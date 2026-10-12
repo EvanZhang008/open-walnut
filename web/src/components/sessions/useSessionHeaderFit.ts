@@ -39,7 +39,11 @@ const NO_TOOL_FIT: ToolRowState = { hidden: new Set(), inMore: [] };
 
 /** Priority (1 leaves last) and kind of every tool row item, by its `data-header-id`. */
 export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; name: string }> = {
-  plan: { kind: 'chip', priority: 1, name: 'Plan' },
+  // Plan is known only once the session record (or its plan) has loaded, so it may join
+  // the row after first paint: it leaves before every host chip, so arriving it only takes
+  // room nobody uses or joins the "..." menu, and never pushes a chip out from under a
+  // click on its way (2026-10-11). A fact the user pinned still leaves first.
+  plan: { kind: 'chip', priority: 6.2, name: 'Plan' },
   fork: { kind: 'chip', priority: 2, name: 'Fork' },
   changed: { kind: 'chip', priority: 3, name: 'Changed' },
   files: { kind: 'chip', priority: 4, name: 'Files' },
@@ -78,8 +82,11 @@ const sameList = (a: string[], b: string[]) => a.length === b.length && a.every(
 /**
  * The tool row (`.session-meta-row-2`): which `[data-header-id]` items stay and
  * which go to the row's "..." menu. Pass the row's ref; the hook
- * finds the items itself, so a chip the session does not offer (no Board without
- * a task, no Terminal on a host without SSH) simply is not there.
+ * finds the items itself, so a chip the session does not offer (no Fork, Board or
+ * Locate on a session known to have no task, no Terminal on a host without SSH)
+ * simply is not there. One that waits for the session record is there from the
+ * first frame, disabled; one kept as a spacer (`data-header-spacer`) is an item
+ * like the control it stands in for, so the row folds exactly as before.
  */
 export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowState {
   const widths = useRef(new Map<string, number>());
@@ -91,7 +98,7 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
     const items: ToolRowItem[] = [];
     for (const el of row.querySelectorAll<HTMLElement>('[data-header-id]')) {
       const id = el.dataset.headerId!;
-      // A wrapper whose component rendered nothing (Fork without a task) is not an item.
+      // A wrapper whose component rendered nothing (Fork with no fork draft, or no task) is not an item.
       if (el.childElementCount === 0 && !el.textContent?.trim()) continue;
       const spec = toolItemSpec(id, el);
       if (!spec) continue;

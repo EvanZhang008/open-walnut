@@ -27,7 +27,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-mcp-e2e'))
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createWalnutMcpServer, type McpOptions } from '../../src/mcp/server.js'
-import { READ_TOOL_NAMES, WRITE_TOOL_NAMES } from '../../src/mcp/tools.js'
+import { opNames } from '../../src/ops/index.js'
 
 let server: HttpServer
 let port: number
@@ -89,7 +89,8 @@ describe('walnut mcp — tool surface', () => {
     try {
       const { tools } = await client.listTools()
       const names = tools.map((t) => t.name).sort()
-      for (const n of [...READ_TOOL_NAMES, ...WRITE_TOOL_NAMES]) {
+      // The registry as it stands now (see the readonly test below for why not READ_TOOL_NAMES).
+      for (const n of [...opNames({ readonly: true }), ...opNames({ readonly: false })]) {
         expect(names, `missing tool ${n}`).toContain(n)
       }
       // Every tool carries a description — it's the model's only affordance.
@@ -116,8 +117,17 @@ describe('walnut mcp — tool surface', () => {
     try {
       const { tools } = await client.listTools()
       const names = tools.map((t) => t.name)
-      expect(names.sort()).toEqual([...READ_TOOL_NAMES].sort())
-      for (const w of WRITE_TOOL_NAMES) expect(names).not.toContain(w)
+      // Read the registry as it stands now, not READ_TOOL_NAMES: those constants are
+      // taken when src/mcp/tools.ts is imported, before startServer activates the
+      // builtin plugins, so they miss every op a plugin registers (the calendar's).
+      expect(names.sort()).toEqual(opNames({ readonly: true }).sort())
+      for (const w of opNames({ readonly: false })) expect(names).not.toContain(w)
+      // The calendar plugin's one read (it only reads events and the calendar list)
+      // is on the read-only surface; its writes are not (tagged in 4d0133bbf).
+      expect(names).toContain('calendar_query')
+      for (const w of ['calendar_event_create', 'calendar_event_update', 'calendar_event_delete', 'calendar_event_visibility']) {
+        expect(names).not.toContain(w)
+      }
     } finally {
       await close()
     }

@@ -20,6 +20,7 @@ import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec } from './useSessionHeaderFit';
 import { TITLE_PILL_SELECTOR } from './session-header-fit';
+import { TASK_SLOT_SPACER } from './header-record-gate';
 
 const itemOf = (row: HTMLElement | null, id: string) => row?.querySelector<HTMLElement>(`[data-header-id="${id}"]`) ?? null;
 
@@ -78,9 +79,13 @@ interface MoreMenuProps {
   rowRef: RefObject<HTMLElement | null>;
   /** Hidden chip and window button ids, in row order. Renders nothing when empty. */
   ids: string[];
+  /** Ids on the row only as spacers (taskControlSlot in header-record-gate.ts): folded
+   *  like the rest, but never a row of the menu nor part of its count. */
+  spacerIds?: ReadonlySet<string>;
 }
 
-export function SessionHeaderMoreMenu({ rowRef, ids }: MoreMenuProps) {
+export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMenuProps) {
+  const ids = spacerIds ? folded.filter((id) => !spacerIds.has(id)) : folded;
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -121,7 +126,16 @@ export function SessionHeaderMoreMenu({ rowRef, ids }: MoreMenuProps) {
     activate(rowRef.current, id);
   }, [rowRef]);
 
-  if (ids.length === 0) return null;
+  if (folded.length === 0) return null;
+  // Only spacers are folded: the chip keeps its place for the row's sake (the fit
+  // counted it), as one more spacer.
+  if (ids.length === 0) {
+    return (
+      <button type="button" className="session-action-chip session-header-more-btn" data-header-more="true" {...TASK_SLOT_SPACER}>
+        <span aria-hidden="true">···</span>
+      </button>
+    );
+  }
   const views = ids.filter((id) => TOOL_ITEMS[id]?.kind !== 'window');
   const windows = ids.filter((id) => TOOL_ITEMS[id]?.kind === 'window');
   return (
@@ -169,8 +183,9 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
       type="button"
       className="task-kebab-item"
       role="menuitem"
-      // A disabled chip (Fork on an engine without session forking) stays a
-      // disabled row, with the chip's own reason as its hover text.
+      // A disabled chip (Fork on an engine without session forking, Fork or Board
+      // while the session record loads) stays a disabled row, with the chip's own
+      // reason as its hover text.
       disabled={!!disabled}
       title={disabled ?? undefined}
       onClick={(e) => { e.stopPropagation(); onChoose(id); }}
@@ -185,7 +200,7 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
 
 /** A hidden window button's row in the "..." menu, with the button's icon and its live label. */
 function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLElement | null>; onChoose: (id: string) => void }) {
-  const { value, label: ariaLabel } = useItemState(rowRef, id);
+  const { value, label: ariaLabel, disabled } = useItemState(rowRef, id);
   // Locate reads as the real button does ("Find on Home" off the home page).
   const label = id === 'locate' && ariaLabel ? ariaLabel : TOOL_ITEMS[id]?.name ?? id;
   return (
@@ -193,6 +208,9 @@ function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTM
       type="button"
       className="task-kebab-item"
       role="menuitem"
+      // Locate waits, disabled, while the session record loads: so does its row.
+      disabled={!!disabled}
+      title={disabled ?? undefined}
       onClick={(e) => { e.stopPropagation(); onChoose(id); }}
       data-testid={`session-header-more-item-${id}`}
       data-state={value || undefined}

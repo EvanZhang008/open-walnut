@@ -31,6 +31,7 @@ import {
   getSessionByClaudeId,
   listSessions,
   renameSessionId,
+  scrubInheritedSessionPids,
   unlinkSessionsFromTasks,
   updateSessionRecord,
   _dropSessionStoreCacheForTesting,
@@ -93,17 +94,31 @@ describe('session store write-through', () => {
   });
 
   it('a set-based update the section never enumerated drops the snapshot instead of patching', async () => {
+    // The pid scrub is one UPDATE over every row holding a pid (pids far above any real one).
+    await createSessionRecord('p-1', 'task-p', 'proj', '/tmp', { pid: 2 ** 22 + 1 });
+    await createSessionRecord('p-2', 'task-p', 'proj', '/tmp', { pid: 2 ** 22 + 2 });
+    await createSessionRecord('p-3', 'task-p', 'proj', '/tmp');
+    await listSessions();
+    const before = scans();
+    expect((await scrubInheritedSessionPids(() => false)).scrubbed).toBe(2);
+    for (const s of await listSessions()) expect(s.pid, s.claudeSessionId).toBeUndefined();
+    expect(scans()).toBe(before + 1);
+  });
+
+  it('a task unlink writes each row it changed, so the snapshot is patched, not rescanned', async () => {
     await createSessionRecord('u-1', 'task-u', 'proj', '/tmp');
     await createSessionRecord('u-2', 'task-u', 'proj', '/tmp');
     await createSessionRecord('u-3', 'task-other', 'proj', '/tmp');
     await listSessions();
     const before = scans();
     expect(await unlinkSessionsFromTasks(['task-u'])).toBe(2);
-    const byId = Object.fromEntries((await listSessions()).map((s) => [s.claudeSessionId, s.taskId]));
-    expect(byId['u-1']).toBeUndefined();
-    expect(byId['u-2']).toBeUndefined();
-    expect(byId['u-3']).toBe('task-other');
-    expect(scans()).toBe(before + 1);
+    const byId = Object.fromEntries((await listSessions()).map((s) => [s.claudeSessionId, s]));
+    expect(byId['u-1']?.taskId).toBeUndefined();
+    expect(byId['u-2']?.taskId).toBeUndefined();
+    expect(byId['u-1']?.statusRevision).toBe(2);
+    expect(byId['u-3']?.taskId).toBe('task-other');
+    expect(byId['u-3']?.statusRevision).toBe(1);
+    expect(scans()).toBe(before);
   });
 
   it('a commit from another connection forces a rescan', async () => {

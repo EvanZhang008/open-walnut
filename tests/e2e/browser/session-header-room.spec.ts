@@ -60,8 +60,9 @@ async function openAtWidth(context: BrowserContext, width: number | null): Promi
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"]`)
   await expect(panel).toBeVisible({ timeout: 90_000 })
   await expect(panel.locator('.session-meta-row-2 [data-header-id="close"]')).toBeVisible({ timeout: 20_000 })
-  // Locate appears once the session's task has loaded; a sweep that misses it would test a row without it.
-  await expect(panel.locator('.session-meta-row-2 [data-header-id="locate"]')).toBeAttached({ timeout: 30_000 })
+  // Locate is on the row from the first frame and acts once the session's task has loaded; a sweep
+  // that reads the row before that would measure a row still waiting for its record.
+  await expect(panel.locator('.session-meta-row-2 [data-header-id="locate"]:enabled')).toBeAttached({ timeout: 30_000 })
   return { page, panel }
 }
 

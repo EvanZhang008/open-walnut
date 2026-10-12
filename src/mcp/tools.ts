@@ -21,7 +21,9 @@ export { resolveApiBase }
 
 /**
  * Read/write tool name sets — derived from the registry now, kept as exports
- * because tests and callers pin the surface through them.
+ * because tests and callers pin the surface through them. They are taken when
+ * this module is imported, so they hold the builtin ops only: an op a plugin
+ * registers later (the calendar's) is missing. Call opNames() for the live set.
  */
 export const READ_TOOL_NAMES: readonly string[] = opNames({ readonly: true })
 export const WRITE_TOOL_NAMES: readonly string[] = opNames({ readonly: false })

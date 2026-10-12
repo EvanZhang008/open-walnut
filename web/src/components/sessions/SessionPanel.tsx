@@ -73,6 +73,10 @@ import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
+import {
+  carryTaskSlots, hasCarriedTaskSlots, headerTaskPresence, recordGateReason, releaseCarriedTaskSlots,
+  TASK_SLOT_IDS, TASK_SLOT_SPACER, taskControlSlot,
+} from './header-record-gate';
 import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
 import { PinnedSessionFacts, SessionMetaFacts } from './SessionMetaFacts';
 import { ComposerModelPill } from './ComposerModelPill';
@@ -394,6 +398,26 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const toolFit = useToolRowFit(toolRowRef);
   const metaFit = useTitleMetaFit(titleMetaRef);
   const hid = (id: string) => (toolFit.hidden.has(id) ? 'true' : 'false');
+  // Fork, Board and Locate need the session's task. Whether they exist is decided
+  // on the first frame from what this page already knows (the status store, which
+  // every list naming the session seeds); a session known to have no task gets
+  // none of them, one with a task gets them in place, disabled until the record
+  // lands. Only a session nothing here has named yet waits with all three drawn.
+  const taskPresence = headerTaskPresence(session, liveStatus);
+  // Once drawn, their places stay while this panel shows this session: a later
+  // "no task" turns them into spacers (taskControlSlot), never removes them from
+  // under a click. A panel that replaced one for the same session (a prefix deep
+  // link adopting the full id) starts from what that one drew.
+  const [taskSlotsDrawnFor, setTaskSlotsDrawnFor] = useState<string | null>(null);
+  const taskSlotsDrawn = taskSlotsDrawnFor === sessionId || hasCarriedTaskSlots(sessionId);
+  if ((taskPresence !== 'none' || taskSlotsDrawn) && taskSlotsDrawnFor !== sessionId) setTaskSlotsDrawnFor(sessionId);
+  useEffect(() => { releaseCarriedTaskSlots(sessionId); }, [sessionId]);
+  const taskSlot = taskControlSlot(taskPresence, taskSlotsDrawn);
+  // Read by the record fetch, which hands the slots over when it adopts the full id.
+  const taskSlotsDrawnRef = useRef(false);
+  taskSlotsDrawnRef.current = taskSlot !== 'absent';
+  const boardWaitReason = recordGateReason('The Board', session, loading);
+  const locateWaitReason = recordGateReason('Locate', session, loading);
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
@@ -556,6 +580,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             log.info('session-panel', 'adopting canonical session id from prefix', {
               requestedId: sessionId, sessionId: s.claudeSessionId,
             });
+            // The host replaces this panel by one under the full id: it starts from what this one drew.
+            if (onSessionReplaced && taskSlotsDrawnRef.current) carryTaskSlots(s.claudeSessionId);
             onSessionReplaced?.(sessionId, s.claudeSessionId);
           }
           setSession(s);
@@ -1805,8 +1831,19 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           ref={glassHeaderRef}
         >
           {/* Two-row header, and the split is deliberate (2026-07-27):
-              ROW 1 = tool chips (Plan / Fork / Changed / Files / Terminal) + time
+              ROW 1 = tool chips (Fork / Changed / Files / Board / Terminal / Plan) + time
                       + EVERY icon button (locate / lock / popout / expand / close).
+                      The row holds still while the session record loads: the chips that
+                      need the session's task (Fork, Board, Locate) exist or not from the
+                      first frame, by what the page already knows of the task
+                      (headerTaskPresence), and wait disabled for the record only while it
+                      loads. A session known to have no task never shows them; once
+                      drawn, a later "no task" keeps their places as spacers. A chip only
+                      some sessions have (Plan) goes after the ones all have, and is the
+                      first host chip to fold into "..." (useSessionHeaderFit.ts).
+                      2026-10-11: Fork appeared 60-130 ms after Files was painted, pushed
+                      Changed onto Files' spot, and a click aimed at Files opened Changed
+                      (tests/e2e/browser/session-header-chips-hold-place.spec.ts).
               ROW 2 = the TITLE on its own full-width line. Only two things may
                       share it: the status badge and the ⋮ kebab.
               Before this the title shared one row with 5 icon buttons and the
@@ -1817,8 +1854,76 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               Session id / SSH host / Open-in-VS-Code all live in the ⋮ kebab. */}
           <div className="session-meta-row-2" ref={toolRowRef}>
             <div className="session-meta-row-2-chips">
-            {/* Plan & Execute \u2014 shown whenever a plan actually exists (regardless
-                of mode), or there's something executable. */}
+            <span className="session-header-item" data-header-id="fork" data-hidden={hid('fork')}>
+              <SessionForkButton
+                sessionId={sessionId}
+                session={session}
+                loading={loading}
+                slot={taskSlot}
+                sourceTitle={headerTitle}
+                onOpenForkDraft={onOpenForkDraft}
+              />
+            </span>
+            {/* The split views need the whole panel: an inset column has none. */}
+            {!inset && (
+              <>
+                <button
+                  className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
+                  onClick={() => toggleView('changed')}
+                  title="See the files this session changed, in a full-screen diff alongside the chat"
+                  data-header-id="changed"
+                  data-hidden={hid('changed')}
+                >
+                  Changed
+                </button>
+                <button
+                  className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
+                  onClick={() => toggleView('files')}
+                  title="Browse the session working directory, full-screen alongside the chat"
+                  data-header-id="files"
+                  data-hidden={hid('files')}
+                >
+                  Files
+                </button>
+                {/* Board needs the task, like Fork: absent for a session known to
+                    have none, otherwise drawn from the first frame (it sits in front of
+                    Terminal) and disabled until the record lands; a spacer once drawn. */}
+                {taskSlot === 'spacer' && (
+                  <button type="button" className="session-action-chip" data-header-id="board" data-hidden={hid('board')} {...TASK_SLOT_SPACER}>
+                    Board
+                  </button>
+                )}
+                {taskSlot === 'live' && (
+                  <button
+                    className={`session-action-chip${activeView === 'board' ? ' session-action-chip-active' : ''}`}
+                    onClick={() => { if (!boardWaitReason) toggleView('board'); }}
+                    disabled={!!boardWaitReason}
+                    title={boardWaitReason ?? "The task's Board: the page its leader keeps, with a thread and a mark per section, beside the chat"}
+                    data-testid="session-board-chip"
+                    data-header-id="board"
+                    data-hidden={hid('board')}
+                  >
+                    Board
+                  </button>
+                )}
+                {terminalOffered && (
+                  <button
+                    className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
+                    onClick={() => toggleView('terminal')}
+                    title="Open a terminal in the session working directory, full-screen alongside the chat"
+                    data-header-id="terminal"
+                    data-hidden={hid('terminal')}
+                  >
+                    Terminal
+                  </button>
+                )}
+              </>
+            )}
+            {/* Plan & Execute: shown whenever a plan actually exists (regardless of
+                mode), or there's something executable. It comes AFTER the chips every
+                session has: whether there is a plan is known only once the record (and
+                then the plan) has loaded, and a chip that appears late in front of Fork,
+                Changed and Files pushes them right under a click on its way to them. */}
             {(hasPlanContent || showExecuteButtons) && (
               <>
                 <button
@@ -1923,60 +2028,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 )}
               </>
             )}
-            <span className="session-header-item" data-header-id="fork" data-hidden={hid('fork')}>
-              <SessionForkButton
-                sessionId={sessionId}
-                session={session}
-                sourceTitle={headerTitle}
-                onOpenForkDraft={onOpenForkDraft}
-              />
-            </span>
-            {/* The split views need the whole panel: an inset column has none. */}
-            {!inset && (
-              <>
-                <button
-                  className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
-                  onClick={() => toggleView('changed')}
-                  title="See the files this session changed, in a full-screen diff alongside the chat"
-                  data-header-id="changed"
-                  data-hidden={hid('changed')}
-                >
-                  Changed
-                </button>
-                <button
-                  className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
-                  onClick={() => toggleView('files')}
-                  title="Browse the session working directory, full-screen alongside the chat"
-                  data-header-id="files"
-                  data-hidden={hid('files')}
-                >
-                  Files
-                </button>
-                {session?.taskId && (
-                  <button
-                    className={`session-action-chip${activeView === 'board' ? ' session-action-chip-active' : ''}`}
-                    onClick={() => toggleView('board')}
-                    title="The task's Board: the page its leader keeps, with a thread and a mark per section, beside the chat"
-                    data-testid="session-board-chip"
-                    data-header-id="board"
-                    data-hidden={hid('board')}
-                  >
-                    Board
-                  </button>
-                )}
-                {terminalOffered && (
-                  <button
-                    className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
-                    onClick={() => toggleView('terminal')}
-                    title="Open a terminal in the session working directory, full-screen alongside the chat"
-                    data-header-id="terminal"
-                    data-hidden={hid('terminal')}
-                  >
-                    Terminal
-                  </button>
-                )}
-              </>
-            )}
             {/* This row's width is very precious: it holds only the host's own tools, and
                 every new chip pushes them into "...". Do not add more here. Plugins
                 (walnut.ui.slot 'session.meta') and any other fact about the session go
@@ -1987,7 +2038,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 opt-in. */}
             <PinnedSessionFacts sessionId={sessionId} taskId={session?.taskId} hid={hid} />
             {/* The chips the row had no room for, as a menu; renders nothing while all fit. */}
-            <SessionHeaderMoreMenu rowRef={toolRowRef} ids={toolFit.inMore} />
+            <SessionHeaderMoreMenu rowRef={toolRowRef} ids={toolFit.inMore} spacerIds={taskSlot === 'spacer' ? TASK_SLOT_IDS : undefined} />
             {activityAge && (
               <time className="session-panel-time" dateTime={session?.lastActiveAt} title={activityTimeTitle} data-header-id="time" data-hidden={hid('time')}>
                 {activityAge}
@@ -1995,22 +2046,39 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             )}
             </div>{/* .session-meta-row-2-chips */}
             <div className="session-panel-window-controls">
-              {!loading && session?.taskId && (
+              {/* Locate needs the task too, the same way: arriving late it took room
+                  from the chips, and in a narrow column that sent Terminal into the
+                  "..." menu under a click. */}
+              {taskSlot === 'spacer' && (
+                <button
+                  type="button"
+                  className="task-action-btn session-panel-locate"
+                  data-header-id="locate"
+                  data-hidden={hid('locate')}
+                  {...TASK_SLOT_SPACER}
+                >
+                  {ICON_LOCATE}
+                </button>
+              )}
+              {taskSlot === 'live' && (
                 <button
                   className="task-action-btn session-panel-locate"
                   data-testid="session-panel-locate"
                   data-header-id="locate"
                   data-hidden={hid('locate')}
+                  disabled={!!locateWaitReason}
                   onClick={() => {
+                    const taskId = session?.taskId;
+                    if (locateWaitReason || !taskId) return;
                     const locate = onLocateTask ?? onTaskClick;
                     // A panel no page gave a handler to lives off Home (an ask drawer, Notes, a plugin
                     // view): its Locate takes the person to the task on Home instead of doing nothing.
-                    if (locate) locate(session.taskId!);
-                    else locateTaskOnHome(session.taskId!, navigate, { sessionId });
+                    if (locate) locate(taskId);
+                    else locateTaskOnHome(taskId, navigate, { sessionId });
                   }}
-                  title={onLocateTask ?? onTaskClick
-                    ? (taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`)
-                    : (taskTitle ? `Find on Home: ${taskTitle}` : 'Find this task on Home')}
+                  title={locateWaitReason ?? (onLocateTask ?? onTaskClick
+                    ? (taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session?.taskId}`)
+                    : (taskTitle ? `Find on Home: ${taskTitle}` : 'Find this task on Home'))}
                   aria-label={onLocateTask ?? onTaskClick ? 'Locate task' : 'Find on Home'}
                 >
                   {ICON_LOCATE}

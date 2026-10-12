@@ -170,11 +170,24 @@ describe('fitToolRow', () => {
     expect(r.visible).toEqual(['fork', 'lock', 'expand', 'close']);
   });
 
-  it('lets Plan lead when the session has one', () => {
-    const withPlan: ToolRowItem[] = [{ id: 'plan', kind: 'chip', priority: 1, width: 40 }, ...ROW];
-    const r = fitToolRow(withPlan, 30, OPTS);
-    expect(r.visible).toEqual(['plan', 'lock', 'expand', 'close']);
-    expect(r.inMore[0]).toBe('fork');
+  it('a late Plan never pushes a host chip into the menu, at any width', () => {
+    // Plan is known only once the session record has loaded, so it joins a row already on screen
+    // (2026-10-11: with the top priority it took Files' place under a click aimed at Files). It sits
+    // after Terminal and leaves before every host chip, so the chips shown without it stay shown.
+    expect(TOOL_ITEMS.plan!.priority).toBeGreaterThan(TOOL_ITEMS.terminal!.priority);
+    const plan: ToolRowItem = { id: 'plan', kind: 'chip', priority: TOOL_ITEMS.plan!.priority, width: 40 };
+    const withPlan = [...ROW.slice(0, 5), plan, ...ROW.slice(5)];
+    const chipsOf = (ids: string[]) => ids.filter((id) => ROW.some((i) => i.id === id && i.kind === 'chip'));
+    for (let width = 30; width <= ROW_WIDTH + 60; width += 1) {
+      const before = chipsOf(fitToolRow(ROW, width, OPTS).visible);
+      const after = fitToolRow(withPlan, width, OPTS);
+      expect(chipsOf(after.visible), `${width}px`).toEqual(before);
+      // Shown only where every host chip is shown too.
+      if (after.visible.includes('plan')) expect(before, `${width}px`).toEqual(chipsOf(ROW.map((i) => i.id)));
+    }
+    // Where the row has no room for it, Plan waits in the menu, first in line after the host chips.
+    const narrow = fitToolRow(withPlan, 285, OPTS);
+    expect(narrow.inMore).toEqual(['board', 'terminal', 'plan', 'locate', 'popout']);
   });
 
   it('assumes a 24px button, not a chip, for a window button that has never been on screen', () => {

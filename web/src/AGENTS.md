@@ -94,6 +94,44 @@ show inline after the open ones, other completed hits that show the query fold i
   node carries `data-column-id` (the session id). Ratchets:
   `tests/e2e/browser/column-complete-close.spec.ts` (holds the tick to act inside it),
   `tests/web/session-columns.test.ts`.
+- **The session header's tool row never moves when the session record lands, and a session with no
+  task shows no task controls.** The record arrives 60 to 130 ms after the row is painted (seconds on
+  a slow box), and a chip that appears then in front of others pushes them under a click already on
+  its way: on 2026-10-11 Fork, which rendered nothing until the record named the task, shifted Changed
+  onto Files' spot and a click aimed at Files opened Changed. The row is also precious (a control that
+  can never act sends a live one into "..." in a narrow column), so the controls that need the
+  session's task (Fork, Board, Locate) are decided on the first frame from what the page already knows
+  (`headerTaskPresence`, `components/sessions/header-record-gate.ts`): the session-status store entry,
+  seeded by every list that names the session (task list slots, finder and recent lists, status
+  hydration, status events). Known to have a task: drawn in place, disabled with their reason as the
+  title (`recordGateReason`) until the record lands. Known to have none: not drawn at all. Not known
+  yet (a reload restoring the column, a deep link, the first chat reference to it on a page): drawn
+  and waiting; if the record then says there is no task, their places stay for the rest of that
+  panel's life as invisible, inert spacers (`taskControlSlot`: same element and width, no pointer, out
+  of the tab order and the accessibility tree, and the "..." chip neither lists nor counts them),
+  because removing them moved Files left and put Terminal under a click aimed at Files. A task deleted
+  while its panel is open turns them into spacers the same way. Once the record is here it decides,
+  through the same resolved record the rest of the panel reads: the store's newer status revision wins
+  over an older record. That holds only because every change of a session's task moves its status
+  revision and is announced as a status change: task delete and duplicate merge rewrote the link
+  without either until 2026-10-11 (`unlinkSessionsFromTasks`, `relinkSessionsToTask` in
+  `src/core/session-tracker.ts`), and a page that held the old snapshot refused the record's "no task"
+  as an equal-revision conflict, keeping the deleted task's controls live. The events of a socket
+  outage are never sent again; every open panel fetches its record once more when the socket comes
+  back (`_ws:reconnected` in `SessionPanel.tsx`), and that record's newer revision catches it up. The
+  one case left that moves the row: a session the page last saw with no task, and does not show in a
+  panel, gains one while the socket is down, and is then opened by a chat reference before any list
+  reads it again; its controls arrive with its record. Fork stays drawn, disabled with its reason, where the engine cannot fork (pinned by
+  `codex-parity-discovery.spec.ts`) or the session has no folder. A chip only some sessions have
+  (Plan) sits after the ones every session has and is the first host chip to fold into "..."
+  (`TOOL_ITEMS` priority), so arriving late in a narrow column it joins the menu instead of pushing a
+  chip out from under a click. A host prop (no fork draft surface, an inset panel) may remove a chip,
+  because it is known on the first frame; so may the host's own capability for Terminal (the cloud
+  companion offers none), which is the last of the chips every session has. Ratchets:
+  `tests/e2e/browser/session-header-chips-hold-place.spec.ts` (holds the record GET, both engines,
+  with and without a task, every route that reaches a panel unnamed, a task deleted under an open
+  panel, during a socket outage too), `tests/web/session-header-record-gate.test.ts`,
+  `tests/core/session-tracker.test.ts`.
 - **Pins never block an open, and the count follows the strip** (`panelBudget` in
   `pages/sessionColumns.ts`, read ONLY by `addSessionColumn`). The panel count
   (`ui.session_panels`, 1-5 or Auto) is the budget, except when the locked columns alone fill it:

@@ -9460,7 +9460,12 @@ body.walnut-dragging {
 
 .session-panel-locate {
   flex-shrink: 0;
+  transition: opacity 0.15s;
 }
+/* Drawn before the session record names the task (so it never takes its room
+   late), it waits disabled: dimmed, no hover wash, the reason in its title. */
+.session-panel-locate:disabled { cursor: default; opacity: 0.45; }
+.session-panel-locate:disabled:hover { color: var(--fg-muted); background: transparent; }
 
 .session-panel-badge {
   display: inline-flex;
@@ -20421,6 +20426,22 @@ td.usage-share-col {
 .session-action-chip:hover {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+/* A header chip that cannot act yet keeps its place and its text and only stops
+   reacting: Fork and Board while the session record loads, or for good (no
+   task, an engine without forking). The opacity eases, so the usual 100 ms wait
+   for the record reads as the chip settling in, not as a flash. */
+.session-meta-row-2 .session-action-chip {
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.session-meta-row-2 .session-action-chip:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.session-meta-row-2 .session-action-chip:disabled:not(.session-action-chip-active) {
+  background: transparent;
+  color: var(--fg-muted);
 }
 
 .session-action-chip-active {

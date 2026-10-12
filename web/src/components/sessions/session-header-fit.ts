@@ -10,8 +10,10 @@
  * resize cannot make it oscillate.
  *
  * Tool row: the view chips leave in priority order into the row's own "..."
- * menu (Terminal before Board before Files before Changed; Fork and Plan leave
- * last). They follow a STRICT priority prefix, so a narrower row never shows a
+ * menu (a fact the user pinned first, then Plan, then Terminal before Board before
+ * Files before Changed; Fork leaves last). Plan leaves early because it is known
+ * only once the session record has loaded: a chip that arrives late must not push
+ * the others into the menu. They follow a STRICT priority prefix, so a narrower row never shows a
  * chip that a wider one hid. The two movable window buttons (Locate, Open in new
  * tab) are small and come after: they take whatever room the chips leave, each
  * if it fits, so a wide chip that just missed the cut never leaves a

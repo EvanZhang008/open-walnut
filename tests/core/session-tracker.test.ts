@@ -41,6 +41,8 @@ import {
   emitSessionStatusChanged,
   stageAcpSessionIdMigration,
   linkSessionToTask,
+  unlinkSessionsFromTasks,
+  relinkSessionsToTask,
   getRecentSessions,
   getActiveSessionsByHost,
   getAllAliveSessionsByHost,
@@ -502,6 +504,87 @@ describe('linkSessionToTask', () => {
 
     const found = await getSessionByClaudeId('link-1');
     expect(found!.taskId).toBe('task-abc');
+  });
+});
+
+// The task is part of the status projection, so every change of a session's task
+// is a status change: the revision moves and the snapshot is published. Until
+// 2026-10-11 task delete and duplicate merge rewrote task_id with a raw UPDATE that
+// kept the revision, and a page that held the old snapshot refused the record's
+// "no task" as an equal-revision conflict: the deleted task's Fork, Board and
+// Locate stayed live in the session header for the life of the page.
+describe('a change of the session task is a status change', () => {
+  const statusEvents = () => {
+    const seen: BusEvent[] = [];
+    bus.subscribe('session-status-contract-test', (event) => {
+      if (event.name === EventNames.SESSION_STATUS_CHANGED || event.name === EventNames.SESSION_CONTENT_UPDATED) seen.push(event);
+    });
+    return seen;
+  };
+  const statusOf = (events: BusEvent[], sessionId: string) => events
+    .filter((e) => e.name === EventNames.SESSION_STATUS_CHANGED && (e.data as { sessionId?: string }).sessionId === sessionId)
+    .map((e) => e.data as { taskId: string | null; statusRevision: number; status: { taskId: string | null; statusRevision: number } });
+  const contentOf = (events: BusEvent[]) => events
+    .filter((e) => e.name === EventNames.SESSION_CONTENT_UPDATED)
+    .map((e) => (e.data as { sessionId: string }).sessionId).sort();
+
+  it('a task delete clears the link, moves the revision and publishes it, without touching activity', async () => {
+    await createSessionRecord('del-a', 'task-gone', 'proj');
+    await createSessionRecord('del-b', 'task-gone', 'proj');
+    await createSessionRecord('del-other', 'task-kept', 'proj');
+    const before = Object.fromEntries(await Promise.all(['del-a', 'del-b', 'del-other'].map(async (id) => [id, await getSessionByClaudeId(id)] as const)));
+    const events = statusEvents();
+
+    expect(await unlinkSessionsFromTasks(['task-gone'])).toBe(2);
+
+    for (const id of ['del-a', 'del-b']) {
+      const after = (await getSessionByClaudeId(id))!;
+      expect(after.taskId, id).toBeUndefined();
+      expect(after.statusRevision, id).toBe(before[id]!.statusRevision + 1);
+      expect(after.lastActiveAt, id).toBe(before[id]!.lastActiveAt);
+      expect(toSessionStatusSnapshot(after).taskId, id).toBeNull();
+      const published = statusOf(events, id);
+      expect(published, id).toHaveLength(1);
+      expect(published[0]!.taskId, id).toBeNull();
+      expect(published[0]!.statusRevision, id).toBe(after.statusRevision);
+      expect(published[0]!.status, id).toEqual(toSessionStatusSnapshot(after));
+    }
+    // A session of another task is not touched, not even its revision.
+    expect((await getSessionByClaudeId('del-other'))!).toMatchObject({ taskId: 'task-kept', statusRevision: before['del-other']!.statusRevision });
+    expect(statusOf(events, 'del-other')).toEqual([]);
+    // The search index re-reads both (the task is part of the indexed session).
+    expect(contentOf(events)).toEqual(['del-a', 'del-b']);
+  });
+
+  it('a merge points the sessions at the survivor as a status change', async () => {
+    await createSessionRecord('merge-a', 'task-victim', 'proj');
+    const before = (await getSessionByClaudeId('merge-a'))!;
+    const events = statusEvents();
+
+    expect(await relinkSessionsToTask('task-victim', 'task-survivor')).toBe(1);
+
+    const after = (await getSessionByClaudeId('merge-a'))!;
+    expect(after.taskId).toBe('task-survivor');
+    expect(after.statusRevision).toBe(before.statusRevision + 1);
+    expect(after.lastActiveAt).toBe(before.lastActiveAt);
+    expect(statusOf(events, 'merge-a').map((e) => [e.taskId, e.statusRevision])).toEqual([['task-survivor', after.statusRevision]]);
+    expect(contentOf(events)).toEqual(['merge-a']);
+  });
+
+  it('a link publishes the change; nothing linked, nothing published', async () => {
+    await createSessionRecord('link-ev', '', 'proj');
+    const before = (await getSessionByClaudeId('link-ev'))!;
+    const events = statusEvents();
+
+    await linkSessionToTask('link-ev', 'task-new');
+    expect(statusOf(events, 'link-ev').map((e) => [e.taskId, e.statusRevision])).toEqual([['task-new', before.statusRevision + 1]]);
+    await linkSessionToTask('link-ev', 'task-new');
+    expect(statusOf(events, 'link-ev')).toHaveLength(1);
+
+    expect(await unlinkSessionsFromTasks(['task-nobody'])).toBe(0);
+    expect(await relinkSessionsToTask('task-nobody', 'task-new')).toBe(0);
+    expect(await unlinkSessionsFromTasks([])).toBe(0);
+    expect(statusOf(events, 'link-ev')).toHaveLength(1);
   });
 });
 

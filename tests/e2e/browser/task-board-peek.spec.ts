@@ -370,6 +370,9 @@ test('a Board chip opens its task as a tab in place of the chat; the tabs switch
   await expect(leaderComposer).toHaveValue(leaderDraft)
   await tabs.button(worker).click()
   await expect(inset).toBeVisible()
+  // Locate is drawn disabled until the worker's record loads, and a disabled button
+  // cannot take focus: Escape would then reach the tab and close the whole split.
+  await expect(inset.getByTestId('session-panel-locate')).toBeEnabled()
   await inset.getByTestId('session-panel-locate').focus()
   await page.keyboard.press('Escape')
   await expect(peek).toHaveCount(0)

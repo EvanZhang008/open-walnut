@@ -7,7 +7,13 @@
 
 .session-meta-row-2 [data-header-id][data-hidden="true"] { display: none !important; }
 
-/* A wrapper around a component that rendered nothing (Fork without a task)
+/* A task control the panel drew before its record said "no task" (Fork, Board,
+   Locate, and the "..." chip when only they are folded): the place stays, with
+   its width, and nothing shows in it or answers a pointer there
+   (header-record-gate.ts, taskControlSlot). */
+.session-meta-row-2 [data-header-spacer="true"] { visibility: hidden; pointer-events: none; }
+
+/* A wrapper around a component that rendered nothing (Fork with no fork draft, or no task)
    must not take a gap. */
 .session-header-item { display: inline-flex; align-items: center; flex-shrink: 0; }
 .session-header-item:empty { display: none; }

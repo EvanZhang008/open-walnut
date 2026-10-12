@@ -2427,7 +2427,65 @@ export async function rollbackAcpSessionIdMigration(
  * Link a session to a task ID.
  */
 export async function linkSessionToTask(claudeSessionId: string, taskId: string): Promise<void> {
-  await updateSessionRecord(claudeSessionId, { taskId });
+  const before = (await getSessionByClaudeId(claudeSessionId))?.statusRevision;
+  const updated = await updateSessionRecord(claudeSessionId, { taskId });
+  // The task is part of the status projection: a link that moved the revision
+  // is announced like any other status change, so a page holding the old
+  // snapshot hears the new task instead of keeping the old one.
+  if (updated.statusRevision !== before) {
+    emitSessionStatusChanged(updated, {}, ['*'], { source: 'session-tracker' });
+  }
+}
+
+/**
+ * Point every session row the select returns at `taskId` (undefined = no task),
+ * as a status change. The task is part of the status projection
+ * (canonicalStatusProjection), so each row's revision moves and the caller
+ * announces the rows this returns (announceRetaskedSessions). Until 2026-10-11
+ * delete and merge rewrote task_id with a raw UPDATE that kept the revision: a
+ * page that held the old snapshot then refused the record's "no task" as an
+ * equal-revision conflict and kept the deleted task's controls live for good.
+ * lastActiveAt stays: a task going away is not activity in the session.
+ */
+async function retaskSessionRows(
+  select: string,
+  params: readonly string[],
+  taskId: string | undefined,
+): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  return withWriteLock(async () => {
+    const db = getDb();
+    if (!db) return [];
+    const now = new Date().toISOString();
+    return sessionDbTx((handle) => {
+      const rows = handle.prepare(select).all(...params) as Array<Record<string, any>>;
+      return rows.map((row) => {
+        const session = rowToSession(row);
+        const before = canonicalStatusProjection(session);
+        // No task is a NULL column, as rows with no link have always been stored.
+        if (taskId) session.taskId = taskId;
+        else delete (session as Partial<SessionRecord>).taskId;
+        commitStatusVersion(session, before, now);
+        writeSessionRowSqlite(handle, session);
+        return session;
+      });
+    });
+  });
+}
+
+/** The committed rows of retaskSessionRows, announced after the lock: a status
+ *  snapshot for every page and consumer, and a search re-sync (the task is part
+ *  of the indexed session too, as in updateSessionRecord). */
+function announceRetaskedSessions(sessions: readonly SessionRecord[]): void {
+  for (const session of sessions) {
+    emitSessionStatusChanged(session, {}, ['*'], { source: 'session-tracker' });
+    bus.emit(
+      EventNames.SESSION_CONTENT_UPDATED,
+      { sessionId: session.claudeSessionId },
+      ['*'],
+      { source: 'session-tracker' },
+    );
+  }
 }
 
 /**
@@ -2436,29 +2494,20 @@ export async function linkSessionToTask(claudeSessionId: string, taskId: string)
  * so a removed task never leaves dangling session.task_id pointers — a sweep on
  * 2026-08-20 found 275 sessions orphaned this way, each invisible on its
  * task's session list forever after.
- *
- * Raw column UPDATE is safe here: task_id is an explicit column (never spilled
- * into `payload` by sessionToRow), and it is not part of the status projection,
- * so the snapshot gate does not apply. Cache invalidation rides on
- * withWriteLock's finally.
  */
 export async function unlinkSessionsFromTasks(taskIds: string[]): Promise<number> {
   if (!taskIds.length) return 0;
-  await ensureSessionInit();
-  return withWriteLock(async () => {
-    const db = getDb();
-    if (!db) return 0;
-    const placeholders = taskIds.map(() => '?').join(', ');
-    const result = db.prepare(
-      `UPDATE sessions SET task_id = NULL WHERE task_id IN (${placeholders})`,
-    ).run(...taskIds);
-    if (result.changes > 0) {
-      log.session.info('cleared task links for deleted tasks', {
-        taskIds, sessionsUnlinked: result.changes,
-      });
-    }
-    return result.changes;
-  });
+  const placeholders = taskIds.map(() => '?').join(', ');
+  const unlinked = await retaskSessionRows(
+    `SELECT * FROM sessions WHERE task_id IN (${placeholders})`, taskIds, undefined,
+  );
+  if (unlinked.length > 0) {
+    log.session.info('cleared task links for deleted tasks', {
+      taskIds, sessionsUnlinked: unlinked.length,
+    });
+  }
+  announceRetaskedSessions(unlinked);
+  return unlinked.length;
 }
 
 /**
@@ -2466,25 +2515,21 @@ export async function unlinkSessionsFromTasks(taskIds: string[]): Promise<number
  * sibling of unlinkSessionsFromTasks: when duplicate tasks are merged, the
  * victims' sessions must FOLLOW the surviving task, never be dropped — dedup
  * cleanups that deleted the copy holding the links are how sessions went
- * invisible (35 tasks lost their links before 2026-08-20). Same raw-column
- * UPDATE rationale as unlinkSessionsFromTasks.
+ * invisible (35 tasks lost their links before 2026-08-20). A status change
+ * like the unlink (retaskSessionRows).
  */
 export async function relinkSessionsToTask(fromTaskId: string, toTaskId: string): Promise<number> {
   if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return 0;
-  await ensureSessionInit();
-  return withWriteLock(async () => {
-    const db = getDb();
-    if (!db) return 0;
-    const result = db.prepare(
-      'UPDATE sessions SET task_id = ? WHERE task_id = ?',
-    ).run(toTaskId, fromTaskId);
-    if (result.changes > 0) {
-      log.session.info('re-pointed session task links to merge survivor', {
-        fromTaskId, toTaskId, sessionsRelinked: result.changes,
-      });
-    }
-    return result.changes;
-  });
+  const relinked = await retaskSessionRows(
+    'SELECT * FROM sessions WHERE task_id = ?', [fromTaskId], toTaskId,
+  );
+  if (relinked.length > 0) {
+    log.session.info('re-pointed session task links to merge survivor', {
+      fromTaskId, toTaskId, sessionsRelinked: relinked.length,
+    });
+  }
+  announceRetaskedSessions(relinked);
+  return relinked.length;
 }
 
 /**
