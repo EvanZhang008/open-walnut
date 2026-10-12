@@ -97,6 +97,18 @@ describe('resume records', () => {
     expect(fs.readdirSync(dir)).toEqual([`${SID}.json`])
   })
 
+  it('a write that names no Walnut keeps the Walnut and task the record already names', () => {
+    const hr = make()
+    hr.remember(SID, { args: ['claude'], cwd: '/work/repo', mode: 'default', home: '/data/walnut', task: 'mtask-1' })
+    // A session this daemon adopted after a restart has no spawn origin in memory.
+    hr.remember(SID, { args: ['claude'], cwd: '/work/repo', mode: 'plan' })
+    expect(hr.recall(SID)).toMatchObject({ mode: 'plan', home: '/data/walnut', task: 'mtask-1' })
+    // A spawn for another Walnut replaces both.
+    hr.remember(SID, { args: ['claude'], cwd: '/work/repo', home: '/data/other' })
+    expect(hr.recall(SID)?.home).toBe('/data/other')
+    expect(hr.recall(SID)?.task).toBeUndefined()
+  })
+
   it('refuses what it could not use: a bad id, no command, no folder, a command too large', () => {
     const hr = make()
     hr.remember('../escape', { args: ['claude'], cwd: '/x' })

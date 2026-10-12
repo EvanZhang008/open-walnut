@@ -32,6 +32,10 @@ const HOME = '/fixture/walnut-home'
 const OTHER_HOME = '/fixture/test-server-home'
 const SID = 'abcdabcd-6666-4666-8666-666666666666'
 const FOREIGN = 'dcbadcba-7777-4777-8777-777777777777'
+// Sessions started before the spawn journal existed: their first line was
+// backfilled from the older ledger and names no Walnut.
+const BACKFILLED = 'b0b0b0b0-8888-4888-8888-888888888888'
+const BACKFILLED_OTHER = 'b1b1b1b1-9999-4999-8999-999999999999'
 const TASK = 'mwatch00-1c2d'
 const TRIGGER = 'mtrig000-r3sm'
 const GRACE_MS = 1_500
@@ -83,6 +87,10 @@ async function waitFor(cond: () => boolean, ms: number, label: string): Promise<
 async function spawnDaemon(twin: 'source' | 'standalone', existing?: string): Promise<Daemon> {
   const dir = existing ?? fs.mkdtempSync(path.join(os.tmpdir(), `walnut-trigresume-${twin}-`))
   for (const f of ['daemon.port', 'daemon.pid']) { try { fs.unlinkSync(path.join(dir, f)) } catch { /* fresh dir */ } }
+  if (!existing) {
+    fs.writeFileSync(path.join(dir, 'spawn-journal.jsonl'), [BACKFILLED, BACKFILLED_OTHER]
+      .map((sid) => JSON.stringify({ v: 1, sid, at: '2026-09-26T19:58:33.293Z', kind: 'backfill', from: 'ledger' }) + '\n').join(''), { mode: 0o600 })
+  }
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -351,4 +359,31 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     expect(spawns()).toHaveLength(3)
     expect(pending().find((f) => f.seq === 4)?.host).toBeUndefined()
   }, 60_000)
+
+  it('a session whose journal line was backfilled is resumed on its spawn record, only for the Walnut that record names', async () => {
+    // Started (after the backfill) for another Walnut: never resumed for this one.
+    let server = await FakeServer.connect(d.port)
+    await startFresh(server, BACKFILLED_OTHER, OTHER_HOME)
+    await stopSession(server, BACKFILLED_OTHER, OTHER_HOME)
+    await server.cmd({ cmd: 'host.slice', slice: slice([{ sid: BACKFILLED_OTHER, taskId: TASK, title: 'Not ours' }]) })
+    await configure(server)
+    await server.close()
+    await fireAndLeave(['c1', 'c2', 'c3', 'c4', 'c5'])
+    await sleep(GRACE_MS + 7_000)
+    expect(spawns(BACKFILLED_OTHER)).toHaveLength(1)
+    // Started for this Walnut: its spawn record is the proof the journal lacks.
+    server = await FakeServer.connect(d.port)
+    await startFresh(server, BACKFILLED, HOME)
+    await stopSession(server, BACKFILLED, HOME)
+    await server.cmd({ cmd: 'host.slice', slice: slice([{ sid: BACKFILLED, taskId: TASK, title: 'Old leader' }]) })
+    await configure(server)
+    await server.close()
+    await fireAndLeave(['c1', 'c2', 'c3', 'c4', 'c5', 'c6'])
+    await waitFor(() => spawns(BACKFILLED).length === 2, 30_000, 'the resume of the backfilled session')
+    const resumed = spawns(BACKFILLED)[1]
+    expect(resumed[resumed.indexOf('--resume') + 1]).toBe(BACKFILLED)
+    expect(resumed).not.toContain('--session-id')
+    await waitFor(() => pending().some((f) => f.host && (f.host as { sessionId?: string }).sessionId === BACKFILLED), 10_000, 'the host delivery recorded')
+    expect(spawns(BACKFILLED_OTHER)).toHaveLength(1)
+  }, 90_000)
 })

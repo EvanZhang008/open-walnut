@@ -80,14 +80,21 @@ export function createHostResume(deps: HostResumeDeps): HostResume {
 
   function remember(sid: string, rec: { args: string[]; cwd: string; mode?: string; home?: string; task?: string }): void {
     if (!SID_RE.test(sid) || !stringArray(rec.args) || typeof rec.cwd !== 'string' || !rec.cwd) return
+    // A write that names no Walnut (a session this daemon adopted after a
+    // restart ends, or changes mode) keeps the one the record already names:
+    // that is the proof resumeForTrigger reads for a backfilled journal line.
+    const named = typeof rec.home === 'string' && rec.home !== ''
+    const prev = named ? null : recall(sid)
+    const home = named ? rec.home : prev?.home
+    const task = typeof rec.task === 'string' && rec.task ? rec.task : prev?.task
     const body: ResumeRecord = {
       v: 1,
       sid,
       args: rec.args.slice(),
       cwd: rec.cwd,
       ...(typeof rec.mode === 'string' && rec.mode ? { mode: rec.mode } : {}),
-      ...(typeof rec.home === 'string' && rec.home ? { home: rec.home } : {}),
-      ...(typeof rec.task === 'string' && rec.task ? { task: rec.task } : {}),
+      ...(home ? { home } : {}),
+      ...(task ? { task } : {}),
       at: deps.now(),
     }
     const text = JSON.stringify(body)

@@ -2276,13 +2276,14 @@ const hostResume = createHostResume({
 /**
  * A session's last spawn: the in-memory record while it holds the command (this
  * daemon spawned or adopted it), else its resume record. The mode is the one
- * that record has now: setMode keeps both current.
+ * that record has now: setMode keeps both current. `home`: the Walnut that
+ * asked for its latest spawn, as either one recorded it.
  */
-function spawnRecordOf(sid: string): { args: string[]; cwd: string; mode: string } | null {
+function spawnRecordOf(sid: string): { args: string[]; cwd: string; mode: string; home?: string } | null {
   const s = sessions.get(sid)
-  if (s && s.args && s.args.length > 0 && s.cwd) return { args: s.args, cwd: s.cwd, mode: s.mode || 'default' }
-  const rec = hostResume.recall(sid)
-  return rec ? { args: rec.args, cwd: rec.cwd, mode: rec.mode || 'default' } : null
+  const rec = s && s.spawnInfo?.home ? null : hostResume.recall(sid)
+  if (s && s.args && s.args.length > 0 && s.cwd) return { args: s.args, cwd: s.cwd, mode: s.mode || 'default', home: s.spawnInfo?.home || rec?.home }
+  return rec ? { args: rec.args, cwd: rec.cwd, mode: rec.mode || 'default', home: rec.home } : null
 }
 
 // ── Host resume for a trigger fire (trigger-host-resume-v1) ──
@@ -2301,7 +2302,11 @@ const hostResumedAt = new Map<string, number>()
 
 async function resumeForTrigger(home: string, sid: string, text: string, messageId: string, taskId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   if (!isJournalSid(sid)) return { ok: false, reason: 'not a session id' }
-  if (journaledHome(sid) !== home) return { ok: false, reason: 'this host has no record of starting that session for this Walnut' }
+  // The journal's first line decides when it names a Walnut. A line backfilled
+  // from the older ledger names none (every session started before 2026-09-26),
+  // and then the Walnut that asked for its latest spawn decides (below).
+  const journaled = journaledHome(sid)
+  if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' }
   if (!fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl'))) return { ok: false, reason: 'no transcript of that session on this host' }
   const now = Date.now()
   for (const [k, at] of hostResumedAt) if (now - at >= HOST_RESUME_COOLDOWN_MS) hostResumedAt.delete(k)
@@ -2312,6 +2317,7 @@ async function resumeForTrigger(home: string, sid: string, text: string, message
   if (busy >= HOST_RESUME_MAX_BUSY) return { ok: false, reason: 'this host is busy' }
   const spawn = spawnRecordOf(sid)
   if (!spawn) return { ok: false, reason: 'no spawn record of that session on this host' }
+  if (journaled === undefined && spawn.home !== home) return { ok: false, reason: 'this host has no record of starting that session for this Walnut' }
   if (!fs.existsSync(spawn.cwd)) return { ok: false, reason: 'its folder is gone from this host' }
   const args = hostResume.resumeArgs(spawn.args, sid, spawn.mode)
   hostResumedAt.set(sid, now)
