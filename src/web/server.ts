@@ -2981,7 +2981,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           recoveryKey: COMPACTION_RECOVERY_KEY,
         })
       }
-      const attemptCompaction = async (retriesLeft = 2): Promise<void> => {
+      const attemptCompaction = async (retriesLeft = 2, deferralsLeft = 6): Promise<void> => {
         if (!workerPath) {
           reportCompactionFailure('compaction worker build is missing from dist/workers', 'missing-worker')
           return
@@ -2992,12 +2992,23 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // set it, ticks kept moving `main` mid-rewrite and every run failed
         // tree verification for 9 days straight (the repo regrew to 6.5GB and
         // its pushes CPU-starved the cloud companion, 2026-08 incident).
-        const { setCompactionInProgress, waitForSyncSettled, syncPauseReason } = await import('../integrations/git-sync.js')
+        const gitSync = await import('../integrations/git-sync.js')
+        const { setCompactionInProgress, waitForSyncSettled, syncPauseReason } = gitSync
         const pausedBy = syncPauseReason()
         if (pausedBy) {
           // An operator holds the repo (in-place history rewrite); the daily
           // timer tries again tomorrow, the startup attempt is simply skipped.
           log.git.info('git compaction skipped — operator pause marker active', { reason: pausedBy })
+          return
+        }
+        // git maintenance holds the same pause flag while its gc runs (the size
+        // sentinel can start one 30s after boot). Taking it too would let
+        // whichever finishes first clear it and resume sync under the other.
+        if (gitSync.compactionInProgress) {
+          if (deferralsLeft > 0) {
+            log.git.info('git compaction deferred — git maintenance holds the repo', { deferralsLeft })
+            setTimeout(() => { void attemptCompaction(retriesLeft, deferralsLeft - 1) }, 10 * 60_000).unref?.()
+          }
           return
         }
         setCompactionInProgress(true)
@@ -5089,26 +5100,40 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
       // Repo-size sentinel (self-throttled to one real check per 6h): the
       // last line of defense if gitignores/compaction/timeout-reaping all
       // fail again — a ballooning .git warns here instead of starving the box.
-      const size = checkRepoSize()
-      if (size) {
-        if (size.sweptBytes > 0) {
-          log.git.warn('repo-size sentinel swept dead transfer debris', { sweptBytes: size.sweptBytes, liveBytes: size.liveBytes })
+      const measured = checkRepoSize()
+      if (measured) {
+        if (measured.sweptBytes > 0) {
+          log.git.warn('repo-size sentinel swept dead transfer debris', { sweptBytes: measured.sweptBytes, liveBytes: measured.liveBytes })
         }
-        if (size.over && size.warning) {
-          log.git.warn(size.warning)
-          void publishErrorNotification({
-            title: 'Data Repo Growing Too Large',
-            body: size.warning,
-            dedupScope: 'git:repo-size',
-            recoveryKey: REPO_SIZE_RECOVERY_KEY,
+        // Not awaited: an over verdict first lets maintenance try (a gc can run
+        // for minutes and pauses sync itself); the card is judged on what is left.
+        void import('../integrations/git-maintenance.js')
+          .then(({ settleRepoSize }) => settleRepoSize(measured))
+          .then((size) => {
+            if (gitTickStopped) return
+            if (size.over && size.warning) {
+              log.git.warn(size.warning)
+              void publishErrorNotification({
+                title: 'Data Repo Growing Too Large',
+                body: size.warning,
+                dedupScope: 'git:repo-size',
+                recoveryKey: REPO_SIZE_RECOVERY_KEY,
+              })
+            } else if (measured.over) {
+              log.git.info('repo-size sentinel: maintenance brought the data repo under the threshold', {
+                liveBytesBefore: measured.liveBytes, liveBytesAfter: size.liveBytes,
+              })
+            }
+            // The card retires on the size itself (a gc, an aged backup branch, a
+            // removed file), measured on the sentinel's own cadence; the commit edge
+            // below knows nothing about size.
+            if (gitRecoveryTracker.observe(REPO_SIZE_RECOVERY_KEY, size.over)) {
+              void publishRecovery([REPO_SIZE_RECOVERY_KEY])
+            }
           })
-        }
-        // The card retires on the size itself (a gc, an aged backup branch, a
-        // removed file), measured on the sentinel's own cadence; the commit edge
-        // below knows nothing about size.
-        if (gitRecoveryTracker.observe(REPO_SIZE_RECOVERY_KEY, size.over)) {
-          void publishRecovery([REPO_SIZE_RECOVERY_KEY])
-        }
+          .catch((err) => {
+            log.git.warn('repo-size sentinel failed', { error: String(err) })
+          })
       }
       // Mass-revert / torn-worktree safe mode: surface the refusal to the
       // human (health + one notification per episode) — commits are paused

@@ -24,6 +24,9 @@ import {
   maintenanceDue,
   maintainRepo,
   readLastRun,
+  settleRepoSize,
+  startGitMaintenance,
+  requestMaintenancePass,
   resolveGitDir,
   packDirBytes,
   staleQuarantineDirs,
@@ -213,6 +216,20 @@ describe('maintenanceDue', () => {
     expect(maintenanceDue(gitDir)).toBe('size');
   });
 
+  // 2026-10-12: a rewrite adoption left the old pack beside a fresh copy of the
+  // whole new chain. A small repo doubles without crossing the size line, so the
+  // adoption itself has to make a pass due.
+  it('a rewrite adoption makes maintenance due inside the calendar window, except right after a failed gc', async () => {
+    await maintainRepo(repo, { force: true });
+    expect(maintenanceDue(gitDir)).toBeNull();
+    expect(maintenanceDue(gitDir, Date.now(), { afterRewrite: true })).toBe('rewrite');
+
+    const marker = path.join(gitDir, 'walnut-last-maintenance');
+    const now = Date.now();
+    await fsp.writeFile(marker, JSON.stringify({ at: now - 60_000, failedAt: now - 60_000 }));
+    expect(maintenanceDue(gitDir, now, { afterRewrite: true })).toBeNull();
+  });
+
   it('reads the pre-JSON marker (bare ISO timestamp) as a real last run with no size on record', async () => {
     const when = new Date(Date.now() - 60_000);
     await fsp.writeFile(path.join(gitDir, 'walnut-last-maintenance'), when.toISOString());
@@ -361,6 +378,80 @@ describe('maintainRepo', () => {
     const second = await maintainRepo(repo);
     expect(second.ran).toBe(false);
     expect(second.reason).toBeUndefined();
+  });
+});
+
+describe('settleRepoSize (the size card waits for the fixer)', () => {
+  const GB = 1024 * 1024 * 1024;
+  const over = (liveBytes: number) => ({
+    liveBytes, debrisBytes: 0, sweptBytes: 0, over: true, warning: `data repo .git has grown to ${(liveBytes / GB).toFixed(1)}GB`,
+  });
+  let handle: ReturnType<typeof startGitMaintenance> | null = null;
+  const start = () => { handle = startGitMaintenance({ startDelayMs: 60 * 60_000 }); };
+
+  afterEach(() => {
+    handle?.stop();
+    handle = null;
+  });
+
+  it('with no scheduler running, the verdict stands as measured', async () => {
+    expect(requestMaintenancePass()).toBeNull();
+    const verdict = over(3.5 * GB);
+    expect(await settleRepoSize(verdict)).toBe(verdict);
+  });
+
+  it('a repo the gc shrinks is judged on the size after the gc, not before', async () => {
+    // The sentinel measured 3.5GB of duplicated packs; the pass that runs now
+    // (never maintained: due) consolidates them, and the re-measure is small.
+    start();
+    const settled = await settleRepoSize(over(3.5 * GB));
+    expect(readLastRun(gitDir).at).toBeGreaterThan(0);
+    expect(settled.over).toBe(false);
+    expect(settled.warning).toBeNull();
+    expect(settled.liveBytes).toBeLessThan(GB);
+  });
+
+  it('a repo still over after the gc keeps its warning', async () => {
+    // A pack gc cannot remove (git ignores a .pack with no index).
+    const fake = path.join(gitDir, 'objects', 'pack', 'pack-fake.pack');
+    await fsp.mkdir(path.dirname(fake), { recursive: true });
+    const fd = await fsp.open(fake, 'w');
+    await fd.truncate(3.5 * GB);
+    await fd.close();
+    start();
+    const settled = await settleRepoSize(over(3.5 * GB));
+    expect(readLastRun(gitDir).at).toBeGreaterThan(0);
+    expect(settled.over).toBe(true);
+    expect(settled.warning).toMatch(/3\.5GB of live packs/);
+  });
+
+  it('a repo maintenance would not touch (no growth since its last gc) is reported without another gc', async () => {
+    const marker = path.join(gitDir, 'walnut-last-maintenance');
+    const at = Date.now() - 60_000;
+    await fsp.writeFile(marker, JSON.stringify({ at, packBytesAfter: 10 * GB }));
+    start();
+    const verdict = over(3.5 * GB);
+    expect(await settleRepoSize(verdict)).toBe(verdict);
+    expect(readLastRun(gitDir).at).toBe(at);
+  });
+
+  it('joins a pass already in flight instead of starting a second gc', async () => {
+    start();
+    const first = handle!.runOnce();
+    expect(requestMaintenancePass()).toBe(first);
+    await first;
+  });
+
+  it('a forced pass queues behind a running one and still runs its gc', async () => {
+    start();
+    const first = handle!.runOnce();
+    const forced = handle!.runOnce(true);
+    expect(forced).not.toBe(first);
+    const [firstWorktree] = await first;
+    const [forcedWorktree] = await forced;
+    expect(firstWorktree.ran).toBe(true);
+    expect(forcedWorktree.reason).toBe('forced');
+    expect(forcedWorktree.ran).toBe(true);
   });
 });
 

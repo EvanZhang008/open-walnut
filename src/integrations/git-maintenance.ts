@@ -41,6 +41,9 @@ import {
   setCompactionInProgress,
   waitForSyncSettled,
   isSyncPaused,
+  measureRepoSize,
+  setRewriteAdoptedListener,
+  type RepoSizeVerdict,
 } from './git-sync.js';
 import { log } from '../logging/index.js';
 
@@ -78,7 +81,13 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** Marker file (inside the git dir — per-repo, machine-local, never synced). */
 const LAST_RUN_FILE = 'walnut-last-maintenance';
 
-export type MaintenanceReason = 'interval' | 'size' | 'debris' | 'backup' | 'forced';
+/**
+ * Wait this long after a rewrite adoption before the gc pass, so the sync tick
+ * that adopted (and its push) settles first.
+ */
+export const REWRITE_MAINTENANCE_DELAY_MS = 60_000;
+
+export type MaintenanceReason = 'interval' | 'size' | 'debris' | 'backup' | 'rewrite' | 'forced';
 
 export interface MaintenanceResult {
   repo: string;
@@ -289,8 +298,16 @@ export function staleCompactionBackups(gitDir: string, now = Date.now()): string
  *
  * The backup trigger is the one cause of a too-large repo that is certain to be
  * fixable: an aged compaction backup is dead weight by definition.
+ *
+ * `afterRewrite`: the worktree just adopted a rewritten upstream, so the old
+ * pack duplicates most of the new one whatever the totals say (a small repo
+ * doubles without crossing SIZE_TRIGGER_BYTES).
  */
-export function maintenanceDue(gitDir: string, now = Date.now()): Exclude<MaintenanceReason, 'forced'> | null {
+export function maintenanceDue(
+  gitDir: string,
+  now = Date.now(),
+  opts: { afterRewrite?: boolean } = {},
+): Exclude<MaintenanceReason, 'forced'> | null {
   const last = readLastRun(gitDir);
   const pack = packDirBytes(gitDir);
   const recentlyFailed = last.failedAt !== undefined && now - last.failedAt < FAILED_GC_BACKOFF_MS;
@@ -300,6 +317,7 @@ export function maintenanceDue(gitDir: string, now = Date.now()): Exclude<Mainte
   }
   if (staleQuarantineDirs(gitDir, now) >= DEBRIS_COUNT_TRIGGER) return 'debris';
   if (staleCompactionBackups(gitDir, now).length > 0 && !recentlyFailed) return 'backup';
+  if (opts.afterRewrite && !recentlyFailed) return 'rewrite';
   if (now - last.at >= MAINTENANCE_INTERVAL_DAYS * 86_400_000) return 'interval';
   return null;
 }
@@ -417,7 +435,7 @@ export function sweepKilledGcPacks(gitDir: string, before: Set<string>): number 
  */
 export async function maintainRepo(
   repoDir: string,
-  opts: { pauseSync?: boolean; force?: boolean } = {},
+  opts: { pauseSync?: boolean; force?: boolean; afterRewrite?: boolean } = {},
 ): Promise<MaintenanceResult> {
   const gitDir = resolveGitDir(repoDir);
   const result: MaintenanceResult = {
@@ -428,7 +446,7 @@ export async function maintainRepo(
     packBytesAfter: 0,
   };
 
-  const due = opts.force ? 'forced' : maintenanceDue(gitDir);
+  const due = opts.force ? 'forced' : maintenanceDue(gitDir, Date.now(), { afterRewrite: opts.afterRewrite });
   if (!due) return result;
   result.reason = due;
   result.packBytesBefore = packDirBytes(gitDir);
@@ -531,6 +549,35 @@ export interface GitMaintenanceHandle {
   runOnce: (force?: boolean) => Promise<MaintenanceResult[]>;
 }
 
+/** The running scheduler's single-flight pass, for callers outside it. */
+let activePass: ((force?: boolean) => Promise<MaintenanceResult[]>) | null = null;
+
+/**
+ * Run (or join) one maintenance pass under the running scheduler's due rules.
+ * Null when no scheduler runs in this process.
+ */
+export function requestMaintenancePass(): Promise<MaintenanceResult[]> | null {
+  return activePass ? activePass(false) : null;
+}
+
+/**
+ * The size sentinel's verdict, after the fixer had its turn. Maintenance is
+ * what shrinks a repo (duplicate packs, aged backups, killed-gc debris), and it
+ * runs on its own clock (daily), so an "over" from the 6h sentinel used to be
+ * reported before anything tried to fix it. Ask for a pass first: the due rules
+ * (growth since the last gc, failure backoff) keep it from re-running a gc that
+ * cannot help, and only a repo still over after that is worth a card.
+ */
+export async function settleRepoSize(verdict: RepoSizeVerdict): Promise<RepoSizeVerdict> {
+  if (!verdict.over) return verdict;
+  const pass = requestMaintenancePass();
+  if (!pass) return verdict;
+  const results = await pass;
+  const worktree = results.find((r) => r.repo === WALNUT_HOME);
+  if (!worktree?.ran) return verdict;
+  return measureRepoSize(WALNUT_HOME);
+}
+
 /**
  * Start the daily scheduler. Covers, in order:
  *   1. the data worktree (WALNUT_HOME) — every box, sync paused during gc;
@@ -541,17 +588,30 @@ export interface GitMaintenanceHandle {
  * boundary and the 75s compaction start, and past the lifetime of any test
  * server (several e2e suites run a real startServer for 2-4 minutes with a
  * real temp hub repo — a first pass inside that window would gc a fixture
- * mid-test).
+ * mid-test). A rewrite adoption brings a pass forward to a minute after it.
  */
-export function startGitMaintenance(opts: { startDelayMs?: number } = {}): GitMaintenanceHandle {
+export function startGitMaintenance(
+  opts: { startDelayMs?: number; rewriteDelayMs?: number } = {},
+): GitMaintenanceHandle {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let rewriteTimer: ReturnType<typeof setTimeout> | null = null;
+  // Set by an adoption, consumed by the next pass that starts after it.
+  let rewritePending = false;
+  let inflight: Promise<MaintenanceResult[]> | null = null;
 
   const pass = async (force = false): Promise<MaintenanceResult[]> => {
     const results: MaintenanceResult[] = [];
+    const afterRewrite = rewritePending;
+    rewritePending = false;
     try {
-      results.push(await maintainRepo(WALNUT_HOME, { pauseSync: true, force }));
+      const worktree = await maintainRepo(WALNUT_HOME, { pauseSync: true, force, afterRewrite });
+      results.push(worktree);
+      // Stood down (compaction or an operator pause), failed, or in backoff: the
+      // duplicates are still there, so the next pass must still see the rewrite.
+      if (afterRewrite && !worktree.ran) rewritePending = true;
     } catch (err) {
+      if (afterRewrite) rewritePending = true;
       log.git.warn('git-maintenance worktree pass failed', {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -572,9 +632,37 @@ export function startGitMaintenance(opts: { startDelayMs?: number } = {}): GitMa
     return results;
   };
 
+  // One pass at a time: the daily tick, an adoption and the size sentinel can
+  // all ask at once, and two gcs on one repo only fight over its lock.
+  const runPass = (force = false): Promise<MaintenanceResult[]> => {
+    // A forced pass is a promise of a gc: queue it behind the running one.
+    if (inflight && force) return inflight.then(() => runPass(true));
+    if (inflight) return inflight;
+    inflight = pass(force).finally(() => { inflight = null; });
+    return inflight;
+  };
+  activePass = runPass;
+
+  const onRewriteAdopted = (): void => {
+    if (stopped) return;
+    rewritePending = true;
+    if (rewriteTimer) return;
+    rewriteTimer = setTimeout(() => {
+      rewriteTimer = null;
+      void (async () => {
+        // A pass already running started before this adoption: let it end, then
+        // run the one that consumes the flag.
+        if (inflight) await inflight;
+        if (!stopped && rewritePending) await runPass();
+      })();
+    }, opts.rewriteDelayMs ?? REWRITE_MAINTENANCE_DELAY_MS);
+    rewriteTimer.unref?.();
+  };
+  setRewriteAdoptedListener(onRewriteAdopted);
+
   const tick = async (): Promise<void> => {
     try {
-      await pass();
+      await runPass();
     } finally {
       if (!stopped) {
         timer = setTimeout(() => { void tick(); }, CHECK_INTERVAL_MS);
@@ -595,7 +683,12 @@ export function startGitMaintenance(opts: { startDelayMs?: number } = {}): GitMa
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      if (rewriteTimer) clearTimeout(rewriteTimer);
+      if (activePass === runPass) {
+        activePass = null;
+        setRewriteAdoptedListener(null);
+      }
     },
-    runOnce: (force = false) => pass(force),
+    runOnce: (force = false) => runPass(force),
   };
 }

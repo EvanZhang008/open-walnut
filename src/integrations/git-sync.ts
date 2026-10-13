@@ -2294,6 +2294,7 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
       reason: noMergeBase ? 'no-merge-base' : 'upstream-force-moved',
       localOnlyCommitsParked: localOnly,
     });
+    try { rewriteAdoptedListener?.(); } catch { /* the listener only schedules */ }
     return { merged: true, conflicts: 0 };
   }
 
@@ -2682,7 +2683,11 @@ export function checkRepoSize(repoDir = WALNUT_HOME): RepoSizeVerdict | null {
   const now = Date.now();
   if (now - lastRepoSizeCheck < REPO_SIZE_CHECK_INTERVAL_MS) return null;
   lastRepoSizeCheck = now;
+  return measureRepoSize(repoDir, now);
+}
 
+/** One sentinel measurement, unthrottled (a re-measure after a gc uses it). */
+export function measureRepoSize(repoDir = WALNUT_HOME, now = Date.now()): RepoSizeVerdict {
   const before = measurePackDir(repoDir);
   let sweptBytes = 0;
   let debrisBytes = before.debrisBytes;
@@ -2705,6 +2710,18 @@ export function checkRepoSize(repoDir = WALNUT_HOME): RepoSizeVerdict | null {
   const warning = `data repo .git has grown to ${gbText(liveBytes)} of live packs (threshold 3GB)${debrisNote}: `
     + 'check for backup-* branches pinning old history, large tracked files, or tmp_pack_* debris; see open-walnut logs -s git';
   return { liveBytes, debrisBytes, sweptBytes, over, warning };
+}
+
+/**
+ * Called after the worktree adopts a rewritten upstream. A no-merge-base fetch
+ * cannot negotiate shared blobs, so the new chain arrives as a second full pack
+ * beside the old one: 2026-10-12 the cloud box went from 2.1GB to 3.5GB of
+ * "live" packs and stayed there 9 hours, until a restart let maintenance run.
+ * git-maintenance registers here (it imports this module, not the reverse).
+ */
+let rewriteAdoptedListener: (() => void) | null = null;
+export function setRewriteAdoptedListener(fn: (() => void) | null): void {
+  rewriteAdoptedListener = fn;
 }
 
 /** Test hook: reset the sentinel's throttle window. */

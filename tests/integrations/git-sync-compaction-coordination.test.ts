@@ -147,6 +147,87 @@ describe('sync adopts a rewritten upstream (post-compaction force-push)', () => 
     expect(await fsp.readFile(path.join(tmpDir, 'data.txt'), 'utf-8')).toBe('v2\n');
   });
 
+  // 2026-10-12: the cloud box adopted a rewrite at 11:05 and then held the old
+  // pack beside a full copy of the new chain (2.1GB of data as 3.5GB of packs)
+  // for 9 hours, raising "Data Repo Growing Too Large" twice, until a restart
+  // happened to let maintenance run. The adoption itself now asks for the gc.
+  it('an adoption brings a maintenance pass forward instead of leaving duplicate packs until the daily check', async () => {
+    const { startGitMaintenance, readLastRun } = await import('../../src/integrations/git-maintenance.js');
+    const marker = path.join(tmpDir, '.git', 'walnut-last-maintenance');
+    // Maintained a minute ago with room to grow: nothing but the rewrite can make a pass due.
+    const lastAt = Date.now() - 60_000;
+    await fsp.writeFile(marker, JSON.stringify({ at: lastAt, packBytesAfter: 1024 ** 3 }));
+    const handle = startGitMaintenance({ startDelayMs: 60 * 60_000, rewriteDelayMs: 50 });
+    try {
+      await fsp.writeFile(path.join(other, 'data.txt'), 'v2\n', 'utf-8');
+      sh('git add -A && git commit -m v2', other);
+      const newRoot = compactAndForcePush('main^{tree}');
+      await fsp.writeFile(path.join(tmpDir, 'data.txt'), 'local-edit\n', 'utf-8');
+      sh('git add -A && git commit -m "local edit"', tmpDir);
+
+      await sync();
+      expect(sh('git rev-parse HEAD', tmpDir)).toBe(newRoot);
+
+      const deadline = Date.now() + 30_000;
+      while (readLastRun(path.join(tmpDir, '.git')).at === lastAt && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(readLastRun(path.join(tmpDir, '.git')).at).toBeGreaterThan(lastAt);
+      // The gc kept the parked chain: the backup ref still resolves.
+      expect(sh('git show pre-rewrite-backup:data.txt', tmpDir)).toBe('local-edit');
+      expect(sh('git fsck --no-progress', tmpDir)).not.toMatch(/missing|error/i);
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('a rewrite pass that had to stand down keeps the rewrite for the next pass', async () => {
+    const { startGitMaintenance, readLastRun } = await import('../../src/integrations/git-maintenance.js');
+    const gitDir = path.join(tmpDir, '.git');
+    const lastAt = Date.now() - 60_000;
+    await fsp.writeFile(path.join(gitDir, 'walnut-last-maintenance'), JSON.stringify({ at: lastAt, packBytesAfter: 1024 ** 3 }));
+    const handle = startGitMaintenance({ startDelayMs: 60 * 60_000, rewriteDelayMs: 200 });
+    try {
+      await fsp.writeFile(path.join(other, 'data.txt'), 'v2\n', 'utf-8');
+      sh('git add -A && git commit -m v2', other);
+      compactAndForcePush('main^{tree}');
+      await fsp.writeFile(path.join(tmpDir, 'data.txt'), 'local-edit\n', 'utf-8');
+      sh('git add -A && git commit -m "local edit"', tmpDir);
+      await sync();
+
+      // Compaction holds the repo when the rewrite pass fires: it stands down.
+      setCompactionInProgress(true);
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(readLastRun(gitDir).at).toBe(lastAt);
+
+      // The next pass (here the daily tick's) still runs the rewrite gc.
+      setCompactionInProgress(false);
+      const [worktree] = await handle.runOnce();
+      expect(worktree.reason).toBe('rewrite');
+      expect(worktree.ran).toBe(true);
+      expect(readLastRun(gitDir).at).toBeGreaterThan(lastAt);
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('an ordinary merge does not ask for a maintenance pass', async () => {
+    const { setRewriteAdoptedListener } = await import('../../src/integrations/git-sync.js');
+    let adopted = 0;
+    setRewriteAdoptedListener(() => { adopted++; });
+    try {
+      await fsp.writeFile(path.join(other, 'theirs.txt'), 'theirs\n', 'utf-8');
+      sh('git add -A && git commit -m theirs', other);
+      sh('git push origin main', other);
+      await fsp.writeFile(path.join(tmpDir, 'data.txt'), 'local-edit\n', 'utf-8');
+      sh('git add -A && git commit -m "local edit"', tmpDir);
+      await sync();
+      expect(adopted).toBe(0);
+    } finally {
+      setRewriteAdoptedListener(null);
+    }
+  });
+
   it('shared-ancestry rewrite (filter-repo style): adopts the force-moved upstream instead of merging the old chain back', async () => {
     // Both sides share `base` AND `v2`: the primary publishes v2 normally and
     // local pulls it, so the later rewrite keeps a common ancestor.
