@@ -232,6 +232,8 @@ class Endpoint implements StreamEndpoint {
       return
     }
     const stream = new LinkStream(this, sid)
+    // The owner may reject before a socket or HTTP consumer installs its listener.
+    stream.on('error', () => {})
     this.streams.set(sid, stream)
     try {
       this.send({ cmd: 'stream.accept', sid })

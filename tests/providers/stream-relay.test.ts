@@ -141,6 +141,18 @@ describe('a stream through the daemon', () => {
     }
   })
 
+  it('an owner rejecting an accepted stream before installing a consumer reports the refusal without crashing', async () => {
+    const h = harness({ accept: () => (stream) => {
+      queueMicrotask(() => stream.destroy(new Error('the host entry is closed')))
+    } })
+    const stream = await h.follower.ep!.open('primary')
+    const error = new Promise<Error>(resolve => stream.once('error', resolve))
+    expect((await error).message).toBe('the host entry is closed')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(h.relay.count()).toBe(0)
+    expect(h.primary.ep!.size()).toBe(0)
+  })
+
   it('an open to nobody, or one the other side refuses, fails with the reason', async () => {
     const h = harness({ accept: () => null })
     await expect(h.follower.ep!.open('companion')).rejects.toThrow('nobody there')
