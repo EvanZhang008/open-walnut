@@ -41,6 +41,7 @@ describe('tunnelAdmission', () => {
     ['a phone device token', PHONE, 403, 'not_primary'],
     ['an API key', API_KEY, 403, 'not_primary'],
     ["another host's machine token", OTHER_MACHINE, 403, 'not_primary'],
+    ['a status-only primary token', { name: 'bridge-local', kind: 'machine', bridgeScope: 'status-only' }, 403, 'not_primary'],
   ] as const)('refuses %s', (_label, cred, status, refusal) => {
     const a = tunnelAdmission(cred, true)
     expect(a.ok).toBe(false)

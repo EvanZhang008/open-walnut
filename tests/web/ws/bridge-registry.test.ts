@@ -23,7 +23,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-bridge-te
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
-import { createDevice, _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
+import { createDevice, revokeDevice, notifyRevoked, verifyDeviceToken, _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { _resetAuthRateLimitForTesting } from '../../../src/web/middleware/auth-rate-limit.js'
 import { OFFLINE_ANNOUNCE_DELAY_MS } from '../../../src/web/ws/bridge-presence.js'
 
@@ -54,6 +54,9 @@ interface FakeDaemon {
 function connectFakeDaemon(token: string, hostAlias: string, opts?: {
   alive?: boolean
   sendResult?: Record<string, unknown>
+  ignorePing?: boolean
+  deferHello?: boolean
+  helloFields?: Record<string, unknown>
 }): Promise<FakeDaemon> {
   const ws = new WebSocket(`ws://localhost:${port}/bridge?token=${token}`)
   const daemon: FakeDaemon = {
@@ -70,7 +73,9 @@ function connectFakeDaemon(token: string, hostAlias: string, opts?: {
     const { id, cmd, sid } = msg as { id?: number; cmd?: string; sid?: string }
     if (typeof id !== 'number') return
     // Answer like a live daemon whose session SID exists and runs.
-    if (cmd === 'status') {
+    if (cmd === 'ping') {
+      if (!opts?.ignorePing) daemon.send({ id, ok: true, pong: true, nonce: msg.nonce })
+    } else if (cmd === 'status') {
       daemon.send({ id, ok: true, exists: sid === SID, alive: (sid === SID) && (opts?.alive ?? true), pid: 4242, state: 'running' })
     } else if (cmd === 'appendUserMarker') {
       daemon.send({ id, ok: true, size: 1024 })
@@ -92,7 +97,7 @@ function connectFakeDaemon(token: string, hostAlias: string, opts?: {
   })
   return new Promise((resolve, reject) => {
     ws.on('open', () => {
-      daemon.send({ ev: 'hello', hostAlias, version: 'test-1', instanceId: 'i-test', sids: [SID] })
+      if (!opts?.deferHello) daemon.send({ ev: 'hello', hostAlias, version: 'test-1', instanceId: 'i-test', sids: [SID], ...opts?.helloFields })
       // Give the server a beat to register before tests fire requests.
       setTimeout(() => resolve(daemon), 150)
     })
@@ -176,6 +181,7 @@ beforeAll(async () => {
   if (!addr || typeof addr === 'string') throw new Error('no port')
   port = addr.port
   ;({ token: deviceToken } = await createDevice('phone'))
+  await import('../../../src/core/device-auth.js').then(async ({ setCompanionOwner }) => setCompanionOwner('phone'))
   ;({ token: machineToken } = await createDevice(`bridge-${HOST}`, { kind: 'machine' }))
 
   // Session projection file: the cloud endpoints look up session→host here.
@@ -224,6 +230,154 @@ describe('machine token scoping', () => {
       ws.on('error', () => resolve(true))
     })
     expect(failed).toBe(true)
+  })
+})
+
+describe('outbound host status and revocation', () => {
+  const headers = () => ({ Authorization: `Bearer ${deviceToken}` })
+
+  it('persists the owner-minted status-only scope and denies broader bridge traffic', async () => {
+    const host = 'scoped-peer'
+    const minted = await fetch(apiUrl('/api/devices'), {
+      method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `bridge-${host}`, kind: 'machine', bridge_scope: 'status-only' }),
+    })
+    expect(minted.status).toBe(201)
+    const { token } = await minted.json() as { token: string }
+    expect(await verifyDeviceToken(token, { touch: false })).toMatchObject({ bridgeScope: 'status-only' })
+    const { bridgeHosts, bridgeRequest } = await import('../../../src/web/ws/bridge-registry.js')
+    const daemon = await connectFakeDaemon(token, host, { helloFields: { scope: 'full', bridgeScope: 'full', uplink: 1 } })
+    try {
+      expect(bridgeHosts().some((h) => h.hostAlias === host)).toBe(true)
+      expect(bridgeHosts({ executionOnly: true }).some((h) => h.hostAlias === host)).toBe(false)
+      expect((await fetch(apiUrl(`/api/hosts/${host}/status`), { headers: headers() })).status).toBe(200)
+      for (const cmd of ['leader.witness', 'leader.claim', 'send', 'fs.read', 'attach']) {
+        await expect(bridgeRequest(host, cmd)).rejects.toThrow('Status-only bridge refuses this command')
+      }
+      await expect(bridgeRequest(host, 'ping', { cmd: 'send' })).rejects.toThrow('Status-only bridge refuses these parameters')
+      await expect(bridgeRequest(host, 'status', { sid: 'foreign' })).rejects.toThrow('Status-only bridge refuses these parameters')
+      expect(daemon.received.every((msg) => msg.cmd === 'ping')).toBe(true)
+      daemon.send({ ev: 'gateway-request', relayId: 1, capability: 'tools.call', walnutId: 'foreign', epoch: 1,
+        payload: { name: 'task_create', args: { title: 'Should not exist', record_only: true } } })
+      await waitFor(() => daemon.closedWith !== null)
+      expect(daemon.closedWith?.code).toBe(4001)
+    } finally { daemon.close() }
+    for (const ev of ['stream-open', 'mobile-event', 'chunk', 'session_state']) {
+      const peer = await connectFakeDaemon(token, host)
+      try {
+        peer.send({ ev, from: 'follower', sid: 'foreign', data: {} })
+        await waitFor(() => peer.closedWith !== null)
+        expect(peer.closedWith?.code).toBe(4001)
+      } finally { peer.close() }
+    }
+  })
+
+  it('a paired non-owner cannot mint a status-only credential', async () => {
+    const { token } = await createDevice('guest-client')
+    const res = await fetch(apiUrl('/api/devices'), {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'bridge-guest', kind: 'machine', bridge_scope: 'status-only' }),
+    })
+    expect(res.status).toBe(409)
+  })
+
+  it('rejects unsupported credential scopes rather than silently minting broad authority', async () => {
+    const res = await fetch(apiUrl('/api/devices'), {
+      method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'bridge-invalid-scope', kind: 'machine', bridge_scope: 'unrecognized' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('requires client authentication and refuses a machine token on status', async () => {
+    expect((await fetch(apiUrl(`/api/hosts/${HOST}/status`))).status).toBe(401)
+    expect((await fetch(apiUrl(`/api/hosts/${HOST}/status`), {
+      headers: { Authorization: `Bearer ${machineToken}` },
+    })).status).toBe(401)
+  })
+
+  it('confirms fresh concurrent round trips and recovers after disconnect', async () => {
+    const host = 'status-peer'
+    const { token } = await createDevice(`bridge-${host}`, { kind: 'machine' })
+    const first = await connectFakeDaemon(token, host)
+    try {
+      const replies = await Promise.all(Array.from({ length: 12 }, async () => {
+        const res = await fetch(apiUrl(`/api/hosts/${host}/status`), { headers: headers() })
+        expect(res.status).toBe(200)
+        return res.json()
+      }))
+      expect(replies).toEqual(Array.from({ length: 12 }, () => ({ host, connected: true, transport: 'outbound_bridge' })))
+      const pings = first.received.filter((m) => m.cmd === 'ping')
+      expect(new Set(pings.map((m) => m.nonce)).size).toBe(12)
+      first.close()
+      await waitFor(() => first.closedWith !== null)
+      const offline = await fetch(apiUrl(`/api/hosts/${host}/status`), { headers: headers() })
+      expect(offline.status).toBe(503)
+      expect(await offline.json()).toEqual({ host, connected: false, code: 'bridge_offline' })
+      const second = await connectFakeDaemon(token, host)
+      try {
+        expect((await fetch(apiUrl(`/api/hosts/${host}/status`), { headers: headers() })).status).toBe(200)
+      } finally { second.close() }
+    } finally { first.close() }
+  })
+
+  it('answers degraded when a registered peer does not answer within five seconds', async () => {
+    const host = 'silent-peer'
+    const { token } = await createDevice(`bridge-${host}`, { kind: 'machine' })
+    const daemon = await connectFakeDaemon(token, host, { ignorePing: true })
+    try {
+      const started = performance.now()
+      const res = await fetch(apiUrl(`/api/hosts/${host}/status`), { headers: headers() })
+      expect(performance.now() - started).toBeGreaterThanOrEqual(4_900)
+      expect(performance.now() - started).toBeLessThan(7_000)
+      expect(res.status).toBe(503)
+      expect(await res.json()).toEqual({ host, connected: false, code: 'bridge_unavailable' })
+    } finally { daemon.close() }
+  }, 15_000)
+
+  it('revocation cuts an established peer and its pending status request, and rejects the old token', async () => {
+    const host = 'revoked-peer'
+    const name = `bridge-${host}`
+    const { token } = await createDevice(name, { kind: 'machine' })
+    const daemon = await connectFakeDaemon(token, host, { ignorePing: true })
+    try {
+      const pending = fetch(apiUrl(`/api/hosts/${host}/status`), { headers: headers() })
+      await waitFor(() => daemon.received.some((m) => m.cmd === 'ping'))
+      expect(await revokeDevice(name)).toBe(true)
+      await waitFor(() => daemon.closedWith !== null)
+      expect(daemon.closedWith?.code).toBe(4001)
+      const res = await pending
+      expect(res.status).toBe(503)
+      expect(await res.json()).toEqual({ host, connected: false, code: 'bridge_unavailable' })
+      const denied = await new Promise<boolean>((resolve) => {
+        const ws = new WebSocket(`ws://localhost:${port}/bridge`, { headers: { Authorization: `Bearer ${token}` } })
+        ws.on('open', () => { ws.close(); resolve(false) })
+        ws.on('error', () => resolve(true))
+      })
+      expect(denied).toBe(true)
+      const { token: replacement } = await createDevice(name, { kind: 'machine' })
+      const fresh = await connectFakeDaemon(replacement, host)
+      try {
+        notifyRevoked([name])
+        expect((await fetch(apiUrl(`/api/hosts/${host}/status`), { headers: headers() })).status).toBe(200)
+        expect(fresh.closedWith).toBeNull()
+      } finally { fresh.close() }
+    } finally { daemon.close() }
+  })
+
+  it('revocation cuts a peer before hello', async () => {
+    const host = 'waiting-peer'
+    const name = `bridge-${host}`
+    const { token } = await createDevice(name, { kind: 'machine' })
+    const daemon = await connectFakeDaemon(token, host, { deferHello: true })
+    try {
+      expect(await revokeDevice(name)).toBe(true)
+      await waitFor(() => daemon.closedWith !== null)
+      expect(daemon.closedWith?.code).toBe(4001)
+      const res = await fetch(apiUrl(`/api/hosts/${host}/status`), { headers: headers() })
+      expect(res.status).toBe(503)
+      expect(await res.json()).toEqual({ host, connected: false, code: 'bridge_offline' })
+    } finally { daemon.close() }
   })
 })
 

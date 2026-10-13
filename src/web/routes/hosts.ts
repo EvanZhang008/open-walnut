@@ -14,6 +14,7 @@
  */
 
 import { Router } from 'express'
+import { randomBytes } from 'node:crypto'
 import { CLOUD_MODE } from '../../constants.js'
 import { getConfig } from '../../core/config-manager.js'
 import { buildHostStatus, listStatusHosts, type HostStatus } from '../../core/hosts/host-status.js'
@@ -56,6 +57,39 @@ hostsRouter.get('/status', async (_req, res, next) => {
     // "off" answer and the warmup's credential clock all ride hostStatusFrame.
     for (const { key, def } of entries) hosts.push(hostStatusFrame(key, def))
     res.json({ hosts })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// A live round trip over an already registered outbound bridge; never dials SSH.
+hostsRouter.get('/:host/status', async (req, res, next) => {
+  const host = String(req.params.host ?? '')
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$/.test(host)) {
+    res.status(400).json({ error: 'Invalid host alias' })
+    return
+  }
+  if (!CLOUD_MODE) {
+    res.status(409).json({ error: 'Outbound host status is served by the cloud companion' })
+    return
+  }
+  try {
+    const { bridgeForHost, bridgeRequest } = await import('../ws/bridge-registry.js')
+    if (!bridgeForHost(host).connected) {
+      res.status(503).json({ host, connected: false, code: 'bridge_offline' })
+      return
+    }
+    const nonce = randomBytes(16).toString('hex')
+    try {
+      const reply = await bridgeRequest(host, 'ping', { nonce }, 5_000)
+      if (reply.ok !== true || reply.pong !== true || reply.nonce !== nonce) {
+        res.status(503).json({ host, connected: false, code: 'bridge_unconfirmed' })
+        return
+      }
+      res.json({ host, connected: true, transport: 'outbound_bridge' })
+    } catch {
+      res.status(503).json({ host, connected: false, code: 'bridge_unavailable' })
+    }
   } catch (err) {
     next(err)
   }

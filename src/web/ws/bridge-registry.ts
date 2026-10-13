@@ -36,6 +36,7 @@ import {
   type BridgeWireStats, type ChunkAssembler,
 } from './bridge-wire.js'
 import { eventLoopP99Ms } from '../../core/event-loop-monitor.js'
+import { onCredentialsRevoked } from '../../core/device-auth.js'
 import {
   sessionChannelKey, scheduleOfflineAnnouncement, cancelOfflineAnnouncement, offlineAnnouncementPending,
   markAnnouncedOffline, announceOnline, forgetPresence, clearBridgePresence,
@@ -51,6 +52,10 @@ interface BridgeConn {
   ws: WebSocket
   hostAlias: string
   deviceName: string
+  order: number
+  scope?: 'status-only'
+  stillValid?: () => Promise<boolean>
+  validating?: boolean
   version?: string
   instanceId?: string
   since: number
@@ -105,7 +110,19 @@ const SILENCE_SWEEP_MS = 30_000
 
 const bridges = new Map<string, BridgeConn>()
 /** Sockets that connected but haven't sent their hello yet. */
-const preHello = new Map<WebSocket, { deviceName: string; timer: NodeJS.Timeout; stats: BridgeWireStats }>()
+interface PendingHello {
+  deviceName: string
+  order: number
+  scope?: 'status-only'
+  timer: NodeJS.Timeout
+  stats: BridgeWireStats
+  stillValid?: () => Promise<boolean>
+  verifying?: boolean
+  queued: string[]
+  queuedBytes: number
+}
+const preHello = new Map<WebSocket, PendingHello>()
+let bridgeOrder = 0
 /**
  * Durable phone interest per host. `attachSent` is per-SOCKET idempotence and
  * dies with the conn — when a bridge redials, the new conn must re-attach
@@ -141,6 +158,13 @@ function ensureSilenceSweep(): void {
   silenceSweepTimer = setInterval(() => {
     const now = Date.now()
     for (const conn of bridges.values()) {
+      if (conn.stillValid && !conn.validating) {
+        conn.validating = true
+        void credentialStillValid(conn.stillValid).then((valid) => {
+          conn.validating = false
+          if (!valid && bridges.get(conn.hostAlias) === conn) revokeBridge(conn)
+        })
+      }
       if (now - conn.lastInbound > SILENCE_MS) {
         log.ws.warn('bridge: host silent — dropping', {
           hostAlias: conn.hostAlias, silentMs: now - conn.lastInbound,
@@ -276,9 +300,11 @@ function forwardJsonlLine(sessionId: string, line: string): void {
 }
 
 function handleFrame(conn: BridgeConn, raw: string): void {
+  if (conn.scope === 'status-only' && Buffer.byteLength(raw) > 65_536) { revokeBridge(conn); return }
   conn.lastInbound = Date.now()
   let msg: Record<string, unknown>
   try { msg = JSON.parse(raw) } catch { return }
+  if (!msg || typeof msg !== 'object' || Array.isArray(msg) || msg.ev !== undefined && typeof msg.ev !== 'string') return
   if (conn.hostAlias === PRIMARY_ALIAS && primaryBridgeActivityHandlers.size && Date.now() - primaryBridgeActivityAt >= 15_000) {
     primaryBridgeActivityAt = Date.now()
     for (const handler of primaryBridgeActivityHandlers) {
@@ -288,6 +314,10 @@ function handleFrame(conn: BridgeConn, raw: string): void {
 
   // A paced daemon splits big frames once we asked it to (bridge.peer): the
   // joined parts are the original frame.
+  if (conn.scope === 'status-only' && msg.ev && msg.ev !== 'bridge-ping') {
+    revokeBridge(conn)
+    return
+  }
   if (msg.ev === 'chunk') {
     const whole = conn.chunks.accept(msg)
     if (whole !== null) handleFrame(conn, whole)
@@ -461,7 +491,52 @@ export function addBridgeConnectedHandler(handler: (hostAlias: string) => void):
  * Wire an authenticated /bridge socket. Registration completes when the
  * daemon's hello arrives (carries the hostAlias).
  */
-export function attachBridge(ws: WebSocket, deviceName: string, meta?: { clientIp?: string | null }): void {
+let stopRevokeWatch: (() => void) | null = null
+
+async function credentialStillValid(check: () => Promise<boolean>): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      check(),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 5_000) }),
+    ])
+  } catch {
+    return false
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function revokeBridge(conn: BridgeConn): void {
+  conn.stats.initiator = 'none'
+  dropBridge(conn, 'credential revoked')
+  try { conn.ws.close(CLOSE_UNAUTHORIZED, 'credential revoked') } catch { /* already closed */ }
+}
+
+function watchBridgeRevocations(): void {
+  stopRevokeWatch ??= onCredentialsRevoked((names) => {
+    const affected = [
+      ...[...preHello].filter(([, waiting]) => names.includes(waiting.deviceName)).map(([ws, waiting]) => ({ ws, check: waiting.stillValid })),
+      ...[...bridges.values()].filter((conn) => names.includes(conn.deviceName)).map((conn) => ({ ws: conn.ws, check: conn.stillValid })),
+    ]
+    for (const { ws, check } of affected) {
+      const closeRevoked = (valid: boolean): void => {
+        if (valid) return
+        const waiting = preHello.get(ws)
+        if (waiting) { clearTimeout(waiting.timer); preHello.delete(ws) }
+        const conn = findConn(ws)
+        if (conn) revokeBridge(conn)
+        else try { ws.close(CLOSE_UNAUTHORIZED, 'credential revoked') } catch { /* already closed */ }
+      }
+      // A delayed name notification must not revoke a new token of that name.
+      if (check) void credentialStillValid(check).then(closeRevoked)
+      else closeRevoked(false)
+    }
+  })
+}
+
+export function attachBridge(ws: WebSocket, deviceName: string, meta?: { clientIp?: string | null; stillValid: () => Promise<boolean>; scope?: 'status-only' }): void {
+  watchBridgeRevocations()
   ensureSilenceSweep()
   const stats = newBridgeWireStats(meta?.clientIp ?? null)
   // A daemon that never says hello is holding a slot — drop it.
@@ -470,7 +545,7 @@ export function attachBridge(ws: WebSocket, deviceName: string, meta?: { clientI
     stats.initiator = 'hello-timeout'
     try { ws.close() } catch { /* already closed */ }
   }, 10_000)
-  preHello.set(ws, { deviceName, timer: helloTimer, stats })
+  preHello.set(ws, { deviceName, order: ++bridgeOrder, timer: helloTimer, stats, stillValid: meta?.stillValid, scope: meta?.scope, queued: [], queuedBytes: 0 })
 
   ws.on('message', (data) => {
     const raw = data.toString()
@@ -478,12 +553,48 @@ export function attachBridge(ws: WebSocket, deviceName: string, meta?: { clientI
 
     const waiting = preHello.get(ws)
     if (waiting) {
+      if (waiting.scope === 'status-only' && Buffer.byteLength(raw) > 65_536) {
+        clearTimeout(waiting.timer)
+        preHello.delete(ws)
+        try { ws.close(1009, 'status frame too large') } catch { /* already closed */ }
+        return
+      }
+      if (waiting.verifying) {
+        waiting.queuedBytes += Buffer.byteLength(raw)
+        if (waiting.queued.length >= 64 || waiting.queuedBytes > 1_048_576) {
+          clearTimeout(waiting.timer)
+          preHello.delete(ws)
+          try { ws.close(1009, 'hello buffer full') } catch { /* already closed */ }
+        } else {
+          waiting.queued.push(raw)
+        }
+        return
+      }
       let msg: Record<string, unknown>
       try { msg = JSON.parse(raw) } catch { return }
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return
       if (msg.ev !== 'hello' || typeof msg.hostAlias !== 'string') return
-      clearTimeout(waiting.timer)
-      preHello.delete(ws)
-      registerBridge(ws, waiting.deviceName, msg, waiting.stats)
+      const finishHello = (valid: boolean): void => {
+        if (preHello.get(ws) !== waiting) return
+        clearTimeout(waiting.timer)
+        preHello.delete(ws)
+        if (!valid || ws.readyState !== undefined && ws.readyState !== 1) {
+          try { ws.close(CLOSE_UNAUTHORIZED, 'credential revoked') } catch { /* already closed */ }
+          return
+        }
+        registerBridge(ws, waiting.deviceName, msg, waiting.stats, waiting.stillValid, waiting.order, waiting.scope)
+        const conn = findConn(ws)
+        if (conn) for (const queued of waiting.queued) {
+          if (findConn(ws) !== conn) break
+          handleFrame(conn, queued)
+        }
+      }
+      if (waiting.stillValid) {
+        waiting.verifying = true
+        void credentialStillValid(waiting.stillValid).then(finishHello)
+      } else {
+        finishHello(true)
+      }
       return
     }
 
@@ -530,12 +641,12 @@ function tokenBoundAlias(deviceName: string): string {
   return alias === 'local' ? '__local__' : alias
 }
 
-function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string, unknown>, stats: BridgeWireStats): void {
+function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string, unknown>, stats: BridgeWireStats, stillValid: (() => Promise<boolean>) | undefined, order: number, scope?: 'status-only'): void {
   const hostAlias = hello.hostAlias as string
   if (typeof hello.connId === 'string') stats.connId = hello.connId.slice(0, 80)
   stats.hostAlias = hostAlias.slice(0, 120)
   const boundAlias = tokenBoundAlias(deviceName)
-  if (hostAlias !== boundAlias) {
+  if (hostAlias !== boundAlias || scope === 'status-only' && hostAlias === PRIMARY_ALIAS) {
     // Token identity and claimed host disagree — impersonation attempt (or a
     // misconfigured daemon). Refuse rather than let it take the host's slot.
     log.ws.warn('bridge: hello hostAlias does not match token identity — rejecting', {
@@ -546,6 +657,11 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     return
   }
   const existing = bridges.get(hostAlias)
+  if (existing && existing.order > order) {
+    stats.initiator = 'replaced'
+    try { ws.close(CLOSE_REPLACED, 'superseded') } catch { /* already closed */ }
+    return
+  }
   if (existing) {
     log.ws.info('bridge: replacing existing connection', { hostAlias })
     existing.stats.initiator = 'replaced'
@@ -556,6 +672,9 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     ws,
     hostAlias,
     deviceName,
+    order,
+    scope,
+    stillValid,
     version: hello.version as string | undefined,
     instanceId: hello.instanceId as string | undefined,
     since: Date.now(),
@@ -582,14 +701,14 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     connId: stats.connId,
   })
   // A paced daemon (hello.uplink) may cut big frames for us: say how big.
-  if (hello.uplink === 1) {
+  if (scope !== 'status-only' && hello.uplink === 1) {
     void bridgeRequest(hostAlias, 'bridge.peer', { chunkBytes: REPLICA_CHUNK_BYTES }).catch(() => { /* frames stay whole */ })
   }
   // Re-attach sessions that still have live phone SSE consumers, THEN tell
   // the phones that were told it was gone that it is back. Interest survives
   // the socket (see hostInterest); without this, a redial left every open
   // conversation on "offline" until the user backed out and reopened it.
-  void reattachInterestedSessions(conn)
+  if (scope !== 'status-only') void reattachInterestedSessions(conn)
   // Anything that banked work during the outage gets a chance to drain now
   // (Phase 4's task-op queue). Guarded: a throwing handler must not abort the
   // registration that just succeeded.
@@ -749,8 +868,8 @@ export function lastBridgeLossAt(hostAlias: string): number | null {
   return bridgeLossAt.get(hostAlias) ?? null
 }
 
-export function bridgeHosts(): Array<{ hostAlias: string; since: number; version?: string }> {
-  return [...bridges.values()].map((c) => ({
+export function bridgeHosts(opts: { executionOnly?: boolean } = {}): Array<{ hostAlias: string; since: number; version?: string }> {
+  return [...bridges.values()].filter((c) => !opts.executionOnly || c.scope !== 'status-only').map((c) => ({
     hostAlias: c.hostAlias, since: c.since, version: c.version,
   }))
 }
@@ -783,6 +902,11 @@ export function bridgeRequest(
 ): Promise<Record<string, unknown>> {
   const conn = bridges.get(hostAlias)
   if (!conn) return Promise.reject(new BridgeOfflineError(hostAlias))
+  if (conn.scope === 'status-only') {
+    if (cmd !== 'ping' && cmd !== 'status') return Promise.reject(new Error('Status-only bridge refuses this command'))
+    const allowed = cmd === 'ping' ? ['nonce', 'ackSeq'] : ['nonce']
+    if (Object.keys(params).some((key) => !allowed.includes(key))) return Promise.reject(new Error('Status-only bridge refuses these parameters'))
+  }
   const id = ++conn.cmdCounter
   const frame = JSON.stringify({ id, cmd, ...params })
   return new Promise((resolve, reject) => {
@@ -853,4 +977,6 @@ export function closeAllBridges(): void {
   clearBridgePresence()
   lastCliState.clear()
   if (silenceSweepTimer) { clearInterval(silenceSweepTimer); silenceSweepTimer = null }
+  stopRevokeWatch?.()
+  stopRevokeWatch = null
 }

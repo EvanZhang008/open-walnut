@@ -41,6 +41,7 @@ export interface DeviceRecord {
    * upgrade, rejected on every REST route. Absent = normal paired device.
    */
   kind?: 'machine'
+  bridgeScope?: 'status-only'
   /**
    * What the device is, recorded once: at its first self-report (the setup
    * claim's, when it carried one), or from the report it had when this field

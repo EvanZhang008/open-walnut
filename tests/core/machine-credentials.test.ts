@@ -207,6 +207,27 @@ describe('minting, rotating and revoking on a real auth.json', () => {
     expect(await verifyDeviceToken(first.token)).toBeNull()
   })
 
+  it('the owner mints a persisted status-only scope and rotation cannot drop it', async () => {
+    const first = await mintMachineCredential('bridge-status-peer', { by: by('mac-a'), bridgeScope: 'status-only' })
+    expect((await record('bridge-status-peer'))?.bridgeScope).toBe('status-only')
+    expect(await verifyDeviceToken(first.token, { touch: false })).toEqual({ name: 'bridge-status-peer', kind: 'machine', bridgeScope: 'status-only' })
+    const second = await mintMachineCredential('bridge-status-peer', { by: by('mac-a'), replace: true })
+    expect((await record('bridge-status-peer'))?.bridgeScope).toBe('status-only')
+    expect(await verifyDeviceToken(first.token, { touch: false })).toBeNull()
+    expect(await verifyDeviceToken(second.token, { touch: false })).toMatchObject({ bridgeScope: 'status-only' })
+  })
+
+  it('refuses a status-only scope for the primary credential', async () => {
+    expect(await refusal(mintMachineCredential('bridge-local', { by: by('mac-a'), bridgeScope: 'status-only' })))
+      .toMatchObject({ status: 400, code: 'invalid_bridge_scope' })
+    expect(await record('bridge-local')).toBeUndefined()
+  })
+
+  it('a scoped machine token cannot mint another credential', async () => {
+    const peer = await mintMachineCredential('bridge-status-peer', { by: by('mac-a'), bridgeScope: 'status-only' })
+    expect(await refusal(mintMachineCredential('bridge-other', { by: { token: peer.token } }))).toMatchObject({ status: 403, code: 'machine_needs_device' })
+  })
+
   it('without replace an existing name answers "already exists"', async () => {
     await mintMachineCredential('bridge-local', { by: by('mac-a') })
     await expect(mintMachineCredential('bridge-local', { by: by('mac-a') })).rejects.toThrow(/already exists/)

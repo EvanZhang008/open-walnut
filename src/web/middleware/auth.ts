@@ -71,9 +71,9 @@ function requestIp(req: Request): string {
  * kind 'machine' = daemon bridge credential — valid ONLY for the /bridge WS
  * upgrade; every other consumer must reject it.
  */
-export async function validateBearerCredential(token: string): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine' } | null> {
+export async function validateBearerCredential(token: string): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine'; bridgeScope?: 'status-only' } | null> {
   const device = await verifyDeviceToken(token)
-  if (device) return { name: device.name, kind: device.kind === 'machine' ? 'machine' : 'device' }
+  if (device) return { name: device.name, kind: device.kind === 'machine' ? 'machine' : 'device', ...(device.bridgeScope ? { bridgeScope: device.bridgeScope } : {}) }
   const keyName = await validateApiKey(token)
   if (keyName) return { name: keyName, kind: 'api_key' }
   return null

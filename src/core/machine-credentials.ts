@@ -52,7 +52,7 @@ const NOT_MACHINE = 'That name already belongs to a paired device.'
 export type MachineCredentialAction = 'mint' | 'replace' | 'revoke' | 'adopt'
 
 export type MachineRefusalCode =
-  | 'machine_needs_device' | 'phone_cannot_mint' | 'other_mac_connected' | 'not_companion_owner' | 'not_machine'
+  | 'machine_needs_device' | 'phone_cannot_mint' | 'other_mac_connected' | 'not_companion_owner' | 'not_machine' | 'invalid_bridge_scope'
 
 type Refusal = { ok: false; status: 400 | 403 | 409; code: MachineRefusalCode; error: string }
 
@@ -161,8 +161,11 @@ function refuse(d: Refusal): never {
  */
 export async function mintMachineCredential(
   name: string,
-  opts: { by: DeviceActor; replace?: boolean; proof?: string },
+  opts: { by: DeviceActor; replace?: boolean; proof?: string; bridgeScope?: 'status-only' },
 ): Promise<{ name: string; token: string; createdAt: string; replaced: boolean }> {
+  if (opts.bridgeScope === 'status-only' && name === PRIMARY_MACHINE_CREDENTIAL) {
+    throw new MachineCredentialRefused(400, 'invalid_bridge_scope', 'The primary credential cannot be status-only')
+  }
   const out = await updateAuth((auth) => {
     const decision = machineCredentialDecision(auth, { by: opts.by, name, action: opts.replace ? 'replace' : 'mint', proof: opts.proof })
     if (!decision.ok) refuse(decision)
@@ -175,6 +178,8 @@ export async function mintMachineCredential(
     if (!me.tunnelDaemon) me.tunnelDaemon = { key: me.id }
     // A rotation keeps the daemon that serves the credential (its sessions).
     const { record, token } = newMachineRecord(name, me.id!, existing ? existing.daemonKey : daemonKeyFor(me))
+    const bridgeScope = opts.bridgeScope ?? existing?.bridgeScope
+    if (bridgeScope) record.bridgeScope = bridgeScope
     auth.devices = [...auth.devices.filter((d) => d.name !== name), record]
     return { persist: true, result: { name, token, createdAt: record.createdAt, replaced: existing !== undefined, owner: me.name, recorded: decision.record?.via ?? null } }
   })

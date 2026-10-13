@@ -215,7 +215,7 @@ export async function getBackupLeader(): Promise<BackupLeader | null> {
     instance = createBackupLeader({
       now: () => Date.now(),
       takeoverMs: takeoverMsFromEnv(),
-      hosts: () => registry.bridgeHosts().map((h) => h.hostAlias),
+      hosts: () => registry.bridgeHosts({ executionOnly: true }).map((h) => h.hostAlias),
       request: (host, cmd, params, timeoutMs) => registry.bridgeRequest(host, cmd, params, timeoutMs),
       stateFile: path.join(LEADER_STATE_DIR, 'companion.json'),
     })

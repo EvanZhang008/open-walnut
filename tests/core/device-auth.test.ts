@@ -119,6 +119,16 @@ describe('createDevice / verifyDeviceToken / revokeDevice round-trip', () => {
 });
 
 describe('lastUsedAt throttle', () => {
+  it('read-only credential checks never write usage and still reject revoked tokens', async () => {
+    const { token } = await createDevice('bridge-peer', { kind: 'machine' });
+    const before = await fs.readFile(authFile(), 'utf-8');
+    expect(await verifyDeviceToken(token, { touch: false })).toEqual({ name: 'bridge-peer', kind: 'machine' });
+    expect(await fs.readFile(authFile(), 'utf-8')).toBe(before);
+    expect(JSON.parse(before).devices[0].lastUsedAt).toBeUndefined();
+    await revokeDevice('bridge-peer');
+    expect(await verifyDeviceToken(token, { touch: false })).toBeNull();
+  });
+
   it('updates lastUsedAt on first verify, then throttles writes within a minute', async () => {
     const { token } = await createDevice('phone');
 

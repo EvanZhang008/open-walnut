@@ -222,7 +222,7 @@ export async function rotateDevice(
  * On success, updates the device's lastUsedAt — throttled to at most one disk
  * write per device per minute.
  */
-export async function verifyDeviceToken(token: string): Promise<{ name: string; kind?: 'machine' } | null> {
+export async function verifyDeviceToken(token: string, opts: { touch?: boolean } = {}): Promise<{ name: string; kind?: 'machine'; bridgeScope?: 'status-only' } | null> {
   if (!token || typeof token !== 'string') return null
   const { devices, revoked } = await readRegistryAndRevoked()
   const matched = recordForToken(devices, token)
@@ -235,7 +235,7 @@ export async function verifyDeviceToken(token: string): Promise<{ name: string; 
 
   const now = Date.now()
   const lastWrite = lastUsedWriteAt.get(matched.name) ?? 0
-  if (now - lastWrite >= LAST_USED_WRITE_THROTTLE_MS) {
+  if (opts.touch !== false && now - lastWrite >= LAST_USED_WRITE_THROTTLE_MS) {
     lastUsedWriteAt.set(matched.name, now)
     const name = matched.name
     // Best-effort — a failed lastUsedAt write must never fail auth. Locked RMW
@@ -255,7 +255,7 @@ export async function verifyDeviceToken(token: string): Promise<{ name: string; 
       })
     }
   }
-  return matched.kind ? { name: matched.name, kind: matched.kind } : { name: matched.name }
+  return matched.kind ? { name: matched.name, kind: matched.kind, ...(matched.bridgeScope === 'status-only' ? { bridgeScope: matched.bridgeScope } : {}) } : { name: matched.name }
 }
 
 export interface RevokeOptions {

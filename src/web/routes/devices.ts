@@ -378,6 +378,11 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
       && (await listDeviceRecords()).some((d) => d.name === name && d.kind === 'machine')
     const kind = req.body?.kind === 'machine' || existingMachine ? 'machine' as const : undefined
     const wantsCloud = req.body?.target === 'cloud' && !CLOUD_MODE
+    const bridgeScope = req.body?.bridge_scope
+    if (bridgeScope !== undefined && (bridgeScope !== 'status-only' || kind !== 'machine' || !CLOUD_MODE)) {
+      res.status(400).json({ error: 'bridge_scope requires a status-only machine credential on the companion' })
+      return
+    }
     // replace:true = "show me a new QR for this phone". Tokens are one-time and
     // unrecoverable, so re-pairing an existing phone (app reinstalled → iOS
     // wipes UserDefaults → the app forgot the server URL) MUST rotate the
@@ -413,7 +418,7 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     if (kind === 'machine' && CLOUD_MODE) {
       // Machine credentials open /bridge and /daemon-tunnel on this box: only
       // the companion's owner may mint or rotate one (machine-credentials.ts).
-      const minted = await mintMachineCredential(name, { by, replace, proof: machineProof(req) })
+      const minted = await mintMachineCredential(name, { by, replace, proof: machineProof(req), bridgeScope })
       log.web.info('devices: machine credential created via console', { name, caller: callerDevice(req) })
       res.status(201).json({ name, token: minted.token, pairingURI: buildPairingURI(name, minted.token, target?.origin), createdAt: minted.createdAt, target: target?.kind ?? null, server: target?.origin ?? null })
       return

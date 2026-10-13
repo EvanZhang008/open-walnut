@@ -31,7 +31,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { log } from '../../logging/index.js'
 import { TUNNEL_PROBE_HEADER, TUNNEL_REFUSAL_HEADER } from '../../core/hosts/cloud-box-host.js'
 
-export type TunnelCredential = { name: string; kind: 'device' | 'api_key' | 'machine' } | null
+export type TunnelCredential = { name: string; kind: 'device' | 'api_key' | 'machine'; bridgeScope?: 'status-only' } | null
 
 export type TunnelAdmission =
   | { ok: true }
@@ -46,7 +46,7 @@ const PRIMARY_MACHINE_DEVICE = 'bridge-local'
  */
 export function tunnelAdmission(cred: TunnelCredential, execEnabled: boolean): TunnelAdmission {
   if (!cred) return { ok: false, status: 401, refusal: 'unauthorized', message: 'a machine credential is required' }
-  if (cred.kind !== 'machine' || cred.name !== PRIMARY_MACHINE_DEVICE) {
+  if (cred.kind !== 'machine' || cred.name !== PRIMARY_MACHINE_DEVICE || cred.bridgeScope === 'status-only') {
     return { ok: false, status: 403, refusal: 'not_primary', message: 'only the paired primary may open the daemon tunnel' }
   }
   if (!execEnabled) {

@@ -242,7 +242,7 @@ function registerSetInterest(): void {
  * Returns the validated credential (caller enforces per-path kind rules) or
  * null on failure.
  */
-async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine' } | null> {
+async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine'; bridgeScope?: 'status-only'; stillValid: () => Promise<boolean> } | null> {
   // Rate-limit key: behind the local reverse proxy every socket peer is
   // loopback, so the first X-Forwarded-For hop is used (one abusive client
   // can't exhaust the shared budget for everyone); only when the actual peer
@@ -272,7 +272,14 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{
     return null
   }
   log.ws.info('cloud ws upgrade authenticated', { name: cred.name, kind: cred.kind })
-  return cred
+  return {
+    ...cred,
+    stillValid: async () => {
+      const { verifyDeviceToken } = await import('../../core/device-auth.js')
+      const current = await verifyDeviceToken(token, { touch: false })
+      return current?.name === cred.name && current.kind === 'machine' && current.bridgeScope === cred.bridgeScope
+    },
+  }
 }
 
 function ignoreSocketError(): void { /* see the upgrade handler */ }
@@ -368,7 +375,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
         // reverse proxy, the first X-Forwarded-For hop).
         const clientIp = bridgeClientIp(request.headers['x-forwarded-for'], request.socket.remoteAddress)
         wss!.handleUpgrade(request, socket, head, (ws) => {
-          attachBridge(ws, cred.name, { clientIp })
+          attachBridge(ws, cred.name, { clientIp, stillValid: cred.stillValid, scope: cred.bridgeScope })
         })
       }).catch(() => socket.destroy())
       return

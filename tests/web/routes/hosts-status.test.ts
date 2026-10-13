@@ -44,8 +44,10 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
 }));
 
 let bridgeConnected = new Set<string>();
+const bridgeRequest = vi.fn();
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeForHost: (alias: string) => ({ connected: bridgeConnected.has(alias) }),
+  bridgeRequest: (...args: unknown[]) => bridgeRequest(...args),
 }));
 
 vi.mock('../../../src/core/config-manager.js', () => ({
@@ -122,6 +124,7 @@ beforeEach(() => {
   cloudMode = false;
   states = {};
   bridgeConnected = new Set();
+  bridgeRequest.mockReset();
   clearFailureCache.mockClear();
   getDaemonConnection.mockClear();
   kick.mockClear();
@@ -432,6 +435,68 @@ describe('POST /api/hosts/:host/connect', () => {
     installWarmup();
     await request(createApp()).post('/api/hosts/devbox/connect');
     expect(getDaemonConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/hosts/:host/status', () => {
+  it('requires the companion and never starts an SSH connection', async () => {
+    const res = await request(createApp()).get('/api/hosts/devbox/status');
+    expect(res.status).toBe(409);
+    expect(getDaemonConnection).not.toHaveBeenCalled();
+    expect(bridgeRequest).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid host aliases', async () => {
+    cloudMode = true;
+    expect((await request(createApp()).get('/api/hosts/%20/status')).status).toBe(400);
+    expect((await request(createApp()).get('/api/hosts/host%40name/status')).status).toBe(400);
+    expect(bridgeRequest).not.toHaveBeenCalled();
+  });
+
+  it.each(['__local__', 'host.name'])('accepts registered host alias %s', async (host) => {
+    cloudMode = true;
+    bridgeConnected.add(host);
+    bridgeRequest.mockImplementation(async (_host, _cmd, params) => ({ ok: true, pong: true, nonce: params.nonce }));
+    const res = await request(createApp()).get(`/api/hosts/${host}/status`);
+    expect(res.status).toBe(200);
+    expect(res.body.host).toBe(host);
+  });
+
+  it('reports an offline bridge without sending a request', async () => {
+    cloudMode = true;
+    const res = await request(createApp()).get('/api/hosts/devbox/status');
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ host: 'devbox', connected: false, code: 'bridge_offline' });
+    expect(bridgeRequest).not.toHaveBeenCalled();
+  });
+
+  it('requires a live nonce echo and bounds the request to five seconds', async () => {
+    cloudMode = true;
+    bridgeConnected.add('devbox');
+    bridgeRequest.mockImplementation(async (_host, _cmd, params) => ({ ok: true, pong: true, nonce: params.nonce }));
+    const res = await request(createApp()).get('/api/hosts/devbox/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ host: 'devbox', connected: true, transport: 'outbound_bridge' });
+    expect(bridgeRequest).toHaveBeenCalledWith('devbox', 'ping', { nonce: expect.stringMatching(/^[a-f0-9]{32}$/) }, 5_000);
+    expect(getDaemonConnection).not.toHaveBeenCalled();
+  });
+
+  it.each([{ ok: true, pong: true, nonce: 'wrong' }, { ok: false }, {}])('rejects an unconfirmed response', async (reply) => {
+    cloudMode = true;
+    bridgeConnected.add('devbox');
+    bridgeRequest.mockResolvedValue(reply);
+    const res = await request(createApp()).get('/api/hosts/devbox/status');
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('bridge_unconfirmed');
+  });
+
+  it('returns degraded when the registered host stops answering', async () => {
+    cloudMode = true;
+    bridgeConnected.add('devbox');
+    bridgeRequest.mockRejectedValue(new Error('request timed out'));
+    const res = await request(createApp()).get('/api/hosts/devbox/status');
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('bridge_unavailable');
   });
 });
 
