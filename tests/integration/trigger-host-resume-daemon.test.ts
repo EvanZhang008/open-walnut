@@ -288,6 +288,14 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     expect(msg).toContain(PROMPT)
     await waitFor(() => pending().some((f) => f.seq === 1 && !!f.host), 5_000, 'the host delivery recorded')
     expect(pending().find((f) => f.seq === 1)!.host).toMatchObject({ sessionId: SID, seqs: [1], resumed: true })
+    // The turn-start marker, once, under the fire's message id: the chat shows the
+    // fire, and the reconciler anchors this turn on it, not on an older one.
+    const messageId = (pending().find((f) => f.seq === 1)!.host as { messageId: string }).messageId
+    const markers = fs.readFileSync(path.join(d.dir, 'streams', `${SID}.jsonl`), 'utf8').split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l) as Record<string, unknown> } catch { return {} } })
+      .filter((e) => e.subtype === 'walnut-injected' && String((e.message as { content?: unknown })?.content).includes('"c1"'))
+    expect(markers).toHaveLength(1)
+    expect(markers[0].walnutMessageId).toBe(messageId)
     // The command it was resumed with is kept for the next time.
     const rec = JSON.parse(fs.readFileSync(path.join(d.dir, 'resume-records', `${SID}.json`), 'utf8'))
     expect(rec).toMatchObject({ v: 1, sid: SID, mode: 'plan', home: HOME, task: TASK })

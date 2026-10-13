@@ -2330,6 +2330,15 @@ async function resumeForTrigger(home: string, sid: string, text: string, message
       if (!current()) throw new Error('a stop request superseded this start')
       return startSessionProcess({ cmd: 'start', sid, args, cwd: spawn.cwd, message: text, resume: true, mode: spawn.mode, origin: { home, task: taskId } }, undefined, current)
     })
+    // The turn-start marker the server writes after its own resume start
+    // (writeSyntheticUserEvent): the CLI never echoes its stdin, so without it
+    // the stream shows no turn start and the fire never appears in the chat.
+    try {
+      const marked = core.handleAppendUserMarker(sid, text, messageId)
+      if (!('ok' in marked) || !marked.ok) logMsg('warn', 'trigger: no turn-start marker for a host resume', { sid, messageId })
+    } catch (err) {
+      logMsg('warn', 'trigger: no turn-start marker for a host resume', { sid, messageId, error: (err as Error).message })
+    }
     logMsg('info', 'trigger: resumed a stopped session on this host', { sid, taskId, messageId, mode: spawn.mode })
     return { ok: true }
   } catch (err) {
