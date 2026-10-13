@@ -164,7 +164,7 @@ interface RequestExtra {
   cacheBypass?: boolean;
   quietStatuses?: number[];
   background?: boolean;
-  /** GET only: yield to every normal request (see the admission notes above). */
+  /** Yield to every normal request; POST also requires background: true. */
   priority?: 'low';
   /** Called the moment the request leaves the admission queue for the network —
    *  the earliest the server can see it. A caller reasoning about "is this
@@ -179,7 +179,10 @@ function priorityOf(method: string, extra?: RequestExtra): FetchPriority {
   // painting the screen. Without this, the draft composer's per-keystroke AI parse
   // (a POST) took all six slots ahead of the path picker's listings and held each
   // for its full 10s model timeout (2026-09-17).
-  if (method !== 'GET') return extra?.background ? 'normal' : 'urgent';
+  if (method !== 'GET') {
+    if (!extra?.background) return 'urgent';
+    return extra.priority === 'low' ? 'low' : 'normal';
+  }
   return extra?.priority === 'low' ? 'low' : 'normal';
 }
 
@@ -369,7 +372,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
 // quietStatuses is offered here for the same reason apiGet offers it: a POST can have a DESIGNED
 // non-2xx outcome (a refused credential, a capability the provider does not have), and those must
 // not land in the error-log audit as if something broke.
-export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean }): Promise<T> {
+export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; priority?: 'low' }): Promise<T> {
   return request<T>('POST', path, body, opts);
 }
 

@@ -1,6 +1,7 @@
 /** Fetch file content for the FileViewer overlay. */
 import { fileDocKey, publishDocSaved } from '@/stores/file-save-signal';
 import { asDeadlineError } from '@/utils/request-failure';
+import { apiPost } from './client';
 
 export interface FileContentResponse {
   content: string | null;
@@ -605,13 +606,13 @@ export async function fetchDirListMany(
   paths: string[],
   host?: string,
   showHidden = false,
+  opts: { signal?: AbortSignal; background?: boolean } = {},
 ): Promise<{ listings: BatchDirListing[]; truncated: boolean; timedOut: boolean }> {
   if (!paths.length) return { listings: [], truncated: false, timedOut: false };
-  const res = await fetch('/api/files/list-many', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paths, host, showHidden }),
+  return apiPost('/api/files/list-many', { paths, host, showHidden }, {
+    signal: opts.signal,
+    timeoutMs: 20_000,
+    background: true,
+    ...(opts.background ? { priority: 'low' as const } : {}),
   });
-  if (!res.ok) throw new Error(`Failed to list directories: ${res.status}`);
-  return res.json();
 }

@@ -175,7 +175,9 @@ for (const sentence of ['Reconnecting to Cloud', "Can't reach Cloud right now."]
     await page.waitForTimeout(1_000)
     const settled = { many: asks.many, file: asks.file }
     await page.waitForTimeout(2_000)
-    expect({ many: asks.many, file: asks.file }).toEqual(settled)
+    expect(asks.file).toBe(settled.file)
+    // Normal directory revalidation continues after the reconnect retry stops.
+    expect(asks.many - settled.many).toBeLessThanOrEqual(1)
   })
 }
 

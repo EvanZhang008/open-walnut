@@ -17,13 +17,15 @@
  * the tree used to render a bare `Loading…` until the first one landed), and the
  * network fetch always still runs and overwrites them.
  */
-import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
-import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, isHostReconnectingListing, HOST_RECONNECTING_CODE, type DirEntry, type ReferencesResponse } from '@/api/files';
+import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, isHostReconnectingListing, HOST_RECONNECTING_CODE, type DirEntry, type DirListResponse, type ReferencesResponse } from '@/api/files';
 import { visibleInterval } from '@/utils/page-visibility';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { useFileContentPrefetch } from '@/hooks/useFileContentPrefetch';
+import { useDirectoryRefresh } from '@/hooks/useDirectoryRefresh';
+import { applyDirectoryListings, removedDirectoryPaths, visibleDirectoryPaths } from './directory-refresh';
 import { FileContentView } from '@/components/common/FileContentView';
 import { ReferencePanel } from '@/components/common/ReferencePanel';
 import { FileTreeContextMenu, type FileTreeContextTarget } from './FileTreeContextMenu';
@@ -277,6 +279,13 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // Bumped on every full reset (cwd/host change). The cache prime is async, so
   // this is what stops one session's cached rows landing in another's tree.
   const resetGenRef = useRef(0);
+  const directoryReadRevisionsRef = useRef(new Map<string, number>());
+  const mutationPendingRef = useRef(0);
+  const mutationRevisionRef = useRef(0);
+  const bumpDirectoryRead = (path: string) => {
+    const revisions = directoryReadRevisionsRef.current;
+    revisions.set(path, (revisions.get(path) ?? 0) + 1);
+  };
 
   // ── Remembered file + browser-style back/forward history ──────────────────
   // Keyed by a STABLE scope, never by `root`: the Files chip roots at the session
@@ -330,8 +339,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     opts: { isRoot?: boolean; restoreExpanded?: boolean; noCache?: boolean } = {},
   ): Promise<void> => {
     const { isRoot = false, restoreExpanded = false, noCache = false } = opts;
+    const gen = resetGenRef.current;
     // Dedupe concurrent loads of the same dir (rapid double-clicks, overlapping refetch)
     if (inFlightRef.current.has(dirPath)) return;
+    bumpDirectoryRead(dirPath);
+    const revision = directoryReadRevisionsRef.current.get(dirPath);
+    const stillCurrent = () => resetGenRef.current === gen && directoryReadRevisionsRef.current.get(dirPath) === revision;
     inFlightRef.current.add(dirPath);
     setLoadingPaths((prev) => new Set(prev).add(dirPath));
     setErrorPaths((prev) => { const next = new Map(prev); next.delete(dirPath); return next; });
@@ -355,7 +368,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       ? getCachedDirList(host, dirPath).catch(() => null)
       : null;
     void cacheRead?.then((rec) => {
-      if (freshLanded || !rec || rec.entries.length === 0) return;
+      if (!stillCurrent() || freshLanded || !rec || rec.entries.length === 0) return;
       painted = true;
       setChildrenMap((prev) => (prev.has(dirPath) ? prev : new Map(prev).set(dirPath, rec.entries)));
       setStalePaths((prev) => (prev.has(dirPath) ? prev : new Set(prev).add(dirPath)));
@@ -366,12 +379,14 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       // (resolve it against the session's transcript / git index, then list what
       // it found) instead of answering `ENOENT: scandir`.
       const res = await fetchDirList(dirPath, host, showHidden, { noCache, cwd, sessionId });
+      if (!stillCurrent()) return;
       // Backend resolves ~ → absolute path and returns it; adopt it as the canonical
       // root so localStorage keys and child paths are all absolute (keeps the
       // persisted expand-state key stable instead of split between ~ and /abs).
       // The same applies when the backend HEALED an unlistable path: `res.path` is
       // then a different directory entirely, and every child path must hang off it.
       const canonical = res.path && (isRoot || res.path !== dirPath) ? res.path : dirPath;
+      if (canonical !== dirPath) bumpDirectoryRead(canonical);
       freshLanded = true;
       freshDirsRef.current.add(dirPath);
       freshDirsRef.current.add(canonical);
@@ -433,12 +448,14 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         }
       }
     } catch (err) {
+      if (!stillCurrent()) return;
       const msg = err instanceof Error ? err.message : String(err);
       log.error('file-explorer', 'failed to list dir', { dirPath, host, error: msg });
       // The cache read may still be in flight; the fetch has already failed, so
       // letting it finish costs nothing and can only turn an error pane into
       // usable rows. (Registered second, so its paint runs before this line.)
       if (cacheRead) await cacheRead;
+      if (!stillCurrent()) return;
       // A stale listing is far more useful than an error pane, so when rows are
       // on screen — from this call's paint OR from the reset effect's bulk prime
       // — the failure is a muted note beside them, not a replacement for them.
@@ -454,8 +471,11 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         if (waiting && restoreExpanded) markReconnecting([...loadExpandedSet(host, dirPath)].slice(0, MAX_RESTORE_LOADS), true);
       } else markReconnecting([dirPath], waiting);
     } finally {
-      inFlightRef.current.delete(dirPath);
-      setLoadingPaths((prev) => { const next = new Set(prev); next.delete(dirPath); return next; });
+      if (resetGenRef.current === gen) {
+        bumpDirectoryRead(dirPath);
+        inFlightRef.current.delete(dirPath);
+        setLoadingPaths((prev) => { const next = new Set(prev); next.delete(dirPath); return next; });
+      }
     }
   }, [host, showHidden, root, cwd, sessionId, clearStale, markReconnecting]);
   loadDirRef.current = loadDir;
@@ -474,12 +494,20 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
    *  persisted expand set, so a path that will not list means the directory is
    *  gone; resolving 64 of them would reintroduce the cost this removes. */
   const loadDirsBatch = useCallback(async (dirPaths: string[]): Promise<void> => {
+    const gen = resetGenRef.current;
     const wanted = dirPaths.filter((p) => !inFlightRef.current.has(p));
     if (!wanted.length) return;
-    for (const p of wanted) inFlightRef.current.add(p);
+    for (const p of wanted) {
+      bumpDirectoryRead(p);
+      inFlightRef.current.add(p);
+    }
+    const revisions = new Map(wanted.map(path => [path, directoryReadRevisionsRef.current.get(path)]));
     setLoadingPaths((prev) => { const next = new Set(prev); for (const p of wanted) next.add(p); return next; });
     try {
-      const { listings, timedOut } = await fetchDirListMany(wanted, host, showHidden);
+      const result = await fetchDirListMany(wanted, host, showHidden);
+      if (resetGenRef.current !== gen) return;
+      const { timedOut } = result;
+      const listings = result.listings.filter(listing => revisions.get(listing.path) === directoryReadRevisionsRef.current.get(listing.path));
       const fresh = listings.filter((l): l is Extract<typeof l, { entries: DirEntry[] }> => !l.error);
       // One setState for the whole batch: 64 sequential map copies would be 64
       // renders of a tree whose rows are the expensive part.
@@ -524,8 +552,13 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         host, count: wanted.length, error: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      for (const p of wanted) inFlightRef.current.delete(p);
-      setLoadingPaths((prev) => { const next = new Set(prev); for (const p of wanted) next.delete(p); return next; });
+      if (resetGenRef.current === gen) {
+        for (const p of wanted) {
+          bumpDirectoryRead(p);
+          inFlightRef.current.delete(p);
+        }
+        setLoadingPaths((prev) => { const next = new Set(prev); for (const p of wanted) next.delete(p); return next; });
+      }
     }
   }, [host, showHidden, clearStale, markReconnecting]);
   loadDirsBatchRef.current = loadDirsBatch;
@@ -536,6 +569,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // loadDir is intentionally omitted: it changes with showHidden, which must not reset.
   useEffect(() => {
     const gen = ++resetGenRef.current;
+    directoryReadRevisionsRef.current.clear();
+    inFlightRef.current = new Set();
+    setLoadingPaths(new Set());
     const initialRoot = cwd || '~';
     setRoot(initialRoot);
     setChildrenMap(new Map());
@@ -811,6 +847,84 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const rootPathsRef = useRef(rootPaths);
   rootPathsRef.current = rootPaths;
 
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const scrollAnchorRef = useRef<{ path: string; section: string; top: number; scrollTop: number } | null>(null);
+  useLayoutEffect(() => {
+    const anchor = scrollAnchorRef.current;
+    scrollAnchorRef.current = null;
+    const tree = treeRef.current;
+    if (!anchor || !tree) return;
+    const row = [...tree.querySelectorAll<HTMLElement>('.session-file-explorer-node')].find(row => row.title === anchor.path
+      && row.closest<HTMLElement>('.sfe-root-section')?.dataset.rootPath === anchor.section);
+    if (row) tree.scrollTop += row.getBoundingClientRect().top - tree.getBoundingClientRect().top - anchor.top;
+    else tree.scrollTop = anchor.scrollTop;
+  }, [childrenMap]);
+
+  const liveDirectoryPaths = useMemo(() => treeCollapsed ? [] : visibleDirectoryPaths(
+    rootSections.filter((section) => openRoots.has(section.path)).map((section) => section.path),
+    expanded,
+    childrenMap,
+  ).filter((path) => path !== root || freshDirsRef.current.has(root)), [treeCollapsed, rootSections, openRoots, expanded, childrenMap, root]);
+  useDirectoryRefresh(liveDirectoryPaths, host, showHidden, (listings) => {
+    // A foreground load or mutation owns its directory until it finishes.
+    if (mutationPendingRef.current || pendingNotice) return;
+    const accepted = listings.filter((listing) => !inFlightRef.current.has(listing.path));
+    const failures = accepted.filter((listing) => listing.error);
+    if (failures.length) setStaleErrors((prev) => {
+      const next = new Map(prev);
+      for (const listing of failures) next.set(listing.path, listing.error!);
+      return next;
+    });
+    const available = accepted.filter((listing): listing is DirListResponse => !listing.error);
+    if (!available.length) return;
+    const tree = treeRef.current;
+    const changed = applyDirectoryListings(childrenMapRef.current, available, rootPathsRef.current) !== childrenMapRef.current;
+    if (changed && tree && !scrollAnchorRef.current) {
+      const bounds = tree.getBoundingClientRect();
+      const row = [...tree.querySelectorAll<HTMLElement>('.session-file-explorer-node:not(.sfe-root-header)')].find(row => {
+        const rect = row.getBoundingClientRect();
+        return rect.bottom > bounds.top && rect.top < bounds.bottom;
+      });
+      if (row) scrollAnchorRef.current = {
+        path: row.title, section: row.closest<HTMLElement>('.sfe-root-section')?.dataset.rootPath ?? '',
+        top: row.getBoundingClientRect().top - bounds.top, scrollTop: tree.scrollTop,
+      };
+    }
+    const before = childrenMapRef.current;
+    const removed = removedDirectoryPaths(before, available).filter((path) => !rootPathsRef.current.has(path));
+    if (removed.length) {
+      const underRemoved = (path: string) => removed.some(dir => path === dir || path.startsWith(`${dir}/`));
+      for (const path of removed) void deleteCachedDirListsUnder(host, path);
+      for (const path of freshDirsRef.current) if (underRemoved(path)) freshDirsRef.current.delete(path);
+      for (const path of new Set([...before.keys(), ...inFlightRef.current])) if (underRemoved(path)) bumpDirectoryRead(path);
+      setExpanded((prev) => {
+        const next = new Set([...prev].filter(path => !underRemoved(path)));
+        try { localStorage.setItem(lsKeyRef.current, JSON.stringify([...next])); } catch { /* denied */ }
+        return next;
+      });
+    }
+    const fresh = available.filter((listing) => rootPathsRef.current.has(listing.path)
+      || !removed.some(path => listing.path === path || listing.path.startsWith(`${path}/`)));
+    const next = applyDirectoryListings(before, fresh, rootPathsRef.current);
+    setChildrenMap((prev) => applyDirectoryListings(prev, fresh, rootPathsRef.current));
+    for (const listing of fresh) {
+      freshDirsRef.current.add(listing.path);
+      clearStale(listing.path);
+      if (!showHidden && before.get(listing.path) !== next.get(listing.path)) void setCachedDirList(host, listing.path, listing);
+    }
+    if (fresh.some((listing) => listing.path === root)) {
+      setRootError(null);
+      setRootReconnecting(false);
+    }
+    setErrorPaths((prev) => {
+      if (!fresh.some((listing) => prev.has(listing.path))) return prev;
+      const next = new Map(prev);
+      for (const listing of fresh) next.delete(listing.path);
+      return next;
+    });
+    markReconnecting(fresh.map((listing) => listing.path), false);
+  }, (path) => `${resetGenRef.current}:${mutationRevisionRef.current}:${directoryReadRevisionsRef.current.get(path) ?? 0}`);
+
   // Flatten one root's expanded subtree into visible rows (DFS). Memoized per
   // childrenMap/expanded change so unrelated re-renders don't re-walk the tree.
   const rowsByRoot = useMemo(() => {
@@ -986,6 +1100,16 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     return section ? { rootPath: section.path, asRow: false } : null;
   }, [editTarget, rootSections, rowsByRoot, openRoots]);
 
+  const runTreeMutation = useCallback(async (run: () => Promise<void>) => {
+    mutationPendingRef.current += 1;
+    mutationRevisionRef.current += 1;
+    try { await run(); }
+    finally {
+      mutationPendingRef.current -= 1;
+      mutationRevisionRef.current += 1;
+    }
+  }, []);
+
   const renderEditRow = useCallback((depth: number) => {
     if (!editing) return null;
     const currentName = editing.kind === 'rename' ? lastSegment(editing.path) : '';
@@ -1007,11 +1131,11 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         entryType={editing.kind === 'rename' ? editing.type : undefined}
         stemLength={stemLength}
         error={editError}
-        onCommit={(name) => { void commitEdit(name); }}
+        onCommit={(name) => { void runTreeMutation(() => commitEdit(name)); }}
         onCancel={cancelEdit}
       />
     );
-  }, [editing, editTarget, editError, commitEdit, cancelEdit]);
+  }, [editing, editTarget, editError, commitEdit, cancelEdit, runTreeMutation]);
 
   // ── Browser-style Back / Forward over the files read in this scope ─────────
   // Both buttons move the index WITHOUT pushing (that would truncate the tail —
@@ -1237,6 +1361,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         {!treeCollapsed && (
         <div
           className="session-file-explorer-tree"
+          ref={treeRef}
           style={{ width: `${treeWidth}px` }}
           // Empty background: every row handler stopPropagations, so anything
           // reaching here is the blank space — right-clicking it targets the tree
@@ -1281,7 +1406,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
             const isRootLoading = loadingPaths.has(section.path);
             const editRowHere = !!editAnchor && !editAnchor.asRow && editAnchor.rootPath === section.path;
             return (
-              <div key={section.path} className="sfe-root-section">
+              <div key={section.path} className="sfe-root-section" data-root-path={section.path}>
                 <div
                   className={`session-file-explorer-node sfe-root-header${section.kind === 'changed' ? ' sfe-root-changed' : ''}`}
                   onClick={() => toggleRoot(section.path)}
@@ -1446,8 +1571,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           onNewFile={(dir) => startCreate(dir, 'create-file')}
           onNewFolder={(dir) => startCreate(dir, 'create-dir')}
           onRename={(p) => startRename(p, ctxMenu.type)}
-          onDuplicate={(p) => { void duplicate(p, ctxMenu.type); }}
-          onDelete={(p, t) => { void remove(p, t); }}
+          onDuplicate={(p) => { void runTreeMutation(() => duplicate(p, ctxMenu.type)); }}
+          onDelete={(p, t) => { void runTreeMutation(() => remove(p, t)); }}
         />
       )}
       {revealError && (

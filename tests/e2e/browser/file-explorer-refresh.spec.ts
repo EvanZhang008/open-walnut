@@ -89,9 +89,6 @@ test('Refresh re-lists the directory, surfacing a file created after load', asyn
   const created = path.join(cwd, 'appeared-later.txt')
   await fs.writeFile(created, 'NEW FILE\n')
   try {
-    // Still absent until the user asks — the tree does not poll.
-    await expect(explorer.locator('.sfe-name', { hasText: 'appeared-later.txt' })).toHaveCount(0)
-
     await explorer.getByRole('button', { name: 'Refresh file panel' }).click()
     await expect(explorer.locator('.sfe-name', { hasText: 'appeared-later.txt' })).toBeVisible({ timeout: 10_000 })
     await page.screenshot({ path: `${SCREENSHOT_DIR}/step2-new-file-listed.png` })

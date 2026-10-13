@@ -22,6 +22,7 @@ import { apiGet, apiPost, getFetchQueueStats, getLowFetchQueueStats } from '../.
 // The real product call site for `background: true`. tasks.ts pulls in the session
 // status store, which is DOM-free too, so it loads in this tier unchanged.
 import { quickParseTask } from '../../web/src/api/tasks';
+import { fetchDirListMany } from '../../web/src/api/files';
 
 type Resolver = { resolve: (r: Response) => void; url: string };
 
@@ -54,6 +55,24 @@ describe('fetch admission control', () => {
       await new Promise((r) => setTimeout(r, 0));
     }
     vi.unstubAllGlobals();
+  });
+
+  it('directory background POSTs use at most two slots and yield to a user write', async () => {
+    const reads = Array.from({ length: 5 }, (_, i) => fetchDirListMany([`/repo-${i}`], 'remote', false, { background: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 3 });
+    const write = apiPost('/api/user-write', { value: 'typed' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fetchMock.mock.calls.map(call => String(call[0]))).toContain('/api/user-write');
+    pending.find(p => p.url === '/api/user-write')!.resolve(jsonResponse({ ok: true }));
+    pending = pending.filter(p => p.url !== '/api/user-write');
+    await write;
+    while (pending.length || getFetchQueueStats().queued) {
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({ listings: [], truncated: false, timedOut: false }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    await Promise.all(reads);
   });
 
   it('dispatches at most 6 concurrent fetches; the rest wait client-side', async () => {
