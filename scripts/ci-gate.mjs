@@ -71,9 +71,33 @@ export function pickLastGreen(shas, verdictFor) {
   return null
 }
 
+/**
+ * Whether a failed `gh api` call is GitHub's or the network's passing trouble,
+ * worth asking again: a 5xx, a 429, a dropped or refused connection, a timeout.
+ * 2026-10-13: one 502 on a run's jobs failed that night's nightly
+ * (run 38465126267). A 4xx that is not a 429 (signed out, no such run) is an answer.
+ */
+export function isTransientGhFailure(text) {
+  return /HTTP (5\d\d|429)|Server Error|Bad Gateway|Service Unavailable|Gateway Time-?out|connection (refused|reset)|unexpected EOF|TLS handshake timeout|i\/o timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED/i.test(String(text))
+}
+
+const GH_ATTEMPTS = 4
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
 function gh(endpoint) {
-  const out = execFileSync('gh', ['api', endpoint], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 })
-  return JSON.parse(out)
+  // 3 s, 6 s, 12 s between tries; CI_GATE_RETRY_MS shortens it for tests.
+  const baseMs = Number(process.env.CI_GATE_RETRY_MS) || 3000
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const out = execFileSync('gh', ['api', endpoint], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 })
+      return JSON.parse(out)
+    } catch (err) {
+      const text = `${err?.message ?? ''}\n${err?.stderr ?? ''}\n${err?.code ?? ''}`
+      if (attempt >= GH_ATTEMPTS || !isTransientGhFailure(text)) throw err
+      process.stderr.write(`ci-gate: gh api ${endpoint} failed (${String(err?.stderr ?? err?.message ?? '').trim().split('\n')[0]}), trying again\n`)
+      sleepSync(baseMs * 2 ** (attempt - 1))
+    }
+  }
 }
 
 const jobsOf = (runId) => gh(`repos/{owner}/{repo}/actions/runs/${runId}/jobs?per_page=100`).jobs

@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { nextVersion, rollChangelog, setManifestVersion } from '../../scripts/release.mjs'
 import { NIGHTLY_GAP_HOURS, lastNightlyCommit, newerBase, nightlyDue, nightlyVersion, servesNightly } from '../../scripts/nightly-version.mjs'
-import { pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
+import { isTransientGhFailure, pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { compareVersions } from '../../src/core/self-update/version-compare.js'
 import { channelOf } from '../../src/core/self-update/update-check.js'
@@ -325,6 +325,17 @@ describe('ci-gate', () => {
     expect(pickLastGreen([], verdictFor)).toBeNull()
   })
 
+  it('asks GitHub again only on its passing trouble, never on an answer', () => {
+    for (const t of ['gh: Server Error (HTTP 502)', 'HTTP 503: Service Unavailable', 'HTTP 429: rate limited',
+      'dial tcp 20.29.134.17:443: connect: connection refused', 'read: connection reset by peer', 'net/http: TLS handshake timeout', 'spawnSync gh ETIMEDOUT']) {
+      expect(isTransientGhFailure(t), t).toBe(true)
+    }
+    for (const t of ['gh: Not Found (HTTP 404)', 'HTTP 401: Bad credentials', 'gh: Resource not accessible by integration (HTTP 403)',
+      'To get started with GitHub CLI, please run:  gh auth login', 'spawnSync gh ENOENT']) {
+      expect(isTransientGhFailure(t), t).toBe(false)
+    }
+  })
+
   it('last-green walks the branch in git and asks GitHub per commit, never the branch run list', () => {
     // 2026-10-05: `runs?branch=main` answered from a stale index for six hours and
     // the nightly took a week-old commit for the newest green one.
@@ -359,6 +370,11 @@ const fs = require('fs'), path = require('path')
 const dir = ${JSON.stringify(tmp)}
 const endpoint = process.argv[3]
 fs.appendFileSync(path.join(dir, 'calls.log'), endpoint + '\\n')
+// GH_FLAKY: the first call to each endpoint gets GitHub's 502, as on 2026-10-13.
+if (process.env.GH_FLAKY) {
+  const seen = path.join(dir, 'seen-' + require('crypto').createHash('sha1').update(endpoint).digest('hex'))
+  if (!fs.existsSync(seen)) { fs.writeFileSync(seen, ''); process.stdout.write('{"message":"Server Error"}'); process.stderr.write('gh: Server Error (HTTP 502)\\n'); process.exit(1) }
+}
 const { runsFor, jobsFor } = JSON.parse(fs.readFileSync(path.join(dir, 'fixture.json'), 'utf8'))
 let m
 if ((m = /runs\\?head_sha=([0-9a-f]+)/.exec(endpoint))) process.stdout.write(JSON.stringify({ workflow_runs: runsFor[m[1]] ?? [] }))
@@ -374,6 +390,16 @@ else { process.stderr.write('unexpected endpoint ' + endpoint); process.exit(1) 
       // docs (no run), red (one run, its jobs), green (one run, its jobs): then it stops.
       expect(calls.filter((c) => c.includes('head_sha='))).toHaveLength(3)
       expect(calls.some((c) => c.includes(`head_sha=${old}`))).toBe(false)
+
+      // GitHub answers 502 once to every call: each is asked again and the answer holds.
+      fs.rmSync(path.join(tmp, 'calls.log'))
+      const flaky = execFileSync(process.execPath, [path.resolve(__dirname, '../../scripts/ci-gate.mjs'), 'last-green', 'main'], {
+        cwd: repo, encoding: 'utf8', env: { ...gitEnv, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GH_FLAKY: '1', CI_GATE_RETRY_MS: '5' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim()
+      expect(flaky).toBe(green)
+      const flakyCalls = fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8').trim().split('\n')
+      expect(flakyCalls).toHaveLength(2 * calls.length)
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
