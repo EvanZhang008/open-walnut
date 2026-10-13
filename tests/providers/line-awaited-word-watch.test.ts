@@ -155,6 +155,9 @@ async function waitedLineKeptForTheWord() {
   await first
   await second
   await settle()
+  // The first row leaves the disk queue on its own write after it started; a fixed
+  // 80 ms was not always enough on a loaded CI runner (2026-10-13, run 38441396838).
+  await vi.waitFor(async () => expect((await rows()).filter((r) => r.startsWith('first message:'))).toEqual([]), { timeout: 10_000 })
   const uuidB = l.sends.find((s) => s.message === 'second message')!.uuid!
   return { l, uuidB, ids }
 }

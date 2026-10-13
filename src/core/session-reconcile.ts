@@ -383,7 +383,11 @@ export function foldSessionTail(
         const prev = fold.bgTasks[taskId]
         const patch = parsed.patch as Record<string, unknown> | undefined
         fold.bgTasks[taskId] = {
+          // Keep what task_started said (its type, its owner), but not a level
+          // snapshot's endedPerLevel mark: the task's own event un-marks it, as
+          // daemon-fold's task_updated does (gatingBgCount parity).
           ...prev,
+          endedPerLevel: undefined,
           status: (patch?.status as string | undefined) ?? prev?.status ?? 'running',
           toolUseId: toolUseId ?? prev?.toolUseId,
           // Sticky: is_backgrounded=true detaches the task from gating forever.
@@ -393,6 +397,7 @@ export function foldSessionTail(
         const prev = fold.bgTasks[taskId]
         fold.bgTasks[taskId] = {
           ...prev,
+          endedPerLevel: undefined,
           status: (parsed.status as string | undefined) ?? 'completed',
           isBackgrounded: prev?.isBackgrounded,
           toolUseId: toolUseId ?? prev?.toolUseId,
