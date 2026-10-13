@@ -407,6 +407,10 @@ async function runJob(state: CloudSetupJobState, opts: { force: boolean }): Prom
       state.error = undefined
       state.steps[id] = { status: 'running', startedAt: new Date().toISOString() }
       await persistIfCurrent()
+      // Stopped or superseded while that write was out: the step must not start.
+      // Without this check a cancelled runner went on into createVM, and the one
+      // that resumed made a second VM (2026-10-13, CI run 38470259405).
+      if (handle.cancelled || superseded()) return
       emitProgress(state)
 
       const outcome = await runners[id](ctx)

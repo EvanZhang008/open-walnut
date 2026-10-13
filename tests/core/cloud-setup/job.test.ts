@@ -427,6 +427,35 @@ describe('crash-resume', () => {
     expect(driver.createVMCalls).toHaveLength(1)
   })
 
+  it('a runner stopped while it records provision as running never creates the VM', async () => {
+    // 2026-10-13 CI (run 38470259405): the old runner was cut while its persist of
+    // "provision running" was still out, carried on into createVM, and the resumed
+    // runner made a second VM. A cancelled runner must not start a step after that await.
+    const driver = useDriver(makeAutoDriver())
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    let held = false
+    const rename = fs.rename.bind(fs)
+    const intercepted = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === jobFile() && !held) {
+        const state = JSON.parse(await fs.readFile(from, 'utf-8')) as CloudSetupJobState
+        if (state.steps.provision.status === 'running') { held = true; await blocked }
+      }
+      return rename(from, to)
+    })
+    try {
+      await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+      await vi.waitFor(() => expect(held).toBe(true), { timeout: 10_000 })
+      _resetCloudSetupJobForTesting() // the process stops here, mid-persist
+      release()
+      await new Promise((r) => setTimeout(r, 200))
+      expect(driver.createVMCalls).toHaveLength(0)
+    } finally {
+      release()
+      intercepted.mockRestore()
+    }
+  })
+
   // One case PER boundary rather than a loop in a single test: four full job
   // runs in one `it` exceeded the quick tier's 15s testTimeout (it passed under
   // focus's 60s), and a loop also hides WHICH boundary regressed.
