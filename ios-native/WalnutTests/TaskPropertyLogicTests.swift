@@ -27,7 +27,7 @@ final class TaskPropertyLogicTests: XCTestCase {
         XCTAssertEqual(placement, .notOnBoard)
         XCTAssertEqual(
             TaskPropertyLogic.boardValueText(placement, tierChoices: choices),
-            "Not on board"
+            "Not pinned"
         )
     }
 
@@ -70,6 +70,23 @@ final class TaskPropertyLogicTests: XCTestCase {
         )
     }
 
+    func testPinListsAndCustomGroupsUseTheSamePlacement() {
+        XCTAssertEqual(TaskFilter.sessions.title, "Pins")
+        let customChoices = choices + [("ct_helpers", "Virtual Teammate")]
+        let current = TaskPropertyLogic.placement(pinned: true, tierId: "ct_helpers")
+        XCTAssertEqual(TaskPropertyLogic.boardValueText(current, tierChoices: customChoices), "Virtual Teammate")
+        XCTAssertEqual(
+            TaskPropertyLogic.boardOptions(tierChoices: customChoices, current: current)
+                .filter(\.isCurrent).map(\.label),
+            ["Virtual Teammate"]
+        )
+        XCTAssertEqual(
+            TaskPropertyLogic.writes(for: current, current: .notOnBoard),
+            [.pin, .setTier("ct_helpers")]
+        )
+        XCTAssertEqual(TaskPropertyLogic.writes(for: .notOnBoard, current: current), [.unpin])
+    }
+
     // MARK: - Board options
 
     func testBoardOptionsListOffBoardFirstThenEveryTier() {
@@ -79,7 +96,7 @@ final class TaskPropertyLogicTests: XCTestCase {
         )
         XCTAssertEqual(
             options.map(\.label),
-            ["Not on board", "Focus", "Satellite", "Backlog", "Wait", "Reading"]
+            ["Not pinned", "Focus", "Satellite", "Backlog", "Wait", "Reading"]
         )
         XCTAssertEqual(options.map(\.id), ["none", "focus", "satellite", "backlog", "wait", "ct_reading"])
         XCTAssertEqual(options.filter(\.isCurrent).map(\.label), ["Backlog"])
@@ -90,7 +107,7 @@ final class TaskPropertyLogicTests: XCTestCase {
             tierChoices: choices,
             current: TaskPropertyLogic.placement(pinned: false, tierId: nil)
         )
-        XCTAssertEqual(options.filter(\.isCurrent).map(\.label), ["Not on board"])
+        XCTAssertEqual(options.filter(\.isCurrent).map(\.label), ["Not pinned"])
     }
 
     /// A pinned-but-unmapped row checks Satellite, so the menu agrees with the
@@ -183,7 +200,7 @@ final class TaskPropertyLogicTests: XCTestCase {
     func testValueLineLimitKeepsASingleWordWhole() {
         XCTAssertEqual(TaskPropertyLogic.valueLineLimit("Immigration"), 1)
         XCTAssertEqual(TaskPropertyLogic.valueLineLimit("Focus"), 1)
-        XCTAssertEqual(TaskPropertyLogic.valueLineLimit("Not on board"), 2)
+        XCTAssertEqual(TaskPropertyLogic.valueLineLimit("Not pinned"), 2)
         XCTAssertEqual(TaskPropertyLogic.valueLineLimit("Imported from this Mac"), 2)
         XCTAssertEqual(TaskPropertyLogic.valueLineLimit("Sep 28, 2026"), 2)
         XCTAssertEqual(TaskPropertyLogic.valueLineLimit(""), 1)

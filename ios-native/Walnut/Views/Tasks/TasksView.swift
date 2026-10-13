@@ -1003,11 +1003,11 @@ struct TasksView: View {
     /// deferred work is a lie that sends the user looking for a bug. Name the
     /// filter that did it AND where the control lives.
     static func boardEmptyText(query: String, dateFilter: BoardDateFilter) -> String {
-        if !query.isEmpty { return "No matches on the board." }
+        if !query.isEmpty { return "No matches in Pins." }
         if dateFilter == .now {
             return "Nothing to do right now: every task starts later. Pick All in the filter menu to see them."
         }
-        return "Nothing pinned yet. Pin a task to put it on the board."
+        return "Nothing pinned yet. Pin a task to keep it here."
     }
 
     /// A tapped tier token. The DECISION is `BoardModel.action` (pure, tested);

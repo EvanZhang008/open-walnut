@@ -93,7 +93,7 @@ enum TaskPropertyLogic {
     /// no two surfaces disagree about the same row.
     static let unknownTierLabel = "Satellite"
 
-    static let notOnBoardLabel = "Not on board"
+    static let notOnBoardLabel = "Not pinned"
 
     // MARK: - Board
 

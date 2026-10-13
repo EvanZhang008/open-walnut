@@ -1484,13 +1484,13 @@ final class TaskBoardModelTests: XCTestCase {
         )
         XCTAssertEqual(
             TasksView.boardEmptyText(query: "", dateFilter: .all),
-            "Nothing pinned yet. Pin a task to put it on the board."
+            "Nothing pinned yet. Pin a task to keep it here."
         )
         // A live query outranks both: the user typed something, that is the reason.
         for filter in BoardDateFilter.allCases {
             XCTAssertEqual(
                 TasksView.boardEmptyText(query: "alpha", dateFilter: filter),
-                "No matches on the board."
+                "No matches in Pins."
             )
         }
     }

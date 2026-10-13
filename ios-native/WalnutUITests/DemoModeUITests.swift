@@ -203,6 +203,112 @@ final class DemoModeUITests: XCTestCase {
         XCTAssertFalse(element(app, "tasks.recents.page").exists, "Recently opened is still on top")
     }
 
+    func testTaskDetailsCallThePlacementPinAndKeepItsChoicesAfterReopening() throws {
+        let app = UITestLaunch.launch([UITestLaunch.serverURLArgument, Self.demoURL])
+        let tryDemo = app.buttons["setup.tryDemo"]
+        if !tryDemo.waitForExistence(timeout: 15) { leaveDemo(app) }
+        XCTAssertTrue(tryDemo.waitForExistence(timeout: 30))
+        tryDemo.tap()
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60))
+        openBoard(app)
+        let row = element(app, "board.row.t-crash")
+        XCTAssertTrue(row.waitForExistence(timeout: 30))
+        row.press(forDuration: 1)
+        app.buttons["Details, dates & priority"].tap()
+        let sheet = app.navigationBars["Task"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        let pin = app.buttons["task.prop.board"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 10))
+        XCTAssertTrue(pin.label.hasPrefix("Pin"), "the placement must be called Pin: \(pin.label)")
+        XCTAssertFalse(pin.label.contains("Board"))
+        for choice in ["Satellite", "Not pinned", "Focus", "Not pinned", "Focus"] {
+            pin.tap()
+            let option = app.buttons[choice].firstMatch
+            XCTAssertTrue(option.waitForExistence(timeout: 5), "missing Pin choice: \(choice)")
+            XCTAssertFalse(app.buttons["Not on board"].exists)
+            option.tap()
+            let updated = expectation(
+                for: NSPredicate(format: "label CONTAINS %@", choice), evaluatedWith: pin)
+            XCTAssertEqual(XCTWaiter().wait(for: [updated], timeout: 10), .completed)
+        }
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "task-pin-property"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        sheet.buttons["Done"].tap()
+        row.press(forDuration: 1)
+        app.buttons["Details, dates & priority"].tap()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        XCTAssertTrue(pin.label.hasPrefix("Pin"))
+        XCTAssertTrue(pin.label.contains("Focus"), "reopening must preserve the placement")
+        sheet.buttons["Done"].tap()
+    }
+
+    func testPinChoiceIncludesACustomGroupAndSurvivesAnOfflineReopen() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let server = environment["WALNUT_UITEST_SERVER"],
+              let url = URL(string: UITestLaunch.pairedServer(server)), url.host == "127.0.0.1",
+              let port = url.port, port != 3456, port != 3457,
+              let taskId = environment["WALNUT_UITEST_ROW_ID"] else {
+            throw XCTSkip("requires an isolated Pin fixture and its own task")
+        }
+        let arguments = [UITestLaunch.serverURLArgument, url.absoluteString, "-walnut.deviceToken", "pin-test"]
+        let app = UITestLaunch.launch(arguments)
+        openBoard(app)
+        let row = element(app, "board.row.\(taskId)")
+        XCTAssertTrue(row.waitForExistence(timeout: 30))
+        row.press(forDuration: 1)
+        app.buttons["Details, dates & priority"].tap()
+        let sheet = app.navigationBars["Task"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        let pin = app.buttons["task.prop.board"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 10))
+        pin.tap()
+        let custom = app.buttons["Virtual Teammate"].firstMatch
+        XCTAssertTrue(custom.waitForExistence(timeout: 5), "a custom group belongs in Pin")
+        XCTAssertTrue(app.buttons["Not pinned"].exists)
+        XCTAssertTrue(app.buttons["Focus"].exists)
+        XCTAssertTrue(app.buttons["Satellite"].exists)
+        let menuShot = XCTAttachment(screenshot: app.screenshot())
+        menuShot.name = "pin-custom-group-menu"
+        menuShot.lifetime = .keepAlways
+        add(menuShot)
+        custom.tap()
+        let moved = expectation(
+            for: NSPredicate(format: "label CONTAINS %@", "Virtual Teammate"), evaluatedWith: pin)
+        XCTAssertEqual(XCTWaiter().wait(for: [moved], timeout: 10), .completed)
+        sheet.buttons["Done"].tap()
+        scrollBoard(to: row, in: app)
+        XCTAssertTrue(row.isHittable)
+        row.press(forDuration: 1)
+        app.buttons["Details, dates & priority"].tap()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        XCTAssertTrue(pin.label.hasPrefix("Pin"))
+        XCTAssertTrue(pin.label.contains("Virtual Teammate"))
+        let savedShot = XCTAttachment(screenshot: app.screenshot())
+        savedShot.name = "pin-custom-group-saved"
+        savedShot.lifetime = .keepAlways
+        add(savedShot)
+        sheet.buttons["Done"].tap()
+        app.terminate()
+        let offline = UITestLaunch.launch([
+            UITestLaunch.serverURLArgument, UITestLaunch.blackholeURL, "-walnut.deviceToken", "pin-test",
+        ])
+        openBoard(offline)
+        let cached = element(offline, "board.row.\(taskId)")
+        scrollBoard(to: cached, in: offline)
+        XCTAssertTrue(cached.waitForExistence(timeout: 10), "offline cache lost the pin")
+        cached.press(forDuration: 1)
+        offline.buttons["Details, dates & priority"].tap()
+        let offlinePin = offline.buttons["task.prop.board"]
+        XCTAssertTrue(offlinePin.waitForExistence(timeout: 10))
+        XCTAssertTrue(offlinePin.label.hasPrefix("Pin"))
+        let offlineShot = XCTAttachment(screenshot: offline.screenshot())
+        offlineShot.name = "pin-offline-reopened"
+        offlineShot.lifetime = .keepAlways
+        add(offlineShot)
+    }
+
     func testNewSessionShowsTheFirstMessageBeforeTheCreateAnswers() throws {
         let app = UITestLaunch.launch([
             UITestLaunch.serverURLArgument, Self.demoURL, "-walnut.demoLatencyScale", "12",

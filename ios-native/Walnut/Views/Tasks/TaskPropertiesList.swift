@@ -142,7 +142,7 @@ struct TaskPropertiesList: View {
             }
         } label: {
             TaskPropertyRowLabel(
-                label: "Board",
+                label: "Pin",
                 value: TaskPropertyLogic.boardValueText(placement, tierChoices: tasks.allTierChoices),
                 icon: placement == .notOnBoard ? "pin.slash" : "pin.fill"
             )

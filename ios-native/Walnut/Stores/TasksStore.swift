@@ -1401,11 +1401,7 @@ enum TaskFilter: String, CaseIterable, Identifiable {
         case .today: return "Today"
         case .calendar: return "Calendar"
         case .inProgress: return "In Progress"
-        // "Board", not "Sessions": the filter no longer shows a session list, it
-        // shows the pinned board where a session is a task that has one. The
-        // enum case keeps its name so every stored preference, accessibility id
-        // ("tasks.card.sessions") and Maestro flow keeps working.
-        case .sessions: return "Board"
+        case .sessions: return "Pins"
         case .allOpen: return "All Open"
         case .done: return "Done"
         }

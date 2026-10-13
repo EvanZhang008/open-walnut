@@ -302,9 +302,9 @@ struct TasksNoSessionPage: View {
         ContentUnavailableView {
             Label("No session open", systemImage: "bubble.left.and.text.bubble.right")
         } description: {
-            Text("Pick a task on the board to open its session, or start a new one.")
+            Text("Pick a task from Pins to open its session, or start a new one.")
         } actions: {
-            Button("Open the board", action: openBoard)
+            Button("Open Pins", action: openBoard)
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.tint)
                 .accessibilityIdentifier("tasks.empty.openBoard")
