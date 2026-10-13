@@ -31,6 +31,9 @@ import { useNotifications } from '@/contexts/notifications';
 import { log } from '@/utils/log';
 import type { EngineUiCaps } from '@/utils/engine-capabilities';
 import type { SessionRecord } from '@/types/session';
+import type { SessionControl } from '@/api/sessions';
+import { sessionModeLabel } from './SessionControlPills';
+import { acpFamilyName, parseAcpModelId } from './acp-model-id';
 
 /** A surface whose session does not exist yet — the pick is the caller's to keep. */
 export interface ComposerModelPillPending {
@@ -79,6 +82,12 @@ export interface ComposerModelPillProps {
   /** The last `openNonce` a pill opened for, kept by the CALLER so it outlives
    *  the pill (see `useOpenRequest`). */
   openServedRef?: MutableRefObject<number>;
+  /** ACP session: the adapter's config options (approval mode, reasoning effort),
+   *  shown in the picker's Live strip and, for an engine whose model ids carry no
+   *  effort, as its Effort column. */
+  controls?: SessionControl[];
+  /** Set one of `controls` (the panel's useSessionControls setter). */
+  onControl?: (id: string, value: string) => Promise<void>;
 }
 
 /**
@@ -108,6 +117,7 @@ export function useOpenRequest(
 
 export function ComposerModelPill({
   sessionId, session, engineUi, onOptimistic, fallbackAssistant, pending, title, openNonce, openServedRef,
+  controls, onControl,
 }: ComposerModelPillProps) {
   const { notify } = useNotifications();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -145,6 +155,12 @@ export function ComposerModelPill({
   // model string can't reveal a custom proxy model's window, and guessing 200K
   // for one was 5x wrong (2026-08-23).
   let badgeUsage = liveUsage;
+  // An ACP engine reports context as two numbers the server keeps on the record
+  // (contextTokens / modelMaxWindow), not as transcript usage.
+  if (contextPercent == null && engineUi.isAcp && session?.contextTokens && session.modelMaxWindow) {
+    contextPercent = Math.round(session.contextTokens / session.modelMaxWindow * 100);
+    badgeUsage = { ...liveUsage, inputTokens: session.contextTokens, contextWindow: session.modelMaxWindow };
+  }
   if (contextPercent == null && fallbackAssistant?.usage) {
     const u = fallbackAssistant.usage as Record<string, number>;
     const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
@@ -247,6 +263,44 @@ export function ComposerModelPill({
   }, [sessionId, session?.effort, session?.effectiveEffort, onOptimistic, pending]);
 
   const extraTitle = title ? ` ${title}` : '';
+
+  // ACP picker facts: the adapter's own effort select and approval mode.
+  const effortControl = controls?.find((control) => control.category === 'thought_level');
+  const modeControl = controls?.find((control) => control.id === 'mode');
+  const acpEffort = effortControl?.currentValue
+    ?? (session?.acpModel ? parseAcpModelId(session.acpModel).effort ?? undefined : undefined);
+  const acpLive = engineUi.isAcp && !pending && sessionId ? {
+    live: session?.process_status === 'running' || session?.process_status === 'idle',
+    ...(acpEffort ? { effort: acpEffort } : {}),
+    ...(modeControl ? { mode: sessionModeLabel(modeControl) } : {}),
+  } : undefined;
+  // Names the model a turn ran on (the user may have switched since): the
+  // catalog's family name, else an advertised name seen for that family with
+  // its effort tail cut ("GPT-6.1 Sol (high)" → "GPT-6.1 Sol"), else the id.
+  const acpCurrentFamily = session?.acpModel ? parseAcpModelId(session.acpModel).familyId : undefined;
+  const acpAdvertised = session?.acpModel && session.acpModelName
+    ? acpModelDisplayName(session.acpModel, session.acpModelName)?.replace(/\s*\([^)]*\)\s*$/, '')
+    : undefined;
+  // An effort switch clears the advertised name until the engine answers, so
+  // names already learned for a family are kept (idempotent, safe in render).
+  const acpFamilyNamesRef = useRef(new Map<string, string>());
+  if (acpCurrentFamily && acpAdvertised) acpFamilyNamesRef.current.set(acpCurrentFamily, acpAdvertised);
+  const acpTurnModelLabel = useCallback((catalogLabel: (familyId: string) => string | undefined) => (model: string | undefined) => {
+    if (!model) return undefined;
+    const familyId = parseAcpModelId(model).familyId;
+    return catalogLabel(familyId) || acpFamilyNamesRef.current.get(familyId) || acpFamilyName(familyId);
+  }, [acpCurrentFamily, acpAdvertised]);
+  const acpContextUsed = liveUsage.inputTokens ?? session?.contextTokens;
+  const acpContext = engineUi.isAcp && acpContextUsed
+    ? { used: acpContextUsed, size: liveUsage.contextWindow ?? session?.modelMaxWindow }
+    : undefined;
+  const handleAcpEffortControl = useCallback((value: string) => {
+    setPickerOpen(false);
+    if (!effortControl || !onControl) return;
+    void onControl(effortControl.id, value).catch((error) => {
+      log.warn('session-controls', 'effort change failed', { sessionId, error: String(error) });
+    });
+  }, [effortControl, onControl, sessionId]);
 
   // In a condensed controls row the pill is one family word ("Opus"), followed
   // by the percentage only while the row has room for it; the effort badge
@@ -376,8 +430,14 @@ export function ComposerModelPill({
             ? { resolvedLabel: autoResolved, active: !pending.model }
             : undefined}
           anchorRef={pillRef}
+          acpLive={acpLive}
+          acpContext={acpContext}
+          acpEffortControl={effortControl}
+          onAcpEffortControl={onControl ? handleAcpEffortControl : undefined}
           speedReadout={!pending && sessionId
-            ? <><SessionSpeedReadout sessionId={sessionId} session={session} />{!engineUi.isAcp && <SubscriptionLimitReadout host={session?.host} />}</>
+            ? (engineUi.isAcp
+              ? (catalogLabel) => <SessionSpeedReadout sessionId={sessionId} session={session} modelLabel={acpTurnModelLabel(catalogLabel)} />
+              : <><SessionSpeedReadout sessionId={sessionId} session={session} /><SubscriptionLimitReadout host={session?.host} /></>)
             : undefined}
         />
       )}

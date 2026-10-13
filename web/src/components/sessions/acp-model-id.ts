@@ -97,9 +97,7 @@ export function shortAcpModelName(modelId: string): string {
   const { familyId, effort } = parseAcpModelId(modelId);
   const family = acpFamilyName(familyId);
   if (!effort) return family;
-  const label = SESSION_EFFORTS.find((e) => e.id === effort)?.label
-    ?? effort.charAt(0).toUpperCase() + effort.slice(1);
-  return `${family} · ${label}`;
+  return `${family} · ${acpEffortLabel(effort)}`;
 }
 
 /**
@@ -220,7 +218,7 @@ export function groupAcpModels(models: readonly AcpCatalogModel[]): AcpModelGrou
       const withoutGroup = groupId && !familyId.startsWith('[') && nameSlash > 0 ? m.name.slice(nameSlash + 1) : m.name;
       const label = m.name === m.modelId
         ? acpFamilyName(familyId)
-        : withoutGroup.replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, '').trim()
+        : withoutGroup.replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max|ultra)\)\s*$/i, '').trim()
           || acpFamilyName(familyId);
       fam = { familyId, label, groupId, groupLabel: group.label, byEffort: new Map() };
       group.families.set(familyId, fam);
@@ -235,4 +233,44 @@ export function groupAcpModels(models: readonly AcpCatalogModel[]): AcpModelGrou
       (family) => `${family.familyId} ${family.label}`,
     ),
   }));
+}
+
+/** Effort order across engines: Walnut's own ladder plus the levels an ACP
+ *  engine may add around it (Codex offers minimal and ultra on some models). */
+const ACP_EFFORT_ORDER = ['none', 'minimal', ...SESSION_EFFORT_IDS, 'ultra'];
+
+export interface AcpEffortLevel { id: string; label: string; description?: string }
+
+/** Display label of an effort id: Walnut's table ("X-High"), else capitalized. */
+export function acpEffortLabel(effort: string): string {
+  return SESSION_EFFORTS.find((e) => e.id === effort)?.label
+    ?? effort.charAt(0).toUpperCase() + effort.slice(1);
+}
+
+/**
+ * The effort column of the ACP pane: every level ANY family offers, in ladder
+ * order (unknown levels after the known ones, in catalog order). A fixed ladder
+ * dropped what it did not list: Codex's "ultra" was reachable only from a
+ * second effort pill beside the model pill (2026-10-12).
+ */
+export function acpEffortLadder(families: readonly AcpModelFamily[]): AcpEffortLevel[] {
+  const seen: string[] = [];
+  for (const fam of families) {
+    for (const effort of fam.byEffort.keys()) {
+      if (effort !== null && !seen.includes(effort)) seen.push(effort);
+    }
+  }
+  // Ranks are fixed before sorting: an in-place sort moves entries mid-way.
+  const catalogOrder = new Map(seen.map((e, i) => [e, i]));
+  const rank = (e: string) => {
+    const i = ACP_EFFORT_ORDER.indexOf(e);
+    return i === -1 ? ACP_EFFORT_ORDER.length + catalogOrder.get(e)! : i;
+  };
+  return [...seen]
+    .sort((a, b) => rank(a) - rank(b))
+    .map((id) => ({
+      id,
+      label: acpEffortLabel(id),
+      ...(SESSION_EFFORTS.find((e) => e.id === id)?.description ? { description: SESSION_EFFORTS.find((e) => e.id === id)!.description } : {}),
+    }));
 }

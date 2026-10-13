@@ -100,7 +100,14 @@ function normalizeProjectedEvent(event: AcpProjectedEvent): NormalizedEvent[] {
     case 'usage':
       return [{
         name: 'session:usage-update',
-        payload: { used: event.used, size: event.size },
+        // Spoken in the Claude event's vocabulary too, so the composer's
+        // context badge reads an ACP session the same way.
+        payload: {
+          used: event.used,
+          size: event.size,
+          inputTokens: event.used,
+          ...(event.size > 0 ? { contextWindow: event.size, contextPercent: Math.round(event.used / event.size * 100) } : {}),
+        },
       }]
     case 'system':
       return [{

@@ -18,6 +18,14 @@ describe('pricing', () => {
       expect(entry!.output).toBe(15.00);
     });
 
+    it('prices each GPT family by its own row, never the Opus fallback', () => {
+      expect(findPricing('openai.gpt-6.1-sol')!.pattern).toBe('gpt-6.1-sol');
+      expect(findPricing('global.openai.gpt-6-sol')!.pattern).toBe('gpt-6-sol');
+      expect(findPricing('openai.gpt-6-luna[high]')!.pattern).toBe('gpt-6-luna');
+      expect(findPricing('openai.gpt-6-astra')!.pattern).toBe('gpt-6-astra');
+      expect(findPricing('openai.gpt-5.6-sol[max]')!.pattern).toBe('gpt-5.6');
+    });
+
     it('returns undefined for unknown models', () => {
       const entry = findPricing('totally-unknown-model-xyz');
       expect(entry).toBeUndefined();

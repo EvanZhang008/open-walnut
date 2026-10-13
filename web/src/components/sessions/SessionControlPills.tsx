@@ -11,6 +11,9 @@ interface SessionControlPillsProps {
    *  silent "Codex" heading on a gemini/opencode/goose/custom session. */
   engineName: string;
   showModeShortcut?: boolean;
+  /** false: the reasoning-effort select lives in the model picker's Effort
+   *  column instead of a second pill beside the model pill. */
+  showThoughtLevel?: boolean;
 }
 
 export function nextSessionControlValue(control: SessionControl | undefined): string | undefined {
@@ -82,6 +85,13 @@ const CHATGPT_MODE_WORDING: Record<string, { name: string; description: string }
   },
 };
 
+/** The approval mode's display name, as the mode pill shows it. */
+export function sessionModeLabel(control: SessionControl): string {
+  return CHATGPT_MODE_WORDING[control.currentValue]?.name
+    ?? control.options.find((option) => option.value === control.currentValue)?.name
+    ?? control.currentValue;
+}
+
 /**
  * ChatGPT-parity approval menu: ONE pill (current mode) opening a dropdown of
  * the provider's own options — icon + name + description, check on the RIGHT,
@@ -92,7 +102,7 @@ const CHATGPT_MODE_WORDING: Record<string, { name: string; description: string }
 export function SessionControlPills(props: SessionControlPillsProps) {
   return <>
     <ApprovalControlPills {...props} />
-    {props.controls.filter((control) => control.category === 'thought_level').map((control) => (
+    {props.showThoughtLevel !== false && props.controls.filter((control) => control.category === 'thought_level').map((control) => (
       <ThoughtControlPill key={`${control.id}:${control.options.map((option) => option.value).join('|')}`} control={control} setControl={props.setControl} />
     ))}
   </>;

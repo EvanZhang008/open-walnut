@@ -43,11 +43,13 @@ import {
   enginePathOverrideVar,
   findEngineBinary,
   inspectExecutable,
+  resolveOverridePath,
 } from '../core/agents/engine-probe.js'
 import { localDaemon } from './local-daemon.js'
 import { getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
 import { AcpJournalProjector } from './acp-journal-projector.js'
 import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
+import { AcpTurnSpeedMeter } from '../core/sessions/acp-turn-speed.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import type {
   AcpCapabilitySnapshot,
@@ -263,7 +265,7 @@ export function resolveSystemCodexPath(options: ResolveSystemCodexPathOptions = 
  * override error messages need.
  */
 function inspectExecutableCandidate(candidate: string, cwd: string): ExecutableCandidateResult {
-  const executable = path.resolve(cwd, candidate)
+  const executable = resolveOverridePath(candidate, cwd)
   const verdict = inspectExecutable(executable)
   if (verdict.executable) return { executable: verdict.executable }
   // A PATH entry inside node_modules is the npm-injected-shim hazard: forbidden
@@ -672,6 +674,11 @@ export class AcpSession {
   private _pendingPermissionCommit: Promise<void> = Promise.resolve()
   private _selfReport: PendingSelfReport | null = null
   private readonly normalizer: AcpStreamNormalizer
+  /** The composer's turn speed readout, measured from the journal (see acp-turn-speed.ts). */
+  private readonly _speed = new AcpTurnSpeedMeter()
+  private _speedEmitAt = 0
+  /** Latest usage_update, written to the record at turn end (one write per turn). */
+  private _lastContext: { used: number; size: number } | null = null
 
   constructor(cfg: AcpSessionConfig) {
     this.cfg = cfg
@@ -869,6 +876,8 @@ export class AcpSession {
       }
     }
 
+    this.meterTurnSpeed(record)
+
     for (const { name, payload } of this.normalizer.normalize(record)) {
       const full: Record<string, unknown> = { ...payload, sessionId: this.trackingId(), taskId: this.taskId }
       if (name === 'session:permission-request') {
@@ -910,6 +919,80 @@ export class AcpSession {
       && (record.event.type === 'turn-ended' || record.event.type === 'turn-interrupted')) {
       this.commitTerminal(v, record)
     }
+  }
+
+  /** Feed one journal record to the turn speed meter; emit its readout. */
+  private meterTurnSpeed(record: JournalRecord): void {
+    if (record.kind === 'meta') {
+      const event = record.event
+      if (event.type === 'turn-started') {
+        this._speed.start(record.ts, this.meterModel())
+        this.emitTurnSpeed(record.ts, false)
+      } else if (event.type === 'turn-ended' || event.type === 'turn-interrupted') {
+        if (!this._speed.active) return
+        const usage = event.type === 'turn-ended' ? event.usage : undefined
+        const interrupted = event.type === 'turn-interrupted' || (event.type === 'turn-ended' && event.stopReason === 'cancelled')
+        const speed = this._speed.finish(record.ts, usage, interrupted)
+        this.emitTurnSpeed(record.ts, true)
+        const sid = this._providerSessionId
+        const context = this._lastContext
+        if (sid) {
+          void updateSessionRecord(sid, {
+            lastTurnSpeed: speed,
+            ...(context ? { contextTokens: context.used, ...(context.size > 0 ? { modelMaxWindow: context.size } : {}) } : {}),
+          }).catch(() => {})
+        }
+      }
+      return
+    }
+    if (record.source !== undefined && record.source !== 'live') return
+    const frame = record.frame as { method?: unknown; params?: { update?: Record<string, unknown> } } | null
+    if (frame?.method !== 'session/update') return
+    const update = frame.params?.update
+    if (!update) return
+    switch (update.sessionUpdate) {
+      case 'agent_message_chunk':
+      case 'agent_thought_chunk': {
+        const content = update.content as { type?: unknown; text?: unknown } | undefined
+        const chars = content?.type === 'text' && typeof content.text === 'string' ? content.text.length : 0
+        this._speed.chunk(record.ts, chars)
+        if (record.ts - this._speedEmitAt >= 400) this.emitTurnSpeed(record.ts, false)
+        return
+      }
+      case 'tool_call':
+        if (typeof update.toolCallId === 'string') this._speed.toolCall(record.ts, update.toolCallId)
+        this.emitTurnSpeed(record.ts, false)
+        return
+      case 'tool_call_update':
+        if (typeof update.toolCallId === 'string' && (update.status === 'completed' || update.status === 'failed')) {
+          this._speed.toolDone(record.ts, update.toolCallId)
+        }
+        return
+      case 'usage_update':
+        this._speed.usage()
+        if (typeof update.used === 'number' && typeof update.size === 'number') {
+          this._lastContext = { used: update.used, size: update.size }
+        }
+        return
+    }
+  }
+
+  /** The model the meter prices and names: the family id, without its effort. */
+  private meterModel(): string | undefined {
+    const current = this._models.currentModelId
+    return current ? splitAcpModelId(current).base : undefined
+  }
+
+  private emitTurnSpeed(now: number, final: boolean): void {
+    const sid = this._providerSessionId
+    if (!sid) return
+    if (!final && !this._speed.active) return
+    this._speedEmitAt = now
+    bus.emit(EventNames.SESSION_TURN_SPEED, {
+      sessionId: sid,
+      taskId: this.taskId,
+      speed: this._speed.snapshot(now),
+    }, ['web-ui'], { source: 'session-runner' })
   }
 
   /** Records/API key: providerSessionId once known, else runtimeId (pending phase). */

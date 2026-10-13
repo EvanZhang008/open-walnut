@@ -22,7 +22,7 @@ import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
-import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, groupAcpModels, acpFilterMatch } from './acp-model-id';
+import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
 
 const EFFORTS = SESSION_EFFORTS;
@@ -221,6 +221,17 @@ export function ProviderRail({ active, onSwitch, lockReason }: {
 }
 
 /** Short display form of a full runtime model ID (e.g. "us.anthropic.claude-sonnet-4-6[1m]" → "sonnet-4-6 1M"). */
+// The last catalog each live ACP session answered, so reopening its picker
+// shows the list (and the names in its Live strip and readout) at once while
+// the fresh answer loads. Bounded: oldest session dropped first.
+const LIVE_ACP_CATALOG_CAP = 32;
+const liveAcpCatalogs = new Map<string, CodexModelInfo[]>();
+function rememberLiveAcpCatalog(sessionId: string, models: CodexModelInfo[]): void {
+  liveAcpCatalogs.delete(sessionId);
+  liveAcpCatalogs.set(sessionId, models);
+  while (liveAcpCatalogs.size > LIVE_ACP_CATALOG_CAP) liveAcpCatalogs.delete(liveAcpCatalogs.keys().next().value!);
+}
+
 function shortModelLabel(raw?: string | null): string {
   if (!raw) return '—';
   const is1m = raw.includes('[1m]');
@@ -287,14 +298,29 @@ interface ModelPickerProps {
   anchorRef?: React.RefObject<HTMLElement | null>;
   /** LIVE session: the turn speed readout (SessionSpeedReadout) rendered under
    *  the live-settings strip, so the speed of the model sits next to the model
-   *  it describes. A caller without a session omits it. */
-  speedReadout?: React.ReactNode;
+   *  it describes. A caller without a session omits it. As a function it is
+   *  handed the catalog's family names, so an ACP readout names the model its
+   *  turn ran on the way the catalog does. */
+  speedReadout?: React.ReactNode | ((familyLabel: (familyId: string) => string | undefined) => React.ReactNode);
+  /** LIVE ACP session: what the adapter reports right now, for the Live strip
+   *  (Claude's comes from get_settings; an ACP adapter states it in its config
+   *  options). `live` is the session's process being up. */
+  acpLive?: { live: boolean; effort?: string; mode?: string };
+  /** ACP: the engine's own reasoning-effort select, used for the effort column
+   *  when the catalog's model ids carry no effort (an engine that keeps effort
+   *  apart from the model). Codex encodes it in the id, so its ladder comes
+   *  from the catalog and this stays unused. */
+  acpEffortControl?: { options: { value: string; name: string; description?: string }[]; currentValue: string };
+  onAcpEffortControl?: (value: string) => void;
+  /** ACP: tokens in context at the last model call and the window, for the
+   *  Context line (an ACP engine reports these two numbers, no breakdown). */
+  acpContext?: { used: number; size?: number };
 }
 
 export function ModelPicker({
   currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, speedReadout,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow,
-  anchorRef,
+  anchorRef, acpLive, acpEffortControl, onAcpEffortControl, acpContext,
 }: ModelPickerProps) {
   // ── LIVE pull: the moment the picker opens, ask the CLI what it's ACTUALLY
   // using (get_settings → applied). Until it answers (or when the session isn't
@@ -324,7 +350,9 @@ export function ModelPicker({
   // caller's draft state (acpCurrentModelId prop), never the probe's default.
   const acpCacheGeneration = React.useSyncExternalStore(subscribeEngineModelCache, getEngineModelCacheGeneration);
   const initialAcpCatalog = !sessionId ? getCachedEngineModelCatalog(engine, cwd) : null;
-  const [acpModels, setAcpModels] = React.useState<CodexModelInfo[] | null>(initialAcpCatalog?.models ?? null);
+  const [acpModels, setAcpModels] = React.useState<CodexModelInfo[] | null>(
+    (sessionId ? liveAcpCatalogs.get(sessionId) : initialAcpCatalog?.models) ?? null,
+  );
   const [acpCurrent, setAcpCurrent] = React.useState<string | undefined>(acpCurrentModelId);
   // The engine's RESOLVED default (probe currentModelId) — lets the draft's
   // "default" row say what the default actually is, not just that one exists.
@@ -346,14 +374,16 @@ export function ModelPicker({
     if (!isAcpPane || !hasAcpSwitch) return;
     let cancelled = false;
     const cached = !sessionId ? getCachedEngineModelCatalog(engine, cwd) : null;
-    setAcpModels(cached?.models ?? null);
-    setAcpLoading(!cached);
+    const liveCached = sessionId ? liveAcpCatalogs.get(sessionId) : undefined;
+    setAcpModels(cached?.models ?? liveCached ?? null);
+    setAcpLoading(!cached && !liveCached);
     setAcpError(null);
     setAcpDefaultModelId(cached?.currentModelId);
     const wantRefresh = acpRetryRef.current;
     acpRetryRef.current = false;
     const pull = sessionId
       ? fetchCodexModelCatalog(sessionId).then((c) => {
+          rememberLiveAcpCatalog(sessionId, c.models);
           if (cancelled) return;
           setAcpModels(c.models);
           setAcpCurrent(c.currentModelId);
@@ -366,7 +396,7 @@ export function ModelPicker({
     pull
       .catch((err: unknown) => {
         if (cancelled) return;
-        if (!cached) setAcpModels([]);
+        if (!cached && !liveCached) setAcpModels([]);
         // Draft probes fail for OPERATOR reasons (engine not installed, no
         // credentials) — show the adapter's own words, not a blank pane.
         if (!sessionId) setAcpError(err instanceof Error ? err.message : String(err));
@@ -583,6 +613,11 @@ export function ModelPicker({
   // (family switch keeps the current effort when offered). The grouping
   // itself is pure and lives in ./acp-model-id (unit-tested directly).
   const acpGroups = React.useMemo(() => groupAcpModels(acpModels ?? []), [acpModels]);
+  const acpCatalogFamilyLabel = React.useCallback(
+    (familyId: string) => acpGroups.flatMap((g) => g.families).find((f) => f.familyId === familyId)?.label,
+    [acpGroups],
+  );
+  const renderedSpeedReadout = typeof speedReadout === 'function' ? speedReadout(acpCatalogFamilyLabel) : speedReadout;
   const acpActive = acpCurrent ? parseAcpModelId(acpCurrent) : null;
   const acpAllFamilies = React.useMemo(() => acpGroups.flatMap((g) => g.families), [acpGroups]);
   const acpActiveFamily = acpActive
@@ -598,7 +633,12 @@ export function ModelPicker({
   const acpFamilies = acpSelectedGroup?.families ?? [];
   // Hide the effort column entirely when NO family has effort variants (mock
   // catalogs) — mirrors the claude pane hiding effort for draft callers.
-  const acpHasEfforts = acpAllFamilies.some((f) => [...f.byEffort.keys()].some((e) => e !== null));
+  const acpEffortLevels = React.useMemo(() => acpEffortLadder(acpAllFamilies), [acpAllFamilies]);
+  const acpHasEfforts = acpEffortLevels.length > 0;
+  // An engine whose ids carry no effort may still expose one as its own select.
+  const acpControlEfforts = !acpHasEfforts && acpEffortControl && acpEffortControl.options.length > 0 && onAcpEffortControl
+    ? acpEffortControl
+    : undefined;
   const acpGrouped = acpGroups.length > 1;
 
   // ── Type-ahead filter over the whole catalog. Grouped/large catalogs only
@@ -683,10 +723,46 @@ export function ModelPicker({
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>
         <span className="model-picker-current">
-          Current: {acpCurrent ? shortAcpModelName(acpCurrent) : acpDefaultLabel}
+          Current: {acpCurrent
+            ? (acpActiveFamily
+              ? `${acpActiveFamily.label}${acpActive?.effort ? ` · ${acpEffortLabel(acpActive.effort)}` : ''}`
+              : shortAcpModelName(acpCurrent))
+            : acpDefaultLabel}
         </span>
         <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
       </div>
+      {sessionId && acpLive && (
+        <div className="model-picker-live" data-testid="picker-live-strip">
+          {acpLive.live ? (
+            <>
+              <span className="model-picker-live-dot" aria-hidden>●</span>
+              <span>
+                Live: <strong>{acpActiveFamily?.label ?? (acpCurrent ? shortAcpModelName(parseAcpModelId(acpCurrent).familyId) : engineUi.displayName)}</strong>
+                {acpLive.effort ? <>{' · '}effort <strong>{acpEffortLabel(acpLive.effort)}</strong></> : null}
+                {acpLive.mode ? <>{' · '}mode <strong>{acpLive.mode}</strong></> : null}
+              </span>
+            </>
+          ) : (
+            <span className="model-picker-live-offline" title={`The ${engineUi.displayName} process is not running. These settings apply when it starts again.`}>
+              ○ Not running · saved settings apply on next start
+            </span>
+          )}
+        </div>
+      )}
+      {sessionId && renderedSpeedReadout}
+      {sessionId && acpContext && acpContext.used > 0 && (
+        <div className="model-picker-details" data-testid="picker-acp-context">
+          <div className="model-picker-details-block">
+            <div className="model-picker-details-title">
+              Context {fmtTokens(acpContext.used)}
+              {acpContext.size ? ` / ${fmtTokens(acpContext.size)} (${Math.round(acpContext.used / acpContext.size * 100)}%)` : ''}
+            </div>
+            <div className="model-picker-details-row model-picker-details-note">
+              <span>{engineUi.displayName} reports the total only, not a breakdown.</span>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="model-picker-columns">
         {onAcpSwitch && acpGrouped && (
           <div className="model-picker-col model-picker-col-groups" role="listbox" aria-label="Provider">
@@ -822,7 +898,7 @@ export function ModelPicker({
         {onAcpSwitch && acpHasEfforts && (
           <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
             <div className="model-picker-col-title">Effort</div>
-            {EFFORTS.map((e) => {
+            {acpEffortLevels.map((e) => {
               const variant = acpActiveFamily?.byEffort.get(e.id);
               const disabled = !variant;
               const active = acpActive?.effort === e.id;
@@ -843,6 +919,28 @@ export function ModelPicker({
                 >
                   <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
                   <span className="model-picker-row-name">{e.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {acpControlEfforts && (
+          <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
+            <div className="model-picker-col-title">Effort</div>
+            {acpControlEfforts.options.map((option) => {
+              const active = option.value === acpControlEfforts.currentValue;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}`}
+                  role="option"
+                  aria-selected={active}
+                  title={option.description ?? option.name}
+                  onClick={() => { if (!active) onAcpEffortControl?.(option.value); }}
+                >
+                  <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
+                  <span className="model-picker-row-name">{option.name}</span>
                 </button>
               );
             })}
@@ -939,7 +1037,7 @@ export function ModelPicker({
 
       {/* How fast the last (or running) turn went on this session's model:
           Walnut's own measurement over the CLI stream, see SessionSpeedReadout. */}
-      {sessionId && speedReadout}
+      {sessionId && renderedSpeedReadout}
 
       {/* Live details — collapsed by default. Everything here is the CLI's OWN
           accounting pulled on expand: context breakdown (same source as the

@@ -34,7 +34,7 @@ import type {
   PermissionOptionId,
 } from '@agentclientprotocol/sdk'
 import { AcpJournal, readJournal } from './journal.js'
-import { mergeAcpSpawnEnv } from './protocol.js'
+import { mergeAcpSpawnEnv, snapshotAcpTurnUsage } from './protocol.js'
 import type {
   AcpMcpServer,
   WorkerRequest,
@@ -376,7 +376,8 @@ export class AcpWorker {
       this.turnActive = false
       this.turnCommandId = null
       this.lastEnded = 'turn'
-      this.journal.appendMeta({ type: 'turn-ended', commandId: params.commandId, stopReason: resp.stopReason })
+      const usage = snapshotAcpTurnUsage((resp as { usage?: unknown }).usage)
+      this.journal.appendMeta({ type: 'turn-ended', commandId: params.commandId, stopReason: resp.stopReason, ...(usage ? { usage } : {}) })
       this.notifyJournal()
     }).catch((e) => {
       if (this.turnCommandId !== params.commandId) return

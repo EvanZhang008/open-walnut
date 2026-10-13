@@ -1642,6 +1642,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             setControl={setSessionControl}
             engineName={engineUi.displayName}
             showModeShortcut
+            showThoughtLevel={false}
           />
         ) : (
           <button
@@ -1668,6 +1669,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             fallbackAssistant={lastAssistant}
             openNonce={opts.openNonce}
             openServedRef={opts.openNonce !== undefined ? modelPickerServed : undefined}
+            controls={engineUi.isAcp ? sessionControls : undefined}
+            onControl={engineUi.isAcp ? setSessionControl : undefined}
           />
         ),
       },

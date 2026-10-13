@@ -29,6 +29,9 @@ interface SessionSpeedReadoutProps {
   session: { model?: string; process_status?: string; lastTurnSpeed?: SessionTurnSpeed } | null | undefined;
   /** Where the row sits: inside the model picker (default) or on its own. */
   placement?: 'picker' | 'standalone';
+  /** Names the turn's model when its id does not prettify (an ACP engine's
+   *  "openai.gpt-6.1-sol"); undefined falls back to formatModelName. */
+  modelLabel?: (model: string | undefined) => string | undefined;
 }
 
 /** A live frame older than this on a session whose process is gone (record
@@ -52,7 +55,19 @@ function useTicker(live: boolean): number {
   return live ? now : 0;
 }
 
-export function SessionSpeedReadout({ sessionId, session, placement = 'picker' }: SessionSpeedReadoutProps) {
+/** "Input 12K (10K cached) · reasoning 300" when the engine reported its input side. */
+function usageBreakdown(speed: SessionTurnSpeed): string {
+  if (speed.inputTokens === undefined && speed.reasoningTokens === undefined) return '';
+  const parts: string[] = [];
+  if (speed.inputTokens !== undefined) {
+    const cached = speed.cachedInputTokens ?? 0;
+    parts.push(`Input ${(speed.inputTokens + cached).toLocaleString()} tokens${cached > 0 ? ` (${cached.toLocaleString()} cached)` : ''}.`);
+  }
+  if (speed.reasoningTokens !== undefined) parts.push(`Reasoning ${speed.reasoningTokens.toLocaleString()} of the output tokens.`);
+  return parts.join(' ');
+}
+
+export function SessionSpeedReadout({ sessionId, session, placement = 'picker', modelLabel }: SessionSpeedReadoutProps) {
   const resolved = useTurnSpeed(sessionId, session?.lastTurnSpeed);
   const liveFrame = !!resolved && !resolved.final;
   const receivedAt = turnSpeedStore.receivedAt(sessionId);
@@ -62,11 +77,15 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker' }
   if (!resolved) return null;
   const speed: SessionTurnSpeed = stale ? { ...resolved, final: true, interrupted: true, endedAt: receivedAt } : resolved;
   const r = computeReadout(speed, now || Date.now());
-  const model = formatModelName(speed.model ?? session?.model) || 'Model';
+  const model = modelLabel?.(speed.model) || formatModelName(speed.model ?? session?.model) || 'Model';
   const title = [
     'Measured by Walnut from the CLI stream.',
     'first: your message to the first visible token (a fresh session includes its startup). tok/s: CLI output tokens, thinking included, over the time the model spent generating (tool runs excluded).',
     r.partial ? 'This turn was only partly observed (server attached mid-turn), so tok/s covers what it saw.' : '',
+    speed.tokenScope === 'last-call'
+      ? `The engine reports usage for its last model call only: tokens and tok/s describe that call (1 of ${speed.messages}), and the turn's cost is unknown.`
+      : '',
+    usageBreakdown(speed),
     r.tokensEstimated || r.tpsEstimated || r.costEstimated
       ? (r.live
         ? '~ marks an estimate that the CLI’s own count replaces at the next message boundary.'
@@ -84,7 +103,9 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker' }
     >
       <span className="session-speed-kicker">{r.live ? 'This turn' : 'Last turn'}</span>
       <span className="session-speed-model" data-testid="speed-model">{model}</span>
-      <span className={`session-speed-stat${r.tokensEstimated ? ' is-estimate' : ''}`} data-testid="speed-tokens">{r.tokens}</span>
+      <span className={`session-speed-stat${r.tokensEstimated ? ' is-estimate' : ''}`} data-testid="speed-tokens">
+        {r.tokens}{speed.tokenScope === 'last-call' && <span className="session-speed-label"> last call</span>}
+      </span>
       {r.ttft && (
         <span className={`session-speed-stat${r.ttftPending ? ' is-pending' : ''}`} data-testid="speed-ttft">
           <span className="session-speed-label">first</span> {r.ttft}

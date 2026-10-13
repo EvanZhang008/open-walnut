@@ -104,6 +104,36 @@ export function enginePathOverrideVar(engineId: SessionEngine): string {
   return `WALNUT_${engineId.toUpperCase()}_PATH`;
 }
 
+/**
+ * The executable an override names. One path segment may carry a `*` that
+ * stands for a version directory (`~/tools/codex/` + `*` + `/codex`): the highest version
+ * whose remainder is an executable wins, read at every resolution. A pinned
+ * version path broke the day a self-updating install replaced its directory
+ * (2026-10-12: 0.162.1.650 was removed for 0.162.1.654 and every Codex start
+ * failed), while the install's own launcher costs seconds per start. No match
+ * returns the literal pattern, so the caller's error names what was asked for.
+ */
+export function resolveOverridePath(override: string, cwd: string = process.cwd()): string {
+  const literal = path.resolve(cwd, override);
+  const segments = literal.split(path.sep);
+  const starAt = segments.findIndex((segment) => segment.includes('*'));
+  if (starAt <= 0 || segments.slice(starAt + 1).some((segment) => segment.includes('*'))) return literal;
+  const parent = segments.slice(0, starAt).join(path.sep) || path.sep;
+  const [head, tail, ...more] = segments[starAt]!.split('*');
+  if (more.length > 0) return literal;
+  let names: string[];
+  try { names = fs.readdirSync(parent); } catch { return literal; }
+  const rest = segments.slice(starAt + 1);
+  const matches = names
+    .filter((name) => name.length >= head!.length + tail!.length && name.startsWith(head!) && name.endsWith(tail!))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  for (const name of matches) {
+    const candidate = path.join(parent, name, ...rest);
+    if (inspectExecutable(candidate).executable) return candidate;
+  }
+  return literal;
+}
+
 const DEFAULT_SYSTEM_DIRS = process.platform === 'win32'
   ? []
   : ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
@@ -344,7 +374,7 @@ async function runProbe(caps: EngineCapabilities, options: EngineProbeOptions): 
   const override = env[overrideVar];
   let binary: string | null;
   if (override) {
-    const verdict = inspectExecutable(path.resolve(options.cwd ?? process.cwd(), override));
+    const verdict = inspectExecutable(resolveOverridePath(override, options.cwd ?? process.cwd()));
     if (!verdict.executable) return { availability: unavailable(overrideReason(overrideVar, override, verdict.rejection)) };
     binary = verdict.executable;
   } else {

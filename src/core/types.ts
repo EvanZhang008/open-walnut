@@ -2327,6 +2327,15 @@ export interface SessionTurnSpeed {
   costEstimated?: boolean;
   /** Turn wall time per the CLI's result (final only). */
   durationMs?: number;
+  /** What the token counts cover. Absent = the whole turn. 'last-call': the
+   *  engine reports only its LAST model call's usage (Codex over ACP), so on a
+   *  turn with several calls the tokens, tok/s and cost describe that call alone. */
+  tokenScope?: 'last-call';
+  /** The counted call's input side, when the engine reports it (ACP usage). */
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  /** Reasoning tokens inside the output count, when the engine reports them. */
+  reasoningTokens?: number;
   /** Whole-turn output tokens per the CLI's result (final only). */
   turnOutputTokens?: number;
   final: boolean;
@@ -2495,6 +2504,10 @@ export interface SessionRecord {
    *  Reported next to the percentage rather than folded into it — a compaction
    *  setting is not a property of the model. */
   autoCompactAt?: number;
+  /** Tokens in context at the last model call, for an engine that reports it as a
+   *  number rather than in transcript usage (an ACP `usage_update`'s `used`). With
+   *  modelMaxWindow it gives a reloaded page its context percentage. */
+  contextTokens?: number;
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */

@@ -612,11 +612,13 @@ export async function terminateSession(
   if (acpLive) {
     log.session.info('session terminate: stopping ACP session', { sessionId });
     await acpLive.gracefulStop();
-    await updateSessionRecord(sessionId, {
+    const stopped = await updateSessionRecord(sessionId, {
       process_status: 'stopped', activity: undefined,
       last_status_change: new Date().toISOString(),
       status_reason: 'user_stopped', status_changed_by: 'user',
-    }).catch(() => {});
+    }).catch(() => null);
+    // Without this the open panel kept saying Idle for a stopped Codex session.
+    if (stopped) emitSessionStatusChanged(stopped, {}, ['*'], { source: 'terminate' });
     return { status: 'terminated', sessionId, tookMs: Date.now() - startedAt };
   }
   if (!isAcpEngine(record.engine)) {

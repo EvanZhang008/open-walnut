@@ -15,6 +15,7 @@ import {
   acpModelDisplayName,
   groupAcpModels,
   acpFilterMatch,
+  acpEffortLadder,
 } from '../../web/src/components/sessions/acp-model-id';
 
 describe('parseAcpModelId', () => {
@@ -214,5 +215,35 @@ describe('acpFilterMatch (the picker filter)', () => {
   it('rejects a non-substring and accepts a blank query', () => {
     expect(acpFilterMatch(sonnet, 'opus')).toBe(false);
     expect(acpFilterMatch(sonnet, '   ')).toBe(true);
+  });
+});
+
+describe('acpEffortLadder', () => {
+  const ids = (models: string[]) => models.map((modelId) => ({ modelId, name: modelId }));
+
+  it('lists every level a family offers, ultra included, in ladder order', () => {
+    // Codex advertises one id per supported effort; GPT-6.1 Sol offers ultra.
+    const families = groupAcpModels(ids([
+      'openai.gpt-6.1-sol[ultra]', 'openai.gpt-6.1-sol[low]', 'openai.gpt-6.1-sol[max]',
+      'openai.gpt-6.1-sol[high]', 'openai.gpt-6-luna[minimal]', 'openai.gpt-6.1-sol[xhigh]',
+    ])).flatMap((g) => g.families);
+    expect(acpEffortLadder(families).map((e) => [e.id, e.label])).toEqual([
+      ['minimal', 'Minimal'], ['low', 'Low'], ['high', 'High'], ['xhigh', 'X-High'], ['max', 'Max'], ['ultra', 'Ultra'],
+    ]);
+  });
+
+  it('keeps an unknown level after the known ones, and is empty without efforts', () => {
+    const families = groupAcpModels(ids(['m[turbo]', 'm[high]'])).flatMap((g) => g.families);
+    expect(acpEffortLadder(families).map((e) => e.id)).toEqual(['high', 'turbo']);
+    // Several unknown levels keep the catalog's order among themselves.
+    const many = groupAcpModels(ids(['m[zeta]', 'm[turbo]', 'm[low]', 'm[alpha]', 'm[warp]'])).flatMap((g) => g.families);
+    expect(acpEffortLadder(many).map((e) => e.id)).toEqual(['low', 'zeta', 'turbo', 'alpha', 'warp']);
+    expect(acpEffortLadder(groupAcpModels(ids(['plain-model'])).flatMap((g) => g.families))).toEqual([]);
+  });
+
+  it('strips an ultra tail from the advertised family name', () => {
+    const [family] = groupAcpModels([{ modelId: 'openai.gpt-6.1-sol[ultra]', name: 'GPT-6.1-Sol (ultra)' }])[0]!.families;
+    expect(family!.label).toBe('GPT-6.1-Sol');
+    expect(shortAcpModelName('openai.gpt-6.1-sol[ultra]')).toMatch(/· Ultra$/);
   });
 });

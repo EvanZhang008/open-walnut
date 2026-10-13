@@ -7,7 +7,7 @@
  * - Perplexity: docs.perplexity.ai (Feb 2025)
  */
 
-export const PRICING_VERSION = '2026-10-07';
+export const PRICING_VERSION = '2026-10-12';
 
 export interface PricingEntry {
   /** Substring pattern matched against model ID. First match wins. */
@@ -53,6 +53,17 @@ export const DEFAULT_PRICING: PricingEntry[] = [
   { pattern: 'claude-haiku-4-5',    input: 1.00,  output: 5.00,  cacheWrite: 1.25,   cacheRead: 0.10 },
   { pattern: 'claude-3-5-haiku',    input: 0.80,  output: 4.00,  cacheWrite: 1.00,   cacheRead: 0.08 },
   { pattern: 'claude-3-haiku',      input: 0.25,  output: 1.25,  cacheWrite: 0.30,   cacheRead: 0.03 },
+
+  // ── OpenAI GPT on Amazon Bedrock (Global CRIS) ──
+  // GPT-6.1 Sol and GPT-6 Astra have a short and a long tier split at 272K
+  // input tokens; these are the long tier, so an estimate errs high. Specific
+  // ids sit above the shorter ones they contain ('gpt-6-sol' is not in
+  // 'gpt-6.1-sol', but 'gpt-6' is in every GPT-6 id).
+  { pattern: 'gpt-6.1-sol',        input: 4.00,  output: 15.00, cacheRead: 0.20 },
+  { pattern: 'gpt-6-sol',          input: 2.00,  output: 10.00, cacheRead: 0.20 },
+  { pattern: 'gpt-6-luna',         input: 0.10,  output: 0.50,  cacheRead: 0.01 },
+  { pattern: 'gpt-6-astra',        input: 20.00, output: 75.00, cacheRead: 2.00 },
+  { pattern: 'gpt-5.6',            input: 8.80,  output: 33.00, cacheRead: 0.88 },
 
   // ── Zhipu GLM (docs.z.ai international USD pricing) ──
   { pattern: 'glm-4.7-flashx',     input: 0.07,  output: 0.40,  cacheRead: 0.01 },

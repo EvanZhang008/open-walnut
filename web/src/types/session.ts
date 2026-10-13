@@ -155,6 +155,8 @@ export interface SessionRecord {
   modelMaxWindow?: number;
   /** Where this session auto-compacts, when below modelMaxWindow. */
   autoCompactAt?: number;
+  /** Tokens in context at the last model call (ACP engines' usage_update). */
+  contextTokens?: number;
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */

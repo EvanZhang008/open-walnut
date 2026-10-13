@@ -399,6 +399,27 @@ export type JournalRecord =
     }
   | { kind: 'meta'; ts: number; event: JournalMetaEvent }
 
+/** The prompt response's token counts for the turn (ACP `PromptResponse.usage`,
+ *  unstable). Codex reports its LAST model call here, not a sum over the turn. */
+export interface AcpTurnUsage {
+  totalTokens?: number
+  inputTokens?: number
+  cachedReadTokens?: number
+  outputTokens?: number
+  thoughtTokens?: number
+}
+
+/** Keep only finite non-negative counts; undefined when nothing usable remains. */
+export function snapshotAcpTurnUsage(raw: unknown): AcpTurnUsage | undefined {
+  const usage = asRecord(raw)
+  const out: AcpTurnUsage = {}
+  for (const key of ['totalTokens', 'inputTokens', 'cachedReadTokens', 'outputTokens', 'thoughtTokens'] as const) {
+    const value = usage[key]
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) out[key] = value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 export type JournalMetaEvent =
   | { type: 'session-created'; providerSessionId: string }
   | { type: 'session-loaded'; providerSessionId: string }
@@ -417,7 +438,7 @@ export type JournalMetaEvent =
       error?: string
     }
   | { type: 'turn-started'; commandId: string }
-  | { type: 'turn-ended'; commandId: string; stopReason: string }
+  | { type: 'turn-ended'; commandId: string; stopReason: string; usage?: AcpTurnUsage }
   | {
       type: 'turn-interrupted'
       reason:

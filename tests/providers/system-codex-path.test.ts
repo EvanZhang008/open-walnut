@@ -176,6 +176,29 @@ describe('resolveSystemCodexPath', () => {
     })).toBe(override)
   })
 
+  it('follows a version wildcard to the newest installed version', () => {
+    // A self-updating install replaces tools/codex/<version>/ in place: a
+    // pinned version path broke the day 0.162.1.650 became 0.162.1.654.
+    executable('tools/codex/0.162.1.650/codex')
+    const newest = executable('tools/codex/0.162.1.1000/codex')
+    executable('tools/codex/0.162.1.654/codex')
+    fs.mkdirSync(path.join(tmpDir, 'tools/codex/0.200.0.0'), { recursive: true }) // no binary inside
+    fs.writeFileSync(path.join(tmpDir, 'tools/codex/0.162.1.654.json'), '{}')
+    const env = { WALNUT_CODEX_PATH: path.join(tmpDir, 'tools/codex/*/codex'), HOME: path.join(tmpDir, 'home') }
+    expect(resolveWith(env)).toBe(newest)
+
+    fs.rmSync(path.dirname(newest), { recursive: true })
+    expect(resolveWith(env)).toBe(path.join(tmpDir, 'tools/codex/0.162.1.654/codex'))
+  })
+
+  it('reports a version wildcard with no installed match as the missing pattern', () => {
+    const pattern = path.join(tmpDir, 'tools/codex/*/codex')
+    fs.mkdirSync(path.join(tmpDir, 'tools/codex'), { recursive: true })
+    const error = resolutionError(() => resolveWith({ WALNUT_CODEX_PATH: pattern, HOME: path.join(tmpDir, 'home') }))
+    expect(error.reason).toBe('override_missing')
+    expect(error.message).toContain(pattern)
+  })
+
   it('fails closed for an invalid override instead of falling back to PATH', () => {
     const pathCandidate = executable('path-bin/codex')
     const missingOverride = path.join(tmpDir, 'missing', 'codex')
