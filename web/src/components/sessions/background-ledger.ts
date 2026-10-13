@@ -13,6 +13,12 @@
  */
 
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
+import { isAgentTask, TERMINAL } from './workflow-layout';
+
+export function backgroundAgentsOnly(tasks: readonly BackgroundTask[]): BackgroundTask[] {
+  const active = tasks.filter(task => !TERMINAL.has(task.status) && !task.ownedBySubagent && !task.endedPerLevel);
+  return active.length > 0 && active.every(task => isAgentTask(task) && task.status === 'running') ? active : [];
+}
 
 /** Compact token count ("1200" → "1k", "8649000" → "8.6M"). Shared with WorkflowGraph's agent meta. */
 export function fmtTokens(n?: number): string {

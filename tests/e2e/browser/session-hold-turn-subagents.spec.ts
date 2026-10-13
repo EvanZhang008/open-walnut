@@ -211,6 +211,12 @@ test('a resumed background agent stays running until its new invocation ends', a
   const sessionId = await sessionIdForTask(page, taskId)
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
   await expect(panel.getByText('The same background agent is running its second verification pass.', { exact: false }).first()).toBeVisible()
+  const backgroundWorking = panel.getByRole('button', { name: '1 subagent is working…' })
+  await expect(backgroundWorking).toBeVisible()
+  await expect(panel.getByText('Waiting for response...', { exact: true })).toHaveCount(0)
+  await backgroundWorking.click()
+  await expect(page.locator('.bg-task-row-running')).toContainText('Second verification pass')
+  await page.keyboard.press('Escape')
   expect(await processStatus(page, sessionId)).toBe('running')
   const taskResponse = await page.request.get(`/api/tasks/${taskId}`)
   expect(taskResponse.ok()).toBe(true)
@@ -251,6 +257,7 @@ test('turn stays open across the early result+idle and completes with the follow
   await expect(panel.getByText('Launching a background agent', { exact: false }).first())
     .toBeVisible({ timeout: 20_000 })
   expect(await processStatus(page, sessionId)).toBe('running')
+  await expect(panel.getByRole('button', { name: '1 subagent is working…' })).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/held-open-mid-subagent.png`, fullPage: true })
 
   // Phase 2 — subagent terminal + followup summary + followup result (NO

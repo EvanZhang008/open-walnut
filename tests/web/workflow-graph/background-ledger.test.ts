@@ -11,12 +11,43 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { fmtElapsed, fmtTokens, rowActivity, rowElapsedMs, buildAgentMeta, agentResultText } from '@/components/sessions/background-ledger';
+import { fmtElapsed, fmtTokens, rowActivity, rowElapsedMs, buildAgentMeta, agentResultText, backgroundAgentsOnly } from '@/components/sessions/background-ledger';
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
 
 function task(p: Partial<BackgroundTask>): BackgroundTask {
   return { taskId: 'a6ec1bb7e', status: 'running', ...p };
 }
+
+describe('backgroundAgentsOnly', () => {
+  const agent = task({ taskType: 'local_agent', isBackgrounded: true });
+
+  it('keeps one or many running agents and ignores terminal jobs', () => {
+    expect(backgroundAgentsOnly([agent])).toEqual([agent]);
+    const second = { ...agent, taskId: 'second' };
+    expect(backgroundAgentsOnly([agent, second, task({ status: 'failed', taskType: 'local_bash' })])).toEqual([agent, second]);
+  });
+
+  it('does not label commands, unknown jobs, or paused agents as working subagents', () => {
+    for (const taskType of ['local_bash', 'local_shell', 'unknown']) {
+      expect(backgroundAgentsOnly([agent, task({ taskType })])).toEqual([]);
+    }
+    for (const status of ['paused', 'pending', 'completed', 'failed', 'stopped', 'killed', 'cancelled']) {
+      expect(backgroundAgentsOnly([{ ...agent, status }])).toEqual([]);
+    }
+    expect(backgroundAgentsOnly([agent, task({ taskType: 'local_bash', ownedBySubagent: true })])).toEqual([agent]);
+    expect(backgroundAgentsOnly([agent, task({ taskType: 'local_bash', endedPerLevel: true })])).toEqual([agent]);
+    expect(backgroundAgentsOnly([{ ...agent, endedPerLevel: true }])).toEqual([]);
+    expect(backgroundAgentsOnly([])).toEqual([]);
+  });
+
+  it('recognizes remote agents, teammates, and typed recovery rows', () => {
+    for (const taskType of ['remote_agent', 'in_process_teammate']) {
+      expect(backgroundAgentsOnly([{ ...agent, taskType }])).toHaveLength(1);
+    }
+    expect(backgroundAgentsOnly([{ ...agent, taskType: undefined, subagentType: 'Explore' }])).toHaveLength(1);
+    expect(backgroundAgentsOnly([{ ...agent, taskType: undefined }])).toEqual([]);
+  });
+});
 
 describe('fmtElapsed — Claude Code shape', () => {
   it('seconds under a minute', () => {

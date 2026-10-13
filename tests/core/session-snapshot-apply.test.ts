@@ -20,8 +20,9 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-snap-apply')
 // a live ClaudeCodeSession via setProcessStatusFromReconciler.
 const liveRunnerSync = vi.fn()
 const liveWatermarkReset = vi.fn()
+const liveForegroundSync = vi.fn()
 let liveSessionId: string | null = null
-const liveSession = { turnGen: 1, processStatus: 'idle', consumedOffset: -1, hasPendingPermission: false, setProcessStatusFromReconciler: liveRunnerSync, resetConsumedOffsetFromSnapshot: liveWatermarkReset }
+const liveSession = { turnGen: 1, processStatus: 'idle', consumedOffset: -1, hasPendingPermission: false, setProcessStatusFromReconciler: liveRunnerSync, setForegroundFromSnapshot: liveForegroundSync, resetConsumedOffsetFromSnapshot: liveWatermarkReset }
 vi.mock('../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
     findSessionByClaudeId: (sid: string) =>
@@ -94,6 +95,7 @@ beforeEach(async () => {
   liveSession.hasPendingPermission = false
   liveRunnerSync.mockClear()
   liveWatermarkReset.mockClear()
+  liveForegroundSync.mockClear()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
 })
@@ -323,6 +325,24 @@ describe('applySnapshot connection recovery at a settled watermark', () => {
 })
 
 // ── shadow mode ──
+describe('applySnapshot foreground evidence', () => {
+  it('repairs foreground display from a duplicate running snapshot but never an older one', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'foreground-snapshot'
+    await seedSession(sid, { process_status: 'running' })
+    liveSessionId = sid
+    const value = snap({ cliState: 'idle', turnActive: false, detachedBgCount: 1, lastResult: { isError: false, endOffset: 90 } })
+    await applySnapshot(sid, value, 'pull-30s')
+    expect(liveForegroundSync).toHaveBeenCalledWith(value, false)
+    liveForegroundSync.mockClear()
+    await applySnapshot(sid, value, 'pull-30s')
+    expect(liveForegroundSync).toHaveBeenCalledWith(value, false)
+    liveForegroundSync.mockClear()
+    await applySnapshot(sid, { ...value, v: 99 }, 'pull-30s')
+    expect(liveForegroundSync).not.toHaveBeenCalled()
+  })
+})
+
 describe('applySnapshot reconnect activity', () => {
   it.each([100, 101])('clears a disproven reconnect hint at snapshot v=%s without changing work state', async (v) => {
     setSnapshotModeForTests('enforce')

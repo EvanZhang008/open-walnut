@@ -29,6 +29,7 @@ const bySession = new Map<string, Map<string, LiveAgentStatus>>();
  *  from here instead of running a second ledger hook (which would fetch again on
  *  every open and miss every event that landed before it mounted). */
 const tasksBySession = new Map<string, readonly BackgroundTask[]>();
+const foregroundBySession = new Map<string, boolean | undefined>();
 const listeners = new Map<string, Set<() => void>>();
 
 function notify(sessionId: string): void {
@@ -41,7 +42,9 @@ function notify(sessionId: string): void {
  *  unchanged (so a chip subscribed to the per-agent map does not re-render on a
  *  heartbeat that moved nothing), while the whole-list snapshot is replaced on
  *  every publish (tokens and elapsed tick for a panel that is open). */
-export function publishLiveAgents(sessionId: string, tasks: readonly BackgroundTask[]): void {
+export function publishLiveAgents(sessionId: string, tasks: readonly BackgroundTask[], foregroundActive?: boolean): void {
+  const foregroundChanged = foregroundBySession.get(sessionId) !== foregroundActive;
+  foregroundBySession.set(sessionId, foregroundActive);
   const prevTasks = tasksBySession.get(sessionId);
   tasksBySession.set(sessionId, tasks);
   const prev = bySession.get(sessionId);
@@ -59,7 +62,7 @@ export function publishLiveAgents(sessionId: string, tasks: readonly BackgroundT
   }
   if (prev && prev.size !== next.size) changed = true;
   if (changed) bySession.set(sessionId, next);
-  if (changed || prevTasks !== tasks) notify(sessionId);
+  if (changed || prevTasks !== tasks || foregroundChanged) notify(sessionId);
 }
 
 const EMPTY_TASKS: readonly BackgroundTask[] = [];
@@ -75,6 +78,13 @@ export function useLiveTasksForSession(sessionId: string | undefined): readonly 
   return useSyncExternalStore(
     (l) => (sessionId ? subscribeLiveAgents(sessionId, l) : () => {}),
     () => getLiveTasks(sessionId),
+  );
+}
+
+export function useForegroundActive(sessionId: string): boolean | undefined {
+  return useSyncExternalStore(
+    (listener) => subscribeLiveAgents(sessionId, listener),
+    () => foregroundBySession.get(sessionId),
   );
 }
 

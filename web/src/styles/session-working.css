@@ -1,0 +1,15 @@
+.session-background-working {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+.session-background-working:hover {
+  color: var(--fg);
+}
+.session-background-working:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}

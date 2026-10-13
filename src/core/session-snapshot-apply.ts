@@ -413,6 +413,8 @@ export async function applySnapshot(
     return { outcome: 'shadow', diverged, projected }
   }
 
+  if (sameTurn()) sessionRunner.findSessionByClaudeId(sessionId)?.setForegroundFromSnapshot?.(snapshot, epochChanged)
+
   let reconnectActivityCleared = false
   if (!recoveringConnection && record.activity === 'Reconnecting to remote host...') {
     const cleared = await updateSessionRecordConditionally(sessionId, { activity: undefined }, (current) =>

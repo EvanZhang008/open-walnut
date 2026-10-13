@@ -17,11 +17,11 @@ import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
 import { useShedToFit } from './shed-to-fit';
 
 export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { sessionId: string }) {
-  const { workflowName, workflowDescription, scriptSource, inFlight, tasks, phases, agents } = useBackgroundTasks(sessionId);
+  const { workflowName, workflowDescription, scriptSource, inFlight, foregroundActive, tasks, phases, agents } = useBackgroundTasks(sessionId);
   // The chat's chips and the Background tasks panel read this same ledger from the
   // store (not a context: a heartbeat must re-render the one chip that moved, not
   // the whole conversation), so every surface shows one status per agent.
-  useEffect(() => { publishLiveAgents(sessionId, tasks); }, [sessionId, tasks]);
+  useEffect(() => { publishLiveAgents(sessionId, tasks, foregroundActive); }, [sessionId, tasks, foregroundActive]);
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
   const [chosenPhase, setChosenPhase] = useState<number | null>(null);
   const [query, setQuery] = useState('');

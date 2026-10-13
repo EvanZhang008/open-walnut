@@ -111,8 +111,9 @@ describe('mid-turn injection does not reset stream dedup', () => {
 
   it('a refused dispatch restores idle state and the previous dedup maps', async () => {
     const session = makeRunningSession();
-    const s = session as unknown as { _processStatus: string; _lastEmittedText: Map<string, string>; _transport: ReturnType<typeof mockTransport> };
+    const s = session as unknown as { _processStatus: string; _foregroundActive: boolean; _lastEmittedText: Map<string, string>; _transport: ReturnType<typeof mockTransport> };
     s._processStatus = 'idle';
+    s._foregroundActive = false;
     s._lastEmittedText.set('previous', 'kept');
     const before = s._lastEmittedText;
     s._transport.writeMessage = (_message, opts) => { opts?.onDispatch?.(); return false; };
@@ -120,6 +121,7 @@ describe('mid-turn injection does not reset stream dedup', () => {
     expect(s._processStatus).toBe('idle');
     expect(s._lastEmittedText).toBe(before);
     expect(s._lastEmittedText.get('previous')).toBe('kept');
+    expect(s._foregroundActive).toBe(false);
   });
 
   it('mid-turn injection twice in a row still dedups the final assistant line', async () => {

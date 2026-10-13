@@ -12,6 +12,8 @@ import { ChatEarlierBlock, useChatEarlier } from './ChatEarlierBlock';
 import { SessionMessage, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
+import { SessionWorkingIndicator } from './SessionWorkingIndicator';
+import { useForegroundActive } from '@/stores/background-agents-store';
 import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { HistoryGapDivider } from './HistoryGapDivider';
@@ -374,10 +376,6 @@ function buildTimeline(
     }
   }
 
-  // Working indicator: pinned at the TAIL of the live region for the whole
-  // turn (Claude-app style) — it replaced the old "Streaming" badge as the
-  // turn-is-live signal. Resuming keeps the old empty-only behavior (a
-  // resumed session with visible blocks isn't producing anything yet).
   if (isStreaming) {
     items.push({ kind: 'indicator', type: 'working' });
   } else if (isResuming && visibleCount === 0) {
@@ -540,6 +538,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   const historyUnavailableRaw = parseHistoryUnavailable(error);
   const { blocks, isStreaming, completedLen, resetIfAbsorbed } = useSessionStream(sessionId);
+  const foregroundActive = useForegroundActive(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const messagesRef = useRef(messages);
@@ -2354,7 +2353,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // ── Build interleaved timeline over VISIBLE blocks ──
   // hiddenBlocks (absorbed by history) don't render; visibility is decided
   // here, at render time, not by deleting state.
-  const isResuming = !isStreaming && phase === 'IN_PROGRESS'
+  const isResuming = !isStreaming && foregroundActive !== false && phase === 'IN_PROGRESS'
     && deduped.length > 0;
   const timeline = buildTimeline(blocks, timelineOptimistic, blockIndexMap.current, isStreaming, isResuming, hiddenBlocks);
 
@@ -3829,11 +3828,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   );
                 }
                 return (
-                  <WorkingIndicator
-                    key="ind-working"
-                    label={assistantLabel}
-                    tokens={Math.round(countStreamChars(blocks, hiddenBlocks) / 4)}
-                  />
+                  <SessionWorkingIndicator key="ind-working" sessionId={sessionId}>
+                    <WorkingIndicator
+                      label={assistantLabel}
+                      tokens={Math.round(countStreamChars(blocks, hiddenBlocks) / 4)}
+                    />
+                  </SessionWorkingIndicator>
                 );
               }
 
@@ -4000,6 +4000,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {/* The resolved / failed strip after the page's turns (spec 4, item 5),
             when the last answer has no Asked-from list to go before. */}
         {!stripPlaced && pageStrip}
+        {!isStreaming && <SessionWorkingIndicator sessionId={sessionId} />}
         {/* Floating scroll-to-bottom arrow — sticky to bottom of scroll viewport */}
         <button
           className={`scroll-to-bottom-btn${showScrollArrow ? ' visible' : ''}`}

@@ -32,6 +32,8 @@ export interface BackgroundTask {
   endedAt?: number;
   /** CLI detached this task from the turn (is_backgrounded). */
   isBackgrounded?: boolean;
+  ownedBySubagent?: boolean;
+  endedPerLevel?: boolean;
   /** Nesting level (1 = spawned by the main agent). */
   spawnDepth?: number;
 }
@@ -73,6 +75,7 @@ export interface BackgroundTasksState {
   scriptSource?: string;
   /** Count of tasks still running (server-authoritative in-flight count). */
   inFlight: number;
+  foregroundActive?: boolean;
   /** All background tasks seen this turn (legacy / non-workflow view). */
   tasks: BackgroundTask[];
   /** Workflow phases (dynamic workflows only). */
@@ -113,6 +116,7 @@ function snapshotToState(snap: WorkflowProgressSnapshot): BackgroundTasksState {
     workflowDescription: snap.workflowDescription,
     scriptSource: snap.scriptSource,
     inFlight: snap.inFlight ?? 0,
+    foregroundActive: snap.foregroundActive,
     tasks: Array.isArray(snap.tasks) ? (snap.tasks as BackgroundTask[]) : [],
     phases: Array.isArray(snap.phases) ? snap.phases : [],
     agents: Array.isArray(snap.agents) ? (snap.agents as WorkflowAgent[]) : [],
@@ -169,6 +173,7 @@ export function useBackgroundTasks(sessionId: string | undefined): BackgroundTas
       workflowDescription?: string;
       scriptSource?: string;
       inFlight?: number;
+      foregroundActive?: boolean;
       tasks?: BackgroundTask[];
       phases?: WorkflowPhase[];
       agents?: WorkflowAgent[];
@@ -186,6 +191,7 @@ export function useBackgroundTasks(sessionId: string | undefined): BackgroundTas
       workflowDescription: d.workflowDescription,
       scriptSource: d.scriptSource,
       inFlight: d.inFlight ?? 0,
+      foregroundActive: d.foregroundActive,
       tasks: Array.isArray(d.tasks) ? d.tasks : [],
       phases: Array.isArray(d.phases) ? d.phases : [],
       agents: Array.isArray(d.agents) ? d.agents : [],

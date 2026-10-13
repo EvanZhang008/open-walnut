@@ -585,6 +585,8 @@ export interface BackgroundTaskInfo {
   endedAt?: number;
   /** CLI detached this task from the turn (task_updated patch `is_backgrounded`). */
   isBackgrounded?: boolean;
+  /** The command belongs to a subagent, not the main conversation. */
+  ownedBySubagent?: boolean;
   /** Nesting level from task_started.spawn_depth (1 = spawned by the main agent). */
   spawnDepth?: number;
 }
@@ -629,6 +631,7 @@ export interface SessionBackgroundTasksPayload {
   taskId?: string;
   workflowName?: string;
   inFlight: number;
+  foregroundActive?: boolean;
   tasks: BackgroundTaskInfo[];
   /** Workflow phases (dynamic workflows only). */
   phases?: WorkflowPhaseInfo[];

@@ -465,6 +465,7 @@ export async function fetchWorkflowProgress(sessionId: string): Promise<Workflow
 /** Mirrors the backend SessionBackgroundTasksPayload (web keeps its own copy). */
 export interface WorkflowProgressSnapshot {
   sessionId: string;
+  foregroundActive?: boolean;
   workflowName?: string;
   workflowDescription?: string;
   scriptSource?: string;

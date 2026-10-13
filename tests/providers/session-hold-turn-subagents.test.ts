@@ -190,6 +190,53 @@ afterEach(async () => {
 //  1. Deferred outcome: a withheld ERROR result must settle as an error
 // ═══════════════════════════════════════════════════════════════════
 
+describe('foreground activity in the background ledger', () => {
+  it('separates the main reply from gating agents and their tool calls', () => {
+    const sid = 'foreground-ledger'
+    const session = makeRunningRemoteSession('task-foreground')
+    feedLines(session, [makeInitEvent(sid), makeAssistantEvent(sid, 'Starting'), makeTaskStartedEvent(sid, 'agent')])
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(true)
+    feedLines(session, [makeResultEvent(sid), makeSessionStateEvent(sid, 'idle')])
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(false)
+    expect(session.backgroundTasksSnapshot(sid)?.tasks[0].status).toBe('running')
+    feedLines(session, [JSON.stringify({ type: 'assistant', parent_tool_use_id: 'agent-call', session_id: sid, message: { content: [{ type: 'text', text: 'Agent output' }] } })])
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(false)
+    feedLines(session, [makeSessionStateEvent(sid, 'running'), makeAssistantEvent(sid, 'Followup')])
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(true)
+    feedLines(session, [makeTaskNotificationResultEvent(sid, 'Summary')])
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(false)
+    session.setForegroundFromSnapshot({ v: 100, lastResult: null, turnActive: true })
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(true)
+    session.setForegroundFromSnapshot({ v: 101, lastResult: {}, turnActive: true })
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(false)
+    feedLines(session, [makeSessionStateEvent(sid, 'running'), makeSessionStateEvent(sid, 'idle')])
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(false)
+    ;(session as unknown as { handleStreamLine(line: string, v: number): void }).handleStreamLine(makeAssistantEvent(sid, 'New foreground output'), 200)
+    session.setForegroundFromSnapshot({ v: 150, lastResult: {}, turnActive: false })
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(true)
+    session.setForegroundFromSnapshot({ v: 10, lastResult: {}, turnActive: false }, true)
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(false)
+    session.setForegroundFromSnapshot({ v: 11, lastResult: null, turnActive: true })
+    expect(session.backgroundTasksSnapshot(sid)?.foregroundActive).toBe(true)
+  })
+
+  it('preserves the CLI ownership of a command inside a subagent', () => {
+    const sid = 'agent-command-ledger'
+    const session = makeRunningRemoteSession('task-agent-command')
+    feedLines(session, [makeInitEvent(sid), JSON.stringify({ type: 'system', subtype: 'task_started', session_id: sid, task_id: 'command', task_type: 'local_bash', owned_by_subagent: true })])
+    expect(session.backgroundTasksSnapshot(sid)?.tasks[0].ownedBySubagent).toBe(true)
+    const fold = foldSessionTail([
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'Check the agents' } }),
+      makeInitEvent(sid),
+      JSON.stringify({ type: 'system', subtype: 'task_started', session_id: sid, task_id: 'agent', task_type: 'local_agent' }),
+      JSON.stringify({ type: 'system', subtype: 'task_started', session_id: sid, task_id: 'command', task_type: 'local_bash', owned_by_subagent: true }),
+      JSON.stringify({ type: 'system', subtype: 'task_progress', task_id: 'agent' }),
+    ].join('\n'))
+    expect(fold.bgTasks.agent.taskType).toBe('local_agent')
+    expect(fold.bgTasks.command.ownedBySubagent).toBe(true)
+  })
+})
+
 describe('#870: deferred outcome preserves the withheld result', () => {
   it('error result withheld for a live subagent completes as an ERROR at drain idle', () => {
     const sid = 'hold-error-outcome'

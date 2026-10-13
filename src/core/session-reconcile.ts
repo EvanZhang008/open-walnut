@@ -97,7 +97,7 @@ export interface SessionTailFold {
    *  `endedPerLevel`: a `background_tasks_changed` replace-semantics snapshot omitted this
    *  task after having listed it — its terminal bookends were lost; excluded from gating
    *  (mirrors the live handler's #870 level reconciliation). */
-  bgTasks: Record<string, { status: string; isBackgrounded?: boolean; endedPerLevel?: boolean; toolUseId?: string }>
+  bgTasks: Record<string, { status: string; isBackgrounded?: boolean; endedPerLevel?: boolean; toolUseId?: string; taskType?: string; subagentType?: string; ownedBySubagent?: boolean }>
   /** In-flight bg tasks that GATE turn-over (non-terminal AND not backgrounded). */
   gatingBgCount: number
   /** In-flight bg tasks DETACHED from turn-over (non-terminal AND backgrounded).
@@ -371,6 +371,9 @@ export function foldSessionTail(
         fold.bgTasks[taskId] = {
           status: !restarted && prev && BG_TERMINAL.has(prev.status) ? prev.status : 'running',
           toolUseId: toolUseId ?? prev?.toolUseId,
+          taskType: typeof parsed.task_type === 'string' ? parsed.task_type : prev?.taskType,
+          subagentType: typeof parsed.subagent_type === 'string' ? parsed.subagent_type : prev?.subagentType,
+          ownedBySubagent: typeof parsed.owned_by_subagent === 'boolean' ? parsed.owned_by_subagent : prev?.ownedBySubagent,
           // A run_in_background Bash task carries is_backgrounded:true TOP-LEVEL
           // on its task_started (verified live, local_bash 2026-08-28). Sticky,
           // same as the task_updated patch path. Keep in parity with daemon-fold.
@@ -380,6 +383,7 @@ export function foldSessionTail(
         const prev = fold.bgTasks[taskId]
         const patch = parsed.patch as Record<string, unknown> | undefined
         fold.bgTasks[taskId] = {
+          ...prev,
           status: (patch?.status as string | undefined) ?? prev?.status ?? 'running',
           toolUseId: toolUseId ?? prev?.toolUseId,
           // Sticky: is_backgrounded=true detaches the task from gating forever.
@@ -388,6 +392,7 @@ export function foldSessionTail(
       } else if (taskId && subtype === 'task_notification') {
         const prev = fold.bgTasks[taskId]
         fold.bgTasks[taskId] = {
+          ...prev,
           status: (parsed.status as string | undefined) ?? 'completed',
           isBackgrounded: prev?.isBackgrounded,
           toolUseId: toolUseId ?? prev?.toolUseId,

@@ -1232,7 +1232,9 @@ export class ClaudeCodeSession {
   /** THE authoritative set of background tasks (dynamic workflows / subagents), keyed by
    *  task_id, each carrying its latest status. "Is bg work in flight" is derived from this
    *  set (see hasActiveBackgroundWork) — there is no parallel scalar counter to desync. */
-  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean; endedPerLevel?: boolean; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; spawnDepth?: number }>()
+  private _foregroundActive: boolean | undefined
+  private _foregroundEvidenceV = 0
+  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean; endedPerLevel?: boolean; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; ownedBySubagent?: boolean; spawnDepth?: number }>()
   /** Task ids that have EVER appeared in a `background_tasks_changed` payload — proof of
    *  membership in the CLI's level universe. Only a task the CLI itself once listed may be
    *  absent-marked by a later level (see the background_tasks_changed handler); a task the
@@ -1389,6 +1391,7 @@ export class ClaudeCodeSession {
     sidHint?: string,
   ): void {
     const sid = this.claudeSessionId ?? sidHint
+    this.setForegroundActive(true)
     this._turnGen++
     // A {running} inside a turn that has not ended (a background agent's result
     // picked up, an answered prompt, the CLI's own echo of a turn writeMessage
@@ -1465,6 +1468,7 @@ export class ClaudeCodeSession {
   private _completeTurnOnIdle(): void {
     const sid = this.claudeSessionId
     if (!sid) return
+    this.setForegroundActive(false)
     const interrupted = this.consumeInterruptRequest()
     const outcome = this._deferredOutcome
     this._deferredOutcome = undefined
@@ -1580,7 +1584,7 @@ export class ClaudeCodeSession {
   }
 
   /** Snapshot of background tasks for the UI (Workflow progress panel). */
-  get backgroundTasks(): Array<{ taskId: string; description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; isBackgrounded?: boolean; spawnDepth?: number }> {
+  get backgroundTasks(): Array<{ taskId: string; description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; isBackgrounded?: boolean; ownedBySubagent?: boolean; spawnDepth?: number }> {
     return [...this._bgTasks.entries()].map(([taskId, t]) => ({ taskId, ...t }))
   }
   get workflowName(): string | undefined { return this._workflowName }
@@ -1623,6 +1627,7 @@ export class ClaudeCodeSession {
       taskId: this.taskId,
       workflowName: this._workflowName,
       inFlight: this._runningBgCount(),
+      foregroundActive: this._foregroundActive,
       tasks: this.backgroundTasks,
       phases: sortedPhases(this._workflowPhases),
       agents: this.workflowAgents,
@@ -1655,6 +1660,13 @@ export class ClaudeCodeSession {
     return { stopped: true, status: row.status }
   }
 
+  private setForegroundActive(active: boolean): void {
+    if (this._currentEventV !== undefined) this._foregroundEvidenceV = Math.max(this._foregroundEvidenceV, this._currentEventV)
+    if (this._foregroundActive === active) return
+    this._foregroundActive = active
+    if (this.claudeSessionId && this._bgTasks.size > 0) this._emitBackgroundTasksUpdate(this.claudeSessionId)
+  }
+
   /** Broadcast the current background-task set so the UI can render workflow progress. */
   private _emitBackgroundTasksUpdate(sessionId: string): void {
     bus.emit(EventNames.SESSION_BACKGROUND_TASKS, {
@@ -1662,6 +1674,7 @@ export class ClaudeCodeSession {
       taskId: this.taskId,
       workflowName: this._workflowName,
       inFlight: this._runningBgCount(),
+      foregroundActive: this._foregroundActive,
       tasks: this.backgroundTasks,
       phases: sortedPhases(this._workflowPhases),
       agents: this.workflowAgents,
@@ -1999,6 +2012,16 @@ export class ClaudeCodeSession {
    *  decision on the stale pre-converge value. */
   setProcessStatusFromReconciler(status: ProcessStatus): void {
     this._processStatus = status
+  }
+
+  setForegroundFromSnapshot(snapshot: { v: number; lastResult: unknown; turnActive: boolean }, epochChanged = false): void {
+    if (epochChanged) this._foregroundEvidenceV = 0
+    if (snapshot.v < this._foregroundEvidenceV) return
+    const active = snapshot.lastResult ? false : snapshot.turnActive ? true : undefined
+    this._foregroundEvidenceV = snapshot.v
+    if (active === undefined || active === this._foregroundActive) return
+    this._foregroundActive = active
+    if (this.claudeSessionId && this._bgTasks.size > 0) this._emitBackgroundTasksUpdate(this.claudeSessionId)
   }
 
   /**
@@ -2437,6 +2460,8 @@ export class ClaudeCodeSession {
     // UI showed a stuck "working…" indicator on a session that was never
     // going to produce output.
     this._processStatus = initOnly ? 'idle' : 'running'
+    this._foregroundActive = !initOnly
+    this._foregroundEvidenceV = 0
     this._exitCode = null
     this._exitStderr = undefined
     this.resultEmitted = false
@@ -2481,6 +2506,7 @@ export class ClaudeCodeSession {
     this._bgSeenInLevel.clear()      // Fresh process — fresh level universe
     this._deferredOutcome = undefined // Fresh process — a dead process's withheld turn is gone
     this._resetWorkflowState()
+    if (this.claudeSessionId) this._emitBackgroundTasksUpdate(this.claudeSessionId)
     this._teamActive = false
     this._cliSessionState = undefined
     // Fresh process ⇒ fresh settings snapshot: the model catalog belongs to the
@@ -3043,12 +3069,17 @@ export class ClaudeCodeSession {
           status,
           toolUseId: foldToolUseId ?? prev?.toolUseId,
           isBackgrounded: t.isBackgrounded || prev?.isBackgrounded,
+          taskType: t.taskType ?? prev?.taskType,
+          subagentType: t.subagentType ?? prev?.subagentType,
+          ownedBySubagent: t.ownedBySubagent ?? prev?.ownedBySubagent,
           // #870: the fold's level verdict rides along so a wedged hold stays
           // un-wedged across an attach (gating skips endedPerLevel entries).
           endedPerLevel: t.endedPerLevel || prev?.endedPerLevel,
         })
         if (t.endedPerLevel) session._bgSeenInLevel.add(taskId)
       }
+      session._foregroundActive = fold.lastResult ? false
+        : fold.cliState === 'running' ? true : undefined
       if (fold.cliState != null) {
         session._sessionStateSeen = true
         session._cliSessionState = fold.cliState
@@ -3459,6 +3490,7 @@ export class ClaudeCodeSession {
       if (isMidTurnInjection) return
       const before = {
         _processStatus: this._processStatus, _activity: this._activity,
+        _foregroundActive: this._foregroundActive, _foregroundEvidenceV: this._foregroundEvidenceV,
         resultEmitted: this.resultEmitted, _turnResultEmitted: this._turnResultEmitted,
         _expectedTeardown: this._expectedTeardown, _turnGen: this._turnGen, _turnEdgeAt: this._turnEdgeAt,
         _deferredOutcome: this._deferredOutcome, _turnStartOffset: this._turnStartOffset,
@@ -3476,6 +3508,7 @@ export class ClaudeCodeSession {
         if (this._transport === transport && this._turnGen === before._turnGen + 1
           && this._lastJsonlEventTs === eventAt && transport.fileSize === offset) {
           Object.assign(this, before)
+          if (this.claudeSessionId) this._emitBackgroundTasksUpdate(this.claudeSessionId)
           // The readout flipped to live at the anchor below; put the previous
           // turn's final back (or close the never-sent turn) so no panel ticks on.
           if (speedBefore.final) {
@@ -3490,6 +3523,8 @@ export class ClaudeCodeSession {
       this._activity = undefined
       this.resultEmitted = false
       this._turnResultEmitted = false  // New turn starting — allow result emission
+      this._foregroundEvidenceV = Math.max(this._foregroundEvidenceV, transport.fileSize + 1)
+      this.setForegroundActive(true)
       this._expectedTeardown = false   // Live turn on this process — a stale teardown mark must not mask a real crash
       // ── THE QUEUED-SEND turn-start edge (incident ed347bde, 2026-08-05) ──
       // This FIFO write is a genuine idle→running turn-start, and for the most
@@ -4999,6 +5034,10 @@ export class ClaudeCodeSession {
       this._onTurnStartEdge('user-message', true)
     }
 
+    if ((event.type === 'assistant' || event.type === 'stream_event')
+      && !(event as { parent_tool_use_id?: string }).parent_tool_use_id
+      && this._isReplayedByOffset() !== true) this.setForegroundActive(true)
+
     try {
       switch (event.type) {
       case 'system': {
@@ -5517,6 +5556,7 @@ export class ClaudeCodeSession {
               }
               const wasCompanionIdle = this._idleDebt > 0
               if (wasCompanionIdle) this._idleDebt--
+              else this.setForegroundActive(false)
               // The idle handler only withholds completion while the derived count says
               // background work is in flight. A genuinely lost terminal event is backstopped by
               // process-death turn completion + the daemon idle-kill, not by an inline reconcile
@@ -5601,6 +5641,7 @@ export class ClaudeCodeSession {
                 // read it here too in case a future CLI stamps it at start. Never
                 // un-background: keep a previously-recorded true.
                 isBackgrounded: sys.is_backgrounded === true || prevStarted?.isBackgrounded,
+                ownedBySubagent: typeof sys.owned_by_subagent === 'boolean' ? sys.owned_by_subagent : prevStarted?.ownedBySubagent,
                 // Display-only. toolUseId: within ONE call the first non-empty wins (never
                 // clobber with undefined). startedAt is OUR clock at the first start we saw — a
                 // replayed task_started must not restart the row's elapsed timer.
@@ -6341,6 +6382,7 @@ export class ClaudeCodeSession {
         // cycle (its running state pulled the status back to 'running', and its own
         // trailing idle can be lost). The positional watermark guard above still
         // runs first: a JSONL-replayed followup is suppressed by position.
+        this.setForegroundActive(false)
         const resultOrigin = (event as { origin?: { kind?: string } }).origin
         const isTaskNotificationResult = resultOrigin?.kind === 'task-notification'
         if (isTaskNotificationResult) {
