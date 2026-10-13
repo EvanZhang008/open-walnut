@@ -456,7 +456,9 @@ describe('bridge lifecycle + proxied send + streaming', () => {
         body: JSON.stringify({ text: 'still here?' }),
       })
       expect(res.status).toBe(202)
-      expect(second.received.some((m) => m.cmd === 'send')).toBe(true)
+      // The 202 can reach the test before the relayed frame does (a loaded CI
+      // runner, 2026-10-13 run 38449733579): wait for the send on the new link.
+      await waitFor(() => second.received.some((m) => m.cmd === 'send'))
     } finally {
       second.close()
       first.close()
