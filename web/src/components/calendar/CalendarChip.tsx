@@ -9,7 +9,7 @@ import { memo, type CSSProperties, type PointerEvent as ReactPointerEvent } from
 import type { CalendarItem } from './calendar-items';
 
 function timeLabel(startMin: number): string {
-  const h24 = Math.floor(startMin / 60);
+  const h24 = Math.floor(startMin / 60) % 24;
   const m = startMin % 60;
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
   const ampm = h24 < 12 ? 'AM' : 'PM';

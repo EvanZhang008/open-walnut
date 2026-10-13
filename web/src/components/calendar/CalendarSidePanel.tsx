@@ -13,7 +13,7 @@ import { useTasksContext } from '@/contexts/TasksContext';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useDragBusTarget } from '@/hooks/useDragBusTarget';
 import { parseDateLocal } from '@/components/common/DatePicker';
-import { SLOT_MINUTES, addDays, formatDateOnly, slotToLocalIso, snapMinutes } from '@/utils/calendar-date';
+import { SLOT_MINUTES, addDays, formatDateOnly } from '@/utils/calendar-date';
 import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from './calendar-items';
 import { TimeGrid, type DropPreview, type GridMetrics } from './TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
@@ -22,7 +22,8 @@ import { CalendarItemPopover } from './CalendarItemPopover';
 import { CalendarsPopover } from './CalendarsPopover';
 import { CalendarGridControls } from './CalendarGridControls';
 import { calendarEventNeedsApproval } from '@/api/calendar';
-import { confirmCalendarWrite } from './calendar-event-actions';
+import { useCalendarWriteConfirmation } from './calendar-event-actions';
+import { gridLocalIso, gridSnapMinute } from './calendar-grid-settings';
 
 interface Props {
   onClose: () => void;
@@ -34,6 +35,7 @@ interface Props {
 
 export function CalendarSidePanel({ onClose, active = true, width, panelRef: externalPanelRef }: Props) {
   const { tasks, update, create, setPhase, deleteTask } = useTasksContext();
+  const confirmCalendarWrite = useCalendarWriteConfirmation();
   const [day, setDay] = useState(() => formatDateOnly(new Date()));
   const anchor = useMemo(() => parseDateLocal(day), [day]);
 
@@ -68,8 +70,8 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
     if (!m || !rect) return null;
     if (y < m.gridTop) return null; // above the scrollable grid = all-day
     const mins = Math.max(m.startMinute, Math.min(m.endMinute - SLOT_MINUTES,
-      snapMinutes(m.startMinute + ((y - rect.top) / m.slotPx) * SLOT_MINUTES, SLOT_MINUTES)));
-    return Math.max(0, Math.min(Math.floor(mins / SLOT_MINUTES), (24 * 60) / SLOT_MINUTES - 1));
+      gridSnapMinute(m.startMinute + ((y - rect.top) / m.slotPx) * SLOT_MINUTES, SLOT_MINUTES, m.endMinute)));
+    return Math.floor(mins / SLOT_MINUTES);
   }, []);
   useDragBusTarget({
     element: () => panelRef.current,
@@ -83,7 +85,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
       if (payload.kind !== 'task') return false;
       const slot = slotFromPoint(p.y);
       update(payload.task.id, {
-        start_date: slot === null ? dayRef.current : slotToLocalIso(dayRef.current, slot),
+        start_date: slot === null ? dayRef.current : gridLocalIso(dayRef.current, slot * SLOT_MINUTES),
       });
       return true;
     },
@@ -92,15 +94,16 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
   // The agenda is "what's today" — meetings matter as much as tasks. The
   // panel shipped tasks-only at first and users glancing at it before their
   // day missed real calendar events entirely.
-  const calendar = useCalendarEvents(day, day);
+  const throughDay = formatDateOnly(addDays(anchor, 1));
+  const calendar = useCalendarEvents(day, throughDay);
   const liveItems = useMemo(
-    () => [...tasksToCalendarItems(tasks, day, day), ...eventsToCalendarItems(calendar.events)],
-    [tasks, day, calendar.events]
+    () => [...tasksToCalendarItems(tasks, day, throughDay), ...eventsToCalendarItems(calendar.events)],
+    [tasks, day, throughDay, calendar.events]
   );
   const items = useFrozenWhile(liveItems, chipDragging);
 
   const moveItem = useCallback(
-    (itemId: string, newWhen: string) => {
+    async (itemId: string, newWhen: string) => {
       // Event ids may themselves contain ':' — split on the FIRST colon only.
       const sep = itemId.indexOf(':');
       const kind = itemId.slice(0, sep);
@@ -126,7 +129,11 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
       else if (kind === 'task-due') update(rest, { due_date: newWhen });
       else if (kind === 'event') {
         const ev = calendar.events.find((e) => e.id === rest);
-        if (!ev || !newWhen.includes('T') || !confirmCalendarWrite(ev, 'update')) return;
+        if (!ev || !(await confirmCalendarWrite(ev, 'update'))) return;
+        if (!newWhen.includes('T')) {
+          calendar.moveEvent(rest, { start: newWhen, end: newWhen, human_confirm: calendarEventNeedsApproval(ev) });
+          return;
+        }
         const durMs = Math.max(
           15 * 60_000,
           parseDateLocal(ev.end || ev.start).getTime() - parseDateLocal(ev.start).getTime()
@@ -140,7 +147,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
         });
       }
     },
-    [update, calendar]
+    [update, calendar, confirmCalendarWrite]
   );
 
   const unscheduleTask = useCallback(
@@ -153,10 +160,10 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
   );
 
   const saveTaskWhen = useCallback(
-    (item: CalendarItem, newWhen: string) => {
+    (item: CalendarItem, newWhen: string, newEnd?: string) => {
       if (item.kind === 'event') return;
       if (item.kind === 'task-due') update(item.task.id, { due_date: newWhen });
-      else update(item.task.id, { start_date: newWhen });
+      else update(item.task.id, { start_date: newWhen, ...(newEnd !== undefined ? { end_date: newEnd } : {}) });
     },
     [update]
   );
@@ -225,13 +232,13 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
             dropPreview={busPreview}
             metricsRef={metricsRef}
             onMoveItem={moveItem}
-            onResizeItem={(itemId, newEnd) => {
+            onResizeItem={async (itemId, newEnd) => {
               const sep = itemId.indexOf(':');
               if (itemId.slice(0, sep) === 'task-start') update(itemId.slice(sep + 1), { end_date: newEnd });
               else {
                 const rest = itemId.slice(sep + 1);
                 const ev = calendar.events.find((e) => e.id === rest);
-                if (ev && confirmCalendarWrite(ev, 'update')) calendar.moveEvent(rest, { start: ev.start, end: newEnd, human_confirm: calendarEventNeedsApproval(ev) });
+                if (ev && (await confirmCalendarWrite(ev, 'update'))) calendar.moveEvent(rest, { start: ev.start, end: newEnd, human_confirm: calendarEventNeedsApproval(ev) });
               }
             }}
             onChipDragging={setChipDragging}
@@ -259,8 +266,8 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
           onDeleteTask={(item) => { if (item.kind !== 'event') deleteTask(item.task.id); }}
           // Context menu hands back the ITEM (id "event:<real-id>"), not the
           // event — passing item.id to the API 404s and the chip resurrects.
-          onDeleteEvent={(item) => {
-            if (item.kind === 'event' && confirmCalendarWrite(item.event, 'delete')) calendar.removeEvent(item.event.id, calendarEventNeedsApproval(item.event));
+          onDeleteEvent={async (item) => {
+            if (item.kind === 'event' && (await confirmCalendarWrite(item.event, 'delete'))) calendar.removeEvent(item.event.id, calendarEventNeedsApproval(item.event));
           }}
           onHideCalendar={calendar.hideCalendar}
           onHideEvent={calendar.hideEvent}
@@ -276,17 +283,14 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
           item={openItem.item}
           anchorEl={openItem.anchorEl}
           onClose={() => setOpenItem(null)}
-          onSaveEvent={(ev, patch) => {
-            if (confirmCalendarWrite(ev, 'update')) calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
+          onSaveEvent={async (ev, patch) => {
+            if (await confirmCalendarWrite(ev, 'update')) calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
           }}
-          onDeleteEvent={(ev) => {
-            if (confirmCalendarWrite(ev, 'delete')) calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
+          onDeleteEvent={async (ev) => {
+            if (await confirmCalendarWrite(ev, 'delete')) calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
           }}
           onHideEvent={calendar.hideEvent}
           onSaveTaskWhen={saveTaskWhen}
-          onSaveTaskEnd={(item, newEnd) => {
-            if (item.kind !== 'event') update(item.task.id, { end_date: newEnd });
-          }}
         />
       )}
     </div>

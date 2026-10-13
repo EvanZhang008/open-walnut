@@ -13,15 +13,23 @@
  *   1. two surfaces asking for the SAME range issue ONE GET, not two;
  *   2. an edit on /calendar reaches the home agenda before the PATCH is answered.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Locator } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const HOLD_MS = 3000
 /** How long a same-frame update may take to reach the other surface. */
 const INSTANT_MS = 700
-/** TimeGrid geometry: SLOT_MINUTES=30 at SLOT_PX=24 → 48px per hour. */
-const topForHour = (hour: number) => `${((hour - 7) * 60 / 30) * 24}px`
+/** Hidden and visible surfaces retain their own viewport-fitted slot size. */
+async function chipTopError(panel: Locator, chip: Locator, hour: number): Promise<number> {
+  const expected = await panel.locator('.cal-grid').evaluate((el, hour) => {
+    const grid = el as HTMLElement
+    const slotPx = parseFloat(grid.style.getPropertyValue('--cal-slot-px'))
+    return (hour * 60 - Number(grid.dataset.startMinute)) / 30 * slotPx
+  }, hour)
+  const actual = await chip.evaluate((el) => parseFloat((el as HTMLElement).style.top))
+  return Math.abs(actual - expected)
+}
 
 function localDay(offset = 0): string {
   const d = new Date()
@@ -43,7 +51,12 @@ async function createEventViaApi(title: string, start: string, end: string): Pro
 
 // The agenda toggle is a synced layout preference; isolate it so an agenda left open here
 // is not handed to the next context through the shared fixture's ui-prefs mirror.
-test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
+test.beforeEach(async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.addInitScript(() => {
+    localStorage.setItem('open-walnut-calendar-grid-settings', JSON.stringify({ zoom: 1, fullDay: false }))
+  })
+})
 
 /** Open the homepage day agenda; it stays mounted for the rest of the test. */
 async function openHomeAgenda(page: Page) {
@@ -60,12 +73,13 @@ function hiddenText(locator: ReturnType<Page['locator']>) {
 
 test('two surfaces on the same day range issue ONE events GET', async ({ page }) => {
   const today = localDay(0)
+  const nextDay = localDay(1)
   let dayRangeStarted = 0
   let dayRangeAnswered = 0
 
   await page.route('**/api/calendar/events?*', async (route) => {
-    const url = route.request().url()
-    if (!url.includes(`from=${today}`) || !url.includes(`to=${today}`)) {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get('from') !== today || url.searchParams.get('to') !== nextDay) {
       await route.continue()
       return
     }
@@ -75,7 +89,7 @@ test('two surfaces on the same day range issue ONE events GET', async ({ page })
     await route.continue()
   })
 
-  await page.goto('/')
+  await page.evaluate((url) => { location.href = url }, API)
   await page.waitForLoadState('networkidle')
   await openHomeAgenda(page)
   await expect.poll(() => dayRangeStarted, { timeout: 5000 }).toBe(1)
@@ -83,7 +97,7 @@ test('two surfaces on the same day range issue ONE events GET', async ({ page })
   // Second surface, same range: /calendar switched to Day view on today.
   await page.click('a[href="/calendar"]')
   await expect(page.locator('.cal-toolbar')).toBeVisible()
-  await page.click('.cal-view-btn:has-text("Day")')
+  await page.locator('.cal-page').getByRole('tab', { name: 'Day', exact: true }).click()
   // Scoped to .cal-page: the home agenda renders a one-day grid too.
   await expect(page.locator('.cal-page .cal-grid[data-days="1"]')).toBeVisible()
 
@@ -99,22 +113,24 @@ test('an event edit on /calendar reaches the home agenda before the PATCH is ans
   const event = await createEventViaApi(original, `${today}T09:00:00`, `${today}T09:30:00`)
 
   try {
-    await page.goto('/')
+    await page.evaluate((url) => { location.href = url }, API)
     await page.waitForLoadState('networkidle')
     const panel = await openHomeAgenda(page)
 
     const homeChip = panel.locator(`.cal-chip[data-item-id="event:${event.id}"]`)
     await homeChip.scrollIntoViewIfNeeded()
     await expect(homeChip).toContainText(original)
-    expect(await homeChip.evaluate((el) => (el as HTMLElement).style.top)).toBe(topForHour(9))
+    await expect.poll(() => chipTopError(panel, homeChip, 9)).toBeLessThan(0.02)
 
     await page.click('a[href="/calendar"]')
     await expect(page.locator('.cal-toolbar')).toBeVisible()
-    await page.click('.cal-view-btn:has-text("Day")')
+    await page.locator('.cal-page').getByRole('tab', { name: 'Day', exact: true }).click()
     // Scoped to .cal-page: the same chip also renders in the (hidden) home agenda.
     const pageChip = page.locator(`.cal-page .cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
     await pageChip.scrollIntoViewIfNeeded()
     await expect(pageChip).toBeVisible()
+    const full = page.locator('.cal-page')
+    await expect.poll(() => chipTopError(full, pageChip, 9)).toBeLessThan(0.02)
 
     // Hold every PATCH for this event: the server does not even see the request
     // until the hold ends, so no echo can arrive before the assertions below.
@@ -138,9 +154,9 @@ test('an event edit on /calendar reaches the home agenda before the PATCH is ans
     await expect.poll(hiddenText(homeChip), { timeout: INSTANT_MS, intervals: [50, 50, 50, 50, 100, 100, 100] })
       .toContain(renamed)
     await expect.poll(
-      () => homeChip.evaluate((el) => (el as HTMLElement).style.top),
+      () => chipTopError(panel, homeChip, 13),
       { timeout: INSTANT_MS, intervals: [50, 50, 50, 50, 100, 100, 100] },
-    ).toBe(topForHour(13))
+    ).toBeLessThan(0.02)
     expect(patchesAnswered).toBe(0)
 
     // Let the held PATCH land: the confirmation must not undo what the user did.
@@ -149,7 +165,10 @@ test('an event edit on /calendar reaches the home agenda before the PATCH is ans
     await expect(pageChip).toContainText(renamed)
     expect(await hiddenText(homeChip)()).toContain(renamed)
 
-    const after = await fetch(`${API}/api/calendar/events?from=${today}&to=${today}`)
+    await expect.poll(() => chipTopError(full, pageChip, 13)).toBeLessThan(0.02)
+    await expect.poll(() => chipTopError(panel, homeChip, 13)).toBeLessThan(0.02)
+    const after = await fetch(`${API}/api/calendar/events?from=${today}&to=${localDay(1)}`)
+    expect(after.ok).toBe(true)
     const body = (await after.json()) as { events: Array<{ id: string; title: string; start: string }> }
     const stored = body.events.find((e) => e.id === event.id)
     expect(stored?.title).toBe(renamed)

@@ -12,9 +12,9 @@ export function CalendarGridControls() {
         onClick={() => setCalendarGridSettings({ zoom: 1 })}>{Math.round(zoom * 100)}%</button>
       <button type="button" aria-label="Zoom in calendar" title="Zoom in" disabled={index === GRID_ZOOM_LEVELS.length - 1}
         onClick={() => setCalendarGridSettings({ zoom: GRID_ZOOM_LEVELS[index + 1] })}>+</button>
-      <button type="button" className="cal-hours-toggle" aria-label={fullDay ? 'Show 7 AM to 11 PM' : 'Show full day'}
-        title={fullDay ? 'Show 7 AM to 11 PM' : 'Show all 24 hours'} aria-pressed={fullDay}
-        onClick={() => setCalendarGridSettings({ fullDay: !fullDay })}>{fullDay ? '24h' : '7–23'}</button>
+      <button type="button" className="cal-hours-toggle" aria-label={fullDay ? 'Show 7 AM to 1 AM' : 'Show full day'}
+        title={fullDay ? 'Show 7 AM to 1 AM' : 'Show all 24 hours'} aria-pressed={fullDay}
+        onClick={() => setCalendarGridSettings({ fullDay: !fullDay })}>{fullDay ? '24h' : '7–1'}</button>
     </div>
   );
 }

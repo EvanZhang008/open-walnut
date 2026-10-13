@@ -37,18 +37,68 @@ async function cli(name: string, args: Record<string, unknown>): Promise<string>
 }
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`;
-function localDay() {
+function localDay(offset = 0) {
   const d = new Date();
+  d.setDate(d.getDate() + offset);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-async function event(title: string, start: string, end: string) {
+async function event(title: string, start: string, end: string, dayOffset = 0) {
   const response = await fetch(`${API}/api/calendar/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ calendarId: 'cal-work', title, start: `${localDay()}T${start}:00`, end: `${localDay()}T${end}:00` }) });
+    body: JSON.stringify({ calendarId: 'cal-work', title, start: `${localDay(dayOffset)}T${start}:00`,
+      end: `${localDay(dayOffset + (end < start ? 1 : 0))}T${end}:00` }) });
   expect(response.ok).toBe(true);
   return (await response.json()).event as { id: string };
 }
+async function gridGeometry(panel: Locator) {
+  return panel.locator('.cal-grid').evaluate((el) => {
+    const grid = el as HTMLElement;
+    const scroller = grid.querySelector<HTMLElement>('.cal-grid-scroll')!;
+    const slotPx = parseFloat(grid.style.getPropertyValue('--cal-slot-px'));
+    const startMinute = Number(grid.dataset.startMinute);
+    return { slotPx, startMinute, endMinute: Number(grid.dataset.endMinute),
+      viewportHeight: scroller.clientHeight, topMinute: startMinute + scroller.scrollTop / slotPx * 30,
+      maxTopMinute: startMinute + (scroller.scrollHeight - scroller.clientHeight) / slotPx * 30,
+      columnHeight: grid.querySelector<HTMLElement>('.cal-grid-cols')!.getBoundingClientRect().height };
+  });
+}
+async function expectFittedGrid(panel: Locator, zoom: number) {
+  await expect.poll(async () => {
+    const g = await gridGeometry(panel);
+    return Math.abs(g.slotPx - (g.viewportHeight - 12) / 36 * zoom);
+  }).toBeLessThan(0.02);
+  const g = await gridGeometry(panel);
+  expect(g.startMinute).toBe(0);
+  expect(g.endMinute).toBe(31 * 60);
+  expect(g.columnHeight).toBeCloseTo((g.endMinute - g.startMinute) / 30 * g.slotPx, 1);
+}
+async function expectChipTime(panel: Locator, chip: Locator, startMinute: number, endMinute: number) {
+  // Read this surface's current scale, including a hidden home panel's retained scale.
+  await expect.poll(async () => {
+    const g = await gridGeometry(panel);
+    const actual = await chip.evaluate((el) => ({
+      top: parseFloat((el as HTMLElement).style.top), height: parseFloat((el as HTMLElement).style.height),
+    }));
+    const start = Math.max(g.startMinute, startMinute);
+    const end = Math.min(g.endMinute, endMinute);
+    return Math.max(Math.abs(actual.top - (start - g.startMinute) / 30 * g.slotPx),
+      Math.abs(actual.height - Math.min((g.endMinute - start) / 30 * g.slotPx, Math.max(20, (end - start) / 30 * g.slotPx))));
+  }).toBeLessThan(0.02);
+}
+async function expectTopMinute(panel: Locator, minute: number) {
+  await expect.poll(async () => {
+    const g = await gridGeometry(panel);
+    // Scroll offsets may round to a device pixel, unlike the fractional CSS slot.
+    return Math.abs(g.topMinute - Math.min(minute, g.maxTopMinute)) * g.slotPx / 30;
+  }).toBeLessThanOrEqual(1);
+}
+async function scrollToMinute(panel: Locator, minute: number) {
+  const g = await gridGeometry(panel);
+  const top = (minute - g.startMinute) / 30 * g.slotPx;
+  await panel.locator('.cal-grid-scroll').evaluate((el, top) => { el.scrollTop = top; }, top);
+  await expectTopMinute(panel, minute);
+}
 async function openAgenda(page: Page) {
-  await page.goto('/');
+  await page.evaluate((url) => { location.href = url; }, API);
   await page.getByTestId('sidebar-toggle-calendar').click();
   const panel = page.getByTestId('cal-side-panel');
   await expect(panel).toBeVisible();
@@ -77,14 +127,16 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test('default hours, zoom bounds, persistence, and both surfaces share the scale', async ({ page }) => {
+test('default hours, zoom bounds, persistence, and both surfaces share the settings', async ({ page }) => {
   const panel = await openAgenda(page);
-  await expect(panel.locator('.cal-grid-hourlabel').first()).toHaveText('7 AM');
-  await expect(panel.locator('.cal-grid-range-end')).toHaveText('11 PM');
-  expect(await panel.locator('.cal-grid-cols').evaluate((el) => el.clientHeight)).toBe(768);
+  await expectFittedGrid(panel, 1);
+  await expect(panel.locator('.cal-grid-hourlabel').first()).toHaveText('12 AM');
+  await expect(panel.locator('.cal-grid-range-end')).toHaveText('7 AM');
+  await expect(panel.locator('.cal-hours-toggle')).toHaveText('7–1');
+  await expectTopMinute(panel, 7 * 60);
   await panel.getByRole('button', { name: 'Zoom in calendar' }).click();
   await expect(panel.getByRole('button', { name: 'Reset calendar zoom' })).toHaveText('125%');
-  expect(await panel.locator('.cal-grid-cols').evaluate((el) => el.clientHeight)).toBe(960);
+  await expectFittedGrid(panel, 1.25);
   for (let i = 0; i < 2; i++) await panel.getByRole('button', { name: 'Zoom in calendar' }).click();
   await expect(panel.getByRole('button', { name: 'Zoom in calendar' })).toBeDisabled();
   await panel.getByRole('button', { name: 'Reset calendar zoom' }).click();
@@ -92,47 +144,62 @@ test('default hours, zoom bounds, persistence, and both surfaces share the scale
   await expect(panel.getByRole('button', { name: 'Zoom out calendar' })).toBeDisabled();
   await page.reload();
   await expect(panel.getByRole('button', { name: 'Reset calendar zoom' })).toHaveText('50%');
+  await expectFittedGrid(panel, 0.5);
   await page.click('a[href="/calendar"]');
   const full = page.locator('.cal-page');
   await expect(full.getByRole('button', { name: 'Reset calendar zoom' })).toHaveText('50%');
+  await expectFittedGrid(full, 0.5);
   await full.getByRole('button', { name: 'Reset calendar zoom' }).click();
   expect(await panel.locator('.cal-zoom-value').textContent()).toBe('100%');
+  await expectFittedGrid(full, 1);
   await full.getByRole('button', { name: 'Show full day', exact: true }).click();
-  await expect(full.locator('.cal-grid-hourlabel').first()).toHaveText('12 AM');
-  await full.getByRole('button', { name: 'Show 7 AM to 11 PM' }).click();
-  await expect(full.locator('.cal-grid-hourlabel').first()).toHaveText('7 AM');
+  await expect(full.locator('.cal-grid')).toHaveAttribute('data-start-minute', '0');
+  await expect(full.locator('.cal-grid')).toHaveAttribute('data-end-minute', String(24 * 60));
+  await expect.poll(async () => (await gridGeometry(full)).slotPx).toBe(24);
+  await expectTopMinute(full, 8 * 60);
+  await page.reload();
+  await expect(full.getByRole('button', { name: 'Show 7 AM to 1 AM' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(full.locator('.cal-grid-range-end')).toHaveText('12 AM');
+  await full.getByRole('button', { name: 'Show 7 AM to 1 AM' }).click();
+  await expectFittedGrid(full, 1);
+  await full.getByRole('tab', { name: 'Week', exact: true }).click();
   await full.getByRole('tab', { name: 'Day', exact: true }).click();
-  await expect(full.locator('.cal-grid-scroll')).toHaveJSProperty('scrollTop', 0);
+  await expectTopMinute(full, 7 * 60);
   await page.setViewportSize({ width: 1280, height: 640 });
-  await full.locator('.cal-grid-scroll').evaluate((el) => { el.scrollTop = 144; });
-  const before = await full.locator('.cal-grid-scroll').evaluate((el) => el.scrollTop);
+  await expectFittedGrid(full, 1);
+  await scrollToMinute(full, 9 * 60);
+  const before = await gridGeometry(full);
   await full.getByRole('button', { name: 'Zoom in calendar' }).click();
-  expect(await full.locator('.cal-grid-scroll').evaluate((el) => el.scrollTop)).toBeCloseTo(before * 1.25, 0);
+  await expectFittedGrid(full, 1.25);
+  await expectTopMinute(full, before.topMinute);
 });
 
-test('zooming out from a late hour preserves the pre-layout scroll position', async ({ page }) => {
+test('zooming out from a late hour preserves the pre-layout minute up to the scroll limit', async ({ page }) => {
   await openAgenda(page);
   await page.click('a[href="/calendar"]');
   const full = page.locator('.cal-page');
   await full.getByRole('tab', { name: 'Day', exact: true }).click();
   await page.setViewportSize({ width: 1280, height: 640 });
   for (let i = 0; i < 3; i++) await full.getByRole('button', { name: 'Zoom in calendar' }).click();
-  const scroller = full.locator('.cal-grid-scroll');
-  await scroller.evaluate((el) => { el.scrollTop = 900; });
-  await expect(scroller).toHaveJSProperty('scrollTop', 900);
+  await expectFittedGrid(full, 2);
+  await scrollToMinute(full, 22 * 60);
+  const before = await gridGeometry(full);
   await full.getByRole('button', { name: 'Reset calendar zoom' }).click();
-  const actual = await scroller.evaluate((el) => ({ top: el.scrollTop, max: el.scrollHeight - el.clientHeight }));
-  expect(actual.top).toBeCloseTo(Math.min(450, actual.max), 0);
+  await expectFittedGrid(full, 1);
+  await expectTopMinute(full, before.topMinute);
 });
 
-test('a horizontal move keeps the real start of a clipped early event', async ({ page }) => {
-  const one = await event(`Clipped move ${Date.now()}`, '06:30', '07:30');
+test('a horizontal move keeps the real start of an early event', async ({ page }) => {
+  const one = await event(`Early move ${Date.now()}`, '06:30', '07:30');
   try {
     await openAgenda(page);
     await page.click('a[href="/calendar"]');
     const full = page.locator('.cal-page');
     await full.getByRole('tab', { name: 'Week', exact: true }).click();
-    const chip = full.locator(`[data-item-id="event:${one.id}"]`);
+    // The extended tail can also draw this event in the previous day's column.
+    const chip = full.locator(`.cal-day-col[data-day="${localDay()}"] [data-item-id="event:${one.id}"]`);
+    await chip.scrollIntoViewIfNeeded();
+    await expectChipTime(full, chip, 6 * 60 + 30, 7 * 60 + 30);
     const src = await chip.boundingBox();
     const index = await chip.evaluate((el) => {
       const day = el.closest('.cal-day-col')!;
@@ -158,19 +225,21 @@ test('resizing to midnight saves the next local day at zero', async ({ page }) =
   const one = await event(`Midnight resize ${Date.now()}`, '23:00', '23:30');
   try {
     const panel = await openAgenda(page);
-    await panel.getByRole('button', { name: 'Show full day', exact: true }).click();
+    // Keep midnight comfortably inside the viewport throughout the gesture.
+    await panel.getByRole('button', { name: 'Zoom in calendar' }).click();
+    await expectFittedGrid(panel, 1.25);
     const chip = panel.locator(`[data-item-id="event:${one.id}"]`);
-    await chip.scrollIntoViewIfNeeded();
+    await point(panel, 23);
     const src = await chip.boundingBox();
     if (!src) throw new Error('Event is missing');
     await page.mouse.move(src.x + src.width / 2, src.y + src.height - 3);
     await page.mouse.down();
-    await page.mouse.move(src.x + src.width / 2, src.y + src.height - 3 + 30, { steps: 8 });
+    const { slotPx } = await gridGeometry(panel);
+    await page.mouse.move(src.x + src.width / 2, src.y + src.height - 3 + slotPx, { steps: 8 });
     await page.mouse.up();
-    const next = new Date(`${localDay()}T00:00:00`); next.setDate(next.getDate() + 1);
-    const nextDay = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+    const nextDay = localDay(1);
     await expect.poll(async () => {
-      const result = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay()}`).then((r) => r.json());
+      const result = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay(1)}`).then((r) => r.json());
       return result.events.find((e: { id: string }) => e.id === one.id)?.end;
     }).toBe(`${nextDay}T00:00:00`);
   } finally { await fetch(`${API}/api/calendar/events/${encodeURIComponent(one.id)}`, { method: 'DELETE' }); }
@@ -186,7 +255,7 @@ test('read-only and all-day events can be hidden without deleting them', async (
     await popover.getByRole('button', { name: 'Hide event', exact: true }).click();
     await expect(chip).toHaveCount(0);
     await expect.poll(async () => {
-      const stored = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay()}&include_hidden=1`).then((r) => r.json());
+      const stored = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay(1)}&include_hidden=1`).then((r) => r.json());
       return stored.events.find((e: { id: string }) => e.id === 'ev-e2e-holiday');
     }).toMatchObject({ readonly: true, allDay: true, hidden: true });
   } finally {
@@ -208,7 +277,7 @@ test('hide one overlapping event, restore it, and recover after a rejected write
     await expect(panel.locator(`[data-item-id="event:${two.id}"]`)).toHaveCount(1);
     await page.reload();
     await expect(chip).toHaveCount(0);
-    const stored = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay()}&include_hidden=1`).then((r) => r.json());
+    const stored = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay(1)}&include_hidden=1`).then((r) => r.json());
     expect(stored.events.find((e: { id: string }) => e.id === one.id)?.hidden).toBe(true);
     await panel.getByTestId('cal-side-cals-btn').click();
     await page.getByRole('button', { name: /Hidden events/ }).click();
@@ -230,23 +299,36 @@ test('hide one overlapping event, restore it, and recover after a rejected write
   }
 });
 
-test('range boundaries clip crossing events and keep off-hours events reachable', async ({ page }) => {
+test('free scrolling keeps early, late, and next-day events reachable and clips only the grid tail', async ({ page }) => {
   const early = await event(`Off-hours ${Date.now()}`, '05:00', '06:00');
-  const start = await event(`Crossing start ${Date.now()}`, '06:30', '07:30');
-  const end = await event(`Crossing end ${Date.now()}`, '22:30', '23:30');
+  const start = await event(`Crossing focus start ${Date.now()}`, '06:30', '07:30');
+  const end = await event(`Late evening ${Date.now()}`, '22:30', '23:30');
+  const overnight = await event(`After midnight ${Date.now()}`, '00:30', '01:30', 1);
+  const tail = await event(`Crossing grid tail ${Date.now()}`, '06:30', '07:30', 1);
   try {
     const panel = await openAgenda(page);
-    await expect(panel.locator(`[data-item-id="event:${early.id}"]`)).toHaveCount(0);
-    await expect(panel.locator(`[data-item-id="event:${start.id}"]`)).toHaveCSS('top', '0px');
-    await expect(panel.locator(`[data-item-id="event:${start.id}"]`)).toHaveCSS('height', '24px');
-    await expect(panel.locator(`[data-item-id="event:${end.id}"]`)).toHaveCSS('top', '744px');
-    await expect(panel.locator(`[data-item-id="event:${end.id}"]`)).toHaveCSS('height', '24px');
-    await panel.locator('.cal-outside-hours').click();
+    await expectFittedGrid(panel, 1);
+    for (const [e, from, to] of [
+      [early, 5 * 60, 6 * 60], [start, 6 * 60 + 30, 7 * 60 + 30],
+      [end, 22 * 60 + 30, 23 * 60 + 30], [overnight, 24 * 60 + 30, 25 * 60 + 30],
+      [tail, 30 * 60 + 30, 31 * 60 + 30],
+    ] as const) {
+      const chip = panel.locator(`[data-item-id="event:${e.id}"]`);
+      await expect(chip).toHaveCount(1);
+      await expectChipTime(panel, chip, from, to);
+      await chip.scrollIntoViewIfNeeded();
+      await expect(chip).toBeInViewport();
+    }
+    await panel.getByRole('button', { name: 'Show full day', exact: true }).click();
+    await expect(panel.locator(`[data-item-id="event:${overnight.id}"]`)).toHaveCount(0);
+    await expect(panel.locator(`[data-item-id="event:${tail.id}"]`)).toHaveCount(0);
+    await expectChipTime(panel, panel.locator(`[data-item-id="event:${early.id}"]`), 5 * 60, 6 * 60);
+    await panel.getByRole('button', { name: 'Show 7 AM to 1 AM' }).click();
+    await expectFittedGrid(panel, 1);
     await expect(panel.locator(`[data-item-id="event:${early.id}"]`)).toHaveCount(1);
-    await panel.getByRole('button', { name: 'Show 7 AM to 11 PM' }).click();
-    await expect(panel.locator(`[data-item-id="event:${early.id}"]`)).toHaveCount(0);
+    await expectChipTime(panel, panel.locator(`[data-item-id="event:${overnight.id}"]`), 24 * 60 + 30, 25 * 60 + 30);
   } finally {
-    for (const e of [early, start, end]) await fetch(`${API}/api/calendar/events/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
+    for (const e of [early, start, end, overnight, tail]) await fetch(`${API}/api/calendar/events/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
   }
 });
 
@@ -265,7 +347,7 @@ test('dense overlapping events stay usable in a narrow agenda at every scale', a
       for (const e of events) await expect(panel.locator(`[data-item-id="event:${e.id}"]`)).toHaveCount(1);
       expect(await panel.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     }
-    await panel.screenshot({ path: `/tmp/calendar-controls/dense-${test.info().project.name}.png` });
+    await panel.screenshot({ path: `/tmp/calendar-controls/dense-${test.info().project.name}.png`, scale: 'css' });
     await panel.locator(`[data-item-id="event:${events[2].id}"]`).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Hide event', exact: true }).click();
     await expect(panel.locator(`[data-item-id="event:${events[2].id}"]`)).toHaveCount(0);
@@ -287,20 +369,22 @@ test('zoomed creation, moving, and resizing preserve wall-clock times', async ({
     if (!box) throw new Error('Event is missing');
     await page.mouse.move(box.x + box.width / 2, box.y + 4);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2, box.y + 4 + 72, { steps: 8 });
+    const { slotPx } = await gridGeometry(panel);
+    await page.mouse.move(box.x + box.width / 2, box.y + 4 + 60 / 30 * slotPx, { steps: 8 });
     await page.mouse.up();
     await expect.poll(async () => {
-      const result = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay()}`).then((r) => r.json());
+      const result = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay(1)}`).then((r) => r.json());
       return result.events.find((e: { id: string }) => e.id === one.id)?.start;
     }).toBe(`${localDay()}T10:00:00`);
     const moved = await chip.boundingBox();
     if (!moved) throw new Error('Moved event is missing');
     await page.mouse.move(moved.x + moved.width / 2, moved.y + moved.height - 3);
     await page.mouse.down();
-    await page.mouse.move(moved.x + moved.width / 2, moved.y + moved.height - 3 + 72, { steps: 8 });
+    const resizeGeometry = await gridGeometry(panel);
+    await page.mouse.move(moved.x + moved.width / 2, moved.y + moved.height - 3 + 60 / 30 * resizeGeometry.slotPx, { steps: 8 });
     await page.mouse.up();
     await expect.poll(async () => {
-      const result = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay()}`).then((r) => r.json());
+      const result = await fetch(`${API}/api/calendar/events?from=${localDay()}&to=${localDay(1)}`).then((r) => r.json());
       return result.events.find((e: { id: string }) => e.id === one.id)?.end;
     }).toBe(`${localDay()}T12:00:00`);
     const p = await point(panel, 14);
@@ -324,10 +408,10 @@ test('agent task scheduling updates the current agenda without changing dates', 
     expect(update.ok).toBe(true);
     const chip = panel.locator(`[data-item-id="task-start:${task.id}"]`);
     await expect(chip).toContainText(task.title);
-    expect(await chip.evaluate((el) => (el as HTMLElement).style.height)).toBe('48px');
+    await expectChipTime(panel, chip, 13 * 60, 14 * 60);
     await fetch(`${API}/api/tasks/${task.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ start_date: `${localDay()}T14:00:00`, end_date: `${localDay()}T15:00:00` }) });
-    await expect(chip).toHaveCSS('top', '336px');
+    await expectChipTime(panel, chip, 14 * 60, 15 * 60);
   } finally { await fetch(`${API}/api/tasks/${task.id}`, { method: 'DELETE' }); }
 });
 

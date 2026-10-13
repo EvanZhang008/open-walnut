@@ -29,12 +29,11 @@ import {
   SNAP_MINUTES,
   formatDateOnly,
   layoutDayEvents,
-  snapMinutes,
-  slotToLocalIso,
   weekRange,
 } from '@/utils/calendar-date';
 import { visibleInterval } from '@/utils/page-visibility';
-import { gridMinute, gridY, gridLocalIso, setCalendarGridSettings, useCalendarGridSettings } from './calendar-grid-settings';
+import { fittedSlotPx, GRID_EXTENDED_END, GRID_FOCUS_START, gridMinute, gridY, gridLocalIso, gridSnapMinute, useCalendarGridSettings } from './calendar-grid-settings';
+import { timeGridItems } from './calendar-items';
 import './grid-controls.css';
 import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
@@ -107,14 +106,15 @@ interface CreateDrag {
   pointer: { x: number; y: number };
 }
 
-function hourLabel(h: number): string {
-  if (h === 0 || h === 24) return '12 AM';
+function hourLabel(hour: number): string {
+  const h = hour % 24;
+  if (h === 0) return '12 AM';
   if (h === 12) return 'Noon';
   return h < 12 ? `${h} AM` : `${h - 12} PM`;
 }
 
 function minsToLabel(mins: number): string {
-  const h24 = Math.floor(mins / 60);
+  const h24 = Math.floor(mins / 60) % 24;
   const m = mins % 60;
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
   return `${h12}:${String(m).padStart(2, '0')} ${h24 < 12 ? 'AM' : 'PM'}`;
@@ -198,8 +198,9 @@ const DayColumn = memo(function DayColumn({
   const { setNodeRef, isOver } = useDroppable({ id: `col:${day}` });
 
   const placements = useMemo(
-    () => layoutDayEvents(items.map((it) => ({ id: it.id, startMin: it.startMin, endMin: it.endMin }))),
-    [items]
+    () => layoutDayEvents(items.map((it) => ({ id: it.id, startMin: Math.max(startMinute, it.startMin),
+      endMin: Math.max(it.endMin, Math.max(startMinute, it.startMin) + MIN_EVENT_PX / slotPx * SLOT_MINUTES) }))),
+    [items, startMinute, slotPx]
   );
 
   return (
@@ -238,7 +239,7 @@ const DayColumn = memo(function DayColumn({
               e.stopPropagation();
               onChipPointerDown(e, item);
             }}
-            onResizePointerDown={onResizePointerDown}
+            onResizePointerDown={it.endMin <= endMinute ? onResizePointerDown : undefined}
             onClick={onChipClick}
             onContextMenu={onChipContextMenu}
           />
@@ -263,9 +264,10 @@ export const TimeGrid = memo(function TimeGrid({
   resizableAllDay = false,
 }: Props) {
   const { zoom, fullDay } = useCalendarGridSettings();
-  const startMinute = fullDay ? 0 : 7 * 60;
-  const endMinute = fullDay ? 24 * 60 : 23 * 60;
-  const slotPx = SLOT_PX * zoom;
+  const startMinute = 0;
+  const endMinute = fullDay ? 24 * 60 : GRID_EXTENDED_END;
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const slotPx = fullDay ? SLOT_PX * zoom : fittedSlotPx(viewportHeight, zoom);
   const hours = Array.from({ length: (endMinute - startMinute) / 60 }, (_, i) => startMinute / 60 + i);
   const dayList = useMemo(() => {
     const base = days === 7 ? weekRange(anchor) : [anchor];
@@ -275,13 +277,23 @@ export const TimeGrid = memo(function TimeGrid({
   const today = new Date();
   const todayStr = formatDateOnly(today);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const scrollTopRef = useRef(0);
+  const scrollMinuteRef = useRef(GRID_FOCUS_START);
   const colsRef = useRef<HTMLDivElement>(null);
   const allDayRef = useRef<HTMLDivElement>(null);
   const allDayResize = useResizableHeight(ALL_DAY_HEIGHT_STORAGE_KEY, {
     min: ALL_DAY_MIN_HEIGHT,
     max: ALL_DAY_MAX_HEIGHT,
   });
+
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const measure = () => { if (scroller.clientHeight > 12) setViewportHeight(scroller.clientHeight); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, []);
 
   // Publish column rects for the page's dnd-kit slot math; refresh on layout.
   const publishMetrics = useCallback(() => {
@@ -315,21 +327,22 @@ export const TimeGrid = memo(function TimeGrid({
     };
   }, [publishMetrics, dayList]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: fullDay ? gridY(8 * 60, startMinute, slotPx) : 0 });
-  }, [days]);
-
-  const previousScale = useRef({ slotPx, startMinute });
+  const previousScale = useRef<{ slotPx: number; days: number; fullDay: boolean } | null>(null);
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
-    if (!scroller) return;
+    if (!scroller || viewportHeight <= 12) return;
     const previous = previousScale.current;
-    const minute = gridMinute(scrollTopRef.current, previous.startMinute, previous.slotPx);
-    scroller.scrollTop = Math.max(0, gridY(minute, startMinute, slotPx));
-    scrollTopRef.current = scroller.scrollTop;
-    previousScale.current = { slotPx, startMinute };
+    const reset = !previous || previous.days !== days || previous.fullDay !== fullDay;
+    const minute = reset ? (fullDay ? 8 * 60 : GRID_FOCUS_START) : scrollMinuteRef.current;
+    scroller.scrollTop = gridY(minute, 0, slotPx);
+    if (Math.abs(scroller.scrollTop - gridY(minute, 0, slotPx)) > 1) {
+      scrollMinuteRef.current = gridMinute(scroller.scrollTop, 0, slotPx);
+    } else {
+      scrollMinuteRef.current = minute;
+    }
+    previousScale.current = { slotPx, days, fullDay };
     publishMetrics();
-  }, [slotPx, startMinute, publishMetrics]);
+  }, [slotPx, days, fullDay, viewportHeight, publishMetrics]);
 
   // Now-line, re-anchored every 60s. visibleInterval: hidden tabs skip; the
   // catch-up tick on return recomputes from the clock, so it's never stale.
@@ -348,7 +361,7 @@ export const TimeGrid = memo(function TimeGrid({
       allDay.set(d, []);
       timed.set(d, []);
     }
-    for (const it of items) {
+    for (const it of timeGridItems(items, dayList, endMinute)) {
       const bucket = it.allDay ? allDay : timed;
       if (it.allDay || (it.endMin > startMinute && it.startMin < endMinute)) bucket.get(it.day)?.push(it);
     }
@@ -372,7 +385,7 @@ export const TimeGrid = memo(function TimeGrid({
     (day: string, y: number): number => {
       const rect = metricsRef.current?.colTops.get(day);
       if (!rect) return 0;
-      return Math.max(startMinute, Math.min(endMinute - SNAP_MINUTES, snapMinutes(gridMinute(y - rect.top, startMinute, slotPx))));
+      return gridSnapMinute(gridMinute(y - rect.top, startMinute, slotPx), SNAP_MINUTES, endMinute);
     },
     [metricsRef, startMinute, endMinute, slotPx]
   );
@@ -402,7 +415,7 @@ export const TimeGrid = memo(function TimeGrid({
       // Above the scrollable grid's viewport edge = the all-day row →
       // date-only preview. (Column rect tops are useless here once scrolled.)
       const inAllDay = m.y < (metricsRef.current?.gridTop ?? 0);
-      const previewMin = inAllDay ? null : Math.max(0, Math.min(endMinute - SNAP_MINUTES, minAtY(overDay, m.y) - drag.grabOffsetMin));
+      const previewMin = inAllDay ? null : Math.max(Math.min(0, drag.item.startMin), Math.min(endMinute - SNAP_MINUTES, minAtY(overDay, m.y) - drag.grabOffsetMin));
       drag.overDay = overDay;
       drag.previewMin = previewMin;
       setMoveGhost({
@@ -424,7 +437,7 @@ export const TimeGrid = memo(function TimeGrid({
       const newWhen =
         drag.previewMin === null
           ? drag.overDay // dropped in the all-day row → strip the time
-          : `${drag.overDay}T${String(Math.floor(drag.previewMin / 60)).padStart(2, '0')}:${String(drag.previewMin % 60).padStart(2, '0')}:00`;
+          : gridLocalIso(drag.overDay, drag.previewMin);
       if (newWhen !== drag.item.when) onMoveItem(drag.item.id, newWhen);
     },
   });
@@ -453,7 +466,7 @@ export const TimeGrid = memo(function TimeGrid({
   );
 
   // ---- resize gesture (bottom edge; events + task-start chips) -----------------
-  const resizeRef = useRef<{ item: CalendarItem; endMin: number } | null>(null);
+  const resizeRef = useRef<{ item: CalendarItem; endMin: number; colTop: number } | null>(null);
   const [resizeGhost, setResizeGhost] = useState<{ itemId: string; day: string; startMin: number; endMin: number } | null>(null);
 
   const resizeGesture = useDragGesture({
@@ -463,8 +476,8 @@ export const TimeGrid = memo(function TimeGrid({
       if (!rs) return;
       const rect = metricsRef.current?.colTops.get(rs.item.day);
       if (!rect) return;
-      const raw = Math.round(gridMinute(m.y - rect.top, startMinute, slotPx) / SNAP_MINUTES) * SNAP_MINUTES;
-      rs.endMin = Math.min(endMinute, Math.max(rs.item.startMin + SNAP_MINUTES_MIN, raw));
+      const raw = Math.round((rs.item.endMin + (m.dy + rs.colTop - rect.top) / slotPx * SLOT_MINUTES) / SNAP_MINUTES) * SNAP_MINUTES;
+      rs.endMin = Math.min(Math.max(endMinute, rs.item.endMin), Math.max(rs.item.startMin + SNAP_MINUTES_MIN, raw));
       setResizeGhost({ itemId: rs.item.id, day: rs.item.day, startMin: rs.item.startMin, endMin: rs.endMin });
     },
     onEnd: ({ canceled }) => {
@@ -486,7 +499,7 @@ export const TimeGrid = memo(function TimeGrid({
     (e: ReactPointerEvent, item: CalendarItem) => {
       if (item.kind === 'event' ? item.event.readonly : item.kind !== 'task-start' || item.allDay) return;
       publishMetrics();
-      resizeRef.current = { item, endMin: item.endMin };
+      resizeRef.current = { item, endMin: item.endMin, colTop: metricsRef.current?.colTops.get(item.day)?.top ?? 0 };
       resizeGesture.onPointerDown(e);
     },
     [resizeGesture, publishMetrics]
@@ -513,7 +526,7 @@ export const TimeGrid = memo(function TimeGrid({
       if (!sel || canceled) return;
       if (!sel.moved) {
         onCreate({
-          start: slotToLocalIso(sel.day, Math.floor(sel.anchorMin / SLOT_MINUTES)),
+          start: gridLocalIso(sel.day, sel.anchorMin),
           anchorPoint: sel.pointer,
         });
       } else {
@@ -521,8 +534,8 @@ export const TimeGrid = memo(function TimeGrid({
         // — flooring into 30-min slots shaved up to 15 min off a :15/:45
         // endpoint (the overlay said 6:45, the created event ended 6:30).
         onCreate({
-          start: slotToLocalIso(sel.day, sel.startMin / SNAP_MINUTES, SNAP_MINUTES),
-          end: slotToLocalIso(sel.day, sel.endMin / SNAP_MINUTES, SNAP_MINUTES),
+          start: gridLocalIso(sel.day, sel.startMin),
+          end: gridLocalIso(sel.day, sel.endMin),
           anchorPoint: sel.pointer,
         });
       }
@@ -532,7 +545,7 @@ export const TimeGrid = memo(function TimeGrid({
   const handleEmptyPointerDown = useCallback(
     (e: ReactPointerEvent, day: string) => {
       publishMetrics();
-      const mins = Math.min(endMinute - SLOT_MINUTES, snapMinutes(minAtY(day, e.clientY), SLOT_MINUTES));
+      const mins = Math.min(endMinute - SLOT_MINUTES, gridSnapMinute(minAtY(day, e.clientY), SLOT_MINUTES, endMinute));
       createRef.current = {
         day,
         anchorMin: mins,
@@ -562,10 +575,10 @@ export const TimeGrid = memo(function TimeGrid({
       if (!onContextMenu) return;
       e.preventDefault();
       publishMetrics();
-      const mins = Math.min(endMinute - SLOT_MINUTES, snapMinutes(minAtY(day, e.clientY), SLOT_MINUTES));
+      const mins = Math.min(endMinute - SLOT_MINUTES, gridSnapMinute(minAtY(day, e.clientY), SLOT_MINUTES, endMinute));
       onContextMenu(
         { x: e.clientX, y: e.clientY },
-        { seed: { start: slotToLocalIso(day, Math.floor(mins / SLOT_MINUTES)), anchorPoint: { x: e.clientX, y: e.clientY } } }
+        { seed: { start: gridLocalIso(day, mins), anchorPoint: { x: e.clientX, y: e.clientY } } }
       );
     },
     [onContextMenu, minAtY, endMinute, publishMetrics]
@@ -637,12 +650,12 @@ export const TimeGrid = memo(function TimeGrid({
           onPointerDown={(e) => allDayResize.handlePointerDown(e, allDayRef.current)}
         />
       )}
-      {!fullDay && items.some((it) => !it.allDay && dayList.includes(it.day) && (it.startMin < startMinute || it.endMin > endMinute)) && (
-        <button className="cal-outside-hours" onClick={() => setCalendarGridSettings({ fullDay: true })}>
-          Events outside 7 AM to 11 PM · Show full day
-        </button>
-      )}
-      <div className="cal-grid-scroll" ref={scrollRef} onScroll={(e) => { scrollTopRef.current = e.currentTarget.scrollTop; }}>
+      <div className="cal-grid-scroll" ref={scrollRef} onScroll={(e) => {
+        if ((fullDay || e.currentTarget.clientHeight === viewportHeight) &&
+          Math.abs(e.currentTarget.scrollTop - gridY(scrollMinuteRef.current, 0, slotPx)) > 1) {
+          scrollMinuteRef.current = gridMinute(e.currentTarget.scrollTop, 0, slotPx);
+        }
+      }}>
         <div className="cal-grid-ruler" style={{ height: gridY(endMinute, startMinute, slotPx) }}>
           {hours.map((h) => (
             <div key={h} className="cal-grid-hour" style={{ height: slotPx * 2 }}>

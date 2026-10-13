@@ -25,8 +25,7 @@ import { parseDateLocal } from '@/components/common/DatePicker';
 import {
   SLOT_MINUTES,
   formatDateOnly,
-  slotToLocalIso,
-  snapMinutes,
+  addDays,
   viewRange,
 } from '@/utils/calendar-date';
 import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from '@/components/calendar/calendar-items';
@@ -40,7 +39,8 @@ import { CalendarsPopover } from '@/components/calendar/CalendarsPopover';
 import { CalendarContextMenu, type CalendarContextTarget } from '@/components/calendar/CalendarContextMenu';
 import { CalendarItemPopover } from '@/components/calendar/CalendarItemPopover';
 import { calendarEventNeedsApproval } from '@/api/calendar';
-import { confirmCalendarWrite } from '@/components/calendar/calendar-event-actions';
+import { useCalendarWriteConfirmation } from '@/components/calendar/calendar-event-actions';
+import { gridLocalIso, gridSnapMinute } from '@/components/calendar/calendar-grid-settings';
 
 const VALID_VIEWS = new Set<CalendarViewKind>(['day', 'week', 'month']);
 const LS_RAIL_KEY = 'open-walnut-calendar-rail-open';
@@ -54,6 +54,7 @@ function parseDroppableId(id: string): { zone: 'day' | 'allday' | 'col'; day: st
 export function CalendarPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { tasks, update, create, setPhase, deleteTask } = useTasksContext();
+  const confirmCalendarWrite = useCalendarWriteConfirmation();
 
   const rawView = searchParams.get('view') as CalendarViewKind | null;
   const view: CalendarViewKind = rawView && VALID_VIEWS.has(rawView) ? rawView : 'week';
@@ -93,10 +94,11 @@ export function CalendarPage() {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [chipDragging, setChipDragging] = useState(false);
 
-  const calendar = useCalendarEvents(from, to);
+  const throughDay = view === 'month' ? to : formatDateOnly(addDays(parseDateLocal(to), 1));
+  const calendar = useCalendarEvents(from, throughDay);
   const liveItems = useMemo(
-    () => [...tasksToCalendarItems(tasks, from, to), ...eventsToCalendarItems(calendar.events)],
-    [tasks, from, to, calendar.events]
+    () => [...tasksToCalendarItems(tasks, from, throughDay), ...eventsToCalendarItems(calendar.events)],
+    [tasks, from, throughDay, calendar.events]
   );
   const items = useFrozenWhile(liveItems, activeTask !== null || chipDragging);
 
@@ -165,7 +167,7 @@ export function CalendarPage() {
       const pointerY = dragPointerY.current ?? (e.activatorEvent as PointerEvent)?.clientY ?? 0;
       const y = pointerY - rect.top;
       const mins = Math.max(metrics.startMinute, Math.min(metrics.endMinute - SLOT_MINUTES,
-        snapMinutes(metrics.startMinute + (y / metrics.slotPx) * SLOT_MINUTES, SLOT_MINUTES)));
+        gridSnapMinute(metrics.startMinute + (y / metrics.slotPx) * SLOT_MINUTES, SLOT_MINUTES, metrics.endMinute)));
       return { day: target.day, slot: Math.floor(mins / SLOT_MINUTES), zone: 'col' };
     },
     []
@@ -191,7 +193,7 @@ export function CalendarPage() {
       if (!target) return;
       if (target.zone === 'col') {
         const slot = preview?.slot ?? 0;
-        update(task.id, { start_date: slotToLocalIso(target.day, slot) });
+        update(task.id, { start_date: gridLocalIso(target.day, slot * SLOT_MINUTES) });
       } else {
         update(task.id, { start_date: target.day });
       }
@@ -207,7 +209,7 @@ export function CalendarPage() {
 
   // ----- chip interactions (shared by views) -------------------------------
   const moveItem = useCallback(
-    (itemId: string, newWhen: string) => {
+    async (itemId: string, newWhen: string) => {
       // Event ids may themselves contain ':' — split on the FIRST colon only.
       const sep = itemId.indexOf(':');
       const kind = itemId.slice(0, sep);
@@ -235,7 +237,7 @@ export function CalendarPage() {
       else if (kind === 'task-due') update(rest, { due_date: newWhen });
       else if (kind === 'event') {
         const ev = calendar.events.find((e) => e.id === rest);
-        if (!ev || !confirmCalendarWrite(ev, 'update')) return;
+        if (!ev || !(await confirmCalendarWrite(ev, 'update'))) return;
         if (!newWhen.includes('T')) {
           // dropped in the all-day row / a month cell with a date-only value
           calendar.moveEvent(rest, { start: newWhen, end: newWhen, human_confirm: calendarEventNeedsApproval(ev) });
@@ -254,11 +256,11 @@ export function CalendarPage() {
         calendar.moveEvent(rest, { start: newWhen, end: fmt(newEnd), human_confirm: calendarEventNeedsApproval(ev) });
       }
     },
-    [update, calendar]
+    [update, calendar, confirmCalendarWrite]
   );
 
   const resizeItem = useCallback(
-    (itemId: string, newEnd: string) => {
+    async (itemId: string, newEnd: string) => {
       const sep = itemId.indexOf(':');
       const kind = itemId.slice(0, sep);
       const rest = itemId.slice(sep + 1);
@@ -267,7 +269,7 @@ export function CalendarPage() {
         return;
       }
       const ev = calendar.events.find((e) => e.id === rest);
-      if (!ev || !confirmCalendarWrite(ev, 'update')) return;
+      if (!ev || !(await confirmCalendarWrite(ev, 'update'))) return;
       calendar.moveEvent(rest, { start: ev.start, end: newEnd, human_confirm: calendarEventNeedsApproval(ev) });
     },
     [calendar, update]
@@ -316,11 +318,11 @@ export function CalendarPage() {
   );
 
   const deleteEventItem = useCallback(
-    (item: CalendarItem) => {
-      if (item.kind !== 'event' || !confirmCalendarWrite(item.event, 'delete')) return;
+    async (item: CalendarItem) => {
+      if (item.kind !== 'event' || !(await confirmCalendarWrite(item.event, 'delete'))) return;
       calendar.removeEvent(item.event.id, calendarEventNeedsApproval(item.event));
     },
-    [calendar]
+    [calendar, confirmCalendarWrite]
   );
 
   const completeTaskItem = useCallback(
@@ -346,10 +348,10 @@ export function CalendarPage() {
 
   /** Item-popover save for tasks: newWhen '' clears the chip's date. */
   const saveTaskWhen = useCallback(
-    (item: CalendarItem, newWhen: string) => {
+    (item: CalendarItem, newWhen: string, newEnd?: string) => {
       if (item.kind === 'event') return;
       if (item.kind === 'task-due') update(item.task.id, { due_date: newWhen });
-      else update(item.task.id, { start_date: newWhen });
+      else update(item.task.id, { start_date: newWhen, ...(newEnd !== undefined ? { end_date: newEnd } : {}) });
     },
     [update]
   );
@@ -444,17 +446,14 @@ export function CalendarPage() {
           item={openItem.item}
           anchorEl={openItem.anchorEl}
           onClose={() => setOpenItem(null)}
-          onSaveEvent={(ev, patch) => {
-            if (confirmCalendarWrite(ev, 'update')) calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
+          onSaveEvent={async (ev, patch) => {
+            if (await confirmCalendarWrite(ev, 'update')) calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
           }}
-          onDeleteEvent={(ev) => {
-            if (confirmCalendarWrite(ev, 'delete')) calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
+          onDeleteEvent={async (ev) => {
+            if (await confirmCalendarWrite(ev, 'delete')) calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
           }}
           onHideEvent={calendar.hideEvent}
           onSaveTaskWhen={saveTaskWhen}
-          onSaveTaskEnd={(item, newEnd) => {
-            if (item.kind !== 'event') update(item.task.id, { end_date: newEnd });
-          }}
         />
       )}
     </div>

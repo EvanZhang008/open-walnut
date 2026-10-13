@@ -51,14 +51,12 @@ test('human sees series and organizer warning, cancel keeps the event, hide is l
   await expect(popover.locator('.cal-item-warning')).toContainText('whole series');
   await expect(popover.locator('.cal-item-warning')).toContainText('Meeting organizer');
   await popover.getByRole('button', { name: 'Delete', exact: true }).click();
-  const dialogHandled = page.waitForEvent('dialog').then(async (dialog) => {
-    expect(dialog.message()).toContain('Invited daily series');
-    expect(dialog.message()).toContain('recurring series');
-    expect(dialog.message()).toContain('organizer may be notified');
-    await dialog.dismiss();
-  });
   await popover.getByRole('button', { name: 'Really delete?' }).click();
-  await dialogHandled;
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Invited daily series');
+  await expect(dialog).toContainText('recurring series');
+  await expect(dialog).toContainText('organizer may be notified');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(chip).toHaveCount(1);
   expect((await read()).title).toBe('Invited daily series');
   await chip.click();
@@ -66,7 +64,7 @@ test('human sees series and organizer warning, cancel keeps the event, hide is l
   try {
     await expect(chip).toHaveCount(0);
     await expect.poll(read).toMatchObject({ title: 'Invited daily series', hidden: true, recurring: true, hasAttendees: true });
-    await panel.screenshot({ path: `/tmp/calendar-controls/invite-hidden-${test.info().project.name}.png` });
+    await panel.screenshot({ path: `/tmp/calendar-controls/invite-hidden-${test.info().project.name}.png`, scale: 'css' });
   } finally {
     await fetch(`${API}/api/calendar/events/${encoded}/visibility`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hidden: false }) });
   }
@@ -81,9 +79,10 @@ test('accepting the web warning still waits for actual source confirmation', asy
   await chip.click();
   const popover = page.getByTestId('cal-item-popover');
   await popover.locator('input[type="time"]').first().fill('18:00');
-  page.once('dialog', async (dialog) => { expect(dialog.message()).toContain('Update'); await dialog.accept(); });
   await popover.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page.getByText('Could not update event')).toBeVisible();
-  await expect(chip).toHaveCSS('top', '432px');
+  const slot = await panel.locator('.cal-grid').evaluate(el => parseFloat((el as HTMLElement).style.getPropertyValue('--cal-slot-px')));
+  expect(await chip.evaluate(el => parseFloat((el as HTMLElement).style.top))).toBeCloseTo(32 * slot, 1);
   expect((await read()).start).toBe(`${day()}T16:00:00`);
 });

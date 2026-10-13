@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { eventsToCalendarItems, timeGridItems } from '../../web/src/components/calendar/calendar-items';
+import type { CalendarEvent } from '../../web/src/api/calendar';
 import {
   WEEK_STARTS_ON,
   SLOT_MINUTES,
@@ -25,6 +27,34 @@ import {
  * the exact bug parseDateLocal exists to prevent.
  */
 const TZLESS = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2}))?$/; // src/core/quick-task-parse.ts contract
+
+describe('extended time-grid days', () => {
+  const event = (id: string, start: string, end: string): CalendarEvent => ({
+    id, source: 'eventkit', calendarId: 'test', calendarName: 'Test', accountName: 'Local', title: id, start, end, allDay: false,
+  });
+  it('continues late events past midnight and places early events on the previous evening too', () => {
+    const items = eventsToCalendarItems([
+      event('crossing', '2026-12-31T23:30:00', '2027-01-01T00:30:00'),
+      event('early', '2027-01-01T00:30:00', '2027-01-01T01:00:00'),
+      event('outside', '2027-01-01T08:00:00', '2027-01-01T09:00:00'),
+    ]);
+    const previous = timeGridItems(items, ['2026-12-31'], 1860);
+    expect(previous.map(i => [i.id, i.day, i.startMin, i.endMin])).toEqual([
+      ['event:crossing', '2026-12-31', 1410, 1470],
+      ['event:early', '2026-12-31', 1470, 1500],
+    ]);
+    const full = timeGridItems(items, ['2026-12-31'], 1440);
+    expect(full.map(i => [i.id, i.startMin, i.endMin])).toEqual([['event:crossing', 1410, 1470]]);
+    const continued = timeGridItems(items, ['2027-01-01'], 1860);
+    expect(continued.find(i => i.id === 'event:crossing')).toMatchObject({ day: '2027-01-01', startMin: -30, endMin: 30 });
+    const long = timeGridItems(eventsToCalendarItems([event('long', '2026-12-31T23:00:00', '2027-01-01T09:00:00')]), ['2026-12-31'], 1860);
+    expect(long[0]).toMatchObject({ startMin: 1380, endMin: 1980 });
+    const week = timeGridItems(items, ['2026-12-31', '2027-01-01'], 1860);
+    expect(week.filter(i => i.id === 'event:early').map(i => [i.day, i.startMin])).toEqual([
+      ['2026-12-31', 1470], ['2027-01-01', 30],
+    ]);
+  });
+});
 
 describe('formatting', () => {
   it('formats tz-less strings that match the quick-parse contract regex', () => {

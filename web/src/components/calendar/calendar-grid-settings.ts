@@ -49,6 +49,18 @@ export function useCalendarGridSettings(): CalendarGridSettings {
   return useSyncExternalStore(subscribe, getSettings, getSettings);
 }
 
+export const GRID_FOCUS_START = 7 * 60;
+export const GRID_FOCUS_END = 25 * 60;
+export const GRID_EXTENDED_END = 31 * 60;
+
+export function fittedSlotPx(viewportHeight: number, zoom: number): number {
+  return Math.max(1, (viewportHeight - 12) / ((GRID_FOCUS_END - GRID_FOCUS_START) / SLOT_MINUTES)) * zoom;
+}
+
+export function gridSnapMinute(minute: number, quantum: number, endMinute: number): number {
+  return Math.max(0, Math.min(endMinute - quantum, Math.round(minute / quantum) * quantum));
+}
+
 export function gridY(minute: number, startMinute: number, slotPx: number): number {
   return (minute - startMinute) / SLOT_MINUTES * slotPx;
 }
@@ -62,6 +74,6 @@ export function gridLocalIso(day: string, minute: number): string {
   date.setDate(date.getDate() + Math.floor(minute / 1440));
   const pad = (n: number) => String(n).padStart(2, '0');
   const datePart = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  const withinDay = minute % 1440;
+  const withinDay = ((minute % 1440) + 1440) % 1440;
   return `${datePart}T${pad(Math.floor(withinDay / 60))}:${pad(withinDay % 60)}:00`;
 }

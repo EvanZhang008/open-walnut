@@ -23,15 +23,13 @@ interface Props {
   /** Hide this one event in Walnut (read-only calendars too). */
   onHideEvent?: (eventId: string) => void;
   /** Persist the task date this chip represents; '' clears it (unschedule). */
-  onSaveTaskWhen?: (item: CalendarItem, newWhen: string) => void;
-  /** Persist the task's end_date (task-start chips only); '' clears it. */
-  onSaveTaskEnd?: (item: CalendarItem, newEnd: string) => void;
+  onSaveTaskWhen?: (item: CalendarItem, newWhen: string, newEnd?: string) => void;
 }
 
 const datePart = (iso: string) => iso.slice(0, 10);
 const timePart = (iso: string, fallback = '09:00') => (iso.includes('T') ? iso.slice(11, 16) : fallback);
 
-export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDeleteEvent, onHideEvent, onSaveTaskWhen, onSaveTaskEnd }: Props) {
+export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDeleteEvent, onHideEvent, onSaveTaskWhen }: Props) {
   const anchorRef = useRef<HTMLElement | null>(anchorEl);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef);
@@ -52,6 +50,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
   const isTaskStart = item.kind === 'task-start';
   const taskEnd = isTaskStart ? item.task.end_date : undefined;
   const [taskEndTime, setTaskEndTime] = useState(taskEnd?.includes('T') ? taskEnd.slice(11, 16) : '');
+  const [taskEndDate, setTaskEndDate] = useState(taskEnd?.includes('T') ? datePart(taskEnd) : startDate);
 
   const composeStart = () => (allDay ? startDate : `${startDate}T${startTime}:00`);
   const composeEnd = () => (allDay ? (endDate || startDate) : `${endDate || startDate}T${endTime}:00`);
@@ -72,8 +71,9 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
     );
   };
   // Optional task end: '' = no end. When set it must land after the start.
-  const composeTaskEnd = () => (taskEndTime && !allDay ? `${startDate}T${taskEndTime}:00` : '');
-  const malformed = !saneWhen(composeStart()) || (isEvent && !saneWhen(composeEnd()));
+  const composeTaskEnd = () => (taskEndTime && !allDay ? `${taskEndDate}T${taskEndTime}:00` : '');
+  const malformed = !saneWhen(composeStart()) || (isEvent && !saneWhen(composeEnd())) ||
+    (isTaskStart && !!composeTaskEnd() && !saneWhen(composeTaskEnd()));
   const misordered =
     (isEvent && !malformed && (allDay ? composeEnd() < composeStart() : composeEnd() <= composeStart())) ||
     (isTaskStart && !malformed && !!composeTaskEnd() && composeTaskEnd() <= composeStart());
@@ -86,13 +86,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
       if (!title.trim()) return;
       onSaveEvent?.(item.event, { start: composeStart(), end: composeEnd(), title: title.trim() });
     } else {
-      onSaveTaskWhen?.(item, composeStart());
-      // Persist the end only when it changed (all-day always clears it).
-      if (isTaskStart && onSaveTaskEnd) {
-        const newEnd = composeTaskEnd();
-        const oldEnd = taskEnd?.includes('T') ? taskEnd : '';
-        if (newEnd !== oldEnd) onSaveTaskEnd(item, newEnd);
-      }
+      onSaveTaskWhen?.(item, composeStart(), isTaskStart ? composeTaskEnd() : undefined);
     }
     onClose();
   };
@@ -179,6 +173,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
 
   const setEventDate = (newDate: string) => {
     if (!newDate) return;
+    if (isTaskStart && taskEndDate === startDate) setTaskEndDate(newDate);
     if (isEvent && !allDay && durMin > 0) {
       // End follows from duration intent, NOT from a span captured at mount:
       // after a time edit changed whether the event crosses midnight, the
@@ -260,14 +255,14 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             {!allDay && !isEvent && (
               <input type="time" value={startTime} disabled={readonly} onChange={(e) => setStartTime(e.target.value)} />
             )}
-            {!allDay && isTaskStart && (
-              <>
-                <span className="cal-item-dash">–</span>
-                {/* Optional end of the working block; clearing it removes the span. */}
-                <input type="time" value={taskEndTime} aria-label="End time (optional)" onChange={(e) => setTaskEndTime(e.target.value)} />
-              </>
-            )}
           </div>
+          {!allDay && isTaskStart && (
+            <div className="cal-item-row">
+              <span className="cal-item-dash">End</span>
+              <input type="date" value={taskEndDate} aria-label="End date" min="1900-01-01" max="2999-12-31" onChange={(e) => setTaskEndDate(e.target.value)} />
+              <input type="time" value={taskEndTime} aria-label="End time (optional)" onChange={(e) => setTaskEndTime(e.target.value)} />
+            </div>
+          )}
           {isEvent && !allDay && (
             <div className="cal-item-row">
               <input type="time" value={startTime} disabled={readonly} onChange={(e) => setEventStartTime(e.target.value)} />

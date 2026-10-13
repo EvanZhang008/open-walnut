@@ -37,6 +37,7 @@ vi.mock('@/utils/log', () => ({ log: { warn: mocks.warn, info: vi.fn() } }))
 import {
   __resetCalendarEventsStore,
   calendarRangeKey,
+  currentCalendarEvent,
   createCalendarEventOptimistic,
   ensureCalendarRange,
   getCalendarRange,
@@ -100,6 +101,24 @@ describe('calendar events store', () => {
     __resetCalendarEventsStore()
     for (const fn of Object.values(mocks)) fn.mockReset()
   })
+
+  it('uses the freshest event and never resurrects a removed event from an older range', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(100);
+      mocks.listCalendarEvents.mockResolvedValue({ events: [event()], sources: [] });
+      await loadCalendarRange(WEEK_KEY);
+      clock.mockReturnValue(200);
+      mocks.listCalendarEvents.mockResolvedValue({ events: [event({ start: `${DAY}T11:00:00` })], sources: [] });
+      await loadCalendarRange(DAY_KEY);
+      expect(currentCalendarEvent('ev-1')?.start).toBe(`${DAY}T11:00:00`);
+      clock.mockReturnValue(300);
+      mocks.listCalendarEvents.mockResolvedValue({ events: [], sources: [] });
+      await loadCalendarRange(DAY_KEY, true);
+      expect(currentCalendarEvent('ev-1')).toBeUndefined();
+      expect(getCalendarRange(WEEK_KEY).events).toHaveLength(1);
+    } finally { clock.mockRestore(); }
+  });
 
   it('fetches one range ONCE however many surfaces ask for it', async () => {
     const held = deferred<{ events: CalendarEvent[]; sources: [] }>()

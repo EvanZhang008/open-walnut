@@ -81,7 +81,9 @@ export function tasksToCalendarItems(tasks: Task[], from: string, to: string): C
     if (DONE_PHASES.has(t.phase)) continue;
     if (t.start_date) {
       const d = dayOf(t.start_date);
-      if (d >= from && d <= to) items.push(taskItem('task-start', t, t.start_date));
+      if (d <= to && (d >= from || (t.start_date.includes('T') && t.end_date?.includes('T') && t.end_date > `${from}T00:00:00`))) {
+        items.push(taskItem('task-start', t, t.start_date));
+      }
     }
     if (t.due_date) {
       const d = dayOf(t.due_date);
@@ -89,6 +91,30 @@ export function tasksToCalendarItems(tasks: Task[], from: string, to: string): C
     }
   }
   return items;
+}
+
+export function timeGridItems(items: CalendarItem[], days: string[], endMinute: number): CalendarItem[] {
+  const projected: CalendarItem[] = [];
+  const ordinal = (value: string) => {
+    const [year, month, date] = dayOf(value).split('-').map(Number);
+    return Date.UTC(year, month - 1, date) / 86_400_000;
+  };
+  const dates = days.map(day => ({ day, ordinal: ordinal(day) }));
+  for (const item of items) {
+    const itemDay = ordinal(item.when);
+    const end = item.kind === 'event' ? item.event.end : item.kind === 'task-start' ? item.task.end_date : undefined;
+    const itemEnd = end?.includes('T') ? ordinal(end) * 1440 + minutesOfDay(end) : itemDay * 1440 + item.endMin;
+    for (const { day, ordinal: dayOrdinal } of dates) {
+      if (item.allDay) {
+        if (item.day === day) projected.push(item);
+        continue;
+      }
+      const startMin = item.startMin + (itemDay - dayOrdinal) * 1440;
+      const endMin = itemEnd - dayOrdinal * 1440;
+      if (startMin < endMinute && endMin > 0) projected.push({ ...item, day, startMin, endMin });
+    }
+  }
+  return projected;
 }
 
 /** Events → items (Phase 2). Multi-day events are clamped per rendered day by the views. */

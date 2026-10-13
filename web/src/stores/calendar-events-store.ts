@@ -245,12 +245,24 @@ function keepHidden(next: CalendarEvent, prev: CalendarEvent): CalendarEvent {
   return !!hidden === !!next.hidden ? next : { ...next, hidden: !!hidden };
 }
 
-function findEvent(id: string): CalendarEvent | undefined {
-  for (const entry of entries.values()) {
+export function currentCalendarEvent(id: string): CalendarEvent | undefined {
+  let newest: CalendarEvent | undefined;
+  let newestAt = -1;
+  for (const [key, entry] of entries) {
     const found = entry.events.find((e) => e.id === id);
-    if (found) return found;
+    const at = loadedAt.get(key) ?? 0;
+    if (found && at >= newestAt) { newest = found; newestAt = at; }
   }
-  return undefined;
+  if (newest) {
+    const startDay = newest.start.slice(0, 10);
+    const endDay = (newest.end || newest.start).slice(0, 10);
+    for (const [key, entry] of entries) {
+      const { from, to } = splitKey(key);
+      if ((loadedAt.get(key) ?? 0) > newestAt && startDay <= to && endDay >= from &&
+        !entry.events.some(event => event.id === id)) return undefined;
+    }
+  }
+  return newest;
 }
 
 function dropEvent(id: string): void {
@@ -395,7 +407,7 @@ const visibility = createEventVisibility({
     const failure = {
       id,
       hidden,
-      title: findEvent(id)?.title ?? '',
+      title: currentCalendarEvent(id)?.title ?? '',
       message: error instanceof Error ? error.message : String(error),
     };
     for (const fn of [...visibilityFailureSubs]) fn(failure);
@@ -406,7 +418,7 @@ const visibility = createEventVisibility({
 
 /** Hide or show one event in every range at once; resolves when its writes settle. */
 export function setCalendarEventHidden(id: string, hidden: boolean): Promise<void> {
-  return visibility.set(id, hidden, !!findEvent(id)?.hidden);
+  return visibility.set(id, hidden, !!currentCalendarEvent(id)?.hidden);
 }
 
 // ── calendar visibility ──
