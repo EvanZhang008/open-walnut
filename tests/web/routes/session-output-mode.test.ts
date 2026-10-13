@@ -66,7 +66,7 @@ import type { SessionOutputMode } from '../../../src/core/types.js'
 import {
   RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_OFF_INSTRUCTION,
   RICH_OUTPUT_MODE_REMINDER, resolveOutputModeDirective, resolveEffectiveOutputMode,
-  stripOutputModeWrappers,
+  stripOutputModeWrappers, applyOutputModeDirective,
 } from '../../../src/core/sessions/output-mode.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import {
@@ -207,7 +207,18 @@ describe('resolveOutputModeDirective', () => {
     expect(RICH_OUTPUT_MODE_OFF_INSTRUCTION).not.toContain('\n')
     // The reminder rides EVERY message, so it stays one short line.
     expect(RICH_OUTPUT_MODE_REMINDER).not.toContain('\n')
-    expect(RICH_OUTPUT_MODE_REMINDER.length).toBeLessThan(120)
+    expect(RICH_OUTPUT_MODE_REMINDER.length).toBeLessThan(300)
+  })
+
+  it('repeats the inline delivery contract even after the initial instruction is compacted', () => {
+    for (const s of [RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER]) {
+      expect(s).toMatch(/directly in (?:your|this) reply/)
+      expect(s).toMatch(/files?|screenshots?/)
+      expect(s).toMatch(/unless (?:the user asks|requested)/)
+      expect(s).toMatch(/blank lines/)
+    }
+    const afterCompact = resolveOutputModeDirective({ output_mode: 'rich', output_mode_injected: 'rich' })
+    expect(applyOutputModeDirective(afterCompact, 'Show a diagram')).toContain('raw HTML directly in this reply')
   })
 
   it('says markdown FIRST, and names what HTML is actually for', () => {

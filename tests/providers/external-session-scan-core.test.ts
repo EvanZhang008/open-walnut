@@ -733,7 +733,11 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
       outputModeInstruction: OUTPUT_MODE_INSTRUCTION_MARKER,
       outputModeReminder: OUTPUT_MODE_REMINDER_MARKER,
     })
-    expect(RICH_OUTPUT_MODE_REMINDER).toBe(REMINDER)
+    // Legacy wrappers remain in transcripts; current wording may change while
+    // the provenance marker stays stable.
+    expect(REMINDER.startsWith(OUTPUT_MODE_REMINDER_MARKER)).toBe(true)
+    writeJsonl(file('current-reminder'), [user('current-reminder', 'continue\n\n' + RICH_OUTPUT_MODE_REMINDER), reply()])
+    expect((await scan()).candidates).toEqual([])
   })
 })
 

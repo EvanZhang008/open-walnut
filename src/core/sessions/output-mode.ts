@@ -11,7 +11,8 @@
  *   · STANDING (rich holds): a one-line reminder on every later send. A one-shot
  *     instruction measurably decays — the model writes HTML for the turn that
  *     carried it and drifts back to plain markdown a turn or two later. The
- *     reminder costs ~15 tokens. Markdown mode appends NOTHING, so a session on
+ *     reminder repeats the inline delivery contract even after compaction.
+ *     Markdown mode appends NOTHING, so a session on
  *     plain markdown still pays exactly zero.
  *
  * BOTH land AFTER the user's text (recency helps, and the human's words stay
@@ -66,7 +67,9 @@ export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
   + '(headings, lists, tables, code blocks), and mix raw HTML into the same reply (separated by a blank line) '
   + 'for what markdown cannot express: colour that carries meaning, diagrams (inline <svg>), '
   + 'side-by-side or card layout, and interactivity (<details>, CSS :checked). The client renders it natively '
-  + 'while streaming. Set text and background colour together or neither: a custom background with '
+  + 'while streaming. Write visual HTML directly in your reply, not in a file, screenshot, or HTML code fence, '
+  + 'unless the user asks for one. Keep each widget contiguous, without internal blank lines. '
+  + 'Set text and background colour together or neither: a custom background with '
   + 'inherited or muted text loses contrast (theme vars --fg, --fg-muted, --bg-secondary, --border always fit). '
   + 'For anything needing <script>, emit a ```html-app fenced block '
   + '(rendered in a sandboxed iframe). A short answer needs none of this. '
@@ -92,7 +95,8 @@ export const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
  *  (colour, diagrams, layout markdown has no shape for) is what makes the line
  *  steer instead of just remind (reported 2026-09-03). */
 export const RICH_OUTPUT_MODE_REMINDER =
-  `${OUTPUT_MODE_REMINDER_MARKER} — markdown first; add HTML only for colour, diagrams, or layout markdown can't do.]`;
+  `${OUTPUT_MODE_REMINDER_MARKER}: markdown first; for colour, diagrams, or layout, write raw HTML directly in this reply. `
+  + 'No files, screenshots, or HTML code fences unless requested (html-app for scripts); no blank lines inside a widget.]';
 
 /** The style a model uses when nothing has been said to it. Compared against the
  *  effective mode to decide whether an edge is owed — deliberately NOT

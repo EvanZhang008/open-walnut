@@ -7,6 +7,8 @@ description: Write replies as rich HTML that the Walnut web console and iOS app 
 
 The Walnut web console and the iOS app both render raw HTML in an assistant reply as real DOM, streaming it like markdown. You do not need a special syntax or a wrapper: write `<div>`, `<style>`, `<svg>`, `<details>` in the reply and they render. Markdown still works alongside, so use HTML only where it earns its place.
 
+**Write visual HTML directly in the reply.** Do not replace it with an HTML file, a screenshot, or an HTML code fence unless the user explicitly requests that artifact. Use `html-app` only for JavaScript islands. Keep internal widget lines contiguous; separate the widget from surrounding markdown with blank lines.
+
 **Do not wrap the whole reply in one container.** Write each block at the top level of the reply, the way you write paragraphs. A single `<div>` around everything is not free: it keeps one element open from the first line to the last, which makes the entire reply one streaming block instead of many, and CommonMark then swallows the line right after the opening tag (a `## Heading` there renders as literal `## Heading`). The client strips a bare wrapper it can prove is ceremony, but a wrapper with attributes is taken at face value.
 
 ## Markdown first, HTML for what markdown cannot express

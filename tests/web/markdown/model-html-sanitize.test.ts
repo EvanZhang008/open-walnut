@@ -189,6 +189,79 @@ describe('a blank line inside an open element', () => {
     expect(html).toContain('</g>');
   });
 
+  it('renders indented HTML cards after blank lines inside a layout', () => {
+    const cards = [
+      '<section class="cards">',
+      '  <div class="row">',
+      '    <div class="first"><b>First</b></div>',
+      '',
+      '    <div class="second">',
+      '      <b>Second</b>',
+      '    </div>',
+      '',
+      '    <div class="third">Third</div>',
+      '  </div>',
+      '</section>',
+    ].join('\n');
+    const html = renderChunk(cards);
+    expect(html).toContain('<div class="second">');
+    expect(html).toContain('<div class="third">');
+    expect(html).not.toMatch(/<pre|&lt;div/);
+  });
+
+  it.each([
+    '<section>\n    <div>First</div>\n\n## More cards\n\n    <div class="second">Second</div>\n</section>',
+    '<section>\n    <div>First</div>\n\n    <!-- Second card -->\n    <div class="second">Second</div>\n</section>',
+  ])('keeps layout HTML after prose or an indented comment', (text) => {
+    const html = renderChunk(text);
+    expect(html).toContain('<div class="second">');
+    expect(html).not.toContain('&lt;div');
+    expect(html).not.toContain('<pre>');
+  });
+
+  it('renders semantic layout tags after a paragraph break', () => {
+    const html = renderChunk('<section class="card">\nIntro\n\n    <header>Title</header>\n    <main>Body</main>\n    <footer>Footer</footer>\n</section>');
+    expect(html).toContain('<header>Title</header>');
+    expect(html).toContain('<footer>Footer</footer>');
+    expect(html).not.toContain('<pre>');
+  });
+
+  it('normalizes a layout tag while its attributes are still arriving', () => {
+    const text = '<section class="cards">\nTitle\n\n    <div class="card" style="padding:';
+    expect(collapseHtmlBlankLines(text)).toBe(text.replace('    <div', '<div'));
+  });
+
+  it('keeps indented style rules intact inside a layout', () => {
+    const text = '<div class="widget">\nContent\n\n    <style>\n    .widget { color:red }\n\n    .widget b { color:blue }\n    </style>\n</div>';
+    const html = renderChunk(text);
+    expect(html).toContain('.widget b { color:blue }');
+    expect(html).not.toContain('&lt;/style');
+    expect(html).not.toContain('<pre>');
+  });
+
+  it('keeps an isolated indented inline-control sample as code', () => {
+    const text = '<div class="explanation">\nExample:\n\n    <input type="checkbox" checked>\n</div>';
+    const html = renderChunk(text);
+    expect(html).toContain('&lt;input');
+    expect(html).toContain('<pre>');
+  });
+
+  it('preserves paragraphs and code samples next to a rich layout', () => {
+    const samples = [
+      '<div class="card">\nTitle\n\nFirst paragraph.\n\nSecond paragraph.\n</div>',
+      '<div>\n<pre>\n    <div>sample</div>\n\n    <div>sample two</div>\n</pre>\n</div>',
+      '<div>\n<textarea>\n    <div>sample</div>\n\n    <div>sample two</div>\n</textarea>\n</div>',
+      '```html\n<div>\n    <div>sample</div>\n\n    <div>sample two</div>\n</div>\n```',
+      '    <div>sample</div>\n\n    <div>sample two</div>',
+      '<div>\nTitle\n\n    const value = 1;\n\n    console.log(value);\n</div>',
+    ];
+    for (const sample of samples) expect(collapseHtmlBlankLines(sample)).toBe(sample);
+    expect(renderChunk(samples[0])).toContain('<p>First paragraph.</p>');
+    expect(renderChunk(samples[0])).toContain('<p>Second paragraph.</p>');
+    expect(renderChunk(samples[3])).toContain('&lt;div');
+    expect(renderChunk(samples[4])).toContain('&lt;div');
+  });
+
   it('keeps a blank line that separates two top-level blocks', () => {
     // Only blank lines INSIDE an open element are removed; ordinary prose
     // paragraphs must still be two paragraphs.

@@ -112,7 +112,10 @@ function mockFrozenHistory(page: Page) {
 }
 
 async function openSession(page: Page) {
-  await page.goto(`/sessions?id=${SESSION_ID}`);
+  // Enter through a real deep-link click, then let the SPA open the home column.
+  const origin = test.info().project.use.baseURL;
+  await page.setContent(`<a href="${origin}/sessions?id=${SESSION_ID}">Open session</a>`);
+  await page.getByRole('link', { name: 'Open session', exact: true }).click();
   await page.waitForLoadState('networkidle');
   await waitForWs(page);
   await page.waitForSelector('.session-msg', { timeout: 15000 });
@@ -778,6 +781,66 @@ test.describe('Rich HTML streaming', () => {
     mkdirSync(SHOT_DIR, { recursive: true });
     await page.screenshot({ path: `${SHOT_DIR}/svg-blank-line.png` });
     await expect(page.locator('body')).not.toContainText('Something went wrong rendering the page.');
+  });
+
+  test('a rescued script stays sandboxed and a fenced script sample stays inert', async ({ page }) => {
+    await mockFrozenHistory(page);
+    await mockSessionDetail(page);
+    await openSession(page);
+    const text = '<div class="mixed-island">\n```html\n<script>window.sampleRan=true</script>\n```\n\n    <script>document.body.dataset.widgetReady="yes";</script>\n</div>';
+    await streamDeltas(page, text + '\n\nIsland complete.');
+    const iframe = page.locator('.session-history iframe.rich-island');
+    await expect(iframe).toHaveAttribute('sandbox', 'allow-scripts');
+    expect(await iframe.evaluate((el) => (el as HTMLIFrameElement).contentDocument)).toBeNull();
+    const frame = await iframe.elementHandle().then((handle) => handle!.contentFrame());
+    await expect.poll(() => frame!.evaluate(() => document.body.dataset.widgetReady)).toBe('yes');
+    expect(await frame!.evaluate(() => (window as any).sampleRan)).toBeUndefined();
+    await expect(frame!.locator('pre code')).toContainText('<script>window.sampleRan=true</script>');
+  });
+
+  test('indented cards stay HTML while streaming and after history reload', async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
+    await page.setViewportSize({ width: 1200, height: 900 });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await mockSessionDetail(page);
+    let archived = false;
+    const cards = Array.from({ length: 12 }, (_, i) => [
+      '    <div class="layout-card" style="flex:1;min-width:190px;border:1px solid var(--border);border-radius:10px;padding:12px">',
+      `      <b>Stage ${i + 1}</b><p>Layout card ${i + 1}: nested HTML remains visible.</p>`,
+      '    </div>',
+    ].join('\n')).join('\n\n    <!-- Next layout card -->\n');
+    const widget = `<section class="layout-demo" style="background:var(--bg-secondary);color:var(--fg);padding:16px;border-radius:12px">\n  <h3>Inline layout</h3>\n  <div style="display:flex;flex-wrap:wrap;gap:12px">\n${cards}\n  </div>\n  <details class="layout-details"><summary>More context</summary><p>Interactive content stays open.</p></details>\n</section>`;
+    const reply = `${widget}\n\nLAYOUT-TAIL-ONE\n\n\`\`\`html\n<div>Code sample, not a widget</div>\n\`\`\`\n\n<pre class="layout-pre">line one\n\n    line three</pre>\n\nLAYOUT-DONE`;
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, (route) => {
+      const messages = archived ? [...base, { role: 'assistant', text: reply, timestamp: new Date().toISOString() }] : base;
+      return route.fulfill({ json: { messages, cursor: messages.length, delta: false } });
+    });
+    await openSession(page);
+    const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`);
+    const history = panel.locator('.session-history');
+    await streamDeltas(page, widget + '\n\nLAYOUT-TAIL-ONE');
+    await expect(history.locator('.layout-card')).toHaveCount(12);
+    await expect(history.locator('.layout-card').last()).toBeVisible();
+    await expect(history.locator('.layout-demo pre')).toHaveCount(0);
+    await expect(history.locator('.layout-demo .layout-card')).toHaveCount(12);
+    await history.locator('.layout-details summary').click();
+    await expect(history.locator('.layout-details')).toHaveAttribute('open', '');
+    await streamDeltas(page, reply.slice((widget + '\n\nLAYOUT-TAIL-ONE').length));
+    await expect(history).toContainText('LAYOUT-DONE');
+    await expect(history.locator('.layout-details')).toHaveAttribute('open', '');
+    await expect(history.locator('pre code')).toHaveCount(1);
+    await expect(history.locator('.layout-pre')).toHaveText('line one\n\n    line three');
+    archived = true;
+    await page.reload();
+    await expect(panel.locator('.layout-card')).toHaveCount(12);
+    await expect(panel.locator('.layout-demo pre')).toHaveCount(0);
+    await expect(panel.locator('pre code')).toHaveCount(1);
+    await expect(panel.locator('.layout-pre')).toHaveText('line one\n\n    line three');
+    await panel.locator('.layout-demo').scrollIntoViewIfNeeded();
+    mkdirSync(SHOT_DIR, { recursive: true });
+    await page.screenshot({ path: `${SHOT_DIR}/indented-layout-${testInfo.project.name}.png`, scale: 'css' });
+    expect(errors).toEqual([]);
   });
 
   /**

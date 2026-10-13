@@ -495,8 +495,14 @@ describe('hasRichContent', () => {
     expect(hasRichContent('plain **markdown** and 3 < 5')).toBe(false);
   });
 
-  it('is true for any real tag, even in code', () => {
-    expect(hasRichContent('a `<div>` sample')).toBe(true);
+  it('keeps explicit html-app fences on the rich path, including unfinished ones', () => {
+    expect(hasRichContent('```html-app\n<div>')).toBe(true);
+    expect(hasRichContent('```html-app\nplain text\n```')).toBe(true);
+  });
+
+  it('ignores code samples and still finds later real markup', () => {
+    expect(hasRichContent('a `<div>` sample')).toBe(false);
+    expect(hasRichContent('```html\n<!--\n```\n\n<style>.card{color:red}</style>\n<div class="card">Card</div>')).toBe(true);
     expect(hasRichContent('closing only: </div>')).toBe(true);
   });
 });
@@ -705,6 +711,99 @@ describe('collapseHtmlBlankLines', () => {
     const out = collapseHtmlBlankLines(SVG_TWO_COLUMN);
     expect(out).not.toMatch(/\n[ \t]*\n/);
     expect(out).toBe(SVG_TWO_COLUMN.split('\n').filter((l) => l !== '').join('\n'));
+  });
+
+  it.each(['    ', '\t', '  \t'])('normalizes indented layout tags without merging paragraphs (%j)', (indent) => {
+    const card = `<div class="cards">\n${indent}<div>First</div>\n\n${indent}<div>Second</div>\n\n${indent}<div>Third</div>\n</div>`;
+    const expected = card.replace(/^(?: {4,}| {0,3}\t)[ \t]*(?=<)/gm, '');
+    expect(collapseHtmlBlankLines(card)).toBe(expected);
+    expect(collapseHtmlBlankLines(expected)).toBe(expected);
+    const split = splitRichChunks(card);
+    expect(split.stable.map((c) => c.text).join('') + (split.tail?.text ?? '')).toBe(card);
+    for (let n = 1; n < card.length; n++) {
+      const prefix = splitRichChunks(card.slice(0, n));
+      expect(split.stable.slice(0, prefix.stable.length)).toEqual(prefix.stable);
+    }
+  });
+
+  it('keeps paragraph gaps while rescuing an indented HTML closing tag', () => {
+    const card = '<div>\nTitle\n\nBody text.\n\n    </div>';
+    expect(collapseHtmlBlankLines(card)).toBe('<div>\nTitle\n\nBody text.\n\n</div>');
+  });
+
+  it('keeps a nested multiline card and footer inside one chunk at every prefix', () => {
+    const widget = '<div class="widget">\nHeader\n\n    <div class="pane">\n      Body\n    </div>\n\n<div class="footer">Footer</div>\n</div>';
+    const full = widget + '\n\nTail\n\nDone';
+    const split = splitRichChunks(full);
+    expect(split.stable[0].text).toBe(widget + '\n\n');
+    for (let n = 1; n <= full.length; n++) {
+      const prefix = splitRichChunks(full.slice(0, n));
+      expect(split.stable.slice(0, prefix.stable.length)).toEqual(prefix.stable);
+    }
+  });
+
+  it('routes an indented script in a layout into a sandboxed app chunk', () => {
+    const text = '<div class="calc">\n<button>Calculate</button>\n\n    <script>document.querySelector("button").onclick=()=>{};</script>\n</div>';
+    expect(splitRichChunks(text).tail?.kind).toBe('app');
+  });
+
+  it('does not close pre on a closing-tag string in a comment', () => {
+    const text = 'Output:\n\n<pre><!-- </pre> -->\n\nSecond line\n</pre>\n\nDone.';
+    expect(allChunks(text)[1].text).toBe('<pre><!-- </pre> -->\n\nSecond line\n</pre>\n\n');
+  });
+
+  it('preserves indented HTML examples directly inside disclosure or quote blocks', () => {
+    for (const tag of ['details', 'blockquote']) {
+      const text = `<${tag}>\n\n    <div class="example">Copy this markup</div>\n\n</${tag}>`;
+      expect(collapseHtmlBlankLines(text)).toBe(text);
+    }
+  });
+
+  it('does not promote nested indented script samples into executable islands', () => {
+    for (const text of [
+      '<details>\n\n    <div>\n\n        <script>window.example=1</script>\n\n    </div>\n\n</details>',
+      '    <section>\n    <div>\n\n        <script>window.example=1</script>\n\n    </div>\n    </section>',
+      '<section>\n\n1. Sample\n\n    ```html\n    <div>literal</div>\n    ```\n\n</section>',
+      '<section>\nExample:\n\n    <span>\n        <script>window.example=1</script>\n    </span>\n</section>',
+    ]) {
+      expect(collapseHtmlBlankLines(text)).toBe(text);
+      expect(allChunks(text).some((c) => c.kind === 'app')).toBe(false);
+    }
+  });
+
+  it('ignores script-shaped text inside a comment or textarea', () => {
+    for (const content of ['    <!-- <script>sample</script> -->', '    <textarea><script>sample</script></textarea>']) {
+      expect(splitRichChunks(`<section>\n\n${content}\n</section>`).tail?.kind).toBe('html');
+    }
+  });
+
+  it('normalizes a nested card before dropping a transparent wrapper', () => {
+    const text = '<div>\n  <div class="card">First</div>\n\n    <div class="card">Second</div>\n</div>';
+    expect(stripTransparentWrapper(text)).toBe('  <div class="card">First</div>\n\n<div class="card">Second</div>\n');
+  });
+
+  it('keeps fenced script samples inert in a mixed island', () => {
+    const text = '<div class="demo">\n```html\n<script>window.sample=1</script>\n```\n\n    <script>window.widget=1</script>\n</div>';
+    const chunk = splitRichChunks(text).tail!;
+    expect(chunk.kind).toBe('app');
+    const html = extractAppHtml(chunk);
+    expect(html).toContain('&lt;script&gt;window.sample=1&lt;/script&gt;');
+    expect(html).not.toContain('<script>window.sample=1</script>');
+    expect(html).toContain('<script>window.widget=1</script>');
+  });
+
+  it('drops only the transparent outer closing line, not nested tags or textarea text', () => {
+    const text = '<div>\n<textarea>\n</div>\nKeep this text\n</textarea>\n</div>';
+    expect(stripTransparentWrapper(text)).toBe('<textarea>\n</div>\nKeep this text\n</textarea>\n');
+    const nested = '<div>\n<div class="card">\nContent\n</div>\n</div>';
+    expect(stripTransparentWrapper(nested)).toBe('<div class="card">\nContent\n</div>\n');
+  });
+
+  it('preserves pre and textarea bodies with markup-shaped indented content', () => {
+    for (const tag of ['pre', 'textarea']) {
+      const text = `<div>\n<${tag}>\n    <div>First</div>\n\n    <div>Second</div>\n</${tag}>\n</div>`;
+      expect(collapseHtmlBlankLines(text)).toBe(text);
+    }
   });
 
   it('keeps a blank line inside a <div> — a paragraph is legal there', () => {

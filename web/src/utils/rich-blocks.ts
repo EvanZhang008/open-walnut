@@ -81,11 +81,9 @@ const COLLAPSIBLE_RAWTEXT = new Set(['style', 'script']);
  * text jumps above the widget it belonged to.
  *
  * Deliberately ABSENT: `div`, `section`, `td`, `li`, `blockquote`, `details` and
- * friends. A `<p>` is legal inside those, so the blank line ends the HTML block and
- * the browser still assembles what the model meant — nothing is destroyed, and
- * deleting the blank line there would silently merge two paragraphs the model
- * wrote on purpose. `pre` is absent for the stronger reason that a blank line in it
- * is content.
+ * friends. A `<p>` is legal inside those, so prose paragraph gaps must stay.
+ * collapseHtmlBlankLines separately normalizes indented layout tags, which would
+ * otherwise become code even in a `<div>`. `pre` is absent because its gaps are content.
  */
 const NO_PARAGRAPH_CHILDREN = new Set([
   // SVG containers (names arrive lowercased, so `clipPath` reads as `clippath`).
@@ -167,6 +165,11 @@ const BLOCK_TAGS = new Set([
   'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'details', 'figure', 'hr',
 ]);
 
+const LAYOUT_TAGS = new Set([
+  ...BLOCK_TAGS, 'address', 'aside', 'center', 'fieldset', 'figcaption', 'footer',
+  'header', 'hgroup', 'main', 'nav', 'summary',
+]);
+
 const TAG_NAME_RE = /^<(\/?)([a-zA-Z][a-zA-Z0-9:-]*)/;
 
 /** `<https://x>`, `<mailto:a@b>` — a markdown autolink, not an element. */
@@ -243,16 +246,17 @@ function inSortedRanges(sorted: [number, number][], count: number, at: number): 
  * terminated its code ranges are final. The only mutable region is the last,
  * still-growing line — which is always after every boundary we evaluate.
  */
-function codeRanges(text: string): [number, number][] {
+function codeRanges(text: string, includeIndented = true): [number, number][] {
   const ranges: [number, number][] = [];
   let fence: { char: string; len: number; start: number } | null = null;
   let prevBlank = true;
+  let indented = false;
   let pos = 0;
   for (const line of text.split('\n')) {
     const start = pos;
     const end = start + line.length;
     pos = end + 1; // consumed '\n'
-    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    const f = (includeIndented ? /^ {0,3}(`{3,}|~{3,})/ : /^[ \t]*(`{3,}|~{3,})/).exec(line);
     if (fence) {
       if (f && f[1][0] === fence.char && f[1].length >= fence.len) {
         ranges.push([fence.start, end]);
@@ -261,8 +265,13 @@ function codeRanges(text: string): [number, number][] {
       continue;
     }
     if (f) { fence = { char: f[1][0], len: f[1].length, start }; prevBlank = false; continue; }
-    if (prevBlank && /^ {4,}\S/.test(line)) ranges.push([start, end]);
-    prevBlank = line.trim() === '';
+    const blank = line.trim() === '';
+    const codeIndent = /^(?: {4}| {0,3}\t)/.test(line);
+    if (includeIndented && codeIndent && (prevBlank || indented)) {
+      ranges.push([start, end]);
+      indented = true;
+    } else if (!blank) indented = false;
+    prevBlank = blank;
   }
   if (fence) ranges.push([fence.start, text.length]);
 
@@ -286,8 +295,8 @@ function codeRanges(text: string): [number, number][] {
  * Built once per split and then queried once per `<` — with a linear scan that
  * product is what dominated the split cost on a long reply.
  */
-function makeSkip(text: string): (index: number) => boolean {
-  const ranges = codeRanges(text).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+function makeSkip(text: string, includeIndented = true): (index: number) => boolean {
+  const ranges = codeRanges(text, includeIndented).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const merged: [number, number][] = [];
   for (const [s, e] of ranges) {
     const last = merged[merged.length - 1];
@@ -344,18 +353,22 @@ function scanHtmlState(
   text: string,
   lines: LineSpan[],
   skip: (index: number) => boolean,
+  explicitSkip = makeSkip(text, false),
 ): { depth: number[]; blocked: boolean[]; inner: string[]; endDepth: number; truncated: boolean } {
+  // Inside open markup, indentation belongs to the HTML layout. Fences/inline
+  // code and top-level indented samples remain code on both render and split paths.
   const depth = new Array<number>(lines.length).fill(0);
   const blocked = new Array<boolean>(lines.length).fill(false);
   const inner = new Array<string>(lines.length).fill('');
   const stack: string[] = [];
+  let preDepth = -1;
   let cursor = 0;
 
   /** Record state for every line starting at or before `pos`. */
   const assign = (pos: number, isBlocked: boolean): void => {
     while (cursor < lines.length && lines[cursor].start <= pos) {
       depth[cursor] = stack.length;
-      blocked[cursor] = isBlocked;
+      blocked[cursor] = isBlocked || preDepth >= 0;
       inner[cursor] = stack[stack.length - 1] ?? '';
       cursor++;
     }
@@ -369,7 +382,10 @@ function scanHtmlState(
   /** `</name>` unwinds to the nearest matching open element, or is ignored. */
   const popTo = (name: string): void => {
     const at = stack.lastIndexOf(name);
-    if (at >= 0) stack.length = at;
+    if (at >= 0) {
+      stack.length = at;
+      if (preDepth >= at) preDepth = -1;
+    }
   };
   /** HTML5 implicit end tags, restricted to the shapes replies actually write. */
   const closeImplied = (name: string): void => {
@@ -387,7 +403,34 @@ function scanHtmlState(
     const lt = text.indexOf('<', i);
     if (lt < 0) break;
     assign(lt, false); // state at a line that STARTS with this '<' is the pre-tag state
-    if (skip(lt)) { i = lt + 1; continue; }
+    const inExample = preDepth >= 0 || top() === 'details' || top() === 'blockquote';
+    const code = skip(lt);
+    const tagHint = TAG_NAME_RE.exec(text.slice(lt, lt + 64));
+    const layout = tagHint && (LAYOUT_TAGS.has(tagHint[2].toLowerCase())
+      || NO_PARAGRAPH_CHILDREN.has(tagHint[2].toLowerCase())
+      || RAWTEXT_TAGS.has(tagHint[2].toLowerCase())
+      || /^[^>]*\s(?:class|style)=/.test(text.slice(lt, lt + 128)))
+      || text.startsWith('<!--', lt);
+    if (explicitSkip(lt)) { i = lt + 1; continue; }
+    const lineStart = text.lastIndexOf('\n', lt - 1) + 1;
+    const previousStart = text.lastIndexOf('\n', lineStart - 2) + 1;
+    const startsExample = !layout && text.slice(previousStart, lineStart).trim() === '';
+    if (code && (stack.length === 0 || inExample || startsExample)) {
+      // Once an indented example starts, all of its continuation lines belong
+      // to that example, even when a later line names a layout or script tag.
+      let end = text.indexOf('\n', lt);
+      if (end < 0) end = text.length;
+      while (end < text.length) {
+        const next = text.indexOf('\n', end + 1);
+        const lineEnd = next < 0 ? text.length : next;
+        const line = text.slice(end + 1, lineEnd);
+        if (line.trim() !== '' && !/^(?: {4}| {0,3}\t)/.test(line)) break;
+        end = lineEnd;
+      }
+      assign(end, true);
+      i = end + 1;
+      continue;
+    }
 
     if (text.startsWith('<!--', lt)) {
       const close = text.indexOf('-->', lt + 4);
@@ -422,6 +465,7 @@ function scanHtmlState(
     closeImplied(name);
     if (VOID_TAGS.has(name) || /\/\s*>$/.test(raw)) continue;
     stack.push(name);
+    if (name === 'pre' && preDepth < 0) preDepth = stack.length - 1;
 
     if (RAWTEXT_TAGS.has(name)) {
       const close = rawtextClose(text, end, name);
@@ -512,9 +556,43 @@ export function collapseRawtextBlankLines(text: string): string {
   return copied === 0 ? text : out + text.slice(copied);
 }
 
+/** HTML layout indentation is not a Markdown code sample; explicit samples stay code. */
+function normalizeHtmlIndentation(text: string): string {
+  if (!/(?:^|\n)(?: {4}| {0,3}\t)[ \t]*</.test(text)) return text;
+  const lines = lineSpans(text);
+  const skip = makeSkip(text);
+  const explicitSkip = makeSkip(text, false);
+  const { depth, blocked, inner } = scanHtmlState(text, lines, skip, explicitSkip);
+  let out = '';
+  let copied = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (depth[i] === 0 || blocked[i] || NO_PARAGRAPH_CHILDREN.has(inner[i])
+      || inner[i] === 'details' || inner[i] === 'blockquote') continue;
+    const { start, end } = lines[i];
+    const indent = /^(?: {4}| {0,3}\t)[ \t]*(?=<)/.exec(text.slice(start, end));
+    if (!indent) continue;
+    const at = start + indent[0].length;
+    if (explicitSkip(at)) continue;
+    const tag = TAG_NAME_RE.exec(text.slice(at, at + 64));
+    if (!text.startsWith('<!--', at)) {
+      if (!tag) continue;
+      const name = tag[2].toLowerCase();
+      // An isolated inline tag may be a Markdown code example, not a layout.
+      const close = tagEnd(text, at);
+      const raw = text.slice(at, close < 0 ? undefined : close);
+      if (!LAYOUT_TAGS.has(name) && !NO_PARAGRAPH_CHILDREN.has(name) && !RAWTEXT_TAGS.has(name)
+        && !/\s(?:class|style)=/.test(raw)) continue;
+      if (!isMarkupTag(raw, name)) continue;
+    }
+    out += text.slice(copied, start);
+    copied = at;
+  }
+  return copied === 0 ? text : out + text.slice(copied);
+}
+
 /**
- * Render-time entry point: delete the blank lines that would BREAK the model's
- * markup, and only those.
+ * Render-time entry point: normalize layout indentation and delete blank lines
+ * that would BREAK the model's markup, and only those.
  *
  * Reported 2026-09-01 (inc-1788285690198): a two-column SVG diagram drew its left
  * column and then printed its right column as a code block full of
@@ -529,17 +607,16 @@ export function collapseRawtextBlankLines(text: string): string {
  *   2. a blank line sitting directly inside an element that cannot hold a
  *      paragraph (NO_PARAGRAPH_CHILDREN — SVG containers, table/list structure).
  *
- * Everywhere else the blank line stays. Inside a `<div>` or a `<td>` a paragraph is
- * legal, so ending the HTML block there costs nothing structurally and the browser
- * assembles what the model meant; deleting it would merge two paragraphs the model
- * wrote deliberately. `<pre>` keeps its blank lines because there they are content.
+ * First remove code-level indentation from layout tags inside open markup.
+ * This keeps cards as HTML even after a prose gap; the gap itself stays, so
+ * paragraphs, explicit samples and `<pre>` / `<textarea>` content keep their shape.
  *
  * Render-time ONLY, like the pass it wraps: boundary decisions must keep seeing the
  * text exactly as it arrived, or the prefix invariant moves and a frozen chunk
  * shifts.
  */
 export function collapseHtmlBlankLines(text: string): string {
-  const collapsed = collapseRawtextBlankLines(text);
+  const collapsed = collapseRawtextBlankLines(normalizeHtmlIndentation(text));
   if (!collapsed.includes('<') || !/\n[ \t]*\r?\n/.test(collapsed)) return collapsed;
 
   const lines = lineSpans(collapsed);
@@ -547,14 +624,13 @@ export function collapseHtmlBlankLines(text: string): string {
   const { depth, blocked, inner } = scanHtmlState(collapsed, lines, skip);
 
   let out = '';
-  let copied = 0; // text before this index is already in `out`
+  let copied = 0;
   for (let i = 0; i < lines.length; i++) {
     const { start, end } = lines[i];
     if (collapsed.slice(start, end).trim() !== '') continue;
-    // `blocked` covers rawtext bodies (pass 1 owns those) and multi-line tags.
     if (depth[i] === 0 || blocked[i] || !NO_PARAGRAPH_CHILDREN.has(inner[i])) continue;
     out += collapsed.slice(copied, start);
-    copied = Math.min(end + 1, collapsed.length); // the line AND its newline go
+    copied = Math.min(end + 1, collapsed.length);
   }
   return copied === 0 ? collapsed : out + collapsed.slice(copied);
 }
@@ -676,24 +752,42 @@ function scanTagNames(text: string, skip: (index: number) => boolean, firstOnly:
     if (lt < 0) break;
     i = lt + 1;
     if (skip(lt)) continue;
+    if (text.startsWith('<!--', lt)) {
+      const close = text.indexOf('-->', lt + 4);
+      if (close < 0) break;
+      i = close + 3;
+      continue;
+    }
     const m = TAG_NAME_RE.exec(text.slice(lt, lt + 64));
     if (!m) continue;
     const end = tagEnd(text, lt);
     // A tag still arriving counts by what it has so far — the classification has
     // to be right from the first delta, not only once the `>` lands.
     const raw = end < 0 ? text.slice(lt) : text.slice(lt, end);
-    if (isMarkupTag(raw, m[2].toLowerCase())) {
+    const markup = isMarkupTag(raw, m[2].toLowerCase());
+    if (markup) {
       names.push(m[2].toLowerCase());
       if (firstOnly) return names;
     }
-    if (end > 0) i = end;
+    if (end > 0) {
+      i = end;
+      const name = m[2].toLowerCase();
+      if (markup && m[1] !== '/' && RAWTEXT_TAGS.has(name)) {
+        const close = rawtextClose(text, end, name);
+        if (!close) break;
+        i = close.end;
+      }
+    }
   }
   return names;
 }
 
 /** Tag names found outside code regions, lowercased (walnut ref tags excluded). */
 function rawTagNames(text: string): string[] {
-  return scanTagNames(text, makeSkip(text), false);
+  const normalized = collapseHtmlBlankLines(text);
+  const skip = makeSkip(normalized);
+  const explicitSkip = makeSkip(normalized, false);
+  return scanTagNames(normalized, (at) => skip(at) || explicitSkip(at), false);
 }
 
 function makeChunk(text: string): RichChunk {
@@ -706,7 +800,26 @@ function makeChunk(text: string): RichChunk {
 
 /** The HTML an `app` chunk should run: a fence's body, or the chunk as written. */
 export function extractAppHtml(chunk: RichChunk): string {
-  return appFence(chunk.text)?.body ?? chunk.text;
+  const app = appFence(chunk.text);
+  if (app) return app.body;
+  // A mixed island may contain Markdown examples. They remain text, never
+  // executable tags just because another part of the same layout has a script.
+  const lines = chunk.text.split('\n');
+  let fence: { char: string; len: number; lines: string[] } | null = null;
+  const out: string[] = [];
+  const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  for (const line of lines) {
+    const marker = /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (marker && marker[0] === fence.char && marker.length >= fence.len) {
+        out.push(`<pre><code>${escape(fence.lines.join('\n'))}</code></pre>`);
+        fence = null;
+      } else fence.lines.push(line);
+    } else if (marker) fence = { char: marker[0], len: marker.length, lines: [] };
+    else out.push(line);
+  }
+  if (fence) out.push(`<pre><code>${escape(fence.lines.join('\n'))}</code></pre>`);
+  return out.join('\n');
 }
 
 /**
@@ -754,8 +867,9 @@ export function endsMidConstruct(text: string): boolean {
  * (an autolink, `<user@host>`, `Array<T>`).
  */
 export function hasRichContent(text: string): boolean {
+  if (/^(?: {0,3})(?:`{3,}|~{3,})[ \t]*html-app\b/im.test(text)) return true;
   if (!text.includes('<')) return false;
-  return scanTagNames(text, () => false, true).length > 0;
+  return scanTagNames(text, makeSkip(text), true).length > 0;
 }
 
 /** Elements a reply opens out of habit. With no attributes each renders as a
@@ -805,17 +919,24 @@ export function stripTransparentWrapper(text: string): string {
 
   // Its closer is the line where the stack unwinds back past it. depth is the
   // state at a line's START, so the closing line still reads as depth 1.
-  const { depth } = scanHtmlState(text, lines, makeSkip(text));
+  const skip = makeSkip(text);
+  const { depth, blocked } = scanHtmlState(text, lines, skip);
   let close = -1;
   for (let i = open + 1; i < lines.length; i++) {
     if (depth[i] < 1) break; // already unwound: whatever closed it was not alone on a line
-    if (lineText(i) === `</${name}>`) { close = i; break; }
+    if (depth[i] === 1 && !blocked[i] && !skip(lines[i].start)
+      && lineText(i) === `</${name}>`) { close = i; break; }
   }
 
-  const head = text.slice(0, lines[open].start);
-  const bodyStart = Math.min(lines[open].end + 1, text.length);
-  if (close < 0) return head + text.slice(bodyStart); // still open: mid-stream
-  return head + text.slice(bodyStart, lines[close].start) + text.slice(Math.min(lines[close].end + 1, text.length));
+  // Normalize while the wrapper still supplies HTML context. Doing it after
+  // removal mistakes a formerly nested card for a top-level code sample.
+  const normalized = normalizeHtmlIndentation(text);
+  const normalizedLines = lineSpans(normalized);
+  const head = normalized.slice(0, normalizedLines[open].start);
+  const bodyStart = Math.min(normalizedLines[open].end + 1, normalized.length);
+  if (close < 0) return head + normalized.slice(bodyStart);
+  return head + normalized.slice(bodyStart, normalizedLines[close].start)
+    + normalized.slice(Math.min(normalizedLines[close].end + 1, normalized.length));
 }
 
 // ── Identity: one scope per MESSAGE, one key per chunk ────────────────────────
