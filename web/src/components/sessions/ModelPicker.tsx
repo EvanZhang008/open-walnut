@@ -12,7 +12,7 @@ import {
   normalizeSessionModelCatalogId,
 } from '@open-walnut/core';
 import type { SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
-import { fetchCodexModelCatalog, fetchEngineModelCatalog, fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
+import { fetchCodexModelCatalog, fetchEngineModelCatalog, getCachedEngineModelCatalog, getEngineModelCacheGeneration, subscribeEngineModelCache, fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
 import type { CodexModelInfo, SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
 import type { SessionEngine } from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -322,11 +322,13 @@ export function ModelPicker({
   // server probes the engine's adapter one-shot (GET /api/engines/:id/models)
   // so real models are pickable BEFORE launch — the current selection is the
   // caller's draft state (acpCurrentModelId prop), never the probe's default.
-  const [acpModels, setAcpModels] = React.useState<CodexModelInfo[] | null>(null);
+  const acpCacheGeneration = React.useSyncExternalStore(subscribeEngineModelCache, getEngineModelCacheGeneration);
+  const initialAcpCatalog = !sessionId ? getCachedEngineModelCatalog(engine, cwd) : null;
+  const [acpModels, setAcpModels] = React.useState<CodexModelInfo[] | null>(initialAcpCatalog?.models ?? null);
   const [acpCurrent, setAcpCurrent] = React.useState<string | undefined>(acpCurrentModelId);
   // The engine's RESOLVED default (probe currentModelId) — lets the draft's
   // "default" row say what the default actually is, not just that one exists.
-  const [acpDefaultModelId, setAcpDefaultModelId] = React.useState<string | undefined>(undefined);
+  const [acpDefaultModelId, setAcpDefaultModelId] = React.useState<string | undefined>(initialAcpCatalog?.currentModelId);
   const [acpLoading, setAcpLoading] = React.useState(false);
   const [acpError, setAcpError] = React.useState<string | null>(null);
   // Bumped by the error pane's Retry — refetches with ?refresh=1 so the
@@ -340,15 +342,14 @@ export function ModelPicker({
   // inline arrow, and any parent re-render while the picker is open would
   // otherwise re-fire the fetch and flash the list back to "Loading…".
   const hasAcpSwitch = !!onAcpSwitch;
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!isAcpPane || !hasAcpSwitch) return;
     let cancelled = false;
-    setAcpLoading(true);
+    const cached = !sessionId ? getCachedEngineModelCatalog(engine, cwd) : null;
+    setAcpModels(cached?.models ?? null);
+    setAcpLoading(!cached);
     setAcpError(null);
-    // Clear the previous engine's resolved default too — "Goose default
-    // (GPT Best)" after a codex→goose switch whose probe failed would be a
-    // confident wrong answer about what an untouched launch does.
-    setAcpDefaultModelId(undefined);
+    setAcpDefaultModelId(cached?.currentModelId);
     const wantRefresh = acpRetryRef.current;
     acpRetryRef.current = false;
     const pull = sessionId
@@ -365,14 +366,14 @@ export function ModelPicker({
     pull
       .catch((err: unknown) => {
         if (cancelled) return;
-        setAcpModels([]);
+        if (!cached) setAcpModels([]);
         // Draft probes fail for OPERATOR reasons (engine not installed, no
         // credentials) — show the adapter's own words, not a blank pane.
         if (!sessionId) setAcpError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => { if (!cancelled) setAcpLoading(false); });
     return () => { cancelled = true; };
-  }, [isAcpPane, sessionId, hasAcpSwitch, engine, cwd, acpRetryNonce]);
+  }, [isAcpPane, sessionId, hasAcpSwitch, engine, cwd, acpRetryNonce, acpCacheGeneration]);
 
   // ── Catalog: instant from the host-level cache (localStorage-seeded, WS-live
   // via useHostModelCatalog — the server pushes session:model-catalog on every
@@ -714,7 +715,7 @@ export function ModelPicker({
           <div className="model-picker-col-title">Model</div>
           {onAcpSwitch ? (
             <>
-              {acpFilterable && !acpLoading && !acpError && (
+              {acpFilterable && !acpLoading && (
                 <input
                   className="model-picker-filter"
                   type="text"
@@ -735,11 +736,9 @@ export function ModelPicker({
                 />
               )}
               {acpDefaultRow}
-              {acpLoading ? (
-                <div className="model-picker-status">Loading {engineUi.displayName} models…</div>
-              ) : acpError ? (
+              {acpError && (
                 <div className="model-picker-status">
-                  <div>Couldn't list {engineUi.displayName} models: {acpError}</div>
+                  <div>{acpListedFamilies.length ? `Couldn't refresh ${engineUi.displayName} models. Showing the last list: ${acpError}` : `Couldn't list ${engineUi.displayName} models: ${acpError}`}</div>
                   {!sessionId && (
                     <button
                       type="button"
@@ -752,8 +751,11 @@ export function ModelPicker({
                     </button>
                   )}
                 </div>
+              )}
+              {acpLoading ? (
+                <div className="model-picker-status">Loading {engineUi.displayName} models…</div>
               ) : acpListedFamilies.length === 0 ? (
-                <div className="model-picker-status">
+                !acpError && <div className="model-picker-status">
                   {acpNeedle
                     ? `No models match “${acpQuery.trim()}”.`
                     : `No ${engineUi.displayName} models ${sessionId ? 'reported by this session' : 'reported by the engine'}.`}

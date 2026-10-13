@@ -98,6 +98,11 @@ export function applyRevisedMessages<T extends RevisableLike>(
 interface RevisableLike {
   msgId?: string;
   unsettled?: boolean;
+  role?: string;
+  text?: string;
+  thinking?: string;
+  systemVariant?: string;
+  systemDetail?: string;
   tools?: { toolUseId?: string; result?: string; bgTaskFinished?: boolean }[];
 }
 
@@ -107,6 +112,9 @@ interface RevisableLike {
  * predicate reads — so this stays O(tools) instead of deep-comparing 5 KB tool results.
  */
 function revisionChangesRow(held: RevisableLike, next: RevisableLike): boolean {
+  // ACP text can grow while unsettled or become a system notice after an explicit retry.
+  if (held.role !== next.role || held.text !== next.text || held.thinking !== next.thinking
+    || held.systemVariant !== next.systemVariant || held.systemDetail !== next.systemDetail) return true;
   if (!!held.unsettled !== !!next.unsettled) return true;
   const a = held.tools ?? [];
   const b = next.tools ?? [];

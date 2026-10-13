@@ -486,6 +486,8 @@ export interface SessionPermissionResolvedEvent {
 }
 
 export interface SessionSystemEventPayload {
+  /** Exact interrupted response preserved in this notice's detail. */
+  replacesMsgId?: string;
   sessionId: string;
   taskId?: string;
   variant: 'compact' | 'error' | 'info';

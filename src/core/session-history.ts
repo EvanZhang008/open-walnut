@@ -646,9 +646,9 @@ export interface SessionHistoryMessage {
    *  line uuid. A question's anchor and meta are keyed by that uuid, so this is how
    *  the row is found again. Not a transcript line id: `msgId` stays `queue-…`. */
   sourceUuid?: string;
-  /** Set by the /history route (never by the parser): this row's CONTENT can still
-   *  change — an Agent/Task row awaiting its late `bgTaskFinished`, or a tool row
-   *  awaiting its result. The client re-asks for these ids on its next delta, which
+  /** This row's CONTENT can still change: the ACP fold marks its active text/thinking
+   *  segment; the /history route also marks an Agent/Task row awaiting its late
+   *  `bgTaskFinished`, or a tool row awaiting its result. The client re-asks for these ids on its next delta, which
    *  is the only way a prefix synced mid-flight ever gets corrected
    *  (inc-1785965937858). See src/core/history-delta.ts. */
   unsettled?: boolean;

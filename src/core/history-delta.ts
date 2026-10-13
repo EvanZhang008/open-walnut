@@ -122,6 +122,8 @@ export function resolveDeltaStart(
  */
 export interface RevisableRow {
   msgId?: string;
+  /** ACP's active text segment may still grow or become a retry notice. */
+  unsettled?: boolean;
   tools?: { toolUseId?: string; name?: string; result?: string; bgTaskFinished?: boolean }[];
 }
 
@@ -130,6 +132,7 @@ const LANE_TOOL_NAMES = new Set(['Task', 'Agent']);
 
 /** True when this row's content can still change after it is served. */
 export function isUnsettledRow(row: RevisableRow): boolean {
+  if (row.unsettled === true) return true;
   if (!row.tools || row.tools.length === 0) return false;
   return row.tools.some(t => {
     if (!t.toolUseId) return false;

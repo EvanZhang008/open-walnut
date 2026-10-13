@@ -398,7 +398,22 @@ export function promoteCompletedBlocks(
   finishedAgentIds?: ReadonlySet<string>,
 ): PromoteResult {
   const { absorbed, unmatched } = computeAbsorbedIndices(blocks, delta, completedLen, fullEvidence, finishedAgentIds);
+  const archivedRetries = new Set<string>();
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (absorbed.has(i) && block.type === 'system' && block.variant === 'error'
+      && block.replacesMsgId && block.detail && block.uuid
+      && (fullEvidence?.systemMsgIds.has(block.uuid) || delta.some(row => row.role === 'system' && row.msgId === block.uuid))) {
+      archivedRetries.add(block.replacesMsgId);
+    }
+  }
+  // Retire the notice and its raw copies together, only after the detail is archived.
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if ((block.type === 'text' || block.type === 'thinking') && !block.parentToolUseId
+      && block.msgId && archivedRetries.has(block.msgId)) absorbed.add(i);
+  }
   if (absorbed.size === 0) return { kept: blocks, removed: 0, unmatched };
   const kept = blocks.filter((_, i) => !absorbed.has(i));
-  return { kept, removed: absorbed.size, unmatched };
+  return { kept, removed: absorbed.size, unmatched: unmatched.filter(row => !absorbed.has(row.index)) };
 }

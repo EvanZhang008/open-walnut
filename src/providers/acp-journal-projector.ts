@@ -30,7 +30,11 @@ interface AcpUpdate {
   status?: string | null
   rawInput?: unknown
   rawOutput?: unknown
-  _meta?: { terminal_output?: { data?: unknown }; terminal_exit?: { exit_code?: unknown; signal?: unknown } }
+  _meta?: {
+    terminal_output?: { data?: unknown }
+    terminal_exit?: { exit_code?: unknown; signal?: unknown }
+    codex?: { error?: { willRetry?: unknown; codexErrorInfo?: { responseStreamDisconnected?: unknown } } }
+  }
   used?: number
   size?: number
 }
@@ -105,6 +109,8 @@ export type AcpProjectedEvent =
       msgId: string
       variant: 'error' | 'info'
       message: string
+      detail?: string
+      replacesMsgId?: string
     }
   | {
       type: 'error'
@@ -113,6 +119,13 @@ export type AcpProjectedEvent =
       msgId: string
       error: string
     }
+
+interface TextSegment {
+  ordinal: number
+  providerMessageId?: string
+  text: string
+  thinking: string
+}
 
 interface ToolIdentity {
   msgId: string
@@ -129,7 +142,8 @@ interface ToolIdentity {
 export class AcpJournalProjector {
   private currentCommandId = 'legacy'
   private segmentOrdinal = 0
-  private currentSegment: { ordinal: number; providerMessageId?: string } | null = null
+  private currentSegment: TextSegment | null = null
+  private lastContentType: 'text' | 'thinking' | 'tool' | null = null
   private tools = new Map<string, ToolIdentity>()
   private terminalOutput = new Map<string, string>()
   private turnHasError = false
@@ -140,6 +154,13 @@ export class AcpJournalProjector {
   private permissionOptionKinds = new Map<string, Map<string, string>>()
 
   constructor(readonly runtimeId: string) {}
+
+  /** Only this segment can still grow or become an interrupted-response notice. */
+  get unsettledMsgId(): string | undefined {
+    return this.currentSegment
+      ? this.segmentId(this.currentCommandId, this.currentSegment.ordinal)
+      : undefined
+  }
 
   project(record: JournalRecord): AcpProjectedEvent[] {
     if (record.kind === 'meta') return this.projectMeta(record)
@@ -290,16 +311,41 @@ export class AcpJournalProjector {
         const text = contentText(update.content)
         if (!text) return []
         const segment = this.ensureSegment(update.messageId ?? undefined)
+        const type = update.sessionUpdate === 'agent_message_chunk' ? 'text' : 'thinking'
+        segment[type] += text
+        this.lastContentType = type
         return [{
-          type: update.sessionUpdate === 'agent_message_chunk' ? 'text' : 'thinking',
+          type,
           ts: record.ts,
           commandId,
           text,
           msgId: this.segmentId(commandId, segment.ordinal),
         }]
       }
+      case 'session_info_update': {
+        const error = update._meta?.codex?.error
+        if (error?.willRetry !== true
+          || !error.codexErrorInfo?.responseStreamDisconnected
+          || typeof error.codexErrorInfo.responseStreamDisconnected !== 'object') return []
+        const segment = this.lastContentType === 'text' ? this.currentSegment : null
+        const msgId = segment?.text
+          ? this.segmentId(commandId, segment.ordinal)
+          : this.id(commandId, 'retry', String(this.segmentOrdinal++))
+        // A retry is a new attempt even when the provider reuses its message id.
+        this.currentSegment = null
+        this.lastContentType = null
+        return [{
+          type: 'system', ts: record.ts, commandId, msgId, variant: 'error',
+          message: 'Response interrupted. Codex is retrying.',
+          ...(segment?.text ? {
+            replacesMsgId: msgId,
+            detail: interruptedDetail(segment.text, segment.thinking),
+          } : {}),
+        }]
+      }
       case 'tool_call': {
         if (!update.toolCallId) return []
+        this.lastContentType = 'tool'
         const segment = this.allocateSegment()
         const identity = {
           msgId: this.segmentId(commandId, segment.ordinal),
@@ -326,6 +372,7 @@ export class AcpJournalProjector {
       }
       case 'tool_call_update': {
         if (!update.toolCallId) return []
+        this.lastContentType = 'tool'
         const delta = update._meta?.terminal_output?.data
         if (typeof delta === 'string') {
           this.terminalOutput.set(update.toolCallId, (this.terminalOutput.get(update.toolCallId) ?? '') + delta)
@@ -362,6 +409,7 @@ export class AcpJournalProjector {
     this.currentCommandId = commandId
     this.segmentOrdinal = 0
     this.currentSegment = null
+    this.lastContentType = null
     this.tools.clear()
     this.terminalOutput.clear()
     this.turnHasError = false
@@ -369,12 +417,13 @@ export class AcpJournalProjector {
 
   private finishTurn(): void {
     this.currentSegment = null
+    this.lastContentType = null
     this.tools.clear()
     this.terminalOutput.clear()
     this.turnHasError = false
   }
 
-  private ensureSegment(providerMessageId?: string): { ordinal: number; providerMessageId?: string } {
+  private ensureSegment(providerMessageId?: string): TextSegment {
     if (this.currentSegment
       && (!providerMessageId
         || !this.currentSegment.providerMessageId
@@ -387,8 +436,8 @@ export class AcpJournalProjector {
     return this.allocateSegment(providerMessageId)
   }
 
-  private allocateSegment(providerMessageId?: string): { ordinal: number; providerMessageId?: string } {
-    const segment = { ordinal: this.segmentOrdinal++, ...(providerMessageId ? { providerMessageId } : {}) }
+  private allocateSegment(providerMessageId?: string): TextSegment {
+    const segment = { ordinal: this.segmentOrdinal++, text: '', thinking: '', ...(providerMessageId ? { providerMessageId } : {}) }
     this.currentSegment = segment
     return segment
   }
@@ -432,6 +481,7 @@ export class AcpHistoryFold {
   private readonly projector: AcpJournalProjector
   private readonly byMessageId = new Map<string, SessionHistoryMessage>()
   private readonly tools = new Map<string, SessionHistoryTool>()
+  private unsettledMsgId?: string
   /** Rough resident-size gauge for cache budgeting (chars pushed, not bytes). */
   charCount = 0
   readonly messages: SessionHistoryMessage[] = []
@@ -510,16 +560,31 @@ export class AcpHistoryFold {
           this.charCount += tool.result.length
           break
         }
-        case 'system':
-          this.messages.push({
-            role: 'system',
-            text: event.message,
-            timestamp,
-            msgId: event.msgId,
-            systemVariant: event.variant,
-          })
-          this.charCount += event.message.length
+        case 'system': {
+          const target = event.replacesMsgId ? this.byMessageId.get(event.replacesMsgId) : undefined
+          if (target?.role === 'assistant' && target.text && !target.tools?.length) {
+            const priorLength = target.text.length + (target.thinking?.length ?? 0)
+            target.systemDetail = interruptedDetail(target.text, target.thinking)
+            target.role = 'system'
+            target.text = event.message
+            target.systemVariant = event.variant
+            delete target.thinking
+            delete target.unsettled
+            // The old text already counted; only the headline/separator are new.
+            this.charCount += event.message.length + target.systemDetail.length - priorLength
+          } else {
+            this.messages.push({
+              role: 'system',
+              text: event.message,
+              timestamp,
+              msgId: event.msgId,
+              systemVariant: event.variant,
+              ...(event.detail ? { systemDetail: event.detail } : {}),
+            })
+            this.charCount += event.message.length + (event.detail?.length ?? 0)
+          }
           break
+        }
         case 'error':
           this.messages.push({
             role: 'system',
@@ -534,7 +599,20 @@ export class AcpHistoryFold {
           break
       }
     }
+    const activeId = this.projector.unsettledMsgId
+    if (this.unsettledMsgId && this.unsettledMsgId !== activeId) {
+      const prior = this.byMessageId.get(this.unsettledMsgId)
+      if (prior) delete prior.unsettled
+    }
+    const active = activeId ? this.byMessageId.get(activeId) : undefined
+    if (active?.role === 'assistant' && !active.tools?.length) active.unsettled = true
+    this.unsettledMsgId = activeId
   }
+}
+
+/** Preserve the response verbatim, with its reasoning in the same collapsed detail. */
+function interruptedDetail(text: string, thinking?: string): string {
+  return thinking ? `${text}\n\n${thinking}` : text
 }
 
 /** Fold a complete journal into the existing session history DTO. */

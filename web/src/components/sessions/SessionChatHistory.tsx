@@ -883,6 +883,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   });
 
+  useEvent('session:system-event', (data) => {
+    const d = data as { sessionId?: string; replacesMsgId?: string };
+    if (d.sessionId === sessionId && d.replacesMsgId) setHistoryVersion((v) => v + 1);
+  });
+
   // Batch delivery failed (e.g. SSH/daemon down): mark the matching optimistic
   // messages 'failed' so they keep their text + show Retry. Crucially we do NOT
   // refresh history here — the messages were never delivered, they remain in the

@@ -47,6 +47,8 @@ export interface StreamingToolCallBlock {
 }
 
 export interface StreamingSystemBlock {
+  /** Exact main-lane response id whose content this notice preserves. */
+  replacesMsgId?: string
   type: 'system'
   variant: 'compact' | 'error' | 'info'
   message: string
@@ -344,14 +346,16 @@ class SessionStreamBuffer {
     }
   }
 
-  appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string, progress?: boolean, uuid?: string): void {
+  appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string, progress?: boolean, uuid?: string, replacesMsgId?: string): void {
     const entry = this.getOrCreate(sessionId)
     this.resetIfTurnEnded(entry, sessionId)
     const row: StreamingSystemBlock = {
       type: 'system', variant, message,
       ...(detail ? { detail } : {}), ...(progress ? { progress: true } : {}),
       ...(uuid ? { uuid } : {}),
+      ...(replacesMsgId ? { replacesMsgId } : {}),
     }
+    if (replacesMsgId && uuid && entry.blocks.some(b => b.type === 'system' && b.uuid === uuid)) return
     // ONE compaction = ONE row, same rule the browser reducer applies — a snapshot
     // must not hand a reconnecting client the pile the live stream just avoided.
     const placement = placeSystemRow(entry.blocks, row)
@@ -361,7 +365,13 @@ class SessionStreamBuffer {
       this.touch(entry)
       return
     }
-    this.carryPendingMarkup(entry)  // card breaks text flow; an unfinished tag rides across
+    if (replacesMsgId) {
+      // A regenerated answer must not inherit an unfinished tag from the failed one.
+      this.releasePendingMarkup(entry)
+      entry.textAccumulator = ''
+    } else {
+      this.carryPendingMarkup(entry)  // ordinary cards carry unfinished tags forward
+    }
     entry.thinkingAccumulator = ''
     this.touch(entry)
     entry.blocks.push(row)

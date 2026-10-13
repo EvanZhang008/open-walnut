@@ -209,16 +209,13 @@ function gcAbsorbedBlocks(sid: string, delta: SessionHistoryMessage[], fullEvide
     streamStates.delete(sid);
     return;
   }
+  const keptRefs = new Set(kept);
+  const removedBefore = state.blocks.slice(0, state.completedLen).filter((b) => !keptRefs.has(b)).length;
   state.blocks = kept;
-  // Shift the merge boundary down by the removal count. This assumes every
-  // GC'd block sat BEFORE completedLen — id evidence can in principle absorb a
-  // block past it (full-history msgId hit on a still-live turn's finished
-  // message), which would drag the boundary below genuinely finished blocks
-  // and re-open them to merging (the TURN LIVENESS hazard). The live-tail
-  // guard above keeps the accumulating block itself safe, and a next
-  // result/snapshot re-stamps completedLen authoritatively, so the window is
-  // narrow — but don't "simplify" this to ignore ordering.
-  state.completedLen = Math.max(0, state.completedLen - removed);
+  // Shift the merge boundary by the blocks removed BEFORE it only: id evidence
+  // (a retry notice's raw copies included) can absorb live-turn blocks, and
+  // counting those would re-open finished blocks to merging (TURN LIVENESS).
+  state.completedLen = Math.max(0, state.completedLen - removedBefore);
 }
 
 // ── Global WS listeners (registered once at module load) ─────────────────────
@@ -332,18 +329,24 @@ function registerGlobalListeners(): void {
 
   // ── system-event ──
   onSessionEvent('session:system-event', (data: unknown) => {
-    const { sessionId: sid, variant, message, detail, progress, uuid } = data as {
+    const { sessionId: sid, variant, message, detail, progress, uuid, replacesMsgId } = data as {
       sessionId: string;
       variant: 'compact' | 'error' | 'info';
       message: string;
       detail?: string;
       progress?: boolean;
       uuid?: string;
+      replacesMsgId?: string;
     };
     if (!sid || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
-    interruptText(state);
-    state.blocks = appendSystemBlock(state.blocks, { variant, message, detail, progress, uuid });
+    if (replacesMsgId) {
+      flushText(state);
+      state.textBuffer = '';
+    } else {
+      interruptText(state);
+    }
+    state.blocks = appendSystemBlock(state.blocks, { variant, message, detail, progress, uuid, replacesMsgId });
   });
 
   // ── permission request/resolved ──

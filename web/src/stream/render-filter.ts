@@ -123,7 +123,22 @@ export function computeRenderFilter(input: RenderFilterInput): RenderFilterResul
   const { absorbed, unmatched } = computeAbsorbedIndices(
     blocks, contentDelta as SessionHistoryMessage[], boundary, fullEv, input.finishedAgentIds,
   );
-  return { hidden: absorbed, unmatched };
+  // An explicit retry notice keeps the failed response in its collapsed detail.
+  // Hide only its exact main-lane text/thinking twins; never delete or similarity-match.
+  const interruptedIds = new Set<string>();
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (block.type !== 'system' || block.variant !== 'error' || !block.replacesMsgId || !block.detail) continue;
+    interruptedIds.add(block.replacesMsgId);
+    // A notice is not an accumulating model tail: its persisted system twin is final.
+    if (block.uuid && fullEv.systemMsgIds.has(block.uuid)) absorbed.add(i);
+  }
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if ((block.type === 'text' || block.type === 'thinking') && !block.parentToolUseId
+      && block.msgId && interruptedIds.has(block.msgId)) absorbed.add(i);
+  }
+  return { hidden: absorbed, unmatched: unmatched.filter(row => !absorbed.has(row.index)) };
 }
 
 /** Convenience: just the hidden set (production code uses computeRenderFilter

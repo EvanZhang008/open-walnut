@@ -69,6 +69,8 @@ export interface StreamingToolCallBlock {
 }
 
 export interface StreamingSystemBlock {
+  /** Exact main-lane response id whose content this notice preserves. */
+  replacesMsgId?: string;
   type: 'system';
   variant: 'compact' | 'error' | 'info';
   message: string;
@@ -145,6 +147,7 @@ export function lastMainLaneText(
 ): StreamingTextBlock | undefined {
   for (let i = blocks.length - 1; i >= Math.max(0, completedLen); i--) {
     const b = blocks[i];
+    if (b.type === 'system' && b.replacesMsgId) return undefined;
     if (b.type === 'text' && !b.parentToolUseId) return b;
   }
   return undefined;
@@ -421,13 +424,17 @@ export function backfillToolResult(
  */
 export function appendSystemBlock(
   blocks: readonly StreamingBlock[],
-  ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string; progress?: boolean; uuid?: string },
+  ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string; progress?: boolean; uuid?: string; replacesMsgId?: string },
 ): StreamingBlock[] {
   const row: StreamingSystemBlock = {
     type: 'system', variant: ev.variant, message: ev.message, detail: ev.detail,
     ...(ev.progress ? { progress: true } : {}),
     ...(ev.uuid ? { uuid: ev.uuid } : {}),
+    ...(ev.replacesMsgId ? { replacesMsgId: ev.replacesMsgId } : {}),
   };
+  if (ev.replacesMsgId && ev.uuid && blocks.some(b => b.type === 'system' && b.uuid === ev.uuid)) {
+    return blocks as StreamingBlock[];
+  }
   const placement = placeSystemRow(blocks, row);
   if (placement.action === 'drop') return blocks as StreamingBlock[];
   if (placement.action === 'replace') {

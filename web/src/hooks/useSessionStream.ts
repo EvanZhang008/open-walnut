@@ -186,15 +186,17 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       log.info('stream', `cache hit: blocks=${cached.blocks.length} isStreaming=${cached.isStreaming}`, { sessionId });
       setBlocks([...cached.blocks]);
       setIsStreaming(cached.isStreaming);
-      streamBuffer.current = cached.textBuffer;
+      const cachedText = lastMainLaneText(cached.blocks, cached.completedLen);
+      streamBuffer.current = cachedText ? cached.textBuffer : '';
+      currentTextMsgId.current = cachedText?.msgId;
       completedLen.current = cached.completedLen;
     } else {
       setBlocks([]);
       setIsStreaming(false);
       streamBuffer.current = '';
+      currentTextMsgId.current = undefined;
       completedLen.current = 0;
     }
-    currentTextMsgId.current = undefined;
     // Session switch OR reconnect: the server buffer may be a new generation —
     // forget the adopted seq so the next snapshot falls back to legacy rules.
     lastAdoptedSeq.current = null;
@@ -255,6 +257,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           // "<whole previous answer><new answer>").
           const lastText = lastMainLaneText(snapshot.blocks, snapCompletedLen);
           streamBuffer.current = lastText ? lastText.content : '';
+          currentTextMsgId.current = lastText?.msgId;
           // Seed global cache with server snapshot for correction
           initStreamState(sessionId, snapshot.blocks, snapshot.isStreaming, snapshot.completedLen);
         }
@@ -364,6 +367,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           if (adopted) {
             const lastText = lastMainLaneText(snapshot.blocks, snapCompletedLen);
             streamBuffer.current = lastText ? lastText.content : '';
+            currentTextMsgId.current = lastText?.msgId;
           }
         }
       })
@@ -678,18 +682,24 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle system events (compact, error, info notifications)
   useEvent('session:system-event', (data) => {
-    const { sessionId: sid, variant, message, detail, progress, uuid } = data as {
+    const { sessionId: sid, variant, message, detail, progress, uuid, replacesMsgId } = data as {
       sessionId: string; variant: 'compact' | 'error' | 'info'; message: string;
-      detail?: string; progress?: boolean; uuid?: string;
+      detail?: string; progress?: boolean; uuid?: string; replacesMsgId?: string;
     };
     if (!sessionId || sid !== sessionId) return;
 
     // Don't set isStreaming — system events are notifications, not active text streaming.
-    // The card breaks text accumulation, but an unfinished tag rides across it.
-    interruptPendingText();
+    // Retries preserve the full failed response; no markup may leak into the new attempt.
+    if (replacesMsgId) {
+      flushPendingTextRaf();
+      streamBuffer.current = '';
+      currentTextMsgId.current = undefined;
+    } else {
+      interruptPendingText();
+    }
     flushPendingThinking();
 
-    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail, progress, uuid }));
+    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail, progress, uuid, replacesMsgId }));
   });
 
   // Handle permission request events (control_request from Claude Code)

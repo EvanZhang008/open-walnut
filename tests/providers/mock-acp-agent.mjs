@@ -199,6 +199,14 @@ async function handlePrompt(id, params) {
     return;
   }
 
+  if (text.includes('stream-retry-check')) {
+    notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'attempt-old', content: { type: 'text', text: 'Partial reply before transport stopped.' } } });
+    notify('session/update', { sessionId, update: { sessionUpdate: 'session_info_update', _meta: { codex: { error: { willRetry: true, codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } } } } } } });
+    notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'attempt-new', content: { type: 'text', text: 'Final reply after recovery.' } } });
+    reply(id, { stopReason: 'end_turn' });
+    return;
+  }
+
   if (text.includes('self-report-test')) {
     chunk(sessionId, 'RECAP: deterministic ');
     chunk(sessionId, 'self report');

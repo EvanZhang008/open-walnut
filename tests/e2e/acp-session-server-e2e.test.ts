@@ -1091,6 +1091,25 @@ rl.on('line', line => {
   }, 30_000)
 
 
+  it('preserves a failed partial response as one retry detail through the real worker and history route', async () => {
+    const started = await quickStart('stream-retry-check', 'codex')
+    const sid = await sessionIdForTask(started.taskId, 'codex')
+    await waitFor(() => eventsFor(sid, EventNames.SESSION_RESULT).length > 0, 15_000, 'retry turn result')
+    const response = await fetch(apiUrl(`/api/sessions/${sid}/history`))
+    expect(response.status).toBe(200)
+    const history = await response.json() as { messages: Array<{ role: string; text: string; msgId?: string; systemDetail?: string }> }
+    const retry = history.messages.filter(row => row.role === 'system' && row.text === 'Response interrupted. Codex is retrying.')
+    expect(retry).toHaveLength(1)
+    expect(retry[0].systemDetail).toBe('Partial reply before transport stopped.')
+    expect(history.messages.filter(row => row.role === 'assistant' && row.text)).toEqual([
+      expect.objectContaining({ text: 'Final reply after recovery.' }),
+    ])
+    const notices = eventsFor(sid, EventNames.SESSION_SYSTEM_EVENT)
+      .filter(event => event.data.message === 'Response interrupted. Codex is retrying.')
+    expect(notices).toHaveLength(1)
+    expect(notices[0].data.replacesMsgId).toBe(retry[0].msgId)
+  }, 30_000)
+
   function findRuntimeId(): string {
     const files = fs.readdirSync(streamsDir).filter((f) => f.endsWith('.acp.jsonl'))
     expect(files.length).toBe(1)

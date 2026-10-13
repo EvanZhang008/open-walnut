@@ -109,6 +109,9 @@ function normalizeProjectedEvent(event: AcpProjectedEvent): NormalizedEvent[] {
           variant: event.variant,
           message: event.message,
           msgId: event.msgId,
+          uuid: event.msgId,
+          ...(event.detail ? { detail: event.detail } : {}),
+          ...(event.replacesMsgId ? { replacesMsgId: event.replacesMsgId } : {}),
         },
       }]
     case 'error':

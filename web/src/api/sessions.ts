@@ -18,6 +18,15 @@ import { registerSessionTitle } from '@/stores/entity-label-store';
 import { patchSessionMentionTitle } from '@/stores/session-mention-index';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineEntry, type LaunchEngine } from '@/utils/engines';
+import { wsClient } from './ws';
+import {
+  clearEngineModelCatalogCache,
+  getEngineModelCacheGeneration,
+  getFreshEngineModelCatalog,
+  recordEngineModelCatalog,
+  shouldInvalidateEngineCatalog,
+  type EngineModelCatalog,
+} from './engine-model-cache';
 import {
   createWorkingDirsCache,
   hostsToPrewarm,
@@ -27,6 +36,11 @@ import {
 } from './working-dirs-cache';
 
 export type { ConfiguredHost, WorkingDirEntry, WorkingDirsResult } from './working-dirs-cache';
+export { getCachedEngineModelCatalog, getEngineModelCacheGeneration, subscribeEngineModelCache } from './engine-model-cache';
+
+wsClient.onEvent('config:changed', (event) => {
+  if (shouldInvalidateEngineCatalog(event)) clearEngineModelCatalogCache();
+});
 
 /** Opportunistic <session-ref/> pill-title seeding: there is no client-side
  *  all-sessions store, so any fetched record's title is registered here and
@@ -684,7 +698,10 @@ export async function fetchEngineModelCatalog(
   engine: string,
   cwd?: string,
   opts?: { refresh?: boolean; timeoutMs?: number },
-): Promise<{ engine: string; models: CodexModelInfo[]; currentModelId?: string; source: 'probe' | 'mock' }> {
+): Promise<EngineModelCatalog> {
+  const cached = opts?.refresh ? null : getFreshEngineModelCatalog(engine, cwd);
+  if (cached) return cached;
+  const requestGeneration = getEngineModelCacheGeneration();
   const params = new URLSearchParams();
   if (cwd) params.set('cwd', cwd);
   // Retry after a probe failure: busts the server's cached failure entry.
@@ -696,7 +713,12 @@ export async function fetchEngineModelCatalog(
   // loses the adapter's words. Prefetch callers pass a SHORT timeout instead:
   // aborting client-side frees the connection slot while the server-side
   // probe runs on and still lands in the cache.
-  return apiGet(`/api/engines/${encodeURIComponent(engine)}/models${qs ? `?${qs}` : ''}`, undefined, { timeoutMs: opts?.timeoutMs ?? 20_000 });
+  const catalog = await apiGet<EngineModelCatalog>(`/api/engines/${encodeURIComponent(engine)}/models${qs ? `?${qs}` : ''}`, undefined, { timeoutMs: opts?.timeoutMs ?? 20_000 });
+  if (requestGeneration !== getEngineModelCacheGeneration()) {
+    throw new Error('Engine configuration changed while loading models. Try again.');
+  }
+  recordEngineModelCatalog(engine, cwd, catalog, requestGeneration);
+  return catalog;
 }
 
 export interface SessionControlOption {
