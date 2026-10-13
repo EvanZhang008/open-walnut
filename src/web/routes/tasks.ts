@@ -17,7 +17,7 @@ import {
   updateTask,
   deleteTask,
   deleteTasksByIds,
-  mergeTaskInto,
+  mergeTasksInto,
   ActiveSessionError,
   InvalidProjectNameError,
   InvalidFocusTierError,
@@ -1523,16 +1523,47 @@ tasksRouter.post('/:id/merge', async (req: Request, res: Response, next: NextFun
         return
       }
     }
-    let sessionsRelinked = 0
-    for (const victim of victimTasks) {
-      const result = await mergeTaskInto(survivor.id, victim.id)
-      sessionsRelinked += result.sessionsRelinked
+    // A request merges its victims in one turn of the merge queue
+    // (mergeTasksInto), but the survivor or a victim can be gone at its turn
+    // (deleted, or merged by a request queued ahead), and the user can delete
+    // the survivor while the sessions move. The answer says what really
+    // happened: 404 when nothing was merged (r5 gate, L-29: a queued merge whose
+    // survivor was gone answered 500), otherwise 200 with the victims merged,
+    // the ones not merged and why, and `survivor_deleted` with no task when the
+    // survivor is gone (L-28: that answered 404 though the victims were merged
+    // and deleted).
+    const victimIds = [...new Set(victimTasks.map((t) => t.id))]
+    const result = await mergeTasksInto(survivor.id, victimIds)
+    const notMerged = result.notMerged
+    if (result.mergedIds.length === 0) {
+      const survivorGone = notMerged.some((v) => v.reason === 'survivor_gone')
+      const gone = survivorGone
+        ? `survivor ${survivor.id} was`
+        : `${notMerged.map((v) => v.id).join(', ')} ${notMerged.length === 1 ? 'was' : 'were'}`
+      log.web.warn('merge found its tasks gone at its turn: nothing merged', {
+        survivorId: survivor.id, notMerged,
+      })
+      res.status(404).json({
+        error: `No task found to merge: ${gone} deleted, or merged into another task, before this merge ran. Nothing was merged.`,
+        code: survivorGone ? 'survivor_gone' : 'victim_gone',
+        merged: 0,
+        not_merged: notMerged,
+      })
+      return
     }
-    const merged = await getTask(survivor.id)
+    const survivorDeleted = result.survivor === null
     log.web.info('tasks merged via REST', {
-      survivorId: survivor.id, victimIds: victimTasks.map((t) => t.id), sessionsRelinked,
+      survivorId: survivor.id, victimIds, mergedIds: result.mergedIds, sessionsRelinked: result.sessionsRelinked,
+      ...(survivorDeleted ? { survivorDeleted } : {}), ...(notMerged.length > 0 ? { notMerged } : {}),
     })
-    res.json({ task: merged, merged: victimTasks.length, sessions_relinked: sessionsRelinked })
+    res.json({
+      task: result.survivor,
+      merged: result.mergedIds.length,
+      merged_ids: result.mergedIds,
+      sessions_relinked: result.sessionsRelinked,
+      ...(survivorDeleted ? { survivor_deleted: true } : {}),
+      ...(notMerged.length > 0 ? { not_merged: notMerged } : {}),
+    })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (msg.includes('No task found matching')) {

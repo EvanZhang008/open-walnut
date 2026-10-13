@@ -1099,3 +1099,48 @@ describe('the legacy session_* writes still speak', () => {
     expect(mapped('session_send', body, args)).toEqual(mapped('task_send', body, args))
   })
 })
+
+describe('task_merge says what really happened (r5 gate, L-28, L-29)', () => {
+  const MERGE_PATH = `/api/tasks/${TASK.id}/merge`
+
+  it('a plain merge: the victims deleted, the links moved, and the ref of the survivor', async () => {
+    const r = runner('task_merge', async () => ({ task: TASK, merged: 2, merged_ids: ['v1', 'v2'], sessions_relinked: 3 }))
+    const said = await r.speak({ survivor_id: TASK.id, victim_ids: ['v1', 'v2'] })
+    expect(r.seen).toEqual([{ method: 'POST', path: MERGE_PATH, body: { victim_ids: ['v1', 'v2'] } }])
+    expect(said.outcome).toContain('2 duplicate task(s) deleted; 3 session link(s) moved onto the survivor')
+    expect(said.outcome).not.toContain('Not merged')
+    expect(said.ref).toContain(TASK.id)
+    expect(said.next).toContain('task_get')
+  })
+
+  it('the survivor deleted while the merge ran: no task, no ref, and no retry', async () => {
+    const r = runner('task_merge', async () => ({
+      task: null, merged: 1, merged_ids: ['v1'], sessions_relinked: 0, survivor_deleted: true,
+      not_merged: [{ id: 'v2', reason: 'survivor_gone' }],
+    }))
+    const said = await r.speak({ survivor_id: TASK.id, victim_ids: ['v1', 'v2'] })
+    expect(said.task).toBeNull()
+    expect(said.ref).toBeUndefined()
+    expect(said.survivor_deleted).toBe(true)
+    expect(said.outcome).toContain(`1 duplicate task(s) merged and deleted, but the survivor ${TASK.id} was deleted while the merge ran`)
+    expect(said.outcome).toContain('Not merged: v2 (the survivor was gone by then).')
+    expect(said.outcome).not.toContain('no conversation was lost')
+    // v2 is still there: the agent is not told the work is all gone.
+    expect(said.next).toContain('The tasks not merged are still there')
+    expect(said.next).not.toContain('Do not retry')
+
+    const alone = runner('task_merge', async () => ({ task: null, merged: 1, merged_ids: ['v1'], sessions_relinked: 0, survivor_deleted: true }))
+    const allGone = await alone.speak({ survivor_id: TASK.id, victim_ids: ['v1'] })
+    expect(allGone.next).toContain('Do not retry the merge')
+  })
+
+  it('a victim already deleted is named; the rest merged', async () => {
+    const r = runner('task_merge', async () => ({
+      task: TASK, merged: 1, merged_ids: ['v1'], sessions_relinked: 1, not_merged: [{ id: 'v2', reason: 'victim_gone' }],
+    }))
+    const said = await r.speak({ survivor_id: TASK.id, victim_ids: ['v1', 'v2'] })
+    expect(said.outcome).toContain('1 duplicate task(s) deleted')
+    expect(said.outcome).toContain('Not merged: v2 (it was already deleted, or merged into another task).')
+    expect(said.not_merged).toEqual([{ id: 'v2', reason: 'victim_gone' }])
+  })
+})

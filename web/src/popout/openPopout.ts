@@ -21,6 +21,27 @@ export function isPopoutPath(pathname: string): boolean {
   return pathname === '/popout' || pathname.startsWith('/popout/');
 }
 
+function popoutSearch(view: PopoutView, params: PopoutParams): URLSearchParams {
+  const search = new URLSearchParams();
+  search.set('view', view);
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) continue;
+    const str = String(value);
+    if (str === '') continue;
+    search.set(key, str);
+  }
+  return search;
+}
+
+/**
+ * The `/popout` path for a view + params: what a link INSIDE a pop-out uses to
+ * stay in it (an app path there renders the whole app in the pop-out tab).
+ * Non-empty params are URL-encoded; empty/nullish params are dropped.
+ */
+export function popoutPath(view: PopoutView, params: PopoutParams = {}): string {
+  return `/popout?${popoutSearch(view, params).toString()}`;
+}
+
 /**
  * Build a `/popout` URL for the given view + params and open it in a new tab.
  * Non-empty params are URL-encoded; empty/nullish params are dropped.
@@ -30,14 +51,7 @@ export function isPopoutPath(pathname: string): boolean {
  * @returns the opened Window (or null if the browser blocked it)
  */
 export function openPopout(view: PopoutView, params: PopoutParams = {}): Window | null {
-  const search = new URLSearchParams();
-  search.set('view', view);
-  for (const [key, value] of Object.entries(params)) {
-    if (value === null || value === undefined) continue;
-    const str = String(value);
-    if (str === '') continue;
-    search.set(key, str);
-  }
+  const search = popoutSearch(view, params);
   const url = `/popout?${search.toString()}`;
 
   // Stable per-target tab name: same view+params reuses (focuses) the tab.

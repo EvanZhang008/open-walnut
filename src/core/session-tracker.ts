@@ -2455,6 +2455,16 @@ let RETASK_SLICE_MS = RETASK_SLICE_DEFAULT_MS;
 export function _setRetaskSliceMsForTesting(ms: number | null): void {
   RETASK_SLICE_MS = ms ?? RETASK_SLICE_DEFAULT_MS;
 }
+/** The clock a slice's cost is read on (performance.now). */
+let retaskClock: () => number = () => performance.now();
+/** Test knob: the clock a slice's cost is read on; null restores performance.now. */
+export function _setRetaskClockForTesting(clock: (() => number) | null): void {
+  retaskClock = clock ?? (() => performance.now());
+}
+/** Test knob: run `fn` under the session write lock, as a writer that holds it across an await. */
+export function _withSessionWriteLockForTesting<T>(fn: () => Promise<T>): Promise<T> {
+  return withWriteLock(fn);
+}
 
 /**
  * Point every session linked to one of `fromTaskIds` at `taskId` (undefined =
@@ -2515,9 +2525,9 @@ async function retaskSessionRows(
       const chunk = ids.slice(next, next + rows);
       next += chunk.length;
       // The cost is timed from the lock on: a wait behind other writers is not this slice's work.
-      let began = performance.now();
+      let began = retaskClock();
       const sessions = await withWriteLock(async () => {
-        began = performance.now();
+        began = retaskClock();
         const db = getDb();
         if (!db) return [] as SessionRecord[];
         const now = new Date().toISOString();
@@ -2554,7 +2564,7 @@ async function retaskSessionRows(
       else cleared += sessions.length;
       // Size the next slice to the budget by this one's cost per row, announcements
       // included (at most four times as many).
-      const spent = Math.max(performance.now() - began, 0.1);
+      const spent = Math.max(retaskClock() - began, 0.1);
       rows = Math.max(1, Math.min(rows * 4, Math.floor((chunk.length * RETASK_SLICE_MS) / spent)));
     }
   }

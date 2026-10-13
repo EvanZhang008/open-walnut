@@ -942,6 +942,221 @@ describe('POST /api/tasks/:id/merge', () => {
     expect(res.status).toBe(404);
   });
 
+  describe('a survivor or victim gone while the merge runs or waits (r5 gate, L-28, L-29)', () => {
+    // A request merges its victims in one turn of the merge queue, and each merge moves its
+    // sessions under the session write lock. Holding that lock here stops a merge right after its
+    // task commit, so the deletes land exactly where the gate found them: while a merge moves its
+    // sessions, or while another request waits behind it.
+    async function holdSessionLock() {
+      const tracker = await import('../../../src/core/session-tracker.js');
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const done = tracker._withSessionWriteLockForTesting(() => held);
+      return { release, done };
+    }
+    const post = (app: ReturnType<typeof createApp>, survivor: string, victims: string[]) =>
+      request(app).post(`/api/tasks/${survivor}/merge`).send({ victim_ids: victims }).then((res) => res);
+    const gone = async (id: string) => {
+      const { getTask } = await import('../../../src/core/task-manager.js');
+      await vi.waitFor(async () => { await expect(getTask(id)).rejects.toThrow(/No task found/); }, { timeout: 10_000, interval: 10 });
+    };
+    const taskOf = async (sid: string) => {
+      const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js');
+      return (await getSessionByClaudeId(sid))?.taskId;
+    };
+    const inFlight = async () => (await import('../../../src/core/task-manager.js'))._mergesInFlightForTesting();
+    /** What a test started and must see end, even when it fails: answers, deletes, the lock hold. */
+    let pending: Array<Promise<unknown>> = [];
+    let releaseLock: (() => void) | null = null;
+    afterEach(async () => {
+      releaseLock?.();
+      releaseLock = null;
+      await Promise.allSettled(pending.splice(0));
+      // No merge outlives its test (a later one counts the queue).
+      await vi.waitFor(async () => { expect(await inFlight()).toBe(0); }, { timeout: 10_000, interval: 10 });
+    });
+    async function lockHeld() {
+      const lock = await holdSessionLock();
+      releaseLock = lock.release;
+      pending.push(lock.done);
+      return lock;
+    }
+    function started<T>(p: Promise<T>): Promise<T> {
+      pending.push(p);
+      return p;
+    }
+
+    it('the survivor deleted while the merge moves the sessions: 200, the victim merged, no task (L-28)', async () => {
+      const { deleteTask, getTask } = await import('../../../src/core/task-manager.js');
+      const { task: b } = await addTask({ title: 'Survivor' });
+      const { task: a } = await addTask({ title: 'Survivor (copy)' });
+      for (const sid of ['l28-a1', 'l28-a2', 'l28-a3']) await createSessionRecord(sid, a.id, 'P', '/tmp');
+      const lock = await lockHeld();
+      const answer = started(post(createApp(), b.id, [a.id]));
+      await gone(a.id); // the merge committed its tasks and now waits to move the sessions
+      const deleting = started(deleteTask(b.id));
+      await gone(b.id);
+      lock.release();
+      const res = await answer;
+      await deleting;
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ task: null, survivor_deleted: true, merged: 1, merged_ids: [a.id], sessions_relinked: 0 });
+      expect(res.body.not_merged).toBeUndefined();
+      await expect(getTask(a.id)).rejects.toThrow(/No task found/);
+      for (const sid of ['l28-a1', 'l28-a2', 'l28-a3']) expect(await taskOf(sid), sid).toBeUndefined();
+    });
+
+    it('the survivor deleted after some sessions moved: 200 with the count that moved (L-28)', async () => {
+      const { deleteTask } = await import('../../../src/core/task-manager.js');
+      const tracker = await import('../../../src/core/session-tracker.js');
+      const { bus, EventNames } = await import('../../../src/core/event-bus.js');
+      const { task: b } = await addTask({ title: 'Survivor' });
+      const { task: a } = await addTask({ title: 'Survivor (copy)' });
+      const ofA = Array.from({ length: 12 }, (_, i) => `l28k-a${i}`);
+      for (const sid of ofA) await createSessionRecord(sid, a.id, 'P', '/tmp');
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      releaseLock = release;
+      let holding = false;
+      let moved = 0;
+      bus.subscribe('l28k-hold', (event) => {
+        if (event.name !== EventNames.SESSION_STATUS_CHANGED || !ofA.includes((event.data as { sessionId: string }).sessionId)) return;
+        // After the fifth session moved, another writer holds the lock: the delete lands there.
+        if (++moved === 5 && !holding) {
+          holding = true;
+          pending.push(tracker._withSessionWriteLockForTesting(() => held));
+        }
+      }, { global: true });
+      tracker._setRetaskSliceMsForTesting(0);
+      try {
+        const answer = started(post(createApp(), b.id, [a.id]));
+        await vi.waitFor(() => { expect(holding).toBe(true); }, { timeout: 10_000, interval: 10 });
+        const deleting = started(deleteTask(b.id));
+        await gone(b.id);
+        release();
+        const res = await answer;
+        await deleting;
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ task: null, survivor_deleted: true, merged: 1, sessions_relinked: 5 });
+        for (const sid of ofA) expect(await taskOf(sid), sid).toBeUndefined();
+      } finally {
+        release();
+        bus.unsubscribe('l28k-hold');
+        tracker._setRetaskSliceMsForTesting(null);
+      }
+    });
+
+    it('a queued merge whose survivor was deleted while it waited: 404, nothing merged (L-29)', async () => {
+      const { deleteTask, getTask } = await import('../../../src/core/task-manager.js');
+      const { task: b } = await addTask({ title: 'Survivor' });
+      const { task: a } = await addTask({ title: 'Copy one' });
+      const { task: c } = await addTask({ title: 'Copy two' });
+      await createSessionRecord('l29-a', a.id, 'P', '/tmp');
+      await createSessionRecord('l29-c1', c.id, 'P', '/tmp');
+      await createSessionRecord('l29-c2', c.id, 'P', '/tmp');
+      const lock = await lockHeld();
+      const first = started(post(createApp(), b.id, [a.id]));
+      await gone(a.id);
+      const second = started(post(createApp(), b.id, [c.id]));
+      await vi.waitFor(async () => { expect(await inFlight()).toBe(2); }, { timeout: 10_000, interval: 10 });
+      const deleting = started(deleteTask(b.id));
+      await gone(b.id);
+      lock.release();
+      const [one, two] = await Promise.all([first, second]);
+      await deleting;
+      expect(one.status).toBe(200);
+      expect(one.body).toMatchObject({ task: null, survivor_deleted: true, merged: 1 });
+      expect(two.status).toBe(404);
+      expect(two.body).toMatchObject({ code: 'survivor_gone', merged: 0, not_merged: [{ id: c.id, reason: 'survivor_gone' }] });
+      expect(two.body.error).toContain(`survivor ${b.id} was deleted, or merged into another task, before this merge ran`);
+      // The queued victim is untouched, sessions and all.
+      expect((await getTask(c.id)).id).toBe(c.id);
+      for (const sid of ['l29-c1', 'l29-c2']) expect(await taskOf(sid), sid).toBe(c.id);
+    });
+
+    it('a queued merge whose victim was deleted while it waited: 404; the merge ahead of it: 200 (L-29)', async () => {
+      const { deleteTask, getTask } = await import('../../../src/core/task-manager.js');
+      const { task: b } = await addTask({ title: 'Survivor' });
+      const { task: a } = await addTask({ title: 'Copy one' });
+      const { task: c } = await addTask({ title: 'Copy two' });
+      await createSessionRecord('l29v-a', a.id, 'P', '/tmp');
+      const lock = await lockHeld();
+      const first = started(post(createApp(), b.id, [a.id]));
+      await gone(a.id);
+      const second = started(post(createApp(), b.id, [c.id]));
+      await vi.waitFor(async () => { expect(await inFlight()).toBe(2); }, { timeout: 10_000, interval: 10 });
+      const deleting = started(deleteTask(c.id));
+      await gone(c.id);
+      lock.release();
+      const [one, two] = await Promise.all([first, second]);
+      await deleting;
+      expect(one.status).toBe(200);
+      expect(one.body).toMatchObject({ task: { id: b.id }, merged: 1, merged_ids: [a.id], sessions_relinked: 1 });
+      expect(one.body.survivor_deleted).toBeUndefined();
+      expect(two.status).toBe(404);
+      expect(two.body).toMatchObject({ code: 'victim_gone', merged: 0, not_merged: [{ id: c.id, reason: 'victim_gone' }] });
+      expect((await getTask(b.id)).id).toBe(b.id);
+      expect(await taskOf('l29v-a')).toBe(b.id);
+    });
+
+    it('several victims and the survivor deleted during the first: 200 with the rest not merged and kept', async () => {
+      const { deleteTask, getTask } = await import('../../../src/core/task-manager.js');
+      const { task: b } = await addTask({ title: 'Survivor' });
+      const { task: a } = await addTask({ title: 'Copy one' });
+      const { task: c } = await addTask({ title: 'Copy two' });
+      await createSessionRecord('multi-c', c.id, 'P', '/tmp');
+      const lock = await lockHeld();
+      const answer = started(post(createApp(), b.id, [a.id, c.id]));
+      await gone(a.id);
+      const deleting = started(deleteTask(b.id));
+      await gone(b.id);
+      lock.release();
+      const res = await answer;
+      await deleting;
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        task: null, survivor_deleted: true, merged: 1, merged_ids: [a.id],
+        not_merged: [{ id: c.id, reason: 'survivor_gone' }],
+      });
+      expect((await getTask(c.id)).id).toBe(c.id);
+      expect(await taskOf('multi-c')).toBe(c.id);
+    });
+
+    it('a merge of the survivor queued meanwhile waits for all of the request: nothing is reported gone', async () => {
+      // A1 and A2 into B, and B into C asked while A1 moves its sessions. Queued one victim at a
+      // time, B into C ran between A1 and A2: A2 had no survivor and was reported gone (r6 review).
+      const { getTask } = await import('../../../src/core/task-manager.js');
+      const { task: c } = await addTask({ title: 'Final' });
+      const { task: b } = await addTask({ title: 'Survivor' });
+      const { task: a1 } = await addTask({ title: 'Copy one' });
+      const { task: a2 } = await addTask({ title: 'Copy two' });
+      for (const [sid, t] of [['seq-a1', a1], ['seq-a2', a2], ['seq-b', b]] as const) await createSessionRecord(sid, t.id, 'P', '/tmp');
+      const lock = await lockHeld();
+      const first = started(post(createApp(), b.id, [a1.id, a2.id]));
+      await gone(a1.id);
+      const second = started(post(createApp(), c.id, [b.id]));
+      await vi.waitFor(async () => { expect(await inFlight()).toBe(2); }, { timeout: 10_000, interval: 10 });
+      lock.release();
+      const [one, two] = await Promise.all([first, second]);
+      expect(one.status).toBe(200);
+      expect(one.body).toMatchObject({ task: { id: b.id }, merged: 2, merged_ids: [a1.id, a2.id], sessions_relinked: 2 });
+      expect(one.body.not_merged).toBeUndefined();
+      expect(two.status).toBe(200);
+      expect(two.body).toMatchObject({ task: { id: c.id }, merged: 1, merged_ids: [b.id], sessions_relinked: 3 });
+      for (const sid of ['seq-a1', 'seq-a2', 'seq-b']) expect(await taskOf(sid), sid).toBe(c.id);
+      await expect(getTask(a2.id)).rejects.toThrow(/No task found/);
+    });
+
+    it('a victim named twice is merged once', async () => {
+      const { task: b } = await addTask({ title: 'Survivor' });
+      const { task: a } = await addTask({ title: 'Copy' });
+      const res = await started(post(createApp(), b.id, [a.id, a.id]));
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ task: { id: b.id }, merged: 1, merged_ids: [a.id] });
+      expect(res.body.not_merged).toBeUndefined();
+    });
+  });
+
   describe('from a session on another host (x-walnut-origin: host:…), only its own work', () => {
     const SID = '33333333-4444-5555-6666-000000000901';
     async function leaderWithSession(project = 'marina'): Promise<{ id: string; group_id?: string }> {

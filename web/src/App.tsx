@@ -56,8 +56,9 @@ export function App() {
   const pluginUi = usePluginUi();
   const pluginRuntime = useWebPluginRuntime();
   const apps = useAppCatalog();
-  // A task pill on a surface with no click handler of its own stays in the app.
-  useTaskLinkClickFallback(navigate);
+  // A task pill on a surface with no click handler of its own stays in the app,
+  // or in the pop-out when this window is one.
+  useTaskLinkClickFallback(navigate, isPopoutPath(location.pathname));
 
   useEffect(() => {
     syncAppCommands(apps.discoverable);
@@ -76,11 +77,16 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Every hook sits above the popout return: a popout window that navigates to
+  // an app path renders the whole App on its next render, and a hook declared
+  // below a conditional return then crashes it ("Rendered more hooks than during
+  // the previous render"). tests/web/hook-order-ratchet.test.ts pins this.
+  const navigateRef = useRef<NavigateFunction>(navigate);
+  navigateRef.current = navigate;
+
   if (isPopoutPath(location.pathname)) return <PopoutRoot />;
 
   const isHome = location.pathname === '/';
-  const navigateRef = useRef<NavigateFunction>(navigate);
-  navigateRef.current = navigate;
 
   return (
     <AppShell>

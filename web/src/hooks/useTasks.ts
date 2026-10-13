@@ -11,6 +11,7 @@ import { scrollLog } from '@/utils/scroll-debug';
 import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
 import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, type LocalEdit } from './task-list-merge';
 import { normalizeTags } from '../../../src/core/tag-model';
+import { deletedTaskId } from '../../../src/core/task-deleted-id';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -880,7 +881,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   });
 
   useEvent('task:deleted', (data) => {
-    const { id } = data as { id: string };
+    // `id`, else the task's own: a merge sent `{ task }` alone, and the row stayed.
+    const id = deletedTaskId(data);
+    if (!id) return;
     retainedAtGen.current.delete(id);
     setTasks((prev) => prev.filter((t) => t.id !== id));
   });

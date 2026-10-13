@@ -50,8 +50,10 @@ import {
   isTerminalSession,
   _resetSessionTrackerForTesting,
   _setRetaskSliceMsForTesting,
+  _setRetaskClockForTesting,
+  _withSessionWriteLockForTesting,
 } from '../../src/core/session-tracker.js';
-import { closeDb, SESSION_DB_PATH } from '../../src/core/session-db.js';
+import { closeDb, getDb as getSessionDb, SESSION_DB_PATH } from '../../src/core/session-db.js';
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { markSessionStoppedInSqlite } from '../../src/hooks/session-status-store.js';
@@ -69,6 +71,7 @@ beforeEach(async () => {
 afterEach(async () => {
   bus.unsubscribe('session-status-contract-test');
   _setRetaskSliceMsForTesting(null);
+  _setRetaskClockForTesting(null);
   closeDb();
   _resetSessionTrackerForTesting();
   // Retry cleanup to handle macOS ENOTEMPTY race (concurrent file writes during rm)
@@ -727,6 +730,86 @@ describe('a change of the session task is a status change', () => {
       // The last status a page heard says the same, at the stored revision.
       expect(statusOf(events, id).at(-1), id).toMatchObject({ taskId: null, statusRevision: after.statusRevision });
     }
+  });
+
+  it('the survivor check and the write of its slice are one step: a delete cannot land between them (r5 gate, L-31)', async () => {
+    // Asked before the slice's lock, or with a turn of the loop before the write, the answer could be
+    // stale by the write: a delete landing in between and that slice pointing its sessions at a task
+    // already gone. The delete's own unlink then has to find them; the merge must not leave them.
+    const victims = Array.from({ length: 12 }, (_, i) => `atom-${i}`);
+    for (const id of victims) await createSessionRecord(id, 'task-victim', 'proj');
+    const onSurvivor = () => (getSessionDb()!.prepare('SELECT claude_session_id FROM sessions WHERE task_id = ?')
+      .pluck().all('task-survivor') as string[]).sort();
+    let survivorExists = true;
+    let checks = 0;
+    const outsideTx: number[] = [];
+    let onSurvivorAtDelete: string[] | null = null;
+    const toTaskExists = () => {
+      checks++;
+      if (!getSessionDb()?.inTransaction) outsideTx.push(checks);
+      // The survivor is deleted at the first turn of the loop after the third answer.
+      if (checks === 3) setImmediate(() => { survivorExists = false; onSurvivorAtDelete = onSurvivor(); });
+      return survivorExists;
+    };
+    _setRetaskSliceMsForTesting(0);
+    expect(await relinkSessionsToTask('task-victim', 'task-survivor', { toTaskExists })).toBe(3);
+    expect(outsideTx, 'checks made outside the slice transaction').toEqual([]);
+    expect(onSurvivorAtDelete).toHaveLength(3);
+    // What sits on the survivor now is what sat there when it was deleted: the merge put nothing after.
+    expect(onSurvivor()).toEqual(onSurvivorAtDelete);
+    for (const id of victims.filter((id) => !onSurvivorAtDelete!.includes(id))) {
+      expect((await getSessionByClaudeId(id))!.taskId, id).toBeUndefined();
+    }
+  });
+
+  it('a slice that waits for the lock behind another writer is not charged for the wait (r5 gate, L-31)', async () => {
+    // Each slice is sized by what the last one cost, timed from the lock on. Timed from the request, a
+    // writer holding the lock a while made the slice queued behind it look slow, and the rest of the
+    // move went in slices a few sessions long.
+    // The cost is read on a test clock that moves only while the other writer holds the lock, by 300 ms
+    // (r6 gate, L-36: on the wall clock a loaded machine made a slice's own work look as slow as the
+    // wait, and the test went red with nothing wrong).
+    for (let i = 0; i < 400; i++) await createSessionRecord(`wait-${i}`, 'task-wait', 'proj');
+    let now = 0;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let holding: Promise<unknown> | null = null;
+    let afterFirstSlice = false;
+    let releasedBy: string | null = null;
+    const letGo = (by: string) => {
+      if (releasedBy) return;
+      releasedBy = by;
+      now += 300;
+      release();
+    };
+    // The first clock read after the first slice is the next slice's, before it asks for the lock: the
+    // writer lets go there, so that slice queues behind it while the clock moves.
+    _setRetaskClockForTesting(() => {
+      const at = now;
+      if (holding && afterFirstSlice) letGo('clock');
+      return at;
+    });
+    // A safety net only, so a change in where the clock is read cannot hang the test.
+    const net = setTimeout(() => letGo('safety net'), 5_000);
+    const slices = sliceSizes(() => {
+      if (holding) return;
+      // While the first slice is announced, another writer takes the lock.
+      holding = _withSessionWriteLockForTesting(() => held);
+      setImmediate(() => { afterFirstSlice = true; });
+    });
+    _setRetaskSliceMsForTesting(20);
+    try {
+      expect(await unlinkSessionsFromTasks(['task-wait'])).toBe(400);
+    } finally {
+      clearTimeout(net);
+      letGo('cleanup');
+      await holding;
+    }
+    // Their own work costs nothing on this clock, so each slice is four times the last, up to what is
+    // left. Charged for the wait (300 ms for 100 sessions, at 20 ms a slice), the third would be 6.
+    expect(slices, slices.join(' ')).toEqual([25, 100, 275]);
+    // The writer was let go by the second slice's clock read, so that slice did queue behind it.
+    expect(releasedBy).toBe('clock');
   });
 
   it('a merge into a survivor already deleted clears the links instead', async () => {

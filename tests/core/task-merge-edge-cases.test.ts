@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
+import Database from 'better-sqlite3';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('task-merge-edge'));
@@ -22,7 +23,10 @@ import {
   getTask,
   listTasks,
   mergeTaskInto,
+  mergeTasksInto,
+  MergeTaskMissingError,
   updateTaskRaw,
+  _mergesInFlightForTesting,
 } from '../../src/core/task-manager.js';
 import { closeDb, getDb as getTaskDb } from '../../src/core/task-db.js';
 import type { Task } from '../../src/core/types.js';
@@ -130,6 +134,12 @@ describe('mergeTaskInto — structure and identity corners', () => {
 
     await expect(mergeTaskInto('nope-1', task.id)).rejects.toThrow(/not found/);
     await expect(mergeTaskInto(task.id, 'nope-2')).rejects.toThrow(/not found/);
+    // Typed, so the route answers 404 for a merge whose task went away while it waited (r5 gate, L-29).
+    await expect(mergeTaskInto('nope-1', task.id)).rejects.toMatchObject({ name: 'MergeTaskMissingError', role: 'survivor', taskId: 'nope-1' });
+    await expect(mergeTaskInto(task.id, 'nope-2')).rejects.toBeInstanceOf(MergeTaskMissingError);
+    await expect(mergeTaskInto(task.id, 'nope-2')).rejects.toMatchObject({ role: 'victim', taskId: 'nope-2' });
+    // A rejected merge leaves the queue: nothing counts as waiting or running.
+    expect(_mergesInFlightForTesting()).toBe(0);
 
     const after = await getTask(task.id);
     expect(after?.session_ids).toEqual(['s1']); // untouched
@@ -243,7 +253,9 @@ describe('mergeTaskInto — structure and identity corners', () => {
     await tracker.createSessionRecord('m14-survivor', survivor.id, 'P', '/tmp');
     let deleting: Promise<unknown> | null = null;
     const updatesOfTheDeleted: string[] = [];
+    const mergeDeletes: unknown[] = [];
     bus.subscribe('m14-delete-survivor', (event) => {
+      if (event.name === EventNames.TASK_DELETED && event.source === 'merge') mergeDeletes.push(event.data);
       if (event.name === EventNames.TASK_UPDATED && (event.data as { task: Task }).task.id === survivor.id && !survivorRow()) {
         updatesOfTheDeleted.push(event.source ?? '?');
       }
@@ -252,13 +264,16 @@ describe('mergeTaskInto — structure and identity corners', () => {
       deleting = deleteTask(survivor.id);
     }, { global: true }); // TASK_UPDATED is addressed to the web UI only
     let relinked = -1;
+    let survivorDeleted = false;
     try {
-      relinked = (await mergeTaskInto(survivor.id, victim.id)).sessionsRelinked;
+      ({ sessionsRelinked: relinked, survivorDeleted } = await mergeTaskInto(survivor.id, victim.id));
       await deleting;
     } finally {
       bus.unsubscribe('m14-delete-survivor');
     }
     expect(deleting).not.toBeNull();
+    // The merge says so, and the route answers what happened from it (r5 gate, L-28).
+    expect(survivorDeleted).toBe(true);
     // The delete landed while the merge ran: it re-pointed only the sessions before it.
     expect(relinked).toBeGreaterThan(0);
     expect(relinked).toBeLessThan(victims.length);
@@ -267,7 +282,35 @@ describe('mergeTaskInto — structure and identity corners', () => {
       expect((await tracker.getSessionByClaudeId(id))?.taskId, id).toBeUndefined();
     }
     expect(updatesOfTheDeleted).toEqual([]);
+    // The victim's delete names no task it went into: the survivor is gone too (r6 gate, MED-1).
+    expect(mergeDeletes).toHaveLength(1);
+    expect(mergeDeletes[0]).toMatchObject({ id: victim.id });
+    expect((mergeDeletes[0] as { mergedInto?: unknown }).mergedInto).toBeUndefined();
     done();
+  });
+
+  it('M16: the merge announces the victim delete by its id, so every open board drops the row (r5 gate, L-27)', async () => {
+    const { task: survivor } = await addTask({ title: 'A', project: 'P' });
+    const { task: victim } = await addTask({ title: 'A (copy)', project: 'P' });
+    const { bus, EventNames } = await import('../../src/core/event-bus.js');
+    const seen: Array<{ name: string; data: unknown; destinations: string[]; source?: string }> = [];
+    bus.subscribe('m16-merge-events', (event) => {
+      if (event.name === EventNames.TASK_DELETED || event.name === EventNames.TASK_UPDATED) seen.push(event);
+    }, { global: true }); // both are addressed to the web UI only
+    let result: Awaited<ReturnType<typeof mergeTaskInto>>;
+    try {
+      result = await mergeTaskInto(survivor.id, victim.id);
+    } finally {
+      bus.unsubscribe('m16-merge-events');
+    }
+    expect(result.survivorDeleted).toBe(false);
+    const deleted = seen.filter((e) => e.name === EventNames.TASK_DELETED);
+    expect(deleted).toHaveLength(1);
+    // It names where the work went, so a page open on the victim can say so and link there (r6 gate, MED-1).
+    expect(deleted[0]!.data).toMatchObject({ id: victim.id, task: { id: victim.id }, mergedInto: { id: survivor.id, title: 'A' } });
+    expect(deleted[0]!.destinations).toEqual(['web-ui']);
+    expect(deleted[0]!.source).toBe('merge');
+    expect(seen.find((e) => e.name === EventNames.TASK_UPDATED)?.data).toMatchObject({ task: { id: survivor.id } });
   });
 
   it('M15: two merges at once, A into B and B into C: every session follows to C', async () => {
@@ -289,5 +332,64 @@ describe('mergeTaskInto — structure and identity corners', () => {
     }
     expect((await listTasks()).map((t) => t.id)).toEqual([c.id]);
     done();
+  });
+  it('M17: a merge that fails for a reason other than a missing task is thrown and moves nothing (r6 gate, L-34)', async () => {
+    // Only a task gone before its turn is listed as not merged. Any other failure (a SQLite or disk
+    // error) must reach the caller: listed as "victim gone", the route answered "nothing was merged"
+    // (404) while part of that victim may have moved.
+    const { task: survivor } = await addTask({ title: 'Keep', project: 'P' });
+    const { task: victim } = await addTask({ title: 'Keep (copy)', project: 'P' });
+    const { task: next } = await addTask({ title: 'Keep (second copy)', project: 'P' });
+    await updateTaskRaw(victim.id, { session_ids: ['m17-v'] });
+    await expect(mergeTasksInto(survivor.id, [survivor.id])).rejects.toThrow(/same task/);
+    // The victim's row cannot be removed: the write of its merge fails.
+    const db = getTaskDb()!;
+    db.exec(`CREATE TRIGGER m17_refuse BEFORE DELETE ON tasks WHEN OLD.id = '${victim.id}' BEGIN SELECT RAISE(ABORT, 'm17: write refused'); END`);
+    try {
+      await expect(mergeTasksInto(survivor.id, [victim.id, next.id])).rejects.toThrow(/m17: write refused/);
+    } finally {
+      db.exec('DROP TRIGGER m17_refuse');
+    }
+    expect(_mergesInFlightForTesting()).toBe(0);
+    // Nothing moved: the victim keeps its link, the survivor did not take it, and the merge stopped
+    // there (the victim after it is still its own task).
+    expect((await getTask(victim.id)).session_ids).toEqual(['m17-v']);
+    expect((await getTask(survivor.id)).session_ids ?? []).not.toContain('m17-v');
+    expect((await listTasks()).map((t) => t.id).sort()).toEqual([survivor.id, victim.id, next.id].sort());
+  });
+
+  it('M18: a survivor that cannot be read back is an error, not a survivor deleted (r6 gate, L-34)', async () => {
+    // After the victims, the merge reads the survivor back for its answer. Only "no such task" means
+    // it was deleted meanwhile; any other read error must reach the caller, or the route answers
+    // survivor_deleted with no task for a survivor that still exists.
+    const { task: survivor } = await addTask({ title: 'Stay', project: 'P' });
+    const { task: victim } = await addTask({ title: 'Stay (copy)', project: 'P' });
+    const { tracker, bus, EventNames, done } = await slicedSessions();
+    await tracker.createSessionRecord('m18-v', victim.id, 'P', '/tmp');
+    // A second connection changes the task DB while the merge moves the victim's session (as another
+    // process would): the read-back then rescans the DB, and one of the tables it reads is gone.
+    const other = new Database(getTaskDb()!.name);
+    let broke = false;
+    bus.subscribe('m18-break-read-back', (event) => {
+      if (event.name !== EventNames.SESSION_STATUS_CHANGED || broke) return;
+      broke = true;
+      other.exec('ALTER TABLE task_projects RENAME TO task_projects_m18');
+    });
+    try {
+      try {
+        await expect(mergeTasksInto(survivor.id, [victim.id])).rejects.toThrow(/task_projects/);
+        expect(broke).toBe(true);
+        expect(_mergesInFlightForTesting()).toBe(0);
+      } finally {
+        bus.unsubscribe('m18-break-read-back');
+        if (broke) other.exec('ALTER TABLE task_projects_m18 RENAME TO task_projects');
+        other.close();
+      }
+      // The merge itself happened: the survivor exists and holds the victim's session.
+      expect((await listTasks()).map((t) => t.id)).toEqual([survivor.id]);
+      expect((await tracker.getSessionByClaudeId('m18-v'))?.taskId).toBe(survivor.id);
+    } finally {
+      done();
+    }
   });
 });

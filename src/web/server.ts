@@ -2863,6 +2863,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // (events-v1) and by reconcileAfterPull() from the auto-commit loop below.
       const { importProjectionOnCloud } = await import('../core/task-outbox.js')
       const { dispatchTaskOp, startTaskQueueFlush } = await import('../core/task-queue.js')
+      const { companionDeleteId } = await import('../core/task-deleted-id.js')
       bus.subscribe('task-outbox', (event) => {
         // Ops the apply path itself produced (import/apply) are event-silent, but
         // guard on source anyway in case that ever changes — echoing an applied
@@ -2879,7 +2880,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           project?: string; taskIds?: string[]; pins?: boolean
         }
         if (event.name === EventNames.TASK_DELETED) {
-          if (data.id) void dispatchTaskOp({ type: 'delete', id: data.id })
+          // Never a merge's victim: a plain delete there would drop its session links.
+          const id = companionDeleteId(event)
+          if (id) void dispatchTaskOp({ type: 'delete', id })
         } else if (event.name === EventNames.TASK_CREATED) {
           if (data.task) void dispatchTaskOp({ type: 'create', task: data.task })
         } else if (event.name === EventNames.TASK_REORDERED) {

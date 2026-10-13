@@ -29,6 +29,8 @@ import { isAwaitingTurnEnd } from './sessions/self-complete-stop.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
 import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
+import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
+import type { TaskMergedInto } from './event-types.js';
 import {
   clearProjectTombstone,
   recordProjectTombstone,
@@ -5113,8 +5115,30 @@ export async function deleteTasksByIds(
   return { deleted, failed };
 }
 
-/** The merges waiting and running (mergeTaskInto). */
+/** The merges waiting and running (mergeTaskInto), and how many there are. */
 let mergeQueue: Promise<unknown> = Promise.resolve();
+let mergesInFlight = 0;
+/** Tests only: how many merges are waiting or running. */
+export function _mergesInFlightForTesting(): number {
+  return mergesInFlight;
+}
+
+/**
+ * A merge whose survivor or victim is not in the store when its turn comes: it
+ * was deleted, or merged into another task, while the merge waited in the
+ * queue, or never existed. Nothing was merged. mergeTasksInto lists it, and
+ * the merge route answers 404 when nothing was merged, not 500 (r5 gate, L-29).
+ */
+export class MergeTaskMissingError extends Error {
+  public readonly role: 'survivor' | 'victim';
+  public readonly taskId: string;
+  constructor(role: 'survivor' | 'victim', taskId: string) {
+    super(`mergeTaskInto: ${role} "${taskId}" not found`);
+    this.name = 'MergeTaskMissingError';
+    this.role = role;
+    this.taskId = taskId;
+  }
+}
 
 /** Whether the task row is in the DB now: a committed, synchronous read. */
 function taskRowExists(id: string): boolean {
@@ -5137,21 +5161,101 @@ function taskRowExists(id: string): boolean {
  * Merges run one at a time, in call order. A merge moves the victim's sessions
  * in slices after its task commit, and a merge meanwhile that took the survivor
  * away (A into B while B goes into C) would find B gone and clear those links,
- * where they must follow B to C.
+ * where they must follow B to C. A merge whose survivor or victim is gone when
+ * its turn comes throws MergeTaskMissingError and changes nothing.
  */
 export async function mergeTaskInto(
   survivorId: string,
   victimId: string,
-): Promise<{ survivor: Task; sessionsRelinked: number }> {
-  const run = mergeQueue.then(() => mergeTaskIntoNow(survivorId, victimId));
-  mergeQueue = run.catch(() => undefined);
+): Promise<MergeTaskResult> {
+  return enqueueMerge(() => mergeTaskIntoNow(survivorId, victimId));
+}
+
+/** Run `fn` as the next turn of the merge queue. */
+function enqueueMerge<T>(fn: () => Promise<T>): Promise<T> {
+  mergesInFlight++;
+  const run = mergeQueue.then(fn);
+  const settled = () => { mergesInFlight--; };
+  mergeQueue = run.then(settled, settled);
   return run;
+}
+
+/**
+ * What a merge of several victims did (mergeTasksInto). `survivor` is the
+ * survivor as stored at the end of the merge, null when it is gone: deleted
+ * meanwhile, since no other merge runs inside one. `notMerged` lists victims
+ * not merged: the victim was gone when its turn came, or the survivor was.
+ */
+export interface MergeTasksResult {
+  survivor: Task | null;
+  mergedIds: string[];
+  notMerged: Array<{ id: string; reason: 'survivor_gone' | 'victim_gone' }>;
+  sessionsRelinked: number;
+}
+
+/**
+ * Merge several victims into one survivor in ONE turn of the merge queue, in
+ * order. Another merge queued meanwhile, one that takes the survivor away (B
+ * into C), waits for all of them: between two victims it would leave the rest
+ * with no survivor, and the answer would call a merge a delete (r6 review). A
+ * survivor or victim gone (deleted, or merged into another task, before its
+ * turn) is listed in `notMerged`, not thrown; any other error is thrown.
+ */
+export async function mergeTasksInto(
+  survivorId: string,
+  victimIds: readonly string[],
+): Promise<MergeTasksResult> {
+  return enqueueMerge(() => mergeTasksIntoNow(survivorId, victimIds));
+}
+
+async function mergeTasksIntoNow(survivorId: string, victimIds: readonly string[]): Promise<MergeTasksResult> {
+  const mergedIds: string[] = [];
+  const notMerged: MergeTasksResult['notMerged'] = [];
+  let sessionsRelinked = 0;
+  let survivorGone = false;
+  for (const victimId of victimIds) {
+    if (survivorGone) {
+      notMerged.push({ id: victimId, reason: 'survivor_gone' });
+      continue;
+    }
+    try {
+      const one = await mergeTaskIntoNow(survivorId, victimId);
+      mergedIds.push(victimId);
+      sessionsRelinked += one.sessionsRelinked;
+      if (one.survivorDeleted) survivorGone = true;
+    } catch (err) {
+      if (!(err instanceof MergeTaskMissingError)) throw err;
+      if (err.role === 'survivor') survivorGone = true;
+      notMerged.push({ id: victimId, reason: err.role === 'survivor' ? 'survivor_gone' : 'victim_gone' });
+    }
+  }
+  let survivor: Task | null = null;
+  if (!survivorGone) {
+    try {
+      survivor = await getTask(survivorId);
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes('No task found matching')) throw err;
+    }
+  }
+  return { survivor, mergedIds, notMerged, sessionsRelinked };
+}
+
+/**
+ * What a merge did. `survivorDeleted`: the survivor was deleted while the
+ * victim's sessions moved (by someone else). The victim is gone all the same,
+ * and the sessions not moved yet were left with no task, so none points at a
+ * deleted task.
+ */
+export interface MergeTaskResult {
+  survivor: Task;
+  sessionsRelinked: number;
+  survivorDeleted: boolean;
 }
 
 async function mergeTaskIntoNow(
   survivorId: string,
   victimId: string,
-): Promise<{ survivor: Task; sessionsRelinked: number }> {
+): Promise<MergeTaskResult> {
   if (survivorId === victimId) throw new Error('mergeTaskInto: survivor and victim are the same task');
   await ensureInit();
 
@@ -5159,8 +5263,8 @@ async function mergeTaskIntoNow(
     const store = await readStore();
     const survivor = store.tasks.find((t) => t.id === survivorId);
     const victim = store.tasks.find((t) => t.id === victimId);
-    if (!survivor) throw new Error(`mergeTaskInto: survivor "${survivorId}" not found`);
-    if (!victim) throw new Error(`mergeTaskInto: victim "${victimId}" not found`);
+    if (!survivor) throw new MergeTaskMissingError('survivor', survivorId);
+    if (!victim) throw new MergeTaskMissingError('victim', victimId);
 
     // Union session history; fill empty slots from the victim. A victim slot
     // the survivor can't take (its own slot is occupied) must still land in
@@ -5234,13 +5338,20 @@ async function mergeTaskIntoNow(
   // would come after its delete and put it back on every open board.
   let survivorDeleted = false;
   try { survivorDeleted = !taskRowExists(survivorId); } catch { /* keep the update */ }
-  if (!survivorDeleted) bus.emit(EventNames.TASK_UPDATED, { task: merged.survivor }, ['web-ui'], { source: 'merge' });
-  bus.emit(EventNames.TASK_DELETED, { task: merged.victim }, ['web-ui'], { source: 'merge' });
+  if (!survivorDeleted) bus.emit(EventNames.TASK_UPDATED, { task: merged.survivor }, ['web-ui'], { source: MERGE_EVENT_SOURCE });
+  // The board removes a row by the event's id: without it every other open
+  // window kept the merged task until a reload (r5 gate, L-27). `mergedInto`
+  // lets a page open on the victim say where its work went and link there
+  // (r6 gate, MED-1); a survivor deleted meanwhile is nowhere to go.
+  const mergedInto: TaskMergedInto | undefined = survivorDeleted
+    ? undefined
+    : { id: merged.survivor.id, title: merged.survivor.title };
+  bus.emit(EventNames.TASK_DELETED, { id: merged.victim.id, task: merged.victim, mergedInto }, ['web-ui'], { source: MERGE_EVENT_SOURCE });
   log.task.info('merged duplicate task into survivor', {
     survivorId, victimId, sessionsRelinked, survivorDeleted,
     sessionIds: merged.survivor.session_ids,
   });
-  return { survivor: merged.survivor, sessionsRelinked };
+  return { survivor: merged.survivor, sessionsRelinked, survivorDeleted };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

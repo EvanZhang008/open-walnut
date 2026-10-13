@@ -866,7 +866,7 @@ function MemoizedTextBlock({ content, cardScope, onClick }: { content: string; c
   );
 }
 
-function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick, cardScope }: ChatMessageProps) {
+function ChatMessageBubble({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick, cardScope }: ChatMessageProps) {
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // File path click → open the shared FileViewer overlay. Self-contained so every
@@ -893,7 +893,6 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   const labelsVersion = useEntityLabelsVersion();
 
   // Intercept clicks on task-link, session-link anchors, and lightbox images
-  // NOTE: ALL hooks must be declared before any early returns (Rules of Hooks).
   const handleContentClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
 
@@ -913,7 +912,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   }, [handleEntityClick, openLightbox]);
 
   const html = useMemo(() => {
-    // Skip markdown rendering for special message types that use early returns
+    // Special rows never reach the bubble (specialChatRow), so this is only a guard
     if (source === 'compacting' || source === 'compaction') return null;
     if (source === 'heartbeat' && (notification || role === 'user')) return null;
     // If no blocks, render content directly (legacy/history messages)
@@ -942,93 +941,11 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   // Everything else (triage, session results, normal chat) renders expanded.
   const isSystemInitiated = source === 'cron' || source === 'heartbeat';
 
-  // ── Early returns for special message types ──
   // Stable prop object for the message body: React 19 rewrites innerHTML whenever
   // the `dangerouslySetInnerHTML` OBJECT changes identity (hooks/useStableHtml.ts),
   // which replaces every child node and takes any text selection inside the bubble
-  // with it. Must stay above the early returns below — it is a hook.
+  // with it.
   const bodyProp = useStableHtml(html ?? '');
-
-  // These MUST come after all hooks (Rules of Hooks: same number of hooks every render).
-
-  // Compaction in-progress — spinner divider
-  if (source === 'compacting') {
-    return (
-      <div className="chat-compaction-divider">
-        <div className="chat-compaction-divider-header">
-          <span className="chat-compaction-divider-line" />
-          <span className="chat-compaction-divider-text" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, display: 'inline-block', verticalAlign: 'middle' }} />
-            Compacting conversation history...
-          </span>
-          <span className="chat-compaction-divider-line" />
-        </div>
-      </div>
-    );
-  }
-
-  // Compaction divider — header + collapsible markdown summary
-  if (source === 'compaction') {
-    const newlineIdx = content.indexOf('\n');
-    const header = newlineIdx >= 0 ? content.slice(0, newlineIdx) : content;
-    const details = newlineIdx >= 0 ? content.slice(newlineIdx + 1).trim() : '';
-
-    return (
-      <div className="chat-compaction-divider">
-        <div className="chat-compaction-divider-header">
-          <span className="chat-compaction-divider-line" />
-          <span
-            className="chat-compaction-divider-text"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(header) }}
-          />
-          <span className="chat-compaction-divider-line" />
-        </div>
-        {details && (
-          <CompactionDetails details={details} />
-        )}
-      </div>
-    );
-  }
-
-  // Heartbeat compact system-line style
-  if (isHeartbeat) {
-    const isHeartbeatOk = notification && role === 'assistant';
-    const isHeartbeatTrigger = role === 'user';
-
-    if (isHeartbeatOk || isHeartbeatTrigger) {
-      return (
-        <div className="chat-heartbeat-line">
-          <span className="chat-heartbeat-icon">{'\u2764\uFE0F'}</span>
-          <span className="chat-heartbeat-text">{isHeartbeatTrigger ? 'Heartbeat check' : 'All clear'}</span>
-          {time && <span className="chat-heartbeat-time">{time}</span>}
-        </div>
-      );
-    }
-    // Substantive heartbeat response falls through to normal rendering below
-  }
-
-  // Quick Start system banner — hidden. New launches stopped sending it
-  // (2026-07-31: titling + placement moved server-side), but old chat history
-  // still replays these entries, so the filter must stay.
-  if (source === 'quick-start' && role === 'user') {
-    return null;
-  }
-
-  // Interrupt marker \u2014 render as muted system banner instead of a misleading
-  // blue "You" bubble. Claude CLI writes `[Request interrupted by user]`
-  // whenever its AbortController fires without a reason \u2014 that includes SIGINT
-  // from walnut's health-monitor idle reap, not just a user-clicked Interrupt.
-  // Showing it as a user message makes automated reaps indistinguishable from
-  // the user's own action.
-  if (role === 'user' && content.trim() === '[Request interrupted by user]') {
-    return (
-      <div className="chat-interrupt-banner">
-        <span className="chat-interrupt-icon">{'\u23F9'}</span>
-        <span className="chat-interrupt-text">Turn interrupted</span>
-        {time && <span className="chat-interrupt-time">{time}</span>}
-      </div>
-    );
-  }
 
   // Determine the display label for the message header
   const isTriage = source === 'triage';
@@ -1416,6 +1333,110 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.onSessionClick === next.onSessionClick &&
     prev.cardScope === next.cardScope
   );
+}
+
+/**
+ * The rows that are not a chat bubble: the compaction spinner and divider, the
+ * heartbeat line, the hidden Quick Start banner and the interrupt marker.
+ * `undefined` means "render the bubble"; `null` means "render nothing". Pure (no
+ * hooks), so the dispatcher below can branch on it.
+ */
+function specialChatRow({ role, content, timestamp, source, notification }: ChatMessageProps): ReactNode | undefined {
+  const time = formatTimestamp(timestamp);
+
+  // Compaction in progress: spinner divider
+  if (source === 'compacting') {
+    return (
+      <div className="chat-compaction-divider">
+        <div className="chat-compaction-divider-header">
+          <span className="chat-compaction-divider-line" />
+          <span className="chat-compaction-divider-text" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, display: 'inline-block', verticalAlign: 'middle' }} />
+            Compacting conversation history...
+          </span>
+          <span className="chat-compaction-divider-line" />
+        </div>
+      </div>
+    );
+  }
+
+  // Compaction divider: header + collapsible markdown summary
+  if (source === 'compaction') {
+    const newlineIdx = content.indexOf('\n');
+    const header = newlineIdx >= 0 ? content.slice(0, newlineIdx) : content;
+    const details = newlineIdx >= 0 ? content.slice(newlineIdx + 1).trim() : '';
+
+    return (
+      <div className="chat-compaction-divider">
+        <div className="chat-compaction-divider-header">
+          <span className="chat-compaction-divider-line" />
+          <span
+            className="chat-compaction-divider-text"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(header) }}
+          />
+          <span className="chat-compaction-divider-line" />
+        </div>
+        {details && (
+          <CompactionDetails details={details} />
+        )}
+      </div>
+    );
+  }
+
+  // Heartbeat compact system-line style. A substantive heartbeat response is a
+  // bubble.
+  if (source === 'heartbeat') {
+    const isHeartbeatOk = notification && role === 'assistant';
+    const isHeartbeatTrigger = role === 'user';
+
+    if (isHeartbeatOk || isHeartbeatTrigger) {
+      return (
+        <div className="chat-heartbeat-line">
+          <span className="chat-heartbeat-icon">{'\u2764\uFE0F'}</span>
+          <span className="chat-heartbeat-text">{isHeartbeatTrigger ? 'Heartbeat check' : 'All clear'}</span>
+          {time && <span className="chat-heartbeat-time">{time}</span>}
+        </div>
+      );
+    }
+  }
+
+  // Quick Start system banner: hidden. New launches stopped sending it
+  // (2026-07-31: titling + placement moved server-side), but old chat history
+  // still replays these entries, so the filter must stay.
+  if (source === 'quick-start' && role === 'user') {
+    return null;
+  }
+
+  // Interrupt marker: render as muted system banner instead of a misleading
+  // blue "You" bubble. Claude CLI writes `[Request interrupted by user]`
+  // whenever its AbortController fires without a reason, and that includes SIGINT
+  // from walnut's health-monitor idle reap, not just a user-clicked Interrupt.
+  // Showing it as a user message makes automated reaps indistinguishable from
+  // the user's own action.
+  if (role === 'user' && content.trim() === '[Request interrupted by user]') {
+    return (
+      <div className="chat-interrupt-banner">
+        <span className="chat-interrupt-icon">{'\u23F9'}</span>
+        <span className="chat-interrupt-text">Turn interrupted</span>
+        {time && <span className="chat-interrupt-time">{time}</span>}
+      </div>
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * A special row and a bubble are two components, so React remounts across the
+ * switch instead of running a different number of hooks: a live row can change
+ * kind (agent:response retro-tags a streamed reply as a heartbeat), and a hook
+ * below a conditional return then crashes the whole tree.
+ * tests/web/hook-order-ratchet.test.ts pins this.
+ */
+function ChatMessageInner(props: ChatMessageProps) {
+  const special = specialChatRow(props);
+  if (special !== undefined) return special;
+  return <ChatMessageBubble {...props} />;
 }
 
 export const ChatMessage = memo(ChatMessageInner, arePropsEqual);

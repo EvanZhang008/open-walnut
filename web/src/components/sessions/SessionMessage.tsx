@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, memo } from 'react';
+import { useState, useCallback, useMemo, memo, type ReactNode } from 'react';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
 import type { StreamingBlock } from '@/stream/stream-reducer';
 import {
@@ -1007,12 +1007,14 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
 }
 
 
-export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
-  const { role, text: rawText, timestamp, tools: rawTools, thinking } = message;
-  // A reply's `[Q<n>]` tag names its question (question-tag.ts); the label above
-  // the turn shows the number, so the line itself never renders.
+/**
+ * The rows that are not a message bubble: a system line, the interrupt marker
+ * and a collapsed CLI-injected context row. `undefined` means "render the
+ * bubble". Pure (no hooks), so the dispatcher below can branch on it.
+ */
+function specialSessionRow({ message }: SessionMessageProps): ReactNode | undefined {
+  const { role, text: rawText, timestamp } = message;
   const text = role === 'assistant' ? stripQuestionTag(rawText ?? '') : rawText;
-  const tools = suppressTools || answerOnly ? undefined : rawTools;
   const time = formatTime(timestamp);
   const isUser = role === 'user';
 
@@ -1046,14 +1048,39 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   if (isUser && text
     && (message.injected || text.startsWith('Base directory for this skill:'))
     // Claude Code delivers another session's message as an INJECTED line. A line
-    // that is nothing but envelopes falls through to the ordinary path below, so
-    // the card gets the same wrapper, click delegation (task/session/file links)
-    // and context menu every other envelope has. Nothing-but is the test: a skill
-    // dump that quotes an envelope still has its own prose and stays collapsed.
+    // that is nothing but envelopes is no special row (undefined below), so the
+    // bubble renders it and the card gets the same wrapper, click delegation
+    // (task/session/file links) and context menu every other envelope has.
+    // Nothing-but is the test: a skill dump that quotes an envelope still has its
+    // own prose and stays collapsed.
     // Parsing is pure (no hook, this is a conditional branch).
     && !isEnvelopeOnly(parseSessionEnvelopes(text))) {
     return <InjectedContextRow text={text} />;
   }
+
+  return undefined;
+}
+
+/**
+ * A special row and a bubble are two components, so React remounts across the
+ * switch instead of running a different number of hooks when a row changes kind
+ * (a list keyed by position hands a row another message when earlier history
+ * loads). tests/web/hook-order-ratchet.test.ts pins this.
+ */
+export const SessionMessage = memo(function SessionMessage(props: SessionMessageProps) {
+  const special = specialSessionRow(props);
+  if (special !== undefined) return special;
+  return <SessionMessageBubble {...props} />;
+});
+
+function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
+  const { role, text: rawText, timestamp, tools: rawTools, thinking } = message;
+  // A reply's `[Q<n>]` tag names its question (question-tag.ts); the label above
+  // the turn shows the number, so the line itself never renders.
+  const text = role === 'assistant' ? stripQuestionTag(rawText ?? '') : rawText;
+  const tools = suppressTools || answerOnly ? undefined : rawTools;
+  const time = formatTime(timestamp);
+  const isUser = role === 'user';
 
   // Walnut sometimes PREPENDS a machine block ("[Conversation context]…") to the
   // message it hands the CLI, so the transcript stores that block inside the
@@ -1283,4 +1310,4 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
       )}
     </div>
   );
-});
+}

@@ -927,12 +927,41 @@ defineOp({
     const { survivor_id, victim_ids } = args
     const body = await call('POST', `/api/tasks/${encodeURIComponent(String(survivor_id))}/merge`, {
       victim_ids,
-    }) as { task?: unknown; merged?: number; sessions_relinked?: number }
+    }) as {
+      task?: unknown; merged?: number; merged_ids?: string[]; sessions_relinked?: number
+      survivor_deleted?: boolean; not_merged?: Array<{ id?: string; reason?: string }>
+    }
+    const extra = {
+      merged: body?.merged, sessions_relinked: body?.sessions_relinked,
+      ...(body?.merged_ids ? { merged_ids: body.merged_ids } : {}),
+      ...(body?.survivor_deleted ? { survivor_deleted: true } : {}),
+      ...(body?.not_merged?.length ? { not_merged: body.not_merged } : {}),
+    }
+    // Victims not merged: the victim, or the survivor, was gone when its turn came.
+    const notMerged = (body?.not_merged ?? []).map((v) => `${v.id ?? '?'} (${v.reason === 'victim_gone'
+      ? 'it was already deleted, or merged into another task' : 'the survivor was gone by then'})`)
+    const notMergedLine = notMerged.length > 0 ? ` Not merged: ${notMerged.join(', ')}.` : ''
+    const stillThere = (body?.not_merged ?? []).some((v) => v.reason === 'survivor_gone')
+    if (body?.survivor_deleted) {
+      // The victims went, and so did the survivor: someone deleted it while the
+      // merge ran. No ref: there is no task left to point at.
+      return withOutcome(
+        { ...extra, task: null },
+        `${body?.merged ?? 0} duplicate task(s) merged and deleted, but the survivor ${String(survivor_id)} `
+        + 'was deleted while the merge ran (not by this merge), so it no longer exists. '
+        + `The merged tasks' sessions are kept and now belong to no task.${notMergedLine}`,
+        stillThere
+          ? 'The tasks not merged are still there. Before merging them into a task that exists, check with the user '
+            + 'whether the survivor was deleted on purpose.'
+          : 'Do not retry the merge: the merged tasks are gone. Before recreating the work, check with the user '
+            + 'whether the survivor was deleted on purpose.',
+      )
+    }
     return withOutcome(
-      withRef(body?.task, { merged: body?.merged, sessions_relinked: body?.sessions_relinked }),
+      withRef(body?.task, extra),
       `${body?.merged ?? 0} duplicate task(s) deleted; `
       + `${body?.sessions_relinked ?? 0} session link(s) moved onto the survivor, so no conversation was lost. `
-      + 'Running sessions were not interrupted.',
+      + `Running sessions were not interrupted.${notMergedLine}`,
       `Read the survivor back if you need its merged state: walnut tools call task_get '{"id":"${taskId(body?.task) || String(survivor_id)}"}'`,
     )
   },

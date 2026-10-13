@@ -48,7 +48,15 @@ export interface TaskPhaseChangedEvent {
   /** The session whose API call made the change (x-walnut-caller-sid), when one did. */
   actorSid?: string;
 }
-export interface TaskDeletedEvent { id?: string; task: Task }
+export interface TaskDeletedEvent {
+  id?: string;
+  task: Task;
+  /** Set by a merge whose survivor still exists: where the task's work went, so
+   *  a page open on the victim can say so and link to it (task-deleted-id.ts). */
+  mergedInto?: TaskMergedInto;
+}
+/** The survivor a merged task went into, as a `task:deleted` names it. */
+export interface TaskMergedInto { id: string; title: string }
 /** `project` is the single grouping layer; '' = Inbox. */
 export interface TaskReorderedEvent { project: string; taskIds: string[] }
 export interface TaskUnblockedEvent { task: Task; unblockedBy: Task }

@@ -14,6 +14,7 @@ import { useShowPriority } from '@/hooks/useShowPriority';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { TagEditor } from '@/components/tasks/TagEditor';
 import { dateTags } from '../../../src/core/tag-model';
+import { pageTaskId, taskGoneAction, taskHref, type TaskGone } from './task-gone';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useEvent } from '@/hooks/useWebSocket';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
@@ -96,6 +97,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const [depSearch, setDepSearch] = useState('');
   const [depSearchResults, setDepSearchResults] = useState<Task[]>([]);
   const [archivedOpen, setArchivedOpen] = useState(false);
+  // The task went away under the page (task-gone.ts). Keyed to the page id it
+  // applies to, so a link to another task in the same window shows that task.
+  const [gone, setGone] = useState<TaskGone | null>(null);
   const sessionSend = useSessionSend(activeSessionId);
   const statusEpoch = useSessionStatusEpoch();
 
@@ -103,8 +107,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     location.key === 'default' ? navigate('/') : navigate(-1);
   }, [location.key, navigate]);
 
-  // Resolved full task ID — use for ALL event matching (URL param `id` may be a prefix)
-  const taskId = detail?.id ?? id;
+  // Resolved full task ID, used for ALL event matching (URL param `id` may be a
+  // prefix), and only while the detail is this page's task (task-gone.ts).
+  const taskId = pageTaskId(detail?.id, id);
 
   // The shared task store, when this surface has one. `/tasks/:id` renders while
   // the home board, the session columns and the dock stay mounted (App.tsx keeps
@@ -137,6 +142,8 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const loadTask = useCallback(() => {
     if (!id) return;
     setLoading(true);
+    // A link to another task reuses this page: an error from the last one is not this one's.
+    setError(null);
     fetchTask(id)
       .then(setDetail)
       .catch((e: Error) => setError(e.message))
@@ -260,9 +267,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     const { task: created } = data as { task?: Task };
     if (created?.parent_task_id === taskId) loadTask();
   });
+  // Merged: say where it went, with a link. Deleted: home in the app; a notice
+  // in a pop-out, which has no home and crashed navigating to one (r6 gate MED-1).
   useEvent('task:deleted', (data) => {
-    const { id: deletedId } = data as { id: string };
-    if (deletedId === taskId) navigate('/');
+    const action = taskGoneAction(data, taskId, id, isPopout);
+    if (action.kind === 'notice') setGone(action.gone);
+    else if (action.kind === 'navigate') navigate(action.to);
   });
 
   // Session events — all funnel through refetchSessions (no duplicated fetch logic)
@@ -336,7 +346,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     }
     try {
       await deleteTask(id);
-      navigate('/tasks');
+      // A pop-out stays put and says so: it has no task list to go back to.
+      if (isPopout) setGone({ forId: id });
+      else navigate('/tasks');
     } catch (e) {
       await alert({ title: 'Delete failed', message: (e as Error).message });
     }
@@ -377,6 +389,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     return { otherSessionIds: other, archivedSessionIds: archived };
   }, [task?.session_ids, sessionRecords, activeSessionIds, statusEpoch]);
 
+  if (gone && gone.forId === id) {
+    return <TaskGoneNotice gone={gone} isPopout={isPopout} onOpen={(to) => navigate(to)} onBack={handleBack} />;
+  }
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
   if (!task) return <div className="empty-state"><p>Task not found</p></div>;
@@ -466,7 +481,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                   </span>
                   <span
                     style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--border)' }}
-                    onClick={() => navigate(`/tasks/${dep.id}`)}
+                    onClick={() => navigate(taskHref(dep.id, isPopout))}
                   >
                     {dep.title}
                   </span>
@@ -503,7 +518,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                 <div key={dep.id} style={{ fontSize: '0.8rem', padding: '2px 0' }}>
                   <span
                     style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--border)' }}
-                    onClick={() => navigate(`/tasks/${dep.id}`)}
+                    onClick={() => navigate(taskHref(dep.id, isPopout))}
                   >
                     {dep.title}
                   </span>
@@ -524,7 +539,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
             <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', opacity: 0.5 }}>Parent Task</span>
             <div
               style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: 4, cursor: 'pointer' }}
-              onClick={() => navigate(`/tasks/${parent.id}`)}
+              onClick={() => navigate(taskHref(parent.id, isPopout))}
             >
               <span style={{
                 width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
@@ -557,7 +572,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                   padding: '6px 10px', borderRadius: '6px',
                   background: 'var(--bg-secondary)', cursor: 'pointer',
                 }}
-                onClick={() => navigate(`/tasks/${child.id}`)}
+                onClick={() => navigate(taskHref(child.id, isPopout))}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)'; }}
               >
@@ -863,6 +878,45 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         />
       </aside>
       </div>{/* /tdv2-body */}
+    </div>
+  );
+}
+
+/**
+ * The page once its task is gone (task-gone.ts): merged into a task that still
+ * exists, with a link to it (in the same pop-out when this is one), or deleted.
+ */
+function TaskGoneNotice({ gone, isPopout, onOpen, onBack }: {
+  gone: TaskGone;
+  isPopout: boolean;
+  onOpen: (to: string) => void;
+  onBack: () => void;
+}) {
+  const into = gone.mergedInto;
+  const href = into ? taskHref(into.id, isPopout) : null;
+  return (
+    <div className="empty-state task-gone-notice" role="status" data-testid="task-gone-notice">
+      {into && href ? (
+        <p>
+          This task was merged into{' '}
+          <a
+            className="task-gone-link"
+            href={href}
+            onClick={(e) => {
+              // A plain click stays in this window; a modified one opens where the browser says.
+              if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              onOpen(href);
+            }}
+          >
+            {into.title || 'another task'}
+          </a>
+          .
+        </p>
+      ) : (
+        <p>This task was deleted.</p>
+      )}
+      {!isPopout && <button className="btn" style={{ marginTop: 12 }} onClick={onBack}>Back</button>}
     </div>
   );
 }

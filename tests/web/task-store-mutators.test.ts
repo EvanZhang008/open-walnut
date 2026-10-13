@@ -159,6 +159,26 @@ describe('task phase event ownership', () => {
   })
 })
 
+describe('a task:deleted from the server', () => {
+  // The r5 gate's L-27: a merge sent `{ task }` alone, the handler read only `id`, and every other
+  // open window kept the merged task until a reload.
+  it('removes the row it names, by its id or by its task', () => {
+    mount([task({ id: 'keep' }), task({ id: 'by-id' }), task({ id: 'by-task' })])
+    eventHandlers.get('task:deleted')?.({ id: 'by-id', task: task({ id: 'by-id' }) })
+    expect(rows().map((t) => t.id)).toEqual(['keep', 'by-task'])
+    eventHandlers.get('task:deleted')?.({ task: task({ id: 'by-task' }) })
+    expect(rows().map((t) => t.id)).toEqual(['keep'])
+  })
+
+  it('an event that names no task removes nothing', () => {
+    const tasks = [task({ id: 'keep' })]
+    mount(tasks)
+    eventHandlers.get('task:deleted')?.({})
+    eventHandlers.get('task:deleted')?.({ task: null })
+    expect(rows()).toBe(tasks)
+  })
+})
+
 describe('applyTagInstructions', () => {
   it('unions add_tags onto the existing tags, keeping order and deduping', () => {
     expect(applyTagInstructions({ tags: ['k:a', 'k:b'] }, { add_tags: ['k:b', 'k:c'] }))
