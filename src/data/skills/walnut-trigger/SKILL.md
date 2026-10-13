@@ -285,3 +285,7 @@ task with them.
   disk.
 - The task's TRIGGER pill and the Routines page show the same thing, with Pause
   and Resume.
+- While the Walnut server is away (an answer says `offline: true`), your host
+  answers these itself for the triggers it checks: list, test, pause, resume
+  (one paused there) and delete take effect at once and reach Walnut when the
+  server is back. `trigger_create` waits for the server.

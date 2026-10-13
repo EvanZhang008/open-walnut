@@ -164,7 +164,7 @@ describe('offline host: the read copy', () => {
     h.host.configure(slice())
     const r = await h.host.handle(HOME, A, 'tools.list', {})
     expect(r.ok && (r.result.ops as Array<{ name: string }>).map((o) => o.name)).toEqual(
-      ['task_get', 'task_list', 'session_list', 'task_send', 'request_get', 'task_update', 'task_complete'])
+      ['task_get', 'task_list', 'session_list', 'task_send', 'request_get', 'task_update', 'task_complete', 'walnut_status'])
   })
 })
 

@@ -112,6 +112,9 @@ server", so on a shared host a test server could answer the real Walnut's calls.
 | `task_update`, `task_complete` | journaled with the caller and time, applied to the read copy so later reads agree, replayed through the op registry on reconnect |
 | `note_read`, `note_search`, `memory_read`, `skill_read` | from the host's copy of notes, memory and skills, when the host keeps that kind (docs/plan/walnut-control-plane.md "What a host keeps"); also while the server is silent or a relayed read timed out |
 | `open_items` (and the compact hook) | from the copy: the caller's unfinished subtasks, the requests it waits on and owes (with what this host settled or opened since), its Board; worded by the server's own formatter (`open-items-text.ts`) |
+| `trigger_list`, `trigger_test` | the checks run on this host, so it answers itself (`offline-triggers-v1`): the triggers it checks for this Walnut with their last check and next run; a test runs here, in the caller's folder when the call names none. A check on another host needs the server |
+| `trigger_pause`, `trigger_resume`, `trigger_delete` | take effect here at once (the check stops or starts), journaled with the trigger's def and replayed through the same op on reconnect. Until the server has taken the record, a set it pushes does not undo the change, and a daemon restart keeps it. A resume here works only for a trigger paused here; one paused before the server went away is not in this host's set |
+| `walnut_status` | that the server is not answering this host, how old the copy is, how many records wait for the server, and what this host answers meanwhile |
 | anything else | `hub_unreachable`, with a message listing what works offline |
 
 On the Mac, a session's `walnut` is the installed Walnut CLI, which talks to the
@@ -122,8 +125,9 @@ environment, so Mac sessions get the same offline answers while the server
 restarts.
 
 What deliberately stays on the server: starting sessions (the launch recipe:
-model, prompt, environment), creating tasks (placement rules), cross-host
-messages, writing notes and memory, the human inbox.
+model, prompt, environment), creating tasks (placement rules), creating a
+trigger (a routine: its id, the task it parks), cross-host messages, writing
+notes and memory, the human inbox.
 
 ### Handover
 

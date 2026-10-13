@@ -128,6 +128,15 @@ One bad item never fails a run (`parseCheckStdout`, `src/providers/trigger-check
 
 A trigger message that sat in a session's queue over an hour gets a line under its opening tag saying when it was queued and how late it is, rewritten on every later write (`src/core/routines/trigger-stale.ts`, applied when the queue picks the row). 2026-10-10: a fire queued 10-06 was written into a new CLI process four days later because the first process never took the line.
 
+### Trigger calls while the Walnut is away
+
+The checks run on the host, so the host answers its sessions' trigger calls while their Walnut server does not (`offline-triggers-v1`, `src/providers/offline-host-core.ts`). Before it, every one of them needed the server: the clouddev transcripts from 2026-10-05 to 10-13 hold about 40 `trigger_list`, `trigger_test`, `trigger_delete` and `trigger_pause` calls answered "needs the Walnut server" while the Mac slept, so a watch could not even be switched off.
+
+- `trigger_list`: the triggers this host checks for that Walnut (those whose def names its data dir in `deliver`), with the daemon's last check, next run, error count and unacked fires.
+- `trigger_test`: run once here through the same runner as `triggers.test` (one cap of 4 for both), in the caller's folder when the call names none.
+- `trigger_pause`, `trigger_resume`, `trigger_delete`: take effect at once and are journaled as `op` records carrying the trigger's def. The daemon arms the server's last set with these **holds** applied (`triggerHolds()`, the last record per id the server has not taken), so a pause holds against a set the returning Mac pushes before its journal drains, and across a daemon restart. The server replays each record through the same op, in order, as the caller (`offline-handover.ts`), then pushes its own set. A resume here works only for a trigger paused here, from the def its record kept.
+- `trigger_create` stays with the server: a trigger is a routine, and creating one mints its id and parks the task.
+
 ## Limits (cron storms have burned this repo)
 
 | Limit | Default | On breach |

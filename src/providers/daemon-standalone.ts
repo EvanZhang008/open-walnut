@@ -74,7 +74,7 @@ import { createFsLs } from './fs-ls-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
-import { createOfflineHost, type HostSlice, type LeaderDelivery } from './offline-host-core.js'
+import { createOfflineHost, type HostSlice, type LeaderDelivery, type OfflineTrigger } from './offline-host-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
@@ -2814,6 +2814,19 @@ const offlineHost = createOfflineHost({
   replica: hostReplica,
   openItems: createOpenItemsText(),
   search: createOfflineSearch(),
+  // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
+  triggers: {
+    armed: () => [...armedTriggers.values()].map((e) => ({
+      def: e.def as unknown as OfflineTrigger,
+      status: {
+        nextRunAtMs: e.nextRunAtMs, running: e.running, consecutiveErrors: e.state.consecutiveErrors,
+        lastRunAtMs: e.state.lastRunAtMs, lastFireAtMs: e.state.lastFireAtMs, pendingFires: e.state.pendingFires.length,
+      },
+    })),
+    test: async (check, triggerId) => (await runTriggerTest(check, triggerId)) as unknown as Record<string, unknown>,
+    changed: () => triggerHoldsChanged(),
+    cwdOf: (sid) => sessions.get(sid)?.cwd,
+  },
   log: (level, msg, data) => logMsg(level, msg, data),
   isLive: (sid) => sessions.get(sid)?.state === 'running',
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
@@ -3380,7 +3393,11 @@ function cmdOfflineDrain(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 
 function cmdOfflineAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (typeof cmd.home !== 'string' || !cmd.home || typeof cmd.upTo !== 'number') return sendError(ws, id, 'offline.ack: missing home or upTo')
+  const held = offlineHost.triggerHolds().size
   sendOk(ws, id, offlineHost.ack(cmd.home, cmd.upTo))
+  // The server took the trigger changes made here: from now on its set alone
+  // decides (a change it refused is undone here too; its push for one it applied follows).
+  if (held > 0 && offlineHost.triggerHolds().size !== held) triggerHoldsChanged()
 }
 
 // The host's copy ('host-replica-v1'): trusted sockets only, like host.slice.
@@ -4577,6 +4594,12 @@ const armedTriggers = new Map<string, ArmedTrigger>()
  */
 const hostDeliveriesInFlight = new Map<string, Set<number>>()
 let armedTriggersHash: string | null = null
+/**
+ * The set as the server last sent it (or as triggers.json kept it). What is armed
+ * is this set with the pauses, resumes and deletes a session made here while its
+ * Walnut was away (offlineHost.triggerHolds), until the server has taken them.
+ */
+let configuredTriggerDefs: TriggerDef[] = []
 let triggerTickTimer: ReturnType<typeof setInterval> | null = null
 let triggerTestsRunning = 0
 const triggersConfigureGate = new DaemonSessionGate()
@@ -4702,7 +4725,9 @@ function loadTriggersAtBoot(): void {
     }
     defs.push(parsed.def)
   }
-  for (const def of defs) {
+  configuredTriggerDefs = defs
+  // A pause made here while the server was away holds across a restart too.
+  for (const def of effectiveTriggerDefs(defs)) {
     armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now))
   }
   armedTriggersHash = triggersSetHash(defs)
@@ -4907,6 +4932,51 @@ function tickTriggers(): void {
   replayPendingFires(now)
 }
 
+/**
+ * The server's set with what a session changed here while its Walnut was away
+ * and the server has not taken yet: a trigger paused or deleted here stays off
+ * even when a set that still carries it arrives first (the reconnect pushes the
+ * set while the journal drains), and one paused and resumed here runs from the
+ * def it had.
+ */
+function effectiveTriggerDefs(defs: TriggerDef[]): TriggerDef[] {
+  const holds = offlineHost.triggerHolds()
+  if (holds.size === 0) return defs
+  const out = defs.filter((def) => holds.get(def.id)?.on !== false)
+  for (const [tid, hold] of holds) {
+    if (!hold.on || !hold.def || out.some((def) => def.id === tid)) continue
+    const parsed = validateTriggerDef(hold.def)
+    if (parsed.ok) out.push(parsed.def)
+  }
+  return out
+}
+
+/**
+ * Arm exactly `defs`. Disarming forgets the trigger but KEEPS its state file: a
+ * disable-then-enable (or a push that briefly carries an empty set) must not
+ * destroy the dedup set, the script's cursor or an unacked fire. Stale files age
+ * out instead.
+ */
+function armTriggerSet(defs: TriggerDef[], now: number): void {
+  const ids = new Set(defs.map((def) => def.id))
+  for (const [tid] of armedTriggers) {
+    if (!ids.has(tid)) armedTriggers.delete(tid)
+  }
+  for (const def of defs) {
+    const existing = armedTriggers.get(def.id)
+    // A trigger that stays keeps its state file, its cursor and its schedule;
+    // only the definition is refreshed.
+    if (existing) { existing.def = def; continue }
+    armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now))
+  }
+}
+
+/** A session paused, resumed or deleted a trigger here: arm by it now. */
+function triggerHoldsChanged(): void {
+  armTriggerSet(effectiveTriggerDefs(configuredTriggerDefs), Date.now())
+  logMsg('info', 'triggers rearmed after a change on this host', { armed: armedTriggers.size, configured: configuredTriggerDefs.length })
+}
+
 function cmdTriggersConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   return triggersConfigureGate.run('triggers.configure', () => configureTriggers(ws, id, cmd))
 }
@@ -4931,20 +5001,8 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   const now = Date.now()
   const hash = triggersSetHash(defs)
   const changed = hash !== armedTriggersHash
-  // Disarming forgets the trigger but KEEPS its state file: a disable-then-enable
-  // (or a push that briefly carries an empty set) must not destroy the dedup set,
-  // the script's cursor or an unacked fire. Stale files age out instead.
-  for (const [tid] of armedTriggers) {
-    if (seenIds.has(tid)) continue
-    armedTriggers.delete(tid)
-  }
-  for (const def of defs) {
-    const existing = armedTriggers.get(def.id)
-    // A trigger that stays keeps its state file, its cursor and its schedule;
-    // only the definition is refreshed.
-    if (existing) { existing.def = def; continue }
-    armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now))
-  }
+  configuredTriggerDefs = defs
+  armTriggerSet(effectiveTriggerDefs(defs), now)
   if (changed) persistTriggersFile(defs)
   armedTriggersHash = hash
   pruneTriggerStateFiles(now)
@@ -4961,9 +5019,19 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
 
 /** Run once and answer; NEVER touch stored state (the form's Test button). */
 async function cmdTriggersTest(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const raw = cmd.check as Record<string, unknown> | undefined
+  try {
+    const result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined)
+    sendOk(ws, id, { result: result as unknown as Record<string, unknown> })
+  } catch (err) {
+    sendError(ws, id, (err as Error).message)
+  }
+}
+
+/** One test run (triggers.test, and trigger_test while the Walnut is away); rejects with the refusal. */
+async function runTriggerTest(check: unknown, targetId: string | undefined): Promise<TriggersTestResult> {
+  const raw = check as Record<string, unknown> | undefined
   if (!raw || typeof raw !== 'object' || typeof raw.run !== 'string' || !raw.run.trim()) {
-    return sendError(ws, id, 'triggers.test: check.run is required')
+    throw new Error('triggers.test: check.run is required')
   }
   const spec: TriggerCheckSpec = {
     run: raw.run,
@@ -4971,12 +5039,11 @@ async function cmdTriggersTest(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
     timeoutSeconds: clampTimeoutSeconds(raw.timeoutSeconds),
   }
   if (triggerTestsRunning >= TRIGGER_TEST_MAX_CONCURRENT) {
-    return sendError(ws, id, `triggers.test: too many concurrent tests (max ${TRIGGER_TEST_MAX_CONCURRENT})`)
+    throw new Error(`triggers.test: too many concurrent tests (max ${TRIGGER_TEST_MAX_CONCURRENT})`)
   }
   triggerTestsRunning += 1
   try {
     const now = Date.now()
-    const targetId = triggerIdOf(cmd) || undefined
     const entry = targetId ? armedTriggers.get(targetId) : undefined
     const state = entry ? entry.state : emptyHostState(now)
     const proc = await runCheckProcess(spec, buildCheckStdin(state, now), {
@@ -5008,7 +5075,7 @@ async function cmdTriggersTest(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
       run: spec.run.slice(0, 200), cwd: spec.cwd, exitCode: proc.exitCode,
       durationMs: proc.durationMs, ok: result.ok,
     })
-    sendOk(ws, id, { result: result as unknown as Record<string, unknown> })
+    return result
   } finally {
     triggerTestsRunning -= 1
   }

@@ -399,6 +399,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'triggers-v1',
   'trigger-claim-v1',
   'trigger-host-resume-v1',
+  // 'offline-triggers-v1': while a Walnut does not answer this host, the host
+  // answers its sessions' trigger_list and trigger_test itself (the checks run
+  // here), and takes trigger_pause / trigger_resume / trigger_delete at once,
+  // journaled for the server like a queued task write; until the server has taken
+  // them, a set it pushes does not undo them. Informational. Sidecar-gated in the
+  // source twin like triggers-v1.
+  'offline-triggers-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs-write-atomic-v1',

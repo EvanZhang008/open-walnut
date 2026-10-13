@@ -3155,9 +3155,16 @@ describe('walnut-trigger daemon parity', () => {
       const cfgStart = src.indexOf('async function configureTriggers(')
       expect(cfgStart).toBeGreaterThan(-1)
       const cfgBody = src.slice(cfgStart, src.indexOf('\n}', cfgStart))
-      expect(cfgBody).toMatch(/armedTriggers\.delete\(tid\)/)
+      // Arming and disarming live in armTriggerSet, which a change made on the
+      // host (offline-triggers-v1) runs too.
+      expect(cfgBody).toMatch(/armTriggerSet\(effectiveTriggerDefs\(defs\), now\)/)
       expect(cfgBody, 'a disarmed trigger keeps its state file').not.toMatch(/unlink/)
       expect(cfgBody).toMatch(/pruneTriggerStateFiles\(now\)/)
+      const armStart = src.indexOf('function armTriggerSet(')
+      expect(armStart).toBeGreaterThan(-1)
+      const armBody = src.slice(armStart, src.indexOf('\n}', armStart))
+      expect(armBody).toMatch(/armedTriggers\.delete\(tid\)/)
+      expect(armBody, 'a disarmed trigger keeps its state file').not.toMatch(/unlink/)
       const bootStart = src.indexOf('function loadTriggersAtBoot(')
       expect(src.slice(bootStart, src.indexOf('\n}', bootStart))).toMatch(/pruneTriggerStateFiles\(now\)/)
       const pruneStart = src.indexOf('function pruneTriggerStateFiles(')
@@ -3214,7 +3221,9 @@ describe('walnut-trigger daemon parity', () => {
   it('both cap concurrent triggers.test runs and log one line per test', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       expect(src).toMatch(/TRIGGER_TEST_MAX_CONCURRENT = 4/)
-      const start = src.indexOf('function cmdTriggersTest(')
+      // triggers.test and the host's own trigger_test share one runner (and so one cap).
+      expect(src.slice(src.indexOf('function cmdTriggersTest('), src.indexOf('\n}', src.indexOf('function cmdTriggersTest(')))).toMatch(/runTriggerTest\(cmd\.check/)
+      const start = src.indexOf('function runTriggerTest(')
       expect(start).toBeGreaterThan(-1)
       const body = src.slice(start, src.indexOf('\n}', start))
       expect(body).toMatch(/triggerTestsRunning >= TRIGGER_TEST_MAX_CONCURRENT/)
@@ -3242,8 +3251,8 @@ describe('walnut-trigger daemon parity', () => {
     expect(templateSrc).toMatch(/require\(path\.join\(__dirname, 'trigger-check-core\.cjs'\)\)/)
     expect(
       templateSrc.split('triggers unsupported: trigger-check-core sidecar not loaded').length - 1,
-      'each triggers.* command must refuse when the sidecar is missing',
-    ).toBe(4)
+      'each triggers.* command, and the test runner the host\'s own trigger_test calls, must refuse when the sidecar is missing',
+    ).toBe(5)
   })
 
   it('the sidecar source is hashed into the daemon version, in the same slot as the build script', () => {

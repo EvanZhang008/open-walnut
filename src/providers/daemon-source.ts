@@ -197,7 +197,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'acp-model-catalog-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'acp-model-catalog-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3970,6 +3970,24 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   openItems: (__CREATE_OPEN_ITEMS_TEXT__)(),
   replica: hostReplica,
   search: (__CREATE_OFFLINE_SEARCH__)(),
+  // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
+  triggers: {
+    armed: function () {
+      if (!triggerCheckCore) return [];
+      return [...armedTriggers.values()].map(function (e) {
+        return {
+          def: e.def,
+          status: {
+            nextRunAtMs: e.nextRunAtMs, running: e.running, consecutiveErrors: e.state.consecutiveErrors,
+            lastRunAtMs: e.state.lastRunAtMs, lastFireAtMs: e.state.lastFireAtMs, pendingFires: e.state.pendingFires.length,
+          },
+        };
+      });
+    },
+    test: function (check, triggerId) { return runTriggerTest(check, triggerId); },
+    changed: function () { triggerHoldsChanged(); },
+    cwdOf: function (sid) { var s = sessions.get(sid); return s ? s.cwd : undefined; },
+  },
   log: function (level, msg, data) { logMsg(level, msg, data); },
   isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
   turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
@@ -4496,7 +4514,11 @@ function cmdOfflineDrain(ws, id, cmd) {
 
 function cmdOfflineAck(ws, id, cmd) {
   if (typeof cmd.home !== 'string' || !cmd.home || typeof cmd.upTo !== 'number') return sendError(ws, id, 'offline.ack: missing home or upTo');
+  var held = offlineHost.triggerHolds().size;
   sendOk(ws, id, offlineHost.ack(cmd.home, cmd.upTo));
+  // The server took the trigger changes made here: from now on its set alone
+  // decides (a change it refused is undone here too; its push for one it applied follows).
+  if (held > 0 && offlineHost.triggerHolds().size !== held) triggerHoldsChanged();
 }
 
 // The host's copy (host-replica-v1): trusted sockets only, like host.slice
@@ -5952,6 +5974,10 @@ var armedTriggers = new Map();
 // trigger mid-write must not make its fires claimable.
 var hostDeliveriesInFlight = new Map();
 var armedTriggersHash = null;
+// The set as the server last sent it (or triggers.json kept it); what is armed is
+// this set with the holds a session made here while its Walnut was away
+// (offlineHost.triggerHolds). Mirror daemon-standalone.ts.
+var configuredTriggerDefs = [];
 var triggerTickTimer = null;
 var triggerTestsRunning = 0;
 
@@ -6081,8 +6107,11 @@ function loadTriggersAtBoot() {
     }
     defs.push(parsed.def);
   }
-  for (var d = 0; d < defs.length; d++) {
-    armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], readTriggerState(defs[d].id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now));
+  configuredTriggerDefs = defs;
+  // A pause made here while the server was away holds across a restart too.
+  var armedDefs = effectiveTriggerDefs(defs);
+  for (var d = 0; d < armedDefs.length; d++) {
+    armedTriggers.set(armedDefs[d].id, newArmedTrigger(armedDefs[d], readTriggerState(armedDefs[d].id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now));
   }
   armedTriggersHash = triggerCheckCore.triggersSetHash(defs);
   try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }); } catch {}
@@ -6294,6 +6323,47 @@ function tickTriggers() {
   replayPendingFires(now);
 }
 
+// The server's set with what a session changed here while its Walnut was away and
+// the server has not taken yet: a trigger paused or deleted here stays off even
+// when a set that still carries it arrives first, and one paused and resumed here
+// runs from the def it had. Mirror daemon-standalone.ts.
+function effectiveTriggerDefs(defs) {
+  var holds = offlineHost.triggerHolds();
+  if (holds.size === 0) return defs;
+  var out = defs.filter(function (def) { var h = holds.get(def.id); return !h || h.on !== false; });
+  for (const [tid, hold] of holds) {
+    if (!hold.on || !hold.def || out.some(function (def) { return def.id === tid; })) continue;
+    var parsed = triggerCheckCore.validateTriggerDef(hold.def);
+    if (parsed.ok) out.push(parsed.def);
+  }
+  return out;
+}
+
+// Arm exactly defs. Disarming forgets the trigger but KEEPS its state file: a
+// disable-then-enable (or a push that briefly carries an empty set) must not
+// destroy the dedup set, the script's cursor or an unacked fire. Stale files age
+// out instead.
+function armTriggerSet(defs, now) {
+  var ids = new Set(defs.map(function (def) { return def.id; }));
+  for (const tid of [...armedTriggers.keys()]) {
+    if (!ids.has(tid)) armedTriggers.delete(tid);
+  }
+  for (var d = 0; d < defs.length; d++) {
+    var existing = armedTriggers.get(defs[d].id);
+    // A trigger that stays keeps its state file, its cursor and its schedule;
+    // only the definition is refreshed.
+    if (existing) { existing.def = defs[d]; continue; }
+    armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], readTriggerState(defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now));
+  }
+}
+
+// A session paused, resumed or deleted a trigger here: arm by it now.
+function triggerHoldsChanged() {
+  if (!triggerCheckCore) return;
+  armTriggerSet(effectiveTriggerDefs(configuredTriggerDefs), Date.now());
+  logMsg('info', 'triggers rearmed after a change on this host', { armed: armedTriggers.size, configured: configuredTriggerDefs.length });
+}
+
 function cmdTriggersConfigure(ws, id, cmd) {
   if (!triggerCheckCore) return sendError(ws, id, 'triggers unsupported: trigger-check-core sidecar not loaded');
   return sessionStartGate.run('triggers.configure', function () { return configureTriggers(ws, id, cmd); });
@@ -6319,20 +6389,8 @@ async function configureTriggers(ws, id, cmd) {
   var now = Date.now();
   var hash = triggerCheckCore.triggersSetHash(defs);
   var changed = hash !== armedTriggersHash;
-  // Disarming forgets the trigger but KEEPS its state file: a disable-then-enable
-  // (or a push that briefly carries an empty set) must not destroy the dedup set,
-  // the script's cursor or an unacked fire. Stale files age out instead.
-  for (const tid of [...armedTriggers.keys()]) {
-    if (seenIds.has(tid)) continue;
-    armedTriggers.delete(tid);
-  }
-  for (var d = 0; d < defs.length; d++) {
-    var existing = armedTriggers.get(defs[d].id);
-    // A trigger that stays keeps its state file, its cursor and its schedule;
-    // only the definition is refreshed.
-    if (existing) { existing.def = defs[d]; continue; }
-    armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], readTriggerState(defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now));
-  }
+  configuredTriggerDefs = defs;
+  armTriggerSet(effectiveTriggerDefs(defs), now);
   if (changed) persistTriggersFile(defs);
   armedTriggersHash = hash;
   pruneTriggerStateFiles(now);
@@ -6352,19 +6410,29 @@ async function configureTriggers(ws, id, cmd) {
 // Run once and answer; NEVER touch stored state (the form's Test button).
 async function cmdTriggersTest(ws, id, cmd) {
   if (!triggerCheckCore) return sendError(ws, id, 'triggers unsupported: trigger-check-core sidecar not loaded');
-  var raw = cmd.check;
+  try {
+    var result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined);
+    sendOk(ws, id, { result: result });
+  } catch (err) {
+    sendError(ws, id, err && err.message ? err.message : String(err));
+  }
+}
+
+// One test run (triggers.test, and trigger_test while the Walnut is away); rejects with the refusal.
+async function runTriggerTest(check, targetId) {
+  if (!triggerCheckCore) throw new Error('triggers unsupported: trigger-check-core sidecar not loaded');
+  var raw = check;
   if (!raw || typeof raw !== 'object' || typeof raw.run !== 'string' || !raw.run.trim()) {
-    return sendError(ws, id, 'triggers.test: check.run is required');
+    throw new Error('triggers.test: check.run is required');
   }
   var spec = { run: raw.run, timeoutSeconds: triggerCheckCore.clampTimeoutSeconds(raw.timeoutSeconds) };
   if (typeof raw.cwd === 'string' && raw.cwd) spec.cwd = raw.cwd;
   if (triggerTestsRunning >= TRIGGER_TEST_MAX_CONCURRENT) {
-    return sendError(ws, id, 'triggers.test: too many concurrent tests (max ' + TRIGGER_TEST_MAX_CONCURRENT + ')');
+    throw new Error('triggers.test: too many concurrent tests (max ' + TRIGGER_TEST_MAX_CONCURRENT + ')');
   }
   triggerTestsRunning += 1;
   try {
     var now = Date.now();
-    var targetId = triggerIdOf(cmd) || undefined;
     var entry = targetId ? armedTriggers.get(targetId) : undefined;
     var state = entry ? entry.state : triggerCheckCore.emptyHostState(now);
     var proc = await triggerCheckCore.runCheckProcess(spec, triggerCheckCore.buildCheckStdin(state, now), {
@@ -6386,19 +6454,17 @@ async function cmdTriggersTest(ws, id, cmd) {
       run: spec.run.slice(0, 200), cwd: spec.cwd, exitCode: proc.exitCode,
       durationMs: proc.durationMs, ok: !error,
     });
-    sendOk(ws, id, {
-      result: {
-        ok: !error,
-        exitCode: proc.exitCode,
-        durationMs: proc.durationMs,
-        stdoutTail: proc.stdout.slice(-TRIGGER_STDOUT_TAIL),
-        stderrTail: proc.stderrTail,
-        parsed: output,
-        error: error,
-        wouldFire: !!output && triggerCheckCore.decideCheck(def, output, state, now).kind === 'fire',
-        newItemCount: output ? triggerCheckCore.newItemsOf(output.items, state).length : 0,
-      },
-    });
+    return {
+      ok: !error,
+      exitCode: proc.exitCode,
+      durationMs: proc.durationMs,
+      stdoutTail: proc.stdout.slice(-TRIGGER_STDOUT_TAIL),
+      stderrTail: proc.stderrTail,
+      parsed: output,
+      error: error,
+      wouldFire: !!output && triggerCheckCore.decideCheck(def, output, state, now).kind === 'fire',
+      newItemCount: output ? triggerCheckCore.newItemsOf(output.items, state).length : 0,
+    };
   } finally {
     triggerTestsRunning -= 1;
   }
@@ -9828,7 +9894,7 @@ function daemonCapabilities() {
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
   if (triggerCheckCore) caps.push('triggers-v1');
   // Host delivery needs the envelope builder the newer sidecar carries.
-  if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1');
+  if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1');
   if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1');
   if (cronRuntimeCore && typeof cronRuntimeCore.prepareDaemonServiceHandover === 'function') caps.push('service-handover-v1');
   // 'grep-v1' is NOT sidecar-gated: cmdFsGrep is inlined above and needs only
