@@ -6,6 +6,22 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-10-14
+
+### Fixed
+
+- Open pages and boards follow a merge, and a popout never crashes on it
+- Show model lists instantly and keep an interrupted reply as one retry notice
+- A host resumes a session from before the spawn journal
+- The open column never shifts on fold, and a merge never strands sessions
+- A masked secret never reaches disk, and URL passwords stay hidden
+- A message the phone sends runs once, whatever the retry path
+- Header chips hold their place while the session record loads
+- Show the first message as soon as a new session is sent
+- Back to an agent, the Chat page is where the user left it
+- Switching agents in the Chat drawer never says "no conversations" or forgets the open chat
+- An ask's earlier chat is asked for again when the server ran out of time
+
 ## [0.6.10] - 2026-10-13
 
 ### Added
