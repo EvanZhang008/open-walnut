@@ -353,12 +353,21 @@ function notFound(res, message) {
 
 const WORK_TASK_ID = 'task-stub-work'
 let workSession = false
+let workTaskMode = 'live'
+let workTaskEdits = {}
 
 function workTask() {
   return {
-    id: WORK_TASK_ID, title: 'Stub work task', status: 'in_progress', phase: 'IN_PROGRESS',
+    id: WORK_TASK_ID,
+    title: workTaskMode === 'long-title'
+      ? 'Review the weekly project summary and check every outstanding item before the next planning meeting'
+      : 'Stub work task',
+    due_date: '2026-10-20', start_date: '2026-10-18', end_date: '2026-10-19',
+    status: workTaskMode === 'completed' ? 'done' : 'in_progress',
+    phase: workTaskMode === 'completed' ? 'COMPLETE' : 'IN_PROGRESS',
     priority: 'none', project: 'Stub', pinned: true,
     created_at: '2026-09-24T00:00:00Z', updated_at: '2026-09-24T00:00:00Z',
+    ...workTaskEdits,
   }
 }
 
@@ -372,17 +381,30 @@ function workSessionRow() {
 }
 
 /** The work-session routes, or false when the flag is off or the path is not one. */
-function answerWorkSession(p, req, res) {
-  if (!workSession || req.method !== 'GET') return false
+function answerWorkSession(p, req, res, raw) {
+  if (!workSession) return false
+  if (p === `/api/v1/tasks/${WORK_TASK_ID}` && req.method === 'PATCH') {
+    const edit = JSON.parse(raw || '{}')
+    workTaskEdits = { ...workTaskEdits, ...edit }
+    if (edit.status) workTaskEdits.phase = edit.status === 'done' ? 'COMPLETE' : 'TODO'
+    return json(res, 200, { task: workTask() }), true
+  }
+  if (req.method !== 'GET') return false
   const now = new Date().toISOString()
-  if (p === '/api/v1/tasks') return json(res, 200, { tasks: [workTask()], syncedAt: now }), true
+  if (p === '/api/v1/tasks') {
+    return json(res, 200, { tasks: workTaskMode === 'live' || workTaskMode === 'long-title' ? [workTask()] : [], syncedAt: now }), true
+  }
   if (p === '/api/v1/focus/tasks') {
     return json(res, 200, { pinned_tasks: [WORK_TASK_ID], focus_tasks: [WORK_TASK_ID] }), true
   }
   if (p === `/api/v1/tasks/${WORK_TASK_ID}`) {
+    if (workTaskMode === 'missing') return notFound(res, 'This task no longer exists on the server.'), true
+    if (workTaskMode === 'unavailable') {
+      return json(res, 503, { error: { code: 'unavailable', message: 'Task lookup is temporarily unavailable.' } }), true
+    }
     return json(res, 200, { task: { ...workTask(), session_ids: [LANE_SESSION_ID] } }), true
   }
-  if (p === '/api/v1/sessions') return json(res, 200, { sessions: [workSessionRow()], syncedAt: now }), true
+  if (p === '/api/v1/sessions') return json(res, 200, { sessions: workTaskMode === 'completed' ? [] : [workSessionRow()], syncedAt: now }), true
   if (p === `/api/v1/sessions/${LANE_SESSION_ID}`) {
     const row = workSessionRow()
     return json(res, 200, {
@@ -504,6 +526,8 @@ function resetAll() {
   laneMode = 'bypass'
   laneWriteDelayMs = 0
   workSession = false
+  workTaskMode = 'live'
+  workTaskEdits = {}
   statusMode = 'live'
   statusCloudChat = null
   answeredByMode = 'mac'
@@ -1458,6 +1482,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/__stub/work-session' && req.method === 'POST') {
       workSession = url.searchParams.get('on') === '1'
+      workTaskMode = url.searchParams.get('taskMode') || 'live'
+      for (const letter of inboxLetters.filter((l) => l.id === 'lt-stub-reply-a')) {
+        letter.taskRefs = [WORK_TASK_ID]
+        if (workTaskMode === 'long-title') letter.sender.taskTitle = workTask().title
+      }
       console.log(`[stub] work session ${workSession ? 'on' : 'off'}`)
       return json(res, 200, { ok: true, on: workSession })
     }
@@ -1645,7 +1674,7 @@ const server = http.createServer(async (req, res) => {
   // costs something (a retry loop, a visible banner). The probe run is what
   // decided this list; see the header.
   if (answerSessionReplica(p, req, res, raw)) return
-  if (answerWorkSession(p, req, res)) return
+  if (answerWorkSession(p, req, res, raw)) return
   if (answerPinnedBoard(p, req, res)) return
   if (p === '/api/v1/chat/engine' && req.method === 'GET') return answerEngine(res)
   const modelOptionsMatch = p.match(/^\/api\/v1\/sessions\/([^/]+)\/model-options$/)

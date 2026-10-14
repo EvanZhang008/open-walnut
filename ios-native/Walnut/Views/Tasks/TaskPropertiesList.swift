@@ -21,6 +21,7 @@ struct TaskPropertiesList: View {
     let reportError: (String) -> Void
     /// Present the sheet's due picker.
     let openDuePicker: () -> Void
+    var onPinnedChange: (Bool) -> Void = { _ in }
 
     @Environment(TasksStore.self) private var tasks
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -165,6 +166,7 @@ struct TaskPropertiesList: View {
                         reportError(failure)
                         return
                     }
+                    onPinnedChange(write == .pin)
                 case .setTier(let tier):
                     if let failure = await tasks.setTier(taskId: task.id, tier: tier) {
                         reportError(failure)

@@ -185,16 +185,16 @@ struct SessionTaskRow: View {
 }
 
 extension WalnutTask {
-    /// Project the FULL detail record onto the slim list row shape (the detail
-    /// payload deliberately omits the timestamp stamps — they stay nil).
     init(detail: TaskDetail) {
         self.init(
             id: detail.id, title: detail.title,
             status: detail.status ?? "todo", phase: detail.phase ?? "TODO",
             priority: detail.priority ?? "none", project: detail.project ?? "",
-            dueDate: nil, createdAt: nil, updatedAt: nil, completedAt: nil,
+            dueDate: detail.dueDate, createdAt: detail.createdAt,
+            updatedAt: detail.updatedAt, completedAt: detail.completedAt,
             starred: detail.starred, pinned: detail.pinned,
-            tags: detail.tags, summary: detail.summary
+            tags: detail.tags, summary: detail.summary,
+            startDate: detail.startDate, endDate: detail.endDate, unread: detail.unread
         )
     }
 }

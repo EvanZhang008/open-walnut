@@ -339,9 +339,22 @@ struct TaskDetail: Codable {
     let children: [Relative]?
     let parent: Relative?
     let sessionIds: [String]?
+    var dueDate: String? = nil
+    var startDate: String? = nil
+    var endDate: String? = nil
+    var unread: Bool? = nil
+    var createdAt: String? = nil
+    var updatedAt: String? = nil
+    var completedAt: String? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, status, phase, priority, project
+        case id, title, status, phase, priority, project, unread
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case completedAt = "completed_at"
+        case dueDate = "due_date"
+        case startDate = "start_date"
+        case endDate = "end_date"
         case description, summary, note, tags, starred, pinned
         case dependsOn = "depends_on"
         case isBlocked = "is_blocked"

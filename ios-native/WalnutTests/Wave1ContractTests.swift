@@ -86,6 +86,7 @@ final class Wave1ContractTests: XCTestCase {
 
     // MARK: - Task detail readback
 
+    @MainActor
     func testTaskDetailDecodesFullRowAndRelations() throws {
         let json = """
         { "task": {
@@ -99,6 +100,9 @@ final class Wave1ContractTests: XCTestCase {
             "children": [ { "id": "task-3", "title": "Child", "phase": "COMPLETE", "status": "done" } ],
             "parent": { "id": "task-p", "title": "Parent", "phase": "IN_PROGRESS", "status": "in_progress" },
             "session_ids": ["s1"],
+            "due_date": "2026-10-20", "start_date": "2026-10-18", "end_date": "2026-10-19",
+            "created_at": "2026-10-01T12:00:00Z", "updated_at": "2026-10-02T12:00:00Z",
+            "completed_at": "2026-10-03T12:00:00Z",
             "some_future_field": { "ignored": true }
         } }
         """
@@ -109,6 +113,22 @@ final class Wave1ContractTests: XCTestCase {
         XCTAssertEqual(detail.resolvedDependencies?.first?.title, "Dep")
         XCTAssertEqual(detail.children?.first?.status, "done")
         XCTAssertEqual(detail.parent?.id, "task-p")
+        let row = WalnutTask(detail: detail)
+        XCTAssertEqual(row.dueDate, "2026-10-20")
+        XCTAssertEqual(row.startDate, "2026-10-18")
+        XCTAssertEqual(row.endDate, "2026-10-19")
+        XCTAssertEqual(row.createdAt, "2026-10-01T12:00:00Z")
+        XCTAssertEqual(row.updatedAt, "2026-10-02T12:00:00Z")
+        XCTAssertEqual(row.completedAt, "2026-10-03T12:00:00Z")
+        let edited = TaskDetailController.withField(detail, starred: false)
+        XCTAssertEqual(edited.dueDate, detail.dueDate)
+        XCTAssertEqual(edited.startDate, detail.startDate)
+        XCTAssertEqual(edited.endDate, detail.endDate)
+        XCTAssertEqual(edited.createdAt, detail.createdAt)
+        XCTAssertEqual(edited.updatedAt, detail.updatedAt)
+        XCTAssertEqual(edited.completedAt, detail.completedAt)
+        let controller = TaskDetailController(taskId: detail.id, detail: detail)
+        XCTAssertEqual(controller.detail?.id, detail.id)
     }
 
     // MARK: - Batch results (partial success contract)

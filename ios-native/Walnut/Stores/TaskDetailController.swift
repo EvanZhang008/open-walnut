@@ -28,9 +28,10 @@ final class TaskDetailController {
     /// Delete hit 409 with active sessions — confirm, then force.
     var deleteNeedsForce: [String]?
 
-    init(taskId: String, transport: WalnutTaskTransport? = nil) {
+    init(taskId: String, transport: WalnutTaskTransport? = nil, detail: TaskDetail? = nil) {
         self.taskId = taskId
         self.api = transport ?? WalnutAPI()
+        self.detail = detail
     }
 
     func load() async {
@@ -68,7 +69,8 @@ final class TaskDetailController {
             dependsOn: d.dependsOn, isBlocked: d.isBlocked,
             resolvedDependencies: d.resolvedDependencies,
             dependents: d.dependents, children: d.children, parent: d.parent,
-            sessionIds: d.sessionIds
+            sessionIds: d.sessionIds, dueDate: d.dueDate, startDate: d.startDate, endDate: d.endDate, unread: d.unread,
+            createdAt: d.createdAt, updatedAt: d.updatedAt, completedAt: d.completedAt
         )
     }
 

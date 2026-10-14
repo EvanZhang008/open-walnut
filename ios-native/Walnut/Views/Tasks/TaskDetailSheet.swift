@@ -24,22 +24,31 @@ struct TaskDetailSheet: View {
     @FocusState private var titleFocused: Bool
     /// Wave-1 detail plane: full-row readback + delete/field edits.
     @State private var detailController: TaskDetailController
+    @State private var fallback: WalnutTask
+    @State private var resolvedSessions: [WalnutSession] = []
+    @State private var usedInitialDetail = false
+    @State private var resolvingSessionId: String?
+    @State private var editGeneration = 0
+    @State private var pendingEdit: Task<Void, Never>?
+    @State private var confirmed: WalnutTask
 
-    init(task: WalnutTask) {
+    init(task: WalnutTask, detail: TaskDetail? = nil) {
         self.task = task
-        _detailController = State(initialValue: TaskDetailController(taskId: task.id))
+        _fallback = State(initialValue: task)
+        _confirmed = State(initialValue: task)
+        _detailController = State(initialValue: TaskDetailController(taskId: task.id, detail: detail))
     }
 
-    /// Live row (feed-updated) when available, else the presented snapshot.
     private var current: WalnutTask {
-        tasks.tasks.first(where: { $0.id == task.id }) ?? task
+        fallback
     }
 
     /// Every task can be (or spawn) a session — surface them here so the
     /// conversation is one tap from the task, newest first.
     private var taskSessions: [WalnutSession] {
-        tasks.sessions
-            .filter { $0.taskId == task.id }
+        let live = tasks.sessions.filter { $0.taskId == task.id }
+        let liveIds = Set(live.map(\.id))
+        return (live + resolvedSessions.filter { !liveIds.contains($0.id) })
             .sorted(by: WalnutSession.recencySort)
     }
 
@@ -79,7 +88,23 @@ struct TaskDetailSheet: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .task { await detailController.load() }
+            .task {
+                if detailController.detail == nil || usedInitialDetail { await detailController.load() }
+                usedInitialDetail = true
+                if let detail = detailController.detail {
+                    if !saving {
+                        fallback = WalnutTask(detail: detail)
+                        confirmed = fallback
+                    }
+                    tasks.noteSessionIds(taskId: task.id, ids: detail.sessionIds ?? [])
+                }
+            }
+            .onChange(of: tasks.tasks.first { $0.id == task.id }) { _, updated in
+                if let updated, !saving {
+                    fallback = updated
+                    confirmed = updated
+                }
+            }
             .navigationTitle("Task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -112,6 +137,10 @@ struct TaskDetailSheet: View {
             openDuePicker: {
                 dueDraft = current.dueDateValue ?? AppClock.startOfToday()
                 showDuePicker = true
+            },
+            onPinnedChange: { pinned in
+                fallback = TasksStore.withPinned(fallback, pinned)
+                confirmed = TasksStore.withPinned(confirmed, pinned)
             }
         )
     }
@@ -125,14 +154,23 @@ struct TaskDetailSheet: View {
     private func apply(_ edit: TasksStore.TaskEdit) {
         editError = nil
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let previous = pendingEdit
+        let original = fallback
+        fallback = TasksStore.applyEdit(edit, to: original)
+        editGeneration += 1
+        let generation = editGeneration
         saving = true
-        Task {
-            defer { saving = false }
+        pendingEdit = Task {
+            await previous?.value
             do {
-                _ = try await tasks.updateTask(id: task.id, edit: edit)
+                let updated = try await tasks.updateTask(id: task.id, edit: edit)
+                confirmed = updated
+                if generation == editGeneration { fallback = updated }
             } catch {
                 editError = Self.friendlyEditError(error)
+                if generation == editGeneration { fallback = confirmed }
             }
+            if generation == editGeneration { saving = false }
         }
     }
 
@@ -164,6 +202,34 @@ struct TaskDetailSheet: View {
                         .foregroundStyle(Theme.tint)
                 }
                 .accessibilityIdentifier("task.newSession")
+            }
+            ForEach((detailController.detail?.sessionIds ?? []).reversed().prefix(5).filter { id in
+                !taskSessions.contains { $0.id == id }
+            }, id: \.self) { id in
+                Button {
+                    guard resolvingSessionId == nil else { return }
+                    resolvingSessionId = id
+                    Task {
+                        defer { resolvingSessionId = nil }
+                        if let session = await tasks.resolveSession(id: id, task: current) {
+                            resolvedSessions.removeAll { $0.id == id }
+                            resolvedSessions.append(session)
+                            navPath.append(session)
+                        } else {
+                            editError = "Couldn't open that session. Try again."
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Label("Open Conversation", systemImage: "bubble.left.and.bubble.right")
+                        Spacer()
+                        if resolvingSessionId == id { ProgressView() }
+                        else { Image(systemName: "chevron.right") }
+                    }
+                    .padding(.vertical, 8)
+                }
+                .disabled(resolvingSessionId != nil)
+                .accessibilityIdentifier("task.session.\(id)")
             }
             VStack(spacing: 0) {
                 ForEach(taskSessions.prefix(5)) { session in

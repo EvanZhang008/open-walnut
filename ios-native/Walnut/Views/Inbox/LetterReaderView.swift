@@ -40,6 +40,7 @@ struct LetterReaderView: View {
     @State private var voice = VoiceRecorder()
     /// The session a status line opened.
     @State private var openedSession: WalnutSession?
+    @State private var openedTask: InboxTaskDestination?
     /// Sessions a status line names that the tasks store does not hold, looked
     /// up by id: found ones open, the rest make the line plain text, so a tap
     /// never ends in "couldn't open that session".
@@ -142,6 +143,11 @@ struct LetterReaderView: View {
         .navigationDestination(item: $openedSession) { session in
             SessionConversationView(session: session)
         }
+        .sheet(item: $openedTask) { destination in
+            InboxTaskSheet(destination: destination)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
         .freezeScreen("inbox-letter")
         .task { await load() }
         .task(id: sessionsToLookUp) { await lookUpSessions(sessionsToLookUp) }
@@ -183,11 +189,31 @@ struct LetterReaderView: View {
                         .fixedSize(horizontal: false, vertical: stacked)
                 }
                 .layoutPriority(1)
-                if let task = letter.taskTitle {
-                    Text(stacked ? task : "· \(task)").font(.caption)
-                        .lineLimit(stacked ? nil : 1)
-                        .fixedSize(horizontal: false, vertical: stacked)
+                if let title = letter.taskTitle {
+                    if let id = letter.sender?.taskId, !id.isEmpty {
+                        Button {
+                            openTask(id, title: title)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(title)
+                                    .lineLimit(stacked ? nil : 2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Image(systemName: "chevron.right").font(.caption2)
+                            }
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                            .frame(minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.tint)
+                        .accessibilityHint("Opens task details")
                         .accessibilityIdentifier("inbox.letter.taskTitle")
+                    } else {
+                        Text(stacked ? title : "· \(title)").font(.caption)
+                            .lineLimit(stacked ? nil : 1)
+                            .fixedSize(horizontal: false, vertical: stacked)
+                    }
                 }
             }
             .foregroundStyle(.secondary)
@@ -366,14 +392,25 @@ struct LetterReaderView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Tasks").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 ForEach(refs, id: \.self) { ref in
-                    HStack(spacing: 5) {
-                        Image(systemName: "checklist").font(.system(size: 9))
-                        Text(taskLabel(ref)).font(.caption).lineLimit(1)
+                    Button {
+                        openTask(ref, title: taskLabel(ref))
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checklist").font(.caption2)
+                            Text(taskLabel(ref)).font(.caption).lineLimit(2)
+                            Image(systemName: "chevron.right").font(.caption2)
+                        }
+                        .multilineTextAlignment(.leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(minHeight: 44)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color(.tertiarySystemFill), in: Capsule())
-                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.tint)
+                    .accessibilityHint("Opens task details")
+                    .accessibilityIdentifier("inbox.letter.taskRef.\(ref)")
                 }
             }
         }
@@ -382,7 +419,15 @@ struct LetterReaderView: View {
     /// A cited task shows its title when the Tasks tab already knows it; the raw
     /// id is a poor label, but inventing one would be worse.
     private func taskLabel(_ id: String) -> String {
-        tasks.tasks.first { $0.id == id }?.title ?? id
+        tasks.tasks.first { $0.id == id }?.title
+            ?? (letter?.sender?.taskId == id ? letter?.taskTitle : nil)
+            ?? id
+    }
+
+    private func openTask(_ id: String, title: String?) {
+        if voice.state == .recording { voice.preserveAndStop(reason: "task-opened") }
+        replyField.endEditing()
+        openedTask = InboxTaskDestination(id: id, title: title)
     }
 
     private func deliveryLine(_ note: String) -> some View {
@@ -589,6 +634,15 @@ struct LetterReaderView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 if let letter {
+                    if let id = letter.sender?.taskId, !id.isEmpty {
+                        Button {
+                            openTask(id, title: letter.taskTitle)
+                        } label: {
+                            Label("View Task", systemImage: "checklist")
+                        }
+                        .accessibilityIdentifier("inbox.letter.viewTask")
+                        Divider()
+                    }
                     Button {
                         Task { await inbox.setPinned(id: letter.id, pinned: !letter.isPinned) }
                     } label: {
