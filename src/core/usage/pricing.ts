@@ -80,12 +80,13 @@ export const DEFAULT_PRICING: PricingEntry[] = [
   { pattern: 'claude-3-5-haiku',    input: 0.80,  output: 4.00,  cacheWrite: 1.00,   cacheWrite1h: 1.60, cacheRead: 0.08 },
   { pattern: 'claude-3-haiku',      input: 0.25,  output: 1.25,  cacheWrite: 0.30,   cacheWrite1h: 0.50, cacheRead: 0.03 },
 
-  // Public standard token rates: https://developers.openai.com/api/docs/pricing
+  // Sol Standard/Global rates: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html
   {
     pattern: 'gpt-6.1-sol', input: 2.00, output: 10.00, cacheRead: 0.10, cacheWrite: 2.50,
     separateCacheCreation: true, contextThreshold: 272_000,
     longContext: { input: 4.00, output: 15.00, cacheRead: 0.20, cacheWrite: 5.00 },
   },
+  // Public standard token rates: https://developers.openai.com/api/docs/pricing
   { pattern: 'gpt-6-sol',          input: 2.00,  output: 10.00, cacheRead: 0.20, separateCacheCreation: true },
   { pattern: 'gpt-6-luna', input: 0.10, output: 0.50, cacheRead: 0.01, cacheWrite: 0.125,
     separateCacheCreation: true, contextThreshold: 272_000,
@@ -173,8 +174,10 @@ export function priceUsage(params: PriceUsageParams): UsagePrice {
   const read = params.cache_read_input_tokens ?? 0;
   const write5m = params.cache_creation?.ephemeral_5m_input_tokens ?? 0;
   const write1h = params.cache_creation?.ephemeral_1h_input_tokens ?? 0;
-  const hasDetails = params.cache_creation?.ephemeral_5m_input_tokens !== undefined
-    || params.cache_creation?.ephemeral_1h_input_tokens !== undefined;
+  const solCacheTotal = entry.pattern === 'gpt-6.1-sol' && params.cache_creation?.ephemeral_5m_input_tokens === 0
+    && params.cache_creation.ephemeral_1h_input_tokens === 0;
+  const hasDetails = !solCacheTotal && (params.cache_creation?.ephemeral_5m_input_tokens !== undefined
+    || params.cache_creation?.ephemeral_1h_input_tokens !== undefined);
   const creation = params.cache_creation_input_tokens ?? (write5m + write1h);
   const context = params.input_tokens + read + creation;
   if (![params.input_tokens, params.output_tokens, read, creation, write5m, write1h, context].every(validTokens)

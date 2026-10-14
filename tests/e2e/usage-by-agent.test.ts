@@ -6,7 +6,7 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { responseUsageStore } from '../../src/core/usage/collection.js';
 import { reconcileUsage, type ProxyUsageRecord } from '../../src/providers/usage-reconcile-core.js';
-import type { CanonicalUsageRecord } from '../../src/providers/usage-scan-core.js';
+import { canonicalRecordFromAssistant, type CanonicalUsageRecord } from '../../src/providers/usage-scan-core.js';
 
 let port: number;
 beforeAll(async () => {
@@ -75,5 +75,26 @@ describe('reconciled usage through the real server', () => {
     expect(sources.sources[0].name).toBe('session');
     const summary = await get('/api/usage/summary');
     expect(summary.allTime.verified_calls).toBe(2);
+  });
+  it('keeps Sol cache totals unverified through the real usage API when independent evidence is absent', async () => {
+    const timestamp = new Date().toISOString();
+    const record = canonicalRecordFromAssistant({ type: 'assistant', sessionId: 'sol-session', timestamp,
+      message: { id: 'sol-response', model: 'gpt-6.1-sol', stop_reason: 'end_turn', usage: {
+        input_tokens: 436, output_tokens: 350, cache_creation_input_tokens: 5_814, cache_read_input_tokens: 349_530,
+        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+        speed: 'standard', inference_geo: '', service_tier: 'standard',
+      } } }, { sessionId: 'sol-session' })!;
+    expect(record.complete).toBe(true);
+    const imported = await responseUsageStore().importHost('sol-host', {
+      canonical: { records: [record], diagnostics: {} as never, costStates: [] },
+      upstream: { records: [], diagnostics: [], coverage: {} as never },
+      reconciliation: reconcileUsage([record], []), until: timestamp,
+    }, [{ sessionId: 'sol-session', taskId: 'sol-task', project: 'Example', title: 'Cache example' }]);
+    responseUsageStore().finishHost('sol-host', timestamp, imported.checks);
+    const body = await get('/api/usage/overview');
+    expect(body.summary).toMatchObject({ api_calls: 4, verified_calls: 2, unverified_calls: 2 });
+    expect(body.summary.total_cost).toBeCloseTo(0.0016, 8);
+    expect(body.recent.find((row: { model: string }) => row.model === 'gpt-6-1-sol')).toMatchObject({ cost_usd: null });
+    expect(body.sessions.find((row: { sessionId: string }) => row.sessionId === 'sol-session')).toMatchObject({ unverified: 1 });
   });
 });

@@ -217,6 +217,26 @@ describe('scanCanonicalUsage', () => {
     expect(result.records[1]!.complete).toBe(false);
   });
 
+  it('preserves Sol cache totals without treating zero adapter placeholders as Claude TTL evidence', async () => {
+    const usage = { ...TOKENS, input_tokens: 436, output_tokens: 350, cache_creation_input_tokens: 5_814,
+      cache_read_input_tokens: 349_530, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } };
+    const row = assistant('sol-final', TODAY, usage, { model: 'gpt-6.1-sol' });
+    await log('project/main.jsonl', [row, row,
+      assistant('claude-zero-details', TODAY, usage),
+      assistant('sol-missing-counter', TODAY, { ...usage, cache_read_input_tokens: undefined }, { model: 'gpt-6.1-sol' }),
+      assistant('sol-positive-mismatch', TODAY, { ...usage, cache_creation: { ephemeral_5m_input_tokens: 1, ephemeral_1h_input_tokens: 0 } }, { model: 'gpt-6.1-sol' }),
+      assistant('other-zero-details', TODAY, usage, { model: 'gpt-6-astra' }),
+    ]);
+    const result = await scanCanonicalUsage({ projectsDir: root });
+    expect(result.records).toHaveLength(5);
+    const sol = result.records.find(record => record.responseId === 'sol-final')!;
+    expect(sol).toMatchObject({ model: 'gpt-6-1-sol', complete: true, cache_creation_input_tokens: 5_814,
+      cache_read_input_tokens: 349_530, pricing_context_complete: true });
+    expect(sol).not.toHaveProperty('cache_creation');
+    expect(canonicalRecordFromAssistant(row, { sessionId: 'main' })).toEqual(sol);
+    expect(result.records.filter(record => record.responseId !== 'sol-final').every(record => !record.complete)).toBe(true);
+  });
+
   it('preserves final standard, fast and regional pricing fields without changing token completeness', async () => {
     await log('project/main.jsonl', [
       assistant('standard'),

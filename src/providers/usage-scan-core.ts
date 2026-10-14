@@ -318,17 +318,18 @@ function toRecord(group: ResponseGroup, diag: UsageScanDiagnostics): CanonicalUs
   const hasTtl = TTL_FIELDS.every(key => c[key] !== undefined);
   const ttlConsistent = hasTtl && c.ephemeral_5m_input_tokens! + c.ephemeral_1h_input_tokens! === c.cache_creation_input_tokens;
   const ttlAbsent = TTL_FIELDS.every(key => c[key] === undefined);
+  const solCacheTotal = owner.model === 'gpt-6-1-sol' && hasTtl && TTL_FIELDS.every(key => c[key] === 0);
   const complete = !owner.ownershipUnverified && owner.sourceRank === 0 && owner.model !== 'unknown' &&
     !['synthetic', '<synthetic>'].includes(owner.model) && chosen.final && chosen.finalUsage &&
     BASE_FIELDS.every(key => c[key] !== undefined) && group.maxOutput === c.output_tokens &&
-    (ttlConsistent || (ttlAbsent && (c.cache_creation_input_tokens === 0 || owner.model.startsWith('gpt-'))));
+    (ttlConsistent || solCacheTotal || (ttlAbsent && (c.cache_creation_input_tokens === 0 || owner.model.startsWith('gpt-'))));
   if (!complete) diag.incomplete_records++;
   return {
     responseId: owner.responseId, model: owner.model, sessionId: owner.sourceSessionId,
     ...(owner.file.agentId ? { agentId: owner.file.agentId } : {}), timestamp: new Date(owner.time).toISOString(),
     input_tokens: c.input_tokens ?? null, output_tokens: group.maxOutput ?? null,
     cache_creation_input_tokens: c.cache_creation_input_tokens ?? null, cache_read_input_tokens: c.cache_read_input_tokens ?? null,
-    ...(hasTtl ? { cache_creation: { ephemeral_5m_input_tokens: c.ephemeral_5m_input_tokens!, ephemeral_1h_input_tokens: c.ephemeral_1h_input_tokens! } } : {}),
+    ...(hasTtl && !solCacheTotal ? { cache_creation: { ephemeral_5m_input_tokens: c.ephemeral_5m_input_tokens!, ephemeral_1h_input_tokens: c.ephemeral_1h_input_tokens! } } : {}),
     ...chosen.pricingContext,
     pricing_context_complete: chosen.finalUsage && chosen.pricingContext?.pricing_context_complete === true,
     complete,

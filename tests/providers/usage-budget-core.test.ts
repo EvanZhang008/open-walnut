@@ -67,6 +67,18 @@ describe('host-persistent usage budgets', () => {
     expect((await budgets.snapshot(SID)).knownSubtotalUsd).toBeCloseTo(0.02);
   });
 
+  it('does not turn published Sol rates into verified lifetime spend without proven upstream pricing context', async () => {
+    const sol = record({ model: 'gpt-6-1-sol', cache_creation_input_tokens: 5_814,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+      verification: 'unmatched', upstream: undefined });
+    expect(await configure(1, [sol])).toMatchObject({ state: 'unverified', spentUsd: null, reason: 'cost_unverified' });
+    const matched = { ...sol, verification: 'matched' as const, upstream: { ...record().upstream!,
+      model: sol.model, requestedModel: sol.model, responseModel: sol.model,
+      forwardedModel: 'global.openai.gpt-6.1-sol', cache_creation_input_tokens: 5_814 } };
+    expect(await budgets.observe(SID, { record: matched })).toMatchObject({ state: 'unverified', spentUsd: null });
+    expect((await budgets.snapshot(SID)).knownSubtotalUsd).toBe(0);
+  });
+
   it('retains unknown cost with no limit without claiming a zero lifetime spend', async () => {
     expect(await configure(null, [record({ upstream: undefined })])).toMatchObject({
       limitUsd: null, spentUsd: null, state: 'unlimited', reason: null,

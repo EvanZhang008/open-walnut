@@ -253,6 +253,22 @@ describe('pricing', () => {
       expect(priceReconciledUsage({ ...base, model: 'claude-opus-4-8', forwardedModel: 'global.anthropic.claude-opus-4-8' }).costUsd).toBeNull();
     });
 
+    it('prices Sol cache totals without using zero Claude TTL placeholders', () => {
+      const usage = { model: 'gpt-6-1-sol', input_tokens: 436, output_tokens: 350,
+        cache_creation_input_tokens: 5_814, cache_read_input_tokens: 349_530 };
+      const priced = priceUsage(usage);
+      expect(priced.costUsd).toBeCloseTo(0.10597, 12);
+      expect(priced.components.cacheWrite).toBeCloseTo(0.02907, 12);
+      expect(priceUsage({ ...usage, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } })).toEqual(priced);
+      for (const cache_creation of [{ ephemeral_5m_input_tokens: 1, ephemeral_1h_input_tokens: 0 },
+        { ephemeral_5m_input_tokens: 0 }, { ephemeral_1h_input_tokens: 0 }]) {
+        expect(priceUsage({ ...usage, cache_creation }).costUsd).toBeNull();
+      }
+      expect(priceUsage({ ...usage, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: null } as never }).costUsd).toBeNull();
+      expect(priceReconciledUsage({ ...usage, forwardedModel: 'global.openai.gpt-6.1-sol',
+        pricing_context_complete: true, speed: 'standard', service_tier: 'standard', inference_geo: '' }).costUsd).toBeNull();
+    });
+
     it('prices consecutive responses with real one-hour token shapes', () => {
       const calls = [
         { input_tokens: 2, output_tokens: 1_711, cache_creation_input_tokens: 460_039, cache_read_input_tokens: 0 },
