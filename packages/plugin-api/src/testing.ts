@@ -106,6 +106,8 @@ export interface FakeMcpServer {
   ): McpCallResult | Promise<McpCallResult>
   tools?(): McpToolInfo[] | Promise<McpToolInfo[]>
   status?(): McpServerStatus | null
+  /** Called by `client(name).restart()`; without it the fake client has no `restart`, like an older Walnut. */
+  restart?(): void | Promise<void>
 }
 
 export interface FakeWalnutResult {
@@ -570,6 +572,14 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
             if (!target) return null
             return target.status?.() ?? { name, title: name, owner: 'test', state: 'ready', since: 0, sessions: 'read-only' }
           },
+          ...(options.mcpServers?.[name]?.restart ? {
+            async restart() {
+              const target = server()
+              if (!target?.restart) throw mcpUnavailable(name)
+              await target.restart()
+              return { restarted: true, status: target.status?.() ?? null }
+            },
+          } : {}),
         }
       },
       list() {

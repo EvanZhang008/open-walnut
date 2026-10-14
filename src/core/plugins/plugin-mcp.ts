@@ -19,6 +19,18 @@ export interface PluginMcpOptions {
 
 let subscriberSequence = 0;
 
+/**
+ * A plugin may restart a server at most this often: a refusal several plugins see at once (a login a
+ * long-lived process can no longer refresh) costs one restart, not one per call.
+ */
+export const PLUGIN_MCP_RESTART_MIN_INTERVAL_MS = 120_000;
+const lastPluginRestart = new Map<string, number>();
+
+/** Tests only: forget the restart clock. */
+export function _resetPluginMcpRestartsForTesting(): void {
+  lastPluginRestart.clear();
+}
+
 function connectionOrThrow(name: string) {
   const connection = getMcpConnection(name);
   if (!connection) {
@@ -51,6 +63,18 @@ export function createPluginMcp({ pluginId, own, assertLive }: PluginMcpOptions)
         },
         status(): McpServerStatus | null {
           return getMcpConnection(name)?.status() ?? null;
+        },
+        /**
+         * Stop the process and start a fresh one. `restarted: false` when another restart of this
+         * server happened in the last PLUGIN_MCP_RESTART_MIN_INTERVAL_MS (the caller just retries).
+         */
+        async restart(): Promise<{ restarted: boolean; status: McpServerStatus | null }> {
+          const connection = connectionOrThrow(name);
+          const now = Date.now();
+          const last = lastPluginRestart.get(name) ?? Number.NEGATIVE_INFINITY;
+          if (now - last < PLUGIN_MCP_RESTART_MIN_INTERVAL_MS) return { restarted: false, status: connection.status() };
+          lastPluginRestart.set(name, now);
+          return { restarted: true, status: await connection.restart() };
         },
       };
     },

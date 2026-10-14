@@ -1355,6 +1355,12 @@ export interface McpClient {
   tools(options?: { refresh?: boolean }): Promise<McpToolInfo[]>
   /** Null while no server by this name is registered. */
   status(): McpServerStatus | null
+  /**
+   * Stop the process and start a fresh one (in-flight calls fail). At most one restart per server
+   * every two minutes across all plugins: inside that window it answers `restarted: false` at once.
+   * Absent on an older Walnut, so check before calling.
+   */
+  restart?(): Promise<{ restarted: boolean; status: McpServerStatus | null }>
 }
 
 /**
