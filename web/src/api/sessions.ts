@@ -1,3 +1,4 @@
+import { INITIAL_HISTORY_TURNS } from '@open-walnut/history-turn-window';
 import { apiGet, apiPatch, apiPost, apiPut, ApiError } from './client';
 import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine, SessionCronMetadata, Task } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
@@ -283,11 +284,14 @@ export async function fetchSessionHistory(
      *  A whale session (3000+ msgs) shrinks from a multi-MB transfer + a 25s
      *  render freeze to a ~100KB tail. */
     tail?: number;
+    turns?: number;
   },
 ): Promise<SessionHistoryResult> {
   const params: Record<string, string> = {};
   if (opts?.source) params.source = opts.source;
   if (opts?.tail !== undefined && Number.isFinite(opts.tail)) params.tail = String(opts.tail);
+  const turns = opts?.turns ?? (opts?.tail && opts.since === undefined ? INITIAL_HISTORY_TURNS : undefined);
+  if (turns !== undefined) params.turns = String(turns);
   // Delta mode: ask only for messages after the client's cursor. Server returns a
   // small slice (usually 1-5 messages) + the new cursor. Empty slice = archive
   // hasn't caught up yet (turn not flushed); caller keeps streaming blocks & retries.
@@ -426,7 +430,7 @@ export async function fetchSessionHistoryBefore(
   signal?: AbortSignal,
 ): Promise<SessionHistoryPage> {
   const res = await apiGet<SessionHistoryPage>(
-    `/api/sessions/${sessionId}/history`, { before }, { signal, timeoutMs: 90_000 },
+    `/api/sessions/${sessionId}/history`, { before, turns: '20' }, { signal, timeoutMs: 90_000 },
   );
   return { messages: res.messages ?? [], reachedStart: !!res.reachedStart, unavailable: res.unavailable };
 }

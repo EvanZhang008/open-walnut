@@ -35,6 +35,9 @@ export default defineConfig({
       // The asks list (membership, order, title, state): the same module
       // GET /api/v1/asks serves the phone from, so the drawer and the phone agree.
       '@open-walnut/ask-list': path.resolve(__dirname, '../src/core/sessions/ask-list.ts'),
+      '@open-walnut/history-turn-window': path.resolve(__dirname, '../src/lib/history-turn-window.ts'),
+      '@open-walnut/history-injected-banner': path.resolve(__dirname, '../src/lib/history-injected-banner.ts'),
+      '@open-walnut/history-session-envelope': path.resolve(__dirname, '../src/lib/history-session-envelope.ts'),
     },
   },
   server: {

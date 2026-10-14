@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildSeedResultsBlock, buildUserPrompt } from '../../src/core/task-search-agent-contract.js';
 import { SEARCH_PROMPT_BANNER, searchPromptBannerSplit } from '@/components/sessions/search-ask';
-import { splitLeadingBanners } from '@/components/sessions/injected-banner';
+import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
 
 const ROWS = JSON.stringify([
   { type: 'task', title: 'Unit test board search', taskId: 'mu4qx48p-4828', phase: 'COMPLETE', updated: '2026-09-16' },

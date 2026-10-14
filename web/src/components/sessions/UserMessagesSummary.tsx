@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { SessionHistoryMessage } from '@/types/session';
 // typedUserText: a stored turn can open with a machine block Walnut prepended,
 // which would otherwise be all this one-line preview ever shows.
-import { typedUserText } from './injected-banner';
+import { typedUserText } from '@open-walnut/history-injected-banner';
 
 interface UserMessagesSummaryProps {
   messages: SessionHistoryMessage[];

@@ -20,7 +20,7 @@
  */
 
 import { parseSearchPromptMessage } from '@open-walnut/search-transcript';
-import type { BannerSplit } from './injected-banner';
+import type { BannerSplit } from '@open-walnut/history-injected-banner';
 
 /** `data-banner-name` for the folded prompt, and the tests' locator. */
 export const SEARCH_PROMPT_BANNER = 'AI search prompt';

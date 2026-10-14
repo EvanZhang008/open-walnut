@@ -16,14 +16,12 @@ import { log } from '@/utils/log';
 import { StableMarkdownBody } from './SessionMessage';
 import '@/styles/chat-earlier.css';
 import { earlierParts, type ChatEarlierMessage } from './chat-earlier-parts';
+import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS } from '@open-walnut/history-turn-window';
 
 export type { ChatEarlierMessage } from './chat-earlier-parts';
 
 /** One stable empty answer, so a consumer's memo does not rerun for nothing. */
 const NO_ROWS: ChatEarlierMessage[] = [];
-
-/** Rows shown before "Show earlier" is needed: a long chat stays cheap to render. */
-export const CHAT_EARLIER_PAGE = 40;
 
 /** How many times a degraded or failed read is asked again, and after how long. */
 const CHAT_EARLIER_RETRIES = 2;
@@ -73,7 +71,10 @@ export function useChatEarlier(sessionId: string, enabled: boolean): ChatEarlier
 
 export function ChatEarlierBlock({ rows, sessionCwd }: { rows: readonly ChatEarlierMessage[]; sessionCwd?: string }) {
   const parts = useMemo(() => earlierParts(rows), [rows]);
-  const [shown, setShown] = useState(CHAT_EARLIER_PAGE);
+  const windowRows = useMemo(() => parts.map(part => part.kind === 'steps' || part.row.kind === 'notification'
+    ? { role: 'assistant', text: '' } : part.row), [parts]);
+  const [expanded, setExpanded] = useState(0);
+  const shown = Math.max(expanded, historyTurnWindowLimit(windowRows, INITIAL_HISTORY_TURNS));
   const sectionRef = useRef<HTMLElement>(null);
   // The reader's distance from the timeline's bottom when they asked for more:
   // the rows open ABOVE them, and WebKit has no scroll anchoring to hold their
@@ -90,15 +91,14 @@ export function ChatEarlierBlock({ rows, sessionCwd }: { rows: readonly ChatEarl
   const showMore = () => {
     const scroller = sectionRef.current?.closest<HTMLElement>('.session-history');
     if (scroller) pendingBottom.current = scroller.scrollHeight - scroller.scrollTop;
-    setShown((n) => n + CHAT_EARLIER_PAGE);
+    setExpanded(parts.length - hidden + historyTurnWindowLimit(windowRows, EARLIER_HISTORY_TURNS, undefined, hidden));
   };
   return (
     <section ref={sectionRef} className="chat-earlier" data-testid="chat-earlier" aria-label="Earlier in this chat">
       <div className="chat-earlier-label">Earlier in this chat</div>
       {hidden > 0 && (
         <button className="session-show-earlier-btn" onClick={showMore}>
-          Show {Math.min(hidden, CHAT_EARLIER_PAGE)} earlier messages
-          <span className="session-show-earlier-count">({hidden} hidden)</span>
+          Load earlier turns
         </button>
       )}
       {parts.slice(hidden).map((part) => part.kind === 'steps' ? (

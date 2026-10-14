@@ -19,7 +19,7 @@ import {
 import {
   splitLeadingBanners,
   injectedBannerLabel,
-} from '../../web/src/components/sessions/injected-banner';
+} from '@open-walnut/history-injected-banner';
 
 /** The recap body the server injects (shape only — content is a rendered recap). */
 const RECAP = [

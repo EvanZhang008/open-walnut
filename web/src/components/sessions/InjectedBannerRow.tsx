@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
-import type { InjectedBanner } from './injected-banner';
+import type { InjectedBanner } from '@open-walnut/history-injected-banner';
 import '@/styles/injected-banner.css';
 
 /**

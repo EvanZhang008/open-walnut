@@ -47,7 +47,7 @@ import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNL
 import { openPopout } from '@/popout/openPopout';
 import { locateTaskOnHome, navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
-import { typedUserText } from './injected-banner';
+import { typedUserText } from '@open-walnut/history-injected-banner';
 // PlanPreviewSection replaced by inline plan popover in meta bar
 import { ChatInput } from '@/components/chat/ChatInput';
 import { keepCommandFirst } from '@/components/chat/leading-command';

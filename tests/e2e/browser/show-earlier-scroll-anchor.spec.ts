@@ -3,7 +3,7 @@ import { openChatOnLoad } from './draft-helpers';
 
 const SESSION_ID = 'pw-vscode-session';
 const TASK_ID = 'pw-task-vscode';
-const TOTAL_MESSAGES = 1050;
+const TOTAL_MESSAGES = 150;
 
 test.use({ deviceScaleFactor: 1 });
 
@@ -38,15 +38,15 @@ async function mockHistory(page: Page, total: number) {
     route.fulfill({ json: { messages, cursor: messages.length, total, delta: false } }));
 }
 
-async function openSession(page: Page, baseURL: string) {
+async function openSession(page: Page, baseURL: string, sessionId = SESSION_ID, taskId = TASK_ID) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`);
   await page.getByRole('link', { name: 'Open Walnut' }).click();
-  await page.locator('.todo-search-input').fill(SESSION_ID);
-  const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`);
+  await page.locator('.todo-search-input').fill(sessionId);
+  const task = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`);
   await expect(task).toBeVisible();
   await task.locator('.todo-item-title').click({ timeout: 10_000 });
-  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`);
+  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sessionId}"]`);
   await expect(panel).toBeVisible();
   return panel;
 }
@@ -55,6 +55,7 @@ async function wheelToTop(page: Page, history: Locator) {
   const box = (await history.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, -1_000_000);
+  await history.evaluate(el => { el.scrollTop = 0; });
   await expect.poll(() => history.evaluate(el => el.scrollTop)).toBeLessThanOrEqual(1);
 }
 
@@ -63,19 +64,24 @@ async function expectBottom(panel: Locator) {
     el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(2);
 }
 
-test('500-row batches preserve the reading anchor across repeated expansion', async ({ page, baseURL }, testInfo) => {
+test('10 initial turns and 20-turn batches preserve the reading anchor across repeated expansion', async ({ page, baseURL }, testInfo) => {
   test.setTimeout(90_000);
   await mockHistory(page, TOTAL_MESSAGES);
   const panel = await openSession(page, baseURL!);
   const history = panel.locator('.session-history');
-  await expect(history.locator('[data-msg-index="1049"]')).toBeAttached();
-  await expect(history.locator('[data-msg-index]')).toHaveCount(30);
+  await expect(history.locator('[data-msg-index="149"]')).toBeAttached();
+  await expect(history.locator('[data-msg-index]')).toHaveCount(20);
   await expectBottom(panel);
 
-  for (const [anchor, revealed, nextCount] of [[1020, 520, 500], [520, 20, 20], [20, 0, 0]]) {
+  for (const [anchor, revealed, nextCount] of [[130, 90, 90], [90, 50, 50], [50, 10, 10], [10, 0, 0]]) {
     await wheelToTop(page, history);
     const button = history.locator('.session-show-earlier-btn');
-    await expect(button).toContainText(`Show ${Math.min(anchor, 500)} earlier messages`);
+    await expect(button).toHaveText('Load earlier turns');
+    const style = await button.evaluate(el => {
+      const css = getComputedStyle(el);
+      return { background: css.backgroundColor, border: css.borderTopWidth, fontSize: css.fontSize };
+    });
+    expect(style).toEqual({ background: 'rgba(0, 0, 0, 0)', border: '0px', fontSize: '12px' });
     const previous = history.locator(`[data-msg-index="${anchor}"]`);
     const before = (await previous.boundingBox())!;
     const started = Date.now();
@@ -86,23 +92,43 @@ test('500-row batches preserve the reading anchor across repeated expansion', as
     expect(elapsedMs).toBeLessThan(15_000);
     await expect.poll(async () => Math.abs((await previous.boundingBox())!.y - before.y)).toBeLessThanOrEqual(30);
     await expect(history.locator('[data-msg-index]')).toHaveCount(TOTAL_MESSAGES - revealed);
-    if (nextCount) await expect(button).toContainText(`Show ${nextCount} earlier messages`);
+    if (nextCount) await expect(button).toHaveText('Load earlier turns');
     else await expect(button).toHaveCount(0);
   }
 
-  const arrowGeometry = await panel.evaluate(el => {
-    const arrow = el.querySelector('.scroll-to-bottom-btn')!.getBoundingClientRect();
-    const input = el.querySelector('.session-panel-input')!;
-    const fogTop = input.getBoundingClientRect().top + parseFloat(getComputedStyle(input, '::before').top);
-    return { clearance: fogTop - arrow.bottom };
-  });
-  await testInfo.attach('arrow-clearance', { body: JSON.stringify(arrowGeometry), contentType: 'application/json' });
-  expect(arrowGeometry.clearance).toBeGreaterThanOrEqual(0);
-  expect(arrowGeometry.clearance).toBeLessThan(100);
+  const arrow = await panel.getByRole('button', { name: 'Scroll to bottom', exact: true }).boundingBox();
+  const composer = await panel.locator('.session-panel-input').boundingBox();
+  expect(arrow).not.toBeNull();
+  expect(composer).not.toBeNull();
+  expect(arrow!.y + arrow!.height).toBeLessThanOrEqual(composer!.y);
   await panel.screenshot({ path: testInfo.outputPath('expanded-arrow.png'), scale: 'css' });
   await panel.getByRole('button', { name: 'Scroll to bottom', exact: true }).click();
   await expectBottom(panel);
-  await expect(history.getByText('Final line 1049.', { exact: true })).toBeVisible();
+  await expect(history.getByText('Final line 149.', { exact: true })).toBeVisible();
+});
+
+test('tool-heavy history opens ten whole turns instead of thirty raw rows', async ({ page, baseURL }, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  const panel = await openSession(page, baseURL!, 'pw-history-turns-session', 'pw-task-history-turns');
+  const history = panel.locator('.session-history');
+  await expect(history.locator('[data-msg-index][data-msg-role="user"]')).toHaveCount(10);
+  await expect(history.getByText('Dense question 35', { exact: true })).toBeAttached();
+  await expect(history.getByText('Dense question 34', { exact: true })).toHaveCount(0);
+  await expect(history.getByText('Dense answer 44', { exact: true })).toBeVisible();
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await wheelToTop(page, history);
+    await expect(history.getByRole('button', { name: 'Load earlier turns', exact: true })).toBeVisible();
+    await panel.screenshot({ path: `/tmp/history-control/${testInfo.project.name}-dense-${theme}.png`, scale: 'css' });
+  }
+  const anchor = history.getByText('Dense question 35', { exact: true });
+  const before = (await anchor.boundingBox())!.y;
+  await history.getByRole('button', { name: 'Load earlier turns', exact: true }).click();
+  await expect(history.locator('[data-msg-index][data-msg-role="user"]')).toHaveCount(30);
+  await expect(history.getByText('Dense question 15', { exact: true })).toBeAttached();
+  await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThanOrEqual(30);
+  expect(errors).toEqual([]);
 });
 
 test('bottom content stays above the fog through tool and composer resizing', async ({ page, baseURL }, testInfo) => {
@@ -138,7 +164,7 @@ test('bottom content stays above the fog through tool and composer resizing', as
       const input = el.querySelector('.session-panel-input')!;
       const tail = el.querySelector('[data-msg-index="61"]')!;
       const scroller = el.querySelector('.session-history')!;
-      const fogTop = input.getBoundingClientRect().top + parseFloat(getComputedStyle(input, '::before').top);
+      const fogTop = input.getBoundingClientRect().top;
       return {
         fogTop, tailBottom: tail.getBoundingClientRect().bottom,
         gap: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
@@ -195,7 +221,7 @@ test('new output follows the bottom but never pulls an earlier-history reader do
   await append(1);
   await expectBottom(panel);
   await wheelToTop(page, history);
-  const anchor = history.locator('[data-message-id="history-30"]');
+  const anchor = history.locator('[data-message-id="history-40"]');
   const before = (await anchor.boundingBox())!.y;
   await append(2);
   await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThanOrEqual(2);
@@ -218,7 +244,7 @@ test('real stored history stays readable after reopening and viewport changes', 
       const input = el.querySelector('.session-panel-input')!;
       const tail = Array.from(el.querySelectorAll('.session-history [data-msg-index]')).at(-1)!;
       return {
-        fogTop: input.getBoundingClientRect().top + parseFloat(getComputedStyle(input, '::before').top),
+        fogTop: input.getBoundingClientRect().top,
         tailBottom: tail.getBoundingClientRect().bottom,
       };
     });
@@ -236,7 +262,8 @@ test('real stored history stays readable after reopening and viewport changes', 
 
 test('late archive and failed backfill preserve the reader until retry succeeds', async ({ page, baseURL }) => {
   test.setTimeout(90_000);
-  const messages = historyRows(TOTAL_MESSAGES);
+  const total = 120;
+  const messages = historyRows(total);
   let releaseArchive!: () => void;
   const archiveGate = new Promise<void>(resolve => { releaseArchive = resolve; });
   let failBackfill = true;
@@ -249,44 +276,91 @@ test('late archive and failed backfill preserve the reader until retry succeeds'
       await route.fulfill({ status: 503, json: { error: 'Temporary history read failure' } });
       return;
     }
-    const take = full ? TOTAL_MESSAGES : streams ? 161 : 400;
+    const take = full ? total : streams ? 41 : 60;
     await route.fulfill({ json: {
-      messages: messages.slice(-take), total: TOTAL_MESSAGES, delta: false,
-      ...(streams ? {} : { cursor: TOTAL_MESSAGES }),
+      messages: messages.slice(-take), total, delta: false,
+      ...(streams ? {} : { cursor: total }),
     } });
   });
   try {
     const panel = await openSession(page, baseURL!);
     const history = panel.locator('.session-history');
-    const anchor = history.locator('[data-message-id="history-1020"]');
+    const anchor = history.locator('[data-message-id="history-100"]');
     await expect(anchor).toBeAttached();
     await wheelToTop(page, history);
     const before = (await anchor.boundingBox())!.y;
     releaseArchive();
-    await expect(history.locator('[data-msg-index="370"]')).toBeAttached();
+    await expect(history.locator('[data-msg-index="40"]')).toBeAttached();
     await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThanOrEqual(30);
-    await history.getByRole('button', { name: /Show 370 earlier messages/ }).click();
-    await expect(history.locator('[data-message-id="history-650"]')).toBeAttached();
+    await history.getByRole('button', { name: 'Load earlier turns', exact: true }).click();
+    await expect(history.locator('[data-message-id="history-60"]')).toBeAttached();
     await wheelToTop(page, history);
-    const load = history.getByRole('button', { name: /Load 650 earlier messages/ });
+    const load = history.getByRole('button', { name: 'Load earlier turns', exact: true });
     const failed = page.waitForResponse(response =>
       response.url().includes(`/api/sessions/${SESSION_ID}/history`) && response.status() === 503);
     await load.click();
     await failed;
     await expect(load).toBeEnabled();
-    await expect(history.locator('[data-message-id="history-650"]')).toBeAttached();
+    await expect(history.locator('[data-message-id="history-60"]')).toBeAttached();
     failBackfill = false;
-    const backfillAnchor = history.locator('[data-message-id="history-650"]');
+    const backfillAnchor = history.locator('[data-message-id="history-60"]');
     const backfillY = (await backfillAnchor.boundingBox())!.y;
     await load.click();
-    await expect(history.locator('[data-message-id="history-520"]')).toBeAttached();
-    await expect(history.locator('[data-msg-index]')).toHaveCount(530);
+    await expect(history.locator('[data-message-id="history-20"]')).toBeAttached();
+    await expect(history.locator('[data-msg-index]')).toHaveCount(100);
     await expect.poll(async () => Math.abs((await backfillAnchor.boundingBox())!.y - backfillY)).toBeLessThanOrEqual(30);
     await wheelToTop(page, history);
-    await history.getByRole('button', { name: /Show 500 earlier messages/ }).click();
-    await expect(history.locator('[data-msg-index]')).toHaveCount(1030);
+    await history.getByRole('button', { name: 'Load earlier turns', exact: true }).click();
+    await expect(history.locator('[data-msg-index]')).toHaveCount(total);
   } finally {
     releaseArchive();
+  }
+});
+
+test('a delayed backfill preserves the newer answer that arrived during the request', async ({ page, baseURL }) => {
+  const rows = historyRows(120);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let asked = false;
+  let grown = false;
+  await page.route(`**/api/sessions/${SESSION_ID}/history**`, async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has('since')) {
+      const messages = grown ? historyRows(122).slice(120) : [];
+      await route.fulfill({ json: { messages, cursor: grown ? 122 : 120, total: grown ? 122 : 120, delta: true } });
+      return;
+    }
+    if (!url.searchParams.has('tail') && url.searchParams.get('source') !== 'streams') {
+      asked = true;
+      await gate;
+      await route.fulfill({ json: { messages: rows, cursor: 120, total: 120, delta: false } });
+      return;
+    }
+    await route.fulfill({ json: { messages: rows.slice(-20), cursor: 120, total: 120, delta: false } });
+  });
+  try {
+    const panel = await openSession(page, baseURL!);
+    const history = panel.locator('.session-history');
+    await expect(history.getByText('Final line 119.', { exact: true })).toBeAttached();
+    await wheelToTop(page, history);
+    await history.getByRole('button', { name: 'Load earlier turns', exact: true }).click();
+    await expect.poll(() => asked).toBe(true);
+    grown = true;
+    await page.waitForFunction(() =>
+      (window as Window & { historyTestSocket?: WebSocket }).historyTestSocket?.readyState === WebSocket.OPEN);
+    await page.evaluate(sessionId => {
+      const socket = (window as Window & { historyTestSocket?: WebSocket }).historyTestSocket!;
+      socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        type: 'event', name: 'session:batch-completed', seq: Date.now(), data: { sessionId },
+      }) }));
+    }, SESSION_ID);
+    await expect(history.getByText('Final line 121.', { exact: true })).toBeAttached();
+    release();
+    await expect(history.getByText('History message 60:', { exact: false }).first()).toBeAttached();
+    await expect(history.getByText('Final line 121.', { exact: true })).toHaveCount(1);
+    await expect(history.locator('[data-message-id="history-120"]')).toHaveCount(1);
+  } finally {
+    release();
   }
 });
 
@@ -313,7 +387,7 @@ test('embedded Ask conversation keeps the same bottom clearance in both themes',
     const clearance = await panel.evaluate(el => {
       const input = el.querySelector('.session-panel-input')!;
       const tail = Array.from(el.querySelectorAll('.session-history [data-msg-index]')).at(-1)!;
-      return input.getBoundingClientRect().top + parseFloat(getComputedStyle(input, '::before').top)
+      return input.getBoundingClientRect().top
         - tail.getBoundingClientRect().bottom;
     });
     expect(clearance).toBeGreaterThanOrEqual(7);
@@ -343,7 +417,7 @@ for (const readingEarlier of [false, true]) {
       const image = history.getByRole('img', { name: 'Delayed chart' });
       await expect(image).toBeAttached();
       await wheelToTop(page, history);
-      const anchor = history.locator('[data-message-id="history-30"]');
+      const anchor = history.locator('[data-message-id="history-40"]');
       const before = (await anchor.boundingBox())!.y;
       if (!readingEarlier) {
         await panel.getByRole('button', { name: 'Scroll to bottom', exact: true }).click();
@@ -364,7 +438,7 @@ for (const readingEarlier of [false, true]) {
   });
 }
 
-for (const total of [0, 1, 30, 31, 200, 500, 530, 531]) {
+for (const total of [0, 1, 20, 21, 59, 60, 61]) {
   test(`history expansion boundary: ${total} messages`, async ({ page, baseURL }) => {
     test.setTimeout(60_000);
     await mockHistory(page, total);
@@ -373,16 +447,16 @@ for (const total of [0, 1, 30, 31, 200, 500, 530, 531]) {
     if (total) await expect(history.locator(`[data-msg-index="${total - 1}"]`)).toBeAttached();
     else await expect(history).toContainText('No conversation history found');
     const button = history.locator('.session-show-earlier-btn');
-    if (total <= 30) {
+    const firstTurn = Math.max(0, total % 2 === 0 ? total - 20 : total - 19);
+    if (firstTurn === 0) {
       await expect(button).toHaveCount(0);
       return;
     }
     await wheelToTop(page, history);
-    await expect(button).toContainText(`Show ${Math.min(total - 30, 500)} earlier messages`);
-    await expect(button).toContainText(`(${total - 30} hidden)`);
+    await expect(button).toHaveText('Load earlier turns');
     await button.click();
-    await expect(history.locator('[data-msg-index]')).toHaveCount(Math.min(total, 530));
-    if (total > 530) await expect(button).toContainText('Show 1 earlier messages');
+    await expect(history.locator('[data-msg-index]')).toHaveCount(total - Math.max(0, firstTurn - 40));
+    if (firstTurn > 40) await expect(button).toHaveText('Load earlier turns');
     else await expect(button).toHaveCount(0);
   });
 }

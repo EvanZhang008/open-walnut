@@ -53,7 +53,7 @@ import type { SessionRecord } from '../../src/core/types.js';
 import {
   parseSessionEnvelopes,
   type SessionEnvelope,
-} from '../../web/src/components/sessions/session-envelope.js';
+} from '@open-walnut/history-session-envelope';
 
 const NOW = new Date().toISOString();
 /** Longer than the 80 chars the envelope prints, so truncation is observable. */

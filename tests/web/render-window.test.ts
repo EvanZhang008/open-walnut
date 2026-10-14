@@ -20,8 +20,53 @@
  */
 import { describe, it, expect } from 'vitest';
 import { computeRenderWindow, type RenderWindowState } from '@/components/sessions/render-window';
+import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS } from '../../src/lib/history-turn-window';
 
-const LIMIT = 30; // INITIAL_RENDER_LIMIT
+describe('historyTurnWindowLimit', () => {
+  const turns = (count: number, activity = 0) => Array.from({ length: count }, (_, turn) => [
+    { role: 'user', text: `Question ${turn}` },
+    ...Array.from({ length: activity }, () => ({ role: 'assistant', text: '' })),
+    { role: 'assistant', text: `Answer ${turn}` },
+  ]).flat();
+
+  it('opens ten full turns even when each contains one hundred activity rows', () => {
+    const rows = turns(45, 100);
+    expect(historyTurnWindowLimit(rows, INITIAL_HISTORY_TURNS)).toBe(1020);
+    const start = rows.length - 1020;
+    expect(historyTurnWindowLimit(rows.slice(0, start), EARLIER_HISTORY_TURNS)).toBe(2040);
+  });
+
+  it('does not count injected rows or peer notices as human turns', () => {
+    const rows = turns(11).flatMap((m) => [m,
+      { role: 'user', text: 'Skill contents', injected: true },
+      { role: 'user', text: '[Request interrupted by user]' },
+      { role: 'user', text: '[Request interrupted by user for tool use]' },
+      { role: 'user', text: '[Task context]\nMachine context\n[/Task context]\n<walnut-message kind="notification">\nDone\n</walnut-message>' },
+      { role: 'user', text: '<walnut-message kind="notification">\nA background job finished.\n</walnut-message>' },
+      { role: 'user', text: '[Task context]\nMachine context\n[/Task context]' },
+    ]);
+    expect(historyTurnWindowLimit(rows, 10)).toBe(rows.length - 14);
+  });
+
+  it('windows the root page over its own human turns', () => {
+    const rows = turns(12);
+    expect(historyTurnWindowLimit(rows, 10, (i) => i < 4 || i >= 8)).toBe(rows.length);
+  });
+
+  it('uses a 75-row fallback when a tail has no human turns', () => {
+    const rows = Array.from({ length: 200 }, () => ({ role: 'assistant', text: 'Activity' }));
+    expect(historyTurnWindowLimit(rows, 10)).toBe(75);
+    expect(historyTurnWindowLimit(rows, 20)).toBe(75);
+    expect(historyTurnWindowLimit([], 10)).toBe(0);
+  });
+
+  it('keeps every row of a short or unfinished conversation', () => {
+    const rows = [...turns(4, 5), { role: 'user', text: '\u4f60\u597d' }]; // Unicode user text still starts a turn.
+    expect(historyTurnWindowLimit(rows, 10)).toBe(rows.length);
+  });
+});
+
+const LIMIT = 30;
 
 /** A conversation of `n` rows, each with a stable msgId (`m<absolute index>`). */
 const conv = (n: number, from = 0) =>
@@ -82,7 +127,7 @@ describe('computeRenderWindow', () => {
     expect(startId(full, w)).toBe('m513');
   });
 
-  it('expands in 500-row batches without moving its anchor on backfill', () => {
+  it('expands a requested row window without moving its anchor on backfill', () => {
     const msgs = conv(1050, 143);
     let w = computeRenderWindow(msgs, LIMIT, fresh);
     for (const [limit, start] of [[530, 520], [1030, 20], [1530, 0]]) {

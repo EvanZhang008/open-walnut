@@ -33,7 +33,7 @@ import {
   envelopeDirectionLabel,
   isEnvelopeOnly,
   type SessionEnvelope,
-} from '../../web/src/components/sessions/session-envelope';
+} from '@open-walnut/history-session-envelope';
 
 const SENDER_TITLE =
   'Mac side: Fable 5.1 (CLI >= 2.1.255, config pull, proxy restart) — FIRST, confirm the daemon version';

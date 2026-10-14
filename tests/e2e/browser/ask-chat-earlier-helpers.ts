@@ -59,7 +59,9 @@ async function openAsk(page: Page, title: string, sessionId: string): Promise<Lo
   // The chat spot starts hidden on a browser that never chose: boot as a user
   // who opened it once.
   await openChatOnLoad(page)
-  await page.goto('/')
+  const root = new URL('/', page.url() === 'about:blank' ? `http://localhost:${process.env.PW_TEST_PORT ?? 3457}` : page.url()).href
+  await page.setContent(`<a href="${root}">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
   const drawer = await openAskWalnutDrawer(page).catch((err: unknown) => {
     throw new Error(`no Ask Walnut slot; page errors: ${JSON.stringify(errors.slice(0, 8))}; ${String(err)}`)
@@ -105,14 +107,14 @@ export async function oldChatOpensWithItsHistory(page: Page, engine: string): Pr
   await expect(session.getByText('History unavailable')).toHaveCount(0)
   await expect(block.locator('.chat-earlier-divider')).toHaveText('This session')
 
-  // 60 rows: the newest 40 first, the rest one click away.
+  // Ten recent turns first, with twenty older turns one click away.
   const total = EARLIER_OLD_TURNS * 2
-  await expect(block.locator('[data-testid="chat-earlier-row"]')).toHaveCount(40)
-  const more = block.getByRole('button', { name: /Show 20 earlier messages/ })
+  await expect(block.locator('[data-testid="chat-earlier-row"]')).toHaveCount(20)
+  const more = block.getByRole('button', { name: 'Load earlier turns', exact: true })
   await expect(more).toBeVisible()
   let texts = await earlierTexts(block)
   expect(texts[texts.length - 1]).toBe(earlierOldAnswer(EARLIER_OLD_TURNS).replace(/\*\*/g, ''))
-  expect(texts[0]).toBe(earlierOldQuestion(EARLIER_OLD_TURNS - 19))
+  expect(texts[0]).toBe(earlierOldQuestion(EARLIER_OLD_TURNS - 9))
   // Markdown renders (the answer's bold), it is not shown raw.
   await expect(block.locator('[data-testid="chat-earlier-row"] strong').last()).toHaveText('bold')
   await session.screenshot({ path: `${SHOTS}/${engine}-01-old-chat-open.png` })
@@ -124,7 +126,7 @@ export async function oldChatOpensWithItsHistory(page: Page, engine: string): Pr
   await expect(block.locator('[data-testid="chat-earlier-row"]')).toHaveCount(total)
   // The reader stays where they were: the row that headed the list is still on
   // screen, with the newly shown ones above it.
-  const formerHead = block.getByText(earlierOldQuestion(EARLIER_OLD_TURNS - 19), { exact: true })
+  const formerHead = block.getByText(earlierOldQuestion(EARLIER_OLD_TURNS - 9), { exact: true })
   await expect(formerHead).toBeInViewport()
   await session.screenshot({ path: `${SHOTS}/${engine}-01b-after-show-earlier.png` })
   await expect(more).toHaveCount(0)
@@ -146,7 +148,7 @@ export async function continuedChatPutsTheEarlierPartAboveTheSession(page: Page,
   const block = session.locator('[data-testid="chat-earlier"]')
   await expect(block).toBeVisible({ timeout: 20_000 })
   expect(await earlierTexts(block)).toEqual(['Which plants like shade?', 'Ferns, hostas and hellebores.'])
-  await expect(block.getByRole('button', { name: /earlier messages/ })).toHaveCount(0)
+  await expect(block.getByRole('button', { name: /earlier turns/ })).toHaveCount(0)
 
   // Above the session's own first message, and the session's turn stays in view.
   const firstOwn = session.getByText('And which of them flower?')

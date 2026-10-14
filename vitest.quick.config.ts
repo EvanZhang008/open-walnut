@@ -35,6 +35,9 @@ const config = mergeConfig(
         '@open-walnut/search-transcript': path.resolve(import.meta.dirname, 'src/core/task-search-transcript.ts'),
         '@open-walnut/host-problem': path.resolve(import.meta.dirname, 'src/core/hosts/host-problem.ts'),
         '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
+        '@open-walnut/history-turn-window': path.resolve(import.meta.dirname, 'src/lib/history-turn-window.ts'),
+        '@open-walnut/history-injected-banner': path.resolve(import.meta.dirname, 'src/lib/history-injected-banner.ts'),
+        '@open-walnut/history-session-envelope': path.resolve(import.meta.dirname, 'src/lib/history-session-envelope.ts'),
       },
     },
     test: {

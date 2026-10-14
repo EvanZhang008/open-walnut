@@ -41,7 +41,7 @@ import {
   type SessionEnvelope,
   type SessionEnvelopePeer,
   type SessionEnvelopeSource,
-} from './session-envelope';
+} from '@open-walnut/history-session-envelope';
 import { resolveRefInIndex } from '@/components/chat/session-mention';
 import {
   ensureSessionMentionIndex,

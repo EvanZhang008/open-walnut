@@ -18,8 +18,9 @@ import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneT
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { HistoryGapDivider } from './HistoryGapDivider';
 import { gapIndex, type HistoryGap } from '@/hooks/history-gap';
-import { typedUserText } from './injected-banner';
+import { typedUserText } from '@open-walnut/history-injected-banner';
 import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
+import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS } from '@open-walnut/history-turn-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
@@ -55,7 +56,7 @@ import { useAnsweringKeys, useThreadMarks } from '@/hooks/useThreadMarks';
 import { useThreadMapLayout } from '@/hooks/useThreadMapLayout';
 import { counts as threadCounts } from '@/utils/thread-meta-counts';
 import type { TreeRow } from '@/utils/thread-tree-rows';
-import { pageRowsBefore, pageWindowLimit } from '@/utils/thread-page-window';
+import { pageRowsBefore } from '@/utils/thread-page-window';
 import { deriveThreadLiveStates, displayTitleOf, metaOf, viewStatusOf } from '@/utils/thread-meta';
 import {
   MAIN_TITLE, askedFromGroups, blockPageKey, composerDraftKey, deliveryEntries, readComposerDraft, deriveThreadStats, markSpecsFor, newTurnBook,
@@ -468,11 +469,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const handleInitialPromptClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
 
   // ── Message truncation — render only the tail to keep DOM count low ──
-  const INITIAL_RENDER_LIMIT = 30;
-  const LOAD_MORE_BATCH = 500;
   const [truncationOffset, setTruncationOffset] = useState(0);
-  // "Show earlier" scroll anchor: distance-to-bottom captured at click time,
-  // restored after the expanded batch renders. The container has
+  // Keep the reader's distance from the bottom while rows open above them.
   // overflow-anchor:none, so without this the browser keeps scrollTop
   // numerically fixed and the newly inserted messages shove the user's
   // reading position out of view. Bottom distance is invariant to any
@@ -1084,7 +1082,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // visible jump: same distance-to-bottom ⇒ the message the user was reading
   // stays exactly where it was, with the revealed batch above the viewport.
   // `messages` is a dep too: "Load N earlier" (lazy-tail backfill) replaces the
-  // whole array without touching truncationOffset. Null-guarded, so ordinary
+  // whole array while the old rows keep their content anchor. Null-guarded, so ordinary
   // appends (dist === null) are a no-op.
   useLayoutEffect(() => {
     const dist = pendingBottomDistance.current;
@@ -1112,13 +1110,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // it right away, holding the reader's place (declared after the restore effect
   // above so the distance is read from the layout that effect has just settled).
   const seenOlderPageSeq = useRef(0);
+  const olderRenderStart = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (olderPageSeq === seenOlderPageSeq.current) return;
     seenOlderPageSeq.current = olderPageSeq;
     if (olderPageSeq === 0) return;
     const el = containerRef.current;
     if (el) pendingBottomDistance.current = el.scrollHeight - el.scrollTop;
-    setTruncationOffset(prev => prev + LOAD_MORE_BATCH);
+    const start = olderRenderStart.current ?? renderWindowStart.current ?? messages.length;
+    olderRenderStart.current = null;
+    const added = historyTurnWindowLimit(messages, EARLIER_HISTORY_TURNS,
+      rootPageWindow ? (i) => rowThreadKey(messages[i].msgId ?? messages[i].walnutMessageId) === ROOT_THREAD_KEY : undefined, start);
+    setTruncationOffset(messages.length - start + added);
   }, [olderPageSeq]);
 
   // Listen for expand-to-message events from parent panels (when clicking a truncated message)
@@ -1129,8 +1132,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const { messageIndex } = (e as CustomEvent).detail;
       // Expand truncation to include the target message
       const needed = messages.length - messageIndex;
-      if (needed > INITIAL_RENDER_LIMIT + truncationOffset) {
-        setTruncationOffset(needed - INITIAL_RENDER_LIMIT);
+      if (needed > truncationOffset) {
+        setTruncationOffset(needed);
       }
       // After React re-render, scroll to the target
       requestAnimationFrame(() => {
@@ -1297,8 +1300,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     if (wanted.length === 0) return;
     const needed = messages.length - Math.min(...wanted);
-    if (needed > INITIAL_RENDER_LIMIT + truncationOffset) {
-      setTruncationOffset(needed - INITIAL_RENDER_LIMIT);
+    if (needed > truncationOffset) {
+      setTruncationOffset(needed);
     }
   }, [stackMode, currentNode, pagePending, rowIndexOf, messages.length, truncationOffset]);
 
@@ -1452,7 +1455,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (index < 0) {
       // The loaded rows are a TAIL window; a pin on an older message is a real
       // destination the window just does not hold yet. Fetch the rest (the same
-      // request the "Load earlier messages" button makes) and finish the jump when
+      // request the "Load earlier turns" button makes) and finish the jump when
       // the row lands (the effect below). A row that is not there even then (a
       // /compact rewrote it) is logged, not silently ignored.
       if (olderHidden > 0 || olderWindowed) {
@@ -1474,8 +1477,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // follow-bottom paths would drag them straight back down on the next delta.
     isAtBottom.current = false;
     const needed = messages.length - index;
-    if (needed > INITIAL_RENDER_LIMIT + truncationOffset) {
-      setTruncationOffset(needed - INITIAL_RENDER_LIMIT);
+    if (needed > truncationOffset) {
+      setTruncationOffset(needed);
     }
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -2393,17 +2396,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   rowThreadKeyRef.current = rowThreadKey;
   const windowAnchors = rootPageWindow ? threadsApi.anchors : null;
   const { historyParts, hiddenCount } = useMemo(() => {
-    const want = INITIAL_RENDER_LIMIT + truncationOffset;
     const keyOf = rowThreadKeyRef.current;
-    const limit = rootPageWindow
-      ? pageWindowLimit(messages.length, (i) => keyOf(messages[i].msgId ?? messages[i].walnutMessageId), ROOT_THREAD_KEY, want)
-      : want;
+    const rawLimit = truncationOffset;
+    const turnLimit = historyTurnWindowLimit(messages, INITIAL_HISTORY_TURNS,
+      rootPageWindow ? (i) => keyOf(messages[i].msgId ?? messages[i].walnutMessageId) === ROOT_THREAD_KEY : undefined);
+    const limit = Math.max(rawLimit, turnLimit);
     const window = computeRenderWindow(
       messages,
       limit,
       { start: renderWindowStart.current, anchor: renderWindowAnchor.current },
     );
     const visibleStart = window.start;
+    if (olderPageSeq !== seenOlderPageSeq.current && renderWindowAnchor.current) {
+      const at = messages.findIndex(m => m.msgId === renderWindowAnchor.current!.msgId);
+      if (at >= 0) olderRenderStart.current = Math.max(0, at - renderWindowAnchor.current.offset);
+    }
     renderWindowStart.current = visibleStart;
     renderWindowAnchor.current = window.anchor;
     const visibleMessages = messages.slice(visibleStart);
@@ -2499,7 +2506,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     flushSystemRun();
     return { historyParts: parts, hiddenCount: visibleStart };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowThreadKeyRef: see above; windowAnchors stands for it
-  }, [messages, truncationOffset, forkBoundaryIndex, gapAt, rootPageWindow, windowAnchors]);
+  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, rootPageWindow, windowAnchors]);
   // What `Show N earlier` counts: on the root page only root rows (N9), since
   // the rows of questions above it render on their own pages.
   const hiddenOnPage = useMemo(() => {
@@ -3645,11 +3652,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               isAtBottom.current = false;
               const el = containerRef.current;
               if (el) pendingBottomDistance.current = el.scrollHeight - el.scrollTop;
-              setTruncationOffset(prev => prev + LOAD_MORE_BATCH);
+              const added = historyTurnWindowLimit(messages, EARLIER_HISTORY_TURNS,
+                rootPageWindow ? (i) => rowThreadKey(messages[i].msgId ?? messages[i].walnutMessageId) === ROOT_THREAD_KEY : undefined, hiddenCount);
+              setTruncationOffset(messages.length - hiddenCount + added);
             }}
           >
-            Show {Math.min(hiddenOnPage, LOAD_MORE_BATCH)} earlier messages
-            <span className="session-show-earlier-count">({hiddenOnPage + olderHidden} hidden)</span>
+            Load earlier turns
           </button>
         )}
         {/* Lazy tail exhausted: everything we HOLD is rendered, but the source
@@ -3668,8 +3676,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             }}
           >
             {phase2Pending
-              ? 'Loading earlier messages…'
-              : olderHidden > 0 ? `Load ${olderHidden} earlier messages` : 'Load earlier messages'}
+              ? 'Loading earlier turns…'
+              : 'Load earlier turns'}
           </button>
         )}
         {/* The older part of this transcript cannot be paged (a fork, a journal, a

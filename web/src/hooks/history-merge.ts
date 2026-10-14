@@ -126,6 +126,17 @@ export function stitchHeldOlder<T extends RowIdentity>(held: readonly T[], incom
   return at > 0 ? [...held.slice(0, at), ...incoming] : incoming as T[];
 }
 
+export function mergeHistoryBackfill<T extends RowIdentity>(held: readonly T[], incoming: T[]): T[] {
+  const head = held[0] && rowKey(held[0]);
+  const seam = head ? incoming.findIndex(m => rowKey(m) === head) : -1;
+  if (seam < 0) return held as T[];
+  const heldByKey = new Map(held.flatMap(m => { const key = rowKey(m); return key ? [[key, m] as const] : []; }));
+  const merged = incoming.map(m => heldByKey.get(rowKey(m) ?? '') ?? m);
+  const lastKey = incoming.at(-1) && rowKey(incoming.at(-1)!);
+  const lastAt = lastKey ? held.findIndex(m => rowKey(m) === lastKey) : -1;
+  return lastAt >= 0 ? [...merged, ...held.slice(lastAt + 1)] : merged;
+}
+
 /** Add one older page above what is held. Rows already held are skipped, so a
  *  page fetched twice cannot double a row. */
 export function prependOlderPage<T extends RowIdentity>(held: readonly T[], page: readonly T[]): T[] {

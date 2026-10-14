@@ -242,6 +242,14 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      {
+        id: 'pw-task-history-turns', title: 'History turn window fixture', status: 'in_progress', phase: 'NEED_ACTION',
+        priority: 'none', project: 'Walnut', source: 'local', session_ids: ['pw-history-turns-session'],
+        active_session_ids: [], session_id: 'pw-history-turns-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        description: '', summary: '', note: '', subtasks: [],
+      },
       // Column complete-close fixtures (column-complete-close.spec.ts): three real columns, each with a
       // long transcript, whose tasks the spec completes and undoes. Their own tasks, because the
       // spec changes their phase and every other spec shares this dataset.
@@ -2906,6 +2914,12 @@ await fs.writeFile(
         cwd: vscodeFixtureRoot,
         title: 'Threads send fixture session',
       },
+      {
+        claudeSessionId: 'pw-history-turns-session', taskId: 'pw-task-history-turns', project: 'Walnut',
+        process_status: 'stopped', mode: 'bypass', cwd: vscodeFixtureRoot,
+        startedAt: new Date(sessionFixtureNow - 1000000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow).toISOString(), messageCount: 4590, title: 'History turn window fixture',
+      },
       // Question stack + tree drawer fixtures (threads-fixture.ts), with their
       // seeded anchors, meta and pins on the record.
       ...allThreadsFixtures(sessionFixtureNow).map((s) => fixtureRecord(s, sessionFixtureNow, vscodeFixtureRoot)),
@@ -4119,6 +4133,21 @@ if (mockDaemon) {
     workerCmd: [process.execPath, WORKER_BUNDLE],
     adapterCmd: [process.execPath, MOCK_ACP_AGENT],
   })
+}
+
+{
+  const encodedCwd = vscodeFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
+  const dir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
+  await fs.mkdir(dir, { recursive: true })
+  const rows = Array.from({ length: 45 }, (_, turn) => [
+    { type: 'user', message: { role: 'user', content: `Dense question ${turn}` } },
+    ...Array.from({ length: 100 }, (_, step) => ({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: `dense-tool-${turn}-${step}`, name: 'Bash', input: { command: `check ${step}` } },
+    ] } })),
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: `Dense answer ${turn}` }] } },
+  ]).flat().map((row, i) => JSON.stringify({ ...row, uuid: `dense-row-${i}`, sessionId: 'pw-history-turns-session',
+    timestamp: new Date(sessionFixtureNow - 1000000 + i * 100).toISOString() }))
+  await fs.writeFile(path.join(dir, 'pw-history-turns-session.jsonl'), rows.join('\n') + '\n')
 }
 
 const testPort = Number(process.env.PW_TEST_PORT ?? 3457)

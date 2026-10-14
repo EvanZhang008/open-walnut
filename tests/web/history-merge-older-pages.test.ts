@@ -8,7 +8,7 @@
  * client holds, which the next anchored delta extends) moves with the pages.
  */
 import { describe, it, expect } from 'vitest';
-import { stitchHeldOlder, prependOlderPage, foldFullPayload, planDeltaMerge } from '../../web/src/hooks/history-merge';
+import { stitchHeldOlder, prependOlderPage, foldFullPayload, planDeltaMerge, mergeHistoryBackfill } from '../../web/src/hooks/history-merge';
 
 interface Row { msgId?: string; timestamp?: string; role?: string; text?: string }
 
@@ -23,6 +23,31 @@ function row(i: number, extra: Partial<Row> = {}): Row {
 }
 const range = (from: number, to: number): Row[] => Array.from({ length: to - from }, (_, k) => row(from + k));
 const ids = (rows: Row[]) => rows.map((r) => r.msgId);
+
+describe('mergeHistoryBackfill', () => {
+  it('keeps a newer turn that arrived while an older full snapshot was in flight', () => {
+    expect(ids(mergeHistoryBackfill(range(50, 102), range(0, 100)))).toEqual(ids(range(0, 102)));
+  });
+
+  it('refuses a stale snapshot after a compaction replaced the transcript', () => {
+    const held = range(1000, 1020);
+    expect(mergeHistoryBackfill(held, range(0, 100))).toBe(held);
+  });
+
+  it('does not undo tool revisions that arrived while backfill was in flight', () => {
+    const held = range(50, 100);
+    held[10].text = 'Tool completed';
+    expect(mergeHistoryBackfill(held, range(0, 100))[60].text).toBe('Tool completed');
+  });
+
+  it('accepts a full response newer than the concurrently refreshed tail', () => {
+    expect(ids(mergeHistoryBackfill(range(50, 101), range(0, 102)))).toEqual(ids(range(0, 102)));
+  });
+
+  it('adopts a complete snapshot at the same newest row without duplicates', () => {
+    expect(ids(mergeHistoryBackfill(range(50, 100), range(0, 100)))).toEqual(ids(range(0, 100)));
+  });
+});
 
 describe('stitchHeldOlder', () => {
   it('keeps the pages above a fresh tail when the tail head is a row already held', () => {

@@ -18,7 +18,7 @@
  * only the grey bubble disappears sooner. Stuck-forever is strictly worse.)
  */
 
-import { typedUserText } from './injected-banner';
+import { typedUserText } from '@open-walnut/history-injected-banner';
 
 /** Minimal shapes — structural, so the component's richer types just fit. */
 interface PersistedLike {

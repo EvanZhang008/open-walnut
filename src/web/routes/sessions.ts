@@ -4,6 +4,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
+import { historyTurnWindowLimit, isHistoryUserTurn } from '../../lib/history-turn-window.js'
 import {
   emitSessionStatusChanged,
   getRecentSessions,
@@ -1239,6 +1240,15 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     const sessionId = req.params.sessionId as string
     const source = req.query.source as string | undefined
     const tail = req.query.tail ? parseInt(req.query.tail as string, 10) : undefined
+    const turnCount = typeof req.query.turns === 'string' ? Number(req.query.turns) : 0
+    if (!Number.isInteger(turnCount) || turnCount < 0 || turnCount > 100) {
+      res.status(400).json({ error: 'turns must be an integer between 0 and 100' })
+      return
+    }
+    const sliceHistory = <T extends { role: string; text: string; injected?: boolean }>(rows: T[]): T[] => {
+      const limit = Math.max(tail && tail > 0 ? tail : 0, turnCount > 0 ? historyTurnWindowLimit(rows, turnCount) : 0)
+      return limit > 0 ? rows.slice(-limit) : rows
+    }
 
     // Look up session record to get cwd
     const record = await getSessionByClaudeId(sessionId)
@@ -1250,9 +1260,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         const { messages, windowed } = await readProviderSessionHistory(sessionId, record, record.host, true,
           tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
         logMessageOrdering('P1:streams', sessionId, messages, record.host)
-        const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
+        const sliced = sliceHistory(messages)
         const initialUserText = windowed ? undefined : initialUserTextOf(messages)
-        res.json({ messages: sliced, total: messages.length, ...(initialUserText ? { initialUserText } : {}) })
+        res.json({ messages: sliced, total: messages.length, ...(windowed ? { windowed: true } : {}), ...(initialUserText ? { initialUserText } : {}) })
         return
       }
       // Fast path: host=undefined forces local-only reads (canonical JSONL + streams fallback).
@@ -1267,7 +1277,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         const { readHistoryCache } = await import('../../core/history-disk-cache.js')
         const diskCached = await readHistoryCache(sessionId)
         if (diskCached && diskCached.messages.length > 0) {
-          const cachedSlice = tail && tail > 0 ? diskCached.messages.slice(-tail) : diskCached.messages
+          const cachedSlice = sliceHistory(diskCached.messages)
           res.json({
             messages: cachedSlice, total: diskCached.messages.length,
             ...(diskCached.finishedAgentIds?.length ? { finishedAgentIds: diskCached.finishedAgentIds } : {}),
@@ -1297,10 +1307,11 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
       const { messages, finishedAgentIds: p1FinishedIds, windowed: p1Windowed } = p1
       logMessageOrdering('P1:streams', sessionId, messages, record?.host)
-      const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
+      const sliced = sliceHistory(messages)
       const p1InitialUserText = p1Windowed ? undefined : initialUserTextOf(messages)
       res.json({
         messages: sliced, total: messages.length,
+        ...(p1Windowed ? { windowed: true } : {}),
         ...(p1InitialUserText ? { initialUserText: p1InitialUserText } : {}),
         ...(p1FinishedIds && p1FinishedIds.length > 0 ? { finishedAgentIds: p1FinishedIds } : {}),
       })
@@ -1332,7 +1343,8 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
         const page = await boundHostRead(record.host, () => readSessionHistoryBefore(
           sessionId, record.cwd, record.host, beforeRaw,
-          { minMessages: HISTORY_PAGE_MIN_MESSAGES, minText: HISTORY_PAGE_MIN_TEXT, isText: isProseRow },
+          turnCount > 0 ? { minMessages: 0, minText: turnCount, isText: isHistoryUserTurn }
+            : { minMessages: HISTORY_PAGE_MIN_MESSAGES, minText: HISTORY_PAGE_MIN_TEXT, isText: isProseRow },
         ))
         if (!page) {
           res.json({ messages: [], reachedStart: false, unavailable: 'unreadable' })
@@ -1372,13 +1384,32 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // pulled the whole 9.5 MB remote JSONL over SSH on every cold panel open).
       // A host still connecting answers at once from the caches below, or
       // degraded: this request never waits out a dial (remote-read-bound.ts).
-      const readHistory = () => readProviderSessionHistory(sessionId, record, record?.host, true,
-        tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+      const readHistory = async () => {
+        const history = await readProviderSessionHistory(sessionId, record, record?.host, true,
+          tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+        if (req.query.since === undefined && turnCount > 0 && history.windowed && record && !record.forkedFromSessionId
+          && engineCaps(record.engine).historySource !== 'acp-journal'
+          && history.messages.filter(isHistoryUserTurn).length < turnCount) {
+          const before = history.messages[0]?.timestamp
+          if (before) {
+            const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
+            const page = await readSessionHistoryBefore(sessionId, record.cwd, record.host, before,
+              { minMessages: 0, minText: turnCount, isText: isHistoryUserTurn })
+            if (page?.messages.length) {
+              const keyOf = (m: SessionHistoryMessage) => m.msgId ? `${m.msgId}|${m.timestamp}|${m.role}` : undefined
+              const tailKeys = new Set(history.messages.map(keyOf).filter(Boolean))
+              history.messages = [...page.messages.filter(m => !keyOf(m) || !tailKeys.has(keyOf(m))), ...history.messages]
+              if (page.reachedStart) history.windowed = false
+            }
+          }
+        }
+        return history
+      }
       // A full read is shared: one still arriving when this request had to
       // answer ("Still loading") goes on, and the client's next request joins
       // it rather than starting over. A delta (?since=) is always fresh.
       const history = req.query.since === undefined
-        ? await boundSharedHostRead(record?.host, `history\u0000${sessionId}\u0000${tail && tail > 0 ? 'tail' : 'all'}`, readHistory)
+        ? await boundSharedHostRead(record?.host, `history\u0000${sessionId}\u0000${tail && tail > 0 ? 'tail' : 'all'}\u0000${turnCount}`, readHistory)
         : await boundHostRead(record?.host, readHistory)
       messages = history.messages
       historySourceAvailable = history.sourceAvailable
@@ -1769,12 +1800,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // Fall through to full payload (unresolvable split point → rebuild).
     }
 
-    const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
+    const sliced = sliceHistory(messages)
     // Adjust forkBoundaryIndex for the sliced window. `dropped` is clamped at 0:
     // a tail LARGER than the transcript drops nothing, and the raw `total - tail`
     // would go negative and INFLATE the boundary past the array (a 6-msg thread
     // asked with tail=200 reported boundary 196 → clients sliced to empty).
-    const dropped = tail && tail > 0 ? Math.max(0, total - tail) : 0
+    const dropped = total - sliced.length
     const adjustedForkBoundary = forkBoundaryIndex != null
       ? (forkBoundaryIndex >= dropped ? forkBoundaryIndex - dropped : undefined)
       : forkBoundaryIndex

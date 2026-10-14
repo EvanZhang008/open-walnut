@@ -1,7 +1,7 @@
 /**
- * "Load earlier messages" on a transcript past the full read's byte ceiling.
+ * "Load earlier turns" on a transcript past the full read's byte ceiling.
  *
- * Reported 2026-10-04: a 38 MB session showed "Load earlier messages", and clicking
+ * Reported 2026-10-04: a 38 MB session showed "Load earlier turns", and clicking
  * it did nothing, forever. The server could only serve the 4 MB tail of such a file,
  * so every click re-served the same rows. The older part now comes a page at a time
  * (GET /api/sessions/:id/history?before=<oldest row held>), through the real server,
@@ -70,18 +70,21 @@ async function clickTopButton(panel: Locator, label: RegExp): Promise<boolean> {
   return true;
 }
 
-/** Render every row already held: the panel shows the newest 30 and reveals the rest in batches. */
+/** Render every row already held: the panel opens ten turns and reveals twenty more per click. */
 async function expandHeld(panel: Locator): Promise<void> {
-  for (let i = 0; i < 20; i++) {
-    if (!(await clickTopButton(panel, /^Show \d+ earlier/))) return;
+  for (let i = 0; i < 100; i++) {
+    const first = panel.locator('.session-history [data-msg-index]').first();
+    if (Number(await first.getAttribute('data-msg-index')) === 0) return;
+    expect(await clickTopButton(panel, /^Load earlier turns$/)).toBe(true);
   }
+  throw new Error('Held history did not reach its first row');
 }
 
-/** The "Load earlier messages" button, with all held rows rendered above the reader. */
+/** The "Load earlier turns" button, with all held rows rendered above the reader. */
 async function loadEarlierBtn(panel: Locator): Promise<Locator> {
   await expandHeld(panel);
   await scrollToTop(panel);
-  return panel.locator('.session-show-earlier-btn', { hasText: /earlier messages/ }).first();
+  return panel.locator('.session-show-earlier-btn', { hasText: /earlier turns/ }).first();
 }
 
 /** Every `whale ask N` / `whale reply N` the panel shows, in DOM order. */
@@ -113,7 +116,7 @@ test('the tail is a bounded window, and the panel offers an uncounted Load earli
   const body = await res.json() as { windowed?: boolean; messages: unknown[]; total: number };
   expect(body.windowed, 'the fixture must be past the ceiling or nothing below proves anything').toBe(true);
   expect(body.total, 'a tail under 400 rows is the reported shape').toBeLessThan(400);
-  await expect(await loadEarlierBtn(panel)).toHaveText(/^Load earlier messages$/);
+  await expect(await loadEarlierBtn(panel)).toHaveText(/^Load earlier turns$/);
 });
 
 test('a click shows older rows at once and the reader keeps their place', async ({ page, baseURL }) => {
@@ -122,7 +125,7 @@ test('a click shows older rows at once and the reader keeps their place', async 
   const panel = await openWhale(page, baseURL!);
   const history = panel.locator('.session-history');
   const btn = await loadEarlierBtn(panel);
-  await expect(btn).toHaveText(/^Load earlier messages$/);
+  await expect(btn).toHaveText(/^Load earlier turns$/);
   const before = await markers(panel);
   const firstHeld = Number(before[0].split(':')[1]);
   // The row right under the button is the reader's place.
@@ -231,7 +234,7 @@ test('a failed page keeps the button and a retry pages normally', async ({ page,
   await btn.click();
   await expect.poll(() => failed).toBe(1);
   await expect(btn).toBeEnabled();
-  await expect(btn).toHaveText(/^Load earlier messages$/);
+  await expect(btn).toHaveText(/^Load earlier turns$/);
   const firstBefore = Number((await markers(panel))[0].split(':')[1]);
 
   await btn.click();

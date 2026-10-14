@@ -23,7 +23,7 @@ import {
   type AskSessionLaunch,
 } from '../../web/src/components/chat/ask-object-session'
 import { pruneAskObjectStore } from '../../web/src/components/chat/ask-object-conversation'
-import { splitLeadingBanners } from '../../web/src/components/sessions/injected-banner'
+import { splitLeadingBanners } from '@open-walnut/history-injected-banner'
 
 class MemoryStorage {
   private map = new Map<string, string>()

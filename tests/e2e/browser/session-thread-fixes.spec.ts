@@ -220,14 +220,7 @@ test.describe('Slice 1 layout fixes', () => {
     // Six root turns among 70 transcript rows: the old raw window of 30 left
     // R0 to R2 unrendered behind a `Show 46 earlier messages` that revealed 6.
     for (let r = 1; r <= 6; r++) await expect(history).toContainText(`Walk me through part ${r} of the storage notes.`)
-    const btn = panel.locator('.session-show-earlier-btn')
-    if (await btn.count() > 0) {
-      const label = (await btn.textContent()) ?? ''
-      const shown = Number(/Show (\d+)/.exec(label)?.[1] ?? '0')
-      const before = await history.locator('[data-message-id]').count()
-      await btn.click()
-      await expect.poll(() => history.locator('[data-message-id]').count()).toBe(before + shown)
-    }
+    await expect(panel.locator('.session-show-earlier-btn')).toHaveCount(0)
   })
 
   for (const width of [480, 720]) {

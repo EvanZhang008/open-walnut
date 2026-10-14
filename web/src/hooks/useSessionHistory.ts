@@ -10,10 +10,11 @@ import {
 } from '@/cache/session-cache';
 import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
-import { planDeltaMerge, foldFullPayload, prependOlderPage } from './history-merge';
+import { planDeltaMerge, foldFullPayload, prependOlderPage, mergeHistoryBackfill } from './history-merge';
 import { fillGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
 import { visibleInterval } from '@/utils/page-visibility';
 import type { SessionHistoryResult } from '@/api/sessions';
+
 
 /** Still-loading answers joined in a row before the answer counts as stale (each is bounded at ~60s server-side). */
 const MAX_LOADING_JOINS = 12;
@@ -507,6 +508,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // overflow-anchor:none they insert ~250px ABOVE a reader who already
           // scrolled up, shoving the conversation down under their eyes.
           // Phase 2 re-derives both from cursor immediately after.
+          setOlderWindowed(!!result.windowed);
           if (result.total != null && result.total > result.messages.length) {
             const offset = result.total - result.messages.length;
             baseOffsetRef.current = offset;
@@ -674,7 +676,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     return () => { cancelled = true; controller.abort(); cancel(); };
   }, [sessionId, stale, enabled]);
 
-  // "Show earlier" past the lazy tail: fetch the WHOLE history once, on demand.
+  // History past the lazy tail is fetched only when the reader asks for it.
   // The one deliberately unbounded fetch — user-initiated, so pinning a browser
   // connection for it is the user's explicit choice, not a background tax.
   const loadingFullRef = useRef(false);
@@ -734,21 +736,30 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         .finally(settle);
       return;
     }
+    const heldAtStart = messagesRef.current;
     fetchSessionHistory(sessionId)
       .then((result) => {
-        if (result.stale) return; // keep the tail view; banner path handles it
-        setMessages(result.messages);
-        setGaps([]);
+        if (sessionIdRef.current !== sessionId || result.stale) return;
+        const current = messagesRef.current;
+        const merged = current !== heldAtStart
+          ? mergeHistoryBackfill(current, result.messages)
+          : result.messages;
+        if (merged === current) return;
+        setMessages(merged);
+        setOlderPageSeq((n) => n + 1);
+        const mergedGaps = merged === result.messages ? [] : liveGaps(merged, gapsRef.current);
+        setGaps(mergedGaps);
         setForkBoundaryIndex(result.forkBoundaryIndex);
         adoptInitialUserText(result.initialUserText);
-        const fullCursor = result.cursor ?? result.messages.length;
+        const fullCursor = (result.cursor ?? result.messages.length) + merged.length - result.messages.length;
         cursorRef.current = fullCursor;
-        adoptOffset(result.messages.length, fullCursor, result.windowed);
+        adoptOffset(merged.length, fullCursor, result.windowed);
         setHistoryCache(sessionId, {
-          messages: result.messages,
+          messages: merged,
           forkBoundaryIndex: result.forkBoundaryIndex,
           msgCount: fullCursor,
-          baseOffset: Math.max(0, fullCursor - result.messages.length),
+          baseOffset: Math.max(0, fullCursor - merged.length),
+          gaps: mergedGaps,
           initialUserText: result.initialUserText ?? initialUserTextRef.current,
         });
       })

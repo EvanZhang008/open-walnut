@@ -65,7 +65,7 @@ import { REQUESTS_FILE, createSessionRequest, getSessionRequest } from '../../sr
 import fs from 'node:fs';
 import { lastTurnOf, turnStarterOf } from '../../src/core/sessions/session-request-notify.js';
 import { buildWalnutMessage, parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
-import { parseSessionEnvelopes } from '../../web/src/components/sessions/session-envelope.js';
+import { parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
 import type { SessionRecord, Task } from '../../src/core/types.js';
 // Loaded before the clock is faked: a module first imported under fake timers never resolves.
 import '../../src/core/sessions/session-send-core.js';

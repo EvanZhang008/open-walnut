@@ -22,6 +22,10 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 const historyBySid = new Map<string, unknown[]>();
 const finishedIdsBySid = new Map<string, string[]>();
 const windowedSids = new Set<string>();
+const olderPages = new Map<string, { messages: unknown[]; reachedStart: boolean }>();
+vi.mock('../../../src/core/session-history-pages.js', () => ({
+  readSessionHistoryBefore: vi.fn(async (sid: string) => olderPages.get(sid) ?? null),
+}));
 vi.mock('../../../src/core/sessions/session-lifecycle.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/sessions/session-lifecycle.js')>();
   return {
@@ -60,6 +64,7 @@ describe('GET /:sessionId/history?tail=N', () => {
     historyBySid.clear();
     finishedIdsBySid.clear();
     windowedSids.clear();
+    olderPages.clear();
   });
 
   afterEach(async () => {
@@ -82,6 +87,48 @@ describe('GET /:sessionId/history?tail=N', () => {
     expect(res.body.total).toBe(50);
     expect(res.body.cursor).toBe(50);
     expect(res.body.delta).toBe(false);
+  });
+
+  it('a turn-aware tail retains ten complete tool-heavy turns in both phases', async () => {
+    const sid = 'tail-turns-001';
+    await createSessionRecord(sid, '', 'p');
+    const rows = Array.from({ length: 15 }, (_, turn) => [
+      { role: 'user', text: `Question ${turn}`, msgId: `question-${turn}`, timestamp: '' },
+      ...Array.from({ length: 100 }, (_, step) => ({ role: 'assistant', text: '', msgId: `step-${turn}-${step}`, timestamp: '' })),
+      { role: 'assistant', text: `Answer ${turn}`, msgId: `answer-${turn}`, timestamp: '' },
+    ]).flat();
+    historyBySid.set(sid, rows);
+    for (const source of ['', '&source=streams']) {
+      const res = await request(createApp()).get(`/api/sessions/${sid}/history?tail=400&turns=10${source}`);
+      expect(res.status).toBe(200);
+      expect(res.body.messages).toHaveLength(1020);
+      expect(res.body.messages[0].msgId).toBe('question-5');
+      expect(res.body.total).toBe(rows.length);
+    }
+  });
+
+  it('keeps both timestamped halves of a message across a cold-window seam', async () => {
+    const sid = 'tail-turn-seam';
+    await createSessionRecord(sid, '', 'p');
+    const tail = [{ role: 'assistant', text: 'Later text', msgId: 'split', timestamp: '2026-01-01T00:00:02Z' }];
+    historyBySid.set(sid, tail);
+    windowedSids.add(sid);
+    olderPages.set(sid, { messages: [
+      { role: 'user', text: 'Question', msgId: 'question', timestamp: '2026-01-01T00:00:00Z' },
+      { role: 'assistant', text: 'Earlier text', msgId: 'split', timestamp: '2026-01-01T00:00:01Z' },
+    ], reachedStart: true });
+    const res = await request(createApp()).get(`/api/sessions/${sid}/history?tail=400&turns=10`);
+    expect(res.status).toBe(200);
+    expect(res.body.messages.map((m: { text: string }) => m.text)).toEqual(['Question', 'Earlier text', 'Later text']);
+    expect(res.body.windowed).toBeUndefined();
+    expect(res.body.initialUserText).toBe('Question');
+  });
+
+  it('rejects malformed turn budgets', async () => {
+    for (const turns of ['abc', '-1', '101', '1.5']) {
+      const res = await request(createApp()).get(`/api/sessions/missing/history?turns=${turns}`);
+      expect(res.status).toBe(400);
+    }
   });
 
   it('tail ≥ total returns everything (same as no tail)', async () => {

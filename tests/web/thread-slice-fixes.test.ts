@@ -5,7 +5,7 @@
  * WebKit needs (N5, N34).
  */
 import { describe, expect, it } from 'vitest';
-import { pageRowsBefore, pageWindowLimit } from '@/utils/thread-page-window';
+import { pageRowsBefore } from '@/utils/thread-page-window';
 import { hitSnippet } from '@/utils/thread-tree-rows';
 import { withoutPendingName } from '@/hooks/useSessionThreadMeta';
 import { isModifierOnly } from '@/utils/keyboard-focus';
@@ -14,12 +14,6 @@ describe('root page window (N9)', () => {
   // 40 rows: every 8th belongs to root, the rest to questions.
   const keys = Array.from({ length: 40 }, (_, i) => (i % 8 === 0 ? '' : 'Q'));
   const keyAt = (i: number) => keys[i];
-
-  it('holds the wanted number of page rows, or everything when there are fewer', () => {
-    expect(pageWindowLimit(40, keyAt, '', 2)).toBe(40 - 24);
-    expect(pageWindowLimit(40, keyAt, '', 30)).toBe(40);
-    expect(pageWindowLimit(40, keyAt, '', 0)).toBe(0);
-  });
 
   it('counts only the page rows that are hidden, never the questions above', () => {
     expect(pageRowsBefore(24, keyAt, '')).toBe(3);

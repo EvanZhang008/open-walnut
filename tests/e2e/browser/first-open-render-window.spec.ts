@@ -26,11 +26,11 @@ const SESSION_ID = 'pw-first-open-window-session';
 const TOTAL = 543;          // conversation length at the source
 const ARCHIVE_TAIL = 400;   // what Phase 2 returns (HISTORY_TAIL_LIMIT)
 const STREAMS_TAIL = 161;   // what Phase 1 happened to hold
-const RENDER_LIMIT = 30;    // INITIAL_RENDER_LIMIT
+const RENDER_LIMIT = 20;    // 10 user turns with one reply each
 
 function row(i: number) {
   return {
-    role: i % 2 === 0 ? 'user' : 'assistant',
+    role: i % 2 === 1 ? 'user' : 'assistant',
     text: `History message ${i}`,
     msgId: `m${i}`,
     timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
@@ -78,10 +78,11 @@ async function mockSession(page: Page) {
 }
 
 test.describe('First open — render window', () => {
-  test('a shorter Phase 1 window does not explode the DOM when Phase 2 lands', async ({ page }) => {
+  test('a shorter Phase 1 window does not explode the DOM when Phase 2 lands', async ({ page, baseURL }) => {
     await mockSession(page);
 
-    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.setContent(`<a href="${baseURL}/sessions?id=${SESSION_ID}">Open conversation</a>`);
+    await page.getByRole('link', { name: 'Open conversation' }).click();
     await page.waitForLoadState('networkidle');
 
     const history = page.locator('.session-history');
@@ -107,7 +108,7 @@ test.describe('First open — render window', () => {
     await expect(page.locator('.session-show-earlier-btn').last()).toBeVisible();
   });
 
-  test('scrolling up while the second phase lands does not move the reader', async ({ page }) => {
+  test('scrolling up while the second phase lands does not move the reader', async ({ page, baseURL }) => {
     // Hold Phase 2 back until the user has scrolled up, so the array is
     // re-windowed underneath a reader who is NOT at the bottom.
     let releasePhase2: (() => void) | null = null;
@@ -141,7 +142,8 @@ test.describe('First open — render window', () => {
       });
     });
 
-    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.setContent(`<a href="${baseURL}/sessions?id=${SESSION_ID}">Open conversation</a>`);
+    await page.getByRole('link', { name: 'Open conversation' }).click();
     await page.waitForLoadState('domcontentloaded');
 
     const history = page.locator('.session-history');

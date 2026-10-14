@@ -23,7 +23,10 @@
       "@open-walnut/compaction-notice": ["../src/core/stream/compaction-notice"],
       "@open-walnut/search-transcript": ["../src/core/task-search-transcript"],
       "@open-walnut/host-problem": ["../src/core/hosts/host-problem"],
-      "@open-walnut/ask-list": ["../src/core/sessions/ask-list"]
+      "@open-walnut/ask-list": ["../src/core/sessions/ask-list"],
+      "@open-walnut/history-turn-window": ["../src/lib/history-turn-window"],
+      "@open-walnut/history-injected-banner": ["../src/lib/history-injected-banner"],
+      "@open-walnut/history-session-envelope": ["../src/lib/history-session-envelope"]
     }
   },
   "include": ["src", "../src/types/**/*.d.ts", "../src/integrations/**/*.d.ts"]
