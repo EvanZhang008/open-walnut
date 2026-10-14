@@ -30,6 +30,7 @@ import {
 } from '@/utils/calendar-date';
 import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from '@/components/calendar/calendar-items';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { CalendarToolbar, type CalendarViewKind } from '@/components/calendar/CalendarToolbar';
 import { CalendarTaskList, TaskListChip } from '@/components/calendar/CalendarTaskList';
 import { MonthView } from '@/components/calendar/MonthView';
@@ -56,8 +57,10 @@ export function CalendarPage() {
   const { tasks, update, create, setPhase, deleteTask } = useTasksContext();
   const confirmCalendarWrite = useCalendarWriteConfirmation();
 
+  // A phone opens on one day: seven columns at phone width are 45px each.
+  const phoneLayout = usePhoneLayout();
   const rawView = searchParams.get('view') as CalendarViewKind | null;
-  const view: CalendarViewKind = rawView && VALID_VIEWS.has(rawView) ? rawView : 'week';
+  const view: CalendarViewKind = rawView && VALID_VIEWS.has(rawView) ? rawView : phoneLayout ? 'day' : 'week';
   const rawDay = searchParams.get('d');
   const anchorDay = rawDay && /^\d{4}-\d{2}-\d{2}$/.test(rawDay) ? rawDay : formatDateOnly(new Date());
   const anchor = useMemo(() => parseDateLocal(anchorDay), [anchorDay]);
@@ -84,6 +87,11 @@ export function CalendarPage() {
       return !prev;
     });
   }, []);
+  // On a phone the task list lies over the grid instead of beside it, so it
+  // starts closed there and its toggle is not the synced desktop flag.
+  const [phoneRailOpen, setPhoneRailOpen] = useState(false);
+  const togglePhoneRail = useCallback(() => setPhoneRailOpen((open) => !open), []);
+  const railShown = phoneLayout ? phoneRailOpen : railOpen;
 
   // ----- items ------------------------------------------------------------
   const { from, to } = useMemo(() => viewRange(view, anchor), [view, anchor]);
@@ -371,8 +379,8 @@ export function CalendarPage() {
           anchor={anchor}
           onViewChange={(v) => setParam({ view: v })}
           onAnchorChange={(d) => setParam({ d })}
-          railOpen={railOpen}
-          onToggleRail={toggleRail}
+          railOpen={railShown}
+          onToggleRail={phoneLayout ? togglePhoneRail : toggleRail}
           onOpenCalendars={setCalsAnchor}
         />
         {calendarAlert && (
@@ -383,7 +391,7 @@ export function CalendarPage() {
           </button>
         )}
         <div className="cal-body">
-          {railOpen && <CalendarTaskList tasks={tasks} />}
+          {railShown && <CalendarTaskList tasks={tasks} />}
           <div className="cal-view">
             {view === 'month' ? (
               <MonthView

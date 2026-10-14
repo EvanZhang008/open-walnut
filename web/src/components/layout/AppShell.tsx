@@ -15,12 +15,14 @@ import { useAppCatalog } from '@/apps/hooks';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { startHostDismissPruner } from '@/utils/host-banner-dismiss';
 import { HostBannerAnnouncer } from '../common/HostBannerAnnouncer';
+import { PHONE_LAYOUT_QUERY } from '@/hooks/usePhoneLayout';
+import '@/styles/phone-layout.css';
 
 interface AppShellProps {
   children: ReactNode;
 }
 
-const MOBILE_SIDEBAR_QUERY = '(max-width: 768px)';
+const MOBILE_SIDEBAR_QUERY = PHONE_LAYOUT_QUERY;
 /** After the home page's own first-paint fetches, before a human reaches the picker. */
 const HOST_STATUS_HYDRATE_DELAY_MS = 1500;
 const FOCUSABLE_SELECTOR = [
@@ -183,20 +185,33 @@ function AppShellInner({ children }: AppShellProps) {
 
   return (
     <div className="app-shell app-shell-navigation">
-      <button
-        ref={sidebarToggleRef}
-        className="sidebar-toggle"
-        onClick={toggleSidebar}
-        aria-label="Toggle sidebar"
-        aria-controls="primary-sidebar"
-        aria-expanded={isMobileSidebar ? sidebarOpen : undefined}
-      >
-        &#9776;
-      </button>
+      {/* The phone's top bar (hidden on wider screens): the drawer's menu button and
+          the name of the page on screen. It sits outside <main> so it stays usable
+          while the open drawer makes <main> inert, and above the drawer so the same
+          button closes it. Every page starts below it, the full-bleed ones too. */}
+      <div className="phone-topbar">
+        <button
+          ref={sidebarToggleRef}
+          className="sidebar-toggle"
+          onClick={toggleSidebar}
+          aria-label="Toggle sidebar"
+          aria-controls="primary-sidebar"
+          aria-expanded={isMobileSidebar ? sidebarOpen : undefined}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+        <span className="phone-topbar-title">{activeApp?.title ?? 'Walnut'}</span>
+      </div>
       <Sidebar
         asideRef={sidebarRef}
         open={sidebarOpen}
-        collapsed={sidebarCollapsed}
+        // The phone drawer always shows its labels: the icon-only rail is a desktop
+        // width preference (synced from the desktop), and a drawer has the room.
+        collapsed={sidebarCollapsed && !isMobileSidebar}
         isMobile={isMobileSidebar}
         onNavigate={closeSidebarForNavigation}
         onToggleCollapse={toggleSidebarCollapse}

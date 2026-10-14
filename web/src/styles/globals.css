@@ -17027,11 +17027,7 @@ a.task-kebab-info:hover {
   }
 
   .sidebar-toggle {
-    display: block;
-  }
-
-  .todo-panel-toolbar {
-    padding-left: 60px;
+    display: inline-flex;
   }
 
   .sidebar-overlay {
@@ -17045,26 +17041,32 @@ a.task-kebab-info:hover {
     display: block;
   }
 
+  /* The phone top bar (phone-layout.css) holds the menu button, so no page
+     reserves a band for a floating one any more. */
   .app-content-area {
     padding: 16px;
-    padding-top: 52px;
   }
 
-  /* Settings runs edge to edge but still clears the floating sidebar toggle. */
+  /* Settings runs edge to edge. */
   .main-content > .app-content-area:has(.settings-container) {
-    padding: 52px 0 0;
+    padding: 0;
   }
 
+  /* One surface at a time: the task panel fills the page, and the chat and every
+     column open over it (fixed overlays below), so the right column keeps only
+     what stays in flow (the Focus Dock). It used to keep `flex: 1` and leave the
+     task panel a 40% band over an empty 60%, because the chat starts hidden. */
   .main-page {
     flex-direction: column;
   }
 
   .main-page-right {
-    flex: 1;
+    flex: 0 0 auto;
     min-height: 0;
   }
 
   .main-page-content-row {
+    flex: 0 0 auto;
     flex-direction: column;
   }
 
@@ -17075,11 +17077,12 @@ a.task-kebab-info:hover {
     display: none;
   }
 
-  .main-page.has-mobile-session .main-page-sessions-area {
+  .main-page-content-row > .main-page-sessions-area:not(.collapsed) {
     /* auto-animate sets `position: relative` inline on its parent. The mobile
-       session surface is a viewport overlay, so this must outrank that style. */
+       session surface is a viewport overlay, so this must outrank that style.
+       Any open strip (a session, a draft, the triage column) is this overlay. */
     position: fixed !important;
-    inset: 52px 0 0;
+    inset: var(--phone-topbar-h, 44px) 0 0;
     /* Must beat .chat-composer-overlay (z-index: 40). The chat column stays IN
        FLOW behind this full-screen overlay (nothing hides it on mobile), and its
        composer is absolutely positioned at the bottom — so at 30 that glass bar
@@ -17093,7 +17096,7 @@ a.task-kebab-info:hover {
     z-index: 41;
     display: flex;
     width: 100vw !important;
-    height: calc(100dvh - 52px);
+    height: calc(100dvh - var(--phone-topbar-h, 44px));
     border: 0;
     background: var(--bg);
     opacity: 1;
@@ -17106,7 +17109,7 @@ a.task-kebab-info:hover {
      takes every click meant for the panel (measured at a 520px window:
      elementFromPoint over a kanban card returned the backdrop). While a panel
      is full screen the overlay rises above the backdrop. */
-  .main-page.has-mobile-session .main-page-sessions-area:has(.open-walnut-fullscreen) {
+  .main-page-content-row > .main-page-sessions-area:has(.open-walnut-fullscreen) {
     z-index: 9001;
   }
 
@@ -17138,35 +17141,26 @@ a.task-kebab-info:hover {
     padding-bottom: max(8px, env(safe-area-inset-bottom));
   }
 
-  .memory-list-pane,
-  .notes-tree-pane {
+  .memory-list-pane {
     flex: 0 0 260px !important;
     width: 260px !important;
   }
 
+  /* The task panel is the phone's home screen: it fills the page. MainPage never
+     marks it collapsed on a phone (a panel hidden on the desktop, a synced flag,
+     used to leave the phone an empty page). */
   .main-page-todo {
     width: 100% !important;
-    height: 40%;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
     border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  /* Same column logic for the Todo panel: the desktop collapse only zeroes the
-     WIDTH, which the `width: 100% !important` above wins anyway, so a hidden Todo
-     kept its 40% band as an invisible, unclickable strip above the chat. The
-     hidden state now reaches a phone from any device (it is a synced layout
-     preference), so it has to give up its height here too. */
-  .main-page-todo.collapsed {
-    height: 0;
-    border-bottom: none;
   }
 
   /* The content row is a COLUMN here, so a collapsed sessions area has to give
-     up its HEIGHT — the desktop rules only zero its width, and `height: 100%` +
-     `flex-shrink: 0` then claimed the whole column and left the chat spot (the
-     Ask Walnut slot) zero pixels tall, i.e. mounted but unreachable on a phone.
-     Scoped through the row so the FIXED mobile session overlay above (which is
-     out of flow) is untouched. */
+     up its HEIGHT: the desktop rules only zero its width, and `height: 100%` +
+     `flex-shrink: 0` would claim the column. Scoped through the row so the FIXED
+     session overlay above (which is out of flow) is untouched. */
   .main-page-content-row > .main-page-sessions-area.collapsed {
     height: 0;
     flex: 0 0 0px;

@@ -759,6 +759,12 @@ mark.notes-search-mark {
   background: var(--bg-secondary, #1a1c22);
 }
 
+/* The way back from a note to the tree. Only a phone, which shows one of the two,
+   needs it (styles/phone-layout.css shows and styles it). */
+.notes-tab-leading {
+  display: none;
+}
+
 .notes-tab {
   display: inline-flex;
   align-items: center;

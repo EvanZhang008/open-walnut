@@ -247,24 +247,30 @@ test('the Todo and Agenda toggles survive a relaunch too', async ({ browser, pag
 test.describe('at phone width', () => {
   test.use({ viewport: { width: 390, height: 844 } })
 
-  test('a Todo hidden elsewhere gives its height to the chat instead of an invisible band', async ({ page }) => {
+  test('a Todo hidden elsewhere stays the phone home screen, and the open chat lies over it full screen', async ({ page }) => {
     // The state arrives from another device through the mirror; here it is seeded
     // straight into localStorage, which is what the boot merge produces. The chat
-    // is open (this user opened it once), so the freed height has somewhere to go.
+    // is open (this user opened it once).
     await openChatOnLoad(page)
     await page.addInitScript(([key]) => { localStorage.setItem(key, 'false') }, [TODO_KEY])
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
 
+    // A phone shows one surface at a time, and the task panel is its home screen:
+    // a desktop "hidden" flag used to leave the phone an empty page (or, earlier, a
+    // 40%-tall opacity:0 band above the chat that swallowed taps).
     const todo = todoColumn(page)
-    await expect(todo).toHaveClass(/collapsed/)
-    // The desktop collapse only zeroes the width, which the phone layout overrides;
-    // a 40%-tall opacity:0 band used to sit above the chat, swallowing taps.
-    await expect.poll(async () => (await todo.boundingBox())?.height ?? 0, { timeout: 10_000 }).toBeLessThanOrEqual(1)
+    await expect(todo).not.toHaveClass(/collapsed/)
     await expect(slot(page)).toBeVisible({ timeout: 30_000 })
     const slotBox = (await slot(page).boundingBox())!
-    expect(slotBox.height, 'the chat slot should take the freed height').toBeGreaterThan(400)
+    expect(slotBox.height, 'the chat slot should take the whole screen under the top bar').toBeGreaterThan(700)
+    // The chat lies OVER the task panel: a tap in the middle of the screen lands in it.
+    const hit = await page.evaluate(([x, y]) => {
+      const el = document.elementFromPoint(x, y)
+      return !!el?.closest('[data-testid="ask-walnut-slot"]')
+    }, [slotBox.x + slotBox.width / 2, slotBox.y + slotBox.height / 2])
+    expect(hit, 'a tap in the middle of the screen reaches the chat').toBe(true)
     await page.screenshot({ path: `${SCREENSHOT_DIR}/6-phone-todo-hidden.png` })
   })
 })

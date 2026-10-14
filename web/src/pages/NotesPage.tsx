@@ -824,11 +824,28 @@ export function NotesPage() {
     </button>
   );
 
+  // Phone only (CSS shows it): a phone shows the tree OR the open note, and this
+  // is the way from the note back to the tree. The tabs stay open.
+  const backToTreeButton = (
+    <button
+      type="button"
+      className="notes-phone-back"
+      onClick={() => setActivePath(null)}
+      aria-label="All notes"
+      title="All notes"
+    >
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points="10 3 5 8 10 13" />
+      </svg>
+      <span>Notes</span>
+    </button>
+  );
+
   if (treeLoading) return <LoadingSpinner />;
   if (treeError && tree.length === 0 && !activeTab) return <div className="empty-state"><p>Error: {treeError}</p><button type="button" onClick={() => void refreshTree()}>Retry</button></div>;
 
   return (
-    <div className="notes-split-view">
+    <div className={`notes-split-view${activeTab ? ' notes-has-active' : ''}${chatOpen ? ' notes-chat-open' : ''}`}>
       <div
         className="notes-tree-pane"
         ref={listPaneRef}
@@ -869,6 +886,7 @@ export function NotesPage() {
             onActivate={handleActivateTab}
             onClose={handleCloseTab}
             onNewTab={handleNewTab}
+            leading={backToTreeButton}
             trailing={aiToggleButton}
             onCloseOthers={handleCloseOtherTabs}
             onCloseAll={handleCloseAllTabs}
@@ -879,6 +897,7 @@ export function NotesPage() {
           />
         ) : (
           <div className="notes-tab-strip notes-tab-strip-empty">
+            <div className="notes-tab-leading">{backToTreeButton}</div>
             <div className="notes-tab-trailing">{aiToggleButton}</div>
           </div>
         )}

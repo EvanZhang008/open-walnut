@@ -38,6 +38,8 @@ interface NotesTabStripProps {
    * own header/content.
    */
   trailing?: ReactNode;
+  /** Controls pinned to the START of the strip (the phone's way back to the tree). */
+  leading?: ReactNode;
   /** Right-click menu — close the other tabs / every tab (all optional: the
    *  menu simply drops the rows whose handler wasn't supplied). */
   onCloseOthers?: (path: string) => void;
@@ -57,7 +59,7 @@ function tabLabel(path: string): string {
 }
 
 export function NotesTabStrip({
-  tabs, activePath, onActivate, onClose, onNewTab, trailing,
+  tabs, activePath, onActivate, onClose, onNewTab, trailing, leading,
   onCloseOthers, onCloseAll, onLocate, onOpenInNewWindow, isFavorite, onToggleFavorite,
 }: NotesTabStripProps) {
   const activeRef = useRef<HTMLDivElement>(null);
@@ -121,6 +123,7 @@ export function NotesTabStrip({
 
   return (
     <div className="notes-tab-strip" role="tablist">
+      {leading && <div className="notes-tab-leading">{leading}</div>}
       {tabs.map((tab) => {
         const isActive = tab.path === activePath;
         return (

@@ -13,6 +13,7 @@ import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
@@ -444,6 +445,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [todoVisible, setTodoVisible] = useState<boolean>(
     () => localStorage.getItem(LS_TODO_VISIBLE_KEY) !== 'false'
   );
+  // On a phone the task panel IS the home screen (the chat and every column open
+  // over it full screen), so it shows whatever the synced desktop flag says: a
+  // panel hidden on the desktop used to leave the phone an empty page.
+  const phoneLayout = usePhoneLayout();
+  const todoShown = todoVisible || phoneLayout;
 
   // Routines panel visibility — hidden by default, toggle via Sidebar
   const [routinesVisible, setRoutinesVisible] = useState<boolean>(
@@ -545,10 +551,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // them: the rail's Settings entry and the bell wear the warn dot instead.
   // A layout effect, so hiding the task panel never paints one frame with the
   // card in both places (or in neither).
-  const hostBannerDraftId = todoVisible || chatVisible ? undefined : sessionColumns.find(s => isDraftColumnId(s.id))?.id;
+  const hostBannerDraftId = todoShown || chatVisible ? undefined : sessionColumns.find(s => isDraftColumnId(s.id))?.id;
   useLayoutEffect(() => {
-    setHostBannerPlacement(placementFor(todoVisible, chatVisible, !!hostBannerDraftId));
-  }, [todoVisible, chatVisible, hostBannerDraftId]);
+    setHostBannerPlacement(placementFor(todoShown, chatVisible, !!hostBannerDraftId));
+  }, [todoShown, chatVisible, hostBannerDraftId]);
   useEffect(() => () => setHostBannerPlacement('none'), []);
   // The task panel's banner reads health from this channel, so a health frame
   // never changes the (memo) TodoPanel's props.
@@ -2959,9 +2965,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       <div
         ref={todoPanel.panelRef}
         id="home-task-navigation"
-        inert={!todoVisible}
-        className={`main-page-todo${todoVisible ? '' : ' collapsed'}`}
-        style={todoVisible ? { width: todoPanel.width } : undefined}
+        inert={!todoShown}
+        className={`main-page-todo${todoShown ? '' : ' collapsed'}`}
+        style={todoShown ? { width: todoPanel.width } : undefined}
       >
         <TodoPanel
           tasks={tasks}
@@ -3032,7 +3038,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       </div>
 
       {/* Todo Resize Handle — only shown when todo is visible */}
-      {todoVisible && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
+      {todoShown && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
 
       {/* The day agenda and the scratchpad open right of the task panel, as the
           first of the columns beside it (user, 2026-09-25: not on the far right,
@@ -3045,7 +3051,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         tasks={tasks}
         focusedTaskId={focusedTask?.id}
         onTaskClick={handleFocusTaskById}
-        overlayLeft={todoVisible ? todoPanel.width : undefined}
+        overlayLeft={todoShown ? todoPanel.width : undefined}
       />
 
       {/* Routines Panel (slide-out, toggled via Sidebar) */}

@@ -1,0 +1,254 @@
+/* Phone layout (max-width: 768px, the twin of PHONE_LAYOUT_QUERY in
+   hooks/usePhoneLayout.ts). One surface at a time: a top bar with the menu
+   button, the task panel filling the page under it, and the chat or a session
+   column opening over the task panel full screen. The older phone rules (drawer
+   slide, session overlay, task panel fill) live in globals.css "Responsive".
+   This file is imported by AppShell, which loads BEFORE globals.css, so every
+   rule here is scoped under the shell (.app-shell-navigation) to outrank the
+   single-class rules it changes. */
+
+.phone-topbar {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --phone-topbar-h: 44px;
+  }
+
+  /* A real bar, not a button floating over each page's first line: it covered
+     the task search, the Notes and Mail headings, and every full-bleed page. */
+  .app-shell-navigation .phone-topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 60;
+    height: var(--phone-topbar-h);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px 0 4px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .app-shell-navigation .phone-topbar .sidebar-toggle {
+    position: static;
+    width: 44px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg);
+  }
+
+  .app-shell-navigation .phone-topbar .sidebar-toggle[aria-expanded='true'] {
+    background: var(--accent-subtle);
+    color: var(--accent);
+  }
+
+  .phone-topbar-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .app-shell-navigation .main-content {
+    padding-top: var(--phone-topbar-h);
+  }
+
+  /* The drawer opens under the bar, so the button that opened it closes it. Its
+     own header (the Walnut label and the desktop collapse button) says nothing the
+     bar does not. */
+  .app-shell-navigation .sidebar {
+    top: var(--phone-topbar-h);
+  }
+
+  /* Opaque on a phone. The desktop glass (72% + blur) is a sidebar beside the
+     page; here the drawer and the full-screen panels it opens lie OVER the task
+     list, which read through them line for line. */
+  .app-shell-navigation .sidebar,
+  /* Portalled to <body>, outside the shell: `html body` gives the weight. */
+  html body .notification-panel,
+  html body .notification-panel.voice-panel {
+    background: var(--bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .app-shell-navigation .sidebar-header {
+    display: none;
+  }
+
+  /* The task panel is the phone's home screen: hiding it would leave an empty
+     page, so neither of its hide controls shows here. */
+  .app-shell-navigation .sidebar .app-task-panel-toggle,
+  .app-shell-navigation .todo-panel-hide {
+    display: none;
+  }
+
+  /* The chat spot opens over the task panel like a session column does (the
+     session overlay is later in the DOM, so a session opened from the chat
+     covers it, and closing that session lands back in the chat). */
+  .app-shell-navigation .main-page-chat:not(.collapsed) {
+    position: fixed;
+    top: var(--phone-topbar-h);
+    left: 0;
+    right: 0;
+    z-index: 41;
+    width: 100vw;
+    height: calc(100dvh - var(--phone-topbar-h));
+    background: var(--bg);
+  }
+
+  .app-shell-navigation .main-page-chat.collapsed {
+    display: none;
+  }
+
+  /* Notes: the tree OR the open note, never a 260px tree beside a 130px editor.
+     Opening a note shows the editor; its strip's leading "Notes" button goes
+     back to the tree. The Note Agent, when open, sits under the note. */
+  .app-shell-navigation .notes-split-view > .notes-resize-handle,
+  .app-shell-navigation .notes-split-view > .notes-chat-divider,
+  .app-shell-navigation .notes-split-view.notes-has-active > .notes-tree-pane,
+  .app-shell-navigation .notes-split-view:not(.notes-has-active):not(.notes-chat-open) > .notes-editor-pane {
+    display: none;
+  }
+
+  .app-shell-navigation .notes-split-view > .notes-tree-pane {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    min-width: 0;
+    border-right: 0;
+  }
+
+  .app-shell-navigation .notes-split-view.notes-chat-open {
+    flex-direction: column;
+  }
+
+  .app-shell-navigation .notes-split-view.notes-chat-open > .notes-tree-pane,
+  .app-shell-navigation .notes-split-view.notes-chat-open > .notes-editor-pane {
+    flex: 1 1 45% !important;
+    min-height: 0;
+  }
+
+  /* No note open while the agent is: the agent alone, under the tree's place. */
+  .app-shell-navigation .notes-split-view.notes-chat-open:not(.notes-has-active) > .notes-editor-pane {
+    display: none;
+  }
+
+  .app-shell-navigation .notes-split-view.notes-chat-open > .notes-chat-pane {
+    flex: 1 1 55% !important;
+    width: 100% !important;
+    min-height: 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .app-shell-navigation .notes-tab-leading {
+    display: flex;
+    align-items: center;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    padding-bottom: 4px;
+    margin-right: 2px;
+    background: var(--bg-secondary, var(--bg));
+  }
+
+  .app-shell-navigation .notes-tab-strip-empty .notes-tab-leading {
+    margin-right: auto;
+  }
+
+  .app-shell-navigation .notes-phone-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 32px;
+    padding: 0 8px 0 2px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--accent);
+    font-size: 15px;
+  }
+
+  /* Calendar: the page fits the area under the bar (100vh is the TALL viewport
+     on iOS, so the old height ran under the toolbar), the toolbar wraps onto
+     two lines instead of drawing its buttons over each other, and the task
+     list opens over the grid (CalendarPage keeps it closed by default here). */
+  .app-shell-navigation .main-content > .app-content-area:has(> .cal-page) {
+    padding: 0;
+  }
+
+  .app-shell-navigation .cal-page {
+    flex: 1 1 auto;
+    height: auto;
+    padding: 0;
+  }
+
+  .app-shell-navigation .cal-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .app-shell-navigation .cal-toolbar-left {
+    flex: 1 1 100%;
+  }
+
+  .app-shell-navigation .cal-toolbar-right {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  .app-shell-navigation .cal-body {
+    position: relative;
+  }
+
+  .app-shell-navigation .cal-body > .cal-rail {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 6;
+    width: min(320px, 88vw);
+    background: var(--bg);
+    box-shadow: 10px 0 36px rgb(0 0 0 / 12%);
+  }
+
+  /* On a phone the open column is already the whole screen and the only one in
+     view: lock (keeps a column in place among several) and expand have nothing
+     to do. A panel already full screen keeps its control to come back. */
+  .app-shell-navigation .main-page-session-column .session-panel-lock,
+  .app-shell-navigation .main-page .session-panel:not(.open-walnut-fullscreen) .session-panel-expand {
+    display: none;
+  }
+}
+
+/* Touch phones. iOS Safari zooms the page in when a field under 16px takes
+   focus and leaves it zoomed, which is most of "the page looks broken" on a
+   phone: every Walnut field is 13-14px. 16px is the size iOS reads as legible. */
+@media (max-width: 768px) and (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
+  /* Finger-sized targets for the task toolbar's icon buttons (24px on desktop). */
+  .app-shell.app-shell-navigation .todo-panel-toolbar .vd-trigger-icon,
+  .app-shell.app-shell-navigation .todo-panel-toolbar .vd-trigger-icon.vd-has-filter {
+    width: 36px;
+    height: 34px;
+  }
+}

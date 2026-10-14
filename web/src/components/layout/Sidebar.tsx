@@ -202,8 +202,11 @@ export function Sidebar({
       </button>
     </div>
   );
+  // A home panel toggle counts as navigation too: on a phone the panel it opens
+  // (Ask Walnut, the agenda, the scratchpad) is the next screen, and the drawer
+  // left open would cover it.
   const handleNavClick = (event: React.MouseEvent<HTMLElement>) => {
-    if ((event.target as Element).closest('a[href]')) onNavigate();
+    if ((event.target as Element).closest('a[href], .sidebar-panel-toggle')) onNavigate();
   };
 
   /**
