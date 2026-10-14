@@ -30,7 +30,7 @@ import {
 } from 'react';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { ContextMenu } from '@/components/common/ContextMenu';
-import type { MailDraftDto, MailboxDto } from '@/api/mail';
+import { providerIdOf, type MailDraftDto, type MailboxDto } from '@/api/mail';
 import { BackIcon, ClipIcon, SentIcon, TrashIcon } from '../mail-icons';
 import { selectMailbox, selectSmartMailbox } from '../mail-actions';
 import { smartRowVisible } from '../mail-smart';
@@ -125,6 +125,12 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
     (one) => canSendFrom(snapshot.providers, one.accountId, snapshot.accounts),
   );
   const switchable = showing === 'edit' && !composer.replyTo && !composer.intent && sendable.length > 1;
+  // Who addresses a reply when no read named the sender's address: a provider that declares its reply
+  // tool answers the original sender itself. Its label, without a qualifier, is what the chip names.
+  const replier = snapshot.providers.find((one) => one.id === providerIdOf(composer.accountId));
+  const senderAddressedBy = replier?.capabilities.replyAddressesSender
+    ? replier.label.replace(/\s*\([^)]*\)\s*$/, '') || replier.label
+    : null;
 
   /**
    * The chip's destination.
@@ -269,6 +275,7 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
               composer={composer}
               canSend={canSend}
               cannotSendTitle={cannotSendTitle}
+              senderAddressedBy={senderAddressedBy}
             />
           )}
         </div>
@@ -289,16 +296,25 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
   );
 }
 
-function ComposerForm({ composer, canSend, cannotSendTitle }: {
+function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }: {
   composer: MailComposer;
   canSend: boolean;
   cannotSendTitle: string;
+  /** The provider that addresses a reply's original sender itself, by name, or null. */
+  senderAddressedBy: string | null;
 }) {
   const { fields } = composer;
   const invalid = hasInvalidAddress([...fields.to, ...fields.cc, ...fields.bcc]);
-  const sendable = canSend && !invalid && !composer.busy && !NO_SEND_PHASES.includes(composer.status.phase);
+  const sender = composer.replyTo ? composer.replySender : undefined;
+  // A reply whose sender has no address and no provider to address them cannot go out with an empty
+  // `To`: the server refuses it, so the button says so before the click rather than after it.
+  const noRecipient = !!sender && sender.state === 'unaddressed' && !senderAddressedBy && fields.to.length === 0;
+  const sendable = canSend && !invalid && !noRecipient && !composer.busy
+    && !NO_SEND_PHASES.includes(composer.status.phase);
   const sendTitle = canSend
-    ? (invalid ? 'Fix the addresses in red first' : 'Send this message now (⌘↩)')
+    ? (invalid
+      ? 'Fix the addresses in red first'
+      : noRecipient ? 'Add the address this reply goes to first' : 'Send this message now (⌘↩)')
     : cannotSendTitle;
 
   // ⌘↩ from anywhere in the form, which is what the Send button's title promises. A shortcut
@@ -321,6 +337,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle }: {
             name="to"
             chips={fields.to}
             autoFocus={!composer.replyTo}
+            leading={sender ? <ReplySenderChip sender={sender} addressedBy={senderAddressedBy} /> : undefined}
             onChange={(to) => setMailComposerFields({ to })}
             trailing={(!composer.showCc || !composer.showBcc) ? (
               <span className="mail-compose-reveals">
@@ -466,5 +483,38 @@ function BodyArea({ value, autoFocus, onChange }: {
       placeholder="Write your message"
       onChange={(event) => onChange(event.target.value)}
     />
+  );
+}
+
+/**
+ * The reply's sender, in `To`, while no address for them is known.
+ *
+ * A blank `To` on a reply read as "this reply goes nowhere" (2026-10-14: an Outlook mailbox lists
+ * people by display name only). This says who it goes to, and how: being found, addressed by the
+ * provider's own reply, or not reachable until the human adds an address.
+ */
+function ReplySenderChip({ sender, addressedBy }: {
+  sender: { name: string; state: 'finding' | 'unaddressed' };
+  addressedBy: string | null;
+}) {
+  const state = sender.state === 'finding' ? 'finding' : addressedBy ? 'provider' : 'missing';
+  const note = state === 'finding'
+    ? 'finding address'
+    : state === 'provider' ? `addressed by ${addressedBy}` : 'no address';
+  const title = state === 'finding'
+    ? 'Reading the message for the sender\'s address'
+    : state === 'provider'
+      ? `${addressedBy} sends a reply to the original sender itself; it gave Walnut no address for them`
+      : 'No address is known for the sender. Add one to send this reply';
+  return (
+    <span
+      className={`mail-chip mail-chip-implied${state === 'missing' ? ' invalid' : ''}`}
+      data-testid="mail-compose-reply-sender"
+      data-state={state}
+      title={title}
+    >
+      {sender.name}
+      <span className="mail-chip-note"> · {note}</span>
+    </span>
   );
 }

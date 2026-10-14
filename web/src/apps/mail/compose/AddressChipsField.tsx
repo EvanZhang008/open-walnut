@@ -27,12 +27,18 @@ interface Props {
    * would wrap the toggles onto a line of their own, halfway across the field.
    */
   trailing?: ReactNode;
+  /**
+   * Something that stands in this row ahead of the chips and is not one: a reply's sender whose
+   * address is still being found, or one the provider addresses itself. Not removable, because
+   * removing it would not change who the mail service sends the reply to.
+   */
+  leading?: ReactNode;
 }
 
 /** The keys that end a recipient. Tab is here so keyboard-only entry never eats an address. */
 const COMMIT_KEYS = new Set(['Enter', ',', ';', 'Tab']);
 
-export function AddressChipsField({ label, name, chips, onChange, autoFocus, trailing }: Props) {
+export function AddressChipsField({ label, name, chips, onChange, autoFocus, trailing, leading }: Props) {
   const [text, setText] = useState('');
 
   const commit = (raw: string): boolean => {
@@ -70,6 +76,7 @@ export function AddressChipsField({ label, name, chips, onChange, autoFocus, tra
     <div className="mail-compose-field" data-testid={`mail-compose-field-${name}`}>
       <label className="mail-compose-label" htmlFor={`mail-compose-${name}`}>{label}</label>
       <div className="mail-compose-chips">
+        {leading}
         {chips.map((chip) => (
           <span
             key={chip.key}

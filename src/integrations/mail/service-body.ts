@@ -84,7 +84,10 @@ export function fillAddressesFromBody(stored: StoredAddresses, body: MailBody): 
 
   for (const field of ['to', 'cc', 'replyTo'] as const) {
     const offered = body[field]
-    if (!offered?.length || fill.payload[field]?.length) continue
+    // A list of display names with no address in any of them is still a gap: a conversation
+    // listing names its participants that way, and treating those names as "already known" left
+    // reply-all with nobody to copy (2026-10-14, an Outlook thread).
+    if (!offered?.length || fill.payload[field]?.some((one) => !!one?.address?.trim())) continue
     const usable = usableList(offered)
     if (usable.length < offered.length) fill.dropped.push(field)
     if (usable.length === 0) continue
@@ -182,6 +185,26 @@ export function senderForUpdate(
   return from?.name ? { name: from.name, address: learned } : { address: learned }
 }
 
+/**
+ * The recipient list to store for an envelope, when a body read already taught real addresses.
+ *
+ * `senderForUpdate`'s twin for `to` and `cc`. A conversation listing names recipients as display
+ * names only, and every poll that changes anything about the row (marking it read is enough)
+ * rebuilt the blob from that listing. The addresses a body read filled in were then gone for good,
+ * because a cached body is never fetched again, and Reply all came back with nobody to copy.
+ *
+ * The envelope wins whenever it names an address itself: that list was just read from the server.
+ * Only a list with no address anywhere in it defers to an addressed one already stored.
+ */
+export function recipientsForUpdate(
+  offered: MailAddress[] | undefined,
+  stored: MailAddress[] | undefined,
+): MailAddress[] | undefined {
+  const named = (list: MailAddress[] | undefined) => !!list?.some((one) => !!one?.address?.trim())
+  if (named(offered)) return offered
+  return named(stored) ? stored : offered
+}
+
 /** The two columns that say WHICH message a cached row is, as the store holds them. */
 export interface StoredInstant {
   sent_at: number
@@ -230,7 +253,12 @@ export function bodyBelongsTo(
  * a scraped link has nothing left to keep, so the whole field goes rather than a hollow object.
  */
 export function payloadForRetiredBody(stored: MessagePayload): MessagePayload {
-  const { bodyFormat: _format, bodyTruncated: _truncated, from: _from, listUnsubscribe, ...rest } = stored
+  // `to` and `cc` go with `from`, for the same reason: a body read may have filled them, and they
+  // name the recipients of the previous newest message (`recipientsForUpdate` would otherwise carry
+  // them under the new one). An envelope that names its own recipients restates them on this write.
+  const {
+    bodyFormat: _format, bodyTruncated: _truncated, from: _from, to: _to, cc: _cc, listUnsubscribe, ...rest
+  } = stored
   if (!hasHeaderSignal(listUnsubscribe)) return rest
   const { bodyLink: _link, bodyCandidates: _candidates, ...fromHeaders } = listUnsubscribe!
   return { ...rest, listUnsubscribe: fromHeaders }

@@ -232,6 +232,15 @@ export interface MailComposer {
   busy: boolean;
   /** One sentence for the human: a stale draft, a refused account, a save that failed. */
   notice: string | null;
+  /**
+   * A reply whose sender has a name but no address yet, as the `To` field shows it.
+   *
+   * `finding`: the message came from a listing that names people only (a conversation provider),
+   * and the composer is re-reading it for the addresses its body carries. `unaddressed`: the read
+   * still named none, so the reply relies on a provider that addresses the original sender itself
+   * (`replyAddressesSender`). Absent once a real address is in `To`, and for every other composer.
+   */
+  replySender?: { name: string; state: 'finding' | 'unaddressed' };
 }
 
 export interface MailSnapshot {

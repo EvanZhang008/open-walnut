@@ -171,8 +171,9 @@ describe('bodyBelongsTo (the rule alone)', () => {
       bodyTruncated: true,
       bodyBytesHint: 42_749,
     });
+    // `to` goes with `from`: a body read may have filled it, and it names the OLD newest message's
+    // recipients. An envelope that names its own recipients restates them on the same write.
     expect(kept).toEqual({
-      to: [{ address: 'cat@example.invalid' }],
       sentAtHeader: 'Mon, 31 Aug 2026 09:47:45 -0700',
       bodyBytesHint: 42_749,
     });

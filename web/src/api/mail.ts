@@ -42,6 +42,8 @@ export interface MailCapabilities {
   archive?: boolean;
   /** Answers meeting invites (Accept / Tentative / Decline). Absent means no. */
   rsvp?: boolean;
+  /** A reply reaches the original sender even with an empty `To`: the provider addresses it. */
+  replyAddressesSender?: boolean;
 }
 
 export type AccountSetupFieldKind = 'text' | 'password' | 'select';

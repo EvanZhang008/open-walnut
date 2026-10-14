@@ -24,6 +24,7 @@ import {
   fillUnsubscribeFromBody,
   filledAddresses,
   payloadForRetiredBody,
+  recipientsForUpdate,
   senderForUpdate,
   unsubscribeForUpdate,
   type BodyAddressFill,
@@ -1212,8 +1213,9 @@ export class MailService {
     const listUnsubscribe = unsubscribeForUpdate(envelope.listUnsubscribe, stored)
     const payload: MessagePayload = {
       from,
-      ...(envelope.to ? { to: envelope.to } : {}),
-      ...(envelope.cc ? { cc: envelope.cc } : {}),
+      // Carried forward the same way: a body read may have filled the addresses the listing lacks.
+      ...(recipientsForUpdate(envelope.to, stored.to) ? { to: recipientsForUpdate(envelope.to, stored.to) } : {}),
+      ...(recipientsForUpdate(envelope.cc, stored.cc) ? { cc: recipientsForUpdate(envelope.cc, stored.cc) } : {}),
       ...(envelope.replyTo ? { replyTo: envelope.replyTo } : {}),
       ...(envelope.sentAtHeader ? { sentAtHeader: envelope.sentAtHeader } : {}),
       ...(envelope.inReplyTo ? { inReplyTo: envelope.inReplyTo } : {}),

@@ -19,9 +19,12 @@ import {
 } from '../../web/src/apps/mail/compose/mail-address';
 import {
   bodyWithQuote,
+  learnedRecipients,
   quoteMarkdown,
+  replyAddressGap,
   replyPrefill,
   replySubject,
+  unaddressedSender,
 } from '../../web/src/apps/mail/compose/reply-draft';
 
 describe('one address', () => {
@@ -236,3 +239,74 @@ describe('the quoted original', () => {
     expect(bodyWithQuote('Sounds good.', null)).toBe('Sounds good.');
   });
 });
+
+/** A conversation listing's row: every participant named, not one address (an Outlook mailbox). */
+const NAMES_ONLY = {
+  from: { name: 'Alder Desk', address: '' },
+  to: [{ name: 'Birch, Sam', address: '' }],
+  subject: 'Please confirm',
+  sentAt: Date.parse('2026-10-13T16:00:00Z'),
+};
+
+/** The same row after the body read filled it. */
+const FILLED = {
+  ...NAMES_ONLY,
+  from: { name: 'Alder Desk', address: 'alder@example.test' },
+  to: [{ name: 'Birch, Sam', address: 'birch@example.test' }],
+  cc: [{ address: 'cedar@example.test' }, { address: 'dogwood@example.test' }],
+};
+
+describe('a reply from a listing that names people only', () => {
+  it('Reply puts the sender in To and Reply all the others in Cc, once the body filled them', () => {
+    const reply = replyPrefill({ message: FILLED, accountAddress: 'birch@example.test', all: false });
+    expect(reply.to).toEqual([{ name: 'Alder Desk', address: 'alder@example.test' }]);
+    expect(reply.cc).toEqual([]);
+    const all = replyPrefill({ message: FILLED, accountAddress: 'birch@example.test', all: true });
+    expect(all.to.map((one) => one.address)).toEqual(['alder@example.test']);
+    expect(all.cc.map((one) => one.address)).toEqual(['cedar@example.test', 'dogwood@example.test']);
+  });
+
+  it('a names-only row yields no recipients, and says it has a gap to re-read', () => {
+    const prefill = replyPrefill({ message: NAMES_ONLY, accountAddress: 'birch@example.test', all: true });
+    expect(prefill.to).toEqual([]);
+    expect(prefill.cc).toEqual([]);
+    expect(replyAddressGap(NAMES_ONLY, false)).toBe(true);
+    expect(replyAddressGap(NAMES_ONLY, true)).toBe(true);
+    expect(unaddressedSender(NAMES_ONLY)).toBe('Alder Desk');
+  });
+
+  it('an addressed row has no gap, and reply all only has one when somebody else is unaddressed', () => {
+    expect(replyAddressGap(FILLED, false)).toBe(false);
+    expect(replyAddressGap(FILLED, true)).toBe(false);
+    const partly = { ...FILLED, cc: [{ name: 'Elm Team', address: '' }] };
+    expect(replyAddressGap(partly, false)).toBe(false);
+    expect(replyAddressGap(partly, true)).toBe(true);
+    expect(unaddressedSender(FILLED)).toBeNull();
+    // A Reply-To with an address answers the question even when From has none.
+    expect(unaddressedSender({ ...NAMES_ONLY, replyTo: [{ address: 'desk@example.test' }] })).toBeNull();
+    expect(unaddressedSender({ ...NAMES_ONLY, from: undefined })).toBe('the sender');
+  });
+
+  it('learned recipients are additions: nothing typed is replaced, nobody is added twice', () => {
+    const learned = replyPrefill({ message: FILLED, accountAddress: 'birch@example.test', all: true });
+    const added = learnedRecipients({
+      // The human already typed one of the Cc people, in another case, while the read was out.
+      current: [{ address: 'DOGWOOD@example.test' }, { address: 'fir@example.test' }],
+      learned,
+      accountAddress: 'birch@example.test',
+    });
+    expect(added.to.map((one) => one.address)).toEqual(['alder@example.test']);
+    expect(added.cc.map((one) => one.address)).toEqual(['cedar@example.test']);
+  });
+
+  it('never learns the account own address, even if the read named it as the sender', () => {
+    const own = { ...FILLED, from: { name: 'Birch, Sam', address: 'Birch@example.test' } };
+    const added = learnedRecipients({
+      current: [],
+      learned: replyPrefill({ message: own, accountAddress: 'birch@example.test', all: false }),
+      accountAddress: 'birch@example.test',
+    });
+    expect(added.to).toEqual([]);
+  });
+});
+

@@ -135,6 +135,9 @@ const withUnsub = process.env.PW_MAIL_UNSUB === '1'
 /** `PW_MAIL_INVITE=1`: meeting invites on the writer account (invite-set.mjs). Implies the link too. */
 const withInvite = process.env.PW_MAIL_INVITE === '1'
 
+/** `PW_MAIL_NAMES_ONLY=1`: rows whose listing names people without addresses (names-only-set.mjs). */
+const withNamesOnly = process.env.PW_MAIL_NAMES_ONLY === '1'
+
 /**
  * `PW_MAIL_GROUPS=1`: the inbox-sorting message set (two adopted accounts, marina and ferry, see
  * `fixtures/mail-fixture-provider/groups-set.mjs`). `PW_MAIL_GROUPS_DENSE=1` is the same two accounts
@@ -150,7 +153,7 @@ const withGroups = process.env.PW_MAIL_GROUPS === '1' || withGroupsDense
 const ruleModelMode = (['canned', 'invalid', 'down', 'slow'] as const)
   .find((mode) => mode === process.env.PW_MAIL_RULE_MODEL) ?? 'down'
 
-const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub || withInvite || withGroups
+const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub || withInvite || withNamesOnly || withGroups
 if (withProvider) {
   const providerSource = path.join(repoRoot, 'tests/e2e/browser/fixtures/mail-fixture-provider')
   await fs.access(path.join(providerSource, 'server.mjs'))

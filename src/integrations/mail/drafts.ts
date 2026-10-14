@@ -268,7 +268,7 @@ export class MailDrafts {
    */
   assertSendable(
     row: DraftRow,
-    capabilities: { send: boolean },
+    capabilities: { send: boolean; replyAddressesSender?: boolean },
     /** The console's own Send may also start from a draft that already has a letter out. */
     allowedStates: readonly string[] = REQUESTABLE_DRAFT_STATES,
   ): void {
@@ -279,7 +279,11 @@ export class MailDrafts {
         409,
       )
     }
-    if (this.addresses(row).length === 0) {
+    // A reply may go out with an empty `To` only when the provider's own reply addresses the
+    // original sender (`replyAddressesSender`): its listing could not name that sender's address,
+    // and refusing would leave the human unable to answer the mail at all.
+    const senderImplied = !!row.in_reply_to && capabilities.replyAddressesSender === true
+    if (this.addresses(row).length === 0 && !senderImplied) {
       throw invalid('a draft needs at least one recipient in `to` before it can be sent')
     }
     if (!row.subject.trim() && !row.body_md.trim()) {

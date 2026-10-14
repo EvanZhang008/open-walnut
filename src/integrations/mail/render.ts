@@ -167,7 +167,8 @@ export function renderApprovalLetter(input: ApprovalLetterInput): { subject: str
     : input.bodyMarkdown
   const lines = [
     `**From**: ${escapeMarkdown(input.accountLabel)} (${escapeMarkdown(input.accountAddress)})`,
-    `**To**: ${input.to.map(addressLine).join(', ') || '(nobody)'}`,
+    `**To**: ${input.to.map(addressLine).join(', ')
+      || (input.isReply ? 'the sender of the original message (the mail service addresses the reply)' : '(nobody)')}`,
     ...(input.cc.length ? [`**Cc**: ${input.cc.map(addressLine).join(', ')}`] : []),
     ...(input.bcc.length ? [`**Bcc**: ${input.bcc.map(addressLine).join(', ')}`] : []),
     `**Subject**: ${escapeMarkdown(input.subject) || '(no subject)'}`,

@@ -40,6 +40,13 @@ export interface MailCapabilities {
    * `respondToInvite`). Optional like `archive`; absent means the reader offers no Accept button.
    */
   rsvp?: boolean
+  /**
+   * A reply (`sendAsReply`) is addressed by the provider itself to the original message's sender,
+   * so a reply draft whose `To` is empty still reaches that person. For a transport whose listing
+   * names people without an address (a conversation-shaped one): when no read named the sender's
+   * address either, the reply can still be sent. Absent means no, and an empty `To` is refused.
+   */
+  replyAddressesSender?: boolean
 }
 
 export type AccountSetupFieldKind = 'text' | 'password' | 'select'

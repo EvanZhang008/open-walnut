@@ -67,7 +67,9 @@ function stageOf(error: unknown): 'before-data' | 'after-data' {
 }
 
 function recipientCount(mail: OutgoingMail): number {
-  return mail.to.length + (mail.cc?.length ?? 0) + (mail.bcc?.length ?? 0)
+  // A reply with an empty `To` went to the original sender, whom the provider addressed itself.
+  const to = mail.to.length || (mail.inReplyTo ? 1 : 0)
+  return to + (mail.cc?.length ?? 0) + (mail.bcc?.length ?? 0)
 }
 
 /** `HH:MM` in the box's own timezone: the human reading it is sitting at that box. */

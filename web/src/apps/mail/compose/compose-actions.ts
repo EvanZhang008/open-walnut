@@ -14,7 +14,9 @@
  *   mid-sentence. It flips when a send actually starts, or back to the form when the phone answers
  *   Edit.
  */
-import { deleteMailDraft, mailFailure, type MailDraftDto, type MailMessageDto } from '@/api/mail';
+import {
+  deleteMailDraft, mailFailure, readMailMessage, type MailDraftDto, type MailMessageDto,
+} from '@/api/mail';
 import { log } from '@/utils/log';
 import {
   patch,
@@ -37,8 +39,12 @@ import {
   retireComposerEpoch,
   scheduleComposerSave,
 } from './compose-autosave';
+import { bodyQuoteText } from '../mail-quote-text';
 import { chipsOf } from './mail-address';
-import { forwardQuote, forwardSubject, quoteMarkdown, replyPrefill } from './reply-draft';
+import {
+  forwardQuote, forwardSubject, learnedRecipients, quoteMarkdown, replyAddressGap, replyPrefill,
+  unaddressedSender,
+} from './reply-draft';
 import {
   isComposingPhase,
   phaseOf,
@@ -202,6 +208,11 @@ export function openMailReplyComposer(input: {
   bodyText?: string;
   all: boolean;
 }): Promise<void> {
+  // A listing that names people without addresses (a conversation provider) leaves a reply with an
+  // empty `To`: the addresses come with the body read. The composer opens at once anyway, says who it
+  // is finding, and re-reads the message for them (`fillReplyAddresses`).
+  const gap = replyAddressGap(input.message, input.all);
+  const sender = unaddressedSender(input.message);
   return handOver(
     () => {
       const prefill = replyPrefill({
@@ -225,10 +236,84 @@ export function openMailReplyComposer(input: {
         replyTo: { accountId: input.message.accountId, messageId: input.message.messageId },
         showCc: prefill.cc.length > 0,
         save: 'saving',
+        ...(sender ? { replySender: { name: sender, state: gap ? 'finding' : 'unaddressed' } as const } : {}),
       });
     },
-    () => { markComposerDirty(); scheduleComposerSave(0); },
+    (composer) => {
+      markComposerDirty();
+      scheduleComposerSave(0);
+      if (gap) void fillReplyAddresses(composer.epoch, input, composer.quote);
+    },
   );
+}
+
+/**
+ * Re-read the answered message for the addresses its listing could not name, and add them.
+ *
+ * The read is the body read the reader does (it never marks anything read), and for a body already
+ * cached it is answered from disk. What it learned is ADDED, never swapped in: the human may have
+ * typed a recipient in the meantime, and that stays. When the read names no sender address either,
+ * the `To` field says who the reply goes to instead of standing blank.
+ */
+async function fillReplyAddresses(epoch: number, input: {
+  accountId: string;
+  accountAddress: string;
+  message: MailMessageDto;
+  bodyText?: string;
+  all: boolean;
+}, openedQuote: string | null): Promise<void> {
+  let learned: MailMessageDto | null = null;
+  let learnedText = '';
+  try {
+    const answer = await readMailMessage(input.message.accountId, input.message.messageId);
+    learned = answer.message;
+    learnedText = bodyQuoteText(answer.body);
+  } catch (error) {
+    log.warn('mail', 'reply address read failed', {
+      accountId: input.message.accountId, messageId: input.message.messageId,
+      error: mailFailure(error).message,
+    });
+  }
+  const composer = store.state.composer;
+  if (!composer || composer.epoch !== epoch) return;
+  const message = learned ?? input.message;
+  const added = learnedRecipients({
+    current: [...composer.fields.to, ...composer.fields.cc, ...composer.fields.bcc],
+    learned: replyPrefill({ message, accountAddress: input.accountAddress, all: input.all }),
+    accountAddress: input.accountAddress,
+  });
+  const sender = unaddressedSender(message);
+  const replySender = sender ? { name: sender, state: 'unaddressed' as const } : undefined;
+  log.info('mail', 'reply addresses filled', {
+    accountId: input.message.accountId, messageId: input.message.messageId,
+    to: added.to.length, cc: added.cc.length, senderAddressed: !sender,
+  });
+  // A reply opened before the body arrived quoted the attribution line alone. The quote is real body
+  // text the next save carries, so it is completed here, and only while nobody has replaced it.
+  const quote = !input.bodyText && learnedText && composer.quote === openedQuote
+    ? quoteMarkdown({ message, text: learnedText })
+    : composer.quote;
+  const { replySender: _old, ...rest } = composer;
+  const changed = added.to.length > 0 || added.cc.length > 0 || quote !== composer.quote;
+  patch({
+    composer: {
+      ...rest,
+      quote,
+      ...(replySender ? { replySender } : {}),
+      ...(changed
+        ? {
+          fields: {
+            ...composer.fields,
+            to: [...chipsOf(added.to), ...composer.fields.to],
+            cc: [...composer.fields.cc, ...chipsOf(added.cc)],
+          },
+          showCc: composer.showCc || added.cc.length > 0,
+          save: 'saving' as const,
+        }
+        : {}),
+    },
+  });
+  if (changed) { markComposerDirty(); scheduleComposerSave(0); }
 }
 
 /**

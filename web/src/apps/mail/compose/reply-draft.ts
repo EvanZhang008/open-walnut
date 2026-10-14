@@ -104,6 +104,62 @@ export function replyPrefill(input: {
 }
 
 /**
+ * Whether this message is missing addresses a reply would use, so the composer must ask for them.
+ *
+ * A conversation-shaped provider (an Outlook mailbox) lists people by display name only, and its
+ * addresses arrive with the body read. A reply opened from a list row, or from the reader before the
+ * body landed, holds names with no address; asking again is how the composer gets them.
+ */
+export function replyAddressGap(message: ReplyTargetMessage, all: boolean): boolean {
+  const senderKnown = !!message.replyTo?.some((one) => !!one?.address) || !!message.from?.address;
+  if (!senderKnown) return true;
+  if (!all) return false;
+  return [...(message.to ?? []), ...(message.cc ?? [])].some((one) => !!one?.name && !one.address);
+}
+
+/**
+ * The sender's display name, when the message names a sender but no address for them.
+ *
+ * What the composer shows in `To` instead of a blank field, because a provider whose reply tool
+ * addresses the original sender itself (`replyAddressesSender`) still reaches that person.
+ */
+export function unaddressedSender(message: ReplyTargetMessage): string | null {
+  if (message.replyTo?.some((one) => !!one?.address)) return null;
+  if (message.from?.address) return null;
+  const name = message.from?.name?.trim() ?? '';
+  return name || 'the sender';
+}
+
+/**
+ * The recipients a re-read learned that the composer does not hold yet.
+ *
+ * Additive only, and returned as ADDITIONS so the caller keeps the human's own chips untouched
+ * (an invalid one included, in the words it was typed in). The learned sender goes to the front of
+ * `To` and the learned others to the end of `Cc`, each only when nobody already holds that address
+ * in any field, and never the account's own. Nothing the human removed can come back, because
+ * before this read there was nothing with an address to remove.
+ */
+export function learnedRecipients(input: {
+  current: Array<{ address: string }>;
+  learned: ReplyPrefill;
+  accountAddress: string;
+}): { to: MailAddress[]; cc: MailAddress[] } {
+  const mine = input.accountAddress.trim().toLowerCase();
+  const seen = new Set<string>(mine ? [mine] : []);
+  for (const one of input.current) {
+    if (one.address) seen.add(addressKey(one));
+  }
+  const take = (list: MailAddress[]): MailAddress[] => list.filter((one) => {
+    if (!one.address) return false;
+    const key = addressKey(one);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { to: take(input.learned.to), cc: take(input.learned.cc) };
+}
+
+/**
  * The original, quoted, as markdown.
  *
  * It is REAL BODY TEXT: the composer shows it read-only under the textarea, and it is appended to

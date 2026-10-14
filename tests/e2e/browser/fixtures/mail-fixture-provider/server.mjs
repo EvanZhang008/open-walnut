@@ -39,6 +39,7 @@ import path from 'node:path';
 
 import { activateGroups, groupsOn } from './groups-set.mjs';
 import { inviteMessages, inviteMethods, inviteOn } from './invite-set.mjs';
+import { namesOnlyMessages, namesOnlyOn } from './names-only-set.mjs';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -447,6 +448,7 @@ function ctxMessages() {
 if (ctx) MESSAGES.push(...ctxMessages());
 if (unsub) MESSAGES.push(...unsubMessages());
 if (inviteOn) MESSAGES.push(...inviteMessages(now));
+if (namesOnlyOn) MESSAGES.push(...namesOnlyMessages(now));
 
 /** Read state, as a server holds it. Seeded from the canned envelopes. */
 const seen = new Set(MESSAGES.filter((one) => !one.unreadAtFirstSight).map((one) => one.messageId));
@@ -550,6 +552,8 @@ const spec = {
     attachments: 'metadata',
     // `PW_MAIL_INVITE=1`: this provider answers meeting invites (invite-set.mjs).
     ...(inviteOn ? { rsvp: true } : {}),
+    // `PW_MAIL_NAMES_ONLY=1`: a reply reaches the original sender even with an empty To.
+    ...(namesOnlyOn ? { replyAddressesSender: true } : {}),
   },
   ...(inviteOn ? inviteMethods : {}),
   setup: {
@@ -664,6 +668,8 @@ const spec = {
   async getBody(_accountId, messageId) {
     const message = MESSAGES.find((one) => one.messageId === messageId);
     if (!message) throw notFound(`no fixture message ${messageId}`);
+    // `PW_MAIL_NAMES_ONLY=1` only: a body read slow enough to answer after the composer opened.
+    if (message.bodyDelayMs) await new Promise((resolve) => setTimeout(resolve, message.bodyDelayMs));
     // RAW: the console sanitizes. A provider that pre-cleaned this would be testing itself.
     return { ...message.body, bytes: bytesOf(message.body) };
   },
@@ -1268,7 +1274,7 @@ export function activate(walnut) {
   // `PW_MAIL_UNSUB=1` wants the same two adopted accounts `PW_MAIL_CTX=1` does, for the same reason: the
   // capability gate on a menu item is only a real question when two accounts disagree about it on one
   // screen. The two flags therefore share this branch, and each adds its own rows above.
-  if (ctx || unsub || inviteOn) {
+  if (ctx || unsub || inviteOn || namesOnlyOn) {
     accounts.push({
       accountId: CTX_WRITER,
       providerId: 'fixture',

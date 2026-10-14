@@ -260,6 +260,13 @@
   box-shadow: inset 0 0 0 1px var(--error);
 }
 
+/* A reply's sender who has a name but no address here: not removable, so no x, and its padding
+   balances on both ends. */
+.mail-chip.mail-chip-implied { padding-right: 9px; }
+.mail-chip.mail-chip-implied[data-state='finding'] { opacity: 0.7; }
+.mail-chip-note { color: var(--fg-muted, var(--fg)); opacity: 0.75; }
+.mail-chip.invalid .mail-chip-note { color: inherit; }
+
 .mail-chip-x {
   border: none;
   background: none;
