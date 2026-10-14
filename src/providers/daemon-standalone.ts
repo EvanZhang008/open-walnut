@@ -144,6 +144,7 @@ import {
 } from './trigger-check-core.js'
 import { buildTriggerMessage } from './trigger-envelope-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
+import { scanHostUsage, scanCostState, createUsagePages } from './usage-host-core.js'
 import { grepReferencesHostLocal } from './search-grep-core.js'
 import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
 import {
@@ -2051,6 +2052,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'git.commitPlan': return cmdGitCommitPlan(ws, id as number, cmd)
     case 'git.commitStart': return cmdGitCommitStart(ws, id as number, cmd)
     case 'git.commitJob': return sendOk(ws, id as number, { job: gitCommit.job(cmd.jobId) })
+    case 'usage.scan': return cmdUsageScan(ws, id as number, cmd)
+    case 'usage.costState': return cmdUsageCostState(ws, id as number, cmd)
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
@@ -8187,6 +8190,35 @@ async function lightChangesHit(sid: string): Promise<ChangesMemo['light'] | null
   } catch { return null }
   memo.lastUsed = Date.now()
   return light
+}
+
+let usageScanInflight: Promise<unknown> = Promise.resolve()
+const usagePages = createUsagePages()
+async function cmdUsageScan(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (typeof cmd.key === 'string') {
+    try { return sendOk(ws, id, usagePages.page(cmd.key, typeof cmd.offset === 'number' ? cmd.offset : 0)) }
+    catch (err) { return sendError(ws, id, String(err)) }
+  }
+  const until = typeof cmd.until === 'string' ? cmd.until : new Date().toISOString()
+  const sessionIds = Array.isArray(cmd.sessionIds) ? cmd.sessionIds.filter((s): s is string => typeof s === 'string') : undefined
+  const work = usageScanInflight.catch(() => {}).then(() => scanHostUsage({
+    projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+    ...(typeof cmd.proxyLogDir === 'string' ? { proxyLogDir: cmd.proxyLogDir } : {}),
+    ...(typeof cmd.since === 'string' ? { since: cmd.since } : {}), until, sessionIds,
+  }))
+  usageScanInflight = work.then(() => {}, () => {})
+  try { sendOk(ws, id, usagePages.put(await work)) }
+  catch (err) { sendError(ws, id, 'usage.scan failed: ' + (err as Error).message) }
+}
+async function cmdUsageCostState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (typeof cmd.sid !== 'string') return sendError(ws, id, 'usage.costState: missing sid')
+  try {
+    const result = await scanCostState({
+      projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+      sessionId: cmd.sid, ...(typeof cmd.cwd === 'string' ? { cwd: cmd.cwd } : {}),
+    })
+    sendOk(ws, id, { result })
+  } catch (err) { sendError(ws, id, 'usage.costState failed: ' + (err as Error).message) }
 }
 
 async function cmdChangesCompute(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {

@@ -32,8 +32,7 @@ describe('AcpTurnSpeedMeter', () => {
     expect(speed.inputTokens).toBe(1_000);
     expect(speed.cachedInputTokens).toBe(9_000);
     expect(speed.reasoningTokens).toBe(50);
-    // $4 in, $15 out, $0.20 cache read per million.
-    expect(speed.costUsd).toBeCloseTo(0.004 + 0.003 + 0.0018, 6);
+    expect(speed.costUsd).toBeCloseTo(0.002 + 0.002 + 0.0009, 6);
     expect(speed.costEstimated).toBe(true);
   });
 

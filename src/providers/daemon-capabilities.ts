@@ -272,6 +272,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
   'snapshot-v1',
   'snapshot-memory-v1',
+  'usage-scan-v1',
   'cron-metadata-v1',
   'image.save',
   'session.launch',

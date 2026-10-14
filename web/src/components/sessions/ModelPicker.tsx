@@ -1095,7 +1095,7 @@ export function ModelPicker({
               {details.usage && (
                 <div className="model-picker-details-block">
                   <div className="model-picker-details-title">
-                    Cost — {details.usage.total_cost_usd != null ? `$${details.usage.total_cost_usd.toFixed(4)}` : '—'}
+                    Cost: Unverified
                     {details.usage.total_lines_added != null
                       ? ` · +${details.usage.total_lines_added}/-${details.usage.total_lines_removed ?? 0} lines`
                       : ''}
@@ -1106,7 +1106,7 @@ export function ModelPicker({
                       <span>
                         {fmtTokens((u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0))} in
                         {' · '}{fmtTokens(u.outputTokens)} out
-                        {u.costUSD != null ? ` · $${u.costUSD.toFixed(4)}` : ''}
+                        {' · Cost unverified'}
                       </span>
                     </div>
                   ))}

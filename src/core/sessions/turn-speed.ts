@@ -221,7 +221,7 @@ export class TurnSpeedMeter {
       inFlightChars: open?.chars ?? 0,
       inFlightMs: open ? Math.max(0, now - open.startedAt) : 0,
       inFlightVisibleMs: open?.firstDeltaAt !== undefined ? Math.max(0, now - open.firstDeltaAt) : 0,
-      ...(this.messages > 0 ? { costUsd: this.costUsd, costEstimated: true } : {}),
+      ...(this.messages > 0 && Number.isFinite(this.costUsd) ? { costUsd: this.costUsd, costEstimated: true } : {}),
       final: false,
       ...(this.partial ? { partial: true } : {}),
     };
@@ -247,7 +247,7 @@ export class TurnSpeedMeter {
     // message escaped us (attach, replay gap) and the ratio is over what we saw.
     const partial = this.partial
       || (typeof turnOutputTokens === 'number' && this.messages > 0 && turnOutputTokens !== this.outputTokens);
-    const cost = typeof result.costUsd === 'number' && result.costUsd > 0
+    const cost = typeof result.costUsd === 'number' && Number.isFinite(result.costUsd) && result.costUsd > 0
       ? { costUsd: result.costUsd }
       : (liveCost !== undefined ? { costUsd: liveCost, costEstimated: true } : {});
     this.finalSnapshot = {

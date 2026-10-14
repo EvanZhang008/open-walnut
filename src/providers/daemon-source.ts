@@ -197,7 +197,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'acp-model-catalog-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'acp-model-catalog-v1', 'usage-scan-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3217,6 +3217,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'git.commitPlan': return cmdGitCommitPlan(ws, id, cmd);
     case 'git.commitStart': return cmdGitCommitStart(ws, id, cmd);
     case 'git.commitJob': return sendOk(ws, id, { job: gitCommit.job(cmd.jobId) });
+    case 'usage.scan': return cmdUsageScan(ws, id, cmd);
+    case 'usage.costState': return cmdUsageCostState(ws, id, cmd);
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
     case 'changes.file': return cmdChangesFile(ws, id, cmd);
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id, cmd);
@@ -9799,6 +9801,8 @@ async function cmdFsGrep(ws, id, cmd) {
 // compute at a time daemon-wide, same-sid followers coalesce.
 let changesCore = null;
 try { changesCore = require(path.join(__dirname, 'changes-core.cjs')); } catch (err) { changesCore = null; }
+let usageCore = null;
+try { usageCore = require(path.join(__dirname, 'usage-core.cjs')); } catch (err) { usageCore = null; }
 
 // External-session scan sidecar (external-scan-core.cjs) — same sidecar
 // rationale as changes-core above: the walk + transcript parse can't live in
@@ -9885,6 +9889,7 @@ function daemonCapabilities() {
   }
   if (acp && typeof acp.modelCatalog === 'function') caps.push('acp-model-catalog-v1');
   if (changesCore) caps.push('changes-v1');
+  if (usageCore) caps.push('usage-scan-v1');
   if (externalScanCore) caps.push('external-scan-v1');
   if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');
   if (externalScanCore && externalScanCore.describeExternalSessions) caps.push('external-describe-v1');
@@ -10114,6 +10119,38 @@ async function lightChangesHit(sid) {
   } catch (err) { return null; }
   memo.lastUsed = Date.now();
   return light;
+}
+
+let usageScanInflight = Promise.resolve();
+let usagePages = null;
+async function cmdUsageScan(ws, id, cmd) {
+  if (!usageCore) return sendError(ws, id, 'usage.scan unsupported: sidecar not loaded');
+  if (!usagePages) usagePages = usageCore.createUsagePages();
+  if (typeof cmd.key === 'string') {
+    try { return sendOk(ws, id, usagePages.page(cmd.key, typeof cmd.offset === 'number' ? cmd.offset : 0)); }
+    catch (err) { return sendError(ws, id, String(err)); }
+  }
+  const until = typeof cmd.until === 'string' ? cmd.until : new Date().toISOString();
+  const sessionIds = Array.isArray(cmd.sessionIds) ? cmd.sessionIds.filter((s) => typeof s === 'string') : undefined;
+  const work = usageScanInflight.catch(() => {}).then(() => usageCore.scanHostUsage({
+    projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+    ...(typeof cmd.proxyLogDir === 'string' ? { proxyLogDir: cmd.proxyLogDir } : {}),
+    ...(typeof cmd.since === 'string' ? { since: cmd.since } : {}), until, sessionIds,
+  }));
+  usageScanInflight = work.then(() => {}, () => {});
+  try { sendOk(ws, id, usagePages.put(await work)); }
+  catch (err) { sendError(ws, id, 'usage.scan failed: ' + err.message); }
+}
+async function cmdUsageCostState(ws, id, cmd) {
+  if (!usageCore) return sendError(ws, id, 'usage.costState unsupported: sidecar not loaded');
+  if (typeof cmd.sid !== 'string') return sendError(ws, id, 'usage.costState: missing sid');
+  try {
+    const result = await usageCore.scanCostState({
+      projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+      sessionId: cmd.sid, ...(typeof cmd.cwd === 'string' ? { cwd: cmd.cwd } : {}),
+    });
+    sendOk(ws, id, { result });
+  } catch (err) { sendError(ws, id, 'usage.costState failed: ' + err.message); }
 }
 
 async function cmdChangesCompute(ws, id, cmd) {

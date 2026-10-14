@@ -37,11 +37,11 @@ export function UsageRecentTable({ data, loading }: Props) {
               </td>
               <td>{r.agentId ? <span className="usage-source-badge">{usageDisplayName(r.agentId)}</span> : <span className="usage-parent-source">—</span>}</td>
               <td className="mono">{shortenModel(r.model)}</td>
-              <td className="num">{formatTokens(r.input_tokens)}</td>
-              <td className="num">{formatTokens(r.cache_read_input_tokens)}</td>
-              <td className="num">{formatTokens(r.cache_creation_input_tokens)}</td>
-              <td className="num">{formatTokens(r.output_tokens)}</td>
-              <td className="num">${r.cost_usd.toFixed(4)}</td>
+              <td className="num">{r.input_tokens === null ? 'Unknown' : formatTokens(r.input_tokens)}</td>
+              <td className="num">{r.cache_read_input_tokens === null ? 'Unknown' : formatTokens(r.cache_read_input_tokens)}</td>
+              <td className="num">{r.cache_creation_input_tokens === null ? 'Unknown' : formatTokens(r.cache_creation_input_tokens)}</td>
+              <td className="num">{r.output_tokens === null ? 'Unknown' : formatTokens(r.output_tokens)}</td>
+              <td className="num">{r.cost_usd === null ? 'Unverified' : `$${r.cost_usd.toFixed(4)}`}</td>
             </tr>
           ))}
         </tbody>

@@ -1022,6 +1022,7 @@ export interface Config {
   providers?: Record<string, import('../model/providers/types.js').ProviderConfig>;
   /** Per-engine settings, keyed by engine id (`custom`, `codex`, ...). */
   engines?: Record<string, EngineConfigEntry>;
+  usage?: { proxy_log_dirs?: Record<string, string> };
   agent?: AgentConfig;
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
@@ -2594,14 +2595,7 @@ export interface SessionRecord {
    *  file's evidence (incident 019a7fe5). Spilled into `payload` (no column). */
   streamEpoch?: string;
 
-  /** Highest cumulative `total_cost_usd` already charged for the CLI process
-   *  `costWatermarkPid`. The CLI reports a running total per process, so a
-   *  server instance that re-attaches to a live process (server restart, the
-   *  queue re-creating the runner for a session) must continue from here, or
-   *  the next turn is charged the whole process total again (the readout
-   *  showed $0.18 for a $0.03 turn). Only trusted while `pid` still equals
-   *  `costWatermarkPid`; a fresh process restarts its total at 0. Spilled
-   *  into `payload`. */
+  /** Trusted for a matching PID; resumed processes restore the transcript cost-state baseline instead. */
   costWatermark?: number;
   costWatermarkPid?: number;
   /** The CLI process that reported its command queue (`command_lifecycle`):

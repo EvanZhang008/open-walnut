@@ -10,6 +10,10 @@ import { costIncrement, CostWatermark } from '../../../src/core/usage/cost-water
  * The watermark bills only the per-result increment and ignores replays.
  */
 describe('costIncrement (pure)', () => {
+  it('rejects non-finite totals without advancing the watermark', () => {
+    expect(costIncrement(Infinity, 5)).toEqual({ delta: 0, watermark: 5 });
+    expect(costIncrement(NaN, 5)).toEqual({ delta: 0, watermark: 5 });
+  });
   it('bills the full amount on the first result', () => {
     expect(costIncrement(2.5, 0)).toEqual({ delta: 2.5, watermark: 2.5 });
   });
@@ -35,6 +39,14 @@ describe('costIncrement (pure)', () => {
 });
 
 describe('CostWatermark (stateful)', () => {
+  it('seeds a resumed process from the cost-state restored by the CLI', () => {
+    const wm = new CostWatermark();
+    wm.reset(690.6778897);
+    expect(wm.bill(690.9278897)).toBeCloseTo(0.25, 8);
+    expect(wm.bill(690.9278897)).toBe(0);
+    wm.reset(690.9278897);
+    expect(wm.bill(691.0278897)).toBeCloseTo(0.1, 8);
+  });
   it('a single long session bills the final total ONCE, not once per turn', () => {
     const wm = new CostWatermark();
     // CLI reports the cumulative total every turn: 2 → 5 → 9 → 14

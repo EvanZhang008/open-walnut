@@ -70,6 +70,10 @@ SOURCES=(
   src/providers/acp-worker/journal.ts
   src/providers/acp-worker/protocol.ts
   src/providers/session-changes-core.ts
+  src/providers/usage-host-core.ts
+  src/providers/usage-scan-core.ts
+  src/providers/usage-reconcile-core.ts
+  src/core/usage/pricing.ts
   src/providers/external-session-scan-core.ts
   src/providers/path-resolve-core.ts
   src/providers/search-grep-core.ts
@@ -203,6 +207,10 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/changes-core.cjs" \
   src/providers/session-changes-core.ts
+
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/usage-core.cjs" \
+  src/providers/usage-host-core.ts
 
 # External-session scan sidecar — same rationale as changes-core.cjs: the
 # source template can't import, so deploySource ships this next to daemon.cjs

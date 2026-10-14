@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { SettingsSection, SettingsNotice, SettingsGroup, SettingsRow, SettingsLoadingRow, SettingsEmpty } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
@@ -8,7 +9,9 @@ import { UsageDailyChart } from '@/components/usage/UsageDailyChart';
 import { SettingsUsageBreakdown, SettingsUsageRecent, usageRangeHint } from './UsageTables';
 import { UsageFilterChips, chipValue, type Chip } from '@/components/usage/UsageFilterChips';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
-import type { Period } from '@/api/usage';
+import { collectUsage, type Period } from '@/api/usage';
+import { openSessionOnHome } from '@/utils/open-session';
+import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import '@/styles/settings-sections-addons.css';
 
 const PRESETS: { value: Period; label: string }[] = [
@@ -19,7 +22,17 @@ const PRESETS: { value: Period; label: string }[] = [
 ];
 
 export function UsageSection() {
+  const navigate = useNavigate();
+  const hostName = useHostDisplayLabels();
   const { overview, loading, error, time, setTime, drill, setDrill, clearDrill, refresh, effectiveRange } = useUsageOverview();
+  const [collecting, setCollecting] = useState(false);
+  const [collectError, setCollectError] = useState('');
+  const collect = async () => {
+    setCollecting(true); setCollectError('');
+    try { await collectUsage(); refresh(); }
+    catch (error) { setCollectError(error instanceof Error ? error.message : String(error)); }
+    finally { setCollecting(false); }
+  };
 
   // The chart drives a single-day custom range when a day is clicked; detect that.
   const chartSelectedDay = time.preset === 'custom' && time.start && time.start === time.end ? time.start : undefined;
@@ -47,8 +60,8 @@ export function UsageSection() {
       id="usage"
       title="Usage & Costs"
       actions={(
-        <SettingsButton className="usage-refresh-btn" onClick={refresh} busy={loading} busyLabel="Refreshing...">
-          Refresh
+        <SettingsButton className="usage-refresh-btn" onClick={collect} busy={collecting || overview?.collection?.running} busyLabel="Checking sources...">
+          Check sources
         </SettingsButton>
       )}
     >
@@ -81,6 +94,20 @@ export function UsageSection() {
       </SettingsGroup>
 
       {error && <SettingsNotice kind="error" role="alert">{`Couldn't load usage: ${error}`}</SettingsNotice>}
+      {collectError && <SettingsNotice kind="error" role="alert">{collectError}</SettingsNotice>}
+      {overview?.accuracy && <details className="settings-group" data-testid="usage-evidence">
+        <summary>Source checks · {overview.accuracy.status === 'verified' ? 'Matched' : 'Partial coverage'}</summary>
+        <SettingsGroup heading="Evidence">
+        <SettingsRow label={overview.accuracy.note} help={`${overview.accuracy.timezone} · Prices ${overview.accuracy.pricingVersion}${overview.accuracy.until ? ` · Checked ${new Date(overview.accuracy.until).toLocaleString('en-US')}` : ''}`} />
+        {overview.accuracy.checks.map(check => <div className="settings-row settings-row-stacked" key={`${check.host}:${check.source}`}>
+          <div><strong>{check.source}</strong> <span className="settings-addons-muted">{hostName(check.host)} · {check.status === 'matched' ? 'Matched' : 'Unverified'}</span></div>
+          <p className="settings-addons-muted">{check.detail} {check.matchedCalls > 0 && `${check.matchedCalls.toLocaleString()} matched calls. `}{check.unmatchedCalls > 0 && `${check.unmatchedCalls.toLocaleString()} unmatched calls.`}</p>
+          {!!check.residuals?.length && <details><summary>Unmatched tokens by model</summary>
+            {check.residuals.map(r => <p key={`${r.source}:${r.model}`}><strong>{r.model}</strong>: {r.count} calls, input {r.input_tokens === null ? 'Unknown' : formatTokens(r.input_tokens)}, output {r.output_tokens === null ? 'Unknown' : formatTokens(r.output_tokens)}, cache read {r.cache_read_input_tokens === null ? 'Unknown' : formatTokens(r.cache_read_input_tokens)}, cache write {r.cache_creation_input_tokens === null ? 'Unknown' : formatTokens(r.cache_creation_input_tokens)}</p>)}
+          </details>}
+        </div>)}
+        </SettingsGroup>
+      </details>}
 
       {firstLoad ? (
         <SettingsGroup>
@@ -88,19 +115,34 @@ export function UsageSection() {
         </SettingsGroup>
       ) : empty ? (
         <SettingsGroup>
-          <SettingsEmpty>No model calls recorded yet.</SettingsEmpty>
+          <SettingsEmpty>No response evidence collected for this period. Check sources to rebuild usage.</SettingsEmpty>
         </SettingsGroup>
       ) : (
         <>
           <SettingsGroup className="settings-addons-summary" data-testid="usage-summary">
             <div className="settings-addons-stats" aria-busy={loading || undefined}>
-              <Stat value={summary ? `$${summary.total_cost.toFixed(2)}` : '--'} label={chips.length > 0 || time.preset === 'custom' ? 'Filtered cost' : 'Walnut cost'} />
-              <Stat value={summary ? String(summary.api_calls) : '--'} label="API calls" />
-              <Stat value={summary ? formatTokens(summary.input_tokens + summary.output_tokens) : '--'} label="Tokens in and out" />
+              <Stat value={summary && (summary.verified_calls ?? 0) > 0 ? `$${summary.total_cost.toFixed(2)}` : 'Unverified'} label="Verified token estimate" />
+              <Stat value={summary ? String(summary.verified_calls ?? 0) : '--'} label="Matched calls" />
+              <Stat value={summary ? String(summary.unverified_calls ?? 0) : '--'} label="Unverified calls" />
+              <Stat value={summary ? summary.token_counts_complete === false ? 'Unknown' : formatTokens(summary.input_tokens + summary.output_tokens) : '--'} label="Tokens in and out" />
             </div>
           </SettingsGroup>
 
-          <SettingsGroup heading="Daily costs" headingTrailing="Click a bar to focus that day">
+          {!!overview?.sessions?.length && <SettingsGroup heading="By task" headingTrailing="Includes coding sessions">
+            {overview.sessions.slice(0, 10).map(session => <SettingsRow key={session.sessionId}
+              label={session.title || 'Untitled task'}
+              help={`${session.project || 'Inbox'} · ${hostName(session.host)} · ${session.calls.toLocaleString()} calls${session.unverified ? ` · ${session.unverified.toLocaleString()} unverified` : ''}`}
+              control={<SettingsButton onClick={() => openSessionOnHome(session.sessionId, navigate)}>
+                {session.unverified === session.calls ? 'Unverified' : `$${session.cost.toFixed(2)}`}
+              </SettingsButton>} />)}
+            {overview.sessions.length > 10 && <details><summary>{overview.sessions.length - 10} more tasks</summary>
+              {overview.sessions.slice(10).map(session => <SettingsRow key={session.sessionId} label={session.title || 'Untitled task'}
+                help={`${session.project || 'Inbox'} · ${session.calls.toLocaleString()} calls`}
+                control={<SettingsButton onClick={() => openSessionOnHome(session.sessionId, navigate)}>{session.unverified === session.calls ? 'Unverified' : `$${session.cost.toFixed(2)}`}</SettingsButton>} />)}
+            </details>}
+          </SettingsGroup>}
+
+          <SettingsGroup heading="Daily costs" headingTrailing="Verified calls only">
             <div className="settings-row settings-row-stacked usage-chart-section" data-wide="true">
               <UsageDailyChart
                 data={overview?.daily ?? []}
@@ -154,15 +196,16 @@ function Stat({ value, label }: { value: string; label: string }) {
 }
 
 function CacheStats({ summary }: { summary: NonNullable<ReturnType<typeof useUsageOverview>['overview']>['summary'] }) {
+  const unknown = summary.token_counts_complete === false;
   const totalIn = summary.input_tokens + summary.cache_read_tokens + summary.cache_creation_tokens;
-  const hitRate = totalIn > 0 ? (summary.cache_read_tokens / totalIn) * 100 : 0;
+  const hitRate = unknown ? null : totalIn > 0 ? (summary.cache_read_tokens / totalIn) * 100 : 0;
   const fmt = (n: number) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M' : n >= 1_000 ? (n / 1_000).toFixed(1) + 'k' : String(n));
   const stats = [
-    { label: 'Cache hit rate', value: `${hitRate.toFixed(1)}%` },
-    { label: 'Total input', value: fmt(totalIn) },
-    { label: 'Cache read', value: fmt(summary.cache_read_tokens) },
-    { label: 'Cache write', value: fmt(summary.cache_creation_tokens) },
-    { label: 'Uncached input', value: fmt(summary.input_tokens) },
+    { label: 'Cache hit rate', value: hitRate === null ? 'Unknown' : `${hitRate.toFixed(1)}%` },
+    { label: 'Total input', value: unknown ? 'Unknown' : fmt(totalIn) },
+    { label: 'Cache read', value: unknown ? 'Unknown' : fmt(summary.cache_read_tokens) },
+    { label: 'Cache write', value: unknown ? 'Unknown' : fmt(summary.cache_creation_tokens) },
+    { label: 'Uncached input', value: unknown ? 'Unknown' : fmt(summary.input_tokens) },
   ];
   return (
     <>

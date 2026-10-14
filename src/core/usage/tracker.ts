@@ -103,13 +103,14 @@ export class UsageTracker {
 
     // Use external_cost_usd (e.g. from Claude Code CLI sessions) when provided,
     // otherwise compute from token counts via the pricing table.
-    const cost_usd = params.external_cost_usd ?? computeCost({
+    const calculatedCost = params.external_cost_usd ?? computeCost({
       model: params.model,
       input_tokens,
       output_tokens,
       cache_creation_input_tokens: cache_creation,
       cache_read_input_tokens: cache_read,
     });
+    const cost_usd = Number.isFinite(calculatedCost) ? calculatedCost : 0;
 
     const stmt = db.prepare(`
       INSERT INTO usage (id, timestamp, date, source, model, input_tokens, output_tokens,

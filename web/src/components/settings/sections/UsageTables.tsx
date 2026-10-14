@@ -46,8 +46,8 @@ export function usageName(raw: string): string {
  * Token counts a source never reported (a CLI engine records only cost) show
  * as a dash, not as a 0 next to a real cost (N09).
  */
-export function tokensUnknown(row: { cost_usd: number; input_tokens: number; output_tokens: number; cache_read_tokens?: number; cache_creation_tokens?: number }): boolean {
-  return row.cost_usd > 0 && !row.input_tokens && !row.output_tokens && !row.cache_read_tokens && !row.cache_creation_tokens;
+export function tokensUnknown(row: { cost_usd: number | null; input_tokens: number; output_tokens: number; cache_read_tokens?: number; cache_creation_tokens?: number }): boolean {
+  return (row.cost_usd ?? 0) > 0 && !row.input_tokens && !row.output_tokens && !row.cache_read_tokens && !row.cache_creation_tokens;
 }
 
 export function shortModel(m: string): string {
@@ -89,8 +89,8 @@ export function SettingsUsageBreakdown({ data, loading, activeName, onSelect }: 
         {data.map((row) => {
           const active = activeName === row.name;
           const label = usageName(row.name);
-          const unknown = tokensUnknown(row);
-          const tokens = (n: number) => (unknown ? <span title="Not recorded for this source">-</span> : formatTokens(n));
+          const unknown = row.token_counts_complete === false || (row.token_counts_complete === undefined && tokensUnknown(row));
+          const tokens = (n: number) => (unknown ? <span title="Not recorded for this source">{row.token_counts_complete === false ? 'Unknown' : '-'}</span> : formatTokens(n));
           return (
             <tr
               key={row.name}
@@ -99,7 +99,7 @@ export function SettingsUsageBreakdown({ data, loading, activeName, onSelect }: 
               title={onSelect ? (active ? 'Click to clear this filter' : `Filter to ${label}`) : undefined}
             >
               <td title={label}>{label}</td>
-              <td className="num">${row.cost_usd.toFixed(2)}</td>
+              <td className="num">{row.unverified_calls === row.api_calls ? 'Unverified' : `$${row.cost_usd.toFixed(2)}`}{!!row.unverified_calls && row.unverified_calls !== row.api_calls && <small className="settings-usage-via"> Partial</small>}</td>
               <td className="num">{tokens(row.input_tokens)}</td>
               <td className="num">{tokens(row.cache_read_tokens)}</td>
               <td className="num">{tokens(row.cache_creation_tokens)}</td>
@@ -145,9 +145,7 @@ export function SettingsUsageRecent({ data, loading }: { data: UsageRecord[]; lo
           const source = usageName(r.source);
           const via = [r.parent_source ? `via ${usageName(r.parent_source)}` : '', r.agentId ? `agent ${usageName(r.agentId)}` : '']
             .filter(Boolean).join(', ');
-          const cache = `Cache read ${formatTokens(r.cache_read_input_tokens)}, cache write ${formatTokens(r.cache_creation_input_tokens)}`;
-          const unknown = tokensUnknown({ cost_usd: r.cost_usd, input_tokens: r.input_tokens, output_tokens: r.output_tokens,
-            cache_read_tokens: r.cache_read_input_tokens, cache_creation_tokens: r.cache_creation_input_tokens });
+          const cache = `Cache read ${r.cache_read_input_tokens === null ? 'Unknown' : formatTokens(r.cache_read_input_tokens)}, cache write ${r.cache_creation_input_tokens === null ? 'Unknown' : formatTokens(r.cache_creation_input_tokens)}`;
           return (
             <tr key={r.id} title={cache}>
               <td className="num-font">{usageTime(r.timestamp)}</td>
@@ -156,9 +154,9 @@ export function SettingsUsageRecent({ data, loading }: { data: UsageRecord[]; lo
                 {via && <span className="settings-usage-via"> {via}</span>}
               </td>
               <td className="mono" title={r.model}>{shortModel(r.model)}</td>
-              <td className="num">{unknown ? <span title="Not recorded for this source">-</span> : formatTokens(r.input_tokens)}</td>
-              <td className="num">{unknown ? <span title="Not recorded for this source">-</span> : formatTokens(r.output_tokens)}</td>
-              <td className="num">${r.cost_usd.toFixed(4)}</td>
+              <td className="num">{r.input_tokens === null ? 'Unknown' : formatTokens(r.input_tokens)}</td>
+              <td className="num">{r.output_tokens === null ? 'Unknown' : formatTokens(r.output_tokens)}</td>
+              <td className="num">{r.cost_usd === null ? 'Unverified' : `$${r.cost_usd.toFixed(4)}`}</td>
             </tr>
           );
         })}

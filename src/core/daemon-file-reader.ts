@@ -318,6 +318,15 @@ export class DaemonFileReader implements SessionFileReader {
     return conn
   }
 
+  async readCostState(sessionId: string, cwd?: string): Promise<{ totalCostUsd: number } | null> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    if (!conn.hasCapability('usage-scan-v1')) return null
+    const reply = await conn.send('usage.costState', { sid: sessionId, cwd }, 30_000)
+    if (!reply.ok) throw new Error(String(reply.error ?? 'Cost state read failed'))
+    return reply.result as { totalCostUsd: number } | null
+  }
+
   /** Rename/move a path. The daemon refuses an existing target (EEXIST). */
   async renamePath(from: string, to: string): Promise<void> {
     const conn = await this.mutateConnection()

@@ -99,7 +99,7 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
       data-testid="session-speed-readout"
       data-live={r.live ? 'true' : 'false'}
       title={title}
-      aria-label={`Turn speed: ${model}, ${r.tokens}${r.ttft ? `, first token ${r.ttft}` : ''}${r.tps ? `, ${r.tps}` : ''}${r.duration ? `, ${r.duration}` : ''}${r.cost ? `, ${r.cost}` : ''}`}
+      aria-label={`Turn speed: ${model}, ${r.tokens}${r.ttft ? `, first token ${r.ttft}` : ''}${r.tps ? `, ${r.tps}` : ''}${r.duration ? `, ${r.duration}` : ''}${r.cost ? ', cost unverified' : ''}`}
     >
       <span className="session-speed-kicker">{r.live ? 'This turn' : 'Last turn'}</span>
       <span className="session-speed-model" data-testid="speed-model">{model}</span>
@@ -118,7 +118,7 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
         <span className="session-speed-stat" data-testid="speed-duration">{r.duration}</span>
       )}
       {r.cost && (
-        <span className={`session-speed-stat${r.costEstimated ? ' is-estimate' : ''}`} data-testid="speed-cost">{r.cost}</span>
+        <span className="session-speed-stat is-estimate" data-testid="speed-cost" title="This turn has not been checked against independent token evidence.">Cost unverified</span>
       )}
       {r.interrupted && <span className="session-speed-stat session-speed-flag" data-testid="speed-flag">stopped</span>}
       {r.partial && !r.interrupted && <span className="session-speed-stat session-speed-flag" data-testid="speed-flag">partial</span>}

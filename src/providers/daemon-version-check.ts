@@ -81,6 +81,10 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/acp-worker/protocol.ts',
   // Session-changes host-local compute (changes.compute / changes.file).
   'src/providers/session-changes-core.ts',
+  'src/providers/usage-host-core.ts',
+  'src/providers/usage-scan-core.ts',
+  'src/providers/usage-reconcile-core.ts',
+  'src/core/usage/pricing.ts',
   // External-session scan (sessions.discoverExternal) — bundled into the
   // binary AND shipped as the external-scan-core.cjs sidecar. Missing from
   // this list once: a classifier edit produced an identical version, no

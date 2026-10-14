@@ -1,109 +1,68 @@
-/**
- * E2E test: per-agent cost attribution surfaces through the real HTTP API.
- *
- * Real server, real SQLite usage ledger, real REST calls. Proves the full
- * Part-C path: usageTracker.record({ agentId }) → GET /api/usage/by-agent
- * returns a breakdown keyed by the agent that spent the money, and rows with
- * no agentId collapse to 'unknown'. This is the cost-dashboard "By Agent" view's
- * data source.
- */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
-import type { Server as HttpServer } from 'node:http';
-
 import { createMockConstants } from '../helpers/mock-constants.js';
-vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-usage-by-agent'));
-
+vi.mock('../../src/constants.js', () => createMockConstants('response-usage-e2e'));
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { usageTracker } from '../../src/core/usage/index.js';
+import { responseUsageStore } from '../../src/core/usage/collection.js';
+import { reconcileUsage, type ProxyUsageRecord } from '../../src/providers/usage-reconcile-core.js';
+import type { CanonicalUsageRecord } from '../../src/providers/usage-scan-core.js';
 
-let server: HttpServer;
 let port: number;
-
-function apiUrl(p: string): string {
-  return `http://localhost:${port}${p}`;
+beforeAll(async () => {
+  await fs.mkdir(WALNUT_HOME, { recursive: true });
+  const server = await startServer({ port: 0, dev: true });
+  port = (server.address() as { port: number }).port;
+  const timestamp = new Date().toISOString();
+  const records: CanonicalUsageRecord[] = [1, 2, 3].map(n => ({ responseId: `reply-${n}`, sessionId: 'session-one',
+    timestamp, model: 'claude-opus-5-5', input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0, complete: true, speed: 'standard', inference_geo: '', service_tier: 'standard', pricing_context_complete: true, ...(n === 2 ? { agentId: 'agent-one' } : {}) }));
+  const upstream: ProxyUsageRecord[] = records.slice(0, 2).map(r => ({ ...r, source: 'proxy', requestId: r.responseId,
+    requestedModel: r.model, responseModel: r.model, forwardedModel: `global.anthropic.${r.model}`, startedMs: Date.parse(timestamp) - 100,
+    finishedMs: Date.parse(timestamp), usagePresent: true, fileIndex: 0, lineNumber: 1 }));
+  const imported = await responseUsageStore().importHost('local', {
+    canonical: { records, diagnostics: {} as never, costStates: [] },
+    upstream: { records: upstream, diagnostics: [], coverage: {} as never },
+    reconciliation: reconcileUsage(records, upstream), until: timestamp,
+  }, [{ sessionId: 'session-one', taskId: 'task-one', project: 'Example', title: 'Review the change' }]);
+  responseUsageStore().finishHost('local', timestamp, imported.checks);
+});
+afterAll(async () => { responseUsageStore().close(); await stopServer(); await fs.rm(WALNUT_HOME, { recursive: true, force: true }); });
+async function get(path: string) {
+  const result = await fetch(`http://127.0.0.1:${port}${path}`); expect(result.status).toBe(200); return result.json();
 }
 
-interface ByGroupRow { name: string; cost_usd: number; api_calls: number; input_tokens: number; percentage: number }
-
-beforeAll(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
-  await fs.mkdir(WALNUT_HOME, { recursive: true });
-  server = await startServer({ port: 0, dev: true });
-  const addr = server.address();
-  port = typeof addr === 'object' && addr ? addr.port : 3456;
-
-  // Two summary-agent runs, one main-agent run, and one legacy row with no agentId.
-  usageTracker.record({ source: 'subagent', model: 'claude-opus-4-6', input_tokens: 1000, output_tokens: 200, agentId: 'turn-complete-triage' });
-  usageTracker.record({ source: 'subagent', model: 'claude-opus-4-6', input_tokens: 500, output_tokens: 100, agentId: 'turn-complete-triage' });
-  usageTracker.record({ source: 'agent', model: 'claude-opus-4-6', input_tokens: 2000, output_tokens: 400, agentId: 'general' });
-  usageTracker.record({ source: 'agent', model: 'claude-opus-4-6', input_tokens: 300, output_tokens: 50 }); // no agentId → 'unknown'
-});
-
-afterAll(async () => {
-  await stopServer();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
-});
-
-describe('GET /api/usage/by-agent', () => {
-  it('returns spend grouped by the agent that incurred it', async () => {
-    const res = await fetch(apiUrl('/api/usage/by-agent?period=all'));
-    expect(res.status).toBe(200);
-    const body = await res.json() as { agents: ByGroupRow[] };
-
-    const triage = body.agents.find((a) => a.name === 'turn-complete-triage');
-    const general = body.agents.find((a) => a.name === 'general');
-
-    expect(triage).toBeDefined();
-    expect(triage!.api_calls).toBe(2);
-    expect(triage!.input_tokens).toBe(1500);
-
-    // Legacy agentId-less 'agent' row merges into 'general' (canonical main
-    // agent) instead of collapsing into a giant 'unknown' bucket.
-    expect(general).toBeDefined();
-    expect(general!.api_calls).toBe(2);
-    expect(body.agents.some((a) => a.name === 'unknown')).toBe(false);
-
-    // Percentages across all agent buckets sum to ~100.
-    const totalPct = body.agents.reduce((s, a) => s + a.percentage, 0);
-    expect(totalPct).toBeCloseTo(100, 0);
+describe('reconciled usage through the real server', () => {
+  it('includes coding sessions and publishes only verified prices', async () => {
+    const body = await get('/api/usage/overview');
+    expect(body.summary).toMatchObject({ api_calls: 3, verified_calls: 2, unverified_calls: 1 });
+    expect(body.summary.total_cost).toBeCloseTo(0.0016, 8);
+    expect(body.summary.session_cost).toBeCloseTo(0.0016, 8);
+    expect(body.sessions[0].title).toBe('Review the change');
+    expect(body.recent.filter((r: { cost_usd: number | null }) => r.cost_usd === null)).toHaveLength(1);
   });
-});
-
-describe('GET /api/usage/overview (interactive dashboard)', () => {
-  it('returns every aggregate in one call', async () => {
-    const res = await fetch(apiUrl('/api/usage/overview'));
-    expect(res.status).toBe(200);
-    const body = await res.json() as {
-      summary: { api_calls: number };
-      bySource: ByGroupRow[]; byModel: ByGroupRow[]; byAgent: ByGroupRow[];
-      recent: unknown[]; daily: unknown[]; dateBounds: { min: string | null; max: string | null };
-    };
-    // 3 walnut rows have agentId, 1 legacy row does not — session rows excluded.
-    expect(body.summary.api_calls).toBe(4);
-    expect(body.bySource.length).toBeGreaterThan(0);
-    expect(body.byAgent.length).toBeGreaterThan(0);
-    expect(body.recent.length).toBe(4);
-    expect(body.dateBounds.min).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  it('exposes independent-source residuals instead of hiding them', async () => {
+    const body = await get('/api/usage/overview');
+    const check = body.accuracy.checks.find((x: { source: string }) => x.source === 'Canonical transcript');
+    expect(check.unmatchedCalls).toBe(1);
+    expect(check.residuals[0]).toMatchObject({ source: 'canonical', count: 1, input_tokens: 100 });
+    expect(body.accuracy.checks.find((x: { source: string }) => x.source === 'Provider invoice').status).toBe('unverified');
   });
-
-  it('scopes every aggregate to a source drill-in', async () => {
-    const res = await fetch(apiUrl('/api/usage/overview?source=subagent'));
-    const body = await res.json() as {
-      summary: { api_calls: number; input_tokens: number };
-      bySource: ByGroupRow[];
-    };
-    // Only the two subagent (turn-complete-triage) rows.
-    expect(body.summary.api_calls).toBe(2);
-    expect(body.summary.input_tokens).toBe(1500);
-    // bySource still lists all sources so the user can pivot.
-    expect(body.bySource.length).toBeGreaterThan(1);
+  it('rejects invalid collection windows without starting a scan', async () => {
+    for (const body of [{ since: 'invalid' }, { since: '2026-10-14' },
+      { since: '2026-10-14T12:00:00Z', until: '2026-10-13T12:00:00Z' }]) {
+      const response = await fetch(`http://127.0.0.1:${port}/api/usage/collect`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+    }
   });
-
-  it('ANDs a source + agent drill-in', async () => {
-    const res = await fetch(apiUrl('/api/usage/overview?source=subagent&agent=turn-complete-triage'));
-    const body = await res.json() as { summary: { api_calls: number } };
-    expect(body.summary.api_calls).toBe(2);
+  it('uses the same verified numbers in the older API entries', async () => {
+    const groups = await get('/api/usage/by-agent?period=all');
+    expect(groups.agents.map((x: { name: string }) => x.name).sort()).toEqual(['main', 'subagent']);
+    const sources = await get('/api/usage/by-source?period=all');
+    expect(sources.sources[0].name).toBe('session');
+    const summary = await get('/api/usage/summary');
+    expect(summary.allTime.verified_calls).toBe(2);
   });
 });

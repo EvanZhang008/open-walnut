@@ -1,8 +1,11 @@
-import { apiGet } from './client';
+import { apiGet, apiPost } from './client';
 
 export interface UsageSummary {
   total_cost: number;
   session_cost: number;
+  verified_calls?: number;
+  unverified_calls?: number;
+  token_counts_complete?: boolean;
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
@@ -29,6 +32,8 @@ export interface UsageByGroup {
   cache_creation_tokens: number;
   api_calls: number;
   percentage: number;
+  unverified_calls?: number;
+  token_counts_complete?: boolean;
 }
 
 export interface UsageRecord {
@@ -37,11 +42,15 @@ export interface UsageRecord {
   date: string;
   source: string;
   model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
-  cost_usd: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  cache_read_input_tokens: number | null;
+  cost_usd: number | null;
+  verification?: string;
+  taskTitle?: string;
+  host?: string;
+  project?: string;
   taskId?: string;
   sessionId?: string;
   runId?: string;
@@ -78,7 +87,17 @@ export interface UsageOverview {
   byAgent: UsageByGroup[];
   recent: UsageRecord[];
   dateBounds: { min: string | null; max: string | null };
+  sessions?: { sessionId: string; taskId?: string; title?: string; project?: string; host: string; calls: number; cost: number; unverified: number }[];
+  collection?: { running: boolean; startedAt?: string; finishedAt?: string; error?: string };
+  accuracy?: {
+    timezone: string; pricingVersion: string; until: string | null; status: string; note: string;
+    checks: { source: string; host: string; status: string; matchedCalls: number; unmatchedCalls: number; detail: string;
+      residuals?: { source: string; model: string; count: number; input_tokens: number | null; output_tokens: number | null;
+        cache_read_input_tokens: number | null; cache_creation_input_tokens: number | null }[] }[];
+  };
 }
+
+export function collectUsage(since?: string) { return apiPost('/api/usage/collect', { since }); }
 
 export async function fetchUsageOverview(filter: UsageFilter, limit = 100): Promise<UsageOverview> {
   const q: Record<string, string> = { limit: String(limit) };

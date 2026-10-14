@@ -3600,7 +3600,7 @@ export class DaemonConnection {
       // Best-effort per file — a missing sidecar (npm-package install without
       // dist/daemon-binaries) just means that host keeps the server-side
       // fallback (changes) or reports no external sessions (external-scan).
-      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
+      for (const sidecarFile of ['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
           const scArgs = [...this.baseSshArgs, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`)]

@@ -58,6 +58,7 @@ import {
 } from './line-consumption.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
+import { DaemonFileReader } from '../core/daemon-file-reader.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
@@ -1025,6 +1026,7 @@ export class ClaudeCodeSession {
    *  Without this, every turn re-recorded the whole running total → the 13×
    *  inflated "$222K" session cost. See core/usage/cost-watermark.ts. */
   private _costWatermark = new CostWatermark()
+  private _costBaselineKnown = true
   /** stop_reason of the most recent assistant message_delta — the truncated-success
    *  invariant compares this against result.subtype (success + null = truncation). */
   private _lastStopReason: string | null | undefined
@@ -1708,14 +1710,12 @@ export class ClaudeCodeSession {
     return false
   }
 
-  /**
-   * Billable cost INCREMENT for a result event (advances the per-process
-   * watermark). The CLI's total_cost_usd is a running total for the current
-   * process; we record only what's new since the last result so the same spend
-   * isn't billed every turn (the root of the 13× inflated session cost).
-   * Returns 0 for replayed/stale results. See core/usage/cost-watermark.ts.
-   */
+  /** Restored history is a baseline, never new spend. */
   private billableCostDelta(totalCostUsd: number | undefined): number {
+    if (!this._costBaselineKnown) {
+      if (this._costWatermark.seed(totalCostUsd)) this._costBaselineKnown = true
+      return 0
+    }
     const delta = this._costWatermark.bill(totalCostUsd)
     // Persist the advanced watermark next to the process it belongs to, so an
     // instance that re-attaches to this same CLI process (the queue re-creates
@@ -2469,7 +2469,8 @@ export class ClaudeCodeSession {
     this._expectedTeardown = false    // Fresh process — a prior intentional kill must not mask THIS process's real crash
     this._idleDebt = 0                // Fresh process — a dead process's owed idles never arrive
     this._lastResultCost = undefined  // Fresh session — no previous cost to compare
-    this._costWatermark.reset()       // Fresh process — its total_cost_usd restarts at 0
+    this._costWatermark.reset()
+    this._costBaselineKnown = !resumeSessionId
     this._askUserIntercepted = false
     this._sawApiTimeoutThisTurn = false
     this.fullText = ''
@@ -2545,6 +2546,18 @@ export class ClaudeCodeSession {
         // Typed: a queue-managed --resume parks its batch on this instead of
         // reverting it to pending and retrying forever (delivery-failure.ts).
         throw new CwdMissingError(errMsg)
+      }
+      if (resumeSessionId) {
+        try {
+          const reader = new DaemonFileReader(host ?? '__local__')
+          const restored = await reader.readCostState(resumeSessionId, resolvedCwd)
+          if (restored) {
+            this._costWatermark.seed(restored.totalCostUsd)
+            this._costBaselineKnown = true
+          }
+        } catch (error) {
+          log.session.warn('restored cost state unavailable', { sessionId: resumeSessionId, error: String(error) })
+        }
       }
       return transport.start({
       args,
@@ -2858,12 +2871,20 @@ export class ClaudeCodeSession {
       && record.consumedOffset < Number.MAX_SAFE_INTEGER) {
       session._consumedOffset = record.consumedOffset
     }
-    // Seed the cost watermark ONLY for the very process it was recorded against:
-    // the CLI's total_cost_usd is cumulative per process, so re-attaching to the
-    // same pid must continue from the last charged total, while a different
-    // (fresh) process starts its total at 0 and keeps the reset watermark.
     if (record.pid && record.costWatermarkPid === record.pid) {
-      session._costWatermark.seed(record.costWatermark)
+      session._costBaselineKnown = session._costWatermark.seed(record.costWatermark)
+    } else {
+      session._costBaselineKnown = false
+      try {
+        const restored = await new DaemonFileReader(record.host ?? '__local__')
+          .readCostState(record.claudeSessionId, record.cwd)
+        if (restored) {
+          session._costWatermark.seed(restored.totalCostUsd)
+          session._costBaselineKnown = true
+        }
+      } catch (error) {
+        log.session.warn('attached cost state unavailable', { sessionId: record.claudeSessionId, error: String(error) })
+      }
     }
     // The process this record reported lifecycle for is still the one attached:
     // its queued lines keep waiting for its word, as before the restart.

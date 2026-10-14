@@ -1,16 +1,4 @@
-/**
- * The cost watermark survives a runner re-creation for the SAME CLI process.
- *
- * The CLI reports `total_cost_usd` as a running total per process. The queue
- * re-creates the ClaudeCodeSession between turns (attachToExisting), and a
- * fresh instance used to start its watermark at 0, so the second turn's result
- * was charged the whole process total: the speed readout showed $0.18 for a
- * $0.03 turn, and the usage ledger over-counted the same way.
- *
- *   1. a result persists {costWatermark, costWatermarkPid} on the record
- *   2. attachToExisting seeds the watermark when the record's pid matches
- *   3. a record whose pid changed (fresh process) keeps the reset watermark
- */
+/** Same-process watermarks and restored transcript baselines must never rebill history. */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
@@ -24,7 +12,7 @@ vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js';
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js';
-import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
+import { WALNUT_HOME, SESSION_STREAMS_DIR, CLAUDE_HOME } from '../../src/constants.js';
 import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js';
 import type { SessionRecord } from '../../src/core/types.js';
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js';
@@ -91,9 +79,27 @@ afterEach(async () => {
 });
 
 describe('cost watermark across runner re-creation', () => {
+  it('a different PID restores the CLI cost-state instead of rebilling history', async () => {
+    const sid = 'cw-restored';
+    const dir = path.join(CLAUDE_HOME, 'projects', '-tmp');
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(path.join(dir, `${sid}.jsonl`), JSON.stringify({
+      type: 'cost-state', sessionId: sid, totalCostUSD: 690,
+      totalAPIDuration: 1, totalAPIDurationWithoutRetries: 1, totalToolDuration: 1,
+      totalLinesAdded: 0, totalLinesRemoved: 0, totalDuration: 1, startTime: 1,
+      modelUsage: { 'claude-opus-5-5': { inputTokens: 1, outputTokens: 1, thinkingTokens: 0,
+        cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 690 } },
+      hasUnknownModelCost: false,
+    }) + '\n');
+    const session = await attach(await makeRecord(sid, 5151, { costWatermark: 690, costWatermarkPid: 4242 }));
+    const deltas = collectCostDeltas();
+    session.handleStreamLine(resultLine(sid, 690.25), 2000);
+    await vi.waitFor(() => expect(deltas).toEqual([expect.closeTo(0.25, 6)]));
+    session.detach();
+  });
   it('a result persists the charged total next to the process pid', async () => {
     const sid = 'cw-persist';
-    const session = await attach(await makeRecord(sid, 4242));
+    const session = await attach(await makeRecord(sid, 4242, { costWatermark: 0, costWatermarkPid: 4242 }));
     const deltas = collectCostDeltas();
 
     session.handleStreamLine(resultLine(sid, 0.15), 1000);
@@ -118,25 +124,22 @@ describe('cost watermark across runner re-creation', () => {
     session.detach();
   });
 
-  it('a record whose pid moved on (fresh process) is charged from zero', async () => {
+  it('does not bill the first restored total when its baseline is unavailable', async () => {
     const sid = 'cw-new-pid';
-    // The watermark was recorded for pid 4242; the session now runs as pid 5151
-    // (a --resume spawned a fresh process whose total restarts at 0).
     const session = await attach(await makeRecord(sid, 5151, { costWatermark: 0.15, costWatermarkPid: 4242 }));
     const deltas = collectCostDeltas();
-
-    session.handleStreamLine(resultLine(sid, 0.02), 3000);
-    await vi.waitFor(() => expect(deltas).toEqual([expect.closeTo(0.02, 6)]), { timeout: 2000, interval: 25 });
+    session.handleStreamLine(resultLine(sid, 690.02), 3000);
+    await vi.waitFor(() => expect(deltas).toEqual([0]), { timeout: 2000, interval: 25 });
     session.detach();
   });
 
-  it('a corrupt persisted watermark is ignored rather than hiding spend', async () => {
+  it('a corrupt persisted watermark leaves the first restored cost unverified', async () => {
     const sid = 'cw-corrupt';
     const session = await attach(await makeRecord(sid, 4242, { costWatermark: Number.NaN, costWatermarkPid: 4242 }));
     const deltas = collectCostDeltas();
 
     session.handleStreamLine(resultLine(sid, 0.05), 4000);
-    await vi.waitFor(() => expect(deltas).toEqual([expect.closeTo(0.05, 6)]), { timeout: 2000, interval: 25 });
+    await vi.waitFor(() => expect(deltas).toEqual([0]), { timeout: 2000, interval: 25 });
     session.detach();
   });
 });

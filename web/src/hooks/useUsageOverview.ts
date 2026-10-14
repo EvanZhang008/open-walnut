@@ -33,14 +33,15 @@ interface UseUsageOverviewReturn {
   effectiveRange: { start?: string; end?: string };
 }
 
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+function localDay(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
+function todayStr(): string { return localDay(new Date()); }
 
 function daysAgoStr(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  return localDay(d);
 }
 
 /** Resolve a time selection into concrete YYYY-MM-DD bounds (undefined = open). */
@@ -87,6 +88,11 @@ export function useUsageOverview(): UseUsageOverviewReturn {
   }, [filter]);
 
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!overview?.collection?.running) return;
+    const timer = setTimeout(refresh, 5_000);
+    return () => clearTimeout(timer);
+  }, [overview?.collection?.running, overview, refresh]);
 
   const clearDrill = useCallback(() => setDrill({}), []);
 

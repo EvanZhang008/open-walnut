@@ -122,6 +122,13 @@ class MockLocalDaemonFileReader {
     return abs;
   }
 
+  async readCostState(sessionId: string, cwd?: string) {
+    const { CLAUDE_HOME } = await import('../../src/constants.js');
+    const { scanCostState } = await import('../../src/providers/usage-scan-core.js');
+    try { return await scanCostState({ projectsDir: path.join(CLAUDE_HOME, 'projects'), sessionId, cwd }); }
+    catch { return null; }
+  }
+
   async readFile(remotePath: string): Promise<string | null> {
     const abs = await this.resolve(remotePath, true);
     if (!abs) return null;
