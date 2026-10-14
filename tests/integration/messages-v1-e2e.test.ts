@@ -153,3 +153,41 @@ describe('a completed parent hears nothing from its subtasks (2026-10-04)', () =
     expect(again.json.error.code).toBe('task_has_no_session')
   }, 60_000)
 })
+
+describe('a session messages a COMPLETE task only with a reason (2026-10-14)', () => {
+  const DONE_SID = 'ffffffff-3333-4333-8333-333333333333'
+  const PEER_SID = 'ffffffff-4444-4444-8444-444444444444'
+
+  it('409 target_complete with the way on, 400 for a force with no usable reason, and through when forced', async () => {
+    const { task: done } = await addTask({ title: 'e2e finished work' })
+    const { task: peer } = await addTask({ title: 'e2e peer' })
+    await createSessionRecord(DONE_SID, done.id, '', '/work', { title: 'e2e finished work' })
+    await createSessionRecord(PEER_SID, peer.id, '', '/work', { title: 'e2e peer' })
+    expect((await post(`/api/v1/tasks/${done.id}/complete`, {})).status).toBe(200)
+    // Nothing live behind it, so a forced send ends at "nothing running", never a CLI.
+    await updateSessionRecord(DONE_SID, { archived: true })
+    const caller = { 'x-walnut-caller-sid': PEER_SID }
+
+    const refused = await post('/api/v1/messages', { to: done.id, text: 'one more thing' }, caller)
+    expect(refused.status).toBe(409)
+    expect(refused.json.error.code).toBe('target_complete')
+    expect(refused.json.error.message).toContain(`"e2e finished work" (${done.id}) is complete`)
+    expect(refused.json.error.message).toContain('force:true with reason:')
+    expect(refused.json.taskId).toBe(done.id)
+
+    const short = await post('/api/v1/messages', { to: done.id, text: 'one more thing', force: true, reason: 'pls' }, caller)
+    expect(short.status).toBe(400)
+    expect(short.json.error.code).toBe('bad_request')
+
+    const forced = await post('/api/v1/messages', {
+      to: done.id, text: 'one more thing', force: true, reason: 'its output fails the new schema check',
+    }, caller)
+    expect(forced.status).toBe(409)
+    expect(forced.json.error.code).toBe('task_has_no_session')
+    expect((await (await fetch(api(`/api/v1/tasks/${done.id}`))).json()).task.phase).toBe('COMPLETE')
+
+    // The human's own send is never asked for a reason.
+    const human = await post('/api/v1/messages', { to: done.id, text: 'from me' })
+    expect(human.json.error.code).toBe('task_has_no_session')
+  }, 60_000)
+})

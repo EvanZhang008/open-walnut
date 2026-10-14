@@ -249,6 +249,9 @@ TEAMWORK (IMPORTANT)
     user's direction: act on it, and never ask the user to repeat a decision
     another task passed on. A worker's questions go to its leader (task_send),
     not to the user.
+  - A COMPLETE task answers target_complete: its work is done and a message
+    would reopen it. Send only when it must act again, with "force":true and a
+    "reason" saying why; the reason leads your message.
   - Sends are rate-limited per sender, duplicates are suppressed, and a busy
     target's queue is capped. On throttled / queue_full, do not retry in a
     loop — continue your own work.

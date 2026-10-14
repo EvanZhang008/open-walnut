@@ -89,6 +89,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `throttled` \| `queue_full` | 429 | Peer send rate budget (`retryAfterMs`) or the target's queue cap; do not retry in a loop |
 | `unknown_request` \| `not_request_target` \| `origin_session_gone` | 404 / 403 / 410 | `in_reply_to` names no request, names one addressed to another session, or the asking session is gone |
 | `parent_complete` | 409 | `POST /messages` (a send or an `in_reply_to`) from a subtask's session to its parent task, which is COMPLETE: a completed parent takes no messages from its subtasks (`parentTaskId`). Reopening the parent lifts it |
+| `target_complete` | 409 | `POST /messages` (a send or an `in_reply_to`) from a session to a task that is COMPLETE (`taskId`): a message would reopen it. Resend with `force: true` and a `reason` (10 characters or more) to reopen it on purpose; the reason leads the delivered text. A `force` without a usable reason is `400 bad_request`. The human's own sends are never refused |
 | `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap, or a `POST /health/sync` call exceeds 500 items or 192 KB: split it) |
 | `bad_audio` | 422 | `POST /stt/transcribe`: this recording is undecodable (an m4a cut off before it was finalized), so re-uploading the same bytes cannot help. Additive: an older server answers `503 stt_unavailable` for the same case, and a client that treats 4xx as a verdict about the audio simply retires the recording sooner |
 | `stt_unavailable` | 503 | `POST /stt/transcribe`: the service cannot answer right now (no engine configured, engine down, the companion could not reach the primary box and has no key of its own). The recording is worth keeping and retrying |
@@ -1860,7 +1861,7 @@ ledger. Both end up in the same persistent message queue.
 
 - `POST /api/v1/messages` body
   `{ "to"?, "text", "expect_reply"?: bool, "reply_timeout"?: number,
-  "in_reply_to"?, "messageId"? }` →
+  "in_reply_to"?, "force"?: bool, "reason"?, "messageId"? }` →
   `202 { "delivery", "targetSessionId", "targetTitle", "targetTaskId"?,
   "requestId"?, "repliedTo"?, "messageId"? }`.
   - `to` resolves in this order: exact session id, then a task id or unique
@@ -1890,11 +1891,17 @@ ledger. Both end up in the same persistent message queue.
     addressed to may close it (`403 not_request_target`); an unknown id is
     `404 unknown_request`. A reply that arrives after Walnut already notified
     the asker is still delivered, marked late.
+  - A session's send or answer to a task that is COMPLETE is refused with
+    `409 target_complete`, because it would reopen the task and wake its
+    session. `force: true` with a `reason` of 10 characters or more lets it
+    through on purpose: the reason leads the delivered text ("This message
+    reopens your task, which was complete. Why: …") and the task reopens as
+    before. Added 2026-10-14; the human's own sends are not affected.
   - `messageId` (`qm-…`) is the same idempotency id the per-session send takes.
   - Errors: `400 bad_request` (empty `text`, missing `to`, `expect_reply`
     without a session caller), `400 ambiguous_target` (with up to 5
     `candidates`), `404 unknown_target`, `409 task_has_no_session` (start one
-    with `POST /tasks/:id/start`), `409 target_archived`, `400 self_send`,
+    with `POST /tasks/:id/start`), `409 target_complete`, `409 target_archived`, `400 self_send`,
     `429 throttled` (with `retryAfterMs`) or `429 queue_full`,
     `410 origin_session_gone` (the asking session is gone),
     `501 not_supported_cloud` on a REPLICA (sends need the primary's

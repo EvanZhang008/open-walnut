@@ -124,6 +124,21 @@ describe('a peer message the leader routes here', () => {
     expect(h.delivered).toHaveLength(0)
   })
 
+  it('a message to a COMPLETE task is refused unless forced with a reason, which then leads the text', async () => {
+    const h = harness()
+    h.host.configure(slice({ hash: 'h4', tasks: slice().tasks.map((t) => t.id === 'mworker0-0002' ? { ...t, phase: 'COMPLETE' } : t) }))
+    const refused = await h.host.deliverFromLeader(HOME, { kind: 'peer', from: FROM, to: WORKER, text: 'again', expect_reply: false })
+    expect(refused).toMatchObject({ ok: false, error: { code: 'target_complete' } })
+    const short = await h.host.deliverFromLeader(HOME, { kind: 'peer', from: FROM, to: WORKER, text: 'again', expect_reply: false, force: true, reason: 'why' })
+    expect(short).toMatchObject({ ok: false, error: { code: 'bad_request' } })
+    expect(h.delivered).toHaveLength(0)
+    const forced = await h.host.deliverFromLeader(HOME, {
+      kind: 'peer', from: FROM, to: WORKER, text: 'again', expect_reply: false, force: true, reason: 'its build broke after the merge',
+    })
+    expect(forced.ok).toBe(true)
+    expect(h.delivered[0].text).toContain('This message reopens your task, which was complete. Why: its build broke after the merge')
+  })
+
   it('refuses malformed deliveries without writing anything', async () => {
     const h = harness()
     expect(await h.host.deliverFromLeader(HOME, { kind: 'peer', from: { sid: '', host: '' }, to: WORKER, text: 'x' } as never)).toMatchObject({ ok: false, error: { code: 'bad_request' } })

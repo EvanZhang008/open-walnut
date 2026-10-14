@@ -110,8 +110,11 @@ describe('open_items from the copy', () => {
     h.configure(slice())
     // The worker completes; the leader answers the worker's question; the leader asks again.
     expect(await h.handle(HOME, W1, 'tools.call', { name: 'task_complete', args: { id: 'mwork111-0002' } })).toMatchObject({ ok: true })
-    expect(await h.handle(HOME, LEAD, 'tools.call', { name: 'task_send', args: { in_reply_to: 'rq-bbb222', text: 'Yes, merge.' } })).toMatchObject({ ok: true })
-    const asked = await h.handle(HOME, LEAD, 'tools.call', { name: 'task_send', args: { to: 'mwork111-0002', text: 'Tag the release too?' } })
+    expect(await h.handle(HOME, LEAD, 'tools.call', { name: 'task_send', args: { in_reply_to: 'rq-bbb222', text: 'Yes, merge.', force: true, reason: 'it waits on this merge decision' } })).toMatchObject({ ok: true })
+    // The worker is complete now, so answering or asking it needs a reason (envelope-kit checkCompleteTarget).
+    const asked = await h.handle(HOME, LEAD, 'tools.call', {
+      name: 'task_send', args: { to: 'mwork111-0002', text: 'Tag the release too?', force: true, reason: 'the release is not tagged yet' },
+    })
     expect(asked.ok).toBe(true)
     const r = await call(h, LEAD)
     const res = (r.ok ? r.result : {}) as Record<string, any>

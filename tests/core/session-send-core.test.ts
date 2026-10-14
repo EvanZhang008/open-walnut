@@ -799,8 +799,15 @@ describe('performSessionSend — a subtask never messages its COMPLETE parent', 
     expect(sendMessageToSession).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves everyone else alone: a non-subtask peer and the human still reach a completed task', async () => {
-    await performSessionSend({ to: PARENT, text: 'from a peer', callerSid: 'sess-peer-1', expectReply: false });
+  it('a non-subtask peer reaches a completed task only forced with a reason; the human always does', async () => {
+    await expectSendError(
+      performSessionSend({ to: PARENT, text: 'from a peer', callerSid: 'sess-peer-1', expectReply: false }),
+      'target_complete', 409,
+    );
+    await performSessionSend({
+      to: PARENT, text: 'from a peer, forced', callerSid: 'sess-peer-1', expectReply: false,
+      force: true, reason: 'the release it shipped broke checkout',
+    });
     await performSessionSend({ to: PARENT, text: 'from the human' });
     expect(sendMessageToSession).toHaveBeenCalledTimes(2);
   });
@@ -809,8 +816,11 @@ describe('performSessionSend — a subtask never messages its COMPLETE parent', 
     sessions = sessions.map((x) => x.claudeSessionId === PARENT ? rec(PARENT, { title: 'Leader', taskId: 'task-parent', archived: true }) : x);
     const err = await expectSendError(performSessionSend({ to: 'task-parent', text: 'done', callerSid: CHILD }), 'parent_complete', 409);
     expect(err.message).not.toContain('task_start');
-    // Anyone else still learns the task is not started.
-    await expectSendError(performSessionSend({ to: 'task-parent', text: 'hi', callerSid: 'sess-peer-1' }), 'task_has_no_session', 409);
+    // Anyone else learns it is complete; forced, that it has nothing running.
+    await expectSendError(performSessionSend({ to: 'task-parent', text: 'hi', callerSid: 'sess-peer-1' }), 'target_complete', 409);
+    await expectSendError(performSessionSend({
+      to: 'task-parent', text: 'hi', callerSid: 'sess-peer-1', force: true, reason: 'its fix regressed in production',
+    }), 'task_has_no_session', 409);
   });
 
   it('a legacy short-prefix parent link still counts as the parent', async () => {
@@ -840,6 +850,104 @@ describe('performSessionSend — a subtask never messages its COMPLETE parent', 
     const ok = await performSessionSend({ text: 'here is the result', inReplyTo: rq.id, callerSid: CHILD });
     expect(ok.repliedTo).toBe(rq.id);
     expect(dispatched().sid).toBe(PARENT);
+  });
+});
+
+describe('performSessionSend — a session messages a COMPLETE task only with a reason', () => {
+  // 2026-10-14, user call: a send to a completed task fails with the right
+  // message unless it is forced, and a force needs a valid reason.
+  const DONE = 'sess-done-1';
+  const PEER = 'sess-peer-2';
+  const REASON = 'review found a data-loss bug in its migration';
+
+  beforeEach(() => {
+    sessions = [
+      rec(DONE, { title: 'Migrate the orders table', taskId: 'task-done' }),
+      rec(PEER, { title: 'Checkout fix', taskId: 'task-peer2' }),
+    ];
+    tasks = [
+      { id: 'task-done', title: 'Migrate the orders table', phase: 'COMPLETE' },
+      { id: 'task-peer2', title: 'Checkout fix', phase: 'IN_PROGRESS' },
+    ];
+  });
+
+  it('refuses with target_complete, names the task, says how to force, and leaves no request behind', async () => {
+    const err = await expectSendError(
+      performSessionSend({ to: 'task-done', text: 'please re-run it', callerSid: PEER }),
+      'target_complete', 409,
+    );
+    expect(err.message).toContain('"Migrate the orders table" (task-done) is complete');
+    expect(err.message).toContain('task_get task-done');
+    expect(err.message).toContain('force:true with reason:');
+    expect(err.detail).toEqual({ taskId: 'task-done', phase: 'COMPLETE' });
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    expect(fs.existsSync(REQUESTS_FILE) ? JSON.parse(fs.readFileSync(REQUESTS_FILE, 'utf8')).requests : []).toEqual([]);
+  });
+
+  it('refuses a force with no reason, or one too short to say anything', async () => {
+    for (const reason of [undefined, '', '   ', 'redo it']) {
+      const err = await expectSendError(
+        performSessionSend({ to: 'task-done', text: `again ${reason}`, callerSid: PEER, force: true, reason }),
+        'bad_request', 400,
+      );
+      expect(err.message).toContain('force:true needs a reason');
+    }
+    // A reason without force is not a force.
+    await expectSendError(performSessionSend({ to: 'task-done', text: 'x', callerSid: PEER, reason: REASON }), 'target_complete', 409);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('a forced send with a reason is delivered, the reason leading the text the task and the user read', async () => {
+    const result = await performSessionSend({
+      to: 'task-done', text: 'please re-run the migration with the fix', callerSid: PEER, force: true, reason: `  ${REASON}\n `,
+    });
+    expect(result.delivery).toBe('queued');
+    expect(result.requestId).toMatch(/^rq-/);
+    const d = dispatched();
+    expect(d.sid).toBe(DONE);
+    expect(d.busText).toBe(`This message reopens your task, which was complete. Why: ${REASON}\n\nplease re-run the migration with the fix`);
+    expect(deliveredText()).toContain(`Why: ${REASON}`);
+    expect(deliveredText()).toContain('kind="peer-note"');
+  });
+
+  it('keeps a very long reason to its cap, never cutting a surrogate pair in half', async () => {
+    const reason = 'x'.repeat(498) + '\u{1F600}\u{1F600}';
+    await performSessionSend({ to: 'task-done', text: 'go', callerSid: PEER, force: true, reason, expectReply: false });
+    const why = dispatched().busText.split('Why: ')[1].split('\n\n')[0];
+    expect(why.length).toBeLessThanOrEqual(501);
+    expect(why.endsWith('…')).toBe(true);
+    expect(/[\uD800-\uDBFF]…$/.test(why)).toBe(false);
+  });
+
+  it('an open task, the human, and an anonymous process are never asked for a reason', async () => {
+    tasks[0].phase = 'IN_PROGRESS';
+    await performSessionSend({ to: 'task-done', text: 'open now', callerSid: PEER, expectReply: false });
+    tasks[0].phase = 'COMPLETE';
+    await performSessionSend({ to: 'task-done', text: 'from the human' });
+    await performSessionSend({ to: 'task-done', text: 'from a script', callerSid: 'sess-not-tracked' });
+    expect(sendMessageToSession).toHaveBeenCalledTimes(3);
+    expect(dispatched(1).busText).toBe('from the human');
+  });
+
+  it('an answer to a request from a task that completed since is refused the same way, and the request stays open', async () => {
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    const rq = await createSessionRequest({ fromSessionId: DONE, toSessionId: PEER, toTaskId: 'task-peer2', text: 'tell me when the fix lands' });
+    const err = await expectSendError(
+      performSessionSend({ text: 'the fix landed', inReplyTo: rq.id, callerSid: PEER }),
+      'target_complete', 409,
+    );
+    expect(err.message).toContain('it finished after asking you');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(await getSessionRequest(rq.id)).toMatchObject({ status: 'pending' });
+
+    const ok = await performSessionSend({
+      text: 'the fix landed', inReplyTo: rq.id, callerSid: PEER, force: true, reason: 'the fix changes what its migration must do',
+    });
+    expect(ok.repliedTo).toBe(rq.id);
+    expect(dispatched().sid).toBe(DONE);
+    expect(deliveredText()).toContain('Why: the fix changes what its migration must do');
+    expect(await getSessionRequest(rq.id)).toMatchObject({ status: 'replied' });
   });
 });
 

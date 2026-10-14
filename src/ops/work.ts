@@ -35,6 +35,8 @@ defineOp({
     'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
     'Give every message a `title`: the one-line TL;DR the reader sees first. ' +
     'Address the task id. A task not started yet returns 409: use task_start. ' +
+    'A COMPLETE task returns 409 target_complete: its work is done and a message would reopen it. ' +
+    'Send to it only when it must act again, with force=true and a reason saying why; the reason leads the message. ' +
     'Legacy session ids and handles are also accepted.',
   input: {
     to: z.string().min(1).optional().describe(
@@ -45,6 +47,8 @@ defineOp({
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
+    force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
+    reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
   },
   bind: { method: 'POST', path: '/messages' },
@@ -60,7 +64,7 @@ defineOp({
       { ...b },
       delivery === 'deferred'
         ? `Message queued for ${target}: it is parked on a human permission prompt, so the text lands after the human answers. Do NOT resend.`
-        : `Message queued for ${b.targetTaskId || b.taskId || target}. Accepted for delivery, not a completed reply. Do NOT resend.`,
+        : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`,
       typeof b.requestId === 'string' && b.requestId
         ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
         : REPLY_ARRIVES_HINT,

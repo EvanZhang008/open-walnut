@@ -62,6 +62,15 @@ describe('backup gateway', () => {
     expect(h.answer()!.result.outcome).toContain('"Fix the build" on oldbox')
   })
 
+  it('carries a force and its reason to the target host, which decides on a COMPLETE task', async () => {
+    const h = harness()
+    await h.gw.handle('devbox', h.frame({ name: 'task_send', args: { to: 'mtaskbbb', text: 'again', force: true, reason: 'its fix regressed' } }))
+    expect(h.delivers[0].delivery).toMatchObject({ kind: 'peer', text: 'again', force: true, reason: 'its fix regressed' })
+    await h.gw.handle('devbox', h.frame({ name: 'task_send', args: { to: 'mtaskbbb', text: 'plain' } }))
+    expect(h.delivers[1].delivery).not.toHaveProperty('force')
+    expect(h.delivers[1].delivery).not.toHaveProperty('reason')
+  })
+
   it('a task\'s current session gets the message over a newer one, as on the server, unless it is stopped', async () => {
     const withSlot = (sessionId: string) => harness({
       findTask: async (ref) => (ref === 'mtaskbbb-0002' ? { id: 'mtaskbbb-0002', title: 'Fix the build', sessionId } : null),

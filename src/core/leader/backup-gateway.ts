@@ -137,6 +137,8 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
       text,
       ...(typeof args.title === 'string' ? { title: args.title } : {}),
       ...(typeof args.expect_reply === 'boolean' ? { expect_reply: args.expect_reply } : {}),
+      ...(args.force === true ? { force: true } : {}),
+      ...(typeof args.reason === 'string' ? { reason: args.reason } : {}),
       ...(typeof args.reply_timeout === 'number' ? { reply_timeout: args.reply_timeout } : {}),
       ...(typeof args.messageId === 'string' ? { messageId: args.messageId } : {}),
     })

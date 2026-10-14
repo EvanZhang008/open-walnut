@@ -263,6 +263,9 @@ export type LeaderDelivery =
     title?: string
     expect_reply?: boolean
     reply_timeout?: number
+    /** A COMPLETE target takes the message only forced, with a reason. */
+    force?: boolean
+    reason?: string
     messageId?: string
   }
   | {
@@ -291,7 +294,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     { name: 'task_get', title: 'Get one task (offline copy)', description: 'A task of a session on this host, from the copy the Walnut server last pushed.', readonly: true, signature: 'id' },
     { name: 'task_list', title: 'List tasks on this host (offline copy)', description: 'Tasks of the sessions on this host, their parents and children.', readonly: true, signature: '[q] [limit]' },
     { name: 'session_list', title: 'List sessions on this host', description: 'This Walnut\'s sessions on this host and whether each is running.', readonly: true, signature: '' },
-    { name: 'task_send', title: 'Message a task on this host', description: 'Delivered by this host directly; the target must be running here. Replies and notices work as usual.', readonly: false, signature: 'to text [expect_reply] [reply_timeout] [in_reply_to] [messageId]' },
+    { name: 'task_send', title: 'Message a task on this host', description: 'Delivered by this host directly; the target must be running here. Replies and notices work as usual.', readonly: false, signature: 'to text [expect_reply] [reply_timeout] [in_reply_to] [force reason] [messageId]' },
     { name: 'request_get', title: 'Read a reply-request status', description: 'Requests this host holds.', readonly: true, signature: 'id' },
     { name: 'task_update', title: 'Update a task (queued)', description: 'Saved here and applied when the Walnut server reconnects.', readonly: false, signature: 'id ...fields' },
     { name: 'task_complete', title: 'Complete a task (queued)', description: 'Saved here and applied when the Walnut server reconnects.', readonly: false, signature: 'id' },
@@ -749,6 +752,27 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     { detail: { parentTaskId: parent.id } })
   }
 
+  /** This copy's view of a task (queued completions included): is it COMPLETE? */
+  function completeTask(home: string, taskId: string | undefined): OfflineSliceTask | undefined {
+    if (!taskId) return undefined
+    const task = tasksWithOverlay(home).find((t) => t.id === taskId)
+    return task?.phase === 'COMPLETE' ? task : undefined
+  }
+
+  /**
+   * The server's rule (session-send-core.ts admitCompleteTarget), with the same
+   * kit function: a session's message to a COMPLETE task needs force + reason.
+   * Returns the text to deliver, or the refusal.
+   */
+  function admitCompleteTarget(home: string, taskId: string | undefined, args: Record<string, unknown>, text: string, mode: 'send' | 'reply'): { text: string } | { error: GatewayResult } {
+    const task = completeTask(home, taskId)
+    if (!task) return { text }
+    const check = kit.checkCompleteTarget({ id: task.id, title: task.title }, args, mode)
+    if (!check.ok) return { error: fail(check.code, check.message, { detail: { taskId: task.id, phase: 'COMPLETE' } }) }
+    deps.log('info', 'offline host: a complete task is reopened by a forced message', { home, taskId: task.id, mode, reason: check.reason })
+    return { text: check.text(text) }
+  }
+
   async function opReply(home: string, callerSid: string, args: Record<string, unknown>, text: string): Promise<GatewayResult> {
     const id = String(args.in_reply_to)
     const { own, copy } = findRequest(home, id)
@@ -759,6 +783,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     if (!isTarget) return fail('bad_request', `request ${id} was not addressed to this session`)
     const closed = parentCompleteRefusal(home, callerSid, sessionOf(home, row.fromSessionId)?.taskId)
     if (closed) return closed
+    const admitted = admitCompleteTarget(home, sessionOf(home, row.fromSessionId)?.taskId, args, text, 'reply')
+    if ('error' in admitted) return admitted.error
     // The asker runs elsewhere: only a leader can carry the answer there.
     const remoteHost = deps.isLive(row.fromSessionId) ? undefined : row.fromHost
     if (!deps.isLive(row.fromSessionId) && !(remoteHost && deps.relay)) {
@@ -769,7 +795,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     const slice = slices.get(home)!
     const wrapped = kit.buildReplyDeliveryText(row, {
       title: me.title, shortId: callerSid.slice(0, 8), host: slice.host, sessionId: callerSid, taskId: me.taskId,
-    }, text, { title: typeof args.title === 'string' ? args.title : undefined })
+    }, admitted.text, { title: typeof args.title === 'string' ? args.title : undefined })
     const mid = messageId(args.messageId)
     const delivered = remoteHost
       ? await deps.relay!(home, { toHost: remoteHost, toSid: row.fromSessionId, text: wrapped, messageId: mid, requestId: id, reply: true, fromSessionId: callerSid })
@@ -840,6 +866,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     if (closedTarget) return closedTarget
     const targetSid = target.sid!
     if (targetSid === callerSid) return fail('self_send', 'target resolves to the calling session itself')
+    const admitted = admitCompleteTarget(home, target.taskId, args, text, 'send')
+    if ('error' in admitted) return admitted.error
     const denied = admitWrite(callerSid) ?? roomFor(home)
     if (denied) return denied
     const slice = slices.get(home)!
@@ -867,7 +895,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       const offset = deps.streamOffset(targetSid)
       if (typeof offset === 'number') row.afterV = offset
     }
-    let envelope = kit.buildPeerWrapper(text, {
+    let envelope = kit.buildPeerWrapper(admitted.text, {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
       host: slice.host, ...(row ? { requestId: row.id } : {}),
     }, { title: typeof args.title === 'string' ? args.title : undefined })
@@ -991,6 +1019,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     if (!target || target.sid === callerSid) return null
     if (deps.pendingPrompt!(target.sid)) return null
     if (parentCompleteRefusal(home, callerSid, target.taskId)) return null
+    // A complete target (and a forced reopen of one) is the server's to decide.
+    if (completeTask(home, target.taskId)) return null
     const denied = admitPeerSend(callerSid, target.sid, text) ?? roomFor(home)
     if (denied) return denied
     const slice = slices.get(home)!
@@ -1047,6 +1077,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     const askerRow = sessionOf(home, asker)
     if (!askerRow || askerRow.aside) return null
     if (parentCompleteRefusal(home, callerSid, askerRow?.taskId)) return null
+    if (completeTask(home, askerRow?.taskId)) return null
     const denied = roomFor(home)
     if (denied) return denied
     const slice = slices.get(home)!
@@ -1546,6 +1577,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       if (target.error) return target.error
       const targetSid = target.sid!
       if (targetSid === from.sid) return fail('self_send', 'target resolves to the calling session itself')
+      const admitted = admitCompleteTarget(home, target.taskId, { force: d.force, reason: d.reason }, text, 'send')
+      if ('error' in admitted) return admitted.error
       const denied = admitWrite(from.sid) ?? roomFor(home)
       if (denied) return denied
       let row: OfflineRequestRow | undefined
@@ -1566,7 +1599,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
         const offset = deps.streamOffset(targetSid)
         if (typeof offset === 'number') row.afterV = offset
       }
-      let envelope = kit.buildPeerWrapper(text, {
+      let envelope = kit.buildPeerWrapper(admitted.text, {
         title: typeof from.title === 'string' ? from.title : '', shortId: from.sid.slice(0, 8), sessionId: from.sid,
         taskId: fromTaskId, host: from.host, ...(row ? { requestId: row.id } : {}),
       }, { title: typeof d.title === 'string' ? d.title : undefined })

@@ -242,6 +242,17 @@ describe('what the host leaves to the server (null: relay, nothing delivered)', 
     expect(await send(h, B, { to: TASK_A, text: 'report' }).result).toBeNull()
   })
 
+  it('any session\'s message or answer to a COMPLETE task, forced or not (the server decides and says why)', async () => {
+    const h = harness()
+    const asked = await send(h, B, { to: TASK_A, text: 'Which release?' }).result
+    const id = String(asked?.ok && asked.result.requestId)
+    h.host.configure(slice({ hash: 'h5', tasks: slice().tasks.map((t) => (t.id === TASK_B ? { ...t, phase: 'COMPLETE', parent_task_id: undefined } : t)) }))
+    expect(await send(h, A, { to: TASK_B, text: 'one more page' }).result).toBeNull()
+    expect(await send(h, A, { to: TASK_B, text: 'one more page', force: true, reason: 'the release needs a pricing page too' }).result).toBeNull()
+    expect(await send(h, A, { in_reply_to: id, text: 'the October one' }).result).toBeNull()
+    expect(h.delivered.map((d) => d.sid)).toEqual([A])
+  })
+
   it('a reply whose asker is not running here, waits on a prompt, or that the caller does not owe', async () => {
     const h = harness()
     const asked = await send(h, A, { to: TASK_B, text: 'Ping?' }).result

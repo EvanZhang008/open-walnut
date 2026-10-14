@@ -346,9 +346,48 @@ describe('offline host: messages between sessions on this host', () => {
     expect(h.delivered).toHaveLength(1)
     const row = h.host.drain(HOME).records.filter((r): r is Extract<OfflineRecord, { kind: 'row' }> => r.kind === 'row').at(-1)!.row
     expect(row).toMatchObject({ id: requestId, status: 'withdrawn' })
-    // Someone who is not its subtask still reaches it.
+    // Someone who is not its subtask reaches it only forced, with a reason.
     h.live.add(C)
-    expect((await call(h, C, 'task_send', { to: A, text: 'from a peer', expect_reply: false })).ok).toBe(true)
+    const unforced = await call(h, C, 'task_send', { to: A, text: 'from a peer', expect_reply: false })
+    expect(!unforced.ok && unforced.error.code).toBe('target_complete')
+    expect((await call(h, C, 'task_send', {
+      to: A, text: 'from a peer', expect_reply: false, force: true, reason: 'its page broke the build',
+    })).ok).toBe(true)
+  })
+
+  it('a COMPLETE task takes a message or an answer only forced with a reason, worded as on the server', async () => {
+    const kit = createEnvelopeKit()
+    const h = harness()
+    h.host.configure(slice({ tasks: slice().tasks.map((t) => (t.id === 'mtaskbbb-0002' ? { ...t, phase: 'COMPLETE', parent_task_id: undefined } : t)) }))
+    const refused = await call(h, A, 'task_send', { to: 'mtaskbbb-0002', text: 'one more thing' })
+    const expected = kit.checkCompleteTarget({ id: 'mtaskbbb-0002', title: 'Child: build the page' }, {}, 'send')
+    expect(!refused.ok && refused.error).toMatchObject({ code: 'target_complete', message: !expected.ok ? expected.message : '' })
+    const noReason = await call(h, A, 'task_send', { to: 'mtaskbbb-0002', text: 'one more thing', force: true })
+    expect(!noReason.ok && noReason.error.code).toBe('bad_request')
+    expect(h.delivered).toHaveLength(0)
+
+    const forced = await call(h, A, 'task_send', {
+      to: 'mtaskbbb-0002', text: 'one more thing', force: true, reason: 'the page lost its footer in review',
+    })
+    expect(forced.ok).toBe(true)
+    const requestId = forced.ok ? String(forced.result.requestId) : ''
+    expect(h.delivered[0].text).toBe(buildPeerWrapper(
+      'This message reopens your task, which was complete. Why: the page lost its footer in review\n\none more thing',
+      { title: 'Parent work', shortId: A.slice(0, 8), sessionId: A, taskId: 'mtaskaaa-0001', host: 'devbox', requestId },
+    ) + '\n' + buildReplyTrailer({ id: requestId } as SessionRequest))
+
+    // A asks C, then completes; C's answer is refused, then forced through.
+    h.live.add(C)
+    const ask = await call(h, A, 'task_send', { to: C, text: 'which footer?' })
+    const askId = ask.ok ? String(ask.result.requestId) : ''
+    expect((await call(h, A, 'task_complete', { id: 'mtaskaaa-0001' })).ok).toBe(true)
+    const late = await call(h, C, 'task_send', { in_reply_to: askId, text: 'the dark one' })
+    expect(!late.ok && late.error.code).toBe('target_complete')
+    expect(!late.ok && late.error.message).toContain('it finished after asking you')
+    const lateForced = await call(h, C, 'task_send', { in_reply_to: askId, text: 'the dark one', force: true, reason: 'the footer choice changes its shipped page' })
+    expect(lateForced.ok).toBe(true)
+    expect(h.delivered.at(-1)!.sid).toBe(A)
+    expect(h.delivered.at(-1)!.text).toContain('Why: the footer choice changes its shipped page')
   })
 
   it('refuses a reply from a session the request was not sent to', async () => {

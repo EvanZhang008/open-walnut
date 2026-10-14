@@ -22,6 +22,7 @@
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
+import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { sessionHandle } from '../peers/walnut-message-tag.js';
 import { PeerThrottle, PEER_PENDING_CAP } from '../peers/peer-throttle.js';
 import { isSideThreadLane } from './side-thread-fork.js';
@@ -36,6 +37,8 @@ import {
   type SessionRequest,
 } from '../session-requests.js';
 
+const kit = createEnvelopeKit();
+
 /** Enqueue + bus fan-out ceiling — same rationale as letter delivery. */
 const DELIVERY_TIMEOUT_MS = 8_000;
 
@@ -48,7 +51,7 @@ export class SendError extends Error {
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
-      | 'parent_complete',
+      | 'parent_complete' | 'target_complete',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -75,6 +78,10 @@ export interface SessionSendInput {
   /** The sender's one-line TL;DR of `text`: the envelope's `title`, the line the
    *  reader's card shows until opened. Only a fenced (non-human) send carries one. */
   title?: string;
+  /** A COMPLETE target takes a session's message only with `force: true` and a
+   *  `reason` (why it must act again), which leads the delivered text. */
+  force?: boolean;
+  reason?: string;
   /** Idempotency id (qm-…) forwarded to the durable queue. */
   messageId?: string;
   /** Transport-stamped caller session id; undefined = the human's own CLI. */
@@ -315,6 +322,34 @@ async function refuseSendToCompleteParent(caller: CallerIdentity, targetTaskId: 
     + 'from you again, the user reopens it.', 409, { parentTaskId: target.id });
 }
 
+/**
+ * A session's message to a COMPLETE task (envelope-kit.ts checkCompleteTarget):
+ * refused unless it passes `force` with a reason, which then leads the text.
+ * Returns the text to deliver. The human, an anonymous process, and a send to a
+ * task that is still open pass untouched.
+ */
+async function admitCompleteTarget(
+  caller: CallerIdentity,
+  targetTaskId: string | undefined,
+  input: SessionSendInput,
+  text: string,
+  mode: 'send' | 'reply',
+): Promise<string> {
+  if (caller.kind !== 'session' || !targetTaskId) return text;
+  const { getTask } = await import('../task-manager.js');
+  const target = await getTask(targetTaskId).catch(() => undefined);
+  if (target?.phase !== 'COMPLETE') return text;
+  const check = kit.checkCompleteTarget({ id: target.id, title: target.title }, input, mode);
+  if (!check.ok) {
+    throw new SendError(check.code, check.message, check.code === 'target_complete' ? 409 : 400,
+      { taskId: target.id, phase: 'COMPLETE' });
+  }
+  log.session.info('session_send: a complete task is reopened by a forced message', {
+    targetTaskId: target.id, callerSessionId: caller.record.claudeSessionId, mode, reason: check.reason,
+  });
+  return check.text(text);
+}
+
 /** The caller's task is the parent of `taskId` (a stored parent id may be a legacy prefix). */
 async function callerLeads(caller: CallerIdentity, taskId: string | undefined): Promise<boolean> {
   if (caller.kind !== 'session' || !caller.record.taskId || !taskId) return false;
@@ -338,7 +373,10 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   } catch (err) {
     // A completed parent usually has no live session: say why, never "use task_start".
     if (err instanceof SendError && err.code === 'task_has_no_session') {
-      await refuseSendToCompleteParent(caller, typeof err.detail?.taskId === 'string' ? err.detail.taskId : undefined);
+      const noSessionTask = typeof err.detail?.taskId === 'string' ? err.detail.taskId : undefined;
+      await refuseSendToCompleteParent(caller, noSessionTask);
+      // A complete task says so, not "not started"; forced, task_start is the way on.
+      await admitCompleteTarget(caller, noSessionTask, input, text, 'send');
     }
     throw err;
   }
@@ -351,6 +389,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw new SendError('self_send', 'target resolves to the calling session itself');
   }
   await refuseSendToCompleteParent(caller, target.taskId ?? target.session.taskId);
+  const body = await admitCompleteTarget(caller, target.taskId ?? target.session.taskId, input, text, 'send');
 
   // Envelope + throttle apply exactly when the SPEAKER is not the human:
   // another session (named peer-note) or an unidentified process (anonymous).
@@ -405,9 +444,9 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     }
   }
 
-  let enqueueText = text;
+  let enqueueText = body;
   if (fenced) {
-    enqueueText = buildPeerWrapper(text, caller.kind === 'session'
+    enqueueText = buildPeerWrapper(body, caller.kind === 'session'
       ? {
         // No title → the handle is just `[8hex]`; never invent a name.
         title: caller.record.title ?? '',
@@ -438,7 +477,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   const fromLeader = await callerLeads(caller, taskId);
   try {
     ({ delivery, messageId } = await deliverToSession(target.session, {
-      busText: text, enqueueText, source, taskId, messageId: input.messageId, fromLeader,
+      busText: body, enqueueText, source, taskId, messageId: input.messageId, fromLeader,
     }));
   } catch (err) {
     // A rejected delivery never landed, so a request row we just created would
@@ -530,6 +569,8 @@ async function performReply(
   }
   logReplyReroute(id, request.fromSessionId, destination);
   const origin = destination.session;
+  // Before the settle: a refused answer leaves the request open for a forced retry.
+  const replyBody = await admitCompleteTarget(caller, origin.taskId, input, text, 'reply');
 
   if (request.status !== 'pending') {
     // Late but honest: the asker was already notified (turn end / timeout), yet
@@ -549,10 +590,10 @@ async function performReply(
     sessionId: caller.record.claudeSessionId,
     taskId: caller.record.taskId,
     host: displayHost(caller.record.host),
-  }, text, { title: input.title });
+  }, replyBody, { title: input.title });
 
   const { delivery, messageId } = await deliverToSession(origin, {
-    busText: text, enqueueText: wrapped, source: 'peer',
+    busText: replyBody, enqueueText: wrapped, source: 'peer',
     taskId: origin.taskId, messageId: input.messageId,
     fromLeader: await callerLeads(caller, origin.taskId),
   });

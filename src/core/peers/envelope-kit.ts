@@ -101,7 +101,17 @@ export interface EnvelopeKit {
   clipNoticeMessage(text: string): EnvelopeLastMessage | undefined;
   buildRequestNotification(request: EnvelopeRequest, outcome: EnvelopeOutcome, target: EnvelopeTarget): string;
   buildSubtaskNotification(input: SubtaskNoticeInput): string;
+  checkCompleteTarget(
+    target: { id: string; title: string },
+    args: { force?: unknown; reason?: unknown },
+    mode: 'send' | 'reply',
+  ): CompleteTargetCheck;
 }
+
+/** A session's send to a COMPLETE task: refused, or let through with the reason it gave. */
+export type CompleteTargetCheck =
+  | { ok: true; text: (body: string) => string; reason: string }
+  | { ok: false; code: 'target_complete' | 'bad_request'; message: string };
 
 export function createEnvelopeKit(): EnvelopeKit {
   /** Fixed print order. An attribute appears only when it has a value. */
@@ -403,6 +413,51 @@ export function createEnvelopeKit(): EnvelopeKit {
     });
   }
 
+  /** A force reason long enough to say something, short enough to stay a reason. */
+  const REOPEN_REASON_MIN = 10;
+  const REOPEN_REASON_MAX = 500;
+
+  /**
+   * A session messages a task that is COMPLETE (2026-10-14, user call: "fail with
+   * the correct message, but not a hard no; there must be a valid reason"). A
+   * message reopens a completed task and wakes its session, so a session must
+   * say why: `force: true` with a `reason`, which then leads the delivered text
+   * so the reopened task and the user read why it was woken. Server and daemon
+   * (offline host) both decide with this one function.
+   */
+  function checkCompleteTarget(
+    target: { id: string; title: string },
+    args: { force?: unknown; reason?: unknown },
+    mode: 'send' | 'reply',
+  ): CompleteTargetCheck {
+    const reason = typeof args.reason === 'string' ? args.reason.replace(/\s+/g, ' ').trim() : '';
+    const name = `"${target.title}" (${target.id})`;
+    if (args.force !== true) {
+      return {
+        ok: false,
+        code: 'target_complete',
+        message: `${name} is complete${mode === 'reply' ? ' (it finished after asking you, so it no longer waits for this answer)' : ''}: `
+          + 'its work is done, and a message would reopen it and wake its session. Read its result with task_get '
+          + `${target.id}. Send only if it must act again: pass force:true with reason:"<what changed and why it must act>"; `
+          + 'the reason leads your message, so the task and the user see why it was reopened.',
+      };
+    }
+    if (reason.length < REOPEN_REASON_MIN) {
+      return {
+        ok: false,
+        code: 'bad_request',
+        message: `force:true needs a reason (at least ${REOPEN_REASON_MIN} characters) saying why ${name}, which is complete, `
+          + 'must act again.',
+      };
+    }
+    const why = reason.length > REOPEN_REASON_MAX ? `${reason.slice(0, cutEnd(reason, REOPEN_REASON_MAX - 1))}…` : reason;
+    return {
+      ok: true,
+      reason: why,
+      text: (body: string) => `This message reopens your task, which was complete. Why: ${why}\n\n${body}`,
+    };
+  }
+
   return {
     ATTR_ORDER,
     NOTICE_LAST_MESSAGE_MAX,
@@ -419,5 +474,6 @@ export function createEnvelopeKit(): EnvelopeKit {
     clipNoticeMessage,
     buildRequestNotification,
     buildSubtaskNotification,
+    checkCompleteTarget,
   };
 }
