@@ -76,6 +76,33 @@ export const CHECK_ERROR_BACKOFF_MS = 5 * 60 * 1000;
  * the trigger's `running` flag, so the trigger would never tick again.
  */
 export const CHECK_SETTLE_GRACE_MS = 5_000;
+/** The check deadline ticks this often and counts what it saw awake. */
+export const AWAKE_TICK_MS = 1_000;
+/** A tick later than this was asleep (or the process was stopped): it counts as one tick. */
+export const AWAKE_MAX_GAP_MS = 5_000;
+
+/**
+ * A deadline that counts the time the machine was awake, not the time it slept.
+ * A Mac that closes its lid in a dark wake freezes a check minutes long; a plain
+ * setTimeout then fires the moment it wakes and reports a timeout the script never
+ * ran into (2026-10-12..14, the release watch: "timed out after 434s", 7 minutes
+ * of sleep and 8 s awake). Returns the stop function.
+ */
+export function startAwakeDeadline(ms: number, onExpire: () => void, now: () => number = Date.now): () => void {
+  let counted = 0;
+  let last = now();
+  const timer = setInterval(() => {
+    const t = now();
+    const gap = Math.max(0, t - last);
+    last = t;
+    counted += gap > AWAKE_MAX_GAP_MS ? AWAKE_TICK_MS : gap;
+    if (counted >= ms) {
+      clearInterval(timer);
+      onExpire();
+    }
+  }, AWAKE_TICK_MS);
+  return () => clearInterval(timer);
+}
 /** Unacked fires are re-sent this often until the server acks them. */
 export const PENDING_FIRE_REPLAY_MS = 60_000;
 /**
@@ -803,6 +830,8 @@ export function runCheckProcess(
     let stdoutOverflow = false;
     let timedOut = false;
     let settled = false;
+    let stopTimer: () => void = () => {};
+    let stopSettleTimer: () => void = () => {};
     // Pipe reads split at arbitrary byte offsets, so a multi-byte character can
     // straddle two chunks; decoding per chunk would turn it into U+FFFD and fail
     // the JSON parse of an otherwise valid line.
@@ -811,8 +840,8 @@ export function runCheckProcess(
     const finish = (partial: Partial<CheckProcessResult>) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      clearTimeout(settleTimer);
+      stopTimer();
+      stopSettleTimer();
       resolve({
         exitCode: null,
         signal: null,
@@ -847,16 +876,17 @@ export function runCheckProcess(
       if (typeof pid !== 'number' || pid <= 1) return;
       try { process.kill(-pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
     };
-    const timer = setTimeout(() => {
+    // Awake time, not wall time: a sleep mid-check is not the script's slowness.
+    stopTimer = startAwakeDeadline(timeoutMs, () => {
       timedOut = true;
       killGroup();
-    }, timeoutMs);
+    });
     // The kill normally produces 'close' within milliseconds; when it does not,
     // this settles the run anyway so the trigger can tick again.
-    const settleTimer = setTimeout(() => {
+    stopSettleTimer = startAwakeDeadline(timeoutMs + CHECK_SETTLE_GRACE_MS, () => {
       timedOut = true;
       finish({ exitCode: null, signal: 'SIGKILL' });
-    }, timeoutMs + CHECK_SETTLE_GRACE_MS);
+    });
 
     child.on('error', (err) => {
       const code = (err as NodeJS.ErrnoException).code;

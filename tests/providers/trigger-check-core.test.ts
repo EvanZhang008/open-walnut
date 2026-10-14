@@ -3,13 +3,13 @@
  * how items are deduped, what the caps do, and that the runner's deadline kills
  * the whole pipeline. Real `/bin/sh` for the runner; everything else is pure.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
   parseCheckStdout, decideCheck, applyCheckOutcome, applyCheckError, ackFire, emptyHostState,
-  coerceHostState, buildCheckStdin, runCheckProcess, checkErrorOf, validateTriggerDef, pruneSeen,
+  coerceHostState, buildCheckStdin, runCheckProcess, startAwakeDeadline, AWAKE_TICK_MS, checkErrorOf, validateTriggerDef, pruneSeen,
   headChars, tailChars,
   CHECK_STDOUT_CAP, CHECK_STATE_CAP, CHECK_INPUT_CAP, CHECK_ITEMS_CAP, MAX_FIRES_PER_DAY_DEFAULT, SEEN_MAX,
   FIRE_BUDGET_WINDOW_MS, CHECK_ITEMS_PARSE_MAX, fireBudgetNextAtMs, fireBudgetUsed, dayKey,
@@ -590,5 +590,46 @@ describe('fires carry what the server needs to dedup and to explain', () => {
     expect(fire.itemsTruncated).toBe(true);
     const plain = applyCheckOutcome(emptyHostState(NOW), parsedOk('{"fire": true}').output, { kind: 'fire', items: [] }, NOW, 5)!;
     expect(plain.itemsTruncated).toBeUndefined();
+  });
+});
+
+describe('startAwakeDeadline', () => {
+  // 2026-10-14: a check started in a dark wake, the Mac slept 7 minutes, and the
+  // plain timer fired at wake: "timed out after 434s" for 8 s of running.
+  it('counts awake time: a long sleep between two ticks is one tick, not a timeout', () => {
+    vi.useFakeTimers();
+    try {
+      let clock = 1_000_000;
+      let expired = 0;
+      const stop = startAwakeDeadline(10_000, () => { expired++; }, () => clock);
+      for (let i = 0; i < 3; i++) { clock += AWAKE_TICK_MS; vi.advanceTimersByTime(AWAKE_TICK_MS); }
+      // The lid closes: the next tick arrives 7 minutes later.
+      clock += 7 * 60_000; vi.advanceTimersByTime(AWAKE_TICK_MS);
+      expect(expired).toBe(0);
+      // Awake again: 4 s counted so far, so it expires 6 s of awake time later, once.
+      for (let i = 0; i < 5; i++) { clock += AWAKE_TICK_MS; vi.advanceTimersByTime(AWAKE_TICK_MS); }
+      expect(expired).toBe(0);
+      clock += AWAKE_TICK_MS; vi.advanceTimersByTime(AWAKE_TICK_MS);
+      expect(expired).toBe(1);
+      for (let i = 0; i < 5; i++) { clock += AWAKE_TICK_MS; vi.advanceTimersByTime(AWAKE_TICK_MS); }
+      expect(expired).toBe(1);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a stopped deadline never fires', () => {
+    vi.useFakeTimers();
+    try {
+      let clock = 0;
+      let expired = false;
+      const stop = startAwakeDeadline(2_000, () => { expired = true; }, () => clock);
+      stop();
+      for (let i = 0; i < 5; i++) { clock += AWAKE_TICK_MS; vi.advanceTimersByTime(AWAKE_TICK_MS); }
+      expect(expired).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
