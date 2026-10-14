@@ -319,8 +319,11 @@ function loginRefusedKind(stderr: string): string | null {
 
 /** An upload's own fresh SSH connection could not log in; nothing was sent. */
 export class SshLoginRefusedError extends Error {
-  constructor(readonly hostKey: string, readonly kind: string) {
-    super(`a new SSH login to ${hostKey} was refused (${kind}): the upload waits until a new login works`)
+  constructor(readonly hostKey: string, readonly kind: string, stderr = '') {
+    // What ssh (or its proxy) actually said rides along: a classification alone
+    // could not be checked after the fact (2026-10-14, a proxy outage).
+    const said = stderr.trim() ? `: ${summarizeConnectFailure(stderr)}` : ''
+    super(`a new SSH login to ${hostKey} was refused (${kind}), the upload waits until a new login works${said}`)
     this.name = 'SshLoginRefusedError'
   }
 }
@@ -2393,7 +2396,7 @@ export class DaemonConnection {
     // A refused login is not a proxy kill: chunks would open the same refused
     // connection dozens of times. The upload waits for a fresh credential.
     const refused = ok ? null : loginRefusedKind(stderr)
-    if (refused) throw new SshLoginRefusedError(this.hostKey, refused)
+    if (refused) throw new SshLoginRefusedError(this.hostKey, refused, stderr)
     if (!ok) return false
 
     const marked = extractMarkedOutput(stdout)
@@ -2437,7 +2440,7 @@ export class DaemonConnection {
 
     // A login that stopped working mid-upload is not a proxy kill to retry.
     const refused = ok ? null : loginRefusedKind(stderr)
-    if (refused) throw new SshLoginRefusedError(this.hostKey, refused)
+    if (refused) throw new SshLoginRefusedError(this.hostKey, refused, stderr)
     if (!ok) return false
 
     // Verify size — proxy can kill mid-write but SSH may still exit 0

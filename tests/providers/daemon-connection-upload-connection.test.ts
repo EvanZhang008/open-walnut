@@ -100,6 +100,8 @@ describe('uploadFile connections', () => {
     const err = await conn.uploadFile('/home/me/x.tgz', DATA).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(SshLoginRefusedError)
     expect((err as Error).message).toContain('refused (auth)')
+    // What ssh said is in the error, so a wrong call can be checked later.
+    expect((err as Error).message).toContain('Permission denied (publickey)')
     expect(sshCalls()).toHaveLength(1)
   })
 
@@ -108,6 +110,15 @@ describe('uploadFile connections', () => {
     replies.push({ code: 255, stderr: 'Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-10-14 04:15)\n' })
     const err = await conn.uploadFile('/home/me/x.tgz', DATA).catch((e: unknown) => e)
     expect((err as Error).message).toContain('refused (cert_expired)')
+  })
+
+  it('a proxy that cannot reach its own service is a cut, not a refused login', async () => {
+    const { conn } = setup()
+    replies.push({ code: 255, stderr: '\u001b[31m Error: SSH proxy client returned an error when reaching the proxy: getaddrinfo ENOTFOUND proxy.example.test\n Please retry SSH.\nConnection closed by UNKNOWN port 65535\n' })
+    replies.push({ code: 0, stdout: marked('262144') })
+    replies.push({ code: 0, stdout: marked(String(DATA.length - 262_144)) })
+    await conn.uploadFile('/home/me/x.tgz', DATA)
+    expect(sshCalls()).toHaveLength(3)
   })
 
   it('a stream the proxy cuts falls back to chunks, each on its own connection too', async () => {
