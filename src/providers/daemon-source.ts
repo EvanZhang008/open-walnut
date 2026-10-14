@@ -68,6 +68,7 @@ import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 import { createWorkspaceCore } from './workspace-core.js'
 import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut } from './line-fate-core.js'
+import { createBudgetPersistence } from './usage-budget-persistence.js'
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
@@ -197,7 +198,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'acp-model-catalog-v1', 'usage-scan-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'budget-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -263,6 +264,7 @@ export function getDaemonSource(): string {
     ['__CREATE_BRIDGE_UPLINK__', createBridgeUplink.toString()],
     ['__CREATE_LOOP_DRIFT_PROBE__', createLoopDriftProbe.toString()],
     ['__CREATE_WORKSPACE_CORE__', createWorkspaceCore.toString()],
+    ['__CREATE_BUDGET_PERSISTENCE__', createBudgetPersistence.toString()],
     ['__LINE_FATE_SCAN__', lineFateScan.toString()],
     ['__LINE_FATE_VERDICT__', lineFateVerdict.toString()],
     ['__LINE_TORN_END__', lineTornEnd.toString()],
@@ -1573,6 +1575,7 @@ function persistRegistry(strict = !!daemonBootId) {
       mode: s.mode,
       pendingCtrl: s.pendingCtrl || undefined,
       turnRetry: s.turnRetry || undefined,
+      ...(s.budgetGracefulStop ? { budgetGracefulStop: true } : {}),
     };
   }
   const body = JSON.stringify({ version: 1, sessions: out });
@@ -1817,7 +1820,7 @@ function reapSession(sid, code, reason, groupExited = false) {
   const groupStartTime = session.startTime;
   const groupBootId = session.bootId;
   const maySignalGroup = function () {
-    if (unownedReap || groupExited) return false;
+    if (unownedReap || groupExited || session.budgetGracefulStop) return false;
     if (!Number.isSafeInteger(groupPid) || groupPid <= 1) return false;
     if (sessions.get(sid) !== session) return false;
     if (daemonBootId) {
@@ -2370,6 +2373,7 @@ function reconcileRegistry() {
       mode: entry.mode || 'default',
       pendingCtrl: entry.pendingCtrl || null,
       turnRetry: entry.turnRetry,
+      budgetGracefulStop: entry.budgetGracefulStop === true || budgetStopGroups.has(sid),
     };
     // A session spawned before cron bookkeeping existed has no origin, and
     // without one every cron line counted as historical (never active, so no
@@ -3219,6 +3223,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'git.commitJob': return sendOk(ws, id, { job: gitCommit.job(cmd.jobId) });
     case 'usage.scan': return cmdUsageScan(ws, id, cmd);
     case 'usage.costState': return cmdUsageCostState(ws, id, cmd);
+    case 'usage.budget.get': return cmdUsageBudget(ws, id, cmd, false);
+    case 'usage.budget.configure': return cmdUsageBudget(ws, id, cmd, true);
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
     case 'changes.file': return cmdChangesFile(ws, id, cmd);
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id, cmd);
@@ -5046,11 +5052,12 @@ async function cmdStart(ws, id, cmd) {
       if (error && error.code === 'SESSION_STOP_SUPERSEDED') return null;
       // A host that cannot run claude answers with the reason itself, not an
       // "internal daemon error". Keep in sync with daemon-standalone.ts.
+      if (error && error.code === 'BUDGET_PAUSED') return { runtimeError: Object.assign(error, { errorKind: 'budget_paused' }) };
       if (error && error.code === 'CLAUDE_RUNTIME') return { runtimeError: error };
       throw error;
     });
   if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' });
-  if (result.runtimeError) return sendError(ws, id, result.runtimeError.message, { errorKind: result.runtimeError.errorKind });
+  if (result.runtimeError) return sendError(ws, id, result.runtimeError.message, { errorKind: result.runtimeError.errorKind, ...(result.runtimeError.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : {}) });
   addSubscriber(ws, sid, result.offset);
   return sendOk(ws, id, result);
 }
@@ -5086,9 +5093,10 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   // to the FIFO — the process emits its init event (+ SessionStart hook, fresh
   // settings/skills/MCP load) then blocks on stdin, idle. Restart-to-reinitialize
   // path. Keep in sync with daemon-standalone.ts.
-  if (!sid || !args || !cwd) {
+  if (!isJournalSid(sid) || !args || !cwd) {
     throw new Error('start: missing required fields (sid, args, cwd)');
   }
+  await requireBudgetAllowance(sid);
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' });
   if (isCurrent && !isCurrent()) throw new Error('start: supervision request was superseded');
 
@@ -5148,6 +5156,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
           ensureWatcher(sid);
           return { pid: existing.pid, outputFile: existing.jsonlPath, offset: curSize, adopted: true };
         }
+        if (sent.reason === 'budget_paused') throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' });
         const afterSend = sessions.get(sid);
         if (afterSend && afterSend.state === 'running') {
           logMsg('warn', 'cmdStart: live-adopt delivery failed but process alive — refusing respawn', { sid, pid: existing.pid, reason: sent.reason || sent.error });
@@ -5165,6 +5174,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   // down: a refusal must leave a live CLI exactly as it was, never killed and
   // replaced by nothing. Keep in sync with daemon-standalone.ts.
   const launch = await gateClaudeLaunch(args);
+  await requireBudgetAllowance(sid);
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' });
 
   if (existing) {
@@ -5336,16 +5346,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   // Write initial message to FIFO — only when one was provided. Empty message =
   // "spawn idle" (restart-to-reinitialize): CLI emits init but runs no turn.
   // Keep in sync with daemon-standalone.ts.
-  if (message && !barrier) {
-    const envelope = {
-      type: 'user',
-      message: { role: 'user', content: message },
-    };
-    // Optional pre-assigned user-line uuid — key omitted when absent, so these
-    // bytes are unchanged for every caller that doesn't pass one.
-    if (initialUuid) envelope.uuid = initialUuid;
-    fs.writeSync(pipeFd, Buffer.from(JSON.stringify(envelope) + '\\n'));
-  }
+  // Deliver only after registry ownership exists, through the guarded FIFO serializer.
   fs.closeSync(pipeFd);
 
   // Close fds in parent
@@ -5413,11 +5414,13 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     if (SERVICE_MODE) throw err;
   }
 
+  await requireBudgetAllowance(sid);
   barrier && barrier.release();
   broadcastSessionState(sid, 'running', { pid });
   ensureWatcher(sid);
-  if (barrier && message) {
+  if (message) {
     const sent = await handleSendCommand(sid, message, initialUuid);
+    if (sent.reason === 'budget_paused') throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' });
     if (!sent.ok) throw new Error('start: initial message not delivered (' + (sent.reason || sent.error) + ')');
   }
   return { pid, outputFile: jsonlPath, offset };
@@ -5594,15 +5597,27 @@ async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeN
 // lines into one corrupted line. Chain each write behind the previous one.
 // Returns the write outcome, or 'dead' if the session was reaped while queued.
 // Keep in sync with daemon-core.ts chainFifoWrite.
-async function chainFifoWrite(sid, session, buf, beforeNewline, line) {
+function budgetControlExempt(raw) {
+  try {
+    const parsed = JSON.parse(raw.trim());
+    if (parsed.type === 'control_request') return ['interrupt', 'stop_task', 'get_settings'].includes(parsed.request?.subtype);
+    if (parsed.type === 'control_response') return parsed.response?.subtype === 'error' || parsed.response?.response?.behavior === 'deny';
+    return parsed.type === 'control_cancel_request';
+  } catch { return false; }
+}
+
+async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
   const deadline = Date.now() + FIFO_WRITE_DEADLINE_MS;
   const prev = session.fifoWriteChain || Promise.resolve();
   const run = prev.catch(() => {}).then(async () => {
-    if (session.state === 'dead' || sessions.get(sid) !== session) return 'dead';
+    const abandoned = function () { return session.state === 'dead' || sessions.get(sid) !== session; };
+    if (abandoned()) return 'dead';
     // send-dedupe-v1, inside the chain: a known fate means do not write; a whole
     // line written is recorded before the next write may ask.
     const known = line && line.fate ? await line.fate() : null;
     if (known) return known;
+    if ((!raw || !budgetControlExempt(raw)) && !await budgetAllowance(sid)) return 'budget_paused';
+    if (abandoned()) return 'dead';
     // An earlier attempt that died part way (after its marker, or after its begin record) may have left
     // a piece in the pipe: a newline first ends it (lineTornEnd). The begin is noted before the first byte.
     const tornEnd = !!(line && line.tornEnd && line.tornEnd());
@@ -6757,10 +6772,9 @@ function checkDurableCronCreate(sid, session, line) {
       type: 'user',
       message: { role: 'user', content: durableCronCorrectionMessage(undefined) },
     });
-    var ok = writeFifoRaw(session.pipePath, payload);
-    logMsg(ok ? 'warn' : 'error',
-      'hook inject: durable CronCreate correction ' + (ok ? 'sent' : 'FIFO write FAILED'),
-      { sid: sid, toolUseId: key, mode: session.mode });
+    void writeSessionLine(sid, payload).then(function (result) {
+      logMsg(result === 'ok' ? 'warn' : 'error', 'hook inject: durable CronCreate correction delivery', { sid: sid, toolUseId: key, mode: session.mode, result: result });
+    });
   }
 }
 
@@ -6936,8 +6950,11 @@ function appendSystemMarker(sid, session, subtype, content) {
     logMsg('warn', 'system marker append failed', { sid: sid, subtype: subtype, error: err.message });
   }
 }
-function checkTurnRetry(sid, session, line, v) {
-  if (daemonCommands.stopping || !TURN_RETRY_CFG.enabled || (cronRuntime && cronRuntime.get(sid))) return;
+async function checkTurnRetry(sid, session, line, v) {
+  if (daemonCommands.stopping || !TURN_RETRY_CFG.enabled || (cronRuntime && cronRuntime.get(sid)) || session.budgetGracefulStop) return;
+  const checkVersion = (retryCheckVersions.get(sid) || 0) + 1;
+  retryCheckVersions.set(sid, checkVersion);
+  if (!await budgetAllowance(sid) || retryCheckVersions.get(sid) !== checkVersion || sessions.get(sid) !== session || session.state !== 'running' || session.intentionalStopAt != null) return;
   var parsedErr = parseTurnErrorLine(line);
   if (!parsedErr.isTurnError) {
     // A clean turn ends the streak, so the budget bounds ONE outage.
@@ -7028,6 +7045,7 @@ var RETRY_WS_SINK = {
   close: function () {},
 };
 function cancelTurnRetry(sid, reason) {
+  retryCheckVersions.set(sid, (retryCheckVersions.get(sid) || 0) + 1);
   var session = sessions.get(sid);
   if (!session || !session.turnRetryTimer) return;
   clearTimeout(session.turnRetryTimer);
@@ -7209,6 +7227,10 @@ function ensureWatcher(sid) {
         // daemon-standalone.ts.
         if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v);
         updateCronMetadata(sid, s, line);
+        // Observe evidence before a result can schedule another billable turn.
+        if (usageBudget && (line.includes('"assistant"') || line.includes('"system"') || line.includes('"result"') || line.includes('"control_response"'))) {
+          try { const parsed = JSON.parse(line); usageBudget.observe(sid, parsed); budgetControl.noteResponse(sid, parsed); } catch {}
+        }
 
         // ── Latency instrumentation: time from CLI spawn to first init line ──
         // Pure CLI cold-start (incl. MCP connect) as seen by the daemon,
@@ -7266,9 +7288,9 @@ function ensureWatcher(sid) {
         // failure streak. Keep in sync with daemon-standalone.ts.
         if (line.includes('"type":"result"')) {
           s.ttftSendTs = null; // turn over — a stale TTFT anchor must not leak into replays
-          try { checkTurnRetry(sid, s, line, v); } catch (err) {
-            logMsg('warn', 'turn-retry check threw', { sid, error: err.message });
-          }
+          void checkTurnRetry(sid, s, line, v).catch(function (err) {
+            logMsg('warn', 'turn-retry check threw', { sid: sid, error: err.message });
+          });
           // A reply request this host owns ends with this turn (offline-host-core.ts).
           offlineHost.onResult(sid, line, v).catch(function () {});
           // The working tree as this turn left it (turn-snapshot-core.ts): returns at once.
@@ -7326,12 +7348,9 @@ function ensureWatcher(sid) {
               }
               if (shouldAutoRespond(s.mode, toolName)) {
                 const resp = buildControlResponse(parsed.request_id, parsed.request, true);
-                if (writeFifoRaw(s.pipePath, resp)) {
-                  s.pendingCtrl = null;
-                  try { persistRegistry(); } catch {}
-                  logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode });
-                  continue;
-                }
+                void writePermissionLine(sid, resp).then(function (result) {
+                  if (result === 'ok') logMsg('info', 'auto-allowed control_request', { sid: sid, tool: toolName, mode: s.mode });
+                });
               }
               s.pendingCtrl = { reqId: parsed.request_id, toolName: toolName || 'unknown', request: parsed.request, receivedAt: Date.now() };
               try { persistRegistry(); } catch {}
@@ -7670,6 +7689,7 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       // A rewrite already starts with its newline: one is enough.
       tornEnd: function () { return torn.end && !rewrite; },
     });
+    if (result === 'budget_paused') return { ok: false, reason: 'budget_paused' };
     if (result && typeof result === 'object') {
       logMsg('info', 'send: the line was not written again', { sid: sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state || null });
       const out = { ok: true, duplicate: true, fate: result.fate };
@@ -7722,7 +7742,8 @@ async function cmdSendRaw(ws, id, cmd) {
 
   try {
     const buf = Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n');
-    const result = await chainFifoWrite(sid, session, buf);
+    const result = await chainFifoWrite(sid, session, buf, undefined, undefined, raw);
+    if (result === 'budget_paused') return sendOk(ws, id, { ok: false, reason: 'budget_paused' });
     if (result === 'ok') {
       if (session.pendingCtrl) {
         try {
@@ -7767,7 +7788,8 @@ async function writeSessionLine(sid, raw) {
     }
   }
   try {
-    const result = await chainFifoWrite(sid, session, Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n'));
+    const result = await chainFifoWrite(sid, session, Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n'), undefined, undefined, raw);
+    if (result === 'budget_paused') return 'budget_paused';
     if (result === 'ok') return 'ok';
     if (result === 'dead') return 'dead';
     if (result === 'ENXIO') { reapSession(sid, -1, 'sendRaw-enxio'); return 'dead'; }
@@ -7777,6 +7799,23 @@ async function writeSessionLine(sid, raw) {
   } catch {
     return 'failed';
   }
+}
+
+// Permission delivery also clears the materialized pending prompt, only after a complete line.
+async function writePermissionLine(sid, raw) {
+  const result = await writeSessionLine(sid, raw);
+  if (result === 'ok') {
+    const session = sessions.get(sid);
+    try {
+      const parsed = JSON.parse(raw);
+      if (session && session.pendingCtrl && parsed.type === 'control_response' && parsed.response?.request_id === session.pendingCtrl.reqId) {
+        session.pendingCtrl = null;
+        persistRegistry();
+        pushSnapshot(sid, false);
+      }
+    } catch {}
+  }
+  return result;
 }
 
 // The single marker write point, shared by the RPC and the cmdSend fence; an fs failure throws so the send fails. Keep in sync with daemon-core.ts.
@@ -7931,13 +7970,10 @@ function applyModePolicy(session, sid, mode) {
   }
   if (session.pendingCtrl && shouldAutoRespond(mode, session.pendingCtrl.toolName)) {
     const resp = buildControlResponse(session.pendingCtrl.reqId, session.pendingCtrl.request, true);
-    if (writeFifoRaw(session.pipePath, resp)) {
-      logMsg('info', 'setMode: auto-allowed pending control_request', { sid, tool: session.pendingCtrl.toolName, mode });
-      session.pendingCtrl = null;
-      pushSnapshot(sid, false); // C1: pendingCtrl cleared → waiting resolves
-    } else {
-      logMsg('warn', 'setMode: failed to write pending control_response', { sid, tool: session.pendingCtrl.toolName, mode });
-    }
+    const toolName = session.pendingCtrl.toolName;
+    void writePermissionLine(sid, resp).then(function (result) {
+      logMsg(result === 'ok' ? 'info' : 'warn', 'setMode: pending control_response delivery', { sid: sid, tool: toolName, mode: mode, result: result });
+    });
   }
   try { persistRegistry(); } catch {}
 }
@@ -9803,6 +9839,168 @@ let changesCore = null;
 try { changesCore = require(path.join(__dirname, 'changes-core.cjs')); } catch (err) { changesCore = null; }
 let usageCore = null;
 try { usageCore = require(path.join(__dirname, 'usage-core.cjs')); } catch (err) { usageCore = null; }
+let usageBudget = null;
+let budgetControl = null;
+const BUDGET_DIR = path.join(path.dirname(RESUME_RECORD_DIR), 'usage-budgets');
+const ensureUsageBudgetDirectory = (__CREATE_BUDGET_PERSISTENCE__)(fs.promises, path).ensureDirectory;
+const budgetStopGroups = new Map();
+const budgetStopFile = path.join(BUDGET_DIR, 'stops.map');
+const budgetBoot = (async function () {
+  if (process.platform === 'linux') return (await fs.promises.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+  if (process.platform === 'darwin') return await new Promise(function (resolve, reject) {
+    execFile('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { timeout: 5000 }, function (error, stdout) { if (error) reject(error); else resolve(String(stdout).trim()); });
+  });
+  return '';
+})().catch(function () { return ''; });
+const budgetStopsReady = (async function () {
+  let text;
+  try { text = await fs.promises.readFile(budgetStopFile, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  for (const [sid, proof] of Object.entries(JSON.parse(text))) {
+    if (!isJournalSid(sid) || !proof || !Number.isSafeInteger(proof.pid) || proof.pid <= 1 || typeof proof.startTime !== 'string' || typeof proof.bootId !== 'string'
+      || (proof.members !== undefined && (!Array.isArray(proof.members) || proof.members.some(function (member) { return !member || !Number.isSafeInteger(member.pid) || member.pid <= 1 || typeof member.startTime !== 'string'; })))) throw new Error('budget stop proof is invalid');
+    budgetStopGroups.set(sid, proof);
+  }
+})();
+void budgetStopsReady.catch(function (error) { logMsg('error', 'budget stop proofs could not be read', { error: String(error) }); });
+let budgetStopWrites = Promise.resolve();
+function persistBudgetStops() {
+  const work = budgetStopWrites.catch(function () {}).then(async function () {
+    await ensureUsageBudgetDirectory(BUDGET_DIR);
+    const temp = budgetStopFile + '.' + crypto.randomUUID() + '.tmp';
+    try {
+      const handle = await fs.promises.open(temp, 'wx', 0o600);
+      try { await handle.writeFile(JSON.stringify(Object.fromEntries(budgetStopGroups))); await handle.sync(); } finally { await handle.close(); }
+      await fs.promises.rename(temp, budgetStopFile);
+      const directory = await fs.promises.open(BUDGET_DIR, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally { await fs.promises.unlink(temp).catch(function () {}); }
+  });
+  budgetStopWrites = work;
+  return work;
+}
+async function budgetGroupMembers(pgid) {
+  const text = await new Promise(function (resolve, reject) {
+    execFile('/bin/ps', ['-axo', 'pid=,pgid=,lstart='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } }, function (error, stdout) { if (error) reject(error); else resolve(String(stdout)); });
+  });
+  const members = [];
+  for (const line of text.split('\\n')) {
+    const match = line.match(/^\\s*(\\d+)\\s+(\\d+)\\s+(.+?)\\s*$/);
+    if (match && Number(match[2]) === pgid && Number(match[1]) > 1) members.push({ pid: Number(match[1]), startTime: match[3] });
+  }
+  return members;
+}
+async function continueBudgetGroupStop(sid, proof) {
+  if (!isProcessGroupAlive(proof.pid)) return;
+  const boot = await budgetBoot;
+  if (!boot || boot !== proof.bootId) throw new Error('budget pause: process group boot identity is unknown');
+  const current = await budgetGroupMembers(proof.pid);
+  const confirmed = current.some(function (member) { return proof.members?.some(function (old) { return old.pid === member.pid && old.startTime === member.startTime; }); });
+  if (!confirmed) throw new Error('budget pause: no surviving owned process group member is confirmed');
+  // The leader may have exited on interrupt; a same-group birth proof still owns the remaining group.
+  killProcessGroup(proof.pid, 'SIGTERM');
+  const deadline = Date.now() + 2500;
+  while (isProcessGroupAlive(proof.pid) && Date.now() < deadline) await new Promise(function (resolve) { setTimeout(resolve, 200); });
+  if (isProcessGroupAlive(proof.pid)) throw new Error('budget pause: process group did not exit after SIGTERM');
+  logMsg('info', 'budget pause: remaining owned process group stopped', { sid: sid });
+}
+async function budgetStopPending(sid) {
+  await budgetStopsReady;
+  const proof = budgetStopGroups.get(sid);
+  if (!proof) return false;
+  const boot = await budgetBoot;
+  if (!(boot && proof.bootId && boot !== proof.bootId) && isProcessGroupAlive(proof.pid)) return true;
+  budgetStopGroups.delete(sid);
+  await persistBudgetStops();
+  return false;
+}
+async function budgetAllowance(sid) {
+  if (!isJournalSid(sid)) return false;
+  if (await budgetStopPending(sid)) return false;
+  if (usageBudget) return await usageBudget.allow(sid) && !await budgetStopPending(sid);
+  // Without the runtime, a saved policy is never bypassed. Unconfigured sessions still work.
+  try { await fs.promises.stat(path.join(BUDGET_DIR, sid + '.json')); return false; }
+  catch (error) { return error.code === 'ENOENT'; }
+}
+if (usageCore && typeof usageCore.createUsageBudgetRuntime === 'function' && typeof usageCore.createBudgetControl === 'function') {
+  try {
+    budgetControl = usageCore.createBudgetControl({ timeoutMs: 2000, writeRaw: async function (sid, raw) { return await writeSessionLine(sid, raw) === 'ok'; } });
+    usageBudget = usageCore.createUsageBudgetRuntime({
+      dir: BUDGET_DIR,
+      projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+      pause: pauseBudgetSession,
+      log: function (message, fields) { logMsg('warn', message, fields); },
+    });
+  } catch (error) { usageBudget = null; logMsg('error', 'budget sidecar failed to initialize', { error: String(error) }); }
+}
+
+async function requireBudgetAllowance(sid) {
+  if (!await budgetAllowance(sid)) throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' });
+}
+
+async function pauseBudgetSession(sid) {
+  cancelTurnRetry(sid, 'budget-paused');
+  await budgetStopsReady;
+  if (cronRuntime && cronRuntime.get(sid)) await cronRuntime.disable(sid);
+  const session = sessions.get(sid);
+  if (!session || session.state !== 'running' || !session.pid) {
+    if (await budgetStopPending(sid)) {
+      await continueBudgetGroupStop(sid, budgetStopGroups.get(sid));
+      budgetStopGroups.delete(sid);
+      await persistBudgetStops();
+    }
+    return;
+  }
+  const pid = session.pid;
+  sessionStopVersions.set(sid, (sessionStopVersions.get(sid) || 0) + 1);
+  const owner = journaledHome(sid);
+  const refusal = stopOwnerRefusal(sid, { home: owner, strict: true, initiator: 'automatic' });
+  if (!owner || refusal) throw new Error('budget pause: session ownership is not confirmed');
+  let pgid = NaN;
+  try { pgid = Number(fs.readFileSync(session.pgidPath, 'utf8').trim()); } catch {}
+  if (pgid !== session.pid) throw new Error('budget pause: process group ownership is not confirmed');
+  if ((SERVICE_MODE && session.bootId !== daemonBootId) || !session.startTime || readStartTime(session.pid) !== session.startTime) throw new Error('budget pause: process identity is not confirmed');
+  const proof = { pid: pid, startTime: session.startTime, bootId: await budgetBoot, members: await budgetGroupMembers(pid) };
+  budgetStopGroups.set(sid, proof);
+  await persistBudgetStops();
+  if (sessions.get(sid) !== session) throw new Error('budget pause: process identity changed');
+  session.intentionalStopAt = Date.now();
+  session.budgetGracefulStop = true;
+  persistRegistry();
+  const ids = Object.keys(session.taskState.tasks).filter(function (id) { return !BG_TERMINAL_STATUSES.has(session.taskState.tasks[id].status); });
+  const controls = budgetControl ? await Promise.all([
+    Promise.all(ids.map(function (task_id) { return budgetControl.ask(sid, { subtype: 'stop_task', task_id: task_id }); })),
+    budgetControl.ask(sid, { subtype: 'interrupt', cancel_queued: true }),
+  ]) : [[], false];
+  const stoppedTasks = controls[0];
+  const interrupted = controls[1];
+  if (stoppedTasks.some(function (ok) { return !ok; }) || !interrupted) logMsg('warn', 'budget pause: control acknowledgement missing; confirming the whole owned process group', { sid: sid });
+  if (sessions.get(sid) !== session) throw new Error('budget pause: process identity changed');
+  if (!session.pid && isProcessGroupAlive(pid)) await continueBudgetGroupStop(sid, proof);
+  let reply;
+  const sink = { data: {}, readyState: 1, send: function (raw) { reply = JSON.parse(raw); return 1; }, close: function () {} };
+  await stopSessionProcess(sink, 0, sid);
+  if (isProcessGroupAlive(pid)) await continueBudgetGroupStop(sid, proof);
+  if (!reply || (reply.stopped !== true && isProcessGroupAlive(pid))) throw new Error(String(reply && reply.error || 'budget pause: process stop was not confirmed'));
+  if (sessions.get(sid) === session && session.state === 'running') { reapSession(sid, 0, 'budget-stop-confirmed', true); persistRegistry(); }
+  budgetStopGroups.delete(sid);
+  await persistBudgetStops();
+}
+
+async function cmdUsageBudget(ws, id, cmd, configure) {
+  if (!usageBudget) return sendError(ws, id, 'usage.budget unsupported: sidecar not loaded', { code: 'UNSUPPORTED' });
+  const sid = cmd.sid;
+  if (!isJournalSid(sid) || (!sessions.has(sid) && !journaledIds().has(sid))) return sendError(ws, id, 'usage.budget: session not found', { code: 'NOT_FOUND' });
+  if (configure) {
+    if (['bridge', 'follower', 'lane'].includes(ws.origin)) return sendError(ws, id, 'usage.budget.configure: trusted clients only', { code: 'NOT_OWNED' });
+    if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'usage.budget.configure: home must name the asking Walnut', { code: 'BAD_REQUEST' });
+    const refusal = stopOwnerRefusal(sid, { ...cmd, strict: true, initiator: 'automatic' });
+    if (refusal) return sendError(ws, id, 'usage.budget.configure: session ownership is not confirmed', { code: 'NOT_OWNED' });
+  }
+  try {
+    const result = configure ? await usageBudget.configure(sid, { limitUsd: cmd.limitUsd, revision: cmd.revision, proxyLogDir: cmd.proxyLogDir }) : await usageBudget.read(sid);
+    return sendOk(ws, id, { result: result });
+  } catch (error) { return sendError(ws, id, String(error instanceof Error ? error.message : error), { code: error.code }); }
+}
 
 // External-session scan sidecar (external-scan-core.cjs) — same sidecar
 // rationale as changes-core above: the walk + transcript parse can't live in
@@ -9876,6 +10074,7 @@ let requestDaemonShutdown = null;
 let handoverPrepared = false;
 let serviceUpdateRequested = false;
 const sessionStopVersions = new Map();
+const retryCheckVersions = new Map();
 // One gate for RPC starts, stops and supervision ensures. The sidecar's gate is
 // the same class daemon-standalone.ts uses; the inlined copy above is the
 // fallback for a source deploy that carries no sidecar.
@@ -9890,6 +10089,7 @@ function daemonCapabilities() {
   if (acp && typeof acp.modelCatalog === 'function') caps.push('acp-model-catalog-v1');
   if (changesCore) caps.push('changes-v1');
   if (usageCore) caps.push('usage-scan-v1');
+  if (usageBudget && budgetControl) caps.push('budget-v1');
   if (externalScanCore) caps.push('external-scan-v1');
   if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');
   if (externalScanCore && externalScanCore.describeExternalSessions) caps.push('external-describe-v1');
@@ -11368,6 +11568,8 @@ function cleanupOrphanedProcessGroups() {
 
 // ── Cleanup ──
 function cleanup() {
+  if (usageBudget) usageBudget.close();
+  if (budgetControl) budgetControl.close();
   if (cronRuntime) {
     cronRuntime.close().catch(function (err) {
       logMsg('error', 'cron supervision shutdown failed', { error: String(err) });
@@ -11584,6 +11786,7 @@ async function startDaemon() {
   logMsg('info', 'startup: reconcile begin', { registryFile: REGISTRY_FILE, streamsDir: STREAMS_DIR });
   // A service must not carry on from a failed reconcile: an empty registry there
   // means adoptable CLIs would be treated as if they never existed.
+  await budgetStopsReady.catch(function () {});
   try { reconcileRegistry(); } catch (err) {
     logMsg('error', 'reconcileRegistry failed', { error: err && err.message });
     if (SERVICE_MODE) throw err;
@@ -11645,6 +11848,14 @@ async function startDaemon() {
       },
       error: function (err) { logMsg('error', 'cron supervision observation failed', { error: String(err) }); },
     });
+  }
+
+  // Supervision must exist before recovery can disable it, including stopped sessions.
+  if (usageBudget) void usageBudget.recover().catch(function (error) { logMsg('error', 'budget recovery failed', { error: String(error) }); });
+  else for (const [sid] of sessions) {
+    void budgetAllowance(sid).then(function (allowed) {
+      if (!allowed) return pauseBudgetSession(sid);
+    }).catch(function (error) { logMsg('error', 'saved session budget could not be enforced without its sidecar', { sid: sid, error: String(error) }); });
   }
 
   const httpServer = http.createServer((req, res) => {

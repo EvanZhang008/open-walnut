@@ -40,6 +40,31 @@ usageRouter.post('/collect', (req: Request, res: Response) => {
 })
 usageRouter.get('/collection', (_req: Request, res: Response) => res.json(collectionState()))
 
+usageRouter.get('/sessions/:sid', async (req: Request, res: Response) => {
+  try {
+    const { getSessionBudget } = await import('../../core/usage/session-budget.js')
+    res.json(await getSessionBudget(String(req.params.sid)))
+  } catch (error) {
+    const failure = error as Error & { code?: string; status?: number }
+    res.status(failure.status ?? 503).json({ error: failure.message, code: failure.code ?? 'budget_unavailable' })
+  }
+})
+usageRouter.patch('/sessions/:sid/budget', async (req: Request, res: Response) => {
+  const { limitUsd, revision } = req.body ?? {}
+  if (!(limitUsd === null || (typeof limitUsd === 'number' && Number.isFinite(limitUsd) && limitUsd >= 0.01))
+    || !Number.isSafeInteger(revision) || revision < 0) {
+    res.status(400).json({ error: 'Set a limit of at least 0.01 USD or null, and the current revision.' })
+    return
+  }
+  try {
+    const { configureSessionBudget } = await import('../../core/usage/session-budget.js')
+    res.json(await configureSessionBudget(String(req.params.sid), { limitUsd, revision }))
+  } catch (error) {
+    const failure = error as Error & { code?: string; status?: number }
+    res.status(failure.status ?? 503).json({ error: failure.message, code: failure.code ?? 'budget_unavailable' })
+  }
+})
+
 // GET /api/usage/summary — all period summaries
 usageRouter.get('/summary', (_req: Request, res: Response, next: NextFunction) => {
   try {

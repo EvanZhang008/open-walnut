@@ -84,6 +84,12 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/usage-host-core.ts',
   'src/providers/usage-scan-core.ts',
   'src/providers/usage-reconcile-core.ts',
+  'src/providers/usage-budget-core.ts',
+  'src/providers/usage-budget-persistence.ts',
+  'src/providers/usage-budget-runtime.ts',
+  'src/providers/usage-budget-control.ts',
+  'src/providers/usage-budget-tail.ts',
+  'src/providers/usage-budget-index.ts',
   'src/core/usage/pricing.ts',
   // External-session scan (sessions.discoverExternal) — bundled into the
   // binary AND shipped as the external-scan-core.cjs sidecar. Missing from

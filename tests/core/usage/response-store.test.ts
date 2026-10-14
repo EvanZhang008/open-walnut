@@ -73,6 +73,16 @@ describe('response-level usage storage', () => {
     expect(result.summary.token_counts_complete).toBe(false);
     expect(result.byModel.some(r => r.token_counts_complete === false)).toBe(true);
   });
+  it('keeps session totals and model breakdown unknown when only a portion is verified', async () => {
+    const s = store(); await s.importHost('local', evidence([record()]), owners);
+    await s.importHost('local', evidence([{ ...record('reply-2'), agentId: 'example-agent' }], false), owners);
+    expect(s.getSessionUsage('session-one')).toMatchObject({ verifiedCostUsd: null, verifiedCalls: 1, unverifiedCalls: 1 });
+    expect(s.getSessionUsage('session-one').byModel[0].costUsd).toBeNull();
+    expect(s.getSessionUsage('session-one').byAgent).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agent: 'main', unverifiedCalls: 0 }),
+      expect.objectContaining({ agent: 'subagent', costUsd: null, unverifiedCalls: 1 }),
+    ]));
+  });
   it('updates ownership and dates without duplicate charges when evidence is corrected', async () => {
     const s = store(); await s.importHost('local', evidence([record()]), owners);
     await s.importHost('local', evidence([{ ...record(), timestamp: '2026-10-12T12:00:00Z' }]),

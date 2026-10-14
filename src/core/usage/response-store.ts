@@ -115,6 +115,26 @@ export class ResponseUsageStore {
     return { host, responses: rows.length, verified: matched, unverified: rows.length - matched, checks };
   }
 
+  getSessionUsage(sessionId: string) {
+    const verified = `verification='verified' AND pricing_version='${PRICING_VERSION}'`;
+    const rows = this.db.prepare(`SELECT COUNT(*) calls, SUM(CASE WHEN ${verified} THEN 1 ELSE 0 END) verified,
+      SUM(CASE WHEN ${verified} THEN estimate_usd ELSE 0 END) cost FROM response_usage WHERE session_id=?`)
+      .get(sessionId) as { calls: number; verified: number | null; cost: number | null };
+    const groups = (field: 'model' | 'agent_id') => this.db.prepare(`SELECT ${field} name, COUNT(*) calls,
+      SUM(CASE WHEN ${verified} THEN estimate_usd ELSE 0 END) cost,
+      SUM(CASE WHEN NOT (${verified}) THEN 1 ELSE 0 END) unverified
+      FROM response_usage WHERE session_id=? GROUP BY ${field} ORDER BY cost DESC`).all(sessionId)
+      .map(raw => {
+        const row = raw as { name: string; calls: number; cost: number | null; unverified: number };
+        return { name: row.name, calls: row.calls, costUsd: row.unverified ? null : row.cost ?? 0,
+          unverifiedCalls: row.unverified };
+      });
+    return { verifiedCostUsd: null,
+      verifiedCalls: rows.verified ?? 0, unverifiedCalls: rows.calls - (rows.verified ?? 0),
+      byModel: groups('model').map(({ name, ...row }) => ({ model: name, ...row })),
+      byAgent: groups('agent_id').map(({ name, ...row }) => ({ agent: name, ...row })) };
+  }
+
   finishHost(host: string, until: string, checks: SourceCheck[]) {
     this.db.prepare('INSERT OR REPLACE INTO usage_checks VALUES (?,?,?)').run(host, until, JSON.stringify(checks));
   }

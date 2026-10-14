@@ -50,6 +50,7 @@ export interface RegistryEntry {
   parented: boolean
   mode?: SessionMode
   pendingCtrl?: PendingCtrl | null
+  budgetGracefulStop?: boolean
   /** Turn-retry streak (see decideTurnRetry). Persisted so a daemon restart
    *  mid-outage RESUMES the same 12h budget instead of granting a fresh one —
    *  otherwise a restart loop would make the budget unbounded. */
@@ -106,6 +107,8 @@ export interface CoreSessionData {
    *  Presence means reapSession reports exit code 0 (see the normalization
    *  block there). Optional so adapters and test fixtures stay type-compatible. */
   intentionalStopAt?: number | null
+  /** Budget stops retain CLI stop hooks; their owner confirms SIGINT/SIGTERM without a force kill. */
+  budgetGracefulStop?: boolean
   /** Turn-retry streak — see decideTurnRetry. Optional so adapters that don't
    *  implement the retry policy stay type-compatible. */
   turnRetry?: TurnRetryState
@@ -156,6 +159,8 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
    *  the walnut client's 30s RPC timeout so the strict-ack always settles.
    *  Default 20s — covers CLI boot (measured 2–7s before it reads stdin). */
   fifoWriteDeadlineMs?: number
+  /** Checked inside the final FIFO serializer, before any cost-producing line. */
+  allowBudgetFn?: (sid: string) => Promise<boolean>
   logger: (level: string, msg: string, meta?: Record<string, unknown>) => void
   /** Broadcasts `{ev:'session_state', sid, state, ...extra}` to all wsClients. */
   broadcastSessionStateFn: (payload: Record<string, unknown>) => void
@@ -242,12 +247,23 @@ export function lockLiveFifo(fs: typeof import('node:fs'), pipePath: string): bo
   try { fs.chmodSync(pipePath, LIVE_FIFO_MODE); return true } catch { return false }
 }
 
+/** A paused session may still receive stop controls and negative permission answers. */
+export function budgetControlExempt(raw: string): boolean {
+  try {
+    const parsed = JSON.parse(raw.trim())
+    if (parsed.type === 'control_request') return ['interrupt', 'stop_task', 'get_settings'].includes(parsed.request?.subtype)
+    if (parsed.type === 'control_response') return parsed.response?.subtype === 'error' || parsed.response?.response?.behavior === 'deny'
+    return parsed.type === 'control_cancel_request'
+  } catch { return false }
+}
+
 /** Outcome of a cmdSend attempt — mirrors the wire envelope sent to clients. */
 export type SendResult =
   // cut: an earlier write of this line into this process died inside it (lineWriteCut):
   // the line is written, but the CLI may exit on what that write left without running it.
   | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; cut?: true }
   | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'budget_paused' }
   | { ok: false; reason: 'session_dead'; exitCode: number | null }
   | { ok: false; reason: 'ENXIO'; exitCode: number | null }
   | { ok: false; reason: 'EAGAIN'; retriable: true }
@@ -426,6 +442,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         parented: s.parented,
         mode: s.mode,
         pendingCtrl: s.pendingCtrl ?? undefined,
+        ...(s.budgetGracefulStop ? { budgetGracefulStop: true } : {}),
         // Carry the retry streak across daemon restarts (budget continuity).
         turnRetry: s.turnRetry ?? undefined,
         bootId: s.bootId ?? undefined,
@@ -592,7 +609,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     const groupStartTime = session.startTime
     const groupBootId = session.bootId
     const maySignalGroup = (): boolean => {
-      if (unownedReap || groupExited) return false
+      if (unownedReap || groupExited || session.budgetGracefulStop) return false
       if (!Number.isSafeInteger(groupPid) || groupPid <= 1) return false
       if (sessions.get(sid) !== session) return false
       const currentBoot = deps.bootId
@@ -907,6 +924,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         // A rewrite already starts with its newline: one is enough.
         tornEnd: () => torn.end && !rewrite,
       })
+      if (result === 'budget_paused') return { ok: false, reason: 'budget_paused' }
       if (typeof result === 'object') {
         logger('info', 'send: the line was not written again', {
           sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state ?? null,
@@ -981,7 +999,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
 
     try {
       const buf = Buffer.from(raw.endsWith('\n') ? raw : raw + '\n')
-      const result = await chainFifoWrite(sid, session, buf)
+      const result = await chainFifoWrite(sid, session, buf, undefined, undefined, raw)
+      if (result === 'budget_paused') return { ok: false, reason: 'budget_paused' }
       if (result === 'ok') {
         // control_response travels Walnut → FIFO and is not echoed to stdout,
         // so the stream watcher cannot observe it. Clear daemon-authoritative
@@ -1190,7 +1209,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
      *  a whole line went in (before the next write may ask), `tornEnd` (asked after
      *  `fate`): a newline goes in before the line (lineTornEnd). */
     line?: { fate?: () => Promise<LineFate | null>; begin?: (on: boolean) => void; written?: () => void; tornEnd?: () => boolean },
-  ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | LineFate> {
+    raw?: string,
+  ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | 'budget_paused' | LineFate> {
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
     // own write share ONE budget, so the strict-ack always settles inside the
     // walnut client's 30s RPC timeout even when writes stack up.
@@ -1199,9 +1219,12 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     const run = prev.catch(() => {}).then(async () => {
       // Re-check state after waiting in the chain — a predecessor's failure
       // (or the orphan poll) may have reaped the session meanwhile.
-      if (session.state === 'dead' || sessions.get(sid) !== session) return 'dead' as const
+      const abandoned = () => session.state === 'dead' || sessions.get(sid) !== session
+      if (abandoned()) return 'dead' as const
       const known = line?.fate ? await line.fate() : null
       if (known) return known
+      if ((!raw || !budgetControlExempt(raw)) && deps.allowBudgetFn && !await deps.allowBudgetFn(sid)) return 'budget_paused' as const
+      if (abandoned()) return 'dead' as const
       const tornEnd = line?.tornEnd?.() === true
       if (tornEnd) logger('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid, pid: session.pid })
       const out = tornEnd ? Buffer.concat([Buffer.from('\n'), buf]) : buf

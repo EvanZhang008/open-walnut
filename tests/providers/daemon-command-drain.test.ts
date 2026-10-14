@@ -147,7 +147,7 @@ describe.each([
         `return ${extract(source, 'createAdoptedSession')};`,
         // The adopt also stamps a cron origin; neither call is what this test is
         // about, so both are stubbed to their "nothing known" answers.
-        { rebuildFoldStateFromJsonl, rebuildTaskStateFromJsonl, processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }) },
+        { rebuildFoldStateFromJsonl, rebuildTaskStateFromJsonl, processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }), budgetStopGroups: new Map() },
       )
       sessions.set('session', adopt('session', entry))
     } else {
@@ -159,6 +159,7 @@ describe.each([
         processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }),
         // Adopting a live CLI locks its stdin FIFO write-only (LIVE_FIFO_MODE); no FIFO here.
         lockLiveFifo: () => true,
+        budgetStopGroups: new Map(),
       })
       reconcile()
     }
@@ -443,8 +444,10 @@ describe.each([
     })
     const reapAllSessionGroupsSync = vi.fn()
     const kill = vi.fn()
+    const usageBudget = { close: vi.fn(() => { order.push('budget-close') }) }
+    const budgetControl = { close: vi.fn(() => { order.push('budget-control-close') }) }
     const cleanup = compile<() => void>(`${extract(source, 'stopSessionWatcher')}\n${extract(source, 'cleanup')}\nreturn cleanup;`, {
-      sessions, cronRuntime: null, stopBridge: vi.fn(), vscodeServerCore: null, triggerTickTimer: null,
+      sessions, cronRuntime: null, usageBudget, budgetControl, stopBridge: vi.fn(), vscodeServerCore: null, triggerTickTimer: null,
       shouldReapOnExit: () => false, reapAllSessionGroupsSync, persistRegistry,
       clearInterval: (timer: unknown) => { cleared.add(timer); order.push(String(timer)) },
       fs: { readFileSync: () => '4242', unlinkSync: vi.fn() }, process: { pid: 4242, kill },
@@ -460,21 +463,27 @@ describe.each([
     expect([...sessions.values()].every((session) => session.offset === 100)).toBe(true)
     expect(reapAllSessionGroupsSync).not.toHaveBeenCalled()
     expect(kill).not.toHaveBeenCalled()
+    expect(usageBudget.close).toHaveBeenCalledOnce()
+    expect(budgetControl.close).toHaveBeenCalledOnce()
+    expect(order.indexOf('budget-close')).toBeLessThan(order.indexOf('persist'))
+    expect(order.indexOf('budget-control-close')).toBeLessThan(order.indexOf('persist'))
   })
 
-  function retryFixture(daemonCommands = createDrain()) {
-    const session = { turnRetry: newTurnRetryState(), turnRetryTimer: null as ReturnType<typeof setTimeout> | null }
+  function retryFixture(daemonCommands = createDrain(), allowance: () => Promise<boolean> = async () => true) {
+    const session = { state: 'running', turnRetry: newTurnRetryState(), turnRetryTimer: null as ReturnType<typeof setTimeout> | null }
     const cmdBridgeResume = vi.fn()
     const persistRegistry = vi.fn()
     const appendSystemMarker = vi.fn()
     const sessions = new Map<string, typeof session>([['test-session', session]])
     const cronRuntime = { get: vi.fn<() => unknown>(() => undefined) }
+    const retryCheckVersions = new Map<string, number>()
+    const budgetAllowance = vi.fn(allowance)
     const functions = ['checkTurnRetry', 'fireTurnRetry', 'cancelTurnRetry'].map((name) => extract(source, name)).join('\n')
     const retry = compile<{
-      check: (sid: string, session: unknown, line: string, v: number) => void
+      check: (sid: string, session: unknown, line: string, v: number) => Promise<void>
       cancel: (sid: string, reason: string) => void
     }>(`${functions}\nreturn { check: checkTurnRetry, cancel: cancelTurnRetry };`, {
-      daemonCommands, cronRuntime, sessions,
+      daemonCommands, cronRuntime, sessions, retryCheckVersions, budgetAllowance,
       TURN_RETRY_CFG: { ...TURN_RETRY_DEFAULTS, enabled: true, backoffBaseMs: 1000 },
       applyTurnRetry, clearTurnRetryStreak, decideTurnRetry, newTurnRetryState, parseTurnErrorLine,
       turnRetryGiveUpText, turnRetryMarkerText, turnRetryMessage,
@@ -482,7 +491,7 @@ describe.each([
       setTimeout, clearTimeout,
     })
     return {
-      ...retry, session, sessions, cronRuntime, cmdBridgeResume, persistRegistry, appendSystemMarker,
+      ...retry, session, sessions, cronRuntime, cmdBridgeResume, persistRegistry, appendSystemMarker, retryCheckVersions, budgetAllowance,
       error: () => retry.check('test-session', session, JSON.stringify({ type: 'result', is_error: true, result: 'overloaded' }), 100),
       success: () => retry.check('test-session', session, JSON.stringify({ type: 'result', is_error: false }), 200),
     }
@@ -495,9 +504,9 @@ describe.each([
     const retry = retryFixture(fixture.daemonCommands)
     let updating: Promise<unknown> | undefined
     try {
-      if (when === 'before') retry.error()
+      if (when === 'before') await retry.error()
       updating = fixture.request().then(() => null, (error: unknown) => error)
-      if (when === 'during') retry.error()
+      if (when === 'during') await retry.error()
       await vi.advanceTimersByTimeAsync(14_000)
       expect(retry.cmdBridgeResume).not.toHaveBeenCalled()
       expect(retry.session.turnRetryTimer).not.toBeNull()
@@ -525,18 +534,18 @@ describe.each([
     const daemonCommands = createDrain()
     const retry = retryFixture(daemonCommands)
     try {
-      retry.error()
+      await retry.error()
       const pause = daemonCommands.pause()
       await vi.advanceTimersByTimeAsync(1500)
       expect(retry.cmdBridgeResume).not.toHaveBeenCalled()
       expect(retry.session.turnRetryTimer).not.toBeNull()
       if (event === 'success') {
-        retry.success()
+        await retry.success()
         expect(retry.session.turnRetry.attempts).toBe(0)
         expect(retry.persistRegistry).toHaveBeenCalledTimes(2)
       } else if (event === 'user-stop') retry.cancel('test-session', 'session-stopped')
       else if (event === 'session-gone') retry.sessions.delete('test-session')
-      else if (event === 'session-replaced') retry.sessions.set('test-session', { turnRetry: newTurnRetryState(), turnRetryTimer: null })
+      else if (event === 'session-replaced') retry.sessions.set('test-session', { state: 'running', turnRetry: newTurnRetryState(), turnRetryTimer: null })
       else if (event === 'cron-registered') retry.cronRuntime.get.mockReturnValue({ enabled: true })
       else await daemonCommands.close()
       pause.resume()
@@ -547,6 +556,34 @@ describe.each([
       retry.cancel('test-session', 'test cleanup')
       vi.useRealTimers()
     }
+  })
+
+  it('does not schedule a retry when the owning budget refuses it', async () => {
+    const retry = retryFixture(createDrain(), async () => false)
+    await retry.error()
+    expect(retry.budgetAllowance).toHaveBeenCalledExactlyOnceWith('test-session')
+    expect(retry.session.turnRetry.attempts).toBe(0)
+    expect(retry.session.turnRetryTimer).toBeNull()
+    expect(retry.appendSystemMarker).not.toHaveBeenCalled()
+  })
+
+  it.each(['user-stop', 'newer-result'] as const)('does not schedule a stale retry after its awaited allowance and %s', async event => {
+    const allowance = deferred<boolean>()
+    const retry = retryFixture(createDrain(), () => allowance.promise)
+    const oldCheck = retry.error()
+    expect(retry.budgetAllowance).toHaveBeenCalledOnce()
+    if (event === 'user-stop') retry.cancel('test-session', 'session-stopped')
+    else {
+      const newer = retry.success()
+      allowance.resolve(true)
+      await newer
+    }
+    allowance.resolve(true)
+    await oldCheck
+    expect(retry.session.turnRetry.attempts).toBe(0)
+    expect(retry.session.turnRetryTimer).toBeNull()
+    expect(retry.appendSystemMarker).not.toHaveBeenCalled()
+    expect(retry.cmdBridgeResume).not.toHaveBeenCalled()
   })
 
   it('does not dispatch an internal retry after admission closes', async () => {

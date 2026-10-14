@@ -24,6 +24,8 @@ import { ThreadModePill } from './ThreadModePill';
 import { ThreadTreeDrawer } from './ThreadTreeDrawer';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
 import { SessionRewindDialog } from './SessionRewindDialog';
+import { SessionBudgetStatus, SessionUsageDialog } from './SessionUsageDialog';
+import { useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
 import { SessionFileExplorer } from './SessionFileExplorer';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
@@ -310,6 +312,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // The host line explains a known host problem; the generic suggestion then stays quiet.
   const hostHasProblem = useSessionHostHasProblem(session?.host);
   const liveStatus = useSessionStatus(sessionId);
+  // Key the open state by session: a replacement cannot inherit an old budget edit.
+  const [usageDialogSession, setUsageDialogSession] = useState<string | null>(null);
+  const usageDialogVisible = usageDialogSession === sessionId;
+  const budgetUsage = useSessionBudgetUsage(sessionId, usageDialogVisible);
+  const openUsageDialog = useCallback(() => {
+    // The menu row disappears on open; give the dialog a durable focus return target.
+    panelRef.current?.querySelector<HTMLButtonElement>('.task-kebab-btn')?.focus({ preventScroll: true });
+    setUsageDialogSession(sessionId);
+  }, [sessionId]);
+  const closeUsageDialog = useCallback(() => setUsageDialogSession(null), []);
+  useEffect(() => { setUsageDialogSession(null); }, [sessionId]);
   const pendingPermission = liveStatus?.pendingPermissionTool === undefined
     ? session?.pendingPermission
     : liveStatus.pendingPermissionTool === null
@@ -1753,6 +1766,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     <SessionRewindContext.Provider value={rewindApi}>
     <SessionPanelErrorBoundary sessionId={sessionId} clearsColumnLayout={!embedded} {...(onClose ? { onClose: closePanel } : {})}>
       {FullscreenBackdrop}
+      {usageDialogVisible && (
+        <SessionUsageDialog key={sessionId} sessionId={sessionId} title={headerTitle} usage={budgetUsage} onClose={closeUsageDialog} />
+      )}
       {rewindTarget && (
         <SessionRewindDialog
           sessionId={sessionId}
@@ -2293,6 +2309,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                       investigating={investigating}
                       investigateResult={investigateResult}
                       onOpenVscodeError={handleOpenVscodeError}
+                      onOpenUsage={openUsageDialog}
                       onAfterAction={close}
                     />
                   )}
@@ -2632,6 +2649,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           <SessionRecapTip sessionId={sessionId} session={session} hidden={isStreaming} />
           {/* A Waiting task leaves Waiting on a message: say so where one is written. */}
           <WaitingComposerLine task={sessionTask} />
+          <SessionBudgetStatus data={budgetUsage.data} onOpen={openUsageDialog} />
           <ChatInput
             focusNonce={composerFocusNonce}
             // Dictating into this box takes focus and so collapses the page's

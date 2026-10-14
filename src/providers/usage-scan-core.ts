@@ -335,6 +335,29 @@ function toRecord(group: ResponseGroup, diag: UsageScanDiagnostics): CanonicalUs
   };
 }
 
+/** Converts one final owned response; folding/deduplication stay with the caller. An explicit observation time fills only a missing timestamp. */
+export function canonicalRecordFromAssistant(
+  row: unknown, fileMetadata: { sessionId: string; agentId?: string }, observedTimestamp?: string | Date,
+): CanonicalUsageRecord | undefined {
+  if (!object(row) || !object(row.message) || typeof row.message.model !== 'string' || !row.message.model.trim()) return;
+  const candidate = { ...row,
+    ...(row.sessionId === undefined && typeof row.session_id === 'string' ? { sessionId: row.session_id } : {}),
+    ...(row.timestamp === undefined && observedTimestamp !== undefined ? { timestamp: observedTimestamp } : {}),
+  };
+  const diag = diagnostics();
+  const identity = responseIdentity(candidate, diag);
+  if (!identity) return;
+  const file = { path: '', ...fileMetadata }, source = sourceOwner(candidate, file);
+  if (source.sourceRank !== 0) return;
+  const snapshot: ResponseSnapshot = { file, time: identity.time, line: 0, ...source,
+    responseId: identity.id, model: identity.model, counters: {}, maxOutput: undefined,
+    final: false, finalUsage: false, lines: 0,
+  };
+  updateUsage(snapshot, identity.message);
+  if (!snapshot.finalUsage) return;
+  return toRecord({ owner: snapshot, maxOutput: snapshot.maxOutput }, diag);
+}
+
 const COST_FIELDS = ['totalAPIDuration', 'totalAPIDurationWithoutRetries', 'totalToolDuration',
   'totalLinesAdded', 'totalLinesRemoved', 'totalDuration', 'startTime'] as const;
 const MODEL_COST_FIELDS = ['inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens', 'webSearchRequests', 'costUSD'] as const;

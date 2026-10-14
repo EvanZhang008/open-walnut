@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { scanCanonicalUsage, scanCostState, normalizeUsageModel } from '../../src/providers/usage-scan-core.js';
+import { canonicalRecordFromAssistant, scanCanonicalUsage, scanCostState, normalizeUsageModel } from '../../src/providers/usage-scan-core.js';
 
 const EARLY = '2026-10-12T12:00:00.000Z';
 const TODAY = '2026-10-13T12:00:00.000Z';
@@ -351,6 +351,53 @@ describe('scanCanonicalUsage', () => {
     await expect(scanCanonicalUsage({ projectsDir: root, since: '2026-02-30T12:00:00Z' })).rejects.toThrow('boundary');
     const filename = await log('project/main.jsonl', []);
     await expect(scanCanonicalUsage({ projectsDir: filename })).rejects.toThrow('directory');
+  });
+});
+
+describe('canonicalRecordFromAssistant', () => {
+  it('uses the scanner conversion for final owned main and subagent responses', async () => {
+    const row = { ...assistant('final-owned'), sessionId: 'main' };
+    await log('project/main.jsonl', [row]);
+    await log('project/main/subagents/agent-one.jsonl', [assistant('agent-owned')]);
+    const scanned = await scanCanonicalUsage({ projectsDir: root });
+    expect(canonicalRecordFromAssistant(row, { sessionId: 'main' })).toEqual(scanned.records[0]);
+    expect(canonicalRecordFromAssistant(assistant('agent-owned'), { sessionId: 'main', agentId: 'agent-one' }))
+      .toEqual(scanned.records[1]);
+  });
+
+  it('rejects fork copies, foreign sources, non-final rows and missing or invalid final usage', () => {
+    const rows = [
+      { ...assistant('fork-copy'), forkedFrom: { sessionId: 'main', messageUuid: 'original' } },
+      { ...assistant('foreign-source'), sessionId: 'other' },
+      assistant('streaming', TODAY, TOKENS, { stop_reason: null }),
+      assistant('missing-usage', TODAY, undefined, { usage: undefined }),
+      assistant('missing-output', TODAY, { input_tokens: 12 }),
+      assistant('invalid-counter', TODAY, { ...TOKENS, output_tokens: -1 }),
+      assistant('bad-time', 'invalid'), assistant('missing-model', TODAY, TOKENS, { model: undefined }),
+      assistant(undefined), { type: 'result' }, null,
+    ];
+    for (const row of rows) expect(canonicalRecordFromAssistant(row, { sessionId: 'main' })).toBeUndefined();
+  });
+
+  it('accepts only owned stream sessions and an explicit fallback for a missing timestamp', () => {
+    const row = { ...assistant('stream-final', undefined, TOKENS), timestamp: undefined, session_id: 'main' };
+    const metadata = { sessionId: 'main' };
+    expect(canonicalRecordFromAssistant(row, metadata)).toBeUndefined();
+    expect(canonicalRecordFromAssistant(row, metadata, new Date(TODAY)))
+      .toEqual(canonicalRecordFromAssistant(assistant('stream-final'), metadata));
+    expect(canonicalRecordFromAssistant({ ...row, session_id: 'other' }, metadata, TODAY)).toBeUndefined();
+    expect(canonicalRecordFromAssistant({ ...row, timestamp: 'invalid' }, metadata, TODAY)).toBeUndefined();
+    expect(canonicalRecordFromAssistant({ ...row, timestamp: EARLY }, metadata, TODAY)?.timestamp).toBe(EARLY);
+    expect(canonicalRecordFromAssistant(row, metadata, 'invalid')).toBeUndefined();
+  });
+
+  it('keeps scanner completeness rules instead of inventing missing counters or cache TTL', () => {
+    expect(canonicalRecordFromAssistant(assistant('partial-final', TODAY, { input_tokens: 12, output_tokens: 8 }),
+      { sessionId: 'main' })).toMatchObject({ complete: false, cache_creation_input_tokens: null, cache_read_input_tokens: null });
+    expect(canonicalRecordFromAssistant(assistant('unknown-ttl', TODAY, { ...TOKENS, cache_creation_input_tokens: 10 }),
+      { sessionId: 'main' })).toMatchObject({ complete: false });
+    expect(canonicalRecordFromAssistant(assistant('gpt-final', TODAY, { ...TOKENS, cache_creation_input_tokens: 10 },
+      { model: 'GPT-6.1-Sol' }), { sessionId: 'main' })).toMatchObject({ model: 'gpt-6-1-sol', complete: true });
   });
 });
 

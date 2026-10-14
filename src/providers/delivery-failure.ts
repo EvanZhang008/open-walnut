@@ -24,7 +24,7 @@ export type DeliveryFailureKind = 'permanent' | 'transient';
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
 }
@@ -49,6 +49,9 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   const message = err instanceof Error ? err.message : String(err ?? '');
   const reason = message.trim().slice(0, REASON_MAX) || 'delivery failed';
 
+  if (err instanceof BudgetPausedError || (err instanceof Error && /\bbudget_paused\b/.test(err.message))) {
+    return { kind: 'permanent', code: 'budget_paused', reason: 'Not sent: the session budget is paused. Raise the limit or resolve unverified cost, then retry.' };
+  }
   if (isSessionStopSuperseded(err)) return { kind: 'permanent', code: 'session_stopped', reason };
   if (err instanceof CwdMissingError) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (CWD_MISSING.test(message)) return { kind: 'permanent', code: 'cwd_missing', reason };
@@ -106,6 +109,14 @@ export class SendOutcomeUnknownError extends Error {
  * outcome stayed unknown, and writing it would let it overtake that line. It
  * goes back to the queue, behind the unknown one.
  */
+export class BudgetPausedError extends Error {
+  readonly code = 'BUDGET_PAUSED';
+  constructor() {
+    super('budget_paused: raise the limit or resolve unverified cost, then retry the message');
+    this.name = 'BudgetPausedError';
+  }
+}
+
 export class SendHeldError extends Error {
   readonly code = 'SEND_HELD';
   constructor() {

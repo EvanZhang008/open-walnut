@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { scanCanonicalUsage, scanCostState } from './usage-scan-core.js';
-import { scanProxyUsage, reconcileUsage } from './usage-reconcile-core.js';
+import { scanProxyUsage, reconcileUsageAsync } from './usage-reconcile-core.js';
+import { setImmediate } from 'node:timers/promises';
 import { priceUsage } from '../core/usage/pricing.js';
 
 export interface UsageScanRequest {
@@ -10,10 +11,14 @@ export interface UsageScanRequest {
   since?: string;
   until: string;
   sessionIds?: string[];
+  lifetime?: boolean;
 }
 
 export async function scanHostUsage(request: UsageScanRequest) {
-  const canonical = await scanCanonicalUsage({ ...request, since: undefined, until: undefined });
+  const since = request.since === undefined ? undefined : Date.parse(request.since);
+  const until = Date.parse(request.until);
+  if ((since !== undefined && !Number.isFinite(since)) || !Number.isFinite(until)
+    || (since !== undefined && since > until)) throw new RangeError('Invalid usage collection window');
   const files: string[] = [];
   if (request.proxyLogDir) {
     try {
@@ -25,13 +30,29 @@ export async function scanHostUsage(request: UsageScanRequest) {
     } catch { /* Missing evidence stays unverified. */ }
   }
   const upstream = await scanProxyUsage({ files, sessionIds: request.sessionIds });
-  const since = request.since ? Date.parse(request.since) : undefined;
-  const until = Date.parse(request.until);
-  if ((since !== undefined && !Number.isFinite(since)) || !Number.isFinite(until)
-    || (since !== undefined && since > until)) throw new RangeError('Invalid usage collection window');
-  const scoped = reconcileUsage(canonical.records, upstream.records, { since, until });
-  const used = new Set(scoped.records.flatMap(r => r.upstream ? [r.upstream] : []));
-  const inWindow = upstream.records.filter(r => used.has(r) || ((since === undefined || r.startedMs >= since) && r.startedMs < until));
+  let retainedSince = since;
+  let retainedUntil = since === until ? until + 1 : until;
+  // Retain every competitor before clipping; proxy compatibility includes its right endpoint.
+  for (const record of upstream.records) {
+    if (retainedSince !== undefined) retainedSince = Math.min(retainedSince, record.startedMs - 5_000);
+    retainedUntil = Math.max(retainedUntil, (record.finishedMs ?? record.startedMs) + 5_000 + 1);
+  }
+  const retainedEnd = new Date(retainedUntil);
+  const canonical = await scanCanonicalUsage({ ...request,
+    since: request.lifetime || retainedSince === undefined ? undefined : new Date(retainedSince),
+    until: request.lifetime ? undefined : Number.isFinite(retainedEnd.getTime()) ? retainedEnd : undefined,
+  });
+  const scoped = await reconcileUsageAsync(canonical.records, upstream.records, request.lifetime ? {} : { since, until });
+  const used = new Set<typeof upstream.records[number]>();
+  for (const [index, record] of scoped.records.entries()) {
+    if (record.upstream) used.add(record.upstream);
+    if (index % 100 === 99) await setImmediate();
+  }
+  const inWindow: typeof upstream.records = [];
+  for (const [index, record] of upstream.records.entries()) {
+    if (request.lifetime || used.has(record) || ((since === undefined || record.startedMs >= since) && record.startedMs < until)) inWindow.push(record);
+    if (index % 100 === 99) await setImmediate();
+  }
   return { canonical: { ...canonical, records: scoped.records }, upstream: { ...upstream, records: inWindow },
     reconciliation: scoped, until: request.until };
 }
@@ -66,3 +87,5 @@ export function createUsagePages() {
 }
 
 export { scanCostState, priceUsage };
+export { createUsageBudgetRuntime } from './usage-budget-runtime.js';
+export { createBudgetControl } from './usage-budget-control.js';

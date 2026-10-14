@@ -73,6 +73,12 @@ SOURCES=(
   src/providers/usage-host-core.ts
   src/providers/usage-scan-core.ts
   src/providers/usage-reconcile-core.ts
+  src/providers/usage-budget-core.ts
+  src/providers/usage-budget-persistence.ts
+  src/providers/usage-budget-runtime.ts
+  src/providers/usage-budget-control.ts
+  src/providers/usage-budget-tail.ts
+  src/providers/usage-budget-index.ts
   src/core/usage/pricing.ts
   src/providers/external-session-scan-core.ts
   src/providers/path-resolve-core.ts
@@ -211,6 +217,9 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/usage-core.cjs" \
   src/providers/usage-host-core.ts
+
+# usage-core also exports the persistent budget runtime and control ACK helper.
+# Both twins use the same accounting and pause policy; source deploy reuses this artifact.
 
 # External-session scan sidecar — same rationale as changes-core.cjs: the
 # source template can't import, so deploySource ships this next to daemon.cjs

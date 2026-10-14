@@ -104,6 +104,7 @@ interface SessionKebabSectionProps {
   investigating: boolean;
   investigateResult: { kind: 'ok'; id: string } | { kind: 'error' } | null;
   onOpenVscodeError: (error: unknown) => void;
+  onOpenUsage?: () => void;
   /** Called after any item runs so the parent can close the dropdown. */
   onAfterAction?: () => void;
 }
@@ -140,7 +141,7 @@ export function SessionKebabSection({
   onRestart, restartBusy,
   onTerminate, terminateBusy,
   onInvestigate, investigating, investigateResult,
-  onOpenVscodeError, onAfterAction,
+  onOpenVscodeError, onOpenUsage, onAfterAction,
 }: SessionKebabSectionProps) {
   const codeHoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(codeHoverTimer.current), [sessionId]);
@@ -152,6 +153,16 @@ export function SessionKebabSection({
   return (
     <div className="task-kebab-section">
       <div className="task-kebab-section-label">Session</div>
+
+      {onOpenUsage && (
+        <button type="button" className="task-kebab-item" onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onAfterAction?.(); onOpenUsage(); }}>
+          <span className="task-kebab-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M7 16v-3m5 3V8m5 8v-5" /></svg>
+          </span>
+          <span>Usage &amp; Budget</span>
+        </button>
+      )}
 
       <button
         className={`task-kebab-item${activeView === 'inbox' ? ' task-kebab-item-active' : ''}`}

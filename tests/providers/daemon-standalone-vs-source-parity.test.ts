@@ -269,8 +269,8 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       // start: destructured off the command and normalised (empty string = absent).
       expect(src).toMatch(/const \{ sid, args, cwd, message, resume, mode, uuid \} = cmd/)
       expect(src).toMatch(/const initialUuid = typeof uuid === 'string' && uuid \? uuid : (undefined|null)/)
-      // The initial-message envelope gains the key only when initialUuid is set.
-      expect(src).toMatch(/\.\.\.\(initialUuid \? \{ uuid: initialUuid \} : \{\}\)|if \(initialUuid\) envelope\.uuid = initialUuid/)
+      // Initial delivery now shares the final guarded FIFO serializer, carrying the same uuid.
+      expect(src).toMatch(/(?:core\.)?handleSendCommand\(sid, message, initialUuid\)/)
     }
     // send: the standalone delegates to core with the uuid; the template builds
     // its own envelope with the same "non-empty string only" gate.
@@ -341,12 +341,14 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     // The spawn gate sits between the adopt path and the replace path: only a
     // replace (a real respawn) may consult it, never an adoption.
     const ensureClaude = vi.fn(async () => ({ ok: true, path: 'fixture-cli', kind: 'native' }))
-    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand', 'hostRuntime',
+    const requireBudgetAllowance = vi.fn(async () => {})
+    const isJournalSid = (sid: unknown) => typeof sid === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(sid)
+    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand', 'hostRuntime', 'isJournalSid', 'requireBudgetAllowance',
       js + '\nreturn cmdStart')(
       sessions, { kill, env: {} }, { existsSync: () => true }, { handleSendCommand: send }, fifo,
       addSubscriber, sendOk, sendError, () => {}, Buffer,
       { run: (_sid: string, work: () => Promise<unknown>) => work() }, new Map(), null, () => {}, send,
-      { ensureClaude },
+      { ensureClaude }, isJournalSid, requireBudgetAllowance,
     )
     const command = { sid: 'sid', args: ['fixture-cli'], cwd: '/fixture', resume: true, message: '' }
     const result = await run({}, 1, { ...command, deferMessage: true })
@@ -357,6 +359,7 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(existing.state).toBe('running')
     expect(addSubscriber).toHaveBeenCalledOnce()
     expect(ensureClaude).not.toHaveBeenCalled()
+    expect(requireBudgetAllowance).toHaveBeenCalledExactlyOnceWith('sid')
     await expect(run({}, 2, command)).rejects.toThrow('replace path reached')
     expect(ensureClaude).toHaveBeenCalledOnce()
   })
@@ -1886,8 +1889,12 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
   it('both clear waiting on pendingCtrl resolution (sendRaw clear + setMode auto-allow)', () => {
     // core handles sendRaw for the standalone; template inlines it.
     expect(coreSrcC1()).toMatch(/pushSnapshotFn\(sid,\s*false\)/)
-    expect(templateSrc.match(/pushSnapshot\(sid,\s*false\); \/\/ C1/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
-    expect(standaloneSrc).toMatch(/pushSnapshot\(sid,\s*false\) \/\/ C1: pendingCtrl cleared/)
+    const sourcePermission = templateSrc.slice(templateSrc.indexOf('async function writePermissionLine('), templateSrc.indexOf('// The single marker write point', templateSrc.indexOf('async function writePermissionLine(')))
+    expect(sourcePermission).toMatch(/session\.pendingCtrl = null;\s*persistRegistry\(\);\s*pushSnapshot\(sid, false\)/)
+    const standaloneMode = standaloneSrc.slice(standaloneSrc.indexOf('function applyModePolicy('), standaloneSrc.indexOf('// ── Stop session', standaloneSrc.indexOf('function applyModePolicy(')))
+    const sourceMode = templateSrc.slice(templateSrc.indexOf('function applyModePolicy('), templateSrc.indexOf('// ── Stop session', templateSrc.indexOf('function applyModePolicy(')))
+    expect(standaloneMode).toMatch(/core\.handleSendRawCommand\(sid, resp\)/)
+    expect(sourceMode).toMatch(/writePermissionLine\(sid, resp\)/)
   })
 
   it("'snapshot-v1' is advertised but NOT required (old daemons must stay usable)", () => {
@@ -2590,9 +2597,33 @@ describe('durable-cron death-funnel strip daemon-core vs daemon-source parity', 
       expect(src).toMatch(/stripped dead session durable crons \(Walnut policy: session-scoped only\)/)
       // Ordering: the strip must sit inside reapSession, after the FIFO unlink
       // and before the process-group kill (so a slow kill can't race a fire).
-      const unlink = src.indexOf('unlinkSync(session.pipePath)')
-      const strip = src.indexOf('stripDurableTasksForSession(raw, sid)')
-      const kill = src.indexOf('SIGTERM')
+      const parsed = ts.createSourceFile('daemon.ts', src, ts.ScriptTarget.Latest, true)
+      let body: string | undefined
+      const visit = (node: ts.Node) => {
+        if (ts.isFunctionDeclaration(node) && node.name?.text === 'reapSession') body = node.body?.getText(parsed)
+        if (!body) ts.forEachChild(node, visit)
+      }
+      // The source twin is embedded JS. Parse its literal body rather than matching wrapper comments.
+      const template = src.indexOf('const DAEMON_SOURCE = `')
+      if (template >= 0) {
+        let literal: string | undefined
+        const find = (node: ts.Node) => {
+          if (ts.isVariableDeclaration(node) && node.name.getText(parsed) === 'DAEMON_SOURCE' && node.initializer && ts.isNoSubstitutionTemplateLiteral(node.initializer)) literal = node.initializer.text
+          ts.forEachChild(node, find)
+        }
+        find(parsed)
+        expect(literal, 'actual source daemon body must be available').toBeDefined()
+        const embedded = ts.createSourceFile('embedded.js', literal!, ts.ScriptTarget.Latest, true)
+        const findReap = (node: ts.Node) => {
+          if (ts.isFunctionDeclaration(node) && node.name?.text === 'reapSession') body = node.body?.getText(embedded)
+          if (!body) ts.forEachChild(node, findReap)
+        }
+        findReap(embedded)
+      } else visit(parsed)
+      expect(body, 'actual reapSession function must be available').toBeDefined()
+      const unlink = body!.indexOf('unlinkSync(session.pipePath)')
+      const strip = body!.indexOf('stripDurableTasksForSession(raw, sid)')
+      const kill = body!.search(/killProcessGroup(?:Fn)?\(groupPid, 'SIGTERM'\)/)
       expect(unlink).toBeGreaterThan(-1)
       expect(strip).toBeGreaterThan(unlink)
       expect(kill).toBeGreaterThan(strip)
@@ -2636,9 +2667,11 @@ describe('control_cancel_request pendingCtrl clear daemon-standalone vs daemon-s
 
   it('both clear pendingCtrl when the cancel request_id matches', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      const at = src.indexOf("parsed.type === 'control_cancel_request'")
-      expect(at, 'cancel branch missing').toBeGreaterThan(-1)
-      const branch = src.slice(at, at + 600)
+      const watcher = src.indexOf('function ensureWatcher(')
+      expect(watcher, 'actual tailer missing').toBeGreaterThan(-1)
+      const at = src.indexOf("parsed.type === 'control_cancel_request' && s.pendingCtrl", watcher)
+      expect(at, 'cancel branch missing from actual tailer').toBeGreaterThan(watcher)
+      const branch = src.slice(at, at + 900)
       expect(branch).toMatch(/request_id === s\.pendingCtrl\.reqId/)
       expect(branch).toMatch(/s\.pendingCtrl = null/)
       expect(branch).toMatch(/persistRegistry\(\)/)

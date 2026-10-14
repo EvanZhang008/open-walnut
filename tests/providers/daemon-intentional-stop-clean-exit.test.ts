@@ -423,14 +423,23 @@ describe('intentional-stop intent parity across the three daemon twins', () => {
     }
   })
 
-  it('nothing else in either twin marks a death as intentional', () => {
-    // EXACTLY two writers: the daemon's own idle scan and cmdStop. A crash,
-    // ENXIO, or a pid-recycle must keep reporting a non-zero code.
+  it('only idle scan, explicit stop and an owned budget pause mark a death as intentional', () => {
+    // Exact sites, not a relaxed count: crashes, ENXIO and pid recycling must remain errors.
     for (const [name, src] of [['daemon-standalone', standaloneSrc], ['daemon-source', templateSrc]] as const) {
-      const assignments = src.match(/intentionalStopAt\s*=(?!=)/g) ?? []
-      expect(assignments.length, `${name}: exactly two intentionalStopAt assignments (idle scan + cmdStop)`).toBe(2)
+      const stop = fnBody(src, 'stopSessionProcess', name)
+      const budget = fnBody(src, 'pauseBudgetSession', name)
+      const count = (text: string) => (text.match(/intentionalStopAt\s*=(?!=)/g) ?? []).length
+      expect(count(stop), `${name}: explicit process stop has one intent stamp`).toBe(1)
+      expect(count(budget), `${name}: actual budget pause has one intent stamp`).toBe(1)
+      expect(budget.indexOf('persistBudgetStops()')).toBeLessThan(budget.indexOf('session.intentionalStopAt = Date.now()'))
+      expect(budget.indexOf('session.intentionalStopAt = Date.now()')).toBeLessThan(budget.indexOf("subtype: 'stop_task'"))
+      const remaining = src.replace(stop, '').replace(budget, '')
+      expect(count(remaining), `${name}: the only remaining stamp belongs to the idle scan`).toBe(1)
+      const idle = remaining.indexOf("'idle scan: killing idle session (no subscribers, no output)'")
+      expect(idle).toBeGreaterThan(-1)
+      expect(count(remaining.slice(idle, idle + 1200))).toBe(1)
+      expect(count(src), `${name}: exactly three intentional stop sites`).toBe(3)
     }
-    // daemon-core only ever READS the flag (the scanners live in the twins).
     expect((coreSrc.match(/intentionalStopAt\s*=(?!=)/g) ?? []).length).toBe(0)
   })
 

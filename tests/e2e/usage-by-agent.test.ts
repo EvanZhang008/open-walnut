@@ -57,6 +57,17 @@ describe('reconciled usage through the real server', () => {
       expect(response.status).toBe(400);
     }
   });
+  it('rejects invalid session allowance writes through the real HTTP boundary', async () => {
+    for (const body of [{ limitUsd: -1, revision: 0 }, { limitUsd: 0, revision: 0 },
+      { limitUsd: 10, revision: -1 }, { limitUsd: '10', revision: 0 }, { limitUsd: null }]) {
+      const response = await fetch(`http://127.0.0.1:${port}/api/usage/sessions/example-session/budget`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+    }
+    const absent = await fetch(`http://127.0.0.1:${port}/api/usage/sessions/absent-session`);
+    expect(absent.status).toBe(404);
+  });
   it('uses the same verified numbers in the older API entries', async () => {
     const groups = await get('/api/usage/by-agent?period=all');
     expect(groups.agents.map((x: { name: string }) => x.name).sort()).toEqual(['main', 'subagent']);

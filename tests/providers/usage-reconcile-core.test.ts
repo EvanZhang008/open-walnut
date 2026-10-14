@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import fs, { appendFile, mkdir, mkdtemp, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { reconcileUsage, scanProxyUsage, type ProxyUsageRecord } from '../../src/providers/usage-reconcile-core.js';
-import type { CanonicalUsageRecord } from '../../src/providers/usage-scan-core.js';
+import { scanCanonicalUsage, type CanonicalUsageRecord } from '../../src/providers/usage-scan-core.js';
+import * as canonicalScanner from '../../src/providers/usage-scan-core.js';
 import { scanHostUsage, createUsagePages } from '../../src/providers/usage-host-core.js';
 
 const START = Date.parse('2026-10-12T12:00:00Z');
@@ -33,7 +34,7 @@ function cache(overrides: Record<string, unknown> = {}): string {
 }
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(path.join(os.tmpdir(), 'wn-usage-reconcile-')); });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); await rm(dir, { recursive: true, force: true }); });
 async function logFile(name: string, lines: string[]): Promise<string> {
   const file = path.join(dir, name);
   await writeFile(file, lines.join('\n') + '\n');
@@ -69,6 +70,27 @@ describe('scanProxyUsage', () => {
     expect(result.records).toHaveLength(3);
     expect(result.coverage.duplicates).toBe(4);
     expect(result.records.map((record) => record.startedMs)).toEqual([START, START, START + 1]);
+  });
+
+  it('returns stable opaque identities across batches without exposing account labels', async () => {
+    const file = await logFile('identities.log', [cache()]);
+    const first = await scanProxyUsage({ files: [file], offsets: {} });
+    const identity = first.records[0].evidenceId;
+    expect(identity).toMatch(/^[a-f0-9]{64}$/);
+    await appendFile(file, [cache(), cache({ account: 'route-b' }), cache({ started_ms: START + 1 })].join('\n') + '\n');
+    const next = await scanProxyUsage({ files: [file], offsets: first.checkpoints });
+    expect(next.records[0].evidenceId).toBe(identity);
+    expect(new Set(next.records.map(row => row.evidenceId)).size).toBe(3);
+    await appendFile(file, cache({ input_tokens: 20 }) + '\n');
+    const conflict = await scanProxyUsage({ files: [file], offsets: next.checkpoints });
+    expect(conflict.records[0]).toMatchObject({ evidenceId: identity, input_tokens: 20, complete: true });
+    expect(first.records[0]).toMatchObject({ evidenceId: identity, input_tokens: 19, complete: true });
+    const full = await scanProxyUsage({ files: [file] });
+    expect(full.records.find(row => row.evidenceId === identity)).toMatchObject({ input_tokens: null, complete: false });
+    const records = JSON.stringify([...first.records, ...next.records, ...conflict.records, ...full.records]);
+    expect(records).not.toContain('route-a');
+    expect(records).not.toContain('route-b');
+    expect(records).not.toContain('account');
   });
 
   it('does not verify conflicting duplicates or turn unknown counters into zero', async () => {
@@ -149,6 +171,92 @@ describe('scanProxyUsage', () => {
     expect((await scanProxyUsage({ files: [file] })).coverage).toMatchObject({ filesScanned: 1, cacheLines: 0, allFilesRead: true });
   });
 
+  it('checkpoints only complete incremental lines and rereads an appended UTF-8 fragment', async () => {
+    const firstLine = cache({ request_id: 'first' }) + '\r\n';
+    const unicode = String.fromCodePoint(0xe9, 0x96ea);
+    const pendingLine = cache({ request_id: 'pending', prompt: unicode });
+    const pendingBytes = Buffer.from(pendingLine);
+    const split = pendingBytes.indexOf(Buffer.from(unicode.slice(1))) + 1;
+    const file = path.join(dir, 'incremental.log');
+    await writeFile(file, Buffer.concat([Buffer.from(firstLine), pendingBytes.subarray(0, split)]));
+    const first = await scanProxyUsage({ files: [file], offsets: {} });
+    expect(first.records.map(row => row.requestId)).toEqual(['first']);
+    expect(first.checkpoints?.[file].offset).toBe(Buffer.byteLength(firstLine));
+    expect(first.diagnostics).toEqual([]);
+    const unchanged = await scanProxyUsage({ files: [file], offsets: first.checkpoints });
+    expect(unchanged.records).toEqual([]);
+    expect(unchanged.checkpoints).toEqual(first.checkpoints);
+    await appendFile(file, Buffer.concat([pendingBytes.subarray(split), Buffer.from('\n' + cache({ request_id: 'last' }))]));
+    const second = await scanProxyUsage({ files: [file], offsets: first.checkpoints });
+    expect(second.records.map(row => row.requestId)).toEqual(['pending']);
+    expect(second.checkpoints?.[file].offset).toBe(Buffer.byteLength(firstLine + pendingLine + '\n'));
+    expect(second.diagnostics).toEqual([]);
+    await appendFile(file, '\n');
+    const third = await scanProxyUsage({ files: [file], offsets: second.checkpoints });
+    expect(third.records.map(row => row.requestId)).toEqual(['last']);
+    expect(third.checkpoints?.[file].offset).toBe((await stat(file)).size);
+    expect((await scanProxyUsage({ files: [file], offsets: third.checkpoints })).records).toEqual([]);
+  });
+
+  it('preserves whole-file EOF behavior while incremental mode waits for a newline', async () => {
+    const file = path.join(dir, 'unterminated.log');
+    await writeFile(file, cache());
+    const whole = await scanProxyUsage({ files: [file] });
+    expect(whole.records).toHaveLength(1);
+    expect(whole).not.toHaveProperty('checkpoints');
+    const incremental = await scanProxyUsage({ files: [file], offsets: {} });
+    expect(incremental.records).toEqual([]);
+    expect(incremental.checkpoints?.[file].offset).toBe(0);
+    await appendFile(file, '\n');
+    expect((await scanProxyUsage({ files: [file], offsets: incremental.checkpoints })).records).toHaveLength(1);
+  });
+
+  it('restarts incremental reads when a file is truncated or replaced by rotation', async () => {
+    const file = await logFile('proxy.log', [cache({ request_id: 'old-one' }), cache({ request_id: 'old-two' })]);
+    const first = await scanProxyUsage({ files: [file], offsets: {} });
+    await writeFile(file, cache({ request_id: 'short' }) + '\n');
+    const truncated = await scanProxyUsage({ files: [file], offsets: first.checkpoints });
+    expect(truncated.records.map(row => row.requestId)).toEqual(['short']);
+    expect(truncated.checkpoints?.[file].ino).toBe(first.checkpoints?.[file].ino);
+    expect(truncated.checkpoints?.[file].offset).toBe((await stat(file)).size);
+    const rotatedFile = path.join(dir, 'proxy.log.2026-10-12');
+    await rename(file, rotatedFile);
+    await writeFile(file, cache({ request_id: 'replacement' }) + '\n');
+    const rotated = await scanProxyUsage({ files: [file, rotatedFile], offsets: {
+      ...truncated.checkpoints, [rotatedFile]: truncated.checkpoints![file],
+    } });
+    expect(rotated.records.map(row => row.requestId)).toEqual(['replacement']);
+    expect(rotated.checkpoints?.[file].ino).not.toBe(truncated.checkpoints?.[file].ino);
+    expect(rotated.checkpoints?.[rotatedFile]).toEqual(truncated.checkpoints?.[file]);
+  });
+
+  it('keeps conflict detection within a new batch and leaves cross-batch merging to the caller', async () => {
+    const file = await logFile('batches.log', [cache()]);
+    const first = await scanProxyUsage({ files: [file], offsets: {} });
+    await appendFile(file, [cache({ input_tokens: 20 }), cache({ input_tokens: 21 })].join('\n') + '\n');
+    const second = await scanProxyUsage({ files: [file], offsets: first.checkpoints });
+    expect(first.records[0]).toMatchObject({ input_tokens: 19, complete: true });
+    expect(second.records[0]).toMatchObject({ requestId: 'p1', input_tokens: null, complete: false });
+    expect(second.coverage.duplicates).toBe(1);
+    expect(second.diagnostics).toEqual([{ fileIndex: 0, lineNumber: 2, code: 'conflicting-duplicate' }]);
+  });
+
+  it('checkpoints complete malformed and filtered lines and validates offsets before opening files', async () => {
+    const file = await logFile('filtered.log', ['INFO request CACHE {invalid}', cache({ session_id: 'other' })]);
+    const result = await scanProxyUsage({ files: [file], offsets: {}, sessionIds: ['session-a'] });
+    expect(result.records).toEqual([]);
+    expect(result.coverage.filtered).toBe(1);
+    expect(result.checkpoints?.[file].offset).toBe((await stat(file)).size);
+    expect((await scanProxyUsage({ files: [file], offsets: result.checkpoints })).diagnostics).toEqual([]);
+    for (const offset of [-1, 1.5, NaN]) {
+      await expect(scanProxyUsage({ files: [path.join(dir, 'missing.log')], offsets: { [file]: { offset, dev: 1, ino: 1 } } }))
+        .rejects.toThrow('Invalid usage file checkpoint');
+    }
+    const emptyFile = path.join(dir, 'empty-incremental.log');
+    await writeFile(emptyFile, '');
+    expect((await scanProxyUsage({ files: [emptyFile], offsets: {} })).checkpoints?.[emptyFile].offset).toBe(0);
+  });
+
   it('yields after a five-millisecond CPU budget even when all scanned lines are unrelated', async () => {
     const file = await logFile('yield.log', Array.from({ length: 8 }, () => 'DEBUG unrelated entry'));
     let calls = 0;
@@ -173,14 +281,17 @@ describe('scanProxyUsage', () => {
 });
 
 describe('host evidence windows and pagination', () => {
+  function response(id: string, offset: number) {
+    return { type: 'assistant', sessionId: 'session-a', timestamp: iso(offset), message: {
+      id, model: 'claude-opus-4-6', stop_reason: 'end_turn',
+      usage: { ...TOKENS, cache_creation: { ephemeral_5m_input_tokens: 120, ephemeral_1h_input_tokens: 0 } },
+    } };
+  }
   async function hostEvidence() {
     const projectsDir = path.join(dir, 'projects');
     await mkdir(path.join(projectsDir, 'example'), { recursive: true });
     await writeFile(path.join(projectsDir, 'example', 'session-a.jsonl'), [9_000, 11_000].map((offset, index) =>
-      JSON.stringify({ type: 'assistant', sessionId: 'session-a', timestamp: iso(offset), message: {
-        id: `msg-${index}`, model: 'claude-opus-4-6', stop_reason: 'end_turn',
-        usage: { ...TOKENS, cache_creation: { ephemeral_5m_input_tokens: 120, ephemeral_1h_input_tokens: 0 } },
-      } })).join('\n') + '\n');
+      JSON.stringify(response(`msg-${index}`, offset))).join('\n') + '\n');
     await logFile('proxy.log', [cache({ started_ms: START + 8_000 })]);
     return { projectsDir, proxyLogDir: dir, sessionIds: ['session-a'] };
   }
@@ -193,6 +304,87 @@ describe('host evidence windows and pagination', () => {
     expect(second.canonical.records.map(r => r.responseId)).toEqual(['msg-1']);
     expect(second.reconciliation.residuals[0]).toMatchObject({ source: 'canonical', count: 1 });
   });
+  it('bounds snapshots but retains out-of-window proxy competitors and historical fork ownership', async () => {
+    const request = await hostEvidence();
+    const history = Array.from({ length: 300 }, (_, index) => response(`historical-${index}`, -86_400_000));
+    await mkdir(path.join(request.projectsDir, 'original'));
+    await writeFile(path.join(request.projectsDir, 'original', 'source.jsonl'), history.map(row =>
+      JSON.stringify({ ...row, sessionId: 'source' })).join('\n') + '\n');
+    await writeFile(path.join(request.projectsDir, 'example', 'session-a.jsonl'), [
+      ...history.map(row => ({ ...row, timestamp: iso(11_000),
+        forkedFrom: { sessionId: 'source', messageUuid: row.message.id } })),
+      response('before-retained-window', -5_001), response('retained-start', -5_000),
+      response('left-endpoint', 3_000), response('in-window', 11_000),
+      response('right-endpoint', 55_000), response('after-retained-window', 55_001), response('future', 100_000),
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    await logFile('proxy.log', [cache({ request_id: 'competitor', started_ms: START + 8_000 }),
+      cache({ request_id: 'left-extension', started_ms: START, input_tokens: 20 }),
+      cache({ request_id: 'right-extension', started_ms: START + 50_000, duration_ms: null, total_ms: null }),
+    ]);
+    const allCanonical = await scanCanonicalUsage(request);
+    const allProxy = await scanProxyUsage({ files: [path.join(dir, 'proxy.log')], sessionIds: request.sessionIds });
+    const expected = reconcileUsage(allCanonical.records, allProxy.records, { since: START + 10_000, until: START + 20_000 });
+    expect(reconcileUsage(allCanonical.records, allProxy.records).records.find(row => row.responseId === 'left-endpoint'))
+      .toMatchObject({ verification: 'matched', upstream: { requestId: 'competitor' } });
+    const scanner = vi.spyOn(canonicalScanner, 'scanCanonicalUsage');
+    const result = await scanHostUsage({ ...request, since: iso(10_000), until: iso(20_000) });
+    expect(scanner).toHaveBeenCalledWith({ ...request, since: new Date(START - 5_000), until: new Date(START + 55_001) });
+    const retained = await (scanner.mock.results[0]!.value as ReturnType<typeof scanCanonicalUsage>);
+    expect(retained.records.map(row => row.responseId)).toEqual([
+      'retained-start', 'left-endpoint', 'in-window', 'right-endpoint',
+    ]);
+    expect(result.reconciliation).toEqual(expected);
+    expect(result.canonical.records).toEqual(expected.records);
+    expect(result.reconciliation.records).toEqual([expect.objectContaining({ responseId: 'in-window', verification: 'unmatched' })]);
+    expect(result.upstream.records).toEqual([]);
+    expect(result.canonical.diagnostics.duplicate_usage_lines).toBe(300);
+  });
+
+  it('keeps the left side unbounded when since is absent, even without proxy evidence', async () => {
+    const request = await hostEvidence();
+    await writeFile(path.join(dir, 'proxy.log'), '');
+    await writeFile(path.join(request.projectsDir, 'example', 'session-a.jsonl'), [
+      response('historical', -86_400_000), response('today', 11_000), response('at-until', 20_000),
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    const scanner = vi.spyOn(canonicalScanner, 'scanCanonicalUsage');
+    const result = await scanHostUsage({ ...request, until: iso(20_000) });
+    expect(scanner).toHaveBeenCalledWith({ ...request, since: undefined, until: new Date(START + 20_000) });
+    expect(result.canonical.records.map(row => row.responseId)).toEqual(['historical', 'today']);
+    expect(result.reconciliation.records.every(row => row.verification === 'unmatched')).toBe(true);
+  });
+
+  it('uses the requested half-open window when proxy evidence is absent', async () => {
+    const request = await hostEvidence();
+    await writeFile(path.join(dir, 'proxy.log'), '');
+    const scanner = vi.spyOn(canonicalScanner, 'scanCanonicalUsage');
+    const result = await scanHostUsage({ ...request, since: iso(10_000), until: iso(11_000) });
+    expect(scanner).toHaveBeenCalledWith({ ...request, since: new Date(START + 10_000), until: new Date(START + 11_000) });
+    expect(result.canonical.records).toEqual([]);
+    expect(result.upstream.records).toEqual([]);
+  });
+
+  it('preserves an empty requested window without proxy evidence', async () => {
+    const request = await hostEvidence();
+    await writeFile(path.join(dir, 'proxy.log'), '');
+    const result = await scanHostUsage({ ...request, since: iso(11_000), until: iso(11_000) });
+    expect(result.reconciliation).toEqual({ records: [], upstreamUnmatched: [], residuals: [] });
+    expect(result.upstream.records).toEqual([]);
+  });
+
+  it.each([
+    { since: 'invalid', until: iso(20_000) },
+    { since: '', until: iso(20_000) },
+    { since: iso(20_000), until: iso(10_000) },
+    { until: 'invalid' },
+  ])('rejects an invalid host window before filesystem work: %j', async (window) => {
+    const readdir = vi.spyOn(fs, 'readdir');
+    const scanner = vi.spyOn(canonicalScanner, 'scanCanonicalUsage');
+    await expect(scanHostUsage({ projectsDir: path.join(dir, 'missing-projects'), proxyLogDir: dir, ...window }))
+      .rejects.toThrow('Invalid usage collection window');
+    expect(readdir).not.toHaveBeenCalled();
+    expect(scanner).not.toHaveBeenCalled();
+  });
+
   it('pages dense evidence without dropping counts or retaining a completed job', async () => {
     const result = await scanHostUsage({ ...await hostEvidence(), until: iso(20_000) });
     result.reconciliation.records = Array.from({ length: 1_201 }, (_, index) => ({

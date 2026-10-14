@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { open, type FileHandle } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { setImmediate } from 'node:timers/promises';
 import { normalizeUsageModel, type CanonicalUsageRecord } from './usage-scan-core.js';
@@ -12,6 +13,8 @@ type Time = string | number | Date;
 /** Only independent token evidence, never request content or inferred cache TTL. */
 export interface ProxyUsageRecord extends Counters {
   source: 'proxy';
+  /** Stable cross-batch identity without returning the private account label. */
+  evidenceId?: string;
   requestId: string;
   sessionId: string | null;
   model: string | null;
@@ -26,8 +29,16 @@ export interface ProxyUsageRecord extends Counters {
   lineNumber: number;
 }
 
+export interface ProxyUsageCheckpoint {
+  offset: number;
+  dev: number;
+  ino: number;
+}
+
 export interface ProxyUsageScanOptions {
   files: string[];
+  /** Opt-in incremental reads. Offsets must be newline boundaries previously returned for the same file. */
+  offsets?: Record<string, ProxyUsageCheckpoint>;
   /** Half-open request-start window [since, until), in milliseconds, ISO timestamps or local dates. */
   since?: Time;
   until?: Time;
@@ -36,6 +47,8 @@ export interface ProxyUsageScanOptions {
 
 export interface ProxyUsageScanResult {
   records: ProxyUsageRecord[];
+  /** Host-local paths are returned only in incremental mode, never in ordinary exported evidence. */
+  checkpoints?: Record<string, ProxyUsageCheckpoint>;
   diagnostics: { fileIndex: number; lineNumber?: number; code: string }[];
   coverage: {
     filesRequested: number;
@@ -94,7 +107,8 @@ function extract(raw: Record<string, unknown>, fileIndex: number, lineNumber: nu
   const responseModel = label(raw.response_model);
   const forwardedModel = label(raw.forwarded_model);
   const record: ProxyUsageRecord = {
-    source: 'proxy', requestId, sessionId: label(raw.session_id),
+    source: 'proxy', evidenceId: createHash('sha256').update(JSON.stringify([label(raw.account), requestId, startedMs])).digest('hex'),
+    requestId, sessionId: label(raw.session_id),
     model: responseModel ?? forwardedModel ?? requestedModel,
     requestedModel, responseModel, forwardedModel, startedMs,
     finishedMs: finish !== null && finish >= startedMs ? finish : null,
@@ -109,10 +123,41 @@ function extract(raw: Record<string, unknown>, fileIndex: number, lineNumber: nu
   return record;
 }
 
-/** Stream only explicitly supplied regular files. File positions replace raw paths/accounts in output. */
+/** Incremental reads wait for a complete LF/CRLF line; trailing fragments are reread next time. */
+async function* completeProxyLines(handle: FileHandle, start: number, end: number): AsyncGenerator<{ line: string; bytes: number }> {
+  const stream = handle.createReadStream({ autoClose: false, start, end: end - 1 });
+  let fragments: Buffer[] = [];
+  let readError: Error | undefined;
+  stream.on('error', error => { readError = error; });
+  try {
+    for await (const value of stream) {
+      const chunk = value as Buffer;
+      let cursor = 0;
+      while (cursor < chunk.length) {
+        const newline = chunk.indexOf(10, cursor);
+        if (newline < 0) { fragments.push(chunk.subarray(cursor)); break; }
+        fragments.push(chunk.subarray(cursor, newline + 1));
+        const bytes = Buffer.concat(fragments);
+        yield { line: bytes.toString('utf8').replace(/\r?\n$/, ''), bytes: bytes.length };
+        fragments = [];
+        cursor = newline + 1;
+      }
+    }
+    if (readError) throw readError;
+  } finally { stream.destroy(); }
+}
+
+/** Stream explicitly supplied regular files. Incremental callers merge/deduplicate evidence across batches. */
 export async function scanProxyUsage(options: ProxyUsageScanOptions): Promise<ProxyUsageScanResult> {
   const since = bound(options.since), until = bound(options.until);
   if (since !== undefined && until !== undefined && since > until) throw new RangeError('Reversed usage time window');
+  if (options.offsets && Object.values(options.offsets).some(checkpoint => !checkpoint
+    || !Number.isSafeInteger(checkpoint.offset) || checkpoint.offset < 0
+    || !Number.isSafeInteger(checkpoint.dev) || checkpoint.dev < 0
+    || !Number.isSafeInteger(checkpoint.ino) || checkpoint.ino < 0)) {
+    throw new RangeError('Invalid usage file checkpoint');
+  }
+  const checkpoints: Record<string, ProxyUsageCheckpoint> | undefined = options.offsets === undefined ? undefined : {};
   const sessions = options.sessionIds ? new Set(options.sessionIds) : null;
   const records: ProxyUsageRecord[] = [];
   const diagnostics: ProxyUsageScanResult['diagnostics'] = [];
@@ -141,15 +186,26 @@ export async function scanProxyUsage(options: ProxyUsageScanOptions): Promise<Pr
         continue;
       }
       coverage.filesScanned++;
-      if (!stat.size) continue;
+      const previous = options.offsets?.[file];
+      let consumedOffset = previous && previous.dev === stat.dev && previous.ino === stat.ino && previous.offset <= stat.size
+        ? previous.offset : 0;
+      const checkpoint = checkpoints ? { offset: consumedOffset, dev: stat.dev, ino: stat.ino } : undefined;
+      if (checkpoint) Object.defineProperty(checkpoints!, file, { value: checkpoint, enumerable: true, configurable: true, writable: true });
+      if (consumedOffset >= stat.size) continue;
       // Snapshot EOF: a busy append-only log cannot extend a scan forever.
-      const stream = handle.createReadStream({ encoding: 'utf8', autoClose: false, end: stat.size - 1 });
-      const lines = createInterface({ input: stream, crlfDelay: Infinity });
+      const stream = checkpoints ? undefined : handle.createReadStream({ encoding: 'utf8', autoClose: false, end: stat.size - 1 });
+      const lines = stream ? createInterface({ input: stream, crlfDelay: Infinity }) : undefined;
       let readError: Error | undefined;
-      stream.on('error', (error) => { readError = error; lines.close(); });
+      stream?.on('error', (error) => { readError = error; lines?.close(); });
+      const input = lines ?? completeProxyLines(handle, consumedOffset, stat.size);
       let lineNumber = 0;
       try {
-        for await (const line of lines) {
+        for await (const value of input) {
+          const line = typeof value === 'string' ? value : value.line;
+          if (typeof value !== 'string') {
+            consumedOffset += value.bytes;
+            checkpoint!.offset = consumedOffset;
+          }
           lineNumber++;
           const pause = yieldIfNeeded();
           if (pause) await pause;
@@ -194,7 +250,7 @@ export async function scanProxyUsage(options: ProxyUsageScanOptions): Promise<Pr
           coverage.lastStartedMs = Math.max(coverage.lastStartedMs ?? record.startedMs, record.startedMs);
         }
         if (readError) throw readError;
-      } finally { lines.close(); stream.destroy(); }
+      } finally { lines?.close(); stream?.destroy(); }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       diagnostics.push({ fileIndex, code: typeof code === 'string' ? code : 'file-read-error' });
@@ -203,7 +259,7 @@ export async function scanProxyUsage(options: ProxyUsageScanOptions): Promise<Pr
   }
   coverage.unattributed = records.filter((record) => record.sessionId === null).length;
   coverage.incomplete = records.filter((record) => !record.complete).length;
-  return { records, diagnostics, coverage };
+  return { records, diagnostics, coverage, ...(checkpoints ? { checkpoints } : {}) };
 }
 
 export type UsageVerification = 'matched' | 'unmatched' | 'incomplete';
@@ -250,59 +306,80 @@ function heapPop(heap: number[], ends: number[]): number {
   return first;
 }
 
-/** Input canonical records are already response/fork deduped by their owning scanner. */
-export function reconcileUsage(
+function* stableSort(values: number[], compare: (a: number, b: number) => number): Generator<void, void> {
+  let source = values, target = new Array<number>(values.length);
+  for (let width = 1; width < values.length; width *= 2) {
+    for (let start = 0; start < values.length; start += width * 2) {
+      const middle = Math.min(start + width, values.length), end = Math.min(start + width * 2, values.length);
+      let left = start, right = middle;
+      for (let out = start; out < end; out++) {
+        target[out] = left < middle && (right >= end || compare(source[left], source[right]) <= 0) ? source[left++] : source[right++];
+        yield;
+      }
+    }
+    [source, target] = [target, source];
+  }
+  if (source !== values) for (let i = 0; i < values.length; i++) { values[i] = source[i]; yield; }
+}
+
+/** One matching algorithm, drained synchronously or cooperatively by the public APIs. */
+function* reconciliationSteps(
   canonical: readonly CanonicalUsageRecord[], upstream: readonly ProxyUsageRecord[],
   options: { maxTimestampDriftMs?: number; since?: number; until?: number } = {},
-): UsageReconciliation {
+): Generator<void, UsageReconciliation> {
   const drift = options.maxTimestampDriftMs ?? 5_000;
   if (!Number.isFinite(drift) || drift < 0) throw new RangeError('Invalid usage timestamp drift');
-  const records: UsageReconciliation['records'] = canonical.map((record) => ({
-    ...record, verification: record.complete && hasCounters(record) && signature(record) && time(record.timestamp) !== null
-      ? 'unmatched' : 'incomplete',
-  }));
+  const records: UsageReconciliation['records'] = [];
   const canonicalGroups = new Map<string, number[]>(), upstreamGroups = new Map<string, number[]>();
-  const starts = upstream.map((record) => record.startedMs - drift);
-  const ends = upstream.map((record) => (record.finishedMs ?? record.startedMs) + drift);
-  records.forEach((record, index) => {
+  const starts: number[] = [], ends: number[] = [], eligible: boolean[] = [];
+  for (const [index, record] of canonical.entries()) {
     const key = signature(record);
-    if (record.verification !== 'incomplete' && key) {
+    const verification = record.complete && hasCounters(record) && key && time(record.timestamp) !== null ? 'unmatched' : 'incomplete';
+    records.push({ ...record, verification });
+    if (verification !== 'incomplete' && key) {
       const group = canonicalGroups.get(key) ?? []; group.push(index); canonicalGroups.set(key, group);
     }
-  });
-  const eligible = upstream.map((record, index) => Boolean(record.complete && record.usagePresent && signature(record)
-    && time(record.startedMs) !== null && (record.finishedMs === null
-      || (time(record.finishedMs) !== null && record.finishedMs >= record.startedMs)) && Number.isFinite(ends[index])));
-  upstream.forEach((record, index) => {
+    yield;
+  }
+  for (const [index, record] of upstream.entries()) {
+    starts.push(record.startedMs - drift); ends.push((record.finishedMs ?? record.startedMs) + drift);
     const key = signature(record);
+    eligible.push(Boolean(record.complete && record.usagePresent && key && time(record.startedMs) !== null
+      && (record.finishedMs === null || (time(record.finishedMs) !== null && record.finishedMs >= record.startedMs)) && Number.isFinite(ends[index])));
     if (eligible[index] && key) {
       const group = upstreamGroups.get(key) ?? []; group.push(index); upstreamGroups.set(key, group);
     }
-  });
+    yield;
+  }
   const used = new Set<number>();
   for (const [key, group] of canonicalGroups) {
     const candidates = upstreamGroups.get(key) ?? [];
-    candidates.sort((a, b) => starts[a] - starts[b] || ends[a] - ends[b]);
-    group.sort((a, b) => time(records[a].timestamp)! - time(records[b].timestamp)!);
+    yield* stableSort(candidates, (a, b) => starts[a] - starts[b] || ends[a] - ends[b]);
+    yield* stableSort(group, (a, b) => time(records[a].timestamp)! - time(records[b].timestamp)!);
     const heap: number[] = [];
     let cursor = 0;
     for (const index of group) {
       const timestamp = time(records[index].timestamp)!;
-      while (cursor < candidates.length && starts[candidates[cursor]] <= timestamp) heapPush(heap, candidates[cursor++], ends);
-      while (heap.length && ends[heap[0]] < timestamp) heapPop(heap, ends);
-      if (!heap.length) continue;
-      // Earliest compatible finish preserves count multiplicity when windows overlap.
-      const match = heapPop(heap, ends);
-      used.add(match); records[index].verification = 'matched'; records[index].upstream = upstream[match];
+      while (cursor < candidates.length && starts[candidates[cursor]] <= timestamp) { heapPush(heap, candidates[cursor++], ends); yield; }
+      while (heap.length && ends[heap[0]] < timestamp) { heapPop(heap, ends); yield; }
+      if (heap.length) {
+        // Earliest compatible finish preserves count multiplicity when windows overlap.
+        const match = heapPop(heap, ends);
+        used.add(match); records[index].verification = 'matched'; records[index].upstream = upstream[match];
+      }
+      yield;
     }
   }
   const inWindow = (timestamp: number) => (options.since === undefined || timestamp >= options.since)
     && (options.until === undefined || timestamp < options.until);
-  const scopedRecords = records.filter(record => inWindow(time(record.timestamp) ?? -Infinity));
-  const upstreamUnmatched: UsageReconciliation['upstreamUnmatched'] = upstream.flatMap((record, index) =>
-    used.has(index) || !inWindow(record.startedMs) ? [] : [{
+  const scopedRecords: UsageReconciliation['records'] = [], upstreamUnmatched: UsageReconciliation['upstreamUnmatched'] = [];
+  for (const record of records) { if (inWindow(time(record.timestamp) ?? -Infinity)) scopedRecords.push(record); yield; }
+  for (const [index, record] of upstream.entries()) {
+    if (!used.has(index) && inWindow(record.startedMs)) upstreamUnmatched.push({
       ...record, verification: !record.sessionId ? 'unattributed' : eligible[index] ? 'unmatched' : 'incomplete',
-    }]);
+    });
+    yield;
+  }
   const residuals = new Map<string, UsageResidual>();
   function addResidual(source: UsageResidual['source'], record: { model: string | null } & object): void {
     const model = record.model ? normalizeUsageModel(record.model) : 'unknown';
@@ -316,7 +393,35 @@ export function reconcileUsage(
     }
     residuals.set(key, sum);
   }
-  scopedRecords.filter((record) => record.verification !== 'matched').forEach((record) => addResidual('canonical', record));
-  upstreamUnmatched.forEach((record) => addResidual('proxy', record));
+  for (const record of scopedRecords) { if (record.verification !== 'matched') addResidual('canonical', record); yield; }
+  for (const record of upstreamUnmatched) { addResidual('proxy', record); yield; }
   return { records: scopedRecords, upstreamUnmatched, residuals: [...residuals.values()] };
+}
+
+/** Input canonical records are already response/fork deduped by their owning scanner. */
+export function reconcileUsage(
+  canonical: readonly CanonicalUsageRecord[], upstream: readonly ProxyUsageRecord[],
+  options: { maxTimestampDriftMs?: number; since?: number; until?: number } = {},
+): UsageReconciliation {
+  const steps = reconciliationSteps(canonical, upstream, options);
+  let next = steps.next();
+  while (!next.done) next = steps.next();
+  return next.value;
+}
+
+/** The same stable greedy matcher, including sort/heap work, yields at a five-millisecond CPU budget. */
+export async function reconcileUsageAsync(
+  canonical: readonly CanonicalUsageRecord[], upstream: readonly ProxyUsageRecord[],
+  options: { maxTimestampDriftMs?: number; since?: number; until?: number } = {},
+): Promise<UsageReconciliation> {
+  const steps = reconciliationSteps(canonical, upstream, options);
+  let cpu = process.cpuUsage(), ticks = 0, next = steps.next();
+  while (!next.done) {
+    if (++ticks % 64 === 0) {
+      const elapsed = process.cpuUsage(cpu);
+      if (elapsed.user + elapsed.system >= 5_000) { await setImmediate(); cpu = process.cpuUsage(); }
+    }
+    next = steps.next();
+  }
+  return next.value;
 }

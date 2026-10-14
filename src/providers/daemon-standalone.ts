@@ -145,6 +145,9 @@ import {
 import { buildTriggerMessage } from './trigger-envelope-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { scanHostUsage, scanCostState, createUsagePages } from './usage-host-core.js'
+import { createUsageBudgetRuntime } from './usage-budget-runtime.js'
+import { createBudgetControl } from './usage-budget-control.js'
+import { ensureUsageBudgetDirectory } from './usage-budget-core.js'
 import { grepReferencesHostLocal } from './search-grep-core.js'
 import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
 import {
@@ -174,6 +177,7 @@ import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.j
 const daemonCommands = createDaemonCommandDrain()
 const sessionStartGate = new DaemonSessionGate()
 const sessionStopVersions = new Map<string, number>()
+const retryCheckVersions = new Map<string, number>()
 let cronRuntime: Awaited<ReturnType<typeof createDaemonCronRuntime>> | null = null
 let daemonInstanceLock: DaemonInstanceLockOwner | null = null
 let daemonBootId: string | undefined
@@ -1768,6 +1772,7 @@ const core = createDaemonCore<SessionData>({
   orphanPollIntervalMs: 1000,
   orphanStartTimeCheckMs: 30_000,
   logger: logMsg,
+  allowBudgetFn: (sid) => budgetAllowance(sid),
   broadcastSessionStateFn: (payload) => {
     const session = sessions.get(payload.sid)
     if (session) updateCronMetadata(payload.sid, session)
@@ -1840,6 +1845,7 @@ const core = createDaemonCore<SessionData>({
       mode: entry.mode ?? 'default',
       pendingCtrl: entry.pendingCtrl ?? null,
       turnRetry: entry.turnRetry,
+      budgetGracefulStop: entry.budgetGracefulStop === true || budgetStopGroups.has(_sid),
     }
     // A session spawned before cron bookkeeping existed carries no origin, and
     // without one EVERY cron line counted as historical (never active, so no
@@ -2054,6 +2060,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'git.commitJob': return sendOk(ws, id as number, { job: gitCommit.job(cmd.jobId) })
     case 'usage.scan': return cmdUsageScan(ws, id as number, cmd)
     case 'usage.costState': return cmdUsageCostState(ws, id as number, cmd)
+    case 'usage.budget.get': return cmdUsageBudget(ws, id as number, cmd, false)
+    case 'usage.budget.configure': return cmdUsageBudget(ws, id as number, cmd, true)
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
@@ -2282,6 +2290,154 @@ const hostResume = createHostResume({
  * that record has now: setMode keeps both current. `home`: the Walnut that
  * asked for its latest spawn, as either one recorded it.
  */
+const BUDGET_DIR = path.join(path.dirname(RESUME_RECORD_DIR), 'usage-budgets')
+type BudgetStopProof = { pid: number; startTime: string; bootId: string; members?: Array<{ pid: number; startTime: string }> }
+const budgetStopGroups = new Map<string, BudgetStopProof>()
+const budgetStopFile = path.join(BUDGET_DIR, 'stops.map')
+const budgetBoot = readCronBootId(process.platform, AbortSignal.timeout(5000)).catch(() => '')
+const budgetStopsReady = (async () => {
+  let text: string
+  try { text = await fs.promises.readFile(budgetStopFile, 'utf8') } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+  for (const [sid, proof] of Object.entries(JSON.parse(text) as Record<string, BudgetStopProof>)) {
+    if (!isJournalSid(sid) || !proof || !Number.isSafeInteger(proof.pid) || proof.pid <= 1 || typeof proof.startTime !== 'string' || typeof proof.bootId !== 'string'
+      || (proof.members !== undefined && (!Array.isArray(proof.members) || proof.members.some(member => !member || !Number.isSafeInteger(member.pid) || member.pid <= 1 || typeof member.startTime !== 'string')))) throw new Error('budget stop proof is invalid')
+    budgetStopGroups.set(sid, proof)
+  }
+})()
+void budgetStopsReady.catch(error => logMsg('error', 'budget stop proofs could not be read', { error: String(error) }))
+let budgetStopWrites: Promise<void> = Promise.resolve()
+function persistBudgetStops(): Promise<void> {
+  const work = budgetStopWrites.catch(() => {}).then(async () => {
+    await ensureUsageBudgetDirectory(BUDGET_DIR)
+    const temp = budgetStopFile + '.' + crypto.randomUUID() + '.tmp'
+    try {
+      const handle = await fs.promises.open(temp, 'wx', 0o600)
+      try { await handle.writeFile(JSON.stringify(Object.fromEntries(budgetStopGroups))); await handle.sync() } finally { await handle.close() }
+      await fs.promises.rename(temp, budgetStopFile)
+      const directory = await fs.promises.open(BUDGET_DIR, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY)
+      try { await directory.sync() } finally { await directory.close() }
+    } finally { await fs.promises.unlink(temp).catch(() => {}) }
+  })
+  budgetStopWrites = work
+  return work
+}
+async function budgetGroupMembers(pgid: number): Promise<Array<{ pid: number; startTime: string }>> {
+  const text = await new Promise<string>((resolve, reject) => {
+    execFile('/bin/ps', ['-axo', 'pid=,pgid=,lstart='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } }, (error, stdout) => error ? reject(error) : resolve(String(stdout)))
+  })
+  const members: Array<{ pid: number; startTime: string }> = []
+  for (const line of text.split('\n')) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/)
+    if (match && Number(match[2]) === pgid && Number(match[1]) > 1) members.push({ pid: Number(match[1]), startTime: match[3] })
+  }
+  return members
+}
+async function continueBudgetGroupStop(sid: string, proof: BudgetStopProof): Promise<void> {
+  if (!isProcessGroupAlive(proof.pid)) return
+  const boot = await budgetBoot
+  if (!boot || boot !== proof.bootId) throw new Error('budget pause: process group boot identity is unknown')
+  const current = await budgetGroupMembers(proof.pid)
+  const confirmed = current.some(member => proof.members?.some(old => old.pid === member.pid && old.startTime === member.startTime))
+  if (!confirmed) throw new Error('budget pause: no surviving owned process group member is confirmed')
+  // The original leader may have exited on interrupt. A same-group birth proof still owns the remaining group.
+  killProcessGroup(proof.pid, 'SIGTERM')
+  const deadline = Date.now() + 2500
+  while (isProcessGroupAlive(proof.pid) && Date.now() < deadline) await new Promise<void>(resolve => setTimeout(resolve, 200))
+  if (isProcessGroupAlive(proof.pid)) throw new Error('budget pause: process group did not exit after SIGTERM')
+  logMsg('info', 'budget pause: remaining owned process group stopped', { sid })
+}
+async function budgetStopPending(sid: string): Promise<boolean> {
+  await budgetStopsReady
+  const proof = budgetStopGroups.get(sid)
+  if (!proof) return false
+  const boot = await budgetBoot
+  if (!(boot && proof.bootId && boot !== proof.bootId) && isProcessGroupAlive(proof.pid)) return true
+  budgetStopGroups.delete(sid)
+  await persistBudgetStops()
+  return false
+}
+const budgetControl = createBudgetControl({
+  timeoutMs: 2_000,
+  writeRaw: async (sid, raw) => { const result = await core.handleSendRawCommand(sid, raw); return 'ok' in result && result.ok === true },
+})
+const usageBudget = createUsageBudgetRuntime({
+  dir: BUDGET_DIR,
+  projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+  pause: pauseBudgetSession,
+  log: (message, fields) => logMsg('warn', message, fields),
+})
+
+async function budgetAllowance(sid: string): Promise<boolean> {
+  if (await budgetStopPending(sid)) return false
+  if (!await usageBudget.allow(sid)) return false
+  return !await budgetStopPending(sid)
+}
+async function requireBudgetAllowance(sid: string): Promise<void> {
+  if (!await budgetAllowance(sid)) throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' })
+}
+
+async function pauseBudgetSession(sid: string): Promise<void> {
+  cancelTurnRetry(sid, 'budget-paused')
+  await budgetStopsReady
+  if (cronRuntime?.get(sid)) await cronRuntime.disable(sid)
+  const session = sessions.get(sid)
+  if (!session || session.state !== 'running' || !session.pid) {
+    if (await budgetStopPending(sid)) {
+      await continueBudgetGroupStop(sid, budgetStopGroups.get(sid)!)
+      budgetStopGroups.delete(sid)
+      await persistBudgetStops()
+    }
+    return
+  }
+  const pid = session.pid
+  sessionStopVersions.set(sid, (sessionStopVersions.get(sid) ?? 0) + 1)
+  const owner = journaledHome(sid)
+  const refusal = stopOwnerRefusal(sid, { home: owner, strict: true, initiator: 'automatic' })
+  if (!owner || refusal) throw new Error('budget pause: session ownership is not confirmed')
+  let pgid = NaN
+  try { pgid = Number(fs.readFileSync(session.pgidPath, 'utf8').trim()) } catch {}
+  if (pgid !== session.pid) throw new Error('budget pause: process group ownership is not confirmed')
+  if ((SERVICE_MODE && session.bootId !== daemonBootId) || !session.startTime || readStartTime(session.pid) !== session.startTime) throw new Error('budget pause: process identity is not confirmed')
+  const proof = { pid, startTime: session.startTime, bootId: await budgetBoot, members: await budgetGroupMembers(pid) }
+  budgetStopGroups.set(sid, proof)
+  await persistBudgetStops()
+  if (sessions.get(sid) !== session) throw new Error('budget pause: process identity changed')
+  session.intentionalStopAt = Date.now()
+  session.budgetGracefulStop = true
+  persistRegistry()
+  const ids = Object.keys(session.taskState.tasks).filter(id => !BG_TERMINAL_STATUSES.has(session.taskState.tasks[id].status))
+  const [stoppedTasks, interrupted] = await Promise.all([
+    Promise.all(ids.map(task_id => budgetControl.ask(sid, { subtype: 'stop_task', task_id }))),
+    budgetControl.ask(sid, { subtype: 'interrupt', cancel_queued: true }),
+  ])
+  if (stoppedTasks.some(ok => !ok) || !interrupted) logMsg('warn', 'budget pause: control acknowledgement missing; confirming the whole owned process group', { sid })
+  if (sessions.get(sid) !== session) throw new Error('budget pause: process identity changed')
+  if (!session.pid && isProcessGroupAlive(pid)) await continueBudgetGroupStop(sid, proof)
+  let reply: Record<string, unknown> | undefined
+  const sink = { data: {}, readyState: 1, send(raw: string) { reply = JSON.parse(raw); return 1 }, close() {} } as unknown as ServerWebSocket<WsData>
+  await stopSessionProcess(sink, 0, sid)
+  if (isProcessGroupAlive(pid)) await continueBudgetGroupStop(sid, proof)
+  if (!reply || (reply.stopped !== true && isProcessGroupAlive(pid))) throw new Error(String(reply?.error || 'budget pause: process stop was not confirmed'))
+  if (sessions.get(sid) === session && session.state === 'running') { reapSession(sid, 0, 'budget-stop-confirmed', true); persistRegistry() }
+  budgetStopGroups.delete(sid)
+  await persistBudgetStops()
+}
+
+async function cmdUsageBudget(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, configure: boolean) {
+  const sid = cmd.sid
+  if (!isJournalSid(sid) || (!sessions.has(sid) && !journaledIds().has(sid))) return sendError(ws, id, 'usage.budget: session not found', { code: 'NOT_FOUND' })
+  if (configure) {
+    if (!isServerClient(ws)) return sendError(ws, id, 'usage.budget.configure: trusted clients only', { code: 'NOT_OWNED' })
+    if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'usage.budget.configure: home must name the asking Walnut', { code: 'BAD_REQUEST' })
+    const refusal = stopOwnerRefusal(sid, { ...cmd, strict: true, initiator: 'automatic' })
+    if (refusal) return sendError(ws, id, 'usage.budget.configure: session ownership is not confirmed', { code: 'NOT_OWNED' })
+  }
+  try {
+    const result = configure ? await usageBudget.configure(sid, { limitUsd: cmd.limitUsd as number | null, revision: cmd.revision as number, proxyLogDir: cmd.proxyLogDir as string | undefined }) : await usageBudget.read(sid)
+    return sendOk(ws, id, { result })
+  } catch (error) { return sendError(ws, id, String(error instanceof Error ? error.message : error), { code: (error as { code?: string }).code }) }
+}
+
 function spawnRecordOf(sid: string): { args: string[]; cwd: string; mode: string; home?: string } | null {
   const s = sessions.get(sid)
   const rec = s && s.spawnInfo?.home ? null : hostResume.recall(sid)
@@ -3976,11 +4132,12 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
       if (error?.code === 'SESSION_STOP_SUPERSEDED') return null
       // A host that cannot run claude answers with the reason itself, not an
       // "internal daemon error". Keep in sync with daemon-source.ts.
+      if (error?.code === 'BUDGET_PAUSED') return Object.assign(error as Error, { errorKind: 'budget_paused' })
       if (error?.code === 'CLAUDE_RUNTIME') return error as Error & { errorKind?: string }
       throw error
     })
   if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' })
-  if (result instanceof Error) return sendError(ws, id, result.message, { errorKind: result.errorKind })
+  if (result instanceof Error) return sendError(ws, id, result.message, { errorKind: result.errorKind, ...(result.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : {}) })
   addSubscriber(ws, sid, result.offset)
   return sendOk(ws, id, result)
 }
@@ -4018,7 +4175,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   }
   const initialUuid = typeof uuid === 'string' && uuid ? uuid : undefined
   // An empty message only resumes the process without injecting a user turn; the CLI may not send init until a schedule fires.
-  if (!sid || !args || !cwd) throw new Error('start: missing required fields (sid, args, cwd)')
+  if (!isJournalSid(sid) || !args || !cwd) throw new Error('start: missing required fields (sid, args, cwd)')
+  await requireBudgetAllowance(sid)
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
   if (isCurrent && !isCurrent()) throw new Error('start: supervision request was superseded')
 
@@ -4079,6 +4237,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
           ensureWatcher(sid)
           return { pid: existing.pid, outputFile: existing.jsonlPath, offset: curSize, adopted: true }
         }
+        if (sendResult.reason === 'budget_paused') throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' })
         // Delivery failed. Only fall through to respawn if handleSendCommand
         // actually reaped the session (ENXIO / precheck-dead / partial-write).
         // A transient EAGAIN (pipe full, process alive) must NOT kill the CLI —
@@ -4103,6 +4262,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // live CLI exactly as it was, never killed and replaced by nothing.
   // Keep in sync with daemon-source.ts.
   const launch = await gateClaudeLaunch(args)
+  await requireBudgetAllowance(sid)
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
 
   if (existing) {
@@ -4324,16 +4484,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // O_RDWR lifetime like the send path, so the FIFO survives until the first real
   // message; closing it here (as the message path does after writing) is fine
   // because the CLI already holds its own read end.
-  if (message && !barrier) {
-    const payload = JSON.stringify({
-      type: 'user',
-      message: { role: 'user', content: message },
-      // Optional pre-assigned user-line uuid (see `initialUuid` above). Spread so
-      // an absent uuid leaves these bytes exactly as they were.
-      ...(initialUuid ? { uuid: initialUuid } : {}),
-    })
-    fs.writeSync(pipeFd, Buffer.from(payload + '\n'))
-  }
+  // Deliver only after registry ownership exists, through the guarded FIFO serializer.
   fs.closeSync(pipeFd)
 
   // Close fds in parent
@@ -4408,11 +4559,13 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     if (SERVICE_MODE) throw error
   }
 
+  await requireBudgetAllowance(sid)
   barrier?.release()
   broadcastSessionState(sid, 'running', { pid })
   ensureWatcher(sid)
-  if (barrier && message) {
+  if (message) {
     const sent = await core.handleSendCommand(sid, message, initialUuid)
+    if (sent.reason === 'budget_paused') throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' })
     if (!sent.ok) throw new Error(`start: initial message not delivered (${sent.reason ?? sent.error})`)
   }
   return { pid, outputFile: jsonlPath, offset }
@@ -5337,10 +5490,9 @@ function checkDurableCronCreate(sid: string, session: SessionData, line: string)
       type: 'user',
       message: { role: 'user', content: durableCronCorrectionMessage(undefined) },
     })
-    const ok = writeFifoRaw(session.pipePath, payload)
-    logMsg(ok ? 'warn' : 'error',
-      'hook inject: durable CronCreate correction ' + (ok ? 'sent' : 'FIFO write FAILED'),
-      { sid, toolUseId: key, mode: session.mode })
+    void core.handleSendRawCommand(sid, payload).then(result => {
+      logMsg(result.ok ? 'warn' : 'error', 'hook inject: durable CronCreate correction delivery', { sid, toolUseId: key, mode: session.mode, result })
+    })
   }
 }
 // ── Turn-error auto-retry (policy in daemon-core: decideTurnRetry) ──
@@ -5364,8 +5516,11 @@ const TURN_RETRY_CFG = resolveTurnRetryConfig(process.env)
  * alive, and as a --resume respawn when it died — reusing the exact paths a
  * human "continue" would take, so no delivery invariant is special-cased.
  */
-function checkTurnRetry(sid: string, session: SessionData, line: string, v: number) {
-  if (daemonCommands.stopping || !TURN_RETRY_CFG.enabled || cronRuntime?.get(sid)) return
+async function checkTurnRetry(sid: string, session: SessionData, line: string, v: number) {
+  if (daemonCommands.stopping || !TURN_RETRY_CFG.enabled || cronRuntime?.get(sid) || session.budgetGracefulStop) return
+  const checkVersion = (retryCheckVersions.get(sid) ?? 0) + 1
+  retryCheckVersions.set(sid, checkVersion)
+  if (!await budgetAllowance(sid) || retryCheckVersions.get(sid) !== checkVersion || sessions.get(sid) !== session || session.state !== 'running' || session.intentionalStopAt != null) return
   const { isTurnError, text } = parseTurnErrorLine(line)
 
   if (!isTurnError) {
@@ -5489,6 +5644,7 @@ function appendSystemMarker(sid: string, session: SessionData, subtype: string, 
 /** Cancel a pending retry. Called when a REAL send arrives (the human took over
  *  — never inject behind them) and from the death funnel. */
 function cancelTurnRetry(sid: string, reason: string) {
+  retryCheckVersions.set(sid, (retryCheckVersions.get(sid) ?? 0) + 1)
   const session = sessions.get(sid)
   if (!session?.turnRetryTimer) return
   clearTimeout(session.turnRetryTimer)
@@ -5744,6 +5900,10 @@ function ensureWatcher(sid: string) {
         if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v)
 
         updateCronMetadata(sid, s, line)
+        // Evidence is observed before a result can schedule another billable turn.
+        if (line.includes('"assistant"') || line.includes('"system"') || line.includes('"result"') || line.includes('"control_response"')) {
+          try { const parsed = JSON.parse(line); usageBudget.observe(sid, parsed); budgetControl.noteResponse(sid, parsed) } catch {}
+        }
 
         // ── Latency instrumentation: time from CLI spawn → first init line ──
         // Pure CLI cold-start (incl. MCP connect) as the daemon sees it, directly
@@ -5805,9 +5965,9 @@ function ensureWatcher(sid: string) {
         // successful turn is what clears the failure streak.
         if (line.includes('"type":"result"')) {
           s.ttftSendTs = null // turn over — a stale TTFT anchor must not leak into replays
-          try { checkTurnRetry(sid, s, line, v) } catch (err) {
+          void checkTurnRetry(sid, s, line, v).catch(err => {
             logMsg('warn', 'turn-retry check threw', { sid, error: (err as Error).message })
-          }
+          })
           // A reply request this host owns ends with this turn (offline-host-core.ts).
           void offlineHost.onResult(sid, line, v).catch(() => {})
           // The working tree as this turn left it (turn-snapshot-core.ts): returns at once.
@@ -5871,12 +6031,9 @@ function ensureWatcher(sid: string) {
               }
               if (shouldAutoRespond(s.mode, toolName)) {
                 const resp = buildControlResponse(parsed.request_id as string, req, true)
-                if (writeFifoRaw(s.pipePath, resp)) {
-                  s.pendingCtrl = null
-                  try { persistRegistry() } catch {}
-                  logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode })
-                  continue
-                }
+                void core.handleSendRawCommand(sid, resp).then(result => {
+                  if (result.ok) logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode })
+                })
               }
               s.pendingCtrl = {
                 reqId: parsed.request_id as string,
@@ -6308,13 +6465,10 @@ function applyModePolicy(session: SessionData, sid: string, mode: SessionMode): 
   }
   if (session.pendingCtrl && shouldAutoRespond(session.mode, session.pendingCtrl.toolName)) {
     const resp = buildControlResponse(session.pendingCtrl.reqId, session.pendingCtrl.request, true)
-    if (writeFifoRaw(session.pipePath, resp)) {
-      logMsg('info', 'setMode: auto-allowed pending control_request', { sid, tool: session.pendingCtrl.toolName, mode })
-      session.pendingCtrl = null
-      pushSnapshot(sid, false) // C1: pendingCtrl cleared → waiting resolves
-    } else {
-      logMsg('warn', 'setMode: failed to write pending control_response', { sid, tool: session.pendingCtrl.toolName, mode })
-    }
+    const toolName = session.pendingCtrl.toolName
+    void core.handleSendRawCommand(sid, resp).then(result => {
+      logMsg(result.ok ? 'info' : 'warn', 'setMode: pending control_response delivery', { sid, tool: toolName, mode, result })
+    })
   }
   try { persistRegistry() } catch {}
 }
@@ -9015,6 +9169,8 @@ function cleanupOrphanedProcessGroups() {
 
 // ── Cleanup ──
 function cleanup() {
+  usageBudget.close()
+  budgetControl.close()
   void cronRuntime?.close().catch((error) => logMsg('error', 'cron supervision shutdown failed', { error: String(error) }))
   // Stop the trigger clock first: no new check may start while we are dying.
   if (triggerTickTimer) {
@@ -9675,6 +9831,7 @@ if (action === '--start' || SERVICE_MODE) {
   // as orphan process groups to kill.
   try { cronMetadataConfig = await readCronCliConfig(HOME_DIR, process.env, AbortSignal.timeout(5000)) } catch {}
   logMsg('info', 'startup: reconcile begin', { registryFile: REGISTRY_FILE, streamsDir: STREAMS_DIR })
+  await budgetStopsReady.catch(() => {})
   try { reconcileRegistry() } catch (err) {
     logMsg('error', 'reconcileRegistry failed', { error: (err as Error).message })
     if (SERVICE_MODE) throw err
@@ -9728,6 +9885,9 @@ if (action === '--start' || SERVICE_MODE) {
       error: (error) => logMsg('error', 'cron supervision observation failed', { error: String(error) }),
     })
   }
+
+  // Supervision must exist before recovery can disable it, including stopped sessions.
+  void usageBudget.recover().catch(error => logMsg('error', 'budget recovery failed', { error: String(error) }))
 
   // Start Bun.serve() with built-in WebSocket support
   const server = Bun.serve<WsData>({

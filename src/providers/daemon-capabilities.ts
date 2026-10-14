@@ -273,6 +273,8 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'snapshot-v1',
   'snapshot-memory-v1',
   'usage-scan-v1',
+  // Persistent session budgets, enforced on the owning host before CLI delivery.
+  'budget-v1',
   'cron-metadata-v1',
   'image.save',
   'session.launch',

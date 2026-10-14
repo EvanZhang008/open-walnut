@@ -10,6 +10,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import ts from 'typescript'
 import { describe, it, expect } from 'vitest'
 import {
   buildDaemonPath,
@@ -411,8 +412,19 @@ describe('injection into the source daemon twin', () => {
       expect(src, label).toMatch(/claudeCheck: (createClaudeCheck|\(__CREATE_CLAUDE_CHECK__\))\(\{ fs(: fs)?, execFile(: execFile)?, env: process\.env \}\)/)
       expect(src, label).toMatch(/const launch = await gateClaudeLaunch\(args\)/)
       expect(src, label).toMatch(/code: 'CLAUDE_RUNTIME', errorKind: gate\.code/)
-      // The reason reaches the client verbatim, not as an "internal daemon error".
-      expect(src, label).toMatch(/sendError\(ws, id, result(\.runtimeError)?\.message, \{ errorKind: result(\.runtimeError)?\.errorKind \}\)/)
+      // Inspect the actual cmdStart, not an earlier budget helper or a whole-file text match.
+      const actual = label === 'template' ? generated : src
+      const parsed = ts.createSourceFile('daemon.ts', actual, ts.ScriptTarget.Latest, true)
+      const start = parsed.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'cmdStart')
+      expect(start, `${label}: actual cmdStart missing`).toBeDefined()
+      const body = start!.getText(parsed)
+      // The original runtime failure and its exact error kind still reach the client.
+      expect(body, label).toMatch(/error\??\.?code === 'CLAUDE_RUNTIME'/)
+      expect(body, label).toMatch(/sendError\(ws, id, result(\.runtimeError)?\.message, \{ errorKind: result(\.runtimeError)?\.errorKind,/)
+      // Budget refusal is a separate precise path, never a generic spawn error or a retry.
+      expect(body, label).toMatch(/error\??\.?code === 'BUDGET_PAUSED'/)
+      expect(body, label).toContain("errorKind: 'budget_paused'")
+      expect(body, label).toContain("{ reason: 'budget_paused', code: 'BUDGET_PAUSED' }")
     }
     for (const src of [standalone, template]) {
       const allow = src.slice(src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(['), src.indexOf('])', src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')))

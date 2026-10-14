@@ -10,11 +10,15 @@
  *   - too wide → a plain ssh outage strands a message the user must retry by hand
  */
 import { describe, it, expect } from 'vitest';
-import { classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown, sendMayHaveLanded } from '../../src/providers/delivery-failure.js';
+import { BudgetPausedError, classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown, sendMayHaveLanded } from '../../src/providers/delivery-failure.js';
 import { CwdMissingError } from '../../src/providers/cwd-check.js';
 import { SessionStopSupersededError } from '../../src/core/sessions/session-stop.js';
 
 describe('classifyDeliveryFailure — permanent', () => {
+  it('parks a budget refusal rather than automatically resuming it on reconnect', () => {
+    expect(classifyDeliveryFailure(new BudgetPausedError())).toMatchObject({ kind: 'permanent', code: 'budget_paused' });
+    expect(classifyDeliveryFailure(new Error('Daemon start failed: budget_paused'))).toMatchObject({ kind: 'permanent', code: 'budget_paused' });
+  });
   it('parks a superseded send rather than resuming it on reconnect', () => {
     expect(classifyDeliveryFailure(new SessionStopSupersededError('Session stopped')))
       .toEqual({ kind: 'permanent', code: 'session_stopped', reason: 'Session stopped' });

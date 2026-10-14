@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
+import { BudgetPausedError } from '../../src/providers/delivery-failure.js'
 
 type Reply = Record<string, unknown> | Error
 
@@ -47,6 +48,9 @@ async function start(replies: Reply[]) {
 const started = { ok: true, pid: 4242, outputFile: '/nonexistent/start-line.jsonl', offset: 0 }
 
 describe('RemoteSessionManager.start: the deferred first line has a send\'s contract', () => {
+  it('a cold resume refused by the budget is a held delivery, not a retryable process failure', async () => {
+    await expect(start([{ ok: false, reason: 'budget_paused', errorKind: 'budget_paused' }])).rejects.toBeInstanceOf(BudgetPausedError);
+  });
   it('the gate\'s PC: the confirm resend is answered cut, and start() says so', async () => {
     const { result, sent } = await start([started, new Error('connection closed'), { ok: true, cut: true }])
     expect(sent.map((s) => s.cmd)).toEqual(['start', 'send', 'send'])

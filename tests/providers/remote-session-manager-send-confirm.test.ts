@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
-import { SendHeldError, SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js'
+import { BudgetPausedError, SendHeldError, SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js'
 
 type Reply = Record<string, unknown> | Error
 
@@ -136,6 +136,14 @@ describe('RemoteSessionManager: a send whose answer never came', () => {
     expect(sent).toHaveLength(1)
   })
 
+  it('a budget refusal never falls back to a fresh process or fires a process exit', async () => {
+    const { conn, sent } = fakeConn([{ ok: false, reason: 'budget_paused' }]);
+    const mgr = manager(conn);
+    const onExit = vi.fn(); Object.assign(mgr as unknown as Record<string, unknown>, { _onExit: onExit, _hasPipe: true });
+    await expect(mgr.writeMessage('hello', { uuid: 'u-1', markers })).rejects.toBeInstanceOf(BudgetPausedError);
+    expect(sent.map(row => row.cmd)).toEqual(['send']);
+    expect(onExit).not.toHaveBeenCalled();
+  });
   it('a refusal is still a refusal (false): the process is gone and the caller may respawn', async () => {
     const { conn } = fakeConn([{ ok: false, reason: 'not_found' }])
     await expect(manager(conn).writeMessage('hello', { uuid: 'u-1', markers })).resolves.toBe(false)

@@ -1,0 +1,49 @@
+/* Session-local usage and lifetime allowance, sharing the app dialog skin. */
+.session-usage-overlay { z-index: 9500; padding: 12px; box-sizing: border-box; }
+.session-usage-dialog.app-modal {
+  width: min(540px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  min-width: 0;
+}
+.session-usage-heading { display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; }
+.session-usage-heading > div { min-width: 0; }
+.session-usage-heading h2 { margin: 0; }
+.session-usage-title { margin: 4px 0 0; color: var(--fg-muted); font-size: 12px; overflow-wrap: anywhere; }
+.session-usage-close { flex-shrink: 0; border: 0; background: transparent; color: var(--fg-muted); font-size: 22px; cursor: pointer; width: 32px; height: 32px; border-radius: 6px; }
+.session-usage-close:hover { background: var(--bg-hover); color: var(--fg); }
+.session-usage-total { display: flex; flex-direction: column; gap: 5px; padding: 22px 0 18px; }
+.session-usage-label { font-size: 12px; color: var(--fg-secondary); }
+.session-usage-total strong { color: var(--fg); font-size: 34px; line-height: 1.2; font-weight: 600; letter-spacing: -0.8px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.session-usage-hint { font-size: 11px; line-height: 1.5; color: var(--fg-muted); }
+.session-usage-budget { border-top: 1px solid var(--border); padding-top: 16px; }
+.session-usage-budget label { font-size: 12px; font-weight: 600; }
+.session-usage-edit-row { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; }
+.session-usage-edit-row .app-modal-input { margin-top: 0; min-width: 0; flex: 1; }
+.session-usage-edit-row .app-modal-btn { flex-shrink: 0; }
+.session-usage-budget-facts { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.session-usage-text-button { border: 0; background: transparent; color: var(--fg-secondary); text-decoration: underline; text-underline-offset: 3px; padding: 2px 0; font-size: 12px; cursor: pointer; }
+.session-usage-paused { font-size: 12px; font-weight: 600; color: var(--fg); margin-bottom: 0; }
+.session-usage-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; line-height: 1.5; color: var(--error); overflow-wrap: anywhere; }
+.session-usage-error-text { color: var(--error); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.session-usage-breakdown { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 14px; }
+.session-usage-breakdown h3 { margin: 0 0 10px; font-size: 12px; font-weight: 600; }
+.session-usage-row { display: flex; gap: 12px; justify-content: space-between; align-items: baseline; padding: 6px 0; }
+.session-usage-row > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.session-usage-row-name { font-size: 12px; color: var(--fg-secondary); overflow-wrap: anywhere; }
+.session-usage-row-cost { flex-shrink: 0; font-size: 12px; color: var(--fg); font-variant-numeric: tabular-nums; }
+.session-usage-disclaimer { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 12px; }
+.session-usage-dialog button:disabled { opacity: 0.5; cursor: default; }
+.session-usage-dialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-budget-status { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 4px 12px 6px; font-size: 12px; color: var(--fg-secondary); }
+.session-budget-status button { background: transparent; border: 0; color: var(--fg-secondary); text-decoration: underline; text-underline-offset: 3px; font-size: 11px; cursor: pointer; padding: 4px 0; }
+.session-budget-status button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 380px) {
+  .session-usage-dialog.app-modal { padding: 16px; }
+  .session-usage-edit-row { flex-wrap: wrap; }
+  .session-usage-edit-row .app-modal-input { flex-basis: 100%; }
+  .session-usage-edit-row .app-modal-btn { width: 100%; }
+  .session-usage-total strong { font-size: 30px; }
+}
