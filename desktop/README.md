@@ -133,6 +133,16 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
   reclaims it if it's an *orphaned* Walnut process (parent PID 1).
 - **Window** — a `WKWebView` pointed at `http://localhost:<port>`; external
   links open in the default browser.
+- **Links** (`AppLink.swift`): the app registers `open-walnut://`, so a plugin
+  install link (`open-walnut://install-plugin?url=<git url>`) clicked in a
+  browser or a chat app opens Walnut on the Plugin Store with an "Install from a
+  link" card. The app only hands the link to the page; nothing installs until the
+  person turns on the trust switch and presses Install.
+- **The `walnut` command** (`CommandLineTool.swift`): when no `walnut` is on the
+  login shell's PATH, the app links `~/.local/bin/walnut` to the Walnut it runs
+  and, if that folder is not on PATH, adds one marked line to `~/.zprofile` or
+  `~/.bash_profile`. A `walnut` the user already has is never replaced. Walnut >
+  Install 'walnut' Command runs the same check and says what it did.
 
 ## Updates
 

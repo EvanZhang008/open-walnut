@@ -1,6 +1,6 @@
 ---
 name: walnut-install-plugin
-description: Install, configure, verify, update, and remove trusted Walnut Plugins from Git or npm through the Plugin Store REST API. Use when the user explicitly provides a Plugin share snippet, Git URL, or npm package spec and asks to install, update, remove, or diagnose that Plugin.
+description: Install, configure, verify, update, and remove trusted Walnut Plugins from Git or npm through the Plugin Store REST API. Use when the user explicitly provides a Plugin install link (open-walnut://install-plugin?...), share snippet, Git URL, or npm package spec and asks to install, update, remove, or diagnose that Plugin.
 ---
 
 # Install a Walnut Plugin
@@ -34,6 +34,16 @@ curl -s -X POST "$base/api/plugin-sources" \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://example.com/team/plugins.git","ref":"main"}'
 ```
+
+An install link (`open-walnut://install-plugin?url=…&ref=…` or `?spec=…`, what the store's "Copy install link" makes) goes in `url` as it is:
+
+```bash
+curl -s -X POST "$base/api/plugin-sources" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"open-walnut://install-plugin?url=https%3A%2F%2Fexample.com%2Fteam%2Fplugins.git"}'
+```
+
+The same works from a terminal: `walnut plugin add '<link, git URL, npm spec or snippet>'`, and `walnut plugin list` shows each source with its plugins' states.
 
 npm registry package:
 

@@ -54,6 +54,8 @@ export interface PluginSource {
   /** What the source carried the last time its files were here; set only while `cloned` is false. */
   lastKnownPlugins?: Array<{ id: string; name: string | null }>;
   shareSnippet?: string;
+  /** `open-walnut://install-plugin?…`: one click on a Mac with the app, and pastes anywhere a snippet does. */
+  installLink?: string;
 }
 
 type Tone = 'neutral' | 'warning' | 'success';
@@ -179,7 +181,7 @@ export function PluginSourcesGroup(props: PluginSourcesGroupProps) {
       {sources.map((source) => {
         // The Installed row owns the verbs (Update AND Remove, N3-17) while a plugin from
         // this source is loaded; the row here offers Restore / Update / Remove only when no
-        // plugin row does (missing, failed load). Copy share snippet is its own verb.
+        // plugin row does (missing, failed load). Copy install link is its own verb.
         const rowId = `source-${source.slug}`;
         const rowKey = sourceRowKey(source.slug);
         const kind: 'git' | 'npm' = source.kind === 'npm' || source.type === 'npm' ? 'npm' : 'git';
@@ -243,9 +245,13 @@ export function PluginSourcesGroup(props: PluginSourcesGroupProps) {
               }
               control={
                 <span className="settings-addons-inline plugin-store-source-actions">
-                  {source.shareSnippet && (
-                    <SettingsButton reserve={['Copy share snippet', 'Copied']} onClick={() => props.onCopy(source.shareSnippet!, source.slug)}>
-                      {copiedKey === source.slug ? 'Copied' : 'Copy share snippet'}
+                  {(source.installLink ?? source.shareSnippet) && (
+                    <SettingsButton
+                      reserve={['Copy install link', 'Copied']}
+                      title="A link teammates click (Mac app) or paste into the Plugin Store, Ask Walnut or `walnut plugin add`"
+                      onClick={() => props.onCopy((source.installLink ?? source.shareSnippet)!, source.slug)}
+                    >
+                      {copiedKey === source.slug ? 'Copied' : 'Copy install link'}
                     </SettingsButton>
                   )}
                   {buttonMode.render && (

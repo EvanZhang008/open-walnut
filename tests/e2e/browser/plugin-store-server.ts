@@ -22,6 +22,8 @@
  *     entry `epsilon` waits for.
  *   - `epsilon`, a plugin inside a source clone that waits on `zeta`, so a blocked row
  *     can offer an install and prove that the offer ASKS first.
+ *   - `pack-repo`, a real git repo holding two plugins (`pack-notes`, `pack-board`), for
+ *     an install link to install for real.
  *   - `sigma`, whose App draws its own settings (`settingsIn: 'app'`), and `tau`, which
  *     asks for the same but whose web entry fails, so its App never registers.
  *   - a bundled store folder holding `omega` (registers nothing), pointed at through
@@ -213,6 +215,24 @@ await fs.writeFile(path.join(tmpBase, 'plugins', 'tau', 'dist', 'web.mjs'), `
 export function activate() { throw new Error('tau web fixture fails on purpose') }
 `)
 
+/**
+ * A plugin pack in a real git repo (one plugin per folder), the shape a team keeps its
+ * own plugins in: what an install link points at. `file://` so nothing leaves the machine.
+ */
+const packRepo = path.join(tmpBase, 'pack-repo')
+await writeFixturePlugin('pack-notes', { name: 'Pack Notes', description: 'The first plugin of a team pack.' }, packRepo)
+await writeFixturePlugin('pack-board', { name: 'Pack Board', description: 'The second plugin of a team pack.' }, packRepo)
+{
+  const { execFileSync } = await import('node:child_process')
+  const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete gitEnv[key]
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: packRepo, env: gitEnv, stdio: 'ignore' })
+  git('init', '-q', '-b', 'main')
+  git('add', '-A')
+  git('commit', '-q', '-m', 'team pack')
+}
+const packUrl = `file://${packRepo}`
+
 // Install walnut-time the documented author way: a symlink in the data home's
 // plugins/ directory, which is exactly what `walnut-plugin link` writes.
 const pluginSource = path.join(repoRoot, 'examples/plugins/walnut-time')
@@ -226,15 +246,18 @@ if (!apiAddress || typeof apiAddress === 'string') throw new Error('Plugin store
 const apiTarget = `http://127.0.0.1:${apiAddress.port}`
 
 const { createServer: createViteServer } = await import('vite')
+const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
 const viteServer = await createViteServer({
   root: path.join(repoRoot, 'web'),
   server: {
     host: '127.0.0.1',
     port,
     strictPort: true,
+    // restateOwnOrigin, as web/vite.config.ts does: the server trusts only its own
+    // Origin, so without it every write from the page (an install) is "another site".
     proxy: {
-      '/api': { target: apiTarget, changeOrigin: true },
-      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true },
+      '/api': { target: apiTarget, changeOrigin: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
+      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget.replace(/^http/, 'ws')) },
     },
   },
   logLevel: 'warn',
@@ -249,6 +272,7 @@ const fixture = {
   dependencySourceSlug,
   dependencySourceUrl,
   bundledEntryId,
+  packUrl,
 }
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`PLUGIN_STORE_READY ${JSON.stringify(fixture)}`)

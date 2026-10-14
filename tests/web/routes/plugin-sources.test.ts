@@ -152,6 +152,51 @@ describe('Plugin sources route boundaries', () => {
  * the point, so both halves are pinned here: the first response must add nothing extra,
  * and the second must add exactly what it named.
  */
+describe('Install links (open-walnut://install-plugin)', () => {
+  it('installs the git source a link names, with its branch', async () => {
+    sourceMocks.addSource.mockResolvedValue(source('plugins'))
+    sourceMocks.listSources.mockResolvedValue([source('plugins')])
+    const link = 'open-walnut://install-plugin?url=' + encodeURIComponent('git@example.test:team/plugins.git') + '&ref=release'
+    await request(app()).post('/api/plugin-sources').send({ url: link }).expect(201)
+    expect(sourceMocks.addSource).toHaveBeenCalledWith('git@example.test:team/plugins.git', 'release')
+    expect(sourceMocks.addNpmSource).not.toHaveBeenCalled()
+  })
+
+  it('installs the npm package a link names', async () => {
+    sourceMocks.addNpmSource.mockResolvedValue(source('npm-demo', { kind: 'npm', spec: '@scope/demo@1.2.3' }))
+    await request(app()).post('/api/plugin-sources').send({ url: 'open-walnut://install-plugin?spec=%40scope%2Fdemo%401.2.3' }).expect(201)
+    expect(sourceMocks.addNpmSource).toHaveBeenCalledWith('@scope/demo@1.2.3')
+    expect(sourceMocks.addSource).not.toHaveBeenCalled()
+  })
+
+  it('refuses another open-walnut action, or a link naming both kinds, before installing anything', async () => {
+    for (const url of ['open-walnut://pair?code=1234', 'open-walnut://install-plugin?url=https://x.test/a.git&spec=demo', 'open-walnut://install-plugin']) {
+      const response = await request(app()).post('/api/plugin-sources').send({ url }).expect(400)
+      expect(response.body.error).toMatch(/not an install link/)
+    }
+    expect(sourceMocks.addSource).not.toHaveBeenCalled()
+    expect(sourceMocks.addNpmSource).not.toHaveBeenCalled()
+  })
+
+  it('a clone the account may not read says so in one sentence, with the full text kept', async () => {
+    sourceMocks.addSource.mockRejectedValue(new Error("git clone failed: git exited 128: remote: Repository not found. fatal: Authentication failed for 'https://user:secret@example.test/team/plugins.git/'"))
+    const response = await request(app()).post('/api/plugin-sources')
+      .send({ url: 'open-walnut://install-plugin?url=' + encodeURIComponent('https://example.test/team/plugins.git') }).expect(400)
+    expect(response.body).toMatchObject({ cause: 'auth', sentence: expect.stringMatching(/credentials/) })
+    expect(response.body.error).toMatch(/^git clone failed/)
+    expect(JSON.stringify(response.body)).not.toContain('secret')
+  })
+
+  it('a link with shell characters in its url meets the same check a pasted url does', async () => {
+    // The real addSource: its URL check runs before anything touches disk or config.
+    const actual = await vi.importActual<typeof import('../../../src/core/plugin-sources.js')>('../../../src/core/plugin-sources.js')
+    sourceMocks.addSource.mockImplementation(actual.addSource)
+    const response = await request(app()).post('/api/plugin-sources')
+      .send({ url: 'open-walnut://install-plugin?url=' + encodeURIComponent('https://x.test/a.git;rm -rf ~') }).expect(400)
+    expect(response.body.error).toMatch(/Invalid git URL/)
+  })
+})
+
 describe('Two-phase dependency install', () => {
   let home = ''
   /** Sources that really exist, so "nothing else was installed" is a length, not a hope. */

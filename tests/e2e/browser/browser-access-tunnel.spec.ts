@@ -191,7 +191,9 @@ test.describe('Open from a browser', () => {
     expect(link).toContain('#pair=')
     const phone = await tunnelPage(browser)
     await phone.goto(link)
-    await expect.poll(() => phone.evaluate(() => localStorage.getItem('walnut.deviceToken')), { timeout: 30_000 }).toMatch(/.{20,}/)
+    // A right code reloads the page with the new token, so a read can land mid-reload
+    // ("execution context was destroyed"): that read counts as not yet, and the poll asks again.
+    await expect.poll(() => phone.evaluate(() => localStorage.getItem('walnut.deviceToken')).catch(() => null), { timeout: 30_000 }).toMatch(/.{20,}/)
     await phone.waitForLoadState('domcontentloaded')
     expect(phone.url()).not.toContain('#pair')
     await phone.waitForTimeout(1_500)

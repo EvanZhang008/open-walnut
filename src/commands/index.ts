@@ -283,6 +283,26 @@ export function registerCommands(program: Command): void {
       await runMcp(options as { readonly?: boolean; apiUrl?: string });
     });
 
+  // The Plugin Store from a terminal (src/commands/plugins.ts).
+  const pluginCmd = program
+    .command('plugin')
+    .description('Add and list plugin sources (the Plugin Store)');
+  pluginCmd
+    .command('add <source>')
+    .description('Install a plugin source: a git URL, an npm package, a share snippet, or an open-walnut://install-plugin link')
+    .option('--ref <ref>', 'Git branch or tag')
+    .action(async (source: string, options: { ref?: string }, cmd: Command) => {
+      const { runPluginAdd } = await import('./plugins.js');
+      await runPluginAdd(source, options, cmd.optsWithGlobals());
+    });
+  pluginCmd
+    .command('list')
+    .description('List plugin sources and the state of each plugin')
+    .action(async (_options: Record<string, unknown>, cmd: Command) => {
+      const { runPluginList } = await import('./plugins.js');
+      await runPluginList(cmd.optsWithGlobals());
+    });
+
   // The registry catalog: same list/help/call contract as the MCP surface,
   // driven from the shared op registry (src/ops/). `allowUnknownOption` +
   // variadic args: subcommand parsing happens in runTools, not commander.

@@ -7,15 +7,20 @@
  * own stale-asset reload uses (stale-assets.ts) so the two never disagree
  * about what counts as unsaved. The shell falls back to its own DOM scan when
  * this hook is missing (an older bundle), so the hook is an upgrade, not a
- * dependency.
+ * dependency. The app also hands it the `open-walnut://` links it is asked to
+ * open (`openLink`), so a link reaches an open page without a reload.
  *
  * Installed on `window` rather than exported: the shell reaches it through
  * `evaluateJavaScript`, which sees only globals.
  */
 import { hasUnsavedWork } from '@/utils/stale-assets';
+import { openLink } from '@/utils/open-link';
 
 export interface DesktopBridge {
   hasUnsavedWork(): boolean;
+  /** An `open-walnut://` link the app was asked to open (desktop/AppLink.swift).
+   *  Handled in place, never by a reload: the page may hold unsaved text. */
+  openLink(link: string): boolean;
 }
 
 declare global {
@@ -29,6 +34,7 @@ export function installDesktopBridge(target: Window = window): DesktopBridge {
     hasUnsavedWork: () => {
       try { return hasUnsavedWork(target.document); } catch { return true; }
     },
+    openLink: (link) => openLink(String(link)),
   };
   target.__walnutDesktop = bridge;
   return bridge;

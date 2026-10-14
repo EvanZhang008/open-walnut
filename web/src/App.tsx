@@ -27,6 +27,7 @@ import { PopoutRoot } from './popout/PopoutRoot';
 import { isPopoutPath } from './popout/openPopout';
 import { scheduleNotesPrefetch } from './utils/notes-prefetch';
 import { useTaskLinkClickFallback } from './hooks/useTaskLinkClickFallback';
+import { PLUGIN_STORE_PATH, peekPendingInstall, subscribeOpenLinks } from './utils/open-link';
 
 ensureCoreAppsRegistered();
 
@@ -63,6 +64,14 @@ export function App() {
   useEffect(() => {
     syncAppCommands(apps.discoverable);
   }, [apps.discoverable]);
+
+  // An install link (utils/open-link.ts) opens the Plugin Store, which shows the link's card.
+  useEffect(() => {
+    const go = () => { if (peekPendingInstall()) navigate(PLUGIN_STORE_PATH); };
+    go();
+    return subscribeOpenLinks(go);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Sidebar links return the user to where they last were in a section (Calendar's
   // ?view=&d=, Settings' #pane) — see utils/last-location.ts for which locations

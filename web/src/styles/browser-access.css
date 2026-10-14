@@ -53,3 +53,20 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+.browser-access-manual summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.browser-access-manual[open] summary {
+  margin-bottom: 6px;
+}
+
+.browser-access-code-inline {
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--fg);
+  user-select: all;
+}

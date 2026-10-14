@@ -2,7 +2,7 @@
  * /api/plugin-sources — manage plugin sources (the "plugin store").
  *
  * GET    /                 list sources with discovered plugins + per-plugin status
- * POST   /                 {url, ref?} | share snippet | {spec} — install a new
+ * POST   /                 {url, ref?} | share snippet | install link | {spec} — install a new
  *                          source (git clone or npm package) and soft-reload plugins
  * POST   /:slug/dependencies  install what the source's plugins are still waiting for,
  *                          after the user has seen the list (two-phase consent)
@@ -29,6 +29,7 @@ import {
   type PluginSourceView,
 } from '../../core/plugin-sources.js';
 import { isValidNpmSpec } from '../../core/plugin-npm-install.js';
+import { INSTALL_LINK_SCHEME, parseInstallLink } from '../../core/plugin-install-link.js';
 import {
   loadPluginCatalog, planPluginDependencies,
   type InstalledPluginFacts, type PluginCatalogEntry, type PluginDependencyPlanItem,
@@ -243,13 +244,23 @@ export function createPluginSourcesRouter(
       return;
     }
 
-    const snippet = bodySnippet ?? (hasSpec ? null : parseShareSnippet(typeof url === 'string' ? url : ''));
+    // An install link (open-walnut://install-plugin?…) names its source the way a
+    // snippet does: pasted into the store, given to the CLI, or POSTed by an agent.
+    const link = hasUrl && !bodySnippet ? parseInstallLink(url as string) : null;
+    if (hasUrl && !link && (url as string).trim().toLowerCase().startsWith(INSTALL_LINK_SCHEME)) {
+      res.status(400).json({ error: 'not an install link: expected open-walnut://install-plugin?url=<git url> or ?spec=<npm package>' });
+      return;
+    }
+    const linkSnippet = link?.kind === 'git' ? { url: link.url, ref: link.ref ?? (typeof ref === 'string' && ref.trim() ? ref.trim() : undefined) } : null;
+    const snippet = bodySnippet ?? linkSnippet ?? (hasSpec || link ? null : parseShareSnippet(typeof url === 'string' ? url : ''));
     const effectiveUrl = snippet ? snippet.url : (typeof url === 'string' ? url.trim() : '');
     const effectiveRef = snippet?.ref ?? (typeof ref === 'string' && ref.trim() ? ref.trim() : undefined);
 
     // npm when asked explicitly, or when a bare {url} is not a git URL / snippet
     // but IS a valid registry spec — one input box serves both kinds.
-    const install = hasSpec
+    const install = link?.kind === 'npm'
+      ? () => addNpmSource(link.spec)
+      : hasSpec
       ? () => addNpmSource((spec as string).trim())
       : (!snippet && !isValidSourceUrl(effectiveUrl) && isValidNpmSpec(effectiveUrl))
         ? () => addNpmSource(effectiveUrl)
@@ -277,7 +288,11 @@ export function createPluginSourcesRouter(
         ...(pendingDependencies.length ? { pendingDependencies } : {}),
       });
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      const message = maskCredentials(err instanceof Error ? err.message : String(err));
+      // A clone that failed also says why in one plain sentence (no access, no network),
+      // the way an update does; `error` keeps the full text for the details.
+      const clone = /^git clone failed/.test(message) ? describeGitFailure(message) : null;
+      res.status(400).json({ error: message, ...(clone ? { cause: clone.cause, sentence: clone.sentence } : {}) });
     }
   });
 

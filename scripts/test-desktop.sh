@@ -33,6 +33,14 @@ swiftc \
 "$OUT_DIR/walnut-bundled-runtime-tests"
 
 swiftc \
+    "$ROOT/desktop/AppLink.swift" \
+    "$ROOT/desktop/BundledRuntime.swift" \
+    "$ROOT/desktop/CommandLineTool.swift" \
+    "$ROOT/tests/desktop/app-link-tests.swift" \
+    -o "$OUT_DIR/walnut-app-link-tests"
+"$OUT_DIR/walnut-app-link-tests"
+
+swiftc \
     "$ROOT/desktop/AppUpdateMachine.swift" \
     "$ROOT/tests/desktop/app-update-tests.swift" \
     -o "$OUT_DIR/walnut-app-update-tests"

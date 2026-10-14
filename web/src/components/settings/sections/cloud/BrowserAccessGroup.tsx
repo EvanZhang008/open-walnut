@@ -7,7 +7,9 @@
  *   <its options>      a tunnel name, say; saved on Enter or when the field loses focus
  *   Open from anywhere the switch, with one sentence of state and Retry when it waits
  *   Address            the public address while connected
- *   Sign in a browser  a code for one browser, with its link and QR when connected
+ *   Connect a phone    a QR code that opens Walnut on the phone, signed in, for each address
+ *                      that reaches it (a host server's always-on tunnel first, then this
+ *                      computer's); the link and the typed code fold under "Can't scan it?"
  *
  * State comes from GET /api/expose, every 3s while the tunnel is moving or waits
  * on the person and every 30s once settled, never while the tab is hidden.
@@ -28,12 +30,26 @@ import '@/styles/browser-access.css';
 
 const PATH = '/api/expose';
 
+/** One address the code opens Walnut at (POST /api/devices/browser-code `addresses`). */
+interface SignInAddress {
+  where: string;
+  label: string;
+  url: string;
+  link: string;
+  alwaysOn: boolean;
+}
+
 interface BrowserCode {
   code: string;
   expiresAt: number;
-  link?: string;
-  qr?: string;
+  addresses: SignInAddress[];
+  /** The address shown, and its QR. A host's always-on server comes first: a phone
+   *  signed in there keeps working while this Mac sleeps. */
+  shown?: string;
+  qr?: Record<string, string>;
 }
+
+const qrFor = (link: string) => QRCode.toDataURL(link, { errorCorrectionLevel: 'M', width: 220, margin: 2 }).catch(() => undefined);
 
 export function BrowserAccessGroup() {
   const [data, setData] = useState<ExposeResponse | null>(null);
@@ -134,11 +150,16 @@ export function BrowserAccessGroup() {
     setCodeBusy(true);
     setCodeError(null);
     try {
-      const res = await apiPost<{ code: string; expiresAt: number; link?: string }>('/api/devices/browser-code');
-      const qr = res.link
-        ? await QRCode.toDataURL(res.link, { errorCorrectionLevel: 'M', width: 220, margin: 2 }).catch(() => undefined)
-        : undefined;
-      setCode({ ...res, ...(qr ? { qr } : {}) });
+      const res = await apiPost<{ code: string; expiresAt: number; link?: string; url?: string; addresses?: SignInAddress[] }>('/api/devices/browser-code');
+      // An older server answers with one link and no list.
+      const addresses = res.addresses ?? (res.link && res.url ? [{ where: 'this-computer', label: 'This computer', url: res.url, link: res.link, alwaysOn: false }] : []);
+      const ordered = [...addresses.filter((a) => a.alwaysOn), ...addresses.filter((a) => !a.alwaysOn)];
+      const qr: Record<string, string> = {};
+      for (const a of ordered) {
+        const data = await qrFor(a.link);
+        if (data) qr[a.where] = data;
+      }
+      setCode({ code: res.code, expiresAt: res.expiresAt, addresses: ordered, shown: ordered[0]?.where, qr });
     } catch (err) {
       setCodeError(saveErrorMessage(err));
     } finally {
@@ -264,32 +285,59 @@ export function BrowserAccessGroup() {
         </>
       )}
       <SettingsRow
-        label="Sign in a browser"
-        help="A code lets one browser in, once, within ten minutes; you can remove it later under Paired phones, Other entries."
+        label="Connect a phone"
+        help="Scan a QR code with the phone's camera: Walnut opens there, signed in. It works once, within ten minutes; you can remove the phone later under Paired phones, Other entries."
         error={codeError ?? undefined}
         control={
           <SettingsButton variant="default" busy={codeBusy} busyLabel="Making..." onClick={() => { void makeCode(); }} data-testid="browser-access-make-code">
-            {code ? 'New code' : 'Make a code'}
+            {code ? 'New QR code' : 'Show QR code'}
           </SettingsButton>
         }
       />
-      {code && (
-        <div className="settings-row settings-row-stacked browser-access-code-row" data-testid="browser-access-code">
-          <span className="browser-access-code settings-addons-mono" data-testid="browser-access-code-value">{code.code}</span>
-          <p className="settings-row-help">
-            Enter it in Walnut on the other browser; it works until {new Date(code.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.
-          </p>
-          {code.link && (
-            <>
-              {code.qr && <img className="browser-access-qr" src={code.qr} alt="QR code that opens Walnut and signs that browser in" width={180} height={180} />}
-              <span className="settings-addons-inline browser-access-link-row">
-                <code className="settings-addons-mono browser-access-link" data-testid="browser-access-link">{code.link.replace(/^https?:\/\//, '')}</code>
-                <CopyButton text={code.link} data-testid="browser-access-copy-link" />
-              </span>
-            </>
-          )}
-        </div>
-      )}
+      {code && (() => {
+        const address = code.addresses.find((a) => a.where === code.shown) ?? code.addresses[0];
+        const qr = address ? code.qr?.[address.where] : undefined;
+        const until = new Date(code.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        return (
+          <div className="settings-row settings-row-stacked browser-access-code-row" data-testid="browser-access-code">
+            {!address ? (
+              // No address a phone can reach: the code is all there is, typed into Walnut there.
+              <>
+                <span className="browser-access-code settings-addons-mono" data-testid="browser-access-code-value">{code.code}</span>
+                <p className="settings-row-help">No address reaches this computer from outside yet: turn on Open from anywhere, or a host server. Meanwhile, type this code into Walnut on the other device; it works until {until}.</p>
+              </>
+            ) : (
+              <>
+                {code.addresses.length > 1 && (
+                  <SegmentedControl
+                    aria-label="Where the phone connects"
+                    value={address.where}
+                    onChange={(v) => setCode((prev) => (prev ? { ...prev, shown: v } : prev))}
+                    options={code.addresses.map((a) => ({ value: a.where, label: a.alwaysOn ? `${a.label} (always on)` : a.label, testId: `browser-access-address-${a.where}` }))}
+                  />
+                )}
+                {qr && <img className="browser-access-qr" src={qr} alt="QR code that opens Walnut on the phone, signed in" width={220} height={220} data-testid="browser-access-qr" />}
+                <p className="settings-row-help" data-testid="browser-access-address-note">
+                  {address.alwaysOn
+                    ? `The phone connects through ${address.label}: it reaches this computer from there, and keeps working while this computer sleeps.`
+                    : "The phone connects through this computer's own tunnel: it works while this computer is awake."}
+                  {` Good until ${until}.`}
+                </p>
+                <details className="browser-access-manual" data-testid="browser-access-manual">
+                  <summary>Can&apos;t scan it?</summary>
+                  <span className="settings-addons-inline browser-access-link-row">
+                    <code className="settings-addons-mono browser-access-link" data-testid="browser-access-link">{address.link.replace(/^https?:\/\//, '')}</code>
+                    <CopyButton text={address.link} data-testid="browser-access-copy-link" />
+                  </span>
+                  <p className="settings-row-help">
+                    Open that link on the phone, or open {address.url.replace(/^https?:\/\//, '').replace(/\/+$/, '')} and type <span className="browser-access-code-inline settings-addons-mono" data-testid="browser-access-code-value">{code.code}</span>.
+                  </p>
+                </details>
+              </>
+            )}
+          </div>
+        );
+      })()}
     </SettingsGroup>
   );
 }

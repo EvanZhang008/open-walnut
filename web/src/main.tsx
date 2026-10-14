@@ -27,12 +27,16 @@ import { installDesktopBridge } from './utils/desktop-bridge';
 import { initWebPlugins } from './plugins/loader';
 import { installPluginHostRuntime } from './plugins/runtime';
 import { consumePairFragment } from './api/browser-pair';
+import { installOpenLinks } from './utils/open-link';
 import './styles/globals.css';
 import './styles/home-navigation.css';
 
 // A `#pair=<code>` sign-in link: the code leaves the address bar before anything
 // else runs, and a right one reloads the page with this browser's new token.
 consumePairFragment();
+// An `#open-link=<open-walnut://…>` fragment (the Mac app opening a link, or a
+// pasted address): taken out of the address bar now and on every hash change.
+installOpenLinks();
 // Persist browser console logs to disk (view with: open-walnut logs -s browser)
 initBrowserLogger();
 installPluginHostRuntime();

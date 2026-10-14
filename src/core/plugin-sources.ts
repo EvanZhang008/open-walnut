@@ -34,6 +34,7 @@ import { readJsonFile, updateJsonFile } from '../utils/fs.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { execGitArgsGroup, hardenGitConfigPerms, isGitAvailable } from '../integrations/git-sync.js';
 import { createSubsystemLogger } from '../logging/index.js';
+import { buildInstallLink } from './plugin-install-link.js';
 import {
   parseNpmSpec, slugForNpmPackage, invalidSpecMessage,
   resolveNpmSpecIsolated, installNpmPlugin, replaceNpmPlugin,
@@ -136,6 +137,9 @@ export interface PluginSourceView {
   /** Paste-able snippet for teammates ("Copy share snippet" button). git only —
    *  absent when the URL embeds credentials, since those must never be shared. */
   shareSnippet?: string;
+  /** The same source as an `open-walnut://install-plugin` link ("Copy install link";
+   *  src/core/plugin-install-link.ts). Absent exactly when the snippet is. */
+  installLink?: string;
 }
 
 // ── URL validation & masking ──
@@ -819,12 +823,13 @@ async function buildView(
 
   if (isNpmSourceConfig(source)) {
     // No share snippet for npm: the spec IS the shareable thing, and it is
-    // already shown verbatim on the card.
+    // already shown verbatim on the card. The install link still is one click.
     return {
       slug,
       kind: 'npm',
       type: 'npm',
       spec: source.spec,
+      installLink: buildInstallLink({ kind: 'npm', spec: source.spec }),
       packageName: state?.packageName ?? parseNpmSpec(source.spec)?.name,
       version: state?.version,
       resolved: state?.resolved,
@@ -851,7 +856,10 @@ async function buildView(
     lastError: state?.lastError,
     plugins,
     ...remembered,
-    ...(hasCredentials ? {} : { shareSnippet: buildShareSnippet(source.url, source.ref) }),
+    ...(hasCredentials ? {} : {
+      shareSnippet: buildShareSnippet(source.url, source.ref),
+      installLink: buildInstallLink(source.ref ? { kind: 'git', url: source.url, ref: source.ref } : { kind: 'git', url: source.url }),
+    }),
   };
 }
 

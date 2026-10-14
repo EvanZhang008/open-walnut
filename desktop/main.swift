@@ -105,6 +105,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // the user downloads it from the rail or the app menu, it installs on restart.
     var appUpdater: AppUpdater?
     var updateMenuItem: NSMenuItem?
+    /// `open-walnut://` links that arrived before the console could take them
+    /// (AppLink.swift); handed over once a page finishes loading.
+    var pendingAppLinks: [URL] = []
+    var consolePageLoaded = false
+    /// The `walnut` command check runs once per launch (CommandLineTool.swift).
+    var commandLineToolChecked = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DesktopLogger.shared.log("app_launched", fields: [
@@ -171,6 +177,86 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
+    }
+
+    // MARK: - open-walnut:// links
+
+    /// A link clicked anywhere on this Mac (AppLink.swift). Brings the window up
+    /// and hands the link to the console; the console decides what it means.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where AppLink.accepts(url) {
+            DesktopLogger.shared.log("app_link_received", fields: ["action": url.host ?? ""])
+            pendingAppLinks.append(url)
+        }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        deliverAppLinks()
+    }
+
+    func deliverAppLinks() {
+        guard consolePageLoaded, let webView = webView, !pendingAppLinks.isEmpty else { return }
+        let links = pendingAppLinks
+        pendingAppLinks = []
+        for url in links {
+            guard let script = AppLink.bridgeScript(for: url) else { continue }
+            webView.evaluateJavaScript(script) { result, error in
+                DesktopLogger.shared.log("app_link_delivered", fields: [
+                    "action": url.host ?? "",
+                    "via": (result as? String) ?? "",
+                    "error": error.map { String(describing: $0) } ?? "",
+                ])
+            }
+        }
+    }
+
+    // MARK: - The walnut command
+
+    /// Puts `walnut` on PATH for a Mac that has only the app (CommandLineTool.swift).
+    /// Quiet unless asked from the menu, where the result is shown.
+    func checkCommandLineTool(showResult: Bool) {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        guard let target = CommandLineTool.target(runtimeAppDir: runtime?.appDir, sourceDir: runtime == nil ? walnutSourceDir : nil) else {
+            if showResult { showCommandLineToolResult("Walnut is not set up yet.") }
+            return
+        }
+        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        let tool = CommandLineTool(home: home)
+        // On launch, nothing to decide when the name is already ours or someone else's
+        // file: skip asking the login shell (it runs the user's profile).
+        if !showResult {
+            switch tool.existing() {
+            case .linkTo(let dest, let ok) where dest == target && ok: return
+            case .otherFile: return
+            default: break
+            }
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let view = CommandLineTool.probeShell(shell)
+            let outcome = tool.install(target: target, shell: shell, view: view)
+            DesktopLogger.shared.log("walnut_command_checked", fields: [
+                "linked": String(outcome.linked),
+                "already": String(outcome.alreadyLinked),
+                "left": outcome.left ?? "",
+                "profile": outcome.profileEdited ?? "",
+                "shellAnswered": String(view != nil),
+                "error": outcome.error ?? "",
+            ])
+            if showResult {
+                DispatchQueue.main.async { self.showCommandLineToolResult(outcome.summary) }
+            }
+        }
+    }
+
+    func showCommandLineToolResult(_ text: String) {
+        let alert = NSAlert()
+        alert.messageText = "The walnut command"
+        alert.informativeText = text
+        alert.addButton(withTitle: "OK")
+        if let window = window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+    }
+
+    @objc func installCommandLineTool() {
+        checkCommandLineTool(showResult: true)
     }
 
     // MARK: - Window chrome
@@ -1358,6 +1444,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ])
 
         webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
+        consolePageLoaded = false
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -1388,6 +1475,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         old.uiDelegate = nil
         old.configuration.userContentController.removeAllScriptMessageHandlers()
         webView = nil
+        consolePageLoaded = false
         loadWebUI(url: current)
     }
 
@@ -1852,6 +1940,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // page). It must NEVER be a destructive action — it used to trigger
         // Reset Setup, so a muscle-memory ⌘, silently wiped the app config.
         appMenu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
+        appMenu.addItem(NSMenuItem(title: "Install 'walnut' Command", action: #selector(installCommandLineTool), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem(title: "Reset Setup...", action: #selector(resetConfig), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem.separator())
         // Dictation gets its own submenu: two triggers plus three delivery
@@ -2030,6 +2119,12 @@ extension AppDelegate: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webContentWatchdog?.pageDidFinishLoading()
         if let state = appUpdater?.state { pushAppUpdateState(state) }
+        consolePageLoaded = true
+        deliverAppLinks()
+        if !commandLineToolChecked {
+            commandLineToolChecked = true
+            checkCommandLineTool(showResult: false)
+        }
     }
 
     /// Without this a killed page process leaves a blank white window that only

@@ -87,6 +87,8 @@ import {
   type Feedback,
 } from '../plugin-update-view';
 import { RESTART_PENDING_STATE, sourceRowKey, type UpdateState, type UpdateStatusRow } from '../plugin-update-types';
+import { buildInstallLink, INSTALL_LINK_SCHEME, type InstallLinkTarget } from '../../../../../src/core/plugin-install-link';
+import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/utils/open-link';
 import '@/styles/settings-sections-addons.css';
 
 /** Mirrors PluginRegistryRow in src/core/plugins/plugin-catalog.ts. */
@@ -227,6 +229,15 @@ function homeDirFor(source: RegistryRow['source'], homeDir: string | undefined):
   return full.endsWith(tail) ? full.slice(0, full.length - tail.length) : undefined;
 }
 
+/** What the link card says when its install fails: the reason in plain words first. */
+function linkFailureText(err: unknown): string {
+  const e = err as { message?: string; gitCause?: unknown; sentence?: unknown };
+  if (e?.gitCause === 'auth') return "Couldn't get the plugins: this account has no access to that repository. Ask whoever shared the link for access, then try again.";
+  if (e?.gitCause === 'network') return "Couldn't get the plugins: the repository could not be reached. Check the network or VPN, then try again.";
+  if (typeof e?.sentence === 'string' && e.gitCause && e.gitCause !== 'unknown') return `Couldn't get the plugins: ${e.sentence}`;
+  return `Couldn't get the plugins from that source. ${e?.message ?? String(err)}`;
+}
+
 export function PluginStoreSection({ config, onSave }: Props) {
   const navigate = useNavigate();
   const apps = useAppCatalog();
@@ -234,6 +245,10 @@ export function PluginStoreSection({ config, onSave }: Props) {
   const [sources, setSources] = useState<PluginSource[]>([]);
   const [url, setUrl] = useState('');
   const [trusted, setTrusted] = useState(false);
+  // A source an install link asked for (utils/open-link.ts), shown in its own card.
+  const [linkRequest, setLinkRequest] = useState<InstallLinkTarget | null>(null);
+  const [linkTrusted, setLinkTrusted] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // 'add' | plugin id | source slug
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -416,6 +431,35 @@ export function PluginStoreSection({ config, onSave }: Props) {
     void updates.checkRow(rowKey, target);
   };
 
+  /** Install one source the way the form's Add does. Throws the server's message. */
+  const installSource = async (payload: Record<string, string>) => {
+    const res = await fetch('/api/plugin-sources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      const failure = new Error(body.error ?? `HTTP ${res.status}`) as Error & { gitCause?: string; sentence?: string };
+      if (typeof body.cause === 'string') failure.gitCause = body.cause;
+      if (typeof body.sentence === 'string') failure.sentence = body.sentence;
+      throw failure;
+    }
+    const count = body.plugins?.length ?? 0;
+    const what = body.resolved ? ` (${body.resolved})` : '';
+    // Only this source was installed. Anything its plugins need is a second question.
+    const plan = (body.pendingDependencies ?? []) as DependencyPlanItem[];
+    setPending(plan.length > 0 && body.slug ? { slug: body.slug as string, plan } : null);
+    setNotice(count > 0
+      ? `Added${what}: found ${count} plugin${count === 1 ? '' : 's'}. New plugins are active now; use Configure on a row that needs setup.`
+      : `Added${what}, but no plugins found (no manifest.json at the root or in top-level folders).`);
+    // The new row needs a chip without a click: one passive GET now (the server checks
+    // the new source in the background and the hook polls until it settles).
+    updates.reload();
+    emitPluginsChanged();
+    await requestRefresh();
+  };
+
   const handleAdd = async () => {
     const value = url.trim();
     if (!value || !trusted) return;
@@ -426,31 +470,33 @@ export function PluginStoreSection({ config, onSave }: Props) {
       // A share snippet is JSON and a git remote has a scheme; everything else
       // goes to the npm path so the error message is about the right thing.
       const isSnippet = value.startsWith('{');
-      const payload = isSnippet || looksLikeGitUrl(value) ? { url: value } : { spec: value };
-      const res = await fetch('/api/plugin-sources', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      const isInstallLink = value.toLowerCase().startsWith(INSTALL_LINK_SCHEME);
+      await installSource(isSnippet || isInstallLink || looksLikeGitUrl(value) ? { url: value } : { spec: value });
       setUrl('');
       setTrusted(false); // trust is granted per install, never sticky
-      const count = body.plugins?.length ?? 0;
-      const what = body.resolved ? ` (${body.resolved})` : '';
-      // Only this source was installed. Anything its plugins need is a second question.
-      const plan = (body.pendingDependencies ?? []) as DependencyPlanItem[];
-      setPending(plan.length > 0 && body.slug ? { slug: body.slug as string, plan } : null);
-      setNotice(count > 0
-        ? `Added${what}: found ${count} plugin${count === 1 ? '' : 's'}. New plugins are active now; use Configure on a row that needs setup.`
-        : `Added${what}, but no plugins found (no manifest.json at the root or in top-level folders).`);
-      // The new row needs a chip without a click: one passive GET now (the server checks
-      // the new source in the background and the hook polls until it settles).
-      updates.reload();
-      emitPluginsChanged();
-      await requestRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** The link's card: Install sends the link itself, so its branch reaches the server. */
+  const handleLinkInstall = async () => {
+    if (!linkRequest || !linkTrusted) return;
+    const target = linkRequest;
+    setBusy('link');
+    setLinkError(null);
+    setNotice(null);
+    setError(null);
+    try {
+      await installSource({ url: buildInstallLink(target) });
+      settlePendingInstall(target);
+      // A newer link that arrived during the install keeps its card.
+      setLinkRequest((current) => (current === target ? null : current));
+      setLinkTrusted(false);
+    } catch (err) {
+      setLinkError(linkFailureText(err));
     } finally {
       setBusy(null);
     }
@@ -692,6 +738,23 @@ export function PluginStoreSection({ config, onSave }: Props) {
   };
 
   const prefillInstall = (row: RegistryRow) => prefillSource(row.source, row.name);
+
+  // An install link someone clicked (utils/open-link.ts): its own card at the top of
+  // the store, where the page lands, with trust off. A newer link replaces it. The
+  // link stays pending until Install or Cancel, so a store mounted again shows it too.
+  useEffect(() => {
+    const take = () => {
+      const target = peekPendingInstall();
+      if (!target) return;
+      setLinkRequest(target);
+      setLinkTrusted(false);
+      setLinkError(null);
+      setNotice(null);
+      setError(null);
+    };
+    take();
+    return subscribeOpenLinks(take);
+  }, []);
 
   const copy = (text: string, key: string) => {
     void navigator.clipboard.writeText(text);
@@ -1082,6 +1145,47 @@ export function PluginStoreSection({ config, onSave }: Props) {
       )}
       {error && <SettingsNotice kind="error" role="alert">{error}</SettingsNotice>}
       {notice && <SettingsNotice kind="success">{notice}</SettingsNotice>}
+
+      {linkRequest && (
+        <SettingsGroup heading="Install from a link" className="plugin-store-group plugin-link-request" data-testid="plugin-link-request">
+          <SettingsRow
+            label="Source"
+            help={
+              <code className="settings-addons-mono" data-testid="plugin-link-source">
+                {linkRequest.kind === 'npm' ? linkRequest.spec : linkRequest.url}
+                {linkRequest.kind === 'git' && linkRequest.ref ? ` (branch ${linkRequest.ref})` : ''}
+              </code>
+            }
+            error={linkError ?? undefined}
+            control={
+              <span className="settings-addons-inline">
+                <SettingsButton variant="text" disabled={busy === 'link'} onClick={() => { settlePendingInstall(linkRequest); setLinkRequest(null); setLinkError(null); }} data-testid="plugin-link-cancel">
+                  Cancel
+                </SettingsButton>
+                <SettingsButton
+                  variant="primary"
+                  disabled={!linkTrusted}
+                  title={!linkTrusted ? 'Turn on the trust switch first.' : undefined}
+                  busy={busy === 'link'}
+                  busyLabel="Installing..."
+                  onClick={() => void handleLinkInstall()}
+                  data-testid="plugin-link-install"
+                >
+                  Install
+                </SettingsButton>
+              </span>
+            }
+          />
+          <SettingsRow
+            label={<span className="plugin-trust-label">I trust this source</span>}
+            htmlFor="plugin-link-trust"
+            help="A link only names the source. Its code runs inside Walnut with full access to your tasks, notes, credentials and this computer."
+            control={
+              <ToggleSwitch id="plugin-link-trust" data-testid="plugin-link-trust" checked={linkTrusted} onChange={setLinkTrusted} />
+            }
+          />
+        </SettingsGroup>
+      )}
 
       <SettingsGroup
         heading="Installed"
