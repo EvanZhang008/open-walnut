@@ -10,6 +10,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import type { WsFrame } from './protocol.js'
 import { CLOUD_MODE } from '../../constants.js'
+import { isHostReplica } from '../../core/server-role.js'
 import { toDisposable, type Disposable } from '../../core/plugins/disposable.js'
 import { OwnedRegistry } from '../../core/plugins/owned-registry.js'
 import { log } from '../../logging/index.js'
@@ -307,6 +308,9 @@ async function verifyPrimaryUpgrade(url: URL, request: IncomingMessage): Promise
     log.ws.warn('ws upgrade refused: no credential', { ip, reason: trust.trusted ? 'on-behalf-of' : trust.reason, origin: request.headers.origin, host: request.headers.host })
     return isCrossSiteRefusal(trust) ? 403 : 401
   }
+  // A host replica: every caller comes through the tunnel over loopback, so its
+  // failures are not keyed by address, and a good token always passes (replica/auth.ts).
+  if (isHostReplica()) return (await import('../../replica/auth.js')).verifyReplicaUpgrade(token)
   const { isAuthRateLimited, recordAuthFailure } = await import('../middleware/auth-rate-limit.js')
   if (isAuthRateLimited(ip)) {
     log.ws.warn('ws upgrade: rate limited', { ip })

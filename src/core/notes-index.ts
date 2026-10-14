@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
+import { bootPolicy } from './boot-policy.js'
 
 export const NOTES_INDEX_PATH = path.join(WALNUT_HOME, 'notes-index.sqlite')
 
@@ -158,6 +159,9 @@ export function getNotesIndexDb(): DatabaseType | null {
   if (db) return db
   if (initAttempted) return db
   initAttempted = true
+  // A host replica keeps no notes index (its notes live in the daemon's copy,
+  // WP6): a notes route there reads as an empty index and never creates the file.
+  if (!bootPolicy('notes-indexer')) return null
   try {
     fs.mkdirSync(path.dirname(NOTES_INDEX_PATH), { recursive: true })
     const handle = new Database(NOTES_INDEX_PATH)

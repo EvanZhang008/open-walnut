@@ -16,7 +16,7 @@
  * A server clock, not a daemon's: the host that would have fired a trigger is
  * exactly what may have stopped working.
  */
-import { CLOUD_MODE } from '../constants.js';
+import { bootPolicy } from './boot-policy.js';
 import { log } from '../logging/index.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import type { Task } from './types.js';
@@ -229,7 +229,8 @@ function onTaskEvent(event: BusEvent): void {
 
 /** Start the timer and its one subscriber (server boot, primary only). Idempotent: the name is overwritten. */
 export function startWaitUntilWatch(): void {
-  if (CLOUD_MODE) return;
+  if (!bootPolicy('wait-until')) return;
+  log.task.info('wait_until: started');
   live = true;
   void loadWaitUntilDeadlines().catch((err) => log.task.warn('wait_until boot scan failed', { error: errText(err) }));
   bus.subscribe(WAIT_UNTIL_SUBSCRIBER, onTaskEvent, {

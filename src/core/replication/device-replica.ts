@@ -10,7 +10,8 @@
  * its own pairings, and device adoption copies them across.
  *
  * One small list, sent whole to a host server whose last answer named another
- * list (or none), every 30 seconds, at once after a device is removed, and
+ * list (or none), every 30 seconds, at once after a device is paired, re-paired
+ * or removed, and
  * again to every host after the 10-minute sweep (a host server that lost its
  * file gets it back).
  */
@@ -18,6 +19,7 @@
 import crypto from 'node:crypto'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import { isDeviceCopyId } from '../../host-server/device-copy.js'
 import type { ReplicaTarget } from './replica-targets.js'
 
 const TICK_MS = 30_000
@@ -25,7 +27,8 @@ const SWEEP_MS = 10 * 60_000
 const FIRST_ROUND_MS = 10_000
 const PUT_TIMEOUT_MS = 15_000
 
-export interface DeviceReplicaEntry { name: string; tokenHash: string }
+/** `id` = the record id (stable across the device's own rotations); the list hash ignores it. */
+export interface DeviceReplicaEntry { name: string; tokenHash: string; id?: string }
 
 export interface DeviceReplicaDeps {
   /** Phones and browsers paired here, or null when the pairings cannot be read. */
@@ -36,6 +39,15 @@ export interface DeviceReplicaDeps {
 /** The same hash the host server computes (device-copy.ts listHash). */
 export function deviceListHash(devices: DeviceReplicaEntry[]): string {
   return crypto.createHash('sha256').update(devices.map((d) => `${d.name}:${d.tokenHash}`).sort().join('\n'), 'utf-8').digest('hex').slice(0, 16)
+}
+
+/**
+ * The row a host server is sent for one device record. Its id rides along only
+ * when the copy can keep it (device-copy.ts isDeviceCopyId): an id from a
+ * hand-edited or older auth.json is left out, the device itself never is.
+ */
+export function deviceReplicaEntry(r: { id?: unknown; name: string; tokenHash: string }): DeviceReplicaEntry {
+  return isDeviceCopyId(r.id) ? { id: r.id, name: r.name, tokenHash: r.tokenHash } : { name: r.name, tokenHash: r.tokenHash }
 }
 
 async function defaultDeps(): Promise<DeviceReplicaDeps> {
@@ -49,7 +61,7 @@ async function defaultDeps(): Promise<DeviceReplicaDeps> {
       const records = await auth.listDeviceRecords()
       return records
         .filter((r) => r.kind !== 'machine' && !paired.revoked.has(r.tokenHash))
-        .map((r) => ({ name: r.name, tokenHash: r.tokenHash }))
+        .map(deviceReplicaEntry)
     },
     targets: targets.replicaTargets,
   }
@@ -75,10 +87,14 @@ export function forgetDeviceReplica(): void {
 }
 
 let running: Promise<DeviceReplicaRoundResult[]> | null = null
+/** A round was asked for while one ran: it may have read the list before the change, so one more follows. */
+let rerun = false
+/** Set by stop(): a rerun queued before it never posts after the teardown. */
+let halted = false
 
 /** One round over every host server. One at a time; never throws. */
 export function syncDeviceReplica(deps?: DeviceReplicaDeps): Promise<DeviceReplicaRoundResult[]> {
-  if (running) return running
+  if (running) { rerun = true; return running }
   running = (async () => {
     const out: DeviceReplicaRoundResult[] = []
     try {
@@ -123,6 +139,8 @@ export function syncDeviceReplica(deps?: DeviceReplicaDeps): Promise<DeviceRepli
       }
     } finally {
       running = null
+      if (rerun && !halted) { rerun = false; void syncDeviceReplica(deps) }
+      rerun = false
     }
     return out
   })()
@@ -133,6 +151,7 @@ export function syncDeviceReplica(deps?: DeviceReplicaDeps): Promise<DeviceRepli
 export function startDeviceReplicaSync(deps?: DeviceReplicaDeps): { stop: () => void } {
   if (CLOUD_MODE) return { stop: () => {} }
   let stopped = false
+  halted = false
   const round = (): void => { if (!stopped) void syncDeviceReplica(deps) }
   const first = setTimeout(round, FIRST_ROUND_MS)
   first.unref?.()
@@ -145,12 +164,17 @@ export function startDeviceReplicaSync(deps?: DeviceReplicaDeps): { stop: () => 
     if (stopped) return
     // A removed device leaves every host server at once, even one that refused a round.
     unlisten.push(auth.onCredentialsRevoked(() => { retryAt.clear(); round() }))
+    // A new pairing (or a new QR for one) reaches every host server at once, so a
+    // phone that turns to that host right after pairing is already known there.
+    unlisten.push(auth.onDevicePaired(() => { retryAt.clear(); round() }))
     // A host server that came up again (an upgrade, say) is asked at once.
     unlisten.push(targets.onReplicaTargetsChanged(() => { retryAt.clear(); round() }))
   })
   return {
     stop: () => {
       stopped = true
+      halted = true
+      rerun = false
       clearTimeout(first)
       clearInterval(tick)
       clearInterval(sweep)
@@ -163,4 +187,6 @@ export function _resetDeviceReplicaForTesting(): void {
   taken.clear()
   retryAt.clear()
   running = null
+  rerun = false
+  halted = false
 }

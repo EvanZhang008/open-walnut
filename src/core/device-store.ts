@@ -19,6 +19,7 @@ import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { withFileLock } from '../utils/file-lock.js'
 import { log } from '../logging/index.js'
+import { isHostReplica } from './server-role.js'
 
 export type DevicePlatform = 'ios' | 'other'
 
@@ -534,6 +535,13 @@ let volatileInstanceId: string | null = null
  * reads, this process answers with an id it keeps in memory instead.
  */
 export async function getInstanceId(): Promise<string> {
+  // A host replica is the Walnut it follows: it answers the Mac's id and never
+  // mints one of its own into an auth.json (replica/boot-guard.ts requires the id).
+  if (isHostReplica()) {
+    const leader = (process.env.WALNUT_WALNUT_ID ?? '').trim()
+    if (leader) return leader
+    throw new Error('a host replica has no WALNUT_WALNUT_ID: it never mints an id of its own')
+  }
   const known = await loadAuth()
   if (known.instanceId) return known.instanceId
   return withFileLock(authFilePath(), async () => {

@@ -10,6 +10,7 @@ import type { Task } from '../types.js'
 import { IS_EPHEMERAL } from '../../constants.js'
 import { onTaskCompleted, onTaskDeleted, onTaskSessionStopped, resumeWorkspaces } from './cleanup.js'
 import { log } from '../../logging/index.js'
+import { bootPolicy } from '../boot-policy.js'
 
 const SUBSCRIBER = 'task-workspaces'
 
@@ -49,7 +50,7 @@ function onEvent(event: BusEvent): void {
 }
 
 export function startWorkspaceWatch(): void {
-  if (process.env.WALNUT_CLOUD_MODE === '1') return
+  if (!bootPolicy('workspace-watch')) return
   bus.subscribe(SUBSCRIBER, onEvent, {
     global: true,
     interest: [EventNames.TASK_PHASE_CHANGED, EventNames.TASK_DELETED, EventNames.SESSION_STATUS_CHANGED],

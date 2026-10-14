@@ -4,6 +4,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
+import { role } from '../../core/server-role.js'
 import { historyTurnWindowLimit, isHistoryUserTurn } from '../../lib/history-turn-window.js'
 import {
   emitSessionStatusChanged,
@@ -2350,7 +2351,7 @@ sessionsRouter.delete('/:sessionId/side-question/:id', async (req: Request, res:
  *  mint hidden CLI processes nothing ever retires. GET stays available (it is
  *  a pure read); every mutating route refuses on the replica. */
 function refuseSideThreadsOnReplica(res: Response): boolean {
-  if (!process.env.WALNUT_CLOUD_MODE) return false
+  if (role() !== 'replica') return false
   res.status(501).json({ error: 'Side threads are managed by the primary server' })
   return true
 }

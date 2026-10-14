@@ -21,6 +21,7 @@ import { WorkspaceError } from './daemon-client.js'
 import { findProvider, validateInputs } from './registry.js'
 import { belongsToWorkspace, isLaunchReady, needsCreation } from './decisions.js'
 import { deferStart, managerDeps, recordRequestFailure, requestWorkspace } from './manager.js'
+import { role } from '../server-role.js'
 
 function normHost(host: string | undefined | null): string {
   return !host || host === 'local' ? '__local__' : host
@@ -169,7 +170,7 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
       if (!provider) return refuse(400, `Unknown workspace provider: ${providerId || '(none)'}`, 'unknown-provider')
       const inputs = validateInputs(provider.inputSchema, asked.inputs)
       if (typeof inputs === 'string') return refuse(400, inputs, 'bad-inputs')
-      if (process.env.WALNUT_CLOUD_MODE === '1') return refuse(409, 'Isolated workspaces are made by the Walnut on your Mac.', 'cloud')
+      if (role() === 'replica') return refuse(409, 'Isolated workspaces are made by the Walnut on your Mac.', 'cloud')
       return begin({ provider: providerId, inputs })
     }
     return begin(null)

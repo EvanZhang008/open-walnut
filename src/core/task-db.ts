@@ -17,6 +17,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { TASKS_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
+import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import type { Task } from './types.js';
 import { migratePhase } from './phase.js';
 import { normalizeTags, tagsAreNormal } from './tag-model.js';
@@ -164,6 +165,8 @@ export function getDb(): DatabaseType | null {
       log.task.warn('task-db: WAL checkpoint on open failed', { err: String(err) });
     }
 
+    // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
+    guardCopyHandle(handle, 'tasks');
     db = handle;
     log.task.info('task-db opened', { path: TASK_DB_PATH });
     log.task.info('task-db: WAL checkpoint on open', { result: checkpoint });
@@ -173,6 +176,12 @@ export function getDb(): DatabaseType | null {
     log.task.error('task-db open failed', { path: TASK_DB_PATH, err: String(err) });
     throw err;
   }
+}
+
+/** The follower apply connection of this store on a host replica (replica/copy-guard.ts). */
+export function openCopyApplyConnection(): DatabaseType {
+  getDb();
+  return openApplyConnection(TASK_DB_PATH, 'tasks');
 }
 
 /**

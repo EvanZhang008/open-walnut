@@ -28,7 +28,7 @@
  */
 
 import { log } from '../logging/index.js';
-import { CLOUD_MODE } from '../constants.js';
+import { bootPolicy } from './boot-policy.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { engineCaps } from './agents/engine-registry.js';
 
@@ -307,7 +307,7 @@ export function startSessionTitleReconciler(): void {
   // is also the right call for constrained deployments: the sweep's primary
   // channel IS an unprompted background model call.
   if (backgroundAiDisabled()) return;
-  if (CLOUD_MODE) return;
+  if (!bootPolicy('title-reconciler')) return;
   if (process.env.WALNUT_DISABLE_TITLE_RECONCILER === '1') return;
 
   // The next tick is armed BEFORE the pass runs: a pass that hangs forever

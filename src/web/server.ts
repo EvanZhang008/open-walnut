@@ -70,8 +70,9 @@ import { createSlashCommandsRouter } from './routes/slash-commands.js'
 import { timelineRouter } from './routes/timeline.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
-import { CLOUD_MODE, CRON_FILE, IS_EPHEMERAL, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
-import { isFollower } from '../core/server-role.js'
+import { CLOUD_MODE, CRON_FILE, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
+import { isFollower, isHostReplica, placement, role } from '../core/server-role.js'
+import { bootPolicy } from '../core/boot-policy.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
@@ -171,6 +172,11 @@ import {
   type HeartbeatRunnerHandle,
 } from '../heartbeat/index.js'
 
+/**
+ * Who a job turned off by the boot policy is off for, in its skip line: the
+ * companion keeps its old 'cloud mode' wording, a host replica says so.
+ */
+function offByPolicy(): string { return isHostReplica() ? 'host replica' : 'cloud mode' }
 
 /**
  * Look up a task and build a rich reference: [id|Project / Title], or
@@ -592,6 +598,12 @@ let heartbeatHandle: HeartbeatRunnerHandle | null = null
 /** The primary's leader heartbeat, or the companion's takeover loop (core/leader/). */
 let leaderLoopHandle: { stop: () => void } | null = null
 let searchCopyHandle: { stop: () => Promise<void> } | null = null
+/** A host replica's leader door (replica/leader-door.ts), null elsewhere. */
+let hostReplicaDoor: import('../replica/leader-door.js').LeaderDoor | null = null
+/** The leader door of this host replica: the follower link hands it the Mac's streams. */
+export function getHostReplicaLeaderDoor(): import('../replica/leader-door.js').LeaderDoor | null {
+  return hostReplicaDoor
+}
 /** Keeps the Inbox Triage routine in line with config.triage (no restart). */
 let triageConfigWatcher: { stop: () => void } | null = null
 /** Keeps what arrived (mail/Slack) for the next Inbox Triage batch. */
@@ -771,8 +783,14 @@ function installExitDiagnostics(): void {
   process.on('exit', (code) => {
     // Sync-only: last chance to log (no async allowed)
     const msg = `[${new Date().toISOString()}] SERVER EXIT: code=${code} pid=${process.pid} uptime=${process.uptime()}s`
-    try { fs.appendFileSync('/tmp/open-walnut-exit.log', msg + '\n') } catch { /* ignore */ }
+    try { fs.appendFileSync(exitTraceFile(), msg + '\n') } catch { /* ignore */ }
   })
+}
+
+/** Where the exit trace goes: a host replica keeps it in its own run dir, never in a shared /tmp file. */
+function exitTraceFile(): string {
+  try { if (isHostReplica()) return path.join(LOG_DIR, 'exit.log') } catch { /* undecidable role: the default */ }
+  return '/tmp/open-walnut-exit.log'
 }
 
 // False while startServer() is booting (rejections are fatal), true once the
@@ -984,6 +1002,33 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     assertEphemeralHomeIsNotProduction(WALNUT_HOME)
   }
 
+  // Which server this is (core/server-role.ts): a contradictory env throws here,
+  // before anything is opened. A host replica (`walnut web --replica`) then
+  // refuses a run dir or data dir that belongs to another Walnut, takes the
+  // follower token and the daemon dir out of the env every child inherits, and
+  // waives no loopback caller (docs/plan/walnut-replica-servers-impl.md, WP1).
+  // The guard runs before the first log line: an unset run dir would put that
+  // line in /tmp/open-walnut.
+  if (isHostReplica()) {
+    const [{ assertReplicaBootSafe }, { takeFollowerSecrets }, { refuseLoopbackTrust }] = await Promise.all([
+      import('../replica/boot-guard.js'), import('../host-server/env.js'), import('./middleware/local-trust.js'),
+    ])
+    assertReplicaBootSafe({ env: process.env, walnutHome: WALNUT_HOME })
+    takeFollowerSecrets()
+    refuseLoopbackTrust()
+    // The copies (inbox bodies, boards, personas) reach a dev box that may be
+    // shared: every file this process creates is 0600, every dir 0700.
+    process.umask(0o077)
+    // And what an older writer left looser is made owner-only too, in the dirs
+    // the replica made (its marker): never in a tree it was merely pointed at.
+    const { claimReplicaDir, tightenReplicaModes } = await import('../replica/boot-guard.js')
+    const dirs = [WALNUT_HOME, (process.env.WALNUT_DAEMON_DIR ?? '').trim()].filter(Boolean)
+    const unclaimed = dirs.filter((d) => !claimReplicaDir(d))
+    tightenReplicaModes(dirs)
+    if (unclaimed.length) log.web.warn('host replica: modes left as they are in dirs it did not make', { dirs: unclaimed })
+  }
+  log.web.info('server role', { role: role(), placement: placement() })
+
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
   const isEphemeral = IS_EPHEMERAL
@@ -1049,7 +1094,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     // Capture for the fatal-signal path (which cannot await an import).
     releaseInstanceLockSync = releaseInstanceLock
-    if (!CLOUD_MODE) {
+    if (bootPolicy('foreign-db-guard')) {
       await assertNoForeignDbHolders()
       // The all-clear (the user killed the rogue writer) retires the SECOND
       // WRITER card. Edge-gated inside the watchdog, so a healthy box's 60s tick
@@ -1212,7 +1257,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // SAME daemon over loopback (no SSH, no bridge, no deploy — the binary is
   // already in dist/daemon-binaries from its own build). See core/cloud-exec.ts
   // for the transport/auth/ownership reasoning.
-  const cloudExec = CLOUD_MODE
+  const cloudExec = bootPolicy('cloud-exec')
     ? await (async () => {
       try {
         const [{ readCloudExecConfig, cloudExecStatus }, { getConfig }] = await Promise.all([
@@ -1235,7 +1280,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
     })()
     : null
-  if (CLOUD_MODE && !cloudExec?.enabled) {
+  if (!bootPolicy('local-daemon')) {
+    log.web.info('host replica: no local session daemon (it never starts or reaches one)')
+  } else if (CLOUD_MODE && !cloudExec?.enabled) {
     log.web.info('cloud mode: skipping local session daemon startup')
   } else try {
     const { localDaemon } = await import('../providers/local-daemon.js')
@@ -1256,7 +1303,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // The paired cloud companion as an exec host ("Cloud"): read the pairing now
   // (bounded, async git) so the session reconciler and the first host lists
   // already see its row; the companion's status probe runs in the background.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('cloud-box-probe')) {
     try {
       const { startCloudBoxHost } = await import('../core/hosts/cloud-box-probe.js')
       await startCloudBoxHost()
@@ -1268,7 +1315,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // for the setup banner. After the daemon start, so the probe can use it. A
   // vitest server, and the Playwright fixture (WALNUT_LOCAL_CLAUDE_PROBE=0, its
   // fake HOME would read as signed out), only ask when a test calls the route.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('local-claude-probe')) {
     const { wireLocalClaude } = await import('../core/hosts/local-readiness.js')
     unsubscribeLocalClaude?.()
     unsubscribeLocalClaude = wireLocalClaude({
@@ -1297,7 +1344,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // req.ip reflects the real client (X-Forwarded-For) for auth rate limiting.
   // NOT set in trusted-LAN mode: there, honoring X-Forwarded-For would let a
   // remote caller spoof a private IP and ride the LAN bypass.
-  if (CLOUD_MODE) {
+  if (bootPolicy('trust-proxy')) {
     app.set('trust proxy', 'loopback')
   }
 
@@ -1316,7 +1363,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // (compression() re-encoding them corrupts the pack protocol). The router
   // carries its own device-token auth — the /api auth middleware below does
   // not cover /git. See src/web/routes/git-http.ts.
-  if (CLOUD_MODE) {
+  if (bootPolicy('companion-ingest-routes')) {
     const { gitHttpRouter } = await import('./routes/git-http.js')
     app.use('/git/data', gitHttpRouter)
     // The primary's projection/transcript uploads, off the bridge socket. Its
@@ -1328,6 +1375,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The primary keeps this box's copy of its task store (same door as ingest).
     const { createBridgeReplicaRouter, BRIDGE_REPLICA_PATH } = await import('./routes/bridge-replica.js')
     app.use(BRIDGE_REPLICA_PATH, createBridgeReplicaRouter())
+  }
+  // A host replica: /bridge/*, /git/data and /host-api/* live on the leader door
+  // only (replica/leader-door.ts); the public app answers 404 for them.
+  if (isHostReplica()) {
+    const { replicaPublicRefusal } = await import('../replica/leader-door.js')
+    app.use(replicaPublicRefusal)
   }
 
   // gzip JSON/text responses. The list payloads (/api/tasks, /api/sessions,
@@ -1587,19 +1640,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // After the registry, because crossing a threshold dispatches a routine
   // through its executor. One global bus subscriber, interest-gated to the
   // events the stored wake routines actually name.
-  {
+  if (bootPolicy('routine-wake')) {
     const { startRoutineWake } = await import('../core/routines/wake-events.js')
     routineWakeHandle = startRoutineWake()
   }
 
   // ── wait_until: the clock on a WAITING task (src/core/task-wait-until.ts).
-  {
+  if (bootPolicy('wait-until')) {
     const { startWaitUntilWatch } = await import('../core/task-wait-until.js')
     startWaitUntilWatch()
   }
 
   // ── Task workspaces: cleanup on complete/delete + resume interrupted jobs (src/core/workspaces/).
-  {
+  if (bootPolicy('workspace-watch')) {
     const { startWorkspaceWatch } = await import('../core/workspaces/watch.js')
     startWorkspaceWatch()
   }
@@ -1665,7 +1718,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // credential (incl. an EC2 instance role in the cloud). A replica reachable
   // by any paired device must not offer them — same audience rationale as the
   // cloud-mode config redaction above.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('backup-routes')) {
     app.use('/api/backup', backupRouter)
   }
   app.use('/api/projects', projectsRouter)
@@ -1854,7 +1907,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // asset). On a Mac that is fine: the files are the user's own, on their own box.
   // On a reachable cloud replica it would be the one world-readable route, so the
   // deliberate call is to serve plugin apps on the primary only.
-  if (!CLOUD_MODE) app.use('/plugin-apps', pluginAppStaticRouter)
+  if (bootPolicy('plugin-apps')) app.use('/plugin-apps', pluginAppStaticRouter)
 
   app.use('/api/system', systemRouter)
   // Remote-host connect status (hydrate + deliberate retry); live updates ride
@@ -1882,7 +1935,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1/setup', setupRouter)
   // The companion is this server plus a public address: while the Mac answers,
   // a phone's call is carried to it and answered there (web/v1-forward/).
-  if (CLOUD_MODE) {
+  if (bootPolicy('v1-forward')) {
     const { getV1Forward, startLeaderPresenceTick } = await import('./v1-forward/proxy.js')
     app.use('/api/v1', getV1Forward().middleware)
     // And this server's one view of the leader (core/server-role.ts) follows it.
@@ -1938,7 +1991,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // companion; the companion watches it and, once a host grants it the lead,
   // answers what that host cannot answer itself.
   app.use('/api', leaderRouter)
-  if (CLOUD_MODE) {
+  if (bootPolicy('backup-leader')) {
     const [{ startBackupLeader }, { handleBackupGatewayFrame }, { setGatewayRequestHandler }] = await Promise.all([
       import('../core/leader/backup-leader.js'),
       import('../core/leader/backup-gateway.js'),
@@ -1950,7 +2003,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { startTaskReplicaLocalWrites } = await import('../core/replication/task-replica-store.js')
     const localWrites = startTaskReplicaLocalWrites()
     leaderLoopHandle = { stop: () => { backup?.stop(); localWrites.stop() } }
-  } else {
+  } else if (bootPolicy('leader-heartbeat') && bootPolicy('replica-pushes')) {
     const { startLeaderHeartbeat, watchBackupLeaderSetting } = await import('../core/leader/primary-leader.js')
     const { startHostReplicaSync } = await import('../core/host-replica-sync.js')
     const heartbeat = startLeaderHeartbeat()
@@ -1970,12 +2023,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { startDeviceReplicaSync } = await import('../core/replication/device-replica.js')
     const deviceReplica = startDeviceReplicaSync()
     leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop() } }
+    log.leader.info('leader loops: started (heartbeat, copies to the followers)')
   }
   // A follower (the cloud companion, a server on a host) keeps the leader's
   // search index copy: semantic search while the leader is away.
   if (isFollower()) {
     const { startSearchReplicaStore } = await import('../core/replication/search-replica-store.js')
     searchCopyHandle = startSearchReplicaStore()
+  }
+  // A host replica's leader door: the second listener the Mac's streams come in by
+  // (replica/leader-door.ts). It listens on no port; the follower link (WP2) feeds it.
+  if (isHostReplica()) {
+    const [{ createLeaderDoor }, { replicaDeviceCopy }] = await Promise.all([
+      import('../replica/leader-door.js'), import('../replica/auth.js'),
+    ])
+    hostReplicaDoor = createLeaderDoor({
+      devices: replicaDeviceCopy(),
+      status: () => ({ pid: process.pid, role: role(), placement: placement(), deviceCopy: replicaDeviceCopy().hash() }),
+      log: (level, msg, data) => log.web[level](msg, data),
+    })
   }
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
@@ -2248,7 +2314,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   try {
     await new Promise<void>((resolve, reject) => {
       httpServer!.once('error', reject)
-      httpServer!.listen(port, () => resolve())
+      // A host replica listens on loopback only: its tunnel is the one way in.
+      if (isHostReplica()) httpServer!.listen(port, '127.0.0.1', () => resolve())
+      else httpServer!.listen(port, () => resolve())
     })
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
@@ -2270,7 +2338,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // The daily "is a newer open-walnut published?" check: armed after listen so its
   // first call (20 s out) is clear of the boot fan-out. A source checkout, a
   // replica, a test and WALNUT_NO_UPDATE_CHECK=1 make start() a no-op.
-  try {
+  if (bootPolicy('update-check')) try {
     const { getUpdateChecker } = await import('../core/self-update/update-check.js')
     const checker = getUpdateChecker()
     let announced: string | null = null
@@ -2292,6 +2360,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (bound && typeof bound === 'object') {
       const { updateInstanceLockPort } = await import('../core/instance-lock.js')
       updateInstanceLockPort(bound.port)
+      // Every port of a host replica is a tunnel port (already refused before listen, local-trust.ts).
+      if (isHostReplica()) (await import('./middleware/local-trust.js')).markTunnelPort(bound.port)
       setPluginApiBase(`http://127.0.0.1:${bound.port}`)
       process.env.WALNUT_SERVER_URL = `http://localhost:${bound.port}`
       // This server's own ops and every local session it launches must talk to
@@ -2300,13 +2370,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // hook scripts); stopServer restores whatever was there before.
       const selfRoot = `http://127.0.0.1:${bound.port}`
       priorOpenWalnutApiUrl = { value: process.env.OPEN_WALNUT_API_URL, self: selfRoot }
-      setSelfApiRoot(selfRoot, { credential: CLOUD_MODE })
+      setSelfApiRoot(selfRoot, { credential: bootPolicy('self-api-credential') })
       process.env.OPEN_WALNUT_API_URL = selfRoot
     }
   }
 
   // -- The tunnel port and the tunnel in front of it (off unless config.yaml's expose says so) --
-  try {
+  if (bootPolicy('expose-runtime')) try {
     const { startExposeRuntime } = await import('./expose-runtime.js')
     const exposeRuntime = startExposeRuntime({ app, mainServer: httpServer })
     void exposeRuntime.reconcile().catch((err) => log.web.warn('expose: start failed', { error: err instanceof Error ? err.message : String(err) }))
@@ -2318,7 +2388,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // While zero devices are paired, print the one-time setup token so the
   // operator can claim the instance (POST /api/v1/setup/claim). The plain
   // multiline banner is intentional — greppable via journalctl on the box.
-  if (CLOUD_MODE) {
+  if (bootPolicy('setup-token-banner')) {
     try {
       const { getSetupTokenIfUnclaimed, printSetupTokenBanner } = await import('../core/device-auth.js')
       const setup = await getSetupTokenIfUnclaimed()
@@ -2376,10 +2446,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // otherwise its hosts are the developer's real ones (src/lib/real-ssh-guard.ts).
       const { realSshReachAllowed } = await import('../lib/real-ssh-guard.js')
       const sshAllowed = realSshReachAllowed()
-      if (!IS_EPHEMERAL && !CLOUD_MODE && !sshAllowed) {
+      if (!IS_EPHEMERAL && bootPolicy('terminal-sweep') && !sshAllowed) {
         log.web.info('terminal sweep skipped: a server under test without ssh isolation never runs ssh')
       }
-      if (!IS_EPHEMERAL && !CLOUD_MODE && sshAllowed) {
+      if (!IS_EPHEMERAL && bootPolicy('terminal-sweep') && sshAllowed) {
         // Sweep leaked walnut-*.dsock dtach sessions whose backing session is gone.
         import('./terminal/dtach-lifecycle.js')
           .then(({ reapOrphanDtach }) => reapOrphanDtach())
@@ -2439,7 +2509,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // to the human, so the decision is per DEVICE (its own foreground state + the
   // user's chosen mode). Primary only — letters live here, and a replica relays
   // every human-inbox route to this box.
-  if (!CLOUD_MODE) initLetterPush()
+  if (bootPolicy('letter-push')) initLetterPush()
 
   // -- Forensic observability: register the incident sink so invariant violations
   //    at turn-completion become durable incidents (+ bundle + notification). The
@@ -2467,8 +2537,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- Audio transcription + capture (macOS ScreenCaptureKit — not on cloud) --
-  if (CLOUD_MODE) {
-    log.web.info('cloud mode: skipping audio transcriber + capture resume')
+  if (!bootPolicy('audio')) {
+    log.web.info(`${offByPolicy()}: skipping audio transcriber + capture resume`)
   } else {
     // -- Audio transcription service (auto-transcribes recorded chunks via STT) --
     {
@@ -2526,7 +2596,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Pull after listen without gating HTTP. Once any remote outbox/projection is
   // reconciled, broadcast the existing bulk task signal so early clients fetch
   // the post-pull source of truth.
-  if (!isEphemeral) {
+  if (!isEphemeral && bootPolicy('git-pull')) {
     void gitPullWalnut()
       .then(async () => {
         startupPhase('background git pull done')
@@ -2546,7 +2616,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
   }
 
-  if (!CLOUD_MODE && !isEphemeral) {
+  if (bootPolicy('session-auto-recover') && !isEphemeral) {
     const { getConfig } = await import('../core/config-manager.js')
     const { startSessionAutoRecover } = await import('../core/session-auto-recover.js')
     if ((await getConfig()).hooks?.overrides?.['session-auto-recover']?.enabled !== false) {
@@ -2561,8 +2631,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Sessions whose process did NOT survive — handed to auto-recover once its
   // watcher is up (it starts later in boot, so the list has to wait here).
   let reconciledDead: import('../core/types.js').SessionRecord[] = []
-  if (CLOUD_MODE) {
-    log.session.info('cloud mode: skipping session reconciliation')
+  if (!bootPolicy('session-reconcile')) {
+    log.session.info(`${offByPolicy()}: skipping session reconciliation`)
   } else try {
     const { reconcileSessions } = await import('../core/session-reconciler.js')
     const result = await reconcileSessions()
@@ -2576,7 +2646,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- Migrate stale sessions from completed tasks --
-  try {
+  if (bootPolicy('completed-task-session-migration')) try {
     const { migrateCompletedTaskSessions } = await import('../core/task-manager.js')
     await migrateCompletedTaskSessions()
     startupPhase('completed-task session migration done')
@@ -2595,7 +2665,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // human to classify each row (scripts/repair-orphan-session-links.mjs), so this
   // only reports. Cloud mode is skipped: a replica's sessions.sqlite is synced
   // read-only state, and its task projection legitimately lags the primary.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('session-integrity-check')) {
     try {
       const { checkSessionTaskIntegrity } = await import('../core/session-integrity.js')
       const report = await checkSessionTaskIntegrity()
@@ -2608,7 +2678,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- Clean up old stream files (preserve non-terminal sessions) --
-  try {
+  if (bootPolicy('stream-file-cleanup')) try {
     const { cleanupStreamFiles } = await import('../providers/claude-code-session.js')
     const { listSessions, isTerminalSession } = await import('../core/session-tracker.js')
     const allSessions = await listSessions()
@@ -2645,11 +2715,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (process.env.WALNUT_DISABLE_SEARCH === '1') {
     log.memory.info('search indexing disabled via WALNUT_DISABLE_SEARCH=1 — keyword-only search')
   }
-  try {
+  if (bootPolicy('notes-watcher')) try {
     const { startNotesWatcher } = await import('../core/notes-watcher.js')
     // semantic:false = structural only (cloud replica / indexing disabled):
     // the notes reconciler still runs, nothing feeds the search index.
-    const semantic = process.env.WALNUT_DISABLE_SEARCH !== '1' && !CLOUD_MODE
+    const semantic = process.env.WALNUT_DISABLE_SEARCH !== '1' && bootPolicy('notes-semantic')
     notesWatcherHandle = startNotesWatcher({ semantic })
     log.memory.info('notes/memory watcher started', { semantic })
     // Warm the notes read path (tree snapshot + structural index) a little after
@@ -2668,7 +2738,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Primary only: on a cloud replica the embed model would pin the instance.
   // The outer check keeps a disabled host from loading the wiring module
   // (and its better-sqlite3 chain) at all.
-  if (process.env.WALNUT_DISABLE_SEARCH !== '1' && !CLOUD_MODE) {
+  if (process.env.WALNUT_DISABLE_SEARCH !== '1' && bootPolicy('search-wiring')) {
     try {
       const wiring = await import('../core/search/wiring.js')
       if (wiring.isSearchV2Enabled()) {
@@ -2688,7 +2758,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // fire-and-forget, gated like every background title call. Runs on ephemeral
   // servers too (they own an isolated data copy, and the browser suite proves
   // naming end to end there); never on the replica, which proxies sessions.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('thread-ai')) {
     const { startThreadTitler } = await import('../core/sessions/thread-title.js')
     const { startThreadTakeaways } = await import('../core/sessions/thread-takeaway.js')
     for (const h of threadAiHandles) h.stop()
@@ -2699,7 +2769,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // left unfinished: a device's push rows on the primary, its pairing's copy on
   // the other box. Both boxes; drained at start, every 60s and on reconnect
   // (core/devices/revoke-queue.ts).
-  {
+  if (bootPolicy('revoke-queue')) {
     const { startRevokeQueue } = await import('../core/devices/revoke-queue.js')
     revokeQueueHandle = startRevokeQueue()
   }
@@ -2707,7 +2777,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Git auto-commit polling (30s interval) --
   // Skip for ephemeral servers — they use a temp copy of data, no need to backup
   if (!isEphemeral) {
-    gitAutoCommitHandle = startGitAutoCommit()
+    if (bootPolicy('git-auto-commit')) gitAutoCommitHandle = startGitAutoCommit()
 
     // Disk watermark monitor: warn at 80% used, block writes (507) + git
     // pull-only at 90% (see src/core/disk-watermark.ts). Runs on every
@@ -2731,8 +2801,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // single-threaded gc on the data worktree — plus the bare hub repo and
     // stale deploy bundles on the cloud box. The 2026-08-12 disk-full outage
     // was exactly this debris accumulating with no one ever gc'ing.
-    const { startGitMaintenance } = await import('../integrations/git-maintenance.js')
-    gitMaintenanceHandle = startGitMaintenance()
+    if (bootPolicy('git-maintenance')) {
+      const { startGitMaintenance } = await import('../integrations/git-maintenance.js')
+      gitMaintenanceHandle = startGitMaintenance()
+    }
 
     // Send-path canary (cloud box only — returns null elsewhere): evaluates
     // the exact gates a phone send passes (disk-guard 507, bridge sockets,
@@ -2740,7 +2812,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // naming the failing hop. Born from 2026-08-21: the disk crossed the 90%
     // watermark and the user discovered it by watching their sends fail.
     const { startSendPathCanary } = await import('../core/send-path-canary.js')
-    sendPathCanaryHandle = startSendPathCanary({
+    if (bootPolicy('send-path-canary')) sendPathCanaryHandle = startSendPathCanary({
       notify: (title, body, dedupScope) => {
         // The canary computes its own edges: 'canary:recovered' is the
         // all-clear alert, which maps to the condition system's recovery for
@@ -2759,7 +2831,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // bridge-pushed to the cloud companion, which serves it at
     // GET /api/v1/tasks (legacy git-synced tasks/projection.json rides along
     // while sync.legacy_projection_files is on). Cloud mode only reads.
-    if (!CLOUD_MODE) {
+    if (bootPolicy('primary-store-jobs')) {
       // S3 backup scheduler (primary box only): a cloud replica backing up its
       // git-synced copy would race the primary and double-pay for uploads.
       // Self-gates on config backup.enabled; the routes 400 when unset here.
@@ -2849,7 +2921,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           })
         }
       }
-    } else {
+    } else if (bootPolicy('companion-queues')) {
       // Cloud box: two-way task sync. Writer half (Phase 4) — every local task
       // mutation is pushed to the primary SYNCHRONOUSLY over the bridge RPC
       // (`server.tasks.apply`), NOT written into git. A failed RPC falls back to
@@ -2932,8 +3004,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Git history compaction rewrites local refs — running it on BOTH the Mac
     // and the cloud companion would make their histories diverge. The Mac stays
     // the sole compactor; the cloud box only commits/pulls/pushes.
-    if (CLOUD_MODE) {
-      log.git.info('cloud mode: skipping git history compaction (Mac is the sole compactor)')
+    if (!bootPolicy('git-compaction')) {
+      log.git.info(`${offByPolicy()}: skipping git history compaction (Mac is the sole compactor)`)
     } else {
       // Recover from any crashed compaction, then schedule if due
       const { recoverFromCrashedCompaction } = await import('../integrations/git-compaction.js')
@@ -3080,7 +3152,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Cloud replica: session domain stays live (session hooks are display/triage
       // side), but task/cron actions must not double-fire — the primary already
       // dispatches them for the same phase change arriving via task sync.
-      const domains = CLOUD_MODE ? (['session'] as const) : undefined
+      const domains = bootPolicy('hook-task-domains') ? undefined : (['session'] as const)
       hookDispatcher.init(buildDefs(bootConfig), buildCfg(bootConfig), domains ? { domains: [...domains] } : undefined)
       setSessionHookDispatcher(hookDispatcher)
       // Live reload on config change: pure in-memory recompute of defs/overrides
@@ -3111,7 +3183,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // The phase-edge hook above is a HINT; this sweep is the guarantee: a pending
   // session-request whose target never produced an edge (killed daemon, stale
   // result gate, host offline) still notifies the asker at its deadline.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('session-request-sweep')) {
     const sweep = setInterval(() => {
       void import('../core/sessions/session-request-notify.js')
         .then(({ sweepSessionRequests }) => sweepSessionRequests())
@@ -3136,7 +3208,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // SECONDS AFTER the replacement server is already up, so a single boot-time
   // pass would find nothing. Adoption is idempotent, so re-running is free.
   // Fully detached + individually caught — a healer must never affect startup.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('lane-orphan-passes')) {
     const laneOrphanPassesMs = [8_000, 60_000, 300_000]
     for (const delayMs of laneOrphanPassesMs) {
       const timer = setTimeout(() => {
@@ -3168,7 +3240,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // had sessions (the first run is the one-time migration) and heals any link a
   // mint missed. Idempotent, detached, after the boot storm. The sync keeps a
   // chat renamed or deleted on one side in step with its ask on the other.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('lane-ask-sync')) {
     const { startLaneAskSync } = await import('../core/sessions/lane-ask-link.js')
     laneAskSyncStop = startLaneAskSync()
     const timer = setTimeout(() => {
@@ -3194,7 +3266,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   //
   // Primary only: task rows on the replica are a projection of these, so a sweep
   // there would race the import and be overwritten by it.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('pin-retirement')) {
     void (async () => {
       try {
         const { sweepPinRetirement, PIN_RETIREMENT_SWEEP_INTERVAL_MS, PIN_RETIREMENT_BOOT_DELAY_MS } =
@@ -3272,8 +3344,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Session health monitor / reapers probe local PIDs + daemons and mutate
   // sessions.json — on the cloud box that state belongs to the Mac (git-synced),
   // so running them would falsely mark live Mac sessions dead.
-  if (CLOUD_MODE) {
-    log.web.info('cloud mode: skipping session health monitor + session/recording reapers')
+  if (!bootPolicy('session-health-monitor')) {
+    log.web.info(`${offByPolicy()}: skipping session health monitor + session/recording reapers`)
   } else {
     // -- Start session health monitor --
     healthMonitor = new SessionHealthMonitor()
@@ -3390,13 +3462,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- Start overview maintainer (task lifecycle → project skill upkeep) --
-  {
+  if (bootPolicy('overview-maintainer')) {
     const { startOverviewMaintainer } = await import('../core/overview-maintainer.js')
     startOverviewMaintainer()
   }
 
   // -- Start project summary maintainer (task counts → fast-model project summaries) --
-  {
+  if (bootPolicy('project-summary')) {
     const { startProjectSummaryMaintainer } = await import('../core/project-summary.js')
     startProjectSummaryMaintainer()
   }
@@ -3467,7 +3539,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // has usually already happened by the time the user opens the folder picker.
   // A replica has no ssh and no daemons of its own — the whole block is the
   // primary's job.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('host-wiring')) {
     const { addOnDaemonPhaseChange, addOnDaemonHostConnected, getDaemonConnectState, getDaemonConnection, isDaemonConnected } =
       await import('../providers/daemon-connection.js')
     const { getConfig } = await import('../core/config-manager.js')
@@ -3663,7 +3735,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         broadcastEvent('system:health', systemHealth)
       }
       // A different model may need a newer Claude Code (claude-version-floor.ts).
-      if (!CLOUD_MODE) void import('../core/hosts/local-readiness.js').then((m) => m.localClaudeConfigChanged()).catch(() => {})
+      if (bootPolicy('local-claude-probe')) void import('../core/hosts/local-readiness.js').then((m) => m.localClaudeConfigChanged()).catch(() => {})
     } catch { /* non-critical */ }
   })
 
@@ -4826,8 +4898,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Load integration plugins --
   try {
-    await loadPlugins(registry)
-    log.web.info('integration plugins loaded', { plugins: registry.getAll().map(p => p.id) })
+    if (bootPolicy('plugins')) {
+      await loadPlugins(registry)
+      log.web.info('integration plugins loaded', { plugins: registry.getAll().map(p => p.id) })
+    }
   } catch (err) {
     log.web.error('failed to load integration plugins', { error: err instanceof Error ? err.message : String(err) })
   } finally {
@@ -4835,7 +4909,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
   // The companion runs only some plugins; its cards about the others, from a
   // previous life, wait for a success this box can never have.
-  if (CLOUD_MODE) {
+  if (bootPolicy('companion-plugin-cards')) {
     void expireOwnCardsOfUnloadedPlugins((id) => !!registry.get(id), bootStartedAt)
       .then(({ expired }) => {
         for (const record of expired) broadcastEvent('notification:updated', record)
@@ -4954,7 +5028,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Keeping it here left the whole multi-second boot without a SIGTERM handler.
 
   // -- Start post-listen services (port already bound above) --
-  cronService.start().catch((err) => {
+  if (bootPolicy('cron')) cronService.start().catch((err) => {
     log.cron.error('failed to start cron service', { error: err instanceof Error ? err.message : String(err) })
   })
 
@@ -4967,7 +5041,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // A REPLICA must not touch cron-jobs.json (the primary owns it — the
   // dual-engine blind-write rule), and the primary's git-synced config would
   // otherwise make both boxes create the same routine.
-  if (!CLOUD_MODE) {
+  if (bootPolicy('triage-bootstrap')) {
     void import('../core/triage/bootstrap.js').then(async ({ ensureTriageRoutine, startTriageConfigWatcher }) => {
       triageConfigWatcher = startTriageConfigWatcher()
       const result = await ensureTriageRoutine()
@@ -5002,6 +5076,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // happens in-conversation via skill_manage triggers.
 
   startupPhase('ALL DONE — server fully initialized')
+  // One line with every job's decision for this role and placement (core/boot-policy.ts),
+  // and what the boot cost: the host replica's budget is checked against it.
+  {
+    const { bootPolicyDecisions } = await import('../core/boot-policy.js')
+    const cpu = process.cpuUsage()
+    log.web.info('boot policy', {
+      role: role(), placement: placement(), ...bootPolicyDecisions(),
+      bootMs: Date.now() - bootStartedAt, rssMb: Math.round(process.memoryUsage().rss / 1048576),
+      cpuMs: Math.round((cpu.user + cpu.system) / 1000),
+    })
+  }
   bootCompleted = true // steady state → stray rejections log, never kill prod
   return httpServer!
 }
@@ -5229,8 +5314,8 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
 async function startHeartbeatIfConfigured(): Promise<void> {
   // config.yaml is git-synced from the primary box — if heartbeat is enabled
   // there, running it here too would double-fire the same agent turns.
-  if (CLOUD_MODE) {
-    log.heartbeat.info('cloud mode: heartbeat skipped (primary box owns heartbeat turns)')
+  if (!bootPolicy('heartbeat')) {
+    log.heartbeat.info(`${offByPolicy()}: heartbeat skipped (primary box owns heartbeat turns)`)
     return
   }
   // An ephemeral server runs over a copy of the real config: its heartbeat would
@@ -5377,8 +5462,8 @@ function startPluginSyncPolling(): void {
   // External-sync plugins write tasks.json — polling from BOTH the primary box
   // and the cloud companion would double-create synced tasks + churn git-sync.
   // The primary box owns external sync; the cloud box only serves the API.
-  if (CLOUD_MODE) {
-    log.web.info('cloud mode: skipping plugin sync polling (primary box owns external sync)')
+  if (!bootPolicy('plugin-sync-polling')) {
+    log.web.info(`${offByPolicy()}: skipping plugin sync polling (primary box owns external sync)`)
     return
   }
   // Idempotent: callable again after a plugin soft-reload — only plugins that
@@ -5812,7 +5897,9 @@ export async function stopServer(): Promise<void> {
   leaderLoopHandle = null
   await searchCopyHandle?.stop().catch(() => {})
   searchCopyHandle = null
-  if (!CLOUD_MODE) {
+  await hostReplicaDoor?.close().catch(() => {})
+  hostReplicaDoor = null
+  if (bootPolicy('leader-heartbeat')) {
     try { await (await import('../core/leader/primary-leader.js')).announceLeaderRestart(800) } catch { /* best-effort */ }
   } else {
     try { (await import('./ws/bridge-registry.js')).setGatewayRequestHandler(null) } catch { /* best-effort */ }
@@ -5863,7 +5950,7 @@ export async function stopServer(): Promise<void> {
     const { closeAllBridges } = await import('./ws/bridge-registry.js')
     closeAllBridges()
   } catch { /* best-effort */ }
-  if (CLOUD_MODE) {
+  if (bootPolicy('v1-forward')) {
     try { (await import('./v1-forward/proxy.js')).stopLeaderPresenceTick() } catch { /* best-effort */ }
   }
   // The cloud box: stop the pairing probe (primary), drop the tunnels (replica;

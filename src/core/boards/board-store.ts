@@ -21,7 +21,8 @@
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js';
+import { WALNUT_HOME } from '../../constants.js';
+import { bootPolicy } from '../boot-policy.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { withFileLock } from '../../utils/file-lock.js';
 import { log } from '../../logging/index.js';
@@ -556,7 +557,7 @@ function onTaskDeleted(event: BusEvent): void {
  * Global, because sync pulls and plugins announce deletions with no destination.
  */
 export function initBoardStore(): void {
-  if (CLOUD_MODE) return;
+  if (!bootPolicy('board-store-watch')) return;
   bus.subscribe(BOARD_SUBSCRIBER, onTaskDeleted, { global: true, interest: [EventNames.TASK_DELETED] });
 }
 

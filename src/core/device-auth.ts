@@ -137,6 +137,8 @@ export async function createDevice(
     return { persist: true, result: { created: { name, token, createdAt: record.createdAt }, gone } }
   }).then(({ created, gone }) => {
     notifyRevoked(gone)
+    // A create that replaced a pairing is heard as that revoke already (one round, not two).
+    if (opts?.kind !== 'machine' && gone.length === 0) notifyPaired(created.name)
     return created
   })
 }
@@ -164,6 +166,9 @@ export async function createDeviceAs(
     auth.devices.push(record)
     log.web.info('device-auth: device created', { name, kind: opts.kind ?? 'device', by: decision.by })
     return { persist: true, result: { name, token, createdAt: record.createdAt } }
+  }).then((created) => {
+    if (opts.kind !== 'machine') notifyPaired(created.name)
+    return created
   })
 }
 
@@ -205,6 +210,9 @@ export async function rotateDevice(
   }, () => stampRevokeTime(intent), () => dropRevokeIntent(intent))
   for (const n of out.gone) lastUsedWriteAt.delete(n)
   notifyRevoked(out.gone)
+  // A rotate that ended a pairing is already heard as a revoke (its listeners
+  // send the round); only a plain pairing of a new name needs its own word.
+  if (out.gone.length === 0) notifyPaired(out.name)
   log.web.info('device-auth: device rotated', { name, by: out.by, replaced: out.replaced, ...(out.gone.length > 1 ? { removedCredentials: out.gone.filter((n) => n !== name) } : {}) })
   // A re-pair by anyone but the device itself ends the old pairing, so its phone
   // stops getting pushes like any revoked one, and the old token's copy goes.
@@ -419,6 +427,26 @@ export function notifyRevoked(names: string[]): void {
   if (names.length === 0) return
   for (const l of revokeListeners) {
     try { l(names) } catch { /* a listener must never fail a revoke */ }
+  }
+}
+
+const pairingListeners = new Set<(name: string) => void>()
+
+/**
+ * Hear every device this process pairs (create, rotate, an adoption from
+ * another box). A create or rotate that also ended a pairing is heard through
+ * onCredentialsRevoked instead, so a listener runs one round for it. A host
+ * replica must hold a new token's hash before the phone that carries it turns
+ * to that host (core/replication/device-replica.ts sends a round at once).
+ */
+export function onDevicePaired(listener: (name: string) => void): () => void {
+  pairingListeners.add(listener)
+  return () => { pairingListeners.delete(listener) }
+}
+
+export function notifyPaired(name: string): void {
+  for (const l of pairingListeners) {
+    try { l(name) } catch { /* a listener must never fail a pairing */ }
   }
 }
 

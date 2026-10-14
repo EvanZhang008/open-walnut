@@ -23,6 +23,7 @@ import {
 import { registry } from './integration-registry.js';
 import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
+import { isHostReplica } from './server-role.js';
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
 import { folderProjectFor, trimDir } from './sessions/folder-project.js';
 import { isAwaitingTurnEnd } from './sessions/self-complete-stop.js';
@@ -477,12 +478,17 @@ async function ensureInit(): Promise<void> {
     // one-shot JSON→SQLite migration if the DB is still empty. Both are
     // idempotent no-ops on subsequent calls.
     getDb();
-    await runMigrationIfNeeded();
-    // One-shot: memory/projects/<cat>/<proj>/ → <proj>/ (marker-guarded no-op
-    // after the first pass). Lives here because every project-memory reader
-    // goes through a task lookup first.
-    await migrateProjectMemoryDirs();
-    await seedProjectsFromConfig();
+    // A host replica's task store is a copy of the Mac's, written only by the
+    // follower apply connection (replica/copy-guard.ts): the Mac already ran
+    // these, and here they would write the copy.
+    if (!isHostReplica()) {
+      await runMigrationIfNeeded();
+      // One-shot: memory/projects/<cat>/<proj>/ → <proj>/ (marker-guarded no-op
+      // after the first pass). Lives here because every project-memory reader
+      // goes through a task lookup first.
+      await migrateProjectMemoryDirs();
+      await seedProjectsFromConfig();
+    }
     initialized = true;
   }
 }

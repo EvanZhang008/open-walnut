@@ -121,6 +121,9 @@ export const SLOW_TEST_FILES = [
   // The stall recorder's hold span on real CPU: CPU burns up to 1.2 s, and a
   // running recorder through real 2 to 3 s stops of its loop, three runs each.
   'tests/core/stall-recorder-running.test.ts', // 30-33s
+  // A host replica: the real startServer in-process with the replica env (WP1).
+  'tests/replica/leader-door.test.ts',
+  'tests/replica/env-scrub.test.ts',
 ] as const
 
 /**

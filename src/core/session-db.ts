@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
+import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import type { SessionRecord } from './types.js';
 
 /** SQLite file path. Sits next to the legacy sessions.json in WALNUT_HOME. */
@@ -190,6 +191,8 @@ export function getDb(): DatabaseType | null {
       log.session.warn('session-db: WAL checkpoint on open failed', { err: String(err) });
     }
 
+    // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
+    guardCopyHandle(handle, 'sessions');
     db = handle;
     log.session.info('session-db opened', { path: SESSION_DB_PATH });
     log.session.info('session-db: WAL checkpoint on open', { result: checkpoint });
@@ -199,6 +202,12 @@ export function getDb(): DatabaseType | null {
     log.session.error('session-db open failed', { path: SESSION_DB_PATH, err: String(err) });
     throw err;
   }
+}
+
+/** The follower apply connection of this store on a host replica (replica/copy-guard.ts). */
+export function openCopyApplyConnection(): DatabaseType {
+  getDb();
+  return openApplyConnection(SESSION_DB_PATH, 'sessions');
 }
 
 /**

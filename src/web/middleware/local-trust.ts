@@ -110,7 +110,23 @@ export function unmarkTunnelPort(port: number): void {
   tunnelPorts.delete(port)
 }
 
+/**
+ * A host replica's every port is a tunnel port (docs/plan/walnut-replica-servers-impl.md,
+ * section 1): set before it listens, so not even a request that wins the race
+ * against marking the bound port is waived.
+ */
+let everyPortIsTunnel = false
+
+export function refuseLoopbackTrust(): void {
+  everyPortIsTunnel = true
+}
+
+export function _resetLoopbackTrustForTesting(): void {
+  everyPortIsTunnel = false
+}
+
 export function isTunnelPort(port: number | undefined): boolean {
+  if (everyPortIsTunnel) return true
   return port !== undefined && tunnelPorts.has(port)
 }
 

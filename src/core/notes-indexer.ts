@@ -20,7 +20,8 @@
 import fsp from 'node:fs/promises'
 import fs from 'node:fs'
 import path from 'node:path'
-import { NOTES_DIR, CLOUD_MODE } from '../constants.js'
+import { NOTES_DIR } from '../constants.js'
+import { bootPolicy } from './boot-policy.js'
 import { withFileLock } from '../utils/file-lock.js'
 import { withUserFileLock } from '../utils/user-file-lock.js'
 import {
@@ -186,7 +187,7 @@ function isIndexableRelPath(relPath: string): boolean {
  * when the file is gone, so deletion rides the same call.
  */
 async function reconcileSemantic(relPath: string): Promise<void> {
-  if (CLOUD_MODE) return
+  if (!bootPolicy('notes-semantic')) return
   try {
     const { upsertSearchV2File } = await import('./search/wiring.js')
     await upsertSearchV2File('note', path.join(NOTES_DIR, relPath))
@@ -479,7 +480,7 @@ export async function collectIndexableNotePaths(): Promise<string[]> {
 async function rebuildSemanticIndex(
   _options: RebuildIndexOptions,
 ): Promise<void> {
-  if (CLOUD_MODE || stopped) return
+  if (!bootPolicy('notes-semantic') || stopped) return
 
   // mtime-based sweep over the file kinds: re-upserts every changed note and
   // evicts stale docs. Vector re-embeds ride the index's own backfill loop
@@ -645,6 +646,9 @@ export async function scanForDrift(): Promise<{ changed: number; deleted: number
  * (Obsidian edits, agent writes, git pulls) are picked up without a rebuild.
  */
 export async function initNotesIndex(): Promise<void> {
+  // A host replica keeps no notes index: its notes live in the daemon's copy (WP6).
+  if (!bootPolicy('notes-indexer')) return
+  log.memory.info('notes-index: started')
   const { getNotesIndexDb, readSchemaVersion, NOTES_INDEX_SCHEMA_VERSION, docCount } =
     await import('./notes-index.js')
   if (stopped) return // stopped while loading: never open (and create) the index in a torn-down dir

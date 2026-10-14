@@ -19,7 +19,8 @@
  * inherited belong to the real Walnut and never fire there (like its paused
  * cron jobs); the ones set during its own life do.
  */
-import { CLOUD_MODE, IS_EPHEMERAL } from '../../constants.js';
+import { IS_EPHEMERAL } from '../../constants.js';
+import { bootPolicy } from '../boot-policy.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { own } from './board-html.js';
@@ -201,7 +202,8 @@ function onBoardChanged(event: BusEvent): void {
 
 /** Start the timer and its one subscriber (server boot, primary only). Idempotent: the name is overwritten. */
 export function startBoardReminders(opts: { ephemeral?: boolean } = {}): void {
-  if (CLOUD_MODE) return;
+  if (!bootPolicy('board-reminders')) return;
+  log.task.info('board reminders: started');
   live = true;
   inheritedBefore = (opts.ephemeral ?? IS_EPHEMERAL) ? Date.now() : null;
   void loadBoardReminders().catch((err) => log.task.warn('board reminders boot scan failed', { error: errText(err) }));

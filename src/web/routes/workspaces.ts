@@ -19,6 +19,7 @@ import { WorkspaceError, workspaceRpc } from '../../core/workspaces/daemon-clien
 import { workspaceProviderCatalog } from '../../core/workspaces/registry.js'
 import { requestWorkspace, retryWorkspace, removalPreview, removeWorkspaceManually, PREVIEW_RPC_MS } from '../../core/workspaces/manager.js'
 import type { WorkspaceCandidate } from '../../core/workspaces/types.js'
+import { role } from '../../core/server-role.js'
 
 export const workspacesRouter = Router()
 
@@ -73,7 +74,7 @@ workspacesRouter.get('/providers', async (req: Request, res: Response, next: Nex
       res.json({ cwd, host, candidates: base('Pick a folder first'), degraded: 'no-folder' })
       return
     }
-    if (process.env.WALNUT_CLOUD_MODE === '1') {
+    if (role() === 'replica') {
       res.json({ cwd, host, candidates: base('Isolated workspaces are made by the Walnut on your Mac'), degraded: 'cloud' })
       return
     }

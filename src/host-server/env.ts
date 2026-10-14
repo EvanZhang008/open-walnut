@@ -40,3 +40,37 @@ export function readHostServerEnv(env: NodeJS.ProcessEnv = process.env): HostSer
     label: (env.WALNUT_HOST_LABEL ?? '').trim() || 'this host',
   }
 }
+
+/**
+ * The two values a follower must not hand down (docs/plan/walnut-replica-servers-impl.md,
+ * section 2, env scrub): the token the daemon started it with and the daemon's
+ * directory. The full server program (`walnut web --replica`) spawns git,
+ * shells, workers and model CLIs; a child holding either could present itself
+ * to the host daemon as this follower. Read once at boot, then deleted from
+ * the env every child is built from.
+ */
+export interface FollowerSecrets {
+  followerToken: string | null
+  hostDaemonDir: string | null
+}
+
+let taken: FollowerSecrets | null = null
+
+export function takeFollowerSecrets(env: NodeJS.ProcessEnv = process.env): FollowerSecrets {
+  taken ??= {
+    followerToken: (env.WALNUT_FOLLOWER_TOKEN ?? '').trim() || null,
+    hostDaemonDir: (env.WALNUT_HOST_DAEMON_DIR ?? '').trim() || null,
+  }
+  delete env.WALNUT_FOLLOWER_TOKEN
+  delete env.WALNUT_HOST_DAEMON_DIR
+  return taken
+}
+
+/** What `takeFollowerSecrets` read, or null before it ran. */
+export function followerSecrets(): FollowerSecrets | null {
+  return taken
+}
+
+export function _resetFollowerSecretsForTesting(): void {
+  taken = null
+}

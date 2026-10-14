@@ -23,6 +23,7 @@ import { workspaceRpc, WorkspaceError, replyError, hostLabel } from './daemon-cl
 import { findProvider, validateInputs, workspaceProviderCatalog, GIT_WORKTREE_ID } from './registry.js'
 import { cleanupDecision, isLaunchReady, keptReason, workspaceName, isBusy, type CleanupTrigger } from './decisions.js'
 import { log } from '../../logging/index.js'
+import { role } from '../server-role.js'
 
 const POLL_MS = 1_500
 export const START_RPC_MS = 30_000
@@ -47,6 +48,7 @@ export interface WorkspaceManagerDeps {
   listTasks(): Promise<Task[]>
   /** The realpath of this server's WALNUT_HOME (a workspace records the one that made it). */
   walnutHome(): Promise<string>
+  /** A replica (the companion or a host replica): workspaces are made and removed by the Mac only. */
   cloudMode(): boolean
   now(): number
   sleep(ms: number): Promise<void>
@@ -111,7 +113,7 @@ const realDeps: WorkspaceManagerDeps = {
     const { WALNUT_HOME } = await import('../../constants.js')
     try { return await fs.promises.realpath(WALNUT_HOME) } catch { return path.resolve(WALNUT_HOME) }
   })()),
-  cloudMode: () => process.env.WALNUT_CLOUD_MODE === '1',
+  cloudMode: () => role() === 'replica',
   now: () => Date.now(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   jobId: () => `ws-${Date.now().toString(36)}-${randomBytes(5).toString('hex')}`,

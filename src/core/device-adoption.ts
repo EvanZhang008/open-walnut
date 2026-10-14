@@ -25,7 +25,7 @@
 import { CLOUD_MODE } from '../constants.js'
 import { log } from '../logging/index.js'
 import {
-  mutateDeviceRecords, readDeviceRegistry, revokePairing, validateDeviceName,
+  mutateDeviceRecords, notifyPaired, readDeviceRegistry, revokePairing, validateDeviceName,
   type DeviceRecord, type DeviceSelfInfo,
 } from './device-auth.js'
 import {
@@ -164,6 +164,8 @@ export async function adoptDeviceRecord(
   })
   if (out.adopted) {
     log.web.info('device-adoption: pairing adopted', { name: out.name, requested: name, from: input.adoptedFrom, platform: platform ?? null })
+    // A phone adopted onto the Mac may turn to a host replica next: its hash goes there at once.
+    notifyPaired(out.name)
   }
   return out
 }

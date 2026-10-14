@@ -240,9 +240,10 @@ export function registerCommands(program: Command): void {
     .option('--dev', 'Development mode (no static file serving)')
     .option('--ephemeral', 'Start an isolated ephemeral server (temp data copy, random port)')
     .addOption(new Option('--_ephemeral-child').hideHelp())
+    .option('--replica', 'Run as a replica on this host that follows your Mac (started by this host\'s Walnut daemon)')
     .action(async (options: Record<string, unknown>) => {
       const { runWeb } = await import('./web.js');
-      await runWeb(options as { port?: string; dev?: boolean; ephemeral?: boolean; _ephemeralChild?: boolean });
+      await runWeb(options as { port?: string; dev?: boolean; ephemeral?: boolean; _ephemeralChild?: boolean; replica?: boolean });
     });
 
   program

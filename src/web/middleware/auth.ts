@@ -18,6 +18,9 @@
  *   outside the /api mount, so they are inherently exempt.
  * - Auth failures are rate-limited in-app (10/min per IP → 429).
  *
+ * Host replica (`walnut web --replica`, placement host): replica/auth.ts. A
+ * token counts only when it hashes to a row of the Mac's device copy.
+ *
  * Both modes: `GET /api/v1/instance` is public (PUBLIC_GET_PATHS below). Primary
  * mode: `POST /api/v1/browser-pair` too (PUBLIC_POST_PATHS).
  */
@@ -30,6 +33,7 @@ import { recordAuthFailure, isAuthRateLimited } from './auth-rate-limit.js'
 import { classifyLocalRequest, isCrossSiteRefusal } from './local-trust.js'
 import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { log } from '../../logging/index.js'
+import { isHostReplica } from '../../core/server-role.js'
 
 // Paths (relative to the /api mount) that stay public in cloud mode:
 // - /v1/setup/*: first-boot claim flow — must work before any token exists.
@@ -72,6 +76,8 @@ function requestIp(req: Request): string {
  * upgrade; every other consumer must reject it.
  */
 export async function validateBearerCredential(token: string): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine'; bridgeScope?: 'status-only' } | null> {
+  // A host replica checks the Mac's device copy only (replica/auth.ts): no API key, no machine token.
+  if (isHostReplica()) return (await import('../../replica/auth.js')).verifyReplicaToken(token)
   const device = await verifyDeviceToken(token)
   if (device) return { name: device.name, kind: device.kind === 'machine' ? 'machine' : 'device', ...(device.bridgeScope ? { bridgeScope: device.bridgeScope } : {}) }
   const keyName = await validateApiKey(token)
@@ -92,6 +98,10 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   }
   if (CLOUD_MODE) {
     await cloudAuthMiddleware(req, res, next)
+    return
+  }
+  if (isHostReplica()) {
+    await (await import('../../replica/auth.js')).replicaAuthMiddleware(req, res, next)
     return
   }
 

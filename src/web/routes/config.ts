@@ -6,6 +6,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE, WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
+import { placement, role } from '../../core/server-role.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { buildProviderMap, resolveProvider, type ProviderConfig } from '../../model/providers/index.js'
@@ -127,7 +128,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // carries: push device tokens and secret-shaped values in the free-form maps
     // masked in every mode, every secret on a replica, since any paired device can
     // read this route there.
-    res.json({ config: configForClients(shown), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair, build: getBuildInfo() })
+    res.json({ config: configForClients(shown), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo() })
   } catch (err) {
     next(err)
   }

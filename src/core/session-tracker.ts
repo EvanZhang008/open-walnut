@@ -17,6 +17,7 @@ import type {
 } from './types.js';
 import { getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transaction as sessionDbTx } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
+import { isHostReplica } from './server-role.js';
 import { bus, EventNames, type EmitOptions } from './event-bus.js';
 import type { SessionStatusChangedEvent } from './event-types.js';
 // Snapshot enforce-mode legacy-writer gate. session-snapshot-gate has ZERO
@@ -43,7 +44,8 @@ async function ensureSessionInit(): Promise<void> {
   if (sessionInitialized) return;
   sessionInitialized = true;
   getDb();
-  await runSessionMigrationIfNeeded();
+  // A host replica's session store is a copy (replica/copy-guard.ts): no migration writes it.
+  if (!isHostReplica()) await runSessionMigrationIfNeeded();
 }
 
 // ── Whole-store read cache ────────────────────────────────────────────────

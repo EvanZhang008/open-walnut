@@ -21,13 +21,28 @@ const HASH_RE = /^[0-9a-f]{64}$/
 const NAME_MAX = 64
 const MAX_DEVICES = 500
 
-export interface DeviceCopyEntry { name: string; tokenHash: string }
+/**
+ * `id` is the device's record id on the Mac (stable across its own rotations,
+ * device-store.ts), sent by newer Macs; a row from an older Mac has none. The
+ * list hash stays over `name:tokenHash`, so an older host server and a newer
+ * Mac still agree on it.
+ */
+export interface DeviceCopyEntry { name: string; tokenHash: string; id?: string }
+
+const ID_RE = /^[A-Za-z0-9._:-]{1,80}$/
+
+/** Whether `id` is a record id this copy keeps (the Mac sends only these, device-replica.ts). */
+export function isDeviceCopyId(id: unknown): id is string {
+  return typeof id === 'string' && ID_RE.test(id)
+}
 
 export interface DeviceCopy {
   /** A step of the Mac's round: `{op:'put', kind:'devices', devices, hash}`. */
   put(body: Record<string, unknown>): { ok: true; hash: string; devices: number } | { ok: false; status: 400; error: string }
   /** The device a Bearer token belongs to, or null. Constant time over the list. */
   verify(token: string): string | null
+  /** The same, with the device's record id when the Mac sent one. */
+  verifyDevice(token: string): { name: string; id: string | null } | null
   /** Whether the Mac ever sent one: without it no token can be checked here. */
   held(): boolean
   hash(): string | null
@@ -45,10 +60,12 @@ function clean(raw: unknown): DeviceCopyEntry[] | null {
   if (!Array.isArray(raw) || raw.length > MAX_DEVICES) return null
   const out: DeviceCopyEntry[] = []
   for (const d of raw) {
-    const r = d as { name?: unknown; tokenHash?: unknown } | null
+    const r = d as { name?: unknown; tokenHash?: unknown; id?: unknown } | null
     if (!r || typeof r.name !== 'string' || !r.name || r.name.length > NAME_MAX) return null
     if (typeof r.tokenHash !== 'string' || !HASH_RE.test(r.tokenHash)) return null
-    out.push({ name: r.name, tokenHash: r.tokenHash })
+    // A bad id (a hand-edited or older auth.json on the Mac) drops from its row
+    // only: refusing the list for it would stop every revoke reaching this copy.
+    out.push(isDeviceCopyId(r.id) ? { id: r.id, name: r.name, tokenHash: r.tokenHash } : { name: r.name, tokenHash: r.tokenHash })
   }
   return out
 }
@@ -56,10 +73,13 @@ function clean(raw: unknown): DeviceCopyEntry[] | null {
 export function createDeviceCopy(file: string): DeviceCopy {
   let devices: DeviceCopyEntry[] | null = null
   let hash: string | null = null
+  // What is on disk, ids included: a list the Mac resends with ids it did not
+  // send before is written although its hash is the same.
+  let stored = ''
   try {
-    const stored = JSON.parse(fs.readFileSync(file, 'utf8')) as { devices?: unknown }
-    const list = clean(stored.devices)
-    if (list) { devices = list; hash = listHash(list) }
+    const onDisk = JSON.parse(fs.readFileSync(file, 'utf8')) as { devices?: unknown }
+    const list = clean(onDisk.devices)
+    if (list) { devices = list; hash = listHash(list); stored = JSON.stringify(list) }
   } catch { /* none yet: the Mac's first round brings it */ }
 
   function write(list: DeviceCopyEntry[]): void {
@@ -69,27 +89,34 @@ export function createDeviceCopy(file: string): DeviceCopy {
     fs.renameSync(tmp, file)
   }
 
+  function verifyDevice(token: string): { name: string; id: string | null } | null {
+    if (!devices || typeof token !== 'string' || !token) return null
+    const candidate = Buffer.from(sha256Hex(token), 'hex')
+    let matched: DeviceCopyEntry | null = null
+    for (const d of devices) {
+      if (crypto.timingSafeEqual(candidate, Buffer.from(d.tokenHash, 'hex'))) matched = d
+    }
+    return matched ? { name: matched.name, id: matched.id ?? null } : null
+  }
+
   return {
     put(body) {
       const list = clean(body.devices)
       if (!list) return { ok: false, status: 400, error: 'devices must be a list of {name, tokenHash}' }
       const next = listHash(list)
-      if (next !== hash) {
+      const content = JSON.stringify(list)
+      if (next !== hash || content !== stored) {
         write(list)
         devices = list
         hash = next
+        stored = content
       }
       return { ok: true, hash: next, devices: list.length }
     },
     verify(token) {
-      if (!devices || typeof token !== 'string' || !token) return null
-      const candidate = Buffer.from(sha256Hex(token), 'hex')
-      let matched: string | null = null
-      for (const d of devices) {
-        if (crypto.timingSafeEqual(candidate, Buffer.from(d.tokenHash, 'hex'))) matched = d.name
-      }
-      return matched
+      return verifyDevice(token)?.name ?? null
     },
+    verifyDevice,
     held: () => devices !== null,
     hash: () => hash,
   }

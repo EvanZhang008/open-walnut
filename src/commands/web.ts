@@ -62,10 +62,15 @@ export async function runWeb(options: {
   dev?: boolean
   ephemeral?: boolean
   _ephemeralChild?: boolean
+  replica?: boolean
 }): Promise<void> {
   forgetInheritedSessionIdentity()
   if (options._ephemeralChild) {
     return runEphemeralChild()
+  }
+
+  if (options.replica) {
+    return runHostReplica(options)
   }
 
   if (options.ephemeral) {
@@ -197,6 +202,79 @@ export async function runWeb(options: {
       })
     } catch { /* advisory only */ }
   }
+}
+
+// ── Host replica (`walnut web --replica`) ────────────────────────────────
+
+/**
+ * The port a host replica listens on: the one its daemon's spec names
+ * (WALNUT_HOST_SERVER_PORT), else an explicit --port. Never 3456: on the Mac
+ * that is the production Walnut, and the default must never be taken by accident.
+ */
+export function hostReplicaPort(env: NodeJS.ProcessEnv, flag: string | undefined): number {
+  const raw = (env.WALNUT_HOST_SERVER_PORT ?? '').trim() || (flag ?? '').trim()
+  const port = Number(raw)
+  if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
+    throw new Error('walnut web --replica needs WALNUT_HOST_SERVER_PORT (its daemon sets it) or --port <port>')
+  }
+  if (port === 3456) throw new Error('a host replica never listens on 3456 (the production Walnut\'s port)')
+  return port
+}
+
+/**
+ * A host replica: the full server program as a follower of the Mac, started by
+ * its host's daemon (docs/plan/walnut-replica-servers-impl.md, WP1). It never
+ * updates itself, rebuilds a native module or the daemon binaries (the Mac
+ * installs it), and startServer refuses a run dir or data dir that is not its own.
+ */
+async function runHostReplica(options: { port?: string; dev?: boolean }): Promise<void> {
+  if (!process.env.WALNUT_ROLE) process.env.WALNUT_ROLE = 'replica'
+  // Refused before anything logs (an unset run dir would log into /tmp/open-walnut)
+  // and without the logger: the reason goes to stderr, the exit is at once.
+  let port: number
+  const { LOG_DIR, WALNUT_HOME } = await import('../constants.js')
+  try {
+    const { role, placement } = await import('../core/server-role.js')
+    if (role() !== 'replica' || placement() !== 'host') {
+      throw new Error(`walnut web --replica runs a host replica, but this env says role ${role()}, placement ${placement()}`)
+    }
+    const { assertReplicaBootSafe } = await import('../replica/boot-guard.js')
+    assertReplicaBootSafe({ env: process.env, walnutHome: WALNUT_HOME })
+    // The commander default is 3456 whether or not --port was given: only an explicit other one counts.
+    port = hostReplicaPort(process.env, options.port === '3456' ? undefined : options.port)
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(2)
+  }
+  // Every file a host replica makes is 0600, every dir 0700 (startServer sets it too).
+  process.umask(0o077)
+  // Its two dirs are claimed before the logger makes the run dir: a dir it
+  // finds empty (or makes) gets the replica's marker, and only a marked dir
+  // ever has its modes repaired (startServer does that).
+  const { claimReplicaDir } = await import('../replica/boot-guard.js')
+  for (const dir of [WALNUT_HOME, LOG_DIR]) claimReplicaDir(dir)
+  // The run dir is proven its own: now the logger may make it and prune old
+  // logs (cli.ts skipped this for `web --replica`), so a long-lived replica
+  // keeps three days of logs like every other Walnut.
+  const { initLogging } = await import('../logging/index.js')
+  initLogging()
+  const { startServer, stopServer, armGracefulSignalExit } = await import('../web/server.js')
+  let shuttingDown = false
+  const shutdown = async () => {
+    if (shuttingDown) return
+    shuttingDown = true
+    const bail = setTimeout(() => {
+      try { fs.appendFileSync(path.join(LOG_DIR, 'exit.log'), `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}\n`) } catch { /* best-effort */ }
+      process.exit(1)
+    }, SHUTDOWN_BAIL_MS)
+    try { await stopServer() } catch { /* a failed teardown must still terminate */ } finally { clearTimeout(bail) }
+    process.exit(0)
+  }
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
+  process.on('SIGHUP', shutdown)
+  armGracefulSignalExit()
+  await startServer({ port, dev: !!options.dev })
 }
 
 // ── Ephemeral Launcher (parent — exits quickly) ──────────────────────────

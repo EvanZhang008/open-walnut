@@ -49,6 +49,9 @@ interface ServerFacts {
   notesDir?: string | null;
   canRevealLocalFiles?: boolean;
   cloud?: boolean;
+  /** Which server answered: the Mac (leader, mac), the companion (replica, cloud) or a host replica (replica, host). */
+  role?: 'leader' | 'replica';
+  placement?: 'mac' | 'host' | 'cloud';
   build?: BuildInfo | null;
 }
 

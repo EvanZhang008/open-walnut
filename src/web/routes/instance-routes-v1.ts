@@ -17,6 +17,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { role } from '../../core/server-role.js'
 import { getInstanceId, listDeviceRecords, type DeviceRecord } from '../../core/device-auth.js'
 import { recordForToken } from '../../core/device-actor.js'
 import { CLOUD_ROUTE_LABEL, directRoutes, listeningPort, type DeviceRoute } from '../../core/devices/routes.js'
@@ -27,7 +28,8 @@ export const instanceRoutesV1Router = Router()
 
 instanceRoutesV1Router.get('/instance', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json({ instance: await getInstanceId(), mode: CLOUD_MODE ? 'REPLICA' : 'LIVE' })
+    // A replica (the companion, a host replica) answers REPLICA; a host replica's instance is the Mac's id.
+    res.json({ instance: await getInstanceId(), mode: role() === 'replica' ? 'REPLICA' : 'LIVE' })
   } catch (err) {
     next(err)
   }

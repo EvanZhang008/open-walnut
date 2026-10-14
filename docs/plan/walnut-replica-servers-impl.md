@@ -675,7 +675,9 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   (new: scans ALL of `src/` for a raw `CLOUD_MODE`; each read is replaced or listed with its host-replica
   decision; count may only fall); `tests/replica/leader-door.test.ts` (new: `POST /bridge/replica` with
   every kind, `devices` included, through the public port is 404 and changes no file; the same request
-  through a primary stream is 200; `/git/data` 404 on the public port); `tests/replica/env-scrub.test.ts`
+  through a primary stream is 200, except `tasks` and `registry`, which answer `400 not_a_replica` until
+  WP3 gates the task copy store on `isFollower()` (C1; WP3 flips that assertion to 200); `/git/data` 404
+  on the public port); `tests/replica/env-scrub.test.ts`
   (new: a child spawned by the replica has neither `WALNUT_FOLLOWER_TOKEN` nor `WALNUT_HOST_DAEMON_DIR`);
   `tests/replica/copy-readonly.test.ts` (new: a copy store write outside the apply connection throws);
   `tests/core/replication/device-replica.test.ts` (extend: stable id, old `listHash` unchanged, a round on
@@ -754,7 +756,9 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   leader rows except held, order equal, no removal past the half rule; default 200 runs, `WALNUT_SIM_RUNS`);
   `tests/core/task-replica.test.ts` (unchanged cases must pass); `tests/core/task-replica-host-target.test.ts`
   (new: a `WALNUT_HOST_SERVER=1` follower store receives tasks through a host target, as
-  `tests/core/search-replica-host-follower.test.ts:57`); `tests/web/routes/bridge-replica-cloud.test.ts` (extend).
+  `tests/core/search-replica-host-follower.test.ts:57`); `tests/web/routes/bridge-replica-cloud.test.ts` (extend);
+  `tests/replica/leader-door.test.ts` (flip: `put`/`sync` of `tasks` and `registry` through a primary stream
+  is 200, where WP1 pinned `400 not_a_replica`).
 - Acceptance: 6,500 tasks (`src/core/host-slice.ts:96`) first round under 10 s and an unchanged round
   with no put; the Mac's event loop never blocked over 50 ms by a round (stall recorder clean).
 

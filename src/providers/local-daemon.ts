@@ -46,6 +46,7 @@ import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { resolveSessionHostLaunch } from './session-host.js'
 import { classifySessionHostStart } from './session-host-core.js'
 import { QOS_CLAMP_ENV, withUtilityQosClamp } from '../lib/background-qos.js'
+import { isHostReplica } from '../core/server-role.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
@@ -268,6 +269,10 @@ export class LocalDaemon {
   get instanceId(): string | null { return this._instanceId ?? this.readInstanceIdFile() }
 
   async ensureRunning(): Promise<number> {
+    // A host replica never starts or adopts a daemon: the host's daemon is the
+    // one it follows, and a second one would take that host's sessions
+    // (docs/plan/walnut-replica-servers-impl.md, WP1).
+    if (isHostReplica()) throw new Error('a host replica never starts or adopts a local session daemon')
     // Posture guard: only an instance running as the real user may claim the
     // production daemon (daemon-ownership.ts documents the two incidents this
     // encodes and the one posture that is deliberately still allowed). It must

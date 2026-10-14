@@ -20,7 +20,7 @@
  * sequence lands in the order it happened. Primary only; async IO only.
  */
 
-import { CLOUD_MODE } from '../../constants.js';
+import { bootPolicy } from '../boot-policy.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { Task } from '../types.js';
@@ -231,7 +231,7 @@ function onEvent(event: BusEvent): void {
 
 /** Start the watch (server boot, next to the reminders clock; primary only). Idempotent. */
 export function startBoardKanbanWatch(): void {
-  if (CLOUD_MODE) return;
+  if (!bootPolicy('board-kanban-watch')) return;
   bus.subscribe(BOARD_KANBAN_WATCH_SUBSCRIBER, onEvent, {
     global: true,
     interest: [EventNames.TASK_CREATED, EventNames.TASK_UPDATED, EventNames.TASK_PHASE_CHANGED,
