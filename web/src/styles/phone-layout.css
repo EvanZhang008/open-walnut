@@ -16,6 +16,21 @@
     --phone-topbar-h: 44px;
   }
 
+  /* The document never moves on a phone; only the panels inside it scroll. A
+     swipe that started on something that does not scroll (the composer, a
+     header) went to the page instead: iOS Safari rubber-banded the whole UI and
+     slid its address bar in and out under the finger (2026-10-13). No phone page
+     scrolls the document itself (measured on every route). */
+  html,
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  .app-shell-navigation .chat-input-textarea {
+    overscroll-behavior: contain;
+  }
+
   /* A real bar, not a button floating over each page's first line: it covered
      the task search, the Notes and Mail headings, and every full-bleed page. */
   .app-shell-navigation .phone-topbar {

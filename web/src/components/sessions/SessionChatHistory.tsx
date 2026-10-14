@@ -1747,13 +1747,30 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         setShowScrollArrow(el.scrollHeight > el.clientHeight);
       }
     };
-    const onTouchMove = () => {
+    // A finger moving DOWN the screen pans the transcript UP, the touch twin of
+    // wheel-up: honor it synchronously for the same reason. Lifting the quiet
+    // window alone was not enough on a phone (2026-10-13, iOS Safari): while a
+    // turn streamed, each content tick re-armed it between two touchmoves, the
+    // pan's scroll events were swallowed, follow-bottom stayed on, and every
+    // follow path pulled the view back under the finger ("it won't scroll").
+    let touchY: number | null = null;
+    const onTouchStart = (e: TouchEvent) => {
       markUserInput();
-      // Touch pan direction isn't in the event; just lift the suppression so
-      // the resulting scroll events are evaluated instead of swallowed.
+      touchY = e.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      markUserInput();
       ignoreScrollUntil.current = 0;
+      const y = e.touches[0]?.clientY;
+      if (y === undefined || touchY === null) return;
+      if (y - touchY > 4 && el.scrollTop > 0) {
+        isAtBottom.current = false;
+        setShowScrollArrow(el.scrollHeight > el.clientHeight);
+      }
+      touchY = y;
     };
     el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
     el.addEventListener('touchmove', onTouchMove, { passive: true });
     el.addEventListener('pointerdown', markUserInput, { passive: true });
     el.addEventListener('keydown', markUserInput, { passive: true });
@@ -1842,6 +1859,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return () => {
       el.removeEventListener('scroll', onScroll);
       el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('pointerdown', markUserInput);
       el.removeEventListener('keydown', markUserInput);
