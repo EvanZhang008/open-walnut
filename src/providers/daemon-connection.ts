@@ -308,6 +308,23 @@ export function parseRemoteServiceProbe(output: string, paths: string[]): Remote
 
 class DaemonShutdownPendingError extends Error {}
 
+/** ssh's answer when the LOGIN failed, as opposed to a connection a proxy cut. */
+const LOGIN_REFUSED_KINDS: ReadonlySet<string> = new Set(['auth', 'cert_expired', 'agent_missing', 'proxy_login', 'host_key'])
+
+function loginRefusedKind(stderr: string): string | null {
+  if (!stderr.trim()) return null
+  const { kind } = classifyHostConnectError(stderr, '')
+  return LOGIN_REFUSED_KINDS.has(kind) ? kind : null
+}
+
+/** An upload's own fresh SSH connection could not log in; nothing was sent. */
+export class SshLoginRefusedError extends Error {
+  constructor(readonly hostKey: string, readonly kind: string) {
+    super(`a new SSH login to ${hostKey} was refused (${kind}): the upload waits until a new login works`)
+    this.name = 'SshLoginRefusedError'
+  }
+}
+
 /** The errors that are a lifecycle DECISION (refuse, retry), never an ssh failure to swallow. */
 function isServiceDecisionError(err: unknown): boolean {
   return err instanceof DaemonShutdownPendingError || err instanceof DaemonServiceNotReadyError
@@ -2238,6 +2255,21 @@ export class DaemonConnection {
   }
 
   /**
+   * Args for a FRESH SSH connection that never rides a shared master, for every
+   * upload. A corporate proxy kills a connection that carries a few MB, and on the
+   * master that took every session on the host down with it. Worse, once the
+   * user's SSH credential has expired the master is the only connection that can
+   * still log in: on 2026-10-14 a 9.6 MB host-server upload over it ended it four
+   * hours after the certificate expired, and the host stayed unreachable until the
+   * user renewed it. A fresh connection the proxy kills costs only itself, and with
+   * an expired credential it simply fails to log in (`ControlPath=none` also keeps
+   * it off any master the user's own ssh config keeps).
+   */
+  private get freshSshArgs(): string[] {
+    return [...this.buildSshArgs({ useControlMaster: false }), '-o', 'ControlMaster=no', '-o', 'ControlPath=none']
+  }
+
+  /**
    * Build SSH args. ControlMaster muxing forwards stdin fine on OpenSSH ≥9; the
    * `useControlMaster: false` opt-out remains for callers that explicitly want a
    * fresh TCP connection (e.g. chunked retry path that tries to dodge a flaky
@@ -2336,7 +2368,7 @@ export class DaemonConnection {
   private async pipeSingleStream(data: Buffer, remotePath: string, expectedSha256: string): Promise<boolean> {
     const q = shq(remotePath)
     const args = [
-      ...this.baseSshArgs,
+      ...this.freshSshArgs,
       this.sshHostString,
       // `sh -c` + markers (remote-sh.ts): the login shell may be csh, and an rc
       // banner on stdout must not read as the checksum.
@@ -2346,7 +2378,9 @@ export class DaemonConnection {
     proc.stdin!.on('error', () => {})
 
     let stdout = ''
+    let stderr = ''
     proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString() })
+    proc.stderr!.on('data', (d: Buffer) => { if (stderr.length < 4096) stderr += d.toString() })
 
     const ok = await new Promise<boolean>((resolve) => {
       proc.on('error', () => resolve(false))
@@ -2356,6 +2390,10 @@ export class DaemonConnection {
       proc.stdin!.end(data)
     })
 
+    // A refused login is not a proxy kill: chunks would open the same refused
+    // connection dozens of times. The upload waits for a fresh credential.
+    const refused = ok ? null : loginRefusedKind(stderr)
+    if (refused) throw new SshLoginRefusedError(this.hostKey, refused)
     if (!ok) return false
 
     const marked = extractMarkedOutput(stdout)
@@ -2381,12 +2419,14 @@ export class DaemonConnection {
   private async pipeChunk(data: Buffer, remoteDir: string, chunkIndex: number): Promise<boolean> {
     const chunkFile = `${remoteDir}/chunk_${String(chunkIndex).padStart(4, '0')}`
     // Write data then echo the byte count for verification (marked: see pipeSingleStream)
-    const args = [...this.buildSshArgs({ useControlMaster: false }), this.sshHostString, markedUploadCommand(chunkFile, `wc -c < ${shq(chunkFile)}`)]
+    const args = [...this.freshSshArgs, this.sshHostString, markedUploadCommand(chunkFile, `wc -c < ${shq(chunkFile)}`)]
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
     proc.stdin!.on('error', () => {})  // swallow EPIPE if SSH dies mid-write
 
     let stdout = ''
+    let stderr = ''
     proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString() })
+    proc.stderr!.on('data', (d: Buffer) => { if (stderr.length < 4096) stderr += d.toString() })
 
     const ok = await new Promise<boolean>((resolve) => {
       proc.on('error', () => resolve(false))
@@ -2395,6 +2435,9 @@ export class DaemonConnection {
       proc.stdin!.end(data)
     })
 
+    // A login that stopped working mid-upload is not a proxy kill to retry.
+    const refused = ok ? null : loginRefusedKind(stderr)
+    if (refused) throw new SshLoginRefusedError(this.hostKey, refused)
     if (!ok) return false
 
     // Verify size — proxy can kill mid-write but SSH may still exit 0
