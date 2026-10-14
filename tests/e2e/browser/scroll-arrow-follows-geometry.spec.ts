@@ -39,19 +39,21 @@ function row(i: number) {
 }
 
 /** A tool-only assistant row renders as ONE collapsed `tool-run-row`; opening it
- *  adds a page of output. Every fourth row is one, so there is always something
- *  collapsed above the viewport to open. */
+ *  lists its tools. Every fourth row is one, so there is always something
+ *  collapsed above the viewport to open. The transcript opens on its last ten
+ *  human turns, which leaves only a few runs above the viewport, so each run
+ *  carries six tools: opening them moves the newest row well off screen. */
 function toolRow(i: number) {
   return {
     role: 'assistant',
     text: '',
     msgId: `arrow-tool-${i}`,
     timestamp: new Date(Date.UTC(2026, 0, 1, 0, 1, i)).toISOString(),
-    tools: [{
+    tools: Array.from({ length: 6 }, (_, t) => ({
       name: 'Read',
-      input: { file_path: `/tmp/arrow-fixture/file-${i}.txt` },
+      input: { file_path: `/tmp/arrow-fixture/file-${i}-${t}.txt` },
       result: Array.from({ length: 60 }, (_, k) => `line ${k} of the tool output for row ${i}`).join('\n'),
-    }],
+    })),
   };
 }
 
