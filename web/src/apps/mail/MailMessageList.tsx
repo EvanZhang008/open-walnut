@@ -37,7 +37,7 @@ import { isOpenRow, MailRow } from './MailMessageRow';
 import { useMailRowContextMenu, type MailRowMenuHandle } from './MailRowContextMenu';
 import { MailDraftsList } from './compose/MailDraftsList';
 import { GroupHeader, MailSmartDraftsSections } from './MailSmartDraftsSections';
-import { BackIcon, SearchIcon } from './mail-icons';
+import { FolderIcon, SearchIcon } from './mail-icons';
 import { MailGroupedList, MailGroupsFallback, useGroupedMode } from './MailGroupedList';
 import { MailViewMenu } from './MailGroupedHeader';
 
@@ -173,7 +173,9 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
             onClick={onShowMailboxes}
             aria-label="Mailboxes"
           >
-            <BackIcon />
+            {/* A tray of mailboxes, not a back arrow: at the list's root the bar's
+                Menu is the way out, and two "back" controls read as one too many (N2-30). */}
+            <FolderIcon />
           </button>
         )}
         <form

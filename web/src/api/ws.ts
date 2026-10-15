@@ -133,6 +133,10 @@ class WsClient {
   // Distinguishes cold first-connect from subsequent reconnects.
   // `_ws:reconnected` only fires on reconnects, not the initial page load.
   private hasConnectedBefore = false;
+  /** When the socket last delivered any frame (resync's "silent for 25 s" test). */
+  private lastFrameAt = 0;
+  /** One resync at a time: a burst of visible + online + pageshow shares it. */
+  private resyncInFlight: Promise<void> | null = null;
   /** Last close event, kept for crash/bug reports (onclose otherwise discards it). */
   lastClose: { code: number; codeDesc: string; reason: string; at: string } | null = null;
 
@@ -198,6 +202,7 @@ class WsClient {
     };
 
     ws.onmessage = (ev) => {
+      this.lastFrameAt = Date.now();
       try {
         const frame: WsFrame = JSON.parse(ev.data);
         if (frame.type === 'event') {
@@ -493,7 +498,90 @@ class WsClient {
     }, this.reconnectDelay);
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
   }
+
+  /**
+   * Back in front (spec 4.5 R): a phone that slept may hold a socket that is
+   * OPEN on paper and dead in fact, with the reconnect backoff grown to 30 s.
+   * Reset the backoff; when the socket is not OPEN or said nothing for 25 s,
+   * ping it (3 s deadline) and reconnect at once when it does not answer.
+   * `_ws:reconnected` tells every store to refetch: sent at once (before the
+   * ping answers), and again by onopen when the socket had to be replaced.
+   * Never reloads the page.
+   */
+  resync(reason: ResyncReason): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    if (this.resyncInFlight) return this.resyncInFlight;
+    const run = async () => {
+      this.reconnectDelay = 1000;
+      const open = this.ws?.readyState === WebSocket.OPEN;
+      const silentMs = this.lastFrameAt ? Date.now() - this.lastFrameAt : Infinity;
+      if (open && silentMs <= RESYNC_SILENT_MS) {
+        this.dispatchEvent({ type: 'event', name: '_ws:reconnected', data: { resync: reason }, seq: -1 });
+        return;
+      }
+      // Refetch at once, in parallel with the ping (C62): the stores refetch
+      // over HTTP, which does not need this socket, so a prompt answered on
+      // the computer reads resolved one round trip after the phone is back,
+      // not after the 3 s ping deadline. A reconnect refetches once more when
+      // the new socket opens (onopen), which also re-subscribes.
+      this.dispatchEvent({ type: 'event', name: '_ws:reconnected', data: { resync: reason, early: true }, seq: -1 });
+      const alive = open ? await this.probe(RESYNC_PING_MS) : false;
+      log.info('ws', 'resync', { reason, open, silentMs: Number.isFinite(silentMs) ? silentMs : null, alive });
+      if (alive) return;
+      await this.reconnectNow(RESYNC_OPEN_MS);
+    };
+    this.resyncInFlight = run().finally(() => { this.resyncInFlight = null; });
+    return this.resyncInFlight;
+  }
+
+  /** Any answer to a `ping` (the server's "Unknown method" error included) proves the socket alive. */
+  private probe(deadlineMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const ws = this.ws;
+      if (!ws || ws.readyState !== WebSocket.OPEN) { resolve(false); return; }
+      const id = nextReqId();
+      const timer = setTimeout(() => { this.pendingRpc.delete(id); resolve(false); }, deadlineMs);
+      const done = (alive: boolean) => { clearTimeout(timer); resolve(alive); };
+      this.pendingRpc.set(id, {
+        resolve: () => done(true),
+        reject: (e) => done(!/^WebSocket/.test(e.message)),
+        lowValue: true,
+      });
+      try { ws.send(JSON.stringify({ type: 'req', id, method: 'ping', payload: {} })); } catch { done(false); }
+    });
+  }
+
+  /** Drop the current socket without waiting for its close and open a new one. */
+  private reconnectNow(deadlineMs: number): Promise<void> {
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    const old = this.ws;
+    if (old) {
+      // Detach first: a half-dead socket's late onclose must not schedule a
+      // second reconnect or reject the new socket's RPCs.
+      old.onopen = null; old.onclose = null; old.onmessage = null; old.onerror = null;
+      try { old.close(); } catch { /* already gone */ }
+      this.ws = null;
+      this.rejectPending('WebSocket disconnected');
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.offConnectionChange(onState); resolve(); }, deadlineMs);
+      const onState = (state: ConnectionState) => {
+        if (state !== 'connected') return;
+        clearTimeout(timer);
+        this.offConnectionChange(onState);
+        resolve();
+      };
+      this.onConnectionChange(onState);
+      this.connect();
+    });
+  }
 }
+
+export type ResyncReason = 'visible' | 'online' | 'pageshow' | 'pull' | 'retry';
+/** A socket that said nothing for this long is pinged before it is trusted. */
+const RESYNC_SILENT_MS = 25_000;
+const RESYNC_PING_MS = 3_000;
+const RESYNC_OPEN_MS = 6_000;
 
 /** Singleton WS client instance */
 export const wsClient = new WsClient();

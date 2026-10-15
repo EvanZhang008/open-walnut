@@ -21,13 +21,14 @@ import { createDevice } from '../../../src/core/device-auth.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
 import { _resetAuthRateLimitForTesting } from '../../../src/web/middleware/auth-rate-limit.js'
 
-type Outcome = { next: boolean; status?: number; body?: any; deviceName?: string; apiKeyName?: string }
+type Outcome = { next: boolean; status?: number; body?: any; deviceName?: string; apiKeyName?: string; headers?: Record<string, string> }
 
 async function run(remoteAddress: string, headers: Record<string, string> = {}): Promise<Outcome> {
   const req = { socket: { remoteAddress, localPort: 3456 }, ip: remoteAddress, headers, path: '/tasks' } as Record<string, unknown>
-  const out: Outcome = { next: false }
+  const out: Outcome = { next: false, headers: {} }
   const res = {
     status(code: number) { out.status = code; return res },
+    set(name: string, value: string) { out.headers![name.toLowerCase()] = value; return res },
     json(body: unknown) { out.body = body; return res },
   }
   await authMiddleware(req as never, res as never, () => { out.next = true })
@@ -105,7 +106,8 @@ describe('authMiddleware, primary mode', () => {
     for (let i = 0; i < 10; i++) {
       expect((await run('192.168.1.66', { authorization: `Bearer wrong-${i}` })).status).toBe(401)
     }
-    expect(await run('192.168.1.66', { authorization: `Bearer ${deviceToken}` })).toMatchObject({ next: false, status: 429 })
+    const limited = await run('192.168.1.66', { authorization: `Bearer ${deviceToken}` })
+    expect(limited).toMatchObject({ next: false, status: 429, body: { code: 'rate_limited' }, headers: { 'retry-after': '60' } })
     // Another address is unaffected, and a missing token never feeds the limiter.
     expect(await run('192.168.1.67', { authorization: `Bearer ${deviceToken}` })).toMatchObject({ next: true })
     for (let i = 0; i < 12; i++) expect((await run('192.168.1.68')).status).toBe(401)

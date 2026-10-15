@@ -32,8 +32,11 @@ import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
 import { isRoutedQuestion, toolRunPhrase } from './tool-run-phrase';
+import { toolCallsLabel } from './tool-call-grouping';
 import { splitSearchAnswerMessage } from '@open-walnut/search-transcript';
 import { log } from '@/utils/log';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { KebabVerticalIcon } from '@/components/common/PhoneIcons';
 
 // ── Edit Diff View ──
 
@@ -102,7 +105,7 @@ function EditDiffView({ filePath, oldString, newString, replaceAll, status, resu
     [oldString, newString],
   );
 
-  const statusIcon = status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6';
+  const statusIcon = status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6\uFE0E';
   const statusClass = status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
@@ -116,7 +119,7 @@ function EditDiffView({ filePath, oldString, newString, replaceAll, status, resu
         <span className="edit-diff-filename" title={filePath}>{filename}</span>
         {replaceAll && <span className="edit-diff-replace-all">(replace all)</span>}
         {status === 'calling' && <span className="chat-tool-block-calling-dot" />}
-        <span className="chat-tool-block-arrow">{collapsed ? '\u25B6' : '\u25BC'}</span>
+        <span className="chat-tool-block-arrow">{collapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>
         {onViewFile && (
           <span
             className="edit-diff-view-file"
@@ -272,7 +275,7 @@ export function PlanCard({ content }: { content: string }) {
     <div className="session-plan-card">
       <div className="session-plan-card-header">
         <button className="session-plan-card-toggle" onClick={() => setOpen((p) => !p)}>
-          <span className="session-plan-card-icon">{open ? '\u25BC' : '\u25B6'}</span>
+          <span className="session-plan-card-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
           <span className="session-plan-card-title">Plan</span>
         </button>
         <button
@@ -352,9 +355,11 @@ function InjectedContextRow({ text }: { text: string }) {
 export { toolRunPhrase };
 
 /** Shared merged-row shell: muted phrase line + expandable children. */
-export function ToolRunShell({ phrase, failCount, running, children }: {
+export function ToolRunShell({ phrase, failCount, running, count, children }: {
   phrase: string;
   failCount: number;
+  /** How many tool calls the run holds: a phone reads the row as `<n> tool calls`. */
+  count?: number;
   /** True while a member is still receiving tokens (the reasoning streaming
    *  inside the run) — pulse dot, the same one a lone "Thinking ›" row shows. */
   running?: boolean;
@@ -365,6 +370,7 @@ export function ToolRunShell({ phrase, failCount, running, children }: {
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
         <span className="tool-run-label">{phrase}</span>
+        {count !== undefined && count > 0 && <span className="tool-run-count">{toolCallsLabel(count)}</span>}
         {failCount > 0 && <span className="tool-run-fail">{failCount} failed</span>}
         {running && <span className="tool-run-live-dot" />}
         <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
@@ -476,7 +482,7 @@ function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost,
   const phrase = toolRunPhrase(tools);
   const failCount = tools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result)).length;
   return (
-    <ToolRunShell phrase={phrase} failCount={failCount}>
+    <ToolRunShell phrase={phrase} failCount={failCount} count={tools.length}>
       {tools.map((t, i) => (
         <SessionToolCall key={t.toolUseId ?? i} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
       ))}
@@ -644,7 +650,7 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
   const failCount = allTools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result)).length
     + trailingTools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
   return (
-    <ToolRunShell phrase={phrase} failCount={failCount} running={trailingLive}>
+    <ToolRunShell phrase={phrase} failCount={failCount} running={trailingLive} count={allTools.length + trailingTools.length}>
       {messages.map((m, mi) => (
         <div key={m.msgId ?? mi}>
           {m.thinking && <SessionThinking text={m.thinking} />}
@@ -737,7 +743,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
     .join(', '), [safeInput]);
 
   // Dynamic icon and class based on status
-  const statusIcon = status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6';
+  const statusIcon = status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6\uFE0E';
   const statusClass = status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
@@ -821,7 +827,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
           <span className="chat-tool-block-summary">{inputSummary}</span>
         )}
         {status === 'calling' && <span className="chat-tool-block-calling-dot" />}
-        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
         {showViewFile && (
           <span
             className="edit-diff-view-file"
@@ -920,7 +926,7 @@ export function TaskGroupPrompt({ input }: { input?: Record<string, unknown> }) 
   return (
     <div className="task-group-prompt">
       <button className="task-group-prompt-toggle" onClick={() => setOpen(p => !p)}>
-        <span className="task-group-chevron">{open ? '▼' : '▶'}</span>
+        <span className="task-group-chevron">{open ? '▼' : '▶︎'}</span>
         <span className="task-group-prompt-title">Prompt &amp; settings</span>
         {!open && prompt && (
           <span className="task-group-prompt-preview">{prompt.slice(0, 120)}</span>
@@ -1162,6 +1168,10 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
    * through the logs. Selecting text first still yields the browser's own menu.
    */
   const rowMenu = useContextMenu<void>();
+  // A phone has no hover: one quiet "Message actions" button opens this row's
+  // menu (copy, pin, rewind) instead of an MD / Rich / pin / time strip under
+  // every bubble (N8), which doubled each short message's height.
+  const phone = usePhoneLayout();
   const pins = useSessionPinsApi();
   const rewind = useSessionRewindApi();
   const msgId = message.msgId ?? message.walnutMessageId;
@@ -1291,13 +1301,26 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             CSS keeps it invisible until the row is hovered); the live tail's last
             reply keeps its actions on screen, which is what showCopyActions has
             always meant. */}
-        <MessageMetaRow
-          msgId={msgId}
-          role={role}
-          text={bodyText}
-          timestamp={timestamp}
-          alwaysVisible={showCopyActions}
-        />
+        {phone ? ((!!bodyText?.trim() || !!msgId) && (
+          <button
+            type="button"
+            className="msg-more-btn"
+            aria-label="Message actions"
+            aria-haspopup="menu"
+            title={timestamp ? new Date(timestamp).toLocaleString() : undefined}
+            onClick={(e) => { e.stopPropagation(); rowMenu.open(e, undefined); }}
+          >
+            <KebabVerticalIcon size={16} />
+          </button>
+        )) : (
+          <MessageMetaRow
+            msgId={msgId}
+            role={role}
+            text={bodyText}
+            timestamp={timestamp}
+            alwaysVisible={showCopyActions}
+          />
+        )}
       </div>
       {rowMenu.state && (
         <ContextMenu

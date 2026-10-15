@@ -23,3 +23,17 @@ const ASSET_EXT_RE = /\.(?:js|mjs|cjs|css|map|json|wasm|woff2?|ttf|otf|eot|svg|p
 export function isStaticAssetPath(pathname: string): boolean {
   return pathname.startsWith('/assets/') || ASSET_EXT_RE.test(pathname)
 }
+
+export const IMMUTABLE_ASSET_CACHE = 'public, max-age=31536000, immutable'
+
+/**
+ * Cache-Control for a file a static root serves, by its path under that root.
+ * Vite writes only content-hashed names into `assets/`, so a name there never
+ * changes its bytes and a phone on a slow link need not ask for it again: a
+ * year, immutable. Everything else keeps its name across builds (index.html,
+ * the icons, the manifest, the app SDK) and revalidates on every load, which
+ * the ETag answers with a 304.
+ */
+export function staticCacheControl(relPath: string): string {
+  return relPath.replace(/\\/g, '/').startsWith('assets/') ? IMMUTABLE_ASSET_CACHE : 'no-cache'
+}

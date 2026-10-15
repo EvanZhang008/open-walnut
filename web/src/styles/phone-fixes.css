@@ -1,0 +1,591 @@
+/* Phone review fixes (nitpicks N1 to N31). Same phone query as phone-layout.css;
+   nothing here reaches the desktop layout. */
+
+/* N24: focus still moves for accessibility, but a finger never sees a ring. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html[data-wn-input="touch"] :focus,
+  html[data-wn-input="touch"] :focus-visible {
+    outline: none;
+  }
+  html[data-wn-input="touch"] .sidebar :focus,
+  html[data-wn-input="touch"] .phone-topbar :focus {
+    box-shadow: none;
+  }
+}
+
+/* N5: a tier card row that needs the user says so in words, as the tree rows
+   do; the pill trails the title, before the row's own buttons. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation :is(.todo-pinned-card, .todo-focus-card) > .phone-row-needs-you {
+    order: 1;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .app-shell-navigation :is(.todo-pinned-card, .todo-focus-card) > :is(.todo-recent-ago, .task-start-btn, .task-kebab-wrapper) {
+    order: 2;
+  }
+  .app-shell-navigation :is(.todo-pinned-card, .todo-focus-card):has(> .phone-row-needs-you) > .task-unread-dot {
+    display: none;
+  }
+}
+
+/* N14: stacked sticky headings. home-navigation.css offsets each level by the
+   26 px desktop heading; a phone heading is a 44 px fold target, so the
+   project header stuck at 26 px slid under the section heading above it.
+   Every stacked heading is exactly 44 px here and the offsets follow. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .home-navigation-scroll.is-stacked .todo-pinned-section > .todo-pinned-header,
+  .app-shell-navigation .home-navigation-scroll.is-stacked .todo-tasks-section > .todo-tasks-header,
+  .app-shell-navigation .home-navigation-scroll.is-stacked .todo-pinned-subgroup-heading,
+  .app-shell-navigation .home-navigation-scroll .todo-group-project-header {
+    box-sizing: border-box;
+    min-height: 44px;
+    height: 44px;
+  }
+  .app-shell-navigation .home-navigation-scroll.is-stacked .todo-pinned-subgroup-heading,
+  .app-shell-navigation .home-navigation-scroll.is-stacked .todo-tasks-section:has(> .todo-tasks-header) .todo-group-project-header {
+    top: 44px;
+  }
+  .app-shell-navigation .home-navigation-scroll.is-stacked .tier-project-label {
+    top: 88px;
+  }
+}
+
+/* N17: the task panel's footer is a bottom surface: its words and its "show"
+   button stay clear of the home indicator. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .todo-filter-footer {
+    padding-bottom: max(2px, var(--wn-safe-bottom));
+  }
+}
+
+/* N21 + C19: the tier tab bar on a phone. Every tab keeps its name whole (the
+   desktop collapses inactive ones to an icon, which cut "Virtual Teammat"
+   mid-word), the strip scrolls sideways instead of squeezing, and each tab and
+   the options button is a 44 px target with 12 px+ text. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .todo-section-tabs {
+    padding: 0 4px;
+    gap: 0;
+    container-type: normal;
+  }
+  .app-shell-navigation .todo-section-tabs-list {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    gap: 2px;
+  }
+  .app-shell-navigation .todo-section-tabs-list::-webkit-scrollbar { display: none; }
+  .app-shell-navigation .todo-section-tab {
+    flex: 0 0 auto;
+    min-height: 44px;
+    min-width: 44px;
+    justify-content: center;
+    padding: 0 10px;
+    font-size: 14px;
+  }
+  .app-shell-navigation .todo-section-tabs .todo-section-tab .todo-section-tab-label {
+    max-width: none;
+    opacity: 1;
+    overflow: visible;
+  }
+  .app-shell-navigation .todo-section-tab-count,
+  .app-shell-navigation .todo-section-tabs .todo-section-tab:not(.is-active) .todo-section-tab-count {
+    display: inline;
+    font-size: 12px;
+  }
+  .app-shell-navigation .todo-section-tabs-menu {
+    width: 44px;
+    height: 44px;
+    margin-left: 0;
+  }
+}
+
+/* N22: an empty tier on a phone says so in the middle of the list. */
+.phone-tier-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 16px 24px;
+  text-align: center;
+}
+.phone-tier-empty-line {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: 15px;
+  line-height: 1.4;
+}
+.phone-tier-empty-btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--accent-text, var(--accent));
+  font-size: 15px;
+  font-weight: 500;
+}
+.phone-tier-empty-btn:active { background: var(--bg-secondary); }
+
+/* N12: a disabled row in the phone's session menu says why. */
+.phone-session-row-why {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* N7: a session's messages are a reading surface, 16 px on a phone. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .session-history .session-msg {
+    font-size: 16px;
+    line-height: 1.45;
+  }
+}
+
+/* N8: one quiet "Message actions" button per message, no second line. On an
+   assistant message it sits in a 32 px gutter at the top right; on the user's
+   bubble it sits in the free space to the bubble's left. 44 px hit area. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .session-history .session-msg {
+    position: relative;
+  }
+  .app-shell-navigation .session-history .session-msg-assistant {
+    padding-right: 32px;
+  }
+  .app-shell-navigation .session-history .msg-more-btn {
+    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 16px;
+    background: transparent;
+    color: var(--fg-muted);
+    opacity: 0.55;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .app-shell-navigation .session-history .msg-more-btn::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+  }
+  .app-shell-navigation .session-history .msg-more-btn:active {
+    opacity: 1;
+    background: var(--bg-secondary);
+  }
+  .app-shell-navigation .session-history .session-msg-assistant .msg-more-btn {
+    top: -4px;
+    right: 0;
+  }
+  .app-shell-navigation .session-history .session-msg-user .msg-more-btn {
+    left: -44px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}
+
+/* N10: the Ask Walnut slot on a phone has ONE bar, the top bar (Back, the
+   agent, the asks list). The draft's own header (title, "Draft", x) goes;
+   Back closes the slot. Suggestion chips are finger sized. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .ask-walnut-draft .draft-session-panel > .session-panel-header {
+    display: none;
+  }
+  .app-shell-navigation :is(.session-panel, .draft-session-panel, .ask-walnut-slot) .session-action-chip {
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 14px;
+    border-radius: 22px;
+  }
+}
+
+/* N11: the asks list on a phone is a full-screen layer under the top bar (its
+   Back closes it), not a 300 px side drawer: no scrim, no second x, rows of
+   48 px, New chat at the top. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .ask-walnut-drawer-layer {
+    position: fixed;
+    top: var(--phone-topbar-h, 44px);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+  }
+  .app-shell-navigation .ask-walnut-scrim,
+  .app-shell-navigation .ask-walnut-drawer-close {
+    display: none;
+  }
+  .app-shell-navigation .ask-walnut-drawer {
+    inset: 0;
+    width: auto;
+    border-right: 0;
+    box-shadow: none;
+    background: var(--bg);
+    animation: none;
+    padding-bottom: var(--wn-safe-bottom);
+  }
+  .app-shell-navigation .ask-walnut-drawer-head { order: -2; }
+  .app-shell-navigation .ask-walnut-drawer-foot { order: -1; border-top: 0; }
+  .app-shell-navigation .ask-walnut-drawer-new {
+    min-height: 48px;
+    width: 100%;
+    font-size: 16px;
+  }
+  .app-shell-navigation .ask-walnut-drawer-links { display: flex; gap: 4px; }
+  .app-shell-navigation .ask-walnut-drawer-link {
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: 14px;
+  }
+  .app-shell-navigation .ask-walnut-drawer-search { min-height: 44px; }
+  .app-shell-navigation .ask-walnut-drawer-search-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .app-shell-navigation .ask-walnut-drawer-item {
+    min-height: 48px;
+    font-size: 16px;
+  }
+  .app-shell-navigation .ask-walnut-drawer-item-time { font-size: 12px; }
+  .app-shell-navigation :is(.ask-walnut-drawer-title, .ask-walnut-agent-item) { min-height: 44px; }
+}
+
+/* N9: a center card's title gets its own line (two at most); the chips, count
+   and time wrap under it, and the dismiss x keeps the top right corner. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html body .notification-panel.nfc-panel-wide .notification-feed-item-head {
+    position: relative;
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding-right: 40px;
+  }
+  html body .notification-panel.nfc-panel-wide .notification-feed-item-head > .notification-feed-item-title {
+    flex: 1 1 calc(100% - 24px);
+    min-width: 0;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  html body .notification-panel.nfc-panel-wide .notification-feed-item-head > .notification-feed-item-dismiss {
+    position: absolute;
+    top: -12px;
+    right: -10px;
+  }
+  html body .notification-panel.nfc-panel-wide :is(.nfc-count-badge, .nfc-rail-subcount, .notification-feed-item-time) {
+    font-size: 12px;
+  }
+  html body .notification-panel.nfc-panel-wide .nfc-card-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    font-size: 13px;
+  }
+  html body .notification-panel.nfc-panel-wide .notification-feed-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40vh;
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--fg-secondary);
+    font-size: 16px;
+  }
+  html body .notification-panel.nfc-panel-wide .nfc-rail {
+    scrollbar-width: none;
+  }
+}
+.nfc-card-toggle-icon { display: inline-flex; }
+
+/* N15: one note on a phone. The top bar (Back, the note's name, Edit) is the
+   only navigation: no desktop tab strip with its own "Notes" back pill, no
+   breadcrumb, no desktop-only header buttons (locate, width, raw). What stays
+   (bookmark, save state, date) is one short row, so the text starts right
+   under the bar. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .notes-split-view .notes-tab-strip,
+  .app-shell-navigation .notes-editor-pane .notes-editor-breadcrumb,
+  .app-shell-navigation .notes-editor-pane :is(.notes-locate-btn, .notes-raw-toggle-btn, .notes-width-btn, .notes-width-toggle) {
+    display: none;
+  }
+  .app-shell-navigation .notes-editor-pane .notes-editor-header {
+    flex-wrap: nowrap;
+    min-height: 44px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .app-shell-navigation .notes-editor-pane .notes-editor-meta {
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+  .app-shell-navigation .notes-editor-pane .notes-editor-updated {
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+  .app-shell-navigation .notes-backlinks-toggle {
+    min-height: 44px;
+    font-size: 14px;
+  }
+}
+
+/* N16: the Notes tree is one scrolling list (search, bookmarks, recent and
+   folders together, like Files on iOS), rows are 44 px, and the pane's own
+   "Notes" title goes: the top bar already says Notes. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .notes-split-view > .notes-tree-pane {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: var(--wn-safe-bottom);
+  }
+  .app-shell-navigation .notes-tree-pane .notes-tree-panel {
+    height: auto;
+    min-height: 0;
+  }
+  .app-shell-navigation .notes-tree-pane .notes-tree-body {
+    flex: none;
+    overflow: visible;
+  }
+  .app-shell-navigation .notes-tree-pane .notes-tree-header > h3 {
+    display: none;
+  }
+  .app-shell-navigation .notes-tree-pane .notes-tree-header {
+    justify-content: flex-end;
+  }
+  .app-shell-navigation .notes-tree-pane :is(.notes-tree-item, .notes-bookmark-row, .notes-bookmarks-header) {
+    min-height: 44px;
+    font-size: 15px;
+  }
+  .app-shell-navigation .notes-tree-pane .notes-bookmark-remove {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* C19 / N2: the 12 px text floor and the 44 px target rule at real density.
+   Every class here was measured under 12 px or under 44 px on a copy of real
+   data (the fixture lacked tags, due dates, team links, quiet mode, ...). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation :is(
+    .todo-recent-ago, .todo-item-due-pill, .tag-chip, .tag-chip-overflow, .task-filter-outside-pill,
+    .notification-badge-count, .quiet-moon, .session-panel-badge, .todo-group-count,
+    .task-completed-time, .task-blocked-badge, .task-pill-long, .task-team-pill,
+    .session-supervision, .session-supervision button, .session-supervision-footer
+  ) {
+    font-size: 12px;
+  }
+  /* Team pills in a row are buttons: a 44 px hit area around the pill (the
+     inset is from the padding box, inside the pill's 1 px border). */
+  .app-shell-navigation .todo-panel .task-team-pill {
+    position: relative;
+    min-width: 28px;
+  }
+  .app-shell-navigation .todo-panel .task-team-pill::before {
+    content: '';
+    position: absolute;
+    inset: -16px -9px;
+  }
+  .app-shell-navigation .todo-panel .task-team-pill { z-index: 1; }
+  /* A tier heading's own + button, and the center's last rail entry. */
+  .app-shell-navigation .todo-group-action-btn,
+  html body .notification-panel.nfc-panel-wide .nfc-rail-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* The tier's "+ Add to ..." row and its heading's add button. */
+  .app-shell-navigation .focus-inline-add-trigger {
+    min-height: 44px;
+    font-size: 15px;
+  }
+  .app-shell-navigation .navigation-heading :is(button, [role=button]) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* The supervision card's "Check again" and the session error line. */
+  .app-shell-navigation .session-supervision button {
+    min-height: 44px;
+    padding: 0 10px;
+  }
+  /* The composer's mode pill ("Bypass") and its other small pills. */
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel, .ask-walnut-slot) :is(.mode-toggle-pill, .composer-model-pill, .session-detail-model-pill) {
+    min-height: 44px;
+    font-size: 13px;
+  }
+  /* A draft's own discard x (a standalone draft keeps its header). */
+  .app-shell-navigation .draft-session-panel .session-panel-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* C19: the composer's text box is a 44 px target (its JS auto-size keeps
+   working: min-height only floors the height it sets). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .chat-input-textarea {
+    min-height: 44px;
+  }
+}
+
+/* N20: a Settings pane on a phone. The top bar already names the pane, so the
+   pane's own heading stays for screen readers only (and keeps its focus
+   target). Switches take the iOS size, checkboxes a 22 px box whose label row
+   (the whole row toggles it) is at least 44 px tall. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane-header .settings-pane-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane-header .settings-pane-tile {
+    display: none;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch {
+    width: 51px;
+    height: 31px;
+    border-radius: 16px;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch .toggle-thumb {
+    width: 27px;
+    height: 27px;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch.toggle-on .toggle-thumb {
+    transform: translateX(20px);
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch::before {
+    inset: -7px -2px;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-row.settings-checkbox-row {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-control,
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-input {
+    width: 22px;
+    height: 22px;
+    flex-basis: 22px;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-input {
+    border-radius: 6px;
+  }
+}
+
+/* N30: the jump pill steps aside while it would cover an unanswered prompt
+   card (PhoneTimelinePills sets the attribute from the two boxes). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .scroll-to-bottom-btn[data-over-prompt] {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* N26: search is left with Cancel (in the bar's right slot), as on iOS: no
+   Back beside it. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .phone-topbar[data-layer="search"] .phone-topbar-back {
+    display: none;
+  }
+}
+
+/* C19: a mail group line's two buttons (Mark read, Group actions) are 32 px
+   boxes with a 46 px target each, 14 px apart so the targets meet, not overlap. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .mail-group-tools {
+    gap: 14px;
+  }
+  /* The title line holds the 32 px boxes, so their targets stay inside the line
+     (a first line's would be cut by the list's own scroll edge). */
+  .app-shell-navigation .mail-group-title {
+    height: 34px;
+  }
+  .app-shell-navigation .mail-group-icon {
+    position: relative;
+    width: 32px;
+    height: 32px;
+  }
+  .app-shell-navigation .mail-group-icon::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+  }
+}
+
+/* N27: the calendar toolbar in two lines, not three: the desktop zoom (minus,
+   percent, plus) is left out on a phone (the hours toggle stays), and
+   Calendars is its icon (the word stays its aria-label). An empty day says so. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .cal-toolbar .cal-grid-controls > button:not(.cal-hours-toggle) {
+    display: none;
+  }
+  .app-shell-navigation .cal-toolbar .cal-grid-controls .cal-hours-toggle {
+    margin-left: 0;
+    padding: 0 8px;
+    border-left: 0;
+    border-radius: var(--radius-sm, 6px);
+  }
+  .app-shell-navigation .cal-toolbar-right {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+  .app-shell-navigation .cal-toolbar .cal-cals-btn {
+    justify-content: center;
+    gap: 0;
+  }
+  .app-shell-navigation .cal-toolbar .cal-cals-label {
+    display: none;
+  }
+  .app-shell-navigation .cal-toolbar .cal-cals-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+  .app-shell-navigation .cal-toolbar .cal-view-switch {
+    margin-left: auto;
+  }
+  .app-shell-navigation .cal-empty-day {
+    margin: 0;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--fg-secondary);
+    font-size: 15px;
+    line-height: 20px;
+    text-align: center;
+  }
+}
+
+/* C19 in one open message: the attachment chips, the "remote images
+   blocked" strip and its Load images button were 11.5 px, the button 17 px
+   tall. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .mail-app :is(.mail-attachment, .mail-blocked-images) {
+    font-size: 13px;
+  }
+  .app-shell-navigation .mail-app .mail-attachment {
+    height: 32px;
+  }
+  .app-shell-navigation .mail-app .mail-blocked-images {
+    min-height: 44px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .app-shell-navigation .mail-app .mail-paper-btn {
+    min-height: 44px;
+    padding: 0 8px;
+    font-size: 14px;
+  }
+}

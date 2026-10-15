@@ -310,3 +310,17 @@ walnut-thread[data-reminder="due"], walnut-choice[data-reminder="due"] {
 }
 .wn-updated.wn-corner { float: left; margin: .5em 6px 0 0; }
 `;
+
+/**
+ * The phone's base rules for a board (spec 4.7 "Board", C77), added after the
+ * runtime CSS only in phone layout: the text a phone can read, media and wide
+ * tables kept inside the frame (they scroll there, the page never widens), and
+ * finger-sized choice and thread buttons. `html body` outranks a board's own
+ * plain `body` rule, so a desktop-sized board still reads on a phone.
+ */
+export const BOARD_PHONE_CSS = `
+html body { font-size: 16px; }
+img, video { max-width: 100%; height: auto; }
+table, pre { display: block; max-width: 100%; overflow-x: auto; }
+.wn-choice-opt, walnut-choice button, walnut-thread button { min-height: 44px; }
+`;

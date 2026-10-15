@@ -29,6 +29,7 @@
  *    absorption and working indicator. ONLY the active thread is mounted — it is
  *    the heaviest subtree in the app.
  */
+import { ArrowUpRightIcon } from '@/components/common/PhoneIcons';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
@@ -812,7 +813,7 @@ export function SideQuestionDrawer({
                 disabled={injecting || digesting || !onInjectToComposer}
                 title="Copy this thread's whole Q&A into the main composer"
               >
-                {injecting ? '⤴ Injecting…' : '⤴ Inject full'}
+                <ArrowUpRightIcon size={12} /> {injecting ? 'Injecting…' : 'Inject full'}
               </button>
               {/* Refuses to run MID-TURN. Measured why: clicking while the thread was
                   still answering caught that turn's end event, read the answer as

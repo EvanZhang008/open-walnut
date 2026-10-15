@@ -33,7 +33,8 @@ import runtimeMarkdown from './board-markdown.frame.js?raw';
 import runtimeElements from './board-elements.frame.js?raw';
 import runtimeItems from './board-items.frame.js?raw';
 import runtimeSections from './board-sections.frame.js?raw';
-import { BOARD_RUNTIME_CSS } from './board-runtime.css.ts';
+import { BOARD_PHONE_CSS, BOARD_RUNTIME_CSS } from './board-runtime.css.ts';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import {
   BOARD_SEEN_PREFIX, advanceSeen, boardWriterLabel, buildFrameRefs, frameRefsEqual, newBoardNonce, parseSeen,
   safeExternalHref, threadAuthorIds, wrapBoardHtml, type BoardMessage, type BoardSectionSeen,
@@ -173,7 +174,11 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const html = board?.html ?? null;
   // One nonce per document: the frame must echo it (board-model.ts newBoardNonce).
   const nonce = useMemo(() => (html === null ? '' : newBoardNonce()), [html]);
-  const srcDoc = useMemo(() => (html === null ? null : wrapBoardHtml(html, RUNTIME_SRC, BOARD_RUNTIME_CSS, nonce)), [html, nonce]);
+  const phone = usePhoneLayout();
+  const srcDoc = useMemo(
+    () => (html === null ? null : wrapBoardHtml(html, RUNTIME_SRC, phone ? BOARD_RUNTIME_CSS + BOARD_PHONE_CSS : BOARD_RUNTIME_CSS, nonce)),
+    [html, nonce, phone],
+  );
   // A new document is not ready until it says so (its listener does not exist yet).
   useLayoutEffect(() => { frameReady.current = false; }, [srcDoc, frameEpoch]);
   // The frame's window.name from the last pane (board-view-memory.ts), set once: a changed name attribute renames the frame.

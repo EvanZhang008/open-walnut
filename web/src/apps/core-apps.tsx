@@ -1,3 +1,4 @@
+import { Navigate } from 'react-router-dom'
 import { appRegistry, type AppComponentProps, type CoreAppContribution } from './registry'
 import { HomeIcon, TasksIcon, NotesIcon, CalendarIcon, MailIcon, ScheduleIcon, SettingsIcon } from './icons'
 import { MailApp } from './mail/MailApp'
@@ -7,9 +8,18 @@ import { NotesPage } from '@/pages/NotesPage'
 import { CalendarPage } from '@/pages/CalendarPage'
 import { RoutinesPage } from '@/pages/RoutinesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { usePhoneLayout } from '@/hooks/usePhoneLayout'
 
 const EmptyApp = (_props: AppComponentProps) => null
-const TasksApp = (_props: AppComponentProps) => <DashboardPage />
+/**
+ * N2-16: on a phone the home screen IS the task list. The dashboard (a project
+ * rail beside a wide table) stays off the drawer, and a link that still lands
+ * on /tasks (a project mention in chat, a deleted task, a command) goes home.
+ */
+function TasksApp(_props: AppComponentProps) {
+  const phone = usePhoneLayout()
+  return phone ? <Navigate to="/" replace /> : <DashboardPage />
+}
 const NotesApp = (_props: AppComponentProps) => <NotesPage />
 const CalendarApp = (_props: AppComponentProps) => <CalendarPage />
 const RoutinesApp = (_props: AppComponentProps) => <RoutinesPage />

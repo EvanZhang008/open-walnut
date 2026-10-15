@@ -265,7 +265,9 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     // 503 "feature disabled") — warn keeps them out of the error-log audit.
     const quiet = extra?.quietStatuses?.includes(res.status) ?? false;
     (quiet ? console.warn : console.error)(`[api] ${method} ${path} → ${res.status} in ${elapsed}ms: ${message}`);
-    if (res.status === 401) noteAuthRefusal(errBody);
+    // Only a refusal of the credential this browser holds NOW says it is signed
+    // out: a request sent before a `#pair=` code was traded carried none.
+    if (res.status === 401 && (deviceToken ?? null) === getDeviceToken()) noteAuthRefusal(errBody);
     throw new ApiError(res.status, message, errBody);
   }
   if (res.status === 204) return undefined as T;

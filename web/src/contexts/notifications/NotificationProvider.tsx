@@ -378,7 +378,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }).catch(err => log.warn('notifications', 'dismiss failed', { error: String(err) }));
   }, []);
 
-  // ── Initial feed load (server-persisted cron/permission survive refresh) ──
+  // ── Feed load (server-persisted cron/permission survive refresh). Runs again
+  // on every `_ws:reconnected` (a phone back in front resyncs), so letters that
+  // arrived while the socket was dead show up without a reload. ──
+  const [feedEpoch, setFeedEpoch] = useState(0);
+  useEvent('_ws:reconnected', () => setFeedEpoch((e) => e + 1));
   useEffect(() => {
     const ac = new AbortController();
     fetch('/api/notifications', { signal: ac.signal })
@@ -405,7 +409,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           for (const n of loaded) byKey.set(n.dedupKey, n);
           for (const n of prev) {
             const server = byKey.get(n.dedupKey);
-            byKey.set(n.dedupKey, server ? { ...n, read: n.read || (server.read ?? false) } : n);
+            // A prompt answered elsewhere while this tab slept: the server's stamp wins.
+            const resolved = n.resolved ?? server?.resolved;
+            byKey.set(n.dedupKey, server ? { ...n, read: n.read || (server.read ?? false), ...(resolved ? { resolved } : {}) } : n);
           }
           return [...byKey.values()]
             .filter(n => !dismissedKeys.current.has(n.dedupKey))
@@ -424,7 +430,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         setLoaded(true);
       });
     return () => ac.abort();
-  }, []);
+  }, [feedEpoch]);
 
   // ── WS source: cron notifications ──
   useEvent('cron:notification', (data) => {

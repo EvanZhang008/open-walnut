@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import {
   Diff, Hunk, Decoration, tokenize, markEdits, useSourceExpansion,
   getChangeKey, computeOldLineNumber, computeNewLineNumber, isDelete,
@@ -1450,6 +1451,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // unified when one side would be empty anyway, split only when lines changed
   // in place. New storage key on purpose — the old 'open-walnut-diff-view' key
   // has 'split' saved everywhere, which would silently defeat the auto default.
+  const phoneDiff = usePhoneLayout();
   const [viewType, setViewType] = useState<DiffViewMode>(() => {
     try {
       const v = localStorage.getItem('open-walnut-diff-view-mode');
@@ -2498,7 +2500,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               <FileDiffPane
                 key={selectedChange.filePath}
                 change={selectedChange}
-                viewType={viewType}
+                // A phone has no room for two columns: always one (C78).
+                viewType={phoneDiff ? 'unified' : viewType}
                 rendered={rendered}
                 sessionCwd={sessionCwd}
                 sessionHost={sessionHost}

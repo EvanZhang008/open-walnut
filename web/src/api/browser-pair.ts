@@ -7,7 +7,7 @@
  * token, stores it (device-token.ts), and reloads so every request and the
  * WebSocket start over with it. A link `<address>/#pair=<code>` does the same on
  * open: the code rides the fragment, which a browser never sends to a server, and
- * it leaves the address bar before the app makes its first request.
+ * it leaves the address bar and is traded before the console mounts.
  *
  * Raw fetch on purpose: client.ts would attach a stale token and report the 401
  * this browser expects.
@@ -31,7 +31,8 @@ export async function exchangeBrowserCode(code: string): Promise<PairResult> {
     res = await fetch('/api/v1/browser-pair', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
+      // A Home Screen app says so: Settings names it "iPhone Home Screen", apart from a Safari tab (D6).
+      body: JSON.stringify({ code, ...(isStandaloneDisplay() ? { standalone: true } : {}) }),
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
@@ -48,6 +49,14 @@ export async function exchangeBrowserCode(code: string): Promise<PairResult> {
   return { ok: false, message };
 }
 
+function isStandaloneDisplay(): boolean {
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  } catch {
+    return false;
+  }
+}
+
 let fragmentState: FragmentPairState = { phase: 'idle' };
 const listeners = new Set<() => void>();
 
@@ -57,13 +66,16 @@ function setFragmentState(next: FragmentPairState): void {
 }
 
 /**
- * Called once, before the app mounts: take a `#pair=` code out of the address bar
- * and trade it. On success the page reloads; on failure UnpairedNotice shows why,
- * with the code filled in.
+ * Called once, before anything else at boot (sign-in-gate.ts): take a `#pair=`
+ * code out of the address bar and trade it. Resolves true when this browser now
+ * holds a token; the gate then reloads, and the console never mounted without
+ * it (2026-10-13: it used to mount beside the exchange, and every request it
+ * made in that window came back 401). False on failure: UnpairedNotice shows
+ * why, with the code filled in. Null when the address carries no code.
  */
-export function consumePairFragment(): void {
+export function consumePairFragment(): Promise<boolean> | null {
   const match = FRAGMENT.exec(window.location.hash);
-  if (!match) return;
+  if (!match) return null;
   const code = match[1]!;
   try {
     history.replaceState(history.state, '', `${window.location.pathname}${window.location.search}`);
@@ -71,12 +83,12 @@ export function consumePairFragment(): void {
     // A sandboxed frame may refuse; the code is one use either way.
   }
   setFragmentState({ phase: 'pending', code });
-  void exchangeBrowserCode(code).then((result) => {
-    if (result.ok) {
-      window.location.reload();
-      return;
-    }
+  return exchangeBrowserCode(code).then((result) => {
+    // A right code stays 'pending' (the sign-in screen keeps saying so) until
+    // the gate's reload replaces the page.
+    if (result.ok) return true;
     setFragmentState({ phase: 'failed', code, message: result.message });
+    return false;
   });
 }
 

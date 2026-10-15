@@ -1,0 +1,132 @@
+/* Phone session overlay fixes, round 3 (session chrome, keyboard, prompts,
+   session menu). Every rule is phone-only: the max-width 768px section (or a
+   landscape phone), never the desktop layout. */
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-06: keyboard up, a Waiting task's line above the composer folds away
+     like the recap and the notes row, so the timeline keeps its 300 px. Its
+     words move into the composer's placeholder (SessionPanel), which is what
+     shows when the field takes focus. */
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .task-waiting-line {
+    display: none !important;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-08 / C19 at real density: the timeline's own controls take a finger
+     and its labels read at 12 px. A trigger or peer message's fold (41 px),
+     "Load earlier turns" (30 px), and the background-task and subagent chips
+     (10 to 11 px) were under the floor on live sessions. */
+  .app-shell-navigation .session-panel.is-phone-layer .provenance-fold {
+    min-height: 44px;
+    justify-content: center;
+  }
+  .app-shell-navigation .session-panel.is-phone-layer .session-show-earlier-btn {
+    min-height: 44px;
+    font-size: 13px;
+  }
+  .app-shell-navigation .session-panel.is-phone-layer :is(
+    .tool-run-fail, .bg-tasks-chip-icon, .bg-tasks-chip-status, .bg-tasks-chip-label, .task-group-model
+  ) {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* C19 on a live Board's Cards view: a card's ticket chip and project filter
+     were 18 px tall links, and the Sev badge, the chips and the lane's
+     needs-you count read at 10 to 11 px. They take a finger on a phone; the
+     card grows a little rather than hiding them. */
+  .app-shell-navigation .task-board-pane .kanban-card .kanban-card-ids :is(.kanban-card-project, .kanban-card-ticket .tag-chip) {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .app-shell-navigation .task-board-pane :is(
+    .kanban-card-sev, .kanban-card-project, .kanban-card-leader-pill,
+    .kanban-card-ids .tag-chip, .kanban-card-ids .tag-chip-value, .kanban-lane-needs
+  ) {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* C19 on a live Board's Projects view (the default view of a team board)
+     and its bar: kickers, badges, counts, chips and meta lines were drawn at
+     10 to 11.5 px. One floor on a phone: 12 px. */
+  .app-shell-navigation .task-board-pane :is(
+    .bo-kicker, .bo-meter-pct, .bo-group-head, .bo-group-count, .bo-place, .bo-badge, .bo-time,
+    .bpc-tag, .bpc-count-red, .bpc-new, .bpc-meta, .bpc-chip, .bpc-chip-state, .bpc-more, .bpc-label,
+    .bpc-when, .bpc-kicker, .bpc-choice-fold, .bpc-rec, .bpc-earlier, .bpc-msg-meta, .bpc-composer-hint,
+    .bpb-label, .board-view-count, .task-board-bar-sub,
+    .board-task-peek-kicker, .board-task-peek-phase, .board-task-peek-note
+  ) {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* C19 in the notification center at live density: a letter row's Pin, Mark
+     read and Archive were 22 px tall, and its type, time and chips read at
+     10 to 11 px. The same rows on the Inbox page and in a letter take the
+     same floor. */
+  html body .hib-row-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  html body .hib-row-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+  html body :is(
+    .hib-type, .hib-time, .hib-chip, .hib-answered-chip, .hib-taskrefs-label, .hib-thread-head,
+    .hib-turn-who, .hib-turn-time, .hib-delivery, .session-inbox-bar-sub
+  ) {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-08: the recap reads whole. Its x is a 44 px target on a phone, so the
+     first lines stop short of all of it (the desktop float reserves 18 px), and
+     its 13 px text gets a line height to match. */
+  .app-shell-navigation .session-recap-tip {
+    --recap-tip-line: 18px;
+  }
+  .app-shell-navigation .session-recap-tip-body::before {
+    width: 40px;
+    height: 44px;
+  }
+
+  /* N2-06: the controls the + menu holds stay out of the composer's row. The
+     phone's 44 px hit-area rule (position: relative, min-width 44 px) put the
+     hidden Output pill back in the flow, an invisible 44 px gap that clipped
+     the mode and model pills. */
+  html body .app-shell-navigation .composer-control[data-add-menu='true'] > :is(.mode-toggle-pill, .session-notes-pill),
+  html body .app-shell-navigation .composer-control[data-add-menu='true'] > .side-question-root > .side-question-pill {
+    position: absolute;
+    min-width: 0;
+    min-height: 0;
+    width: 1px;
+    height: 1px;
+  }
+  /* The mode is a short word and is never cut; the model pill gives way first. */
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-input .session-mode-bar > [data-control-id='mode'] {
+    flex-shrink: 0;
+  }
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-input .session-mode-bar > [data-control-id='model'] {
+    flex-shrink: 10;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* The notes row is a 44 px target on a phone (phone-fixes-r2.css); its
+     one-line preview sits in the middle of it, not at its top edge. */
+  .app-shell-navigation .session-notes-toggle {
+    align-items: center;
+  }
+}

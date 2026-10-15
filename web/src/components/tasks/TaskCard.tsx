@@ -94,7 +94,7 @@ export function SyncIndicator({ task }: { task: TaskListProjection }) {
       style={synced && badgeColor ? { background: badgeColor } : undefined}
       title={synced ? `Synced to ${integrationName}` : `Not synced to ${integrationName} — will retry`}
     >
-      {synced ? badge : '\u23F3'}
+      {synced ? badge : '\u23F3\uFE0E'}
     </span>
   );
 }

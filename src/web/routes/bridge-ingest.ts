@@ -60,7 +60,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
   const cred = await validateBearerCredential(token)
   const admission = ingestAdmission(cred)
   if (!admission.ok) {
-    if (!cred) recordAuthFailure(ip)
+    if (!cred) recordAuthFailure(ip, token)
     log.web.warn('bridge ingest: refused', { ip, status: admission.status, name: cred?.name, kind: cred?.kind })
     res.status(admission.status).json({ error: admission.status === 401 ? 'unauthorized' : 'not_primary' })
     return

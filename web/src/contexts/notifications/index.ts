@@ -6,7 +6,7 @@ export {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
-  causeLabelOf, partitionErrorsByCause, attentionBadgeCount,
+  causeLabelOf, partitionErrorsByCause, attentionBadgeCount, answerableCount,
   systemIssueCount, errorsBadgeCount, letterIdOf,
 } from './notification-model';
 export {

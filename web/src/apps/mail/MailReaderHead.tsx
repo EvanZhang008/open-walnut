@@ -242,6 +242,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
         disabled={!canSend}
         title={sendTitle('Reply to the sender')}
         aria-label="Reply"
+        data-label="Reply"
         onClick={() => reply(false)}
       >
         <ReplyIcon size={15} />
@@ -253,6 +254,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
         disabled={!canSend}
         title={sendTitle('Reply to everyone')}
         aria-label="Reply all"
+        data-label="Reply all"
         onClick={() => reply(true)}
       >
         <ReplyAllIcon size={15} />
@@ -264,6 +266,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
         disabled={!canSend}
         title={sendTitle('Forward this message')}
         aria-label="Forward"
+        data-label="Forward"
         onClick={() => {
           void openMailForwardComposer({
             accountId: open.accountId,
@@ -286,6 +289,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
           ? (unread ? 'Mark as read' : 'Mark as unread')
           : 'This provider cannot change the read flag'}
         aria-label={unread ? 'Mark as read' : 'Mark as unread'}
+        data-label={unread ? 'Read' : 'Unread'}
         onClick={() => { void setOpenMessageRead(unread); }}
       >
         {unread ? <EnvelopeOpenIcon size={15} /> : <EnvelopeIcon size={15} />}

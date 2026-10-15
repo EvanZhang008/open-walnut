@@ -18,6 +18,8 @@ import type { Task } from '@open-walnut/core';
 import { ICON_ROBOT } from '@/components/common/Icons';
 import { useCanonicalSessionId, useSessionStatus } from '@/hooks/useSessionStatus';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { phoneSessionLabel } from '@/utils/phone-session-label';
 
 /** Registry label for a mode id that arrives as a loose string off the wire. */
 function modeLabelFor(mode: string | undefined, fallback: string): string {
@@ -105,6 +107,10 @@ function stateClassLegacy(plan: SessionStatus | undefined, exec: SessionStatus |
 }
 
 export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, execSessionId, planStatus, execStatus, sessionIds, mode, onClick, isActive }: SessionPillProps) {
+  // A phone has no tooltip: the pill's words are the four readings of
+  // phoneSessionLabel (no permission mode, no phase / process pair; spec 4.2).
+  const phone = usePhoneLayout();
+  const phoneClass = phone ? ' task-session-pill-phone' : '';
   const storedSessionStatus = useSessionStatus(sessionId);
   const storedPlanStatus = useSessionStatus(planSessionId);
   const storedExecStatus = useSessionStatus(execSessionId);
@@ -144,9 +150,11 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
         : 'Session';
 
     return (
-      <span className={`task-session-pill task-session-pill-${cls}${clickClass}${activeClass}`} title={title} onClick={handleClick}>
+      <span className={`task-session-pill task-session-pill-${cls}${clickClass}${activeClass}${phoneClass}`} title={title} onClick={handleClick}>
         <span className={`task-session-dot task-session-dot-${cls}`} />
-        {isEmbedded ? <>{ICON_ROBOT}{' '}</> : ''}Session · {modeLabel} · {wl} / {pl}
+        {phone
+          ? phoneSessionLabel(isWaiting(status) ? status : status ? { process_status: status.process_status } : null)
+          : <>{isEmbedded ? <>{ICON_ROBOT}{' '}</> : ''}Session · {modeLabel} · {wl} / {pl}</>}
       </span>
     );
   }
@@ -190,9 +198,11 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
   const title = titleParts.join('  |  ') || 'Session';
 
   return (
-    <span className={`task-session-pill task-session-pill-${cls}${clickClass}`} title={title} onClick={handleClick}>
+    <span className={`task-session-pill task-session-pill-${cls}${clickClass}${phoneClass}`} title={title} onClick={handleClick}>
       <span className={`task-session-dot task-session-dot-${cls}`} />
-      {isEmbedded ? <>{ICON_ROBOT}{' '}</> : ''}Session · {legacyModeLabel} · {wl} / {pl}
+      {phone
+        ? phoneSessionLabel(isWaiting(primary) ? primary : primary ? { process_status: primary.process_status } : null)
+        : <>{isEmbedded ? <>{ICON_ROBOT}{' '}</> : ''}Session · {legacyModeLabel} · {wl} / {pl}</>}
     </span>
   );
 }

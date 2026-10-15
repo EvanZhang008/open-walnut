@@ -60,6 +60,8 @@ interface TaskQuickActionsProps {
   compact?: boolean;
   /** Which sub-element(s) to render. 'all' (default) = phase + kebab; 'phase' or 'kebab' = only that part. */
   slot?: 'all' | 'phase' | 'kebab';
+  /** The phone's short menu (N12): leading rows, Task detail and Status only. */
+  phoneMenu?: boolean;
   /**
    * Extra content appended to the bottom of the kebab dropdown, below a divider
    * (e.g. session-panel's "Session" actions). Receives `close` so items can
@@ -92,7 +94,7 @@ interface TaskQuickActionsProps {
   onCompleted?: (info: { taskId: string; from: TaskPhase }) => void;
 }
 
-export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
+export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', phoneMenu = false, extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
   const integrations = useIntegrations();
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
   // Writes go through the shared task store when it carries this row: the
@@ -403,6 +405,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             afterAction={closeKebab}
           />
 
+          {!phoneMenu && (<>
           {/* Pin / Tier · Priority · Start / Due: the SAME rows as the board's
               task kebab (one definition, TaskKebabMenu.TaskActionMenuItems). */}
           <TaskActionMenuItems
@@ -495,6 +498,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               </>
             );
           })()}
+          </>)}
           </>)}
 
           {/* Session section — appended below the task actions, or shown alone

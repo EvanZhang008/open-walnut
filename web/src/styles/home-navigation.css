@@ -227,7 +227,7 @@
   .home-companion { position: absolute; top: 0; left: var(--home-companion-left, 0); bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); }
 }
 /* A phone stacks the task panel above the rest, so the overlay starts at the left edge. */
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .home-companion { left: 0; }
 }
 @media (hover: none) {

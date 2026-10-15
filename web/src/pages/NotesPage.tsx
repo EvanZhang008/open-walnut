@@ -22,6 +22,7 @@ import { saveNoteContent } from '@/api/notes-v2';
 import { quickStartSession, fetchSession } from '@/api/sessions';
 import { fetchNotesDir } from '@/api/config';
 import { log } from '@/utils/log';
+import { usePhoneNoteLayer, replaceUrlKeepingState } from '@/components/notes/usePhoneNoteLayer';
 
 const LS_WIDTH_KEY = 'open-walnut-notes-tree-width';
 const LS_TABS_KEY = 'open-walnut-notes-tabs';
@@ -377,6 +378,8 @@ export function NotesPage() {
   const activeCcTab = useMemo(() => ccTabs.find((t) => t.key === chatMode) ?? null, [ccTabs, chatMode]);
 
   const activeTab = useMemo(() => tabs.find((t) => t.path === activePath) ?? null, [tabs, activePath]);
+  // Phone: the open note is a layer (Back = the tree) and reads until Edit.
+  const noteLayer = usePhoneNoteLayer(activeTab ? activePath : null, () => setActivePath(null));
   // useNoteContent only ever sees a NOTE path; attachment tabs (and "no tab") → null
   // so the markdown editor never loads a binary file and the hook clears.
   const activeNotePath = activeTab?.kind === 'note' ? activeTab.path : null;
@@ -461,6 +464,7 @@ export function NotesPage() {
   useEffect(() => {
     if (!activeTab) {
       // Only clear if a notes param is present (avoid clobbering unrelated params).
+      if (noteLayer.phone) { replaceUrlKeepingState({}); return; }
       if (searchParams.get('path') || searchParams.get('attachment')) {
         setSearchParams({}, { replace: true });
       }
@@ -468,6 +472,8 @@ export function NotesPage() {
     }
     const next: Record<string, string> =
       activeTab.kind === 'attachment' ? { attachment: activeTab.path } : { path: activeTab.path };
+    // A phone layer's history entry carries its marker: keep that state.
+    if (noteLayer.phone) { replaceUrlKeepingState(next); return; }
     setSearchParams(next, { replace: true });
   // setSearchParams is stable; intentionally exclude searchParams to avoid a sync loop.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -830,7 +836,7 @@ export function NotesPage() {
     <button
       type="button"
       className="notes-phone-back"
-      onClick={() => setActivePath(null)}
+      onClick={noteLayer.close}
       aria-label="All notes"
       title="All notes"
     >
@@ -940,6 +946,7 @@ export function NotesPage() {
                 onDismissExternal={dismissExternalChange}
                 isFavorite={isNoteFavorite(activeNotePath)}
                 onToggleFavorite={() => toggleFavoriteNote(activeNotePath)}
+                readOnly={noteLayer.readOnly}
               />
             </div>
           )}

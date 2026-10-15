@@ -156,6 +156,74 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     return () => { wsClient.offConnectionChange(onStateChange); };
   }, []);
 
+  // The REST read of the session's pending prompts (and its status). Held in a ref
+  // so the subscribe effect and the resync listener below share one copy.
+  const blocksNowRef = useRef(blocks);
+  blocksNowRef.current = blocks;
+  const refetchPendingRef = useRef((sessionId: string, knownAtStart: Set<string> | null): void => {
+    fetch(`/api/sessions/${sessionId}`)
+      .then(r => {
+        if (r.ok) return r.json()
+        // Release a refused answer (a 404 for a session that is gone): Chromium
+        // keeps a response whose body is never read open, so the request never
+        // finishes and holds its connection until the page is collected.
+        void r.body?.cancel().catch(() => {})
+        return null
+      })
+      .then((data: {
+        session?: unknown;
+        pendingPermissions?: Array<{
+          requestId: string;
+          toolName?: string;
+          input?: Record<string, unknown>;
+          reason?: string;
+          acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+        }>;
+      } | null) => {
+        if (activeSessionId.current !== sessionId) return;
+        if (data?.session) seedSessionStatus(data.session, 'rest:session');
+        const perms = data?.pendingPermissions ?? [];
+        // Zombie sweep is only safe when NO turn is running: mid-turn, a fresh
+        // permission may ride the WS ahead of this REST response and would be
+        // wrongly retired. When the session is settled, permissions can't be
+        // in flight — an unknown pending card is authoritatively dead (worker
+        // died / auto-cancelled while we were away; its permission-resolved
+        // event never reached us, so it would stay clickable forever and 404).
+        const settled = (data?.session as { process_status?: string } | undefined)?.process_status !== 'running';
+        // A resync (C62): a card that was already pending when this fetch went out
+        // and that the server no longer lists was answered elsewhere, mid-turn too.
+        const retire = (b: StreamingPermissionBlock) => settled || (knownAtStart?.has(b.requestId) ?? false);
+        setBlocks(prev => {
+          const serverIds = new Set(perms.map(p => p.requestId));
+          const existingIds = new Set(prev.filter(b => b.type === 'permission').map(b => (b as StreamingPermissionBlock).requestId));
+          const isZombie = (b: typeof prev[number]): b is StreamingPermissionBlock =>
+            isPendingPermissionBlock(b) && !serverIds.has(b.requestId) && retire(b);
+          const hasZombie = prev.some(isZombie);
+          const next: typeof prev = hasZombie
+            ? prev.map(b => (isZombie(b) ? { ...b, status: 'denied' as const } : b))
+            : prev;
+          const newBlocks = perms
+            .filter(p => !existingIds.has(p.requestId))
+            .map(p => ({ type: 'permission' as const, requestId: p.requestId, toolName: p.toolName ?? 'unknown', input: p.input, reason: p.reason, acpOptions: p.acpOptions }));
+          if (newBlocks.length === 0) return hasZombie ? next : prev;
+          return [...next, ...newBlocks];
+        });
+      })
+      .catch(() => {});
+  });
+
+  // Back in front (usePhoneResync): the early `_ws:reconnected` comes before the
+  // dead socket is replaced. Reread the open session's prompts then, so a prompt
+  // answered on another device leaves within the 2 s budget (C62), not after the
+  // 3 s ping deadline and the reconnect.
+  useEvent('_ws:reconnected', (data) => {
+    const sid = activeSessionId.current;
+    // Only a resync's events (a plain reconnect reruns the subscribe effect itself).
+    if (!sid || !(data as { resync?: string } | undefined)?.resync) return;
+    const known = new Set(blocksNowRef.current.filter(isPendingPermissionBlock).map((b) => b.requestId));
+    refetchPendingRef.current(sid, known);
+  });
+
   // Subscribe to backend stream buffer when sessionId changes OR WS reconnects
   useEffect(() => {
     // A session switch forgets the old session's unflushed reasoning; a
@@ -267,52 +335,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       });
 
     // Fallback: fetch pending permissions from REST (covers cases where buffer was pruned)
-    fetch(`/api/sessions/${sessionId}`)
-      .then(r => {
-        if (r.ok) return r.json()
-        // Release a refused answer (a 404 for a session that is gone): Chromium
-        // keeps a response whose body is never read open, so the request never
-        // finishes and holds its connection until the page is collected.
-        void r.body?.cancel().catch(() => {})
-        return null
-      })
-      .then((data: {
-        session?: unknown;
-        pendingPermissions?: Array<{
-          requestId: string;
-          toolName?: string;
-          input?: Record<string, unknown>;
-          reason?: string;
-          acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
-        }>;
-      } | null) => {
-        if (activeSessionId.current !== sessionId) return;
-        if (data?.session) seedSessionStatus(data.session, 'rest:session');
-        const perms = data?.pendingPermissions ?? [];
-        // Zombie sweep is only safe when NO turn is running: mid-turn, a fresh
-        // permission may ride the WS ahead of this REST response and would be
-        // wrongly retired. When the session is settled, permissions can't be
-        // in flight — an unknown pending card is authoritatively dead (worker
-        // died / auto-cancelled while we were away; its permission-resolved
-        // event never reached us, so it would stay clickable forever and 404).
-        const settled = (data?.session as { process_status?: string } | undefined)?.process_status !== 'running';
-        setBlocks(prev => {
-          const serverIds = new Set(perms.map(p => p.requestId));
-          const existingIds = new Set(prev.filter(b => b.type === 'permission').map(b => (b as StreamingPermissionBlock).requestId));
-          const isZombie = (b: typeof prev[number]): b is StreamingPermissionBlock =>
-            isPendingPermissionBlock(b) && !serverIds.has(b.requestId);
-          const hasZombie = settled && prev.some(isZombie);
-          const next: typeof prev = hasZombie
-            ? prev.map(b => (isZombie(b) ? { ...b, status: 'denied' as const } : b))
-            : prev;
-          const newBlocks = perms
-            .filter(p => !existingIds.has(p.requestId))
-            .map(p => ({ type: 'permission' as const, requestId: p.requestId, toolName: p.toolName ?? 'unknown', input: p.input, reason: p.reason, acpOptions: p.acpOptions }));
-          if (newBlocks.length === 0) return hasZombie ? next : prev;
-          return [...next, ...newBlocks];
-        });
-      })
-      .catch(() => {});
+    refetchPendingRef.current(sessionId, null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, wsConnected]);
 

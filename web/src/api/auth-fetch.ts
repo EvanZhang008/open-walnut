@@ -1,0 +1,68 @@
+/**
+ * Every same-origin `/api/` fetch carries the device token.
+ *
+ * client.ts attaches it, but about forty loaders call `fetch('/api/...')`
+ * directly (the notifications feed, quiet mode, status items, files, session
+ * streams). On the computer Walnut runs on that is fine, since no token is
+ * needed there; a signed-in phone got 401 from each of them, so parts of the
+ * console stayed empty with no error (2026-10-13). Wrapping fetch once fixes
+ * them all and every future one.
+ *
+ * An explicit Authorization header wins, a request to another origin is left
+ * alone, and the sign-in exchange is never given a token (it is how a browser
+ * gets one, and a stale one there would only confuse the log).
+ */
+
+import { getDeviceToken } from './device-token';
+
+const NO_TOKEN_PATHS = new Set(['/api/v1/browser-pair']);
+
+/** The URL a fetch input names, or null when it cannot be read. */
+function inputUrl(input: RequestInfo | URL): string | null {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  if (typeof Request !== 'undefined' && input instanceof Request) return input.url;
+  return null;
+}
+
+/**
+ * The init to send instead, or null to send the call untouched. Pure apart from
+ * reading the token, so tests drive it without a browser.
+ */
+export function initWithDeviceToken(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  pageHref: string,
+  token: string | null,
+): RequestInit | null {
+  if (!token) return null;
+  const raw = inputUrl(input);
+  if (raw === null) return null;
+  let url: URL;
+  let page: URL;
+  try {
+    url = new URL(raw, pageHref);
+    page = new URL(pageHref);
+  } catch {
+    return null;
+  }
+  if (url.origin !== page.origin) return null;
+  if (!url.pathname.startsWith('/api/') || NO_TOKEN_PATHS.has(url.pathname)) return null;
+  const fromRequest = typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined;
+  const headers = new Headers(init?.headers ?? fromRequest);
+  if (headers.has('Authorization')) return null;
+  headers.set('Authorization', `Bearer ${token}`);
+  return { ...init, headers };
+}
+
+let installed = false;
+
+export function installAuthFetch(): void {
+  if (installed || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
+  installed = true;
+  const original = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    const next = initWithDeviceToken(input, init, window.location.href, getDeviceToken());
+    return next ? original(input, next) : original(input, init);
+  };
+}

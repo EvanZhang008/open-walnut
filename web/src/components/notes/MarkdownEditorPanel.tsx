@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { isPhoneLayout } from '@/hooks/usePhoneLayout';
+import { timeAgo } from '@/utils/time';
 import type { Editor } from '@tiptap/core';
 import { NotesEditor } from './NotesEditor';
 import { NotesFormatToolbar } from './NotesFormatToolbar';
@@ -79,6 +81,8 @@ export interface MarkdownEditorPanelProps {
   // ── Editor feature flags (passed through to NotesEditor) ──
   enableWikiLinks?: boolean;
   enableBlockTools?: boolean;
+  /** Read only (the phone's default for a note): see NotesEditor. */
+  readOnly?: boolean;
   /** Wiki-link autocomplete corpus. If enableWikiLinks and omitted, the shell fetches it. */
   wikiLinkNotes?: NoteListItem[];
   /** #tag autocomplete corpus. If enableWikiLinks and omitted, the shell fetches it. */
@@ -146,6 +150,7 @@ export function MarkdownEditorPanel({
   updatedAt,
   enableWikiLinks = false,
   enableBlockTools = false,
+  readOnly = false,
   wikiLinkNotes,
   tagSuggestions,
   onWikiLinkClick,
@@ -485,12 +490,16 @@ export function MarkdownEditorPanel({
             )}
             <SaveStatusIndicator status={saveStatus} />
             {updatedAt && (
-              <span className="notes-editor-updated">{new Date(updatedAt).toLocaleString()}</span>
+              // A phone reads "Edited 5m ago"; the exact time stays in the title (N2-29).
+              <span className="notes-editor-updated" title={new Date(updatedAt).toLocaleString()}>
+                {isPhoneLayout() ? `Edited ${timeAgo(new Date(updatedAt).toISOString())}` : new Date(updatedAt).toLocaleString()}
+              </span>
             )}
           </div>
         </div>
       )}
-      {showFormatToolbar && !rawMode && live.editor && (
+      {/* A read-only note (the phone's reading mode) has nothing to format. */}
+      {showFormatToolbar && !rawMode && !readOnly && live.editor && (
         <NotesFormatToolbar
           key={live.gen}
           editor={live.editor}
@@ -511,8 +520,9 @@ export function MarkdownEditorPanel({
           <NotesEditor
             key={key ?? 'editor'}
             content={content}
+            readOnly={readOnly}
             onDirty={handleEditorUpdate}
-            autoFocus={autoFocus}
+            autoFocus={autoFocus && !readOnly}
             placeholder={placeholder ?? 'Start writing...'}
             enableWikiLinks={enableWikiLinks}
             enableBlockTools={enableBlockTools}

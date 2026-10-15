@@ -113,6 +113,10 @@ export function activate(walnut: WalnutWebApi) {
 
 Everything a plugin receives is scoped to that plugin and torn down when it unloads, so a reload leaves no stray listeners, routes, Apps, or Settings sections behind.
 
+### On a phone
+
+The console opens an App full screen under its own top bar when the window matches `(max-width: 768px), (pointer: coarse) and (max-height: 500px)`; the host frame starts below that bar and keeps the safe area at the bottom. Everything inside the frame is the App's own markup, so its stylesheet decides how it reads on a phone. Follow what the built-in Mail and Notes pages do under that media query: show the list or one item at a time, not both side by side; give every control and row a 44 px target; keep text at 12 px or more (16 px for reading text); and never hide a control behind `:hover`, because a touch screen has no hover and leaves the last tapped row looking hovered. The top bar already carries the page name and the notification bell, so an App needs neither again.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).

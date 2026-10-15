@@ -16,7 +16,7 @@ import compression from 'compression'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { attachWss, broadcastEvent, sendStreamEvent, closeWss } from './ws/handler.js'
 import { sessionStreamBuffer } from './session-stream-buffer.js'
-import { isStaticAssetPath } from './static-asset-path.js'
+import { isStaticAssetPath, staticCacheControl } from './static-asset-path.js'
 import { refreshStaticMirror, bundleIdInHtml, mirrorHoldsBuild } from './static-mirror.js'
 import { createStaticRootWatch } from './static-root-watch.js'
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js'
@@ -2184,11 +2184,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const mirrorReady = mirror.ready
     const mirrorIndexRoot = mirror.indexRoot
 
-    app.use(express.static(staticDir))
+    // Hashed assets are cached for a year, everything else revalidates
+    // (static-asset-path.ts). Each root judges a path relative to itself.
+    const staticFrom = (root: string) => express.static(root, {
+      setHeaders: (res, filePath) => { res.setHeader('Cache-Control', staticCacheControl(path.relative(root, filePath))) },
+    })
+    app.use(staticFrom(staticDir))
     // Fallthrough roots, newest build first, consulted only for what the primary
     // could not answer: zero cost while the stage is intact, and the app stays up
     // when it is not.
-    for (const root of mirror.roots) app.use(express.static(root))
+    for (const root of mirror.roots) app.use(staticFrom(root))
     // A previewed HTML document's root-absolute references (`/tmp/report/x.webm`)
     // are filesystem paths, not site paths: what no static root claimed goes back
     // onto the file-raw route before the index.html fallback can answer it.
@@ -2265,9 +2270,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Fall back through the send itself rather than stat-ing per request: no
       // sync fs work on the hot path, and no window where a break that happened
       // seconds ago is still being answered with an errno.
-      res.sendFile('index.html', { root: staticDir }, (err) => {
+      const shell = { headers: { 'Cache-Control': 'no-cache' } }
+      res.sendFile('index.html', { root: staticDir, ...shell }, (err) => {
         if (!err) return
-        if (mirrorIndexRoot) { res.sendFile('index.html', { root: mirrorIndexRoot }, () => { /* nothing left to try */ }); return }
+        if (mirrorIndexRoot) { res.sendFile('index.html', { root: mirrorIndexRoot, ...shell }, () => { /* nothing left to try */ }); return }
         next(err)
       })
     })

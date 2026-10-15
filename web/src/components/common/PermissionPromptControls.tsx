@@ -91,7 +91,7 @@ export function PermissionAskDetail({ n, detail, clamp = false }: { n: Notificat
             ) : (
               <>
                 <button className="nfc-card-toggle" onClick={() => setExpanded((v) => !v)}>
-                  {expanded ? '▼' : '▶'} Plan ready for review
+                  {expanded ? '▼' : '▶︎'} Plan ready for review
                 </button>
                 {expanded && <pre className="nfc-card-pre">{detail.plan}</pre>}
               </>

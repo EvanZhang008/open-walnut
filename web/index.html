@@ -2,20 +2,54 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover: the phone rules pad with env(safe-area-inset-*).
+         No maximum-scale / user-scalable: pinch zoom stays available. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Browser bar colour = the phone top bar's --bg. The script below and
+         useThemeColorMeta collapse these two to one for an explicit theme. -->
+    <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <link rel="icon" type="image/png" href="/walnut-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="Walnut" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- default, not black-translucent: its white status text vanishes on the light theme. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Open Walnut</title>
+    <style>
+      /* Before the first frame: the page colour of the theme, never a white flash. */
+      html { background: #FFFFFF; }
+      @media (prefers-color-scheme: dark) { html:not([data-theme="light"]) { background: #000000; } }
+      html[data-theme="dark"] { background: #000000; }
+      .boot-splash { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+      .boot-splash img { display: block; width: 64px; height: 64px; border-radius: 14px; }
+    </style>
     <script>
       (function() {
         var t = 'system';
         try { t = localStorage.getItem('open-walnut-theme') || 'system'; } catch(e) {}
-        if (t === 'dark') document.documentElement.dataset.theme = 'dark';
-        else if (t === 'light') document.documentElement.dataset.theme = 'light';
+        // The launch splash takes the manifest's colour: the dark one only for a dark theme (N2-37).
+        var dark = t === 'dark' || (t !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        var manifest = document.querySelector('link[rel="manifest"]');
+        if (manifest && dark) manifest.setAttribute('href', '/manifest-dark.webmanifest');
+        if (t !== 'dark' && t !== 'light') return;
+        document.documentElement.dataset.theme = t;
+        // An explicit theme: one theme-color, whatever the system says.
+        var metas = document.querySelectorAll('meta[name="theme-color"]');
+        for (var i = 1; i < metas.length; i++) metas[i].parentNode.removeChild(metas[i]);
+        if (metas[0]) {
+          metas[0].removeAttribute('media');
+          metas[0].setAttribute('content', t === 'dark' ? '#000000' : '#FFFFFF');
+        }
       })();
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Replaced by React's first render (the sign-in page or the console). -->
+    <div id="root"><div class="boot-splash" aria-hidden="true" data-testid="boot-splash"><img src="/walnut-icon.png" width="64" height="64" alt="" /></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

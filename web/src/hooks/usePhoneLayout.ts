@@ -3,10 +3,13 @@ import { useSyncExternalStore } from 'react';
 /**
  * The phone layout: one surface at a time. The task panel is the home screen,
  * and the chat, a session or a draft opens over it full screen; navigation is a
- * drawer behind the top bar's menu button. The CSS twin of this query is every
- * `@media (max-width: 768px)` block (globals.css "Responsive", phone-layout.css).
+ * drawer behind the top bar's menu button. A phone held sideways (844 to 932 px
+ * wide, under 500 px tall, touch) is still a phone. The CSS twin of this query
+ * is every `@media (max-width: 768px), (pointer: coarse) and (max-height: 500px)`
+ * block (globals.css "Responsive", phone-layout.css); the ratchet
+ * tests/web/phone-media-query-ratchet.test.ts keeps them the same.
  */
-export const PHONE_LAYOUT_QUERY = '(max-width: 768px)';
+export const PHONE_LAYOUT_QUERY = '(max-width: 768px), (pointer: coarse) and (max-height: 500px)';
 
 function subscribe(onChange: () => void): () => void {
   if (typeof window === 'undefined' || !window.matchMedia) return () => {};

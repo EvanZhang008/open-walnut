@@ -34,6 +34,8 @@ interface NotesEditorPanelProps {
   onDismissExternal?: () => void;
   isFavorite?: boolean;
   onToggleFavorite?: () => void;
+  /** Read only (the phone's default for a note, until Edit). */
+  readOnly?: boolean;
 }
 
 export function NotesEditorPanel({
@@ -50,6 +52,7 @@ export function NotesEditorPanel({
   onDismissExternal,
   isFavorite,
   onToggleFavorite,
+  readOnly = false,
 }: NotesEditorPanelProps) {
   if (!notePath) {
     return (
@@ -73,7 +76,8 @@ export function NotesEditorPanel({
       onNavigate={onNavigate}
       onLocate={onLocate}
       onBreadcrumbNavigate={onBreadcrumbNavigate}
-      autoFocus
+      autoFocus={!readOnly}
+      readOnly={readOnly}
       placeholder="Start writing..."
       enableWikiLinks
       enableBlockTools

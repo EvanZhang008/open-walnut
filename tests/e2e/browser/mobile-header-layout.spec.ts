@@ -10,7 +10,7 @@ test('mobile sidebar toggle does not overlap task search at 390px', async ({ pag
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  const sidebarToggle = page.getByRole('button', { name: 'Toggle sidebar' })
+  const sidebarToggle = page.getByRole('button', { name: 'Menu', exact: true })
   const searchInput = page.locator('.todo-search-input')
   await expect(sidebarToggle).toBeVisible()
   await expect(searchInput).toBeVisible()

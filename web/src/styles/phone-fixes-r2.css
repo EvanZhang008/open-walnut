@@ -1,0 +1,373 @@
+/* Phone review fixes, round 2 (nitpicks N2-xx). Same phone query as
+   phone-layout.css; nothing here reaches the desktop layout. */
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-06: keyboard up, the timeline keeps its 300 px. The recap and the
+     strips above the composer fold away while typing; they come back with
+     the keyboard down. */
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .session-recap-tip,
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .session-notes-toggle,
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .wf-card--bar {
+    display: none !important;
+  }
+
+  /* N2-06: the composer's controls stay on one row: the mode and model pills
+     give up width (ellipsis) before anything wraps under the + button. */
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-input .chat-input-controls {
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-input .session-mode-bar {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    flex-wrap: nowrap;
+  }
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-input .session-mode-bar > * {
+    min-width: 0;
+    flex-shrink: 1;
+  }
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-input .session-mode-bar button,
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-input .session-mode-bar [role='button'] {
+    /* Shrinks to an ellipsis, never under a finger's 44 px. */
+    min-width: 44px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* N2-06: a layer that ends at the keyboard's top edge paints the band under
+     it too, so a translucent keyboard never shows the home list beneath. */
+  html[data-wn-keyboard='open'] .app-shell-navigation .main-page-content-row > .main-page-sessions-area:not(.collapsed),
+  html[data-wn-keyboard='open'] .app-shell-navigation .main-page-chat:not(.collapsed) {
+    box-shadow: 0 var(--wn-keyboard-inset, 0px) 0 0 var(--bg);
+  }
+
+  /* N2-08: session chrome reads at 12 px or more and takes a finger. */
+  .app-shell-navigation .session-recap-tip-label {
+    font-size: 12px;
+  }
+  .app-shell-navigation .session-recap-tip-text,
+  .app-shell-navigation .wf-card-open-label,
+  .app-shell-navigation .wf-card,
+  .app-shell-navigation .wf-card-title,
+  .app-shell-navigation .wf-card-count,
+  .app-shell-navigation .wf-card-tokens {
+    font-size: 13px;
+  }
+  /* The recap is read in place: no 47 px scroller inside the timeline. */
+  .app-shell-navigation .session-recap-tip-body,
+  .app-shell-navigation .session-recap-tip-body.is-scrollable {
+    max-height: none;
+    overflow: visible;
+  }
+  .app-shell-navigation .session-recap-tip-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .app-shell-navigation .wf-card--bar,
+  .app-shell-navigation .session-notes-toggle {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  /* The outline rail is a hover affordance at the message's left edge; on a
+     phone it overlapped the text and was an 18 px target. */
+  .app-shell-navigation .session-panel.is-phone-layer .session-toc-rail {
+    display: none;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-07: menus are opaque on a phone in every engine. WebKit drew the glass
+     menu without its blur (no -webkit-backdrop-filter), so the conversation
+     read through it. A possibly translucent card color is laid over the page
+     color, which is always solid. */
+  html body .task-kebab-menu {
+    background: linear-gradient(var(--card-bg), var(--card-bg)), var(--bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* N2-07: the session rows center their label in the 44 px row. */
+  html body .task-kebab-menu .phone-session-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* N2-07: one divider under the session rows, not two. */
+  html body .task-kebab-menu .phone-session-rows:has(+ .task-kebab-divider) > .task-kebab-divider,
+  html body .task-kebab-menu .phone-session-rows:last-child > .task-kebab-divider {
+    display: none;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-22: the cached-history line mixed its tint into an undefined
+     --bg-primary, whose #fff fallback drew a cream box on a black page. */
+  .app-shell-navigation .session-history-stale-banner {
+    background: color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--bg));
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* C19: the permission toast answers with a finger: 44 px buttons side by
+     side, the Open session link a full row target, text at 13 px or more. */
+  html body .nfc-perm-toast .nfc-perm-actions {
+    display: flex;
+    gap: 8px;
+  }
+  html body .nfc-perm-toast .nfc-perm-btn,
+  html body .nfc-perm-toast .notification-toast-action {
+    flex: 1 1 0;
+    min-height: 44px;
+    font-size: 15px;
+  }
+  html body .nfc-perm-toast .nfc-open-session {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 8px;
+    font-size: 13px;
+  }
+  html body .nfc-perm-toast .notification-toast-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  html body .nfc-perm-toast .notification-toast-title,
+  html body .nfc-perm-toast .nfc-perm-context,
+  html body .nfc-perm-toast .nfc-perm-cmd,
+  html body .nfc-perm-toast .nfc-perm-ask,
+  html body .nfc-perm-toast .nfc-perm-path,
+  html body .nfc-perm-toast .nfc-perm-settled,
+  html body .nfc-perm-toast .notification-toast-body {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* C19: the Board's Cards view in a phone session. Its controls were desktop
+     sized (22 px view toggle, 24 px lane kebabs, a 26 px search field, 11 px
+     counts). Every control outside a card takes a finger; text reads 12 px. */
+  .app-shell-navigation .task-board-pane :is(button, [role='button'], [role='tab'], input, select):not(.kanban-card, .kanban-card *) {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  .app-shell-navigation .task-board-pane :is(button, [role='button'], [role='tab']):not(.kanban-card, .kanban-card *) {
+    min-width: 44px;
+  }
+  .app-shell-navigation .task-board-pane input:not(.kanban-card *) {
+    font-size: 16px;
+  }
+  /* Inside a card: its own row actions, finger sized too. */
+  .app-shell-navigation .task-board-pane .kanban-card :is(.kanban-text-btn, .kanban-card-status-btn, button[data-testid='kanban-card-status']) {
+    min-height: 44px;
+  }
+  .app-shell-navigation .task-board-pane :is(.board-view-count, .kanban-chip-count, .kanban-lane-count, small) {
+    font-size: 12px;
+  }
+}
+
+/* N2-12: the line that says why Submit waits is a phone thing; the desktop
+   form keeps its layout. */
+.nfc-answer-hint {
+  display: none;
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-12: a question in the center reads like the session's card: full-width
+     option rows of 48 px, a 44 px Other field at 16 px, and a reason under a
+     Submit that waits. */
+  html body .notification-panel .nfc-answer-opts {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  /* Doubled class: the center's generic 44 px button rule is more specific. */
+  html body .notification-panel .nfc-answer .nfc-answer-opts > .nfc-answer-opt.nfc-answer-opt {
+    width: 100%;
+    min-height: 48px;
+    padding: 10px 12px;
+    text-align: left;
+    justify-content: flex-start;
+    font-size: 16px;
+    line-height: 1.3;
+    white-space: normal;
+  }
+  html body .notification-panel .nfc-answer .nfc-answer-input.nfc-answer-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 44px;
+    font-size: 16px;
+  }
+  html body .notification-panel .nfc-answer-hint {
+    display: block;
+    margin: 6px 0 0;
+    font-size: 13px;
+    color: var(--fg-secondary);
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-27: the quiet moon sits after the label, never on the bell's clapper. */
+  .app-shell-navigation .sidebar .sidebar-notification-btn .quiet-moon {
+    position: static;
+    order: 2;
+    margin: 0 0 0 2px;
+    transform: none;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .app-shell-navigation .sidebar .sidebar-notification-btn .sidebar-label {
+    order: 1;
+  }
+  .app-shell-navigation .sidebar .sidebar-notification-btn .notification-badge-count {
+    order: 3;
+  }
+
+  /* N2-23: the Latest pill is opaque and sits 8 px above the composer, in the
+     scroller's own bottom edge, like the prompt pill. */
+  /* Sticky offsets count from inside the scroller's padding: the timeline's
+     bottom padding is pinned to 12 px here, and the pills sit at -4 px, which
+     puts them 8 px above the scroller's edge, right over the composer. */
+  .app-shell-navigation .session-panel.is-phone-layer .session-history {
+    padding-bottom: 12px;
+  }
+  .app-shell-navigation .session-panel.is-phone-layer .session-history .phone-prompt-pill {
+    bottom: -4px;
+  }
+  .app-shell-navigation .session-panel.is-phone-layer .session-history .phone-prompt-pill.is-stacked {
+    bottom: calc(-4px + 44px + 8px);
+  }
+  .app-shell-navigation .session-history .scroll-to-bottom-btn {
+    position: sticky;
+    bottom: -4px;
+    z-index: 11;
+    background: var(--card-bg);
+    background: linear-gradient(var(--card-bg), var(--card-bg)), var(--bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    border: 1px solid var(--border-strong, var(--border));
+    box-shadow: 0 2px 10px rgb(0 0 0 / 18%);
+  }
+  /* Opaque only while it is up and not stepping aside from a prompt card
+     (N30): a bare opacity 1 above showed the pill on every session, a short
+     one too, sitting on the last message's text. */
+  .app-shell-navigation .session-history .scroll-to-bottom-btn.visible:not([data-over-prompt]) {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-15: the host card on the phone home: 44 px targets, 12 px text. */
+  .app-shell-navigation .hpb :is(button, a[href], [role='button']),
+  .app-shell-navigation .hpb .hft-details,
+  .app-shell-navigation .ab-dismiss-all {
+    min-height: 44px;
+    min-width: 44px;
+    box-sizing: border-box;
+  }
+  .app-shell-navigation .hpb :is(.hpb-count, .hpb-elapsed, .hpb-receipt, .hpb-subhead, .hpb-step, .hft-when, .hft-hint, .hft-more, .hpb-more),
+  .app-shell-navigation .attention-banner .hft-details {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-28: the footer's chips are separate taps, not one sentence that wraps
+     with a comma left hanging at the end of a line. */
+  .app-shell-navigation .todo-filter-footer {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 16px;
+  }
+  .app-shell-navigation .todo-filter-footer .todo-filter-footer-sep {
+    display: none;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-34: a session that is gone offers no composer to type into. */
+  .app-shell-navigation .session-panel:has([data-session-gone='true']) .session-panel-input {
+    display: none;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-26: the center's tab strip rests on whole tabs, never a cut one. */
+  html body .notification-panel.nfc-panel-wide .nfc-rail {
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 12px;
+  }
+  html body .notification-panel.nfc-panel-wide .nfc-rail .nfc-rail-btn {
+    scroll-snap-align: start;
+  }
+  /* N2-26: a card's dismiss reads as a control: full-strength glyph, 16 px. */
+  html body .notification-panel.nfc-panel-wide .notification-feed-item-dismiss {
+    color: var(--fg-secondary);
+    font-size: 16px;
+    opacity: 1;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-18: calendar event text on a phone reads at 12 px or more. */
+  .app-shell-navigation .cal-page :is(.cal-chip-location, .cal-chip-time, .cal-chip-meta) {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-19: Routines on a phone. The bar already names the page, so the page's
+     own title goes; every control takes a finger; badges read 12 px. */
+  .app-shell-navigation .page-header:has(+ .routines-view) .page-title {
+    display: none;
+  }
+  .app-shell-navigation .routines-view :is(button, [role='button'], [role='switch'], input:not([type='hidden']), select) {
+    min-height: 44px;
+    min-width: 44px;
+    box-sizing: border-box;
+  }
+  .app-shell-navigation .routines-view :is(.routine-executor-badge, .cron-form-error, .routine-error) {
+    font-size: 12px;
+  }
+  .app-shell-navigation .routines-view textarea {
+    resize: none;
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-14: the fold chevrons of a tier's project and folder rows take a finger
+     (they were 16 px glyph buttons). */
+  .app-shell-navigation .todo-panel :is([class*='tier-project-label'], .task-group-chip) > .collapse-chevron {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-29: the Notes tree's counts read at 12 px. */
+  .app-shell-navigation .notes-bookmarks-count {
+    font-size: 12px;
+  }
+}
+
+/* N2-37: a finger leaves :hover behind on the control it lifted from, so the
+   bar's menu button stayed highlighted after its menu closed. Touch screens
+   draw no hover state on the bar; pressed (:active) still shows. The bar
+   exists only in the phone layout, so the query needs no width clause (and
+   tests/web/phone-media-query-ratchet.test.ts keeps hover rules out of one). */
+@media (hover: none) {
+  .app-shell-navigation .phone-topbar :is(button, .task-kebab-btn):hover:not(:active),
+  .app-shell-navigation .phone-topbar .phone-bar-slot .task-kebab-btn:hover:not(:active) {
+    background: transparent;
+    color: inherit;
+  }
+}

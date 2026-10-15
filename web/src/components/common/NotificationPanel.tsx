@@ -23,6 +23,9 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
+import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { PhonePullToRefresh } from '@/components/tasks/PhonePullToRefresh';
 import {
   useNotifications, sectionOf, sectionCounts, effectiveTs,
   toolNameOf, sessionLabelOf, formatRelative,
@@ -47,6 +50,7 @@ import { navigateToTarget } from '@/utils/open-session';
 import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { startNotificationFix } from '@/api/notifications';
 import { log } from '@/utils/log';
+import { ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from './Icons';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { LetterEnvelopeRow } from '@/components/inbox/LetterEnvelopeRow';
@@ -69,7 +73,28 @@ interface NotificationPanelProps {
 /** Rail tabs — the notification sections plus the ambient System zone. */
 type RailSection = NotificationSection | 'system';
 
-export function NotificationPanel({ open, onClose, sidebarCollapsed }: NotificationPanelProps) {
+export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed }: NotificationPanelProps) {
+  // Phone: the center is a full-screen layer (spec 4.7, C55). Back, Escape and
+  // the backdrop close it through history; `onClose` below is that UI close.
+  // A click-through closes the layer FIRST and navigates once its history entry
+  // is gone, so the new page or session layer is never pushed above a ghost.
+  const phone = usePhoneLayout();
+  const ownerCloseRef = useRef(ownerClose);
+  ownerCloseRef.current = ownerClose;
+  const afterCloseRef = useRef<(() => void) | null>(null);
+  const layer = usePhoneOverlay({
+    id: 'notifications',
+    kind: 'notifications',
+    open,
+    bar: { title: 'Notifications' },
+    onClose: () => {
+      ownerCloseRef.current();
+      const next = afterCloseRef.current;
+      afterCloseRef.current = null;
+      if (next) setTimeout(next, 0);
+    },
+  });
+  const onClose = layer.close;
   const { hasIssues, health, loading: healthLoading } = useSystemHealth();
   // What is broken right now: it leads All and Errors, and counts on the Errors badge.
   const disabledHosts = useDisabledHosts(open);
@@ -367,6 +392,26 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // The dialog contract (focus in, Tab kept inside, back to the bell on close).
   const [panelEl, setPanelEl] = useState<HTMLDivElement | null>(null);
   useDialogFocus(open ? panelEl : null, 'Notifications');
+  // A phone's rail is one sideways strip: the selected section is scrolled into
+  // view, or a center opening on All (the strip's last entry) showed no
+  // selected tab at all (N9).
+  // Measured from the two boxes (offsets were read against the panel, not the
+  // strip, and missed), and again while the opening panel settles: the strip
+  // is not scrollable yet while it slides in and its counts load.
+  useEffect(() => {
+    if (!phone || !open || !panelEl) return undefined;
+    const reveal = () => {
+      const active = panelEl.querySelector<HTMLElement>('.nfc-rail-btn.nfc-active');
+      const rail = active?.closest<HTMLElement>('.nfc-rail');
+      if (!active || !rail) return;
+      const a = active.getBoundingClientRect();
+      const r = rail.getBoundingClientRect();
+      if (a.left < r.left || a.right > r.right) rail.scrollLeft += a.left - r.left - (r.width - a.width) / 2;
+    };
+    const raf = requestAnimationFrame(reveal);
+    const timers = [120, 360, 900].map((ms) => setTimeout(reveal, ms));
+    return () => { cancelAnimationFrame(raf); timers.forEach(clearTimeout); };
+  }, [phone, open, panelEl, section, feed.length]);
 
   // Escape closes, same idiom as Lightbox/FileViewer: the panel is a portalled
   // overlay, so there is no ancestor to catch the key — it has to be on document.
@@ -381,9 +426,14 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   }, [open, onClose]);
 
   const onNavigate = useCallback((to: string) => {
+    if (phone) {
+      afterCloseRef.current = () => navigateToTarget(to, navigate);
+      onClose();
+      return;
+    }
     navigateToTarget(to, navigate);
     onClose();
-  }, [navigate, onClose]);
+  }, [navigate, onClose, phone]);
 
   const toggleGroup = useCallback((key: string) => {
     setExpandedGroups(prev => {
@@ -457,6 +507,11 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
           </button>
         </div>
 
+        <PhonePullToRefresh
+          enabled={phone && open}
+          getScroller={() => panelEl?.querySelector<HTMLElement>('.nfc-detail') ?? panelEl}
+          testId="phone-pull-notifications"
+        />
         {/* Body: rail + detail. The panel is a fixed slide-out (top:0/bottom:0),
             so the body's height is fully determined by the viewport — `flex:1` +
             `min-height:0` is safe here (ViewDropdown needs `flex:0 1 <basis>`
@@ -680,6 +735,9 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   );
 }
 
+/** Tool ids a person does not read, as the phone's center names them (N2-12). */
+const PHONE_TOOL_TITLES: Record<string, string> = { AskUserQuestion: 'Question', ExitPlanMode: 'Plan review' };
+
 const EMPTY_TEXT: Record<NotificationSection, string> = {
   action: 'Nothing waiting on you',
   inbox: 'No letters yet',
@@ -870,12 +928,16 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
   const answer = usePermissionAnswer(n);
   const { resolved, failed: respondError } = answer;
   const target = linkTargetOf(n);
+  // A phone names the ask in words, not by the tool id (N2-12).
+  const phoneTitles = usePhoneLayout();
+  const tool = toolNameOf(n);
+  const title = (phoneTitles && tool ? PHONE_TOOL_TITLES[tool] : undefined) ?? tool ?? n.title;
 
   return (
     <div className={`notification-feed-item nfc-perm-card notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-        <span className="notification-feed-item-title">{toolNameOf(n) ?? n.title}</span>
+        <span className="notification-feed-item-title">{title}</span>
         {/* Click-through, on EVERY permission card that has a session — pending or
             settled. The card body stays inert (decision surface, see the class
             comment), so this small header link is the only way to get from a
@@ -1117,7 +1179,7 @@ const FeedItem = memo(function FeedItem({
             onClick={(e) => { e.stopPropagation(); setDetailOpen(v => !v); }}
             aria-expanded={detailOpen}
           >
-            {detailOpen ? '▼' : '▶'} Details
+            <span className="nfc-card-toggle-icon" aria-hidden="true">{detailOpen ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT}</span> Details
           </button>
           {detailOpen && (
             <pre className="nfc-card-pre" onClick={(e) => e.stopPropagation()}>{presented.detail}</pre>
@@ -1195,7 +1257,7 @@ const FeedItem = memo(function FeedItem({
             >
               {fixBusy
                 ? (fixNeedsClone ? 'Cloning Walnut source… (first time only)' : 'Starting…')
-                : '🔧 Ask AI to fix'}
+                : 'Ask AI to fix'}
             </button>
           )}
           {fixError && <span className="nfc-fix-error">{fixError}</span>}

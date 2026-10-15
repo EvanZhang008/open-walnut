@@ -93,6 +93,26 @@ describe('serving a previous build after a deploy', () => {
     expect((await get('/assets/index-NEWBUILD.js')).status).toBe(200);
   });
 
+  it('caches hashed assets for a year and revalidates the shell, from the primary and the mirror', async () => {
+    const cache = async (p: string, headers: Record<string, string> = {}) => {
+      const res = await fetch(`http://localhost:${port}${p}`, { headers });
+      await res.arrayBuffer();
+      return { status: res.status, cache: res.headers.get('cache-control'), etag: res.headers.get('etag') };
+    };
+    const year = 'public, max-age=31536000, immutable';
+    expect((await cache('/assets/index-NEWBUILD.js')).cache).toBe(year);
+    expect((await cache(`/assets/${OLD_GRAMMAR}`)).cache, 'a kept build is just as immutable').toBe(year);
+    for (const p of ['/', '/index.html', '/tasks', '/sessions?id=x']) {
+      expect((await cache(p)).cache, p).toBe('no-cache');
+    }
+    // no-cache still lets a warm load skip the bytes: the shell answers 304.
+    // fetch() adds `Cache-Control: no-cache` to a conditional request unless one
+    // is set, which forces a full answer; a browser's warm load sends max-age=0.
+    const first = await cache('/index.html');
+    expect(first.etag).toBeTruthy();
+    expect((await cache('/index.html', { 'if-none-match': first.etag!, 'cache-control': 'max-age=0' })).status).toBe(304);
+  });
+
   it('reports the bundle it serves, so a tab can tell it has drifted', async () => {
     const cfg = await (await fetch(`http://localhost:${port}/api/config`)).json();
     expect(cfg.webAssets.bundle).toBe('NEWBUILD');

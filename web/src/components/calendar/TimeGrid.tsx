@@ -22,6 +22,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { useDroppable } from '@dnd-kit/core';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
 import {
@@ -32,7 +33,7 @@ import {
   weekRange,
 } from '@/utils/calendar-date';
 import { visibleInterval } from '@/utils/page-visibility';
-import { fittedSlotPx, GRID_EXTENDED_END, GRID_FOCUS_START, gridMinute, gridY, gridLocalIso, gridSnapMinute, useCalendarGridSettings } from './calendar-grid-settings';
+import { fittedSlotPx, GRID_EXTENDED_END, GRID_FOCUS_START, gridMinute, gridY, gridLocalIso, gridSnapMinute, PHONE_MIN_SLOT_PX, phoneLandingMinute, useCalendarGridSettings } from './calendar-grid-settings';
 import { timeGridItems } from './calendar-items';
 import './grid-controls.css';
 import type { CalendarItem } from './calendar-items';
@@ -234,7 +235,10 @@ const DayColumn = memo(function DayColumn({
               height,
               left: `calc(${p.lane * widthPct}% + 2px)`,
               width: `calc(${widthPct}% - 4px)`,
-            }}
+              // Whole 15 px title lines the chip holds: a narrow phone chip wraps
+              // its title over them (phone-pages-r3.css).
+              '--cal-chip-lines': Math.max(1, Math.floor((height - 4) / 15)),
+            } as React.CSSProperties}
             onMovePointerDown={(e, item) => {
               e.stopPropagation();
               onChipPointerDown(e, item);
@@ -267,7 +271,12 @@ export const TimeGrid = memo(function TimeGrid({
   const startMinute = 0;
   const endMinute = fullDay ? 24 * 60 : GRID_EXTENDED_END;
   const [viewportHeight, setViewportHeight] = useState(0);
-  const slotPx = fullDay ? SLOT_PX * zoom : fittedSlotPx(viewportHeight, zoom);
+  const phone = usePhoneLayout();
+  const fittedPx = fullDay ? SLOT_PX * zoom : fittedSlotPx(viewportHeight, zoom);
+  // R3-06: fitting the work day into a phone screen gave 31 px an hour, under a
+  // finger's chip. A phone keeps hours tall enough for a 30 minute block (like
+  // iOS Calendar) and scrolls the day instead.
+  const slotPx = phone ? Math.max(fittedPx, PHONE_MIN_SLOT_PX) : fittedPx;
   const hours = Array.from({ length: (endMinute - startMinute) / 60 }, (_, i) => startMinute / 60 + i);
   const dayList = useMemo(() => {
     const base = days === 7 ? weekRange(anchor) : [anchor];
@@ -333,7 +342,7 @@ export const TimeGrid = memo(function TimeGrid({
     if (!scroller || viewportHeight <= 12) return;
     const previous = previousScale.current;
     const reset = !previous || previous.days !== days || previous.fullDay !== fullDay;
-    const minute = reset ? (fullDay ? 8 * 60 : GRID_FOCUS_START) : scrollMinuteRef.current;
+    const minute = reset ? (phone ? phoneLandingMinute(dayList) : fullDay ? 8 * 60 : GRID_FOCUS_START) : scrollMinuteRef.current;
     scroller.scrollTop = gridY(minute, 0, slotPx);
     if (Math.abs(scroller.scrollTop - gridY(minute, 0, slotPx)) > 1) {
       scrollMinuteRef.current = gridMinute(scroller.scrollTop, 0, slotPx);
@@ -342,7 +351,7 @@ export const TimeGrid = memo(function TimeGrid({
     }
     previousScale.current = { slotPx, days, fullDay };
     publishMetrics();
-  }, [slotPx, days, fullDay, viewportHeight, publishMetrics]);
+  }, [slotPx, days, fullDay, viewportHeight, publishMetrics, phone, dayList]);
 
   // Now-line, re-anchored every 60s. visibleInterval: hidden tabs skip; the
   // catch-up tick on return recomputes from the clock, so it's never stale.

@@ -38,6 +38,7 @@
  * and is kept in sync on scroll/resize via a rAF-throttled listener.
  */
 
+import { isPhoneLayout } from './usePhoneLayout';
 import { useState, useRef, useLayoutEffect, type CSSProperties, type RefObject } from 'react';
 
 export interface MenuPlacement {
@@ -119,6 +120,26 @@ export interface MenuPlacementOptions {
    * the same row. The flip/clamp/maxHeight rules are unchanged either way.
    */
   preferSide?: 'up' | 'down';
+  /**
+   * The box the menu must fit in. 'visual' (the default in phone layout): the
+   * part of the screen the keyboard leaves, under the phone's top bar, so a
+   * composer's palette opens upward above the keyboard and never under the bar
+   * (spec 4.4, C81). 'layout': the whole window (the desktop default).
+   */
+  bounds?: 'layout' | 'visual';
+}
+
+/** The phone top bar's height and the keyboard's inset, from the CSS variables. */
+export function visualBounds(): { top: number; height: number } {
+  const root = document.documentElement;
+  const cs = getComputedStyle(root);
+  const px = (v: string) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+  const inset = px(cs.getPropertyValue('--wn-keyboard-inset'));
+  const bar = document.querySelector<HTMLElement>('.phone-topbar');
+  const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
+  const vv = window.visualViewport;
+  const visible = vv ? vv.height + vv.offsetTop : window.innerHeight;
+  return { top, height: Math.max(0, Math.min(visible, window.innerHeight - inset)) };
 }
 
 /**
@@ -164,6 +185,8 @@ export interface PlacementInput {
   edgeOverflow?: 'flip' | 'clamp';
   /** See MenuPlacementOptions.preferSide. */
   preferSide?: 'up' | 'down';
+  /** Extra room kept free at the top (the phone top bar); default 0. */
+  topInset?: number;
 }
 
 /**
@@ -174,8 +197,9 @@ export interface PlacementInput {
 export function computePlacement(input: PlacementInput): MenuPlacement & { side: 'up' | 'down' } {
   const { anchor, naturalHeight, menuWidth, viewportWidth, viewportHeight, gap, margin, minHeight, forceSide } = input;
 
+  const topInset = input.topInset ?? 0;
   const spaceBelow = viewportHeight - anchor.bottom - gap - margin;
-  const spaceAbove = anchor.top - gap - margin;
+  const spaceAbove = anchor.top - gap - margin - topInset;
 
   // Open toward the preferred side (default: down) unless it doesn't fit AND
   // the other side has more room. A caller that already opened (forceSide)
@@ -197,7 +221,7 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   // passing a large margin) would otherwise produce exactly that — so give up
   // the margins before giving up the menu.
   const ABSOLUTE_MIN = 48;   // ~1 row + padding: still usable, still scrollable
-  const viewportCap = Math.max(viewportHeight - margin * 2, Math.min(viewportHeight, ABSOLUTE_MIN));
+  const viewportCap = Math.max(viewportHeight - topInset - margin * 2, Math.min(viewportHeight, ABSOLUTE_MIN));
   // `|| available` carries the pre-mount pass, where naturalHeight is still 0.
   // Without it that first frame would collapse to maxHeight === minHeight.
   const wanted = naturalHeight || available;
@@ -208,7 +232,7 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   // bottomed out at minHeight) still lands fully on screen and scrolls inside.
   let top = openUp ? anchor.top - gap - height : anchor.bottom + gap;
   top = Math.min(top, viewportHeight - height - margin);
-  top = Math.max(top, margin);
+  top = Math.max(top, margin + topInset);
 
   // Horizontal: right edge at the anchor (default), left edge for align:'left'
   // (menu opens rightward, keeping the anchor visible — flips back leftward
@@ -254,6 +278,7 @@ export function useMenuPlacement(
     gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', preferSide = 'down',
     edgeOverflow = 'flip', verticalAnchorRef, onAnchorLost,
   } = options;
+  const bounds = options.bounds ?? (isPhoneLayout() ? 'visual' : 'layout');
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   // The side is decided ONCE per open and then latched — see PlacementInput.forceSide.
   const sideRef = useRef<OpenSide>(null);
@@ -280,7 +305,12 @@ export function useMenuPlacement(
       // the trigger button's box.
       const trigger = triggerRef.current;
       const triggerRect = trigger?.getBoundingClientRect();
-      const vertical = verticalAnchorRef?.current;
+      // Phone: a menu opened from inside a composer clears the whole composer
+      // (spec 4.4: popovers open above it, under the top bar), not just its pill.
+      const vertical = verticalAnchorRef?.current
+        ?? (bounds === 'visual'
+          ? trigger?.closest<HTMLElement>('.session-panel-input') ?? trigger?.closest<HTMLElement>('.chat-input-container') ?? null
+          : null);
       // Vertical anchor: the element's own top/bottom, the trigger's left/right.
       const r = anchorPoint
         ? { top: anchorPoint.y, bottom: anchorPoint.y, right: anchorPoint.x }
@@ -346,8 +376,10 @@ export function useMenuPlacement(
         naturalHeight: menu ? menu.scrollHeight + borderY : 0,
         menuWidth: menu ? menu.offsetWidth : 0,
         viewportWidth: window.innerWidth,
-        viewportHeight: window.innerHeight,
-        gap, margin, minHeight, align, preferSide, edgeOverflow,
+        ...(bounds === 'visual'
+          ? (() => { const b = visualBounds(); return { viewportHeight: b.height, topInset: b.top }; })()
+          : { viewportHeight: window.innerHeight }),
+        gap, margin, minHeight: bounds === 'visual' ? Math.min(minHeight, 132) : minHeight, align, preferSide, edgeOverflow,
         forceSide: sideRef.current,
       });
       // Latch on the first pass only — but not before the menu has been measured,
@@ -418,6 +450,8 @@ export function useMenuPlacement(
     // reports the old content (measured: a +160px insertion moved the cap by only
     // the 2.5px border correction). Waiting one extra frame lets layout settle so
     // the re-measure sees the real height.
+    // The keyboard opening or closing moves the visual bounds.
+    if (bounds === 'visual') window.visualViewport?.addEventListener('resize', onScrollOrResize);
     let mo: MutationObserver | undefined;
     let moRaf = 0;
     if (typeof MutationObserver !== 'undefined' && menuRef.current) {
@@ -440,8 +474,9 @@ export function useMenuPlacement(
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
       document.removeEventListener('transitionend', onScrollOrResize, true);
+      if (bounds === 'visual') window.visualViewport?.removeEventListener('resize', onScrollOrResize);
     };
-  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef]);
+  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef, bounds]);
 
   return placement;
 }

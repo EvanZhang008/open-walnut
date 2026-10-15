@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useEvent } from './useWebSocket';
 import * as audioApi from '@/api/audio';
 import { log } from '@/utils/log';
+import { afterFirstScreen } from '@/utils/after-first-screen';
 
 export interface AudioCaptureState {
   available: boolean | null;
@@ -29,36 +30,43 @@ export function useAudioCapture() {
   const startTime = useRef<number | null>(null);
   const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Check availability on mount
+  // Check availability on mount (on a phone, after the home rows: N19)
   useEffect(() => {
-    audioApi.fetchAudioAvailability().then((res) => {
-      setState(s => ({
-        ...s,
-        available: res.available,
-        permissionGranted: res.permissions?.granted ?? null,
-      }));
-    }).catch(() => {
-      setState(s => ({ ...s, available: false }));
+    afterFirstScreen(() => {
+      audioApi.fetchAudioAvailability().then((res) => {
+        setState(s => ({
+          ...s,
+          available: res.available,
+          permissionGranted: res.permissions?.granted ?? null,
+        }));
+      }).catch(() => {
+        setState(s => ({ ...s, available: false }));
+      });
     });
   }, []);
 
-  // Sync status on mount
+  // Sync status on mount (on a phone, after the home rows: N19)
   useEffect(() => {
-    audioApi.fetchAudioStatus().then((status) => {
-      if (status.recording) {
-        setState(s => ({
-          ...s,
-          recording: true,
-          recordingId: status.recordingId,
-          source: status.source,
-          totalDuration: status.totalDuration,
-          currentChunkIndex: status.currentChunkIndex,
-        }));
-        startTime.current = status.startedAt ? new Date(status.startedAt).getTime() : Date.now();
-        startDurationTimer();
-      }
-    }).catch(() => { /* ignore */ });
-    return () => stopDurationTimer();
+    let live = true;
+    afterFirstScreen(() => { if (live) syncStatus(); });
+    function syncStatus() {
+      audioApi.fetchAudioStatus().then((status) => {
+        if (!live) return;
+        if (status.recording) {
+          setState(s => ({
+            ...s,
+            recording: true,
+            recordingId: status.recordingId,
+            source: status.source,
+            totalDuration: status.totalDuration,
+            currentChunkIndex: status.currentChunkIndex,
+          }));
+          startTime.current = status.startedAt ? new Date(status.startedAt).getTime() : Date.now();
+          startDurationTimer();
+        }
+      }).catch(() => { /* ignore */ });
+    }
+    return () => { live = false; stopDurationTimer(); };
   }, []);
 
   // Listen for audio events via WebSocket

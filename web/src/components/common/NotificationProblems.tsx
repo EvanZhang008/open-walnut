@@ -18,6 +18,7 @@
  * host gets its own row (no credential grouping) and there is no cap.
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { WarningTriangleIcon } from './PhoneIcons';
 import { useNavigate } from 'react-router-dom';
 import type { DaemonHealth, SystemHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useAllHostStatus } from '@/hooks/useHostStatus';
@@ -111,7 +112,7 @@ export function NotificationProblems({ hosts, health, healthLoading, renderHostC
       {local.present && (
         <div className="notification-card warn nfc-local-claude" data-testid="nfc-local-claude" data-kind={local.kind ?? ''}>
           <div className="notification-card-row">
-            <span className="notification-card-icon warn">⚠</span>
+            <span className="notification-card-icon warn"><WarningTriangleIcon size={14} /></span>
             <span className="notification-card-label">Claude Code</span>
           </div>
           {local.node}
@@ -120,7 +121,7 @@ export function NotificationProblems({ hosts, health, healthLoading, renderHostC
       {hosts.length > 0 && (
         <div className="notification-card warn" data-testid="nfc-problem-hosts">
           <div className="notification-card-row">
-            <span className="notification-card-icon warn">⚠</span>
+            <span className="notification-card-icon warn"><WarningTriangleIcon size={14} /></span>
             <span className="notification-card-label">Remote hosts</span>
           </div>
           <ul className="notification-card-details nfc-host-list">

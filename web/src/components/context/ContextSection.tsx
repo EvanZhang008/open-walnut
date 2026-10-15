@@ -20,7 +20,7 @@ export function ContextSection({ title, tokens, count, defaultOpen = false, chil
         onClick={() => setOpen((p) => !p)}
         aria-expanded={open}
       >
-        <span className="context-section-arrow">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="context-section-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
         <span className="context-section-title">{label}</span>
         <span className="context-token-badge">~{tokens.toLocaleString()} tokens</span>
       </button>

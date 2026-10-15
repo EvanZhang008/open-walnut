@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, memo } from 'react';
+import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
@@ -84,6 +85,14 @@ import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
+import { usePhoneBarSlot, usePhoneLayerWithBar, scrollToLatestTurnStart } from './phone-session-layer';
+import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { useHomeTaskTitleForSession } from '@/components/tasks/phone-row-behavior';
+import { PhoneSessionHeaderRows } from './PhoneSessionHeaderRows';
+import { createPortal } from 'react-dom';
+import { phoneSessionLabel } from '@/utils/phone-session-label';
+import { usePendingCardTool } from '@/hooks/usePendingCardTool';
+import '@/styles/phone-session.css';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useHeightVar } from '@/hooks/useHeightVar';
@@ -296,9 +305,17 @@ interface SessionPanelProps {
     cwd: string; host: string | null; hostLabel?: string;
     project?: string; model?: string; cwdPinned: true;
   }) => void;
+  /** Phone layout: this panel is the one open over the home screen, so it is a
+   *  phone layer ('session:<id>') whose bar is the top bar (phone-session-layer). */
+  phoneLayer?: boolean;
+  /** Phone deep link on first load: back from the layer lands here (C26). */
+  phoneDeepLinkBaseUrl?: string;
+  /** Phone: the host surface is the layer (the Ask Walnut slot's 'chat'); the
+   *  panel only hides its header and puts its kebab into that layer's bar. */
+  phoneHostSlot?: string;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, inset, headerLeading, focusComposer, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, inset, headerLeading, focusComposer, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -1031,7 +1048,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // Board again (the user's choice wins).
   const boardChatRevealed = useRef(false);
   const applyOpenCollapse = useCallback((view: SessionSplitView) => {
-    if (view === 'inbox' && window.innerWidth < SPLIT_MIN_WIDTH) {
+    // A phone shows the view OR the chat (the view's `Chat` toggle), never both.
+    if (isPhoneLayout() || (view === 'inbox' && window.innerWidth < SPLIT_MIN_WIDTH)) {
       autoCollapsed.current = true;
       setChatCollapsed(true);
       return;
@@ -1079,7 +1097,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     const next = activeView === view ? null : view;
     traceInteraction(next ? `view-open:${next}` : `view-close:${view}`, { sessionId });
     setActiveView(next);
-    if (next) { enterFullscreen(); applyOpenCollapse(next); } else { exitFullscreen(); collapseChat(false); }
+    // Phone: the view is a layer under the top bar (its Back closes it), never a
+    // full-screen promotion over that bar.
+    if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { exitFullscreen(); collapseChat(false); }
   }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, onLocateTask, onTaskClick, navigate]);
   // Keep-alive for the Code view: once opened, it stays MOUNTED (css-hidden)
   // for the panel's lifetime. Unmounting destroys the iframe, and remounting
@@ -1315,7 +1335,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // `deepLinkFullscreenReassert`, where it is unit-pinned.
   const settledClaim = useRef('');
   useEffect(() => {
-    if (isFullscreen || !splitOpen) return;
+    // A phone never promotes a view to fullscreen: there the view is a layer,
+    // and its Back is what closes it.
+    if (isFullscreen || !splitOpen || isPhoneLayout()) return;
     const key = deepLinkFullscreenReassert({
       claim: claimedInboxLink.current,
       sessionId,
@@ -1600,6 +1622,51 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
 
   const planContentValue = plan?.content ?? null;
 
+  // A session whose record is gone (404) still opened from a task row: the bar
+  // names that task, not "Untitled session" (N29).
+  const fallbackTaskTitle = useHomeTaskTitleForSession(sessionId, !!phoneLayer && !headerTitle);
+  // The bar and the timeline agree: a card waiting in the timeline names the bar (N2-10).
+  const phoneCardTool = usePendingCardTool(sessionId, !!phoneLayer);
+  // The home row's task, while the record that names it is still on its way.
+  const phoneEarlyTask = useStoreTask(phoneLayer && !session ? liveStatus?.taskId : null);
+  // Ask Walnut embeds this panel without a phone layer; on a phone its composer
+  // takes the same one-line placeholder (N2-32).
+  const phoneWidth = usePhoneLayout();
+  // Phone: the open column is a layer whose bar is the top bar (one bar, C64).
+  const phoneBar = usePhoneLayerWithBar({
+    id: `session:${sessionId}`,
+    kind: 'session',
+    active: !!phoneLayer,
+    title: headerTitle || fallbackTaskTitle || 'Untitled session',
+    subtitle: phoneSessionLabel({
+      // Before the record loads, the status the home row read (N2-10), never a default Stopped.
+      process_status: ps ?? liveStatus?.process_status ?? null,
+      pendingPermissionTool: pendingPermission?.toolName ?? null,
+      cardTool: phoneCardTool.tool,
+      missing: missing || phoneCardTool.gone,
+      taskNeedsYou: (session ? taskPhase : phoneEarlyTask?.phase) === 'NEED_ACTION',
+      loading: loading && !session,
+    }),
+    onClose: () => closePanel(sessionId),
+    onTitleTap: () => scrollToLatestTurnStart(
+      document.querySelector<HTMLElement>(`.session-panel[data-session-id="${CSS.escape(sessionId)}"]`),
+    ),
+    deepLinkBaseUrl: phoneDeepLinkBaseUrl,
+  });
+  const phoneClose = phoneBar.close;
+  const hostSlot = usePhoneBarSlot(phoneHostSlot ?? '');
+  // An open view (Board, Files, Changed...) is a layer over the session's chat.
+  usePhoneLayerWithBar({
+    id: activeView === 'board' ? `board:${session?.taskId ?? sessionId}` : `viewer:${activeView ?? 'none'}:${sessionId}`,
+    kind: activeView === 'board' ? 'board' : 'viewer',
+    active: !!(phoneLayer || phoneHostSlot) && !!activeView,
+    title: activeView ? activeView.charAt(0).toUpperCase() + activeView.slice(1) : '',
+    withAction: false,
+    onClose: () => { setActiveView(null); collapseChat(false); },
+  });
+  // Where the kebab goes on a phone: this panel's own bar, or its host's.
+  const kebabSlot = phoneLayer ? phoneBar.slot : (phoneHostSlot && phoneBar.phone ? hostSlot : null);
+
   // The id resolved to nothing after the full retry window. Say so explicitly:
   // the previous behaviour rendered an ordinary empty panel, indistinguishable
   // from a slow load, and the column stayed in sessionStorage so every reload
@@ -1737,6 +1804,71 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
 
   // The agent handed this back (turn ended, errored, or waits on a decision).
   const needsAction = !!sessionTask && taskNeedsAction(sessionTask);
+  // The session's kebab. On a phone it lives in the top bar's right slot (a portal,
+  // so it keeps this tree), led by the header's own row-1 actions (C64).
+  const renderSessionKebab = (phoneRows?: (close: () => void) => ReactNode) => (
+    <TaskQuickActions
+      taskId={session?.taskId}
+      task={session?.taskId ? sessionTask : null}
+      isPinned={pinned}
+      pinnedTier={pinnedTier}
+      onPinTask={handlePinTask}
+      onUnpinTask={handleUnpinTask}
+      onSetTier={handleSetTier}
+      onOpenTaskDetail={onOpenTaskDetail}
+      onCompleted={completedInColumn}
+      slot="kebab"
+      // Right-clicking the panel header opens this same menu at the
+      // cursor: the header is the session's object, so its actions
+      // belong to the gesture people already try there.
+      contextMenuScope=".session-panel-header"
+      // The strip's own control leads the menu (PanelCountRow explains).
+      // A phone gets the short list (N12): its own rows, Task detail and status.
+      // Panel columns, new tabs, editors and directory copies mean nothing there.
+      phoneMenu={!!phoneRows}
+      leadingSection={(close) => phoneRows ? phoneRows(close) : (
+        <>
+          <HiddenPillRows metaRef={titleMetaRef} kinds={[...metaFit.hidden]} pin={metaFit.pin} onAfterAction={close} />
+          <PanelCountRow onAfterAction={close} />
+          <SessionMetaFacts sessionId={sessionId} taskId={session?.taskId} onAfterAction={close} />
+        </>
+      )}
+      extraSection={phoneRows ? undefined : (close) => (
+        <SessionKebabSection
+          sessionId={sessionId}
+          cwd={session?.cwd}
+          host={session?.host}
+          hostname={session?.hostname}
+          archived={session?.archived}
+          startedAt={session?.startedAt}
+          lastActiveAt={session?.lastActiveAt}
+          activeView={activeView}
+          onToggleView={toggleView}
+          unreadCount={letterUnread}
+          decisionCount={letterDecisions}
+          attentionCount={letterAttention}
+          notesOpen={notesOpen}
+          onToggleNotes={() => setNotesOpen(o => !o)}
+          messagesOpen={messagesOpen}
+          onToggleMessages={() => setMessagesOpen(o => !o)}
+          // typedUserText: a turn that was only a machine block Walnut
+          // prepended is not one of "my messages", so it must not be
+          // counted here either — the list below drops it.
+          msgCount={historyMessages.filter(m => m.role === 'user' && typedUserText(m.text).trim()).length}
+          onRestart={handleRestart}
+          restartBusy={restartBusy}
+          onTerminate={handleTerminate}
+          terminateBusy={terminateBusy}
+          onInvestigate={handleInvestigate}
+          investigating={investigating}
+          investigateResult={investigateResult}
+          onOpenVscodeError={handleOpenVscodeError}
+          onOpenUsage={openUsageDialog}
+          onAfterAction={close}
+        />
+      )}
+    />
+  );
   // Agent output the user has not looked at yet: task.unread, the same red dot
   // the task list shows. Here it is a dot before the title and a red composer,
   // so a finished column reads as ready at a glance (2026-09-29: a full red
@@ -1825,7 +1957,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           view stays guttered at 1400px in this slide-out. */}
       <ThreadToastProvider panelRef={panelRef} composerRef={composerWrapRef}>
       <div
-        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}`}
+        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}${(phoneLayer || phoneHostSlot) && phoneBar.phone ? ' is-phone-layer' : ''}`}
         data-session-id={sessionId}
         ref={panelRef}
         // The panel the user last pointed into is "the current session" for
@@ -1971,7 +2103,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                           {showExecuteButtons && (
                             <>
                               <button className="execute-plan-btn" onClick={handleExecuteContinue} disabled={executing}>
-                                {executing ? 'Starting\u2026' : '\u25B6 Execute'}
+                                {executing ? 'Starting\u2026' : <><PlayGlyphIcon size={10} /> Execute</>}
                               </button>
                               <button className="execute-plan-btn-secondary" onClick={handleClearContextExecute} disabled={executing}>
                                 Clear Context & Execute
@@ -2255,66 +2387,19 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 />
               )}
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
-              {!loading && sessionId && (
-                <TaskQuickActions
-                  taskId={session?.taskId}
-                  task={session?.taskId ? sessionTask : null}
-                  isPinned={pinned}
-                  pinnedTier={pinnedTier}
-                  onPinTask={handlePinTask}
-                  onUnpinTask={handleUnpinTask}
-                  onSetTier={handleSetTier}
-                  onOpenTaskDetail={onOpenTaskDetail}
-                  onCompleted={completedInColumn}
-                  slot="kebab"
-                  // Right-clicking the panel header opens this same menu at the
-                  // cursor: the header is the session's object, so its actions
-                  // belong to the gesture people already try there.
-                  contextMenuScope=".session-panel-header"
-                  // The strip's own control leads the menu (PanelCountRow explains).
-                  leadingSection={(close) => (
-                    <>
-                      <HiddenPillRows metaRef={titleMetaRef} kinds={[...metaFit.hidden]} pin={metaFit.pin} onAfterAction={close} />
-                      <PanelCountRow onAfterAction={close} />
-                      <SessionMetaFacts sessionId={sessionId} taskId={session?.taskId} onAfterAction={close} />
-                    </>
-                  )}
-                  extraSection={(close) => (
-                    <SessionKebabSection
-                      sessionId={sessionId}
-                      cwd={session?.cwd}
-                      host={session?.host}
-                      hostname={session?.hostname}
-                      archived={session?.archived}
-                      startedAt={session?.startedAt}
-                      lastActiveAt={session?.lastActiveAt}
-                      activeView={activeView}
-                      onToggleView={toggleView}
-                      unreadCount={letterUnread}
-                      decisionCount={letterDecisions}
-                      attentionCount={letterAttention}
-                      notesOpen={notesOpen}
-                      onToggleNotes={() => setNotesOpen(o => !o)}
-                      messagesOpen={messagesOpen}
-                      onToggleMessages={() => setMessagesOpen(o => !o)}
-                      // typedUserText: a turn that was only a machine block Walnut
-                      // prepended is not one of "my messages", so it must not be
-                      // counted here either — the list below drops it.
-                      msgCount={historyMessages.filter(m => m.role === 'user' && typedUserText(m.text).trim()).length}
-                      onRestart={handleRestart}
-                      restartBusy={restartBusy}
-                      onTerminate={handleTerminate}
-                      terminateBusy={terminateBusy}
-                      onInvestigate={handleInvestigate}
-                      investigating={investigating}
-                      investigateResult={investigateResult}
-                      onOpenVscodeError={handleOpenVscodeError}
-                      onOpenUsage={openUsageDialog}
-                      onAfterAction={close}
-                    />
-                  )}
+              {!loading && sessionId && !kebabSlot && renderSessionKebab()}
+              {!loading && sessionId && kebabSlot && createPortal(renderSessionKebab((close) => (
+                <PhoneSessionHeaderRows
+                  close={close}
+                  activeView={activeView}
+                  onToggleView={toggleView}
+                  board={taskSlot === 'live' ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
+                  terminal={terminalOffered && !inset}
+                  plan={!!(hasPlanContent || showExecuteButtons)}
+                  onPlan={() => setPlanPopoverOpen(true)}
+                  onCloseSession={onClose ? phoneClose : undefined}
                 />
-              )}
+              )), kebabSlot)}
             </div>
           </div>
         </div>
@@ -2372,7 +2457,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               : isReconnecting ? 'Reconnecting to remote host...' : errorText;
           return (
             <div className={`session-error-banner${spinning ? ' session-error-banner--reconnecting' : provedReachable ? ' session-error-banner--idle' : ''}`}>
-              <span className="session-error-banner-icon">{spinning ? '\u21BB' : provedReachable ? '\u2139\uFE0F' : '\u26A0\uFE0F'}</span>
+              <span className="session-error-banner-icon">{spinning ? '\u21BB' : provedReachable ? '\u2139\uFE0E' : <WarningTriangleIcon size={14} />}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 {isRemote && session?.host && !checking && !provedReachable
                   ? <SessionHostErrorText host={session.host} label={hostLabel} reconnecting={isReconnecting} fallback={bannerText} />
@@ -2395,7 +2480,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           if (!idle) return null;
           return (
             <div className="session-error-banner session-error-banner--idle">
-              <span className="session-error-banner-icon">{'⏸'}</span>
+              <span className="session-error-banner-icon"><PauseGlyphIcon size={14} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <span className="session-error-banner-text">
                   Auto-stopped after {idle[1]} min idle. The conversation is preserved — send a message to resume it.
@@ -2413,7 +2498,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           && historyMessages.filter(m => m.role === 'assistant').length === 0
           && historyMessages.some(m => m.role === 'user') && (
           <div className="session-error-banner" style={{ background: 'color-mix(in srgb, var(--warning) 8%, transparent)', borderColor: 'color-mix(in srgb, var(--warning) 25%, transparent)' }}>
-            <span className="session-error-banner-icon">{'\u26A0\uFE0F'}</span>
+            <span className="session-error-banner-icon"><WarningTriangleIcon size={14} /></span>
             <span className="session-error-banner-text">Session returned empty — Claude may have encountered an issue.</span>
             <button className="session-retry-btn" onClick={handleRestart} disabled={restartBusy}>
               {restartBusy ? 'Restarting...' : 'Restart'}
@@ -2439,7 +2524,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 onClick={revealChatForBoard}
                 title="Show the chat beside the board"
                 aria-expanded={false}
-              >Show chat</button>
+              >{phoneBar.phone ? 'Chat' : 'Show chat'}</button>
             ) : chatCollapsed ? (
               <button
                 type="button"
@@ -2592,7 +2677,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             })()}
             {peekBarAlone && <PeekTabBar peek={peek} />}
         <div className="session-panel-body" ref={bodyRef}>
-          <SessionSupervisionBar sid={sessionId} snapshot={supervisionSnapshot} onRetryStop={handleTerminate} archived={session?.archived} />
+          {/* A phone says one plain sentence for a session that is gone (N29). */}
+          {!(phoneLayer && !loading && !session) && (
+            <SessionSupervisionBar sid={sessionId} snapshot={supervisionSnapshot} onRetryStop={handleTerminate} archived={session?.archived} />
+          )}
           <CronJobsCard sid={sessionId} snapshot={supervisionSnapshot} open={cronDetailOpen} onClose={() => setCronDetailOpen(false)} archived={session?.archived} />
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
@@ -2666,7 +2754,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onInterruptSend={handleInterruptSend}
             onStop={handleStopTurn}
             isStreaming={isStreaming}
-            placeholder={threads.composerPlaceholder ?? 'Send a message to this session... (/ for commands)'}
+            // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
+            placeholder={threads.composerPlaceholder ?? (phoneLayer || phoneWidth
+              ? (sessionTask?.phase === 'WAITING' ? 'Message: moves it to In Progress' : 'Message')
+              : 'Send a message to this session... (/ for commands)')}
             onValueChange={handleComposerValue}
             showCommands={false}
             sessionCommands={slashCommands}

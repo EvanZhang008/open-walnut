@@ -1,0 +1,154 @@
+/* Phone review fixes, round 3. Every rule is phone-only: the max-width 768px
+   section (or a landscape phone), never the desktop layout. */
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-13: the work that needs the user leads the home list. */
+  .app-shell-navigation .phone-needs-you {
+    padding: 8px 12px 4px;
+  }
+  .app-shell-navigation .phone-needs-you-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .app-shell-navigation .phone-needs-you-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .app-shell-navigation .phone-needs-you-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+    width: 100%;
+    min-height: 52px;
+    padding: 6px 4px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--fg);
+    text-align: left;
+    font: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .app-shell-navigation .phone-needs-you-row:active {
+    background: var(--hover-bg, rgb(0 0 0 / 6%));
+  }
+  .app-shell-navigation .phone-needs-you-title {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 15px;
+    line-height: 20px;
+  }
+  .app-shell-navigation .phone-needs-you-meta {
+    display: flex;
+    gap: 8px;
+    max-width: 100%;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--fg-secondary);
+  }
+  .app-shell-navigation .phone-needs-you-reason {
+    flex: none;
+    color: var(--error);
+    font-weight: 600;
+  }
+  .app-shell-navigation .phone-needs-you-project {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .app-shell-navigation .phone-needs-you-more {
+    min-height: 44px;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: var(--accent-text, var(--accent));
+    font: inherit;
+    font-size: 15px;
+  }
+  /* An empty Pinned says so in one short line, not a 110 px block. */
+  .app-shell-navigation .todo-pinned-empty {
+    margin: 0;
+    padding: 4px 16px 8px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-14: a home row reads like a phone list row. Line one is the phase
+     circle, the title (two lines at most) and the row's own buttons; line two
+     holds everything that describes the task, as whole words: Needs you, then
+     the pills (Worker, Leader, Trigger, tags, dates). A pill was cut to "ti..."
+     or to one letter (W, L, T) and squeezed the title down to two words.
+     On a phone the pills are labels, not 15 px buttons: a tap anywhere on the
+     row opens the task, whose detail and session carry the same links. */
+  html .app-shell-navigation .todo-panel .todo-item-title-row {
+    --phone-row-indent: 22px;
+    flex-wrap: wrap;
+    row-gap: 0;
+    /* Every line starts at the title's edge; the phase circle steps back into
+       the padding on line one. */
+    padding-left: var(--phone-row-indent);
+  }
+  html .app-shell-navigation .todo-panel .todo-item-title-row > .task-phase-icon-btn {
+    order: -1;
+    margin-left: calc(-1 * var(--phone-row-indent));
+  }
+  /* Line one never wraps: the title gives way to the row's buttons. */
+  html .app-shell-navigation .todo-panel .todo-item-title-row > .todo-item-title {
+    flex: 1 1 0;
+  }
+  /* The line break: line two starts here. */
+  html .app-shell-navigation .todo-panel .todo-item-title-row::after {
+    content: '';
+    order: 3;
+    flex: 0 0 100%;
+    height: 0;
+  }
+  html .app-shell-navigation .todo-panel .todo-item-title-row > :is(.phone-row-needs-you, .phone-row-need-you-parent) {
+    order: 5;
+    margin: 0 6px 6px 0;
+  }
+  html .app-shell-navigation .todo-panel .todo-item-title-row > :is(.task-row-pill, .todo-item-due-pill, .task-tag-pills, .task-session-pill, .task-blocked-badge, .todo-recent-ago, .task-completed-time) {
+    order: 6;
+    flex: 0 0 auto;
+    max-width: 100%;
+    margin: 0 6px 6px 0;
+    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  html .app-shell-navigation .todo-panel .todo-item-title-row > :is(.task-row-pill, .todo-item-due-pill, .task-tag-pills) {
+    pointer-events: none;
+  }
+  /* A label needs no 44 px hit area (phone-fixes.css gave the team pills one). */
+  html .app-shell-navigation .todo-panel .todo-item-title-row > .task-team-pill::before {
+    content: none;
+  }
+  /* Whole tags: no squeezed prefix, no capped value. */
+  html .app-shell-navigation .todo-panel .task-tag-pills .tag-chip-inline:not(.tag-chip-whole) {
+    flex-wrap: nowrap;
+    height: auto;
+  }
+  html .app-shell-navigation .todo-panel .task-tag-pills .tag-chip-value {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  /* Words, not letters: the letter fold is for a narrow desktop column (row-pill-fit.css). */
+  html .app-shell-navigation .home-navigation-scroll[data-row-fit] .task-row-pill[data-short] > .task-pill-long {
+    display: inline;
+  }
+  html .app-shell-navigation .home-navigation-scroll[data-row-fit] .task-row-pill[data-short]::after {
+    content: none;
+  }
+}

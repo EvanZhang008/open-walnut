@@ -48,7 +48,9 @@ Primary-mode refusals carry a `code`: `not_paired` (no credential) or
   expired code is `400 { error: { code: "invalid_code", message } }`; 10 wrong
   codes a minute from one address are `429 rate_limited`, counted apart from
   token failures. The token is a device token named `browser-<6 hex>`, listed
-  and removable like any other.
+  and removable like any other. Its `info.deviceName` says what it is, from the
+  User-Agent (`iPhone Safari`, `Mac Chrome`); an optional `standalone: true` in
+  the body (a Home Screen app) makes a phone's `iPhone Home Screen`. Display only.
 
 Auth failures return `401`; repeated failures are rate-limited per IP (`429`).
 
@@ -1311,6 +1313,9 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   registry lookup and one task read, no projection export), so an agent-facing
   list can ask it before every query.
   The `task_list` op does exactly that to apply its default folder ring.
+  A caller that authenticated as a paired device (a phone's bearer token, a
+  signed-in browser's token or cookie) also gets `"device": { "name" }`, the
+  name of its own record in `GET /api/devices` (additive, 2026-10-14).
 - `GET /api/v1/me/open` (additive, 2026-09-30) → what is still open for the
   calling session's task: `{ "task"?: { id, title }, "subtasks": [{ id, title,
   phase }], "moreSubtasks", "waitingOn": [{ id, to, preview, createdAt }],

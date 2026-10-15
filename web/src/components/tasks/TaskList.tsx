@@ -199,7 +199,7 @@ export function TaskList({
       {grouped.map(({ project, tasks: projTasks }) => (
         <div key={project || '__inbox__'} className="task-group">
           <button className="task-group-header" onClick={() => toggleProject(project)}>
-            <span className="task-group-arrow">{collapsedProjects.has(project) ? '▶' : '▼'}</span>
+            <span className="task-group-arrow">{collapsedProjects.has(project) ? '▶︎' : '▼'}</span>
             <span className="task-group-name">{project || 'Inbox'}</span>
             <span className="task-group-count text-muted text-xs">{projTasks.length}</span>
           </button>

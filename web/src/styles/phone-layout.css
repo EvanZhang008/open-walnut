@@ -1,5 +1,7 @@
-/* Phone layout (max-width: 768px, the twin of PHONE_LAYOUT_QUERY in
-   hooks/usePhoneLayout.ts). One surface at a time: a top bar with the menu
+/* Phone layout: `(max-width: 768px), (pointer: coarse) and (max-height: 500px)`,
+   the twin of PHONE_LAYOUT_QUERY in hooks/usePhoneLayout.ts (a phone held
+   sideways is still a phone; tests/web/phone-media-query-ratchet.test.ts keeps
+   every twin the same). One surface at a time: a top bar with the menu
    button, the task panel filling the page under it, and the chat or a session
    column opening over the task panel full screen. The older phone rules (drawer
    slide, session overlay, task panel fill) live in globals.css "Responsive".
@@ -7,13 +9,27 @@
    rule here is scoped under the shell (.app-shell-navigation) to outrank the
    single-class rules it changes. */
 
+/* Safe areas and the keyboard as variables. Every phone rule reads these and
+   never env() directly, so a test can draw a notch with
+   documentElement.style.setProperty('--wn-safe-top', '47px'). */
+:root {
+  --wn-safe-top: env(safe-area-inset-top, 0px);
+  --wn-safe-right: env(safe-area-inset-right, 0px);
+  --wn-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --wn-safe-left: env(safe-area-inset-left, 0px);
+  --wn-keyboard-inset: 0px;
+}
+
 .phone-topbar {
   display: none;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   :root {
-    --phone-topbar-h: 44px;
+    /* The bar plus the status row under it when one shows (PhoneStatusRow sets
+       --phone-status-h): everything below starts under both. */
+    --phone-bar-h: calc(44px + var(--wn-safe-top));
+    --phone-topbar-h: calc(44px + var(--wn-safe-top) + var(--phone-status-h, 0px));
   }
 
   /* The document never moves on a phone; only the panels inside it scroll. A
@@ -39,19 +55,25 @@
     left: 0;
     right: 0;
     z-index: 60;
-    height: var(--phone-topbar-h);
+    box-sizing: border-box;
+    height: var(--phone-bar-h);
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 0 8px 0 4px;
+    padding: var(--wn-safe-top) max(4px, var(--wn-safe-right)) 0 max(0px, var(--wn-safe-left));
     background: var(--bg);
-    border-bottom: 1px solid var(--border);
+    /* The hairline is drawn inside the box, so the 44px row under the safe
+       area is all target: a border would leave 43px for the buttons. */
+    border-bottom: 0;
+    box-shadow: inset 0 -1px 0 var(--border);
   }
 
   .app-shell-navigation .phone-topbar .sidebar-toggle {
     position: static;
+    display: inline-flex;
     width: 44px;
-    height: 40px;
+    height: 44px;
+    flex: 0 0 44px;
     align-items: center;
     justify-content: center;
     padding: 0;
@@ -66,14 +88,46 @@
     color: var(--accent);
   }
 
-  .phone-topbar-title {
+  /* The title is centered on the whole bar, not between its buttons: it is laid
+     over the bar between two 52px gutters (44px button + its padding). */
+  .app-shell-navigation .phone-topbar-title {
+    position: absolute;
+    top: var(--wn-safe-top);
+    bottom: 0;
+    left: calc(52px + var(--wn-safe-left));
+    right: calc(52px + var(--wn-safe-right));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: default;
+  }
+
+  .phone-topbar-title-text,
+  .phone-topbar-subtitle {
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--fg);
+  }
+
+  .app-shell-navigation .phone-topbar-title.has-subtitle {
+    font-size: 15px;
+  }
+
+  .phone-topbar-subtitle {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--fg-secondary);
   }
 
   .app-shell-navigation .main-content {
@@ -253,7 +307,7 @@
 /* Touch phones. iOS Safari zooms the page in when a field under 16px takes
    focus and leaves it zoomed, which is most of "the page looks broken" on a
    phone: every Walnut field is 13-14px. 16px is the size iOS reads as legible. */
-@media (max-width: 768px) and (pointer: coarse) {
+@media (max-width: 768px) and (pointer: coarse), (pointer: coarse) and (max-height: 500px) {
   input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
   textarea,
   select {
@@ -265,5 +319,400 @@
   .app-shell.app-shell-navigation .todo-panel-toolbar .vd-trigger-icon.vd-has-filter {
     width: 36px;
     height: 34px;
+  }
+}
+
+/* Shell chrome (spec 4.1, 4.2, 4.7): the bar's buttons and right slot, the
+   2px sync line and the connection row under it, the drawer, heights in dvh. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
+
+  .app-shell-navigation.app-shell {
+    height: 100dvh;
+  }
+
+  .app-shell-navigation .phone-topbar-btn {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg);
+  }
+
+  .app-shell-navigation .phone-topbar-back {
+    color: var(--accent);
+  }
+
+  .app-shell-navigation .phone-topbar-right {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 44px;
+    height: 44px;
+    margin-left: auto;
+  }
+
+  .app-shell-navigation .phone-topbar-slot {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .phone-topbar-sync {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    overflow: hidden;
+    pointer-events: none;
+    visibility: hidden;
+  }
+
+  .app-shell-navigation .phone-topbar-sync.is-active {
+    visibility: visible;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat;
+    animation: wn-phone-sync 1s linear infinite;
+  }
+
+  .app-shell-navigation .phone-status-row {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0 max(12px, var(--wn-safe-right)) 0 max(12px, var(--wn-safe-left));
+    box-sizing: border-box;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    color: var(--fg);
+    font-size: 13px;
+    line-height: 1.3;
+  }
+
+  .app-shell-navigation .phone-status-row-text {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .app-shell-navigation .phone-status-row-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font-size: 15px;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+}
+
+@keyframes wn-phone-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes wn-phone-sync {
+  from { background-position: -40% 0; }
+  to { background-position: 140% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-navigation .phone-topbar-sync.is-active {
+    animation: none;
+    background: var(--accent);
+    opacity: 0.6;
+  }
+}
+
+/* The drawer (spec 4.7 "Drawer"). It opens under the bar, so the Menu button
+   that opened it closes it; the bar already covers the top safe area. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .sidebar {
+    box-sizing: border-box;
+    bottom: auto;
+    width: min(320px, 85vw);
+    height: calc(100dvh - var(--phone-topbar-h));
+    padding: 8px 0 0 var(--wn-safe-left);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-padding-bottom: calc(var(--wn-safe-bottom) + 8px);
+    transition: transform 220ms ease, visibility 0s linear 220ms;
+  }
+
+  /* The bottom inset as a flex spacer, not padding: WebKit leaves a flex
+     column's bottom padding out of its scrollable overflow. */
+  .app-shell-navigation .sidebar::after {
+    content: '';
+    flex: 0 0 calc(var(--wn-safe-bottom) + 8px);
+  }
+
+  .app-shell-navigation .sidebar.open {
+    transition-delay: 0s;
+  }
+
+  .app-shell-navigation .sidebar-overlay {
+    top: var(--phone-topbar-h);
+    background: rgba(0, 0, 0, 0.32);
+  }
+
+  .app-shell-navigation .sidebar .sidebar-link {
+    min-height: 48px;
+    gap: 12px;
+    font-size: 17px;
+  }
+
+  .app-shell-navigation .sidebar .sidebar-link > svg,
+  .app-shell-navigation .sidebar .sidebar-link .sidebar-icon svg {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+  }
+
+  .app-shell-navigation .sidebar .sidebar-link[aria-current='page'] {
+    background: var(--bg-secondary);
+    color: var(--fg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-navigation .sidebar,
+  .app-shell-navigation .sidebar.open {
+    transition: none;
+  }
+}
+
+/* 100vh is the TALL viewport on iOS (the toolbar collapsed), so every rule a
+   phone can reach that sizes by it runs under the toolbar. Same rules in dvh. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .memory-split-view,
+  .app-shell-navigation .chat-page {
+    height: calc(100dvh - 48px);
+  }
+
+  html body .popout-root {
+    height: 100dvh;
+  }
+
+  .app-shell-navigation .cal-page {
+    max-height: calc(100dvh - var(--phone-topbar-h));
+  }
+
+  html body .app-modal.scd-modal {
+    max-height: calc(100dvh - 48px);
+  }
+
+  html body .mail-add-dialog,
+  html body .mail-unsub-plan {
+    max-height: calc(100dvh - 96px);
+  }
+
+  html body .session-control-menu {
+    max-height: min(420px, calc(100dvh - var(--wn-safe-top) - var(--wn-safe-bottom) - 24px));
+  }
+
+  html body .side-question-popover--threads {
+    max-height: min(72vh, calc(100dvh - 120px));
+  }
+
+  /* Menus (web/src/AGENTS.md "Menus & overlays"): never past the screen, the
+     notch or the home indicator. */
+  html body .task-kebab-menu:not(.task-batch-dropdown),
+  html body .dp-popover,
+  html body .cal-cals-popover,
+  html body .cal-item-popover {
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - var(--wn-safe-top) - var(--wn-safe-bottom) - 16px);
+  }
+}
+
+/* Toasts (spec 4.7): inside the screen, under the bar, one at a time
+   (NotificationToaster), a finger-sized close. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html body .notification-toaster {
+    top: calc(var(--phone-topbar-h) + 8px);
+    left: max(8px, var(--wn-safe-left));
+    right: max(8px, var(--wn-safe-right));
+    max-width: none;
+  }
+
+  /* It drops in from the bar instead of sliding in from the right edge, which
+     ran past the screen while it moved. */
+  html body .notification-toaster .notification-toast {
+    max-width: none;
+    width: 100%;
+    box-sizing: border-box;
+    animation: wn-phone-toast-in 0.2s ease-out;
+  }
+
+  html body .notification-toaster .notification-toast-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin: -10px -10px -10px auto;
+  }
+
+  html body .notification-toast-swipe {
+    touch-action: pan-x;
+  }
+}
+
+/* Touch feedback (spec 4.2): no grey iOS flash, our own pressed state in the
+   same frame, and no callout or text selection on the shell's chrome. Message
+   and note text stay selectable. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .phone-topbar,
+  .app-shell-navigation .sidebar,
+  .app-shell-navigation .phone-status-row,
+  .phone-confirm-sheet-root {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+
+  .app-shell-navigation .phone-topbar-btn:active,
+  .app-shell-navigation .phone-topbar-title:active,
+  .app-shell-navigation .phone-status-row-btn:active,
+  .app-shell-navigation .sidebar .sidebar-link:active,
+  .phone-confirm-sheet-btn:active {
+    background: var(--bg-secondary);
+  }
+
+  .app-shell-navigation button,
+  .app-shell-navigation a {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Landscape (P2): the notch is on a side; the bar and the page keep clear. */
+@media (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .main-content {
+    padding-left: var(--wn-safe-left);
+    padding-right: var(--wn-safe-right);
+  }
+}
+
+/* PhoneConfirmSheet: a bottom sheet over a dimmed page. */
+.phone-confirm-sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.phone-confirm-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.phone-confirm-sheet {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 20px max(16px, var(--wn-safe-right)) calc(16px + var(--wn-safe-bottom)) max(16px, var(--wn-safe-left));
+  border-radius: 14px 14px 0 0;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 -8px 32px rgb(0 0 0 / 18%);
+}
+
+.phone-confirm-sheet-title {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.phone-confirm-sheet-body {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--fg-secondary);
+}
+
+.phone-confirm-sheet-error {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--error);
+}
+
+.phone-confirm-sheet-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.phone-confirm-sheet-btn {
+  flex: 1 1 0;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.phone-confirm-sheet-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.phone-confirm-sheet-btn-primary.is-destructive {
+  border-color: var(--error);
+  background: var(--error);
+}
+
+.phone-confirm-sheet-btn:disabled {
+  opacity: 0.6;
+}
+
+/* The home list scrolls its last row clear of the home indicator (C20). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .todo-panel-list {
+    padding-bottom: calc(80px + var(--wn-safe-bottom));
+    scroll-padding-bottom: calc(8px + var(--wn-safe-bottom));
+    overscroll-behavior: contain;
+  }
+
+  /* The home navigation layout scrolls this box instead (a flex column, so
+     the inset rides a spacer: WebKit drops a flex column's bottom padding). */
+  .app-shell-navigation .home-navigation-scroll {
+    scroll-padding-bottom: calc(8px + var(--wn-safe-bottom));
+    overscroll-behavior: contain;
+  }
+
+  .app-shell-navigation .home-navigation-scroll::after {
+    content: '';
+    flex: 0 0 calc(8px + var(--wn-safe-bottom));
   }
 }

@@ -26,6 +26,7 @@ import { SegmentedControl } from '../../inputs/SegmentedControl';
 import { CopyButton } from '../../inputs/CopyButton';
 import { saveErrorMessage } from '../../settings-pane-context';
 import { describeExpose, exposePollMs, type ExposeResponse, type ExposeStatus } from './browser-access-status';
+import { isDeviceCaller } from './device-caller';
 import '@/styles/browser-access.css';
 
 const PATH = '/api/expose';
@@ -52,6 +53,9 @@ interface BrowserCode {
 const qrFor = (link: string) => QRCode.toDataURL(link, { errorCorrectionLevel: 'M', width: 220, margin: 2 }).catch(() => undefined);
 
 export function BrowserAccessGroup() {
+  // A browser signed in with a code is refused every code (403
+  // person_at_this_machine): say where codes come from, no button.
+  const [deviceCaller] = useState(isDeviceCaller);
   const [data, setData] = useState<ExposeResponse | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -286,13 +290,15 @@ export function BrowserAccessGroup() {
       )}
       <SettingsRow
         label="Connect a phone"
-        help="Scan a QR code with the phone's camera: Walnut opens there, signed in. It works once, within ten minutes; you can remove the phone later under Paired phones, Other entries."
+        help={deviceCaller
+          ? <span data-testid="browser-access-codes-elsewhere">Make sign-in codes on the computer Walnut runs on.</span>
+          : "Scan a QR code with the phone's camera: Walnut opens there, signed in. It works once, within ten minutes; you can remove the phone later under Signed-in browsers."}
         error={codeError ?? undefined}
-        control={
+        control={deviceCaller ? undefined : (
           <SettingsButton variant="default" busy={codeBusy} busyLabel="Making..." onClick={() => { void makeCode(); }} data-testid="browser-access-make-code">
             {code ? 'New QR code' : 'Show QR code'}
           </SettingsButton>
-        }
+        )}
       />
       {code && (() => {
         const address = code.addresses.find((a) => a.where === code.shown) ?? code.addresses[0];

@@ -477,9 +477,19 @@ test('C42: layout follows the Settings width, never the viewport', async ({ page
   expect(viewportRules).toEqual([])
 })
 
+// The rail answers a Settings CONTAINER under 640 px: a desktop window of 860
+// beside the 240 px sidebar. A window of 768 or less is a phone, whose Settings
+// is a list, then one pane (phone-settings.spec.ts).
+const RAIL_WINDOW = { width: 860, height: 800 }
+async function toRailWindow(page: Page): Promise<void> {
+  await page.setViewportSize(RAIL_WINDOW)
+  const expand = page.getByRole('button', { name: 'Expand sidebar' })
+  if (await expand.isVisible()) await expand.click()
+}
+
 test('C43: under 640px the nav is an icon rail whose magnifier opens the full nav', async ({ page }) => {
-  await page.setViewportSize({ width: 620, height: 800 })
   await openSettings(page)
+  await toRailWindow(page)
   const nav = page.locator('.settings-nav')
   await expect.poll(async () => Math.round((await nav.boundingBox())!.width)).toBe(56)
   await expect(page.getByTestId('settings-filter')).toBeHidden()
@@ -593,7 +603,7 @@ test('C75: nav tiles stay distinct with plugin apps and panels', async ({ page }
     els.map((el) => `${getComputedStyle(el).backgroundColor}|${el.getAttribute('data-glyph') ?? el.textContent}`))
   const keys = await tileKeys()
   expect(new Set(keys).size).toBe(keys.length)
-  await page.setViewportSize({ width: 620, height: 800 })
+  await toRailWindow(page)
   await expect.poll(async () => Math.round((await page.locator('.settings-nav').boundingBox())!.width)).toBe(56)
   const railKeys = await tileKeys()
   expect(new Set(railKeys).size).toBe(railKeys.length)
@@ -632,7 +642,7 @@ test('C60: a change left behind by a pane switch still saves, and a failure mark
   await expect(page.locator('.settings-row:has(#idle-timeout) [role="alert"], #idle-timeout ~ [role="alert"], [role="alert"]:near(#idle-timeout)').first()).toBeVisible()
 })
 
-test('evidence: pane screenshots at 1280, 900 and 620 wide', async ({ page, browserName }) => {
+test('evidence: pane screenshots at 1280, 900 and 860 wide', async ({ page, browserName }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   await openSettings(page)
   await expect(page.locator('#general.settings-section')).toBeVisible({ timeout: 20_000 })
@@ -648,12 +658,12 @@ test('evidence: pane screenshots at 1280, 900 and 620 wide', async ({ page, brow
   await page.setViewportSize({ width: 900, height: 800 })
   await page.waitForTimeout(300)
   await page.screenshot({ path: `/tmp/settings-redesign/after/p2-advanced-900-${browserName}.png` })
-  await page.setViewportSize({ width: 620, height: 800 })
+  await toRailWindow(page)
   await page.waitForTimeout(300)
-  await page.screenshot({ path: `/tmp/settings-redesign/after/p2-rail-620-${browserName}.png` })
+  await page.screenshot({ path: `/tmp/settings-redesign/after/p2-rail-860-${browserName}.png` })
   await page.locator('.settings-nav-find-button').click()
   await page.waitForTimeout(200)
-  await page.screenshot({ path: `/tmp/settings-redesign/after/p2-rail-overlay-620-${browserName}.png` })
+  await page.screenshot({ path: `/tmp/settings-redesign/after/p2-rail-overlay-860-${browserName}.png` })
 })
 
 test('C83 + C64: the second group reads Plugins; slack puts Plugins first', async ({ page }) => {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { getDeviceToken } from '@/api/device-token';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -12,6 +13,7 @@ import { log } from '@/utils/log';
 import { PairingQrBlock } from './cloud/PairingQrBlock';
 import { requestFailureText } from '@/utils/request-failure';
 import { deviceNameForServer } from './device-name';
+import { browserRowLabels } from './browser-labels';
 import { usePairDevice, type PairingTarget, type PairTargetKind } from './cloud/usePairDevice';
 import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
@@ -20,6 +22,8 @@ import { BackupLeaderGroup } from './cloud/BackupLeaderGroup';
 import { BrowserAccessGroup } from './cloud/BrowserAccessGroup';
 import type { Config } from '@open-walnut/core';
 import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud/cloud-change-timeout';
+import { isIosSafariTab, ownFirst, useDeviceCaller } from './cloud/device-caller';
+import { OwnDeviceSignOut } from './cloud/OwnDeviceSignOut';
 
 import '@/styles/settings-sections-addons.css';
 
@@ -135,6 +139,11 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   // "Unpair this Mac" is two deliberate clicks with the warning between them.
   const [unpairArmed, setUnpairArmed] = useState(false);
   const { notifySaved } = useSettingsSaved();
+  // A browser signed in with a code: its own row says so, other rows offer no Remove.
+  const caller = useDeviceCaller();
+  // Only a Safari tab signed in with a token can lose it after a week (N2-36):
+  // a tab on the Mac's own address holds none, so the tip would say nothing true.
+  const [homeScreenHint] = useState(() => isIosSafariTab() && !!getDeviceToken());
 
   // Reads can land out of order (a pairing's read can beat the pane's first one):
   // only the newest read writes the list.
@@ -276,9 +285,12 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     return [...byName.values()].sort((a, b) => rank(a.role) - rank(b.role));
   })();
   const selfRow = cloudDevices.find((d) => d.role === 'self');
-  const phones = rows.filter((r) => (r.role ?? 'phone') === 'phone');
+  const phones = ownFirst(rows.filter((r) => (r.role ?? 'phone') === 'phone'), caller.name);
+  const browsers = ownFirst(rows.filter((r) => r.role === 'browser'), caller.name);
+  // "iPhone Safari", "iPhone Safari 2": the kind recorded at sign-in, never the id (N2-21).
+  const browserLabels = browserRowLabels(rows.filter((r) => r.role === 'browser'));
   const macs = rows.filter((r) => r.role === 'mac');
-  const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone' && r.role !== 'mac');
+  const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone' && r.role !== 'mac' && r.role !== 'browser');
   const rowErrorFor = (name: string) => (rowError?.name === name ? `Couldn't ${rowError.verb}: ${rowError.message}` : undefined);
 
   /** This Mac as the companion knows it: no QR, and removal is a deliberate unpair. */
@@ -321,6 +333,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
 
   const renderRow = (d: typeof rows[number]) => {
     const role = d.role ?? 'phone';
+    const own = caller.name === d.name;
     const hw = role === 'phone' ? describeDevice(d.info) : null;
     const meta = role === 'phone'
       ? [
@@ -328,7 +341,14 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           `paired ${formatAbsoluteTime(d.createdAt)}`,
           ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
         ].join(', ')
-      : role === 'mac' ? describeMacRow(d) : ROLE_NOTE[role];
+      : role === 'mac' ? describeMacRow(d)
+      // A signed-in browser says when it signed in and was last used, so two
+      // rows can be told apart (N18); the one-line role note was the same on all.
+      : role === 'browser' ? [
+          `signed in ${formatAbsoluteTime(d.createdAt)}`,
+          ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
+        ].join(', ')
+      : ROLE_NOTE[role];
     return (
       <SettingsRow
         key={d.name}
@@ -337,15 +357,18 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
         data-device-role={role}
         label={
           <span className="settings-addons-inline devices-name">
-            <span className="settings-addons-ellipsis" title={d.name}>{d.name}</span>
-            {d.kinds.map((k) => (
+            <span className="settings-addons-ellipsis" title={d.name}>{role === 'browser' ? browserLabels.get(d.name) ?? 'Browser' : d.name}</span>
+            {own && <span className="devices-own-tag" data-testid="devices-own-tag">{caller.touch ? 'This phone' : 'This browser'}</span>}
+            {/* A browser signs in on this Mac only: a "Local" tag on every row tells nothing. */}
+            {role !== 'browser' && d.kinds.map((k) => (
               <SettingsTag key={k}>{k === 'cloud' ? 'Cloud' : 'Local'}</SettingsTag>
             ))}
           </span>
         }
         help={<span className="devices-meta">{meta}</span>}
         error={rowErrorFor(d.name)}
-        control={
+        data-own-device={own ? 'true' : undefined}
+        control={own ? <OwnDeviceSignOut name={d.name} touch={caller.touch} /> : caller.isDevice ? undefined : (
           <>
             {role === 'phone' && (
               <InlineConfirmButton
@@ -367,7 +390,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
               />
             )}
           </>
-        }
+        )}
       />
     );
   };
@@ -375,8 +398,16 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   return (
     <SectionCard id="devices" title="Phones & Cloud">
       <div className="devices-section">
-        <SettingsGroup heading="Paired phones">
-          {phones.length === 0 && (
+        {homeScreenHint && (
+          <p className="settings-row-help devices-home-screen-hint" data-testid="devices-home-screen-hint">
+            Add Walnut to your Home Screen (Share &gt; Add to Home Screen) to keep this phone signed in. Safari may sign it
+            out after a week without a visit.
+          </p>
+        )}
+        {/* A phone signed in only by browser: its group is Signed-in browsers, no empty box here. */}
+        {(phones.length > 0 || listState !== 'ready' || browsers.length === 0 || others.length > 0 || selfRow || cloudUnpaired || cloudError) && (
+        <SettingsGroup heading="Paired phones" data-testid="devices-phones-group">
+          {phones.length === 0 && (listState !== 'ready' || browsers.length === 0) && (
             <SettingsEmpty>
               {listState === 'loading' ? 'Loading paired phones...'
                 : listState === 'failed' ? "Couldn't load paired phones."
@@ -392,7 +423,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
               id="devices-others"
               data-testid="devices-others"
               label="Other entries"
-              help="This Mac, simulators and signed-in browsers."
+              help="This Mac and simulators."
               summary={String(others.length + (selfRow ? 1 : 0))}
             >
               {selfRow && renderSelfRow(selfRow)}
@@ -400,6 +431,15 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
             </SettingsDisclosure>
           )}
         </SettingsGroup>
+        )}
+
+        {browsers.length > 0 && (
+          // Browsers signed in with a code (a phone's Safari, another computer):
+          // their own group, so a signed-in phone never reads "No phones paired yet".
+          <SettingsGroup heading="Signed-in browsers" headingTrailing={String(browsers.length)} data-testid="devices-browsers-group">
+            {browsers.map(renderRow)}
+          </SettingsGroup>
+        )}
 
         {macs.length > 0 && (
           // Other Macs paired with the same companion: never phones, so no QR and

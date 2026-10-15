@@ -10,6 +10,10 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import { resolveTaskSessionId, phasePickerChoices, taskNeedsAction } from '@/utils/session-status';
+import { phoneOpenKeepsList, phonePhaseAttrs, phoneRowFocusOpts, phoneTitleTapOpens, usePhoneHomeList } from './phone-row-behavior';
+import { PhoneNeedsYouStrip } from './PhoneNeedsYouStrip';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { PhoneRowExtras } from './PhoneRowExtras';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
@@ -552,6 +556,12 @@ function readSection(): TodoSection {
     if (v === 'backlog') return 'wait';
   } catch { /* ignore */ }
   return 'all';
+}
+
+/** The task's row is drawn in the panel's current view (not folded away): opening it needs no tab switch. */
+function rowShownInPanel(taskId: string): boolean {
+  const el = document.querySelector(`.todo-panel [data-task-id="${window.CSS.escape(taskId)}"]`);
+  return !!el && el.getClientRects().length > 0;
 }
 
 function persistSection(section: TodoSection) {
@@ -1110,7 +1120,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
     }
     // First click on an unfocused task → focus it (open detail panel).
     // Only enter editing mode when task is already focused.
-    if (!isFocused) {
+    if (phoneTitleTapOpens(isFocused)) {
       onClick(task);
       return;
     }
@@ -1235,9 +1245,11 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           ) : needsAction && (
             <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
           ))}
+          <PhoneRowExtras task={task} needsAction={needsAction} childCount={childCount} isExpanded={isExpanded} onToggleExpand={onToggleExpand} />
           {/* Phase icon — one click toggles To Do ↔ Complete (an hourglass while Waiting) */}
           <button
             className={`task-phase-icon-btn ${circleClass}`}
+            {...phonePhaseAttrs()}
             onClick={(e) => {
               e.stopPropagation();
               onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
@@ -1272,7 +1284,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           {/* Info pills + kebab — same line as title, no second row */}
           {startDateLabel && (
             <span className="todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
-              ▶ {startDateLabel}
+              ▶︎ {startDateLabel}
             </span>
           )}
           {dueDateLabel && (
@@ -2257,9 +2269,11 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       ) : needsAction && !isDone && (
         <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
+      {!isDone && <PhoneRowExtras task={task} needsAction={needsAction} />}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
         className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
+        {...phonePhaseAttrs()}
         onClick={(e) => {
           e.stopPropagation();
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
@@ -2324,6 +2338,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
   scrollLog('drag-trace-TodoPanel-render', { n: __renderCountRef.current, tasks: rawTasks.length });
+  // A phone's host card follows the work that needs you, inside the list (N2-13, N2-15).
+  const bannerInList = usePhoneLayout();
   // Hide .metadata* tasks (legacy project-configuration sentinels, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   // Always-current task list for drag closures (drag handlers freeze their deps).
@@ -2911,6 +2927,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     focusHandledRef.current = true;
     const isUserLocate = pendingLocateRef.current;
     pendingLocateRef.current = false;
+    // A phone opens the row as a layer: the list keeps the place the thumb left (N2-01).
+    if (phoneOpenKeepsList(focusScope)) return;
     // 'pinned' scope (tier quick-adds): the new card is already visible in its tier —
     // scroll the Pinned region only. Switching the TASKS tab to the capture project
     // filtered the list below down to ~1 task and read as data loss.
@@ -3002,14 +3020,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // tier/Recent/Notes tab is showing) switches — to the stacked All view,
       // which shows the task in its tier AND the list at once.
       const cur = activeSectionRef.current;
-      if (focusScope === 'locate') {
+      if (focusScope !== 'locate' && rowShownInPanel(focusedTaskId)) {
+        // The tap came from a row this tab already draws (Recent, a custom tab): stay (N2-01).
+      } else if (focusScope === 'locate') {
         // Asked from outside the panel (a session panel's Locate): with the tab bar showing
         // the task's tier, go straight to that tab; without it, All, which shows every tier.
         const bar = tabBarRef.current;
         const target = bar.shown && !bar.hidden.includes(tierKey) ? tierKey : cur === 'pinned' ? 'pinned' : 'all';
         if (cur !== target) handleSectionChange(target);
       } else if (cur !== 'all' && cur !== 'pinned' && cur !== 'tasks' && cur !== tierKey) handleSectionChange('all');
-    } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && (focusScope === 'locate' || activeSectionRef.current !== 'tasks')) {
+    } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && (focusScope === 'locate' || activeSectionRef.current !== 'tasks')
+      && !(focusScope !== 'locate' && rowShownInPanel(focusedTaskId))) {
       // A task in no tier only shows in the list, and All is the view with the list in it
       // (Projects is a filter menu view, not a tab the user can see they are on).
       handleSectionChange('all');
@@ -5318,7 +5339,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // --- Combine: latest task data arranged in deferred sort order ---
   // This ensures badges/fields update INSTANTLY while position delays.
-  const sorted = useMemo(() => {
+  const sortedLive = useMemo(() => {
     const taskById = new Map(filtered.map((t) => [t.id, t]));
     const result: Task[] = [];
     const emitted = new Set<string>();
@@ -5333,6 +5354,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     return result;
   }, [filtered, sortOrder]);
+  const sorted = usePhoneHomeList(sortedLive, tasks);
 
   // Projects created THIS session via the bottom "New Project" row. They have
   // zero tasks so the task-derived grouping below wouldn't show them — surface
@@ -6417,7 +6439,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const sid = resolveTaskSessionId(task);
     if (sid) onOpenSession?.(sid);
     // Always scroll to position; suppress detail panel (ⓘ button is the only way to open detail)
-    onFocusTask?.(task, { openDetail: false });
+    onFocusTask?.(task, phoneRowFocusOpts(sid));
   }, [onFocusTask, onOpenSession, selectedIds]);
 
   // AI search rows carry only a taskId — resolve to the live Task and route
@@ -7184,6 +7206,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   };
   // Any pinned tier showing? Drives whether the pinned wrapper mounts at all.
+  // R3-02: a phone's first load paints only the spinner, nothing tappable that
+  // the Needs-you strip and the rows would then push down under the thumb.
+  const phoneFirstLoad = bannerInList && loading && tasks.length === 0;
   const anyTierVisible = showSection('focus') || showSection('satellite') || showSection('wait')
     || (customTiers ?? []).some((t) => showSection(t.id));
   const recentVisible = showSection('recent');
@@ -7394,6 +7419,30 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   };
 
   const tierSectionActive = isTierSection(effectiveSection) && !isSearchMode;
+  // A single-tier view names its tier and keeps the tier's "+" (the All view's
+  // tier headings carry the same control). View modes live in the Display menu.
+  // On a phone it rides at the top of the list and scrolls away with it (R3-03).
+  const tierSoloHeading = tierSectionActive ? (
+        <div className="tier-solo-heading" data-testid="tier-view-bar">
+          <span className={`navigation-icon todo-tier-icon-${isBuiltinTier(effectiveSection) ? effectiveSection : 'custom'}`} aria-hidden="true">{ICONS.tierIcon(effectiveSection)}</span>
+          <span className="tier-solo-heading-label">{tierDisplayLabel(effectiveSection, customTiers)}</span>
+          <TierPlusButton
+            tier={effectiveSection}
+            label={tierDisplayLabel(effectiveSection, customTiers)}
+            onAddSession={onOpenLauncherForTier}
+            onAddTask={addTaskToTier}
+            onAddSeparator={tierSort(effectiveSection) === 'manual' ? addSeparator : undefined}
+          />
+        </div>
+  ) : null;
+  const filterFooter = !isSearchMode ? (
+    <TodoFilterFooter
+      tasks={footerTasks}
+      ctx={filterEvalCtx}
+      archiveHidden={footerTasks === tasks ? (tasksStore?.completedHidden ?? 0) : 0}
+      onApply={applyFromFooter}
+    />
+  ) : null;
 
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}${activeDragPinnedId ? ' is-task-dragging' : ''}`} ref={splitterContainerRef}>
@@ -7405,6 +7454,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onClear={clearSearch}
           isSearching={isSearching}
           resultCount={searchResultCount}
+          onPhoneOpenTask={handleTaskClick}
         />
         {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
         <DisplayButton {...displayProps} filters={filterBar} />
@@ -7424,7 +7474,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </div>
       </div>
 
-      {banner}
+      {!bannerInList && banner}
 
       {/* ✦ AI lane: an in-process agent searches tasks AND session transcripts,
           streaming its progress live. Anchored here — directly under the search
@@ -7438,21 +7488,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         />
       )}
 
-      {/* A single-tier view names its tier and keeps the tier's "+" (the All view's
-          tier headings carry the same control). View modes live in the Display menu. */}
-      {tierSectionActive && (
-        <div className="tier-solo-heading" data-testid="tier-view-bar">
-          <span className={`navigation-icon todo-tier-icon-${isBuiltinTier(effectiveSection) ? effectiveSection : 'custom'}`} aria-hidden="true">{ICONS.tierIcon(effectiveSection)}</span>
-          <span className="tier-solo-heading-label">{tierDisplayLabel(effectiveSection, customTiers)}</span>
-          <TierPlusButton
-            tier={effectiveSection}
-            label={tierDisplayLabel(effectiveSection, customTiers)}
-            onAddSession={onOpenLauncherForTier}
-            onAddTask={addTaskToTier}
-            onAddSeparator={tierSort(effectiveSection) === 'manual' ? addSeparator : undefined}
-          />
-        </div>
-      )}
+      {!bannerInList && tierSoloHeading}
 
       {quickViews && <TodoSectionTabs
         active={effectiveSection}
@@ -7482,12 +7518,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {showFilterEmpty && <TodoFilterEmpty onClear={homeFilters.clearAll} />}
 
       <div ref={setListScrollEl} className={`home-navigation-scroll${isStacked ? ' is-stacked' : ''}${unpinZone ? ' is-unpin-dragging' : ''}${showFilterEmpty && overrideOnlyIds.size === 0 ? ' is-filter-empty' : ''}`}>
+      {bannerInList && tierSoloHeading}
       <NavigationSections storageKey="walnut-todo-navigation-order">
         <NavigationSection key="pinned" navId="pinned">
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin.
           A search in the All view is ONE ranked list (pinned hits carry a tier pill), so
           the tier regions step aside; a single-tier view still searches inside its tier. */}
-      {!(isSearchMode && isAll) && (anyTierVisible || recentVisible) && (
+      {isStacked && !isSearchMode && <PhoneNeedsYouStrip tasks={tasks} onOpen={handleTaskClick} />}
+      {/* R3-02: on a phone the host card and the tier rows wait for the first
+          task list, so the Needs-you strip above them lands in the same commit
+          instead of pushing painted controls down under the thumb (the spinner
+          below holds the place). */}
+      {bannerInList && !phoneFirstLoad && banner}
+      {!phoneFirstLoad && !(isSearchMode && isAll) && (anyTierVisible || recentVisible) && (
         <DndContext sensors={pinnedSensors} collisionDetection={pinnedCollision} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
             ref={pinnedWrapperRef}
@@ -7760,7 +7803,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           PINNED / RECENT / Notes. The Tasks TAB doesn't get one: the tab strip
           already labels the region, and folding the only visible section away
           would leave an empty panel with no way back except another tab. */}
-      {isAll && !isSearchMode && (
+      {isAll && !isSearchMode && !phoneFirstLoad && (
       <NavigationHeading id="tasks" label="Projects" className="todo-pinned-header todo-tasks-header" collapsed={tasksCollapsed} onClick={() => toggleSection('tasks')}
         actions={[
           { key: 'organize', label: 'Organize', section: true },
@@ -8143,17 +8186,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       </NavigationSection>
       </NavigationSections>
+      {/* R3-03: on a phone the footer is the list's last line, not a bar that
+          takes a row's height off every screen (landscape kept one row). */}
+      {bannerInList && filterFooter}
       </div>
 
       {/* Filter footer: what the default filters hide in this view (spec 5.6). */}
-      {!isSearchMode && (
-        <TodoFilterFooter
-          tasks={footerTasks}
-          ctx={filterEvalCtx}
-          archiveHidden={footerTasks === tasks ? (tasksStore?.completedHidden ?? 0) : 0}
-          onApply={applyFromFooter}
-        />
-      )}
+      {!bannerInList && filterFooter}
 
       {/* Detail pane: the project registry row (inline split-pane). Task detail now
           opens in a full-screen modal hosted by MainPage, not inline here. */}

@@ -16,6 +16,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import type { AppBadge } from '@/apps/registry'
 import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
+import { isPhoneLayout } from '@/hooks/usePhoneLayout'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import { corePaneFilterEntry } from './settings-routing'
 import { compareHits, filterEntries, primaryHit, PAGE_LINK_KEYWORDS, type FilterEntry, type FilterHit } from './settings-filter'
@@ -306,8 +307,11 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
   }, [model.ready, pluginRowCount])
   const placeholders = model.ready || filtering ? 0 : Math.max(0, cachedCount - pluginRowCount)
 
-  // The current entry stays in view in a short window.
+  // The current entry stays in view in a short window. Not on a phone: there
+  // the list is the page under the open pane, and back must find it where the
+  // finger left it.
   useEffect(() => {
+    if (isPhoneLayout()) return
     const item = navRef.current?.querySelector<HTMLElement>('.settings-nav-active')
     item?.scrollIntoView?.({ block: 'nearest' })
   }, [activePane])

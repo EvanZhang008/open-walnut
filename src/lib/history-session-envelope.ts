@@ -766,6 +766,8 @@ export function envelopeDirectionGlyph(kind: SessionEnvelopeKind): string {
     case 'peer-note': return '→';      // → arrived from elsewhere
     case 'notification': return '◎';   // ◎ Walnut itself speaking
     case 'reply-request': return '↻';  // ↻ your turn to answer
-    case 'trigger': return '⚡';        // ⚡ a check script said so
+    // ⚡ a check script said so. U+FE0E asks for the text glyph: bare U+26A1 is
+    // emoji by default, which iOS draws as a yellow emoji (N2-33, C73).
+    case 'trigger': return '\u26A1\uFE0E';
   }
 }

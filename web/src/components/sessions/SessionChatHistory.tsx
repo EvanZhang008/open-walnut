@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo, type ReactNode } from 'react';
+import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
@@ -9,6 +10,10 @@ import { BackgroundTasksChip, BackgroundTasksPanelHost, type KnownAgent } from '
 import { setLiveLanes, setToolSource } from '@/stores/background-panel-store';
 import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
 import { ChatEarlierBlock, useChatEarlier } from './ChatEarlierBlock';
+import { DeliveryMetaLine } from './DeliveryMetaLine';
+import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
+import { isPhoneLayout } from '@/hooks/usePhoneLayout';
+import { JumpPillLabel, PromptWaitingPill } from './PhoneTimelinePills';
 import { SessionMessage, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
@@ -1769,6 +1774,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
       touchY = y;
     };
+    // A move the reader asked for from outside the scroller (the phone bar's
+    // title tap): the same intent as a wheel up, announced by the caller.
+    const onReaderScroll = () => {
+      markUserInput();
+      isAtBottom.current = false;
+      ignoreScrollUntil.current = 0;
+    };
+    el.addEventListener(READER_SCROLL_EVENT, onReaderScroll);
     el.addEventListener('wheel', onWheel, { passive: true });
     el.addEventListener('touchstart', onTouchStart, { passive: true });
     el.addEventListener('touchmove', onTouchMove, { passive: true });
@@ -1858,6 +1871,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }, 500);
     return () => {
       el.removeEventListener('scroll', onScroll);
+      el.removeEventListener(READER_SCROLL_EVENT, onReaderScroll);
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
@@ -1981,6 +1995,52 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [phase2Pending]);
 
+  // Phone (spec 4.5, C69): a latest turn taller than the timeline opens at its
+  // start (the user's message at the top, the jump pill showing), so a long
+  // answer is read from its beginning; a turn that fits stays bottom aligned.
+  // Once per mount, after the load settles; later pins respect isAtBottom.
+  const phoneTurnStartDone = useRef(false);
+  const phoneTurnStartFrom = useRef(0);
+  useLayoutEffect(() => {
+    if (phoneTurnStartDone.current || phase2Pending || messages.length === 0 || !isPhoneLayout()) return undefined;
+    const el = containerRef.current;
+    if (!el) return undefined;
+    if (!phoneTurnStartFrom.current) phoneTurnStartFrom.current = performance.now();
+    // Rows finish laying out over a few frames (markdown, the run rows): check
+    // again while the view is still pinned, and stop for good once the user
+    // has scrolled or the first moments are over.
+    const apply = (): boolean => {
+      if (phoneTurnStartDone.current) return true;
+      if (!isAtBottom.current || performance.now() - phoneTurnStartFrom.current > 2000) {
+        phoneTurnStartDone.current = true;
+        log.info('session-history', 'phone turn start skipped', { sessionId, atBottom: isAtBottom.current, ms: Math.round(performance.now() - phoneTurnStartFrom.current) });
+        return true;
+      }
+      // R3-01: an unanswered prompt needs the tap, so a timeline that ends in one
+      // stays on it (bottom aligned, its buttons above the composer), like a
+      // chat app landing on the newest bubble; the turn's start is a scroll away.
+      if (el.querySelector('[data-prompt-pending="true"]')) {
+        phoneTurnStartDone.current = true;
+        log.info('session-history', 'phone turn start kept on a pending prompt', { sessionId });
+        return true;
+      }
+      const top = latestTurnStartTop(el);
+      if (top === null || el.scrollHeight - top <= el.clientHeight + 1) return false;
+      phoneTurnStartDone.current = true;
+      log.info('session-history', 'phone turn start applied', { sessionId, top: Math.round(top), scrollHeight: el.scrollHeight });
+      // Ends the load-window bottom pin, which would otherwise take it back.
+      el.dispatchEvent(new Event(READER_SCROLL_EVENT));
+      el.scrollTop = Math.max(0, top - 8);
+      isAtBottom.current = false;
+      setShowScrollArrow(true);
+      scrollLog('content', 'PHONE-TURN-START', el);
+      return true;
+    };
+    if (apply()) return undefined;
+    const timers = [60, 180, 400, 800, 1400, 2001].map((ms) => setTimeout(apply, ms));
+    return () => { timers.forEach(clearTimeout); };
+  }, [phase2Pending, messages, scrollLog, sessionId]);
+
   // ── Scroll-to-bottom: 2 paths ──
   //
   // Path A — IMMEDIATE: The very first scroll when messages arrive (before paint, zero flash).
@@ -2060,7 +2120,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       el0?.removeEventListener('touchmove', stop);
       el0?.removeEventListener('pointerdown', stop);
       el0?.removeEventListener('keydown', stop);
+      el0?.removeEventListener(READER_SCROLL_EVENT, stop);
     }
+    // A landing the reader owns (the phone's turn start, a restored place).
+    el0?.addEventListener(READER_SCROLL_EVENT, stop);
     el0?.addEventListener('wheel', onWheel, { passive: true });
     el0?.addEventListener('touchmove', stop, { passive: true });
     el0?.addEventListener('pointerdown', stop, { passive: true }); // scrollbar drag
@@ -3607,9 +3670,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             the session has content, it must not fall through to this generic
             banner and print the internal "HISTORY_UNAVAILABLE:" string. */}
         {error && !historyUnavailableRaw && (
-          <div className="session-history-empty">
-            <p className="text-muted">Failed to load history: {error}</p>
-          </div>
+          isPhoneLayout() && /not found/i.test(String(error)) ? (
+            // N2-34: say what to do, and the panel drops its composer (phone-fixes-r2.css).
+            <div className="session-history-empty" data-session-gone="true">
+              <p className="text-muted">This session is no longer available. Open its task from Home to start a new one.</p>
+            </div>
+          ) : (
+            <div className="session-history-empty">
+              <p className="text-muted">{`Failed to load history: ${error}`}</p>
+            </div>
+          )
         )}
         {historyUnavailable && (
           <div className="session-history-unavailable" role="status">
@@ -3628,7 +3698,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {stale && !error && !loadingFrom && (
           <div className="session-history-stale-banner" role="status">
-            Showing cached history — live connection unavailable ({stale}). Reconnecting…
+            {staleBannerText(stale)}
           </div>
         )}
         {!error && !hasContent && !loading && !phase2Pending && !loadingFrom && chatEarlier.length === 0 && (
@@ -3829,7 +3899,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 const running = thinkingLive || streamRunHasCallingTool(members);
                 return (
                   <div key={`run-${item.index}`} className="session-msg-bare">
-                    <ToolRunShell phrase={phrase} failCount={failCount} running={running}>
+                    <ToolRunShell phrase={phrase} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length}>
                       <StreamRunMembers
                         members={members}
                         live={thinkingLive}
@@ -3988,6 +4058,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                     <div className="thread-queue-note session-msg-held-note" role="status">Waiting to confirm the previous message</div>
                   )}
                   <OptimisticImagePreviews images={m.images} />
+                  <DeliveryMetaLine status={m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />
                   {m.status === 'received' && (
                     <>
                       <div className="session-msg-received-badge">Queued</div>
@@ -4028,11 +4099,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {!stripPlaced && pageStrip}
         {!isStreaming && <SessionWorkingIndicator sessionId={sessionId} />}
         {/* Floating scroll-to-bottom arrow — sticky to bottom of scroll viewport */}
+        {/* Phone: a prompt pill stacked over the jump pill (PhoneTimelinePills). */}
+        <PromptWaitingPill containerRef={containerRef} stacked={showScrollArrow} />
         <button
           className={`scroll-to-bottom-btn${showScrollArrow ? ' visible' : ''}`}
           onClick={handleScrollToBottom}
           aria-label="Scroll to bottom"
-        >↓</button>
+        ><JumpPillLabel containerRef={containerRef} visible={showScrollArrow} /></button>
       </div>
       </ThreadStackFrame>
       {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}

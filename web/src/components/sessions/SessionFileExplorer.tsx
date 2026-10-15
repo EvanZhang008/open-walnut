@@ -17,6 +17,8 @@
  * the tree used to render a bare `Loading…` until the first one landed), and the
  * network fetch always still runs and overwrites them.
  */
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { usePhoneLayerWithBar } from './phone-session-layer';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
@@ -182,6 +184,13 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // "Showing the last known contents — couldn't reach the host." Muted, keeps rows.
   const [staleErrors, setStaleErrors] = useState<Map<string, string>>(new Map());
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  // Phone: the tree OR one file; an open file is a layer (back returns to the tree, C78).
+  const phone = usePhoneLayout();
+  usePhoneLayerWithBar({
+    id: `file:${selectedFile ?? ''}`, kind: 'file', active: phone && !!selectedFile,
+    title: selectedFile ? (selectedFile.split('/').pop() || selectedFile) : '', withAction: false,
+    onClose: () => setSelectedFile(null),
+  });
   const selectedFileRef = useRef(selectedFile);
   selectedFileRef.current = selectedFile;
   const [rootError, setRootError] = useState<string | null>(null);
@@ -1357,7 +1366,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         {barRightSlot}
       </div>
 
-      <div className="session-file-explorer-body">
+      <div className={`session-file-explorer-body${phone ? (selectedFile ? ' is-phone-file' : ' is-phone-tree') : ''}`}>
         {!treeCollapsed && (
         <div
           className="session-file-explorer-tree"
@@ -1415,7 +1424,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                   })}
                   title={section.path}
                 >
-                  <span className="sfe-arrow">{isRootLoading ? '…' : isOpen ? '▼' : '▶'}</span>
+                  <span className="sfe-arrow">{isRootLoading ? '…' : isOpen ? '▼' : '▶︎'}</span>
                   <span className="sfe-icon">{section.kind === 'cwd' ? '🏠' : '📦'}</span>
                   <span className={`sfe-name${section.prefix ? ' sfe-name-ctx' : ''}`}>
                     {section.prefix && <span className="sfe-name-prefix">{section.prefix}/</span>}
@@ -1467,7 +1476,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                         title={node.path}
                       >
                         <span className="sfe-arrow">
-                          {node.type === 'dir' ? (isLoading ? '…' : isExpanded ? '▼' : '▶') : ''}
+                          {node.type === 'dir' ? (isLoading ? '…' : isExpanded ? '▼' : '▶︎') : ''}
                         </span>
                         <span className="sfe-icon">{node.type === 'dir' ? '📁' : '📄'}</span>
                         <span className="sfe-name">{node.name}</span>

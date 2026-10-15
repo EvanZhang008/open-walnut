@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useEvent } from './useWebSocket';
 import type { LocalClaudeStatus } from '@/api/local-claude';
 import { sharedGet } from '@/api/shared-get';
+import { afterFirstScreen } from '@/utils/after-first-screen';
 
 export interface GitSyncHealth {
   protected: boolean;
@@ -72,14 +73,16 @@ export function useSystemHealth() {
         setLoading(false);
       });
 
-    // Fetch git-sync status separately
-    sharedGet('/api/git-sync/status', () => fetch('/api/git-sync/status')
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      }), { invalidateOn: ['git-sync:status'] })
-      .then((data: GitSyncHealth) => setGitSync(data))
-      .catch(() => {});
+    // Fetch git-sync status separately (on a phone, after the home rows: N19)
+    afterFirstScreen(() => {
+      sharedGet('/api/git-sync/status', () => fetch('/api/git-sync/status')
+        .then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        }), { invalidateOn: ['git-sync:status'] })
+        .then((data: GitSyncHealth) => setGitSync(data))
+        .catch(() => {});
+    });
   }, []);
 
   // Listen for real-time updates

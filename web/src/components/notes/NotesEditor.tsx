@@ -52,6 +52,12 @@ import './notes-editor.css';
 
 interface NotesEditorProps {
   content: string;
+  /**
+   * Read only (the phone's default for a note, spec 4.7 Notes): no caret, no
+   * keyboard, no bubble menu; links still open on one tap and text still
+   * selects for copy. Flipping it back focuses the end of the note.
+   */
+  readOnly?: boolean;
   onDirty: (editor: Editor) => void;
   placeholder?: string;
   className?: string;
@@ -174,7 +180,7 @@ function isUrl(text: string): boolean {
   }
 }
 
-export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady }: NotesEditorProps) {
+export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -234,6 +240,7 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
   }, []);
 
   const editor = useEditor({
+    editable: !readOnly,
     extensions: [
       StarterKit.configure({
         // Disable built-in link — we use TaskAwareLink with custom renderHTML
@@ -471,6 +478,18 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     editorRef.current = editor;
   }, [editor]);
 
+  // Read only <-> editable without remounting (the phone's Edit / Done). Going
+  // editable puts the caret at the end, which raises the keyboard.
+  const wasReadOnly = useRef(readOnly);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    if (editor.isEditable === !readOnly) { wasReadOnly.current = readOnly; return; }
+    editor.setEditable(!readOnly);
+    if (wasReadOnly.current && !readOnly) editor.commands.focus('end');
+    if (readOnly) (editor.view.dom as HTMLElement).blur();
+    wasReadOnly.current = readOnly;
+  }, [editor, readOnly]);
+
   // Latest callback without re-running the hand-off effect on every render.
   const onEditorReadyRef = useRef(onEditorReady);
   onEditorReadyRef.current = onEditorReady;
@@ -646,10 +665,11 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     <>
       <EditorContent
         editor={editor}
-        className={`notes-editor ${className ?? ''}`}
+        // note-body: the note's own text (its inline links are prose, not controls).
+        className={`notes-editor note-body ${className ?? ''}`}
       />
       {/* Selection format toolbar (opt-in per surface). */}
-      {editor && enableBlockTools && <NotesBubbleMenu editor={editor} onAsk={onAskSelection} onAskHere={onAskHere} />}
+      {editor && enableBlockTools && !readOnly && <NotesBubbleMenu editor={editor} onAsk={onAskSelection} onAskHere={onAskHere} />}
       {editor && slashState.phase !== 'closed' && (
         <SlashCommandPortal
           editor={editor}

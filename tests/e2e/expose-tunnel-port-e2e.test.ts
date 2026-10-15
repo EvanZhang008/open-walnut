@@ -167,9 +167,15 @@ describe('the tunnel port, through a bare pipe of a tunnel', () => {
   })
 
   it('a browser still holding a removed token can sign in with a fresh code, and its new token works at once', async () => {
-    // Through a tunnel every caller is loopback, so this is one address's count.
-    for (let i = 0; i < 10; i++) {
+    // Through a tunnel every caller is loopback, so this is one address's count. The removed
+    // token reloading is one failure however often it is sent, so it never locks the address.
+    for (let i = 0; i < 12; i++) {
       const res = await fetch(`${tunnelUrl}/api/tasks`, { headers: { authorization: 'Bearer removed-token' } })
+      expect(res.status).toBe(401)
+    }
+    // Guesses still count one each: nine more lock it.
+    for (let i = 0; i < 9; i++) {
+      const res = await fetch(`${tunnelUrl}/api/tasks`, { headers: { authorization: `Bearer guess-${i}` } })
       expect(res.status).toBe(401)
     }
     expect((await fetch(`${tunnelUrl}/api/tasks`, { headers: { authorization: 'Bearer removed-token' } })).status).toBe(429)

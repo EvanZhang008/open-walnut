@@ -6,6 +6,12 @@
 import { useRef, useEffect, useCallback, useState, startTransition } from 'react';
 import { ICON_SEARCH } from '@/components/common/Icons';
 import { log } from '@/utils/log';
+import type { Task } from '@open-walnut/core';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { PhoneSearchLayer } from './PhoneSearchLayer';
+import { PhonePullToRefresh } from './PhonePullToRefresh';
+import { PhoneQueuedUpdatesPill } from './PhoneQueuedUpdatesPill';
+import { homeListScroller } from './phone-row-behavior';
 
 /** A blur this soon after a keystroke, with no user gesture, was not the user's. */
 const TYPING_GUARD_MS = 2000;
@@ -24,6 +30,8 @@ interface TodoSearchBarProps {
   onClear: () => void;
   isSearching: boolean;
   resultCount?: number | null; // null = no server results yet
+  /** Phone: how a task result of the search layer opens (the home row's open). */
+  onPhoneOpenTask?: (task: Task) => void;
 }
 
 export function TodoSearchBar({
@@ -32,7 +40,18 @@ export function TodoSearchBar({
   onClear,
   isSearching,
   resultCount,
+  onPhoneOpenTask,
 }: TodoSearchBarProps) {
+  // Phone (spec 4.7 Search): the box is the door to a full-screen search layer.
+  // It also hosts the home list's phone extras: pull to refresh and the
+  // queued-updates pill, which sit right under it.
+  const phone = usePhoneLayout();
+  const [layerOpen, setLayerOpen] = useState(false);
+  const openLayer = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    e.currentTarget.blur();
+    log.info('todo-search', 'phone search layer opened');
+    setLayerOpen(true);
+  }, []);
   const inputRef = useRef<HTMLInputElement>(null);
   const reveal = useCallback(() => {
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -125,9 +144,11 @@ export function TodoSearchBar({
       <span className="todo-search-icon">{ICON_SEARCH}</span>
       <input
         ref={inputRef}
-        type="text"
+        type={phone ? 'search' : 'text'}
+        enterKeyHint={phone ? 'search' : undefined}
         className="todo-search-input"
-        placeholder="Search tasks...  &#x2318;K"
+        placeholder={phone ? 'Search' : 'Search tasks...  \u2318K'}
+        onFocus={phone ? openLayer : undefined}
         value={draftQuery}
         onChange={(e) => updateQuery(e.target.value)}
         onKeyDown={handleKeyDown}
@@ -145,6 +166,13 @@ export function TodoSearchBar({
         >
           &#x2715;
         </button>
+      )}
+      {phone && (
+        <>
+          <PhoneSearchLayer open={layerOpen} onClose={() => setLayerOpen(false)} onOpenTask={onPhoneOpenTask} />
+          <PhonePullToRefresh enabled={!layerOpen} getScroller={homeListScroller} testId="phone-pull-home" />
+          <PhoneQueuedUpdatesPill />
+        </>
       )}
     </div>
   );

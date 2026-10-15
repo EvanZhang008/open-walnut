@@ -12,6 +12,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import Database from 'better-sqlite3'
 import yaml from 'js-yaml'
 
 /**
@@ -27,8 +28,9 @@ export const SNAPSHOT_SKIP_TOP_LEVEL = new Set(['.git', '.smart-env', 'cache', '
 /**
  * Copy the data dir `home` into the snapshot dir `dest`, leaving out what a test
  * server must not carry (the private health store, live locks, sockets and FIFOs)
- * or does not need (regenerable caches, streams, images, SQLite files). This is
- * the launcher's one copy step, and the tests run this very function on a real tree.
+ * or does not need (regenerable caches, streams, images, SQLite indexes). The task
+ * and session stores are copied apart (snapshotStoreDatabases). This is the
+ * launcher's one copy step, and the tests run this very function on a real tree.
  */
 export function copyDataSnapshot(home: string, dest: string): void {
   fs.cpSync(home, dest, {
@@ -47,7 +49,8 @@ export function copyDataSnapshot(home: string, dest: string): void {
     // silently read and wrote production notes through them.
     verbatimSymlinks: true,
     filter: (src: string) => {
-      // Skip SQLite files (WAL-locked, ephemeral creates fresh ones)
+      // Skip raw SQLite files (a copy of a live WAL file can be torn); the task
+      // and session stores are copied consistently after this pass.
       if (/\.sqlite(-wal|-shm)?$/.test(src)) return false
       // Skip session stream files (large, not needed)
       if (src.includes(path.join('sessions', 'streams'))) return false
@@ -102,6 +105,45 @@ export function copyDataSnapshot(home: string, dest: string): void {
       return true
     },
   })
+  snapshotStoreDatabases(home, dest)
+}
+
+/**
+ * The stores a test server needs to look like the real Walnut. The copy filter
+ * skips every SQLite file (a raw copy of a live WAL database can be torn), so
+ * without this step the snapshot fell back to a months-old tasks.json and had
+ * no sessions at all. Indexes (search, notes) stay out: they are regenerable
+ * and large.
+ */
+export const SNAPSHOT_SQLITE_STORES = [path.join('tasks', 'tasks.sqlite'), 'sessions.sqlite']
+
+/**
+ * Copy each store with VACUUM INTO over a read-only connection: one consistent
+ * snapshot that includes the WAL, and the live file is never written. A store
+ * that is missing or fails to copy is left out (the test server then starts it
+ * empty), and the failure is said on stderr.
+ */
+export function snapshotStoreDatabases(home: string, dest: string, stores: readonly string[] = SNAPSHOT_SQLITE_STORES): string[] {
+  const copied: string[] = []
+  for (const rel of stores) {
+    const src = path.join(home, rel)
+    if (!fs.existsSync(src)) continue
+    const out = path.join(dest, rel)
+    let db: Database.Database | null = null
+    try {
+      fs.mkdirSync(path.dirname(out), { recursive: true })
+      fs.rmSync(out, { force: true })
+      db = new Database(src, { readonly: true, fileMustExist: true, timeout: 10_000 })
+      db.exec(`VACUUM INTO '${out.replace(/'/g, "''")}'`)
+      copied.push(rel)
+    } catch (err) {
+      try { fs.rmSync(out, { force: true }) } catch { /* best-effort */ }
+      process.stderr.write(`ephemeral: could not copy ${rel}: ${err instanceof Error ? err.message : String(err)}\n`)
+    } finally {
+      try { db?.close() } catch { /* best-effort */ }
+    }
+  }
+  return copied
 }
 
 /** Cron store file name inside a data dir (CRON_FILE in constants.ts). */

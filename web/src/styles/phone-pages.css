@@ -1,0 +1,877 @@
+/* Phone pages: the home rows, the bell and its notification center, search,
+   task detail, Notes, Calendar, Mail and plugin pages (spec 4.2, 4.5, 4.7).
+   Imported by Sidebar.tsx (always mounted). Everything that changes layout
+   is under the phone query and `.app-shell-navigation` (or `html body` for
+   portals outside the shell); only the (hover: none) block sits outside the
+   width query, so a touch iPad has no hover-only control either. The Notes and
+   Calendar rules in phone-layout.css are the shell's: this file overrides them
+   with more weight, never edits them. */
+
+/* ---- Home rows ---------------------------------------------------------- */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* The phase circle is a picture here (C57): a tap on it is a tap on the row,
+     which opens it. Completing lives in task detail, behind a confirmation. */
+  .app-shell-navigation .todo-panel .task-phase-icon-btn {
+    pointer-events: none;
+  }
+
+  .app-shell-navigation .todo-panel .todo-panel-item {
+    min-height: 52px;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+
+  .app-shell-navigation .todo-panel .todo-panel-item:active {
+    background: var(--bg-secondary);
+  }
+
+  .app-shell-navigation .todo-panel .todo-item-title-row {
+    min-height: 44px;
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  /* Two lines, then an ellipsis; never the inline editor (renaming is in detail). */
+  .app-shell-navigation .todo-panel .todo-item-title,
+  .app-shell-navigation .todo-panel .todo-pinned-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    white-space: normal;
+    /* Break between words (home-navigation's one-line clamp breaks anywhere);
+       only a token longer than the line breaks inside. */
+    word-break: normal;
+    overflow-wrap: break-word;
+    min-width: 0;
+    flex: 1 1 auto;
+    line-height: 1.3;
+  }
+
+  /* Badges keep their words whole; the title gives way instead. */
+  .app-shell-navigation .todo-panel .todo-item-due-pill,
+  .app-shell-navigation .todo-panel .task-blocked-badge,
+  .app-shell-navigation .todo-panel .task-completed-time,
+  .app-shell-navigation .todo-panel .phone-row-needs-you,
+  .app-shell-navigation .todo-panel .phone-row-need-you-parent,
+  .app-shell-navigation .task-session-pill.task-session-pill-phone {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  /* The words trail the title and its badges, just before the row's own
+     buttons, so every title starts at the same edge. */
+  .app-shell-navigation .todo-panel .todo-item-title-row > .phone-row-needs-you,
+  .app-shell-navigation .todo-panel .todo-item-title-row > .phone-row-need-you-parent {
+    order: 1;
+  }
+
+  .app-shell-navigation .todo-panel .todo-item-title-row > .task-start-btn,
+  .app-shell-navigation .todo-panel .todo-item-title-row > .task-kebab-wrapper {
+    order: 2;
+  }
+
+  /* The "Needs you" words win over the unread dot (a dot is only a color). */
+  .app-shell-navigation .todo-panel .todo-panel-item-needs-action .task-unread-dot,
+  .app-shell-navigation .todo-panel .todo-item-title-row:has(.phone-row-needs-you) .task-unread-dot {
+    display: none;
+  }
+
+  .app-shell-navigation .phone-row-needs-you,
+  .app-shell-navigation .phone-row-need-you-parent {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 11px;
+    background: var(--error-subtle, rgb(220 38 38 / 12%));
+    color: var(--error);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  /* A real button: the hit area grows to 44 px around the 22 px pill. */
+  .app-shell-navigation .phone-row-need-you-parent {
+    position: relative;
+    border: 0;
+    margin: 0 2px;
+    cursor: pointer;
+  }
+
+  .app-shell-navigation .phone-row-need-you-parent::before {
+    content: '';
+    position: absolute;
+    inset: -11px -4px;
+  }
+
+  .app-shell-navigation .todo-panel .todo-panel-item.phone-row-highlight {
+    background: var(--accent-subtle);
+    transition: background 0.2s;
+  }
+
+  .app-shell-navigation .task-session-pill.task-session-pill-phone {
+    font-size: 12px;
+  }
+
+  /* Secondary row buttons are real 44 px boxes on the phone: a pseudo-element
+     hit area is clipped by the row and the card around it. */
+  .app-shell-navigation .todo-panel .task-kebab-btn,
+  .app-shell-navigation .todo-panel .task-start-btn,
+  .app-shell-navigation .todo-panel .home-navigation-scroll .todo-panel-item > .collapse-chevron {
+    min-width: 44px;
+    min-height: 44px;
+    flex: 0 0 auto;
+  }
+
+  .app-shell-navigation .todo-panel .todo-pinned-card {
+    min-height: 52px;
+  }
+
+  /* The search row: field, New task and Display at 44 px. */
+  .app-shell-navigation .todo-panel .todo-search-input,
+  .app-shell-navigation .todo-panel .new-launcher-btn,
+  .app-shell-navigation .todo-panel .tp-btn {
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .todo-panel .tp-btn {
+    min-width: 44px;
+  }
+
+  /* Section and project headings: the whole row is the fold target, so the
+     chevron and the name inside it are pictures and the row grows to 44 px. */
+  .app-shell-navigation .todo-panel .navigation-heading-open,
+  .app-shell-navigation .todo-panel .todo-group-project-header {
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .todo-panel .todo-group-project-header .collapse-chevron,
+  .app-shell-navigation .todo-panel .todo-group-project-header .todo-group-name-btn {
+    pointer-events: none;
+  }
+
+  .app-shell-navigation .todo-panel .navigation-more,
+  .app-shell-navigation .todo-panel .todo-group-fav-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .todo-panel .todo-group-count,
+  .app-shell-navigation .todo-panel .home-navigation-scroll .todo-group-header-controls > .todo-group-count,
+  .app-shell-navigation .todo-panel .home-navigation-scroll .tier-project-label > .tier-project-label-count {
+    font-size: 12px;
+  }
+
+  .app-shell-navigation .todo-panel .todo-filter-footer-chip {
+    min-height: 44px;
+    font-size: 12px;
+  }
+
+  /* The home list draws its chevrons as a stroke (home-navigation.css) and
+     hides the glyph with font-size 0. Here the glyph keeps a readable size but
+     no color, and the stroke is centered on its own. */
+  .app-shell-navigation .todo-panel .home-navigation-scroll .collapse-chevron {
+    position: relative;
+    font-size: 12px;
+    color: transparent;
+  }
+
+  .app-shell-navigation .todo-panel .home-navigation-scroll .collapse-chevron::before {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    margin: -2.25px 0 0 -2.25px;
+    border-color: var(--fg-muted);
+  }
+}
+
+/* No hover on a touch screen: the row's secondary buttons always show, a
+   little quieter than the row (C37, C86). Outside the width query on purpose. */
+@media (hover: none) {
+  .todo-panel-item .task-kebab-btn,
+  .todo-focus-card .task-kebab-btn,
+  .todo-pinned-card .task-kebab-btn,
+  .todo-panel-item .task-start-btn,
+  .todo-focus-card .task-start-btn,
+  .todo-pinned-card .task-start-btn {
+    opacity: 0.7;
+  }
+}
+
+/* ---- The bell in the top bar and the notification center (C55, C56) ---- */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .phone-bell {
+    position: relative;
+    color: var(--fg);
+    background: transparent;
+  }
+
+  .app-shell-navigation .phone-bell-count {
+    position: absolute;
+    top: 5px;
+    right: 3px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    box-sizing: border-box;
+    border-radius: 9px;
+    background: var(--warning);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+    pointer-events: none;
+  }
+
+  /* Full screen under the top bar: the bar's Back closes it. No backdrop (it
+     would cover the bar), no second title, no x. */
+  html body .notification-panel-backdrop {
+    display: none;
+  }
+
+  html body .notification-panel.nfc-panel-wide,
+  html body .notification-panel.nfc-panel-wide.sidebar-collapsed {
+    top: var(--phone-topbar-h, 44px);
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: auto;
+    z-index: 55;
+    box-shadow: none;
+    border-right: 0;
+    animation: none;
+    padding-bottom: var(--wn-safe-bottom);
+  }
+
+  html body .notification-panel.nfc-panel-wide .notification-panel-title,
+  html body .notification-panel.nfc-panel-wide .notification-panel-close {
+    display: none;
+  }
+
+  /* Quiet mode and Clear All lead the center as plain 44 px rows of buttons. */
+  html body .notification-panel.nfc-panel-wide .notification-panel-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    min-height: 52px;
+    padding: 4px max(8px, var(--wn-safe-right)) 4px max(8px, var(--wn-safe-left));
+  }
+
+  html body .notification-panel.nfc-panel-wide .notification-panel-header button,
+  html body .notification-panel.nfc-panel-wide .nfc-quiet-toggle button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: 15px;
+  }
+
+  html body .notification-panel.nfc-panel-wide .nfc-quiet-chip {
+    font-size: 13px;
+  }
+
+  html body .notification-panel.nfc-panel-wide .nfc-rail-btn {
+    min-height: 44px;
+    font-size: 15px;
+  }
+
+  html body .notification-panel.nfc-panel-wide .nfc-detail {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  html body .notification-panel.nfc-panel-wide .notification-feed-item {
+    font-size: 15px;
+  }
+
+  html body .notification-panel.nfc-panel-wide .notification-feed-item button,
+  html body .notification-panel.nfc-panel-wide .notification-perm-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  html body .notification-panel.nfc-panel-wide .notification-feed-item-time,
+  html body .notification-panel.nfc-panel-wide .nfc-chip {
+    font-size: 12px;
+  }
+
+  html body .notification-panel.nfc-panel-wide .nfc-rail-badge {
+    min-width: 20px;
+    height: 20px;
+    font-size: 12px;
+  }
+
+  html body .notification-panel.nfc-panel-wide .notification-group-toggle,
+  html body .notification-panel.nfc-panel-wide .nfc-open-session {
+    min-height: 44px;
+    padding: 0 8px;
+    font-size: 13px;
+  }
+}
+
+/* The pull indicator (home list and notification center, C90). */
+.phone-pull {
+  position: fixed;
+  left: 50%;
+  z-index: 70;
+  transform: translateX(-50%);
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 16px;
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 12%);
+  font-size: 14px;
+  line-height: 32px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.phone-pull.is-updated {
+  color: var(--accent);
+}
+
+/* ---- Task detail: a layer under the top bar, one column (C23, C58) ----- */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html body .wf-modal-overlay.task-detail-modal-overlay.is-phone-layer {
+    animation: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    top: var(--phone-topbar-h, 44px);
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 0;
+    z-index: 55;
+    align-items: stretch;
+    justify-content: stretch;
+    background: var(--bg);
+  }
+
+  html body .is-phone-layer > .wf-modal.task-detail-modal {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: var(--wn-safe-bottom);
+  }
+
+  /* The bar already says the title and Back closes: no second title, no x. */
+  html body .is-phone-layer .todo-detail-title,
+  html body .is-phone-layer .todo-detail-close {
+    display: none;
+  }
+
+  html body .is-phone-layer .tdp-body {
+    display: block;
+  }
+
+  html body .is-phone-layer .tdp-body > * {
+    width: auto;
+    max-width: none;
+  }
+
+  /* The phase row above replaces the phase badge; every other control in the
+     detail is a 44 px target with 12 px words or more. */
+  html body .is-phone-layer .badge-phase {
+    display: none;
+  }
+
+  html body .is-phone-layer .tag-editor-hidden-toggle,
+  html body .is-phone-layer .dp-trigger,
+  html body .is-phone-layer .copyable-id-value,
+  html body .is-phone-layer .todo-detail-session-item {
+    min-height: 44px;
+  }
+
+  html body .is-phone-layer .copyable-id-value,
+  html body .is-phone-layer .tag-editor-hidden-toggle {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  html body .is-phone-layer .tag-editor-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  html body .is-phone-layer .tag-editor-hidden-toggle,
+  html body .is-phone-layer .copyable-id-value,
+  html body .is-phone-layer .todo-detail-project,
+  html body .is-phone-layer .tdp-label,
+  html body .is-phone-layer .tdp-label-count,
+  html body .is-phone-layer .tdp-row-end {
+    font-size: 12px;
+  }
+
+  .phone-detail-head {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px max(16px, var(--wn-safe-right)) 4px max(16px, var(--wn-safe-left));
+  }
+
+  .phone-detail-title-label {
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+
+  .phone-detail-title {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--fg);
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.35;
+    resize: none;
+  }
+
+  .phone-detail-save {
+    margin: 0;
+    font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .phone-detail-save.is-failed {
+    color: var(--error);
+  }
+
+  .phone-detail-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 0 4px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--fg);
+    font-size: 16px;
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .phone-detail-row:active {
+    background: var(--bg-secondary);
+  }
+
+  .phone-detail-row-label {
+    flex: 1 1 auto;
+  }
+
+  .phone-detail-row-value {
+    color: var(--fg-secondary);
+  }
+}
+
+/* The phase list sheet (outside the query: it only ever opens on a phone). */
+.phone-phase-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.phone-phase-option {
+  min-height: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 17px;
+  text-align: left;
+}
+
+.phone-phase-option.is-current {
+  background: var(--bg-secondary);
+  font-weight: 600;
+}
+
+.phone-phase-option:active {
+  background: var(--bg-secondary);
+}
+
+/* ---- Search layer (C76) and the queued-updates pill (C61) -------------- */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* Under the session layer (41) so a result opened from here covers it. */
+  .phone-search-layer {
+    position: fixed;
+    top: var(--phone-topbar-h, 44px);
+    left: 0;
+    right: 0;
+    bottom: var(--wn-keyboard-inset, 0px);
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+  }
+
+  .phone-search-field {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 8px max(12px, var(--wn-safe-right)) 8px max(12px, var(--wn-safe-left));
+    border-bottom: 1px solid var(--border);
+  }
+
+  .phone-search-input {
+    box-sizing: border-box;
+    width: 100%;
+    height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    color: var(--fg);
+    font-size: 16px;
+  }
+
+  .phone-search-results {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: calc(16px + var(--wn-safe-bottom));
+  }
+
+  .phone-search-note {
+    margin: 24px 16px;
+    font-size: 15px;
+    color: var(--fg-secondary);
+    text-align: center;
+  }
+
+  .phone-search-group-title {
+    margin: 0;
+    padding: 14px 16px 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .phone-search-row {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 48px;
+    padding: 6px 16px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--fg);
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .phone-search-row:active {
+    background: var(--bg-secondary);
+  }
+
+  .phone-search-row-title {
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .phone-search-row-snippet {
+    font-size: 13px;
+    color: var(--fg-secondary);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell-navigation .phone-search-cancel {
+    min-width: 44px;
+    height: 44px;
+    padding: 0 10px;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font-size: 17px;
+  }
+
+  /* The home search row: 44 px, 16 px text. */
+  .app-shell-navigation .todo-panel .todo-search-bar {
+    position: relative;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .todo-panel .todo-search-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .app-shell-navigation .todo-panel .todo-search-input::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .app-shell-navigation .phone-updates-pill {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    z-index: 20;
+    transform: translateX(-50%);
+    min-width: 96px;
+    height: 44px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 22px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+    white-space: nowrap;
+  }
+}
+
+/* ---- Notes, Calendar, Mail and plugin pages (C40, C79) ----------------- */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* The bar's one text action (a note's Edit / Done). */
+  .app-shell-navigation .phone-topbar-text-btn {
+    min-width: 44px;
+    height: 44px;
+    padding: 0 10px;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font-size: 17px;
+    font-weight: 500;
+  }
+
+  /* Notes: the strip's way back is a 44 px target (the shell's rule is 32). */
+  .app-shell-navigation .notes-split-view .notes-phone-back {
+    min-width: 44px;
+    height: 44px;
+  }
+
+  /* Reading size, and the last line clears the keyboard while editing. */
+  .app-shell-navigation .notes-editor-pane .ProseMirror {
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 16px max(16px, var(--wn-safe-right)) calc(24px + var(--wn-keyboard-inset, 0px) + var(--wn-safe-bottom)) max(16px, var(--wn-safe-left));
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell-navigation .notes-editor-pane .ProseMirror h1 {
+    font-size: 24px;
+    margin-top: 8px;
+  }
+
+  /* The header: the path on its own line, the note's buttons under it. */
+  .app-shell-navigation .notes-editor-pane .notes-editor-header {
+    flex-wrap: wrap;
+    gap: 0 8px;
+    padding: 4px max(12px, var(--wn-safe-right)) 4px max(12px, var(--wn-safe-left));
+  }
+
+  .app-shell-navigation .notes-editor-pane .notes-editor-breadcrumb {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .app-shell-navigation .notes-editor-pane .notes-breadcrumb-link {
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .notes-editor-pane .ProseMirror[contenteditable='false'] {
+    -webkit-user-select: text;
+    user-select: text;
+    caret-color: transparent;
+  }
+
+  .app-shell-navigation .notes-editor-pane .ProseMirror pre,
+  .app-shell-navigation .notes-editor-pane .ProseMirror table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .app-shell-navigation .notes-tab-strip {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  /* Calendar: finger-sized day controls, a title that never truncates, and
+     short events still a 44 px target. */
+  .app-shell-navigation .cal-toolbar .cal-nav-btns button,
+  .app-shell-navigation .cal-toolbar .cal-today-btn,
+  .app-shell-navigation .cal-toolbar .cal-rail-toggle,
+  .app-shell-navigation .cal-toolbar .cal-cals-btn,
+  .app-shell-navigation .cal-toolbar .cal-view-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .cal-toolbar .cal-title {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .app-shell-navigation .cal-grid-cols .cal-chip {
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .cal-body > .cal-rail {
+    width: 100%;
+    box-shadow: none;
+    padding-bottom: var(--wn-safe-bottom);
+  }
+
+  /* The time scale (zoom, reset, hours) and the grid's own labels. */
+  .app-shell-navigation .cal-grid-controls button,
+  .app-shell-navigation .cal-outside-hours {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .cal-grid-controls .cal-zoom-value,
+  .app-shell-navigation .cal-grid-controls .cal-hours-toggle,
+  .app-shell-navigation .cal-grid-gutter,
+  .app-shell-navigation .cal-grid-hourlabel,
+  .app-shell-navigation .cal-grid-range-end,
+  .app-shell-navigation .cal-chip-title {
+    font-size: 12px;
+  }
+
+  /* The Notes tree's header actions and its search field. */
+  .app-shell-navigation .notes-split-view .notes-tree-action-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .notes-split-view .notes-search-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  /* One note: its tab, header and (while editing) format buttons are 44 px. */
+  .app-shell-navigation .notes-split-view .notes-tab-close,
+  .app-shell-navigation .notes-split-view .notes-tab-new,
+  .app-shell-navigation .notes-split-view .notes-ai-toggle,
+  .app-shell-navigation .notes-split-view .global-notes-expand-btn,
+  .app-shell-navigation .notes-split-view .notes-bookmark-btn,
+  .app-shell-navigation .notes-split-view .notes-width-btn,
+  .app-shell-navigation .notes-split-view .notes-format-btn,
+  .app-shell-navigation .notes-split-view .notes-format-block-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .notes-split-view .notes-editor-meta {
+    flex-wrap: wrap;
+  }
+
+  .app-shell-navigation .notes-split-view .notes-editor-updated,
+  .app-shell-navigation .notes-split-view .notes-format-toolbar code {
+    font-size: 12px;
+  }
+
+  /* Mail: the message reads at 16 px; a wide HTML mail scrolls in its own box. */
+  .app-shell-navigation .mail-reader-body {
+    font-size: 16px;
+    line-height: 1.5;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell-navigation .mail-reader-body iframe,
+  .app-shell-navigation .mail-reader-body img {
+    max-width: 100%;
+  }
+
+  .app-shell-navigation .mail-console {
+    padding-top: 0;
+    padding-bottom: var(--wn-safe-bottom);
+  }
+
+  /* The mail list's own controls and its small words. */
+  .app-shell-navigation .mail-app .mail-icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .mail-app .mail-search-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .app-shell-navigation .mail-app .mail-view-menu-btn,
+  .app-shell-navigation .mail-app .mail-text-btn,
+  .app-shell-navigation .mail-app .mail-reader-details-btn {
+    min-height: 44px;
+  }
+
+  /* The sender gets the whole line; the date and Details go under it. */
+  .app-shell-navigation .mail-app .mail-reader-sender {
+    flex-wrap: wrap;
+  }
+
+  .app-shell-navigation .mail-app .mail-reader-identity {
+    flex: 1 1 0;
+  }
+
+  .app-shell-navigation .mail-app .mail-reader-when {
+    flex: 1 1 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* One message: Reply, Reply all, Forward, Task, Unread as 44 px circles. */
+  .app-shell-navigation .mail-app .mail-round-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .mail-app .mail-list-section-name,
+  .app-shell-navigation .mail-app .mail-group-pill,
+  .app-shell-navigation .mail-app .mail-row-account,
+  .app-shell-navigation .mail-app .mail-row-time,
+  .app-shell-navigation .mail-app .mail-reader-account,
+  .app-shell-navigation .mail-app .mail-reader-details-btn {
+    font-size: 12px;
+  }
+
+  /* Plugin pages start right under the bar (the shell already pads the bar's
+     height; the old 48 px was the floating menu button's clearance). */
+  .app-shell-navigation .plugin-native-app {
+    padding-top: 0;
+    padding-bottom: var(--wn-safe-bottom);
+  }
+}

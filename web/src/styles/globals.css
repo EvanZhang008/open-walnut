@@ -12309,7 +12309,7 @@ body.walnut-dragging {
   transition: none;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .todo-detail-splitter,
   .todo-pinned-splitter { display: none; }
 }
@@ -17001,7 +17001,7 @@ a.task-kebab-info:hover {
 
 /* ===== Responsive ===== */
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .sidebar {
     position: fixed;
     top: 0;
@@ -19698,7 +19698,7 @@ a.task-kebab-info:hover {
 }
 
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .usage-summary-cards {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -31478,7 +31478,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    tab strip on top — 150px of vertical rail would eat a third of a phone screen.
    768px, not 640px: that is where the sidebar transforms off-screen, and the two
    breakpoints disagreeing is exactly what left the 641-768px band clipped. */
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* left:0 belongs with the width: the base rule only zeroes the offset at
      640px, so full-width alone would restore the same overflow one band up. */
   .notification-panel.nfc-panel-wide,
@@ -32062,7 +32062,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   overflow: auto;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .plugin-native-app {
     padding-top: 48px;
   }
@@ -33344,7 +33344,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 /* On a narrow window the composer is taller and the pill has less room. */
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .stale-build-pill { bottom: 76px; font-size: 11px; }
 }
 

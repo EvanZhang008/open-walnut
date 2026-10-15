@@ -11,6 +11,7 @@
 import { useEffect } from 'react';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useNotifications } from '@/contexts/notifications';
+import { operationErrorWords } from '@/utils/operation-error-words';
 
 export function OperationErrorBridge() {
   const { operationError, clearOperationError } = useTasksContext();
@@ -18,11 +19,13 @@ export function OperationErrorBridge() {
 
   useEffect(() => {
     if (!operationError) return;
+    // A failed connection reads as words, never the browser's "Load failed" (N25).
+    const body = operationErrorWords(operationError);
     notify({
       kind: 'operation-error', severity: 'error', title: 'Action failed',
-      body: operationError, persistent: true,
+      body, persistent: true,
       // Dedup on the message so a repeated identical error doesn't stack toasts.
-      dedupKey: `operr:${operationError}`,
+      dedupKey: `operr:${body}`,
     });
     clearOperationError();
   }, [operationError, notify, clearOperationError]);

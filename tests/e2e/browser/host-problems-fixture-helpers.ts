@@ -93,7 +93,7 @@ export const bell = (page: Page): Locator => page.locator('.sidebar-notification
 /** Open the notification panel with a real click on the bell. */
 export async function openBell(page: Page): Promise<Locator> {
   // A phone keeps the rail behind the menu button: a user opens it first, then taps the bell.
-  if (!(await bell(page).isVisible())) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
+  if (!(await bell(page).isVisible())) await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await bell(page).click()
   const panel = page.locator('.notification-panel')
   await expect(panel).toBeVisible({ timeout: 10_000 })

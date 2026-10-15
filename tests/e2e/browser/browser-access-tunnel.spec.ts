@@ -14,8 +14,11 @@
  *      right one signs the browser in and the board loads
  *   3. a `#pair=` link signs a fresh browser in on open and leaves the address bar
  *   4. the same link again: the notice shows why, with the code filled in
- *   5. turning it off ends the tunnel
- *   6. a command that is not installed says so, with Retry
+ *   5. a signed-in browser is listed under Signed-in browsers; removing it shows
+ *      "This browser was signed out" over the console; a removed phone sees
+ *      "This phone was signed out"
+ *   6. turning it off ends the tunnel
+ *   7. a command that is not installed says so, with Retry
  *
  * Config writes are real, on the fixture server; navigation in Walnut is by
  * clicks. The tunnel browser's first load is a `goto`, because opening a link is
@@ -23,7 +26,8 @@
  * `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { test, expect, type Browser, type Page } from '@playwright/test'
+import { test, expect, devices, type Browser, type Locator, type Page } from '@playwright/test'
+import { browserKindFromUserAgent } from '../../../src/core/browser-kind'
 
 test.setTimeout(180_000)
 
@@ -109,6 +113,58 @@ async function tunnelPage(browser: Browser): Promise<Page> {
   return context.newPage()
 }
 
+/** An iPhone in this project's engine (no `defaultBrowserType`: the project picks it). */
+function phoneDevice() {
+  const { defaultBrowserType: _engine, ...iphone } = devices['iPhone 15']
+  return iphone
+}
+
+/** The sign-in page is opaque and full screen: whatever booted under it takes no tap. */
+async function expectCoversConsole(phone: Page) {
+  const vp = phone.viewportSize()!
+  const box = (await phone.getByTestId('unpaired-notice').boundingBox())!
+  expect(box.x).toBe(0)
+  expect(box.y).toBe(0)
+  expect(box.width).toBe(vp.width)
+  expect(box.height).toBeGreaterThanOrEqual(vp.height - 1)
+  const hits = await phone.evaluate(() => {
+    const pts: Array<[number, number]> = [[0.5, 0.5], [0.1, 0.1], [0.9, 0.9], [0.5, 0.05]]
+    return pts.map(([x, y]) => {
+      const el = document.elementFromPoint(innerWidth * x, innerHeight * y)
+      return !!el?.closest('[data-testid="unpaired-notice"]')
+    })
+  })
+  expect(hits).toEqual([true, true, true, true])
+  const bg = await phone.getByTestId('unpaired-notice').evaluate((el) => getComputedStyle(el).backgroundColor)
+  expect(bg).not.toMatch(/rgba\(.*, 0\)|transparent/)
+}
+
+/** A finger on the right of the code: the caret lands after its last character. */
+async function tapAtEnd(input: Locator) {
+  const box = (await input.boundingBox())!
+  await input.click({ position: { x: box.width - 6, y: box.height / 2 } })
+  await expect(input).toBeFocused()
+}
+
+/**
+ * The server rate-limits refused tokens per address (10 a minute), and every
+ * tunnel client shares the tunnel's address: right after another test's
+ * refusals, a fresh sign-in is answered 429 until the minute is over. Wait
+ * that out, then start the console again with nothing failed.
+ */
+async function settleSignedIn(phone: Page) {
+  let limited = false
+  await expect.poll(async () => {
+    const status = await phone.evaluate(async () => (await fetch('/api/tasks', { cache: 'no-store' })).status).catch(() => 0)
+    if (status === 429) limited = true
+    return status
+  }, { timeout: 90_000, intervals: [3_000] }).toBe(200)
+  if (limited) {
+    await phone.reload()
+    await expect(phone.locator('.app-shell').first()).toBeVisible({ timeout: 60_000 })
+  }
+}
+
 async function mintCode(page: Page): Promise<{ code: string; link?: string }> {
   const res = await page.request.post('/api/devices/browser-code')
   expect(res.ok()).toBe(true)
@@ -162,13 +218,19 @@ test.describe('Open from a browser', () => {
     await phone.goto(tunnelUrl)
     const notice = phone.getByTestId('unpaired-notice')
     await expect(notice).toBeVisible({ timeout: 30_000 })
-    await expect(notice).toContainText('This device is not paired with Walnut')
+    await expect(notice.locator('h1')).toHaveText('Sign in to Walnut')
+    await expect(notice).toContainText('Sign in to Walnut')
 
     const input = phone.getByTestId('unpaired-code-input')
     await input.fill('zzzz-zzzz')
     await phone.getByTestId('unpaired-code-submit').click()
     await expect(phone.getByTestId('unpaired-code-error')).toContainText('That code is wrong or has expired')
+    // The code stays to be fixed; editing any character clears the line.
+    await expect(input).toHaveValue('ZZZZ-ZZZZ')
     await shot(phone, '3-tunnel-wrong-code')
+    await tapAtEnd(input)
+    await input.press('Backspace')
+    await expect(phone.getByTestId('unpaired-code-error')).toHaveCount(0)
 
     const { code } = await mintCode(page)
     await input.fill(code.toLowerCase())
@@ -181,6 +243,20 @@ test.describe('Open from a browser', () => {
       return res.status
     })
     expect(tasks).toBe(200)
+    // A loader that calls fetch() itself carries the token too (auth-fetch.ts),
+    // and a request that cannot send a header (an <img>, here an XHR that nothing
+    // patches) gets in on the cookie; a write on the cookie alone does not.
+    const raw = await phone.evaluate(async () => (await fetch('/api/quiet')).status)
+    expect(raw).toBe(200)
+    const xhr = (method: string) => phone.evaluate((m) => new Promise<number>((resolve) => {
+      const x = new XMLHttpRequest()
+      x.open(m, '/api/tasks')
+      x.onload = () => resolve(x.status)
+      x.onerror = () => resolve(0)
+      x.send(m === 'GET' ? null : '{}')
+    }), method)
+    expect(await xhr('GET')).toBe(200)
+    expect(await xhr('POST')).toBe(401)
     await phone.waitForTimeout(1_500)
     await expect(notice).toBeHidden()
     await shot(phone, '4-tunnel-signed-in')
@@ -213,7 +289,7 @@ test.describe('Open from a browser', () => {
     await phone.context().close()
   })
 
-  test('a signed-in browser is listed under Other entries; removing it signs that browser out', async ({ page, browser }) => {
+  test('a signed-in browser is listed under Signed-in browsers; removing it signs that browser out', async ({ page, browser }) => {
     const phone = await tunnelPage(browser)
     await phone.goto(tunnelUrl)
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
@@ -229,10 +305,15 @@ test.describe('Open from a browser', () => {
 
     await openDevices(page)
     const devices = page.locator('#devices')
-    await devices.getByText('Other entries', { exact: true }).click()
+    await expect(devices.getByTestId('devices-browsers-group')).toContainText('Signed-in browsers')
     const row = devices.locator(`[data-device-name="${mine.name}"]`)
     await expect(row).toBeVisible()
-    await expect(row).toContainText('A browser you signed in with a code')
+    // Named by what it is (N2-21), never by its id; the meta says when it signed in.
+    const kind = browserKindFromUserAgent(await phone.evaluate(() => navigator.userAgent))
+    expect(kind).not.toBe('Browser')
+    await expect(row.locator('.devices-name')).toContainText(kind)
+    await expect(row.locator('.devices-name')).not.toContainText(mine.name)
+    await expect(row.locator('.devices-meta')).toContainText('signed in')
     await expect(row.getByTestId('devices-show-qr')).toHaveCount(0)
     await shot(page, '6-listed', devices)
     await row.getByTestId('devices-remove').click()
@@ -240,8 +321,71 @@ test.describe('Open from a browser', () => {
     await expect(row).toHaveCount(0, { timeout: 15_000 })
 
     await phone.reload()
-    await expect(phone.getByTestId('unpaired-notice')).toContainText('This device is no longer paired', { timeout: 30_000 })
+    const notice = phone.getByTestId('unpaired-notice')
+    await expect(notice.locator('h1')).toHaveText('This browser was signed out', { timeout: 30_000 })
+    await expectCoversConsole(phone)
+    await shot(phone, '7-removed-browser')
+    // Try again reloads the page. (What the reload then shows depends on the
+    // auth rate limit: within a minute of the refusals above, every request
+    // from the tunnel's address gets a bare 429; reported, not this page's.)
+    const reloaded = phone.waitForEvent('framenavigated', { timeout: 30_000 })
+    await phone.getByTestId('unpaired-retry').click()
+    await reloaded
     await phone.context().close()
+  })
+
+  test('a removed phone sees This phone was signed out, over a console it cannot reach', async ({ page, browser }) => {
+    const context = await browser.newContext({ ...phoneDevice() })
+    const phone = await context.newPage()
+    await phone.goto(tunnelUrl)
+    await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
+    const { code } = await mintCode(page)
+    await phone.getByTestId('unpaired-code-input').fill(code.toLowerCase())
+    await phone.getByTestId('unpaired-code-submit').click()
+    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+    await settleSignedIn(phone)
+    const listed = await (await page.request.get('/api/devices')).json() as { devices: Array<{ name: string; createdAt: string; role?: string }> }
+    const mine = listed.devices.filter((d) => d.role === 'browser').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
+    expect((await page.request.delete(`/api/devices/${encodeURIComponent(mine.name)}`)).ok()).toBe(true)
+
+    await phone.reload()
+    const notice = phone.getByTestId('unpaired-notice')
+    await expect(notice.locator('h1')).toHaveText('This phone was signed out', { timeout: 30_000 })
+    await expect(notice).toContainText('Walnut no longer accepts this sign-in. It may have been removed on your computer. Sign in again below.')
+    const retry = phone.getByTestId('unpaired-retry')
+    await expect(retry).toBeVisible()
+    expect((await retry.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    await expectCoversConsole(phone)
+    await shot(phone, '8-removed-phone')
+    await context.close()
+  })
+
+  test('a Home Screen app is listed as iPhone Home Screen, apart from a Safari tab (D6)', async ({ page, browser }) => {
+    const context = await browser.newContext({ ...phoneDevice() })
+    // The page runs as a Home Screen app: display-mode standalone, as iOS reports it.
+    await context.addInitScript(() => {
+      const real = window.matchMedia.bind(window)
+      window.matchMedia = (q: string) => {
+        if (!q.includes('display-mode: standalone')) return real(q)
+        const noop = () => {}
+        return { matches: true, media: q, onchange: null, addEventListener: noop, removeEventListener: noop, addListener: noop, removeListener: noop, dispatchEvent: () => false } as unknown as MediaQueryList
+      }
+    })
+    const phone = await context.newPage()
+    await phone.goto(tunnelUrl)
+    await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
+    await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).code)
+    await phone.getByTestId('unpaired-code-submit').click()
+    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+    const listed = await (await page.request.get('/api/devices')).json() as { devices: Array<{ name: string; createdAt: string; role?: string; info?: { deviceName?: string } }> }
+    const mine = listed.devices.filter((d) => d.role === 'browser').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
+    expect(mine.info?.deviceName).toBe('iPhone Home Screen')
+    await openDevices(page)
+    const row = page.locator('#devices').locator(`[data-device-name="${mine.name}"]`)
+    // " 2" only when an earlier run on the same fixture signed one in too.
+    await expect(row.locator('.devices-name')).toHaveText(/^iPhone Home Screen( \d+)?$/)
+    await shot(page, '8b-home-screen-listed', row)
+    await context.close()
   })
 
   test('turning it off ends the tunnel', async ({ page }) => {

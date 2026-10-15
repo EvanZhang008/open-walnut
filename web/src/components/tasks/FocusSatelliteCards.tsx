@@ -19,6 +19,8 @@ import { TriggerPill } from '@/components/routines/TriggerPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
+import { PhoneRowExtras } from './PhoneRowExtras';
+import { PhoneTierEmpty } from './PhoneTierEmpty';
 import { TaskTagPills } from './TaskTagPills';
 import * as ICONS from '../common/Icons';
 
@@ -491,6 +493,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       ) : needsAction && !isDone && (
         <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
+      {!isDone && <PhoneRowExtras task={task} needsAction={needsAction} />}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
         className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
@@ -582,6 +585,7 @@ export function TierDropZone({ id, isEmpty, children }: { id: string; isEmpty: b
       {isEmpty && (
         <div className="todo-focus-placeholder">Drag tasks here</div>
       )}
+      {isEmpty && <PhoneTierEmpty />}
     </div>
   );
 }

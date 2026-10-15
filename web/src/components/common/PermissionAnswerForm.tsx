@@ -93,6 +93,12 @@ export function PermissionAnswerForm({
           </div>
         );
       })}
+      {/* Why Submit waits: shown on a phone only (phone-fixes-r2.css, N2-12). */}
+      {!complete && !disabled && (
+        <div className="nfc-answer-hint" data-testid="nfc-answer-hint">
+          {questions.length > 1 ? 'Answer every question to submit.' : 'Pick an answer or type one to submit.'}
+        </div>
+      )}
       <div className="notification-feed-item-actions">
         <button
           className="notification-perm-btn approve"

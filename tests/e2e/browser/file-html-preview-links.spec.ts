@@ -48,7 +48,7 @@ async function openSummary(page: Page, explorer: Locator) {
   // decide from the chevron, not from whether the child row is visible yet: a
   // click on an expanding folder would collapse it.
   await expect(folderRow.locator('.sfe-arrow')).toHaveText(/[▶▼]/, { timeout: 10_000 })
-  if ((await folderRow.locator('.sfe-arrow').textContent())?.trim() === '▶') await folderRow.click()
+  if (/^\u25B6\uFE0E?$/.test((await folderRow.locator('.sfe-arrow').textContent())?.trim() ?? '')) await folderRow.click()
   const summaryRow = explorer.locator('.sfe-name', { hasText: 'summary.html' })
   await expect(summaryRow).toBeVisible({ timeout: 10_000 })
   await summaryRow.click()

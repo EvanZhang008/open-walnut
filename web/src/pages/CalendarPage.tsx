@@ -31,6 +31,7 @@ import {
 import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from '@/components/calendar/calendar-items';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { CalendarToolbar, type CalendarViewKind } from '@/components/calendar/CalendarToolbar';
 import { CalendarTaskList, TaskListChip } from '@/components/calendar/CalendarTaskList';
 import { MonthView } from '@/components/calendar/MonthView';
@@ -42,6 +43,7 @@ import { CalendarItemPopover } from '@/components/calendar/CalendarItemPopover';
 import { calendarEventNeedsApproval } from '@/api/calendar';
 import { useCalendarWriteConfirmation } from '@/components/calendar/calendar-event-actions';
 import { gridLocalIso, gridSnapMinute } from '@/components/calendar/calendar-grid-settings';
+import { emptyDayLine, isDayEmpty } from '@/components/calendar/phone-empty-day';
 
 const VALID_VIEWS = new Set<CalendarViewKind>(['day', 'week', 'month']);
 const LS_RAIL_KEY = 'open-walnut-calendar-rail-open';
@@ -90,7 +92,19 @@ export function CalendarPage() {
   // On a phone the task list lies over the grid instead of beside it, so it
   // starts closed there and its toggle is not the synced desktop flag.
   const [phoneRailOpen, setPhoneRailOpen] = useState(false);
-  const togglePhoneRail = useCallback(() => setPhoneRailOpen((open) => !open), []);
+  // The list is a phone layer (spec 4.3): Back closes it, the bar names it.
+  const railLayer = usePhoneOverlay({
+    id: 'calendar-tasks',
+    kind: 'calendar-tasks',
+    open: phoneLayout && phoneRailOpen,
+    bar: { title: 'Tasks' },
+    onClose: () => setPhoneRailOpen(false),
+  });
+  const closeRailLayer = railLayer.close;
+  const togglePhoneRail = useCallback(() => {
+    if (phoneRailOpen) closeRailLayer();
+    else setPhoneRailOpen(true);
+  }, [phoneRailOpen, closeRailLayer]);
   const railShown = phoneLayout ? phoneRailOpen : railOpen;
 
   // ----- items ------------------------------------------------------------
@@ -364,6 +378,9 @@ export function CalendarPage() {
     [update]
   );
 
+  // N27: a phone's empty day says so (only once its events are in and no calendar problem is up).
+  const dayEmpty = phoneLayout && view === 'day' && !calendar.loading && !calendarAlert && isDayEmpty(items, from);
+
   return (
     <div className="cal-page" data-view={view}>
       <DndContext
@@ -383,6 +400,9 @@ export function CalendarPage() {
           onToggleRail={phoneLayout ? togglePhoneRail : toggleRail}
           onOpenCalendars={setCalsAnchor}
         />
+        {dayEmpty && (
+          <p className="cal-empty-day" role="status" data-testid="cal-empty-day">{emptyDayLine(from, formatDateOnly(new Date()))}</p>
+        )}
         {calendarAlert && (
           <button type="button" className="cal-alert" onClick={calendar.refetch} title={calendarAlert}>
             <span aria-hidden="true">⚠</span>

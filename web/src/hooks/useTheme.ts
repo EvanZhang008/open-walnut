@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useThemeColorMeta } from './useThemeColorMeta';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type ResolvedTheme = 'light' | 'dark';
@@ -44,6 +45,9 @@ export function useTheme() {
 
   // Sync DOM on mount (in case React hydrates after the inline script)
   useEffect(() => { applyToDOM(theme); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The browser bar follows the choice (index.html sets it before first paint).
+  useThemeColorMeta(theme);
 
   const resolvedTheme: ResolvedTheme = useMemo(() => {
     if (theme === 'system') return osDark ? 'dark' : 'light';

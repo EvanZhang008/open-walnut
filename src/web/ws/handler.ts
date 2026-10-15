@@ -268,7 +268,7 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{
   const { validateBearerCredential } = await import('../middleware/auth.js')
   const cred = await validateBearerCredential(token)
   if (!cred) {
-    recordAuthFailure(ip)
+    recordAuthFailure(ip, token)
     log.ws.warn('cloud ws upgrade: invalid token', { ip })
     return null
   }
@@ -320,7 +320,7 @@ async function verifyPrimaryUpgrade(url: URL, request: IncomingMessage): Promise
   const cred = await validateBearerCredential(token)
   // Machine tokens are bridge-only: a daemon credential must not open the RPC surface.
   if (!cred || cred.kind === 'machine') {
-    recordAuthFailure(ip)
+    recordAuthFailure(ip, token)
     log.ws.warn('ws upgrade refused: invalid credential', { ip, machine: cred?.kind === 'machine' })
     return 401
   }

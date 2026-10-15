@@ -20,7 +20,10 @@
  * because a sandbox with no same-origin cannot be measured from here, so a header that scrolled
  * with it would need a height this page is not allowed to know.
  */
+import { useMemo } from 'react';
 import type { MailAccountDto, MailProviderSummary } from '@/api/mail';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { MailReaderHead } from './MailReaderHead';
 import { MailReaderBody } from './MailReaderBody';
 import { closeMailMessage } from './mail-actions';
@@ -36,6 +39,13 @@ interface ReaderProps {
 }
 
 export function MailReader({ open, narrow, accounts, providers }: ReaderProps) {
+  // A phone opens one message as a layer of its own (N4): the top bar becomes
+  // Back + the subject, and Back (button or gesture) returns to the list,
+  // which stays mounted under it, so its scroll position is kept.
+  const phone = usePhoneLayout();
+  const subject = open?.message ? (open.message.subject?.trim() || '(no subject)') : 'Message';
+  const bar = useMemo(() => ({ title: subject }), [subject]);
+  usePhoneOverlay({ id: 'mail-message', kind: 'viewer', open: !!open, onClose: () => closeMailMessage(), bar });
   if (!open) {
     return (
       <section className="mail-reader-pane mail-reader-blank" data-testid="mail-reader">
@@ -50,7 +60,7 @@ export function MailReader({ open, narrow, accounts, providers }: ReaderProps) {
   const message = open.message;
   return (
     <section className="mail-reader-pane" data-testid="mail-reader" data-message-id={open.messageId}>
-      {narrow && (
+      {narrow && !phone && (
         <div className="mail-pane-head mail-reader-back-bar">
           <button type="button" className="mail-icon-btn" data-testid="mail-reader-back" onClick={closeMailMessage} aria-label="Back to the list">
             <BackIcon />

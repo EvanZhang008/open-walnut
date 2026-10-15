@@ -86,6 +86,7 @@ export const CalendarToolbar = memo(function CalendarToolbar({
             className="cal-cals-btn"
             onClick={(e) => onOpenCalendars(e.currentTarget)}
             title="Choose which calendars to show"
+            aria-label="Calendars"
             data-testid="cal-cals-btn"
           >
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -97,7 +98,7 @@ export const CalendarToolbar = memo(function CalendarToolbar({
               <circle cx="12" cy="14" r="1.4" fill="currentColor" stroke="none" />
               <circle cx="15.5" cy="14" r="1.4" fill="currentColor" stroke="none" />
             </svg>
-            Calendars
+            <span className="cal-cals-label">Calendars</span>
           </button>
         )}
         <div className="cal-view-switch" role="tablist" aria-label="Calendar view">

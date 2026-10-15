@@ -1,0 +1,46 @@
+/* Phone review fixes, round 3: the pages a phone's drawer opens (Calendar,
+   Routines, plugin pages). Phone layout only; the desktop never matches. */
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-18: overlapping meetings share the day column four ways (about 78 px
+     each), and a one-line title cut to "AWS We...". On a phone a narrow timed
+     chip wraps its title over the whole lines its height holds
+     (--cal-chip-lines, set by TimeGrid) and gives its location line to the
+     title; a tap opens the full details. Wide chips keep one line. */
+  .app-shell-navigation .cal-page .cal-grid-cols .cal-chip:not(.cal-chip-compact) {
+    container-type: inline-size;
+  }
+  @container (max-width: 140px) {
+    .app-shell-navigation .cal-page .cal-chip-body {
+      align-items: flex-start;
+    }
+    .app-shell-navigation .cal-page .cal-chip-title {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: var(--cal-chip-lines, 2);
+      line-clamp: var(--cal-chip-lines, 2);
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      line-height: 15px;
+    }
+    .app-shell-navigation .cal-page .cal-chip-location {
+      display: none;
+    }
+  }
+
+  /* N2-18: the hours toggle reads "24h" on a phone and lights while all 24
+     hours show (its range label "7-1" meant nothing on its own). */
+  .app-shell-navigation .cal-grid-controls .cal-hours-toggle[aria-pressed='true'] {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* N2-19: a routine card's last error ('agent "x" not found') is
+     .cron-job-error with .text-xs (11 px); on a phone it reads at 12 px. */
+  .app-shell-navigation .routines-view .cron-job-error {
+    font-size: 12px;
+  }
+}

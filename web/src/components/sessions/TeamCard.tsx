@@ -30,7 +30,7 @@ function shortModel(model: string): string {
 
 /** Tab status indicator */
 function StatusDot({ status }: { status?: 'calling' | 'done' | 'error' }) {
-  if (!status) return <span className="team-tab-dot team-tab-dot-pending" title="Pending">{'\u23F3'}</span>;
+  if (!status) return <span className="team-tab-dot team-tab-dot-pending" title="Pending">{'\u23F3\uFE0E'}</span>;
   if (status === 'calling') return <span className="team-tab-dot team-tab-dot-running" title="Running">{'\u25CF'}</span>;
   if (status === 'done') return <span className="team-tab-dot team-tab-dot-done" title="Done">{'\u2713'}</span>;
   return <span className="team-tab-dot team-tab-dot-error" title="Error">{'\u2717'}</span>;

@@ -1,89 +1,410 @@
-/* UnpairedNotice: nothing on the page works until the device is paired, so the
-   card sits over the app, above the composer, under dialogs (9500) and menus. */
+/* The sign-in page (UnpairedNotice, spec 3.1): a full-screen opaque page, not
+   a card. It may render with no app shell at all (main.tsx renders it alone),
+   so it carries its own media queries and safe-area fallbacks: the --wn-safe-*
+   variables come from phone-layout.css, which may not apply here.
+   Above the console and its composer (9300), under dialogs (9500). */
 .unpaired-notice {
+  /* Text colours that pass 4.5:1 on --bg in both themes: the shared muted grey
+     and error red are lighter than that on white. */
+  --un-muted: #6E6E73;
+  --un-error: #D70015;
+  --un-button: #0060CC;
+  --un-safe-top: var(--wn-safe-top, env(safe-area-inset-top, 0px));
+  --un-safe-bottom: var(--wn-safe-bottom, env(safe-area-inset-bottom, 0px));
+  --un-safe-left: var(--wn-safe-left, env(safe-area-inset-left, 0px));
+  --un-safe-right: var(--wn-safe-right, env(safe-area-inset-right, 0px));
   position: fixed;
-  top: 64px;
-  left: 50%;
-  transform: translateX(-50%);
+  inset: 0;
   z-index: 9300;
-  width: min(460px, calc(100vw - 32px));
-  padding: 14px 16px;
-  color: var(--fg-secondary);
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding:
+    calc(var(--un-safe-top) + 48px)
+    max(24px, var(--un-safe-right))
+    calc(var(--un-safe-bottom) + 24px)
+    max(24px, var(--un-safe-left));
+  background: var(--bg, #FFFFFF);
+  color: var(--fg, #1D1D1F);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  text-align: left;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+[data-theme="dark"] .unpaired-notice {
+  --un-muted: #98989D;
+  --un-error: #FF6961;
+  --un-button: #0060CC;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .unpaired-notice {
+    --un-muted: #98989D;
+    --un-error: #FF6961;
+    --un-button: #0060CC;
+  }
+}
+
+/* A computer's browser: the same page, its column lower on a tall window. */
+@media (min-width: 769px) {
+  .unpaired-notice {
+    padding-top: 12vh;
+  }
+}
+
+.unpaired-notice-column {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+
+.unpaired-notice-icon {
+  display: block;
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  margin: 0 0 20px;
+  flex: none;
 }
 
 .unpaired-notice-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg);
+  margin: 0;
+  font-size: 28px;
+  line-height: 34px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg, #1D1D1F);
+  overflow-wrap: anywhere;
 }
 
-.unpaired-notice-body {
-  margin: 6px 0 0;
-  font-size: 13px;
-  line-height: 20px;
+.unpaired-notice-tagline {
+  margin: 8px 0 0;
+  font-size: 17px;
+  line-height: 22px;
+  color: var(--fg-secondary, #424245);
 }
 
-.unpaired-notice-body code {
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.unpaired-notice-more {
-  color: var(--fg-muted);
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.unpaired-notice-pair {
-  margin: 10px 0 0;
-}
-
-.unpaired-notice-label {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.unpaired-notice-pair-row {
+.unpaired-notice-steps {
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
   display: flex;
-  gap: 8px;
-  margin-top: 4px;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.unpaired-notice-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 17px;
+  line-height: 24px;
+  color: var(--fg, #1D1D1F);
+}
+
+.unpaired-notice-step-n {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--accent, #007AFF);
+  background: color-mix(in srgb, var(--accent, #007AFF) 12%, transparent);
+}
+
+.unpaired-notice-rule {
+  flex: none;
+  width: 100%;
+  height: 1px;
+  margin: 28px 0;
+  border: 0;
+  background: var(--border, rgba(60, 60, 67, 0.12));
+}
+
+/* Code first (a Home Screen app): the rule sits between code and steps, and
+   the steps lose their own top gap. */
+.unpaired-notice-rule + .unpaired-notice-steps {
+  margin-top: 0;
+}
+
+.unpaired-notice-code {
+  display: flex;
+  flex-direction: column;
+}
+
+.unpaired-notice-h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--fg, #1D1D1F);
+}
+
+.unpaired-notice-hint {
+  margin: 4px 0 0;
+  font-size: 15px;
+  line-height: 20px;
+  color: var(--un-muted);
+}
+
+.unpaired-notice-form {
+  display: flex;
+  flex-direction: column;
+  margin-top: 14px;
+  scroll-margin: 16px;
 }
 
 .unpaired-notice-input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 8px;
-  /* 16px keeps iOS Safari from zooming the page when the field takes focus. */
-  font-size: 16px;
-  line-height: 20px;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  width: 100%;
+  height: 52px;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong, rgba(60, 60, 67, 0.18));
+  border-radius: 12px;
+  background: var(--bg-secondary, #F5F5F7);
+  color: var(--fg, #1D1D1F);
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  text-align: center;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  /* The 2 px ring is a box-shadow, so focus never moves the text. */
+  transition: box-shadow 120ms ease, border-color 120ms ease;
 }
 
 .unpaired-notice-input::placeholder {
-  color: var(--fg-muted);
-  letter-spacing: 0.06em;
+  color: var(--un-muted);
+  opacity: 0.7;
+  letter-spacing: 0.12em;
 }
 
-.unpaired-notice-pair-row .btn:disabled {
-  opacity: 0.55;
-  cursor: default;
+.unpaired-notice-input:focus {
+  border-color: var(--accent, #007AFF);
+  box-shadow: 0 0 0 1px var(--accent, #007AFF);
+}
+
+.unpaired-notice-input[aria-invalid="true"] {
+  border-color: var(--un-error);
+}
+
+.unpaired-notice-input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 1px var(--un-error);
+}
+
+.unpaired-notice-input:disabled {
+  opacity: 0.6;
 }
 
 .unpaired-notice-error {
-  margin: 6px 0 0;
-  font-size: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 15px;
+  line-height: 20px;
+  color: var(--un-error);
+  overflow-wrap: anywhere;
+}
+
+/* The round "!" is drawn, not text: the line's text is the message alone. */
+.unpaired-notice-error::before {
+  content: '!';
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--bg, #FFFFFF);
+  background: var(--un-error);
+}
+
+.unpaired-notice-submit {
+  box-sizing: border-box;
+  width: 100%;
+  height: 50px;
+  margin: 12px 0 0;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--un-button);
+  color: #FFFFFF;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: filter 120ms ease, opacity 120ms ease;
+}
+
+.unpaired-notice-submit:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Busy is a disabled button too, but it must read as working, not refused. */
+.unpaired-notice-submit[aria-busy="true"] {
+  opacity: 0.85;
+}
+
+@media (hover: hover) {
+  .unpaired-notice-submit:not(:disabled):hover {
+    filter: brightness(0.9);
+  }
+}
+
+.unpaired-notice-submit:not(:disabled):active {
+  filter: brightness(0.85);
+}
+
+.unpaired-notice-submit:focus-visible,
+.unpaired-notice-text-btn:focus-visible {
+  outline: 2px solid var(--accent, #007AFF);
+  outline-offset: 2px;
+}
+
+/* "Try again": a text button with a full 44 px hit area. */
+.unpaired-notice-text-btn {
+  align-self: flex-start;
+  box-sizing: border-box;
+  min-height: 44px;
+  min-width: 44px;
+  margin: 8px 0 0 -8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--accent-text, #0060CC);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.unpaired-notice-text-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.unpaired-notice-probe {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+}
+
+/* Sinks to the bottom when the page has room. */
+.unpaired-notice-more {
+  margin: auto 0 0;
+  padding-top: 32px;
+  font-size: 13px;
   line-height: 18px;
-  color: var(--error);
+  color: var(--un-muted);
+}
+
+.unpaired-notice-code-first {
+  margin-top: 28px;
+}
+
+.unpaired-notice-slow {
+  margin: 16px 0 0;
+  font-size: 15px;
+  line-height: 20px;
+  color: var(--un-muted);
+}
+
+.unpaired-notice-ring,
+.unpaired-notice-spinner {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border-style: solid;
+  border-color: currentColor;
+  border-right-color: transparent;
+  animation: unpaired-notice-spin 0.8s linear infinite;
+}
+
+.unpaired-notice-ring {
+  width: 20px;
+  height: 20px;
+  border-width: 2px;
+  margin-top: 24px;
+  color: var(--un-muted);
+}
+
+.unpaired-notice-spinner {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+
+@keyframes unpaired-notice-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* No spin for reduced motion: a still dot says "working" without moving. */
+@media (prefers-reduced-motion: reduce) {
+  .unpaired-notice-ring,
+  .unpaired-notice-spinner {
+    animation: none;
+    border-color: currentColor;
+    background: currentColor;
+    transform: scale(0.4);
+  }
+}
+
+/* N23: the code reads at 22 px on a phone as on the desktop. The touch rule
+   that lifts every input to 16 px (so iOS does not zoom) must not shrink this
+   larger one; the :not(#id) only raises specificity past that rule. */
+.unpaired-notice .unpaired-notice-input:not(#wn-sign-in-none) {
+  font-size: 22px !important;
+}
+
+/* N2-24: no one-word last lines ("QR / code.", "signed / out"), and step
+   numbers that read in both themes (solid accent, white digit). */
+.unpaired-notice-title {
+  text-wrap: balance;
+}
+.unpaired-notice-tagline,
+.unpaired-notice-steps li,
+.unpaired-notice-hint,
+.unpaired-notice-more,
+.unpaired-notice-error {
+  text-wrap: pretty;
+}
+.unpaired-notice .unpaired-notice-step-n {
+  color: #fff;
+  background: var(--accent, #007AFF);
 }

@@ -13,7 +13,8 @@ import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
-import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { deepLinkBaseUrl, usePhoneRestore } from '@/hooks/usePhoneRestore';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
@@ -1218,7 +1219,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       visible, tasksLoading: loading, tasksError: !!tasksError, urlPending: !!urlSync.pending,
       taskCount: tasks.length, completedHidden,
       columnCount: sessionColumns.length, draftCount: draftColumns.length,
-      chatVisible, narrowLayout: window.matchMedia('(max-width: 768px)').matches,
+      chatVisible, narrowLayout: isPhoneLayout(),
     };
     if (!firstDraftDecisionReady(input)) return;
     firstDraftDecidedRef.current = true;
@@ -1565,6 +1566,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   const handleToggleSession = openSessionOrToast;
 
+  // Phone: a deep link (/?s1=<id>) opens its session as a layer whose back lands
+  // on home (C26); a reload puts the open session, its message and the home
+  // list's scroll back where they were (C80).
+  const [phoneDeepLinkBase] = useState(() => deepLinkBaseUrl(window.location.href));
+  const phoneColumnsRef = useRef(sessionColumns);
+  phoneColumnsRef.current = sessionColumns;
+  usePhoneRestore({
+    ready: !loading,
+    isSessionOpen: (sid) => phoneColumnsRef.current.some((c) => c.id === sid),
+    openSession: openSessionOrToast,
+  });
+
   // ⌘⇧O opens the session finder from anywhere on the home page (no mouse
   // needed). Plain ⌘K stays with the task search (TodoSearchBar) — don't
   // collide. Shortcut choice: ⌘⇧K is Firefox's Web Console, ⌘J is Chrome's
@@ -1653,13 +1666,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         : null;
       const target = pending.opener?.isConnected ? pending.opener : fallback;
       target?.focus({ preventScroll: true });
-      target?.scrollIntoView({ block: 'nearest' });
+      // Phone: back puts the home exactly where it was (C34); the row is on
+      // screen already, and nudging it out from under the stuck headings moved it.
+      if (!isPhoneLayout()) target?.scrollIntoView({ block: 'nearest' });
     });
     return () => cancelAnimationFrame(frame);
   }, [sessionColumns]);
 
   useEffect(() => {
-    if (sessionColumns.length === 0 || !window.matchMedia('(max-width: 768px)').matches) return;
+    if (sessionColumns.length === 0 || !isPhoneLayout()) return;
     const frame = requestAnimationFrame(() => {
       document.querySelector<HTMLButtonElement>(
         '.main-page-session-column.is-mobile-active .session-panel-close',
@@ -3043,19 +3058,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {/* The day agenda and the scratchpad open right of the task panel, as the
           first of the columns beside it (user, 2026-09-25: not on the far right,
           and not left of the tasks). A narrow window overlays it from the same edge. */}
-      <HomeCompanionPanel
-        calendarOpen={calendarVisible}
-        scratchpadOpen={scratchpadVisible}
-        onCloseCalendar={closeCompanion}
-        onCloseScratchpad={closeScratchpad}
-        tasks={tasks}
-        focusedTaskId={focusedTask?.id}
-        onTaskClick={handleFocusTaskById}
-        overlayLeft={todoShown ? todoPanel.width : undefined}
-      />
+      {/* Phone (C49, spec 5.1): the desktop-only panes neither mount nor fetch
+          (the panel loads the scratchpad on mount); their saved flags stay as
+          the desktop left them. */}
+      {!phoneLayout && (
+        <HomeCompanionPanel
+          calendarOpen={calendarVisible}
+          scratchpadOpen={scratchpadVisible}
+          onCloseCalendar={closeCompanion}
+          onCloseScratchpad={closeScratchpad}
+          tasks={tasks}
+          focusedTaskId={focusedTask?.id}
+          onTaskClick={handleFocusTaskById}
+          overlayLeft={todoShown ? todoPanel.width : undefined}
+        />
+      )}
 
       {/* Routines Panel (slide-out, toggled via Sidebar) */}
-      {routinesVisible && (
+      {routinesVisible && !phoneLayout && (
         <div className="main-page-routines">
           <div className="routines-panel-header">
             <span className="routines-panel-title">&#9889; Routines</span>
@@ -3093,6 +3113,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       <div className={`main-page-chat${chatVisible ? '' : ' collapsed'}`}>
         {chatVisible && (
         <AskWalnutSlot
+          phoneOpen={phoneLayout && chatVisible}
           tasks={tasks}
           // First-load flag, so the slot doesn't read the store's empty starting
           // list as "no asks yet" and flash its composer on every page load.
@@ -3194,6 +3215,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           const colStyle: React.CSSProperties = colCount >= 2
             ? { flex: `0 0 ${renderWeights[colIdx] ?? 0}%` }
             : {};
+          // Phone: only the open column is on screen, so only it mounts (and fetches).
+          if (phoneLayout && idx !== mobileActiveIdx) {
+            return <div key={sid} className="main-page-session-column" data-column-id={sid} data-phone-parked="true" />;
+          }
           return (<Fragment key={sid}>
             {/* This divider trades width between colIdx-1 and colIdx only. */}
             {needsDivider && <div className="session-col-resize-handle" {...colSplitHandleProps(colIdx - 1)} />}
@@ -3214,6 +3239,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     onStart={handleDraftStart}
                     onSaveAsTask={handleDraftSaveAsTask}
                     onClose={closeDraftColumn}
+                    phoneLayer={phoneLayout && idx === mobileActiveIdx}
                     onPathChange={handleDraftPathChange}
                     onProjectChange={handleDraftProjectChange}
                     onMetaChange={handleDraftMetaChange}
@@ -3276,6 +3302,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onSessionClick={handleSessionClick}
                   onSessionReplaced={handleSessionReplaced}
                   onOpenForkDraft={handleOpenForkDraft}
+                  phoneLayer={phoneLayout && idx === mobileActiveIdx}
+                  phoneDeepLinkBaseUrl={phoneDeepLinkBase}
                 />
               )}
             </div>

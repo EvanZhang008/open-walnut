@@ -1,0 +1,680 @@
+/* Phone session surfaces (spec 4.4, 4.5, 4.7 "Session overlay"): the session
+   overlay, the Ask Walnut chat and the draft sit on the keyboard; one bar (the
+   panel's own header is hidden, its title, status and kebab are the top
+   bar's); the composer clears the home indicator; the jump and prompt pills.
+   Same query as phone-layout.css. Rules a touch screen of any width needs
+   (iPad portrait included) are in the (hover: none) block at the end. */
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* Full-screen layers end at the keyboard's top edge. */
+  .app-shell-navigation .main-page-content-row > .main-page-sessions-area:not(.collapsed) {
+    bottom: var(--wn-keyboard-inset, 0px) !important;
+    height: calc(100dvh - var(--phone-topbar-h, 44px) - var(--wn-keyboard-inset, 0px)) !important;
+  }
+
+  .app-shell-navigation .main-page-chat:not(.collapsed) {
+    height: calc(100dvh - var(--phone-topbar-h, 44px) - var(--wn-keyboard-inset, 0px));
+  }
+
+  /* One bar: the top bar carries the title, the status line and the kebab. The
+     header stays in the tree (the plan window is drawn from inside it), it
+     just takes no room and no taps. */
+  .app-shell-navigation .session-panel.is-phone-layer > .session-panel-header {
+    visibility: hidden;
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  .app-shell-navigation .session-panel.is-phone-layer > .session-panel-header .plan-popup-overlay {
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-body .session-history {
+    padding-top: 8px;
+  }
+
+  /* The kebab in the top bar: a 44 px target, its rows finger sized. */
+  .phone-topbar .phone-bar-slot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .phone-topbar .phone-bar-slot .task-kebab-btn {
+    width: 44px;
+    height: 44px;
+    font-size: 20px;
+    opacity: 1;
+  }
+
+  html body .task-kebab-menu .task-kebab-item,
+  html body .task-kebab-menu [role='menuitem'] {
+    min-height: 44px;
+  }
+
+  /* The tier picker: finger-sized chips that wrap instead of one tight row. */
+  html body .task-kebab-menu .task-kebab-tier {
+    flex-wrap: wrap;
+  }
+
+  html body .task-kebab-menu .task-kebab-tier-options {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  html body .task-kebab-menu .task-kebab-tier-btn {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0 10px;
+    font-size: 14px;
+  }
+
+  .phone-session-row-chip > .session-action-chip {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 15px;
+    text-align: left;
+  }
+
+  .phone-session-row.is-active {
+    font-weight: 600;
+  }
+
+  /* Composer: clear of the home indicator with the keyboard down, close to
+     the keyboard with it up (spec 4.4). */
+  .app-shell-navigation .session-panel-input,
+  .app-shell-navigation .main-page-chat .chat-composer-overlay {
+    padding-bottom: max(8px, var(--wn-safe-bottom, 0px));
+  }
+
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel-input,
+  html[data-wn-keyboard='open'] .app-shell-navigation .main-page-chat .chat-composer-overlay {
+    padding-bottom: 8px;
+  }
+
+  /* Keyboard up: the composer gives its spare padding to the timeline, which
+     keeps at least 300 px on a 390 x 844 screen with a notch (spec 4.7). */
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel-input {
+    padding-top: 0;
+    padding-bottom: 2px;
+  }
+
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel-input .chat-input-container {
+    padding: 2px 0 0;
+  }
+
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel-input .chat-input-controls {
+    padding-bottom: 0;
+  }
+
+  /* Send: a 44 x 44 target. */
+  .app-shell-navigation .session-panel-input .chat-send-btn-icon,
+  .app-shell-navigation .main-page-chat .chat-send-btn-icon,
+  .app-shell-navigation .draft-session-panel .chat-send-btn-icon {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* Timeline (spec 4.5): the jump pill reuses .scroll-to-bottom-btn; the prompt
+   pill stacks 8 px above it. Both sticky at the scroller's bottom, both in
+   the scroller's own box, so neither covers the composer. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* flex-shrink 0: the timeline is a flex column, and a long one squeezes a
+     shrinkable item down to its text's height. */
+  .app-shell-navigation .scroll-to-bottom-btn {
+    flex-shrink: 0;
+    width: auto;
+    min-width: 88px;
+    height: 44px;
+    min-height: 44px;
+    margin-top: -44px;
+    padding: 0 16px;
+    border-radius: 22px;
+    font-size: 15px;
+    font-weight: 600;
+    align-self: center;
+  }
+
+  .app-shell-navigation .phone-prompt-pill {
+    flex-shrink: 0;
+    min-height: 44px;
+    position: sticky;
+    bottom: 8px;
+    z-index: 11;
+    align-self: center;
+    height: 44px;
+    margin-top: -44px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 22px;
+    background: var(--accent, #2563eb);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    box-shadow: 0 2px 10px rgb(0 0 0 / 18%);
+  }
+
+  .app-shell-navigation .phone-prompt-pill.is-stacked {
+    bottom: calc(8px + 44px + 8px);
+  }
+
+  /* Message text 16 px; code blocks scroll inside themselves. */
+  .app-shell-navigation .session-panel .session-history .markdown {
+    font-size: 16px;
+    line-height: 1.45;
+  }
+
+  .app-shell-navigation .session-panel .session-history pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  /* A run of tool calls is one 44 px row: `<n> tool calls`. */
+  .app-shell-navigation .session-history .tool-run-toggle {
+    min-height: 44px;
+  }
+
+  .app-shell-navigation .session-history .tool-run-toggle:has(.tool-run-count) .tool-run-label {
+    display: none;
+  }
+
+  /* The delivery line replaces the desktop badges (the actions stay). */
+  .app-shell-navigation .session-history .session-msg-received-badge,
+  .app-shell-navigation .session-history .session-msg-delivered-badge,
+  .app-shell-navigation .session-history .session-msg-failed-badge {
+    display: none;
+  }
+
+  .app-shell-navigation .session-delivery-meta {
+    display: block;
+    margin: 2px 0 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--fg-muted);
+    font-size: 12px;
+    text-align: right;
+    transition: opacity 0.4s;
+  }
+
+  .app-shell-navigation button.session-delivery-meta {
+    min-height: 44px;
+    margin-left: auto;
+    color: var(--error, #dc2626);
+  }
+
+  .app-shell-navigation .session-delivery-meta.is-fading {
+    opacity: 0;
+  }
+}
+
+/* Off phone the count and the delivery line are not drawn. */
+.tool-run-count {
+  display: none;
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .tool-run-count {
+    display: inline;
+  }
+}
+
+/* Prompt cards (spec 4.7 "Permission prompt"): at the end of the timeline,
+   never pinned; Allow / Deny side by side, an adapter's options stacked; an
+   unarmed card reads as such; the command wraps and keeps its last lines. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .permission-request-card {
+    position: static;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell-navigation .permission-request-card.is-arming .permission-request-actions,
+  .app-shell-navigation .permission-request-card.is-arming .qp-options {
+    opacity: 0.6;
+  }
+
+  .app-shell-navigation .permission-request-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .app-shell-navigation .permission-request-actions > .permission-request-btn {
+    flex: 1 1 0;
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .app-shell-navigation .permission-request-actions--options {
+    flex-direction: column;
+  }
+
+  .app-shell-navigation .permission-request-btn.is-busy {
+    position: relative;
+    color: transparent;
+  }
+
+  .app-shell-navigation .permission-request-btn.is-busy::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 18px;
+    height: 18px;
+    margin: auto;
+    border: 2px solid currentColor;
+    border-color: var(--fg-muted) transparent var(--fg-muted) var(--fg-muted);
+    border-radius: 50%;
+    animation: phone-busy-ring 0.8s linear infinite;
+  }
+
+  .app-shell-navigation .permission-request-input-toggle,
+  .app-shell-navigation .permission-command-showall {
+    min-height: 44px;
+    padding: 0 8px;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font-size: 15px;
+  }
+
+  .app-shell-navigation .permission-command-text {
+    margin: 6px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    max-width: 100%;
+  }
+
+  /* AskUserQuestion: full-width rows, check rows for multi-select. */
+  .app-shell-navigation .qp-options.qp-options--rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .app-shell-navigation .qp-options--rows > .qp-option {
+    display: flex;
+    /* R3-08: one row, the mark beside the label (the desktop chip is a column). */
+    flex-direction: row;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 48px;
+    padding: 8px 12px;
+    font-size: 16px;
+    text-align: left;
+  }
+
+  .app-shell-navigation .qp-options--rows .qp-option-mark {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--fg-muted);
+    border-radius: 50%;
+  }
+
+  .app-shell-navigation .qp-options--rows .qp-option-label {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell-navigation .qp-options--rows .qp-option--check .qp-option-mark {
+    border-radius: 4px;
+  }
+
+  .app-shell-navigation .qp-options--rows .qp-option-selected .qp-option-mark {
+    border-color: var(--accent);
+    background: var(--accent);
+    box-shadow: inset 0 0 0 3px var(--bg);
+  }
+
+  .app-shell-navigation .qp-options--rows .qp-option-desc {
+    flex-basis: 100%;
+    padding-left: 30px;
+    font-size: 13px;
+  }
+
+  .app-shell-navigation .ask-user-question-card .qp-input {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+    box-sizing: border-box;
+  }
+
+  .app-shell-navigation .ask-user-submit-hint {
+    margin-top: 8px;
+    color: var(--fg-muted);
+    font-size: 13px;
+  }
+
+  .app-shell-navigation .ask-user-question-card .permission-request-actions {
+    flex-direction: column;
+    margin-top: 8px;
+  }
+
+  .app-shell-navigation .ask-user-question-card .permission-request-actions > .permission-request-btn {
+    width: 100%;
+  }
+}
+
+@keyframes phone-busy-ring {
+  to { transform: rotate(360deg); }
+}
+
+/* Plan approval on a phone: the plan's head, then a full-screen layer. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .phone-plan-preview-text {
+    margin: 6px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  html body .phone-plan-layer {
+    position: fixed;
+    top: var(--phone-topbar-h, 44px);
+    left: 0;
+    right: 0;
+    bottom: var(--wn-keyboard-inset, 0px);
+    z-index: 45;
+    overflow-y: auto;
+    padding: 12px 16px calc(12px + var(--wn-safe-bottom, 0px));
+    background: var(--bg);
+  }
+
+  html body .phone-plan-layer-text {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 16px;
+    line-height: 1.45;
+  }
+}
+
+/* Board, Files, Changed in a session (C77, C78): the view OR the chat, each
+   the full width; the divider between them has nothing to divide. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-split.is-changed-open > .session-panel-diff-col {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-split.is-changed-open:not(.is-chat-collapsed) > .session-panel-diff-col {
+    display: none;
+  }
+
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-split.is-changed-open:not(.is-chat-collapsed) > .session-panel-chat-col {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+  }
+
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-split.is-changed-open .session-col-resize-handle,
+  .app-shell-navigation .session-panel.is-phone-layer .session-panel-split.is-changed-open .session-panel-chat-resize {
+    display: none;
+  }
+
+  .app-shell-navigation .session-panel.is-phone-layer .session-chat-collapse-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* The Board's reply dock sits on the keyboard (C77). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .session-panel.is-phone-layer .task-board-dock {
+    position: fixed !important;
+    top: auto !important;
+    left: 0 !important;
+    right: 0;
+    bottom: var(--wn-keyboard-inset, 0px);
+    width: auto !important;
+    z-index: 44;
+    padding-bottom: max(8px, var(--wn-safe-bottom, 0px));
+  }
+
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .task-board-dock {
+    padding-bottom: 8px;
+  }
+
+  .app-shell-navigation .session-panel.is-phone-layer .task-board-dock-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* Files: the tree or one file, never both (C78). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .session-file-explorer-body.is-phone-tree > .session-file-explorer-tree {
+    flex: 1 1 100%;
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  .app-shell-navigation .session-file-explorer-body.is-phone-tree > .session-file-explorer-preview,
+  .app-shell-navigation .session-file-explorer-body.is-phone-tree > .sfe-divider,
+  .app-shell-navigation .session-file-explorer-body.is-phone-file > .session-file-explorer-tree,
+  .app-shell-navigation .session-file-explorer-body.is-phone-file > .sfe-divider {
+    display: none;
+  }
+
+  .app-shell-navigation .session-file-explorer-body.is-phone-file > .session-file-explorer-preview {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app-shell-navigation .session-file-explorer-tree .session-file-explorer-node {
+    min-height: 44px;
+  }
+}
+
+/* Composer popovers (C81): finger-sized rows; useMenuPlacement keeps them in
+   the space between the top bar and the keyboard. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html body .command-palette-item,
+  html body .mention-row,
+  html body .model-picker-row,
+  html body .provider-rail-item,
+  html body .model-picker-close {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+
+}
+
+/* Touch screens of any width (the iPad's portrait desktop columns too, C37,
+   C86): nothing in a session is reachable only by hovering. A message's copy
+   actions, a command's expand button and the plan card's expand show at a
+   low contrast, full when pressed. */
+@media (hover: none) {
+  html body .session-msg .session-msg-actions,
+  html body .session-msg-bare .session-msg-actions {
+    opacity: 0.7;
+    pointer-events: auto;
+  }
+
+  html body .session-msg .session-msg-actions:active,
+  html body .session-msg-bare .session-msg-actions:active,
+  html body .bash-tool-expand-btn:active {
+    opacity: 1;
+  }
+
+  html body .bash-tool-expand-btn {
+    opacity: 0.6;
+  }
+
+  html body .session-panel-header .task-kebab-btn {
+    opacity: 1;
+  }
+}
+
+/* Changed: one column, the diff scrolls inside its own box (C78). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .session-panel.is-phone-layer .session-diff-viewtoggle {
+    display: none;
+  }
+
+  .app-shell-navigation .session-panel.is-phone-layer .session-diff-table {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+/* The composer's own palettes open upward from it: never under the top bar,
+   whatever the keyboard leaves (C81). 180 px is the composer and its gaps. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .command-palette,
+  .app-shell-navigation .mention-palette {
+    max-height: min(280px, calc(100dvh - var(--phone-topbar-h, 44px) - var(--wn-keyboard-inset, 0px) - 180px));
+    overflow-y: auto;
+  }
+}
+
+/* Finger-sized targets and 12 px text in the session surfaces (C19). A short
+   control keeps its drawn height and gets a 44 px tall hit area from a
+   centered ::before (hit testing counts it), so rows do not grow. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
+    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .session-detail-model-pill
+  ),
+  .phone-topbar .phone-bar-slot .task-action-btn {
+    position: relative;
+  }
+
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
+    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .session-detail-model-pill
+  )::before,
+  .phone-topbar .phone-bar-slot .task-action-btn::before {
+    content: '';
+    position: absolute;
+    /* The box's own width (each of these is at least 44 wide): a wider hit
+       area would take the edge of the neighbour's. */
+    left: 0;
+    right: 0;
+    top: 50%;
+    z-index: 1; /* above the next row, which may start inside the 44 px */
+    height: max(100%, 44px);
+    transform: translateY(-50%);
+  }
+
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) .mode-toggle-pill {
+    min-width: 44px;
+  }
+
+  .phone-topbar .phone-bar-slot .task-action-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Side by side, so each is 44 wide for real (the ::before gives the height). */
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) .msg-copy-btn {
+    min-width: 44px;
+    justify-content: center;
+  }
+
+  /* Pin and Rewind touch edge to edge: a hair between them, so a tap on the
+     edge of one is not the other's. */
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
+    .msg-copy-btn + .msg-copy-btn, .msg-copy-actions + .msg-copy-btn, .msg-copy-btn + .msg-copy-actions
+  ) {
+    margin-left: 2px;
+  }
+
+  /* The composer box clips anything drawn past it: these are 44 x 44 boxes. */
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(.chat-plus-btn, .mic-btn, .session-detail-model-pill) {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  html body .task-kebab-menu .task-kebab-project-current,
+  .app-shell-navigation .session-panel select {
+    min-height: 44px;
+  }
+
+  /* The Files / Changed toolbars: side-by-side icon buttons, so each is a real
+     44 x 44 box; the path between them gives up the width. */
+  .app-shell-navigation .session-panel .sfe-btn {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  .app-shell-navigation .session-panel .sfe-btn-label {
+    display: none;
+  }
+
+  /* A touch screen has no Shift+Tab: the shortcut hint goes. */
+  .app-shell-navigation .mode-toggle-pill-shortcut {
+    display: none;
+  }
+
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
+    .msg-copy-label, .msg-time, .mode-toggle-pill-label, .session-detail-model-pill, .composer-model-pill-short,
+    .sfe-arrow, .session-diff-base-help, .session-diff-ai-toggle, .session-diff-commit-btn,
+    .chat-earlier-label, .chat-earlier-divider span
+  ),
+  html body .task-kebab-menu :is(.task-kebab-date-caret, .task-kebab-project-caret, .task-kebab-status-caret) {
+    font-size: 12px;
+  }
+
+  /* Show hidden files: the checkbox covers its whole 44 px label (it is the
+     target), and the label draws the box. */
+  .app-shell-navigation .session-panel .sfe-hidden-toggle {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 6px;
+  }
+
+  .app-shell-navigation .session-panel .sfe-hidden-toggle::before {
+    content: '';
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid currentColor;
+    border-radius: 4px;
+    opacity: 0.7;
+  }
+
+  .app-shell-navigation .session-panel .sfe-hidden-toggle:has(input:checked)::before {
+    border-color: var(--accent, #2563eb);
+    background: var(--accent, #2563eb);
+    opacity: 1;
+  }
+
+  .app-shell-navigation .session-panel .sfe-hidden-toggle input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0.001;
+    cursor: pointer;
+  }
+}

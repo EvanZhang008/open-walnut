@@ -3338,7 +3338,10 @@ apiV1Router.get('/me', async (req: Request, res: Response, next: NextFunction) =
     const { resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
     const rawSid = req.headers['x-walnut-caller-sid']
     const me = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
-    res.json(me)
+    // A paired device (a phone, a signed-in browser) learns which device record
+    // is its own, so its settings can mark that row and offer to sign it out.
+    const deviceName = (req as Request & { deviceName?: string }).deviceName
+    res.json(deviceName ? { ...me, device: { name: deviceName } } : me)
   } catch (err) {
     next(err)
   }

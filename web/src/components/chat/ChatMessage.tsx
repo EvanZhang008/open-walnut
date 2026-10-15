@@ -126,7 +126,7 @@ function CompactionDetails({ details }: { details: string }) {
   return (
     <div className="chat-compaction-details">
       <button className="chat-compaction-details-toggle" onClick={() => setOpen(p => !p)}>
-        <span className="chat-compaction-details-icon">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="chat-compaction-details-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
         <span className="chat-compaction-details-label">
           {open ? 'Hide compaction details' : 'Show compaction details'}
         </span>
@@ -192,7 +192,7 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
   return (
     <div className="chat-task-context">
       <button className="chat-task-context-toggle" onClick={() => setOpen(p => !p)}>
-        <span className="chat-task-context-icon">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="chat-task-context-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
         <span className="chat-task-context-label">
           Task Context &middot; {ctx.title}
         </span>
@@ -319,7 +319,7 @@ function RouteInfoSection({ info, taskLookup, onTaskClick, onSessionClick }: Rou
   return (
     <div className="chat-route-info">
       <button className="chat-route-info-toggle" onClick={() => setOpen(p => !p)}>
-        <span className="chat-route-info-icon">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="chat-route-info-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
         <span className="chat-route-info-label">{label}</span>
       </button>
       {open && (
@@ -708,7 +708,7 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
         {!open && inputSummaryNode && (
           <span className="chat-tool-block-summary">{inputSummaryNode}</span>
         )}
-        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
       </button>
       {open && (
         <div className="chat-tool-block-body">
@@ -807,7 +807,7 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTask
             {statusIcon}
           </span>
           <span className="chat-tool-group-summary">{summaryText}</span>
-          <span className="chat-tool-group-arrow">{isOpen ? '\u25BC' : '\u25B6'}</span>
+          <span className="chat-tool-group-arrow">{isOpen ? '\u25BC' : '\u25B6\uFE0E'}</span>
         </button>
         {isOpen && (
           <div className="chat-tool-group-body">
@@ -1114,7 +1114,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
           />
         )}
         {time && <div className="chat-message-time">{time}</div>}
-        {shouldAutoCollapse && <span className="chat-collapse-toggle">{isCollapsed ? '\u25B6' : '\u25BC'}</span>}
+        {shouldAutoCollapse && <span className="chat-collapse-toggle">{isCollapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>}
       </div>
     </div>
   ) : null;

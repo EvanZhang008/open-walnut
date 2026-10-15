@@ -1,97 +1,231 @@
 /**
- * Shown when the server refuses this browser for lack of a credential: a browser
- * on another device, or one whose device token was revoked. Without it the app
- * renders an empty board, which reads as lost data. See api/unpaired.ts.
+ * The sign-in page (spec 3): what a browser without a working sign-in sees,
+ * full screen and opaque, so nothing of the console shows or takes a tap.
  *
- * It takes a sign-in code (api/browser-pair.ts): the person at the computer
- * Walnut runs on makes one in Settings > Phones & Cloud. A `#pair=` link fills it
- * in and signs in on its own; when that code fails, the form shows why.
+ *   unpaired      no token; main.tsx renders this page alone (sign-in-gate.ts)
+ *   revoked       a token the server refuses; it covers the booted console
+ *   signed-out    this browser signed itself out (Settings > Phones & Cloud
+ *                 sets sessionStorage['walnut.signedOut'] = 'self', then reloads)
+ *   probe-failed  no token and GET /api/v1/me did not answer; the gate passes
+ *                 `probeFailed` and `onRetryProbe` (spec D5)
+ *   pending       a scanned `#pair=` code is being traded
+ *
+ * A code comes from the person at the computer Walnut runs on (Settings >
+ * Phones & Cloud). Every string lives in sign-in-copy.ts.
  *
  * Portalled to <body> for the same reason as StaleBuildPill: a `contain: paint`
  * ancestor turns `position: fixed` into "fixed inside that box".
  */
-import { useEffect, useState, useSyncExternalStore, type FormEvent } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { getUnpairedState, subscribeUnpaired } from '@/api/unpaired';
 import {
   exchangeBrowserCode, getFragmentPairState, subscribeFragmentPair, type FragmentPairState,
 } from '@/api/browser-pair';
+import { log } from '@/utils/log';
+import { formatSignInCode } from './sign-in-code';
+import {
+  pickSignInState, signInCopy, SIGN_IN_PENDING_LINE, SIGN_IN_PENDING_SLOW, SIGN_IN_PENDING_TITLE, SIGN_IN_FAILED_SCAN_HEADING,
+  SIGN_IN_SIGNED_OUT_FLAG, type SignInCopy, type SignInState,
+} from './sign-in-copy';
+import { UnpairedCodeField } from './UnpairedCodeField';
 import '@/styles/unpaired-notice.css';
 
-export function UnpairedNotice() {
+export interface UnpairedNoticeProps {
+  /** No token and the sign-in probe did not answer (spec D5). */
+  probeFailed?: boolean;
+  /** Ask the probe again; the button stays busy until it settles. */
+  onRetryProbe?: () => void | Promise<unknown>;
+}
+
+const SLOW_PENDING_MS = 6_000;
+
+function matches(query: string): boolean {
+  try { return window.matchMedia(query).matches; } catch { return false; }
+}
+
+/** Touch and Home Screen app, read once: neither changes while the page lives. */
+function readEnv(): { touch: boolean; standalone: boolean } {
+  const nav = navigator as Navigator & { standalone?: boolean };
+  return {
+    touch: matches('(pointer: coarse)'),
+    standalone: matches('(display-mode: standalone)') || nav.standalone === true,
+  };
+}
+
+function signedOutBySelf(): boolean {
+  try { return sessionStorage.getItem(SIGN_IN_SIGNED_OUT_FLAG) === 'self'; } catch { return false; }
+}
+
+function clearSignedOut(): void {
+  try { sessionStorage.removeItem(SIGN_IN_SIGNED_OUT_FLAG); } catch { /* private mode */ }
+}
+
+export function UnpairedNotice({ probeFailed = false, onRetryProbe }: UnpairedNoticeProps = {}) {
   const state = useSyncExternalStore(subscribeUnpaired, getUnpairedState);
   const fragment = useSyncExternalStore(subscribeFragmentPair, getFragmentPairState);
-  if (state === 'ok') return null;
-  const port = window.location.port || '3456';
-  return createPortal(
-    <div className="unpaired-notice" role="alert" data-testid="unpaired-notice">
-      <div className="unpaired-notice-title">
-        {state === 'revoked' ? 'This device is no longer paired' : 'This device is not paired with Walnut'}
+  const [env] = useState(readEnv);
+  // A scanned code is a new sign-in: the "Signed out" page no longer applies.
+  useEffect(() => { if (fragment.phase === 'pending') clearSignedOut(); }, [fragment.phase]);
+  // A `#pair=` code being traded shows its pending page before the console
+  // boots (main.tsx), so the phone never sits on a blank page. A scanned code
+  // that failed while an older sign-in still works (a used QR scanned again)
+  // leaves that console alone: the gate booted it, and nothing is wrong.
+  if (state === 'ok' && fragment.phase !== 'pending' && !probeFailed) return null;
+  const signInState = pickSignInState(state, probeFailed, signedOutBySelf());
+  const page = fragment.phase === 'pending'
+    ? <PendingPage />
+    : <SignInPage
+        state={signInState}
+        copy={signInCopy({ state: signInState, ...env })}
+        fragment={fragment}
+        onRetryProbe={onRetryProbe}
+      />;
+  return createPortal(page, document.body);
+}
+
+function Brand() {
+  return <img className="unpaired-notice-icon" src="/walnut-icon.png" alt="" width={64} height={64} />;
+}
+
+/** A scanned code being traded: no steps, no form, one line and a ring. */
+function PendingPage() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setSlow(true), SLOW_PENDING_MS);
+    return () => window.clearTimeout(t);
+  }, []);
+  return (
+    <div className="unpaired-notice unpaired-notice-pending" role="status" aria-busy="true" data-testid="unpaired-notice">
+      <div className="unpaired-notice-column">
+        <Brand />
+        <h1 className="unpaired-notice-title">{SIGN_IN_PENDING_TITLE}</h1>
+        <p className="unpaired-notice-tagline">{SIGN_IN_PENDING_LINE}</p>
+        <span className="unpaired-notice-ring" aria-hidden="true" data-testid="unpaired-pending-ring" />
+        {slow && <p className="unpaired-notice-slow" data-testid="unpaired-pending-slow">{SIGN_IN_PENDING_SLOW}</p>}
       </div>
-      <p className="unpaired-notice-body">
-        Walnut answers only the computer it runs on and the devices you sign in. To sign in this
-        browser, make a code in Walnut on that computer (Settings &gt; Phones &amp; Cloud) and enter it here.
-      </p>
-      <CodeForm fragment={fragment} />
-      <p className="unpaired-notice-body unpaired-notice-more">
-        On that computer itself, open <code>http://localhost:{port}</code>; from another computer you can
-        also forward the port over SSH (<code>ssh -L {port}:localhost:{port} &lt;that computer&gt;</code>).
-        For a phone, pair the Walnut app in Settings &gt; Phones &amp; Cloud.
-      </p>
-    </div>,
-    document.body,
+    </div>
   );
 }
 
-function CodeForm({ fragment }: { fragment: FragmentPairState }) {
-  const [code, setCode] = useState(fragment.phase === 'idle' ? '' : fragment.code);
+function SignInPage({ state, copy, fragment, onRetryProbe }: {
+  state: SignInState;
+  copy: SignInCopy;
+  fragment: FragmentPairState;
+  onRetryProbe?: () => void | Promise<unknown>;
+}) {
+  const steps = (
+    <ol className="unpaired-notice-steps" data-testid="unpaired-steps">
+      {copy.steps.map((step, i) => (
+        <li key={i}><span className="unpaired-notice-step-n" aria-hidden="true">{i + 1}</span><span>{step}</span></li>
+      ))}
+    </ol>
+  );
+  const code = (
+    <section
+      className={copy.codeFirst ? 'unpaired-notice-code unpaired-notice-code-first' : 'unpaired-notice-code'}
+      aria-labelledby="unpaired-code-heading"
+      data-testid="unpaired-code-section"
+    >
+      {/* After a scanned link failed, "Can't scan it?" no longer fits: the scan worked. */}
+      <h2 className="unpaired-notice-h2" id="unpaired-code-heading">{fragment.phase === 'failed' ? SIGN_IN_FAILED_SCAN_HEADING : copy.codeHeading}</h2>
+      {copy.codeHint && <p className="unpaired-notice-hint">{copy.codeHint}</p>}
+      <CodeForm copy={copy} fragment={fragment} />
+    </section>
+  );
+  return (
+    <div className="unpaired-notice" aria-labelledby="unpaired-notice-title" data-testid="unpaired-notice" data-sign-in-state={state}>
+      <div className="unpaired-notice-column">
+        <Brand />
+        <h1 className="unpaired-notice-title" id="unpaired-notice-title">{copy.title}</h1>
+        <p className="unpaired-notice-tagline">{copy.tagline}</p>
+        {copy.retry && (
+          <button type="button" className="unpaired-notice-text-btn" onClick={() => window.location.reload()} data-testid="unpaired-retry">
+            {copy.retry}
+          </button>
+        )}
+        {copy.probeError && <ProbeRetry message={copy.probeError} label={copy.probeRetry ?? 'Try again'} onRetry={onRetryProbe} />}
+        {copy.codeFirst ? <>{code}<hr className="unpaired-notice-rule" />{steps}</> : <>{steps}<hr className="unpaired-notice-rule" />{code}</>}
+        <p className="unpaired-notice-more">{copy.footer}</p>
+      </div>
+    </div>
+  );
+}
+
+function ProbeRetry({ message, label, onRetry }: { message: string; label: string; onRetry?: () => void | Promise<unknown> }) {
+  const [busy, setBusy] = useState(false);
+  const retry = () => {
+    if (busy) return;
+    if (!onRetry) { window.location.reload(); return; }
+    setBusy(true);
+    Promise.resolve().then(onRetry).catch(() => undefined).finally(() => setBusy(false));
+  };
+  return (
+    <div className="unpaired-notice-probe">
+      <p className="unpaired-notice-error" role="alert" data-testid="unpaired-probe-error">
+        {message}
+      </p>
+      <button type="button" className="unpaired-notice-text-btn" onClick={retry} disabled={busy} aria-busy={busy || undefined} data-testid="unpaired-probe-retry">
+        {busy && <span className="unpaired-notice-spinner" aria-hidden="true" />}
+        <span>{label}</span>
+      </button>
+    </div>
+  );
+}
+
+/** api/browser-pair.ts's answer when no response came back at all. */
+function isNetworkFailure(message: string): boolean {
+  return /did not answer/i.test(message);
+}
+
+function CodeForm({ copy, fragment }: { copy: SignInCopy; fragment: FragmentPairState }) {
+  const [code, setCode] = useState(fragment.phase === 'failed' ? formatSignInCode(fragment.code).display : '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(fragment.phase === 'failed' ? fragment.message : null);
+  // The server's answer was about the code itself (not "Walnut did not
+  // answer"): the same code would be refused again, so it waits for an edit.
+  const [refused, setRefused] = useState(fragment.phase === 'failed' && !isNetworkFailure(fragment.message));
+  // A scanned code that failed: the code stays in the field with the reason.
   useEffect(() => {
     if (fragment.phase !== 'failed') return;
-    setCode(fragment.code);
+    setCode(formatSignInCode(fragment.code).display);
     setError(fragment.message);
+    setRefused(!isNetworkFailure(fragment.message));
   }, [fragment]);
 
-  const pending = busy || fragment.phase === 'pending';
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    const typed = code.trim();
-    if (pending || !typed) return;
+  const submit = (display: string) => {
+    if (busy) return;
+    // Busy in the same frame as the tap (a discrete event renders at once),
+    // before the request even leaves.
     setBusy(true);
     setError(null);
-    const result = await exchangeBrowserCode(typed);
-    if (result.ok) {
-      // Every request and the WebSocket start over with the new token.
-      window.location.reload();
-      return;
-    }
-    setBusy(false);
-    setError(result.message);
+    void exchangeBrowserCode(display).then((result) => {
+      if (result.ok) {
+        clearSignedOut();
+        // Every request and the WebSocket start over with the new token; the
+        // button stays busy until the page is replaced.
+        window.location.reload();
+        return;
+      }
+      log.info('pairing', 'sign-in page: code refused', { message: result.message });
+      setBusy(false);
+      setError(result.message);
+      setRefused(!isNetworkFailure(result.message));
+    });
   };
 
   return (
-    <form className="unpaired-notice-pair" onSubmit={(e) => { void submit(e); }} data-testid="unpaired-code-form">
-      <label className="unpaired-notice-label" htmlFor="unpaired-code">Sign-in code</label>
-      <div className="unpaired-notice-pair-row">
-        <input
-          id="unpaired-code"
-          className="unpaired-notice-input"
-          value={code}
-          onChange={(e) => { setCode(e.target.value); setError(null); }}
-          placeholder="XXXX-XXXX"
-          autoCapitalize="characters"
-          autoCorrect="off"
-          spellCheck={false}
-          maxLength={20}
-          disabled={pending}
-          data-testid="unpaired-code-input"
-        />
-        <button type="submit" className="btn btn-primary btn-sm" disabled={pending || !code.trim()} data-testid="unpaired-code-submit">
-          {pending ? 'Signing in...' : 'Sign in'}
-        </button>
-      </div>
-      {error && <p className="unpaired-notice-error" role="status" data-testid="unpaired-code-error">{error}</p>}
-    </form>
+    <UnpairedCodeField
+      value={code}
+      onValueChange={(next) => { if (next !== code) { setRefused(false); setError(null); } setCode(next); }}
+      error={error}
+      busy={busy}
+      refused={refused}
+      label={copy.inputLabel}
+      placeholder={copy.placeholder}
+      submitLabel={copy.submit}
+      busyLabel={copy.submitBusy}
+      onSubmit={submit}
+    />
   );
 }

@@ -40,6 +40,48 @@ import {
 import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { NotificationActionButtons } from './NotificationActionButtons';
 import { navigateToTarget } from '@/utils/open-session';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverlayHistory';
+
+/** Upward travel that dismisses a toast on the phone. */
+const SWIPE_DISMISS_PX = 40;
+
+/**
+ * Phone rules (spec 4.7 "Toasts"): one toast at a time (the rest wait their
+ * turn), and no permission toast for a session whose overlay is open, since
+ * its card is already on screen. Pure, so the order rule is testable.
+ */
+export function phoneVisibleToasts<T extends { kind?: string; resolved?: unknown; sessionId?: string | null }>(
+  toasts: readonly T[],
+  sessionOverlayOpen: (sid: string) => boolean,
+): T[] {
+  const first = toasts.find((t) => !(t.kind === 'permission' && !t.resolved && t.sessionId && sessionOverlayOpen(t.sessionId)));
+  return first ? [first] : [];
+}
+
+/** Swipe up on a toast dismisses it (phone). */
+function useSwipeUpDismiss(enabled: boolean, onDismiss: () => void) {
+  const start = useRef<{ id: number; y: number } | null>(null);
+  if (!enabled) return {};
+  return {
+    onPointerDownCapture: (e: React.PointerEvent) => { start.current = { id: e.pointerId, y: e.clientY }; },
+    // Capture only once the finger moves up: the finger leaves the toast while
+    // it swipes, so its pointerup must still land here. Capturing on down
+    // would retarget a plain tap's click away from the x and the buttons.
+    onPointerMoveCapture: (e: React.PointerEvent) => {
+      const s0 = start.current;
+      const el = e.currentTarget as HTMLElement;
+      if (!s0 || s0.id !== e.pointerId || e.clientY - s0.y > -8 || el.hasPointerCapture?.(e.pointerId)) return;
+      try { el.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    },
+    onPointerUpCapture: (e: React.PointerEvent) => {
+      const s0 = start.current;
+      start.current = null;
+      if (s0 && s0.id === e.pointerId && e.clientY - s0.y <= -SWIPE_DISMISS_PX) onDismiss();
+    },
+    onPointerCancelCapture: () => { start.current = null; },
+  };
+}
 
 // Escape-coded so the source bytes are identical across editors/terminals
 // (raw multi-codepoint emoji like ⚠️ can render or copy-paste inconsistently).
@@ -55,8 +97,13 @@ const SEVERITY_ICON: Record<NotificationSeverity, ReactNode> = {
 const RESOLVED_DISMISS_MS = 1500;
 
 export function NotificationToaster() {
-  const { toasts, dismissToast, pinToast, markReadByKey } = useNotifications();
+  const { toasts: allToasts, dismissToast, pinToast, markReadByKey } = useNotifications();
   const navigate = useNavigate();
+  const phone = usePhoneLayout();
+  usePhoneOverlayDepth(); // re-render when a session overlay opens or closes
+  const toasts = phone
+    ? phoneVisibleToasts(allToasts, (sid) => isPhoneOverlayOpen(`session:${sid}`))
+    : allToasts;
 
   if (toasts.length === 0) return null;
 
@@ -75,6 +122,7 @@ export function NotificationToaster() {
               // cancel it (see NotificationProvider.pinToast) rather than racing it.
               onPin={() => pinToast(toast.id)}
               navigate={navigate}
+              phone={phone}
             />
           );
         }
@@ -82,8 +130,8 @@ export function NotificationToaster() {
         // the notification center. Ephemeral ones (sort/audio) aren't — inert body.
         const opensCenter = toast.persistent;
         return (
+        <SwipeToast key={toast.id} phone={phone} onDismiss={() => dismissToast(toast.id)}>
         <div
-          key={toast.id}
           className={`notification-toast notification-toast--${toast.severity}${opensCenter ? ' notification-toast--clickable' : ''}`}
           role={toast.severity === 'error' || toast.severity === 'warning' ? 'alert' : 'status'}
           onClick={opensCenter ? () => {
@@ -144,6 +192,7 @@ export function NotificationToaster() {
             </button>
           )}
         </div>
+        </SwipeToast>
         );
       })}
     </div>
@@ -156,11 +205,19 @@ export function NotificationToaster() {
  * another surface, turn died) — settle and dismiss instead of re-arming buttons
  * the user would click forever.
  */
-function PermissionToast({ n, onDismiss, onPin, navigate }: {
+/** A wrapper that only adds the phone's swipe-up dismissal. */
+function SwipeToast({ phone, onDismiss, children }: { phone: boolean; onDismiss: () => void; children: ReactNode }) {
+  const swipe = useSwipeUpDismiss(phone, onDismiss);
+  if (!phone) return <>{children}</>;
+  return <div className="notification-toast-swipe" {...swipe}>{children}</div>;
+}
+
+function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
   n: Notification;
   onDismiss: () => void;
   onPin: () => void;
   navigate: (to: string) => void;
+  phone?: boolean;
 }) {
   const detail = permissionDetail(n);
   const requestId = requestIdOf(n);
@@ -232,6 +289,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
     onPin();
   }, [onPin]);
 
+  const swipe = useSwipeUpDismiss(phone, onDismiss);
   const context = [sessionLabelOf(n), n.host].filter(Boolean).join(' · ');
   // A record with no session/requestId can't be answered from here (legacy or a
   // dropped field) — offer the deep link instead of dead buttons. An
@@ -251,6 +309,13 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
       onPointerDown={pinOnce}
       onFocusCapture={pinOnce}
       onKeyDownCapture={pinOnce}
+      {...swipe}
+      // Phone: a tap on the toast's body (not on one of its controls) opens
+      // the session it came from, as an overlay.
+      onClick={phone && target ? (e) => {
+        if ((e.target as Element).closest('button, a, input, textarea, select, label, [role="button"]')) return;
+        openSession();
+      } : undefined}
     >
       <div className="notification-toast-header">
         <span className="notification-toast-icon">{SEVERITY_ICON.warning}</span>

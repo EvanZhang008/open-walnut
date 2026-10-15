@@ -18,7 +18,8 @@
 import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { consumeBrowserCode, mintBrowserCode } from '../../core/browser-pairing.js'
-import { createDeviceAs, listDevices } from '../../core/device-auth.js'
+import { createDeviceAs, listDevices, setDeviceInfo } from '../../core/device-auth.js'
+import { browserKindFromUserAgent } from '../../core/browser-kind.js'
 import { LOCAL_ACTOR } from '../../core/device-actor.js'
 import { clearAuthFailures, isAuthRateLimited, recordAuthFailure } from '../middleware/auth-rate-limit.js'
 import { getExposeRuntime } from '../expose-runtime.js'
@@ -116,6 +117,10 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
     }
     const name = await freshBrowserName()
     const device = await createDeviceAs(name, { by: LOCAL_ACTOR })
+    // Settings names the row by what it is ("iPhone Safari"), not by the id (N2-21).
+    // Only deviceName: no model/os, so this never claims a platform for the record.
+    const standalone = (req.body as { standalone?: unknown } | undefined)?.standalone === true
+    await setDeviceInfo(name, { deviceName: browserKindFromUserAgent(req.get('user-agent'), { standalone }) }).catch(() => false)
     clearAuthFailures(codeKey)
     clearAuthFailures(ip)
     log.web.info('browser signed in', { device: name })

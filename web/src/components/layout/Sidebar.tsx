@@ -1,6 +1,7 @@
 import { useState, useEffect, type RefObject } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { linkTargetFor } from '@/utils/last-location';
+import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useAppCatalog } from '@/apps/hooks';
@@ -31,6 +32,8 @@ import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot
 import { HOME_CHAT_VISIBLE_DEFAULT, readHomeChatVisible, showHomeChatToggle } from '@/pages/home-panel-flags';
 import '@/styles/attention-banner.css';
 import '@/styles/bell-dot.css';
+import '@/styles/phone-pages.css';
+import { PhoneNotificationBell } from './PhoneNotificationBell';
 
 // Twins of MainPage's keys: localStorage, so the toggles read the same state the
 // page restores after a relaunch (sessionStorage dies with the Mac app's web view).
@@ -48,6 +51,14 @@ interface SidebarProps {
   isMobile: boolean;
   onNavigate: () => void;
   onToggleCollapse: () => void;
+}
+
+/**
+ * Pages a phone's drawer leaves out (N2-16): the Tasks dashboard is a two-pane
+ * desktop table, and on a phone the home screen IS the task list.
+ */
+export function isDesktopOnlyApp(app: { kind?: string; path?: string }): boolean {
+  return app.kind === 'core' && app.path === '/tasks';
 }
 
 export function Sidebar({
@@ -75,7 +86,7 @@ export function Sidebar({
   // selection used to hand the gesture to the native menu, so this one never opened on a label.
   const appMenu = useContextMenu<RegisteredApp>({ overrideLinks: true, ignorePressSelection: true });
   const audio = useAudioCapture();
-  const { notify, attentionCount, quiet } = useNotifications();
+  const { notify, attentionCount, quiet, feed } = useNotifications();
   const quietNow = effectiveQuiet(quiet).active;
   const [notifOpen, setNotifOpen] = useState(false);
   const bell = bellPresentation({ reason: bellReason, attentionCount, hasIssues, quiet: quietNow, quietLabel: quietNow ? quietLabel(quiet) : '', collapsed });
@@ -152,13 +163,18 @@ export function Sidebar({
   // the user home first, and only ever open a panel there, never hide it.
   const homeToggle = (event: string, visible: boolean) => () => {
     if (location.pathname === '/') { window.dispatchEvent(new CustomEvent(event)); return; }
-    navigate('/');
+    // On a phone the drawer's own history entry becomes home (like a drawer
+    // link), so back from the panel never lands on a stale drawer entry.
+    navigate('/', isPhoneLayout() ? { replace: true } : undefined);
     if (!visible) window.dispatchEvent(new CustomEvent(event));
   };
   const handleToggleChat = homeToggle('dock:activate-chat', chatVisible);
   const handleToggleTodo = homeToggle('sidebar:toggle-todo', todoVisible);
   const handleToggleCalendarPanel = homeToggle('sidebar:toggle-calendar', calendarPanelVisible);
   const handleToggleScratchpad = homeToggle('sidebar:toggle-scratchpad', scratchpadVisible);
+  // A phone mounts neither the agenda nor the scratchpad panel (spec 5.1), so
+  // their toggles would be controls that do nothing there (N3).
+  const phone = usePhoneLayout();
   const homePanelToggles = (
     <div className="sidebar-home-panels" role="group" aria-label="Home panels">
       <button
@@ -182,6 +198,7 @@ export function Sidebar({
           <span className="sidebar-label">Ask Walnut</span>
         </button>
       )}
+      {!phone && (<>
       <button
         className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
         onClick={handleToggleCalendarPanel}
@@ -200,6 +217,7 @@ export function Sidebar({
         <ScratchpadIcon />
         <span className="sidebar-label">Scratchpad</span>
       </button>
+      </>)}
     </div>
   );
   // A home panel toggle counts as navigation too: on a phone the panel it opens
@@ -284,7 +302,7 @@ export function Sidebar({
         {/* `sidebar`, not `pinned`: an App whose effective placement is 'settings'
             (declared by the App, or moved by the user from its plugin's row in
             Settings → Plugins) has its row in Settings → Manage and never here. */}
-        {apps.sidebar.map((app) => {
+        {apps.sidebar.filter((app) => !(phone && isDesktopOnlyApp(app))).map((app) => {
           const Icon = app.icon;
           const icon = Icon ? (
             app.kind === 'native' && app.pluginId ? (
@@ -410,6 +428,9 @@ export function Sidebar({
         />
       )}
 
+      {/* Phone: the bell lives in the top bar (portalled), the drawer keeps its own. */}
+      {/* One count rule (C55, N2-05): the bar's bell says the drawer row's number. */}
+      <PhoneNotificationBell count={attentionCount} open={notifOpen} onOpen={() => setNotifOpen(true)} />
       <NotificationPanel
         open={notifOpen}
         onClose={() => setNotifOpen(false)}

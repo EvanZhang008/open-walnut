@@ -62,7 +62,7 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
             ${meta.cost} · {meta.duration}s
           </span>
         )}
-        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
       </button>
       {open && (
         <div className="chat-tool-block-body subagent-block-body">

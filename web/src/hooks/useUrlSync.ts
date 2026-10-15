@@ -3,6 +3,7 @@ import { MAX_PANELS } from '@/hooks/useSessionPanelMode';
 import { projectToUrl, projectFromUrl } from '@/components/tasks/task-tabs';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import { getThreadLeaves, subscribeThreadLeaves, threadParamsFor } from '@/utils/thread-stack-persist';
+import { isPhoneLayout } from './usePhoneLayout';
 
 // `?proj=` <-> internal tab id mapping lives in components/tasks/task-tabs.ts,
 // next to the sentinel definitions it encodes (and unit-testable without this
@@ -100,7 +101,9 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
       // This also prevents echo: when we apply URL params → state changes → effect fires,
       // the computed search matches the existing URL, so no write occurs.
       if (search === window.location.search) return;
-      window.history.replaceState(null, '', `/${search}`);
+      // Keep the entry's state: a phone layer's marker (usePhoneOverlayHistory)
+      // and react-router's own keys live there, and null would wipe both.
+      window.history.replaceState(window.history.state, '', `/${search}`);
     }, 300);
 
     return () => {
@@ -112,6 +115,11 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
   useEffect(() => {
     const handlePopState = () => {
       if (window.location.pathname !== '/') return;
+      // C24: on a phone, back and forward move between layers, and each layer's
+      // own entry closes it (usePhoneOverlayHistory). The Home entry still
+      // carries the `?task=` a row tap wrote, so applying it here reopened the
+      // task detail the user had just peeled off with two backs.
+      if (isPhoneLayout()) return;
       const parsed = parseUrlParams();
       if (parsed) setPending(parsed);
     };

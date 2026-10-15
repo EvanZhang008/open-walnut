@@ -36,6 +36,7 @@ export function MailTaskButton({ open }: { open: MailOpenMessage }) {
         disabled={open.taskBusy || !open.message}
         title={open.taskBusy ? 'Making a task…' : 'Make a Walnut task from this message'}
         aria-label="Make a Walnut task from this message"
+        data-label="Task"
         onClick={() => { void makeTaskFromMessage(open.accountId, open.messageId); }}
       >
         <TaskIcon size={15} />

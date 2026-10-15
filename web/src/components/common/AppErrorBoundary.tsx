@@ -103,14 +103,14 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
   render() {
     if (this.state.healing) {
       return (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'system-ui, sans-serif', fontSize: 13, color: '#888' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100dvh', fontFamily: 'system-ui, sans-serif', fontSize: 13, color: '#888' }}>
           Recovering…
         </div>
       );
     }
     if (this.state.error) {
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', gap: 12, padding: 16, fontFamily: 'system-ui, sans-serif' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', gap: 12, padding: 16, fontFamily: 'system-ui, sans-serif' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Something went wrong rendering the page.</div>
           <div style={{ fontSize: 12, color: '#888', maxWidth: 560, textAlign: 'center', wordBreak: 'break-word' }}>
             {String(this.state.error.message || this.state.error)}

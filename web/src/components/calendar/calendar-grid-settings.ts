@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { SLOT_MINUTES } from '@/utils/calendar-date';
+import { SLOT_MINUTES, formatDateOnly } from '@/utils/calendar-date';
 
 export const GRID_SETTINGS_KEY = 'open-walnut-calendar-grid-settings';
 export const GRID_ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -52,6 +52,15 @@ export function useCalendarGridSettings(): CalendarGridSettings {
 export const GRID_FOCUS_START = 7 * 60;
 export const GRID_FOCUS_END = 25 * 60;
 export const GRID_EXTENDED_END = 31 * 60;
+
+/** A phone's floor: 26 px a 30 minute slot, 52 px an hour (R3-06). */
+export const PHONE_MIN_SLOT_PX = 26;
+
+/** Where a phone's day opens: an hour before now on today, else the work day's start. */
+export function phoneLandingMinute(dayList: readonly string[], now = new Date()): number {
+  if (!dayList.includes(formatDateOnly(now))) return GRID_FOCUS_START;
+  return Math.max(0, now.getHours() * 60 + now.getMinutes() - 60);
+}
 
 export function fittedSlotPx(viewportHeight: number, zoom: number): number {
   return Math.max(1, (viewportHeight - 12) / ((GRID_FOCUS_END - GRID_FOCUS_START) / SLOT_MINUTES)) * zoom;

@@ -106,7 +106,7 @@ function intersects(a: { x: number; y: number; width: number; height: number }, 
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
 }
 
-const toggle = (page: Page) => page.getByRole('button', { name: 'Toggle sidebar' })
+const toggle = (page: Page) => page.getByRole('button', { name: 'Menu', exact: true })
 const drawer = (page: Page) => page.locator('#primary-sidebar')
 const board = (page: Page) => page.locator('.main-page-todo')
 const topbarTitle = (page: Page) => page.locator('.phone-topbar-title')
@@ -156,9 +156,10 @@ test('a task panel hidden on the desktop still shows, and answers taps, on a pho
   await expect(board(page)).toBeVisible({ timeout: 30_000 })
   await expect(board(page)).not.toHaveClass(/\bcollapsed\b/)
   await expectFillsUnderTopBar(page, board(page))
-  // Not inert: the search takes a tap and typing.
-  const search = page.locator('.todo-search-input')
-  await search.click()
+  // Not inert: the search takes a tap, which opens the full-screen search, and typing.
+  await page.locator('.todo-search-input').click()
+  const search = page.locator('.phone-search-input')
+  await expect(search).toBeFocused()
   await search.fill('invoice')
   await expect(search).toHaveValue('invoice')
   await shot(page, info, 'hidden-panel-flag')
@@ -212,11 +213,14 @@ test('the drawer opens with labels under the bar and closes from the button, the
 test('a task opens its session full screen with the composer in view, and closing it returns to the board', async ({ page }, info) => {
   const errors = await bootPhone(page)
   await page.goto('/')
-  const search = page.locator('.todo-search-input')
-  await expect(search).toBeVisible({ timeout: 30_000 })
-  await search.click()
+  const homeSearch = page.locator('.todo-search-input')
+  await expect(homeSearch).toBeVisible({ timeout: 30_000 })
+  // On a phone the field opens the full-screen search; a result opens the task.
+  await homeSearch.click()
+  const search = page.locator('.phone-search-input')
+  await expect(search).toBeFocused()
   await search.fill('Quarterly invoice')
-  const row = page.locator('.todo-item-title', { hasText: SESSION_TASK_TITLE }).first()
+  const row = page.locator('.phone-search-row', { hasText: SESSION_TASK_TITLE }).first()
   await expect(row).toBeVisible({ timeout: 15_000 })
   await row.click()
 
@@ -245,12 +249,17 @@ test('a task opens its session full screen with the composer in view, and closin
   await composer.fill('')
   await shot(page, info, 'session')
 
-  const close = panel.getByRole('button', { name: 'Close session panel' })
+  // On a phone the layer's close is the bar's Back (the panel header's x is gone).
+  const close = page.locator('.phone-topbar').getByRole('button', { name: 'Back' })
   const closeBox = await box(close)
   expect(closeBox.width).toBeGreaterThanOrEqual(44)
   expect(closeBox.height).toBeGreaterThanOrEqual(44)
   await close.click()
   await expect(column).toHaveCount(0)
+  // Back on the search it was opened from; Cancel returns to the board.
+  await expect(page.getByTestId('phone-search-layer')).toBeVisible()
+  await page.locator('.phone-search-cancel').click()
+  await expect(page.getByTestId('phone-search-layer')).toHaveCount(0)
   await expectFillsUnderTopBar(page, board(page))
   expect(errors).toEqual([])
 })
@@ -274,7 +283,8 @@ test('a new task started on the phone answers, and a follow-up sends from the co
   await draftInput.fill(prompt)
   const started = page.waitForResponse((response) => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/api/sessions/quick-start')
-  await draftInput.press('Enter')
+  // Return inserts a newline on a touch screen; the send button sends.
+  await draft.locator('.chat-send-btn-icon:not(.chat-stop-btn-icon)').first().click()
   const startedResponse = await started
   expect(startedResponse.status()).toBe(200)
   const { taskId } = await startedResponse.json() as { taskId: string }
@@ -290,7 +300,7 @@ test('a new task started on the phone answers, and a follow-up sends from the co
     const composer = panel.locator('.chat-input-textarea')
     await composer.click()
     await composer.fill(followUp)
-    await composer.press('Enter')
+    await panel.locator('.chat-send-btn-icon:not(.chat-stop-btn-icon)').first().click()
     await expect(panel.getByText(`Hello! I processed your message: ${followUp}`)).toBeVisible({ timeout: 30_000 })
     const vp = await viewport(page)
     const c = await box(composer)
@@ -314,8 +324,11 @@ test('Ask Walnut opens from the drawer over the board, and its close comes back 
   // The home screen cannot be hidden on a phone, so its drawer toggle is not there.
   await expect(drawer(page).locator('.app-task-panel-toggle')).toBeHidden()
   await drawer(page).getByRole('button', { name: 'Ask Walnut', exact: true }).click()
-  // A panel toggle is navigation on a phone: the drawer gets out of the way.
-  await expectDrawerClosed(page)
+  // A panel toggle is navigation on a phone: the drawer gets out of the way,
+  // and the chat is a layer of its own with a Back in the bar.
+  await expect(drawer(page)).not.toHaveClass(/\bopen\b/)
+  await expect(drawer(page)).toBeHidden()
+  await expect(page.locator('.phone-topbar').getByRole('button', { name: 'Back' })).toBeVisible()
 
   const chat = page.locator('.main-page-chat')
   await expect(page.locator('[data-testid="ask-walnut-slot"]')).toBeVisible({ timeout: 15_000 })
@@ -329,7 +342,8 @@ test('Ask Walnut opens from the drawer over the board, and its close comes back 
   await shot(page, info, 'ask-walnut')
 
   // Its own list of asks fits the phone.
-  await chat.locator('[data-testid="ask-walnut-menu"]').click()
+  // On a phone the asks button rides in the top bar's action slot.
+  await page.locator('.phone-topbar [data-testid="ask-walnut-menu"]').click()
   const asks = page.locator('[data-testid="ask-walnut-drawer"]')
   await expect(asks).toBeVisible()
   // It slides in from the left edge; measure where it settles.
@@ -339,9 +353,11 @@ test('Ask Walnut opens from the drawer over the board, and its close comes back 
   await page.keyboard.press('Escape')
   await expect(asks).toBeHidden()
 
-  await chat.getByRole('button', { name: 'Close session panel' }).first().click()
+  // The chat layer's close on a phone is the bar's Back.
+  await page.locator('.phone-topbar').getByRole('button', { name: 'Back' }).click()
   await expect(chat).toHaveClass(/\bcollapsed\b/)
   await expectFillsUnderTopBar(page, board(page))
+  await expectDrawerClosed(page)
   expect(errors).toEqual([])
 })
 
@@ -369,7 +385,9 @@ test('Notes shows the tree or the open note, never both squeezed, with a way bac
   await expectNoHorizontalOverflow(page)
   await shot(page, info, 'notes-editor')
 
-  await editor.getByRole('button', { name: 'All notes' }).click()
+  // The way back is the bar's Back (N15: no second, in-page "All notes" pill under it).
+  await expect(editor.getByRole('button', { name: 'All notes' })).toBeHidden()
+  await page.locator('.phone-topbar').getByRole('button', { name: 'Back' }).click()
   await expect(tree).toBeVisible()
   await expect(editor).toBeHidden()
   expect(errors).toEqual([])
@@ -418,19 +436,40 @@ test('the sign-in notice a fresh phone sees fits the screen', async ({ page }, i
   await page.goto('/')
   const notice = page.getByTestId('unpaired-notice')
   await expect(notice).toBeVisible({ timeout: 30_000 })
+  // A whole page now (nothing renders behind it, so there is no top bar).
   const vp = await viewport(page)
   const n = await box(notice)
-  expect(n.x).toBeGreaterThanOrEqual(0)
-  expect(n.x + n.width).toBeLessThanOrEqual(vp.width)
-  expect(n.y).toBeGreaterThanOrEqual(TOPBAR_H)
-  expect(n.y + n.height).toBeLessThanOrEqual(vp.height)
+  expect(n.x).toBeLessThanOrEqual(0.5)
+  expect(n.y).toBeLessThanOrEqual(0.5)
+  expect(Math.abs(n.width - vp.width)).toBeLessThanOrEqual(1)
+  expect(n.height).toBeGreaterThanOrEqual(vp.height - 1)
+  const h1 = notice.locator('h1')
+  await expect(h1).toHaveText('Sign in to Walnut')
+  const safeTop = await page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.cssText = 'position:fixed;top:0;height:env(safe-area-inset-top, 0px)'
+    document.body.appendChild(probe)
+    const h = probe.getBoundingClientRect().height
+    probe.remove()
+    return h
+  })
+  expect((await box(h1)).y).toBeGreaterThanOrEqual(safeTop + 40)
+  // No words for a developer on a page for a phone.
+  const text = (await notice.innerText()).toLowerCase()
+  for (const word of ['ssh', 'localhost', ':3456']) expect(text).not.toContain(word)
   const input = page.getByTestId('unpaired-code-input')
+  const submit = page.getByTestId('unpaired-code-submit')
   await expectNoFocusZoom(input)
   await input.click()
-  await input.fill('ABCD-EFGH')
-  await expect(page.getByTestId('unpaired-code-submit')).toBeEnabled()
+  await input.fill('abcd efgh')
+  await expect(input).toHaveValue('ABCD-EFGH')
+  await expect(submit).toBeEnabled()
+  await input.fill('abc')
+  await expect(submit).toBeDisabled()
   await expectNoHorizontalOverflow(page)
   await shot(page, info, 'sign-in-notice')
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await shot(page, info, 'sign-in-notice-dark')
 })
 
 test.describe('desktop', () => {

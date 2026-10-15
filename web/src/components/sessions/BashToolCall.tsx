@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { ChevronRightIcon, PlayGlyphIcon } from '@/components/common/PhoneIcons';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { findImagePaths, resolveImagePath } from '@/utils/markdown';
@@ -88,7 +89,7 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
     ? result.slice(0, INLINE_RESULT_LIMIT) + `\n… (${result.length - INLINE_RESULT_LIMIT} more chars — expand ⤢ for full output)`
     : result;
 
-  const statusIcon = status === 'error' ? '✗' : status === 'done' ? '✓' : '▶';
+  const statusIcon = status === 'error' ? '✗' : status === 'done' ? '✓' : <PlayGlyphIcon size={10} />;
   const statusClass = status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
@@ -102,7 +103,7 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
           <span className="chat-tool-block-summary">{commandSummary}</span>
         )}
         {status === 'calling' && <span className="chat-tool-block-calling-dot" />}
-        <span className="chat-tool-block-arrow">{open ? '▼' : '▶'}</span>
+        <span className="chat-tool-block-arrow">{open ? '▼' : <ChevronRightIcon size={10} />}</span>
         <span
           className="bash-tool-expand-btn"
           role="button"

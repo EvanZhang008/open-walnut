@@ -29,7 +29,7 @@ import type { Request, Response, NextFunction } from 'express'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { isPairedDeviceId, verifyDeviceToken } from '../../core/device-auth.js'
-import { recordAuthFailure, isAuthRateLimited } from './auth-rate-limit.js'
+import { recordAuthFailure, isAuthRateLimited, RATE_LIMITED_BODY, RATE_LIMIT_RETRY_AFTER_S } from './auth-rate-limit.js'
 import { classifyLocalRequest, isCrossSiteRefusal } from './local-trust.js'
 import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { log } from '../../logging/index.js'
@@ -67,6 +67,31 @@ function isPublicRequest(req: Request): boolean {
 
 function requestIp(req: Request): string {
   return req.ip ?? req.socket.remoteAddress ?? 'unknown'
+}
+
+/** The cookie a signed-in browser mirrors its device token into (web/src/api/device-token.ts). */
+export const DEVICE_COOKIE = 'walnut_device'
+
+/**
+ * The device token a GET or HEAD carries in the `walnut_device` cookie: an
+ * `<img>`, an HTML preview frame or a download cannot send a header. Never for
+ * any other method, so a cookie can only ever read; the browser sets it
+ * SameSite=Strict, so no other site's page can make it send one at all.
+ */
+export function cookieCredential(req: Pick<Request, 'method' | 'headers'>): string {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return ''
+  const raw = req.headers.cookie
+  if (!raw) return ''
+  for (const part of raw.split(';')) {
+    const eq = part.indexOf('=')
+    if (eq < 0 || part.slice(0, eq).trim() !== DEVICE_COOKIE) continue
+    try {
+      return decodeURIComponent(part.slice(eq + 1).trim())
+    } catch {
+      return ''
+    }
+  }
+  return ''
 }
 
 /**
@@ -107,7 +132,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
   const trust = classifyLocalRequest(req)
   const header = req.headers.authorization
-  const bearer = header?.startsWith('Bearer ') ? header.slice(7) : ''
+  const bearer = header?.startsWith('Bearer ') ? header.slice(7) : cookieCredential(req)
 
   if (trust.trusted) {
     // Still IDENTIFY a device that bothered to present a token. The waiver only
@@ -149,14 +174,14 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
   if (isAuthRateLimited(ip)) {
     log.web.warn('auth: rate limited', { ip })
-    res.status(429).json({ error: 'Too many authentication failures. Try again later.' })
+    res.status(429).set('Retry-After', RATE_LIMIT_RETRY_AFTER_S).json(RATE_LIMITED_BODY)
     return
   }
 
   try {
     const cred = await validateBearerCredential(bearer)
     if (!cred || cred.kind === 'machine') {
-      recordAuthFailure(ip)
+      recordAuthFailure(ip, bearer)
       log.web.warn('auth: invalid credential', { ip, machine: cred?.kind === 'machine' })
       res.status(401).json({ error: 'Invalid or revoked token', code: 'token_refused' })
       return
@@ -184,11 +209,13 @@ async function cloudAuthMiddleware(req: Request, res: Response, next: NextFuncti
   const ip = requestIp(req)
   if (isAuthRateLimited(ip)) {
     log.web.warn('auth: rate limited', { ip })
-    res.status(429).json({ error: 'Too many authentication failures. Try again later.' })
+    res.status(429).set('Retry-After', RATE_LIMIT_RETRY_AFTER_S).json(RATE_LIMITED_BODY)
     return
   }
 
-  const authHeader = req.headers.authorization
+  const header = req.headers.authorization
+  const cookie = header?.startsWith('Bearer ') ? '' : cookieCredential(req)
+  const authHeader = cookie ? `Bearer ${cookie}` : header
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     // A token-ABSENT request is the normal first contact (an unpaired browser
     // loading the SPA fires a dozen of these on boot), not a guessing attempt —
@@ -204,7 +231,7 @@ async function cloudAuthMiddleware(req: Request, res: Response, next: NextFuncti
     if (!cred || cred.kind === 'machine') {
       // Machine tokens are bridge-upgrade-only: a leaked daemon credential
       // must not open the whole REST surface.
-      recordAuthFailure(ip)
+      recordAuthFailure(ip, authHeader.slice(7))
       log.web.warn('auth: invalid device token', { ip, machine: cred?.kind === 'machine' })
       res.status(401).json({ error: 'Invalid or revoked token' })
       return

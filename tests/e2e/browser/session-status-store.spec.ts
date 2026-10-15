@@ -186,7 +186,7 @@ async function openTaskDetail(page: Page, task: Locator): Promise<Locator> {
 
 /** Top-level app-sidebar link — the Tasks table is a daily surface, not a setting. */
 async function navigateToTasks(page: Page, mobile = false): Promise<void> {
-  if (mobile) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
+  if (mobile) await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await page.locator('.sidebar a[href="/tasks"]').click()
   await expect(page).toHaveURL(/\/tasks$/)
   if (mobile) {

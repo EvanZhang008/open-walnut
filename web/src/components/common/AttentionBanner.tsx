@@ -25,6 +25,7 @@ import { useNavigate } from 'react-router-dom';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { HOST_SUBHEAD, HOST_TITLE, READY_HOLD_MS, activeHiddenIds, nextBanner, type BannerRow } from '@/utils/attention-banner-model';
 import {
@@ -141,7 +142,11 @@ export function AttentionBanner({
   const gateHosts = useGateBarHosts();
   // The draft column's compact card leaves out a host its own gate bar speaks for.
   const statuses = compact && gateHosts.size ? allStatuses.filter((s) => !gateHosts.has(s.host)) : allStatuses;
-  const mountH = useMountHeight(el, mount);
+  // A phone's home card rides inside the task list (TodoPanel, N2-13/N2-15): the list
+  // scrolls, so the card takes its natural height and never scrolls on its own.
+  const phoneList = usePhoneLayout() && mount === 'tasks';
+  const measuredH = useMountHeight(el, mount);
+  const mountH = phoneList ? null : measuredH;
   const marginY = verticalMarginPx(el);
   // A cap at its 132px floor (a phone's task band, a very short panel) cannot hold
   // an opened row plus its buttons, so every row is one line there: headline + first action.

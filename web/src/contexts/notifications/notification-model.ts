@@ -187,6 +187,16 @@ export function attentionBadgeCount(feed: Notification[]): number {
 }
 
 /**
+ * The phone bell's number (spec 4.7 "one count rule", C55): only the cards the
+ * notification center lets the user answer right there, its Needs Action
+ * section. Inbox letters keep their own count on the Inbox tab; the desktop
+ * bell keeps attentionBadgeCount.
+ */
+export function answerableCount(feed: Notification[]): number {
+  return sectionCounts(feed).action;
+}
+
+/**
  * How many System-zone checks are currently unhealthy.
  *
  * The System zone has no feed entries, so its rail marker can't come from

@@ -8,6 +8,7 @@
  * hashchange both drive it, nav clicks and same-page `#x` links replace the
  * history entry (Back leaves Settings in one step), and a hash naming a folded
  * section opens its owner and holds that section in view for a bounded time.
+ * On a phone it is two layers, list then pane (usePhoneSettingsPane).
  */
 import {
   Component,
@@ -47,6 +48,8 @@ import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
 import { pluginUiRegistry } from '@/plugins/registry'
 import { appRegistry } from '@/apps/registry'
 import { log } from '@/utils/log'
+import { usePhoneSettingsPane } from '@/components/settings/usePhoneSettingsPane'
+import '@/styles/phone-settings.css'
 
 /** Any of these means the person took the wheel: hash anchoring lets go. */
 const USER_TAKEOVER_EVENTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const
@@ -341,12 +344,14 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
   }, [navigate])
 
   // Pending work from a nav open (focus the title, scroll to a filter row hit).
+  const phoneOpen = useRef<() => void>(() => {})
   const pendingOpen = useRef<{ paneId: string; anchor: string | null; focusTitle: boolean } | null>(null)
   const [openSeq, setOpenSeq] = useState(0)
   const onOpenPane = useCallback((id: string, opts?: { anchor?: string | null; focusTitle?: boolean }) => {
     pendingOpen.current = { paneId: id, anchor: opts?.anchor ?? null, focusTitle: !!opts?.focusTitle }
     openPane(id)
     setOpenSeq((n) => n + 1)
+    phoneOpen.current()
   }, [openPane])
 
   // Same-page `#x` links inside Settings behave like a nav click (replace, no reload).
@@ -391,6 +396,9 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
   useEffect(() => {
     document.title = `Settings: ${titleLabel}`
   }, [titleLabel])
+
+  const phonePane = usePhoneSettingsPane(paneId, titleLabel, scroller)
+  phoneOpen.current = phonePane.open
 
   // Switching panes starts at the top.
   useLayoutEffect(() => {
@@ -474,7 +482,11 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
   const activeNav = view.kind === 'pending' ? DEFAULT_PANE_ID : paneId
   return (
     <div className="settings-container">
-      <div className="settings-layout" ref={layoutRef}>
+      <div
+        className="settings-layout"
+        ref={layoutRef}
+        data-phone-settings={phonePane.layer}
+      >
         <SettingsNav model={model} activePane={activeNav} onOpenPane={onOpenPane} />
         <div
           ref={setScroller}

@@ -14,6 +14,7 @@
 
 import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { PlayGlyphIcon } from '@/components/common/PhoneIcons';
 
 export function TaskStartButton({ task, isDone, onStartSession }: {
   task: Task;
@@ -35,7 +36,8 @@ export function TaskStartButton({ task, isDone, onStartSession }: {
       title="Start a session for this task"
       aria-label="Start a session for this task"
     >
-      ▶
+      {/* An SVG: iOS draws the play character as a color emoji. */}
+      <PlayGlyphIcon size={11} />
     </button>
   );
 }

@@ -6,6 +6,7 @@
  * (G15): their chips show live under the input and × drops one (and its
  * token). No session starts.
  */
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ICON_PLUS } from '@/components/common/Icons';
 import { TagChip } from '@/components/tasks/TagChip';
@@ -39,8 +40,12 @@ export interface KanbanAddTaskProps {
   autoFocus?: boolean;
 }
 
-function KanbanAddTaskInner({ laneId, laneName, api, autoFocus }: KanbanAddTaskProps) {
-  const [open, setOpen] = useState(!!autoFocus);
+function KanbanAddTaskInner({ laneId, laneName, api, autoFocus: autoFocusProp }: KanbanAddTaskProps) {
+  // A phone never opens the form on its own: focusing it raises the keyboard over
+  // a board the user only came to read (C19). The Add task button stays one tap away.
+  const phone = usePhoneLayout();
+  const autoFocus = !!autoFocusProp && !phone;
+  const [open, setOpen] = useState(autoFocus);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);

@@ -93,6 +93,22 @@ describe('ui-prefs-sync write mirror', () => {
     expect(keysOf(local)).not.toContain('setItem')
   })
 
+  it('re-writing the value a key already holds sends nothing; a real change still does (N19)', async () => {
+    puts.length = 0
+    vi.useFakeTimers()
+    localStorage.setItem('walnut-todo-unchanged', '["a"]')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(puts).toHaveLength(1)
+    localStorage.setItem('walnut-todo-unchanged', '["a"]')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(puts).toHaveLength(1)
+    localStorage.setItem('walnut-todo-unchanged', '["a","b"]')
+    await vi.advanceTimersByTimeAsync(1_000)
+    vi.useRealTimers()
+    expect(puts).toHaveLength(2)
+    expect(Object.keys(puts[1].prefs as object)).toEqual(['walnut-todo-unchanged'])
+  })
+
   it('a second evaluation of the module (HMR) replaces the wrapper instead of stacking on it: one write, one PUT', async () => {
     vi.resetModules()
     const again = await import('../../web/src/utils/ui-prefs-sync')

@@ -324,7 +324,7 @@ function Section({ title, id, collapsed, onToggle, count, children }: SectionPro
         className="memory-tree-section-header"
         onClick={() => onToggle(id)}
       >
-        <span className="memory-tree-chevron">{isCollapsed ? '\u25B6' : '\u25BC'}</span>
+        <span className="memory-tree-chevron">{isCollapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>
         <span className="memory-tree-section-title">{title}</span>
         {count !== undefined && <span className="memory-tree-section-count">{count}</span>}
       </button>
@@ -381,7 +381,7 @@ function ProjectNodeView({ node, depth, selectedPath, onSelect, collapsed, onTog
           onClick={() => onToggle(nodeId)}
           style={{ paddingLeft: `${12 + depth * 16}px` }}
         >
-          <span className="memory-tree-chevron">{isCollapsed ? '\u25B6' : '\u25BC'}</span>
+          <span className="memory-tree-chevron">{isCollapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>
           <span className="memory-tree-folder-name">{node.name}</span>
         </button>
         {!isCollapsed && (

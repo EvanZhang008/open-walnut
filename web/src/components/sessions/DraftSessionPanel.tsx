@@ -41,6 +41,8 @@
  * ever touched on open.
  */
 
+import { formatModelName } from '@/utils/model-name';
+import { usePhoneLayerWithBar } from './phone-session-layer';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
@@ -179,7 +181,9 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
   // pick" (which launches on the Ask Walnut launch memory instead).
   const isAuto = !meta.model || meta.model === 'default';
   const selectedLabel = !isAuto
-    ? options.find((o) => o.value === meta.model)?.label ?? meta.model
+    // A remembered id the option list does not carry (yet) reads as a model
+    // name, never as a provider id like "global.anthropic.claude-..." (N10).
+    ? options.find((o) => o.value === meta.model)?.label ?? formatModelName(meta.model)
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';
   const acpPillLabel = meta.model ? shortAcpModelName(meta.model) : entry.displayName;
   return (
@@ -277,6 +281,8 @@ interface Props {
    *  async; the owner handles its own success/failure UI. */
   onSaveAsTask: (draftId: string, text: string) => void | Promise<void>;
   onClose: (draftId: string) => void;
+  /** Phone layout: the open column over home, a 'draft:<id>' layer (back closes it). */
+  phoneLayer?: boolean;
   /** Rendered before the title — the host surface's own control (the Ask Walnut
    *  slot's session switcher), so the draft header reads like the session header
    *  it is about to become. */
@@ -334,9 +340,13 @@ export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget,
+  onCustomizeWalnut, repairTarget, phoneLayer,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const phoneDraft = usePhoneLayerWithBar({
+    id: `draft:${draft.id}`, kind: 'draft', active: !!phoneLayer, title: 'New session', withAction: false,
+    onClose: () => onClose(draft.id),
+  });
   // "Start anyway" rides the ordinary send (so images and the settle rules apply) with one flag.
   const overrideNextRef = useRef(false);
   const clearGate = useCallback(() => onGateErrorClear?.(draft.id), [onGateErrorClear, draft.id]);
@@ -667,7 +677,7 @@ export function DraftSessionPanel({
           )}
           <button
             className="task-action-btn session-panel-close"
-            onClick={() => onClose(draft.id)}
+            onClick={phoneDraft.close}
             title="Discard this draft"
             aria-label="Discard draft session"
           >

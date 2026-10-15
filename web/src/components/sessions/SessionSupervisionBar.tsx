@@ -1,3 +1,4 @@
+import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { useCallback, useSyncExternalStore } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useActiveSessionCron } from '@/hooks/useSessionStatus';
@@ -73,6 +74,10 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
   if (!forced) return null;
   const enabled = requestedEnabled ?? supervision?.enabled ?? false;
   const stale = unavailable || value?.available === false;
+  // A phone shows no card that only says the recovery status cannot be read
+  // (N29): it has no action, and for a session that is gone the timeline's
+  // one sentence already says so. A stop in flight or an error still shows.
+  if (stale && !stopping && !stopPending && (!error || /not found/i.test(error)) && isPhoneLayout()) return null;
   const title = stopping ? 'Requesting stop'
     : stopPending ? 'Stop pending host confirmation'
     : stale ? 'Recovery status unavailable'

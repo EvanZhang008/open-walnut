@@ -13,6 +13,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Routine } from '@/api/routines';
 import { wsClient } from '@/api/ws';
 import { getRoutinesSnapshot, loadRoutines, onRoutinesChanged, subscribeRoutines } from '@/stores/routines-store';
+import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 
 export function isTriggerForTask(routine: Routine, taskId: string): boolean {
   if (!routine.check) return false;
@@ -43,8 +44,16 @@ export function useTaskTriggers(taskId: string | null | undefined): Routine[] {
   const shared = useSyncExternalStore(subscribeRoutines, getRoutinesSnapshot, getRoutinesSnapshot);
   useEffect(() => {
     retainLive();
-    void loadRoutines();
-    return releaseLive;
+    if (!isPhoneLayout()) { void loadRoutines(); return releaseLive; }
+    // A phone over a slow tunnel paints its first rows before it asks for the
+    // routines behind their trigger pills (C49): wait for the next frame.
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const frame = requestAnimationFrame(() => { timer = setTimeout(() => { void loadRoutines(); }, 0); });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (timer) clearTimeout(timer);
+      releaseLive();
+    };
   }, []);
   return useMemo(() => {
     const found = triggersForTask(shared.routines, taskId);

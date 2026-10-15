@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { NotificationToaster } from '../common/NotificationToaster';
 import { OperationErrorBridge } from '../common/OperationErrorBridge';
@@ -16,7 +16,23 @@ import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { startHostDismissPruner } from '@/utils/host-banner-dismiss';
 import { HostBannerAnnouncer } from '../common/HostBannerAnnouncer';
 import { PHONE_LAYOUT_QUERY } from '@/hooks/usePhoneLayout';
+import {
+  installPhoneOverlayHistory, usePhoneOverlay, usePhoneOverlayEdgeSwipe, isStandaloneDisplay,
+} from '@/hooks/usePhoneOverlayHistory';
+import { useVisualViewportInset } from '@/hooks/useVisualViewportInset';
+import { usePhoneResync } from '@/hooks/usePhoneResync';
+import { installStandaloneLinks } from '@/utils/standalone-links';
+import { PhoneTopBar } from './PhoneTopBar';
 import '@/styles/phone-layout.css';
+import '@/styles/phone-fixes.css';
+import '@/styles/phone-fixes-r2.css';
+import '@/styles/phone-fixes-r3.css';
+import '@/styles/phone-session-r3.css';
+import '@/styles/phone-pages-r3.css';
+import '@/styles/phone-fixes-r4.css';
+import { installInputModality } from '@/utils/input-modality';
+
+installInputModality();
 
 interface AppShellProps {
   children: ReactNode;
@@ -70,6 +86,28 @@ function AppShellInner({ children }: AppShellProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
+  const navigate = useNavigate();
+
+  // Phone chrome: the back-gesture stack, the keyboard inset, the resync on
+  // return, the Home Screen app's edge swipe and its file links.
+  useEffect(() => { installPhoneOverlayHistory(); }, []);
+  useVisualViewportInset(isMobileSidebar);
+  usePhoneResync(isMobileSidebar);
+  usePhoneOverlayEdgeSwipe();
+  useEffect(() => (isMobileSidebar && isStandaloneDisplay() ? installStandaloneLinks() : undefined), [isMobileSidebar]);
+
+  // The drawer is the first phone layer: back closes it.
+  const drawerLayer = usePhoneOverlay({
+    id: 'drawer',
+    kind: 'drawer',
+    open: sidebarOpen && isMobileSidebar,
+    bar: null,
+    onClose: ({ fromHistory }) => {
+      setSidebarOpen(false);
+      if (fromHistory) requestAnimationFrame(() => sidebarToggleRef.current?.focus());
+    },
+  });
+  const closeDrawerLayer = drawerLayer.close;
 
   // A route owns the next screen. Never carry the mobile navigation modal or
   // its backdrop across that transition.
@@ -118,17 +156,44 @@ function AppShellInner({ children }: AppShellProps) {
   useEffect(() => installTimeTracker({ getPathname: () => pathnameRef.current }), []);
 
   const toggleSidebar = useCallback(() => {
+    if (sidebarOpen && isMobileSidebar) { closeDrawerLayer(); return; }
     setSidebarOpen((prev) => !prev);
-  }, []);
+  }, [closeDrawerLayer, isMobileSidebar, sidebarOpen]);
 
   const closeSidebar = useCallback(() => {
-    setSidebarOpen(false);
+    if (isMobileSidebar) closeDrawerLayer();
+    else setSidebarOpen(false);
     requestAnimationFrame(() => sidebarToggleRef.current?.focus());
-  }, []);
+  }, [closeDrawerLayer, isMobileSidebar]);
 
+  // A home panel toggle in the drawer (Ask Walnut, the agenda) opens the next
+  // layer: the drawer leaves through history first, and that layer's push
+  // waits for it, so back from the panel lands on the page under the drawer.
   const closeSidebarForNavigation = useCallback(() => {
-    setSidebarOpen(false);
-  }, []);
+    if (isMobileSidebar) closeDrawerLayer();
+    else setSidebarOpen(false);
+  }, [closeDrawerLayer, isMobileSidebar]);
+
+  // Drawer links on the phone REPLACE the drawer's history entry, so back from
+  // Notes lands on the page the drawer was opened over. Native capture: it runs
+  // before React's Link handler, which then sees defaultPrevented and skips its
+  // own push; the click still bubbles to Sidebar's onNavigate.
+  useEffect(() => {
+    const aside = sidebarRef.current;
+    if (!aside || !isMobileSidebar) return undefined;
+    const onClick = (ev: MouseEvent) => {
+      if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+      const a = (ev.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || !aside.contains(a) || (a.target && a.target !== '_self') || a.hasAttribute('download')) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname.startsWith('/api/')) return;
+      ev.preventDefault();
+      navigate(`${url.pathname}${url.search}${url.hash}`, { replace: true });
+      closeDrawerLayer();
+    };
+    aside.addEventListener('click', onClick, true);
+    return () => aside.removeEventListener('click', onClick, true);
+  }, [closeDrawerLayer, isMobileSidebar, navigate]);
 
   useEffect(() => {
     if (!sidebarOpen || !isMobileSidebar) return;
@@ -189,23 +254,14 @@ function AppShellInner({ children }: AppShellProps) {
           the name of the page on screen. It sits outside <main> so it stays usable
           while the open drawer makes <main> inert, and above the drawer so the same
           button closes it. Every page starts below it, the full-bleed ones too. */}
-      <div className="phone-topbar">
-        <button
-          ref={sidebarToggleRef}
-          className="sidebar-toggle"
-          onClick={toggleSidebar}
-          aria-label="Toggle sidebar"
-          aria-controls="primary-sidebar"
-          aria-expanded={isMobileSidebar ? sidebarOpen : undefined}
-        >
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <line x1="3" y1="6" x2="21" y2="6" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
-        </button>
-        <span className="phone-topbar-title">{activeApp?.title ?? 'Walnut'}</span>
-      </div>
+      {isMobileSidebar && (
+        <PhoneTopBar
+          pageTitle={activeApp?.title ?? 'Walnut'}
+          menuRef={sidebarToggleRef}
+          menuExpanded={sidebarOpen}
+          onMenu={toggleSidebar}
+        />
+      )}
       <Sidebar
         asideRef={sidebarRef}
         open={sidebarOpen}

@@ -20,6 +20,7 @@ import { loadMailBadgeSource, onMailEvent } from './mail-actions';
 import { readGroupedPref, subscribeGroupedPref } from './mail-grouped-pref';
 import { loadGroupedRailBadge, railValue, setRailListener } from './mail-groups-store';
 import { publishBadge, setMailBadgeHandle, type MailBadgeHandle } from './mail-store';
+import { afterFirstScreen } from '@/utils/after-first-screen';
 
 const PREFIX = 'plugin:mail:';
 
@@ -42,7 +43,8 @@ function mailPluginActive(): boolean {
 function startBadgeSource(): void {
   if (badgeSourceStarted) return;
   badgeSourceStarted = true;
-  void loadMailBadgeSource();
+  // The badge is in the drawer on a phone: its four reads wait for the home rows (N19).
+  afterFirstScreen(() => { void loadMailBadgeSource(); });
 }
 
 /**

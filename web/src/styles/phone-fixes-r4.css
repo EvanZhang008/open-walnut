@@ -1,0 +1,249 @@
+/* Phone layout, review round 4 (R3-01 .. R3-10). Every rule sits behind the
+   phone query; the desktop layout does not change. */
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* R3-02 / C80: the home list holds still by its own rules (rows wait for the
+     first task list, a restore puts back the exact offset). Chromium's scroll
+     anchoring moved the restored offset when a row off screen changed height;
+     iOS Safari has no anchoring, so the phone behaves the same in both. */
+  .app-shell-navigation .home-navigation-scroll {
+    overflow-anchor: none;
+  }
+  /* The desktop rows skip layout off screen (content-visibility) and rely on
+     scroll anchoring to absorb the estimate; WebKit has no anchoring, so on a
+     phone an off-screen row drawn at its real two-line height pushed a row
+     that scrollIntoView had just brought up back out of view, and a tap
+     landed on nothing. A phone list is paged ("Show more"), so rows render. */
+  .app-shell-navigation .todo-panel .todo-panel-item {
+    content-visibility: visible;
+    contain-intrinsic-size: none;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* R3-03: a single-tier tab (Focus, Satellite, Parked, Recent) scrolls with
+     the page, one scroller like Mail: the desktop's fill-and-scroll-inside
+     chain (wrapper, section, subgroup, list) takes its natural height, so the
+     rows run down to the footer with no blank band and no short inner box. */
+  .app-shell-navigation .home-navigation-scroll .todo-pinned-wrapper-solo,
+  .app-shell-navigation .home-navigation-scroll .todo-pinned-section-solo,
+  .app-shell-navigation .home-navigation-scroll .todo-pinned-section-solo .todo-pinned-subgroup,
+  .app-shell-navigation .home-navigation-scroll .todo-pinned-section-solo .todo-pinned-list-scroll,
+  .app-shell-navigation .home-navigation-scroll .todo-pinned-section-solo .todo-pinned-list-recent {
+    min-height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .app-shell-navigation .home-navigation-scroll .todo-pinned-section-solo .todo-pinned-list-scroll,
+  .app-shell-navigation .home-navigation-scroll .todo-pinned-section-solo .todo-pinned-list-recent {
+    flex: 0 0 auto;
+  }
+
+  /* R3-03: the footer is one line; more chips than fit scroll sideways. */
+  .app-shell-navigation .todo-filter-footer {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+
+  .app-shell-navigation .todo-filter-footer::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-shell-navigation .todo-filter-footer .todo-filter-footer-chip {
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* R3-04: a tier card row (Pinned, Focus, Satellite, Parked, Recent) reads
+     like the tree rows (N2-14) and like Linear on iOS: line one is the phase
+     circle, the title and the row's own buttons; line two holds what
+     describes the task (Needs you, then the pills). Three pills on line one
+     had squeezed a title to 19 px. The pills are labels here: a tap on one
+     opens the row, and the row's detail carries the same links. */
+  /* Held sideways the row is 800 px wide: one line has room for all of it. */
+  @media (orientation: portrait) {
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) {
+      --phone-card-indent: 24px;
+      flex-wrap: wrap;
+      row-gap: 2px;
+      padding-left: calc(6px + var(--phone-card-indent));
+    }
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > .task-phase-icon-btn {
+      order: 0;
+      margin-left: calc(-1 * var(--phone-card-indent));
+    }
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > .todo-pinned-title {
+      order: 0;
+      flex: 1 1 0;
+      min-width: 0;
+    }
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card)::after {
+      content: '';
+      order: 3;
+      flex: 0 0 100%;
+      height: 0;
+    }
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > .phone-row-needs-you {
+      order: 5;
+      margin: 0 6px 6px 0;
+    }
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > :not(.task-phase-icon-btn, .todo-pinned-title, .task-start-btn, .task-kebab-wrapper, .todo-recent-ago, .task-unread-dot, .phone-row-needs-you, .todo-pinned-card-override, input, textarea) {
+      order: 6;
+      flex: 0 0 auto;
+      max-width: 100%;
+      margin: 0 6px 6px 0;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > .todo-pinned-card-override {
+      order: 7;
+      flex: 0 0 100%;
+    }
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* R3-06: a chip is as tall as its time (the hours are 52 px now, TimeGrid),
+     never a 44 px block that covers the meeting after it. The tap area may
+     reach past the drawn block; the blocks themselves never overlap. */
+  .app-shell-navigation .cal-grid-cols .cal-chip {
+    min-height: 0;
+    /* The body clips the words; the chip lets its tap band reach out. */
+    overflow: visible;
+  }
+  .app-shell-navigation .cal-grid-cols .cal-chip > .cal-chip-body {
+    overflow: hidden;
+    max-height: 100%;
+  }
+  /* A 44 px tap band centred on a short chip (none on a chip 44 px or taller). */
+  .app-shell-navigation .cal-grid-cols .cal-chip::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: min(0px, calc((100% - 44px) / 2));
+    bottom: min(0px, calc((100% - 44px) / 2));
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* R3-07: a markdown table keeps readable columns and scrolls sideways in its
+     own box (the table is already a block scroller, globals.css); without a
+     floor the columns shrank to the message width and CJK cells broke one
+     character a line. */
+  .app-shell-navigation .markdown-body :is(th, td) {
+    /* Seven characters of text a line, plus the cell's own padding (border-box). */
+    min-width: calc(7em + 24px);
+  }
+  .app-shell-navigation .markdown-body table {
+    overscroll-behavior-x: contain;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* R3-10: the reader's actions are a labelled row under the subject (bare
+     icons in the title's corner read as nothing), each a 44 px target with
+     its name under it, as iOS Mail's toolbar names nothing yet sits apart. */
+  .app-shell-navigation .mail-app .mail-reader-title-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  /* In a column the subject's 240 px flex basis would be its height. */
+  .app-shell-navigation .mail-app .mail-reader-title-row > .mail-reader-subject {
+    flex: 0 0 auto;
+  }
+  .app-shell-navigation .mail-app .mail-reader-title-row > .mail-reader-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: 4px;
+    width: 100%;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 2px 0;
+  }
+  .app-shell-navigation .mail-app .mail-reader-actions > .mail-task-slot {
+    display: contents;
+  }
+  .app-shell-navigation .mail-app .mail-reader-actions .mail-round-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
+    height: auto;
+    min-height: 52px;
+    flex-direction: column;
+    gap: 2px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.2;
+    color: var(--accent-text, var(--accent));
+  }
+  /* The name each button already carries for a screen reader, shown. */
+  .app-shell-navigation .mail-app .mail-reader-actions .mail-round-btn[data-label]::after {
+    content: attr(data-label);
+    white-space: nowrap;
+  }
+
+  /* Invite answers are finger targets. */
+  .app-shell-navigation .mail-app .mail-invite-btn {
+    min-height: 44px;
+    height: auto;
+    font-size: 14px;
+  }
+
+  /* The sort line: no separator left at the start of a wrapped line. */
+  .app-shell-navigation .mail-app .mail-reader-sort {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 10px;
+  }
+  .app-shell-navigation .mail-app .mail-reader-sort-sep {
+    display: none;
+  }
+  .app-shell-navigation .mail-app .mail-reader-sort-fix {
+    min-height: 44px;
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* C19: the file viewer's toolbar (Preview, Source, Live, History, Save,
+     Find, Copy Path) is one row of 44 px buttons with 13 px words that
+     scrolls sideways, so Copy Path is never cut at the edge. */
+  .app-shell-navigation .fv-html-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+  .app-shell-navigation .fv-html-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .app-shell-navigation .fv-html-tab {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  /* C28: an editable document is 16 px or more, or iOS zooms in on focus. */
+  .app-shell-navigation .ProseMirror[contenteditable='true'] {
+    font-size: max(16px, 1em);
+  }
+  /* C19: Mail's empty state offers its account button as a finger target. */
+  .app-shell-navigation .mail-app .mail-add-account {
+    min-height: 44px;
+  }
+  /* A seen prompt pill keeps its place in the timeline (PhoneTimelinePills). */
+  .app-shell-navigation .session-history .phone-prompt-pill.is-seen {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}

@@ -1,4 +1,6 @@
-import { memo, useState, type MouseEvent, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { PHONE_SHOW_SECTION_EVENT } from './PhoneTierEmpty';
 import * as ICONS from '../common/Icons';
 import '@/styles/view-menu-choices.css';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
@@ -59,7 +61,26 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
   const [, setBarShown] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
   const tabs = tabBarTabs(customTiers);
-  const shown = visibleTabBarTabs(tabs, { active, counts, held: heldCounts, hidden, hideEmpty: hideEmpty && countsReady });
+  // A phone keeps one stable set of tabs (N21): hiding the empty ones made a
+  // tab vanish the moment another was picked, so tabs moved under the thumb.
+  const phone = usePhoneLayout();
+  const shown = visibleTabBarTabs(tabs, { active, counts, held: heldCounts, hidden, hideEmpty: hideEmpty && countsReady && !phone });
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!phone) return;
+    const el = listRef.current?.querySelector<HTMLElement>('.todo-section-tab.is-active');
+    el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [phone, active]);
+  // The empty tier's "Show recent tasks" (PhoneTierEmpty) switches tabs here.
+  useEffect(() => {
+    if (!phone) return;
+    const onShow = (e: Event) => {
+      const section = (e as CustomEvent<{ section?: TodoSection }>).detail?.section;
+      if (section && tabs.some((t) => t.id === section)) onChange(section);
+    };
+    window.addEventListener(PHONE_SHOW_SECTION_EVENT, onShow);
+    return () => window.removeEventListener(PHONE_SHOW_SECTION_EVENT, onShow);
+  }, [phone, tabs, onChange]);
   const roomy = shown.length <= ROOMY_TAB_LIMIT;
 
   const openMenu = (event: MouseEvent<HTMLElement>, atCursor = false) => {
@@ -95,7 +116,7 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
 
   return (
     <div className={`todo-section-tabs${roomy ? ' is-roomy' : ''}`} onContextMenu={(event) => openMenu(event, true)}>
-      <div className="todo-section-tabs-list" role="tablist" aria-label="Todo panel sections">
+      <div className="todo-section-tabs-list" role="tablist" aria-label="Todo panel sections" ref={listRef}>
         {shown.map(({ id, label, title }) => {
           const isActive = id === active;
           const count = counts[id];

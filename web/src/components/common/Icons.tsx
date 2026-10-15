@@ -36,7 +36,7 @@ export const ICON_FOLDER_OUTLINE = folderOutlineIcon();
  *  rotates it when expanded). Shared so the tier chip and the list rows can
  *  never drift apart; it lives here rather than in TodoPanel because
  *  FocusSatelliteCards importing TodoPanel would be a cycle. */
-export const CHEVRON_GLYPH = '▶';
+export const CHEVRON_GLYPH = '▶︎';
 /** folder FILLED: PROJECT labels. Solid vs outline is the at-a-glance
  *  project/folder distinction: project = solid, folder = hollow. */
 export const ICON_FOLDER_SOLID = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4a1 1 0 011-1h3.6l1.6 1.8h5.8a1 1 0 011 1V12a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/></svg>;

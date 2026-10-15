@@ -624,7 +624,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
                 closeMenu();
               }}
             >
-              <span className="task-kebab-icon">▶</span>
+              <span className="task-kebab-icon">▶︎</span>
               <span>Start Session</span>
             </button>
           )}

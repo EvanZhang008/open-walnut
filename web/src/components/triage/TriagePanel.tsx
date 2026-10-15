@@ -106,7 +106,7 @@ function TriageSessionSection({
         onClick={() => setExpanded((p) => !p)}
         aria-expanded={expanded}
       >
-        <span className="triage-session-chevron">{expanded ? '\u25BC' : '\u25B6'}</span>
+        <span className="triage-session-chevron">{expanded ? '\u25BC' : '\u25B6\uFE0E'}</span>
         <span className="triage-session-index">#{index + 1}</span>
         {entry.timestamp && (
           <span className="triage-session-time">{timeAgo(entry.timestamp)}</span>

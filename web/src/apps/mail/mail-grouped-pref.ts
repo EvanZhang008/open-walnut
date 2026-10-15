@@ -9,10 +9,13 @@
  * browser open and have to know whether grouping is on. The mirror is fire and forget: the switch on
  * screen never waits on it. A failed write is retried on the next change, or on a read a minute
  * later: every render reads the switch, so retrying on every read was a request per render for as long
- * as the server kept refusing.
+ * as the server kept refusing. The value last mirrored is kept in `localStorage` too, so a page load
+ * does not re-send what the server already has (a load wrote it every time); it is re-sent once a day
+ * all the same, in case the server lost its copy.
  *
  * `v2` because the v1 key stored a bare string and defaulted OFF; it is deleted once, on first read.
  */
+import { afterFirstScreen } from '@/utils/after-first-screen';
 import { useSyncExternalStore } from 'react';
 import { setMailGroupedPref } from '@/api/mail-groups';
 import { log } from '@/utils/log';
@@ -23,8 +26,27 @@ const LEGACY_KEY = 'walnut.mail.grouped.v1';
 let version = 0;
 const listeners = new Set<() => void>();
 let legacyCleared = false;
-/** The value last sent to the server, so a re-read does not re-send it. */
-let mirrored: boolean | null = null;
+/** The value last sent to the server, so a re-read does not re-send it (undefined: not read yet). */
+let mirrored: boolean | null | undefined;
+/** Where this browser keeps what it last told the server, and when. Not a synced UI pref. */
+export const GROUPED_MIRRORED_KEY = 'walnut.mail.grouped.mirrored';
+const MIRROR_REFRESH_MS = 24 * 60 * 60_000;
+
+function readMirrored(): boolean | null {
+  try {
+    const raw = window.localStorage.getItem(GROUPED_MIRRORED_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { on?: unknown; at?: unknown };
+    if (typeof parsed.on !== 'boolean' || typeof parsed.at !== 'number') return null;
+    return Date.now() - parsed.at < MIRROR_REFRESH_MS ? parsed.on : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberMirrored(on: boolean): void {
+  try { window.localStorage.setItem(GROUPED_MIRRORED_KEY, JSON.stringify({ on, at: Date.now() })); } catch { /* kept in memory */ }
+}
 /** The value and time of the last failed mirror write. */
 let failed: { on: boolean; at: number } | null = null;
 const MIRROR_RETRY_MS = 60_000;
@@ -36,11 +58,18 @@ function clearLegacyOnce(): void {
 }
 
 function mirror(on: boolean): void {
+  if (mirrored === undefined) mirrored = readMirrored();
   if (mirrored === on) return;
   if (failed && failed.on === on && Date.now() - failed.at < MIRROR_RETRY_MS) return;
   mirrored = on;
+  // A phone sends it after its first screen, never from behind the sign-in page (N2-35).
+  afterFirstScreen(() => sendMirror(on));
+}
+
+function sendMirror(on: boolean): void {
+  if (mirrored !== on) return;
   void setMailGroupedPref(on).then(
-    () => { failed = null; },
+    () => { failed = null; rememberMirrored(on); },
     (error: unknown) => {
       mirrored = null;
       failed = { on, at: Date.now() };
@@ -95,9 +124,12 @@ export function useGroupedPref(): boolean {
   return readGroupedPref();
 }
 
-/** Test seam: forget what was mirrored and whether the legacy key was cleared. */
-export function resetGroupedPrefForTests(): void {
+/**
+ * Test seam: forget what was mirrored and whether the legacy key was cleared. `fromStorage` starts
+ * like a fresh page load, which reads what this browser last mirrored.
+ */
+export function resetGroupedPrefForTests(opts: { fromStorage?: boolean } = {}): void {
   legacyCleared = false;
-  mirrored = null;
+  mirrored = opts.fromStorage ? undefined : null;
   failed = null;
 }

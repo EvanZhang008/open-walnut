@@ -30,6 +30,11 @@
  * without a DOM.
  */
 
+import { createPortal } from 'react-dom';
+import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
+import { usePhoneLayerWithBar } from '@/components/sessions/phone-session-layer';
+import { phoneSessionLabel } from '@/utils/phone-session-label';
+import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { SessionMode, Task } from '@open-walnut/core';
 import type { ImageAttachment } from '@/api/chat';
@@ -114,6 +119,9 @@ export interface AskWalnutSlotProps {
   onFixWalnut?: () => void;
   /** Collapse the slot — the panel's own × (the Focus Dock brings it back). */
   onCloseChat: () => void;
+  /** Phone layout: the slot is open over the home screen, so it is the 'chat'
+   *  layer (back closes it) and its asks drawer is the 'asks' layer. */
+  phoneOpen?: boolean;
   /** Reported on every selection change, so the owner can point the context
    *  inspector at the session actually on screen. */
   onSelectionChange?: (selection: { taskId: string | null; sessionId: string | null }) => void;
@@ -141,7 +149,7 @@ function initialDraftMeta(): QuickStartTaskMeta {
 
 export function AskWalnutSlot({
   tasks, tasksLoading, banner, inspectorPanel,
-  inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onSelectionChange,
+  inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onSelectionChange, phoneOpen,
   onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
   // The console agents, from the shared agent store (the /agents page writes to
@@ -564,6 +572,24 @@ export function AskWalnutSlot({
     [drawerOpen, toggleDrawer, agent.project],
   );
 
+  // Phone: the slot is a layer whose bar is the top bar (title = the agent, the
+  // ask's status under it); the asks drawer is a full-screen layer of its own.
+  const askStatus = useSessionStatus(view === 'session' ? sessionId ?? undefined : undefined);
+  const phoneChat = usePhoneLayerWithBar({
+    id: 'chat',
+    kind: 'chat',
+    active: !!phoneOpen,
+    title: agent.name || agent.project,
+    subtitle: view === 'session' && sessionId
+      ? phoneSessionLabel({ process_status: askStatus?.process_status, pendingPermissionTool: askStatus?.pendingPermissionTool ?? null })
+      : undefined,
+    onClose: hideSlot,
+  });
+  const asksLayer = usePhoneOverlay({ id: 'asks', kind: 'asks', open: drawerOpen, onClose: closeDrawer });
+  // ONE asks button: on a phone it rides in the top bar, so the header copy goes
+  // (two would share the ref the drawer anchors and focuses back to).
+  const inlineMenuButton = phoneChat.slot ? null : menuButton;
+
   return (
     <div className="ask-walnut-slot" data-testid="ask-walnut-slot">
       {banner}
@@ -572,7 +598,7 @@ export function AskWalnutSlot({
       <div className="ask-walnut-slot-body">
         {view === 'loading' ? (
           <div className="ask-walnut-loading" data-testid="ask-walnut-loading">
-            <div className="ask-walnut-bare-header">{menuButton}</div>
+            {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             <p className="ask-walnut-pending-status">
               <span className="spinner ask-walnut-pending-spinner" />
               Loading your asks…
@@ -582,7 +608,7 @@ export function AskWalnutSlot({
           <div className="ask-walnut-draft" data-testid="ask-walnut-draft">
             <DraftSessionPanel
               draft={draft}
-              headerLeading={menuButton}
+              headerLeading={inlineMenuButton}
               // ONLY an explicit New click takes the caret. `view` is also 'new'
               // for the DERIVED empty state (no asks yet), which is what the slot
               // shows on a plain page load — autofocusing there stole the caret
@@ -601,7 +627,7 @@ export function AskWalnutSlot({
           </div>
         ) : view === 'pending' && pending ? (
           <div className="ask-walnut-pending" data-testid="ask-walnut-pending">
-            <div className="ask-walnut-bare-header">{menuButton}</div>
+            {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             {pending.error ? (
               <>
                 <p className="ask-walnut-pending-error">{agent.project} couldn&apos;t start: {pending.error}</p>
@@ -631,8 +657,9 @@ export function AskWalnutSlot({
               key={sessionId}
               sessionId={sessionId}
               embedded
-              headerLeading={menuButton}
-              onClose={hideSlot}
+              headerLeading={inlineMenuButton}
+              onClose={phoneChat.slot ? phoneChat.close : hideSlot}
+              {...(phoneChat.slot ? { phoneHostSlot: 'chat' } : {})}
               {...(onTaskClick ? { onTaskClick } : {})}
               {...(onLocateTask ? { onLocateTask } : {})}
               {...(onOpenTaskDetail ? { onOpenTaskDetail } : {})}
@@ -643,16 +670,17 @@ export function AskWalnutSlot({
           </div>
         ) : (
           <div className="ask-walnut-empty">
-            <div className="ask-walnut-bare-header">{menuButton}</div>
+            {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             <p>This ask has no session yet.</p>
             <button className="btn btn-sm btn-primary" onClick={startNew}>New</button>
           </div>
         )}
       </div>
 
+      {phoneChat.slot && createPortal(menuButton, phoneChat.slot)}
       <AskWalnutDrawer
         open={drawerOpen}
-        onClose={closeDrawer}
+        onClose={asksLayer.close}
         returnFocusRef={menuBtnRef}
         agents={agents}
         agent={agent}

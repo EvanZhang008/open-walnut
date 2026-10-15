@@ -1048,7 +1048,7 @@
 /* The shell's mobile hamburger is `position: fixed` at top 12px and is about 36px tall, so its
    bottom edge is near 48px: the pane head has to start below THAT, not below 44px, or the back
    chevron sits directly under it (seen in the narrow verification screenshot). */
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .mail-console { padding-top: 56px; }
 }
 

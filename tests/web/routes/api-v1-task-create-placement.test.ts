@@ -537,4 +537,19 @@ describe('GET /api/v1/me', () => {
       session: { id: worker.sid, host: '', cwd: '/repo/here' },
     })
   })
+
+  it('names the paired device that is calling, by token or by cookie, and nothing for anyone else', async () => {
+    const { createDevice } = await import('../../../src/core/device-auth.js')
+    const { token } = await createDevice('me-probe-phone')
+    const ask = async (headers: Record<string, string>) => {
+      const res = await fetch(api('/api/v1/me'), { headers })
+      expect(res.status).toBe(200)
+      return await res.json() as Record<string, any>
+    }
+    expect(await ask({ authorization: `Bearer ${token}` })).toEqual({ kind: 'human', device: { name: 'me-probe-phone' } })
+    expect(await ask({ cookie: `walnut_device=${token}` })).toEqual({ kind: 'human', device: { name: 'me-probe-phone' } })
+    // An unknown token on the trusted loopback is not refused, and names no device.
+    expect(await ask({ authorization: 'Bearer not-a-token' })).toEqual({ kind: 'human' })
+    expect(await ask({})).toEqual({ kind: 'human' })
+  })
 })

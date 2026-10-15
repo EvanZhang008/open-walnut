@@ -8,6 +8,7 @@ import { taskCommand } from './task.js';
 import { tasksCommand } from './tasks.js';
 import { loadMarkdownCommands } from './markdown-bridge.js';
 import { loadSkillCommands } from './skill-bridge.js';
+import { afterFirstScreen } from '@/utils/after-first-screen';
 
 // Hardcoded commands own the 'core' tier — the highest priority. Commands with their
 // own source (e.g. 'control') keep it for palette labelling; others get 'hardcoded'.
@@ -20,8 +21,9 @@ registerOwned('core', { ...taskCommand });
 registerOwned('core', { ...tasksCommand, source: 'hardcoded' });
 
 // Load markdown-based commands, then skills (async, non-blocking). Owner tiers decide
-// name collisions now, so load order is no longer load-bearing.
-loadMarkdownCommands().then(() => loadSkillCommands());
+// name collisions now, so load order is no longer load-bearing. A phone's home has no
+// composer, so there they wait for the home rows (N19).
+afterFirstScreen(() => { void loadMarkdownCommands().then(() => loadSkillCommands()); });
 
 export { getCommand, listCommands, searchCommands } from './registry.js';
 export { refreshMarkdownCommands } from './markdown-bridge.js';

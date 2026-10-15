@@ -230,8 +230,11 @@ export function wrapLocalStorageWrites(): void {
     if (v !== null && /=>|function/.test(v)) rawRemove.call(localStorage, junk);
   }
   storageProto.setItem = function setItem(this: Storage, key: string, value: string) {
+    // A write of the value the key already holds changes nothing to sync: a boot that
+    // re-saved its state used to PUT it back every load (N19).
+    const unchanged = this === localStorage && rawGet.call(this, key) === String(value);
     rawSet.call(this, key, value);
-    if (this === localStorage) queue(key, value);
+    if (this === localStorage && !unchanged) queue(key, value);
   };
   storageProto.removeItem = function removeItem(this: Storage, key: string) {
     rawRemove.call(this, key);

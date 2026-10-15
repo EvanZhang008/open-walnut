@@ -146,16 +146,29 @@ describe('cloud mode auth enforcement', () => {
 
   it('rate-limits repeated auth failures with 429', async () => {
     _resetAuthRateLimitForTesting();
+    // Ten different guesses (auth-rate-limit.ts counts one refused token once per window).
     for (let i = 0; i < 10; i++) {
+      const res = await fetch(apiUrl('/api/tasks'), {
+        headers: { Authorization: `Bearer ${String(i).padStart(32, '0')}` },
+      });
+      expect(res.status).toBe(401);
+    }
+    const limited = await fetch(apiUrl('/api/tasks'), {
+      headers: { Authorization: 'Bearer 00000000000000000000000000000099' },
+    });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toBe('60');
+    expect(await limited.json()).toMatchObject({ code: 'rate_limited' });
+  });
+
+  it('one refused token sent again and again is one failure: a revoked phone reloading never locks the address', async () => {
+    _resetAuthRateLimitForTesting();
+    for (let i = 0; i < 15; i++) {
       const res = await fetch(apiUrl('/api/tasks'), {
         headers: { Authorization: 'Bearer 00000000000000000000000000000000' },
       });
       expect(res.status).toBe(401);
     }
-    const limited = await fetch(apiUrl('/api/tasks'), {
-      headers: { Authorization: 'Bearer 00000000000000000000000000000000' },
-    });
-    expect(limited.status).toBe(429);
   });
 
   it('WS upgrade without a token is rejected', async () => {

@@ -167,7 +167,7 @@ async function gitAuthMiddleware(req: Request, res: Response, next: NextFunction
     const cred = await validateBearerCredential(credential)
     if (!cred || cred.kind === 'machine') {
       // Machine tokens are bridge-upgrade-only — never valid for git sync.
-      recordAuthFailure(ip)
+      recordAuthFailure(ip, credential)
       log.web.warn('git-http: invalid credential', { ip, machine: cred?.kind === 'machine' })
       challenge(res)
       return

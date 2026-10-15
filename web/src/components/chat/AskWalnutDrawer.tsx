@@ -36,6 +36,7 @@ import {
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
+import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { ICON_SLIDERS } from '@/components/common/Icons';
 import type { AskAgent } from './ask-walnut-slot-model';
 
@@ -151,7 +152,10 @@ export function AskWalnutDrawer({
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    searchRef.current?.focus({ preventScroll: true });
+    // A phone moves focus to the list itself: focusing the search box there
+    // pops the keyboard over the asks the user opened the list to see (N11).
+    if (isPhoneLayout()) panelRef.current?.focus({ preventScroll: true });
+    else searchRef.current?.focus({ preventScroll: true });
     const key = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.preventDefault();

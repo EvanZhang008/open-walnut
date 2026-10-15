@@ -12,6 +12,7 @@ import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
 import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, type LocalEdit } from './task-list-merge';
 import { normalizeTags } from '../../../src/core/tag-model';
 import { deletedTaskId } from '../../../src/core/task-deleted-id';
+import { markFirstScreen } from '@/utils/after-first-screen';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -685,6 +686,11 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       });
   }, [filter]);
 
+  // The first answer (or failure) is on screen: work a phone deferred may start (N19).
+  useEffect(() => {
+    if (!loading) markFirstScreen();
+  }, [loading]);
+
   useEffect(() => {
     refetch();
     refetchGroups();
@@ -903,6 +909,16 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // Coalesced like the bulk signals: filing N subtasks, or a create followed by
   // its AI label refine, emits a burst of these, and each one used to cost every
   // open window a full list fetch.
+  // A phone back in front with a socket that may be dead (wsClient.resync, C62):
+  // the list is read again over HTTP at once, one round trip after the phone
+  // is back, not after the ping deadline and the new socket's connect. The
+  // connect still refetches once more (what the gap between them missed).
+  useEvent('_ws:reconnected', (data) => {
+    if ((data as { early?: boolean } | undefined)?.early !== true) return;
+    log.info('tasks', 'resync → refetching tasks before the socket answers');
+    refetch();
+  });
+
   useEvent('task:groups-changed', () => {
     log.info('tasks', 'ws task:groups-changed → refetch tasks (coalesced) + groups');
     scheduleBulkRefetch();

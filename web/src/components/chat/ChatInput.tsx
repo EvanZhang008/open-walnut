@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
+import { returnInsertsNewline } from './touch-return';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { searchCommands, getCommand } from '@/commands/index';
 import type { SlashCommand } from '@/commands/types';
@@ -983,8 +984,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }
 
     if (e.key === 'Enter') {
-      if (e.shiftKey || e.altKey) {
-        // Shift+Enter or Option+Enter → newline (default behavior)
+      if (e.shiftKey || e.altKey || returnInsertsNewline()) {
+        // Shift+Enter or Option+Enter → newline (default behavior); touch: always
         return;
       }
       e.preventDefault();
