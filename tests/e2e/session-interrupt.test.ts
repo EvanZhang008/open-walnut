@@ -171,6 +171,13 @@ describe('session:interrupt RPC', () => {
       })
       const sessionId = ((await result1).data!.sessionId) as string
       expect(sessionId).toBeTruthy()
+      // The record is born with the prompt the session runs, so turn 2 reads the
+      // place it was told from it. 2026-10-15 (CI 38761957420): the prompt landed
+      // only 10s later, the told place fell back to the record's project (this RPC
+      // start names none), and turn 2 carried a false "the Inbox became project
+      // InterruptTest" notice that hid its `slow:` directive from the mock CLI.
+      const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
+      expect((await getSessionByClaudeId(sessionId))?.appliedAppendSystemPrompt).toContain('project "InterruptTest"')
 
       // Turn 2: a slow message (mock CLI waits 8s before result) so the
       // interrupt lands strictly mid-turn.
@@ -186,6 +193,7 @@ describe('session:interrupt RPC', () => {
       const messageId = (sendRes.payload as { messageId?: string })?.messageId
       expect(messageId).toBeTruthy()
       await delivered
+      expect((await getSessionByClaudeId(sessionId))?.placeNoted).toBeUndefined()
 
       // Bare stop. The runner must clear the in-flight batch and tell the
       // frontend via batch-completed (id-first) — that is what unpins the

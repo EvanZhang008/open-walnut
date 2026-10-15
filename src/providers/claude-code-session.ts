@@ -1145,6 +1145,9 @@ export class ClaudeCodeSession {
   pendingTitle?: string
   /** Auto-generated description set by SessionRunner before first send */
   pendingDescription?: string
+  /** The append prompt this spawn runs with, stored on the record it creates
+   *  (the place notice reads the session's told place from it; see persistSessionRecord). */
+  private _spawnAppendPrompt?: string
   /** Source plan session ID (set when this session was created from a plan) */
   fromPlanSessionId?: string
   /** Source session ID when this session was forked from another session */
@@ -2363,6 +2366,7 @@ export class ClaudeCodeSession {
     const profile = opts?.profile
     this._profile = profile
     this._lane = opts?.lane
+    this._spawnAppendPrompt = appendSystemPrompt
     // 'replace' → --system-prompt (FULL replacement of the CLI's own prompt).
     // Anything else (append / unset) composes with the caller's append text:
     // profile prompt FIRST, caller's append after, so a profile establishes the
@@ -8742,6 +8746,12 @@ export class ClaudeCodeSession {
       effort: this._effort,
       profile: this._profile,
       lane: this._lane,
+      // Born with the prompt it runs: the runner's own write of it fails until the
+      // record exists and retries 10s later, and a message inside that window read
+      // the place from the record's project instead (a false "moved" notice). Only
+      // a new record takes it (createSessionRecord); the 64KB cap matches the runner's.
+      ...(this._spawnAppendPrompt && Buffer.byteLength(this._spawnAppendPrompt, 'utf8') <= 65536
+        ? { appliedAppendSystemPrompt: this._spawnAppendPrompt } : {}),
       // Init-only spawn persists while parked ('idle' — no first turn). All
       // other callers persist mid-turn, where the default 'running' is right.
       initialProcessStatus: this._processStatus === 'idle' ? 'idle' : undefined,
