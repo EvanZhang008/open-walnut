@@ -6,6 +6,24 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-10-15
+
+### Added
+
+- Enforce status-only credentials and confirm host round trips
+- One picker for model and effort, with live state, turn speed and context
+
+### Fixed
+
+- A setup runner stopped mid-write never starts its next step
+- The CI gate asks GitHub again on a 5xx or a dropped connection
+- A task's own event clears its level-snapshot mark in the tail fold again
+- A host-resumed fire shows in the session's chat
+- Render indented layouts inline and repeat the delivery contract
+- Name task placement Pin and its lists Pins
+- Repack right after a rewrite adoption, and judge repo size after maintenance
+- Show when only background subagents are working
+
 ## [0.6.11] - 2026-10-14
 
 ### Fixed
