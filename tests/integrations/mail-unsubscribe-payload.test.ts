@@ -209,10 +209,9 @@ describe('a retired body', () => {
       from: { name: 'Marina Weekly', address: 'weekly@lists.example.invalid' },
       listUnsubscribe: { ...HEADERS, bodyLink: HTTPS, bodyCandidates: 3 },
     });
-    expect(kept).toEqual({
-      to: [{ address: 'reader@example.invalid' }],
-      listUnsubscribe: HEADERS,
-    });
+    // `to` and `cc` go with `from` (a body read may have filled them for the previous newest
+    // message, ee4afe96a); only the header fields of the list stay.
+    expect(kept).toEqual({ listUnsubscribe: HEADERS });
   });
 
   it('drops the whole field when the capture was nothing but a scraped link', () => {
@@ -221,9 +220,9 @@ describe('a retired body', () => {
       .toEqual({});
   });
 
-  it('changes nothing for a row that never had the field', () => {
-    expect(payloadForRetiredBody({ to: [{ address: 'reader@example.invalid' }], bodyFormat: 'text' }))
-      .toEqual({ to: [{ address: 'reader@example.invalid' }] });
+  it('changes nothing else for a row that never had the field', () => {
+    expect(payloadForRetiredBody({ bodyBytesHint: 42_749, bodyFormat: 'text' }))
+      .toEqual({ bodyBytesHint: 42_749 });
   });
 });
 
