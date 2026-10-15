@@ -846,6 +846,10 @@ export class LocalDaemon {
     // The keep-sessions switch is one daemon's own exit policy (the cloud tunnel
     // daemon sets it through envOverrides): never inherit it.
     delete env.WALNUT_DAEMON_KEEP_SESSIONS
+    // The service daemon's state dir is its own (its triggers, hooks, host copies): a daemon
+    // started here is never the service, and with this var inherited from a session of the
+    // service daemon it could reach that daemon's state.
+    delete env.WALNUT_DAEMON_STATE_DIR
     for (const [key, value] of Object.entries(this.envOverrides)) {
       if (value === undefined) delete env[key]
       else env[key] = value

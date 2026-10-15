@@ -14,7 +14,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import { createOfflineHost, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
+import { createOfflineHost, createOfflineHostCore, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
+import { createOfflineJournal } from '../../src/providers/offline-journal-core.js'
 import { createOfflineSearch } from '../../src/providers/offline-search-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
@@ -582,7 +583,9 @@ describe('offline host: queued writes and the handover', () => {
     const restarted = harness(h.dir)
     restarted.host.configure(slice())
     const { records } = restarted.host.drain(HOME)
-    expect(records.map(({ seq: _s, at: _a, ...r }) => r)).toEqual([
+    // Journal v2 envelope: each record carries its op id and rev (an old Mac ignores them).
+    expect(records.every((r) => r.v === 2 && /^op-[0-9a-f]{16}$/.test(String(r.opId)) && r.rev === 1)).toBe(true)
+    expect(records.map(({ seq: _s, at: _a, v: _v, opId: _o, rev: _r, ...r }) => r)).toEqual([
       { kind: 'settings', sid: B, cliModel: 'sonnet[1m]' },
       { kind: 'settings', sid: B, effort: 'low' },
     ])
@@ -605,10 +608,16 @@ describe('offline host: the source twin runs the factories from their text', () 
   it('rebuilds both factories under strict mode and gets the same envelopes', async () => {
     const rebuild = <T>(fn: T): T => new Function('"use strict"; return ' + String(fn))() as T
     const kitCopy = rebuild(createEnvelopeKit)()
-    const hostCopy = rebuild(createOfflineHost)
+    // The source twin inlines the host core and the journal core, each from its text.
+    const hostCopy = rebuild(createOfflineHostCore)
+    const journalCopy = rebuild(createOfflineJournal)
     const h = harness()
     const text = 'from the rebuilt copy é中'
-    const copy = hostCopy({ ...h.deps, kit: kitCopy })
+    const journal = journalCopy({
+      fs: h.deps.fs, path: h.deps.path, dir: h.deps.dir, now: h.deps.now, randomHex: h.deps.randomHex, keyOf: h.deps.keyOf, log: h.deps.log,
+      sha256: (body) => createHash('sha256').update(body).digest('hex'),
+    })
+    const copy = hostCopy({ ...h.deps, kit: kitCopy, journal })
     copy.configure(slice())
     const r = await copy.handle(HOME, A, 'tools.call', { name: 'task_send', args: { to: B, text, expect_reply: false } })
     expect(r.ok).toBe(true)

@@ -21,6 +21,15 @@ const T = 60_000
 let dirs: string[] = []
 afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); dirs = [] })
 
+/** Where a v1 daemon kept its book: `<its daemon dir>/leader`, both this user's own (the import checks both). */
+function legacyLeaderDir(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-legacy-'))
+  dirs.push(root)
+  const dir = path.join(root, 'leader')
+  fs.mkdirSync(dir, { mode: 0o700 })
+  return dir
+}
+
 function book(opts: { dir?: string; bootAt?: number; create?: typeof createLeaderBook } = {}) {
   const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'leader-book-'))
   if (!opts.dir) dirs.push(dir)
@@ -191,5 +200,152 @@ describe('leader book: rebuilt from its text (the source twin)', () => {
     clock.now += T
     expect(b.backupClaim(WALNUT, 2).ok).toBe(true)
     expect(b.primaryClaim(HOME)).toMatchObject({ epoch: 3, holder: 'primary' })
+  })
+})
+
+describe('leader book: journal v2 (drains, heardSinceBoot, the state dir move)', () => {
+  it('keeps the drains a configure names, persists them, and an older configure without drains clears them', () => {
+    const { b, dir } = book()
+    b.configure({ home: HOME, walnutId: WALNUT, backup: false, drains: ['task-fields', 'board', 'task-fields', 'Bad Kind'] })
+    expect(b.drainsFor(HOME)).toEqual(['board', 'task-fields'])
+    const again = book({ dir })
+    expect(again.b.drainsFor(HOME)).toEqual(['board', 'task-fields'])
+    // A rolled-back Mac (no drains): v1 only from now on, persisted too.
+    again.b.configure({ home: HOME, walnutId: WALNUT, backup: false })
+    expect(again.b.drainsFor(HOME)).toBeNull()
+    expect(book({ dir }).b.drainsFor(HOME)).toBeNull()
+    expect(again.b.drainsFor('/unknown')).toBeNull()
+  })
+
+  it('a claim and a takeover keep the drains', () => {
+    const { b, clock } = book()
+    b.configure({ home: HOME, walnutId: WALNUT, backup: true, drains: ['task-fields'] })
+    clock.now += T
+    expect(b.backupClaim(WALNUT, 2).ok).toBe(true)
+    expect(b.primaryClaim(HOME)).toMatchObject({ drains: ['task-fields'] })
+  })
+
+  it('after a boot, the companion is still refused within takeoverMs while follower writes are allowed until the primary is heard (D14)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-book-'))
+    dirs.push(dir)
+    book({ dir }).b.configure({ home: HOME, walnutId: WALNUT, backup: true })
+    // The daemon restarts: the record is on disk, nothing heard yet.
+    const { b, clock } = book({ dir })
+    expect(b.heardSinceBoot(HOME)).toBe(false)
+    expect(b.backupClaim(WALNUT, 2)).toMatchObject({ ok: false, code: 'primary_alive' })
+    // The follower view's rule (the twins' primaryAnswersFollower): unheard = not answering.
+    const answersFollower = () => b.heardSinceBoot(HOME) && b.primaryAgeMs(HOME) < 30_000
+    expect(answersFollower()).toBe(false)
+    b.noteHeard(HOME)
+    expect(b.heardSinceBoot(HOME)).toBe(true)
+    expect(answersFollower()).toBe(true)
+    clock.now += 30_000
+    expect(answersFollower()).toBe(false)
+  })
+
+  it('takes a record from a legacy dir when this book has none, and copies it into its own dir', () => {
+    const legacy = legacyLeaderDir()
+    const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-book-'))
+    dirs.push(legacy, mine)
+    const old = book({ dir: legacy })
+    old.b.configure({ home: HOME, walnutId: WALNUT, backup: true })
+    old.clock.now += T
+    old.b.backupClaim(WALNUT, 5)
+    const build = () => createLeaderBook({
+      fs, path, dir: mine, now: () => 2_000_000, keyOf: (home) => createHash('sha1').update(home).digest('hex').slice(0, 12),
+      log: () => {}, takeoverMs: T, bootAt: 2_000_000, legacyDirs: [legacy],
+    })
+    // Building a book (every run of the daemon binary, the walnut CLI included) writes nothing.
+    expect(build().recordOf(HOME)).toBeNull()
+    expect(fs.readdirSync(mine)).toEqual([])
+    // The boot migration takes the legacy record.
+    const make = () => { const b = build(); b.importLegacy(); return b }
+    expect(make().recordOf(HOME)).toMatchObject({ epoch: 5, holder: 'backup' })
+    expect(fs.readdirSync(mine).filter((n) => n.startsWith('leader-'))).toHaveLength(1)
+    // This dir moved on (epoch 6): the older legacy record never takes it back.
+    const now = make()
+    now.primaryClaim(HOME)
+    expect(make().recordOf(HOME)).toMatchObject({ epoch: 6, holder: 'primary' })
+  })
+
+  it('a takeover a downgraded daemon recorded at a lower epoch wins by its later lead change, at an epoch past both books', () => {
+    const legacy = legacyLeaderDir()
+    const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-book-'))
+    dirs.push(legacy, mine)
+    const at = (dir: string, now: { at: number }, legacyDirs: string[] = []) => {
+      const b = createLeaderBook({
+        fs, path, dir, now: () => now.at, keyOf: (home) => createHash('sha1').update(home).digest('hex').slice(0, 12),
+        log: () => {}, takeoverMs: T, bootAt: now.at, legacyDirs,
+      })
+      b.importLegacy()
+      return b
+    }
+    // An older daemon's book: the companion led at epoch 5.
+    const t = { at: 1_000_000 }
+    const old = at(legacy, t)
+    old.configure({ home: HOME, walnutId: WALNUT, backup: true })
+    t.at += T
+    expect(old.backupClaim(WALNUT, 5).ok).toBe(true)
+    // Upgrade: this book takes epoch 5, the primary takes the lead back (6), later the
+    // companion leads (7) and the primary returns (8).
+    t.at += 1000
+    const up = at(mine, t, [legacy])
+    up.primaryClaim(HOME)
+    t.at += T
+    expect(up.backupClaim(WALNUT, 7).ok).toBe(true)
+    t.at += 1000
+    expect(up.primaryClaim(HOME)).toMatchObject({ epoch: 8, holder: 'primary' })
+    // Downgrade: the old daemon reads epoch 5 from its own dir; the Mac takes the lead
+    // there (6), then the companion takes over there (7), both after this book's last change.
+    t.at += 1000
+    const down = at(legacy, t)
+    expect(down.recordOf(HOME)).toMatchObject({ epoch: 5 })
+    down.primaryClaim(HOME)
+    t.at += T
+    expect(down.backupClaim(WALNUT, 7).ok).toBe(true)
+    // Upgrade again: the companion leads, as the downgraded book last said, at an epoch
+    // above both (a command at 7 or 8 is fenced; the companion claims again above 9).
+    t.at += 1000
+    const again = at(mine, t, [legacy])
+    expect(again.recordOf(HOME)).toMatchObject({ holder: 'backup', epoch: 9 })
+    expect(again.backupClaim(WALNUT, 9)).toMatchObject({ ok: false, code: 'stale_epoch' })
+    // And the next boot keeps that answer (the legacy record is no later now).
+    expect(at(mine, t, [legacy]).recordOf(HOME)).toMatchObject({ holder: 'backup', epoch: 9 })
+  })
+
+  it('a legacy record at a higher epoch but an older lead change never flips the holder: this book only raises its epoch past it', () => {
+    const legacy = legacyLeaderDir()
+    const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-book-'))
+    dirs.push(legacy, mine)
+    const keyOf = (home: string) => createHash('sha1').update(home).digest('hex').slice(0, 12)
+    // An unreadable legacy file is injected through deps.fs (chmod passes as root).
+    const denied = (file: string): typeof fs => ({
+      ...fs,
+      readFileSync: ((f: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+        if (String(f) === file) throw Object.assign(new Error('EACCES: injected'), { code: 'EACCES' })
+        return (fs.readFileSync as (...a: unknown[]) => unknown)(f, ...rest)
+      }) as typeof fs.readFileSync,
+    })
+    const at = (now: number, bookFs: typeof fs = fs) => {
+      const b = createLeaderBook({ fs: bookFs, path, dir: mine, now: () => now, keyOf, log: () => {}, takeoverMs: T, bootAt: now, legacyDirs: [legacy] })
+      b.importLegacy()
+      return b
+    }
+    // A v1 daemon's book: the companion took the lead at 1000 (epoch 3).
+    const legacyFile = path.join(legacy, `leader-${keyOf(HOME)}.json`)
+    fs.writeFileSync(legacyFile, JSON.stringify({ v: 1, home: HOME, walnutId: WALNUT, backup: true, epoch: 3, holder: 'backup', since: 1000 }))
+    // Boot 1 cannot read it (tried again at the next boot); the Mac configures at 5000.
+    const first = at(5000, denied(legacyFile))
+    expect(first.recordOf(HOME)).toBeNull()
+    first.configure({ home: HOME, walnutId: WALNUT, backup: true })
+    expect(first.recordOf(HOME)).toMatchObject({ epoch: 1, holder: 'primary', since: 5000 })
+    // Boot 2 reads it: the Mac still leads (its lead change is the later one), past epoch 3.
+    const second = at(6000)
+    expect(second.recordOf(HOME)).toMatchObject({ epoch: 4, holder: 'primary', since: 5000 })
+    // A command at either old epoch is fenced; the legacy file is never changed.
+    expect(second.backupClaim(WALNUT, 3)).toMatchObject({ ok: false, code: 'stale_epoch' })
+    expect(JSON.parse(fs.readFileSync(legacyFile, 'utf8'))).toMatchObject({ epoch: 3, holder: 'backup' })
+    // Boot 3 keeps that answer (the copy in this dir is no older now).
+    expect(at(7000).recordOf(HOME)).toMatchObject({ epoch: 4, holder: 'primary', since: 5000 })
   })
 })

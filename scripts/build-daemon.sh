@@ -122,6 +122,7 @@ SOURCES=(
   src/providers/git-attribution-core.ts
   src/providers/git-commit-core.ts
   src/providers/offline-host-core.ts
+  src/providers/offline-journal-core.ts
   src/core/peers/envelope-kit.ts
   src/providers/leader-core.ts
   src/providers/live-settings-core.ts

@@ -166,6 +166,7 @@ const DAEMON_SOURCE_FILES = [
   // The offline host and the envelope wording it shares with the server: same
   // import-or-inline rule (docs/plan/daemon-first-hosts.md).
   'src/providers/offline-host-core.ts',
+  'src/providers/offline-journal-core.ts',
   'src/core/peers/envelope-kit.ts',
   // The leader book (who leads while the primary is away): same rule
   // (docs/plan/walnut-control-plane.md).

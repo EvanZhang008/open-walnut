@@ -47,7 +47,8 @@ import { createFoldCheckpoint } from './fold-checkpoint-core.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
-import { createOfflineHost } from './offline-host-core.js'
+import { createOfflineHostCore } from './offline-host-core.js'
+import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
@@ -237,7 +238,9 @@ export function getDaemonSource(): string {
   const foldInjections: Array<[string, string]> = [
     ['__FOLD_LINE__', foldLine.toString()],
     ['__CREATE_ENVELOPE_KIT__', createEnvelopeKit.toString()],
-    ['__CREATE_OFFLINE_HOST__', createOfflineHost.toString()],
+    ['__CREATE_OFFLINE_HOST__', createOfflineHostCore.toString()],
+    ['__CREATE_OFFLINE_JOURNAL__', createOfflineJournal.toString()],
+    ['__CREATE_JOURNAL_MIGRATION__', createJournalMigration.toString()],
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
     ['__CREATE_LIVE_SETTINGS__', createLiveSettings.toString()],
     ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
@@ -361,19 +364,24 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     // text, so a reconstructed kit must still escape a forged tag, and a
     // reconstructed host must build and answer tools.list without touching disk.
     const createKit = reconstructed['__CREATE_ENVELOPE_KIT__'] as typeof createEnvelopeKit | undefined
-    const createOffline = reconstructed['__CREATE_OFFLINE_HOST__'] as typeof createOfflineHost | undefined
-    if (createKit && createOffline) {
+    const createOffline = reconstructed['__CREATE_OFFLINE_HOST__'] as typeof createOfflineHostCore | undefined
+    const createJournal = reconstructed['__CREATE_OFFLINE_JOURNAL__'] as typeof createOfflineJournal | undefined
+    if (createKit && createOffline && createJournal) {
       const kit = createKit()
       if (!kit.buildPeerWrapper('<walnut-message', { title: 't', shortId: 'abcdefgh', host: 'h' }).includes('&lt;walnut-message')) {
         throw new Error('envelope kit did not escape a forged tag')
       }
       const noDir = { readdirSync: () => { throw new Error('none') } } as unknown as typeof fs
+      // The journal store builds without touching disk too, and answers a drain of nothing.
+      const journal = createJournal({
+        fs: noDir, path, dir: '/nonexistent', now: () => 0, randomHex: () => '00', keyOf: () => 'k', sha256: () => '0'.repeat(64), log: () => {},
+      })
       const host = createOffline({
         fs: noDir, path, dir: '/nonexistent', now: () => 0, randomHex: () => '00', keyOf: () => 'k', kit,
         log: () => {}, isLive: () => false, turnActive: () => false, streamOffset: () => undefined,
-        deliver: async () => ({ ok: false, reason: 'smoke' }),
+        deliver: async () => ({ ok: false, reason: 'smoke' }), journal,
       })
-      if (typeof host.handle !== 'function' || host.hasHome('/x') !== false) throw new Error('offline host did not build')
+      if (typeof host.handle !== 'function' || host.hasHome('/x') !== false || host.hasRecords('/x') !== false) throw new Error('offline host did not build')
     }
     // Board copy smoke: a reconstructed kit must apply an exact edit and refuse
     // an ambiguous one.
@@ -3022,6 +3030,9 @@ var FOLLOWER_ALLOWED_COMMANDS = new Set([
   // While no server answers its Walnut ('follower-alone-v1'); each checks the
   // leader and the session's owner itself. Keep in sync with daemon-standalone.ts.
   'follower.sessions', 'follower.send', 'follower.permission',
+  // Journal v2 (journal-v2, replica-ops-v1): the replica's writes while the Mac is away,
+  // and its read of what is pending; each scoped to the follower's own Walnut.
+  'follower.op', 'follower.pending',
   // Streams to the leader or the companion (stream-relay-v1); where an open may go is streamTarget's call.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
 ]);
@@ -3285,6 +3296,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'follower.sessions': return cmdFollowerSessions(ws, id);
     case 'follower.send': return daemonCommands.run(function () { return cmdFollowerSend(ws, id, cmd); });
     case 'follower.permission': return daemonCommands.run(function () { return cmdFollowerPermission(ws, id, cmd); });
+    case 'follower.op': return cmdFollowerOp(ws, id, cmd);
+    case 'follower.pending': return cmdFollowerPending(ws, id, cmd);
     // Streams between servers through this daemon (stream-relay-v1): frames,
     // never answered by id. Twin of daemon-standalone.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd);
@@ -3303,6 +3316,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'host.slice': return cmdHostSlice(ws, id, cmd);
     case 'offline.drain': return cmdOfflineDrain(ws, id, cmd);
     case 'offline.ack': return cmdOfflineAck(ws, id, cmd);
+    case 'offline.blob': return cmdOfflineBlob(ws, id, cmd);
     // The host's copy (host-replica-v1): NOT in BRIDGE_ALLOWED_COMMANDS either.
     case 'replica.sync': return cmdReplica(ws, id, 'sync', cmd);
     case 'replica.put': return cmdReplica(ws, id, 'put', cmd);
@@ -3967,9 +3981,101 @@ var hostReplica = (__CREATE_HOST_REPLICA__)({
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });
 
+// ── Journal v2 (offline-journal-core.ts, inlined; docs/plan/walnut-replica-servers-impl.md
+// section 5 Location): ONE journal root per host in every mode. The host's own daemon
+// (the prod dir, where the service runs too, or its home fallback) keeps journals, slices
+// and the leader book in ~/.open-walnut/tmp; an isolated daemon keeps them in its
+// DAEMON_DIR, even in service mode (a test's --service daemon must never read or rename the
+// real /tmp/open-walnut journal). WALNUT_JOURNAL_DIR is for TESTS ONLY and is refused on the
+// prod dir. Every boot moves the v1 journals an older daemon left (its DAEMON_DIR, and for
+// the prod dir's daemon the home fallback) into v2. Twin of the daemon-standalone.ts block.
+var JOURNAL_PROD_STATE_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp');
+var JOURNAL_HOST_DAEMON = IS_PROD_DAEMON_DIR;
+var JOURNAL_TEST_DIR = !IS_PROD_DAEMON_DIR ? process.env.WALNUT_JOURNAL_DIR : undefined;
+var JOURNAL_ROOT = JOURNAL_TEST_DIR || (JOURNAL_HOST_DAEMON ? JOURNAL_PROD_STATE_DIR : DAEMON_DIR);
+var OFFLINE_HOST_DIR = path.join(JOURNAL_ROOT, 'offline-host');
+var LEADER_BOOK_DIR = path.join(JOURNAL_ROOT, 'leader');
+// Where a v1 daemon (1fe1fd194 and older) kept its journal and leader book: its own
+// DAEMON_DIR, always. The daemon on the prod dir also reads the home fallback (a v1 daemon
+// used it while the server picked it). The home fallback daemon NEVER reads
+// /tmp/open-walnut: the server picks the fallback when that dir is another user's or a
+// symlink. An isolated daemon reads only its own dir. Read for v1 files, slices and leader
+// records only, each this user's own (the core checks). Twin of daemon-standalone.ts.
+var JOURNAL_ON_PROD_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON_DIR);
+var JOURNAL_LEGACY_ROOTS = [DAEMON_DIR].concat(JOURNAL_ON_PROD_DIR ? [FALLBACK_DAEMON_DIR] : [])
+  .filter(function (d, i, all) { return all.findIndex(function (x) { return path.resolve(x) === path.resolve(d); }) === i; });
+var LEGACY_JOURNAL_DIRS = JOURNAL_LEGACY_ROOTS.map(function (d) { return path.join(d, 'offline-host'); })
+  .filter(function (d) { return path.resolve(d) !== path.resolve(OFFLINE_HOST_DIR); });
+var LEGACY_LEADER_DIRS = JOURNAL_LEGACY_ROOTS.map(function (d) { return path.join(d, 'leader'); })
+  .filter(function (d) { return path.resolve(d) !== path.resolve(LEADER_BOOK_DIR); });
+
+// Whether daemon.pid names this process (a zombie predecessor refuses journal writes).
+function ownsDaemonDir() {
+  try {
+    var owner = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
+    return !(owner > 0) || owner === process.pid;
+  } catch (e) {
+    return true;
+  }
+}
+
+function createJournalStore(dir) {
+  return (__CREATE_OFFLINE_JOURNAL__)({
+    fs: fs, path: path, dir: dir,
+    now: function () { return Date.now(); },
+    randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
+    keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
+    sha256: function (body) { return crypto.createHash('sha256').update(body).digest('hex'); },
+    log: function (level, msg, data) { logMsg(level, msg, data); },
+    startTimeOf: function (pid) { return hostServerStartTime(pid); },
+    isOwner: ownsDaemonDir,
+    // One long-lived store per dir: the append fd stays open between appends.
+    keepOpen: true,
+    // A v1 file the boot migration left (part way, or of a Walnut it did not know) finished
+    // later: arm the trigger holds again, after the write or configure that finished it.
+    migrated: function () { setTimeout(function () { triggerHoldsChanged(); }, 0); },
+  });
+}
+// Building the store reads and writes nothing: this text runs for every use of the
+// daemon (the walnut CLI, --status, --stop). Only migrateJournals() below, after
+// daemon.pid names this process, copies, imports or sweeps (twin of daemon-standalone.ts).
+var offlineJournal = createJournalStore(OFFLINE_HOST_DIR);
+
+// The boot migration, shared with daemon-standalone.ts (offline-journal-core.ts
+// createJournalMigration): legacy slices and leader records, then the v1 journals. The
+// journal root is the same in every mode, so no v2 journal elsewhere is taken.
+var journalMigration = (__CREATE_JOURNAL_MIGRATION__)({
+  path: path,
+  journal: offlineJournal,
+  dir: OFFLINE_HOST_DIR,
+  legacyDirs: LEGACY_JOURNAL_DIRS,
+  importLegacyLeaders: function () { leaderBook.importLegacy(); },
+  slicesMoved: function () { offlineHost.reloadSlices(); },
+  // loadTriggersAtBoot ran before the migration: a pause or delete made offline under the
+  // old daemon holds from this boot on. Twin of daemon-standalone.ts.
+  recordsMigrated: function () { triggerHoldsChanged(); },
+  ignoredTestDir: IS_PROD_DAEMON_DIR ? process.env.WALNUT_JOURNAL_DIR || null : null,
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
+// Every v1 journal an older daemon left moves here, once daemon.pid names
+// us; then the offline host's minute sweep starts. Never at module load: this script also
+// answers CLI uses, and a long one must not read or write the journals every minute. Twin
+// of daemon-standalone.ts.
+var offlineSweepTimer = null;
+function migrateJournals() {
+  journalMigration.boot();
+  if (!offlineSweepTimer) {
+    offlineSweepTimer = setInterval(function () { offlineHost.sweep().catch(function () {}); }, 60000);
+    if (offlineSweepTimer.unref) offlineSweepTimer.unref();
+  }
+}
+
 var offlineHost = (__CREATE_OFFLINE_HOST__)({
   fs: fs, path: path,
-  dir: path.join(DAEMON_DIR, 'offline-host'),
+  dir: OFFLINE_HOST_DIR,
+  journal: offlineJournal,
+  drainsOf: function (home) { return leaderBook.drainsFor(home); },
   now: function () { return Date.now(); },
   randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
   keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
@@ -4040,8 +4146,6 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
     });
   },
 });
-var offlineSweepTimer = setInterval(function () { offlineHost.sweep().catch(function () {}); }, 60000);
-if (offlineSweepTimer.unref) offlineSweepTimer.unref();
 
 // ── Leader book: who leads this host's work, the primary or (while it is away)
 // the cloud companion (leader-core.ts, inlined; docs/plan/walnut-control-plane.md).
@@ -4053,7 +4157,8 @@ var LEADER_NUDGE_MS = 10000;
 var GATEWAY_SILENT_BEATS = 3;
 var leaderBook = (__CREATE_LEADER_BOOK__)({
   fs: fs, path: path,
-  dir: path.join(DAEMON_DIR, 'leader'),
+  dir: LEADER_BOOK_DIR,
+  legacyDirs: LEGACY_LEADER_DIRS,
   now: function () { return Date.now(); },
   keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
@@ -4099,7 +4204,7 @@ function forwardToBackup(home, capability, callerSid, payload, respond) {
 function cmdLeaderConfigure(ws, id, cmd) {
   if (ws.origin === 'bridge') return sendError(ws, id, 'leader.configure: trusted clients only');
   try {
-    var rec = leaderBook.configure({ home: cmd.home, walnutId: cmd.walnutId, backup: cmd.backup === true });
+    var rec = leaderBook.configure({ home: cmd.home, walnutId: cmd.walnutId, backup: cmd.backup === true, drains: cmd.drains });
     gatewayClientHomes.set(ws, rec.home);
     sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder, since: rec.since, takeoverMs: LEADER_TAKEOVER_MS });
   } catch (err) {
@@ -4156,14 +4261,23 @@ function followerView(home) {
     epoch: rec.epoch,
     holder: rec.holder,
     backup: rec.backup,
-    primaryConnected: primarySocketOpen(home) && age < LEADER_TAKEOVER_MS,
+    // A primary this daemon has not heard since it started is not answering yet (D14).
+    primaryConnected: primarySocketOpen(home) && leaderBook.heardSinceBoot(home) && age < LEADER_TAKEOVER_MS,
     primaryHeardAgoMs: age,
+    heardSinceBoot: leaderBook.heardSinceBoot(home),
     takeoverMs: LEADER_TAKEOVER_MS,
     // The window this daemon calls the Mac away by (the replica's presence reads it).
     quietMs: LEADER_QUIET_MS,
     bridge: { connected: bridgeAdapter != null, companion: companion },
     settings: hostServers.settingsOf(home),
+    ...followerJournalView(home),
   };
+}
+
+// Journal v2 in the follower view (twin of daemon-standalone.ts).
+function followerJournalView(home) {
+  var stats = offlineHost.journalStats(home);
+  return { journal: stats, drainablePending: stats.drainable };
 }
 
 function cmdFollowerHello(ws, id, cmd) {
@@ -4488,8 +4602,13 @@ function cmdFollowerSessions(ws, id) {
 // and a host replica's presence: one window, LEADER_QUIET_MS (knob
 // WALNUT_LEADER_QUIET_MS). Twin of daemon-standalone.ts.
 var LEADER_QUIET_MS = envTimerMs(process.env.WALNUT_LEADER_QUIET_MS, 30000, 500);
+// The follower-write quiet window, read in ONE place (twin of daemon-standalone.ts).
+function followerQuietMs() {
+  return LEADER_QUIET_MS;
+}
 function primaryAnswersFollower(home) {
-  return primarySocketOpen(home) && leaderBook.primaryAgeMs(home) < LEADER_QUIET_MS;
+  // A primary unheard since this daemon started does not answer (D14).
+  return primarySocketOpen(home) && leaderBook.heardSinceBoot(home) && leaderBook.primaryAgeMs(home) < followerQuietMs();
 }
 
 // While a follower of home is linked, a primary not heard within LEADER_QUIET_MS
@@ -4498,10 +4617,16 @@ function primaryQuietWithFollower(home) {
   return followerSockets.has(home) && leaderBook.primaryAgeMs(home) >= LEADER_QUIET_MS;
 }
 
+// A follower may write while no server answers its Walnut, or while its server is back
+// but still taking the journal (twin of daemon-standalone.ts followerMayWrite).
+function followerMayWrite(home) {
+  return !primaryAnswersFollower(home) || offlineHost.pendingHandover(home);
+}
+
 function followerWriteTarget(ws, id, cmd, name) {
   var home = followerHomeOf(ws);
   if (!home) { sendError(ws, id, name + ': send follower.hello first'); return null; }
-  if (primaryAnswersFollower(home)) { sendError(ws, id, name + ': your Mac answers again; write through it', { errorKind: 'leader_answers' }); return null; }
+  if (!followerMayWrite(home)) { sendError(ws, id, name + ': your Mac answers again; write through it', { errorKind: 'leader_answers' }); return null; }
   var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
   if (!sid || offlineHost.ownerOf(sid) !== home) { sendError(ws, id, name + ': not a session of this Walnut on this host', { errorKind: 'not_found' }); return null; }
   return { home: home, sid: sid };
@@ -4523,6 +4648,37 @@ async function cmdFollowerPermission(ws, id, cmd) {
   sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId, allow: r.allow });
 }
 
+// The replica's write while the Mac is away (replica-ops-v1, journal v2). Its own gate:
+// the follower's own Walnut, the quiet window unless the Mac is still taking the
+// journal, and the daemon dir's owner. Twin of daemon-standalone.ts cmdFollowerOp.
+function cmdFollowerOp(ws, id, cmd) {
+  var home = followerHomeOf(ws);
+  if (!home) return sendError(ws, id, 'follower.op: send follower.hello first');
+  if (!followerMayWrite(home)) return sendError(ws, id, 'follower.op: your Mac answers again; write through it', { errorKind: 'leader_answers' });
+  if (!ownsDaemonDir()) {
+    return sendError(ws, id, 'follower.op: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } });
+  }
+  var r = offlineHost.handleFollower(home, { op: cmd.op, args: cmd.args, actor: cmd.actor, opId: cmd.opId, base: cmd.base });
+  if (r.ok) return sendOk(ws, id, r.result);
+  sendError(ws, id, 'follower.op: ' + r.error.message, Object.assign({ errorKind: r.error.code },
+    r.error.detail !== undefined ? { detail: r.error.detail } : {}, r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}));
+}
+
+// What is pending for the follower's Walnut (its overlay; read only, own Walnut only).
+function cmdFollowerPending(ws, id, cmd) {
+  var home = followerHomeOf(ws);
+  if (!home) return sendError(ws, id, 'follower.pending: send follower.hello first');
+  sendOk(ws, id, offlineHost.pendingFor(home, cmd.sinceSeq));
+}
+
+// A note body a journal record names (journal-v2): at most 2 MB per reply. Trusted only.
+function cmdOfflineBlob(ws, id, cmd) {
+  if (ws.origin === 'bridge' || ws.origin === 'follower') return sendError(ws, id, 'offline.blob: trusted clients only');
+  var r = offlineJournal.readBlob(cmd.sha, cmd.offset);
+  if (!r.ok) return sendError(ws, id, 'offline.blob: ' + r.message, { errorKind: r.code });
+  sendOk(ws, id, r);
+}
+
 function cmdHostSlice(ws, id, cmd) {
   try {
     var r = offlineHost.configure(cmd.slice);
@@ -4533,15 +4689,26 @@ function cmdHostSlice(ws, id, cmd) {
   }
 }
 
+// kinds (journal-v2): the v2 kinds the Mac applies; absent, an older Mac's v1 prefix.
 function cmdOfflineDrain(ws, id, cmd) {
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'offline.drain: missing home');
-  sendOk(ws, id, offlineHost.drain(cmd.home));
+  var kinds = Array.isArray(cmd.kinds) ? cmd.kinds.filter(function (k) { return typeof k === 'string'; }) : null;
+  var out = offlineHost.drain(cmd.home, kinds);
+  // A batch whose freeze could not be saved is never handed out (its ack could not be saved either).
+  if (out.error) return sendError(ws, id, 'offline.drain: ' + out.error, { errorKind: 'journal_unwritable', why: out.why });
+  if (out.records.length) logMsg('info', 'journal: drained', { home: cmd.home, records: out.records.length, more: out.more, kinds: kinds ? kinds.join(',') : 'v1', firstSeq: out.records[0].seq, lastSeq: out.records[out.records.length - 1].seq });
+  sendOk(ws, id, out);
 }
 
+// seqs (journal-v2) names exactly what the Mac applied or gave up on; upTo is an older Mac's watermark.
 function cmdOfflineAck(ws, id, cmd) {
-  if (typeof cmd.home !== 'string' || !cmd.home || typeof cmd.upTo !== 'number') return sendError(ws, id, 'offline.ack: missing home or upTo');
+  var seqs = Array.isArray(cmd.seqs) ? cmd.seqs : undefined;
+  if (typeof cmd.home !== 'string' || !cmd.home || (typeof cmd.upTo !== 'number' && !seqs)) return sendError(ws, id, 'offline.ack: missing home, seqs or upTo');
   var held = offlineHost.triggerHolds().size;
-  sendOk(ws, id, offlineHost.ack(cmd.home, cmd.upTo));
+  var r = offlineHost.ack(cmd.home, seqs ? { seqs: seqs } : cmd.upTo);
+  if (r.error) return sendError(ws, id, 'offline.ack: ' + r.error, { errorKind: 'journal_unwritable' });
+  logMsg('info', 'journal: acked', Object.assign({ home: cmd.home }, seqs ? { seqs: seqs.length } : { upTo: cmd.upTo }, { remaining: r.remaining }, r.ignored ? { ignored: r.ignored.length } : {}));
+  sendOk(ws, id, r);
   // The server took the trigger changes made here: from now on its set alone
   // decides (a change it refused is undone here too; its push for one it applied follows).
   if (held > 0 && offlineHost.triggerHolds().size !== held) triggerHoldsChanged();
@@ -4746,6 +4913,11 @@ function startGatewayListener() {
       try { fs.chmodSync(GATEWAY_SOCK_PATH, 0o600); } catch {}
       logMsg('info', 'agent gateway listening', { sock: GATEWAY_SOCK_PATH });
     });
+    // A unix socket is bound inside listen() itself, so its file exists now: lock it at
+    // once, as daemon-standalone.ts does, instead of only in the callback a tick later.
+    // The gateway starts after the daemon announced its port (behind the journal
+    // migration), so a client that saw the port can already see the socket.
+    try { fs.chmodSync(GATEWAY_SOCK_PATH, 0o600); } catch {}
   } catch (err) {
     // The gateway is additive — never fail daemon startup over it.
     logMsg('warn', 'agent gateway listener failed', { error: err.message });
@@ -5348,6 +5520,9 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // Same for the keep-sessions switch (this daemon's own exit policy): a CLI
       // that starts a daemon of its own must not hand it on.
       WALNUT_DAEMON_KEEP_SESSIONS: undefined,
+      // And the service state dir: a daemon a CLI starts is isolated, and with this var
+      // it could reach the service daemon's journals. Keep in sync with daemon-standalone.ts.
+      WALNUT_DAEMON_STATE_DIR: undefined,
     },
   };
   let barrier = null;
@@ -11966,12 +12141,6 @@ async function startDaemon() {
     });
   });
 
-  // Agent gateway: second (unix-socket) listener + on-PATH walnut shim. Both
-  // additive — failures log a warning and never abort daemon startup.
-  // Keep in sync with daemon-standalone.ts --start.
-  startGatewayListener();
-  writeWalnutShim();
-
   // Listen on random port (localhost only)
   httpServer.listen(0, '127.0.0.1', () => {
     const port = httpServer.address().port;
@@ -11980,6 +12149,15 @@ async function startDaemon() {
     if (daemonInstanceLock) daemonInstanceLock.publish(port);
     fs.writeFileSync(PORT_FILE, String(port));
     fs.writeFileSync(PID_FILE, String(process.pid));
+    // daemon.pid names us now: the journal writes are ours (journal v2 migration).
+    migrateJournals();
+    // Agent gateway: second (unix-socket) listener + on-PATH walnut shim. Both
+    // additive: failures log a warning and never abort daemon startup. Started only
+    // after the migration, as in daemon-standalone.ts --start (one synchronous block
+    // there): a session's walnut call before it would be journaled ahead of the older
+    // v1 records the migration then adds.
+    startGatewayListener();
+    writeWalnutShim();
     fs.writeFileSync(INSTANCE_ID_FILE, DAEMON_INSTANCE_ID);
     if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID);
     else { try { fs.unlinkSync(SERVICE_FILE); } catch {} }

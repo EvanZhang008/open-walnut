@@ -21,13 +21,17 @@
  * reconnect (`offline.drain` / `offline.ack`); until the journal is empty the
  * gateway keeps answering here, so no id the server has not seen yet reaches it.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createOfflineHost;
- * daemon-source.ts inlines `createOfflineHost.toString()` through
+ * How the daemon twins get it: daemon-standalone.ts imports createOfflineHostCore;
+ * daemon-source.ts inlines `createOfflineHostCore.toString()` through
  * `__CREATE_OFFLINE_HOST__`. So the factory body references NOTHING at module
- * scope; the envelope kit and every side effect arrive through deps.
+ * scope; the envelope kit, the journal store (offline-journal-core.ts) and every
+ * side effect arrive through deps. `createOfflineHost` (tests, other callers)
+ * builds the journal store itself when none is given.
  */
 
+import { createHash } from 'node:crypto'
 import type { EnvelopeKit, EnvelopeOutcome } from '../core/peers/envelope-kit.js'
+import { createOfflineJournal } from './offline-journal-core.js'
 import type { BoardOffline, OfflineSliceBoard } from './offline-board-core.js'
 import type { HostReplica } from './host-replica-core.js'
 import type { OfflineSearch } from './offline-search-core.js'
@@ -50,6 +54,27 @@ export interface OfflineSliceTask {
   description?: string
   updated_at?: string
   session_id?: string
+  /**
+   * Journal v2 (docs/plan/walnut-replica-servers-impl.md section 7): the other queueable
+   * fields when the server ships them, and the server's per-field write time. A field
+   * the copy lacks is queued with `base: 'unknown'`.
+   */
+  status?: string
+  priority?: string
+  due_date?: string
+  start_date?: string
+  end_date?: string
+  pinned?: boolean
+  tags?: string[]
+  summary?: string
+  note?: string
+  sprint?: string
+  unread?: boolean
+  focus_tier?: string
+  pin_order?: number
+  depends_on?: string[]
+  wait_until?: string
+  field_at?: Record<string, string>
 }
 
 /**
@@ -152,7 +177,30 @@ export type OfflineRecord =
    */
   | { seq: number; at: number; online?: true; kind: 'resume'; sid: string; taskId?: string; messageId: string }
 
-interface Journal { nextSeq: number; records: OfflineRecord[]; rows: Record<string, OfflineRequestRow>; settledCopies: string[] }
+/**
+ * Journal v2 kinds (offline-journal-core.ts). New names on purpose: an old Mac's drain
+ * never receives them (it would apply nothing and ack them), so the daemon writes them
+ * only for a Mac whose `leader.configure {drains}` lists them.
+ */
+export type OfflineFieldWrite = { base: unknown; value: unknown }
+export type OfflineRecordV2 =
+  | { kind: 'task-fields'; op: 'task_update' | 'task_complete'; taskId: string; fields: Record<string, OfflineFieldWrite> }
+  | { kind: 'task-create'; taskId: string; fields: Record<string, unknown>; placement: { parentTaskId?: string; project?: string; groupId?: string; tier?: string }; order?: unknown }
+  | { kind: 'task-move'; taskId: string; anchor: { after?: string; before?: string } | null; tier?: string; base?: unknown }
+  | { kind: 'board'; op: string; args: Record<string, unknown>; postId?: string }
+  | { kind: 'note'; path: string; noteId?: string; mode: 'put' | 'create' | 'delete'; baseHash: string | null; baseBlob: string | null; oursBlob: string | null }
+
+/** Every record a drain may hand out: the v1 shapes plus the v2 bookkeeping and kinds. */
+export type OfflineJournalRecord = (OfflineRecord | (OfflineRecordV2 & { seq: number; at: number; online?: true })) & {
+  v?: 2; opId?: string; rev?: number; actor?: import('./offline-journal-core.js').JournalActor; supersedes?: number
+}
+
+/** The v1 field names a gateway task_update overlays (unchanged), and the queueable set of journal v2. */
+const QUEUEABLE_TASK_FIELDS = [
+  'title', 'status', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'tags',
+  'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id',
+]
+export { QUEUEABLE_TASK_FIELDS }
 
 type GatewayResult = { ok: true; result: Record<string, unknown> } | { ok: false; error: { code: string; message: string; retryAfterMs?: number; detail?: unknown } }
 
@@ -249,6 +297,17 @@ export interface OfflineHostDeps {
   search?: OfflineSearch
   /** The triggers this daemon runs; absent: the trigger ops need the server. */
   triggers?: OfflineTriggerTable
+  /**
+   * The journal store (offline-journal-core.ts, journal v2). The twins build it (it also
+   * migrates v1 journals and answers offline.blob); createOfflineHost builds one in `dir`
+   * when absent.
+   */
+  journal?: import('./offline-journal-core.js').OfflineJournal
+  /**
+   * The v2 kinds the leading Mac drains (`leader.configure {drains}`), or null for a Mac
+   * that sent none: then only v1 kinds are written, and only the v1 prefix is drainable.
+   */
+  drainsOf?: (home: string) => string[] | null
 }
 
 /** A message the leader routes to a session of this host (`leader.deliver`). */
@@ -280,7 +339,7 @@ export type LeaderDelivery =
     fromSessionId?: string
   }
 
-export function createOfflineHost(deps: OfflineHostDeps) {
+export function createOfflineHostCore(deps: OfflineHostDeps) {
   const { fs, path, kit } = deps
   const MAX_RECORDS = 1000
   const MAX_ARGS_BYTES = 256 * 1024
@@ -290,6 +349,17 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   const IMPLICIT_REPLY_SECS = 6 * 3_600
   const DRAIN_BATCH = 200
   const QUEUED_OPS = ['task_update', 'task_complete']
+  /**
+   * Inputs task_update retired (its `retiredInput` in src/ops/tasks.ts): dropped, never a
+   * reason to refuse, as the server's executor drops them (an older session still sends
+   * wait_report with a park; 2026-10-05 such a replay was refused and lost).
+   */
+  const RETIRED_TASK_INPUTS = ['wait_report']
+  /** The fields a task write may queue (task-outbox whitelist plus phase, parent, pinned, focus tier). */
+  const QUEUEABLE = [
+    'title', 'status', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'tags',
+    'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id',
+  ]
   const OFFLINE_OPS: Array<{ name: string; title: string; description: string; readonly: boolean; signature: string }> = [
     { name: 'task_get', title: 'Get one task (offline copy)', description: 'A task of a session on this host, from the copy the Walnut server last pushed.', readonly: true, signature: 'id' },
     { name: 'task_list', title: 'List tasks on this host (offline copy)', description: 'Tasks of the sessions on this host, their parents and children.', readonly: true, signature: '[q] [limit]' },
@@ -335,7 +405,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   const HANDOVER_GRACE_MS = 60_000
 
   const slices = new Map<string, HostSlice>()
-  const journals = new Map<string, Journal>()
+  const journal = deps.journal!
   const writes = new Map<string, number[]>()
   /** Rows the server is taking right now (drained, not yet acked): no notice from here. */
   const handingOver = new Map<string, number>()
@@ -367,7 +437,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     try { return JSON.parse(fs.readFileSync(target, 'utf8')) as T } catch { return null }
   }
 
-  /** Load every persisted slice and journal (a daemon restart while the server is away keeps both). */
+  /** Load every persisted slice (the journal store loads its journals itself, slice or not). */
   function load(): void {
     let names: string[] = []
     try { names = fs.readdirSync(deps.dir) } catch { return }
@@ -375,37 +445,68 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       if (!name.startsWith('slice-') || !name.endsWith('.json')) continue
       const slice = readJson<HostSlice>(path.join(deps.dir, name))
       if (!slice || slice.v !== 1 || typeof slice.home !== 'string') continue
+      // Read again after the boot migration copied slices here: a copy a Mac sent since wins.
+      const mine = slices.get(slice.home)
+      if (mine && Number(mine.asOf ?? 0) >= Number(slice.asOf ?? 0)) continue
       slices.set(slice.home, slice)
-      const journal = readJson<Journal>(file('journal', slice.home))
-      if (journal && Array.isArray(journal.records)) {
-        journals.set(slice.home, {
-          nextSeq: journal.nextSeq || 1,
-          records: journal.records,
-          rows: journal.rows ?? {},
-          settledCopies: journal.settledCopies ?? [],
-        })
-      }
     }
   }
 
-  function journalOf(home: string): Journal {
-    let j = journals.get(home)
-    if (!j) { j = { nextSeq: 1, records: [], rows: {}, settledCopies: [] }; journals.set(home, j) }
-    return j
+  /** The request rows and settled copies kept beside the records (a live object). */
+  function journalOf(home: string): { rows: Record<string, OfflineRequestRow>; settledCopies: string[] } {
+    return journal.state(home) as { rows: Record<string, OfflineRequestRow>; settledCopies: string[] }
   }
 
   function persistJournal(home: string): void {
-    writeAtomic(file('journal', home), journalOf(home))
+    journal.persist(home)
+  }
+
+  /** The pending records of a home, in seq order (folded: one per op). */
+  function recordsOf(home: string): OfflineJournalRecord[] {
+    return journal.records(home) as unknown as OfflineJournalRecord[]
+  }
+
+  /** The kinds the leading Mac drains, or null for a Mac that sent none. */
+  function drainsOf(home: string): string[] | null {
+    try { return deps.drainsOf ? deps.drainsOf(home) : null } catch { return null }
+  }
+
+  function drainsKind(home: string, kind: string): boolean {
+    const kinds = drainsOf(home)
+    return !!kinds && kinds.indexOf(kind) !== -1
   }
 
   // Distributive over the union: an `Omit` of the whole union would collapse it.
   type NewRecord = OfflineRecord extends infer R ? R extends OfflineRecord ? Omit<R, 'seq' | 'at' | 'online'> : never : never
 
-  function append(home: string, record: NewRecord, online = false): void {
-    const j = journalOf(home)
-    j.records.push({ ...record, seq: j.nextSeq++, at: deps.now(), ...(online ? { online: true } : {}) } as OfflineRecord)
-    persistJournal(home)
-    try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ }
+  /**
+   * Save one record. A refusal (full disk, a lost lock, a daemon that no longer owns its
+   * dir) is answered, never swallowed: a queued write tells its caller (journal_unwritable).
+   */
+  function append(
+    home: string, record: NewRecord | (OfflineRecordV2 & Record<string, unknown>), online = false,
+    opts: { actor?: import('./offline-journal-core.js').JournalActor; opId?: string; coalesce?: boolean; limit?: boolean; admit?: () => GatewayResult | null } = {},
+  ): import('./offline-journal-core.js').AppendResult {
+    const kind = (record as { kind: string }).kind
+    if (kind === 'row' || kind === 'settle') journal.markDirty(home)
+    const callerSid = (record as { callerSid?: unknown }).callerSid
+    const actor = opts.actor ?? (typeof callerSid === 'string' && callerSid ? { kind: 'session' as const, sid: callerSid } : undefined)
+    const r = journal.append(home, record as unknown as Record<string, unknown>, {
+      online, coalesce: opts.coalesce === true, ...(actor ? { actor } : {}), ...(opts.opId ? { opId: opts.opId } : {}),
+      ...(opts.limit ? { limit: true } : {}),
+      ...(opts.admit ? { admit: opts.admit as () => { ok: false; error: { code: string; message: string; retryAfterMs?: number } } | null } : {}),
+    })
+    if (!r.ok) {
+      if (r.code === 'journal_unwritable') deps.log('error', 'offline host: journal write refused', { home, kind, code: r.code, why: r.why, error: r.message })
+      return r
+    }
+    if (!r.duplicate) { try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ } }
+    return r
+  }
+
+  function refusal(r: import('./offline-journal-core.js').AppendResult): GatewayResult | null {
+    if (r.ok) return null
+    return fail(r.code, r.message, { ...(r.retryAfterMs !== undefined ? { retryAfterMs: r.retryAfterMs } : {}), ...(r.why ? { detail: { why: r.why } } : {}) })
   }
 
   function configure(slice: HostSlice): { changed: boolean } {
@@ -416,8 +517,10 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     if (changed) writeAtomic(file('slice', slice.home), slice)
     // A settle made offline for a server-owned copy is spoken for once the server
     // stops listing that request as pending: drop the local marker with it.
-    const j = journals.get(slice.home)
-    if (j && j.settledCopies.length) {
+    // A journal on disk for this Walnut (one migrated, or written by another process) is its own.
+    journal.adopt(slice.home)
+    const j = journalOf(slice.home)
+    if (j.settledCopies.length) {
       const pending = new Set(slice.requests.map((r) => r.id))
       const kept = j.settledCopies.filter((id) => pending.has(id))
       if (kept.length !== j.settledCopies.length) { j.settledCopies = kept; persistJournal(slice.home) }
@@ -441,16 +544,21 @@ export function createOfflineHost(deps: OfflineHostDeps) {
    * holds nothing back: the server drains it before it answers a relayed call.
    */
   function pendingHandover(home: string | undefined): boolean {
-    return !!home && (journals.get(home)?.records ?? []).some((r) => !r.online)
+    // Only what the leading Mac can drain counts: a record parked for a newer Mac never
+    // pins the gateway (or the follower) away.
+    return !!home && journal.drainableRecords(home, drainsOf(home)).some((r) => !r.online)
   }
 
-  function drain(home: string): { records: OfflineRecord[]; more: boolean } {
-    const records = journals.get(home)?.records ?? []
-    const batch = records.slice(0, DRAIN_BATCH)
+  /**
+   * The server's next batch. `kinds` (journal-v2): the v2 kinds it applies; absent (an old
+   * Mac), only the v1 prefix before the first record it cannot take is handed out.
+   */
+  function drain(home: string, kinds?: string[] | null): { records: OfflineJournalRecord[]; more: boolean; now: number; error?: string; why?: string } {
+    const out = journal.drain(home, { kinds: Array.isArray(kinds) ? kinds.filter((k) => typeof k === 'string') : null, batch: DRAIN_BATCH })
     // The server may notice a row it just imported; this host stays quiet on it
     // meanwhile, or the asker could hear twice.
-    for (const r of batch) if (r.kind === 'row') handingOver.set(r.row.id, deps.now())
-    return { records: batch, more: records.length > DRAIN_BATCH }
+    for (const r of out.records) if (r.kind === 'row') handingOver.set((r as unknown as { row: OfflineRequestRow }).row.id, deps.now())
+    return out as unknown as { records: OfflineJournalRecord[]; more: boolean; now: number; error?: string; why?: string }
   }
 
   function isHandingOver(id: string): boolean {
@@ -475,22 +583,28 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     append(home, { kind: 'stop', sid, stopRequestId: stop.id, requestedAt: stop.requestedAt })
   }
 
-  /** The server applied every record up to `upTo`: drop them, and the rows it now owns. */
-  function ack(home: string, upTo: number): { remaining: number } {
-    const j = journals.get(home)
-    if (!j || typeof upTo !== 'number') return { remaining: j?.records.length ?? 0 }
+  /**
+   * The server applied (or gave up on) records: `seqs` names them exactly (journal-v2); a
+   * number is an old Mac's `upTo`, which drops only seqs a drain handed it. Then the rows
+   * it now owns are dropped too.
+   */
+  function ack(home: string, req: number | { seqs?: unknown; upTo?: unknown }): { remaining: number; ignored?: number[]; error?: string } {
+    const asked = typeof req === 'number' ? { upTo: req } : (req ?? {})
+    if (typeof asked.upTo !== 'number' && !Array.isArray(asked.seqs)) return { remaining: recordsOf(home).length }
+    const r = journal.ack(home, asked)
     const handed = new Set<string>()
-    for (const r of j.records) if (r.seq <= upTo && r.kind === 'row') handed.add(r.row.id)
-    j.records = j.records.filter((r) => r.seq > upTo)
+    for (const x of r.acked) if (x.kind === 'row') handed.add((x as unknown as { row: OfflineRequestRow }).row.id)
     // A row whose latest state the server took is the server's now; a later
     // record for it (written during the handover) keeps it here one more round.
-    const stillOwed = new Set(j.records.filter((r) => r.kind === 'row').map((r) => (r as { row: OfflineRequestRow }).row.id))
+    const stillOwed = new Set(recordsOf(home).filter((x) => x.kind === 'row').map((x) => (x as { row: OfflineRequestRow }).row.id))
+    const j = journalOf(home)
+    let changed = false
     for (const id of handed) {
       handingOver.delete(id)
-      if (!stillOwed.has(id)) delete j.rows[id]
+      if (!stillOwed.has(id) && id in j.rows) { delete j.rows[id]; changed = true }
     }
-    persistJournal(home)
-    return { remaining: j.records.length }
+    if (changed) persistJournal(home)
+    return { remaining: r.remaining, ...(r.ignored.length ? { ignored: r.ignored } : {}), ...(r.error ? { error: r.error } : {}) }
   }
 
   // ── lookups over the copy ──
@@ -499,7 +613,28 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     const slice = slices.get(home)
     if (!slice) return []
     const overlay = new Map<string, Record<string, unknown>>()
-    for (const r of journals.get(home)?.records ?? []) {
+    const created: OfflineSliceTask[] = []
+    for (const r of recordsOf(home)) {
+      if (r.kind === 'task-create') {
+        // A task made here (a host-started ask's own), so its session finds it.
+        const p = r.placement ?? {}
+        created.push({
+          ...(r.fields as Record<string, unknown>), id: r.taskId, title: String((r.fields as { title?: unknown }).title ?? ''),
+          ...(p.parentTaskId ? { parent_task_id: p.parentTaskId } : {}), ...(p.project !== undefined ? { project: p.project } : {}),
+          ...(p.groupId ? { group_id: p.groupId } : {}), ...(p.tier ? { focus_tier: p.tier } : {}),
+        } as OfflineSliceTask)
+        continue
+      }
+      if (r.kind === 'task-fields') {
+        const cur = overlay.get(r.taskId) ?? {}
+        for (const [k, w] of Object.entries(r.fields ?? {})) cur[k] = (w as OfflineFieldWrite).value
+        overlay.set(r.taskId, cur)
+        continue
+      }
+      if (r.kind === 'task-move') {
+        if (r.tier) { const cur = overlay.get(r.taskId) ?? {}; cur.focus_tier = r.tier; overlay.set(r.taskId, cur) }
+        continue
+      }
       if (r.kind !== 'op' || QUEUED_OPS.indexOf(r.op) === -1) continue
       const id = String(r.args.id ?? '')
       const cur = overlay.get(id) ?? {}
@@ -509,7 +644,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
       }
       overlay.set(id, cur)
     }
-    return slice.tasks.map((t) => (overlay.has(t.id) ? { ...t, ...overlay.get(t.id), queued_offline: true } as OfflineSliceTask : t))
+    const base = slice.tasks.concat(created.filter((c) => !slice.tasks.some((t) => t.id === c.id)))
+    return base.map((t) => (overlay.has(t.id) ? { ...t, ...overlay.get(t.id), queued_offline: true } as OfflineSliceTask : created.indexOf(t) !== -1 ? { ...t, queued_offline: true } as OfflineSliceTask : t))
   }
 
   function resolveTask(home: string, ref: string): { task?: OfflineSliceTask; error?: GatewayResult } {
@@ -561,7 +697,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   }
 
   function roomFor(home: string): GatewayResult | null {
-    return (journals.get(home)?.records.length ?? 0) >= MAX_RECORDS
+    return recordsOf(home).length >= MAX_RECORDS
       ? fail('queue_full', `this host already holds ${MAX_RECORDS} records for the Walnut server; wait for it to reconnect`)
       : null
   }
@@ -658,7 +794,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   }
 
   function findRequest(home: string, id: string): { own?: OfflineRequestRow; copy?: OfflineSliceRequest } {
-    const own = journals.get(home)?.rows[id]
+    const own = journalOf(home).rows[id]
     if (own) return { own }
     const copy = slices.get(home)?.requests.find((r) => r.id === id)
     return copy ? { copy } : {}
@@ -1138,16 +1274,163 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     let size = 0
     try { size = JSON.stringify(args).length } catch { return fail('bad_request', 'arguments are not JSON') }
     if (size > MAX_ARGS_BYTES) return fail('bad_request', `arguments are too large to queue offline (${size} bytes, limit ${MAX_ARGS_BYTES})`)
-    const denied = admitWrite(callerSid) ?? roomFor(home)
-    if (denied) return denied
-    const base = slices.get(home)?.tasks.find((t) => t.id === task.id)?.updated_at
-    append(home, { kind: 'op', op: name, args: { ...args, id: task.id }, callerSid, ...(base ? { base } : {}) })
-    deps.log('info', 'offline host: write queued', { home, op: name, taskId: task.id, callerSid })
+    if (drainsKind(home, 'task-fields')) {
+      // Journal v2: per-field bases from the copy plus what is queued here (section 7).
+      const built = taskFieldsRecord(home, task, name, args, null)
+      if ('error' in built) return built.error
+      const saved = append(home, built.record, false, { actor: { kind: 'session', sid: callerSid }, coalesce: true, admit: () => admitWrite(callerSid) ?? roomFor(home) })
+      const no = refusal(saved)
+      if (no) return no
+      deps.log('info', 'offline host: write queued', { home, op: name, taskId: task.id, callerSid, kind: 'task-fields', seq: saved.ok ? saved.seq : undefined })
+    } else {
+      const denied = admitWrite(callerSid) ?? roomFor(home)
+      if (denied) return denied
+      const base = slices.get(home)?.tasks.find((t) => t.id === task.id)?.updated_at
+      const no = refusal(append(home, { kind: 'op', op: name, args: { ...args, id: task.id }, callerSid, ...(base ? { base } : {}) }))
+      if (no) return no
+      deps.log('info', 'offline host: write queued', { home, op: name, taskId: task.id, callerSid })
+    }
     return ok({
       queued: true, offline: true, id: task.id,
       outcome: `Saved on this host; Walnut applies this ${name} when the server reconnects (a newer change made elsewhere wins).`,
       next: 'Nothing else is required. Do not repeat the call.',
     })
+  }
+
+  /**
+   * A task write as a `task-fields` record: every field with the value this host shows
+   * now as its base (copy plus what is queued here), `'unknown'` where the copy lacks the
+   * field, or the writer's own base (a replica's) when it gives one. All or nothing: a
+   * field outside the queueable set refuses the whole write (`needs_leader {fields}`).
+   */
+  function taskFieldsRecord(
+    home: string, task: OfflineSliceTask | null, name: string, args: Record<string, unknown>, given: Record<string, unknown> | null,
+  ): { record: OfflineRecordV2 & Record<string, unknown> } | { error: GatewayResult } {
+    const taskId = task?.id ?? String(args.id ?? '')
+    const op = name === 'task_complete' ? 'task_complete' : 'task_update'
+    const values: Record<string, unknown> = {}
+    if (op === 'task_complete') values.phase = 'COMPLETE'
+    else for (const [k, v] of Object.entries(args)) if (k !== 'id' && k !== 'messageId' && RETIRED_TASK_INPUTS.indexOf(k) === -1) values[k] = v
+    const bad = Object.keys(values).filter((k) => QUEUEABLE.indexOf(k) === -1)
+    if (bad.length) {
+      return { error: fail('needs_leader', `${bad.join(', ')} can only be changed while the Walnut server answers; nothing of this write was saved`, { detail: { why: 'fields', fields: bad } }) }
+    }
+    if (!Object.keys(values).length) return { error: fail('bad_request', `${name} names no field to change`) }
+    const seen = task as Record<string, unknown> | null
+    const fields: Record<string, OfflineFieldWrite> = {}
+    for (const [k, value] of Object.entries(values)) {
+      const base = given && k in given ? given[k] : seen && k in seen ? seen[k] : 'unknown'
+      fields[k] = { base: base === undefined ? 'unknown' : base, value }
+    }
+    return { record: { kind: 'task-fields', op, taskId, fields } }
+  }
+
+  // ── follower.op: the replica's writes while the Mac is away (replica-ops-v1) ──
+
+  const FOLLOWER_OP_KINDS: Record<string, string> = { task_update: 'task-fields', task_complete: 'task-fields', task_create: 'task-create', task_move: 'task-move' }
+  const OP_ID_RE = /^[A-Za-z0-9_-]{1,80}$/
+
+  function actorOf(given: unknown): import('./offline-journal-core.js').JournalActor | null {
+    const a = given as { kind?: unknown; deviceId?: unknown; name?: unknown; sid?: unknown } | null
+    if (!a || typeof a !== 'object') return null
+    if (a.kind === 'device' && typeof a.deviceId === 'string' && OP_ID_RE.test(a.deviceId)) {
+      return { kind: 'device', deviceId: a.deviceId, ...(typeof a.name === 'string' && a.name ? { name: a.name.slice(0, 80) } : {}) }
+    }
+    if (a.kind === 'session' && typeof a.sid === 'string' && a.sid) return { kind: 'session', sid: a.sid }
+    return null
+  }
+
+  /**
+   * One write from the replica of `home` (the twin checked the socket's home, the quiet
+   * window and the daemon dir's owner). Written only as a kind the leading Mac drains;
+   * a task outside the copy is taken with the replica's base. Never throws.
+   */
+  function handleFollower(home: string, req: { op?: unknown; args?: unknown; actor?: unknown; opId?: unknown; base?: unknown }): GatewayResult {
+    try {
+      const name = typeof req.op === 'string' ? req.op : ''
+      const args = (req.args && typeof req.args === 'object' && !Array.isArray(req.args) ? req.args : {}) as Record<string, unknown>
+      const actor = actorOf(req.actor)
+      if (!actor) return fail('bad_request', 'follower.op needs an actor (the paired device, or a session)')
+      if (req.opId !== undefined && (typeof req.opId !== 'string' || !OP_ID_RE.test(req.opId))) return fail('bad_request', 'follower.op: bad opId')
+      // A retry of a saved write (its answer was lost) answers the saved record before any
+      // gate or base: the overlay already holds the first attempt, so a Board edit's
+      // version or old text would no longer match and a saved write would read as failed.
+      if (typeof req.opId === 'string') {
+        const first = journal.byOpId(home, req.opId)
+        if (first) {
+          deps.log('info', 'offline host: follower write retried', { home, op: name, opId: req.opId, seq: first.seq })
+          return ok({ queued: true, offline: true, kind: first.kind, seq: first.seq, opId: String(first.opId), rev: first.rev ?? 1, duplicate: true })
+        }
+      }
+      const opId = typeof req.opId === 'string' ? req.opId : `op-${deps.randomHex(8)}`
+      const kind = FOLLOWER_OP_KINDS[name] ?? (deps.boards && deps.boards.WRITE_OPS.indexOf(name) !== -1 ? 'board' : '')
+      if (!kind) return fail('needs_leader', `${name || 'that write'} needs your Mac`, { detail: { why: 'not_queueable' } })
+      if (!drainsKind(home, kind) || (actor.kind === 'device' && !drainsKind(home, 'device-actor'))) {
+        return fail('needs_leader', 'your Mac runs an older Walnut that cannot take this change later; it needs your Mac', { detail: { why: 'mac_too_old' } })
+      }
+      let size = 0
+      try { size = JSON.stringify(args).length } catch { return fail('bad_request', 'arguments are not JSON') }
+      if (size > MAX_ARGS_BYTES) return fail('bad_request', `arguments are too large to queue (${size} bytes, limit ${MAX_ARGS_BYTES})`)
+      const budgetKey = actor.kind === 'device' ? `device:${actor.deviceId}` : actor.kind === 'session' ? actor.sid : `trigger:${actor.id}`
+      const given = req.base && typeof req.base === 'object' && !Array.isArray(req.base) ? req.base as Record<string, unknown> : null
+      let record: (OfflineRecordV2 & Record<string, unknown>) | null = null
+      const taskId = typeof args.id === 'string' ? args.id.trim() : ''
+      if (kind === 'task-fields') {
+        if (!taskId) return fail('bad_request', `${name} needs "id"`)
+        const built = taskFieldsRecord(home, resolveTask(home, taskId).task ?? null, name, { ...args, id: taskId }, given)
+        if ('error' in built) return built.error
+        record = built.record
+      } else if (kind === 'task-create') {
+        if (!OP_ID_RE.test(taskId)) return fail('bad_request', 'task_create needs the id the replica minted')
+        const placementKeys = ['parent_task_id', 'project', 'group_id', 'focus_tier', 'order', 'id']
+        const fields: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(args)) if (placementKeys.indexOf(k) === -1) fields[k] = v
+        const bad = Object.keys(fields).filter((k) => QUEUEABLE.indexOf(k) === -1)
+        if (bad.length) return fail('needs_leader', `${bad.join(', ')} can only be set while the Walnut server answers`, { detail: { why: 'fields', fields: bad } })
+        const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
+        const placement = {
+          ...(str(args.parent_task_id) ? { parentTaskId: str(args.parent_task_id) } : {}), ...(typeof args.project === 'string' ? { project: args.project } : {}),
+          ...(str(args.group_id) ? { groupId: str(args.group_id) } : {}), ...(str(args.focus_tier) ? { tier: str(args.focus_tier) } : {}),
+        }
+        record = { kind: 'task-create', taskId, fields, placement, ...(args.order !== undefined ? { order: args.order } : {}) }
+      } else if (kind === 'task-move') {
+        if (!taskId) return fail('bad_request', 'task_move needs "id"')
+        const an = args.anchor as { after?: unknown; before?: unknown } | null | undefined
+        const anchor = an && typeof an === 'object'
+          ? (typeof an.after === 'string' ? { after: an.after } : typeof an.before === 'string' ? { before: an.before } : null)
+          : null
+        record = { kind: 'task-move', taskId, anchor, ...(typeof args.tier === 'string' ? { tier: args.tier } : {}), base: given ?? 'unknown' }
+      } else {
+        const kit = deps.boards!
+        const boardId = typeof args.task === 'string' ? args.task : ''
+        const board = boardId ? boardWithOverlay(home, boardId) : undefined
+        if (!board && name !== 'board_set') return fail('needs_leader', 'that Board is not kept on this host', { detail: { why: 'board_not_here' } })
+        const by = actor.kind === 'device' ? `device:${actor.name ?? actor.deviceId}` : 'task:'
+        const prepared = kit.prepare(board, name, args, by)
+        if (!prepared.ok) return fail(prepared.code, prepared.message, prepared.detail !== undefined ? { detail: prepared.detail } : undefined)
+        const postId = typeof args.postId === 'string' && OP_ID_RE.test(args.postId) ? args.postId : `bm-host-${deps.randomHex(8)}`
+        record = { kind: 'board', op: name, args: { ...prepared.args, task: boardId }, ...(name === 'board_post' ? { postId } : {}) }
+      }
+      const t0 = process.hrtime.bigint()
+      const c0 = process.cpuUsage()
+      const saved = append(home, record, false, { actor, opId, coalesce: kind === 'task-fields', limit: true, admit: () => admitWrite(budgetKey) })
+      // What the append cost (lock, tail re-read, line, fdatasync): the twins test's budget,
+      // in wall time and in this process's CPU (a saturated machine stretches only the first).
+      const appendMs = Number(process.hrtime.bigint() - t0) / 1e6
+      const cpu = process.cpuUsage(c0)
+      const appendCpuMs = (cpu.user + cpu.system) / 1000
+      const no = refusal(saved)
+      if (no || !saved.ok) return no ?? fail('internal', 'not saved')
+      deps.log('info', 'offline host: follower write queued', { home, op: name, kind, opId: saved.opId, seq: saved.seq, rev: saved.rev, actor: budgetKey, ...(saved.coalesced ? { coalesced: true } : {}), ...(saved.duplicate ? { duplicate: true } : {}) })
+      return ok({
+        queued: true, offline: true, kind, seq: saved.seq, opId: saved.opId, rev: saved.rev,
+        appendMs: Math.round(appendMs * 1000) / 1000, appendCpuMs: Math.round(appendCpuMs * 1000) / 1000,
+        ...(saved.coalesced ? { coalesced: true } : {}), ...(saved.duplicate ? { duplicate: true } : {}),
+      })
+    } catch (err) {
+      deps.log('error', 'offline host: follower write failed', { home, error: (err as Error).message })
+      return fail('internal', `offline host error: ${(err as Error).message}`)
+    }
   }
 
   // ── the Board copy (offline-board-core.ts) ──
@@ -1172,7 +1455,16 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   function boardWithOverlay(home: string, boardId: string): OfflineSliceBoard | undefined {
     const kit = deps.boards!
     let board = (slices.get(home)?.boards ?? []).find((b) => b.taskId === boardId)
-    for (const r of journals.get(home)?.records ?? []) {
+    for (const r of recordsOf(home)) {
+      if (r.kind === 'board') {
+        // Journal v2: the writer is the record's actor; a post keeps its writer-minted id.
+        if (kit.WRITE_OPS.indexOf(r.op) === -1 || r.args.task !== boardId) continue
+        const a = r.actor
+        const by = a?.kind === 'session' ? `task:${callerIdentity(home, a.sid).taskId ?? ''}` : a?.kind === 'device' ? `device:${a.name ?? a.deviceId}` : 'task:'
+        const postId = r.postId
+        board = kit.apply(board, r.op, r.args, by, new Date(r.at).toISOString(), boardId, () => postId ?? `bm-offline-${r.seq}`)
+        continue
+      }
       if (r.kind !== 'op' || kit.WRITE_OPS.indexOf(r.op) === -1 || r.args.task !== boardId) continue
       const by = `task:${callerIdentity(home, r.callerSid).taskId ?? ''}`
       board = kit.apply(board, r.op, r.args, by, new Date(r.at).toISOString(), boardId, () => `bm-offline-${r.seq}`)
@@ -1222,7 +1514,12 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     if (!prepared.ok) return fail(prepared.code, prepared.message, prepared.detail !== undefined ? { detail: prepared.detail } : undefined)
     const denied = admitWrite(callerSid) ?? roomFor(home)
     if (denied) return denied
-    append(home, { kind: 'op', op: name, args: { ...prepared.args, task: boardId }, callerSid })
+    const saved = drainsKind(home, 'board')
+      // Journal v2: a post carries its writer-minted id, so a replay can never post twice.
+      ? append(home, { kind: 'board', op: name, args: { ...prepared.args, task: boardId }, ...(name === 'board_post' ? { postId: `bm-host-${deps.randomHex(8)}` } : {}) }, false, { actor: { kind: 'session', sid: callerSid } })
+      : append(home, { kind: 'op', op: name, args: { ...prepared.args, task: boardId }, callerSid })
+    const no = refusal(saved)
+    if (no) return no
     const after = boardWithOverlay(home, boardId)
     deps.log('info', 'offline host: board write queued', { home, op: name, boardId, callerSid })
     return ok({
@@ -1237,8 +1534,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   /** The last pause, resume or delete made here per trigger id, until the server takes it. */
   function triggerHolds(): Map<string, TriggerHold> {
     const out = new Map<string, TriggerHold>()
-    for (const [home, j] of journals) {
-      for (const r of j.records) {
+    for (const home of journal.homes()) {
+      for (const r of recordsOf(home)) {
         if (r.kind !== 'op' || TRIGGER_WRITE_OPS.indexOf(r.op) === -1) continue
         const id = typeof r.args.id === 'string' ? r.args.id : ''
         if (!id) continue
@@ -1351,7 +1648,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     }
     const denied = admitWrite(callerSid) ?? roomFor(home)
     if (denied) return denied
-    append(home, { kind: 'op', op: name, args: { id }, callerSid, trigger: t!.def })
+    const saved = refusal(append(home, { kind: 'op', op: name, args: { id }, callerSid, trigger: t!.def }))
+    if (saved) return saved
     try { deps.triggers!.changed() } catch (err) { deps.log('warn', 'offline host: triggers did not follow a change here', { id, error: (err as Error).message }) }
     deps.log('info', 'offline host: trigger change queued', { home, op: name, id, callerSid })
     const label = `"${t!.def.name}"`
@@ -1367,10 +1665,9 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   }
 
   function opWalnutStatus(home: string): GatewayResult {
-    const j = journals.get(home)
     return ok({
       mode: 'HOST_OFFLINE', server: 'not answering this host', host: slices.get(home)?.host ?? '', copyAsOf: asOf(home),
-      queuedForServer: j?.records.length ?? 0, answersHere: OFFLINE_OPS.map((o) => o.name),
+      queuedForServer: recordsOf(home).length, answersHere: OFFLINE_OPS.map((o) => o.name),
       outcome: `${offlineNote(home)} This host answers ${OFFLINE_NAMES} meanwhile, and keeps every write for the server.`,
       next: 'Use those calls; the rest waits for the server.',
     })
@@ -1461,7 +1758,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
    * stream re-read after a daemon restart replays old turns) never count.
    */
   async function onResult(sid: string, line: string, v?: number): Promise<void> {
-    for (const [home, j] of journals) {
+    for (const home of journal.homes()) {
+      const j = journalOf(home)
       for (const row of Object.values(j.rows)) {
         if (row.status !== 'pending' || row.toSessionId !== sid || isHandingOver(row.id)) continue
         if (typeof v === 'number') {
@@ -1655,7 +1953,8 @@ export function createOfflineHost(deps: OfflineHostDeps) {
   async function sweep(): Promise<number> {
     let n = 0
     const now = deps.now()
-    for (const [home, j] of journals) {
+    for (const home of journal.homes()) {
+      const j = journalOf(home)
       for (const row of Object.values(j.rows)) {
         if (row.status !== 'pending' || row.deadlineAt > now || isHandingOver(row.id)) continue
         if (row.online && deps.serverAnswers?.(home)) continue
@@ -1684,12 +1983,45 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     return !!deps.replica && deps.replica.keeps(home, name)
   }
 
-  /** Any record the server has not taken yet, made while it was away or not. */
+  /**
+   * Any record the leading Mac can take that it has not taken yet, made while it was away
+   * or not (a record parked for a newer Mac is not one: an old Mac would drain forever).
+   */
   function hasRecords(home: string | undefined): boolean {
-    return !!home && (journals.get(home)?.records.length ?? 0) > 0
+    return !!home && journal.drainableCount(home, drainsOf(home)) > 0
   }
 
-  return { configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, triggerHolds, homes: () => [...slices.keys()] }
+  /** The replica's overlay (`follower.pending`): pending records past `sinceSeq` and their blobs. */
+  function pendingFor(home: string, sinceSeq: unknown) {
+    return journal.pending(home, typeof sinceSeq === 'number' && sinceSeq > 0 ? sinceSeq : 0)
+  }
+
+  /** The journal line of `follower.status` (the away line and observability). */
+  function journalStats(home: string) {
+    return journal.stats(home, drainsOf(home))
+  }
+
+  return {
+    /** The slices on disk again (the boot migration copied some here). */
+    reloadSlices: load,
+    configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower,
+    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf,
+    triggerHolds, homes: () => [...slices.keys()], journal, QUEUEABLE, RETIRED_TASK_INPUTS,
+  }
 }
 
-export type OfflineHost = ReturnType<typeof createOfflineHost>
+/**
+ * The offline host with its journal store. The twins pass the store they built (it also
+ * migrates v1 journals and serves offline.blob); any other caller gets one in `deps.dir`.
+ */
+export function createOfflineHost(deps: OfflineHostDeps) {
+  return createOfflineHostCore({
+    ...deps,
+    journal: deps.journal ?? createOfflineJournal({
+      fs: deps.fs, path: deps.path, dir: deps.dir, now: deps.now, randomHex: deps.randomHex, keyOf: deps.keyOf, log: deps.log,
+      sha256: (body) => createHash('sha256').update(body).digest('hex'),
+    }),
+  })
+}
+
+export type OfflineHost = ReturnType<typeof createOfflineHostCore>

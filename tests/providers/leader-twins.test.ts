@@ -161,15 +161,28 @@ describe('leader protocol: both twins', () => {
       // A write: the follower's socket, then no server answering, then the session's owner.
       const target = fnBody(src, 'followerWriteTarget')
       const home = target.indexOf('followerHomeOf(ws)')
-      const answers = target.indexOf('primaryAnswersFollower(home)')
+      const answers = target.indexOf('followerMayWrite(home)')
       const owner = target.indexOf('offlineHost.ownerOf(sid) !== home')
       expect(home).toBeGreaterThan(-1)
       expect(answers).toBeGreaterThan(home)
       expect(owner).toBeGreaterThan(answers)
       expect(target).toMatch(/errorKind: 'leader_answers'/)
-      // "Answers" is the window the host server routes by, so the page and the daemon agree.
-      expect(fnBody(src, 'primaryAnswersFollower')).toMatch(/primarySocketOpen\(home\) && leaderBook\.primaryAgeMs\(home\) < LEADER_QUIET_MS/)
+      // "Answers" is the window the host server routes by, so the page and the daemon agree;
+      // a primary unheard since this daemon started does not answer (D14), and the window
+      // is read in one place (followerQuietMs).
+      expect(fnBody(src, 'primaryAnswersFollower')).toMatch(/primarySocketOpen\(home\) && leaderBook\.heardSinceBoot\(home\) && leaderBook\.primaryAgeMs\(home\) < followerQuietMs\(\)/)
+      expect(fnBody(src, 'followerQuietMs')).toMatch(/return LEADER_QUIET_MS/)
       expect(src).not.toMatch(/FOLLOWER_LEADER_QUIET_MS/)
+      // While the Mac is back but still taking the journal, the journal stays the one writer.
+      expect(fnBody(src, 'followerMayWrite')).toMatch(/!primaryAnswersFollower\(home\) \|\| offlineHost\.pendingHandover\(home\)/)
+      // follower.op (journal v2): its own gate, in this order, then the core.
+      for (const c of ['follower.op', 'follower.pending']) expect(list).toContain(`'${c}'`)
+      const fop = fnBody(src, 'cmdFollowerOp')
+      const order = ['followerHomeOf(ws)', 'followerMayWrite(home)', 'ownsDaemonDir()', 'offlineHost.handleFollower(home,'].map((x) => fop.indexOf(x))
+      expect(order.every((x, i) => x > -1 && (i === 0 || x > order[i - 1]))).toBe(true)
+      expect(fop).toMatch(/why: 'not_owner'/)
+      expect(fnBody(src, 'cmdFollowerPending')).toMatch(/followerHomeOf\(ws\)[\s\S]*offlineHost\.pendingFor\(home, cmd\.sinceSeq\)/)
+      expect(fnBody(src, 'cmdOfflineBlob')).toMatch(/origin === 'bridge' \|\| [\w.?]*origin === 'follower'/)
       expect(fnBody(src, 'cmdFollowerSend')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.send'\)[\s\S]*offlineHost\.deliverHuman\(t\.home, t\.sid, cmd\.text, cmd\.messageId\)/)
       expect(fnBody(src, 'cmdFollowerPermission')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.permission'\)[\s\S]*answerPermission\(t\.sid, cmd, 'follower\.permission'\)/)
       // read-history: a session id names a stream file and nothing else; a follower reads its own Walnut's.
@@ -283,7 +296,7 @@ describe('leader protocol: both twins', () => {
   it('both cores are part of the daemon version hash, in the build script', () => {
     const versionSrc = read('src/providers/daemon-version-check.ts')
     const buildSrc = read('scripts/build-daemon.sh')
-    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts', 'src/providers/offline-search-core.ts', 'src/providers/host-server-core.ts', 'src/providers/stream-relay-core.ts']) {
+    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-journal-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts', 'src/providers/offline-search-core.ts', 'src/providers/host-server-core.ts', 'src/providers/stream-relay-core.ts']) {
       expect(versionSrc).toContain(`'${f}'`)
       expect(buildSrc).toContain(f)
     }

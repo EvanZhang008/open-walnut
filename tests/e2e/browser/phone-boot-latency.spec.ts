@@ -18,7 +18,7 @@
  * Cold = a new context (the token copied in), warm = a reload of the same one,
  * 5 runs each; median and worst go to /tmp/mobile-web/boot-latency.json under
  * the label in BOOT_LABEL (default `candidate`). The baseline is this spec run
- * with BOOT_LABEL=baseline against a fixture booted from `git archive b0a13dde5`
+ * with BOOT_LABEL=baseline against a fixture booted from `git archive 1fe1fd194`
  * (its own server and its own built SPA; the slice's foundation is not a commit
  * of its own, so the baseline holds none of the slice). BOOT_SOURCE is stored
  * with the numbers. When both are in the file and were measured on the same

@@ -24,7 +24,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import { createOfflineHost, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
+import { createOfflineHost, createOfflineHostCore, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
+import { createOfflineJournal } from '../../src/providers/offline-journal-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
 import { sessionHandle } from '../../src/core/peers/walnut-message-tag.js'
@@ -379,7 +380,12 @@ describe('the source twin runs it from its text', () => {
   it('rebuilt under strict mode, it delivers the same envelope', async () => {
     const rebuild = <T>(fn: T): T => new Function('"use strict"; return ' + String(fn))() as T
     const h = harness()
-    const copy = rebuild(createOfflineHost)({ ...h.deps, kit: rebuild(createEnvelopeKit)() })
+    // The source twin inlines the host core and the journal core, each from its text.
+    const journal = rebuild(createOfflineJournal)({
+      fs: h.deps.fs, path: h.deps.path, dir: h.deps.dir, now: h.deps.now, randomHex: h.deps.randomHex, keyOf: h.deps.keyOf, log: h.deps.log,
+      sha256: (body) => createHash('sha256').update(body).digest('hex'),
+    })
+    const copy = rebuild(createOfflineHostCore)({ ...h.deps, kit: rebuild(createEnvelopeKit)(), journal })
     copy.configure(slice())
     const r = await copy.handleLocal(HOME, A, 'tools.call', { name: 'task_send', args: { to: TASK_B, text: 'from the copy', expect_reply: false } })
     expect(r?.ok).toBe(true)

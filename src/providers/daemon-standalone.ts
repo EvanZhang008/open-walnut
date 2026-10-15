@@ -74,7 +74,8 @@ import { createFsLs } from './fs-ls-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
-import { createOfflineHost, type HostSlice, type LeaderDelivery, type OfflineTrigger } from './offline-host-core.js'
+import { createOfflineHostCore, type HostSlice, type LeaderDelivery, type OfflineTrigger } from './offline-host-core.js'
+import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
@@ -808,6 +809,10 @@ const FOLLOWER_ALLOWED_COMMANDS = new Set([
   // sessions here, a message to a running one, the answer to its prompt.
   // Each checks the leader and the session's owner itself.
   'follower.sessions', 'follower.send', 'follower.permission',
+  // Journal v2 ('journal-v2', 'replica-ops-v1'): the replica's writes while the Mac is
+  // away, and its read of what is pending (its overlay). Each is scoped to the follower's
+  // own Walnut and checks the leader itself.
+  'follower.op', 'follower.pending',
   // Streams to the leader or the companion ('stream-relay-v1'): the frames of a
   // stream on this socket only; where an open may go is checked in streamTarget.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
@@ -2128,6 +2133,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'follower.sessions': return cmdFollowerSessions(ws, id as number)
     case 'follower.send': return daemonCommands.run(() => cmdFollowerSend(ws, id as number, cmd))
     case 'follower.permission': return daemonCommands.run(() => cmdFollowerPermission(ws, id as number, cmd))
+    case 'follower.op': return cmdFollowerOp(ws, id as number, cmd)
+    case 'follower.pending': return cmdFollowerPending(ws, id as number, cmd)
     // Streams between servers through this daemon ('stream-relay-v1',
     // stream-relay-core.ts): frames, never answered by id. Keep in sync with daemon-source.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd)
@@ -2147,6 +2154,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'host.slice': return cmdHostSlice(ws, id as number, cmd)
     case 'offline.drain': return cmdOfflineDrain(ws, id as number, cmd)
     case 'offline.ack': return cmdOfflineAck(ws, id as number, cmd)
+    case 'offline.blob': return cmdOfflineBlob(ws, id as number, cmd)
     // The host's copy ('host-replica-v1'): NOT in BRIDGE_ALLOWED_COMMANDS either.
     case 'replica.sync': return cmdReplica(ws, id as number, 'sync', cmd)
     case 'replica.put': return cmdReplica(ws, id as number, 'put', cmd)
@@ -2962,9 +2970,111 @@ const hostReplica = createHostReplica({
   log: (level, msg, data) => logMsg(level, msg, data),
 })
 
-const offlineHost = createOfflineHost({
+// ── Journal v2 (offline-journal-core.ts; docs/plan/walnut-replica-servers-impl.md
+// section 5 Location): records that exist nowhere else get ONE place per host, whatever
+// mode the daemon runs in. The host's own daemon (the prod dir, where the service runs too,
+// or its home fallback) keeps journals, slices and the leader book in ~/.open-walnut/tmp
+// (the trigger state's home, kept across reboots); an isolated daemon keeps them in its
+// DAEMON_DIR, even in service mode (a test's --service daemon on a temp dir must never read
+// or rename the real /tmp/open-walnut journal). So no v2 record ever moves between dirs.
+// WALNUT_JOURNAL_DIR is for TESTS ONLY and is refused on the prod dir. Every boot moves the
+// v1 journals an older daemon left (in its DAEMON_DIR, and for the prod dir's daemon also in
+// the home fallback) into v2. Mirror daemon-source.ts.
+const JOURNAL_PROD_STATE_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp')
+const JOURNAL_HOST_DAEMON = IS_PROD_DAEMON_DIR
+const JOURNAL_TEST_DIR = !IS_PROD_DAEMON_DIR ? process.env.WALNUT_JOURNAL_DIR : undefined
+const JOURNAL_ROOT = JOURNAL_TEST_DIR || (JOURNAL_HOST_DAEMON ? JOURNAL_PROD_STATE_DIR : DAEMON_DIR)
+const OFFLINE_HOST_DIR = path.join(JOURNAL_ROOT, 'offline-host')
+const LEADER_BOOK_DIR = path.join(JOURNAL_ROOT, 'leader')
+/**
+ * Where a v1 daemon (1fe1fd194 and older) kept its journal and leader book: its own
+ * DAEMON_DIR, always. The daemon on the prod dir (/tmp/open-walnut, the service's runtime
+ * dir too) also reads the home fallback, which a v1 daemon used while the server picked it.
+ * The home fallback daemon NEVER reads /tmp/open-walnut: the server picks the fallback when
+ * that dir is another user's or a symlink (remote-daemon-dir.ts), so whatever sits there
+ * is not this user's. An isolated daemon (any other DAEMON_DIR, service mode or not, the
+ * test knob or not) reads only its own dir. Read for v1 files, slices and leader records
+ * only, each of them this user's own (the core checks), never written but for the
+ * `.migrated` rename. Mirror daemon-source.ts.
+ */
+const JOURNAL_ON_PROD_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON_DIR)
+const JOURNAL_LEGACY_ROOTS = [DAEMON_DIR, ...(JOURNAL_ON_PROD_DIR ? [FALLBACK_DAEMON_DIR] : [])]
+  .filter((d, i, all) => all.findIndex((x) => path.resolve(x) === path.resolve(d)) === i)
+const LEGACY_JOURNAL_DIRS = JOURNAL_LEGACY_ROOTS.map((d) => path.join(d, 'offline-host'))
+  .filter((d) => path.resolve(d) !== path.resolve(OFFLINE_HOST_DIR))
+const LEGACY_LEADER_DIRS = JOURNAL_LEGACY_ROOTS.map((d) => path.join(d, 'leader'))
+  .filter((d) => path.resolve(d) !== path.resolve(LEADER_BOOK_DIR))
+
+/** Whether daemon.pid names this process (a zombie predecessor refuses journal writes). */
+function ownsDaemonDir(): boolean {
+  try {
+    const owner = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10)
+    return !(owner > 0) || owner === process.pid
+  } catch {
+    return true
+  }
+}
+
+function createJournalStore(dir: string) {
+  return createOfflineJournal({
+    fs, path, dir,
+    now: () => Date.now(),
+    randomHex: (n) => crypto.randomBytes(n).toString('hex'),
+    keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
+    sha256: (body) => crypto.createHash('sha256').update(body).digest('hex'),
+    log: (level, msg, data) => logMsg(level, msg, data),
+    startTimeOf: (pid) => hostServerStartTime(pid),
+    isOwner: ownsDaemonDir,
+    // One long-lived store per dir: the append fd stays open between appends.
+    keepOpen: true,
+    // A v1 file the boot migration left (part way, or of a Walnut it did not know) finished
+    // later: arm the trigger holds again, after the write or configure that finished it.
+    migrated: () => { setTimeout(() => triggerHoldsChanged(), 0) },
+  })
+}
+// Building the store reads and writes nothing: this module runs for every use of the
+// binary (the walnut CLI, --status, --stop). Only migrateJournals() below, after
+// daemon.pid names this process, copies slices and leader records, imports or sweeps.
+const offlineJournal = createJournalStore(OFFLINE_HOST_DIR)
+
+/**
+ * The boot migration (offline-journal-core.ts createJournalMigration, shared with
+ * daemon-source.ts): legacy slices and leader records, then the v1 journals. The journal
+ * root is the same in every mode, so there is no v2 journal elsewhere to take.
+ */
+const journalMigration = createJournalMigration({
+  path,
+  journal: offlineJournal,
+  dir: OFFLINE_HOST_DIR,
+  legacyDirs: LEGACY_JOURNAL_DIRS,
+  importLegacyLeaders: () => leaderBook.importLegacy(),
+  slicesMoved: () => offlineHost.reloadSlices(),
+  // loadTriggersAtBoot ran before the migration: a pause or delete made offline under the
+  // old daemon (a v1 record) holds from this boot on, not only once the Mac pushes a set.
+  recordsMigrated: () => triggerHoldsChanged(),
+  ignoredTestDir: IS_PROD_DAEMON_DIR ? process.env.WALNUT_JOURNAL_DIR || null : null,
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+/**
+ * Every v1 journal an older daemon left moves here, once daemon.pid names us; then the offline host's minute sweep starts. Never at module load: the binary is
+ * also the walnut CLI, and a `walnut wait` lives for hours (it must not read or write the
+ * daemon's journals every minute). Mirror daemon-source.ts.
+ */
+let offlineSweepTimer: ReturnType<typeof setInterval> | null = null
+function migrateJournals(): void {
+  journalMigration.boot()
+  if (!offlineSweepTimer) {
+    offlineSweepTimer = setInterval(() => { void offlineHost.sweep() }, 60_000)
+    offlineSweepTimer.unref?.()
+  }
+}
+
+const offlineHost = createOfflineHostCore({
   fs, path,
-  dir: path.join(DAEMON_DIR, 'offline-host'),
+  dir: OFFLINE_HOST_DIR,
+  journal: offlineJournal,
+  drainsOf: (home) => leaderBook.drainsFor(home),
   now: () => Date.now(),
   randomHex: (n) => crypto.randomBytes(n).toString('hex'),
   keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
@@ -3025,7 +3135,6 @@ const offlineHost = createOfflineHost({
     if (!sent) resolve({ ok: false, reason: 'no server leads this Walnut right now' })
   }),
 })
-setInterval(() => { void offlineHost.sweep() }, 60_000).unref?.()
 
 // ── Leader book: who leads this host's work, the primary or (while it is away)
 // the cloud companion (leader-core.ts; docs/plan/walnut-control-plane.md). The
@@ -3042,7 +3151,8 @@ const LEADER_NUDGE_MS = 10_000
 const GATEWAY_SILENT_BEATS = 3
 const leaderBook = createLeaderBook({
   fs, path,
-  dir: path.join(DAEMON_DIR, 'leader'),
+  dir: LEADER_BOOK_DIR,
+  legacyDirs: LEGACY_LEADER_DIRS,
   now: () => Date.now(),
   keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
   log: (level, msg, data) => logMsg(level, msg, data),
@@ -3105,7 +3215,7 @@ function forwardToBackup(
 function cmdLeaderConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin === 'bridge') return sendError(ws, id, 'leader.configure: trusted clients only')
   try {
-    const rec = leaderBook.configure({ home: cmd.home as string, walnutId: cmd.walnutId as string, backup: cmd.backup === true })
+    const rec = leaderBook.configure({ home: cmd.home as string, walnutId: cmd.walnutId as string, backup: cmd.backup === true, drains: cmd.drains })
     gatewayClientHomes.set(ws, rec.home)
     sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder, since: rec.since, takeoverMs: LEADER_TAKEOVER_MS })
   } catch (err) {
@@ -3163,14 +3273,24 @@ function followerView(home: string): Record<string, unknown> | null {
     epoch: rec.epoch,
     holder: rec.holder,
     backup: rec.backup,
-    primaryConnected: primarySocketOpen(home) && age < LEADER_TAKEOVER_MS,
+    // A primary this daemon has not heard since it started is not answering yet (D14);
+    // the companion's takeover still waits takeoverMs from boot (leader-core.ts).
+    primaryConnected: primarySocketOpen(home) && leaderBook.heardSinceBoot(home) && age < LEADER_TAKEOVER_MS,
     primaryHeardAgoMs: age,
+    heardSinceBoot: leaderBook.heardSinceBoot(home),
     takeoverMs: LEADER_TAKEOVER_MS,
     // The window this daemon calls the Mac away by (the replica's presence reads it).
     quietMs: LEADER_QUIET_MS,
     bridge: { connected: bridgeAdapter != null, companion },
     settings: hostServers.settingsOf(home),
+    ...followerJournalView(home),
   }
+}
+
+/** Journal v2 in the follower view: the away line, and `drainablePending` for presence. */
+function followerJournalView(home: string): Record<string, unknown> {
+  const stats = offlineHost.journalStats(home)
+  return { journal: stats, drainablePending: stats.drainable }
 }
 
 function cmdFollowerHello(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -3511,8 +3631,13 @@ function cmdFollowerSessions(ws: ServerWebSocket<WsData>, id: number) {
  * C4), knob WALNUT_LEADER_QUIET_MS for tests. Keep in sync with daemon-source.ts.
  */
 const LEADER_QUIET_MS = envTimerMs(process.env.WALNUT_LEADER_QUIET_MS, 30_000, 500)
+/** The follower-write quiet window, read in ONE place. */
+function followerQuietMs(): number {
+  return LEADER_QUIET_MS
+}
 function primaryAnswersFollower(home: string): boolean {
-  return primarySocketOpen(home) && leaderBook.primaryAgeMs(home) < LEADER_QUIET_MS
+  // A primary unheard since this daemon started does not answer (D14).
+  return primarySocketOpen(home) && leaderBook.heardSinceBoot(home) && leaderBook.primaryAgeMs(home) < followerQuietMs()
 }
 
 /**
@@ -3525,11 +3650,20 @@ function primaryQuietWithFollower(home: string): boolean {
   return followerSockets.has(home) && leaderBook.primaryAgeMs(home) >= LEADER_QUIET_MS
 }
 
+/**
+ * Whether a follower of `home` may write now: no server answers that Walnut, or its server
+ * is back but still taking the journal (pendingHandover), so the journal stays the one
+ * writer until the drain ends (the gateway's rule in sendGatewayRequest).
+ */
+function followerMayWrite(home: string): boolean {
+  return !primaryAnswersFollower(home) || offlineHost.pendingHandover(home)
+}
+
 /** A follower's write is for a session of its Walnut, while no server answers that Walnut. */
 function followerWriteTarget(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, name: string): { home: string; sid: string } | null {
   const home = followerHomeOf(ws)
   if (!home) { sendError(ws, id, name + ': send follower.hello first'); return null }
-  if (primaryAnswersFollower(home)) { sendError(ws, id, name + ': your Mac answers again; write through it', { errorKind: 'leader_answers' }); return null }
+  if (!followerMayWrite(home)) { sendError(ws, id, name + ': your Mac answers again; write through it', { errorKind: 'leader_answers' }); return null }
   const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
   if (!sid || offlineHost.ownerOf(sid) !== home) { sendError(ws, id, name + ': not a session of this Walnut on this host', { errorKind: 'not_found' }); return null }
   return { home, sid }
@@ -3551,6 +3685,32 @@ async function cmdFollowerPermission(ws: ServerWebSocket<WsData>, id: number, cm
   sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId as string, allow: r.allow })
 }
 
+/**
+ * The replica's write while the Mac is away ('replica-ops-v1', journal v2): a task, Board
+ * or note change journaled for the Mac, with the writer's op id, actor and bases. Its own
+ * gate (not followerWriteTarget, which needs a session): the follower's own Walnut, the
+ * quiet window unless the Mac is still taking the journal, and the daemon dir's owner.
+ * Keep in sync with daemon-source.ts.
+ */
+function cmdFollowerOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = followerHomeOf(ws)
+  if (!home) return sendError(ws, id, 'follower.op: send follower.hello first')
+  if (!followerMayWrite(home)) return sendError(ws, id, 'follower.op: your Mac answers again; write through it', { errorKind: 'leader_answers' })
+  if (!ownsDaemonDir()) {
+    return sendError(ws, id, 'follower.op: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } })
+  }
+  const r = offlineHost.handleFollower(home, { op: cmd.op, args: cmd.args, actor: cmd.actor, opId: cmd.opId, base: cmd.base })
+  if (r.ok) return sendOk(ws, id, r.result)
+  sendError(ws, id, 'follower.op: ' + r.error.message, { errorKind: r.error.code, ...(r.error.detail !== undefined ? { detail: r.error.detail } : {}), ...(r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}) })
+}
+
+/** What is pending for the follower's Walnut (its overlay; read only, own Walnut only). */
+function cmdFollowerPending(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = followerHomeOf(ws)
+  if (!home) return sendError(ws, id, 'follower.pending: send follower.hello first')
+  sendOk(ws, id, offlineHost.pendingFor(home, cmd.sinceSeq) as unknown as Record<string, unknown>)
+}
+
 /** The Walnut a session belongs to: the home whose copy lists it. */
 function gatewayOwnerHome(callerSid: string): string | undefined {
   return offlineHost.ownerOf(callerSid)
@@ -3567,18 +3727,37 @@ function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
   }
 }
 
+/** `kinds` (journal-v2): the v2 kinds the Mac applies; absent, an older Mac's v1 prefix. The reply carries this host's clock. */
 function cmdOfflineDrain(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'offline.drain: missing home')
-  sendOk(ws, id, offlineHost.drain(cmd.home) as unknown as Record<string, unknown>)
+  const kinds = Array.isArray(cmd.kinds) ? cmd.kinds.filter((k): k is string => typeof k === 'string') : null
+  const out = offlineHost.drain(cmd.home, kinds)
+  // A batch whose freeze could not be saved is never handed out (its ack could not be saved either).
+  if (out.error) return sendError(ws, id, 'offline.drain: ' + out.error, { errorKind: 'journal_unwritable', why: out.why })
+  if (out.records.length) logMsg('info', 'journal: drained', { home: cmd.home, records: out.records.length, more: out.more, kinds: kinds ? kinds.join(',') : 'v1', firstSeq: out.records[0].seq, lastSeq: out.records[out.records.length - 1].seq })
+  sendOk(ws, id, out as unknown as Record<string, unknown>)
 }
 
+/** `seqs` (journal-v2) names exactly what the Mac applied or gave up on; `upTo` is an older Mac's watermark. */
 function cmdOfflineAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  if (typeof cmd.home !== 'string' || !cmd.home || typeof cmd.upTo !== 'number') return sendError(ws, id, 'offline.ack: missing home or upTo')
+  const seqs = Array.isArray(cmd.seqs) ? cmd.seqs : undefined
+  if (typeof cmd.home !== 'string' || !cmd.home || (typeof cmd.upTo !== 'number' && !seqs)) return sendError(ws, id, 'offline.ack: missing home, seqs or upTo')
   const held = offlineHost.triggerHolds().size
-  sendOk(ws, id, offlineHost.ack(cmd.home, cmd.upTo))
+  const r = offlineHost.ack(cmd.home, seqs ? { seqs } : (cmd.upTo as number))
+  if (r.error) return sendError(ws, id, 'offline.ack: ' + r.error, { errorKind: 'journal_unwritable' })
+  logMsg('info', 'journal: acked', { home: cmd.home, ...(seqs ? { seqs: seqs.length } : { upTo: cmd.upTo }), remaining: r.remaining, ...(r.ignored ? { ignored: r.ignored.length } : {}) })
+  sendOk(ws, id, r)
   // The server took the trigger changes made here: from now on its set alone
   // decides (a change it refused is undone here too; its push for one it applied follows).
   if (held > 0 && offlineHost.triggerHolds().size !== held) triggerHoldsChanged()
+}
+
+/** A note body a journal record names (journal-v2): at most 2 MB per reply, from `offset`. Trusted only. */
+function cmdOfflineBlob(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws.data?.origin === 'bridge' || ws.data?.origin === 'follower') return sendError(ws, id, 'offline.blob: trusted clients only')
+  const r = offlineJournal.readBlob(cmd.sha, cmd.offset)
+  if (!r.ok) return sendError(ws, id, 'offline.blob: ' + r.message, { errorKind: r.code })
+  sendOk(ws, id, r as unknown as Record<string, unknown>)
 }
 
 // The host's copy ('host-replica-v1'): trusted sockets only, like host.slice.
@@ -4469,6 +4648,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // daemon's own exit policy, and a CLI that starts a daemon of its own must
       // not hand it on. Keep in sync with daemon-source.ts.
       WALNUT_DAEMON_KEEP_SESSIONS: undefined,
+      // And the service state dir: a daemon a CLI starts (a test, a sandbox) is isolated,
+      // and with this var it could reach the service daemon's journals and state.
+      // Keep in sync with daemon-source.ts.
+      WALNUT_DAEMON_STATE_DIR: undefined,
     },
   }
   let barrier: ReturnType<typeof spawnBehindRegistry> | null = null
@@ -10018,15 +10201,18 @@ if (action === '--start' || SERVICE_MODE) {
     }
   }, TRUSTED_CLIENT_BEAT_MS).unref?.()
 
-  // Agent gateway: second (unix-socket) listener + on-PATH `walnut` shim. Both
-  // additive — failures log a warning and never abort daemon startup.
-  startGatewayListener()
-  writeWalnutShim()
-
   const port = server.port
   daemonInstanceLock?.publish(port)
   fs.writeFileSync(PORT_FILE, String(port))
   fs.writeFileSync(PID_FILE, String(process.pid))
+  // daemon.pid names us now: the journal writes are ours (journal v2 migration).
+  migrateJournals()
+  // Agent gateway: second (unix-socket) listener + on-PATH `walnut` shim. Both
+  // additive: failures log a warning and never abort daemon startup. Started after the
+  // migration (as in daemon-source.ts): no session's write is journaled ahead of the
+  // older v1 records the migration adds.
+  startGatewayListener()
+  writeWalnutShim()
   fs.writeFileSync(VERSION_FILE, DAEMON_VERSION)
   // Instance ID file — lets clients detect PID recycling / daemon swap by
   // comparing the on-disk value against what `hello` returns. Stable for the

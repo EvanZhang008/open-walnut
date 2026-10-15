@@ -192,6 +192,12 @@ describe.each(twins)('a host server answering alone (%s twin)', (twin) => {
   }, 90_000)
 
   it('the daemon itself: a follower writes only while no server answers, and reads only its own session files', async () => {
+    // The Mac that woke takes the journal first, as the real one does: until it has, the
+    // journal stays the one writer and a follower may still write (journal v2).
+    const drained = await h.macCmd({ cmd: 'offline.drain', home: HOME })
+    expect(drained.ok, JSON.stringify(drained)).toBe(true)
+    const seqs = (drained.records as Array<{ seq: number }>).map((r) => r.seq)
+    if (seqs.length > 0) expect((await h.macCmd({ cmd: 'offline.ack', home: HOME, seqs })).ok).toBe(true)
     const token = h.followerToken()
     const f = await followerSocket(h.daemonPort(), token)
     try {

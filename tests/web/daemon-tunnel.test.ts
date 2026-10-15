@@ -132,6 +132,27 @@ describe('the tunnel daemon spawn env', () => {
     }
   })
 
+  // A session of the service daemon carries its state dir; a daemon started from that
+  // session (a test, a sandbox) must not, or it could take the service daemon's journals.
+  it('no daemon it starts inherits WALNUT_DAEMON_STATE_DIR (an override still sets it)', async () => {
+    const before = process.env.WALNUT_DAEMON_STATE_DIR
+    process.env.WALNUT_DAEMON_STATE_DIR = '/srv/acme-service-state'
+    try {
+      expect((await new LocalDaemon({ daemonDir: '/tmp/walnut-tunnel-unit-e' }).buildSpawnEnv()).WALNUT_DAEMON_STATE_DIR).toBeUndefined()
+      expect((await new LocalDaemon({ daemonDir: '/tmp/walnut-tunnel-unit-f', persistent: true }).buildSpawnEnv()).WALNUT_DAEMON_STATE_DIR).toBeUndefined()
+      const set = await new LocalDaemon({ daemonDir: '/tmp/walnut-tunnel-unit-g', envOverrides: { WALNUT_DAEMON_STATE_DIR: '/srv/marina-state' } }).buildSpawnEnv()
+      expect(set.WALNUT_DAEMON_STATE_DIR).toBe('/srv/marina-state')
+    } finally {
+      if (before === undefined) delete process.env.WALNUT_DAEMON_STATE_DIR
+      else process.env.WALNUT_DAEMON_STATE_DIR = before
+    }
+  })
+
+  it.each(['daemon-standalone.ts', 'daemon-source.ts'])('%s strips WALNUT_DAEMON_STATE_DIR from every CLI it spawns', (file) => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', file), 'utf-8')
+    expect(src).toMatch(/WALNUT_DAEMON_KEEP_SESSIONS: undefined,\s*(\/\/[^\n]*\n\s*)*WALNUT_DAEMON_STATE_DIR: undefined,/)
+  })
+
   // The daemon's own switch must stop at the daemon: a CLI that inherited it
   // would hand it to any daemon it starts (a `walnut` run inside a session).
   it.each(['daemon-standalone.ts', 'daemon-source.ts'])('%s strips WALNUT_DAEMON_KEEP_SESSIONS from every CLI it spawns', (file) => {

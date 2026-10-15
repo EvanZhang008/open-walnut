@@ -184,6 +184,8 @@ async function boot(managed = true) {
       WALNUT_DAEMON_DIR: runtime, WALNUT_DAEMON_STATE_DIR: state,
       WALNUT_STREAMS_DIR: path.join(WALNUT_HOME, 'streams'),
       WALNUT_LEGACY_STREAMS_DIR: path.join(WALNUT_HOME, 'legacy'), WALNUT_TURN_RETRY: '0',
+      // Belt and braces: the journal root of a test daemon stays in this test's temp area.
+      WALNUT_JOURNAL_DIR: path.join(WALNUT_HOME, 'journal'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

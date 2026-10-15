@@ -547,6 +547,24 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // providers and removes folders on this host. Optional: without it a task
   // asking for an isolated workspace is told the host's daemon needs an update.
   'workspace-v1',
+  // 'journal-v2' (offline-journal-core.ts, docs/plan/walnut-replica-servers-impl.md section 5):
+  // the journal of each Walnut is append-only NDJSON in the host's one journal root
+  // (~/.open-walnut/tmp for the host's own daemon, kept across reboots), under a per-home lock, with op ids, revs and actors; v1 journals are moved in
+  // at every boot. `leader.configure {drains}` names the v2 kinds the Mac applies (the
+  // daemon writes them only then), `offline.drain {kinds}` answers `{records, more, now}`
+  // (kinds filtered before the batch cut; without kinds only the v1 prefix), `offline.ack
+  // {seqs}` drops exactly those (an `upTo` drops only seqs a drain handed out),
+  // `offline.blob {sha, offset}` hands a note body in 2 MB chunks, and `follower.pending
+  // {sinceSeq}` / `follower.status {journal}` give the replica its overlay and the away
+  // line. Both twins (the core is text-injected into the source twin), NOT sidecar-gated,
+  // not bridge-reachable. Optional: without it the Mac drains v1 as before.
+  'journal-v2',
+  // 'replica-ops-v1': `follower.op {op, args, actor, opId, base}`, the replica's task and
+  // Board writes while the Mac is away, journaled as v2 kinds (task-fields, task-create,
+  // task-move, board) for a Mac that drains them; a retry with the same opId is answered,
+  // not written again; `needs_leader {why:'mac_too_old'}` for an older Mac. Both twins.
+  // Optional: without it a write away answers needs_leader {why:'daemon_needs_upgrade'}.
+  'replica-ops-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

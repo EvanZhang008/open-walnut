@@ -5,7 +5,7 @@ new v2 kind names, coalescing by append, journal location and lock, leader door,
 op ids, conflict log, build order; see 14b for what was changed or rejected), owner: replica architect.
 Design: `docs/plan/walnut-replica-servers.md`. Related: `docs/plan/walnut-servers-everywhere.md`,
 `docs/plan/walnut-control-plane.md`, `docs/plan/daemon-first-hosts.md`.
-Tree read: private clone at `b0a13dde5`. All `path:line` citations refer to that tree.
+Tree read: private clone at `1fe1fd194`. All `path:line` citations refer to that tree.
 
 ## 0. What this plan changes in the design (read first)
 
@@ -17,7 +17,7 @@ Tree read: private clone at `b0a13dde5`. All `path:line` citations refer to that
 | C4 | presence: "leader heard within 30 s" | three windows today: follower writes 30 s (`src/providers/daemon-standalone.ts:3342-3345`), gateway skips the primary at 3 beats = 45 s (`:2883`), takeover 60 s (`:2879`) | one window `LEADER_QUIET_MS` (default 30 s, env `WALNUT_LEADER_QUIET_MS`) read by the daemon for follower writes AND gateway routing for a home that has a follower, and by the replica (WP2, WP7) |
 | C5 | "the replica reads that same copy" for notes | follower socket has no `replica.*` read (`src/providers/daemon-standalone.ts:792-809`) | new owner-scoped follower reads `replica.list`, `replica.read`, `replica.readMany` (WP6); no second vault on the host |
 | C6 | devices "copy on both" | device copy skips the companion on purpose (`src/core/replication/device-replica.ts:1-16`) | unchanged: companion keeps its own pairings |
-| C7 | design mentions no journal location | journal and leader book live in `/tmp/open-walnut` (`src/providers/daemon-standalone.ts:2808`, `:2886`), lost on reboot | WP8 moves journals, slices and the leader book to the host-replica state dir rule (`src/providers/daemon-standalone.ts:2789-2791`); every boot migrates any legacy v1 journal that holds records (section 5 Location) |
+| C7 | design mentions no journal location | journal and leader book live in `/tmp/open-walnut` (`src/providers/daemon-standalone.ts:2808`, `:2886`), lost on reboot | WP8 moves journals, slices and the leader book to ONE root per host in every mode (`~/.open-walnut/tmp` for the host's own daemon, `DAEMON_DIR` for an isolated one); every boot migrates any legacy v1 journal that holds records (section 5 Location) |
 | C8 | design assumes a per-record handover | the journal ack is a watermark: `ack(home, upTo)` drops every `seq <= upTo` (`src/providers/offline-host-core.ts:476-491`), the Mac acks the max seq it was handed (`src/core/offline-handover.ts:167-171`) | v2 ack names exact seqs (`offline.ack {seqs}`, cap `journal-v2`); an old Mac is handed only the prefix before the first withheld record (section 5) |
 | C9 | design lists a boot policy over `server.ts` | `CLOUD_MODE` is read 568 times in 152 files; many modules self-gate in their start function (`src/core/boards/board-reminders.ts:204`, `src/core/task-wait-until.ts:232`, `src/core/session-title-reconciler.ts:310`, `src/core/notes-indexer.ts:189,482`) | WP1 ratchet covers all of `src/`; copy stores open read only on a replica (section 2) |
 | C10 | design's dev box check uses an ephemeral Mac | an ephemeral server is `isReadOnlyRemote` for every non-local host: no slice, no leader.configure, no host server, no drain (`src/providers/daemon-connection.ts:625-627,1108-1109,1842`) | browser fixture boots a non-ephemeral Mac child; the dev box check uses an isolated daemon and a narrow opt-in (section 13) |
@@ -385,7 +385,7 @@ base}` from a v2 shape, and an old Mac's `applyRecord` would throw at `String(re
 and the Mac's `recordScope` (`src/core/offline-handover.ts:400-415`) learn the new kinds;
 `tasksWithOverlay` and `resolveTask` include `task-create` records and their later `task-fields`
 records, so a host-started ask's own `walnut task_get`/`task_update` finds its new task. A parity test
-feeds every v2 kind to the `b0a13dde5` `applyRecord` and asserts none is acked (they are never handed
+feeds every v2 kind to the `1fe1fd194` `applyRecord` and asserts none is acked (they are never handed
 to it, section "Ack").
 
 Coalescing (for `note`, and for `task-fields` on the same task, field and actor) is by APPEND, never in
@@ -411,8 +411,18 @@ the per-home lock, after re-reading the tail (so a line another process appended
 A failed append answers the caller `journal_unwritable` (never a silent warning,
 `src/providers/offline-host-core.ts:352-361`) and the replica returns 503 with the reason.
 
-Location: `<state>` follows the host-replica rule (`src/providers/daemon-standalone.ts:2789-2791`):
-service mode `WALNUT_DAEMON_STATE_DIR`, the prod dir `~/.open-walnut/tmp`, else `DAEMON_DIR`. Tests use a
+Location: records that exist nowhere else get ONE place per host, whatever mode the daemon runs in.
+The host's own daemon (the prod dir, where the service runs, or its home fallback) keeps journals, slices
+and the leader book in `~/.open-walnut/tmp` (the trigger state's home); an isolated daemon keeps them in
+its `DAEMON_DIR`, in service mode too (only tests run `--service` on another dir).
+Copies the Mac re-pushes (the host replica's notes) may follow the mode; a journal may not: two roots
+made a cross-dir move of unacked v2 records necessary, and every transient read error in that move
+(EACCES, EMFILE, a failed rename) could reorder the Mac's changes or lose a record (WP8 review rounds
+1-3). No v2 journal exists on any host yet, so there is nothing to move: the only legacy data is v1.
+Known limit: a home dir shared between hosts (NFS) would share this root; the trigger state has the
+same limit. (Superseded wording: `<state>` followed the host-replica rule
+(`src/providers/daemon-standalone.ts:2789-2791`): service mode `WALNUT_DAEMON_STATE_DIR`, the prod dir
+`~/.open-walnut/tmp`, else `DAEMON_DIR`.) Tests use a
 new tests-only knob `WALNUT_JOURNAL_DIR` (refused when the daemon dir is the prod dir), because in test
 mode the state dir is `DAEMON_DIR` (`src/providers/daemon-standalone.ts:2792-2794`) and
 `WALNUT_DAEMON_STATE_DIR` applies only with `--service`. Slices move WITH journals (one dir is
@@ -423,11 +433,28 @@ journals by scanning `journal-*` files, independent of slices; `nextSeq = max(se
 (never `state.json` alone); `configure()` adopts an on-disk journal for a home it has not loaded.
 
 Migration runs at EVERY boot, not once: any v1 journal that holds records, in `/tmp/open-walnut/offline-host`
-or in either state dir candidate, is appended as v2 lines with opId `v1-<journalId>-<seq>` (deduped by
-that id), then renamed `.migrated`. A downgrade (the Mac auto-deploys whatever daemon it bundles, an LKG
-rollback included) writes v1 records again, and the next upgrade picks them up. The leader book moves
-the same way. The daemon reads both state dir candidates (service and prod) and refuses to start, with a
-loud error, when both hold unacked records for one home.
+or in `DAEMON_DIR/offline-host` (where v1 wrote; never a v2 file, which is never read outside the one root), is appended as v2 lines with opId `v1-<sha16 of the canonical record>`
+(deduped by that id while pending, and by the acked ids kept in `state.json`, so a v1 file an older
+instance rewrites later never brings an acked record back), then renamed `.migrated`. A downgrade (the
+Mac auto-deploys whatever daemon it bundles, an LKG rollback included) writes v1 records again, and the
+next upgrade picks them up. The leader book moves the same way (a legacy record wins only with a later lead change, `since`,
+at an epoch past this book's; one with a higher epoch but an older lead change only raises this book's
+epoch past it, so the holder never flips back to an older lead). Only the host's own daemon (the prod dir,
+where the service runs) reads `/tmp/open-walnut/offline-host`, and it also reads the home fallback's
+`~/.cache/open-walnut/offline-host` (a v1 daemon journaled there while the server picked it); the home
+fallback's daemon never reads `/tmp/open-walnut` (the server picks the fallback exactly when that dir is
+another user's or a symlink); an isolated daemon, service mode included, reads only its own `DAEMON_DIR`.
+A legacy dir is read only when lstat shows it, and the daemon dir holding it, as real dirs of this uid
+that are not world writable, and each file in it as a regular file of this uid; anything else is logged
+and left as it is. A v1 file whose Walnut nothing names at boot waits until a configure or a write names
+that Walnut, then goes in ahead of that write.
+A v1 file is read, then (state readable) CLAIMED by rename (`<file>.migrating-<ms>-<hex>`) and read again,
+appended here and renamed `.migrated` (under the v1 name); a migration that stops part way puts the claim
+back with a hard link, never over a file written there since: a v1 daemon still running writes by tmp + rename, so a record it writes
+after the claim makes a new `journal-<key>.json` that the next boot takes (its older records dedupe by v1
+op id), never a file set aside unread. A claim a crash left is taken at the next boot. A read error
+leaves the file (or the claim) as it is for the next boot (never "empty"). A state.json read error other than ENOENT is a refusal
+(`journal_unwritable`), never a blank state that the next write saves over the file.
 
 Old Mac gate: `leader.configure` gains `drains: ['task-fields','task-create','task-move','board','note',
 'session','device-actor','device-revoke']`. The daemon writes a v2-only kind ONLY when the leader book's record for that
@@ -467,7 +494,7 @@ per-kind idempotence, so a crash between apply and ledger is harmless:
 | board | posts by writer-minted `postId`; `board_set`/`board_edit` by version base (equal value = no-op) |
 | note | `bytes == ours` is a no-op (section 6) |
 | session | `createSessionRecord` on an existing sid is a no-op |
-| v1 kinds | unchanged; migrated ids `v1-<journalId>-<seq>` never collide across hosts |
+| v1 kinds | unchanged; migrated ids `v1-<record hash>` (the Mac's ledger keys them by host too) |
 
 Failure policy: the batch STOPS at the first record that throws; the Mac acks only the seqs before it and
 keeps the rest for the next attempt, retried on the same connection with backoff 5 s, 30 s, 2 min (the
@@ -915,8 +942,10 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   `journal-*` with `nextSeq` from disk, `configure()` adopting an on-disk journal, blob byte budget,
   `handleFollower` gate split); `src/providers/leader-core.ts` (record keeps `drains` from
   `leader.configure`; `primaryAgeMs` kept for takeover, new `heardSinceBoot` for the follower view,
-  D14); daemon twins (state dir rule for journals, slices and the leader book, migration at every boot
-  from either legacy location, refusal when both state dirs hold unacked records, `WALNUT_JOURNAL_DIR`
+  D14); daemon twins (ONE journal root per host for journals, slices and the leader book:
+  `~/.open-walnut/tmp` for the host's own daemon in service and plain mode alike, `DAEMON_DIR` for an
+  isolated one, so no v2 record ever moves between dirs; v1 migration at every boot from
+  `DAEMON_DIR/offline-host` and, for the host's own daemon, `/tmp/open-walnut/offline-host`; `WALNUT_JOURNAL_DIR`
   test knob, `follower.op`, `follower.pending`, `follower.status` journal stats, `offline.drain {kinds}`
   reply `{now}`, `offline.ack {seqs}`, `offline.blob {sha, offset}`, non-owner of `daemon.pid` refuses
   writes, `followerWriteTarget` accepts follower writes while `pendingHandover`); cap `journal-v2`.
@@ -928,7 +957,7 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   append answer `journal_unwritable` and keep earlier records, blob budget answers `queue_full`, a v1
   file migrated, the note mode table, a journal with no slice beside it still loads and drains,
   `nextSeq` from disk when `state.json` is stale); `tests/providers/offline-host-v1-parity.test.ts` (new:
-  every v2 kind fed to the `b0a13dde5` `applyRecord` is never acked, and an old-Mac drain over a mixed
+  every v2 kind fed to the `1fe1fd194` `applyRecord` is never acked, and an old-Mac drain over a mixed
   v1 and v2 journal never loses a v2 record); `tests/providers/offline-host-journal-property.test.ts`
   (new, seeded: random interleavings of append, drain, ack (explicit seqs and old-Mac `upTo`), coalesce,
   crash at any line boundary or mid-line, daemon restart, compaction, parked kinds at the head of the
@@ -944,7 +973,18 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   `WALNUT_JOURNAL_DIR` kept and a new daemon dir; OVERLAP: two daemons on one dir appending interleaved,
   unique seqs and no loss, the non-owner of `daemon.pid` refuses; DOWNGRADE then upgrade: new, old, new
   daemon keeps every record; an upgrade boot with a v1 journal plus records then drain returns all of
-  them (R13c); 500 records queued, SIGCONT, a phone write mid-drain lands once and in order).
+  them (R13c); 500 records queued, SIGCONT, a phone write mid-drain lands once and in order);
+  `tests/providers/offline-journal-migration.test.ts` (new; faults injected through `deps.fs`, never chmod,
+  which passes as root: the journal root evaluated from both twins' own text over a mode matrix, and
+  neither rule reads the service state dir; service-mode and plain-mode daemons on the same HOME write and
+  drain the same journal file (both twins); a service daemon followed by a plain daemon, and the reverse,
+  loses and reorders nothing; EACCES on a v1 file at boot leaves it un-renamed and the next clean boot
+  migrates it once; a v1 file met while state.json cannot be read is kept for the next boot; a v2 file in a
+  legacy dir is never read nor renamed; a fold into a migrated v1 record, drain, ack, then the same v1 file
+  restored from a copy (or rewritten with one more record) brings back nothing acked; EMFILE on state.json
+  at load then `persist()` keeps rows and `importedAcked` on disk; an unreadable or non-v2 state.json
+  refuses every write with `journal_unwritable` and is never replaced; the leader book's legacy import
+  leaves a record it cannot read for the next boot).
 - Acceptance: property suite green at 20,000 runs locally; an append costs under 2 ms p99 at 1,000
   records (measured in the twins test).
 
@@ -955,7 +995,11 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   refused vs thrown, give-up of later records on the same task, unknown kinds never acked, clock offset,
   replay stamps the shifted `at`, actor check against the Mac's paired devices, blobs fetched by
   `offline.blob`); `src/core/offline-merge/{task-fields,letter,conflict-log}.ts` (new) and
-  `src/core/offline-merge/ledger.ts` (from WP2, extended: written right after each apply); conflict log under
+  `src/core/offline-merge/ledger.ts` (from WP2, extended: written right after each apply; the op-id
+  middleware also RESERVES `(hostKey, home, opId)` in memory when a request arrives, so a duplicate that
+  arrives while the first is still in its handler waits for the first answer and returns it, never
+  applying again: the web client retries a timed-out write under the same id about 300 ms after it
+  aborts, usually while the Mac is still running the first attempt, WP2 review round 3); conflict log under
   `WALNUT_HOME/offline-conflicts/` written before ack, letter resent at boot when not marked sent);
   `src/core/task-manager.ts` (`field_at` per field on every update and on replays, `addTask` with an
   explicit id, `created_by_op`); `src/providers/daemon-connection.ts` (`leader.configure` sends `drains`,
@@ -976,7 +1020,8 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   second drain changes nothing; the letter lists exactly the both-changed fields with different values;
   1,000 runs default, 50,000 in the large run); `tests/core/offline-merge/ledger.test.ts` (cross-host
   collision: host A and host B both with `v1-…-1` style ids from different journals apply both; same
-  opId with a new rev applies); `tests/core/offline-merge/conflict-log.test.ts` (new: written before ack,
+  opId with a new rev applies; two requests with the same op id, the second sent while the first is
+  still in its handler, apply once and both get the first answer); `tests/core/offline-merge/conflict-log.test.ts` (new: written before ack,
   crash after ack and before the letter resends the letter at boot, once); `tests/integration/offline-handover.test.ts`
   (extend: v2 records, old v1 records still apply, the batch stops at a throwing record and later
   records wait, a record retried with backoff 3 times then given up with later records on the same task,
@@ -1007,7 +1052,7 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   (both engines): edit a task, create a task, complete one, post on a Board while asleep; marks visible;
   `wake`; marks go, the Mac's stores (read through the control port) hold every change once; the write
   row of `replica-smoke.spec.ts`; `tests/e2e/replica-old-mac-e2e.test.ts` (new: an old leader booted from
-  `git archive b0a13dde5`, rows R10 and R25).
+  `git archive 1fe1fd194`, rows R10 and R25).
 - Acceptance: every write made away is on the Mac exactly once after wake, checked against the stores on
   disk; nothing is applied on the replica's stores directly (asserted: copy files change only by puts).
 
@@ -1127,7 +1172,7 @@ Windows: `WALNUT_LEADER_QUIET_MS=6000`, `WALNUT_TRUSTED_CLIENT_BEAT_MS=1000`, `W
 machine; the 2026 flake lesson at `tests/e2e/leader-takeover-live-e2e.test.ts:43-49`). The harness asserts
 that ordering itself at start and refuses to run otherwise.
 Old builds: a capability-drop knob `WALNUT_DAEMON_DROP_CAPS` in both twins (refused when the daemon dir
-is the prod dir) and an old leader booted from `git archive b0a13dde5` into a temp dir with
+is the prod dir) and an old leader booted from `git archive 1fe1fd194` into a temp dir with
 `node_modules` symlinked.
 
 | ID | Scenario | Expect | Covered by |
@@ -1164,7 +1209,7 @@ is the prod dir) and an old leader booted from `git archive b0a13dde5` into a te
 | R28 | device revoked away; device unpaired on the Mac just before sleep | revoke applies on the replica at once; that device's queued records refused and lettered on drain | `replica-cluster-e2e` R28, `task-fields.test.ts` |
 | R29 | the iOS app's `/api/v1` calls with the Mac asleep | every call answered from copies or `needs_leader`, none 5xx | `replica-api-v1-away`, iOS stub flows once |
 | R30 | daemon downgrade then upgrade while away writes happen | every v1 record written by the old daemon is migrated at the next boot | `journal-v2-twins` |
-| R31 | two daemon processes on one state dir | unique seqs, no lost line; the non-owner refuses writes | `journal-v2-twins` |
+| R31 | two daemon processes on one journal root | unique seqs, no lost line; the non-owner refuses writes | `journal-v2-twins` |
 | R32 | a replica build that crashes only when away | the daemon switches to `host-server` by itself, the front door answers | `replica-front-twins`, `host-server-core` |
 
 Write rows W1 to W14 in `replica-cluster-e2e` (both twins): in-flight write (504), task edit, create,
@@ -1215,7 +1260,7 @@ address, post every copy kind (devices first) to `/bridge/replica` through the p
 follower token from a child the replica spawns, read a copy file as another local user (modes);
 (2) data loss: kill each process at every step of a drain (scripted `kill -9` points), fill the disk,
 corrupt one journal line, truncate a copy file, a Mac manifest that removes every row, two daemons on
-one state dir, a daemon downgrade then upgrade, an old-Mac drain over a mixed journal, a coalesce
+one journal root, a daemon downgrade then upgrade, an old-Mac drain over a mixed journal, a coalesce
 between drain and ack, a crash after ack and before the letter; (3) double apply: retry storms from the
 phone during sleep and wake, a write forwarded into a frozen Mac then retried, two phones, a session and
 a phone on the same task; (4) compatibility: every R8 to R11 and R25 row by hand on builds from the
@@ -1283,7 +1328,7 @@ and the supervisor caps its stdout log by size, so a long-running replica never 
 
 D1 Notes writable away when the host holds the base (C2). D2 Conflict copy plus newer-wins-per-hunk.
 D3 One letter per host drain, conflicts only. D4 Companion queues kept (C3). D5 One quiet window,
-default 30 s (C4). D6 Journal v2 append-only in the state dir (C7). D7 Replica never writes its copies
+default 30 s (C4). D6 Journal v2 append-only in the host's one journal root (C7). D7 Replica never writes its copies
 directly; overlay from the daemon. D8 The daemon builds a host ask's argv from fields. D9 No task delete
 while away. D10 The replica refuses to start with a shared daemon dir or the user's data dir. D11
 `/ws` is spliced to the Mac while it answers; the replica's own WS serves away mode only, so live
