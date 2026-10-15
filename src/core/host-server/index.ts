@@ -94,8 +94,10 @@ export function getHostServerManager(): HostServerManager | null {
               const res = await post(payload, opts)
               const json = await res.json().catch(() => null) as Record<string, unknown> | null
               if (res.ok && json) return { ok: true, reply: json }
-              if (res.status === 404 || res.status === 405) return { ok: false, outcome: 'unsupported', status: res.status }
-              return { ok: false, outcome: 'failed', status: res.status, error: typeof json?.error === 'string' ? json.error : undefined }
+              if (res.status === 404 || res.status === 405) {
+                return { ok: false, outcome: 'unsupported', status: res.status, ...(typeof json?.error === 'string' ? { error: json.error } : {}) }
+              }
+              return { ok: false, outcome: 'failed', status: res.status, error: typeof json?.error === 'string' ? json.error : undefined, ...(json ? { body: json } : {}) }
             } catch (err) {
               return { ok: false, outcome: 'failed', error: err instanceof Error ? err.message : String(err) }
             }
@@ -103,6 +105,9 @@ export function getHostServerManager(): HostServerManager | null {
         })
       })
       return () => unregister()
+    },
+    targetReady: (hostKey) => {
+      void import('../replication/replica-targets.js').then(({ replicaTargetAvailable }) => replicaTargetAvailable(`host:${hostKey}`))
     },
   })
   void import('../event-bus.js').then(({ bus, EventNames }) => {

@@ -114,6 +114,8 @@ export interface ManagerDeps {
   registerTarget?(hostKey: string, post: (body: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<Response>): () => void
   /** A view changed (the settings page listens). */
   changed?(view: HostServerView): void
+  /** The host's server answers again (its phase became 'running') with a copy target registered: the copies go now. */
+  targetReady?(hostKey: string): void
   pollMs?: number
   installPollMs?: number
   /** How long a started server has to send its first report. */
@@ -184,6 +186,9 @@ export function createHostServerManager(deps: ManagerDeps) {
     if (phaseChanged) v.since = deps.now()
     if (patch.phase !== undefined && patch.message === undefined && phaseChanged) v.message = undefined
     deps.changed?.({ ...v })
+    // The copy target is registered while the server still starts; its first
+    // round (and the one after a restart) waits for this, not for a task event.
+    if (phaseChanged && v.phase === 'running' && links.get(hostKey)?.unregister) deps.targetReady?.(hostKey)
   }
 
   function readPorts(): Record<string, PortsRecord> {
@@ -343,6 +348,8 @@ export function createHostServerManager(deps: ManagerDeps) {
       const hostServerArgs = [`${install.appDir}/dist/cli.js`, 'host-server']
       const hostServerEnv: Record<string, string> = {
         OPEN_WALNUT_HOME: install.dataDir,
+        // Its own run dir (logs, scratch): never the host daemon's /tmp/open-walnut.
+        WALNUT_DAEMON_DIR: install.runDir,
         WALNUT_HOST_SERVER: '1',
         WALNUT_HOST_SERVER_PORT: String(rec.publicPort),
         WALNUT_LEADER_HOME: deps.home,
@@ -355,8 +362,8 @@ export function createHostServerManager(deps: ManagerDeps) {
       const run = replica
         ? {
             args: [`${install.appDir}/dist/cli.js`, 'web', '--replica'],
-            // Its own run dir: a replica never writes the daemon's dir or /tmp/open-walnut.
-            env: { ...hostServerEnv, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_DAEMON_DIR: install.runDir },
+            // Its own run dir (hostServerEnv): a replica never writes the daemon's dir or /tmp/open-walnut.
+            env: { ...hostServerEnv, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host' },
             // The daemon runs this by itself after a crash loop (it works while the Mac sleeps).
             fallback: { args: hostServerArgs, env: hostServerEnv },
           }

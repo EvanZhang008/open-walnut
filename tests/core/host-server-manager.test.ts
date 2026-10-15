@@ -184,7 +184,8 @@ describe('host server manager', () => {
       settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
     })
     expect(spec.env).toEqual({
-      OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/data', WALNUT_HOST_SERVER: '1',
+      // Its own run dir: the host server never writes the host daemon's /tmp/open-walnut (WP3).
+      OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/data', WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/run', WALNUT_HOST_SERVER: '1',
       WALNUT_HOST_SERVER_PORT: String(ports.publicPort),
       WALNUT_LEADER_HOME: HOME, WALNUT_WALNUT_ID: 'wmac01',
       WALNUT_HOST_LABEL: 'Dev box', WALNUT_NO_AUTO_UPDATE: '1',
@@ -295,6 +296,32 @@ describe('host server manager', () => {
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
   })
 
+  it('the copy target hears when the server answers: once it runs, and again after it comes back', async () => {
+    const readies: string[] = []
+    const phases: string[] = []
+    const m = createHostServerManager(deps({ targetReady: (k) => readies.push(k), changed: (v) => phases.push(v.phase), pollMs: 5 }))
+    const host = fakeHost()
+    try {
+      await m.connected(host)
+      // Registered at 'starting' (before the server answers), told at 'running'.
+      expect(ids()).toEqual(['+devbox'])
+      expect(phases.indexOf('starting')).toBeLessThan(phases.indexOf('running'))
+      expect(readies).toEqual(['devbox'])
+      // A poll that sees the same running server tells nothing again.
+      await new Promise((r) => setTimeout(r, 30))
+      expect(readies).toEqual(['devbox'])
+      // The server stops answering (a restart on the host), then answers again.
+      host.reports = false
+      await expect.poll(() => m.view('devbox').phase, { timeout: 5_000, interval: 5 }).toBe('starting')
+      expect(readies).toEqual(['devbox'])
+      host.reports = true
+      await expect.poll(() => m.view('devbox').phase, { timeout: 5_000, interval: 5 }).toBe('running')
+      expect(readies).toEqual(['devbox', 'devbox'])
+    } finally {
+      m.stop()
+    }
+  })
+
   it('a host that is not connected waits for it', async () => {
     const m = createHostServerManager(deps())
     await m.reconcile('devbox')
@@ -314,7 +341,7 @@ describe('host server manager', () => {
 describe('host server manager: which program (WP2)', () => {
   const cli = '/home/me/.open-walnut-host/app/0.6.7-abc1234/dist/cli.js'
   const hostServerEnv = (port: number) => ({
-    OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/data', WALNUT_HOST_SERVER: '1',
+    OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/data', WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/run', WALNUT_HOST_SERVER: '1',
     WALNUT_HOST_SERVER_PORT: String(port), WALNUT_LEADER_HOME: HOME, WALNUT_WALNUT_ID: 'wmac01',
     WALNUT_HOST_LABEL: 'Dev box', WALNUT_NO_AUTO_UPDATE: '1',
   })
@@ -329,7 +356,6 @@ describe('host server manager: which program (WP2)', () => {
     expect(spec.args).toEqual([cli, 'web', '--replica'])
     expect(spec.env).toEqual({
       ...hostServerEnv(spec.port), WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host',
-      WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/run',
     })
     expect(spec.fallback).toEqual({ args: [cli, 'host-server'], env: hostServerEnv(spec.port) })
     expect(m.view('devbox')).toMatchObject({ phase: 'running', program: 'replica' })

@@ -113,3 +113,27 @@ describe('a round from the primary', () => {
     expect((await syncTaskReplica({ view, post: postToCloudReplica })).map((r) => r.action)).toEqual(['unchanged', 'unchanged'])
   })
 })
+
+describe('kinds (docs/plan/walnut-replica-servers-impl.md, section 4, WP3)', () => {
+  it('a kind this build does not keep is 404 unknown_kind, and the lane does not rest for the others', async () => {
+    const r = await post(T.local, { op: 'sync', kind: 'acme-kind', entries: [], asOf: Date.now() })
+    expect(r).toEqual({ status: 404, body: { ok: false, error: 'unknown_kind' } })
+    // Through the real client: that one kind is unsupported, the tasks copy still goes.
+    expect(await postToCloudReplica({ op: 'sync', kind: 'acme-kind', entries: [], asOf: Date.now() })).toEqual({ ok: false, outcome: 'unsupported', status: 404, error: 'unknown_kind' })
+    const tasks = await postToCloudReplica({ op: 'sync', kind: 'tasks', entries: [], asOf: Date.now() })
+    expect(tasks.ok).toBe(true)
+  })
+
+  it('a step built with a newer schema than this build is 409 schema_newer, and changes nothing', async () => {
+    const before = (await tm.listTasks()).map((t) => t.id)
+    const r = await post(T.local, { op: 'sync', kind: 'tasks', schemaVersion: 99, entries: [], asOf: Date.now() })
+    expect(r).toEqual({ status: 409, body: { ok: false, error: 'schema_newer', have: 1 } })
+    expect((await tm.listTasks()).map((t) => t.id)).toEqual(before)
+  })
+
+  it('the per-target status is the leader\'s: the companion answers 404 leader_only', async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/replicas/status`, { headers: { Authorization: `Bearer ${T.phone}` } })
+    expect(r.status).toBe(404)
+    expect(await r.json()).toEqual({ ok: false, error: 'leader_only' })
+  })
+})

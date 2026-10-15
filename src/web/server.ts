@@ -27,6 +27,7 @@ import { sessionsRouter } from './routes/sessions.js'
 import { sessionTurnsRouter } from './routes/session-turns.js'
 import { sessionCommitRouter } from './routes/session-commit.js'
 import { searchRouter } from './routes/search.js'
+import { replicasStatusRouter } from './routes/replicas-status.js'
 import { searchAgentRouter } from './routes/search-agent.js'
 import { memoryRouter } from './routes/memory.js'
 import { configRouter, setStaticRootReporter } from './routes/config.js'
@@ -2041,6 +2042,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // companion; the companion watches it and, once a host grants it the lead,
   // answers what that host cannot answer itself.
   app.use('/api', leaderRouter)
+  // Every follower's copies, kind by kind (leader only; core/replication/replica-status.ts).
+  app.use('/api', replicasStatusRouter)
   if (bootPolicy('backup-leader')) {
     const [{ startBackupLeader }, { handleBackupGatewayFrame }, { setGatewayRequestHandler }] = await Promise.all([
       import('../core/leader/backup-leader.js'),

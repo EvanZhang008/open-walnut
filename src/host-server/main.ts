@@ -243,6 +243,9 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
 
 /** `open-walnut host-server`: run until the daemon stops it. */
 export async function runHostServer(): Promise<void> {
+  // The copies it keeps (devices, search, the task store) reach a dev box that
+  // may be shared: every file this process creates is 0600, every dir 0700.
+  process.umask(0o077)
   const server = await startHostServer()
   let stopping = false
   const stop = (signal: string) => {

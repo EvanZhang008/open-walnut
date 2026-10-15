@@ -90,8 +90,6 @@ const OTHERS: Array<[string, number, string]> = [
   ['src/core/push/device-revoke.ts', 2, off('revoke-queue')],
   ['src/core/push/relay.ts', 1, leader('no relay credential is copied')],
   ['src/core/replication/device-replica.ts', 1, off('replica-pushes')],
-  ['src/core/replication/task-replica-store.ts', 4, COMPANION + ' (WP3 gates it on isFollower())'],
-  ['src/core/replication/task-replica.ts', 1, off('replica-pushes')],
   ['src/core/self-repair/walnut-source.ts', 1, ROUTE],
   ['src/core/self-update/install-kind.ts', 1, off('update-check')],
   ['src/core/send-outcomes.ts', 6, ROUTE],

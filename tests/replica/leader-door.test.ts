@@ -31,7 +31,7 @@ const KINDS: Array<Record<string, unknown>> = [
   { op: 'sync', kind: 'search', entries: [], asOf: 1 },
   { op: 'sync', kind: 'tasks', entries: [], asOf: 1 },
   { op: 'put', kind: 'tasks', rows: [{ id: 't-acme-1', title: 'acme', phase: 'TODO' }] },
-  { op: 'put', kind: 'registry', registry: {} },
+  { op: 'put', kind: 'registry', registry: { projects: {}, task_groups: {}, custom_tiers: [] } },
   { op: 'put', kind: 'sessions', rows: [] },
 ]
 
@@ -149,18 +149,44 @@ describe('the leader door (a primary stream)', () => {
     expect(api.status).toBe(200)
   })
 
-  it('serves every kind: the steps reach their stores (search 200; tasks answer from the task store until WP3)', async () => {
+  it('serves every kind: the steps reach their stores (search, tasks and registry 200; a kind not kept yet 404 unknown_kind)', async () => {
     const answers: Array<[string, number, unknown]> = []
     for (const body of KINDS.slice(1)) {
       const r = await post(doorPort, '/bridge/replica', body)
       answers.push([`${body.op}:${body.kind}`, r.status, r.body.error ?? null])
-      expect(r.status, JSON.stringify(r.body)).not.toBe(404)
+      // Never the door's own 404: every step reached the kind dispatcher.
+      expect(r.body.error, JSON.stringify(r.body)).not.toBe('not_found')
     }
     expect(answers.find(([k]) => k === 'status:search')?.[1]).toBe(200)
-    // The task copy store refuses off the companion until WP3 gates it on isFollower().
+    // WP3: the task copy store is gated on isFollower(), so a host replica takes it.
     for (const [k, status, error] of answers.filter(([k]) => k.endsWith(':tasks') || k.endsWith(':registry'))) {
-      expect([k, status, error]).toEqual([k, 400, 'not_a_replica'])
+      expect([k, status, error]).toEqual([k, 200, null])
     }
+    // The sessions kind arrives with WP4; until then the dispatcher names it unknown.
+    expect(answers.find(([k]) => k === 'put:sessions')).toEqual(['put:sessions', 404, 'unknown_kind'])
+    const { listTasks } = await import('../../src/core/task-manager.js')
+    expect((await listTasks()).map((t) => t.id)).toContain('t-acme-1')
+    // Every file of the replica's data dir is 0600 and every dir 0700, after the
+    // copy steps: the task copy's state, the store with its -wal and -shm, any
+    // backup a store step made, the device and search copies.
+    await new Promise((r) => setTimeout(r, 100))
+    const loose: string[] = []
+    const seen: string[] = []
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isSymbolicLink()) continue
+        const mode = fs.statSync(p).mode & 0o777
+        const rel = path.relative(home, p)
+        seen.push(rel)
+        if (e.isDirectory()) { if (mode !== 0o700) loose.push(`${rel}/ ${mode.toString(8)}`); walk(p) }
+        else if (mode !== 0o600) loose.push(`${rel} ${mode.toString(8)}`)
+      }
+    }
+    expect(fs.statSync(home).mode & 0o777).toBe(0o700)
+    walk(home)
+    expect(seen).toEqual(expect.arrayContaining(['cache/task-replica.json', 'tasks/tasks.sqlite', 'replica/devices.json']))
+    expect(loose).toEqual([])
   })
 
   it('answers its own status and 404 for paths it does not serve', async () => {

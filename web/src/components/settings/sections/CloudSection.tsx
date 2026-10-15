@@ -38,6 +38,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsGroup, SettingsRow, SettingsTag, SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
+import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { CloudConfigureForm, type ConfigureValues } from './cloud/CloudConfigureForm';
 import { CloudManualPaste } from './cloud/CloudManualPaste';
@@ -336,6 +337,7 @@ export function CloudSection() {
       description="A server you run in the cloud keeps sessions reachable from your phone while this Mac sleeps."
     >
       <div className="cloud-section">
+        <ReplicaRemovalGroup only="companion" />
         {view === 'loading' && (
           <SettingsGroup>
             <SettingsLoadingRow>Checking for an existing setup...</SettingsLoadingRow>

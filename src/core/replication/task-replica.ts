@@ -1,7 +1,10 @@
 /**
- * The primary's side of the companion's copy of the task store
- * (docs/plan/walnut-control-plane.md "The companion's copy of the tasks"; the
- * companion's side is task-replica-store.ts).
+ * The primary's side of every follower's copy of the task store: the
+ * `tasks` and `registry` replication kinds (docs/plan/walnut-control-plane.md
+ * "The companion's copy of the tasks"; docs/plan/walnut-replica-servers-impl.md
+ * section 4 and WP3). A follower's side is task-replica-store.ts; the generic
+ * round for one kind on one target is kind-leader.ts, whose state is kept per
+ * target (replica-status.ts), so the companion and each host never share a memo.
  *
  * One round, two kinds:
  *   tasks     manifest of every row (`{k: id, h: sha256-12 of the row}`, in
@@ -13,30 +16,28 @@
  * kept against the row object itself: the store keeps an unchanged row's object
  * between writes, so a round hashes only what changed.
  *
- * Over POST /bridge/replica (cloud-ingest.ts postToCloudReplica). A companion
- * without the route gets nothing new and keeps importing the projection.
+ * Over POST /bridge/replica on every target of replica-targets.ts (the
+ * companion through cloud-ingest.ts postToCloudReplica, a host over its
+ * daemon's stream), one target after another. A companion without the route
+ * gets nothing new and keeps importing the projection.
  */
 
-import crypto from 'node:crypto'
-import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
+import { isFollower } from '../server-role.js'
 import type { Task } from '../types.js'
 import type { TaskReplicaRegistry } from '../task-manager.js'
+import { HELD_RETRY_MS, sha12 } from './kind.js'
+// One build sends the schema its own follower side stores.
+import { REGISTRY_SCHEMA_VERSION, TASKS_SCHEMA_VERSION } from './task-replica-store.js'
+import { buildKindManifest, confirmKindRemoval, runKindRound, StepFailed, type KindManifest, type LeaderKind } from './kind-leader.js'
+import { _resetReplicaStatusForTesting, dropTargetsNotIn, forgetKindManifests, peekKindState } from './replica-status.js'
+import type { ReplicaTarget } from './replica-targets.js'
 
-const PUT_BATCH_BYTES = 512 * 1024
-const PUT_TIMEOUT_MS = 60_000
 const DEBOUNCE_MS = 3_000
 const SWEEP_MS = 5 * 60_000
 const FIRST_ROUND_MS = 15_000
-/** A round the companion answered with held rows runs again after their hold ends (30s there). */
-const HELD_RETRY_MS = 35_000
-/** Hash this many rows, then let the event loop run. */
-const HASH_SLICE = 300
-
-function sha12(body: string): string {
-  return crypto.createHash('sha256').update(body).digest('hex').slice(0, 12)
-}
+const KINDS = ['tasks', 'registry'] as const
 
 const rowHashes = new WeakMap<object, string>()
 
@@ -49,21 +50,44 @@ function hashOf(row: Task): string {
   return h
 }
 
+/** The `tasks` kind: every row as it is (no projection), in store order. */
+export const TASKS_KIND: LeaderKind<Task> = {
+  kind: 'tasks',
+  schemaVersion: TASKS_SCHEMA_VERSION,
+  key: (t) => t.id,
+  hash: hashOf,
+}
+
+/** The `registry` kind: projects, folders and custom tiers as one document. */
+export const REGISTRY_KIND: LeaderKind<TaskReplicaRegistry> = {
+  kind: 'registry',
+  schemaVersion: REGISTRY_SCHEMA_VERSION,
+  key: () => 'registry',
+  hash: (r) => sha12(JSON.stringify(r)),
+  encodePut: (rows) => ({ registry: rows[0] }),
+  single: true,
+}
+
 export interface TaskReplicaDeps {
   view: () => Promise<{ tasks: readonly Task[]; registry: TaskReplicaRegistry }>
-  post: (payload: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<CloudReplicaReply>
-  /** No companion, or its lane resting: the round builds no manifest at all. */
+  /** One follower (the companion), posted to directly; results then name no target. */
+  post?: (payload: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<CloudReplicaReply>
+  /** No companion, or its lane resting: the round builds no manifest at all (with `post`). */
   available?: () => Promise<boolean>
+  /** Every follower (replica-targets.ts): the companion and each host server or host replica. */
+  targets?: () => ReplicaTarget[]
 }
 
 async function defaultDeps(): Promise<TaskReplicaDeps> {
-  const [tm, ingest] = await Promise.all([import('../task-manager.js'), import('../cloud-ingest.js')])
-  return { view: tm.taskStoreForReplica, post: ingest.postToCloudReplica, available: ingest.cloudReplicaAvailable }
+  const [tm, targets] = await Promise.all([import('../task-manager.js'), import('./replica-targets.js')])
+  return { view: tm.taskStoreForReplica, targets: targets.replicaTargets }
 }
 
 export interface TaskReplicaRoundResult {
   kind: 'tasks' | 'registry'
   action: 'synced' | 'unchanged' | 'unsupported' | 'failed'
+  /** The follower, when the round served the targets list (not a single `post`). */
+  target?: string
   entries?: number
   sent?: number
   held?: number
@@ -71,83 +95,30 @@ export interface TaskReplicaRoundResult {
   error?: string
 }
 
-/** The manifest last taken by the companion, per kind. */
-const lastManifest = new Map<string, string>()
-
-/** Send every manifest again on the next round (the sweep, a companion that may have lost its copy). */
+/** Send every manifest again on the next round (the sweep, a follower that may have lost its copy). */
 export function forgetTaskReplica(): void {
-  lastManifest.clear()
+  forgetKindManifests(KINDS)
 }
 
-class StepFailed extends Error {
-  constructor(readonly outcome: 'failed' | 'unsupported', message: string) { super(message) }
+type Served = { target: Pick<ReplicaTarget, 'id' | 'kind' | 'label' | 'post' | 'available'>; named: boolean }
+
+function servedTargets(d: TaskReplicaDeps): Served[] {
+  if (d.targets) return d.targets().map((target) => ({ target, named: true }))
+  if (!d.post) return []
+  const post = d.post
+  return [{ target: { id: 'companion', kind: 'companion', label: 'Cloud companion', post, available: d.available ?? (async () => true) }, named: false }]
 }
 
-async function step(deps: TaskReplicaDeps, payload: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
-  const r = await deps.post(payload, timeoutMs ? { timeoutMs } : undefined)
-  if (r.ok) {
-    if (r.reply.ok !== true) throw new StepFailed('failed', typeof r.reply.error === 'string' ? r.reply.error : 'refused')
-    return r.reply
-  }
-  throw new StepFailed(r.outcome, r.error ?? (r.status ? `HTTP ${r.status}` : r.outcome))
-}
-
-async function syncTasks(deps: TaskReplicaDeps, tasks: readonly Task[]): Promise<TaskReplicaRoundResult> {
-  const entries: Array<{ k: string; h: string }> = []
-  for (let i = 0; i < tasks.length; i++) {
-    entries.push({ k: tasks[i].id, h: hashOf(tasks[i]) })
-    if (i % HASH_SLICE === HASH_SLICE - 1) await new Promise((r) => setImmediate(r))
-  }
-  const manifestHash = sha12(entries.map((e) => `${e.k}:${e.h}`).join('\n'))
-  if (lastManifest.get('tasks') === manifestHash) return { kind: 'tasks', action: 'unchanged', entries: entries.length }
-  const reply = await step(deps, { op: 'sync', kind: 'tasks', entries, asOf: Date.now() })
-  const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
-  const byId = new Map(tasks.map((t) => [t.id, t]))
-  let held = Number(reply.held) || 0
-  let sent = 0
-  let batch: Task[] = []
-  let bytes = 0
-  const flush = async (last = false): Promise<void> => {
-    if (batch.length === 0) return
-    const r = await step(deps, { op: 'put', kind: 'tasks', rows: batch, ...(last ? { last: true } : {}) }, PUT_TIMEOUT_MS)
-    sent += Number(r.stored) || 0
-    held += Number(r.held) || 0
-    batch = []
-    bytes = 0
-  }
-  for (const id of need) {
-    const row = byId.get(id)
-    if (!row) continue
-    const size = Buffer.byteLength(JSON.stringify(row))
-    if (batch.length > 0 && bytes + size > PUT_BATCH_BYTES) await flush()
-    batch.push(row)
-    bytes += size
-  }
-  await flush(true)
-  // A held row comes back once the companion's own write reaches this store.
-  if (held === 0) lastManifest.set('tasks', manifestHash)
-  else lastManifest.delete('tasks')
-  return { kind: 'tasks', action: 'synced', entries: entries.length, sent, held, removed: Number(reply.removed) || 0 }
-}
-
-async function syncRegistry(deps: TaskReplicaDeps, registry: TaskReplicaRegistry): Promise<TaskReplicaRoundResult> {
-  const h = sha12(JSON.stringify(registry))
-  if (lastManifest.get('registry') === h) return { kind: 'registry', action: 'unchanged' }
-  const reply = await step(deps, { op: 'sync', kind: 'registry', entries: [{ k: 'registry', h }], asOf: Date.now() })
-  let sent = 0
-  if (Array.isArray(reply.need) && reply.need.includes('registry')) {
-    await step(deps, { op: 'put', kind: 'registry', registry })
-    sent = 1
-  }
-  lastManifest.set('registry', h)
-  return { kind: 'registry', action: 'synced', sent }
+function named(s: Served, r: Omit<TaskReplicaRoundResult, 'target'>): TaskReplicaRoundResult {
+  return s.named ? { target: s.target.id, ...r } : r
 }
 
 let running: { rerun: boolean } | null = null
 
 /**
- * Bring the companion's copy up to date. One round at a time; a request
- * during a round runs one more after it. Never throws.
+ * Bring every follower's copy up to date, one target after another, each with
+ * its own state (replica-status.ts). One round at a time; a request during a
+ * round runs one more after it. Never throws.
  */
 export async function syncTaskReplica(deps?: TaskReplicaDeps): Promise<TaskReplicaRoundResult[]> {
   if (running) { running.rerun = true; return [] }
@@ -156,26 +127,24 @@ export async function syncTaskReplica(deps?: TaskReplicaDeps): Promise<TaskRepli
   const results: TaskReplicaRoundResult[] = []
   try {
     const d = deps ?? await defaultDeps()
-    if (d.available && !(await d.available())) return [{ kind: 'tasks', action: 'unsupported' }]
     do {
       me.rerun = false
-      const view = await d.view()
-      // The store's row list is patched in place; the round works on its own copy of it.
-      const tasks = [...view.tasks]
-      for (const kind of ['tasks', 'registry'] as const) {
-        const startedAt = Date.now()
-        try {
-          const r = kind === 'tasks' ? await syncTasks(d, tasks) : await syncRegistry(d, view.registry)
-          results.push(r)
-          if (r.action === 'synced') log.task.info('task replica: round', { ...r, ms: Date.now() - startedAt })
-        } catch (err) {
-          const outcome = err instanceof StepFailed ? err.outcome : 'failed'
-          const error = err instanceof Error ? err.message : String(err)
-          results.push({ kind, action: outcome, error })
-          if (outcome === 'failed') log.task.warn('task replica: round failed', { kind, error })
-          break // the other kind waits for the next round
-        }
+      const all = servedTargets(d)
+      if (d.targets) dropTargetsNotIn(all.map((s) => s.target.id))
+      const ready: Served[] = []
+      for (const s of all) {
+        if (await s.target.available()) ready.push(s)
+        else results.push(named(s, { kind: 'tasks', action: 'unsupported' }))
       }
+      if (ready.length === 0) break
+      const view = await d.view()
+      const asOf = Date.now()
+      // The store's row list is patched in place; the round works on its own copy of it.
+      const manifests = {
+        tasks: await buildKindManifest(TASKS_KIND, [...view.tasks]),
+        registry: await buildKindManifest(REGISTRY_KIND, [view.registry]),
+      }
+      for (const s of ready) await serveTarget(s, manifests, asOf, results)
     } while (me.rerun)
   } finally {
     running = null
@@ -183,14 +152,56 @@ export async function syncTaskReplica(deps?: TaskReplicaDeps): Promise<TaskRepli
   return results
 }
 
+async function serveTarget(
+  s: Served, manifests: { tasks: KindManifest<Task>; registry: KindManifest<TaskReplicaRegistry> }, asOf: number, results: TaskReplicaRoundResult[],
+): Promise<void> {
+  for (const kind of KINDS) {
+    const startedAt = Date.now()
+    try {
+      const r = kind === 'tasks'
+        ? await runKindRound(TASKS_KIND, manifests.tasks, s.target, { asOf, log: log.task })
+        : await runKindRound(REGISTRY_KIND, manifests.registry, s.target, { asOf, log: log.task })
+      results.push(named(s, r as Omit<TaskReplicaRoundResult, 'target'>))
+      if (r.action === 'synced') log.task.info('task replica: round', { target: s.target.id, ...r, ms: Date.now() - startedAt })
+    } catch (err) {
+      const outcome = err instanceof StepFailed ? err.outcome : 'failed'
+      const error = err instanceof Error ? err.message : String(err)
+      results.push(named(s, { kind, action: outcome, error }))
+      if (outcome === 'failed') log.task.warn('task replica: round failed', { target: s.target.id, kind, error })
+      break // the other kind waits for the next round
+    }
+  }
+}
+
+let soonHook: (() => void) | null = null
+let schedulers = 0
+
 /**
- * Primary only: a round a few seconds after a task or registry change, a
- * first one shortly after boot, one more after rows the companion held, and
- * the sweep every 5 minutes.
+ * The user confirmed a removal the half rule refused three rounds in a row
+ * (the Settings row): the next round on that target sends `confirm:true`,
+ * only while the leader still has the refused count and keys (kind-leader.ts).
+ * `entries`, `keys`: the count and key set the user saw (a confirm for another
+ * manifest is refused).
+ */
+export async function confirmTaskReplicaRemoval(targetId: string, kind: 'tasks' | 'registry' = 'tasks', opts: { entries?: number; keys?: string } = {}): Promise<boolean> {
+  const { replicaTargets } = await import('./replica-targets.js')
+  const target = replicaTargets().find((t) => t.id === targetId)
+  if (!target || !peekKindState(targetId, kind)) return false
+  if (!confirmKindRemoval(target, kind, opts)) return false
+  log.task.warn('task replica: the user confirmed a removal of most rows', { target: targetId, kind, entries: peekKindState(targetId, kind)?.confirmFor?.entries })
+  soonHook?.()
+  return true
+}
+
+/**
+ * Primary only: a round a few seconds after a task or registry change or a
+ * follower joining, a first one shortly after boot, one more after rows a
+ * follower held, and the sweep every 5 minutes.
  */
 export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void } {
-  if (CLOUD_MODE) return { stop: () => {} }
-  const name = 'task-replica-sync'
+  if (isFollower()) return { stop: () => {} }
+  // Its own bus name: stopping an older scheduler never unsubscribes a newer one.
+  const name = `task-replica-sync-${++schedulers}`
   let timer: ReturnType<typeof setTimeout> | null = null
   let retry: ReturnType<typeof setTimeout> | null = null
   let stopped = false
@@ -215,6 +226,12 @@ export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void
       else if ((event.data as { key?: unknown } | undefined)?.key === 'focus_tiers') soon()
     }, { global: true, interest })
   })
+  // A follower that joins (a host server came up) gets its first round within seconds.
+  let unlistenTargets: (() => void) | null = null
+  void import('./replica-targets.js').then(({ onReplicaTargetsChanged }) => {
+    if (!stopped) unlistenTargets = onReplicaTargetsChanged(soon)
+  })
+  soonHook = soon
   const first = setTimeout(round, FIRST_ROUND_MS)
   first.unref?.()
   const sweep = setInterval(() => { forgetTaskReplica(); round() }, SWEEP_MS)
@@ -222,6 +239,8 @@ export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void
   return {
     stop: () => {
       stopped = true
+      if (soonHook === soon) soonHook = null
+      unlistenTargets?.()
       if (timer) clearTimeout(timer)
       if (retry) clearTimeout(retry)
       clearTimeout(first)
@@ -233,6 +252,6 @@ export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void
 
 /** Tests only. */
 export function _resetTaskReplicaForTesting(): void {
-  lastManifest.clear()
+  _resetReplicaStatusForTesting()
   running = null
 }

@@ -282,8 +282,10 @@ and the leader rests that kind for that target; the replica skips its own store 
 (asserted: copy file hashes unchanged across a replica boot).
 
 Mass removal: a legitimate prune on the Mac (session retention, a folder move of most notes) is refused by
-the half rule. After 3 refused rounds with a stable leader count, the leader may send `confirm:true`
-(driven by the Settings row the refusal raised), the follower accepts and logs it.
+the half rule. After 3 refused rounds of a stable leader manifest (the same count and key set), the leader
+may send `confirm:true` with `confirmFor` {count, key set} (driven by the Settings row the refusal raised,
+which shows the follower's `local` and `removing` from the refusal); the follower accepts it only when
+`confirmFor` names the manifest it came with, and logs it.
 
 Hold after ack: a row a journal record wrote stays held (and its overlay and mark stay) after the record
 is acked, as `awaiting copy`, until a manifest whose `asOf` is later than the ack time has stored that
@@ -780,7 +782,12 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   per-target state instead of the module-level `lastManifest`/`running`, `src/core/replication/task-replica.ts:75,146,192`;
   store gated on `isFollower()` instead of `CLOUD_MODE`, `src/core/replication/task-replica-store.ts:163,233,292,301`);
   `src/web/routes/bridge-replica.ts` (dispatch by registered kind, `404 unknown_kind`);
-  `src/web/routes/replicas-status.ts` (new, `GET /api/replicas/status`, leader only).
+  `src/web/routes/replicas-status.ts` (new, `GET /api/replicas/status`, leader only);
+  `web/src/components/settings/sections/ReplicaRemovalGroup.tsx` + `replica-removal-status.ts` (new: the
+  Settings row a refusal three rounds in a row raises, in Remote Hosts for a host and in Cloud Companion for
+  the companion; it names the leader's count and the follower's `local`/`removing`, and its two-click confirm
+  posts the count and keys the user read); `src/core/host-server/manager.ts` (`targetReady`: a host's copy
+  target, registered while its server starts, gets its round when the server answers, also after a restart).
 - Delivers: section 4 protocol (with `schemaVersion`, `409 schema_newer`, the `confirm:true` mass-removal
   path, file modes); tasks and registry reach host replicas; held rows on a host come from the journal
   overlay (stub that holds nothing until WP10); the companion keeps its held sources.
@@ -795,7 +802,10 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   (new: a `WALNUT_HOST_SERVER=1` follower store receives tasks through a host target, as
   `tests/core/search-replica-host-follower.test.ts:57`); `tests/web/routes/bridge-replica-cloud.test.ts` (extend);
   `tests/replica/leader-door.test.ts` (flip: `put`/`sync` of `tasks` and `registry` through a primary stream
-  is 200, where WP1 pinned `400 not_a_replica`).
+  is 200, where WP1 pinned `400 not_a_replica`); `tests/core/replication/task-replica-scheduler.test.ts` (fake
+  clock: debounce, held rerun, sweep, a target that joins or becomes reachable, the confirm round, a follower
+  starts nothing, stop clears every timer); `tests/web/replica-removal-status.test.ts` and
+  `tests/e2e/browser/replica-removal-settings.spec.ts` (the Settings row).
 - Acceptance: 6,500 tasks (`src/core/host-slice.ts:96`) first round under 10 s and an unchanged round
   with no put; the Mac's event loop never blocked over 50 ms by a round (stall recorder clean).
 

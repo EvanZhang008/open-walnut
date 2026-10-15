@@ -145,7 +145,7 @@ export async function postToCloudIngest(
 
 export type CloudReplicaReply =
   | { ok: true; reply: Record<string, unknown> }
-  | { ok: false; outcome: 'failed' | 'unsupported'; status?: number; error?: string }
+  | { ok: false; outcome: 'failed' | 'unsupported'; status?: number; error?: string; body?: Record<string, unknown> }
 
 let replicaUnsupportedUntil = 0
 
@@ -197,6 +197,9 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
     status = res.status
     const json = await res.json().catch(() => null) as Record<string, unknown> | null
     if (res.ok && json) return { ok: true, reply: json }
+    // The route is there but this one kind is not (core/replication/kind-follower.ts):
+    // the kind rests on its own (kind-leader.ts), the other kinds keep going.
+    if (status === 404 && json?.error === 'unknown_kind') return { ok: false, outcome: 'unsupported', status, error: 'unknown_kind' }
     // An older companion without the route: a 404, or its app shell for an unknown path.
     if (status === 404 || status === 405 || (res.ok && !json)) {
       replicaUnsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
@@ -208,7 +211,8 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
       endpoint = null
       return { ok: false, outcome: 'unsupported', status }
     }
-    return { ok: false, outcome: 'failed', status, error: typeof json?.error === 'string' ? json.error : undefined }
+    // The answer's own fields (a refusal names how many rows it would remove) go with it.
+    return { ok: false, outcome: 'failed', status, error: typeof json?.error === 'string' ? json.error : undefined, ...(json ? { body: json } : {}) }
   } catch (err) {
     return { ok: false, outcome: 'failed', status, error: err instanceof Error ? err.message : String(err) }
   } finally {

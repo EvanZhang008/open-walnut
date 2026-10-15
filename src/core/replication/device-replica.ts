@@ -21,6 +21,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { isDeviceCopyId } from '../../host-server/device-copy.js'
 import type { ReplicaTarget } from './replica-targets.js'
+import { noteKindRound } from './replica-status.js'
 
 const TICK_MS = 30_000
 const SWEEP_MS = 10 * 60_000
@@ -136,6 +137,11 @@ export function syncDeviceReplica(deps?: DeviceReplicaDeps): Promise<DeviceRepli
           retryAt.set(target.id, now + FAILED_RETRY_MS)
           out.push({ target: target.id, action: 'failed', error: err instanceof Error ? err.message : String(err) })
         }
+      }
+      // Its own protocol, one status row per host (GET /api/replicas/status).
+      for (const r of out) {
+        const t = hosts.find((h) => h.id === r.target)
+        if (t) noteKindRound(t, 'devices', { action: r.action, error: r.error, ...(r.action === 'synced' ? { entries: r.devices, syncedAt: Date.now() } : {}) })
       }
     } finally {
       running = null

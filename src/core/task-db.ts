@@ -12,12 +12,14 @@
  */
 
 import Database, { type Database as DatabaseType } from 'better-sqlite3';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { TASKS_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
+import { isHostReplica } from './server-role.js';
 import type { Task } from './types.js';
 import { migratePhase } from './phase.js';
 import { normalizeTags, tagsAreNormal } from './tag-model.js';
@@ -151,18 +153,25 @@ export function getDb(): DatabaseType | null {
     handle.pragma('foreign_keys = ON');
 
     handle.exec(SCHEMA_SQL);
+    // Self-gated on user_version: a copy file this code already knows is left as it is.
     runOneTimeMigrations(handle);
-    backfillNullTimestamps(handle);
-    normalizeStoredTags(handle);
-
-    // Truncate the WAL on open. Without this the WAL grows unboundedly
-    // between process restarts — observed at 80MB in prod. Returns
-    // { busy, log, checkpointed } per SQLite docs.
+    // A host replica's file is a copy of the Mac's rows, kept byte for byte by the
+    // follower apply connection (docs/plan/walnut-replica-servers-impl.md, section 4:
+    // "the replica skips its own store migrations on copy files"). The Mac ran these
+    // data fixes on its own rows; here they would change the copy behind its hashes.
     let checkpoint: unknown = null;
-    try {
-      checkpoint = handle.pragma('wal_checkpoint(TRUNCATE)');
-    } catch (err) {
-      log.task.warn('task-db: WAL checkpoint on open failed', { err: String(err) });
+    if (!isHostReplica()) {
+      backfillNullTimestamps(handle);
+      normalizeStoredTags(handle);
+
+      // Truncate the WAL on open. Without this the WAL grows unboundedly
+      // between process restarts (observed at 80MB in prod). Returns
+      // { busy, log, checkpointed } per SQLite docs.
+      try {
+        checkpoint = handle.pragma('wal_checkpoint(TRUNCATE)');
+      } catch (err) {
+        log.task.warn('task-db: WAL checkpoint on open failed', { err: String(err) });
+      }
     }
 
     // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
@@ -184,12 +193,39 @@ export function openCopyApplyConnection(): DatabaseType {
   return openApplyConnection(TASK_DB_PATH, 'tasks');
 }
 
+// The follower apply scope of a host replica: the copy's one writer. Inside it
+// (and only on a host replica) transaction() runs on the apply connection, so
+// the replica's copy steps write through the same task-manager code as the
+// companion's while every other write still meets the read-only shared handle.
+const copyApplyScope = new AsyncLocalStorage<true>();
+let applyHandle: DatabaseType | null = null;
+
+/** Run `fn` as the copy's writer (task-replica-store.ts). Off a host replica it just runs `fn`. */
+export function withCopyApply<T>(fn: () => Promise<T>): Promise<T> {
+  if (!isHostReplica()) return fn();
+  return copyApplyScope.run(true, fn);
+}
+
+/** Inside withCopyApply on a host replica. */
+export function inCopyApply(): boolean {
+  return copyApplyScope.getStore() === true;
+}
+
+function copyApplyHandle(): DatabaseType {
+  applyHandle ??= openCopyApplyConnection();
+  return applyHandle;
+}
+
 /**
  * Close the handle. Safe to call when already closed or never opened.
  * Intended for test teardown and graceful shutdown; production code should
  * not need to close/reopen during normal operation.
  */
 export function closeDb(): void {
+  if (applyHandle) {
+    try { applyHandle.close(); } catch (err) { log.task.warn('task-db apply connection close error', { err: String(err) }); }
+    applyHandle = null;
+  }
   if (db) {
     try { db.close(); } catch (err) { log.task.warn('task-db close error', { err: String(err) }); }
     db = null;
@@ -210,10 +246,11 @@ export function closeDb(): void {
  * If you need async work, do it before/after the transaction, not inside.
  */
 export function transaction<T>(fn: (db: DatabaseType) => T): T {
-  const handle = getDb();
-  if (!handle) {
+  const shared = getDb();
+  if (!shared) {
     throw new Error('task-db: transaction() called before database was successfully opened');
   }
+  const handle = inCopyApply() ? copyApplyHandle() : shared;
   const tx = handle.transaction(fn);
   return tx(handle);
 }

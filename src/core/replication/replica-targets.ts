@@ -60,6 +60,16 @@ export function registerReplicaTarget(target: ReplicaTarget): () => void {
   }
 }
 
+/**
+ * A registered follower became reachable: its server answers now (a host server
+ * is registered while it is still starting, and comes back after a restart
+ * under the same registration). Every copy runs a round within its debounce,
+ * as for a follower that joins.
+ */
+export function replicaTargetAvailable(id: string): void {
+  if (registered.has(id)) changed()
+}
+
 export function onReplicaTargetsChanged(cb: () => void): () => void {
   listeners.add(cb)
   return () => { listeners.delete(cb) }

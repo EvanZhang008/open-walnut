@@ -14,6 +14,7 @@ import { flashHostsOf, hostRowId, useHostSettingsFocus } from '@/utils/host-sett
 import { landOnRow } from '@/utils/scroll-land';
 import { AddLimitRow } from './RemoteHostLimits';
 import { HostServersGroup } from './HostServersGroup';
+import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { CopyHostDiagnosticsButton, DiagnosticsFallback, useCopyDiagnostics } from '../CopyDiagnostics';
 import { hasStatusHosts } from '../diagnostics-copy';
 import '@/styles/settings-sections-addons.css';
@@ -444,6 +445,10 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       </SettingsGroup>
 
       <HostServersGroup hosts={config.hosts} />
+      <ReplicaRemovalGroup
+        only="host"
+        labels={Object.fromEntries(Object.entries(config.hosts ?? {}).map(([key, h]) => [`host:${key}`, h?.label?.trim() || key]))}
+      />
 
       <SettingsGroup heading="Session limits" footer="Most sessions one host runs at once.">
         {/* Each limit is a row: host on the left, its number on the right (N3-21). */}

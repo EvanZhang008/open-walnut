@@ -21,7 +21,7 @@ import {
   type TaskQuerySort,
 } from './task-query.js';
 import { registry } from './integration-registry.js';
-import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
+import { getDb, inCopyApply, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
 import { isHostReplica } from './server-role.js';
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
@@ -473,7 +473,11 @@ function withWriteLockIfFree<T>(fn: () => Promise<T>): Promise<T> {
 
 async function ensureInit(): Promise<void> {
   if (!initialized) {
-    await initDirectories();
+    // A host's task store is a copy (getDb makes its one dir): the rest of the
+    // data tree, the run dir's streams and images, the seeded config.yaml and
+    // MEMORY.md are the full server's (server.ts runs initDirectories at its
+    // boot), never the light host server's on its first copy round.
+    if (!isHostReplica()) await initDirectories();
     // Open the SQLite handle (creates schema on first touch) and run the
     // one-shot JSON→SQLite migration if the DB is still empty. Both are
     // idempotent no-ops on subsequent calls.
@@ -874,7 +878,9 @@ async function writeStore(store: TaskStore): Promise<void> {
     // at our last commit: that counter is bumped by OTHER connections' commits
     // (verified — our own writes leave it untouched), so any external writer
     // (CLI process, migration, plugin) forces a full rewrite and self-heals.
-    const shadow = rowShadowIfCurrent(handle) ?? shadowFromSnapshot(handle);
+    // A host replica's copy writer is another connection than the shared one the
+    // shadow's data_version is read on (task-db.ts withCopyApply): no shadow, a full pass.
+    const shadow = inCopyApply() ? null : (rowShadowIfCurrent(handle) ?? shadowFromSnapshot(handle));
     const validTasks = store.tasks.filter(
       (t) => t && typeof t === 'object' && typeof t.id === 'string',
     );
