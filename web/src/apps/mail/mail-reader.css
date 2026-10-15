@@ -104,6 +104,7 @@
 
 .mail-reader-sender {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-top: 14px;
@@ -127,8 +128,12 @@
   user-select: none;
 }
 
+/* The sender keeps a readable measure (12rem, about one address) before anything else on the line gives way: the account
+   pill and the date never shrink, so on a narrow reader the date moves to its own line instead. With
+   `flex: 1 1 auto` the name was the only item that could shrink, and an address-only sender broke one
+   letter per line (2026-10-15). */
 .mail-reader-identity {
-  flex: 1 1 auto;
+  flex: 1 1 12rem;
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
@@ -259,6 +264,8 @@
 
 .mail-reader-when {
   flex: 0 0 auto;
+  /* Right-aligned on the sender's line, and on its own line when it wraps there. */
+  margin-left: auto;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
