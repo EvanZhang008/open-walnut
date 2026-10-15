@@ -16,7 +16,7 @@ let unsubscribe: (() => void) | null = null
 let packageCache: { at: number; pkg: HostAppPackage } | null = null
 
 /** The settings of one host's server, defaults filled in. */
-export function hostServerSettingsFrom(raw: unknown): HostServerSettings {
+export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostServerSettings {
   const s = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; node?: unknown; build_env?: unknown
     expose?: { enabled?: unknown; provider?: unknown; options?: unknown }
@@ -38,6 +38,8 @@ export function hostServerSettingsFrom(raw: unknown): HostServerSettings {
       provider: typeof s.expose?.provider === 'string' && s.expose.provider ? s.expose.provider : null,
       options,
     },
+    // The per-host opt-in for the replica program (off unless set: D13's rollout gate).
+    ...(program === 'replica' || program === 'host-server' ? { program } : {}),
   }
 }
 
@@ -48,7 +50,7 @@ export function getHostServerManager(): HostServerManager | null {
     settingsOf: async (hostKey) => {
       const { getConfig } = await import('../config-manager.js')
       const host = (await getConfig()).hosts?.[hostKey]
-      return host ? hostServerSettingsFrom(host.server) : null
+      return host ? hostServerSettingsFrom(host.server, host.server_program) : null
     },
     label: async (hostKey) => {
       const { getConfig } = await import('../config-manager.js')
@@ -75,6 +77,10 @@ export function getHostServerManager(): HostServerManager | null {
     },
     stateFile: path.join(WALNUT_HOME, 'host-servers.json'),
     now: Date.now,
+    // Test and safety knobs (docs/plan/walnut-replica-servers-impl.md, WP2): another root
+    // on the host, and (tests only) a local tree run in place of an installed build.
+    ...(process.env.WALNUT_HOST_SERVER_ROOT?.trim() ? { hostRoot: process.env.WALNUT_HOST_SERVER_ROOT.trim() } : {}),
+    ...(process.env.WALNUT_HOST_SERVER_APP_DIR?.trim() ? { appDir: process.env.WALNUT_HOST_SERVER_APP_DIR.trim() } : {}),
     registerTarget: (hostKey, post) => {
       let unregister: () => void = () => {}
       void import('../replication/replica-targets.js').then(({ registerReplicaTarget }) => {

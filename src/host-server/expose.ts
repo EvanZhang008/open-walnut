@@ -117,3 +117,28 @@ export function createHostExpose(opts: { port: number; stateFile: string; deps?:
     stop: () => serialize(() => supervisor.stop()),
   }
 }
+
+/**
+ * Follow the tunnel settings the Mac gives a host server through its daemon
+ * (`view.settings.expose`, `exposeRetry`): a changed definition is applied, a
+ * bumped retry count retries. Shared by the host server (main.ts) and a host
+ * replica (src/replica/front.ts).
+ */
+export function followExposeSettings(expose: HostExpose, warn: (msg: string, data?: Record<string, unknown>) => void): (settings: Record<string, unknown>) => void {
+  let exposeKey = ''
+  let exposeRetry: unknown = undefined
+  return (raw) => {
+    const s = raw as { expose?: unknown; exposeRetry?: unknown }
+    if (s.expose && typeof s.expose === 'object') {
+      const key = JSON.stringify(s.expose)
+      if (key !== exposeKey) {
+        exposeKey = key
+        void expose.apply(s.expose as never).catch((err) => {
+          warn('host server: the tunnel settings were refused', { error: err instanceof Error ? err.message : String(err) })
+        })
+      }
+    }
+    if (exposeRetry !== undefined && s.exposeRetry !== exposeRetry) expose.retry()
+    exposeRetry = s.exposeRetry ?? null
+  }
+}

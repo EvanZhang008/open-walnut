@@ -17,6 +17,18 @@
 import { shq } from '../../providers/remote-sh.js'
 
 export const HOST_ROOT = '$HOME/.open-walnut-host'
+
+/**
+ * A root other than HOST_ROOT (the WALNUT_HOST_SERVER_ROOT knob, tests): an
+ * absolute path, or one under `$HOME`. It is put inside double quotes in the
+ * scripts, so nothing that a shell expands there is taken.
+ */
+export function checkHostRoot(root: string): string {
+  if (!/^(\$HOME)?\/[A-Za-z0-9_./-]+$/.test(root) || root.includes('..')) {
+    throw new Error(`a host server root must be an absolute path (or one under $HOME) of plain characters: ${JSON.stringify(root)}`)
+  }
+  return root.replace(/\/+$/, '')
+}
 /** The oldest Node a host server runs on (package.json engines). */
 export const MIN_NODE_MAJOR = 22
 
@@ -29,6 +41,8 @@ export interface InstallPlan {
   node: string
   /** Extra environment for the dependency install (CC, CXX for a native module). */
   buildEnv: Record<string, string>
+  /** The root on the host (default HOST_ROOT). */
+  root?: string
 }
 
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -44,7 +58,7 @@ export function installScript(plan: InstallPlan): string {
   const depsJson = JSON.stringify({ name: 'open-walnut-host-deps', private: true, dependencies: plan.dependencies }, null, 2)
   return [
     'set -u',
-    `ROOT="${HOST_ROOT}"`,
+    `ROOT="${checkHostRoot(plan.root ?? HOST_ROOT)}"`,
     `ID=${shq(plan.id)}`,
     `DEPS=${shq(plan.depsHash)}`,
     `NODE=${shq(plan.node)}`,
@@ -87,9 +101,9 @@ export function installScript(plan: InstallPlan): string {
 }
 
 /** Start the install script detached, its output in the install log. */
-export function launchScript(id: string): string {
+export function launchScript(id: string, root: string = HOST_ROOT): string {
   return [
-    `ROOT="${HOST_ROOT}"`,
+    `ROOT="${checkHostRoot(root)}"`,
     `ID=${shq(id)}`,
     'IN="$ROOT/incoming"',
     'nohup sh "$IN/$ID.install.sh" > "$IN/$ID.install.log" 2>&1 < /dev/null &',
@@ -105,9 +119,9 @@ export type InstallState =
   | { state: 'absent' }
 
 /** Where an install of `id` stands on the host. */
-export function stateScript(id: string): string {
+export function stateScript(id: string, root: string = HOST_ROOT): string {
   return [
-    `ROOT="${HOST_ROOT}"`,
+    `ROOT="${checkHostRoot(root)}"`,
     `ID=${shq(id)}`,
     'IN="$ROOT/incoming"',
     'if [ -f "$ROOT/app/$ID/.ready" ]; then echo READY',

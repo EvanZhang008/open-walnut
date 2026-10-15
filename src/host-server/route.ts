@@ -14,6 +14,8 @@
  */
 
 import type { FollowerView } from './daemon-link.js'
+// The daemon twins' own parse of a timer knob (daemon-source.ts mirrors it verbatim).
+import { envTimerMs } from '../providers/daemon-core.js'
 
 export type Route =
   | { kind: 'leader' }
@@ -22,8 +24,12 @@ export type Route =
 
 /** A daemon answer this old says nothing (the link is stuck). */
 export const VIEW_STALE_MS = 15_000
-/** The Mac answers while the daemon heard it within this. */
-export const LEADER_QUIET_MS = 30_000
+/**
+ * The Mac answers while the daemon heard it within this: the one window
+ * (WALNUT_LEADER_QUIET_MS) the daemon twins and a host replica's presence use,
+ * so this program, run as the daemon's fallback, never disagrees with them.
+ */
+export const LEADER_QUIET_MS = envTimerMs(process.env.WALNUT_LEADER_QUIET_MS, 30_000, 500)
 /** A target whose stream failed is skipped this long. */
 export const SUSPECT_MS = 5_000
 
@@ -45,7 +51,7 @@ export function leaderAnswers(input: RouteInput): { answers: boolean; why: strin
   if (!v) return { answers: false, why: 'no-daemon' }
   if (v.holder !== 'primary') return { answers: false, why: 'companion-leads' }
   const quietFor = v.primaryHeardAgoMs + (input.now - input.view!.at)
-  if (!v.primaryConnected || quietFor > LEADER_QUIET_MS) return { answers: false, why: 'mac-away' }
+  if (!v.primaryConnected || quietFor >= LEADER_QUIET_MS) return { answers: false, why: 'mac-away' }
   if ((input.suspect.leader ?? 0) > input.now) return { answers: false, why: 'unreachable' }
   return { answers: true, why: 'answers' }
 }

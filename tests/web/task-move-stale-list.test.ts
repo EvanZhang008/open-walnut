@@ -122,7 +122,7 @@ describe('a moved task is not drawn back by a list answer read before the move',
     api.rows = [row('a', 'Q'), row('b', ''), row('c', 'Q')]
     await act(async () => { write.resolve({}) })
     await flush()
-    expect(api.reorderTasks).toHaveBeenCalledWith('Q', expect.arrayContaining(['a', 'c']))
+    expect(api.reorderTasks).toHaveBeenCalledWith('Q', expect.arrayContaining(['a', 'c']), { opId: expect.stringMatching(/^op-[0-9a-f]{16}$/) })
     expect(taskA().project).toBe('Q')
   })
 

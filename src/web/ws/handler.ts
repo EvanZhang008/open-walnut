@@ -80,6 +80,37 @@ export function _getRpcMethodForTesting(name: string): RpcHandler | undefined {
   return rpcMethods.get(name)
 }
 
+/** Every RPC method registered now (the replica's route-table ratchet reads it). */
+export function listRpcMethods(): string[] {
+  return rpcMethods.entries().map((e) => e.key)
+}
+
+/**
+ * A host replica's front (src/replica/front.ts) sees every upgrade first: it
+ * splices `/ws` to the Mac while the Mac answers, and hands it back (`own`)
+ * when the replica answers itself. Null everywhere else.
+ */
+type UpgradeInterceptor = (request: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer, own: (request: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => void) => boolean
+let upgradeInterceptor: UpgradeInterceptor | null = null
+export function setUpgradeInterceptor(fn: UpgradeInterceptor | null): void {
+  upgradeInterceptor = fn
+}
+
+/** A host replica's RPC table (src/replica/ws-rpc-table.ts): a refusal string, or null to run the method. */
+let rpcGate: ((method: string) => string | null) | null = null
+export function setRpcGate(fn: ((method: string) => string | null) | null): void {
+  rpcGate = fn
+}
+
+/** Close every browser socket with a code (a host replica's 4002 leader_back). */
+export function closeAllClients(code: number, reason: string): number {
+  let n = 0
+  for (const client of clients) {
+    try { client.ws.close(code, reason); n++ } catch { /* gone */ }
+  }
+  return n
+}
+
 /**
  * Broadcast a bus event to all connected WebSocket clients.
  *
@@ -183,6 +214,12 @@ async function handleMessage(client: Client, raw: string): Promise<void> {
   }
 
   if (frame.type !== 'req') return // only handle RPC requests from clients
+
+  const refusal = rpcGate?.(frame.method) ?? null
+  if (refusal) {
+    sendResponse(client.ws, frame.id, false, undefined, refusal)
+    return
+  }
 
   const handler = rpcMethods.get(frame.method)
   if (!handler) {
@@ -348,6 +385,15 @@ export function attachWss(server: HttpServer): WebSocketServer {
   registerSetInterest()
 
   server.on('upgrade', (request: IncomingMessage, socket, head) => {
+    // First, before any interceptor: Node drops its own error listener before
+    // 'upgrade', and a host replica's front waits on a stream before it adds one
+    // (see ownUpgrade below for the outage this gap once caused).
+    socket.on('error', ignoreSocketError)
+    if (upgradeInterceptor?.(request, socket, head, ownUpgrade)) return
+    ownUpgrade(request, socket, head)
+  })
+
+  function ownUpgrade(request: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer): void {
     // Node removes its own socket error listener before emitting 'upgrade', and
     // ws attaches one only inside handleUpgrade. Every gate below awaits first
     // (a token check reads auth.json), so a peer that resets the connection in
@@ -433,7 +479,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
         wss!.emit('connection', ws, request)
       })
     }).catch(() => socket.destroy())
-  })
+  }
 
   wss.on('connection', (ws: WebSocket) => {
     // New connections default to "global" mode (full firehose) — unchanged behavior.

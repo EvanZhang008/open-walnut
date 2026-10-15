@@ -22,9 +22,19 @@
  *   - the Mac's stream to the host server reaches its status and its copy door;
  *   - the Mac sets the tunnel through the daemon, and a tunnel in front of the
  *     public port reaches the Mac; the server's report comes back to the Mac.
+ *
+ * Every case runs twice (docs/plan/walnut-replica-servers-impl.md, WP2
+ * acceptance): once with the host server program, once with the full server
+ * program as this host's replica (`startServer` with WALNUT_ROLE=replica, in
+ * this process, its follower link to the same daemon). Where the replica
+ * answers by design differently, the case says so: neither answering, an API
+ * read runs on the replica's copies (200, `x-walnut-offline`) instead of the
+ * host server's 503 `leader_away`, and a WebSocket is the replica's own (which
+ * trusts no loopback caller) instead of a 503.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -117,7 +127,13 @@ let companionDoorPort = 0
 let companionBridge: http.Server
 let companionBridgePort = 0
 let companionSockets = new Set<WebSocket>()
-let hostServer: HostServer | null = null
+/** The program under test: the host server, or the full server as this host's replica. */
+type Program = 'host-server' | 'replica'
+const PROGRAMS: Program[] = ['host-server', 'replica']
+interface Under { route(): string; stop(): Promise<void> }
+let under: Under | null = null
+/** A browser's device token, in the device copy the Mac pushes (case 3). */
+const PHONE_TOKEN = 'marina-phone-' + 'z'.repeat(40)
 let publicPort = 0
 let tunnelPid = 0
 
@@ -234,6 +250,40 @@ async function macAsks(method: string, route: string, body?: unknown): Promise<{
   })
 }
 
+async function startUnder(program: Program, daemonDir: string, token: string): Promise<Under> {
+  if (program === 'host-server') {
+    const hs: HostServer = await startHostServer({
+      env: { publicPort, daemonDir, leaderHome: HOME, walnutId: WALNUT, followerToken: token, label: 'devbox' },
+    })
+    return { route: () => hs.route().kind, stop: () => hs.stop() }
+  }
+  // The full server program as this host's replica, as its daemon would start it.
+  const c = await import('../../src/constants.js')
+  const keys = ['WALNUT_ROLE', 'WALNUT_PLACEMENT', 'WALNUT_HOST_SERVER', 'WALNUT_HOST_SERVER_PORT', 'WALNUT_LEADER_HOME', 'WALNUT_WALNUT_ID', 'WALNUT_HOST_LABEL', 'WALNUT_FOLLOWER_TOKEN', 'WALNUT_HOST_DAEMON_DIR', 'OPEN_WALNUT_HOME', 'WALNUT_NO_AUTO_UPDATE']
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]))
+  if (!process.env.WALNUT_DAEMON_DIR || process.env.WALNUT_DAEMON_DIR === '/tmp/open-walnut') throw new Error('REFUSING: no isolated WALNUT_DAEMON_DIR')
+  Object.assign(process.env, {
+    WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(publicPort),
+    WALNUT_LEADER_HOME: HOME, WALNUT_WALNUT_ID: WALNUT, WALNUT_HOST_LABEL: 'devbox', WALNUT_FOLLOWER_TOKEN: token,
+    WALNUT_HOST_DAEMON_DIR: daemonDir, OPEN_WALNUT_HOME: c.WALNUT_HOME, WALNUT_NO_AUTO_UPDATE: '1',
+  })
+  const role = await import('../../src/core/server-role.js')
+  role._resetServerRoleForTesting()
+  ;(await import('../../src/host-server/env.js'))._resetFollowerSecretsForTesting()
+  const server = await import('../../src/web/server.js')
+  await server.startServer({ port: publicPort, dev: true })
+  const front = server.getHostReplicaFront()
+  if (!front) throw new Error('the replica has no front')
+  return {
+    route: () => front.route().kind,
+    async stop() {
+      try { await server.stopServer() } catch { /* already down */ }
+      for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] }
+      role._resetServerRoleForTesting()
+    },
+  }
+}
+
 const baseSpec = () => ({
   v: 1, home: HOME, walnutId: WALNUT, command: process.execPath,
   // The daemon's server is a stand-in that hands this test the token it was started with;
@@ -243,7 +293,9 @@ const baseSpec = () => ({
   settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
 })
 
-beforeAll(async () => {
+async function setup(program: Program): Promise<void> {
+  companionSockets = new Set()
+  tunnelPid = 0
   base = fs.mkdtempSync(path.join(os.tmpdir(), 'hse-'))
   const daemonDir = path.join(base, 'd')
   fs.mkdirSync(daemonDir)
@@ -275,14 +327,13 @@ beforeAll(async () => {
   const [token, pid] = (await waitFor(() => { try { return fs.readFileSync(path.join(base, 'token'), 'utf8') } catch { return '' } }, 20_000, 'the token')).split(' ')
   placeholderPid = Number(pid)
 
-  hostServer = await startHostServer({
-    env: { publicPort, daemonDir, leaderHome: HOME, walnutId: WALNUT, followerToken: token!, label: 'devbox' },
-  })
-}, 120_000)
+  under = await startUnder(program, daemonDir, token!)
+}
 
-afterAll(async () => {
+async function teardown(): Promise<void> {
   try { if (mac) await mac.cmd({ cmd: 'server.configure', home: HOME, spec: null }) } catch { /* gone */ }
-  await hostServer?.stop().catch(() => undefined)
+  await under?.stop().catch(() => undefined)
+  under = null
   unlinkMac()
   for (const pid of [tunnelPid, placeholderPid, daemonPid]) {
     if (pid > 1) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
@@ -293,11 +344,14 @@ afterAll(async () => {
   for (const s of companionSockets) s.terminate()
   await sleep(500)
   fs.rmSync(base, { recursive: true, force: true })
-})
+}
 
-describe('a host server, linked to its daemon only', () => {
+describe.each(PROGRAMS)('%s, linked to its daemon only', (program) => {
+  beforeAll(() => setup(program), 180_000)
+  afterAll(teardown, 60_000)
+
   it('with the Mac linked, sends every request and WebSocket to it as they came', async () => {
-    await waitFor(() => hostServer!.route().kind === 'leader', 20_000, 'the leader route')
+    await waitFor(() => under!.route() === 'leader', 20_000, 'the leader route')
     const r = await get('/api/tasks?x=1', { host: 'devbox-tunnel.example', origin: 'https://devbox-tunnel.example', authorization: 'Bearer tok' })
     expect(r.status).toBe(200)
     expect(JSON.parse(r.body)).toMatchObject({ from: 'mac', url: '/api/tasks?x=1' })
@@ -329,6 +383,11 @@ describe('a host server, linked to its daemon only', () => {
     // The copy door answers (an unknown step is refused by the store, not by a credential check).
     const copy = await macAsks('POST', '/bridge/replica', { op: 'nope' })
     expect(copy).toEqual({ status: 400, json: { ok: false, error: 'unknown_op' } })
+    // A browser's device token reaches it in the device copy (both programs take one on this door).
+    const { deviceListHash } = await import('../../src/core/replication/device-replica.js')
+    const devices = [{ id: 'd0a1b2c3d4e5f6', name: 'marina-phone', tokenHash: crypto.createHash('sha256').update(PHONE_TOKEN, 'utf-8').digest('hex') }]
+    const put = await macAsks('POST', '/bridge/replica', { op: 'put', kind: 'devices', devices, hash: deviceListHash(devices) })
+    expect(put.status).toBe(200)
     // And its report reaches the Mac through the daemon.
     const reported = await waitFor(async () => {
       const r = await mac!.cmd({ cmd: 'server.status', home: HOME })
@@ -344,14 +403,14 @@ describe('a host server, linked to its daemon only', () => {
     expect(companionDoor.seen.at(-1)).toMatchObject({
       host: `127.0.0.1:${companionBridgePort}`, origin: `http://127.0.0.1:${companionBridgePort}`, via: 'host-server', xff: '127.0.0.1',
     })
-    expect(hostServer!.route().kind).toBe('companion')
+    expect(under!.route()).toBe('companion')
     expect(await wsEcho(`ws://127.0.0.1:${publicPort}/ws`, 'hi')).toBe('companion:hi')
   })
 
   it('neither answering, says so: a page, a 503 for the API and for a WebSocket', async () => {
     for (const s of companionSockets) s.terminate()
     companionBridge.close()
-    await waitFor(() => hostServer!.route().kind === 'alone', 15_000, 'alone')
+    await waitFor(() => under!.route() === 'alone', 15_000, 'alone')
     // A page of its own (host-server/alone-page.ts): it names nothing until a device token holds.
     const page = await get('/', { accept: 'text/html' })
     expect(page.status).toBe(200)
@@ -359,15 +418,33 @@ describe('a host server, linked to its daemon only', () => {
     expect(page.body).toContain('data-why="nobody-answers"')
     expect(page.body).toContain('Neither your Mac nor your cloud companion is answering')
     expect(page.headers.get('content-security-policy')).toMatch(/script-src 'nonce-/)
-    const api = await get('/api/tasks')
-    expect(api.status).toBe(503)
-    expect(JSON.parse(api.body).error.code).toBe('leader_away')
-    expect(await wsEcho(`ws://127.0.0.1:${publicPort}/ws`, 'x')).toBe('status 503')
+    if (program === 'host-server') {
+      const api = await get('/api/tasks')
+      expect(api.status).toBe(503)
+      expect(JSON.parse(api.body).error.code).toBe('leader_away')
+      expect(await wsEcho(`ws://127.0.0.1:${publicPort}/ws`, 'x')).toBe('status 503')
+      return
+    }
+    // The replica answers a read itself, on its copies, and says how fresh they are.
+    const api = await get('/api/tasks', { authorization: `Bearer ${PHONE_TOKEN}` })
+    expect(api.status).toBe(200)
+    expect(Number(api.headers.get('x-walnut-offline'))).toBeGreaterThan(0)
+    expect(api.headers.get('x-walnut-answered-via')).toBe('replica')
+    // It trusts no loopback caller: no token is 401.
+    expect((await get('/api/tasks')).status).toBe(401)
+    // A write that needs the Mac says so.
+    const write = await fetch(`http://127.0.0.1:${publicPort}/api/tasks`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${PHONE_TOKEN}` }, body: '{}' })
+    expect(write.status).toBe(503)
+    expect((await write.json()).error.code).toBe('needs_leader')
+    // A WebSocket is the replica's own: refused without a token, nothing spliced anywhere.
+    const seen = macDoor.seen.length + companionDoor.seen.length
+    expect(await wsEcho(`ws://127.0.0.1:${publicPort}/ws`, 'x')).toBe('status 401')
+    expect(macDoor.seen.length + companionDoor.seen.length).toBe(seen)
   })
 
   it('the Mac back, browsers reach it again', async () => {
     mac = await linkMac()
-    await waitFor(() => hostServer!.route().kind === 'leader', 15_000, 'the leader route again')
+    await waitFor(() => under!.route() === 'leader', 15_000, 'the leader route again')
     expect(JSON.parse((await get('/api/tasks')).body)).toMatchObject({ from: 'mac' })
   })
 
@@ -426,7 +503,7 @@ describe('a host server, linked to its daemon only', () => {
       expect(JSON.parse(r.body)).toMatchObject({ from: 'mac', url: '/api/tasks?after=lane' })
       expect(opened).toBe(2)
       expect(mac!.streamFrames()).toBe(before)
-      expect(hostServer!.route().kind).toBe('leader')
+      expect(under!.route()).toBe('leader')
 
       // A lane that does not come back: after a short wait, browsers go on over the session link.
       lane.stop()

@@ -31,6 +31,10 @@ export interface FollowerView {
   bridge: { connected: boolean; companion: string | null }
   /** What the Mac set for this server (its tunnel); changes need no restart. */
   settings: Record<string, unknown>
+  /** The daemon's one quiet window (LEADER_QUIET_MS), when it says it (replica-host-v1). */
+  quietMs?: number
+  /** This home's journal records the current leader's drain can take (a drain still to run). */
+  drainablePending?: number
 }
 
 export type DaemonLinkState = 'connecting' | 'following' | 'unknown-walnut' | 'not-started-here' | 'no-daemon'
@@ -65,9 +69,27 @@ export interface DaemonLink {
   report(body: Record<string, unknown>): void
   /** A command on the link (what a follower may send); the daemon's answer as it came. */
   request(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
+  /** When the last frame from the daemon arrived (frames, never the socket's state), or null. */
+  lastFrameAt(): number | null
+  /** What the daemon advertised in its `hello` (asked once each link is following), or null before the first answer. */
+  capabilities(): readonly string[] | null
 }
 
 const CALL_TIMEOUT_MS = 5_000
+
+/**
+ * A request that never left this server (no link, or the socket refused the
+ * frame): the daemon cannot have acted on it. A timeout or a `closed` answer
+ * carries no mark, because those frames were written.
+ */
+export function notSent(err: Error): Error & { notSent: true } {
+  return Object.assign(err, { notSent: true as const })
+}
+
+/** Whether a request's failure proves the frame never reached the daemon. */
+export function wasNotSent(err: unknown): boolean {
+  return !!err && typeof err === 'object' && (err as { notSent?: unknown }).notSent === true
+}
 const MAX_REDIAL_MS = 30_000
 
 export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
@@ -85,6 +107,9 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
   const pending = new Map<number, (m: Record<string, unknown>) => void>()
   /** The streams on the socket in use; a new socket gets a new endpoint. */
   let streams: StreamEndpoint | null = null
+  let frameAt: number | null = null
+  // Kept across a redial: a link blip is no downgrade, the next hello says.
+  let caps: readonly string[] | null = null
 
   function setState(next: DaemonLinkState, why?: string): void {
     if (why !== undefined) error = why
@@ -103,7 +128,7 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
       } catch (err) {
         clearTimeout(timer)
         pending.delete(id)
-        reject(err)
+        reject(notSent(err instanceof Error ? err : new Error(String(err))))
       }
     })
   }
@@ -111,6 +136,8 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
   function take(m: Record<string, unknown>): void {
     const v = m as unknown as FollowerView & { ok?: boolean }
     if (m.ok !== true || typeof v.walnutId !== 'string') return
+    const journal = (m as { journal?: { drainable?: unknown } }).journal
+    const drainable = Number(m.drainablePending ?? journal?.drainable)
     last = {
       at: now(),
       view: {
@@ -120,6 +147,8 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
         takeoverMs: Number(v.takeoverMs) || 0,
         bridge: { connected: v.bridge?.connected === true, companion: typeof v.bridge?.companion === 'string' ? v.bridge.companion : null },
         settings: v.settings && typeof v.settings === 'object' && !Array.isArray(v.settings) ? v.settings : {},
+        ...(Number(v.quietMs) > 0 ? { quietMs: Number(v.quietMs) } : {}),
+        ...(Number.isFinite(drainable) && drainable > 0 ? { drainablePending: drainable } : {}),
       },
     }
     try { opts.onView?.(last.view) } catch { /* a listener never breaks the link */ }
@@ -167,6 +196,7 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
     })
     streams = endpoint
     socket.on('message', (data) => {
+      frameAt = now()
       let m: Record<string, unknown>
       try { m = JSON.parse(String(data)) } catch { return }
       if (endpoint.handle(m)) return
@@ -205,8 +235,16 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
           void call(socket, 'follower.status').then(take, () => { /* the next poll, or the close, says more */ })
         }, pollMs)
         pollTimer.unref?.()
+        askCapabilities(socket)
       })()
     })
+  }
+
+  /** The daemon's capabilities (`hello`, which a follower may send): what the replica may ask it. */
+  function askCapabilities(socket: WebSocket): void {
+    void call(socket, 'hello').then((m) => {
+      if (ws === socket && m.ok === true && Array.isArray(m.capabilities)) caps = m.capabilities.filter((c): c is string => typeof c === 'string')
+    }, () => { /* the next link asks again */ })
   }
 
   return {
@@ -219,12 +257,14 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
     state: () => state,
     view: () => last,
     lastError: () => error,
+    lastFrameAt: () => frameAt,
+    capabilities: () => caps,
     openStream: (to, purpose) => {
       if (state !== 'following' || !streams) return Promise.reject(new Error('not linked to the daemon'))
       return streams.open(to, purpose ? { purpose } : {})
     },
     request: (cmd, params = {}, timeoutMs) => {
-      if (state !== 'following' || !ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error('not linked to the daemon'))
+      if (state !== 'following' || !ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(notSent(new Error('not linked to the daemon')))
       return call(ws, cmd, params, timeoutMs)
     },
     report: (body) => {

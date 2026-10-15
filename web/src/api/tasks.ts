@@ -368,8 +368,11 @@ export async function createTask(input: CreateTaskInput, clientRequestId?: strin
   return seedTask(res.task);
 }
 
-export async function updateTask(id: string, updates: UpdateTaskInput): Promise<Task> {
-  const res = await apiPatch<{ task: Task }>(`/api/tasks/${id}`, updates);
+/** A retried user action's op id (write-retry.ts): every attempt carries the same one. */
+export interface WriteOpts { opId?: string }
+
+export async function updateTask(id: string, updates: UpdateTaskInput, opts?: WriteOpts): Promise<Task> {
+  const res = await apiPatch<{ task: Task }>(`/api/tasks/${id}`, updates, opts);
   return seedTask(res.task);
 }
 
@@ -378,8 +381,8 @@ export async function completeTask(id: string): Promise<Task> {
   return seedTask(res.task);
 }
 
-export async function toggleCompleteTask(id: string): Promise<Task> {
-  const res = await apiPost<{ task: Task }>(`/api/tasks/${id}/toggle-complete`);
+export async function toggleCompleteTask(id: string, opts?: WriteOpts): Promise<Task> {
+  const res = await apiPost<{ task: Task }>(`/api/tasks/${id}/toggle-complete`, undefined, opts);
   return seedTask(res.task);
 }
 
@@ -413,9 +416,9 @@ export async function toggleSubtask(taskId: string, subtaskId: string): Promise<
   return seedTask(res.task);
 }
 
-export function deleteTask(taskId: string, opts?: { force?: boolean }): Promise<void> {
+export function deleteTask(taskId: string, opts?: { force?: boolean } & WriteOpts): Promise<void> {
   const qs = opts?.force ? '?force=true' : '';
-  return apiDelete(`/api/tasks/${taskId}${qs}`);
+  return apiDelete(`/api/tasks/${taskId}${qs}`, opts?.opId ? { opId: opts.opId } : undefined);
 }
 
 export function deleteSubtask(taskId: string, subtaskId: string): Promise<void> {
@@ -446,18 +449,18 @@ export interface BatchTaskOutcome {
  * `syncFailed` = applied locally but the external push failed — do NOT roll back;
  * the phase change is real, only the plugin sync didn't land.
  */
-export function batchSetPhase(taskIds: string[], phase: string): Promise<{ changed: Task[]; failed: BatchTaskOutcome[]; syncFailed?: BatchTaskOutcome[] }> {
-  return apiPost('/api/tasks/batch/phase', { task_ids: taskIds, phase });
+export function batchSetPhase(taskIds: string[], phase: string, opts?: WriteOpts): Promise<{ changed: Task[]; failed: BatchTaskOutcome[]; syncFailed?: BatchTaskOutcome[] }> {
+  return apiPost('/api/tasks/batch/phase', { task_ids: taskIds, phase }, opts);
 }
 
 /** Delete many tasks in one round-trip. `force` stops active sessions first. */
-export function batchDeleteTasks(taskIds: string[], opts?: { force?: boolean }): Promise<{ deleted: Task[]; failed: BatchTaskOutcome[] }> {
-  return apiPost('/api/tasks/batch/delete', { task_ids: taskIds, ...(opts?.force ? { force: true } : {}) });
+export function batchDeleteTasks(taskIds: string[], opts?: { force?: boolean } & WriteOpts): Promise<{ deleted: Task[]; failed: BatchTaskOutcome[] }> {
+  return apiPost('/api/tasks/batch/delete', { task_ids: taskIds, ...(opts?.force ? { force: true } : {}) }, opts?.opId ? { opId: opts.opId } : undefined);
 }
 
 /** Reorder tasks within ONE project group. `project: ''` = Inbox (valid, not "unset"). */
-export async function reorderTasks(project: string, taskIds: string[]): Promise<void> {
-  await apiPatch<{ ok: boolean }>('/api/tasks/reorder', { project, taskIds });
+export async function reorderTasks(project: string, taskIds: string[], opts?: WriteOpts): Promise<void> {
+  await apiPatch<{ ok: boolean }>('/api/tasks/reorder', { project, taskIds }, opts);
 }
 
 export async function fetchDashboard(): Promise<DashboardData> {
@@ -496,13 +499,14 @@ export function batchSetPluginFieldValue(
   taskIds: string[],
   field: PluginFieldRef,
   value: string | null,
+  opts?: WriteOpts,
 ): Promise<{ changed: Task[]; failed: BatchTaskOutcome[] }> {
   return apiPost('/api/tasks/batch/plugin-field', {
     task_ids: taskIds,
     pluginId: field.pluginId,
     key: field.key,
     value,
-  });
+  }, opts);
 }
 
 /** Write a field value ('' or null clears) through the generic endpoint. */
@@ -510,12 +514,13 @@ export async function setPluginFieldValue(
   taskId: string,
   field: PluginFieldRef,
   value: string | null,
+  opts?: WriteOpts,
 ): Promise<void> {
   await apiPut(`/api/tasks/${taskId}/plugin-field`, {
     pluginId: field.pluginId,
     key: field.key,
     value,
-  });
+  }, opts);
 }
 
 // ── Tag helpers ──

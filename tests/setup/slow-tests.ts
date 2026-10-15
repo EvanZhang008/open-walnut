@@ -58,6 +58,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/remote-session-manager-session-state.test.ts', // 2s
   'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout
   'tests/integration/host-server-twins.test.ts', // ~40s: both daemon twins as processes, a 5s restart backoff, a daemon restart each
+  'tests/integration/replica-front-twins.test.ts', // ~4 min: both daemon twins supervise a real `web --replica` (tsx), a 6s quiet window, a crash loop to the fallback
   'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
   'tests/utils/file-lock-multiprocess.test.ts', // ~1.5s idle, 3s+ under load: four real locker processes
   'tests/integration/cloud-setup-e2e.test.ts', // real cloud-mode HTTP server + git sync
@@ -124,6 +125,7 @@ export const SLOW_TEST_FILES = [
   // A host replica: the real startServer in-process with the replica env (WP1).
   'tests/replica/leader-door.test.ts',
   'tests/replica/env-scrub.test.ts',
+  'tests/replica/route-table-coverage.test.ts', // ~7s: boots the real startServer as a host replica to walk its routes
 ] as const
 
 /**

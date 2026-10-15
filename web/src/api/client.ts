@@ -1,6 +1,7 @@
 import { getDeviceToken } from './device-token';
 import { noteAuthRefusal } from './unpaired';
 import { asDeadlineError } from '../utils/request-failure';
+import { mintOpId, isWriteMethod, OP_ID_HEADER, WAIT_HEADER, DEFAULT_WRITE_WAIT_MS } from './op-id';
 
 class ApiError extends Error {
   constructor(
@@ -171,6 +172,8 @@ interface RequestExtra {
    *  response newer than X" needs this, not the time it CALLED the API: a call
    *  can sit in the queue for seconds. Fires again on the cache-bypass retry. */
   onDispatch?: () => void;
+  /** The write's op id (one per user action): a retried action passes its own (write-retry.ts), else request() mints one. */
+  opId?: string;
 }
 
 function priorityOf(method: string, extra?: RequestExtra): FetchPriority {
@@ -187,6 +190,9 @@ function priorityOf(method: string, extra?: RequestExtra): FetchPriority {
 }
 
 async function request<T>(method: string, path: string, body?: unknown, extra?: RequestExtra): Promise<T> {
+  // One op id per user action that writes, minted before the queue so every
+  // attempt of this call carries the same one (a host replica dedupes by it).
+  if (isWriteMethod(method) && !extra?.opId) extra = { ...extra, opId: mintOpId() };
   const priority = priorityOf(method, extra);
   await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal);
   let retryWithBypass = false;
@@ -204,7 +210,7 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   return request<T>(method, path, body, { ...extra, cacheBypass: true });
 }
 
-async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[] }): Promise<T> {
+async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; opId?: string }): Promise<T> {
   const timeoutMs = extra?.timeoutMs ?? 15_000;
   // Created AFTER slot acquisition — the timer measures the network round
   // trip only, never time spent waiting for a connection.
@@ -217,6 +223,8 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   // browser on another device). On the server's own machine none is needed.
   const deviceToken = getDeviceToken();
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
+  if (extra?.opId) headers[OP_ID_HEADER] = extra.opId;
+  if (extra?.opId && timeoutMs > DEFAULT_WRITE_WAIT_MS) headers[WAIT_HEADER] = String(timeoutMs);
   const opts: RequestInit = {
     method,
     headers,
@@ -257,7 +265,9 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     try {
       const data = await res.json();
       errBody = data;
-      if (data.error) message = data.error;
+      // A replica's answer is { error: { code, message } }: its message, never "[object Object]".
+      if (typeof data.error === 'string') message = data.error;
+      else if (typeof data.error?.message === 'string') message = data.error.message;
     } catch {
       // use statusText
     }
@@ -374,24 +384,24 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
 // quietStatuses is offered here for the same reason apiGet offers it: a POST can have a DESIGNED
 // non-2xx outcome (a refused credential, a capability the provider does not have), and those must
 // not land in the error-log audit as if something broke.
-export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; priority?: 'low' }): Promise<T> {
+export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; priority?: 'low'; opId?: string }): Promise<T> {
   return request<T>('POST', path, body, opts);
 }
 
 // Same options as apiPost, and for the same reason: a PATCH has designed non-2xx outcomes too. A
 // draft edit that races a send answers 409 by contract, and without this that expected answer was
 // logged at error level in the audit, which is how a real fault gets lost in the noise.
-export function apiPatch<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[] }): Promise<T> {
+export function apiPatch<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; opId?: string }): Promise<T> {
   return request<T>('PATCH', path, body, opts);
 }
 
-export function apiPut<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>('PUT', path, body);
+export function apiPut<T>(path: string, body?: unknown, opts?: { opId?: string }): Promise<T> {
+  return request<T>('PUT', path, body, opts);
 }
 
 // Default void for fire-and-forget deletes; pass T when the server responds
 // 200 + JSON body (request() parses any JSON response regardless of method).
-export function apiDelete<T = void>(path: string, opts?: { timeoutMs?: number; quietStatuses?: number[] }): Promise<T> {
+export function apiDelete<T = void>(path: string, opts?: { timeoutMs?: number; quietStatuses?: number[]; opId?: string }): Promise<T> {
   return request<T>('DELETE', path, undefined, opts);
 }
 

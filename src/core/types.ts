@@ -1163,6 +1163,10 @@ export interface Config {
         options?: Record<string, string>;
       };
     };
+    /** Which program that server is: 'replica' runs the full Walnut server as this
+     *  host's replica (docs/plan/walnut-replica-servers-impl.md) where the host's
+     *  daemon can; unset or 'host-server' keeps the plain host server. */
+    server_program?: 'replica' | 'host-server';
   }>;
   /** Startup warmup of every explicitly configured host's session daemon.
    *  On by default: without it the FIRST folder-picker open on a host pays the

@@ -16,7 +16,6 @@
  * copies the Mac sends.
  */
 
-import crypto from 'node:crypto'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import path from 'node:path'
 import type { Duplex } from 'node:stream'
@@ -28,9 +27,8 @@ import { readHostServerEnv, type HostServerEnv } from './env.js'
 import { createDaemonLink, type DaemonLink, type FollowerView } from './daemon-link.js'
 import { chooseRoute, leaderAnswers, SUSPECT_MS, type Route } from './route.js'
 import { forwardHttp, forwardUpgrade, type ForwardTarget } from './proxy.js'
-import { createHostExpose, type HostExpose } from './expose.js'
-import { aloneJson } from './pages.js'
-import { alonePage, aloneContentSecurityPolicy } from './alone-page.js'
+import { createHostExpose, followExposeSettings, type HostExpose } from './expose.js'
+import { sendAlone } from './pages.js'
 import { createAloneApi, ALONE_PREFIX } from './alone-api.js'
 import { createDeviceCopy } from './device-copy.js'
 
@@ -54,6 +52,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(text)
 }
 
+function ignoreSocketError(): void { /* the client went away; its close ends the work */ }
+
 function listen(server: http.Server, port: number): Promise<number> {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -70,8 +70,6 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
   const build = getBuildInfo()
   const suspect: { leader?: number; companion?: number } = {}
   let lastRoute: Route['kind'] | null = null
-  let exposeKey = ''
-  let exposeRetry: unknown = undefined
 
   // Streams the Mac opens to this server land here; it listens on no port.
   const fromLeader = http.createServer((req, res) => { void handleFromLeader(req, res) })
@@ -91,19 +89,9 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
   })
 
   /** The Mac's settings for this server, as the daemon holds them. */
+  const followSettings = followExposeSettings(expose, (m, d) => log.web.warn(m, d))
   function applySettings(view: FollowerView): void {
-    const s = view.settings as { expose?: unknown; exposeRetry?: unknown }
-    if (s.expose && typeof s.expose === 'object') {
-      const key = JSON.stringify(s.expose)
-      if (key !== exposeKey) {
-        exposeKey = key
-        void expose.apply(s.expose as never).catch((err) => {
-          log.web.warn('host server: the tunnel settings were refused', { error: err instanceof Error ? err.message : String(err) })
-        })
-      }
-    }
-    if (exposeRetry !== undefined && s.exposeRetry !== exposeRetry) expose.retry()
-    exposeRetry = s.exposeRetry ?? null
+    followSettings(view.settings)
   }
 
   // The Mac's copy of the signed-in devices: what the alone answers check tokens against.
@@ -144,18 +132,7 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
   }
 
   function answerAlone(req: IncomingMessage, res: ServerResponse, why: string): void {
-    if (res.headersSent || res.destroyed) return
-    if ((req.url ?? '').startsWith('/api/') || req.headers.accept?.includes('application/json')) {
-      sendJson(res, 503, aloneJson(env.label, why))
-      return
-    }
-    // A working page of its own: this Walnut's sessions here, once the browser's token holds (alone-page.ts).
-    const nonce = crypto.randomBytes(16).toString('base64')
-    res.writeHead(200, {
-      'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
-      'content-security-policy': aloneContentSecurityPolicy(nonce), 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer',
-    })
-    res.end(alonePage(env.label, why, nonce))
+    sendAlone(req, res, env.label, why)
   }
 
   function handlePublic(req: IncomingMessage, res: ServerResponse): void {
@@ -179,6 +156,10 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
   }
 
   function handlePublicUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    // Node drops its own error listener before 'upgrade': a client that resets
+    // after the 503 below (no forward runs to add one) would raise uncaught and
+    // end this program, the daemon's fallback while the Mac is away.
+    socket.on('error', ignoreSocketError)
     const route = routeNow()
     if (route.kind === 'alone') {
       socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')

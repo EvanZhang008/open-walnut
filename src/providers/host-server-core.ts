@@ -24,6 +24,15 @@
  * It does not stop the server when the daemon itself exits: the server outlives
  * a daemon upgrade the way sessions do.
  *
+ * A spec may carry a `fallback {args, env}` (docs/plan/walnut-replica-servers-impl.md,
+ * WP2: the plain host server beside a host replica). After 3 exits within 10 min
+ * the daemon runs the fallback by itself, for 1 h or until the next configure
+ * from a fresh leader link (the Mac is back) or with another spec, and
+ * `server.status` says so (`program`, `fallback`). A resend of the same spec on
+ * the link that sent it before (the Mac sends one on every settings save) keeps
+ * the fallback: it is no news that the primary works again. This works while
+ * the Mac sleeps, which is when a replica's away code runs.
+ *
  * How the daemon twins get it: daemon-standalone.ts imports
  * createHostServerSupervisor; daemon-source.ts inlines its `toString()` through
  * `__CREATE_HOST_SERVER__`. So the factory body references NOTHING at module
@@ -47,7 +56,11 @@ export interface HostServerSpec {
   port: number
   /** What the server reads while it runs (a change needs no restart). */
   settings: Record<string, unknown>
+  /** What runs instead after a crash loop (same command and cwd; this env replaces the spec's). */
+  fallback?: { args: string[]; env: Record<string, string> }
 }
+
+export type HostServerProgram = 'primary' | 'fallback'
 
 export type HostServerState = 'off' | 'starting' | 'running' | 'retrying'
 
@@ -65,6 +78,10 @@ export interface HostServerStatus {
   reportedAt?: number
   /** How long ago, by this host's clock (the leader's clock may differ). */
   reportAgeMs?: number
+  /** Which program runs (only when the spec has a fallback). */
+  program?: HostServerProgram
+  /** While the fallback runs: since when, until when, and the primary's last error. */
+  fallback?: { since: number; until: number; lastError?: string }
 }
 
 interface ChildLike {
@@ -106,6 +123,10 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
   const MAX_SETTINGS_CHARS = 64 * 1024
   const MAX_REPORT_CHARS = 16 * 1024
   const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/
+  /** This many exits of the primary program within CRASH_WINDOW_MS switch to the fallback. */
+  const CRASH_EXITS = 3
+  const CRASH_WINDOW_MS = 10 * 60_000
+  const FALLBACK_MS = 60 * 60_000
 
   interface Entry {
     spec: HostServerSpec
@@ -126,6 +147,11 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     poll?: unknown
     /** Bumped on every start and stop: an exit of an older run is ignored. */
     gen: number
+    program: HostServerProgram
+    /** When the primary program exited, inside the crash window. */
+    exitTimes: number[]
+    fallback?: { since: number; until: number; lastError?: string }
+    backTimer?: unknown
   }
   const entries = new Map<string, Entry>()
 
@@ -150,30 +176,79 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     if (typeof s.walnutId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(s.walnutId)) throw new Error('server.configure: bad walnutId')
     const args = Array.isArray(s.args) ? s.args : []
     if (args.length > 64 || args.some((a) => typeof a !== 'string' || a.length > 4096)) throw new Error('server.configure: args must be at most 64 strings')
-    const env: Record<string, string> = {}
-    for (const [k, v] of Object.entries(s.env && typeof s.env === 'object' ? s.env : {})) {
-      if (!ENV_KEY.test(k) || typeof v !== 'string' || v.length > 8192) throw new Error(`server.configure: env.${k} must be a string`)
-      env[k] = v
+    const envOf = (raw: unknown, name: string): Record<string, string> => {
+      const out: Record<string, string> = {}
+      for (const [k, v] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
+        if (!ENV_KEY.test(k) || typeof v !== 'string' || v.length > 8192) throw new Error(`server.configure: ${name}.${k} must be a string`)
+        out[k] = v
+      }
+      if ('WALNUT_FOLLOWER_TOKEN' in out) throw new Error('server.configure: the daemon sets WALNUT_FOLLOWER_TOKEN itself')
+      return out
+    }
+    const env = envOf(s.env, 'env')
+    let fallback: HostServerSpec['fallback']
+    if (s.fallback !== undefined && s.fallback !== null) {
+      const f = s.fallback as { args?: unknown; env?: unknown }
+      if (typeof f !== 'object' || !Array.isArray(f.args) || f.args.length > 64 || f.args.some((a) => typeof a !== 'string' || a.length > 4096)) {
+        throw new Error('server.configure: fallback.args must be at most 64 strings')
+      }
+      fallback = { args: f.args as string[], env: envOf(f.env, 'fallback.env') }
     }
     const port = Number(s.port)
     if (!Number.isInteger(port) || port <= 0 || port >= 65536) throw new Error('server.configure: port must be a TCP port')
     const settings = s.settings && typeof s.settings === 'object' && !Array.isArray(s.settings) ? s.settings : {}
     if (JSON.stringify(settings).length > MAX_SETTINGS_CHARS) throw new Error('server.configure: settings are too large')
-    if ('WALNUT_FOLLOWER_TOKEN' in env) throw new Error('server.configure: the daemon sets WALNUT_FOLLOWER_TOKEN itself')
     return {
       v: 1, home: s.home, walnutId: s.walnutId,
       command: abs(s.command, 'command'), args, cwd: abs(s.cwd, 'cwd'), env, log: abs(s.log, 'log'),
-      port, settings,
+      port, settings, ...(fallback ? { fallback } : {}),
     }
   }
 
   function save(e: Entry): void {
-    writeAtomic(specFile(e.spec.home), JSON.stringify({ spec: e.spec, token: e.token }))
+    // The program in use rides along, so a new daemon adopting the fallback knows it.
+    writeAtomic(specFile(e.spec.home), JSON.stringify({ spec: e.spec, token: e.token, ...(e.fallback ? { fallback: e.fallback } : {}) }))
   }
 
   /** Everything that needs a restart when it changes (the settings do not). */
   function runKey(s: HostServerSpec): string {
-    return JSON.stringify([s.walnutId, s.command, s.args, s.cwd, s.env, s.log, s.port])
+    return JSON.stringify([s.walnutId, s.command, s.args, s.cwd, s.env, s.log, s.port, s.fallback ?? null])
+  }
+
+  /** What the run uses: the primary program, or the fallback while it is on. */
+  function runOf(e: Entry): { args: string[]; env: Record<string, string> } {
+    return e.program === 'fallback' && e.spec.fallback ? e.spec.fallback : { args: e.spec.args, env: e.spec.env }
+  }
+
+  function toFallback(e: Entry): void {
+    const now = deps.now()
+    e.program = 'fallback'
+    e.fallback = { since: now, until: now + FALLBACK_MS, ...(e.lastError ? { lastError: e.lastError } : {}) }
+    e.exitTimes = []
+    e.attempt = 0
+    if (e.backTimer) deps.clearTimer(e.backTimer)
+    e.backTimer = deps.setTimer(() => { e.backTimer = undefined; toPrimary(e, 'the fallback hour is over') }, FALLBACK_MS)
+    try { save(e) } catch { /* adoption only */ }
+    deps.log('warn', 'host server: crash loop, running the fallback program', {
+      home: e.spec.home, exits: CRASH_EXITS, windowMs: CRASH_WINDOW_MS, forMs: FALLBACK_MS, error: e.lastError,
+    })
+  }
+
+  /** Back to the primary program: stop the fallback run and start the primary. */
+  function toPrimary(e: Entry, why: string): void {
+    if (e.program !== 'fallback') return
+    if (e.backTimer) { deps.clearTimer(e.backTimer); e.backTimer = undefined }
+    e.program = 'primary'
+    e.fallback = undefined
+    e.exitTimes = []
+    e.attempt = 0
+    try { save(e) } catch { /* adoption only */ }
+    deps.log('info', 'host server: back to the primary program', { home: e.spec.home, why })
+    stopRun(e)
+    // The fallback lets go of the port first.
+    setState(e, 'retrying')
+    e.nextRetryAt = deps.now() + FIRST_DELAY_MS
+    e.timer = deps.setTimer(() => { e.timer = undefined; start(e) }, FIRST_DELAY_MS)
   }
 
   function setState(e: Entry, state: HostServerState): void {
@@ -212,6 +287,11 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     e.reportedAt = undefined
     try { fs.unlinkSync(pidFile(e.spec.home)) } catch { /* none */ }
     if (ranMs >= STEADY_MS) e.attempt = 0
+    if (e.program === 'primary' && e.spec.fallback) {
+      const now = deps.now()
+      e.exitTimes = [...e.exitTimes.filter((t) => now - t < CRASH_WINDOW_MS), now]
+      if (e.exitTimes.length >= CRASH_EXITS) toFallback(e)
+    }
     const delay = Math.min(MAX_DELAY_MS, FIRST_DELAY_MS * 2 ** e.attempt)
     e.attempt += 1
     e.restarts += 1
@@ -244,8 +324,9 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     }
     let child: ChildLike
     try {
-      child = deps.spawn(e.spec.command, e.spec.args, {
-        cwd: e.spec.cwd, env: { ...deps.baseEnv(), ...e.spec.env, WALNUT_FOLLOWER_TOKEN: e.token }, detached: true, stdio: ['ignore', fd, fd],
+      const run = runOf(e)
+      child = deps.spawn(e.spec.command, run.args, {
+        cwd: e.spec.cwd, env: { ...deps.baseEnv(), ...run.env, WALNUT_FOLLOWER_TOKEN: e.token }, detached: true, stdio: ['ignore', fd, fd],
       })
     } catch (err) {
       try { fs.closeSync(fd) } catch { /* closed */ }
@@ -272,7 +353,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     e.lastError = undefined
     try { writeAtomic(pidFile(e.spec.home), JSON.stringify({ pid: e.pid, startTime: e.startTime })) } catch { /* adoption only */ }
     setState(e, 'running')
-    deps.log('info', 'host server: started', { home: e.spec.home, pid: e.pid, port: e.spec.port })
+    deps.log('info', 'host server: started', { home: e.spec.home, pid: e.pid, port: e.spec.port, ...(e.spec.fallback ? { program: e.program } : {}) })
   }
 
   function stopRun(e: Entry): void {
@@ -304,15 +385,21 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
       ...(e.lastError ? { lastError: e.lastError } : {}),
       ...(e.nextRetryAt ? { nextRetryAt: e.nextRetryAt } : {}),
       ...(e.report ? { report: e.report, reportedAt: e.reportedAt, reportAgeMs: Math.max(0, deps.now() - (e.reportedAt ?? 0)) } : {}),
+      ...(e.spec.fallback ? { program: e.program } : {}),
+      ...(e.fallback ? { fallback: e.fallback } : {}),
     }
   }
 
-  /** The leader sets (or removes, with null) what runs for its Walnut. */
-  function configure(home: string, raw: unknown): HostServerStatus {
+  /**
+   * The leader sets (or removes, with null) what runs for its Walnut.
+   * `from.freshLink`: the first configure on this leader connection (the twins say).
+   */
+  function configure(home: string, raw: unknown, from?: { freshLink?: boolean }): HostServerStatus {
     if (typeof home !== 'string' || !home) throw new Error('server.configure: missing home')
     const prev = entries.get(home)
     if (raw === null || raw === undefined) {
       if (prev) {
+        if (prev.backTimer) { deps.clearTimer(prev.backTimer); prev.backTimer = undefined }
         stopRun(prev)
         entries.delete(home)
         deps.log('info', 'host server: removed', { home })
@@ -327,12 +414,24 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
         prev.spec = spec
         save(prev)
       }
+      // The leader is back (a fresh link) and says what to run: the primary program again.
+      if (prev.program === 'fallback') {
+        if (from?.freshLink !== true) return statusOf(prev)
+        toPrimary(prev, 'configure')
+        return statusOf(prev)
+      }
       // A spec the leader sends again after a long wait need not wait out the backoff.
       if (prev.state === 'retrying') { prev.attempt = 0; start(prev) }
       return statusOf(prev)
     }
-    if (prev) stopRun(prev)
-    const e: Entry = { spec, token: deps.randomToken(), state: 'off', since: deps.now(), restarts: 0, attempt: 0, gen: prev ? prev.gen + 1 : 0 }
+    if (prev) {
+      if (prev.backTimer) { deps.clearTimer(prev.backTimer); prev.backTimer = undefined }
+      stopRun(prev)
+    }
+    const e: Entry = {
+      spec, token: deps.randomToken(), state: 'off', since: deps.now(), restarts: 0, attempt: 0, gen: prev ? prev.gen + 1 : 0,
+      program: 'primary', exitTimes: [],
+    }
     save(e)
     entries.set(home, e)
     start(e)
@@ -347,14 +446,23 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
       if (!name.startsWith('server-') || !name.endsWith('.json')) continue
       let spec: HostServerSpec
       let token: string
+      let fallback: Entry['fallback']
       try {
-        const saved = JSON.parse(fs.readFileSync(path.join(deps.dir, name), 'utf8')) as { spec?: unknown; token?: unknown }
+        const saved = JSON.parse(fs.readFileSync(path.join(deps.dir, name), 'utf8')) as { spec?: unknown; token?: unknown; fallback?: unknown }
         spec = validate(saved.spec)
         if (typeof saved.token !== 'string' || saved.token.length < 32) continue
         token = saved.token
+        const f = saved.fallback as Entry['fallback'] | undefined
+        if (spec.fallback && f && typeof f.since === 'number' && typeof f.until === 'number') fallback = f
       } catch { continue }
       if (entries.has(spec.home)) continue
-      const e: Entry = { spec, token, state: 'off', since: deps.now(), restarts: 0, attempt: 0, gen: 0 }
+      const e: Entry = { spec, token, state: 'off', since: deps.now(), restarts: 0, attempt: 0, gen: 0, program: 'primary', exitTimes: [] }
+      // The fallback hour an earlier daemon began keeps its end (one already over ends at once).
+      if (fallback) {
+        e.program = 'fallback'
+        e.fallback = fallback
+        e.backTimer = deps.setTimer(() => { e.backTimer = undefined; toPrimary(e, 'the fallback hour is over') }, Math.max(0, fallback.until - deps.now()))
+      }
       entries.set(spec.home, e)
       let held: { pid?: unknown; startTime?: unknown } | null = null
       try { held = JSON.parse(fs.readFileSync(pidFile(spec.home), 'utf8')) } catch { /* none */ }

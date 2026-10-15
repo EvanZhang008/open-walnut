@@ -10,7 +10,7 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom';
 import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
 import { fetchTask, updateTask } from '@/api/tasks';
-import { ApiError } from '@/api/client';
+import { createPhaseWriter } from './task-phase-write';
 import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
 import { taskCircleClass } from '@/utils/session-status';
@@ -106,6 +106,8 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   const storeFor = useCallback((id: string) => (
     store && store.tasks.some((t) => t.id === id) ? store : null
   ), [store]);
+  // The phase menu's own writes (no shared store): the latest pick per task wins.
+  const [writePhase] = useState(() => createPhaseWriter());
   const [kebabOpen, setKebabOpen] = useState(false);
   /** Set only by the right-click path, which anchors the menu at the cursor. */
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
@@ -236,24 +238,16 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     }
     // Nothing rolls back the store here, so the host hears about the completion only once the
     // server has taken it: a refused write must never cost the person their column.
+    // One op id for every attempt, 2 s apart (task-phase-write.ts): a 504 that reached the Mac,
+    // or an answer that may be journaled, is never sent again and is shown; a newer pick drops
+    // this one's retries.
     const from = task.phase;
-    const attempt = (retries: number) => {
-      updateTask(id, { phase }).then(() => {
-        if (completing) onCompleted?.({ taskId: id, from });
-      }, (err) => {
-        if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
-          fetchTask(id).then(setTask).catch(() => {});
-          return;
-        }
-        if (retries > 0) {
-          setTimeout(() => attempt(retries - 1), 2000);
-        } else {
-          fetchTask(id).then(setTask).catch(() => {});
-        }
-      });
-    };
-    attempt(5);
-  }, [task, storeFor, onCompleted]);
+    void writePhase(id, phase, {
+      done: () => { if (completing) onCompleted?.({ taskId: id, from }); },
+      resync: () => { fetchTask(id).then(setTask).catch(() => {}); },
+      showError: (message) => store?.showOperationError(message),
+    });
+  }, [task, storeFor, store, writePhase, onCompleted]);
 
   // The status control's "Until" row. Same split as the other writes: this
   // menu's own copy at once, then the shared store when it carries the row.

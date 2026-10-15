@@ -69,6 +69,26 @@ export async function verifyReplicaUpgrade(token: string): Promise<'ok' | 401 | 
   return status
 }
 
+export interface ReplicaRefusal { status: 401 | 429; body: Record<string, unknown> }
+
+/**
+ * The answer to a request whose Authorization header does not verify: none at
+ * all is 401 not_paired (a browser's normal first contact, not counted); a
+ * wrong token is counted in the shared bucket, 401 token_refused, and 429 once
+ * the bucket is full. The /api auth and the dispatcher's away writes (which
+ * read a body only for a known device) answer with it alike.
+ */
+export async function replicaRefusal(header: string | undefined): Promise<ReplicaRefusal> {
+  if (!header?.startsWith('Bearer ')) {
+    return { status: 401, body: { error: 'Authentication required. Pair this device on your Mac and send Authorization: Bearer <token>', code: 'not_paired' } }
+  }
+  const status = await refuseWrongToken()
+  log.web.warn('replica auth: token not in the device copy', { status, deviceCopy: replicaDeviceCopy().hash() })
+  return status === 429
+    ? { status, body: { error: 'Too many authentication failures. Try again later.' } }
+    : { status, body: { error: 'Invalid or revoked token', code: 'token_refused' } }
+}
+
 /**
  * The /api auth of a host replica. Only a wrong token counts toward the
  * limit; an absent one is a browser's normal first contact, and a good one
@@ -77,16 +97,10 @@ export async function verifyReplicaUpgrade(token: string): Promise<'ok' | 401 | 
 export async function replicaAuthMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (req.method === 'GET' && PUBLIC_GET_PATHS.has(req.path)) { next(); return }
   const header = req.headers.authorization
-  if (!header?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Authentication required. Pair this device on your Mac and send Authorization: Bearer <token>', code: 'not_paired' })
-    return
-  }
-  const cred = verifyReplicaToken(header.slice(7))
+  const cred = header?.startsWith('Bearer ') ? verifyReplicaToken(header.slice(7)) : null
   if (!cred) {
-    const status = await refuseWrongToken()
-    log.web.warn('replica auth: token not in the device copy', { status, deviceCopy: replicaDeviceCopy().hash() })
-    if (status === 429) res.status(429).json({ error: 'Too many authentication failures. Try again later.' })
-    else res.status(401).json({ error: 'Invalid or revoked token', code: 'token_refused' })
+    const refusal = await replicaRefusal(header)
+    res.status(refusal.status).json(refusal.body)
     return
   }
   ;(req as Request & { apiKeyName?: string; deviceName?: string }).apiKeyName = cred.name

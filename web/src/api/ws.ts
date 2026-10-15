@@ -7,6 +7,7 @@
 
 import { log } from '@/utils/log';
 import { getDeviceToken } from './device-token';
+import { mintOpId } from './op-id';
 
 /** WebSocket frame types matching the server protocol. */
 export interface WsEventFrame {
@@ -21,6 +22,8 @@ export interface WsReqFrame {
   id: string;
   method: string;
   payload: unknown;
+  /** One per user action (api/op-id.ts): a host replica keeps it on forward and journal. */
+  opId?: string;
 }
 
 export interface WsResFrame {
@@ -326,7 +329,7 @@ class WsClient {
   /** Send an RPC over the live OPEN socket. Caller guarantees readyState===OPEN. */
   private dispatchRpc(method: string, payload: unknown, resolve: (v: unknown) => void, reject: (e: Error) => void): void {
     const id = nextReqId();
-    const frame: WsReqFrame = { type: 'req', id, method, payload };
+    const frame: WsReqFrame = { type: 'req', id, method, payload, opId: mintOpId() };
     const body = JSON.stringify(frame);
     // Oversized frame guard — see MAX_RPC_FRAME_BYTES. Measure encoded bytes,
     // not string length: non-ASCII text (e.g. Chinese) is up to 3 bytes/char.

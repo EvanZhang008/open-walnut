@@ -4,7 +4,7 @@ import type { Task } from '@open-walnut/core';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
 import * as tasksApi from '@/api/tasks';
-import { ApiError } from '@/api/client';
+import { withWriteRetry } from '@/api/write-retry';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import { scrollLog } from '@/utils/scroll-debug';
@@ -294,25 +294,7 @@ function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unk
   });
 }
 
-// ── Retry helper ──
-
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  retries = 2,
-  baseDelay = 300,
-): Promise<T> {
-  let lastErr: Error | undefined;
-  for (let i = 0; i <= retries; i++) {
-    try { return await fn(); }
-    catch (err) {
-      lastErr = err instanceof Error ? err : new Error(String(err));
-      // Don't retry client errors (4xx) — they won't succeed on retry
-      if (lastErr instanceof ApiError && lastErr.status >= 400 && lastErr.status < 500) throw lastErr;
-      if (i < retries) await new Promise(r => setTimeout(r, baseDelay * (i + 1)));
-    }
-  }
-  throw lastErr!;
-}
+// ── Retry helper: withWriteRetry (@/api/write-retry), one op id per user action across its attempts ──
 
 /** How long (ms) an operation error banner stays visible before auto-dismissing. */
 const OPERATION_ERROR_TIMEOUT_MS = 6000;
@@ -1025,25 +1007,25 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       if (!onlyReadMarker) guardEcho(`update:${id}`);
       setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
     }
-    withRetry(() => tasksApi.updateTask(id, updates)).catch((err: Error) => onOpError(err, [id]));
+    withWriteRetry((opId) => tasksApi.updateTask(id, updates, { opId })).catch((err: Error) => onOpError(err, [id]));
   }, [guardEcho, onOpError]);
 
   const toggleComplete = useCallback((id: string) => {
     guardEcho(`complete:${id}`);
     setTasks(prev => applyToggleComplete(prev, id));
-    withRetry(() => tasksApi.toggleCompleteTask(id)).catch((err: Error) => onOpError(err, [id]));
+    withWriteRetry((opId) => tasksApi.toggleCompleteTask(id, { opId })).catch((err: Error) => onOpError(err, [id]));
   }, [guardEcho, onOpError]);
 
   const setPhase = useCallback((id: string, phase: string) => {
     guardEcho(`phase:${id}`);
     setTasks(prev => applyPhaseChange(prev, id, phase));
-    withRetry(() => tasksApi.updateTask(id, { phase })).catch((err: Error) => onOpError(err, [id]));
+    withWriteRetry((opId) => tasksApi.updateTask(id, { phase }, { opId })).catch((err: Error) => onOpError(err, [id]));
   }, [guardEcho, onOpError]);
 
   const reorder = useCallback((project: string, taskIds: string[]) => {
     guardEcho(`reorder:${project}`);
     setTasks((prev) => applyReorder(prev, project, taskIds));
-    withRetry(() => tasksApi.reorderTasks(project, taskIds))
+    withWriteRetry((opId) => tasksApi.reorderTasks(project, taskIds, { opId }))
       .catch(onOpError);
   }, [guardEcho, onOpError]);
 
@@ -1087,8 +1069,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       return final;
     });
 
-    withRetry(() => tasksApi.updateTask(taskId, { project }))
-      .then(() => { settle(); return withRetry(() => tasksApi.reorderTasks(project, newGroupOrder)); })
+    withWriteRetry((opId) => tasksApi.updateTask(taskId, { project }, { opId }))
+      .then(() => { settle(); return withWriteRetry((opId) => tasksApi.reorderTasks(project, newGroupOrder, { opId })); })
       .catch((err) => { settle(); onOpError(err); });
   }, [guardEcho, onOpError]);
 
@@ -1158,13 +1140,13 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     //
     // Unparent still persists the new ordering via reorderTasks so the
     // server doesn't send a stale order on next organic fetch.
-    withRetry(() => tasksApi.updateTask(taskId, { parent_task_id: newParentId ?? '' }))
+    withWriteRetry((opId) => tasksApi.updateTask(taskId, { parent_task_id: newParentId ?? '' }, { opId }))
       .then((freshTask) => {
         scrollLog('drag-trace-reparentTask-response', { id: taskId.slice(0,12), isUnparent });
         if (isUnparent && optimisticGroupIds) {
           const { project, ids } = optimisticGroupIds;
           guardEcho(`reorder:${project}`);
-          return withRetry(() => tasksApi.reorderTasks(project, ids));
+          return withWriteRetry((opId) => tasksApi.reorderTasks(project, ids, { opId }));
         }
         setTasks((prev) => {
           const idx = prev.findIndex((t) => t.id === freshTask.id);
@@ -1206,7 +1188,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const deleteTask = useCallback(async (taskId: string, opts?: { force?: boolean }): Promise<boolean> => {
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
     try {
-      await withRetry(() => tasksApi.deleteTask(taskId, opts));
+      await withWriteRetry((opId) => tasksApi.deleteTask(taskId, { ...opts, opId }));
       return true;
     } catch (err) {
       onOpError(err as Error, [taskId]);
@@ -1232,7 +1214,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       const base = { sprint: t.sprint ?? donor?.sprint, ext: { ...donor?.ext, ...t.ext } };
       return { ...t, ...applyPluginFieldPatch(base, field, value), updated_at: now };
     }));
-    withRetry(() => tasksApi.setPluginFieldValue(id, field, value)).catch((err: Error) => onOpError(err, [id]));
+    withWriteRetry((opId) => tasksApi.setPluginFieldValue(id, field, value, { opId })).catch((err: Error) => onOpError(err, [id]));
   }, [onOpError]);
 
   /** One plugin field on many tasks (a folder's or project's Sprint row): one optimistic pass, one request. */
@@ -1248,7 +1230,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       ? { ...t, ...applyPluginFieldPatch({ sprint: t.sprint, ext: { ...t.ext } }, field, value), updated_at: now }
       : t)));
     try {
-      const { failed } = await withRetry(() => tasksApi.batchSetPluginFieldValue(ids, field, value));
+      const { failed } = await withWriteRetry((opId) => tasksApi.batchSetPluginFieldValue(ids, field, value, { opId }));
       if (failed.length > 0) {
         resyncTasks(failed.map((f) => f.id));
         showOperationError(`${failed.length} of ${ids.length} tasks could not be updated.`);
@@ -1274,7 +1256,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const idSet = new Set(ids);
     setTasks((prev) => applyPhaseChangeMany(prev, idSet, phase));
     try {
-      const { failed, syncFailed } = await withRetry(() => tasksApi.batchSetPhase(ids, phase));
+      const { failed, syncFailed } = await withWriteRetry((opId) => tasksApi.batchSetPhase(ids, phase, { opId }));
       // Only `failed` means "not applied" — our optimistic flip lied about those, so
       // refetch server truth. `syncFailed` tasks DID change locally (only their plugin
       // push failed), so they must NOT trigger a rollback; they're reported to the
@@ -1301,7 +1283,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       return prev.filter((t) => !idSet.has(t.id));
     });
     try {
-      const { deleted, failed } = await withRetry(() => tasksApi.batchDeleteTasks(ids, opts));
+      const { deleted, failed } = await withWriteRetry((opId) => tasksApi.batchDeleteTasks(ids, { ...opts, opId }));
       if (failed.length > 0) {
         // Put the NOT-deleted rows back: the failed ids are exactly what survived.
         const deletedIds = new Set(deleted.map((t) => t.id));

@@ -30,6 +30,8 @@ interface FakeHost extends HostServerHost {
   daemonState: string
   /** The server reports through its daemon once started. */
   reports: boolean
+  /** More of the daemon's server.status (its program, a fallback). */
+  statusExtra?: Record<string, unknown>
 }
 
 /** The host server's end of a stream: what the Mac posts to it. */
@@ -53,7 +55,7 @@ function fakeHost(): FakeHost {
       if (cmd === 'server.status') {
         // The host's clock is an hour behind: only the age it gives counts.
         const report = h.daemonState === 'running' && h.reports ? { report: { route: { kind: 'leader' }, version: '0.6.7' }, reportedAt: Date.now() - 3_600_000, reportAgeMs: 1_000 } : {}
-        return { ok: true, status: { state: h.daemonState, since: 0, restarts: 0, ...report } }
+        return { ok: true, status: { state: h.daemonState, since: 0, restarts: 0, ...report, ...h.statusExtra } }
       }
       if (cmd === 'server.configure') {
         h.specs.push((params?.spec as Record<string, any>) ?? null)
@@ -306,5 +308,92 @@ describe('host server manager', () => {
     await m.connected(host)
     expect(m.view('devbox')).toMatchObject({ phase: 'error' })
     expect(m.view('devbox').message).toMatch(/did not answer within a minute; its log is \/home\/me\/\.open-walnut-host\/logs\/server\.log on the host/)
+  })
+})
+
+describe('host server manager: which program (WP2)', () => {
+  const cli = '/home/me/.open-walnut-host/app/0.6.7-abc1234/dist/cli.js'
+  const hostServerEnv = (port: number) => ({
+    OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/data', WALNUT_HOST_SERVER: '1',
+    WALNUT_HOST_SERVER_PORT: String(port), WALNUT_LEADER_HOME: HOME, WALNUT_WALNUT_ID: 'wmac01',
+    WALNUT_HOST_LABEL: 'Dev box', WALNUT_NO_AUTO_UPDATE: '1',
+  })
+
+  it('a host that opted in, on a daemon with replica-host-v1, runs web --replica with the host server as its fallback', async () => {
+    settings = { ...settings, program: 'replica' }
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.caps.add('replica-host-v1')
+    await m.connected(host)
+    const spec = host.specs[0]!
+    expect(spec.args).toEqual([cli, 'web', '--replica'])
+    expect(spec.env).toEqual({
+      ...hostServerEnv(spec.port), WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host',
+      WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/run',
+    })
+    expect(spec.fallback).toEqual({ args: [cli, 'host-server'], env: hostServerEnv(spec.port) })
+    expect(m.view('devbox')).toMatchObject({ phase: 'running', program: 'replica' })
+  })
+
+  it('the view says the daemon\'s fallback while it runs one, and the replica again once it is back', async () => {
+    settings = { ...settings, program: 'replica' }
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.caps.add('replica-host-v1')
+    await m.connected(host)
+    expect(m.view('devbox').program).toBe('replica')
+    const fallback = { since: 1_000, until: 3_601_000, lastError: 'exit code 1' }
+    host.statusExtra = { program: 'fallback', fallback }
+    await m.reconcile('devbox')
+    expect(m.view('devbox')).toMatchObject({ program: 'fallback', daemon: { program: 'fallback', fallback } })
+    host.statusExtra = { program: 'primary' }
+    await m.reconcile('devbox')
+    expect(m.view('devbox').program).toBe('replica')
+  })
+
+  it('the opt-in on a daemon without replica-host-v1 runs host-server, with no fallback', async () => {
+    settings = { ...settings, program: 'replica' }
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    await m.connected(host)
+    const spec = host.specs[0]!
+    expect(spec.args).toEqual([cli, 'host-server'])
+    expect(spec.env).toEqual(hostServerEnv(spec.port))
+    expect('fallback' in spec).toBe(false)
+    expect(m.view('devbox').program).toBe('host-server')
+  })
+
+  it('a daemon with replica-host-v1 and no opt-in runs host-server exactly as before', async () => {
+    for (const program of [undefined, 'host-server'] as const) {
+      settings = { enabled: true, buildEnv: {}, expose: { enabled: false, provider: null, options: {} }, ...(program ? { program } : {}) }
+      const m = createHostServerManager(deps())
+      const host = fakeHost()
+      host.caps.add('replica-host-v1')
+      await m.connected(host)
+      const spec = host.specs[0]!
+      expect(spec.args).toEqual([cli, 'host-server'])
+      expect(spec.env).toEqual(hostServerEnv(spec.port))
+      expect(Object.keys(spec)).toEqual(['v', 'home', 'walnutId', 'command', 'args', 'cwd', 'env', 'log', 'port', 'settings'])
+    }
+  })
+
+  it('another root and a local app dir: no install, every path under that root', async () => {
+    settings = { ...settings, program: 'replica' }
+    const m = createHostServerManager(deps({ hostRoot: '/srv/marina-host', appDir: '/work/walnut-tree' }))
+    const host = fakeHost()
+    host.caps.add('replica-host-v1')
+    await m.connected(host)
+    expect(host.uploads).toEqual([])
+    expect(host.calls).not.toContain('launch')
+    const spec = host.specs[0]!
+    expect(spec).toMatchObject({ args: ['/work/walnut-tree/dist/cli.js', 'web', '--replica'], cwd: '/srv/marina-host/data', log: '/srv/marina-host/logs/server.log' })
+    expect(spec.env).toMatchObject({ OPEN_WALNUT_HOME: '/srv/marina-host/data', WALNUT_DAEMON_DIR: '/srv/marina-host/run' })
+  })
+
+  it('a root a shell would expand is refused', async () => {
+    const m = createHostServerManager(deps({ hostRoot: '/srv/$(touch x)' }))
+    await m.connected(fakeHost())
+    expect(m.view('devbox')).toMatchObject({ phase: 'error' })
+    expect(m.view('devbox').message).toMatch(/plain characters/)
   })
 })

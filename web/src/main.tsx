@@ -31,9 +31,13 @@ import { syncDeviceCookie } from './api/device-token';
 import { resolveSignInGate, type SignInGate } from './api/sign-in-gate';
 import { UnpairedNotice } from './components/common/UnpairedNotice';
 import { installOpenLinks } from './utils/open-link';
+import { installOpIdFetch } from './api/op-id';
 import './styles/globals.css';
 import './styles/home-navigation.css';
 
+// Every same-origin fetch write carries an op id (api/op-id.ts), the raw ones too,
+// before anything below sends one.
+installOpIdFetch();
 // A signed-in browser on another device sends its token on every /api fetch,
 // including the loaders that call fetch() directly, and on every <img>.
 installAuthFetch();

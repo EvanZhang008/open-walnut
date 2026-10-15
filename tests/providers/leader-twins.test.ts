@@ -6,7 +6,7 @@
  * inlined copies of the leader book and the board kit. The behaviour on real
  * daemon processes is tests/integration/leader-takeover-twins.test.ts.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
@@ -168,8 +168,8 @@ describe('leader protocol: both twins', () => {
       expect(owner).toBeGreaterThan(answers)
       expect(target).toMatch(/errorKind: 'leader_answers'/)
       // "Answers" is the window the host server routes by, so the page and the daemon agree.
-      expect(fnBody(src, 'primaryAnswersFollower')).toMatch(/primarySocketOpen\(home\) && leaderBook\.primaryAgeMs\(home\) < FOLLOWER_LEADER_QUIET_MS/)
-      expect(src).toMatch(/FOLLOWER_LEADER_QUIET_MS = 30_?000/)
+      expect(fnBody(src, 'primaryAnswersFollower')).toMatch(/primarySocketOpen\(home\) && leaderBook\.primaryAgeMs\(home\) < LEADER_QUIET_MS/)
+      expect(src).not.toMatch(/FOLLOWER_LEADER_QUIET_MS/)
       expect(fnBody(src, 'cmdFollowerSend')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.send'\)[\s\S]*offlineHost\.deliverHuman\(t\.home, t\.sid, cmd\.text, cmd\.messageId\)/)
       expect(fnBody(src, 'cmdFollowerPermission')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.permission'\)[\s\S]*answerPermission\(t\.sid, cmd, 'follower\.permission'\)/)
       // read-history: a session id names a stream file and nothing else; a follower reads its own Walnut's.
@@ -221,6 +221,9 @@ describe('leader protocol: both twins', () => {
       expect(src).toMatch(/if \(isServerClient\(client\)\) sendEvent\(client, 'cron-metadata'/)
       // Only the socket the leader's configure tagged may say what server runs here.
       expect(fnBody(src, 'cmdServerConfigure')).toMatch(/gatewayClientHomes\.get\(ws\) !== home\) return sendError/)
+      // A fallback ends only at the first configure of a leader link (the Mac is back), not at a resend.
+      expect(fnBody(src, 'cmdServerConfigure')).toMatch(/hostServers\.configure\(home, spec (\?\?|\|\|) null, \{ freshLink: freshServerLink\(ws\) \}\)/)
+      expect(fnBody(src, 'freshServerLink')).toMatch(/if \(serverConfiguredBy\.has\(ws\)\) return false;?\s+serverConfiguredBy\.add\(ws\)/)
       expect(fnBody(src, 'cmdFollowerHello')).toMatch(/gatewayClientHomes\.has\(ws\)\) return sendError/)
       // Only the server the daemon started speaks as the follower.
       expect(fnBody(src, 'cmdFollowerHello')).toMatch(/if \(!hostServers\.tokenMatches\(home, cmd\.token\)\)/)
@@ -283,6 +286,68 @@ describe('leader protocol: both twins', () => {
     for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts', 'src/providers/offline-search-core.ts', 'src/providers/host-server-core.ts', 'src/providers/stream-relay-core.ts']) {
       expect(versionSrc).toContain(`'${f}'`)
       expect(buildSrc).toContain(f)
+    }
+  })
+})
+
+/** A `new Set([...])` list's entries, comments stripped, as a set. */
+function setEntries(src: string, name: string): Set<string> {
+  const start = src.indexOf(`${name} = new Set([`)
+  expect(start, name).toBeGreaterThan(0)
+  return new Set(src.slice(start, src.indexOf('])', start)).replace(/\/\/[^\n]*/g, '').match(/'[\w.:-]+'/g) ?? [])
+}
+
+describe('one quiet window, LEADER_QUIET_MS (replica plan C4, WP2)', () => {
+  for (const [name, src] of Object.entries(twins)) {
+    it(`${name}: follower writes and gateway routing read the one knob, parsed by envTimerMs (min 500, default 30 s)`, () => {
+      expect(src).toMatch(/LEADER_QUIET_MS = envTimerMs\(process\.env\.WALNUT_LEADER_QUIET_MS, 30_?000, 500\)/)
+      // The follower view says the window, so the replica's presence counts by the daemon's own.
+      expect(fnBody(src, 'followerView')).toMatch(/quietMs: LEADER_QUIET_MS/)
+      // Gateway routing: a home with a linked follower calls a quiet primary away by the same window.
+      expect(fnBody(src, 'primaryQuietWithFollower')).toMatch(/followerSockets\.has\(home\) && leaderBook\.primaryAgeMs\(home\) >= LEADER_QUIET_MS/)
+      const send = fnBody(src, 'sendGatewayRequest')
+      const silent = send.indexOf('gateway: primary silent, answering here')
+      const quiet = send.indexOf('if (target && home && primaryQuietWithFollower(home))')
+      expect(silent).toBeGreaterThan(-1)
+      expect(quiet).toBeGreaterThan(silent)
+      // Before the offline host decides who answers.
+      expect(quiet).toBeLessThan(send.indexOf('offlineHost.hasHome(home)'))
+      // The offline host's "a primary answers" check honours it too.
+      expect(src).toMatch(/GATEWAY_SILENT_BEATS\) return !primaryQuietWithFollower\(home\)/)
+    })
+  }
+
+  it('the follower allowlists of both twins are the same set (order may differ)', () => {
+    expect(setEntries(twins.source, 'FOLLOWER_ALLOWED_COMMANDS')).toEqual(setEntries(twins.standalone, 'FOLLOWER_ALLOWED_COMMANDS'))
+  })
+
+  it('the replica presence, the host server route and both twins default to the same window, and the replica parses the knob with the twins\' own parser', async () => {
+    const presence = await import('../../src/replica/presence.js')
+    const route = await import('../../src/host-server/route.js')
+    expect(presence.LEADER_QUIET_MS).toBe(30_000)
+    expect(route.LEADER_QUIET_MS).toBe(presence.LEADER_QUIET_MS)
+    const presenceSrc = read('src/replica/presence.ts')
+    expect(presenceSrc).toMatch(/LEADER_QUIET_MS = envTimerMs\(process\.env\.WALNUT_LEADER_QUIET_MS, 30_?000, 500\)/)
+    expect(presenceSrc).toMatch(/from '\.\.\/providers\/daemon-core\.js'/)
+  })
+
+  it.each([['6000', 6_000], ['100', 500], ['', 30_000]])('WALNUT_LEADER_QUIET_MS=%s: the host server route (the daemon\'s fallback) and the replica presence read the same window', async (raw, want) => {
+    const before = process.env.WALNUT_LEADER_QUIET_MS
+    process.env.WALNUT_LEADER_QUIET_MS = raw
+    vi.resetModules()
+    try {
+      const presence = await import('../../src/replica/presence.js')
+      const route = await import('../../src/host-server/route.js')
+      expect(route.LEADER_QUIET_MS).toBe(want)
+      expect(presence.LEADER_QUIET_MS).toBe(want)
+      // The route's away is the window's: heard (want - 1) ms ago answers, want ms ago is away.
+      const view = (ago: number) => ({ view: { holder: 'primary', primaryConnected: true, primaryHeardAgoMs: ago, bridge: { connected: false } } as never, at: 1_000 })
+      expect(route.leaderAnswers({ view: view(want - 1), now: 1_000, suspect: {} }).answers).toBe(true)
+      expect(route.leaderAnswers({ view: view(want), now: 1_000, suspect: {} }).answers).toBe(false)
+    } finally {
+      if (before === undefined) delete process.env.WALNUT_LEADER_QUIET_MS
+      else process.env.WALNUT_LEADER_QUIET_MS = before
+      vi.resetModules()
     }
   })
 })

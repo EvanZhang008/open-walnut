@@ -4025,7 +4025,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
     if (leaderBook.backupLead(home)) return false;
     for (const client of wsClients) {
       if (client.origin === 'bridge' || gatewayClientHomes.get(client) !== home) continue;
-      if ((client.missedBeats || 0) < GATEWAY_SILENT_BEATS) return true;
+      if ((client.missedBeats || 0) < GATEWAY_SILENT_BEATS) return !primaryQuietWithFollower(home);
     }
     return false;
   },
@@ -4159,6 +4159,8 @@ function followerView(home) {
     primaryConnected: primarySocketOpen(home) && age < LEADER_TAKEOVER_MS,
     primaryHeardAgoMs: age,
     takeoverMs: LEADER_TAKEOVER_MS,
+    // The window this daemon calls the Mac away by (the replica's presence reads it).
+    quietMs: LEADER_QUIET_MS,
     bridge: { connected: bridgeAdapter != null, companion: companion },
     settings: hostServers.settingsOf(home),
   };
@@ -4314,6 +4316,14 @@ function cmdFollowerStatus(ws, id) {
   sendOk(ws, id, view);
 }
 
+// Leader sockets that sent server.configure: the first one on a link says the Mac is (back) here.
+var serverConfiguredBy = new WeakSet();
+function freshServerLink(ws) {
+  if (serverConfiguredBy.has(ws)) return false;
+  serverConfiguredBy.add(ws);
+  return true;
+}
+
 function cmdServerConfigure(ws, id, cmd) {
   if (!isServerClient(ws)) return sendError(ws, id, 'server.configure: the leader only');
   var home = typeof cmd.home === 'string' ? cmd.home : '';
@@ -4322,7 +4332,7 @@ function cmdServerConfigure(ws, id, cmd) {
   var rec = leaderBook.recordOf(home);
   if (spec && spec.walnutId !== (rec && rec.walnutId)) return sendError(ws, id, 'server.configure: the spec names another Walnut');
   try {
-    sendOk(ws, id, { status: hostServers.configure(home, spec || null) });
+    sendOk(ws, id, { status: hostServers.configure(home, spec || null, { freshLink: freshServerLink(ws) }) });
   } catch (err) {
     sendError(ws, id, err.message);
   }
@@ -4474,10 +4484,18 @@ function cmdFollowerSessions(ws, id) {
   sendOk(ws, id, { host: copy.host, asOf: copy.asOf, sessions: list });
 }
 
-// Same window as the host server's route (host-server/route.ts LEADER_QUIET_MS).
-var FOLLOWER_LEADER_QUIET_MS = 30000;
+// Same window as the host server's route (host-server/route.ts LEADER_QUIET_MS)
+// and a host replica's presence: one window, LEADER_QUIET_MS (knob
+// WALNUT_LEADER_QUIET_MS). Twin of daemon-standalone.ts.
+var LEADER_QUIET_MS = envTimerMs(process.env.WALNUT_LEADER_QUIET_MS, 30000, 500);
 function primaryAnswersFollower(home) {
-  return primarySocketOpen(home) && leaderBook.primaryAgeMs(home) < FOLLOWER_LEADER_QUIET_MS;
+  return primarySocketOpen(home) && leaderBook.primaryAgeMs(home) < LEADER_QUIET_MS;
+}
+
+// While a follower of home is linked, a primary not heard within LEADER_QUIET_MS
+// is away for gateway routing too. Twin of daemon-standalone.ts.
+function primaryQuietWithFollower(home) {
+  return followerSockets.has(home) && leaderBook.primaryAgeMs(home) >= LEADER_QUIET_MS;
 }
 
 function followerWriteTarget(ws, id, cmd, name) {
@@ -4569,6 +4587,11 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   // read the copy answers does not end in a timeout (twin of daemon-standalone.ts).
   if (target && (target.missedBeats || 0) >= GATEWAY_SILENT_BEATS) {
     logMsg('info', 'gateway: primary silent, answering here', { callerSid: callerSid, op: payload.name, missedBeats: target.missedBeats });
+    target = null;
+  }
+  // A follower is linked: the same quiet window as its writes (primaryQuietWithFollower).
+  if (target && home && primaryQuietWithFollower(home)) {
+    logMsg('info', 'gateway: primary quiet, answering here', { callerSid: callerSid, home: home, op: payload.name, quietMs: LEADER_QUIET_MS });
     target = null;
   }
   var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);

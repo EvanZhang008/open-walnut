@@ -148,3 +148,84 @@ describe('forwardUpgrade', () => {
     expect(link!.destroyed).toBe(true)
   })
 })
+
+describe('a browser that goes away (the host server and a host replica alike)', () => {
+  /** A target that takes the request and never answers. */
+  async function silent(): Promise<number> {
+    return listen(http.createServer(() => { /* never answers */ }))
+  }
+
+  it('a cancelled forward is no failure of the target: onFail is not called', async () => {
+    const port = await silent()
+    const fails: string[] = []
+    let took!: () => void
+    const reached = new Promise<void>((r) => { took = r })
+    const front = await listen(http.createServer((req, res) => {
+      forwardHttp(req, res, via('leader', port), (err) => { fails.push(err.message) }, { onSent: () => took() })
+    }))
+    const req = http.get({ host: '127.0.0.1', port: front, path: '/api/tasks', agent: false })
+    req.on('error', () => {})
+    await reached
+    await new Promise((r) => setTimeout(r, 50))
+    req.destroy()
+    await new Promise((r) => setTimeout(r, 200))
+    expect(fails).toEqual([])
+  })
+
+  it('a reset while the stream opens raises nothing (Node dropped its own listener), and onFail is not called', async () => {
+    const port = await silent()
+    const fails: string[] = []
+    const uncaught: string[] = []
+    const onErr = (e: Error) => { uncaught.push(e.message) }
+    process.on('uncaughtException', onErr)
+    const slow: ForwardTarget = { kind: 'leader', connect: () => new Promise<Duplex>((resolve) => setTimeout(() => { const s = net.connect(port, '127.0.0.1', () => resolve(s)) }, 300)) }
+    const front = await listen(http.createServer())
+    servers.at(-1)!.on('upgrade', (req, socket, head) => { forwardUpgrade(req, socket, head, slow, (err) => { fails.push(err.message) }) })
+    try {
+      await new Promise<void>((resolve) => {
+        const c = net.connect(front, '127.0.0.1', () => {
+          c.write('GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
+          setTimeout(() => { c.resetAndDestroy(); resolve() }, 100)
+        })
+        c.on('error', () => {})
+      })
+      await new Promise((r) => setTimeout(r, 500))
+    } finally { process.off('uncaughtException', onErr) }
+    expect(uncaught).toEqual([])
+    expect(fails).toEqual([])
+  })
+
+  it('a handshake with no answer within its deadline fails with handshake_timeout; cancel() before that lets go quietly', async () => {
+    const port = await silent()
+    const fails: string[] = []
+    const front = await listen(http.createServer())
+    const fwds: Array<ReturnType<typeof forwardUpgrade>> = []
+    const socks: Duplex[] = []
+    servers.at(-1)!.on('upgrade', (req, socket, head) => {
+      socks.push(socket)
+      fwds.push(forwardUpgrade(req, socket, head, via('leader', port), (err) => {
+        fails.push((err as Error & { code?: string }).code ?? err.message)
+        socket.end('HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+      }, undefined, { handshakeMs: req.url === '/a' ? 300 : 5_000 }))
+    })
+    const status = (p: string) => new Promise<number>((resolve) => {
+      const r = http.request({ host: '127.0.0.1', port: front, path: p, agent: false, headers: { connection: 'Upgrade', upgrade: 'websocket' } })
+      r.on('response', (res) => { res.resume(); resolve(res.statusCode ?? 0) })
+      r.on('error', () => resolve(-1))
+      r.end()
+    })
+    expect(await status('/a')).toBe(504)
+    expect(fails).toEqual(['handshake_timeout'])
+    const b = status('/b')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(fwds[1]!.settled()).toBe(false)
+    expect(fwds[1]!.cancel()).toBe(true)
+    expect(fwds[1]!.settled()).toBe(true)
+    expect(fwds[1]!.cancel()).toBe(false)
+    await new Promise((r) => setTimeout(r, 200))
+    expect(fails).toEqual(['handshake_timeout'])
+    // The browser socket is the caller's again: nothing was written to it.
+    socks[1]!.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+    expect(await b).toBe(503)
+  })
+})

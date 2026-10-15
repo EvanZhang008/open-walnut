@@ -137,11 +137,29 @@ plugin routes are class `leader` by prefix. The test also lists every `/api/v1` 
 list, send, history) and requires an explicit away row for each.
 
 Op ids: every client write carries a client-minted `x-walnut-op-id` (one per user action; web client and
-WS RPC writes; the iOS app keeps working without one, the replica mints it then). The replica keeps the id
+WS RPC writes, the web client's raw `fetch` writes too through `installOpIdFetch` in `web/src/api/op-id.ts`;
+the iOS app keeps working without one, the replica mints it then). A web write the client retries keeps
+its id across every attempt (`withWriteRetry` in `web/src/api/write-retry.ts`; every automatic retry site,
+the session header's phase menu included), and a 504 `sent: true`, a 503 `leader_unsure` with `why:
+'lost_answer'` or `journal_unwritable` is never retried automatically: it is shown, as its message asks. A
+plain 503 `leader_unsure` (the forward failed before a byte was sent and nothing was journaled) is retried
+under the same id. The client's own deadline (its fetch timeout) fires before a replica's write budget,
+which starts only once the request is fully written to the Mac, so a web write that reached a slow Mac
+is retried under the same id by design: the Mac's `applied-ops` ledger and its in-flight op-id
+reservation (WP9) apply it once. The session header's phase menu retries a flat 2 s apart (about 10 s
+before it puts the server's copy back), and a newer pick drops the older pick's pending retries. Known exception: the two `navigator.sendBeacon` writes (the time-tracking heartbeat, the browser log
+flush) cannot set a header and carry none, so the replica mints one per beacon; both are counters or logs
+where a second copy costs nothing. The replica keeps the id
 on forward and on journal. The Mac's write routes check and record it in the `applied-ops` ledger (section
 5) for direct writes too, so a forward and a journaled retry of the same action apply once. The replica
 stamps `x-walnut-forwarded-at`; the Mac refuses a forwarded write older than 20 s with
 `409 stale_forward`, never applied (a write that sat in the buffers of a frozen Mac).
+What the stamp means (WP9 implements the check to this): the HOST's clock (ms) when the replica opened
+the stream to the Mac, before any body byte (a header cannot be stamped later). So the Mac judges the age
+when its server first sees the request's headers, never after the body is read (a 15 MB upload from a
+phone takes longer than 20 s and is not stale), and against the host's clock, not its own: a remote
+host's clock may be minutes off the Mac's. Until the Mac knows that host's clock offset (measured on the
+link), it does not refuse on age; the ledger alone then makes a late forward apply once.
 
 Dispatcher (`src/replica/dispatch.ts`), mounted before `createPluginBodyParser` and `express.json`
 (`src/web/server.ts:1355,1378`) so forwarded bodies stay raw bytes:
@@ -150,13 +168,23 @@ Dispatcher (`src/replica/dispatch.ts`), mounted before `createPluginBodyParser` 
 cls local   -> next() (the express route runs here: host session history/transcript, file reads, git diff reads, health)
 cls feature -> next() (the route calls routeFeature; leader engine dropped when !leaderAnswers())
 leaderAnswers() -> forwardHttp over link.openStream('primary','web')   (src/host-server/proxy.ts:31-84)
-   writes get a forward budget of 15 s (none today), then 504
+   writes get a forward budget only when the client says its wait (x-walnut-wait-ms, at least 15 s,
+      at most 20 min), then 504; a write that says none (the iOS app, a raw fetch) is never cut while
+      the Mac works on it, as on the host server today: the client's own deadline ends it, a presence
+      flip answers it 504 at once, 20 min is the backstop (past the iOS app's longest wait, 900 s)
+   a 504 says whether the write reached the Mac (`error.sent`): sent, "it may have kept the change;
+      check it before you try again"; "nothing was saved" only for a flip while the stream still opened
    GET/HEAD failed before any byte answered -> answerAway
    write failed after the request was written -> 504 {error.code:'primary_timeout'} (never journaled;
-      the op id makes a retry safe: a later journaled retry is deduped by the ledger)
+      the op id makes a retry safe for a client that sends one: a later journaled retry is deduped by the
+      ledger; a client that sends none gets a new id per attempt)
    write failed before the stream opened -> answerAway (provably not sent)
-   presence flips to away -> every in-flight forward answered 504 at once
-   WebSocket upgrade -> spliced raw (src/host-server/proxy.ts:87-120)
+   the Mac really away (the quiet window, no daemon view, the companion leads) -> every in-flight forward
+      answered 504 at once, every socket spliced to it closed 4001; a suspect mark (one failed stream to a
+      live Mac) only steers NEW requests and handshakes, it cuts nothing (src/replica/presence.ts macAway)
+   WebSocket upgrade -> spliced raw (src/host-server/proxy.ts:87-120); a close of its own (4001, 4002)
+      goes between two frames (src/replica/ws-frames.ts): mid-frame, the rest of that frame first;
+      a target frozen mid-frame has the socket dropped after 1 s (1006), never a broken frame
 else answerAway:
    read        -> next() on the copies, response header x-walnut-offline: <asOf ms>, JSON body unchanged
    host-write / queue:<kind> / note-write -> next() with req.replicaWrite set; the route's write goes to
@@ -166,6 +194,11 @@ else answerAway:
                   with the same op id; that forward failing before any byte -> 503
                   {code:'leader_unsure', retryAfter:5}
       follower.op answer lost or timed out -> retry with the SAME op id (the daemon dedupes, section 5)
+      follower.op never sent (the link refused it: `notSent`) -> no lost answer; the next try waits
+                  for the link (at most 5 s); never sent on any try -> 503 needs_leader
+                  {why:'daemon_unreachable'} (retryable: nothing can be journaled)
+      the daemon without `replica-ops-v1` (its `hello`, asked once per link) -> 503 needs_leader
+                  {why:'daemon_needs_upgrade'}; no hello answered yet -> {why:'daemon_unreachable'}
    needs-leader -> 503 {error:{code:'needs_leader', why, retryAfter}}
 ```
 
@@ -174,7 +207,9 @@ WebSocket RPC writes on `/ws` follow the same table: the WS handler checks an RP
 the leader answers, `/ws` itself is spliced to the leader, so the replica's own WS serves only away mode
 and the presence event. A spliced socket to a frozen Mac stays open and silent (SIGSTOP keeps sockets),
 so the replica moves clients itself: on a flip to away it closes every spliced `/ws` with close code
-`4001 leader_away`; on a flip back it closes its own away sockets with `4002 leader_back`. The client
+`4001 leader_away`; on a flip back it closes its own away sockets and the ones the companion took with
+`4002 leader_back`, once a probe stream to the Mac opened (`leaderReturn` in `src/replica/presence.ts`: a Mac whose frames flow while its
+stream door still refuses must not move every browser off and back on at each flip). The client
 reconnects at once without a reload and lands on the right side. `useLeaderPresence` also reads
 `x-walnut-offline` on every HTTP response.
 
@@ -191,7 +226,9 @@ is not installed on hosts (`--omit=optional`, `src/core/host-server/install.ts:6
 `needs_leader {why:'terminal_needs_mac'}`.
 
 Presence (`src/replica/presence.ts`): input = the follower view (`src/host-server/daemon-link.ts:22-34`),
-age, and the last forward outcome (suspect 5 s, `src/host-server/route.ts:23-61`). One rule:
+age, and the last forward outcome (suspect 5 s, `src/host-server/route.ts:23-61`; on the replica each
+mark after another with no answer between them doubles, up to LEADER_QUIET_MS, and an answer starts the
+count again: `SuspectMarks`). One rule:
 `leaderAnswers = holder=='primary' && primaryConnected && primaryHeardAgoMs + viewAge < LEADER_QUIET_MS
 && !suspect && drainablePending == 0`. `drainablePending` (new in the follower view) counts this home's
 journal records the CURRENT leader's drain kinds can take; a record parked for a newer Mac never counts,
@@ -1087,7 +1124,7 @@ is the prod dir) and an old leader booted from `git archive b0a13dde5` into a te
 |---|---|---|---|
 | R1 | Mac awake, phone on the host QR | full console forwarded; host session history `local` (zero Mac streams) | `replica-cluster-e2e` R1, `replica-local-routes-twins`, `replica-away-read.spec` |
 | R2 | Mac asleep (SIGSTOP, sockets open), no companion | away line; every read from copies | `replica-cluster-e2e` R2, `replica-away-read.spec` |
-| R3 | Mac stuck (frames flow, HTTP never answers: test hook `WALNUT_TEST_HOOKS=1` holds forward targets) | read answered away after its budget, write 504 after 15 s, presence suspect; an away write meanwhile gets `follower.op` `leader_answers` (the daemon still hears frames), is forwarded once, fails, and answers `503 leader_unsure` | `replica-cluster-e2e` R3, `tests/replica/dispatch.test.ts` |
+| R3 | Mac stuck (frames flow, HTTP never answers: test hook `WALNUT_TEST_HOOKS=1` holds forward targets) | a read has no budget and is answered away only when its stream fails; a write that says its wait (`x-walnut-wait-ms`) is 504 `sent: true` at that wait (at least 15 s), a write that says none waits for the client's own deadline or for the Mac to be really away (the quiet window); a failed stream is a suspect mark that steers new requests and cuts nothing in flight; an away write meanwhile gets `follower.op` `leader_answers` (the daemon still hears frames), is forwarded once, fails, and answers `503 leader_unsure` | `replica-cluster-e2e` R3, `tests/replica/dispatch.test.ts` |
 | R4 | Mac wakes on the same sockets | drain, line gone after the drain, no reload | `replica-cluster-e2e` R4, all browser away specs |
 | R4b | wake, drain, SIGSTOP again before the copy round | the board still shows the edit with its mark (awaiting copy) | `replica-cluster-e2e` R4b |
 | R5 | Mac wakes after reconnect (Mac server SIGKILL plus restart) | drain on connect, held rows released | `replica-cluster-e2e` R5 |
@@ -1098,7 +1135,7 @@ is the prod dir) and an old leader booted from `git archive b0a13dde5` into a te
 | R9 | daemon without `journal-v2`/`replica-ops-v1` | away writes `needs_leader {why:'daemon_needs_upgrade'}` | `replica-cluster-e2e` R9 |
 | R10 | old Mac with a new daemon | `host-server` program; v1 journal only; no v2 kind written | `tests/e2e/replica-old-mac-e2e.test.ts` (old leader from the archive) |
 | R11 | Mac upgrades the replica | runKey change restarts with a new token, front door gap < 15 s, copies kept | `tests/integration/replica-front-twins.test.ts` |
-| R12 | write in flight at sleep | 504 to the phone (at once on the presence flip); the phone retries with the same op id and it is journaled; after wake the forwarded copy is refused `409 stale_forward` (older than 20 s) or deduped by the ledger, so it is applied exactly once; a create retried gives ONE task | `replica-cluster-e2e` W1, `tests/replica/dispatch.test.ts`, `op-id.test.ts` |
+| R12 | write in flight at sleep | 504 `sent: true` to the client at once when the quiet window flips presence. Dedupe by op id holds for a client that sends one (the web: `withWriteRetry` keeps the id, and does not retry a 504 `sent: true` by itself; a retry the user makes is journaled with a new id): after wake the forwarded copy is refused `409 stale_forward` (older than 20 s) or deduped by the ledger, so an id is applied exactly once, and a create retried under the same id gives ONE task. The iOS app sends no id, so each phone retry gets a new replica-minted one: its only guards are `409 stale_forward` on the late forwarded copy and the 504 message ("check it before you try again") | `replica-cluster-e2e` W1, `tests/replica/dispatch.test.ts`, `op-id.test.ts` |
 | R13 | restarts away: replica, host daemon, host reboot (new daemon dir, `WALNUT_JOURNAL_DIR` kept) | replica answers at boot from disk; journal kept; follower re-hello; after a daemon restart the follower view counts the Mac as unheard until a frame, while the companion's takeover still waits `takeoverMs`; R13c starts the daemon ONLY through the service path (the systemd user unit, a test unit dir), and an upgrade boot with a v1 journal plus records drains all of them | `replica-cluster-e2e` R13a to R13c, `journal-v2-twins` |
 | R14 | duplicate drains (Mac killed after apply, before ack) | applied once | `replica-cluster-e2e` W8, ledger and property tests |
 | R15 | concurrent edits on both sides (task fields, notes) | section 6 and 7 rules, one letter | `task-fields-property`, `notes-property`, `replica-away-notes.spec` |

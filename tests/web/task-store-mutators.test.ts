@@ -55,6 +55,9 @@ vi.mock('@/hooks/useWebSocket', () => ({
   useEvent: (name: string, handler: (data: unknown) => void) => eventHandlers.set(name, handler),
 }))
 
+/** Every write carries the op id its retry minted (web/src/api/write-retry.ts). */
+const OP_ID = expect.stringMatching(/^op-[0-9a-f]{16}$/)
+
 const api = {
   fetchTasks: vi.fn(async () => [] as Task[]),
   fetchTaskList: vi.fn(async (opts?: unknown) => ({ tasks: await api.fetchTasks(opts as never), completedHidden: 0 })),
@@ -269,7 +272,7 @@ describe('update() with tag instructions', () => {
     const store = mount([task({ tags: ['label:a'] })])
     store.update('task-1', { add_tags: ['b'] })
     expect(rows()[0].tags).toEqual(['label:a', 'label:b'])
-    expect(api.updateTask).toHaveBeenCalledWith('task-1', { add_tags: ['b'] })
+    expect(api.updateTask).toHaveBeenCalledWith('task-1', { add_tags: ['b'] }, { opId: OP_ID })
   })
 
   it('bumps updated_at (a tag change is content, unlike the read marker)', () => {
@@ -294,7 +297,7 @@ describe('setPluginField()', () => {
     const field = { pluginId: 'plugin-a', key: 'iteration' }
     store.setPluginField('task-1', field, 'IT-7')
     expect(rows()[0].ext).toEqual({ 'plugin-a': { id: 'PA-1', iteration: 'IT-7' } })
-    expect(api.setPluginFieldValue).toHaveBeenCalledWith('task-1', field, 'IT-7')
+    expect(api.setPluginFieldValue).toHaveBeenCalledWith('task-1', field, 'IT-7', { opId: OP_ID })
   })
 
   it('takes ext from the caller\'s copy — the list payload carries none', () => {
@@ -329,13 +332,13 @@ describe('deleteTask()', () => {
     const done = store.deleteTask('task-1')
     expect(rows().map((t) => t.id)).toEqual(['task-2'])
     await expect(done).resolves.toBe(true)
-    expect(api.deleteTask).toHaveBeenCalledWith('task-1', undefined)
+    expect(api.deleteTask).toHaveBeenCalledWith('task-1', { opId: OP_ID })
   })
 
   it('forwards force — the toast Undo may have to delete past the session guard', async () => {
     const store = mount([task()])
     await store.deleteTask('task-1', { force: true })
-    expect(api.deleteTask).toHaveBeenCalledWith('task-1', { force: true })
+    expect(api.deleteTask).toHaveBeenCalledWith('task-1', { force: true, opId: OP_ID })
   })
 
   it('resolves FALSE instead of rejecting when the server refuses', async () => {

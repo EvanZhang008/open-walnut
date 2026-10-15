@@ -600,6 +600,16 @@ let leaderLoopHandle: { stop: () => void } | null = null
 let searchCopyHandle: { stop: () => Promise<void> } | null = null
 /** A host replica's leader door (replica/leader-door.ts), null elsewhere. */
 let hostReplicaDoor: import('../replica/leader-door.js').LeaderDoor | null = null
+/** A host replica's front (replica/front.ts): follower link, presence, dispatcher. Null elsewhere. */
+let hostReplicaFront: import('../replica/front.js').ReplicaFront | null = null
+export function getHostReplicaFront(): import('../replica/front.js').ReplicaFront | null {
+  return hostReplicaFront
+}
+/** The express app of the running server (tests: the replica's route-table ratchet walks it). */
+let currentApp: import('express').Express | null = null
+export function _getAppForTesting(): import('express').Express | null {
+  return currentApp
+}
 /** The leader door of this host replica: the follower link hands it the Mac's streams. */
 export function getHostReplicaLeaderDoor(): import('../replica/leader-door.js').LeaderDoor | null {
   return hostReplicaDoor
@@ -1028,6 +1038,40 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (unclaimed.length) log.web.warn('host replica: modes left as they are in dirs it did not make', { dirs: unclaimed })
   }
   log.web.info('server role', { role: role(), placement: placement() })
+  // A host replica's leader door (replica/leader-door.ts: the second listener the
+  // Mac's streams come in by) and its front (replica/front.ts: the follower link,
+  // presence, the report loop, the dispatcher), started BEFORE the heavy init,
+  // so the Mac sees its first report within seconds of the spawn (WP2).
+  if (isHostReplica()) {
+    const [{ createLeaderDoor }, { replicaDeviceCopy }, { startReplicaFront }, { followerSecrets }, ws] = await Promise.all([
+      import('../replica/leader-door.js'), import('../replica/auth.js'), import('../replica/front.js'),
+      import('../host-server/env.js'), import('./ws/handler.js'),
+    ])
+    const secrets = followerSecrets()
+    const env = process.env
+    hostReplicaFront = startReplicaFront({
+      env: {
+        publicPort: Number(env.WALNUT_HOST_SERVER_PORT) || options.port || 0,
+        daemonDir: secrets?.hostDaemonDir ?? '',
+        leaderHome: (env.WALNUT_LEADER_HOME ?? '').trim(),
+        walnutId: (env.WALNUT_WALNUT_ID ?? '').trim(),
+        followerToken: secrets?.followerToken ?? '',
+        label: (env.WALNUT_HOST_LABEL ?? '').trim() || 'this host',
+      },
+      devices: replicaDeviceCopy(),
+      acceptFromLeader: (stream) => hostReplicaDoor?.accept(stream),
+      broadcast: (name, data) => ws.broadcastEvent(name, data),
+      closeOwnSockets: (code, reason) => { ws.closeAllClients(code, reason) },
+    })
+    const front = hostReplicaFront
+    hostReplicaDoor = createLeaderDoor({
+      devices: replicaDeviceCopy(),
+      status: () => front.status(),
+      log: (level, msg, data) => log.web[level](msg, data),
+    })
+    ws.setUpgradeInterceptor((request, socket, head, own) => { front.upgrade(request, socket, head, own); return true })
+    ws.setRpcGate((method) => front.rpcGate(method))
+  }
 
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
@@ -1329,6 +1373,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   const app = express()
+  currentApp = app
 
   // Never auto-generate ETags for API JSON. Express's default weak ETag let the
   // browser turn concurrent duplicate GETs into If-None-Match revalidations; a
@@ -1354,6 +1399,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // file-content read made that a real data-exfil / agent-RCE vector). Native
   // apps and same-origin SPA fetches send no cross-origin preflight, so they're
   // unaffected; only browser pages from an untrusted origin are refused.
+  // A host replica: /bridge/*, /git/data and /host-api/* live on the leader door
+  // only (replica/leader-door.ts); the public app answers 404 for them. Then the
+  // front (replica/front.ts), BEFORE every body parser: a forwarded request goes
+  // to the Mac as raw bytes, and an away one runs on this replica's copies.
+  if (isHostReplica()) {
+    const { replicaPublicRefusal } = await import('../replica/leader-door.js')
+    app.use(replicaPublicRefusal)
+    const front = hostReplicaFront
+    if (front) app.use((req, res, next) => front.middleware(req, res, next))
+  }
+
   app.use(cors({ origin: corsOriginAllowed }))
 
   // Git smart HTTP for the cloud data hub (cloud mode only). MUST be mounted
@@ -1375,12 +1431,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The primary keeps this box's copy of its task store (same door as ingest).
     const { createBridgeReplicaRouter, BRIDGE_REPLICA_PATH } = await import('./routes/bridge-replica.js')
     app.use(BRIDGE_REPLICA_PATH, createBridgeReplicaRouter())
-  }
-  // A host replica: /bridge/*, /git/data and /host-api/* live on the leader door
-  // only (replica/leader-door.ts); the public app answers 404 for them.
-  if (isHostReplica()) {
-    const { replicaPublicRefusal } = await import('../replica/leader-door.js')
-    app.use(replicaPublicRefusal)
   }
 
   // gzip JSON/text responses. The list payloads (/api/tasks, /api/sessions,
@@ -2031,18 +2081,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { startSearchReplicaStore } = await import('../core/replication/search-replica-store.js')
     searchCopyHandle = startSearchReplicaStore()
   }
-  // A host replica's leader door: the second listener the Mac's streams come in by
-  // (replica/leader-door.ts). It listens on no port; the follower link (WP2) feeds it.
-  if (isHostReplica()) {
-    const [{ createLeaderDoor }, { replicaDeviceCopy }] = await Promise.all([
-      import('../replica/leader-door.js'), import('../replica/auth.js'),
-    ])
-    hostReplicaDoor = createLeaderDoor({
-      devices: replicaDeviceCopy(),
-      status: () => ({ pid: process.pid, role: role(), placement: placement(), deviceCopy: replicaDeviceCopy().hash() }),
-      log: (level, msg, data) => log.web[level](msg, data),
-    })
-  }
+  // A host replica's leader door and front were started before the heavy init (above).
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
   // Image bytes for mobile (additive): local file, daemon, or bridge proxy.
@@ -5905,6 +5944,14 @@ export async function stopServer(): Promise<void> {
   searchCopyHandle = null
   await hostReplicaDoor?.close().catch(() => {})
   hostReplicaDoor = null
+  currentApp = null
+  if (hostReplicaFront) {
+    const ws = await import('./ws/handler.js')
+    ws.setUpgradeInterceptor(null)
+    ws.setRpcGate(null)
+    await hostReplicaFront.stop().catch(() => {})
+    hostReplicaFront = null
+  }
   if (bootPolicy('leader-heartbeat')) {
     try { await (await import('../core/leader/primary-leader.js')).announceLeaderRestart(800) } catch { /* best-effort */ }
   } else {

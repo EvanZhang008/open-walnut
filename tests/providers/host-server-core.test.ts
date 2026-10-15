@@ -272,3 +272,116 @@ describe('host server supervision', () => {
     expect(signals).toEqual([{ pid: 1001, signal: 'SIGTERM' }])
   })
 })
+
+describe('host server supervision: the fallback after a crash loop (WP2)', () => {
+  const withFallback = () => spec({
+    args: ['/app/cli.js', 'web', '--replica'], env: { WALNUT_ROLE: 'replica', LABEL: 'x' },
+    fallback: { args: ['/app/cli.js', 'host-server'], env: { WALNUT_HOST_SERVER: '1', LABEL: 'x' } },
+  })
+  const last = () => children[children.length - 1]!
+
+  it('three exits within ten minutes switch to the fallback args with no configure, and server.status says so', () => {
+    const sup = createHostServerSupervisor(deps())
+    sup.configure('/h', withFallback())
+    expect(sup.status('/h')).toMatchObject({ state: 'running', program: 'primary' })
+    expect(sup.status('/h').fallback).toBeUndefined()
+    // Exits 1 and 2: the primary again, with the usual backoff.
+    exit(last(), 1); advance(5_000)
+    exit(last(), 1); advance(10_000)
+    expect(spawned.map((s) => s.args.at(-1))).toEqual(['--replica', '--replica', '--replica'])
+    // Exit 3 inside the window: the fallback, after the first delay only.
+    exit(last(), 1)
+    const status = sup.status('/h')
+    expect(status).toMatchObject({ state: 'retrying', program: 'fallback', fallback: { since: now, until: now + 60 * 60_000, lastError: 'exited with code 1' } })
+    advance(5_000)
+    expect(spawned.at(-1)!.args).toEqual(['/app/cli.js', 'host-server'])
+    // The fallback env replaces the primary's; the token is the same one.
+    expect(spawned.at(-1)!.env).toMatchObject({ WALNUT_HOST_SERVER: '1', LABEL: 'x', HOME: '/home/u' })
+    expect(spawned.at(-1)!.env.WALNUT_ROLE).toBeUndefined()
+    expect(spawned.at(-1)!.env.WALNUT_FOLLOWER_TOKEN).toBe(spawned[0]!.env.WALNUT_FOLLOWER_TOKEN)
+    expect(sup.status('/h')).toMatchObject({ state: 'running', program: 'fallback' })
+  })
+
+  it('three exits spread over more than ten minutes never switch', () => {
+    const sup = createHostServerSupervisor(deps())
+    sup.configure('/h', withFallback())
+    exit(last(), 1); advance(6 * 60_000)
+    exit(last(), 1); advance(6 * 60_000)
+    exit(last(), 1)
+    expect(sup.status('/h')).toMatchObject({ program: 'primary' })
+  })
+
+  it('a spec without a fallback crash-loops on its own args, as before', () => {
+    const sup = createHostServerSupervisor(deps())
+    sup.configure('/h', spec())
+    for (let i = 0; i < 4; i++) { exit(last(), 1); advance(5 * 60_000) }
+    expect(new Set(spawned.map((s) => s.args.join(' ')))).toEqual(new Set(['/app/cli.js web']))
+    expect(sup.status('/h').program).toBeUndefined()
+  })
+
+  it('goes back to the primary after one hour', () => {
+    const sup = createHostServerSupervisor(deps())
+    sup.configure('/h', withFallback())
+    exit(last(), 1); advance(5_000); exit(last(), 1); advance(10_000); exit(last(), 1); advance(5_000)
+    const fallbackPid = last().pid!
+    expect(sup.status('/h')).toMatchObject({ state: 'running', program: 'fallback', pid: fallbackPid })
+    advance(60 * 60_000)
+    // The fallback is stopped, and the primary starts once it let go of the port.
+    expect(signals).toContainEqual({ pid: fallbackPid, signal: 'SIGTERM' })
+    advance(5_000)
+    expect(spawned.at(-1)!.args.at(-1)).toBe('--replica')
+    expect(sup.status('/h')).toMatchObject({ state: 'running', program: 'primary' })
+    expect(sup.status('/h').fallback).toBeUndefined()
+  })
+
+  it('a resend of the same spec on the same link (a settings save, retryExpose) keeps the fallback', () => {
+    const sup = createHostServerSupervisor(deps())
+    sup.configure('/h', withFallback(), { freshLink: true })
+    exit(last(), 1); advance(5_000); exit(last(), 1); advance(10_000); exit(last(), 1); advance(5_000)
+    expect(sup.status('/h').program).toBe('fallback')
+    const spawnsBefore = spawned.length
+    const saved = withFallback() as Record<string, unknown>
+    saved.settings = { expose: { enabled: true }, exposeRetry: 3 }
+    expect(sup.configure('/h', saved, { freshLink: false })).toMatchObject({ program: 'fallback' })
+    // The new settings are taken all the same (the fallback reads them too).
+    expect(sup.settingsOf('/h')).toEqual(saved.settings)
+    expect(sup.configure('/h', withFallback())).toMatchObject({ program: 'fallback' })
+    advance(10_000)
+    // Nothing restarted: the fallback keeps the port, no crash loop again.
+    expect(spawned.length).toBe(spawnsBefore)
+    expect(spawned.at(-1)!.args.at(-1)).toBe('host-server')
+  })
+
+  it('goes back to the primary at the next configure from a fresh link (the same spec, the Mac is back)', () => {
+    const sup = createHostServerSupervisor(deps())
+    sup.configure('/h', withFallback())
+    exit(last(), 1); advance(5_000); exit(last(), 1); advance(10_000); exit(last(), 1); advance(5_000)
+    expect(sup.status('/h').program).toBe('fallback')
+    expect(sup.configure('/h', withFallback(), { freshLink: true })).toMatchObject({ program: 'primary' })
+    advance(5_000)
+    expect(spawned.at(-1)!.args.at(-1)).toBe('--replica')
+    // And the crash count starts again.
+    exit(last(), 1); advance(5_000)
+    expect(sup.status('/h').program).toBe('primary')
+  })
+
+  it('a new daemon adopting the fallback keeps it until its hour ends', () => {
+    const first = createHostServerSupervisor(deps())
+    first.configure('/h', withFallback())
+    exit(last(), 1); advance(5_000); exit(last(), 1); advance(10_000); exit(last(), 1); advance(5_000)
+    const pid = last().pid!
+    timers = []
+    const second = createHostServerSupervisor(deps())
+    second.boot()
+    expect(second.status('/h')).toMatchObject({ state: 'running', pid, program: 'fallback' })
+    advance(60 * 60_000)
+    expect(signals).toContainEqual({ pid, signal: 'SIGTERM' })
+  })
+
+  it('refuses a fallback it cannot run safely', () => {
+    const sup = createHostServerSupervisor(deps())
+    expect(() => sup.configure('/h', spec({ fallback: { args: Array(65).fill('a'), env: {} } }))).toThrow(/fallback\.args/)
+    expect(() => sup.configure('/h', spec({ fallback: { args: [], env: { WALNUT_FOLLOWER_TOKEN: 'x' } } }))).toThrow(/WALNUT_FOLLOWER_TOKEN/)
+    expect(() => sup.configure('/h', spec({ fallback: { args: [], env: { 'BAD-KEY': 'v' } } }))).toThrow(/fallback\.env/)
+  })
+})

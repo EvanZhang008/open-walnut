@@ -28,6 +28,18 @@ export interface ForwardTarget {
   origin?: string
 }
 
+/** What a host replica adds to a forward (src/replica/dispatch.ts); the host server passes none. */
+export interface ForwardOptions {
+  /** Extra request headers (the op id and the forwarded-at stamp of a write). */
+  headers?: Record<string, string>
+  /** Headers taken once the stream opened, right before the request is written (a write's forwarded-at stamp). */
+  stamp?: () => Record<string, string>
+  /** The body, already read (a write replayed to the leader); else the request is piped. */
+  body?: Buffer
+  /** The stream is open and the request is being written: a failure from here may have reached the target. */
+  onSent?: (up: http.ClientRequest) => void
+}
+
 function outgoingHeaders(req: IncomingMessage, to: ForwardTarget, upgrade: boolean): http.OutgoingHttpHeaders {
   const out: http.OutgoingHttpHeaders = {}
   for (const [k, v] of Object.entries(req.headers)) {
@@ -47,22 +59,29 @@ function outgoingHeaders(req: IncomingMessage, to: ForwardTarget, upgrade: boole
   return out
 }
 
-function request(req: IncomingMessage, to: ForwardTarget, socket: Duplex, upgrade: boolean): http.ClientRequest {
+function request(req: IncomingMessage, to: ForwardTarget, socket: Duplex, upgrade: boolean, opts?: ForwardOptions): http.ClientRequest {
+  const headers = outgoingHeaders(req, to, upgrade)
+  for (const [k, v] of Object.entries(opts?.headers ?? {})) headers[k] = v
+  for (const [k, v] of Object.entries(opts?.stamp?.() ?? {})) headers[k] = v
+  if (opts?.body) {
+    delete headers['transfer-encoding']
+    headers['content-length'] = String(opts.body.length)
+  }
   return http.request({
     method: req.method,
     path: req.url ?? '/',
-    headers: outgoingHeaders(req, to, upgrade),
+    headers,
     createConnection: () => socket,
   } as http.RequestOptions)
 }
 
 /** Forward one HTTP request. `onFail` runs when the target could not be reached (nothing was sent back yet). */
-export function forwardHttp(req: IncomingMessage, res: ServerResponse, to: ForwardTarget, onFail: (err: Error) => void): void {
+export function forwardHttp(req: IncomingMessage, res: ServerResponse, to: ForwardTarget, onFail: (err: Error) => void, opts?: ForwardOptions): void {
   let gone = false
   res.on('close', () => { gone = true })
   to.connect().then((socket) => {
     if (gone) { socket.destroy(); return }
-    const up = request(req, to, socket, false)
+    const up = request(req, to, socket, false, opts)
     up.on('response', (answer) => {
       const headers: http.OutgoingHttpHeaders = {}
       for (const [k, v] of Object.entries(answer.headers)) if (v !== undefined && !HOP.has(k)) headers[k] = v
@@ -72,25 +91,75 @@ export function forwardHttp(req: IncomingMessage, res: ServerResponse, to: Forwa
       answer.on('error', () => res.destroy())
     })
     up.on('error', (err) => {
+      // A browser that went away destroyed this request itself: no failure of the target.
+      if (gone || res.destroyed) return
       if (res.headersSent) { res.destroy(); return }
       onFail(err)
     })
     // A browser that went away takes its upstream request with it.
     res.on('close', () => { if (!res.writableFinished) up.destroy() })
+    opts?.onSent?.(up)
     // A read retried on the next target: its (empty) body was already read by the first.
-    if (req.readableEnded) up.end()
+    if (opts?.body) up.end(opts.body)
+    else if (req.readableEnded) up.end()
     else req.pipe(up)
   }, (err: Error) => { if (!gone) onFail(err) })
 }
 
+/** A WebSocket forward still in its handshake: `cancel()` lets go of it (nothing was written to the browser). */
+export interface UpgradeForward {
+  /** True once the browser got an answer (the 101 or the target's refusal), or the forward ended. */
+  settled(): boolean
+  /** Stop the handshake; the browser socket is left untouched for the caller. False when already settled. */
+  cancel(): boolean
+}
+
+function ignoreError(): void { /* the browser went away; its close ends the forward */ }
+
 /** Forward one WebSocket (an HTTP upgrade) and then splice the two sockets. */
-export function forwardUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, to: ForwardTarget, onFail: (err: Error) => void): void {
-  to.connect().then((link) => {
-    if (socket.destroyed) { link.destroy(); return }
+export function forwardUpgrade(
+  req: IncomingMessage, socket: Duplex, head: Buffer, to: ForwardTarget, onFail: (err: Error) => void,
+  /** The two sockets are spliced (a host replica keeps them, to close a frozen leader's); `upHead`: target bytes already passed on. */
+  onSpliced?: (client: Duplex, upstream: Duplex, upHead: Buffer) => void,
+  /** No 101 nor refusal within this: onFail with a timeout (code 'handshake_timeout'). */
+  opts?: { handshakeMs?: number },
+): UpgradeForward {
+  // Node drops its own error listener on the socket before it emits 'upgrade':
+  // a browser that resets while the stream opens would raise uncaught.
+  socket.on('error', ignoreError)
+  let done = false
+  let up: http.ClientRequest | null = null
+  let link: Duplex | null = null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const settle = () => { done = true; if (timer) clearTimeout(timer) }
+  const fail = (err: Error) => {
+    if (done) return
+    settle()
+    // A browser that went away is no failure of the target.
+    if (socket.destroyed) { link?.destroy(); return }
+    onFail(err)
+  }
+  const letGo = () => {
+    if (up) { up.removeAllListeners('error'); up.on('error', ignoreError); up.destroy() }
+    link?.destroy()
+  }
+  if (opts?.handshakeMs) {
+    timer = setTimeout(() => {
+      if (done) return
+      letGo()
+      fail(Object.assign(new Error(`no handshake answer within ${opts.handshakeMs} ms`), { code: 'handshake_timeout' }))
+    }, opts.handshakeMs)
+    timer.unref?.()
+  }
+  to.connect().then((stream) => {
+    link = stream
+    if (done || socket.destroyed) { settle(); stream.destroy(); return }
     // A browser that went away ends its stream, whatever the target answered.
-    socket.once('close', () => { if (!link.destroyed) link.destroy() })
-    const up = request(req, to, link, true)
+    socket.once('close', () => { if (!stream.destroyed) stream.destroy() })
+    up = request(req, to, stream, true)
     up.on('upgrade', (answer, upSocket, upHead) => {
+      if (done) { upSocket.destroy(); return }
+      settle()
       let raw = `HTTP/1.1 ${answer.statusCode ?? 101} ${answer.statusMessage ?? 'Switching Protocols'}\r\n`
       for (let i = 0; i < answer.rawHeaders.length; i += 2) raw += `${answer.rawHeaders[i]}: ${answer.rawHeaders[i + 1]}\r\n`
       socket.write(raw + '\r\n')
@@ -101,9 +170,12 @@ export function forwardUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
       upSocket.on('close', () => socket.destroy())
       socket.on('close', () => upSocket.destroy())
       upSocket.pipe(socket).pipe(upSocket)
+      onSpliced?.(socket, upSocket, upHead)
     })
     // The target refused the upgrade (401 without a token, say): pass its answer on.
     up.on('response', (answer) => {
+      if (done) { answer.resume(); stream.destroy(); return }
+      settle()
       let raw = `HTTP/1.1 ${answer.statusCode ?? 502} ${answer.statusMessage ?? ''}\r\n`
       for (let i = 0; i < answer.rawHeaders.length; i += 2) {
         if (!HOP.has(answer.rawHeaders[i]!.toLowerCase())) raw += `${answer.rawHeaders[i]}: ${answer.rawHeaders[i + 1]}\r\n`
@@ -111,10 +183,19 @@ export function forwardUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
       socket.write(raw + 'Connection: close\r\n\r\n')
       answer.pipe(socket)
       // The HTTP client lets go of the stream here: once the answer is passed on, it is done.
-      answer.on('end', () => link.destroy())
+      answer.on('end', () => stream.destroy())
     })
-    up.on('error', (err) => onFail(err))
-    socket.on('error', () => up.destroy())
+    up.on('error', (err) => fail(err))
+    socket.on('error', () => up?.destroy())
     up.end()
-  }, (err: Error) => onFail(err))
+  }, (err: Error) => fail(err))
+  return {
+    settled: () => done,
+    cancel() {
+      if (done) return false
+      settle()
+      letGo()
+      return true
+    },
+  }
 }

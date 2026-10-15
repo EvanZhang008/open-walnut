@@ -3012,7 +3012,7 @@ const offlineHost = createOfflineHost({
     if (leaderBook.backupLead(home)) return false
     for (const client of wsClients) {
       if (client.data?.origin === 'bridge' || gatewayClientHomes.get(client) !== home) continue
-      if ((client.data?.missedBeats ?? 0) < GATEWAY_SILENT_BEATS) return true
+      if ((client.data?.missedBeats ?? 0) < GATEWAY_SILENT_BEATS) return !primaryQuietWithFollower(home)
     }
     return false
   },
@@ -3166,6 +3166,8 @@ function followerView(home: string): Record<string, unknown> | null {
     primaryConnected: primarySocketOpen(home) && age < LEADER_TAKEOVER_MS,
     primaryHeardAgoMs: age,
     takeoverMs: LEADER_TAKEOVER_MS,
+    // The window this daemon calls the Mac away by (the replica's presence reads it).
+    quietMs: LEADER_QUIET_MS,
     bridge: { connected: bridgeAdapter != null, companion },
     settings: hostServers.settingsOf(home),
   }
@@ -3324,6 +3326,14 @@ function cmdFollowerStatus(ws: ServerWebSocket<WsData>, id: number) {
   sendOk(ws, id, view)
 }
 
+/** Leader sockets that sent server.configure: the first one on a link says the Mac is (back) here. */
+const serverConfiguredBy = new WeakSet<object>()
+function freshServerLink(ws: object): boolean {
+  if (serverConfiguredBy.has(ws)) return false
+  serverConfiguredBy.add(ws)
+  return true
+}
+
 /** The leader, on the socket its leader.configure tagged, sets what runs here for its Walnut. */
 function cmdServerConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (!isServerClient(ws)) return sendError(ws, id, 'server.configure: the leader only')
@@ -3332,7 +3342,7 @@ function cmdServerConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   const spec = cmd.spec as { walnutId?: unknown } | null | undefined
   if (spec && spec.walnutId !== leaderBook.recordOf(home)?.walnutId) return sendError(ws, id, 'server.configure: the spec names another Walnut')
   try {
-    sendOk(ws, id, { status: hostServers.configure(home, spec ?? null) })
+    sendOk(ws, id, { status: hostServers.configure(home, spec ?? null, { freshLink: freshServerLink(ws) }) })
   } catch (err) {
     sendError(ws, id, (err as Error).message)
   }
@@ -3495,12 +3505,24 @@ function cmdFollowerSessions(ws: ServerWebSocket<WsData>, id: number) {
 
 /**
  * Whether the primary answers `home` for a follower's write: the same window
- * the host server routes by (host-server/route.ts LEADER_QUIET_MS), so the page
- * and the daemon agree on "alone". Keep in sync with daemon-source.ts.
+ * the host server routes by (host-server/route.ts LEADER_QUIET_MS) and a host
+ * replica's presence (replica/presence.ts), so the page and the daemon agree on
+ * "away". One window, LEADER_QUIET_MS (docs/plan/walnut-replica-servers-impl.md
+ * C4), knob WALNUT_LEADER_QUIET_MS for tests. Keep in sync with daemon-source.ts.
  */
-const FOLLOWER_LEADER_QUIET_MS = 30_000
+const LEADER_QUIET_MS = envTimerMs(process.env.WALNUT_LEADER_QUIET_MS, 30_000, 500)
 function primaryAnswersFollower(home: string): boolean {
-  return primarySocketOpen(home) && leaderBook.primaryAgeMs(home) < FOLLOWER_LEADER_QUIET_MS
+  return primarySocketOpen(home) && leaderBook.primaryAgeMs(home) < LEADER_QUIET_MS
+}
+
+/**
+ * While a follower of `home` is linked, a primary not heard within
+ * LEADER_QUIET_MS is away for gateway routing too (the replica and its
+ * sessions see one Mac, not two windows). A home with no follower keeps the
+ * missed-beats rule alone. Keep in sync with daemon-source.ts.
+ */
+function primaryQuietWithFollower(home: string): boolean {
+  return followerSockets.has(home) && leaderBook.primaryAgeMs(home) >= LEADER_QUIET_MS
 }
 
 /** A follower's write is for a session of its Walnut, while no server answers that Walnut. */
@@ -3607,6 +3629,11 @@ function sendGatewayRequest(
   // is applied twice; its first pong makes it the target again.
   if (target && (target.data?.missedBeats ?? 0) >= GATEWAY_SILENT_BEATS) {
     logMsg('info', 'gateway: primary silent, answering here', { callerSid, op: payload.name, missedBeats: target.data?.missedBeats })
+    target = null
+  }
+  // A follower is linked: the same quiet window as its writes (primaryQuietWithFollower).
+  if (target && home && primaryQuietWithFollower(home)) {
+    logMsg('info', 'gateway: primary quiet, answering here', { callerSid, home, op: payload.name, quietMs: LEADER_QUIET_MS })
     target = null
   }
   // A relayed read this host can answer from its copy does not end in a timeout:

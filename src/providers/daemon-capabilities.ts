@@ -376,6 +376,17 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // it (the core is text-injected into the source twin), so it is NOT
   // sidecar-gated. Optional: without it the primary pushes nothing.
   'host-replica-v1',
+  // 'replica-host-v1' (docs/plan/walnut-replica-servers-impl.md, WP2): this daemon
+  // may run the full server program as its host's replica (`web --replica`).
+  // It calls the Mac away by ONE window, LEADER_QUIET_MS (env
+  // WALNUT_LEADER_QUIET_MS, default 30 s), for follower writes AND, while a
+  // follower of that Walnut is linked, for gateway routing; `follower.status`
+  // says the window (`quietMs`). `server.configure` takes a `fallback {args,
+  // env}`: after 3 exits within 10 min the daemon runs the fallback (the plain
+  // host server) by itself for 1 h or until the next configure, and
+  // `server.status` names the program. Both twins (host-server-core.ts is
+  // text-injected). Optional: without it the Mac installs `host-server`.
+  'replica-host-v1',
   'session.message',
   'hooks-v1',
   'changes-v1',
