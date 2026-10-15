@@ -5633,13 +5633,20 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
   const deadline = Date.now() + FIFO_WRITE_DEADLINE_MS;
   const prev = session.fifoWriteChain || Promise.resolve();
   const run = prev.catch(() => {}).then(async () => {
-    const abandoned = function () { return session.state === 'dead' || sessions.get(sid) !== session; };
+    // The session, not its key (twin of daemon-core.ts): a rename while this write
+    // waited re-keys the same process, whose pipe still takes it.
+    const keyNow = function () {
+      if (sessions.get(sid) === session) return sid;
+      for (const [key, s] of sessions) if (s === session) return key;
+      return null;
+    };
+    const abandoned = function () { return session.state === 'dead' || keyNow() === null; };
     if (abandoned()) return 'dead';
     // send-dedupe-v1, inside the chain: a known fate means do not write; a whole
     // line written is recorded before the next write may ask.
     const known = line && line.fate ? await line.fate() : null;
     if (known) return known;
-    if ((!raw || !budgetControlExempt(raw)) && !await budgetAllowance(sid)) return 'budget_paused';
+    if ((!raw || !budgetControlExempt(raw)) && !await budgetAllowance(keyNow() || sid)) return 'budget_paused';
     if (abandoned()) return 'dead';
     // An earlier attempt that died part way (after its marker, or after its begin record) may have left
     // a piece in the pipe: a newline first ends it (lineTornEnd). The begin is noted before the first byte.
@@ -7370,10 +7377,25 @@ function ensureWatcher(sid) {
                 }
               }
               if (shouldAutoRespond(s.mode, toolName)) {
-                const resp = buildControlResponse(parsed.request_id, parsed.request, true);
+                // Twin of daemon-standalone.ts: pending until the write lands, and the
+                // prompt reaches Walnut late only when the write was refused.
+                const reqId = parsed.request_id;
+                s.pendingCtrl = { reqId: reqId, toolName: toolName || 'unknown', request: parsed.request, receivedAt: Date.now() };
+                try { persistRegistry(); } catch {}
+                const resp = buildControlResponse(reqId, parsed.request, true);
                 void writePermissionLine(sid, resp).then(function (result) {
-                  if (result === 'ok') logMsg('info', 'auto-allowed control_request', { sid: sid, tool: toolName, mode: s.mode });
+                  if (result === 'ok') {
+                    logMsg('info', 'auto-allowed control_request', { sid: sid, tool: toolName, mode: s.mode });
+                    return;
+                  }
+                  logMsg('warn', 'auto-allow not delivered; the prompt goes to Walnut', { sid: sid, tool: toolName, mode: s.mode, result: result });
+                  if (!s.pendingCtrl || s.pendingCtrl.reqId !== reqId) return;
+                  for (const ws of s.subscribers) {
+                    if (ws.readyState === 1) { try { sendEvent(ws, 'jsonl', { sid, line, v }); } catch {} }
+                  }
+                  pushSnapshot(sid, false);
                 });
+                continue;
               }
               s.pendingCtrl = { reqId: parsed.request_id, toolName: toolName || 'unknown', request: parsed.request, receivedAt: Date.now() };
               try { persistRegistry(); } catch {}
@@ -7825,16 +7847,20 @@ async function writeSessionLine(sid, raw) {
 }
 
 // Permission delivery also clears the materialized pending prompt, only after a complete line.
+// The session is taken before the write: a rename while it waited in the chain
+// re-keys it, so it is cleared and pushed under the sid it holds now.
 async function writePermissionLine(sid, raw) {
+  const session = sessions.get(sid);
   const result = await writeSessionLine(sid, raw);
   if (result === 'ok') {
-    const session = sessions.get(sid);
     try {
       const parsed = JSON.parse(raw);
       if (session && session.pendingCtrl && parsed.type === 'control_response' && parsed.response?.request_id === session.pendingCtrl.reqId) {
         session.pendingCtrl = null;
         persistRegistry();
-        pushSnapshot(sid, false);
+        let now = sid;
+        if (sessions.get(sid) !== session) for (const [key, s] of sessions) if (s === session) now = key;
+        pushSnapshot(now, false);
       }
     } catch {}
   }

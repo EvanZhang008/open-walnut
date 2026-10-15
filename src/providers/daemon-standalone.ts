@@ -6057,10 +6057,27 @@ function ensureWatcher(sid: string) {
                 }
               }
               if (shouldAutoRespond(s.mode, toolName)) {
-                const resp = buildControlResponse(parsed.request_id as string, req, true)
+                // The answer is Walnut's business only when it could not be given:
+                // pending until the write lands (handleSendRawCommand clears it), and
+                // the prompt reaches Walnut late only when the write was refused (a
+                // paused budget, a dead pipe), so the human can still answer it.
+                const reqId = parsed.request_id as string
+                s.pendingCtrl = { reqId, toolName: toolName ?? 'unknown', request: req, receivedAt: Date.now() }
+                try { persistRegistry() } catch {}
+                const resp = buildControlResponse(reqId, req, true)
                 void core.handleSendRawCommand(sid, resp).then(result => {
-                  if (result.ok) logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode })
+                  if (result.ok) {
+                    logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode })
+                    return
+                  }
+                  logMsg('warn', 'auto-allow not delivered; the prompt goes to Walnut', { sid, tool: toolName, mode: s.mode, result })
+                  if (s.pendingCtrl?.reqId !== reqId) return
+                  for (const ws of s.subscribers) {
+                    if (ws.readyState === 1) { try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {} }
+                  }
+                  pushSnapshot(sid, false)
                 })
+                continue
               }
               s.pendingCtrl = {
                 reqId: parsed.request_id as string,

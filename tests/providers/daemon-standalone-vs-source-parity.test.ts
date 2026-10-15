@@ -1888,9 +1888,11 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
 
   it('both clear waiting on pendingCtrl resolution (sendRaw clear + setMode auto-allow)', () => {
     // core handles sendRaw for the standalone; template inlines it.
-    expect(coreSrcC1()).toMatch(/pushSnapshotFn\(sid,\s*false\)/)
+    // Under the sid the session holds when the write lands (a rename may re-key it meanwhile).
+    expect(coreSrcC1()).toMatch(/pushSnapshotFn\(currentSid\(sid, session\),\s*false\)/)
     const sourcePermission = templateSrc.slice(templateSrc.indexOf('async function writePermissionLine('), templateSrc.indexOf('// The single marker write point', templateSrc.indexOf('async function writePermissionLine(')))
-    expect(sourcePermission).toMatch(/session\.pendingCtrl = null;\s*persistRegistry\(\);\s*pushSnapshot\(sid, false\)/)
+    expect(sourcePermission).toMatch(/const session = sessions\.get\(sid\);\s*const result = await writeSessionLine/)
+    expect(sourcePermission).toMatch(/session\.pendingCtrl = null;\s*persistRegistry\(\);[\s\S]*?pushSnapshot\(now, false\)/)
     const standaloneMode = standaloneSrc.slice(standaloneSrc.indexOf('function applyModePolicy('), standaloneSrc.indexOf('// ── Stop session', standaloneSrc.indexOf('function applyModePolicy(')))
     const sourceMode = templateSrc.slice(templateSrc.indexOf('function applyModePolicy('), templateSrc.indexOf('// ── Stop session', templateSrc.indexOf('function applyModePolicy(')))
     expect(standaloneMode).toMatch(/core\.handleSendRawCommand\(sid, resp\)/)

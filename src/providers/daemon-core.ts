@@ -979,6 +979,17 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    * Shares the pre-flight kill check, ENXIO death-funnel, and EAGAIN retry
    * semantics with handleSendCommand.
    */
+  /** The key a session holds now, null once it left the registry (cmdRename
+   *  re-keys a session while a write of it may wait in the chain). */
+  function sessionKey(sid: string, session: S): string | null {
+    if (sessions.get(sid) === session) return sid
+    for (const [key, s] of sessions) if (s === session) return key
+    return null
+  }
+  function currentSid(sid: string, session: S): string {
+    return sessionKey(sid, session) ?? sid
+  }
+
   async function handleSendRawCommand(sid: string | undefined, raw: string | undefined): Promise<SendResult> {
     if (!sid || !raw) return { error: 'sendRaw: missing sid or raw' }
 
@@ -1018,7 +1029,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
               persistRegistry()
               logger('info', 'sendRaw cleared pending control_response', { sid, requestId })
               // C1: pendingCtrl cleared → snapshot changes (waiting → running/idle).
-              if (pushSnapshotFn) { try { pushSnapshotFn(sid, false) } catch {} }
+              // Pushed under the session's sid NOW: a rename while the write waited
+              // in the chain re-keyed it, and the old sid finds nothing to push.
+              if (pushSnapshotFn) { try { pushSnapshotFn(currentSid(sid, session), false) } catch {} }
             }
           } catch { /* non-JSON raw payload — nothing to acknowledge */ }
         }
@@ -1219,11 +1232,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     const run = prev.catch(() => {}).then(async () => {
       // Re-check state after waiting in the chain — a predecessor's failure
       // (or the orphan poll) may have reaped the session meanwhile.
-      const abandoned = () => session.state === 'dead' || sessions.get(sid) !== session
+      // The session, not its key: a rename while this write waited (the budget
+      // check reads files) re-keys the same process, whose pipe still takes it.
+      const abandoned = () => session.state === 'dead' || sessionKey(sid, session) === null
       if (abandoned()) return 'dead' as const
       const known = line?.fate ? await line.fate() : null
       if (known) return known
-      if ((!raw || !budgetControlExempt(raw)) && deps.allowBudgetFn && !await deps.allowBudgetFn(sid)) return 'budget_paused' as const
+      if ((!raw || !budgetControlExempt(raw)) && deps.allowBudgetFn && !await deps.allowBudgetFn(currentSid(sid, session))) return 'budget_paused' as const
       if (abandoned()) return 'dead' as const
       const tornEnd = line?.tornEnd?.() === true
       if (tornEnd) logger('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid, pid: session.pid })
