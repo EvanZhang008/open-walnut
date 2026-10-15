@@ -16,7 +16,10 @@
  * same queue row, so it costs no turn of its own and never interrupts one.
  * What it was told:
  *   - the note it last got (`placeNoted`), while the session still runs on the
- *     prompt that note was written against (`promptHash`);
+ *     prompt that note was written against (`promptHash`) and no compaction
+ *     came after it (`compactUuid`: a summary is the model's own writing and
+ *     may drop the note, the way Claude Code re-attaches its own state after a
+ *     compaction instead of trusting the summary);
  *   - else the place in its stored prompt's task and leader lines;
  *   - else the project stamped on its record at start (no folder, no leader).
  * Personal AI asks are never told: their own `Ask …` project is not a place for
@@ -54,7 +57,14 @@ export interface ToldPlace {
 /** The record field: the last note, and the prompt it was written against. */
 export interface PlaceNoted extends SessionPlace {
   promptHash: string;
+  /** The compaction the note came after (`SessionRecord.lastCompactUuid` then). */
+  compactUuid?: string;
+  /** Set when the post-compaction hook stated it: the boundary it answered may be read later. */
+  byHookAt?: string;
 }
+
+/** A hook statement this fresh belongs to the next boundary the server reads. */
+const HOOK_BOUNDARY_MS = 5 * 60_000;
 
 export function promptHash(prompt: string | undefined): string {
   return createHash('sha1').update(prompt ?? '').digest('hex').slice(0, 16);
@@ -131,13 +141,79 @@ export async function livePlaceOf(task: Task): Promise<SessionPlace> {
   };
 }
 
-export function toldPlaceOf(record: Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'project' | 'placeNoted'>, taskId: string): ToldPlace {
+export function toldPlaceOf(
+  record: Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'project' | 'placeNoted' | 'lastCompactUuid'>, taskId: string,
+): ToldPlace {
   const hash = promptHash(record.appliedAppendSystemPrompt);
   const noted = record.placeNoted;
-  if (noted && noted.promptHash === hash) {
+  if (noted && noted.promptHash === hash && (noted.compactUuid ?? '') === (record.lastCompactUuid ?? '')) {
     return { project: noted.project, folderId: noted.folderId ?? '', folder: noted.folder ?? null, leaderId: noted.leaderId ?? null };
   }
   return placeFromPrompt(record.appliedAppendSystemPrompt, taskId) ?? { project: record.project ?? '' };
+}
+
+function notedFor(record: Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'lastCompactUuid'>, live: SessionPlace): PlaceNoted {
+  return {
+    ...live, promptHash: promptHash(record.appliedAppendSystemPrompt),
+    ...(record.lastCompactUuid ? { compactUuid: record.lastCompactUuid } : {}),
+  };
+}
+
+async function recordTold(sessionId: string, noted: PlaceNoted): Promise<void> {
+  const { updateSessionRecordConditionally } = await import('../session-tracker.js');
+  await updateSessionRecordConditionally(sessionId, { placeNoted: noted }, () => true, { preserveLastActiveAt: true })
+    .catch((err) => log.session.warn('place notice: could not record it as told', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    }));
+}
+
+/**
+ * A compaction boundary in the session's stream: a note given before it no
+ * longer counts as told. Idempotent per boundary (a replayed tail writes the
+ * same uuid). Never throws.
+ */
+export async function notePlaceCompaction(sessionId: string, boundaryUuid: string, now = Date.now()): Promise<void> {
+  try {
+    const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../session-tracker.js');
+    const record = await getSessionByClaudeId(sessionId);
+    if (!record || record.lastCompactUuid === boundaryUuid) return;
+    // The CLI runs the hook right after it compacts, and the server may read the
+    // boundary only after that: a fresh hook statement made after the last
+    // boundary Walnut read answered THIS one. One made before it answered that one.
+    const noted = record.placeNoted;
+    const hookAt = noted?.byHookAt ? Date.parse(noted.byHookAt) : NaN;
+    const hookAnswered = Number.isFinite(hookAt) && now - hookAt < HOOK_BOUNDARY_MS
+      && (!record.lastCompactAt || hookAt > Date.parse(record.lastCompactAt));
+    await updateSessionRecordConditionally(sessionId, {
+      lastCompactUuid: boundaryUuid,
+      lastCompactAt: new Date(now).toISOString(),
+      ...(hookAnswered && noted ? { placeNoted: { ...noted, compactUuid: boundaryUuid } } : {}),
+    }, (cur) => cur.lastCompactUuid !== boundaryUuid, { preserveLastActiveAt: true });
+  } catch (err) {
+    log.session.warn('place notice: compaction not recorded', { sessionId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
+ * The place to state right after a compaction (the open_items hook puts it into
+ * the context), recorded as told. A compaction keeps the system prompt and
+ * summarizes the rest, so the session surely knows its prompt's place and maybe
+ * not a note: the place is stated only when it is not the prompt's. Null when
+ * there is nothing to state: no task, an ask, a replica, or the prompt is still
+ * right. Never throws.
+ */
+export async function statePlaceAfterCompaction(record: SessionRecord, task: Task): Promise<SessionPlace | null> {
+  try {
+    const { role } = await import('../server-role.js');
+    if (role() !== 'leader' || isAskTask(task)) return null;
+    const live = await livePlaceOf(task);
+    const prompt = placeFromPrompt(record.appliedAppendSystemPrompt, task.id) ?? { project: record.project ?? '' };
+    if (placeChanges(prompt, live).length === 0) return null;
+    await recordTold(record.claudeSessionId, { ...notedFor(record, live), byHookAt: new Date().toISOString() });
+    return live;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -160,7 +236,7 @@ export async function pendingPlaceNotice(sessionId: string): Promise<PendingPlac
     // The leader holds the live tasks and records; a replica's copies may lag.
     const { role } = await import('../server-role.js');
     if (role() !== 'leader') return null;
-    const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../session-tracker.js');
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
     const record = await getSessionByClaudeId(sessionId);
     if (!record?.taskId) return null;
     const { getTask } = await import('../task-manager.js');
@@ -169,7 +245,7 @@ export async function pendingPlaceNotice(sessionId: string): Promise<PendingPlac
     const live = await livePlaceOf(task);
     const changes = placeChanges(toldPlaceOf(record, task.id), live);
     if (changes.length === 0) return null;
-    const noted: PlaceNoted = { ...live, promptHash: promptHash(record.appliedAppendSystemPrompt) };
+    const noted = notedFor(record, live);
     const key = JSON.stringify(noted);
     const claim = claims.get(sessionId);
     if (claim && claim.key === key && Date.now() - claim.at < CLAIM_MS) return null;
@@ -177,10 +253,7 @@ export async function pendingPlaceNotice(sessionId: string): Promise<PendingPlac
     return {
       text: buildPlaceNoticeText(task, live, changes),
       markTold: async () => {
-        await updateSessionRecordConditionally(sessionId, { placeNoted: noted }, () => true, { preserveLastActiveAt: true })
-          .catch((err) => log.session.warn('place notice: could not record it as told', {
-            sessionId, error: err instanceof Error ? err.message : String(err),
-          }));
+        await recordTold(sessionId, noted);
         // The record holds it now; the claim only bridged the write.
         if (claims.get(sessionId)?.key === key) claims.delete(sessionId);
         log.session.info('place notice queued', { sessionId, taskId: task.id, changes });

@@ -5397,6 +5397,11 @@ export class ClaudeCodeSession {
             // canonical JSONL uses compactMetadata/preTokens; the CLI's stream-json
             // stdout (what the daemon stream files hold) uses compact_metadata/pre_tokens.
             const meta = sys.compact_metadata as { trigger?: string; pre_tokens?: number; post_tokens?: number } | undefined
+            // A place note given before this boundary may be gone with the old context.
+            if (firstBoundary && sid && typeof sys.uuid === 'string' && sys.uuid) {
+              const boundary = sys.uuid
+              void import('../core/sessions/place-notice.js').then((m) => m.notePlaceCompaction(sid, boundary))
+            }
             if (firstBoundary) {
               bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
                 sessionId: sid, taskId: this.taskId,

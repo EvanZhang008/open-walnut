@@ -23,7 +23,15 @@ export interface OpenItemsInput {
   askedOfYou: OpenAsk[];
   /** The task's Board, when it has one: a summary lost with the context is re-derived from the html. */
   board?: OpenBoard;
+  /**
+   * Where the task stands now (place-notice.ts). Stated even when nothing is
+   * open: the prompt names the place the session was spawned in, and a summary
+   * may have dropped the note that said it moved.
+   */
+  place?: OpenPlace;
 }
+
+export interface OpenPlace { project: string; folder?: string; leaderId?: string; leader?: string }
 
 export function createOpenItemsText() {
   const TITLE_MAX = 90;
@@ -57,11 +65,24 @@ export function createOpenItemsText() {
   function format(items: OpenItemsInput, now: number): string {
     if (!items.task) return '';
     const total = items.subtasks.length + items.moreSubtasks;
-    if (total === 0 && items.waitingOn.length === 0 && items.askedOfYou.length === 0 && !items.board) return '';
+    const open = total > 0 || items.waitingOn.length > 0 || items.askedOfYou.length > 0 || !!items.board;
+    if (!open && !items.place) return '';
+    const title = oneLine(items.task.title, TITLE_MAX);
     const lines = [
-      `Walnut: still open for your task "${oneLine(items.task.title, TITLE_MAX)}" (${items.task.id}). ` +
-        'Your context was just compacted; this list comes from Walnut, not from the summary.',
+      open
+        ? `Walnut: still open for your task "${title}" (${items.task.id}). ` +
+          'Your context was just compacted; this list comes from Walnut, not from the summary.'
+        : `Walnut: your context was just compacted; this comes from Walnut, not from the summary.`,
     ];
+    if (items.place) {
+      const p = items.place;
+      const where = (p.project.trim() ? `project "${oneLine(p.project, TITLE_MAX)}"` : 'the Inbox (no project)')
+        + (p.folder ? `, folder "${oneLine(p.folder, TITLE_MAX)}"` : '');
+      const leader = p.leaderId ? `; its leader is "${oneLine(p.leader || 'untitled', TITLE_MAX)}" (${p.leaderId})` : '';
+      lines.push(`Your task "${title}" (${items.task.id}) stands in ${where}${leader}. Trust this over your prompt; `
+        + 'work you create lands there unless you name another project.');
+    }
+    if (!open) return lines.join('\n');
     if (total > 0) {
       lines.push(`Unfinished subtasks of your task (${total}):`);
       for (const t of items.subtasks) lines.push(`- ${t.id} [${t.phase}] ${oneLine(t.title, TITLE_MAX)}`);

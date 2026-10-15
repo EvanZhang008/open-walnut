@@ -26,7 +26,7 @@ const MAX_SUBTASKS = 20;
 const MAX_REQUESTS = 10;
 
 export interface OpenItems extends OpenItemsInput {
-  /** The block the session reads; '' when nothing is open. */
+  /** The block the session reads; '' when nothing is open and there is no place to state. */
   text: string;
 }
 
@@ -98,6 +98,17 @@ export async function collectOpenItems(callerSid: string | undefined, now = Date
       items.board = {
         version: board.version, updatedAt: board.updated_at, threads: Object.keys(board.threads).length,
         userMessages: msgs.filter((m) => m.author === 'user').length, marks: Object.keys(board.marks).length,
+      };
+    }
+    // Where the task stands, read back after a compaction (place-notice.ts).
+    const { statePlaceAfterCompaction } = await import('./place-notice.js');
+    const place = await statePlaceAfterCompaction(caller.record, task);
+    if (place) {
+      items.place = {
+        project: place.project,
+        ...(place.folder ? { folder: place.folder } : {}),
+        ...(place.leaderId ? { leaderId: place.leaderId } : {}),
+        ...(place.leader ? { leader: place.leader } : {}),
       };
     }
     items.text = formatOpenItems(items, now);

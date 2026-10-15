@@ -2448,7 +2448,15 @@ export interface SessionRecord {
    * place notice, and the hash of the prompt it ran on then
    * (src/core/sessions/place-notice.ts). A different prompt makes it void.
    */
-  placeNoted?: { promptHash: string; project: string; folderId?: string; folder?: string; leaderId?: string; leader?: string };
+  placeNoted?: { promptHash: string; compactUuid?: string; byHookAt?: string; project: string; folderId?: string; folder?: string; leaderId?: string; leader?: string };
+  /**
+   * The uuid of the last compaction boundary Walnut saw in this session's
+   * stream. A place note given before it may be gone from the context, so it
+   * no longer counts as told (place-notice.ts).
+   */
+  lastCompactUuid?: string;
+  /** When Walnut read that boundary. */
+  lastCompactAt?: string;
   /** Messages the human pinned, in pin order. Drives the timeline's TOC. */
   pinnedMessages?: SessionPinnedMessage[];
   /** Conversation-thread links over this session's ONE linear transcript, in the

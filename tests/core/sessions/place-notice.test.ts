@@ -24,6 +24,9 @@ import { buildSessionContext } from '../../../src/core/sessions/session-context.
 import { addTask, updateTask, createFolder, addToGroup, getTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
 import { sendMessageToSession, getQueue, resetCache } from '../../../src/core/session-message-queue.js'
+import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
+import { collectOpenItems } from '../../../src/core/sessions/open-items.js'
+import { createOpenItemsText } from '../../../src/core/sessions/open-items-text.js'
 
 describe('placeFromPrompt (reads back the lines session-context.ts writes)', () => {
   it('a project, a folder and a leader', () => {
@@ -195,5 +198,121 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
     const [a, b] = await rows('sid-old')
     expect(a).toBe('a')
     expect(b).toContain('project "acme" became project "marina"')
+  })
+
+  // A compaction keeps the system prompt and summarizes the rest: a note may be
+  // gone from the context afterwards, while the prompt's (old) place stays. The
+  // CLI's own SessionStart hook (open_items) restates the place right then; the
+  // boundary in the stream makes an earlier note count for nothing either way.
+  describe('compaction', () => {
+    async function moved() {
+      const s = await spawned('old-repo')
+      const folder = await createFolder('Rearchitecture', 'Cluster Insights')
+      await updateTask(s.task.id, { project: 'Cluster Insights' })
+      await addToGroup(folder.group_id, [s.task.id], { move: true })
+      return s
+    }
+
+    it('told, then compacted with no hook: the next message tells it again', async () => {
+      const { sid } = await moved()
+      await sendMessageToSession(sid, 'one', { source: 'ui' })
+      await notePlaceCompaction(sid, 'boundary-1')
+      await sendMessageToSession(sid, 'two', { source: 'ui' })
+      const [one, two] = await rows(sid)
+      expect(one).toContain('outcome="moved"')
+      expect(two).toContain('now stands in project "Cluster Insights", folder "Rearchitecture".')
+      expect(two).toContain('project "old-repo" became project "Cluster Insights"')
+    })
+
+    it('a replayed boundary (same uuid) does not void the note given after it', async () => {
+      const { sid } = await moved()
+      await notePlaceCompaction(sid, 'boundary-1')
+      await sendMessageToSession(sid, 'one', { source: 'ui' })
+      await notePlaceCompaction(sid, 'boundary-1')
+      await sendMessageToSession(sid, 'two', { source: 'ui' })
+      expect((await rows(sid))[1]).toBe('two')
+    })
+
+    it('the compaction hook states the place when the prompt is wrong, and that counts as told', async () => {
+      const { task, sid } = await moved()
+      await sendMessageToSession(sid, 'one', { source: 'ui' })
+      await notePlaceCompaction(sid, 'boundary-1')
+      const open = await collectOpenItems(sid)
+      expect(open.text).toContain('your context was just compacted')
+      expect(open.text).toContain(`Your task "Sync worker" (${task.id}) stands in project "Cluster Insights", folder "Rearchitecture".`)
+      expect(open.text).toContain('Trust this over your prompt')
+      await sendMessageToSession(sid, 'two', { source: 'ui' })
+      expect((await rows(sid))[1]).toBe('two')
+      // A move after the compaction is a new change: told again.
+      await updateTask(task.id, { project: 'lighthouse' })
+      await sendMessageToSession(sid, 'three', { source: 'ui' })
+      expect((await rows(sid))[2]).toContain('project "Cluster Insights" became project "lighthouse"')
+    })
+
+    it('the hook stays silent when the prompt still names the place (nothing to restate)', async () => {
+      const { sid } = await spawned('acme')
+      expect((await collectOpenItems(sid)).text).toBe('')
+    })
+
+    // Seen live 2026-10-15: the CLI ran the hook before the server read the
+    // boundary line, and the next message repeated the note.
+    it('a hook that runs before the server reads the boundary still counts for that boundary', async () => {
+      const { sid } = await moved()
+      await collectOpenItems(sid)                  // the hook answers first...
+      await notePlaceCompaction(sid, 'boundary-2') // ...then the boundary is read from the stream
+      await sendMessageToSession(sid, 'after', { source: 'ui' })
+      expect((await rows(sid))[0]).toBe('after')
+    })
+
+    it('a stale hook statement does not cover a later compaction', async () => {
+      const { sid } = await moved()
+      await collectOpenItems(sid)
+      await notePlaceCompaction(sid, 'boundary-3', Date.now() + 10 * 60_000)
+      await sendMessageToSession(sid, 'after', { source: 'ui' })
+      expect((await rows(sid))[0]).toContain('outcome="moved"')
+    })
+
+    it('a second compaction right after the hook answered the first voids it', async () => {
+      const { sid } = await moved()
+      await notePlaceCompaction(sid, 'boundary-1')
+      await new Promise((r) => setTimeout(r, 5))
+      await collectOpenItems(sid)
+      await notePlaceCompaction(sid, 'boundary-1') // a replay: nothing changes
+      await sendMessageToSession(sid, 'one', { source: 'ui' })
+      expect((await rows(sid))[0]).toBe('one')
+      // The note above replaced the hook's, so make the hook speak again, then
+      // compact twice: the first boundary read takes the hook, the second does not.
+      await notePlaceCompaction(sid, 'boundary-2')
+      await new Promise((r) => setTimeout(r, 5))
+      await collectOpenItems(sid)
+      await new Promise((r) => setTimeout(r, 5))
+      await notePlaceCompaction(sid, 'boundary-3')
+      await new Promise((r) => setTimeout(r, 5))
+      await notePlaceCompaction(sid, 'boundary-4')
+      await sendMessageToSession(sid, 'two', { source: 'ui' })
+      expect((await rows(sid))[1]).toContain('outcome="moved"')
+    })
+  })
+})
+
+describe('open items text: the place line', () => {
+  const t = createOpenItemsText()
+  const base = { task: { id: 'mt-1', title: 'Sync worker' }, subtasks: [], moreSubtasks: 0, waitingOn: [], askedOfYou: [] }
+  it('the place alone is worth injecting', () => {
+    const text = t.format({ ...base, place: { project: 'Cluster', folder: 'Team', leaderId: 'mt-0', leader: 'Lead' } }, Date.now())
+    expect(text.split('\n')).toEqual([
+      'Walnut: your context was just compacted; this comes from Walnut, not from the summary.',
+      'Your task "Sync worker" (mt-1) stands in project "Cluster", folder "Team"; its leader is "Lead" (mt-0). '
+        + 'Trust this over your prompt; work you create lands there unless you name another project.',
+    ])
+  })
+  it('the Inbox, and alongside open work', () => {
+    const text = t.format({ ...base, subtasks: [{ id: 'mt-2', title: 'Child', phase: 'TODO' }], place: { project: '' } }, Date.now())
+    expect(text).toContain('Walnut: still open for your task "Sync worker" (mt-1).')
+    expect(text).toContain('stands in the Inbox (no project).')
+    expect(text).toContain('- mt-2 [TODO] Child')
+  })
+  it('nothing open and no place: nothing', () => {
+    expect(t.format(base, Date.now())).toBe('')
   })
 })

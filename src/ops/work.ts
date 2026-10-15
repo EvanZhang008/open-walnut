@@ -148,8 +148,8 @@ defineOp({
   name: 'open_items',
   title: 'What is still open for your task',
   description:
-    'Unfinished subtasks of your task, replies you are still waiting for, and requests to you that you have not answered. ' +
-    'Walnut also puts this list into your context after every compaction.',
+    'Unfinished subtasks of your task, replies you are still waiting for, requests to you that you have not answered, ' +
+    'and where your task stands now (project, folder, leader). Walnut also puts this into your context after every compaction.',
   input: {
     hook: z.enum(['compact']).optional().describe(
       'Set by Walnut\'s post-compaction hook: answer in the JSON shape a Claude Code SessionStart hook prints'),
@@ -165,7 +165,8 @@ defineOp({
     }
     return withOutcome(
       { ...open },
-      text ? 'These are still open for your task.' : 'Nothing is open for your task.',
+      ['subtasks', 'waitingOn', 'askedOfYou'].some((k) => Array.isArray(open[k]) && (open[k] as unknown[]).length > 0) || open.board
+        ? 'These are still open for your task.' : 'Nothing is open for your task.',
       'Read one with task_get; answer a request with task_send in_reply_to.',
     );
   },
