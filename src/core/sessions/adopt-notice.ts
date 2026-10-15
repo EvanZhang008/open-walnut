@@ -9,8 +9,9 @@
  *    for free. An idle or stopped one is NOT woken: adopting is bookkeeping, and
  *    a turn spent on "this is only a notice" is the whole cost (2026-10-02: a
  *    leader adopted five idle workers and each woke to say exactly that). It
- *    reads the link from its task when it next runs, and the leader's own
- *    message tells it how to reply;
+ *    learns the link from the place notice the next message into it carries
+ *    (place-notice.ts: its resumes replay the spawn-time prompt, which named the
+ *    old leader), and the leader's own message tells it how to reply;
  *    The status is a snapshot: a turn that ends between the check and the
  *    delivery is woken once, which is the old behaviour, not a new failure;
  *  - never the caller's own session (it made the change and knows);

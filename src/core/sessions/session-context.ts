@@ -90,7 +90,14 @@ export async function buildSessionContext(
       const { getTask } = await import('../task-manager.js')
       const task = await getTask(taskId)
       const project = task.project ? `project "${task.project}"` : 'the Inbox (no project)'
-      taskLine = `You are working on the task "${task.title}" (id ${task.id}, ${project}).\n\n`
+      // The folder too: where its work lands (caller-placement.ts). A move after
+      // spawn reaches the session as a place notice (place-notice.ts), which reads
+      // these exact words back, since a resume replays this prompt unchanged.
+      const folderLabel = task.group_id
+        ? (await (await import('../task-manager.js')).listFolderLabels().catch(() => new Map<string, string>())).get(task.group_id)
+        : undefined
+      const folder = folderLabel ? `, folder "${folderLabel}"` : ''
+      taskLine = `You are working on the task "${task.title}" (id ${task.id}, ${project}${folder}).\n\n`
       if (task.parent_task_id) {
         // Who asked (see 2b above). A missing parent just drops the line.
         const parent = await getTask(task.parent_task_id).catch(() => null)

@@ -184,7 +184,13 @@ export async function sendMessageToSession(
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
-  const msg = await enqueueMessage(sessionId, opts?.enqueueMessage ?? message, {
+  // A task that moved since its session was told rides a place note on this
+  // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
+  const { pendingPlaceNotice } = await import('./sessions/place-notice.js');
+  const place = await pendingPlaceNotice(sessionId);
+  const body = opts?.enqueueMessage ?? message;
+  const enqueueText = place ? `${place.text}\n\n${body}` : body;
+  const msg = await enqueueMessage(sessionId, enqueueText, {
     id: opts?.messageId,
     ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
@@ -192,6 +198,8 @@ export async function sendMessageToSession(
     ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
   });
   const source = opts?.source ?? 'unknown';
+  // A repeat collapsed onto the row already queued: only the row that holds the note counts.
+  if (place && msg.message.startsWith(place.text)) await place.markTold();
 
   // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because
   // the record profile is consumed exactly when this send triggers a cold

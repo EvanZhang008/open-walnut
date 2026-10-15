@@ -2439,6 +2439,12 @@ export interface SessionRecord {
    * cache_read collapsed to the 15K shared base, 217K re-written).
    */
   appliedAppendSystemPrompt?: string;
+  /**
+   * The place (project, folder, leader) Walnut last told this session in a
+   * place notice, and the hash of the prompt it ran on then
+   * (src/core/sessions/place-notice.ts). A different prompt makes it void.
+   */
+  placeNoted?: { promptHash: string; project: string; folderId?: string; folder?: string; leaderId?: string; leader?: string };
   /** Messages the human pinned, in pin order. Drives the timeline's TOC. */
   pinnedMessages?: SessionPinnedMessage[];
   /** Conversation-thread links over this session's ONE linear transcript, in the
