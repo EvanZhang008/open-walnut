@@ -15,11 +15,13 @@ async function transcribe(id: string, language?: string): Promise<VoiceTranscrip
   const record = await voiceArchive.get(id)
   if (record.text !== undefined) return reply(record)
   const primaryOnline = CLOUD_MODE && (await import('../../web/ws/bridge-registry.js')).bridgeForHost('__local__').connected
-  if (CLOUD_MODE && record.primarySaved === true && !primaryOnline) {
-    throw new VoiceArchiveError(503, 'stt_pending', 'The Mac has this recording; its saved transcription will be recovered when it reconnects')
-  }
-  if (primaryOnline) {
-    if (!await replicateVoiceRecording(id)) throw new VoiceArchiveError(503, 'stt_pending', 'The Mac copy is incomplete; retry after the upload resumes')
+  // A Mac that is away, or connected but not answering the copy (asleep behind a
+  // live bridge), leaves this box's own engines: it holds the whole recording.
+  // Waiting for the Mac turned every recording made while it slept into a failure.
+  if (primaryOnline && await replicateVoiceRecording(id)) {
+    // The copy check pulls back text the Mac already saved.
+    const copied = await voiceArchive.get(id)
+    if (copied.text !== undefined) return reply(copied)
     let primary: VoiceTranscript | undefined
     try {
       const result = await voicePrimaryAction('transcribe', id, { language }, VOICE_TRANSCRIBE_TIMEOUT_MS)

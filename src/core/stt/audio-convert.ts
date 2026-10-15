@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sttSpawnEnv } from './spawn-env.js';
+import { cafToWav } from './caf-to-wav.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -107,6 +108,14 @@ export async function convertToWav(audioBase64: string, inputFormat: string): Pr
     const buf = Buffer.from(audioBase64, 'base64');
     if (isConformingWav(buf)) {
       await writeFile(outputPath, buf);
+      return outputPath;
+    }
+  }
+  // The phone's PCM CAF is rewrapped in-process, so no box needs ffmpeg for it.
+  if (inputFormat === 'caf') {
+    const wav = cafToWav(Buffer.from(audioBase64, 'base64'));
+    if (wav) {
+      await writeFile(outputPath, wav);
       return outputPath;
     }
   }

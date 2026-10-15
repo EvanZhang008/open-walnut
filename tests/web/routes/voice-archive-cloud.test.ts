@@ -5,8 +5,9 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('voice-archive-cloud', { CLOUD_MODE: true }))
 const bridge = vi.hoisted(() => vi.fn())
 const activity = vi.hoisted(() => new Set<() => void>())
+const link = vi.hoisted(() => ({ connected: true }))
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
-  bridgeRequest: bridge, bridgeForHost: () => ({ connected: true }),
+  bridgeRequest: bridge, bridgeForHost: () => ({ connected: link.connected }),
   addPrimaryBridgeConnectedHandler: () => () => {},
   addPrimaryBridgeActivityHandler: (handler: () => void) => {
     activity.add(handler)
@@ -18,10 +19,14 @@ vi.mock('../../../src/core/stt/index.js', () => ({ transcribeAudio: engine }))
 import { voiceArchive, VoiceArchiveStore, VOICE_CHUNK_BYTES } from '../../../src/core/stt/voice-archive.js'
 import { replicateVoiceRecording, startVoiceArchiveReplication, stopVoiceArchiveReplication } from '../../../src/core/stt/voice-archive-replication.js'
 import { transcribeVoiceRecording } from '../../../src/core/stt/voice-archive-transcribe.js'
+import { updateConfig } from '../../../src/core/config-manager.js'
 let primaryHome: string
 let primary: VoiceArchiveStore
 beforeEach(async () => {
   stopVoiceArchiveReplication()
+  link.connected = true
+  // An engine of the companion's own (the mocked transcribeAudio), no hosted key.
+  await updateConfig({ stt: { engine: 'whisper-cpp' } })
   await rm(voiceArchive.root, { recursive: true, force: true })
   if (primaryHome) await rm(primaryHome, { recursive: true, force: true })
   primaryHome = await mkdtemp(tmpdir() + '/voice-primary-')
@@ -143,6 +148,60 @@ describe('durable voice cloud copies', () => {
     await expect(transcribeVoiceRecording(record.id)).rejects.toMatchObject({ code: 'stt_pending' })
     expect(engine).not.toHaveBeenCalled()
     expect((await voiceArchive.get(record.id)).text).toBeUndefined()
+  })
+  it('transcribes on the companion when the Mac holding the copy is offline, then hands the text over', async () => {
+    const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
+    expect(await replicateVoiceRecording(record.id)).toBe(true)
+    expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
+    link.connected = false
+    bridge.mockClear()
+    engine.mockResolvedValue({ text: 'companion text', durationMs: 1 })
+    expect(await transcribeVoiceRecording(record.id)).toMatchObject({ text: 'companion text', via: 'local' })
+    expect(bridge).not.toHaveBeenCalled()
+    expect((await voiceArchive.get(record.id)).primarySaved).toBe(false)
+    link.connected = true
+    expect(await replicateVoiceRecording(record.id)).toBe(true)
+    expect((await primary.get(record.id)).text).toBe('companion text')
+    expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
+  })
+  it('transcribes on the companion when the bridge is up but the Mac does not answer the copy', async () => {
+    const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
+    bridge.mockRejectedValue(new Error('bridge request timed out'))
+    engine.mockResolvedValue({ text: 'companion text', durationMs: 1 })
+    expect(await transcribeVoiceRecording(record.id)).toMatchObject({ text: 'companion text', via: 'local' })
+    expect(bridge.mock.calls.some((call) => call[2].params.operation === 'transcribe')).toBe(false)
+  })
+  it('keeps the Mac its own transcript when both boxes transcribed, and stops retrying', async () => {
+    const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
+    expect(await replicateVoiceRecording(record.id)).toBe(true)
+    await primary.saveText(record.id, 'mac text', 'primary')
+    link.connected = false
+    engine.mockResolvedValue({ text: 'companion text', durationMs: 1 })
+    expect((await transcribeVoiceRecording(record.id)).text).toBe('companion text')
+    link.connected = true
+    // The Mac refuses a second, different transcript (409): decided once, so
+    // the copy counts as done instead of retrying on every bridge pulse.
+    expect(await replicateVoiceRecording(record.id)).toBe(true)
+    expect((await primary.get(record.id)).text).toBe('mac text')
+    expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
+  })
+  it('answers with text the Mac had saved when a copy check brings it back', async () => {
+    const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
+    expect(await replicateVoiceRecording(record.id)).toBe(true)
+    await primary.saveText(record.id, 'mac text', 'primary')
+    expect(await transcribeVoiceRecording(record.id)).toMatchObject({ text: 'mac text' })
+    expect(engine).not.toHaveBeenCalled()
+  })
+  it('a hosted-only companion still says the service is unavailable when nothing can transcribe', async () => {
+    await updateConfig({ stt: { engine: 'openai' } })
+    const saved = process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_API_KEY
+    try {
+      const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
+      link.connected = false
+      await expect(transcribeVoiceRecording(record.id)).rejects.toMatchObject({ status: 503, code: 'stt_unavailable' })
+      expect((await voiceArchive.readAudio(record.id)).audio.toString()).toBe('speech')
+    } finally { if (saved !== undefined) process.env.OPENAI_API_KEY = saved }
   })
   it('never copies a transcript from a different recording', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })

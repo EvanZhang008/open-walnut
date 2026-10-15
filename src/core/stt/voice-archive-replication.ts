@@ -67,7 +67,15 @@ export function replicateVoiceRecording(raw: string, store: VoiceArchiveStore = 
     }
     // Pick up a transcript saved during the copy rather than marking only audio replicated.
     const latest = await store.get(id)
-    if (latest.text !== undefined) await send('text', { text: latest.text, via: latest.via })
+    if (latest.text !== undefined) {
+      try {
+        await send('text', { text: latest.text, via: latest.via })
+      } catch (error) {
+        // 409: the Mac transcribed it too, and its own text stays. Each box keeps
+        // the transcript it made; retrying could never change that.
+        if ((error as { status?: number }).status !== 409) throw error
+      }
+    }
     const marked = await store.markPrimarySaved(id, latest.text)
     return marked.primarySaved === true
   })().catch(() => {
