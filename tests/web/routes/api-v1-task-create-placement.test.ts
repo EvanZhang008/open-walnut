@@ -192,10 +192,33 @@ describe('a worker caller', () => {
     expect(json.placement.group_id).toBe(folder.group_id)
   })
 
+  // 2026-10-14: a leader guessed a project from its repo's name and filed its
+  // subtask outside the team's project. Another project needs a stated reason.
+  it('naming another project without a reason is refused and makes nothing', async () => {
+    const folder = await createFolder('Team', 'marina')
+    const { sid } = await seedCaller('marina', { folder: folder.group_id })
+    const before = (await fetch(api('/api/v1/tasks')).then((r) => r.json())) as { tasks?: unknown[] }
+    for (const body of [
+      { title: 'Guessed project', project: 'marina-repo' },
+      { title: 'Short reason', project: 'acme', project_reason: '  because ' },
+      { title: 'To the Inbox', project: '' },
+    ]) {
+      const r = await post(body, sid)
+      expect(r.status).toBe(409)
+      expect(r.json.error.code).toBe('project_elsewhere')
+      expect(r.json.error.message).toContain('project "marina", folder "Team"')
+      expect(r.json.error.message).toContain('project_reason')
+    }
+    const after = (await fetch(api('/api/v1/tasks')).then((r) => r.json())) as { tasks?: unknown[] }
+    expect(after.tasks?.length).toBe(before.tasks?.length)
+    // A human (no caller header) names any project with no reason, as before.
+    expect((await post({ title: 'Human files it anywhere', project: 'acme' })).status).toBe(201)
+  })
+
   it('naming another project: that project, the folder does not follow, the parent link does', async () => {
     const folder = await createFolder('Stays', 'marina')
     const { task: caller, sid } = await seedCaller('marina', { folder: folder.group_id })
-    const { json } = await post({ title: 'Release notes', project: 'acme' }, sid)
+    const { json } = await post({ title: 'Release notes', project: 'acme', project_reason: 'release notes are kept in acme' }, sid)
     expect(json.task.project).toBe('acme')
     expect(json.placement).toEqual({ project: 'acme', folder_created: false, parent_task_id: caller.id, tier: 'satellite' })
     const born = await getTask(json.task.id)
@@ -207,7 +230,7 @@ describe('a worker caller', () => {
 
   it('naming the Inbox on purpose: Inbox, no folder', async () => {
     const { sid } = await seedCaller('marina')
-    const { json } = await post({ title: 'Personal errand', project: '' }, sid)
+    const { json } = await post({ title: 'Personal errand', project: '', project_reason: 'the user asked for the Inbox' }, sid)
     expect(['', 'Inbox']).toContain(json.task.project)
     expect(json.placement.group_id).toBeUndefined()
   })
@@ -386,7 +409,7 @@ describe('the board tier: a worker\'s new task is born where the caller sits', (
     expect(stored.pinned).toBe(true)
     expect(stored.focus_tier).toBe('focus')
     // A tier is board-wide: it follows the work into another project.
-    const there = await post({ title: 'Focus work elsewhere', project: 'lighthouse' }, sid)
+    const there = await post({ title: 'Focus work elsewhere', project: 'lighthouse', project_reason: 'the lighthouse team owns it' }, sid)
     expect((await getTask(there.json.task.id)).focus_tier).toBe('focus')
   })
 
@@ -463,7 +486,7 @@ describe('the team a session already leads (placement.open_subtasks)', () => {
     const { sid } = await seedCaller('bakery')
     const first = await post({ title: 'Bake the tasting box' }, sid)
     expect(first.json.placement.open_subtasks).toBeUndefined()
-    const second = await post({ title: 'Print the flyers', project: 'flyers' }, sid)
+    const second = await post({ title: 'Print the flyers', project: 'flyers', project_reason: 'flyers are their own project' }, sid)
     expect(second.json.placement.open_subtasks).toEqual([{ id: first.json.task.id, title: 'Bake the tasting box', phase: 'TODO' }])
     expect(second.json.placement.more_open_subtasks).toBeUndefined()
     const third = await post({ title: 'Book the market stall' }, sid)

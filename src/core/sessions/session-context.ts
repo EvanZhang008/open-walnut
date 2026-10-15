@@ -143,7 +143,7 @@ export async function buildSessionContext(
       + 'step: one per ask (ask the user before splitting), and more work in its '
       + 'area goes to it (task_send). It '
       + 'lands beside yours: same project, folder and board tier, same host and '
-      + 'directory. Name a project only to file it elsewhere.\n\n'
+      + 'directory. Omit project; naming another needs project_reason.\n\n'
   const lines =
     'You are a coding session opened by Walnut, the user\'s personal AI. '
     + 'Walnut is the layer above you: it keeps the user\'s board of tasks and '

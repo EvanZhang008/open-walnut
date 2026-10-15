@@ -2589,9 +2589,10 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
   try {
     const { title, project, priority, due_date: dueDate, start_date: startDate,
       end_date: endDate, description, pinned, focus_tier: focusTier, group_id: groupId,
-      launch_cwd: launchCwd, launch_host: launchHost } = (req.body ?? {}) as {
+      launch_cwd: launchCwd, launch_host: launchHost, project_reason: projectReason } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown
+      project_reason?: unknown
       priority?: unknown
       due_date?: unknown
       start_date?: unknown
@@ -2698,11 +2699,20 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     // place, and it is the caller's subtask wherever it lands. Only a worker
     // session is placed from; a Personal AI ask gets the parent link alone, and
     // the phone and the web UI send no caller and keep the old defaults.
-    const { resolveCallerPlacement, decidePlacement, createTimeCwd, joinOrCreateSiblingFolder, inheritedTier } =
+    const { resolveCallerPlacement, decidePlacement, createTimeCwd, joinOrCreateSiblingFolder, inheritedTier, projectElsewhereRefusal } =
       await import('../../core/sessions/caller-placement.js')
     const rawSid = req.headers['x-walnut-caller-sid']
     const caller = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
       .catch(() => ({ kind: 'unknown' as const }))
+    // A worker naming a project other than its own says why (caller-placement.ts).
+    const elsewhere = projectElsewhereRefusal(
+      { ...(typeof project === 'string' ? { project } : {}), project_reason: projectReason }, caller)
+    if (elsewhere) {
+      sendError(res, 409, 'project_elsewhere', elsewhere, 'task' in caller
+        ? { callerProject: caller.task.project, requestedProject: project }
+        : undefined)
+      return
+    }
     const placementReq = {
       ...(typeof project === 'string' ? { project } : {}),
       ...(typeof groupId === 'string' ? { group_id: groupId } : {}),

@@ -518,8 +518,9 @@ defineOp({
     'fix the cause and use task_start with that id, never create a duplicate. Placement: called from ' +
     'inside a task, the new task lands BESIDE yours by default: same project, your folder (Walnut makes ' +
     'one holding both when yours has none, and a subfolder of yours holding both when yours also holds ' +
-    'other work), same host and directory. Name a project to file it elsewhere ' +
-    '("" = Inbox); a folder never follows work into another project. Wherever it lands, the new task is your SUBTASK (Sub on the board), from a Personal AI conversation too. Called from anywhere else, an ' +
+    'other work), same host and directory. Omit project for that. Name another project ("" = Inbox) only ' +
+    'when the work belongs there, with project_reason saying why: without one the create is refused ' +
+    '(409 project_elsewhere) and nothing is made. A folder never follows work into another project. Wherever it lands, the new task is your SUBTASK (Sub on the board), from a Personal AI conversation too. Called from anywhere else, an ' +
     'omitted project means the configured default project (normally the Inbox). A new project name ' +
     'creates its registry row. The result\'s ' +
     '`placement` says where it landed. From inside a task the new task is born in your board tier ' +
@@ -528,6 +529,7 @@ defineOp({
   input: {
     title: z.string().min(1).describe('Task title: a few words naming the specific subject, like a commit subject (under 60 characters; the server cuts a longer one from a session). The brief goes in message or description'),
     project: z.string().optional().describe('Project name; "" for the Inbox. Omit to use your own task\'s project (from inside a task) or the Inbox (elsewhere)'),
+    project_reason: z.string().optional().describe('From inside a task: why the work belongs in `project` when that is not your own task\'s project (10 characters or more). Not needed when project is omitted'),
     group_id: z.string().optional().describe('Folder id (g_...) inside the target project; "" for no folder. Omit to join your own task\'s folder (a new one when it has none) when the task lands in your project'),
     priority: PRIORITY.optional().describe('immediate | important | backlog | none'),
     due_date: z.string().optional().describe('YYYY-MM-DD or a full ISO-8601 datetime'),

@@ -157,13 +157,13 @@ describe('buildSessionContext (identity note)', () => {
     }
   })
 
-  it('says where asked-for work lands: beside the caller, a project named only to file it elsewhere', async () => {
+  it('says where asked-for work lands: beside the caller, another project only with a reason', async () => {
     // Without this an agent "helps" by naming a project it guessed, which files
     // the work away from the folder the user put the caller in.
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).toMatch(/it lands beside yours: same project, folder and board tier/i)
     expect(systemPrompt).toMatch(/same host and directory/i)
-    expect(systemPrompt).toMatch(/name a project only to file it elsewhere/i)
+    expect(systemPrompt).toMatch(/Omit project; naming another needs project_reason/)
   })
 
   it('says a task you create is a teammate owning an area, one per ask, and its follow-ups go to it', async () => {

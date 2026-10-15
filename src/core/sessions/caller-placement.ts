@@ -195,6 +195,33 @@ export function decidePlacement(req: PlacementRequest, caller: CallerPlacement):
   return { project, placeBesideCaller: true, inheritedFrom: caller.task.id, ...parent };
 }
 
+/** A project reason long enough to say something. */
+export const PROJECT_REASON_MIN = 10;
+
+/**
+ * A worker that names a project other than its own task's must say why
+ * (`project_reason`), or the create is refused with where it would have landed.
+ * 2026-10-14: a leader filed its subtask under a project
+ * it guessed from its repository's name; omitting `project` would have put it
+ * beside the leader. Same shape as a send to a completed task: not a hard no,
+ * a stated reason. Null = go ahead. Asks, humans and other callers never asked.
+ */
+export function projectElsewhereRefusal(
+  req: { project?: string; project_reason?: unknown },
+  caller: CallerPlacement,
+): string | null {
+  if (caller.kind !== 'worker' || req.project === undefined) return null;
+  if (sameProject(req.project, caller.task.project)) return null;
+  const reason = typeof req.project_reason === 'string' ? req.project_reason.replace(/\s+/g, ' ').trim() : '';
+  if (reason.length >= PROJECT_REASON_MIN) return null;
+  const name = (p: string) => (p.trim() ? `project "${p.trim()}"` : 'the Inbox');
+  const folder = caller.task.group_label ? `, folder "${caller.task.group_label}"` : '';
+  return `Your task "${caller.task.title}" (${caller.task.id}) is in ${name(caller.task.project)}${folder}. `
+    + 'Omit project and the new task lands beside yours, as your subtask. '
+    + `File it in ${name(req.project)} only when the work belongs there: pass project_reason `
+    + `(at least ${PROJECT_REASON_MIN} characters) saying why.`;
+}
+
 /**
  * The board tier a worker's new task is born in: the caller's own, unless the
  * create names `pinned` or a `focus_tier` (''/null = not named). Undefined =

@@ -218,7 +218,7 @@ THE MODEL (one identity: the task)
 
 THE VERBS (keep it simple)
   task_create      create AND start it      walnut tools call task_create '{"title":"..."}'
-                   lands beside your task   same project, folder, host and directory; "project" files it elsewhere
+                   lands beside your task   same project, folder, host and directory; another "project" needs "project_reason"
                    placeholder only         walnut tools call task_create '{"title":"...","record_only":true}'
   task_start       start an existing task   walnut tools call task_start '{"id":"<task-id>","message":"..."}'
   task_send        message any task         walnut tools call task_send '{"to":"<task-id>","title":"<TL;DR>","text":"..."}'

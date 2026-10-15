@@ -74,6 +74,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all |
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
 | `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
+| `project_elsewhere` | 409 | `POST /tasks` from a session: `project` names a project other than the caller task's own and `project_reason` is missing or under 10 characters. Nothing is created; the body also carries `callerProject` and `requestedProject` |
 | `subtask_too_deep` | 409 | `POST /tasks` from a session: the new task would be its subtask more than 3 levels below a top-level task. Nothing is created |
 | `too_many_running_subtasks` | 409 | `POST /tasks/:id/start` from a worker session that already has 8 subtasks running (IN_PROGRESS or starting). Nothing is started |
 | `host_not_ready` | 409 | `POST /sessions` refused before anything was written: the host is connected but its Claude Code cannot run the session (`kind`: `claude_missing`, `claude_needs_node`, `claude_error`, `claude_outdated`, `claude_not_logged_in`). Extras `kind`, `host`, `headline`, `hint`, and `allowOverride: true` for the two kinds `overrideReadiness` may skip |
@@ -883,6 +884,11 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   REPLICA the caller is never a worker (it has no session registry), and a
   non-empty `group_id` answers `501 not_supported_cloud`.
   Implementation: `src/core/sessions/caller-placement.ts`.
+  Project guard (additive, 2026-10-14): a worker caller that names a `project`
+  other than its own task's (case-insensitive; `""` = Inbox counts as another)
+  must pass `project_reason` (a string of 10+ characters saying why the work
+  belongs there), else `409 project_elsewhere` and nothing is created. Humans,
+  asks and callers with no session are never asked.
   Depth limit (additive, 2026-09-28): a session's subtask sits at most 3 levels
   below a top-level task; a create that would go deeper answers
   `409 subtask_too_deep` and files nothing (`src/core/sessions/subtask-limits.ts`).

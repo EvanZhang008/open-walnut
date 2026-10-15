@@ -20,7 +20,7 @@ vi.mock('../../../src/core/fork-title.js', () => ({ summarizeGroupLabel: vi.fn(a
 import { WALNUT_HOME } from '../../../src/constants.js'
 import {
   decidePlacement, resolveCallerPlacement, createTimeCwd, inheritedLaunchPair,
-  joinOrCreateSiblingFolder, inheritedTier, type CallerPlacement,
+  joinOrCreateSiblingFolder, inheritedTier, projectElsewhereRefusal, type CallerPlacement,
 } from '../../../src/core/sessions/caller-placement.js'
 import {
   addTask, getTask, createFolder, updateTask, setProjectMetadata, listGroups,
@@ -113,6 +113,48 @@ describe('decidePlacement (the rule table)', () => {
     expect(decidePlacement({ project: '' }, worker('g_f')).parentTaskId).toBe('t-caller')
     // Only a caller with no task of its own has nothing to be the parent.
     for (const c of others) expect(decidePlacement({}, c).parentTaskId).toBeUndefined()
+  })
+})
+
+// 2026-10-14: a leader guessed a project from its repo's name and filed its
+// subtask outside the team. A worker naming another project must say why.
+describe('projectElsewhereRefusal (another project needs a reason)', () => {
+  const inFolder: CallerPlacement = {
+    kind: 'worker',
+    task: { id: 't-caller', title: 'Refactor the fixture', project: 'marina', group_id: 'g_x', group_label: 'Rail Top' },
+    session: SESSION,
+  }
+  it('lets an omitted project and the caller\'s own project (any case) through', () => {
+    expect(projectElsewhereRefusal({}, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: 'marina' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: ' MARINA ' }, inFolder)).toBeNull()
+  })
+  it('refuses another project, the Inbox included, with no reason or a short one', () => {
+    for (const req of [
+      { project: 'acme' }, { project: '' }, { project: 'acme', project_reason: 'short   ' },
+      { project: 'acme', project_reason: 42 }, { project: 'acme', project_reason: '   \n\t  ' },
+    ]) {
+      const msg = projectElsewhereRefusal(req, inFolder)
+      expect(msg).toContain('"Refactor the fixture" (t-caller) is in project "marina", folder "Rail Top"')
+      expect(msg).toContain('Omit project')
+      expect(msg).toContain('project_reason')
+    }
+    expect(projectElsewhereRefusal({ project: '' }, inFolder)).toContain('File it in the Inbox only')
+    expect(projectElsewhereRefusal({ project: 'acme' }, inFolder)).toContain('File it in project "acme" only')
+  })
+  it('a caller in the Inbox with no folder is named so', () => {
+    expect(projectElsewhereRefusal({ project: 'acme' }, worker(undefined, ''))).toContain('is in the Inbox. Omit')
+  })
+  it('a reason of 10 characters or more lets it through', () => {
+    expect(projectElsewhereRefusal({ project: 'acme', project_reason: 'acme owns it' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: '', project_reason: 'the user said Inbox' }, inFolder)).toBeNull()
+  })
+  it('never asks a caller that is not a worker', () => {
+    const others: CallerPlacement[] = [
+      { kind: 'human' }, { kind: 'external' }, { kind: 'unknown' }, { kind: 'untracked', session: SESSION },
+      { kind: 'ask', task: { id: 't-ask', title: 'Ask', project: 'Ask Walnut' }, session: SESSION },
+    ]
+    for (const c of others) expect(projectElsewhereRefusal({ project: 'acme' }, c)).toBeNull()
   })
 })
 
