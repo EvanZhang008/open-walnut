@@ -6,6 +6,12 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-10-16
+
+### Fixed
+
+- A check's deadline counts awake time, not the time a Mac slept
+
 ## [0.6.12] - 2026-10-15
 
 ### Added
