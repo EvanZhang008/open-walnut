@@ -2690,7 +2690,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       return
     }
 
-    const { addTask, getTask, newTaskPinDefault, ProjectSourceConflictError, InvalidFocusTierError } =
+    const { addTask, getTask, ProjectSourceConflictError, InvalidFocusTierError } =
       await import('../../core/task-manager.js')
     const { projectTask } = await import('../../core/task-projection.js')
     // Work created from INSIDE a task lands beside it: the caller's project and
@@ -2699,20 +2699,11 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     // place, and it is the caller's subtask wherever it lands. Only a worker
     // session is placed from; a Personal AI ask gets the parent link alone, and
     // the phone and the web UI send no caller and keep the old defaults.
-    const { resolveCallerPlacement, decidePlacement, createTimeCwd, joinOrCreateSiblingFolder, inheritedTier, projectElsewhereRefusal } =
+    const { resolveCallerPlacement, decidePlacement, createTimeCwd } =
       await import('../../core/sessions/caller-placement.js')
     const rawSid = req.headers['x-walnut-caller-sid']
     const caller = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
       .catch(() => ({ kind: 'unknown' as const }))
-    // A worker naming a project other than its own says why (caller-placement.ts).
-    const elsewhere = projectElsewhereRefusal(
-      { ...(typeof project === 'string' ? { project } : {}), project_reason: projectReason }, caller)
-    if (elsewhere) {
-      sendError(res, 409, 'project_elsewhere', elsewhere, 'task' in caller
-        ? { callerProject: caller.task.project, requestedProject: project }
-        : undefined)
-      return
-    }
     const placementReq = {
       ...(typeof project === 'string' ? { project } : {}),
       ...(typeof groupId === 'string' ? { group_id: groupId } : {}),
@@ -2720,43 +2711,32 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       ...(typeof launchHost === 'string' ? { launch_host: launchHost } : {}),
     }
     const decision = decidePlacement(placementReq, caller)
-    if (decision.parentTaskId) {
-      // A session's subtask chain has a depth cap in the server (subtask-limits.ts).
-      const { assertSubtaskDepth, SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
-      try {
-        await assertSubtaskDepth(decision.parentTaskId, 'task' in caller ? caller.task.title : undefined)
-      } catch (err) {
-        if (!(err instanceof SubtaskLimitError)) throw err
-        sendError(res, err.statusCode, err.code, err.message)
+    // The create rules by caller, shared with the offline drain (create-rules.ts): a
+    // worker naming a project other than its own says why, a session's depth cap, an ask's project, the board tier (a worker's own, else pinned
+    // by default), and a session's long title cut to its head (the long form becomes the
+    // description when there was none) and refined in the background.
+    const { applyCreateRules, placeBesideCaller, ProjectElsewhereError } = await import('../../core/sessions/create-rules.js')
+    let rules: Awaited<ReturnType<typeof applyCreateRules>>
+    try {
+      rules = await applyCreateRules({
+        title, description: description as string | undefined, pinned, focus_tier: focusTier,
+        ...(typeof project === 'string' ? { project } : {}), project_reason: projectReason,
+      }, caller, decision)
+    } catch (err) {
+      if (err instanceof ProjectElsewhereError) {
+        sendError(res, err.statusCode, err.code, err.message, err.details)
         return
       }
-    }
-    if (caller.kind === 'ask' && decision.project === undefined) {
-      // An ask's own project is `Ask …`, never a place for the user's work. With
-      // a parent set, addTask would inherit the parent's project, so the default
-      // a parentless create gets is made explicit here.
-      const { getConfig } = await import('../../core/config-manager.js')
-      decision.project = (await getConfig()).defaults?.project ?? ''
+      const { SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
+      if (!(err instanceof SubtaskLimitError)) throw err
+      sendError(res, err.statusCode, err.code, err.message)
+      return
     }
     const stampedCwd = await createTimeCwd(placementReq, caller, decision).catch(() => undefined)
-    // A worker's new task is born in the caller's board tier (Focus work stays
-    // Focus) unless the body names `pinned` or a `focus_tier`.
-    const tier = inheritedTier({ pinned, focus_tier: focusTier }, caller)
-    // A session's long title is cut to its head here and refined in the
-    // background; the long form becomes the description when there was none.
-    // A human's title (no caller) is theirs (task-title-brake.ts).
-    const { needsShortening, heuristicShortTitle, refineShortTitle } =
-      await import('../../core/sessions/task-title-brake.js')
-    let finalTitle = title.trim()
-    let titleShortenedFrom: string | undefined
-    if ('session' in caller && needsShortening(finalTitle)) {
-      titleShortenedFrom = finalTitle
-      finalTitle = heuristicShortTitle(finalTitle)
-    }
-    // A blank description counts as none: the long form is what the session wrote.
-    const finalDescription = titleShortenedFrom && !(typeof description === 'string' && description.trim())
-      ? titleShortenedFrom
-      : description as string | undefined
+    const { refineShortTitle } = await import('../../core/sessions/task-title-brake.js')
+    const finalTitle = rules.title
+    const titleShortenedFrom = rules.titleShortenedFrom
+    const finalDescription = rules.description
     try {
       // asyncPush like the web create path: the client renders the task
       // immediately, so don't block the response on an external sync push.
@@ -2776,9 +2756,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       // Human/AI create surface (phone Quick Add, `walnut add`, the task_create
       // op): lands on the board in Satellite unless the caller passed an
       // explicit `pinned` (see newTaskPinDefault), or a worker's tier is inherited.
-      let tierInput: { pinned: boolean; focus_tier?: string } = tier
-        ? tier
-        : { pinned: newTaskPinDefault(pinned), ...(typeof focusTier === 'string' ? { focus_tier: focusTier } : {}) }
+      let tierInput: { pinned: boolean; focus_tier?: string } = rules.tier
       let tierWarning: string | undefined
       let folderWarning: string | undefined
       let parentWarning: string | undefined
@@ -2790,7 +2768,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         } catch (err) {
           // An INHERITED custom tier deleted since the caller was read: a tier
           // the body never named must not fail the create; Satellite instead.
-          if (tier?.focus_tier && tierInput.focus_tier && err instanceof InvalidFocusTierError) {
+          if (rules.tierInherited && rules.tier.focus_tier && tierInput.focus_tier && err instanceof InvalidFocusTierError) {
             tierWarning = err.message
             tierInput = { pinned: true }
             return add(folder)
@@ -2811,11 +2789,9 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       let folderCreated = false
       let folderLabel = decision.group_id && caller.kind === 'worker' && decision.group_id === caller.task.group_id
         ? caller.task.group_label : undefined
-      if (decision.placeBesideCaller && caller.kind === 'worker') {
-        // A subtask: nests when the caller's folder holds other work too.
-        const placed = await joinOrCreateSiblingFolder(caller.task, created.id, {
-          eventSource: 'api-v1', refineTitles: [caller.task.title, created.title], nest: true,
-        })
+      // A subtask: nests when the caller's folder holds other work too.
+      const placed = await placeBesideCaller(decision, caller, created, 'api-v1')
+      if (placed) {
         folderCreated = placed.created
         folderLabel = placed.label
         folderWarning = placed.error
@@ -2861,7 +2837,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
           ...(task.cwd ? { cwd: task.cwd } : {}),
           // The board tier taken from the caller: a tier id, 'satellite', or
           // 'unpinned'. Absent when the body chose, or nothing was inherited.
-          ...(tier && !tierWarning ? { tier: !task.pinned ? 'unpinned' : task.focus_tier || 'satellite' } : {}),
+          ...(rules.tierInherited && !tierWarning ? { tier: !task.pinned ? 'unpinned' : task.focus_tier || 'satellite' } : {}),
           // The long title the session sent, when the brake cut it (the
           // response's task.title is the cut; the board refines it shortly).
           ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}),
@@ -4208,6 +4184,13 @@ apiV1Router.use(actionsV1Router)
 import { timeV1Router } from './time-v1.js'
 
 apiV1Router.use(timeV1Router)
+
+// --- Offline conflicts (the full entries a drain's conflict letter links to) ---
+// Read only; the letter body is capped, the values are kept in full here.
+
+import { offlineConflictsV1Router } from './offline-conflicts-v1.js'
+
+apiV1Router.use(offlineConflictsV1Router)
 
 // ─── Apple Health (the phone uploads HealthKit data to the primary) ────────
 // Same device auth as the rest of /api/v1; a replica relays every call.

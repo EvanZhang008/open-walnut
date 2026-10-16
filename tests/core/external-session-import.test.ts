@@ -152,6 +152,12 @@ async function taskForSession(sessionId: string) {
   return getTask(record!.taskId);
 }
 
+/** `before` with `patch` applied: the write also stamps each changed field's time (`field_at`). */
+function changedTask<T extends { field_at?: Record<string, string> }>(before: T, patch: Record<string, unknown>): Record<string, unknown> {
+  const stamped = Object.fromEntries(Object.keys(patch).map((f) => [f, expect.any(String)]));
+  return { ...before, ...patch, field_at: { ...before.field_at, ...stamped } };
+}
+
 // BOTH dbs must close before the rm: each is a module-level singleton, and
 // deleting the file under a live handle leaves it on an unlinked inode — the
 // next test then reads the PREVIOUS test's tasks.
@@ -422,7 +428,7 @@ describe('importExternalSessions — fallback-name re-title', () => {
     expect(emit).toHaveBeenCalledWith(EventNames.TASK_UPDATED, expect.objectContaining({ task: expect.objectContaining({ id: original.id }) }), ['web-ui'], { source: 'external-session-import' });
     expect(info).toHaveBeenCalledWith('imported external sessions', expect.objectContaining({ imported: 0, retitled: 1 }));
     const after = await getTask(original.id);
-    expect(after).toEqual({ ...before, title: 'Real work' });
+    expect(after).toEqual(changedTask(before, { title: 'Real work' }));
     expect(host.calls[0].knownSessionIds).not.toContain('deadbeef-1111');
     expect(await getSessionByClaudeId('deadbeef-1111')).toEqual({ ...sessionBefore, title: 'Real work' });
   });
@@ -461,7 +467,7 @@ describe('importExternalSessions — fallback-name re-title', () => {
     const sessionBefore = await getSessionByClaudeId('deadbeef-1111');
     const host = setHost('__local__', { candidates: [candidate({ sessionId: 'deadbeef-1111', title })] });
     expect((await importExternalSessions()).retitled).toBe(1);
-    expect(await taskForSession('deadbeef-1111')).toEqual({ ...before, title: 'My session title' });
+    expect(await taskForSession('deadbeef-1111')).toEqual(changedTask(before, { title: 'My session title' }));
     expect(await getSessionByClaudeId('deadbeef-1111')).toEqual(sessionBefore);
     expect((await importExternalSessions()).retitled).toBe(0);
     expect(host.calls[1].knownSessionIds).toContain('deadbeef-1111');
@@ -479,7 +485,7 @@ describe('importExternalSessions — fallback-name re-title', () => {
     expect(await taskForSession('deadbeef-1111')).toEqual(before);
     expect(await getSessionByClaudeId('deadbeef-1111')).toEqual({ ...trackerBefore, title: 'Recovered title' });
     expect((await importExternalSessions()).retitled).toBe(1);
-    expect(await taskForSession('deadbeef-1111')).toEqual({ ...before, title: 'Recovered title' });
+    expect(await taskForSession('deadbeef-1111')).toEqual(changedTask(before, { title: 'Recovered title' }));
   });
 
   it('preserves a task renamed between the session write and the task write', async () => {
@@ -495,7 +501,7 @@ describe('importExternalSessions — fallback-name re-title', () => {
     });
     const host = setHost('__local__', { candidates: [candidate({ sessionId: 'deadbeef-1111', title: 'Scanner title' })] });
     expect((await importExternalSessions()).retitled).toBe(0);
-    expect(await taskForSession('deadbeef-1111')).toEqual({ ...before, title: 'Human task title' });
+    expect(await taskForSession('deadbeef-1111')).toEqual(changedTask(before, { title: 'Human task title' }));
     expect((await importExternalSessions()).retitled).toBe(0);
     expect(host.calls[1].knownSessionIds).toContain('deadbeef-1111');
   });

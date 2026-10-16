@@ -30,6 +30,7 @@ import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../lib/link-stream.js'
+import { registerForwardSocket } from '../lib/forward-lane-ports.js'
 import { laneForwardForTesting, sshLaneForward, StreamLane } from './stream-lane.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
@@ -1849,6 +1850,9 @@ export class DaemonConnection {
       rescue: async (sessionIds) => {
         void this.recoverDisconnectedSessions(new Set(sessionIds)).catch(() => {})
       },
+      // journal-v2: the drain names its kinds, reads the host clock, acks exact seqs.
+      journalV2: this.hasCapability('journal-v2'),
+      alive: () => this._connected,
     }
   }
 
@@ -2085,7 +2089,11 @@ export class DaemonConnection {
       stream.destroy(new Error('this Walnut has no door open for host servers'))
       return
     }
-    spliceStream(stream, net.connect(port, '127.0.0.1'))
+    const socket = net.connect(port, '127.0.0.1')
+    // Every request on it came through this host (middleware/op-id.ts forwardHostOf): the
+    // port is registered on connect, before the splice's first byte reaches the server.
+    registerForwardSocket(socket, this.hostKey)
+    spliceStream(stream, socket)
   }
 
   /** What the host-server manager may do on this host (core/host-server/manager.ts HostServerHost). */

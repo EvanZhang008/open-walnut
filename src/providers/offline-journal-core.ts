@@ -711,7 +711,8 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     return []
   }
 
-  type Fields = Record<string, { base: unknown; value: unknown }>
+  /** `at`: the field's own write time once a fold merged writes made at different times. */
+  type Fields = Record<string, { base: unknown; value: unknown; at?: number }>
 
   /** The note mode after a later save onto a pending one (section 5 mode table). */
   function foldMode(first: string, later: string): string {
@@ -733,7 +734,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
    * the subject (replay order stays append order). A frozen target is never superseded:
    * the save becomes a new record whose base is the frozen record's result.
    */
-  function coalesceInto(j: HomeJournal, body: Record<string, unknown>, actor: JournalActor | undefined): Coalesce {
+  function coalesceInto(j: HomeJournal, body: Record<string, unknown>, actor: JournalActor | undefined, at: number): Coalesce {
     const subject = subjectsOf(body)[0]
     if (!subject || (body.kind !== 'note' && body.kind !== 'task-fields')) return { kind: 'none' }
     let last: JournalRecord | undefined
@@ -752,8 +753,11 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
         for (const k of Object.keys(next)) fields[k] = k in prev ? { base: prev[k].value, value: next[k].value } : next[k]
         return { kind: 'frozen', body: { ...body, fields } }
       }
-      const fields: Fields = { ...prev }
-      for (const k of Object.keys(next)) fields[k] = k in prev ? { base: prev[k].base, value: next[k].value } : next[k]
+      // Each field keeps the time it was written: the folded record's `at` is the latest
+      // write, and an earlier field judged by it would beat a Mac edit made after it.
+      const fields: Fields = {}
+      for (const k of Object.keys(prev)) fields[k] = { ...prev[k], at: typeof prev[k].at === 'number' ? prev[k].at : last.at }
+      for (const k of Object.keys(next)) fields[k] = k in prev ? { base: prev[k].base, value: next[k].value, at } : { ...next[k], at }
       return { kind: 'fold', target: last, body: { ...body, fields } }
     }
     const later = String(body.mode ?? 'put')
@@ -798,13 +802,14 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
           if (first) return { ok: true as const, seq: first.seq, opId: String(first.opId), rev: first.rev ?? 1, duplicate: true as const }
         }
         const actor = opts.actor
-        const c = opts.coalesce === false || opts.online ? { kind: 'none' as const } : coalesceInto(j, body, actor)
+        const at = opts.at ?? deps.now()
+        const c = opts.coalesce === false || opts.online ? { kind: 'none' as const } : coalesceInto(j, body, actor, at)
         const seq = j.maxSeq + 1
         let line: JournalRecord
         if (c.kind === 'fold') {
           const saves = [...((c.target.saveOpIds as string[] | undefined) ?? []), ...(opts.opId ? [opts.opId] : [])].slice(-50)
           line = {
-            v: 2, seq, opId: String(c.target.opId), rev: (c.target.rev ?? 1) + 1, at: opts.at ?? deps.now(),
+            v: 2, seq, opId: String(c.target.opId), rev: (c.target.rev ?? 1) + 1, at,
             ...(actor ? { actor } : {}), ...c.body, kind: String(c.body.kind), supersedes: c.target.seq,
             ...(saves.length ? { saveOpIds: saves } : {}),
             // A fold into a migrated v1 record stays one: its ack is remembered (importedAcked).
@@ -818,7 +823,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
           }
           const own = c.kind === 'frozen' ? c.body : body
           line = {
-            v: 2, seq, opId: opts.opId ?? mintOpId(), rev: opts.rev ?? 1, at: opts.at ?? deps.now(),
+            v: 2, seq, opId: opts.opId ?? mintOpId(), rev: opts.rev ?? 1, at,
             ...(actor ? { actor } : {}), ...own, kind: String(own.kind),
             ...(opts.online ? { online: true as const } : {}),
             ...(opts.v1Seq !== undefined ? { v1Seq: opts.v1Seq } : {}),

@@ -837,7 +837,8 @@ describe('journal v2: a replica retry, coalesced growth, retired inputs (review 
     }
     const recs = journal.records(JHOME)
     expect(recs).toHaveLength(1)
-    expect((recs[0].fields as Record<string, { base: unknown; value: unknown }>).description).toEqual({ base: 'first line', value: big(299) })
+    // A folded field carries its own write time (WP9 review: each field is judged by when it was written).
+    expect((recs[0].fields as Record<string, { base: unknown; value: unknown }>).description).toEqual({ base: 'first line', value: big(299), at: expect.any(Number) })
     const size = fs.statSync(path.join(dir, `journal-${keyOf(JHOME)}.ndjson`)).size
     // Live: one 20 KB line. A fold leaves at most about as many dead bytes before it compacts.
     expect(size).toBeLessThan(3 * 21 * 1024)
@@ -991,3 +992,23 @@ function setAside(dir: string): void {
 function sha256Hex(text: string): string {
   return createHash('sha256').update(Buffer.from(text)).digest('hex')
 }
+
+describe('journal v2: a fold keeps each field\'s own write time (WP9 review)', () => {
+  it('title written at 09:00 and priority at 11:00 fold into one record whose title still says 09:00', () => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    const j = journalStore(dir, clock)
+    j.append(JHOME, fields({ title: ['Leader work', 'Away title'] }), { actor: DEVICE })
+    clock.now = T0 + 2 * 3600_000
+    const folded = j.append(JHOME, fields({ priority: ['none', 'immediate'] }), { actor: DEVICE })
+    expect(folded).toMatchObject({ ok: true, coalesced: true, rev: 2 })
+    const [rec] = j.records(JHOME)
+    // The record's own time is the latest write; each field keeps when IT was written.
+    expect(rec.at).toBe(T0 + 2 * 3600_000)
+    expect(rec.fields).toMatchObject({ title: { value: 'Away title', at: T0 }, priority: { value: 'immediate', at: T0 + 2 * 3600_000 } })
+    // A third save of the title moves only the title's time.
+    clock.now = T0 + 3 * 3600_000
+    j.append(JHOME, fields({ title: ['Away title', 'Away title 2'] }), { actor: DEVICE })
+    expect(j.records(JHOME)[0].fields).toMatchObject({ title: { base: 'Leader work', value: 'Away title 2', at: T0 + 3 * 3600_000 }, priority: { at: T0 + 2 * 3600_000 } })
+  })
+})

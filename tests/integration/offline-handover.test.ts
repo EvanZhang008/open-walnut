@@ -30,6 +30,19 @@ vi.mock('../../src/core/sessions/session-send-core.js', async (importOriginal) =
   },
 }))
 
+// A host write the server never answers, for chosen task ids only (the backoff and
+// give-up cases); every other replay goes to the real op executor.
+const opFaults = vi.hoisted(() => ({ unreachable: new Set<string>() }))
+vi.mock('../../src/ops/index.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/ops/index.js')>()
+  return {
+    ...real,
+    executeOp: async (...a: Parameters<typeof real.executeOp>) => opFaults.unreachable.has(String((a[1] as Record<string, unknown> | undefined)?.id ?? ''))
+      ? { ok: false as const, unreachable: true as const, message: 'fetch failed (injected)' }
+      : real.executeOp(...a),
+  }
+})
+
 import { startServer, stopServer } from '../../src/web/server.js'
 import { closeDb } from '../../src/core/task-db.js'
 import { buildHostSlice } from '../../src/core/host-slice.js'
@@ -122,6 +135,18 @@ describe('buildHostSlice', () => {
     expect(local.sessions.map((s) => s.sid)).toEqual([L])
     // Same content, same hash: an unchanged copy is never re-sent.
     expect((await buildHostSlice('devbox')).hash).toBe(again.hash)
+  })
+
+  it('ships every queueable scalar (an unset one as its empty value) and the field times, so an away write has a known base', async () => {
+    await api('PATCH', `/api/v1/tasks/${grandchild}`, { priority: 'important' })
+    const t = (await buildHostSlice('devbox')).tasks.find((x) => x.id === grandchild)!
+    // No clock is '' in the copy: an away park then carries base '', never 'unknown'.
+    expect(t).toMatchObject({ priority: 'important', wait_until: '', due_date: '', focus_tier: expect.any(String), pinned: expect.any(Boolean), unread: expect.any(Boolean), tags: expect.any(Array), depends_on: [] })
+    expect(t.field_at?.priority).toEqual(expect.any(String))
+    // An empty folder, parent and description too: an away write on one has base '', never 'unknown'.
+    const all = (await buildHostSlice('devbox')).tasks
+    for (const x of all) expect([typeof x.group_id, typeof x.parent_task_id, typeof x.description]).toEqual(['string', 'string', 'string'])
+    expect(all.some((x) => x.parent_task_id === '' && x.group_id === '')).toBe(true)
   })
 
   it('marks the sessions the server would never wake for a trigger, so the host does not resume them either', async () => {
@@ -299,5 +324,97 @@ describe('runOfflineHandover', () => {
     await waitForOfflineHandovers(200)
     expect(Date.now() - start).toBeLessThan(2_000)
     void stuck
+  })
+})
+
+// -- Journal v2 (docs/plan/walnut-replica-servers-impl.md section 5, "Mac drain v2") --
+
+describe('runOfflineHandover over journal v2', () => {
+  /** A daemon stand-in that keeps every record not acked by seq, and hands them out again. */
+  function v2Daemon(initial: Array<Record<string, unknown> & { seq: number }>) {
+    const pending = new Map(initial.map((r) => [r.seq, r]))
+    const calls: Array<{ cmd: string; params: Record<string, unknown> }> = []
+    const conn = {
+      hostKey: 'devbox',
+      journalV2: true,
+      alive: () => true,
+      send: async (cmd: string, params: Record<string, unknown> = {}) => {
+        calls.push({ cmd, params })
+        if (cmd === 'offline.drain') return { ok: true, records: [...pending.values()].sort((a, b) => a.seq - b.seq), more: false, now: Date.now() }
+        if (cmd === 'offline.ack') { for (const s of (params.seqs as number[]) ?? []) pending.delete(s); return { ok: true, remaining: pending.size } }
+        return { ok: true }
+      },
+    }
+    return { conn, pending, calls }
+  }
+  const v2 = (seq: number, taskId: string, fields: Record<string, { base: unknown; value: unknown }>, over: Record<string, unknown> = {}) =>
+    ({ v: 2, seq, at: Date.now(), kind: 'task-fields', opId: `op-int-${seq}-${Math.random().toString(16).slice(2, 10)}`, rev: 1, actor: { kind: 'session', sid: B }, op: 'task_update', taskId, fields, ...over })
+  const until = async (cond: () => boolean, ms = 10_000): Promise<void> => {
+    const end = Date.now() + ms
+    while (!cond()) { if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)) }
+  }
+
+  it('v2 records apply beside old v1 records, the drain names its kinds, and acks by exact seqs', async () => {
+    const t1 = await newTask('v1 and v2 together')
+    const before = await task(t1)
+    const d = v2Daemon([
+      { seq: 1, at: Date.now(), kind: 'op', op: 'task_update', args: { id: t1, title: 'v1 title' }, callerSid: B, base: String(before.updated_at) },
+      v2(2, t1, { priority: { base: String(before.priority ?? 'none'), value: 'immediate' } }),
+    ])
+    await runOfflineHandover(d.conn)
+    expect(await task(t1)).toMatchObject({ title: 'v1 title', priority: 'immediate' })
+    const drain = d.calls.find((c) => c.cmd === 'offline.drain')!
+    expect(drain.params).toEqual({ home: WALNUT_HOME, kinds: ['task-fields', 'task-create', 'task-move', 'board'] })
+    expect(d.calls.filter((c) => c.cmd === 'offline.ack').map((c) => c.params)).toEqual([{ home: WALNUT_HOME, seqs: [1, 2] }])
+    expect(d.pending.size).toBe(0)
+  })
+
+  it('a record that throws stops the batch (later records wait), is retried with backoff 3 times, then given up with the later records of its task', async () => {
+    const { _setHandoverBackoffForTesting } = await import('../../src/core/offline-handover.js')
+    _setHandoverBackoffForTesting([40, 40, 40])
+    const stuck = await newTask('Never answered')
+    const other = await newTask('Unrelated, after it')
+    const stuckBefore = await task(stuck)
+    opFaults.unreachable.add(stuck)
+    try {
+      const d = v2Daemon([
+        { seq: 1, at: Date.now(), kind: 'op', op: 'task_update', args: { id: stuck, title: 'lost?' }, callerSid: B, base: String(stuckBefore.updated_at) },
+        v2(2, stuck, { priority: { base: 'none', value: 'immediate' } }),
+        v2(3, other, { priority: { base: 'none', value: 'backlog' } }),
+      ])
+      await runOfflineHandover(d.conn)
+      // The first attempt failed: nothing after it moved.
+      expect(d.pending.size).toBe(3)
+      expect((await task(other)).priority).not.toBe('backlog')
+      await until(() => d.pending.size === 0)
+      const drains = d.calls.filter((c) => c.cmd === 'offline.drain').length
+      expect(drains).toBeGreaterThanOrEqual(4)
+      expect((await task(other)).priority).toBe('backlog')
+      expect((await task(stuck)).priority).not.toBe('immediate')
+      const { readConflictLog, conflictDir } = await import('../../src/core/offline-merge/conflict-log.js')
+      const fs = await import('node:fs')
+      const entries = fs.readdirSync(conflictDir()).flatMap((f) => readConflictLog(f.replace(/\.json$/, ''))?.entries ?? [])
+      expect(entries.filter((e) => e.taskId === stuck && e.kind === 'given-up').map((e) => e.seq).sort()).toEqual([1, 2])
+    } finally {
+      opFaults.unreachable.delete(stuck)
+      _setHandoverBackoffForTesting(null)
+    }
+  }, 30_000)
+
+  it('a RefusedWrite is lettered at once; an unknown kind is left unacked', async () => {
+    const t = await newTask('Refused v2')
+    const { listLetters } = await import('../../src/core/human-inbox/store.js')
+    const lettersBefore = (await listLetters()).letters.length
+    const d = v2Daemon([
+      v2(1, t, { title: { base: 'Refused v2', value: 'x' }, cwd: { base: '', value: '/srv/marina' } }),
+      { seq: 2, at: Date.now(), kind: 'session-from-the-future', opId: 'op-future-0000001' },
+      v2(3, t, { priority: { base: 'none', value: 'important' } }),
+    ])
+    await runOfflineHandover(d.conn)
+    expect([...d.pending.keys()]).toEqual([2])
+    expect((await task(t))).toMatchObject({ title: 'Refused v2', priority: 'important' })
+    const letters = (await listLetters()).letters
+    expect(letters.length).toBe(lettersBefore + 1)
+    expect(JSON.stringify(letters)).toContain('cwd')
   })
 })

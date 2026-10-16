@@ -88,7 +88,8 @@ it('filters probes through REST, retitles in place and recovers when exclusions 
   const second = await api('/api/sessions/import-external', 'POST', { days: 30 });
   expect(second).toMatchObject({ imported: 0, retitled: 1 });
   expect(emit.mock.calls.some(([event]) => event === EventNames.TASK_COMPLETED)).toBe(false);
-  expect(await getTask(task.id)).toEqual({ ...before, title: '真实工作标题' });
+  // The retitle also stamps the title's change time (field_at).
+  expect(await getTask(task.id)).toEqual({ ...before, title: '真实工作标题', field_at: { ...before.field_at, title: expect.any(String) } });
   expect(await getSessionByClaudeId('deadbeef-1111')).toEqual({ ...sessionBefore, title: '真实工作标题' });
   const listed = await api('/api/tasks?project=Actual%20work');
   expect(listed.tasks.some((row: { id: string }) => row.id === task.id)).toBe(true);

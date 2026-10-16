@@ -127,7 +127,9 @@ export interface LeaderHostConnection {
  */
 export async function configureHostLeader(conn: LeaderHostConnection): Promise<HostLeaderState | null> {
   const backup = await backupLeaderAllowed()
-  const reply = await conn.send('leader.configure', { home: WALNUT_HOME, walnutId: await walnutId(), backup }, 15_000)
+  // `drains`: the journal v2 kinds this Mac applies (journal-v2); a daemon writes them only then.
+  const { MAC_DRAINS } = await import('../offline-merge/apply-v2.js')
+  const reply = await conn.send('leader.configure', { home: WALNUT_HOME, walnutId: await walnutId(), backup, drains: [...MAC_DRAINS] }, 15_000)
   if (reply.ok !== true) {
     log.leader.warn('leader: host refused the Walnut description', { host: conn.hostKey, error: String(reply.error ?? '') })
     return null

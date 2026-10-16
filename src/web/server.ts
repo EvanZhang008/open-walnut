@@ -1412,6 +1412,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   app.use(cors({ origin: corsOriginAllowed }))
+  // When a request's headers arrived, before any body parser: the op-id middleware judges a
+  // forwarded write's age from it, never from after a slow body (middleware/op-id.ts).
+  app.use((await import('./middleware/op-id.js')).stampArrival())
 
   // Git smart HTTP for the cloud data hub (cloud mode only). MUST be mounted
   // BEFORE compression() and express.json(): git POST bodies are raw binary
@@ -1499,6 +1502,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // ENOSPC (2026-08-12 cloud outage). Reads stay fully available.
   const { diskGuardMiddleware } = await import('./middleware/disk-guard.js')
   app.use('/api', diskGuardMiddleware)
+  // Client op ids: a write applies once per op id, a duplicate waits for the first
+  // answer, and a stale forwarded write is refused (docs/plan/walnut-replica-servers-impl.md section 3).
+  const { opIdMiddleware } = await import('./middleware/op-id.js')
+  app.use('/api', opIdMiddleware())
 
   // -- Cron service --
   const cronService = new CronService({

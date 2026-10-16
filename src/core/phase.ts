@@ -211,19 +211,33 @@ export function applyPhase(task: Task, phase: TaskPhase): void {
   }
   task.phase = phase;
   task.status = deriveStatusFromPhase(phase);
+  const derived = phaseDerivedFields(task, phase, new Date().toISOString());
+  Object.assign(task, derived.set);
+  for (const f of derived.clear) task[f] = undefined;
+}
 
-  // Read marker implied by the phase. Object.assign (not a ternary per key) so
-  // phases that imply nothing leave whatever the caller set untouched.
-  Object.assign(task, readMarkerForPhase(phase));
+/** The fields a phase clears (completed_at off COMPLETE; the session slots on it). */
+export type PhaseClearedField = 'completed_at' | 'session_id' | 'plan_session_id' | 'exec_session_id';
 
+/**
+ * What a phase write derives besides phase and status, THE one rule both write paths
+ * use: applyPhase (updateTask) and the offline drain's raw row write
+ * (offline-merge/apply-fields.ts), so an away task_update / task_complete ends as the
+ * online call does. `set`: the read marker the phase implies (readMarkerForPhase), and
+ * on COMPLETE a completed_at (`nowIso`) when the task has none. `clear`: on COMPLETE the
+ * session slots (new 1-slot, legacy 2-slot), off it completed_at.
+ */
+export function phaseDerivedFields(
+  task: Readonly<Partial<Task>>, phase: TaskPhase, nowIso: string,
+): { set: Partial<Task>; clear: PhaseClearedField[] } {
+  // Object.assign of the marker (not a ternary per key) so phases that imply
+  // nothing leave whatever the caller set untouched.
+  const set: Partial<Task> = { ...readMarkerForPhase(phase) };
   if (phase === 'COMPLETE') {
-    if (!task.completed_at) task.completed_at = new Date().toISOString();
-    task.session_id = undefined;          // new 1-slot
-    task.plan_session_id = undefined;     // legacy 2-slot (backward compat)
-    task.exec_session_id = undefined;     // legacy 2-slot (backward compat)
-  } else {
-    task.completed_at = undefined;
+    if (!task.completed_at) set.completed_at = nowIso;
+    return { set, clear: ['session_id', 'plan_session_id', 'exec_session_id'] };
   }
+  return { set, clear: ['completed_at'] };
 }
 
 // ── Phase migration (legacy data) ──

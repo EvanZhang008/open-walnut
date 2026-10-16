@@ -244,3 +244,26 @@ describe('the companion copy of the tasks', () => {
     expect(await companionIds()).toEqual(['lead', 'worker'])
   })
 })
+
+describe('the copy keeps the primary\'s field times', () => {
+  it('a copy apply keeps the Mac\'s field_at byte for byte: a follower never stamps its own', async () => {
+    edit('lead', { field_at: { title: '2026-10-01T00:00:00.000Z' } } as Partial<Task>)
+    await syncTaskReplica(deps)
+    expect((await tm.getTask('lead')).field_at).toEqual({ title: '2026-10-01T00:00:00.000Z' })
+    // The primary renames with its own time: the copy takes that time, never its own clock.
+    // The order moves too, so the round is the whole-store write (writeStore stamps field
+    // times on the leader; a row-only round binds the row as sent anyway).
+    edit('lead', { title: 'Renamed on the Mac', field_at: { title: '2026-10-02T00:00:00.000Z' } } as Partial<Task>)
+    primary = [primary[1], primary[0], primary[2]]
+    await syncTaskReplica(deps)
+    expect(await companionIds()).toEqual(['worker', 'lead', 'old-done'])
+    expect(await tm.getTask('lead')).toMatchObject({ title: 'Renamed on the Mac', field_at: { title: '2026-10-02T00:00:00.000Z' } })
+    // A primary change that names no time for its field leaves none in the copy either.
+    edit('lead', { priority: 'immediate' })
+    primary = [primary[1], primary[0], primary[2]]
+    await syncTaskReplica(deps)
+    const lead = await tm.getTask('lead')
+    expect(lead.priority).toBe('immediate')
+    expect(lead.field_at).toEqual({ title: '2026-10-02T00:00:00.000Z' })
+  })
+})

@@ -124,6 +124,26 @@ function resumableForTrigger(s: SessionRecord): boolean {
   return true;
 }
 
+/** The queueable scalar fields a host copy carries. */
+const SLICE_SCALARS = ['status', 'priority', 'due_date', 'start_date', 'end_date', 'sprint', 'focus_tier', 'wait_until'] as const;
+
+/**
+ * Every one is shipped, an unset one as its empty value: the host takes a field the copy
+ * lacks as base 'unknown' (offline-host-core.ts taskFieldsRecord), so "no clock" must be
+ * '' in the copy for an away park to carry a known base. pin_order is shipped when set.
+ */
+function sliceFields(t: Task): Partial<OfflineSliceTask> {
+  const out: Record<string, unknown> = {};
+  for (const f of SLICE_SCALARS) out[f] = typeof t[f] === 'string' ? t[f] : '';
+  out.pinned = t.pinned === true;
+  out.unread = t.unread === true;
+  if (typeof t.pin_order === 'number' && Number.isFinite(t.pin_order)) out.pin_order = t.pin_order;
+  out.tags = Array.isArray(t.tags) ? [...t.tags] : [];
+  out.depends_on = Array.isArray(t.depends_on) ? [...t.depends_on] : [];
+  if (t.field_at && Object.keys(t.field_at).length) out.field_at = { ...t.field_at };
+  return out as Partial<OfflineSliceTask>;
+}
+
 export async function buildHostSlice(hostKey: string, now = Date.now()): Promise<HostSlice> {
   const key = normalizeHostKey(hostKey);
   const [{ listSessions, isListableSession }, { listTasksByIds }, requests] = await Promise.all([
@@ -149,10 +169,18 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       title: t.title,
       phase: t.phase,
       project: t.project || '',
-      ...(t.group_id ? { group_id: t.group_id } : {}),
-      ...(t.parent_task_id ? { parent_task_id: t.parent_task_id } : {}),
-      ...(t.description ? { description: clip(t.description, DESCRIPTION_MAX) } : {}),
+      // An empty folder, parent or description is shipped as '': a field the copy lacks is
+      // queued with base 'unknown', and an away write on it is then judged by time alone
+      // (no merge, no conflict entry when it wins over a Mac edit made after this copy).
+      group_id: t.group_id || '',
+      parent_task_id: t.parent_task_id || '',
+      description: t.description ? clip(t.description, DESCRIPTION_MAX) : '',
       ...(t.updated_at ? { updated_at: t.updated_at } : {}),
+      // The other queueable fields and their per-field times (journal v2, section 7): an
+      // away write's base is then the value the host showed, never 'unknown'. The long
+      // texts (summary, note) stay out: a clipped copy would be a wrong base, and a
+      // session's write cannot name them.
+      ...sliceFields(t),
       // The session a message to the task goes to, as the server picks it (session-send-core.ts).
       ...((t.session_id || t.exec_session_id) ? { session_id: t.session_id || t.exec_session_id } : {}),
     });

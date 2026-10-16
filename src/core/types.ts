@@ -713,6 +713,21 @@ export interface Task {
   external_url?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * When each queueable field last changed (ISO), written by every task write that
+   * changes it (task-field-times.ts) and by a host journal replay with the record's
+   * shifted time. The offline drain judges "newer" per field with it, falling back to
+   * `updated_at` (docs/plan/walnut-replica-servers-impl.md section 7).
+   */
+  field_at?: Record<string, string>;
+  /** The op id of the write that created the task (a replica's create replayed on the Mac). */
+  created_by_op?: string;
+  /**
+   * The last host journal writes merged into this task (`<host>|<opId>|<rev>`), written in
+   * the same row write as their fields, so a replay after a crash before the ledger row is a
+   * no-op even where a text merge would not be (offline-merge/apply-v2.ts).
+   */
+  applied_ops?: string[];
   completed_at?: string;
   due_date?: string;
   /** When to START working on the task (ISO date or datetime). Drives the "Now"

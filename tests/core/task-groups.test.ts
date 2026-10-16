@@ -663,8 +663,9 @@ describe('project move auto-unfolders the task', () => {
     expect(reloaded.project).toBe('Acme');
     expect(reloaded.group_id).toBeUndefined();
     // The physical blob no longer carries the key (the null-clear marker path),
-    // so it can't reappear on the next payload rewrite.
-    expect(rawPayload(a) ?? '').not.toContain('group_id');
+    // so it can't reappear on the next payload rewrite. Top-level keys only: the
+    // per-field change times (`field_at`) name the field that changed.
+    expect(Object.keys(JSON.parse(rawPayload(a) ?? '{}'))).not.toContain('group_id');
 
     // Survives a real reload from SQLite, and b is untouched.
     closeDb();

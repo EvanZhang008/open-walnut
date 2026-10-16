@@ -24,6 +24,8 @@ import { log } from '../logging/index.js';
 import type { OfflineRecord } from '../providers/offline-host-core.js';
 import type { SessionRequest } from './session-requests.js';
 import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from './types.js';
+import { APPLIED_V2_KINDS, RefusedWrite, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
+import { recordRemap } from './offline-merge/ledger.js';
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
@@ -34,6 +36,13 @@ export interface HandoverConnection {
    * not say stopped: the host started them while this server was away.
    */
   rescue?(sessionIds: string[]): Promise<void>;
+  /**
+   * The daemon speaks journal v2 (cap `journal-v2`): the drain names the kinds this Mac
+   * applies, answers `{now}` (the host clock), and is acked by exact `seqs`.
+   */
+  journalV2?: boolean;
+  /** False once the connection is gone: a scheduled retry of a failed record then waits for the next connect. */
+  alive?(): boolean;
 }
 
 export interface HandoverResult {
@@ -49,8 +58,6 @@ export interface HandoverResult {
 /** A queued write that did not land, told to the session that made it. */
 interface Unapplied { callerSid: string; op: string; taskId: string; reason: string }
 
-/** A queued write the server answered with a refusal (validation, a guard), not a Walnut failure. */
-class RefusedWrite extends Error {}
 
 const MAX_ROUNDS = 10;
 /** The daemon connection's own command budget: a loaded host answered a 10s drain too late (2026-09-28). */
@@ -106,6 +113,12 @@ export async function waitForOfflineHandovers(maxMs = HANDOVER_WAIT_MS): Promise
 export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverResult> {
   const existing = running.get(conn.hostKey);
   if (existing) return existing;
+  // Every drain first letters what an earlier one left unsent (a drain that threw after a
+  // conflict was durable, a letter that failed, a crash): its redrain acks from the ledger
+  // with nothing new to letter, so waiting for the next boot kept the away text unseen.
+  void import('./offline-merge/letter.js').then((m) => m.resendUnsentConflictLetters()).catch((err) => {
+    log.session.warn('offline handover: unsent conflict letters were not resent', { error: err instanceof Error ? err.message : String(err) });
+  });
   const startedAt = Date.now();
   const job = handover(conn).finally(() => {
     running.delete(conn.hostKey);
@@ -120,6 +133,8 @@ export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverRe
 /** Tests only. */
 export function _resetOfflineHandoverForTesting(): void {
   running.clear();
+  letterFailing.clear();
+  logDiskErrorHosts.clear();
   resumesToRescue.clear();
   for (const d of due.values()) d.resolve();
   due.clear();
@@ -131,44 +146,33 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   // queued write for the same task must not lose to the first one's own stamp.
   const baseline = new Map<string, number>();
   const unapplied: Unapplied[] = [];
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const reply = await conn.send('offline.drain', { home: WALNUT_HOME }, RPC_TIMEOUT_MS);
-    if (reply.ok === false) throw new Error(String(reply.error ?? 'offline.drain refused'));
-    const records = (Array.isArray(reply.records) ? reply.records : []) as OfflineRecord[];
-    if (records.length === 0) break;
-    result.rounds++;
-    result.records += records.length;
-    let upTo = 0;
-    for (const record of records) {
-      try {
-        await applyRecord(conn.hostKey, record, baseline, result, unapplied);
-      } catch (err) {
-        // Applied or not, a record is acked: a record that fails every time
-        // would otherwise pin the host in offline mode forever. The log keeps
-        // it, and the session that made a failed write hears about it.
-        result.failed++;
-        const reason = err instanceof Error ? err.message : String(err);
-        if (err instanceof RefusedWrite && record.kind === 'op') {
-          // The server's own answer to the caller's write, the one the same call
-          // made online gets: the caller's to redo (it is told below), not a fault.
-          log.session.warn('offline handover: queued write refused', {
-            host: conn.hostKey, seq: record.seq, op: record.op, taskId: String(record.args.id ?? ''),
-            callerSid: record.callerSid, error: reason,
-          });
-        } else {
-          // Walnut could not apply its own record. Named by the session it
-          // concerns, so the card retires on that session's next clean turn.
-          log.session.error('offline handover: record failed', {
-            host: conn.hostKey, seq: record.seq, kind: record.kind, error: reason, ...await recordScope(record),
-          });
-        }
-        if (record.kind === 'op') unapplied.push({ callerSid: record.callerSid, op: record.op, taskId: String(record.args?.id ?? record.args?.task ?? ''), reason });
-      }
-      upTo = Math.max(upTo, record.seq);
+  const v2 = conn.journalV2 === true;
+  const [{ ConflictLog }, { measureHostClock, hostClockOffset }, letters] = await Promise.all([
+    import('./offline-merge/conflict-log.js'), import('./offline-merge/host-clock.js'), import('./offline-merge/letter.js'),
+  ]);
+  const batch: Batch = {
+    conn, v2, baseline, result, unapplied,
+    conflicts: new ConflictLog(conn.hostKey, WALNUT_HOME),
+    remap: new Map(), givenUp: new Set(), offset: 0, retryIn: null,
+  };
+  // Registered before anything can write the log: a resend never takes a live drain's log.
+  letters.openDrainLog(batch.conflicts.drainId);
+  try {
+    await drainRounds(batch, measureHostClock, hostClockOffset);
+  } finally {
+    // Also when a round threw after a conflict was durable (the ack's link dropped, a
+    // later round's drain failed): the redrain acks from the ledger with nothing to letter.
+    if (batch.conflicts.entries.length > 0) await letters.sendConflictLetter(batch.conflicts);
+    letters.closeDrainLog(batch.conflicts.drainId);
+    // Also here: a refusal is in the ledger before its ack, so the redrain of a drain that
+    // threw acks it silently, and this is the only time its session can hear of it.
+    if (unapplied.length > 0) {
+      await tellCallers(unapplied).catch((err: unknown) => {
+        log.session.warn('offline handover: the sessions whose writes did not land were not told', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) });
+      });
     }
-    // The next drain returns what was written during this round (or nothing).
-    await conn.send('offline.ack', { home: WALNUT_HOME, upTo }, RPC_TIMEOUT_MS);
   }
+  if (batch.retryIn !== null) scheduleRetry(conn, batch.retryIn);
   if (stopsToRun.delete(conn.hostKey)) {
     try {
       await (await import('./sessions/session-stop.js')).sessionStops.flush(conn.hostKey);
@@ -188,8 +192,412 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
     }
   }
   if (result.records > 0) log.session.info('offline handover: done', { host: conn.hostKey, ...result });
-  if (unapplied.length > 0) await tellCallers(unapplied);
   return result;
+}
+
+/** The drain's rounds: take what the host hands over, ack what was taken, until it is empty. */
+async function drainRounds(
+  batch: Batch,
+  measureHostClock: typeof import('./offline-merge/host-clock.js').measureHostClock,
+  hostClockOffset: typeof import('./offline-merge/host-clock.js').hostClockOffset,
+): Promise<void> {
+  const { conn, v2, result } = batch;
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const sentAt = Date.now();
+    const reply = await conn.send('offline.drain', { home: WALNUT_HOME, ...(v2 ? { kinds: [...APPLIED_V2_KINDS] } : {}) }, RPC_TIMEOUT_MS);
+    if (reply.ok === false) throw new Error(String(reply.error ?? 'offline.drain refused'));
+    if (v2) measureHostClock(conn.hostKey, sentAt, Date.now(), reply.now);
+    batch.offset = hostClockOffset(conn.hostKey) ?? 0;
+    const records = ((Array.isArray(reply.records) ? reply.records : []) as OfflineRecord[]).slice().sort((a, b) => a.seq - b.seq);
+    if (records.length === 0) break;
+    result.rounds++;
+    result.records += records.length;
+    const acked: number[] = [];
+    let stopped = false;
+    for (const record of records) {
+      const step = await takeRecord(batch, record);
+      if (step === 'stop') { stopped = true; break; }
+      if (step === 'ack') acked.push(record.seq);
+    }
+    // Every conflict of what is acked is on disk BEFORE the ack (a write failure throws: no ack).
+    batch.conflicts.flush();
+    if (v2) {
+      if (acked.length) await conn.send('offline.ack', { home: WALNUT_HOME, seqs: acked }, RPC_TIMEOUT_MS);
+    } else {
+      // An old daemon acks by watermark: only the prefix before the first record that waits.
+      let upTo = 0;
+      for (const r of records) { if (!acked.includes(r.seq)) break; upTo = r.seq; }
+      if (upTo > 0) await conn.send('offline.ack', { home: WALNUT_HOME, upTo }, RPC_TIMEOUT_MS);
+    }
+    // A stop waits for its backoff; a round that acked nothing (unknown kinds only) ends here.
+    if (stopped || acked.length === 0) break;
+  }
+}
+
+/** One drain's state across its rounds. */
+interface Batch {
+  conn: HandoverConnection;
+  v2: boolean;
+  baseline: Map<string, number>;
+  result: HandoverResult;
+  unapplied: Unapplied[];
+  conflicts: import('./offline-merge/conflict-log.js').ConflictLog;
+  /** Created-while-away ids this Mac re-minted (a collision), for later records of the batch. */
+  remap: Map<string, string>;
+  /** Tasks whose earlier record was given up: their later records are given up with it. */
+  givenUp: Set<string>;
+  /** Host clock offset of this drain (ms to add to a host time). */
+  offset: number;
+  /** A record waits for its backoff: drain again after this many ms. */
+  retryIn: number | null;
+}
+
+/** v1 kinds keep their meaning; v2 kinds the Mac applies are APPLIED_V2_KINDS. */
+const V1_KINDS = new Set(['row', 'settle', 'delivery', 'settings', 'stop', 'resume', 'op']);
+/** Retries of a record that threw, on the same connection, before it is given up (section 5). */
+let retryBackoffMs = [5_000, 30_000, 120_000];
+/** Thrown records by `${host}|${opId or seq}`: how often they threw, and when the next try is due. */
+const failing = new Map<string, { count: number; nextAt: number; reason: string }>();
+/**
+ * Records whose letter entry could not be written (a full disk), by the same key: they back
+ * off like a failed apply, and once the steps are spent the record is acked with its entry
+ * kept in that drain's letter only (HEAD acked them), so the host's gateway is not held
+ * offline for as long as the disk stays full.
+ */
+const letterFailing = new Map<string, { count: number; nextAt: number }>();
+/** Hosts whose conflict log write failure was logged as an error (once, until a write works). */
+const logDiskErrorHosts = new Set<string>();
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** How often a record waits on a running request with its op id before it waits for a retry. */
+const RESERVE_TRIES = 5;
+/** How long one wait on a running request with the record's op id may take. */
+let reservationWaitMs = RPC_TIMEOUT_MS;
+/** A record whose op is still running here is drained again after this. */
+const RESERVED_RETRY_MS = 2_000;
+
+/** True when `p` settled within `ms` (its value is not needed: the ledger is read after). */
+async function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p.then(() => true, () => true),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); timer.unref?.(); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Tests only: a shorter bound on one wait for a running request with the record's op id. */
+export function _setReservationWaitForTesting(ms: number | null): void {
+  reservationWaitMs = ms ?? RPC_TIMEOUT_MS;
+}
+
+/** Tests only: shorter backoff steps. */
+export function _setHandoverBackoffForTesting(steps: number[] | null): void {
+  retryBackoffMs = steps ?? [5_000, 30_000, 120_000];
+  failing.clear();
+  for (const t of retryTimers.values()) clearTimeout(t);
+  retryTimers.clear();
+}
+
+/** Drain the host again once a record's backoff ran out, on the same connection while it lives. */
+function scheduleRetry(conn: HandoverConnection, ms: number): void {
+  const prev = retryTimers.get(conn.hostKey);
+  if (prev) clearTimeout(prev);
+  const t = setTimeout(() => {
+    retryTimers.delete(conn.hostKey);
+    if (conn.alive && !conn.alive()) return;
+    runOfflineHandover(conn).catch((err) => {
+      log.session.warn('offline handover: retry failed', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) });
+    });
+  }, ms);
+  t.unref?.();
+  retryTimers.set(conn.hostKey, t);
+}
+
+function recordOpId(record: OfflineRecord): string | undefined {
+  const id = (record as { opId?: unknown }).opId;
+  return typeof id === 'string' && id ? id : undefined;
+}
+
+/** The task a record writes (v1 op or v2 kinds), for give-up and the letter. */
+function recordTask(batch: Batch, record: OfflineRecord): string | undefined {
+  if (record.kind === 'op') return record.op.startsWith('trigger_') ? undefined : String(record.args?.id ?? record.args?.task ?? '') || undefined;
+  if (V1_KINDS.has(record.kind)) return undefined;
+  return v2TaskIdOf(record as unknown as V2Record, batch.remap, batch.conn.hostKey);
+}
+
+/**
+ * Take one record: 'ack' (applied, a no-op, refused into the letter, or given up),
+ * 'stop' (it threw and waits for its backoff; later records wait behind it), or
+ * 'leave' (a kind this Mac does not know: never acked, the next Mac takes it).
+ */
+async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 'stop' | 'leave'> {
+  const host = batch.conn.hostKey;
+  const known = V1_KINDS.has(record.kind) || (APPLIED_V2_KINDS as readonly string[]).includes(record.kind);
+  if (!known) {
+    log.session.warn('offline handover: a record of a kind this Mac does not know is left on the host', { host, seq: record.seq, kind: record.kind });
+    return 'leave';
+  }
+  const opId = recordOpId(record);
+  const taskId = recordTask(batch, record);
+  const rev = Number((record as { rev?: unknown }).rev) || 1;
+  const key = opId ? { hostKey: host, home: WALNUT_HOME, opId, rev } : null;
+  const { lookupJournaled, recordApplied, reserveJournaled } = await import('./offline-merge/ledger.js');
+  const actor = (record as { actor?: { kind?: string; deviceId?: string; name?: string } }).actor;
+  const callerSid = record.kind === 'op' ? record.callerSid : actor?.kind === 'session' ? String((actor as { sid?: unknown }).sid ?? '') : '';
+  const opName = record.kind === 'op' ? record.op : record.kind;
+  const retryKey = `${host}|${opId ?? `seq:${record.seq}`}`;
+  // A record whose letter entry could not be written waits out its backoff first.
+  const letterWait = letterFailing.get(retryKey);
+  if (letterWait && letterWait.nextAt > Date.now()) {
+    batch.retryIn = Math.min(batch.retryIn ?? Infinity, letterWait.nextAt - Date.now());
+    return 'stop';
+  }
+  /**
+   * A letter entry for this record, durable BEFORE the ledger row or the ack that would
+   * let a redrain skip it (offline-merge/conflict-log.ts addDurable). False: the log could
+   * not be written, nothing is recorded, and the record waits for its backoff
+   * (letterNotWritten; true once the steps are spent, the entry kept in memory).
+   */
+  const letter = (kind: import('./offline-merge/conflict-log.js').ConflictKind, reason: string): boolean => {
+    const entry = { kind, seq: record.seq, ...(opId ? { opId } : {}), recordKind: record.kind, ...(taskId ? { taskId } : {}), reason, record, ...(actor ? { actor } : {}) };
+    try {
+      batch.conflicts.addDurable([entry]);
+      letterFailing.delete(retryKey);
+      logDiskErrorHosts.delete(host);
+      return true;
+    } catch (err) {
+      return letterNotWritten(batch, record, entry, retryKey, err);
+    }
+  };
+  // The ledger first: a write a forward (or an earlier drain) applied is never lettered as
+  // not applied, whoever made it (a device unpaired since) and whatever became of the
+  // task's earlier records.
+  const early = key ? lookupJournaled(key) : null;
+  if (early) return ledgerHit(batch, record, early, { retryKey, taskId, callerSid, opName, letter });
+  if (taskId && batch.givenUp.has(taskId)) {
+    if (!letter('given-up', 'an earlier change to this task could not be applied, so this later one was not applied either')) return 'stop';
+    if (key) recordApplied(key, { outcome: 'given-up', detail: 'earlier record of the task given up', source: 'drain' });
+    batch.result.failed++;
+    return 'ack';
+  }
+  if (actor?.kind === 'device' && !(await devicePaired(String(actor.deviceId ?? '')))) {
+    if (!letter('actor-dropped', `${actor.name ?? actor.deviceId} is no longer paired with this Mac`)) return 'stop';
+    if (key) recordApplied(key, { outcome: 'refused', detail: 'device no longer paired', source: 'drain' });
+    batch.result.skipped++;
+    log.session.warn('offline handover: a change from a device no longer paired is dropped', { host, seq: record.seq, opId, deviceId: actor.deviceId });
+    return 'ack';
+  }
+  const fail = failing.get(retryKey);
+  if (fail && fail.nextAt > Date.now()) {
+    // A rerun before the backoff ran out (a host.slice push) takes no attempt.
+    batch.retryIn = Math.max(0, fail.nextAt - Date.now());
+    return 'stop';
+  }
+  // The ledger: a forward (or an earlier drain) that applied this op already wins; one still
+  // running here is waited for.
+  let held: import('./offline-merge/ledger.js').Reserved | null = null;
+  if (key) {
+    for (let i = 0; i < RESERVE_TRIES; i++) {
+      // Under the host's key or, for a forward on a socket nobody tagged, this server's own.
+      const hit = lookupJournaled(key);
+      if (hit) return ledgerHit(batch, record, hit, { retryKey, taskId, callerSid, opName, letter });
+      const r = reserveJournaled(key);
+      if (r.owner) { held = r; break; }
+      // Bounded: a write handler that never answers while its client stays connected must
+      // not pin this host's handover (every later drain joins this one).
+      if (!(await settlesWithin(r.wait, reservationWaitMs))) break;
+    }
+    if (!held) {
+      const hit = lookupJournaled(key);
+      if (hit) return ledgerHit(batch, record, hit, { retryKey, taskId, callerSid, opName, letter });
+      // The same op is still running here (or kept being taken first): never applied beside
+      // it. The record and everything after it wait for a short retry.
+      batch.retryIn = Math.min(batch.retryIn ?? Infinity, RESERVED_RETRY_MS);
+      log.session.info('offline handover: the same write is still running here; the record waits', { host, seq: record.seq, opId });
+      return 'stop';
+    }
+  }
+  return applyTaken(batch, record, { key, held, retryKey, fail, taskId, callerSid, opName, letter });
+}
+
+/**
+ * The conflict log could not take a record's entry: false (the record waits for its
+ * backoff, counted like a failed apply), or true once the steps are spent (the entry is
+ * kept for this drain's letter only and the record is acked). One error per host.
+ */
+function letterNotWritten(
+  batch: Batch, record: OfflineRecord, entry: import('./offline-merge/conflict-log.js').ConflictEntry, retryKey: string, err: unknown,
+): boolean {
+  const host = batch.conn.hostKey;
+  const error = err instanceof Error ? err.message : String(err);
+  const count = (letterFailing.get(retryKey)?.count ?? 0) + 1;
+  if (count > retryBackoffMs.length) {
+    letterFailing.delete(retryKey);
+    batch.conflicts.addMemoryOnly(entry);
+    log.session.error('offline handover: the conflict log could not be written after every retry; the record is acked and its entry is only in this drain\'s letter', { host, seq: record.seq, opId: entry.opId, error });
+    return true;
+  }
+  const wait = retryBackoffMs[count - 1];
+  letterFailing.set(retryKey, { count, nextAt: Date.now() + wait });
+  batch.retryIn = Math.min(batch.retryIn ?? Infinity, wait);
+  if (!logDiskErrorHosts.has(host)) {
+    logDiskErrorHosts.add(host);
+    log.session.error('offline handover: the conflict log could not be written; the record waits', { host, seq: record.seq, opId: entry.opId, attempt: count, retryInMs: wait, error });
+  } else {
+    log.session.warn('offline handover: the conflict log still cannot be written', { host, seq: record.seq, attempt: count, retryInMs: wait });
+  }
+  return false;
+}
+
+interface TakeState {
+  retryKey: string;
+  taskId: string | undefined;
+  callerSid: string | undefined;
+  opName: string;
+  letter: (kind: import('./offline-merge/conflict-log.js').ConflictKind, reason: string) => boolean;
+}
+
+/**
+ * The ledger already holds the op: an apply (a forward, an earlier drain) acks silently.
+ * A direct write this Mac REFUSED, whose answer the client never got (the stream died,
+ * the replica answered 504, the client retried and the replica journaled it), is the
+ * user's change that did not land: it is lettered with the Mac's answer, never dropped.
+ */
+function ledgerHit(
+  batch: Batch, record: OfflineRecord, hit: import('./offline-merge/ledger.js').LedgerEntry, st: TakeState,
+): 'ack' | 'stop' {
+  const host = batch.conn.hostKey;
+  const opId = recordOpId(record);
+  if ((hit.outcome === 'refused' || hit.outcome === 'given-up') && hit.source !== 'drain') {
+    const answer = hit.detail ?? (hit.body ? hit.body.slice(0, 500) : '');
+    const reason = `the Mac refused this write when it first reached it${hit.status ? ` (HTTP ${hit.status})` : ''}${answer ? `: ${answer}` : ''}`;
+    if (!st.letter('refused', reason)) return 'stop';
+    batch.result.failed++;
+    if (st.callerSid) batch.unapplied.push({ callerSid: st.callerSid, op: st.opName, taskId: st.taskId ?? '', reason });
+    log.session.warn('offline handover: a journaled retry of a write the Mac refused is lettered', { host, seq: record.seq, opId, status: hit.status });
+  } else {
+    if ((record.kind as string) === 'task-create' && hit.source !== 'drain' && createdAs(batch, record, hit, st) === 'stop') return 'stop';
+    batch.result.skipped++;
+    log.session.info('offline handover: record already applied (ledger)', { host, seq: record.seq, opId });
+  }
+  failing.delete(st.retryKey);
+  return 'ack';
+}
+
+/**
+ * A create the Mac applied when its forward reached it made the task under the Mac's own
+ * id, while the client that got the replica's journaled answer knows only the id the
+ * writer minted, and every later record of that task names it. The created id is read
+ * from the stored answer (`task.id`, else `id`) and the minted one remapped to it, the
+ * way a collision re-mint is, so those records follow it. An answer that was not kept
+ * (too large) cannot be followed: it is lettered, never acked in silence.
+ */
+function createdAs(
+  batch: Batch, record: OfflineRecord, hit: import('./offline-merge/ledger.js').LedgerEntry, st: TakeState,
+): 'ok' | 'stop' {
+  const host = batch.conn.hostKey;
+  const minted = String((record as { taskId?: unknown }).taskId ?? '');
+  if (!minted) return 'ok';
+  let created: string | undefined;
+  try {
+    const body = hit.body === undefined ? undefined : JSON.parse(hit.body) as { task?: { id?: unknown }; id?: unknown };
+    const id = body?.task?.id ?? body?.id;
+    created = typeof id === 'string' && id ? id : undefined;
+  } catch { created = undefined; }
+  if (created === undefined) {
+    const reason = `the Mac created this task when the write first reached it, under an id it did not keep; changes made while away to ${minted} after it may be missing`;
+    return st.letter('create-collision', reason) ? 'ok' : 'stop';
+  }
+  if (created === minted) return 'ok';
+  try {
+    recordRemap(host, WALNUT_HOME, minted, created);
+  } catch (err) {
+    batch.retryIn = Math.min(batch.retryIn ?? Infinity, retryBackoffMs[0] ?? RESERVED_RETRY_MS);
+    log.session.warn('offline handover: the id of a forwarded create could not be remembered; the record waits', { host, seq: record.seq, minted, created, error: err instanceof Error ? err.message : String(err) });
+    return 'stop';
+  }
+  batch.remap.set(minted, created);
+  log.session.info('offline handover: a create the Mac applied over HTTP: later records of its minted id follow the Mac\'s id', { host, seq: record.seq, minted, created });
+  return 'ok';
+}
+
+/** Apply a record the ledger does not hold, then record it (after its letter entries are on disk). */
+async function applyTaken(
+  batch: Batch, record: OfflineRecord,
+  st: TakeState & {
+    key: import('./offline-merge/ledger.js').LedgerKey | null;
+    held: import('./offline-merge/ledger.js').Reserved | null;
+    fail: { count: number; nextAt: number; reason: string } | undefined;
+  },
+): Promise<'ack' | 'stop'> {
+  const host = batch.conn.hostKey;
+  const opId = recordOpId(record);
+  const { key, held, retryKey, fail, taskId, callerSid, opName, letter } = st;
+  const { recordApplied, lookupJournaled } = await import('./offline-merge/ledger.js');
+  const owned = held?.owner ? held : null;
+  try {
+    if (V1_KINDS.has(record.kind)) {
+      await applyRecord(host, record, batch.baseline, batch.result, batch.unapplied);
+    } else {
+      await applyV2({ hostKey: host, at: record.at + batch.offset, offset: batch.offset, conflicts: batch.conflicts, remap: batch.remap, result: batch.result }, record as unknown as V2Record);
+    }
+    // Every entry the apply wrote is on disk already (addDurable); this is the round's no-op.
+    batch.conflicts.flush();
+    if (key) {
+      recordApplied(key, { outcome: 'applied', source: 'drain' });
+      // A coalesced record carries the op ids of every save folded into it: a client
+      // retry of any of them is the same write, answered as applied.
+      const saves = (record as { saveOpIds?: unknown }).saveOpIds;
+      // A save also applied directly keeps its own row (its route and first answer).
+      for (const s of Array.isArray(saves) ? saves : []) {
+        if (typeof s !== 'string' || !s || s === opId) continue;
+        const saveKey = { hostKey: host, home: WALNUT_HOME, opId: s, rev: 1 };
+        if (!lookupJournaled(saveKey)) recordApplied(saveKey, { outcome: 'applied', source: 'drain', detail: `folded into ${opId}` });
+      }
+    }
+    owned?.finish({ outcome: 'applied' });
+    failing.delete(retryKey);
+    return 'ack';
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    if (err instanceof RefusedWrite && letter((record.kind as string) === 'board' || (record.kind === 'op' && record.op.startsWith('board_')) ? 'board' : 'refused', reason)) {
+      // The server's own answer to the write, the one the same call made online gets:
+      // lettered (on disk first) and acked at once, and the session that made it is told.
+      batch.result.failed++;
+      log.session.warn('offline handover: queued write refused', { host, seq: record.seq, kind: record.kind, op: opName, opId, taskId, callerSid, error: reason });
+      if (key) recordApplied(key, { outcome: 'refused', detail: reason, source: 'drain' });
+      owned?.finish({ outcome: 'refused', detail: reason });
+      failing.delete(retryKey);
+      if (callerSid) batch.unapplied.push({ callerSid, op: opName, taskId: taskId ?? '', reason });
+      return 'ack';
+    }
+    owned?.finish(null);
+    const count = (fail?.count ?? 0) + 1;
+    if (count <= retryBackoffMs.length) {
+      const wait = retryBackoffMs[count - 1];
+      failing.set(retryKey, { count, nextAt: Date.now() + wait, reason });
+      batch.retryIn = wait;
+      batch.result.failed++;
+      // Walnut could not apply its own record: an error named by the session it concerns,
+      // so the card retires on that session's next clean turn. Later records wait.
+      log.session.error('offline handover: record failed', { host, seq: record.seq, kind: record.kind, opId, attempt: count, retryInMs: wait, error: reason, ...await recordScope(record) });
+      return 'stop';
+    }
+    // Retries spent: given up into the letter with the change attached, and every later
+    // record of the same task with it. A letter that cannot be written keeps the record.
+    if (!letter('given-up', reason)) return 'stop';
+    failing.delete(retryKey);
+    batch.result.failed++;
+    if (taskId) batch.givenUp.add(taskId);
+    if (key) recordApplied(key, { outcome: 'given-up', detail: reason, source: 'drain' });
+    log.session.error('offline handover: record failed', { host, seq: record.seq, kind: record.kind, error: reason, givenUp: true, ...await recordScope(record) });
+    if (callerSid) batch.unapplied.push({ callerSid, op: opName, taskId: taskId ?? '', reason });
+    return 'ack';
+  }
 }
 
 /**
@@ -412,6 +820,15 @@ async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string;
       return row ? { sessionId: row.fromSessionId } : {};
     }
   }
+  return v2Scope(record as unknown as V2Record);
+}
+
+/** Journal v2 kinds: the session that wrote it (a device or trigger names none), and its task. */
+function v2Scope(record: V2Record): { sessionId?: string; taskId?: string } {
+  const actor = record.actor;
+  const sid = actor && actor.kind === 'session' ? actor.sid : undefined;
+  const taskId = v2TaskIdOf(record);
+  return { ...(sid ? { sessionId: sid } : {}), ...(taskId ? { taskId } : {}) };
 }
 
 async function taskOfSession(sid: string): Promise<string | undefined> {

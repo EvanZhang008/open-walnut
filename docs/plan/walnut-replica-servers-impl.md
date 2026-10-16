@@ -514,9 +514,12 @@ Actor check: a record whose device actor (stable device id, section 1) is no lon
 dropped into the conflict log and letter, never replayed.
 
 Conflict log: every conflict (kind, id, both values in full, base, times) is written to
-`WALNUT_HOME/offline-conflicts/<drainId>.json` (durable, not tmp) BEFORE its record is acked. The letter
-is built from that log, idempotently keyed by drain id, and resent at the next boot when not marked
-sent; the 16 KB cap applies to the letter body only, which links to the full entry.
+`WALNUT_HOME/offline-conflicts/` (durable, not tmp) BEFORE its record is acked: a small header
+`<drainId>.json` (drain id, host, the letter mark) and the entries appended one fdatasynced line each to
+`<drainId>.ndjson`, so N conflicts cost O(N) bytes, never a whole-file rewrite per record. The letter
+is built from that log, idempotently keyed by drain id, sent when the drain ends (also when it threw),
+and resent by the next drain when not marked sent; the 16 KB cap applies to the letter body only,
+which links to the full entry.
 
 Clock: `offline.drain` replies `{now}`; the Mac shifts record times by `macNow - daemonNow - rtt/2`.
 
@@ -609,8 +612,8 @@ if the resolved pair is invalid, the Mac's pair is kept and the other is in the 
 |---|---|
 | == value | nothing (idempotent) |
 | == base | take the replica's value |
-| base unknown | the replica's value only when `field_at(Mac) < shifted at`, else the Mac's; listed when they differ |
-| else, text field (description, note, summary) | `merge3(base, mac, value)` (worker, budget as section 6); clean applies; a conflict takes the newer side and the other side goes to the conflict log in full (the letter body capped 16 KB, linking to the entry) |
+| base unknown | the replica's value only when `field_at(Mac) < shifted at`, else the Mac's; listed only when the Mac's value is kept (an away write that wins over an older Mac value is the ordinary case of a copy that lacked the field, and is no conflict) |
+| else, text field (description, note, summary) | `merge3(base, mac, value)` (worker thread with a 2 s deadline, made before the task lock and reused in it while the Mac's text is unchanged; over the deadline is the over-budget row of section 6: one conflict over the whole text, the newer side kept, so the outcome depends on the times and not on the machine's speed); clean applies; a conflict takes the newer side and the other side goes to the conflict log in full (the letter body capped 16 KB, linking to the entry) |
 | else, scalar | newer by time wins: replica `at` (shifted) vs the Mac's per-field time `task.field_at[f]` (new, written by every task update from WP9 on, and by a replay with the record's shifted `at`; falls back to `updated_at`); both values listed in the letter |
 
 - Delete wins: a task deleted on the Mac drops every queued write for it; listed in the letter when a
@@ -1134,7 +1137,10 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   (extend: 4 MB body and a WebSocket through the stream; old daemon via cap drop uses `server.http`);
   `tests/providers/leader-twins.test.ts` (bridge set gains only `stream.open`); `tests/core/task-queue-merge.test.ts`
   (new: a companion queue record and a host journal record on the same field, both drain orders give
-  the same task; an old queue file without bases still replays as today).
+  the same task; an old queue file without bases still replays as today). The host-first order is the
+  one to pin: since WP9 a drained host record moves `updated_at` to the drain's clock, so today's
+  whole-row gate in `task-outbox.ts` `applyTaskOp` (`snapshot.updated_at <= existing.updated_at` is
+  stale) drops a phone edit queued away for the same task; the per-field merge replaces that gate.
 - Acceptance: the companion live e2e and `tests/e2e/leader-takeover-live-e2e.test.ts` pass unchanged.
 
 ### WP14 Release gate: large runs, adversarial review, dev box check, observability

@@ -23,7 +23,17 @@ import {
 import { registry } from './integration-registry.js';
 import { getDb, inCopyApply, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
-import { isHostReplica } from './server-role.js';
+import { isFollower, isHostReplica } from './server-role.js';
+import { stampedFieldTimes as stampFieldTimesPure, type FieldStamp } from './task-field-times.js';
+
+/**
+ * Per-field change times are the leader's own record (task-field-times.ts). A follower
+ * (a host replica or the companion) keeps the leader's rows as they came: stamping its
+ * own times there would make the copy differ from the Mac's rows byte for byte.
+ */
+function stampedFieldTimes(...args: Parameters<typeof stampFieldTimesPure>): ReturnType<typeof stampFieldTimesPure> {
+  return isFollower() ? null : stampFieldTimesPure(...args);
+}
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
 import { folderProjectFor, trimDir } from './sessions/folder-project.js';
 import { isAwaitingTurnEnd } from './sessions/self-complete-stop.js';
@@ -89,7 +99,7 @@ export function validatePluginContent(task: { source: string; id?: string }, fie
 }
 
 /** Ask the task's plugin to validate content before writing. Throws on rejection. */
-function runPluginContentValidation(task: { source: string; id?: string }, field: string, value: string): void {
+export function runPluginContentValidation(task: { source: string; id?: string }, field: string, value: string): void {
   const error = validatePluginContent(task, field, value);
   if (error) {
     log.task.info('content validation rejected', { source: task.source, field, taskId: (task as Task).id, error });
@@ -891,10 +901,29 @@ async function writeStore(store: TaskStore): Promise<void> {
     const nextFingerprints = new Map<string, RowFingerprint>();
 
     const insertStmt = handle.prepare(insertSql);
+    // The rows as stored, for the per-field change times (task-field-times.ts): the
+    // shadow when it is current, else read once (the rewrite is whole-store then anyway).
+    let storedRows: Map<string, Record<string, any>> | null = null;
+    const storedTask = (id: string): Task | undefined => {
+      const old = shadow?.fingerprints.get(id);
+      if (old) return rowToTask(boundRow(old));
+      if (shadow) return undefined;
+      storedRows ??= new Map((handle.prepare('SELECT * FROM tasks').all() as Record<string, any>[]).map((r) => [String(r.id), r]));
+      const row = storedRows.get(id);
+      return row ? rowToTask(row) : undefined;
+    };
     for (const task of validTasks) {
       // Identity over the exact bound values, so a field that round-trips to the
       // same column value is correctly treated as unchanged.
-      const fingerprint = rowFingerprint(task);
+      let fingerprint = rowFingerprint(task);
+      // Only a row whose bound values changed can have a field that changed.
+      if (!(shadow && sameFingerprint(shadow.fingerprints.get(task.id), fingerprint))) {
+        const stamped = stampedFieldTimes(storedTask(task.id), task);
+        if (stamped) {
+          task.field_at = stamped;
+          fingerprint = rowFingerprint(task);
+        }
+      }
       nextFingerprints.set(task.id, fingerprint);
       storeStats.fingerprintedRows += 1;
       if (canSkipUnchanged && sameFingerprint(shadow!.fingerprints.get(task.id), fingerprint)) {
@@ -1055,6 +1084,21 @@ export interface AddTaskInput {
   asyncPush?: boolean;
   /** Skip plugin content-validation & auto-push (fork children are internal). */
   _skipPluginOps?: boolean;
+  /**
+   * A host journal replay of a task the replica created while the Mac was away
+   * (docs/plan/walnut-replica-servers-impl.md section 7, "Create"): the id the writer
+   * minted. An id already taken throws `TaskIdTakenError` (the drain re-mints).
+   */
+  explicitId?: string;
+  /** The op id that created the task (stored as `created_by_op`): a replay with the same op is a no-op. */
+  createdByOp?: string;
+}
+
+/** addTask with an explicitId that another task already has. */
+export class TaskIdTakenError extends Error {
+  constructor(readonly id: string, readonly createdByOp: string | undefined) {
+    super(`A task with id ${id} already exists`);
+  }
 }
 
 /**
@@ -2720,8 +2764,14 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       }
     }
 
+    if (input.explicitId !== undefined) {
+      const taken = store.tasks.find((t) => t.id === input.explicitId);
+      if (taken) throw new TaskIdTakenError(input.explicitId, taken.created_by_op);
+    }
+
     const newTask: Task = {
-      id: generateId(),
+      id: input.explicitId ?? generateId(),
+      ...(input.createdByOp ? { created_by_op: input.createdByOp } : {}),
       title: input.title,
       status: 'todo',
       phase: 'TODO',
@@ -3475,6 +3525,38 @@ function checkCircularDependency(store: TaskStore, taskId: string, depIds: strin
       }
     }
   }
+}
+
+/**
+ * The online dependency checks (validateDependencyIds, then checkCircularDependency) for a
+ * caller that holds a store it read itself: the offline drain checks a queued depends_on
+ * inside the row's write lock against the rows read there (readDependencyStoreSync). Throws the same
+ * DependencyValidationError / CircularDependencyError the online write does.
+ */
+export function checkDependencyWrite(store: Pick<TaskStore, 'tasks'>, taskId: string, depIds: readonly string[]): void {
+  const deduped = [...new Set(depIds)];
+  if (!deduped.length) return;
+  validateDependencyIds(store as TaskStore, taskId, deduped);
+  checkCircularDependency(store as TaskStore, taskId, deduped);
+}
+
+/**
+ * Every task's id and depends_on straight from SQLite, synchronously, for a check made
+ * INSIDE the write lock (an updateTaskRaw callback): no other write can move a row
+ * between this read and the write, as in the online dependency mutation. Two small
+ * columns, so the read stays a few ms on a large store.
+ */
+export function readDependencyStoreSync(): Pick<TaskStore, 'tasks'> {
+  const db = getDb();
+  if (!db) throw new Error('task store is not open');
+  const rows = db.prepare('SELECT id, depends_on FROM tasks').all() as Array<{ id: string; depends_on: string | null }>;
+  return {
+    tasks: rows.map((r) => {
+      let deps: unknown;
+      try { deps = r.depends_on ? JSON.parse(r.depends_on) : undefined; } catch { deps = undefined; }
+      return { id: String(r.id), ...(Array.isArray(deps) ? { depends_on: deps.map(String) } : {}) } as Task;
+    }),
+  };
 }
 
 /**
@@ -5927,6 +6009,9 @@ function fileTasksLocked(
     }
     const prepared = prepareRawUpdate(task, patch);
     if (!prepared) continue;
+    // Per-field change times (task-field-times.ts), from the row as stored.
+    const filedTimes = stampedFieldTimes(task, { ...task, ...prepared });
+    if (filedTimes) prepared.field_at = filedTimes;
     prepared.updated_at = now;
     const patchRow = taskToRow(prepared);
     // group_id rides the payload column: rebuild it from the merged task so the
@@ -7923,6 +8008,16 @@ export async function updateTaskRaw(
      *  other than COMPLETE. The session machine sets it (a new turn, a prompt
      *  that needs the human); sync pulls stay blocked by the held-phase guard. */
     leaveHeld?: boolean;
+    /** The session whose call made this write, carried on the phase event so a notice
+     *  it causes skips its own author (updateTask's actorSid). */
+    actorSid?: string;
+    /** The time this ONE row's changed fields are stamped at (a journal replay's shifted
+     *  time, task-field-times.ts), instead of now. Writes the events cause stamp now. */
+    fieldTimes?: FieldStamp;
+    /** A write that moves the task to COMPLETE ends its sessions the way completeTask
+     *  does (autoCompleteTaskSessions; `actorSid`'s own session at its turn end). The
+     *  offline drain replays a session's away task_complete through here. */
+    completeSessions?: boolean;
   },
 ): Promise<{ changed: boolean; task?: Task }> {
   await ensureInit();
@@ -7939,6 +8034,9 @@ export async function updateTaskRaw(
     if (!patch) return undefined;
     const prepared = prepareRawUpdate(task, patch, { reopenTerminal: opts?.reopenTerminal, leaveHeld: opts?.leaveHeld });
     if (!prepared) return undefined;
+    // Per-field change times (task-field-times.ts), from the row as stored.
+    const stamped = stampedFieldTimes(task, { ...task, ...prepared }, opts?.fieldTimes);
+    if (stamped) prepared.field_at = stamped;
 
     // Build the UPDATE dynamically from the fields that actually changed.
     // taskToRow() already handles column mapping + JSON encoding + payload spill.
@@ -7983,10 +8081,14 @@ export async function updateTaskRaw(
   if (opts?.push && updated.source !== 'local') {
     pushInBackground(updated, null); // sync_error is stamped inside on failure
   }
+  // Before the phase event, as completeTask orders them.
+  if (opts?.completeSessions && updated.phase === 'COMPLETE' && rawOldPhase !== 'COMPLETE') {
+    autoCompleteTaskSessions(updated, opts.actorSid);
+  }
   if (opts?.emitEvent) {
     const eventName = updated.phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED;
     bus.emit(eventName, { task: updated }, ['web-ui'], { source: opts.source ?? 'internal' });
-    if (rawOldPhase !== undefined) emitPhaseChanged(updated, rawOldPhase, opts.source ?? 'session');
+    if (rawOldPhase !== undefined) emitPhaseChanged(updated, rawOldPhase, opts.source ?? 'session', opts.actorSid);
   }
 
   return { changed: true, task: updated };
@@ -8083,6 +8185,9 @@ export async function updateTasksBulk(
         const task = rowToTask(row);
         const prepared = prepareRawUpdate(task, patch);
         if (!prepared) continue;
+        // Per-field change times (task-field-times.ts), from the row as stored.
+        const bulkTimes = stampedFieldTimes(task, { ...task, ...prepared });
+        if (bulkTimes) prepared.field_at = bulkTimes;
         const patchRow = taskToRow(prepared);
         // See updateTaskRaw: recompute the payload column from the merged task so
         // a patch touching one payload field doesn't wipe the others (group_id …).
