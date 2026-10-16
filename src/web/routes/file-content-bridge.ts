@@ -20,6 +20,11 @@
  *                             next primary reconnect via auto-deploy)
  *   daemon EDENIED          → 403 not_supported_cloud
  *
+ * A path in the PRIMARY's data dir (`~/.open-walnut/...`) has a git-synced
+ * copy on this box: when the primary is offline, too old, or the file is over
+ * the cap, that copy answers instead (file-content-replica-copy.ts). The
+ * primary's "not found" and "refused" stay final.
+ *
  * The replica ALSO pre-checks the obvious denials (traversal, secret paths)
  * to save a round trip — but the daemon is the authority; these checks are a
  * convenience, not the guarantee.
@@ -33,7 +38,8 @@ import { computeContentHash } from '../../utils/file-ops.js'
 import { sendV1Error } from './v1-control-relay.js'
 // ONE source of truth for which extensions ride the raw byte lane (see the
 // note next to its use below — a copied table drifted and corrupted bytes).
-import { RAW_INLINE_MIME, rawTextMime } from './file-content.js'
+import { RAW_INLINE_MIME, rawTextMime, attachmentDisposition } from './file-content.js'
+import { resolveReplicaCopy } from './file-content-replica-copy.js'
 
 /** Primary box's daemon always registers under this bridge alias. */
 const PRIMARY_BRIDGE_ALIAS = '__local__'
@@ -281,6 +287,13 @@ export async function serveCloudFileContent(req: Request, res: Response): Promis
 
   const result = await bridgeReadFile(hostAlias, filePath)
   if (result.status !== 'ok') {
+    if (hostAlias === PRIMARY_BRIDGE_ALIAS && copyMayAnswer(result)) {
+      const copy = await resolveReplicaCopy(filePath)
+      if (copy) {
+        await serveReplicaCopy(req, res, filePath, copy, { raw, download, ext, why: failureLabel(result) })
+        return
+      }
+    }
     answerFailure(res, result, raw ? 'raw' : 'json', ext)
     return
   }
@@ -293,7 +306,7 @@ export async function serveCloudFileContent(req: Request, res: Response): Promis
       res.status(200).set({
         'Content-Type': inlineType ?? 'application/octet-stream',
         'Content-Length': String(buf.length),
-        ...(download ? { 'Content-Disposition': `attachment; filename="${path.basename(filePath)}"` } : {}),
+        ...(download ? { 'Content-Disposition': attachmentDisposition(filePath) } : {}),
       })
       res.end(buf)
       return
@@ -303,20 +316,84 @@ export async function serveCloudFileContent(req: Request, res: Response): Promis
     return
   }
 
-  // JSON viewer payload — same shape/truncation contract as the shared core.
+  res.json(jsonPayloadFromBuffer(buf, ext, true))
+}
+
+/** JSON viewer payload — same shape/truncation contract as the shared core. */
+function jsonPayloadFromBuffer(buf: Buffer, ext: string, withHash: boolean): Record<string, unknown> {
   if (isBinaryBuffer(buf)) {
-    res.json({ content: null, size: buf.length, truncated: false, binary: true, extension: ext })
-    return
+    return { content: null, size: buf.length, truncated: false, binary: true, extension: ext }
   }
   const content = buf.toString('utf-8')
   const truncated = content.length > MAX_TEXT_PAYLOAD
-  res.json({
+  return {
     content: truncated ? content.slice(0, MAX_TEXT_PAYLOAD) : content,
     size: content.length,
     truncated,
     binary: false,
     extension: ext,
     // Only a WHOLE read gets a hash (the editor's optimistic-lock token).
-    ...(truncated ? {} : { contentHash: computeContentHash(content) }),
+    ...(truncated || !withHash ? {} : { contentHash: computeContentHash(content) }),
+  }
+}
+
+/** The primary could not, or would not, send the bytes: the synced copy may. A
+ *  "not there" or "refused" answer from the primary is final. */
+function copyMayAnswer(result: Exclude<BridgeReadResult, { status: 'ok' }>): boolean {
+  if (result.status === 'offline') return true
+  return result.failure.kind === 'too_large' || result.failure.kind === 'needs_upgrade'
+}
+
+function failureLabel(result: Exclude<BridgeReadResult, { status: 'ok' }>): string {
+  return result.status === 'offline' ? 'primary_offline' : result.failure.kind
+}
+
+/**
+ * Answer from this replica's git-synced copy of the primary's data dir. Raw
+ * mode streams with Range support (no 2 MB cap: the bytes never cross the
+ * bridge). The JSON payload carries no contentHash: a copy that may trail the
+ * primary by one sync must never become an editor's write token.
+ */
+async function serveReplicaCopy(
+  req: Request,
+  res: Response,
+  requestPath: string,
+  copy: { localPath: string; size: number },
+  opts: { raw: boolean; download: boolean; ext: string; why: string },
+): Promise<void> {
+  log.web.info('cloud file-content served from the synced copy', {
+    path: requestPath, size: copy.size, why: opts.why,
   })
+  res.set('X-Walnut-Served-From', 'replica-copy')
+  if (opts.raw) {
+    const { serveRawBytes } = await import('./file-content.js')
+    const inlineType = Object.hasOwn(RAW_INLINE_MIME, opts.ext) ? RAW_INLINE_MIME[opts.ext] : undefined
+    const ctype = opts.download || inlineType ? (inlineType ?? 'application/octet-stream') : rawTextMime(opts.ext)
+    await serveRawBytes(req, res, copy.localPath, undefined, ctype, opts.download)
+    return
+  }
+  if (copy.size <= MAX_BRIDGE_FILE_BYTES) {
+    res.json(jsonPayloadFromBuffer(await fsp.readFile(copy.localPath), opts.ext, false))
+    return
+  }
+  // Large file: the viewer only ever shows the first MAX_TEXT_PAYLOAD chars.
+  const fh = await fsp.open(copy.localPath, 'r')
+  try {
+    const head = Buffer.alloc(MAX_TEXT_PAYLOAD)
+    const { bytesRead } = await fh.read(head, 0, head.length, 0)
+    const buf = head.subarray(0, bytesRead)
+    if (isBinaryBuffer(buf)) {
+      res.json({ content: null, size: copy.size, truncated: false, binary: true, extension: opts.ext })
+      return
+    }
+    res.json({
+      content: buf.toString('utf-8').replace(/\uFFFD+$/, ''),
+      size: copy.size,
+      truncated: true,
+      binary: false,
+      extension: opts.ext,
+    })
+  } finally {
+    await fh.close()
+  }
 }

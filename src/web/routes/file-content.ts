@@ -173,6 +173,16 @@ const RAW_TEXT_MIME: Record<string, string> = {
 }
 
 /** Shared with the cloud bridge relay so both edges answer the same type. */
+/** `attachment` header for any file name: Node refuses a header holding a
+ *  non-Latin-1 character, so the plain `filename` is an ASCII stand-in and the
+ *  real name rides `filename*` (RFC 6266 / 5987). */
+export function attachmentDisposition(filePath: string): string {
+  const name = path.basename(filePath)
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`
+}
+
 export function rawTextMime(ext: string): string {
   return Object.hasOwn(RAW_TEXT_MIME, ext) ? RAW_TEXT_MIME[ext]! : 'text/plain; charset=utf-8'
 }
@@ -215,7 +225,7 @@ function parseRangeHeader(
  * frame — see DaemonFileReader.CHUNK_THRESHOLD). Aborts cleanly when the player
  * cancels mid-stream (seek) so a whale video doesn't keep transferring.
  */
-async function serveRawBytes(
+export async function serveRawBytes(
   req: Request,
   res: Response,
   filePath: string,
@@ -254,7 +264,7 @@ async function serveRawBytes(
       'Content-Length': String(end - start + 1),
       'Accept-Ranges': 'bytes',
       ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
-      ...(download ? { 'Content-Disposition': `attachment; filename="${path.basename(filePath)}"` } : {}),
+      ...(download ? { 'Content-Disposition': attachmentDisposition(filePath) } : {}),
     })
 
     let offset = start
@@ -312,11 +322,13 @@ async function serveRawBytes(
     'Content-Length': String(end - start + 1),
     'Accept-Ranges': 'bytes',
     ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
-    ...(download ? { 'Content-Disposition': `attachment; filename="${path.basename(filePath)}"` } : {}),
+    ...(download ? { 'Content-Disposition': attachmentDisposition(filePath) } : {}),
   })
   if (end < start) { res.end(); return } // empty file — headers already say Content-Length: 0
   const stream = fs.createReadStream(filePath, { start, end })
   stream.on('error', () => res.destroy())
+  // pipe() only unpipes on a client abort (a player seeking): close the fd too.
+  res.on('close', () => stream.destroy())
   stream.pipe(res)
 }
 

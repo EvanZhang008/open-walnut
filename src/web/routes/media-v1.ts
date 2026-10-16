@@ -158,6 +158,15 @@ mediaV1Router.get('/media', async (req: Request, res: Response, next: NextFuncti
           } catch { /* no cache */ }
         }
       }
+      // 4. An image the primary owns, in its data dir: the cloud box holds a
+      //    git-synced copy (on the primary itself this is the file step 1 tried).
+      //    Only while the primary has no live bridge: its "not found" is final.
+      if (!buffer && hosts.length > 0 && hosts.every((h) => h === '__local__')
+        && !(await import('../ws/bridge-registry.js')).bridgeForHost('__local__').connected) {
+        const { resolveReplicaCopy } = await import('./file-content-replica-copy.js')
+        const copy = await resolveReplicaCopy(filePath)
+        if (copy && copy.size <= MAX_FILE_SIZE) buffer = await fsp.readFile(copy.localPath)
+      }
     }
 
     if (!buffer) {

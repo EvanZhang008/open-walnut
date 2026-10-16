@@ -212,7 +212,7 @@ describe('GET /api/file-content download=1', () => {
       .query({ path: videoPath, raw: '1', download: '1' });
 
     expect(res.status).toBe(200);
-    expect(res.headers['content-disposition']).toBe('attachment; filename="demo.mp4"');
+    expect(res.headers['content-disposition']).toBe("attachment; filename=\"demo.mp4\"; filename*=UTF-8''demo.mp4");
   });
 
   it('downloads a non-media file as octet-stream attachment', async () => {
@@ -222,7 +222,7 @@ describe('GET /api/file-content download=1', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('application/octet-stream');
-    expect(res.headers['content-disposition']).toBe('attachment; filename="notes.txt"');
+    expect(res.headers['content-disposition']).toBe("attachment; filename=\"notes.txt\"; filename*=UTF-8''notes.txt");
     expect(res.text ?? res.body.toString()).toContain('hello walnut');
   });
 });
