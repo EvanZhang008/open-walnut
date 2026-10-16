@@ -16,8 +16,14 @@ import fsp from 'node:fs/promises'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-replica-guard', { CLOUD_MODE: false }))
+// The real stop funnel, watched: capacity eviction reaches it through a dynamic import.
+vi.mock('../../../src/core/sessions/owner-stop.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/core/sessions/owner-stop.js')>()
+  return { ...real, stopThroughOwner: vi.fn(real.stopThroughOwner) }
+})
 
 import { WALNUT_HOME } from '../../../src/constants.js'
+import { log } from '../../../src/logging/index.js'
 import { _resetServerRoleForTesting, isHostReplica } from '../../../src/core/server-role.js'
 import { ORPHAN_STOP_CAPABILITY, stopAcpThroughOwner, stopThroughOwner, sweepOrphansThroughOwner, type OwnerConnection } from '../../../src/core/sessions/owner-stop.js'
 import { OWNER_HOME_CAPABILITY } from '../../../src/core/sessions/stop-provenance.js'
@@ -118,22 +124,67 @@ describe('a host replica never acts on a process named by a copied row', () => {
     expect(alive(pid)).toBe(true)
   })
 
-  it('evicts no copied idle session for capacity and repairs no copied row', async () => {
+  it('evicts no copied idle session for capacity: no victim marked, no stop asked, not even one the funnel would refuse', async () => {
     const sessionDb = await import('../../../src/core/session-db.js')
     const tracker = await import('../../../src/core/session-tracker.js')
     sessionDb.getDb()
     // The copy's own write path (kinds/sessions.ts), rows as the Mac had them.
     const ids = ['sid-marina-idle-1', 'sid-marina-idle-2', 'sid-marina-idle-3']
     sessionDb.applySessionCopy({ rows: ids.map((id) => copiedRow({ claudeSessionId: id, process_status: 'idle', status_reason: undefined })) })
+    const stop = vi.mocked(stopThroughOwner)
+    stop.mockClear()
+    const warns = vi.spyOn(log.session, 'warn')
     const kill = vi.spyOn(process, 'kill')
     try {
       const result = await tracker.checkSessionLimit(null, undefined, { max_idle: 1 })
       // Over the idle limit (3 >= 1), so the Mac would evict here; the replica must not.
       expect(result.idleCount).toBe(3)
       expect(result.evicted ?? []).toEqual([])
+      // The guard in checkSessionLimit is what stops it, before the loop: stopThroughOwner's own
+      // guard would refuse each victim too, so only the funnel never being reached proves this one.
+      expect(stop).not.toHaveBeenCalled()
+      const said = warns.mock.calls.map(([msg, data]) => [msg, (data as { action?: string } | undefined)?.action])
+      expect(said.filter(([msg]) => msg === 'evicting idle session for capacity')).toEqual([])
+      expect(said).toContainEqual(['replica: refused a process action, sessions here are copies of the Mac\'s', 'capacity_eviction'])
       expect(kill.mock.calls.filter(([p]) => p === pid)).toEqual([])
-    } finally { kill.mockRestore() }
-    for (const id of ids) expect((await tracker.getSessionByClaudeId(id))?.process_status).toBe('idle')
+      for (const id of ids) expect((await tracker.getSessionByClaudeId(id))).toMatchObject({ process_status: 'idle' })
+    } finally {
+      kill.mockRestore()
+      warns.mockRestore()
+      sessionDb.applySessionCopy({ removeIds: ids })
+    }
     expect(alive(pid)).toBe(true)
+  })
+
+  it('repairs no copied row its label cannot vouch for, through every caller of the repair', async () => {
+    const sessionDb = await import('../../../src/core/session-db.js')
+    const tracker = await import('../../../src/core/session-tracker.js')
+    sessionDb.getDb()
+    // Rows whose label this server does not read as alive: one with none, one a newer Mac wrote.
+    // On the Mac a dead pid would mark such a row stopped; on a replica the row is the Mac's.
+    const rows = [
+      copiedRow({ claudeSessionId: 'sid-marina-nolabel', process_status: undefined, status_reason: undefined }),
+      copiedRow({ claudeSessionId: 'sid-marina-newlabel', process_status: 'suspended' as SessionRecord['process_status'], status_reason: undefined }),
+    ]
+    sessionDb.applySessionCopy({ rows })
+    const warns = vi.spyOn(log.session, 'warn')
+    try {
+      const before = await Promise.all(rows.map((r) => tracker.getSessionByClaudeId(r.claudeSessionId)))
+      const limit = await tracker.checkSessionLimit(null, undefined, { max_idle: 30 })
+      expect(limit.running).toBe(0)
+      const alive = await tracker.getAllAliveSessionsByHost()
+      expect(Object.values(alive).flat().map((s) => s.claudeSessionId)).toEqual([])
+      // fixStaleRecords writes fire and forget: give a write that should not exist time to land.
+      await new Promise((r) => setTimeout(r, 50))
+      const said = warns.mock.calls.map(([msg, data]) => [msg, (data as { action?: string } | undefined)?.action])
+      expect(said.filter(([msg]) => msg === 'fixing stale records' || msg === 'failed to fix stale record')).toEqual([])
+      expect(said.filter(([, action]) => action === 'stale_repair')).toHaveLength(2)
+      const after = await Promise.all(rows.map((r) => tracker.getSessionByClaudeId(r.claudeSessionId)))
+      expect(after).toEqual(before)
+      expect(after.map((s) => s?.status_reason)).toEqual([undefined, undefined])
+    } finally {
+      warns.mockRestore()
+      sessionDb.applySessionCopy({ removeIds: rows.map((r) => r.claudeSessionId) })
+    }
   })
 })

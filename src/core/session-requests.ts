@@ -105,9 +105,13 @@ async function updateRequests(fn: (store: RequestStore) => RequestStore | Promis
   }
 }
 
-/** Every request as stored (the requests copy's leader rows). */
+/**
+ * Every request as stored (the requests copy's leader rows). A read that
+ * failed throws rather than answering no requests (utils/fs.ts readErrors), so
+ * the copy round skips this kind instead of removing the host's copy.
+ */
 export async function listAllSessionRequests(): Promise<SessionRequest[]> {
-  return [...((await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY)).requests ?? [])];
+  return [...((await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, { readErrors: 'throw' })).requests ?? [])];
 }
 
 function prune(requests: SessionRequest[]): SessionRequest[] {

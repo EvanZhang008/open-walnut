@@ -125,6 +125,36 @@ describe('a host\'s Walnut, as a setting', () => {
     expect(((await on.json()) as { host: { settings: { copies: unknown } } }).host.settings.copies).toEqual(DEFAULT_COPIES)
   })
 
+  it('a copies change of the wrong shape is a 400 that writes nothing; a good one merges with the stored choice', async () => {
+    const put = (body: unknown) => api('/api/host-servers/devbox', { method: 'PUT', headers: PERSON, body: JSON.stringify(body) })
+    const stored = async () => ((await getConfig()).hosts?.devbox?.server as { copies?: Record<string, boolean> } | undefined)?.copies
+    const before = await stored()
+    expect(before).toEqual({ inbox_bodies: false, inbox: true })
+    for (const copies of [null, [], [true], 'sessions', 7, true, { sessions: null }, { sessions: 1 }, { sessions: 'false' }]) {
+      const res = await put({ copies })
+      const error = ((await res.json()) as { error?: string }).error
+      expect([JSON.stringify(copies), res.status, error]).toEqual([JSON.stringify(copies), 400, 'copies names only sessions, requests, boards, inbox, inbox_bodies, each true or false'])
+    }
+    // A bad choice beside a good field writes neither.
+    expect((await put({ enabled: false, copies: [] })).status).toBe(400)
+    expect(await stored()).toEqual(before)
+    expect((await getConfig()).hosts?.devbox?.server).toMatchObject({ enabled: true })
+    // One kind per change: each keeps the choices stored before it.
+    expect((await put({ copies: { sessions: false } })).status).toBe(200)
+    const res = await put({ copies: { boards: false } })
+    expect(res.status).toBe(200)
+    expect(await stored()).toEqual({ ...before, sessions: false, boards: false })
+    expect(((await res.json()) as { host: { settings: { copies: unknown } } }).host.settings.copies)
+      .toEqual({ ...DEFAULT_COPIES, sessions: false, boards: false })
+    // A change of another field, or an empty choice, keeps the stored one.
+    expect((await put({ expose: { enabled: false } })).status).toBe(200)
+    expect((await put({ copies: {} })).status).toBe(200)
+    expect(await stored()).toEqual({ ...before, sessions: false, boards: false })
+    // Back on: stored as chosen, reported with the defaults filled in.
+    expect((await put({ copies: { sessions: true, boards: true } })).status).toBe(200)
+    expect(await stored()).toEqual({ ...before, sessions: true, boards: true })
+  })
+
   it('turning it off writes it off', async () => {
     expect((await api('/api/host-servers/devbox', { method: 'PUT', headers: PERSON, body: JSON.stringify({ enabled: false }) })).status).toBe(200)
     expect((await getConfig()).hosts?.devbox?.server).toMatchObject({ enabled: false })

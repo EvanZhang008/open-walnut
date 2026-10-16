@@ -27,7 +27,7 @@
 
 import { log } from '../../../logging/index.js'
 import { isFollower } from '../../server-role.js'
-import { HELD_RETRY_MS, PUT_BATCH_BYTES, PUT_TIMEOUT_MS, REST_ERRORS, sha12 } from '../kind.js'
+import { HELD_RETRY_MS, PUT_BATCH_BYTES, PUT_TIMEOUT_MS, REST_ERRORS, keptManifestHash, sha12 } from '../kind.js'
 import { buildKindManifest, confirmKindRemoval, putRow, runKindRound, StepFailed, type KindManifest, type KindRoundResult, type LeaderKind } from '../kind-leader.js'
 import { DigestMap } from '../search-digest.js'
 import { forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
@@ -62,6 +62,24 @@ export interface CopyKind<Row> extends LeaderKind<Row> {
   choice: keyof CopyChoice
   /** Calls `soon` whenever the kind's store wrote. Returns the stop. */
   watch(soon: () => void): () => void
+  /**
+   * Keys this `rows()` answer found but could not read (boards: a file that did
+   * not open or parse). The round names them in `keep` (kind.ts), so the host
+   * keeps its copy of each instead of removing it. None: every row was read.
+   */
+  keep?(rows: readonly Row[]): readonly string[]
+}
+
+/** A kind's manifest for this round: its rows, plus the keys it could not read (`keep`, in the manifest hash). */
+export async function buildCopyManifest<Row>(kind: CopyKind<Row>): Promise<KindManifest<Row>> {
+  const rows = await kind.rows()
+  const manifest = await buildKindManifest(kind, [...rows])
+  const keep = [...(kind.keep?.(rows) ?? [])].sort()
+  if (keep.length > 0) {
+    manifest.keep = keep
+    manifest.hash = keptManifestHash(manifest.hash, keep)
+  }
+  return manifest
 }
 
 export type CopyTarget = Pick<ReplicaTarget, 'id' | 'kind' | 'label' | 'post' | 'available' | 'copies' | 'program'>
@@ -143,7 +161,8 @@ async function digestShortcut<Row>(
 ): Promise<KindRoundResult | null> {
   // A kind turned on again after a purge takes the manifest: only a sync replaces the host's off marker
   // (kinds/gate.ts), even when both sides are empty and the digests agree.
-  if (!kind.digest || st.confirmNext || st.manifest === manifest.hash || st.action === 'off') return null
+  // Rows the leader could not read ride only on a sync (`keep`), never on a delta.
+  if (!kind.digest || st.confirmNext || st.manifest === manifest.hash || st.action === 'off' || (manifest.keep?.length ?? 0) > 0) return null
   const digest = manifestDigest(manifest, kind.ordered)
   const prev = taken.get(st)
   const changed = prev ? deltaKeys(kind as CopyKind<unknown>, manifest, prev) : []
@@ -234,8 +253,9 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
   for (const kind of kinds) {
     if (!ready.some((r) => r.choice[kind.choice])) continue
     try {
-      manifests.set(kind.kind, await buildKindManifest(kind, [...await kind.rows()]))
+      manifests.set(kind.kind, await buildCopyManifest(kind))
     } catch (err) {
+      // No manifest, no step: a store this leader failed to read never reads as an empty one.
       log.session.warn('copies: could not read the leader rows of a kind', { kind: kind.kind, error: err instanceof Error ? err.message : String(err) })
     }
   }

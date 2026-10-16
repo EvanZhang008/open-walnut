@@ -143,9 +143,13 @@ export function onLetterStoreWritten(cb: () => void): () => void {
   return () => { storeWriteListeners.delete(cb); };
 }
 
-/** The index as stored, in its order (the inbox copy's leader rows). */
-export async function readLetterIndexForReplica(): Promise<LetterRecord[]> {
-  return normalizeStore(await readJsonFile<unknown>(INDEX_FILE, null)).letters;
+/**
+ * The index as stored, in its order (the inbox copy's leader rows). The leader
+ * passes `readErrors: 'throw'`: an index it failed to read is not an empty inbox,
+ * and the copy round then skips the inbox instead of removing the host's letters.
+ */
+export async function readLetterIndexForReplica(opts: { readErrors?: 'fallback' | 'throw' } = {}): Promise<LetterRecord[]> {
+  return normalizeStore(await readJsonFile<unknown>(INDEX_FILE, null, opts)).letters;
 }
 
 // ── Ids + body files ──

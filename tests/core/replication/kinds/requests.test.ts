@@ -63,6 +63,19 @@ beforeEach(async () => {
   leader = [rq(1), rq(2, { status: 'replied', settledAt: T0 }), rq(3)]
 })
 
+describe('a request store the Mac fails to read', () => {
+  it('is not an empty store: the round skips the kind and sends nothing', async () => {
+    const real: CopyKind<SessionRequest> = { ...REQUESTS_KIND, watch: () => () => {} }
+    // No file yet: no requests.
+    expect(await real.rows()).toEqual([])
+    // A file that does not open (a link to itself: ELOOP, as root too), standing in for EACCES or EMFILE.
+    await fsp.symlink('session-requests.json', storeFile())
+    await expect(real.rows()).rejects.toThrow(/ELOOP/)
+    expect(await syncCopyKinds([real], { targets: () => [h.target] })).toEqual([])
+    expect(h.calls).toEqual([])
+  })
+})
+
 describe('forwardRequest', () => {
   it('takes the leader\'s row unless that moves a final status anywhere else', () => {
     expect(forwardRequest(undefined, rq(1)).status).toBe('pending')

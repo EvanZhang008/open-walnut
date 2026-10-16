@@ -13,12 +13,13 @@
  * answer.
  */
 
+import { randomBytes } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { writeJsonFile } from '../../utils/fs.js'
 import { DigestMap } from './search-digest.js'
 import {
-  OPS, REFUSAL_ERROR, confirmMatches, entriesOf, removesMost, sameOrder, sha12, stepSchemaVersion, type ReplicaOp, type ReplicaStepResult,
+  OPS, REFUSAL_ERROR, confirmMatches, entriesOf, keepOf, removesMost, sameOrder, sha12, stepSchemaVersion, type ReplicaOp, type ReplicaStepResult,
 } from './kind.js'
 
 export interface FollowerKindHandler {
@@ -59,6 +60,26 @@ export async function followerStep(body: Record<string, unknown>, extra: readonl
 export async function writeCopyFile(file: string, data: unknown): Promise<void> {
   await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
   await writeJsonFile(file, data, { mode: 0o600 })
+}
+
+/**
+ * A copy's text file (a letter body), as writeCopyFile writes JSON: a temp
+ * file at 0600 in the same dir, then a rename, so a reader never sees half a
+ * body and a file that was there at another mode ends up 0600. The temp name
+ * starts with a dot, which no kind's key shape takes.
+ */
+export async function writeCopyText(file: string, text: string): Promise<void> {
+  const dir = path.dirname(file)
+  await fsp.mkdir(dir, { recursive: true, mode: 0o700 })
+  const tmp = path.join(dir, `.copy-${randomBytes(8).toString('hex')}.tmp`)
+  try {
+    await fsp.writeFile(tmp, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    await fsp.chmod(tmp, 0o600)
+    await fsp.rename(tmp, file)
+  } catch (err) {
+    await fsp.rm(tmp, { force: true }).catch(() => {})
+    throw err
+  }
 }
 
 /** One replica step at a time per chain: a put must never interleave with the sync it answers. */
@@ -170,6 +191,10 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     if (refused) return refused
     const entries = entriesOf(body.entries)
     if (!entries) return { ok: false, status: 400, error: 'bad_entries' }
+    // Rows the leader could not read this round (kind.ts keepOf): this side keeps its copy of each.
+    const keep = keepOf(body.keep)
+    if (!keep) return { ok: false, status: 400, error: 'bad_keep' }
+    const kept = new Set(keep)
     const s = await spec.load()
     const held = await spec.held()
     const local = await spec.localKeys()
@@ -182,9 +207,11 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
       if (!localSet.has(e.k) || s.hashes[e.k] !== e.h) need.push(e.k)
     }
     const removeIds: string[] = []
+    let keptCount = 0
     for (const id of local) {
       if (wanted.has(id)) continue
       if (held.has(id)) { heldCount++; continue }
+      if (kept.has(id)) { keptCount++; continue }
       removeIds.push(id)
     }
     // A leader that lost its store (an empty or damaged database at boot) must
@@ -214,8 +241,10 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     s.asOf = Number(body.asOf) || Date.now()
     s.at = Date.now()
     await spec.save()
-    if (removeIds.length > 0 || need.length > 0) {
-      spec.log.info(`${spec.label}: manifest`, { kind: spec.kind, entries: entries.length, need: need.length, held: heldCount, removed: removeIds.length, reordered: reorder })
+    if (removeIds.length > 0 || need.length > 0 || keptCount > 0) {
+      spec.log.info(`${spec.label}: manifest`, {
+        kind: spec.kind, entries: entries.length, need: need.length, held: heldCount, removed: removeIds.length, reordered: reorder, ...(keptCount > 0 ? { kept: keptCount } : {}),
+      })
     }
     return { ok: true, need, held: heldCount, removed: removeIds.length }
   })

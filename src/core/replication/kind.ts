@@ -5,7 +5,7 @@
  * POST /bridge/replica. The protocol is the task copy's:
  *
  *   status  digest kinds only (WP4): count + 48-bit sum, ends an equal round
- *   sync    {kind, schemaVersion, entries:[{k,h}], asOf, confirm?, confirmFor?} -> {need, held, removed}
+ *   sync    {kind, schemaVersion, entries:[{k,h}], asOf, confirm?, confirmFor?, keep?} -> {need, held, removed}
  *   put     {kind, schemaVersion, rows, last?}                    -> {stored, held}
  *
  * The leader side runs per target (kind-leader.ts), the follower side behind
@@ -25,6 +25,11 @@
  *     names that many rows and that set of keys, and only for CONFIRM_TTL_MS;
  *     a follower refuses a confirm whose `confirmFor` does not match the
  *     manifest it came with;
+ *   - `keep` (WP4): keys the leader has but could not read this round (a board
+ *     file it failed to open or parse). The follower neither asks for them nor
+ *     removes them, so a read error on the Mac never deletes the copy. The
+ *     manifest hash takes them in (keptManifestHash), so a key leaving `keep`
+ *     runs the round again;
  *   - a follower that does not know a kind answers `404 unknown_kind`, one
  *     whose code is older than the kind's schema `409 schema_newer`; the
  *     leader rests that kind for that target 10 minutes.
@@ -98,6 +103,18 @@ export function removesMost(local: number, removing: number, floor: number): boo
 /** The manifest hash: one value over every entry, in order. */
 export function manifestHashOf(entries: readonly ManifestEntry[]): string {
   return sha12(entries.map((e) => `${e.k}:${e.h}`).join('\n'))
+}
+
+/** A sync's `keep` keys ([] when it names none), or null when it is malformed. */
+export function keepOf(raw: unknown): string[] | null {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw) || !raw.every((k) => typeof k === 'string' && k.length > 0)) return null
+  return raw as string[]
+}
+
+/** A manifest hash with its `keep` keys in it (unchanged when there are none). */
+export function keptManifestHash(hash: string, keep: readonly string[]): string {
+  return keep.length === 0 ? hash : sha12(`${hash}\nkeep:${[...keep].sort().join('\n')}`)
 }
 
 /** The set of keys a manifest names, order aside: what a confirmed removal is bound to. */

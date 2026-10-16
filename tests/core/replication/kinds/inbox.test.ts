@@ -19,9 +19,8 @@ vi.mock('../../../../src/constants.js', () => createMockConstants('walnut-copy-i
 
 import { WALNUT_HOME } from '../../../../src/constants.js'
 import { _resetServerRoleForTesting } from '../../../../src/core/server-role.js'
-import { runCopyRound, syncCopyKinds, type CopyKind } from '../../../../src/core/replication/kinds/copy-kind.js'
+import { buildCopyManifest, runCopyRound, syncCopyKinds, type CopyKind } from '../../../../src/core/replication/kinds/copy-kind.js'
 import { INBOX_BODIES_KIND, INBOX_KIND, leaderBodies, _resetInboxCopyForTesting, type LetterBodyRow } from '../../../../src/core/replication/kinds/inbox.js'
-import { buildKindManifest } from '../../../../src/core/replication/kind-leader.js'
 import { _resetReplicaStatusForTesting, forgetKindManifests } from '../../../../src/core/replication/replica-status.js'
 import type { LetterRecord } from '../../../../src/core/human-inbox/types.js'
 
@@ -40,8 +39,9 @@ function letter(i: number, over: Partial<LetterRecord> = {}): LetterRecord {
   return { id: `lt-${(1_700_000 + i).toString(36)}-a${String(i).padStart(4, '0')}`, type: 'report', title: `Weekly report ${i}`, createdAt: T0, read: false, bodyFile: `lt-${(1_700_000 + i).toString(36)}-a${String(i).padStart(4, '0')}.md`, bodyFormat: 'md', ...over } as unknown as LetterRecord
 }
 
+/** One round as syncCopyKinds runs it (the bodies it could not read in `keep`). */
 async function round<R>(kind: CopyKind<R>) {
-  return runCopyRound(kind, await buildKindManifest(kind, [...await kind.rows()]), h.target, { asOf: Date.now() })
+  return runCopyRound(kind, await buildCopyManifest(kind), h.target, { asOf: Date.now() })
 }
 
 beforeAll(async () => {
@@ -110,6 +110,21 @@ describe('the inbox index copy', () => {
     await expect(round(index)).rejects.toThrow(/manifest_removes_most_rows/)
     expect((await copiedIds()).length).toBe(80)
   })
+
+  it('an index the Mac fails to read is not an empty inbox: the round skips the kind and sends nothing', async () => {
+    const { readLetterIndexForReplica } = await import('../../../../src/core/human-inbox/store.js')
+    const real: CopyKind<LetterRecord> = { ...INBOX_KIND, watch: () => () => {} }
+    // No index yet: no letters.
+    expect(await real.rows()).toEqual([])
+    // A file that does not open (a link to itself: ELOOP, as root too), standing in for EACCES or EMFILE.
+    await fsp.mkdir(path.dirname(indexFile()), { recursive: true })
+    await fsp.symlink('index.json', indexFile())
+    await expect(real.rows()).rejects.toThrow(/ELOOP/)
+    // The replica's own reads of its copy keep their fallback.
+    expect(await readLetterIndexForReplica()).toEqual([])
+    expect(await syncCopyKinds([real], { targets: () => [h.target] })).toEqual([])
+    expect(h.calls).toEqual([])
+  })
 })
 
 describe('letter bodies', () => {
@@ -133,6 +148,36 @@ describe('letter bodies', () => {
       await syncCopyKinds([bodies], { targets: () => [chosen.target] })
       expect(stepsSince(chosen.calls, from)).toEqual(['sync:inbox-bodies'])
     } finally { await chosen.close() }
+  })
+
+  it('a body copy is replaced whole: a temp file and a rename at 0600, never written in place', async () => {
+    expect(await round(bodies)).toMatchObject({ action: 'synced', sent: 6 })
+    const name = letters[0].bodyFile as string
+    const copied = path.join(WALNUT_HOME, 'human-inbox', 'bodies', name)
+    fs.chmodSync(copied, 0o644)
+    const ino = fs.statSync(copied).ino
+    await fsp.writeFile(path.join(bodyDir, name), '# Report\nBody, revised\n')
+    expect(await round(bodies)).toMatchObject({ action: 'synced', sent: 1 })
+    const st = fs.statSync(copied)
+    expect([st.ino === ino, st.mode & 0o777]).toEqual([false, 0o600])
+    expect(await fsp.readFile(copied, 'utf8')).toBe('# Report\nBody, revised\n')
+    expect(fs.readdirSync(path.dirname(copied)).filter((n) => n.startsWith('.'))).toEqual([])
+  })
+
+  it('a body the Mac lists but cannot read stays on the host; once the Mac deletes it, it goes', async () => {
+    await round(bodies)
+    const name = letters[1].bodyFile as string
+    const leaderFile = path.join(bodyDir, name)
+    const copied = path.join(WALNUT_HOME, 'human-inbox', 'bodies', name)
+    await fsp.rm(leaderFile)
+    await fsp.symlink(name, leaderFile) // ELOOP: stands in for EACCES or EMFILE, as root too
+    const manifest = await buildCopyManifest(bodies)
+    expect([manifest.entries.length, manifest.keep]).toEqual([5, [name]])
+    expect(await round(bodies)).toMatchObject({ action: 'synced', removed: 0 })
+    expect(fs.existsSync(copied)).toBe(true)
+    await fsp.rm(leaderFile)
+    expect(await round(bodies)).toMatchObject({ action: 'synced', removed: 1 })
+    expect(fs.existsSync(copied)).toBe(false)
   })
 
   it('the Mac holds no body text between rounds: a manifest row has the hash, a put reads the file', async () => {

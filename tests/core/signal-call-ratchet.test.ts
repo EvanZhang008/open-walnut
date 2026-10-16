@@ -47,6 +47,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { bootPolicy, type BootJob } from '../../src/core/boot-policy.js';
 
 const repoRoot = path.resolve(__dirname, '../..');
 
@@ -332,25 +333,37 @@ describe('signal-call ratchet', () => {
  * from one there. Every pid probe in session code, and each funnel every stop
  * goes through (owner-stop.ts), asks sessions/replica-process-guard.ts first.
  * The other kill-shaped calls in session code are session-manager RPCs to a
- * daemon; each file is listed with why it never runs on a host replica.
+ * daemon; each file is listed with why it never runs on a host replica, and
+ * with the boot-policy jobs that reason leans on (each must be off on a host).
  */
 const REPLICA_GUARDS = ['refuseProcessAction', 'processActionsRefused'];
 const STOP_FUNNELS = ['stopThroughOwner', 'stopAcpThroughOwner', 'sweepOrphansThroughOwner'];
-const REPLICA_UNREACHABLE: Record<string, string> = {
-  'src/core/session-health-monitor.ts': 'the health monitor and its reapers are off on a replica (boot policy)',
-  'src/core/sessions/session-lifecycle.ts': 'a registered session manager: a replica starts no session and registers none',
-  'src/providers/claude-code-session.ts': 'the runner\'s own live sessions: a replica runs none (no local daemon)',
-  'src/providers/session-host.ts': 'its own host-probe child, not a session process',
-  'src/web/routes/sessions.ts': 'retiring a live plan session of this server: a replica has none; stops away are needs_leader',
+/** The pid-probe helpers (src/utils/process.ts): each is a `process.kill(pid, 0)` one call away, so a call to one is a probe site. */
+const PROBE_HELPERS = ['isProcessAlive', 'isProcessAliveAsync'];
+const REPLICA_UNREACHABLE: Record<string, { why: string; offOnHost: BootJob[] }> = {
+  'src/core/session-health-monitor.ts': { why: 'the health monitor and its reapers are off on a replica (boot policy)', offOnHost: ['session-health-monitor'] },
+  'src/core/sessions/session-lifecycle.ts': {
+    why: 'a registered session manager: a replica starts no session and registers none',
+    offOnHost: ['local-daemon', 'session-auto-recover', 'session-reconcile'],
+  },
+  'src/providers/claude-code-session.ts': { why: 'the runner\'s own live sessions: a replica runs none (no local daemon)', offOnHost: ['local-daemon'] },
+  'src/providers/session-host.ts': { why: 'its own host-probe child, not a session process', offOnHost: [] },
+  'src/web/routes/sessions.ts': { why: 'retiring a live plan session of this server: a replica has none; stops away are needs_leader', offOnHost: ['local-daemon'] },
 };
 
-/** Functions (by name) whose body has a `process.kill(` call, and whether that body asks a replica guard. */
+/**
+ * Functions (by name) whose body has a `process.kill(` call or a call to a
+ * pid-probe helper, and whether that body asks a replica guard first.
+ */
 export function probeSitesAndGuards(fileName: string, text: string): Array<{ fn: string; guarded: boolean }> {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.ES2022, true);
   const out: Array<{ fn: string; guarded: boolean }> = [];
   const isGuardCall = (c: ts.CallExpression) => ts.isIdentifier(c.expression) && REPLICA_GUARDS.includes(c.expression.text);
-  const isProcessKill = (c: ts.CallExpression) => ts.isPropertyAccessExpression(c.expression) && c.expression.name.text === 'kill'
-    && ts.isIdentifier(c.expression.expression) && c.expression.expression.text === 'process';
+  const calleeName = (c: ts.CallExpression): string | null => (ts.isIdentifier(c.expression) ? c.expression.text
+    : ts.isPropertyAccessExpression(c.expression) ? c.expression.name.text : null);
+  const isProcessKill = (c: ts.CallExpression) => (ts.isPropertyAccessExpression(c.expression) && c.expression.name.text === 'kill'
+    && ts.isIdentifier(c.expression.expression) && c.expression.expression.text === 'process')
+    || PROBE_HELPERS.includes(calleeName(c) ?? '');
   const visit = (node: ts.Node): void => {
     if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && node.body) {
       const firstOwn = (n: ts.Node, pred: (c: ts.CallExpression) => boolean): number => {
@@ -396,10 +409,27 @@ describe('the replica wall: no signal path reachable on a host replica', () => {
       'function after(pid: number) { process.kill(pid, 0); if (refuseProcessAction("probe")) return false; return true }',
       'function nested(pid: number) { const f = () => processActionsRefused(); process.kill(pid, 0); return f }',
       'function none(pid: number) { process.kill(pid, 0) }',
+      // A pid-probe helper is a probe site too, called bare or through its module.
+      'async function helper(pid: number) { return isProcessAliveAsync(pid, "claude") }',
+      'function viaModule(pid: number) { return proc.isProcessAlive(pid) }',
+      'async function helperGuarded(pid: number) { return !processActionsRefused() && await isProcessAliveAsync(pid, "claude") }',
     ].join('\n'));
     expect(sites).toEqual([
       { fn: 'before', guarded: true }, { fn: 'after', guarded: false }, { fn: 'nested', guarded: false }, { fn: 'none', guarded: false },
+      { fn: 'helper', guarded: false }, { fn: 'viaModule', guarded: false }, { fn: 'helperGuarded', guarded: true },
     ]);
+  });
+
+  it('every boot-policy job a reason above leans on is off on a host replica (and on for the Mac)', () => {
+    // The health monitor's reapers (mgr.kill('idle'), a daemon RPC) ask no replica guard: its boot policy keeps them off.
+    expect(bootPolicy('session-health-monitor', 'host')).toBe(false);
+    const leaned = [...new Set(Object.values(REPLICA_UNREACHABLE).flatMap((r) => r.offOnHost))].sort();
+    expect(leaned).toEqual(['local-daemon', 'session-auto-recover', 'session-health-monitor', 'session-reconcile']);
+    for (const job of leaned) {
+      expect([job, bootPolicy(job, 'host')]).toEqual([job, false]);
+      // A job that is off everywhere would make the reason true by accident.
+      expect([job, bootPolicy(job, 'mac')]).toEqual([job, true]);
+    }
   });
 
   it('every pid probe in session code asks the replica guard first', () => {

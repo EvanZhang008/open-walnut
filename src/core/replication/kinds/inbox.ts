@@ -23,7 +23,7 @@ import { log } from '../../../logging/index.js'
 import { BODY_FILE_RE, LETTER_ID_RE } from '../../human-inbox/normalize.js'
 import type { LetterRecord } from '../../human-inbox/types.js'
 import { sha12 } from '../kind.js'
-import { createRowSetFollower, serialChain, writeCopyFile, type RowSetFollower, type RowSetState } from '../kind-follower.js'
+import { createRowSetFollower, serialChain, writeCopyFile, writeCopyText, type RowSetFollower, type RowSetState } from '../kind-follower.js'
 import type { CopyKind } from './copy-kind.js'
 import { copyRefusal, markCopyOff } from './gate.js'
 
@@ -52,7 +52,8 @@ export const INBOX_KIND: CopyKind<LetterRecord> = {
   ordered: true,
   digest: true,
   choice: 'inbox',
-  rows: async () => (await import('../../human-inbox/store.js')).readLetterIndexForReplica(),
+  // An index this leader failed to read throws (no round), never answers an empty inbox.
+  rows: async () => (await import('../../human-inbox/store.js')).readLetterIndexForReplica({ readErrors: 'throw' }),
   watch: (soon) => watchLetters(soon),
 }
 
@@ -71,17 +72,21 @@ const bodyCache = new Map<string, CachedBody>()
 const bodyHashes = new WeakMap<object, string>()
 /** A manifest row's file: the row holds no text, a put reads it (INBOX_BODIES_KIND.loadRow). */
 const bodyFiles = new WeakMap<object, string>()
+/** The bodies a leaderBodies answer listed but could not read, by that answer. */
+const unreadableBodiesOf = new WeakMap<object, string[]>()
 
 /**
  * Every body file the Mac has, as manifest rows: the name and (in bodyHashes)
  * the hash, no text. A file is read only to hash it when its size or mtime
  * changed, and again when a put sends it. A row without text is never a valid
  * put (the follower answers 400 bad_rows), so a path that forgot loadRow
- * cannot write an empty body.
+ * cannot write an empty body. A body listed but not read (any error but a file
+ * gone since the listing) goes in `keep`: the host keeps its copy of it.
  */
 export async function leaderBodies(dir = bodiesDir()): Promise<LetterBodyRow[]> {
   const names = (await fsp.readdir(dir).catch(() => [] as string[])).filter((n) => BODY_FILE_RE.test(n)).sort()
   const out: LetterBodyRow[] = []
+  const unreadable: string[] = []
   const seen = new Set(names)
   for (const name of names) {
     const file = path.join(dir, name)
@@ -97,9 +102,12 @@ export async function leaderBodies(dir = bodiesDir()): Promise<LetterBodyRow[]> 
       bodyHashes.set(row, c.hash)
       bodyFiles.set(row, file)
       out.push(row)
-    } catch { /* went away: the next round */ }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | null)?.code !== 'ENOENT') unreadable.push(name)
+    }
   }
   for (const k of [...bodyCache.keys()]) if (!seen.has(k)) bodyCache.delete(k)
+  if (unreadable.length > 0) unreadableBodiesOf.set(out, unreadable)
   return out
 }
 
@@ -124,6 +132,7 @@ export const INBOX_BODIES_KIND: CopyKind<LetterBodyRow> = {
   digest: false,
   choice: 'inbox_bodies',
   rows: () => leaderBodies(),
+  keep: (rows) => unreadableBodiesOf.get(rows) ?? [],
   watch: (soon) => watchLetters(soon),
 }
 
@@ -227,8 +236,8 @@ export function inboxBodiesFollower(): RowSetFollower {
       const skipped: string[] = []
       for (const b of rows ?? []) {
         if (Buffer.byteLength(b.body) > INBOX_BODY_COPY_MAX_BYTES) { skipped.push(b.name); continue }
-        await fsp.mkdir(bodiesDir(), { recursive: true, mode: 0o700 })
-        await fsp.writeFile(path.join(bodiesDir(), b.name), b.body, { mode: 0o600 })
+        // Temp file and rename: a reader never sees half a body, and the file is 0600 whatever it was.
+        await writeCopyText(path.join(bodiesDir(), b.name), b.body)
       }
       return { skipped }
     },

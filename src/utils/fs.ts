@@ -100,8 +100,14 @@ function safeClone<T>(fallback: T, filePath: string): T {
  * the file sat one commit back. Recovery is gated to the data dir (repo config
  * files and test fixtures must keep failing loudly) and, when it cannot find a
  * valid version, the ORIGINAL parse error is thrown unchanged.
+ *
+ * `readErrors: 'throw'` (a copy round's leader rows, core/replication/kinds/):
+ * a read that failed for any reason but a missing file throws instead of
+ * answering the fallback. To a copy round the fallback reads as "no rows", and
+ * a round that took a permission or too-many-open-files error for an empty
+ * store would remove the host's copy of it.
  */
-export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
+export async function readJsonFile<T>(filePath: string, fallback: T, options: { readErrors?: 'fallback' | 'throw' } = {}): Promise<T> {
   let content: string;
   try {
     content = await fs.readFile(filePath, 'utf-8');
@@ -110,6 +116,7 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
     if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
       return safeClone(fallback, filePath);
     }
+    if (options.readErrors === 'throw') throw err;
     // Permission error, etc. → log and use fallback (matches previous behavior)
     log.web.warn('non-ENOENT error reading JSON file', { filePath, error: err instanceof Error ? err.message : String(err) });
     return safeClone(fallback, filePath);

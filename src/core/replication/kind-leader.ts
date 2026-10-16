@@ -49,6 +49,8 @@ export interface KindManifest<Row> {
   byKey: Map<string, Row>
   /** The key set's hash (manifestKeysHashOf), worked out only when a refusal or a confirm needs it. */
   keys?: string
+  /** Keys the leader could not read this round: the sync names them, the follower keeps its copy (kind.ts keepOf). */
+  keep?: string[]
 }
 
 function keysOf(manifest: KindManifest<unknown>): string {
@@ -133,6 +135,7 @@ export async function runKindRound<Row>(
   try {
     reply = await step(target, {
       op: 'sync', kind: kind.kind, schemaVersion: kind.schemaVersion, entries: manifest.entries, asOf, ...(confirm ? { confirm: true, confirmFor: confirm } : {}),
+      ...(manifest.keep?.length ? { keep: manifest.keep } : {}),
     })
   } catch (err) {
     // A confirm is used up only by an answer (an older follower refusing it anyway);

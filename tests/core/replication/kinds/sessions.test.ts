@@ -281,29 +281,77 @@ describe('a replica boot leaves the copy as the Mac sent it', () => {
     sessionDb.getDb()
   }
 
-  it('reopening on a host replica runs no data fix (the leader placement would change the rows)', async () => {
-    // A Mac row the open path's backfill would rewrite (no status revision, an empty stamp).
-    leaderRows[1] = session(1, { statusRevision: 0, statusUpdatedAt: '' } as Partial<SessionRecord>)
-    await round()
-    const rows = allRows()
-    const state = stateBytes()
-    expect([rawRow('sid-marina-00001')?.status_revision, rawRow('sid-marina-00001')?.status_updated_at]).toEqual([0, ''])
-    reopen()
-    expect(allRows()).toBe(rows)
-    expect(stateBytes()).toBe(state)
-    expect([rawRow('sid-marina-00001')?.status_revision, rawRow('sid-marina-00001')?.status_updated_at]).toEqual([0, ''])
-    // The same file opened by a server that is not a host replica: the backfill runs, so the branch is the reason.
+  /** Each stored row's hash, worked out as the copy kind works out the Mac's (volatile and process fields aside). */
+  const rowHashes = async (): Promise<Record<string, string>> =>
+    Object.fromEntries((await tracker.listSessions()).map((s) => [s.claudeSessionId, sessionCopyHash(projectSession(s))]))
+  const asLeaderPlacement = async (fn: () => Promise<void> | void): Promise<void> => {
     for (const k of ENV) delete process.env[k]
     _resetServerRoleForTesting()
-    try {
-      reopen()
-      expect(isHostReplica()).toBe(false)
-      expect([rawRow('sid-marina-00001')?.status_revision, rawRow('sid-marina-00001')?.status_updated_at]).toEqual([1, T0])
-      expect(allRows()).not.toBe(rows)
-    } finally {
+    try { await fn() } finally {
       Object.assign(process.env, { WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_SERVER: '1' })
       _resetServerRoleForTesting()
       reopen()
+    }
+  }
+
+  it('reopening on a host replica runs no data fix (the leader placement would change the rows)', async () => {
+    // Mac rows the open path's backfill would rewrite, one per branch of it: a status revision
+    // below 1 with an empty stamp (filled from lastActiveAt), and an empty stamp beside a
+    // last_status_change (filled from that). Neither column can be NULL in a copy: the revision
+    // is NOT NULL and sessionToRow fills a missing stamp on every full write, the Mac's and the copy's.
+    const CHANGED = '2026-10-15T07:30:00.000Z'
+    leaderRows[1] = session(1, { statusRevision: 0, statusUpdatedAt: '' } as Partial<SessionRecord>)
+    leaderRows[2] = session(2, { statusUpdatedAt: '', last_status_change: CHANGED } as Partial<SessionRecord>)
+    await round()
+    const rows = allRows()
+    const state = stateBytes()
+    const hashes = await rowHashes()
+    expect([rawRow('sid-marina-00001')?.status_revision, rawRow('sid-marina-00001')?.status_updated_at]).toEqual([0, ''])
+    expect([rawRow('sid-marina-00002')?.status_revision, rawRow('sid-marina-00002')?.status_updated_at]).toEqual([1, ''])
+    reopen()
+    expect(allRows()).toBe(rows)
+    expect(stateBytes()).toBe(state)
+    expect(await rowHashes()).toEqual(hashes)
+    expect([rawRow('sid-marina-00001')?.status_revision, rawRow('sid-marina-00001')?.status_updated_at]).toEqual([0, ''])
+    expect([rawRow('sid-marina-00002')?.status_revision, rawRow('sid-marina-00002')?.status_updated_at]).toEqual([1, ''])
+    // The follower's digest still matches the Mac's after the boot: the sweep ends on one status step.
+    forgetKindManifests(['sessions'])
+    const from = h.calls.length
+    expect((await round()).action).toBe('unchanged')
+    expect(stepsSince(h.calls, from)).toEqual(['status:sessions'])
+    // The same file opened by a server that is not a host replica: the backfill runs, so the branch is the reason.
+    await asLeaderPlacement(async () => {
+      reopen()
+      expect(isHostReplica()).toBe(false)
+      expect([rawRow('sid-marina-00001')?.status_revision, rawRow('sid-marina-00001')?.status_updated_at]).toEqual([1, T0])
+      expect([rawRow('sid-marina-00002')?.status_revision, rawRow('sid-marina-00002')?.status_updated_at]).toEqual([1, CHANGED])
+      expect(allRows()).not.toBe(rows)
+      const fixed = await rowHashes()
+      expect(Object.keys(fixed).filter((id) => fixed[id] !== hashes[id]).sort()).toEqual(['sid-marina-00001', 'sid-marina-00002'])
+    })
+  })
+
+  it('reopening on a host replica leaves the WAL to the apply connection; the leader placement truncates it', async () => {
+    await round()
+    const wal = `${sessionDb.SESSION_DB_PATH}-wal`
+    // A second handle keeps the file open across the close (the last close of a WAL database
+    // checkpoints and deletes the WAL), as the apply connection does on a live replica.
+    const holder = new Database(sessionDb.SESSION_DB_PATH, { fileMustExist: true })
+    try {
+      holder.prepare('SELECT count(*) FROM sessions').get()
+      reopen()
+      const before = fs.statSync(wal).size
+      expect(before).toBeGreaterThan(0)
+      reopen()
+      expect(fs.statSync(wal).size).toBe(before)
+      // The same open as the leader: wal_checkpoint(TRUNCATE) empties it.
+      await asLeaderPlacement(() => {
+        reopen()
+        expect(isHostReplica()).toBe(false)
+        expect(fs.statSync(wal).size).toBe(0)
+      })
+    } finally {
+      holder.close()
     }
   })
 })

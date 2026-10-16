@@ -18,7 +18,7 @@ import type {
 import { getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transaction as sessionDbTx } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
-import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
+import { refuseProcessAction } from './sessions/replica-process-guard.js';
 import { bus, EventNames, type EmitOptions } from './event-bus.js';
 import type { SessionStatusChangedEvent } from './event-types.js';
 // Snapshot enforce-mode legacy-writer gate. session-snapshot-gate has ZERO
@@ -799,6 +799,10 @@ export async function getAllAliveSessionsByHost(): Promise<Record<string, Sessio
  * these sessions.
  */
 function fixStaleRecords(sessionIds: string[]): void {
+  // A host replica repairs no copied row: its liveness is the Mac's label, and
+  // its rows change only through the copy (sessions/replica-process-guard.ts).
+  // Every caller funnels here (the limit check and both alive-by-host reads).
+  if (refuseProcessAction('stale_repair')) return;
   log.session.warn('fixing stale records', { count: sessionIds.length, ids: sessionIds });
   const now = new Date().toISOString();
   for (const id of sessionIds) {
@@ -896,16 +900,15 @@ export async function checkSessionLimit(
     }
   }
 
-  // A host replica repairs no copied row and evicts no session: both act on
-  // the Mac's processes (sessions/replica-process-guard.ts).
-  const copyOnly = processActionsRefused();
-  if (staleIds.length > 0 && !copyOnly) {
+  if (staleIds.length > 0) {
     fixStaleRecords(staleIds);
   }
 
   // Tier 2: idle limit — auto-evict oldest idle CLI sessions if exceeded
   const evicted: SessionRecord[] = [];
 
+  // A host replica evicts no session: its idle rows are copies, their processes the Mac's
+  // (sessions/replica-process-guard.ts). Refused here, before a victim is marked or a stop asked.
   if (maxIdle > 0 && idleSessions.length >= maxIdle && !refuseProcessAction('capacity_eviction')) {
     // Only evict CLI sessions (a daemon holds their process and can stop it).
     // SDK/embedded sessions have no process: evicting them frees nothing.

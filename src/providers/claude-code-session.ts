@@ -4894,9 +4894,10 @@ export class ClaudeCodeSession {
       const now = Date.now()
       const currentFileSize = this._transport?.fileSize ?? 0
       const fileSizeGrew = currentFileSize > this._fileSizeAtDelivery
+      // (A host replica runs no session of its own: it never probes a pid, not even for a diagnostic.)
       const pidAlive = this._transport
         ? await this._transport.isAlive()
-        : (this.pid !== null && await isProcessAliveAsync(this.pid, 'claude'))
+        : (this.pid !== null && !processActionsRefused() && await isProcessAliveAsync(this.pid, 'claude'))
       const msSinceDelivery = now - this._lastMessageDeliveryTs
       const msSinceLastEvent = this._lastJsonlEventTs ? now - this._lastJsonlEventTs : -1
       const hasTailer = !!this._transport

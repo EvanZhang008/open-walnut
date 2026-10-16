@@ -874,7 +874,17 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   target took the previous manifest and nothing was removed, and confirm by the follower's digest on the
   last put; an ordered kind's digest names its order. Inbox bodies are their own kind (`inbox-bodies`,
   keyed by file name, hashed by content), and a host that keeps no inbox keeps no bodies either. The
-  choice lives in `hosts.<key>.server.copies`.
+  choice lives in `hosts.<key>.server.copies`. The half rule starts at 200 session rows, 50 requests,
+  20 boards and 50 letters. A board over `BOARD_COPY_MAX_BYTES` (2 MB: the store caps a board's html at
+  1 MB, the rest is room for its threads and marks) is not copied, and the host reads it from the Mac
+  while the Mac answers; a letter body over 4 MB is not copied either. A board or body file the Mac
+  lists but cannot read (it does not open or parse; only a file gone since the listing counts as
+  deleted) rides in the sync's `keep` (`kind.ts` `keepOf`): the host neither asks for it nor removes
+  it, and the manifest hash takes `keep` in, so a key leaving it runs the round again. A whole-file
+  store the Mac fails to read (the request store, the letter index) throws instead of reading as
+  empty (`utils/fs.ts` `readErrors: 'throw'`), so that kind skips the round. The host writes a letter
+  body through a temp file and a rename, at 0600, as it writes every JSON copy file. The process
+  guard's stale-record repair sits in `fixStaleRecords` itself, the one funnel its three callers share.
 
 ### WP5 Copies: routines, conversations, prefs and favorites, sanitized config
 - Depends on: WP3.

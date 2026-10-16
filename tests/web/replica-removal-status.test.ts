@@ -60,6 +60,14 @@ describe('the rows of copies that held off', () => {
     expect(replicaRemovalRows(null)).toEqual([])
   })
 
+  it('names each copy kind\'s rows in plain words (WP4 kinds included)', () => {
+    const words = (kind: string) => refusedText(kind, { error: 'manifest_removes_most_rows', at: 1, entries: 3, local: 100, removing: 97 }).split(' now,')[0]
+    expect(['tasks', 'registry', 'sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'search'].map(words)).toEqual([
+      'This Mac has 3 tasks', 'This Mac has 3 project and folder entries', 'This Mac has 3 sessions', 'This Mac has 3 reply requests',
+      'This Mac has 3 boards', 'This Mac has 3 letters', 'This Mac has 3 letter bodies', 'This Mac has 3 search rows',
+    ])
+  })
+
   it('a refusal with no key set (nothing to bind a confirm to) offers no confirm', () => {
     const s = status()
     s.targets[1].kinds[0] = { kind: 'tasks', refusals: 3, needsConfirm: true, lastRefusal: { ...refusal, keys: undefined } }

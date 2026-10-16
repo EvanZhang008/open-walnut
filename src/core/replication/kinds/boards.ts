@@ -8,6 +8,11 @@
  *
  * The leader reads a board file again only when its size or mtime moved, so a
  * round over unchanged boards hashes nothing. Unordered, half rule from 20.
+ *
+ * A board file the leader lists but cannot read (a permission or open-file
+ * error, a file that does not parse as a board) is not a deleted board: the
+ * round names it in `keep` (kind.ts), so the host keeps its copy, and reads it
+ * again next round. Only a file gone since the listing (ENOENT) is removed.
  */
 
 import fsp from 'node:fs/promises'
@@ -32,11 +37,15 @@ interface Cached { size: number; mtimeMs: number; row: BoardFile; hash: string }
 const cache = new Map<string, Cached>()
 const hashOf = new WeakMap<object, string>()
 const warnedTooBig = new Set<string>()
+/** The boards a leaderBoards answer listed but could not read, by that answer. */
+const unreadableOf = new WeakMap<object, string[]>()
+const warnedUnreadable = new Set<string>()
 
 /** Every board the Mac has, read again only when its file changed. */
 export async function leaderBoards(dir = boardsDir()): Promise<BoardFile[]> {
   const names = await fsp.readdir(dir).catch(() => [] as string[])
   const out: BoardFile[] = []
+  const unreadable: string[] = []
   const seen = new Set<string>()
   for (const name of names) {
     if (!name.endsWith('.json')) continue
@@ -55,15 +64,24 @@ export async function leaderBoards(dir = boardsDir()): Promise<BoardFile[]> {
       let c = cache.get(id)
       if (!c || c.size !== st.size || c.mtimeMs !== st.mtimeMs) {
         const row = JSON.parse(await fsp.readFile(file, 'utf8')) as BoardFile
-        if (!isRow(row) || row.task_id !== id) continue
+        if (!isRow(row) || row.task_id !== id) { unreadable.push(id); continue }
         c = { size: st.size, mtimeMs: st.mtimeMs, row, hash: sha12(JSON.stringify(row)) }
         cache.set(id, c)
         hashOf.set(row, c.hash)
       }
       out.push(c.row)
-    } catch { /* went away, or mid-write: the next round reads it */ }
+    } catch (err) {
+      // Gone since the listing: the Mac deleted it, so the copy goes too. Anything else is kept.
+      if ((err as NodeJS.ErrnoException | null)?.code !== 'ENOENT') unreadable.push(id)
+    }
   }
   for (const id of [...cache.keys()]) if (!seen.has(id)) cache.delete(id)
+  if (unreadable.length > 0) unreadableOf.set(out, unreadable)
+  // Said once per board until it reads again (a round runs on every board write).
+  const fresh = unreadable.filter((id) => !warnedUnreadable.has(id))
+  warnedUnreadable.clear()
+  for (const id of unreadable) warnedUnreadable.add(id)
+  if (fresh.length > 0) log.session.warn('boards copy: a board could not be read, the host keeps its copy of it', { taskIds: fresh })
   return out
 }
 
@@ -82,6 +100,7 @@ export const BOARDS_KIND: CopyKind<BoardFile> = {
   digest: false,
   choice: 'boards',
   rows: () => leaderBoards(),
+  keep: (rows) => unreadableOf.get(rows) ?? [],
   watch: (soon) => {
     const name = `boards-copy-${Math.random().toString(36).slice(2, 10)}`
     let stopped = false
@@ -178,4 +197,5 @@ export function _resetBoardsCopyForTesting(): void {
   serial = serialChain()
   cache.clear()
   warnedTooBig.clear()
+  warnedUnreadable.clear()
 }
