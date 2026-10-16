@@ -77,6 +77,8 @@ import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEAD
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
 import { markLinkFailure } from './link-failure.js'
 import { selfHostConnection } from '../replica/self-host.js'
+import { isHostReplicaProgram } from '../core/server-role.js'
+import { NeedsLeaderError } from '../core/replication/needs-leader.js'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
@@ -5774,6 +5776,13 @@ export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget)
   // A host replica reads its own host through the follower link (replica/self-host.ts, WP6); null elsewhere.
   const self = selfHostConnection(hostKey)
   if (self) return self as unknown as DaemonConnection
+  // A host replica reaches no host of its own: its config is a copy of the Mac's
+  // (with every host's ssh target), and a dial from here would make this host a
+  // second Walnut home for another host's daemon. Its own host before the link
+  // is up is the same answer: the follower link, never ssh.
+  if (isHostReplicaProgram()) {
+    throw markLinkFailure(new NeedsLeaderError('other_hosts_need_mac'), 'no-link')
+  }
   // Every failure here is the LINK's (no connection could be had), tagged so a
   // request path tells it from a command's own error by kind (link-failure.ts).
   return getDaemonConnectionOrThrow(hostKey, sshTarget).catch((err) => { throw markLinkFailure(err, 'no-link') })

@@ -15,7 +15,11 @@ import { copyKinds } from '../../../../src/core/replication/kinds/index.js'
 
 describe('the copied kinds choice', () => {
   it('defaults to every kind kept and letter bodies read from the Mac', () => {
-    expect(DEFAULT_COPY_CHOICE).toEqual({ sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false })
+    expect(DEFAULT_COPY_CHOICE).toEqual({
+      sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false,
+      // WP5: routines, the Ask lists, prefs and favorites, the allowlisted config.
+      routines: true, conversations: true, prefs: true, config: true,
+    })
     expect(copyChoiceFrom(undefined)).toEqual(DEFAULT_COPY_CHOICE)
     expect(copyChoiceFrom({ inbox_bodies: true, boards: false, sessions: 'no', other: true })).toEqual({ ...DEFAULT_COPY_CHOICE, inbox_bodies: true, boards: false })
   })
@@ -31,6 +35,6 @@ describe('the copied kinds choice', () => {
 
   it('names a choice for every copy kind', () => {
     for (const k of copyKinds()) expect(Object.keys(DEFAULT_COPY_CHOICE)).toContain(k.choice)
-    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies'])
+    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config'])
   })
 })

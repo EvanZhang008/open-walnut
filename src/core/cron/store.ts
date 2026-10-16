@@ -17,6 +17,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { CronStoreFile, CronStateFile, CronJobState, CronServiceState } from './types.js';
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js';
+import { noteStoreWrite } from '../replication/store-writes.js';
 import { recomputeNextRuns } from './jobs.js';
 import { syncExecutorFields } from './executor-compat.js';
 
@@ -181,6 +182,8 @@ export async function persist(state: CronServiceState): Promise<void> {
   await writeJsonFile(state.deps.storePath, { ...state.store, jobs: jobsWithoutState });
   const stateFile: CronStateFile = { version: 1, states };
   await writeJsonFile(cronStatePath(state.deps.storePath), stateFile);
+  // The routines copy kind's watch (replication/store-writes.ts): this is the one write point.
+  noteStoreWrite('routines');
 }
 
 export function warnIfDisabled(state: CronServiceState, action: string): void {

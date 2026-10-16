@@ -6,7 +6,8 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE, WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
-import { placement, role } from '../../core/server-role.js'
+import { isHostReplicaProgram, placement, role } from '../../core/server-role.js'
+import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { buildProviderMap, resolveProvider, type ProviderConfig } from '../../model/providers/index.js'
@@ -61,6 +62,13 @@ import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // A host replica with no copy of the Mac's config reads the defaults: it says so
+    // (`configCopied: false`), so a settings view never shows them as the user's.
+    // Not a 503: this route also carries the page's role, placement and build, the
+    // replica's first answer at boot.
+    const configCopied = isHostReplicaProgram()
+      ? (await (await import('../../core/replication/kinds/config.js')).readConfigCopy()) !== null
+      : undefined
     const config = await getConfig()
     // Include env var bearer token hint so the UI can show it without a test call
     const envBearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK
@@ -132,7 +140,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // that run here, so the console tells a session here from one on the Mac. Absent
     // everywhere else (the Mac, the companion): their answer is unchanged.
     const replicaHostKey = role() === 'replica' && placement() === 'host' ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
-    res.json({ config: configForClients(shown), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
+    res.json({ config: configForClients(shown), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
   } catch (err) {
     next(err)
   }
@@ -566,6 +574,9 @@ configRouter.post('/test-provider', async (req: Request, res: Response, next: Ne
 // PUT /api/config
 configRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // A host replica holds an allowlisted copy of the Mac's config (core/replication/kinds/config.ts):
+    // a settings save waits for the Mac, before any mask is paired against that copy.
+    if (isHostReplicaProgram()) throw new NeedsLeaderError('config_writes_need_mac')
     // A client saves back what it read, and GET masks secrets (core/config-broadcast.ts):
     // every mask in the write becomes the value stored at the same place again, so a
     // round trip never replaces a secret with its mask. Before any check below, which

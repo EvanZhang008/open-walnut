@@ -898,6 +898,36 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   refuses the row; masked strings never written back, `src/core/config-redact.ts`); a ratchet that a new
   config key defaults to NOT copied.
 - Acceptance: grep of the replica data dir after a round finds none of the fixture's secret values.
+- As built: the four kinds go to host replica programs only, like the WP4 kinds, and each has its own
+  per-host choice (`routines`, `conversations`, `prefs`, `config` in `hosts.<key>.server.copies`, on by
+  default; no new Settings row). The followers live beside them (`kinds/routines-follower.ts`,
+  `kinds/conversations-follower.ts`, `kinds/file-copy.ts` for the one-file copies of prefs and config,
+  `kinds/state-io.ts`). Routines: `cron-jobs.json` and `cron-state.json` in the Mac's layout, the status
+  projected to next run, last run, last status, last error, duration, error count and pause; the copied
+  definition leaves out the engine's `updatedAtMs` clock and a trigger's status leaves out its next check,
+  so a running mark or a real quiet check (`applyTriggerChecked`) moves no row; a routine with anything
+  secret-shaped in it (a token in a check's shell line, a key in an executor setting, an error quoting a
+  header) is left out on the Mac and refused on the host. The Routines page reads them through
+  `routines-core.ts`, never through the engine, whose list recomputes and persists. Conversations: the
+  chat-history index IS `conversations/<agent>/_index.json` (the legacy single file is migrated into it),
+  copied per agent, a secret-shaped title shown as untitled; `GET /api/chat/history`, `/api/chat/stats`,
+  `/api/chat/triage` and the phone's `GET /api/v1/conversations/:id/messages` and `/api/v1/chat/stats`
+  (the bodies) are `needs-leader` rows while away. The routines and conversations watches hear the
+  stores' one write point (`replication/store-writes.ts`: cron `persist()`, `writeIndex()`), since their
+  writers tell only the browser sockets. A read that finds no copy of its kind (none yet, or the host
+  turned it off) answers `needs_leader {why:'kind_not_copied'}`: the Routines list, the Ask list, GET
+  favorites and ui-prefs, never an empty list; GET /api/config stays a 200 (it carries the page's role,
+  placement and build, the replica's first answer at boot) and says `configCopied: false` over the defaults. The config copy is one row per
+  allowlisted top-level key, each section spelled out field by field; `CONFIG_COPY_DROPPED` names every
+  other key and `CONFIG_COPY_DROPPED_FIELDS` every other field of a copied section, with why, and the
+  ratchet walks the sections' types in `src/core/types.ts`; the secret check runs on the Mac (the row is
+  left out, one warning naming paths) and again on the host (the row is skipped). The copy holds every
+  host's ssh target for the views, so `getDaemonConnection` on a host replica refuses every host but its
+  own follower link (`needs_leader {why:'other_hosts_need_mac'}`, a link failure): a replica dials no host. On a host replica `getConfig()` and
+  `readStoredConfig()` read the copy over the defaults, every config.yaml writer throws
+  `NeedsLeaderError` (`replication/needs-leader.ts`, answered `503 needs_leader` by the web error
+  handler), and the boot seed and migration are no-ops; routine, conversation-list, ui-prefs and
+  favorites writes answer the same.
 
 ### WP6 Follower reads (owner scoped), `local` routes, notes read from the daemon copy
 - Depends on: WP2.

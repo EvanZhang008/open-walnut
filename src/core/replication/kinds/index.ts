@@ -1,6 +1,7 @@
 /**
  * The WP4 copy kinds (docs/plan/walnut-replica-servers-impl.md, section 4):
- * sessions, requests, boards, inbox (index and bodies). One list for the
+ * sessions, requests, boards, inbox (index and bodies), and the WP5 ones:
+ * routines, conversations, prefs, config. One list for the
  * leader's scheduler (copy-kind.ts) and one registration for the follower
  * route (web/routes/bridge-replica.ts builtinKinds).
  */
@@ -12,10 +13,18 @@ import { BOARDS_KIND, boardsFollower } from './boards.js'
 import { INBOX_BODIES_KIND, INBOX_KIND, inboxBodiesFollower, inboxFollower } from './inbox.js'
 import { REQUESTS_KIND, requestsFollower } from './requests.js'
 import { SESSIONS_KIND, sessionsFollower } from './sessions.js'
+// WP5: routines, conversations, prefs and favorites, the allowlisted config.
+import { ROUTINES_KIND } from './routines.js'
+import { routinesFollower } from './routines-follower.js'
+import { CONVERSATIONS_KIND } from './conversations.js'
+import { conversationsFollower } from './conversations-follower.js'
+import { PREFS_KIND, prefsFollower } from './prefs.js'
+import { CONFIG_KIND, configFollower } from './config.js'
 
 /** The leader's copy kinds, in the order a round serves them. */
 export function copyKinds(): CopyKind<any>[] {
-  return [SESSIONS_KIND, REQUESTS_KIND, BOARDS_KIND, INBOX_KIND, INBOX_BODIES_KIND]
+  return [SESSIONS_KIND, REQUESTS_KIND, BOARDS_KIND, INBOX_KIND, INBOX_BODIES_KIND,
+    ROUTINES_KIND, CONVERSATIONS_KIND, PREFS_KIND, CONFIG_KIND]
 }
 
 /**
@@ -35,7 +44,8 @@ export function hostReplicaOnly(h: FollowerKindHandler): FollowerKindHandler {
 
 /** The follower side of every copy kind, for POST /bridge/replica. Returns the unregister. */
 export function registerCopyFollowerKinds(): () => void {
-  const off = [sessionsFollower(), requestsFollower(), boardsFollower(), inboxFollower(), inboxBodiesFollower()].map((h) => registerFollowerKind(hostReplicaOnly(h)))
+  const off = [sessionsFollower(), requestsFollower(), boardsFollower(), inboxFollower(), inboxBodiesFollower(),
+    routinesFollower(), conversationsFollower(), prefsFollower(), configFollower()].map((h) => registerFollowerKind(hostReplicaOnly(h)))
   return () => { for (const u of off) u() }
 }
 

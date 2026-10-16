@@ -5,6 +5,9 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { bus, EventNames } from '../../core/event-bus.js'
+import { isHostReplicaProgram } from '../../core/server-role.js'
+import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { KIND_NOT_COPIED } from '../../core/replication/kinds/gate.js'
 
 // Express 5 ALREADY percent-decodes route params. Do NOT re-decode
 // `req.params.name`: a project name with a literal '%' double-decodes and
@@ -32,6 +35,14 @@ async function canonicalProjectName(name: string): Promise<string> {
 // GET /api/favorites
 favoritesRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // A host replica holds the Mac's favorites in its prefs copy (core/replication/kinds/prefs.ts).
+    if (isHostReplicaProgram()) {
+      const fav = await (await import('../../core/replication/kinds/prefs.js')).readFavoritesCopy()
+      // No copy yet (or the host turned it off): not "no favorites".
+      if (!fav) throw new NeedsLeaderError(KIND_NOT_COPIED)
+      res.json({ projects: fav.projects ?? [], notes: fav.notes ?? [] })
+      return
+    }
     const config = await getConfig()
     res.json({
       projects: config.favorites?.projects ?? [],

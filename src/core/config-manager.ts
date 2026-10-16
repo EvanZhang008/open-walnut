@@ -12,6 +12,8 @@ import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
 import { realSshReachAllowed } from '../lib/real-ssh-guard.js';
 import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
+import { isHostReplicaProgram } from './server-role.js';
+import { NeedsLeaderError } from './replication/needs-leader.js';
 
 const DEFAULT_CONFIG: Config = {
   version: 1,
@@ -207,9 +209,19 @@ export async function writeFileAtomic(filePath: string, content: string): Promis
   }
 }
 
+/** Called after every write of config.yaml (the config and prefs copy kinds start a round). */
+const configWriteListeners = new Set<() => void>();
+
+export function onConfigWritten(cb: () => void): () => void {
+  configWriteListeners.add(cb);
+  return () => { configWriteListeners.delete(cb); };
+}
+
 /** Mirror freshly written config to the sidecar. Never throws. */
 async function writeConfigWithBackup(content: string): Promise<void> {
+  refuseConfigWriteOnReplica();
   await writeFileAtomic(CONFIG_FILE, content);
+  for (const cb of configWriteListeners) { try { cb(); } catch { /* a listener never fails a write */ } }
   try {
     await writeFileAtomic(CONFIG_BACKUP_FILE, content);
   } catch (err) {
@@ -227,6 +239,7 @@ async function writeConfigWithBackup(content: string): Promise<void> {
  * (no discovered hosts, no cloud box).
  */
 export async function readStoredConfig(): Promise<Partial<Config> | null> {
+  if (isHostReplicaProgram()) return (await import('./replication/kinds/config.js')).readConfigCopy() as Promise<Partial<Config> | null>;
   try {
     const content = await readRawConfigContent();
     if (content === null) return null;
@@ -238,32 +251,55 @@ export async function readStoredConfig(): Promise<Partial<Config> | null> {
 }
 
 /**
+ * getConfig() on a host replica (docs/plan/walnut-replica-servers-impl.md WP5): the
+ * Mac's config as the copy holds it (allowlisted keys only, replication/config-allowlist.ts)
+ * over the defaults, the defaults alone before the first round. No ssh hosts merged,
+ * no cloud box row: a replica reaches no host of its own.
+ */
+async function replicaConfig(): Promise<Config> {
+  const copy = await (await import('./replication/kinds/config.js')).readConfigCopy();
+  return normalizeReadConfig({ ...DEFAULT_CONFIG, ...(copy ?? {}) } as Config);
+}
+
+/**
+ * What every read of a stored config gets in memory (the Mac's config.yaml, or a
+ * host replica's copy of it, which holds what the yaml holds): retired fields
+ * migrated, a legacy priority mapped to the 3-tier values, the model defaults
+ * seeded. One function, so the two servers read the same config the same way.
+ */
+export function normalizeReadConfig(config: Config): Config {
+  // In-memory field migration so readers never see retired category fields,
+  // even before seedConfigDefaults() persists the cleanup.
+  migrateConfigToProjectOnly(config as unknown as Record<string, unknown>);
+  // Sanitize legacy priority values to new 3-tier system
+  if (config.defaults?.priority && !(VALID_PRIORITIES as readonly string[]).includes(config.defaults.priority)) {
+    const p = config.defaults.priority as string;
+    config.defaults = { ...config.defaults };
+    if (p === 'high') config.defaults.priority = 'immediate';
+    else if (p === 'medium' || p === 'low') config.defaults.priority = 'backlog';
+    else config.defaults.priority = 'none';
+  }
+  // Seed defaults from MODEL_CATALOG
+  if (!config.agent?.available_models) {
+    config.agent = { ...config.agent, available_models: (MODEL_CATALOG.bedrock ?? []).map(m => m.id) };
+  }
+  if (!config.agent?.main_model) {
+    config.agent = { ...config.agent, main_model: (MODEL_CATALOG.bedrock ?? [])[0]?.id };
+  }
+  return config;
+}
+
+/**
  * Read config.yaml. Returns default config if file doesn't exist.
  * Also merges auto-discovered SSH hosts.
  */
 export async function getConfig(): Promise<Config> {
+  if (isHostReplicaProgram()) return replicaConfig();
   try {
     const content = await readRawConfigContent();
     if (content === null) throw new Error('no config file and no backup');
     const parsed = yaml.load(content) as Config;
-    const config = { ...DEFAULT_CONFIG, ...parsed };
-    // In-memory field migration so readers never see retired category fields,
-    // even before seedConfigDefaults() persists the cleanup.
-    migrateConfigToProjectOnly(config as unknown as Record<string, unknown>);
-    // Sanitize legacy priority values to new 3-tier system
-    if (config.defaults?.priority && !(VALID_PRIORITIES as readonly string[]).includes(config.defaults.priority)) {
-      const p = config.defaults.priority as string;
-      if (p === 'high') config.defaults.priority = 'immediate';
-      else if (p === 'medium' || p === 'low') config.defaults.priority = 'backlog';
-      else config.defaults.priority = 'none';
-    }
-    // Seed defaults from MODEL_CATALOG
-    if (!config.agent?.available_models) {
-      config.agent = { ...config.agent, available_models: (MODEL_CATALOG.bedrock ?? []).map(m => m.id) };
-    }
-    if (!config.agent?.main_model) {
-      config.agent = { ...config.agent, main_model: (MODEL_CATALOG.bedrock ?? [])[0]?.id };
-    }
+    const config = normalizeReadConfig({ ...DEFAULT_CONFIG, ...parsed });
     // Merge auto-discovered SSH hosts
     await mergeSshDiscoveredHosts(config);
     // The paired cloud box, reached over the daemon tunnel (in memory only:
@@ -346,7 +382,17 @@ export function _resetWriteLockForTest(): void {
   writeLock = Promise.resolve();
 }
 
+/**
+ * A host replica holds a COPY of the Mac's config (core/replication/kinds/config.ts):
+ * every config write there waits for the Mac (503 needs_leader), and nothing writes
+ * the replica's own config.yaml either.
+ */
+function refuseConfigWriteOnReplica(): void {
+  if (isHostReplicaProgram()) throw new NeedsLeaderError('config_writes_need_mac');
+}
+
 function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  refuseConfigWriteOnReplica();
   const prev = writeLock;
   let resolve: () => void;
   writeLock = new Promise<void>((r) => { resolve = r; });
@@ -575,6 +621,8 @@ export async function updatePushTokens(
  * startup; idempotent, so a second run is a cheap parse + no write.
  */
 export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
+  // A replica migrates nothing: its config is the Mac's copy, already migrated there.
+  if (isHostReplicaProgram()) return false;
   return withWriteLock(async () => {
     let parsed: Record<string, unknown>;
     try {
@@ -606,6 +654,7 @@ export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
  * Called at startup from init.ts.
  */
 export async function seedConfigDefaults(): Promise<void> {
+  if (isHostReplicaProgram()) return;
   await migrateConfigFileToProjectOnly();
   const config = await getConfig();
   let needsWrite = false;

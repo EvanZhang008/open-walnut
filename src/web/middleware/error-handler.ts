@@ -5,6 +5,7 @@
 import type { Request, Response, NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { routeLogMessage, routeRecoveryKey } from '../../core/notifications/route-condition.js'
+import { NEEDS_LEADER_HEADERS, isNeedsLeaderError, needsLeaderBody, shouldLogNeedsLeader } from '../../core/replication/needs-leader.js'
 
 /**
  * 404 handler for unknown API routes.
@@ -19,6 +20,13 @@ export function notFoundHandler(req: Request, res: Response, _next: NextFunction
  * Must be the last middleware mounted on the app.
  */
 export function errorHandler(err: Error, req: Request, res: Response, _next: NextFunction): void {
+  // A host replica's write to a store it only holds a copy of (core/replication/needs-leader.ts):
+  // the same answer the dispatcher gives a needs-leader row, and not a card (nothing is broken).
+  if (isNeedsLeaderError(err)) {
+    if (shouldLogNeedsLeader(err.why)) log.web.warn('a request on this replica needs the Mac', { reqId: req.reqId, url: req.originalUrl, why: err.why })
+    res.status(503).set(NEEDS_LEADER_HEADERS).json(needsLeaderBody(err.why))
+    return
+  }
   const status = (err as { status?: number }).status ?? 500
   const message = err.message || 'Internal server error'
 

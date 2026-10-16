@@ -46,6 +46,7 @@ const PHONE_CALLS: Array<[string, string]> = [
   ['GET', '/api/v1/sessions/:id'],
   ['GET', '/api/v1/sessions/:id/history'],
   ['POST', '/api/v1/sessions/:id/messages'],
+  ['GET', '/api/v1/conversations/:id/messages'],
 ]
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE', 'ALL'])

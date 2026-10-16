@@ -29,9 +29,28 @@ import {
   validateConversationId,
 } from '../constants.js';
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
+import { noteStoreWrite } from './replication/store-writes.js';
 import { log } from '../logging/index.js';
+import { isHostReplicaProgram } from './server-role.js';
+import { NeedsLeaderError } from './replication/needs-leader.js';
 
 const MAX_TITLE_LEN = 60;
+
+/**
+ * A host replica holds each agent's list as the Mac's copy
+ * (replication/kinds/conversations.ts): its reads come from there and never
+ * migrate, adopt or back-fill, each of which writes the index.
+ */
+async function copiedIndex(agentId: string): Promise<ConversationIndex> {
+  const { readConversationIndexCopy } = await import('./replication/kinds/conversations-follower.js');
+  const copied = await readConversationIndexCopy(agentId);
+  if (copied) return copied;
+  // An agent the copy has no list of is an empty list, once there is a copy at all;
+  // with none yet (or the host turned it off) it is not "no chats".
+  const { copyKindHeld, KIND_NOT_COPIED } = await import('./replication/kinds/gate.js');
+  if (!(await copyKindHeld('conversations'))) throw new NeedsLeaderError(KIND_NOT_COPIED);
+  return { version: 1, activeConversationId: null, conversations: [] };
+}
 
 // ── Write lock: serialize index read-modify-write per agent ──
 // Keyed by agentId so two agents' indexes don't block each other.
@@ -132,7 +151,11 @@ async function readIndex(agentId: string): Promise<ConversationIndex> {
 }
 
 async function writeIndex(agentId: string, index: ConversationIndex): Promise<void> {
+  // The copy is the Mac's (copiedIndex): a list change made here waits for it.
+  if (isHostReplicaProgram()) throw new NeedsLeaderError('conversation_writes_need_mac');
   await writeJsonFile(conversationIndexFile(agentId), index);
+  // The conversations copy kind's watch (replication/store-writes.ts): the one write of a list.
+  noteStoreWrite('conversations');
 }
 
 /**
@@ -365,6 +388,7 @@ function dedupeConversations(agentId: string, list: ConversationMeta[]): Convers
 
 /** List conversations for an agent (pinned first, then lastMessageAt desc). */
 export async function listConversations(agentId: string): Promise<ConversationMeta[]> {
+  if (isHostReplicaProgram()) return sortConversations(dedupeConversations(agentId, (await copiedIndex(agentId)).conversations));
   await migrateIfNeeded(agentId);
   await adoptOrphanedConversationFiles(agentId);
   const index = await readIndex(agentId);
@@ -488,6 +512,12 @@ export async function ensureConversationRow(
 
 /** The active conversation id for an agent (guaranteed non-null after migrate). */
 export async function getActiveConversationId(agentId: string): Promise<string> {
+  if (isHostReplicaProgram()) {
+    const index = await copiedIndex(agentId);
+    const id = index.activeConversationId || sortConversations(index.conversations)[0]?.id;
+    if (!id) throw new NeedsLeaderError('conversation_writes_need_mac');
+    return id;
+  }
   await migrateIfNeeded(agentId);
   const index = await readIndex(agentId);
   if (index.activeConversationId) return index.activeConversationId;
@@ -511,6 +541,13 @@ export async function getActiveConversationId(agentId: string): Promise<string> 
  * and persists, so subsequent reads are O(1).
  */
 export async function getMainConversationId(agentId: string): Promise<string> {
+  if (isHostReplicaProgram()) {
+    const list = (await copiedIndex(agentId)).conversations;
+    const pool = list.some((c) => !c.recovered) ? list.filter((c) => !c.recovered) : list;
+    const id = list.find((c) => c.isMain)?.id ?? [...pool].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0]?.id;
+    if (!id) throw new NeedsLeaderError('conversation_writes_need_mac');
+    return id;
+  }
   await migrateIfNeeded(agentId);
   return withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);

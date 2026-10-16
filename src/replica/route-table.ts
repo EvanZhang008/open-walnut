@@ -118,6 +118,17 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // gives the task and session writes exact rows of their own that journal.
   { method: W, pattern: '/api/tasks/*', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: W, pattern: '/api/sessions/*', away: 'needs-leader', why: 'session_writes_need_mac' },
+  // WP5 copies: the conversation lists, routines, prefs, favorites and the config
+  // read from this replica's copies while away (the default read row). Only the
+  // lists are copied, never a conversation body: a body read is the Mac's.
+  { method: 'GET', pattern: '/api/chat/history', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
+  { method: 'GET', pattern: '/api/chat/stats', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
+  { method: 'GET', pattern: '/api/chat/triage', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
+  // The phone's twins: the copied list says the conversation exists, so a body
+  // read here would answer 200 with no messages, and the phone replaces its rows
+  // with that answer.
+  { method: 'GET', pattern: '/api/v1/conversations/:id/messages', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
+  { method: 'GET', pattern: '/api/v1/chat/stats', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
   // Everything else: writes need the Mac until WP10 gives them a journal.
   { method: W, pattern: '/api/v1/*', away: 'needs-leader' },
   { method: W, pattern: '/api/*', away: 'needs-leader' },

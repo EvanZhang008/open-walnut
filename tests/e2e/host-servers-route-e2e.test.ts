@@ -23,7 +23,7 @@ let port: number
 const SESSION = { 'content-type': 'application/json', 'x-walnut-caller-sid': 'sess-1' }
 const PERSON = { 'content-type': 'application/json' }
 // The copies choice the route reports with defaults filled in (no `copies` in the config yet).
-const DEFAULT_COPIES = { sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false }
+const DEFAULT_COPIES = { sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false, routines: true, conversations: true, prefs: true, config: true }
 
 function api(pathname: string, init?: RequestInit) {
   return fetch(`http://localhost:${port}${pathname}`, init)
@@ -133,7 +133,7 @@ describe('a host\'s Walnut, as a setting', () => {
     for (const copies of [null, [], [true], 'sessions', 7, true, { sessions: null }, { sessions: 1 }, { sessions: 'false' }]) {
       const res = await put({ copies })
       const error = ((await res.json()) as { error?: string }).error
-      expect([JSON.stringify(copies), res.status, error]).toEqual([JSON.stringify(copies), 400, 'copies names only sessions, requests, boards, inbox, inbox_bodies, each true or false'])
+      expect([JSON.stringify(copies), res.status, error]).toEqual([JSON.stringify(copies), 400, 'copies names only sessions, requests, boards, inbox, inbox_bodies, routines, conversations, prefs, config, each true or false'])
     }
     // A bad choice beside a good field writes neither.
     expect((await put({ enabled: false, copies: [] })).status).toBe(400)

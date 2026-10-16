@@ -48,3 +48,19 @@ export async function copyKindOff(kind: string): Promise<boolean> {
     return raw?.off === true
   } catch { return false }
 }
+
+/**
+ * True when this host holds a copy of `kind`: a round wrote its state (an empty
+ * copy of an empty store counts), and the host's choice did not turn it off.
+ * A read of a kind with no copy answers needs_leader {why:'kind_not_copied'},
+ * never an empty list or the defaults as if they were the user's.
+ */
+export async function copyKindHeld(kind: string): Promise<boolean> {
+  try {
+    const raw = JSON.parse(await fsp.readFile(copyStateFile(kind), 'utf8')) as { v?: unknown; off?: unknown; hashes?: unknown } | null
+    return raw?.v === 1 && raw.off !== true && !!raw.hashes && typeof raw.hashes === 'object'
+  } catch { return false }
+}
+
+/** The why of a read that finds no copy of its kind here. */
+export const KIND_NOT_COPIED = 'kind_not_copied'

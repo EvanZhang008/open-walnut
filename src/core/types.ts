@@ -1185,6 +1185,10 @@ export interface Config {
         boards?: boolean;
         inbox?: boolean;
         inbox_bodies?: boolean;
+        routines?: boolean;
+        conversations?: boolean;
+        prefs?: boolean;
+        config?: boolean;
       };
     };
     /** Which program that server is: 'replica' runs the full Walnut server as this

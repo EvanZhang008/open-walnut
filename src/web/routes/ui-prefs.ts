@@ -24,8 +24,19 @@ import path from 'node:path'
 import { WALNUT_HOME, UI_PREFS_FILE } from '../../constants.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { log } from '../../logging/index.js'
+import { MAX_KEY_LEN, machineLocalKey, syncableKey } from '../../core/ui-prefs-keys.js'
+import { isHostReplicaProgram } from '../../core/server-role.js'
+import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { KIND_NOT_COPIED } from '../../core/replication/kinds/gate.js'
 
 export const uiPrefsRouter = Router()
+
+/** Called after every write of ui-prefs.json (the prefs copy kind starts a round). */
+const writeListeners = new Set<() => void>()
+export function onUiPrefsWritten(cb: () => void): () => void {
+  writeListeners.add(cb)
+  return () => { writeListeners.delete(cb) }
+}
 
 const PREFS_FILE = () => UI_PREFS_FILE
 
@@ -35,29 +46,7 @@ const LEGACY_PREFS_FILE = () => path.join(WALNUT_HOME, 'ui-prefs.json')
 
 interface PrefEntry { v: string | null; ts: number }
 
-/**
- * Key families that are LAYOUT-shaped but MACHINE-specific: the key itself
- * embeds an absolute filesystem path (`…-file-explorer-selected:local:/Users/…`),
- * so the entry is meaningless on another device — at best dead weight, at worst
- * the Files panel restoring a path that doesn't exist there. Excluded from the
- * synced file both going forward (syncableKey) and retroactively (the migration
- * below strips whatever is already on disk).
- */
-const MACHINE_LOCAL_PREFIXES = ['open-walnut-file-explorer-selected:']
-
-/** True when a key is layout-shaped but describes THIS machine only. */
-function machineLocalKey(key: string): boolean {
-  return MACHINE_LOCAL_PREFIXES.some((p) => key.startsWith(p))
-}
-
-// Same allowlist as the client sync layer — layout state only. Rejecting
-// everything else keeps auth tokens, drafts, and per-session blobs out.
-function syncableKey(key: string): boolean {
-  if (key.startsWith('open-walnut-diff-review:')) return false
-  if (key === 'open-walnut-ui-prefs-sync-meta') return false
-  if (machineLocalKey(key)) return false
-  return key.startsWith('open-walnut-') || key.startsWith('walnut-todo-')
-}
+// The key rule (syncableKey, machine-local families, MAX_KEY_LEN) is shared with the prefs copy kind.
 
 /**
  * One-time move of the root ui-prefs.json into config/share/, dropping the
@@ -126,7 +115,6 @@ export function _resetUiPrefsMigrationForTest(): void {
 }
 
 const MAX_KEYS = 1000
-const MAX_KEY_LEN = 200
 const MAX_VALUE_LEN = 8 * 1024
 
 /** Load prefs, migrating legacy plain-string values to { v, ts: 0 } (any client write beats them). */
@@ -148,6 +136,14 @@ async function loadPrefs(): Promise<Record<string, PrefEntry>> {
 // GET /api/ui-prefs → { prefs: Record<string, { v: string|null, ts: number }> }
 uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // A host replica holds the Mac's prefs as a copy (core/replication/kinds/prefs.ts).
+    if (isHostReplicaProgram()) {
+      const prefs = await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
+      // No copy yet (or the host turned it off): not "no prefs", which a client would merge as such.
+      if (!prefs) throw new NeedsLeaderError(KIND_NOT_COPIED)
+      res.json({ prefs })
+      return
+    }
     res.json({ prefs: await loadPrefs() })
   } catch (err) {
     next(err)
@@ -157,6 +153,8 @@ uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) 
 // PUT /api/ui-prefs { prefs: { key: { v, ts } } } — LWW merge; v null = delete tombstone.
 uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // The copy is the Mac's: a layout change made here waits for it.
+    if (isHostReplicaProgram()) throw new NeedsLeaderError('prefs_writes_need_mac')
     const patch = req.body?.prefs
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
       res.status(400).json({ error: 'prefs object is required' })
@@ -179,6 +177,7 @@ uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) =
       for (const k of keys.slice(0, keys.length - MAX_KEYS)) delete prefs[k]
     }
     await writeJsonFile(PREFS_FILE(), prefs)
+    for (const cb of writeListeners) { try { cb() } catch { /* never fails the write */ } }
     res.json({ ok: true })
   } catch (err) {
     next(err)

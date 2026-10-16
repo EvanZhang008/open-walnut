@@ -39,9 +39,19 @@ export const COPY_FIRST_ROUND_MS = 15_000
 /** A delta of more rows than this goes as a manifest round instead. */
 export const DELTA_MAX_ROWS = 1_000
 
-/** Which kinds a host copies (hosts.<key>.server.copies). Inbox bodies are off unless chosen. */
-export interface CopyChoice { sessions: boolean; requests: boolean; boards: boolean; inbox: boolean; inbox_bodies: boolean }
-export const DEFAULT_COPY_CHOICE: Readonly<CopyChoice> = Object.freeze({ sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false })
+/**
+ * Which kinds a host copies (hosts.<key>.server.copies). Inbox bodies are off unless chosen.
+ * WP5 adds routines, conversations (the Ask lists), prefs (ui prefs and favorites) and the
+ * allowlisted config, all on by default.
+ */
+export interface CopyChoice {
+  sessions: boolean; requests: boolean; boards: boolean; inbox: boolean; inbox_bodies: boolean
+  routines: boolean; conversations: boolean; prefs: boolean; config: boolean
+}
+export const DEFAULT_COPY_CHOICE: Readonly<CopyChoice> = Object.freeze({
+  sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false,
+  routines: true, conversations: true, prefs: true, config: true,
+})
 
 /** The choice from config, defaults filled in (anything but a boolean keeps the default). */
 export function copyChoiceFrom(raw: unknown): CopyChoice {
@@ -317,7 +327,7 @@ let schedulers = 0
 let copySoon: ((kind?: string) => void) | null = null
 
 /** Every copy kind's name (web/routes/replicas-status.ts accepts a confirm for these). */
-export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies'] as const
+export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config'] as const
 
 /**
  * The user confirmed a removal the half rule refused three rounds in a row (the

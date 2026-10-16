@@ -20,6 +20,8 @@ import type { CronJob, TriggerCheck } from '../cron/types.js';
 import { requireTriggerDaemon } from './trigger-daemon.js';
 import { assertCheckHostAllowed, checkCommandChanged } from './check-host-policy.js';
 import { REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js';
+import { isHostReplicaProgram } from '../server-role.js';
+import { NeedsLeaderError } from '../replication/needs-leader.js';
 
 /** Resolve the live cron service or throw a 503 (server still booting). */
 async function requireCronService(): Promise<CronService> {
@@ -202,14 +204,31 @@ async function findJob(service: CronService, id: string): Promise<CronJob | null
   return jobs.find((j) => j.id === id) ?? null;
 }
 
+/**
+ * A host replica holds the Mac's routines as a copy (replication/kinds/routines.ts):
+ * reads come from there (the engine's list would recompute and persist), and every
+ * routine write waits for the Mac.
+ */
+async function copiedRoutines(includeDisabled: boolean): Promise<CronJob[]> {
+  const { readRoutinesCopy } = await import('../replication/kinds/routines-follower.js');
+  // No copy yet (or the host turned it off): not "no routines".
+  const jobs = await readRoutinesCopy({ includeDisabled });
+  if (!jobs) throw new NeedsLeaderError('kind_not_copied');
+  return jobs;
+}
+
+function refuseRoutineWriteOnReplica(): void {
+  if (isHostReplicaProgram()) throw new NeedsLeaderError('routine_writes_need_mac');
+}
+
 export async function listRoutines(includeDisabled: boolean): Promise<{ jobs: unknown[] }> {
+  if (isHostReplicaProgram()) return { jobs: await copiedRoutines(includeDisabled) };
   const service = await requireCronService();
   return { jobs: await service.list({ includeDisabled }) };
 }
 
 export async function getRoutine(id: string): Promise<{ job: unknown }> {
-  const service = await requireCronService();
-  const jobs = await service.list({ includeDisabled: true });
+  const jobs = isHostReplicaProgram() ? await copiedRoutines(true) : await (await requireCronService()).list({ includeDisabled: true });
   const job = jobs.find((j) => j.id === id);
   if (!job) throw new SessionControlError(`Cron job not found: ${id}`, 404);
   return { job };
@@ -217,6 +236,7 @@ export async function getRoutine(id: string): Promise<{ job: unknown }> {
 
 /** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
 export async function createRoutine(body: unknown, origin?: string): Promise<{ job: unknown }> {
+  refuseRoutineWriteOnReplica();
   const service = await requireCronService();
   const { normalizeCronJobCreate } = await import('../cron/index.js');
   const input = normalizeCronJobCreate(body);
@@ -240,6 +260,7 @@ export async function createRoutine(body: unknown, origin?: string): Promise<{ j
 
 /** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
 export async function patchRoutine(id: string, body: unknown, origin?: string): Promise<{ job: unknown }> {
+  refuseRoutineWriteOnReplica();
   const service = await requireCronService();
   const { normalizeCronJobPatch } = await import('../cron/index.js');
   const patch = normalizeCronJobPatch(body);
@@ -261,6 +282,7 @@ export async function patchRoutine(id: string, body: unknown, origin?: string): 
 }
 
 export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed: boolean }> {
+  refuseRoutineWriteOnReplica();
   const service = await requireCronService();
   const before = await findJob(service, id);
   const result = await service.remove(id);
@@ -278,6 +300,7 @@ export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed:
 }
 
 export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
+  refuseRoutineWriteOnReplica();
   const service = await requireCronService();
   try {
     const job = await service.toggle(id);
@@ -291,6 +314,7 @@ export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
 }
 
 export async function runRoutineNow(id: string): Promise<{ result: unknown }> {
+  refuseRoutineWriteOnReplica();
   const service = await requireCronService();
   try {
     const result = await service.run(id, 'force');
@@ -302,6 +326,10 @@ export async function runRoutineNow(id: string): Promise<{ result: unknown }> {
 }
 
 export async function getRoutinesStatus(): Promise<Record<string, unknown>> {
+  if (isHostReplicaProgram()) {
+    // The engine does not run here: the copy's count, and no next wake.
+    return { enabled: false, storePath: '', jobs: (await copiedRoutines(true)).length, nextWakeAtMs: null };
+  }
   const service = await requireCronService();
   return await service.status() as unknown as Record<string, unknown>;
 }
