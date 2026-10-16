@@ -49,6 +49,7 @@ import { log } from '../../logging/index.js'
 import { hostDisplayNameFor } from './host-display-name.js'
 import { ReadProgress, currentReadProgress, runWithReadProgress } from './read-progress.js'
 import { linkFailureKind } from '../../providers/link-failure.js'
+import { isSelfHost } from '../../replica/self-host.js'
 
 /** How long a request waits on a dial it started itself. */
 export const HOST_READ_DIAL_CAP_MS = 5_000
@@ -201,7 +202,7 @@ export function isRemoteHost(host: string | null | undefined): host is string {
  * read deadline would cut short. False when nothing is connected.
  */
 export async function hostLinkAnswers(host: string | null | undefined, deadlineMs = HOST_LIVENESS_PROBE_MS): Promise<boolean> {
-  if (!isRemoteHost(host)) return true
+  if (!isRemoteHost(host) || isSelfHost(host)) return true
   return defaultProbe(host, deadlineMs).catch(() => true)
 }
 
@@ -299,7 +300,7 @@ async function boundHostReadIn<T>(
   deps: Partial<BoundDeps>,
   progress: ReadProgress,
 ): Promise<T> {
-  if (!isRemoteHost(host)) return read()
+  if (!isRemoteHost(host) || isSelfHost(host)) return read()
   const wouldWait = deps.wouldWait ?? await defaultWouldWait()
   const label = () => (deps.label ?? hostDisplayNameFor)(host)
   const before = wouldWait(host)
@@ -493,7 +494,7 @@ export function boundSharedHostRead<T>(
   read: () => Promise<T>,
   deps: Partial<BoundDeps> = {},
 ): Promise<T> {
-  if (!isRemoteHost(host)) return read()
+  if (!isRemoteHost(host) || isSelfHost(host)) return read()
   const fullKey = `${host}\u0000${key}`
   const kept = cutResults.get(fullKey)
   if (kept) {

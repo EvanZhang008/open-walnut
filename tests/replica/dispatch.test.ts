@@ -113,6 +113,9 @@ const state = {
   opsWhileDown: 0,
   /** The link goes down once this many follower.op tries reached the daemon. */
   downAfterOps: null as number | null,
+  /** WP6: whether a conditional local row is this host's data (null: never asked, a leader row). */
+  localHere: null as ((req: IncomingMessage, d: RouteDecision) => boolean | Promise<boolean>) | null,
+  localAsked: [] as string[],
 }
 
 function reset(): void {
@@ -124,6 +127,7 @@ function reset(): void {
   state.connects = []; state.suspects = []; state.ops = []; state.opAnswers = []; state.logs = []
   state.table = null
   state.linked = true; state.opsCap = true; state.opsWhileDown = 0; state.downAfterOps = null
+  state.localHere = null; state.localAsked = []
   mac.seen.length = 0; companion.seen.length = 0
   mac.partials.length = 0
 }
@@ -182,6 +186,10 @@ beforeAll(async () => {
     authorized: () => state.authorized,
     writeBudgetMs: state.writeBudgetMs,
     classify: (method, p) => (state.table ?? classify)(method, p),
+    localHere: (req, d) => {
+      state.localAsked.push(req.url ?? '')
+      return state.localHere ? state.localHere(req, d) : false
+    },
   }
   dispatcher = createDispatcher(deps)
   pub = http.createServer((req, res) => dispatcher.middleware(req, res, () => { void local(req, res) }))
@@ -854,5 +862,61 @@ describe('a flip closes a spliced socket between two frames', () => {
     expect(Date.now() - t0).toBeLessThan(3_000)
     expect(w.messages).toEqual([])
     expect(w.errors).toEqual([])
+  })
+})
+
+describe('a local row with a condition (WP6, self-host.ts)', () => {
+  it('this host\'s data runs here while the Mac answers, with no stream; anything else is the Mac\'s', async () => {
+    state.localHere = () => true
+    const here = await call('GET', '/api/sessions/s-host/history')
+    expect(here.json).toMatchObject({ from: 'replica', offline: null })
+    expect(state.connects).toEqual([])
+    expect(mac.seen).toHaveLength(0)
+    state.localHere = async () => { await new Promise((r) => setTimeout(r, 20)); return false }
+    const there = await call('GET', '/api/sessions/s-mac/history')
+    expect(there.json).toMatchObject({ from: 'mac' })
+    expect(state.connects).toEqual(['leader'])
+    expect(state.localAsked).toEqual(['/api/sessions/s-host/history', '/api/sessions/s-mac/history'])
+  })
+
+  it('a judge that throws is a no: the Mac answers; a local row without a condition never asks', async () => {
+    state.localHere = () => { throw new Error('store unreadable') }
+    expect((await call('GET', '/api/file-content?host=devbox&path=/x')).json).toMatchObject({ from: 'mac' })
+    const health = await call('GET', '/api/health')
+    expect(health.json).toMatchObject({ from: 'replica' })
+    expect(state.localAsked).toEqual(['/api/file-content?host=devbox&path=/x'])
+  })
+
+  it('while the Mac is away a no is a read on this replica\'s copies, as any read row', async () => {
+    state.route = { kind: 'alone', why: 'quiet' } as Route
+    state.localHere = () => false
+    const r = await call('GET', '/api/sessions/s-mac/history')
+    expect(r.json).toMatchObject({ from: 'replica' })
+    expect(r.json.offline).not.toBeNull()
+    expect(state.connects).toEqual([])
+  })
+
+  it('the real judge: a file route with no host goes to the Mac (a sessionId of this host does not decide), and needs it while away', async () => {
+    const { installSelfHost, clearSelfHost, isLocalHere } = await import('../../src/replica/self-host.js')
+    installSelfHost({ aliases: ['devbox'], link: { state: () => 'up', capabilities: () => ['replica-reads-v1'], request: async () => ({ ok: true }) } })
+    try {
+      const lookup = async (sid: string) => (sid === 's-host' ? { host: 'devbox' } : null)
+      // The judge front.ts wires (src/replica/front.ts localHere).
+      state.localHere = (req, d) => (d.row?.local ? isLocalHere(req.url ?? '', d.row.local, lookup) : true)
+      const own = encodeURIComponent('/home/u/.ssh/id_ed25519')
+      expect((await call('GET', `/api/file-content?path=${own}&sessionId=s-host`)).json).toMatchObject({ from: 'mac' })
+      expect((await call('GET', '/api/files/list?path=%2F&sessionId=s-host')).json).toMatchObject({ from: 'mac' })
+      expect((await call('GET', `/api/file-content?host=devbox&path=${own}`)).json).toMatchObject({ from: 'replica' })
+      expect(state.connects).toEqual(['leader', 'leader'])
+      state.route = { kind: 'alone', why: 'quiet' } as Route
+      for (const p of [`/api/file-content?path=${own}&sessionId=s-host`, `/api/file-content?host=other-box&path=${own}`, '/api/file-raw/devbox/etc/hosts', '/api/file-history?path=%2Fx']) {
+        const r = await call('GET', p)
+        expect(r.status, p).toBe(503)
+        expect(r.json, p).toMatchObject({ error: { code: 'needs_leader' } })
+      }
+      expect((await call('GET', `/api/file-content?host=devbox&path=${own}`)).json).toMatchObject({ from: 'replica' })
+    } finally {
+      clearSelfHost()
+    }
   })
 })

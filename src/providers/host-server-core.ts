@@ -505,6 +505,17 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
       return true
     },
     homes: (): string[] => [...entries.keys()],
+    /** Each server's data dir on this host (OPEN_WALNUT_HOME of its spec and of its fallback). */
+    dataDirs: (): string[] => {
+      const out: string[] = []
+      for (const e of entries.values()) {
+        for (const env of [e.spec.env, e.spec.fallback?.env]) {
+          const dir = env?.OPEN_WALNUT_HOME
+          if (typeof dir === 'string' && dir) out.push(dir)
+        }
+      }
+      return out
+    },
   }
 }
 

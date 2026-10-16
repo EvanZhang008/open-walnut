@@ -129,6 +129,7 @@ SOURCES=(
   src/providers/offline-search-core.ts
   src/providers/offline-board-core.ts
   src/providers/host-replica-core.ts
+  src/providers/follower-reads-core.ts
   src/providers/host-server-core.ts
   src/providers/stream-relay-core.ts
   src/providers/host-resume-core.ts

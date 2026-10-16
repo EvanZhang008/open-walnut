@@ -356,6 +356,8 @@ describe('host server manager: which program (WP2)', () => {
     expect(spec.args).toEqual([cli, 'web', '--replica'])
     expect(spec.env).toEqual({
       ...hostServerEnv(spec.port), WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host',
+      // WP6: the replica reads this host's sessions and files itself (replica/self-host.ts).
+      WALNUT_HOST_KEY: 'devbox',
     })
     expect(spec.fallback).toEqual({ args: [cli, 'host-server'], env: hostServerEnv(spec.port) })
     expect(m.view('devbox')).toMatchObject({ phase: 'running', program: 'replica' })

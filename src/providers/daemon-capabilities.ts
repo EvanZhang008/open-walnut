@@ -387,6 +387,17 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // `server.status` names the program. Both twins (host-server-core.ts is
   // text-injected). Optional: without it the Mac installs `host-server`.
   'replica-host-v1',
+  // 'replica-reads-v1' (follower-reads-core.ts, docs/plan/walnut-replica-servers-impl.md
+  // WP6): a follower socket reads its own Walnut only. attach, status (never
+  // with the argv), markers.find, read-history and changes.* answer not_found
+  // for another Walnut's session, `list` keeps that Walnut's rows, and the
+  // follower may read files (fs.ls/read/stat/readRange/resolvePath/grep,
+  // git.diff/fileShow/fileLog) inside that Walnut's session cwds, plus this
+  // host's copy of its notes, memory and skills (`replica.list {kind}`,
+  // `replica.read {kind, key}`, `replica.readMany {kind, keys}`, at most 4 MB
+  // per answer, the rest in `more`). Both twins (the core is text-injected).
+  // Optional: without it a replica reads notes, history and files through the Mac.
+  'replica-reads-v1',
   'session.message',
   'hooks-v1',
   'changes-v1',

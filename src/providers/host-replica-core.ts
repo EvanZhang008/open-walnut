@@ -456,7 +456,77 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return OPS.filter((o) => has(home, o.kind)).map(({ kind: _kind, ...o }) => o)
   }
 
-  return { sync, put, drop, status, answer, ops, has, keeps, memoryDocs, READ_OPS: Object.keys(READ_OPS) }
+  // ── reads for the replica server (docs/plan/walnut-replica-servers-impl.md WP6,
+  // 'replica-reads-v1'): the follower of `home` reads this copy instead of a
+  // second vault on the host. The daemon checks whose follower asks
+  // (follower-reads-core.ts); these only read.
+
+  const manifestMemo = new Map<string, { sig: string; hash: string }>()
+
+  /** One hash over the manifest (every key, body hash and metadata, in key order). */
+  function manifestHash(home: string, kind: ReplicaKind): string {
+    const st = load(home, kind)
+    const keys = Object.keys(st.index)
+    const sig = `${st.asOf}:${st.pendingAsOf}:${keys.length}:${Object.keys(st.pending).length}`
+    const memo = manifestMemo.get(stateKey(home, kind))
+    if (memo && memo.sig === sig) return memo.hash
+    keys.sort()
+    const hash = deps.hash(keys.map((k) => `${k}\u0000${st.index[k].h}\u0000${st.index[k].m ? JSON.stringify(st.index[k].m) : ''}`).join('\n'))
+    manifestMemo.set(stateKey(home, kind), { sig, hash })
+    return hash
+  }
+
+  /** A body without growing the search cache (a whole-vault read would hold every note). */
+  function peekBody(home: string, kind: ReplicaKind, k: string): string | null {
+    const row = load(home, kind).index[k]
+    if (!row) return null
+    const cached = bodies.get(stateKey(home, kind))?.get(k)
+    if (cached !== undefined) return cached
+    try { return fs.readFileSync(bodyFile(home, kind, row.f), 'utf8') } catch { return null }
+  }
+
+  /** The manifest as this host holds it, or null for a kind it never keeps. */
+  function list(home: string, kind: unknown): { entries: Array<{ k: string; h: string; n?: number; m?: Record<string, unknown> }>; asOf: string | null; manifestHash: string } | null {
+    if (!isKind(kind) || typeof home !== 'string' || !home) return null
+    const st = load(home, kind)
+    const entries = Object.keys(st.index).sort().map((k) => {
+      const row = st.index[k]
+      return { k, h: row.h, ...(row.n !== undefined ? { n: row.n } : {}), ...(row.m ? { m: row.m } : {}) }
+    })
+    return { entries, asOf: st.asOf ? new Date(st.asOf).toISOString() : null, manifestHash: manifestHash(home, kind) }
+  }
+
+  /** One entry with its body, or null (no such key in this copy). */
+  function read(home: string, kind: unknown, key: unknown): { k: string; h: string; n?: number; m?: Record<string, unknown>; body: string } | null {
+    if (!isKind(kind) || typeof home !== 'string' || !home || typeof key !== 'string' || !key || key.length > MAX_KEY) return null
+    const row = load(home, kind).index[key]
+    const body = row ? peekBody(home, kind, key) : null
+    if (!row || body === null) return null
+    return { k: key, h: row.h, ...(row.n !== undefined ? { n: row.n } : {}), ...(row.m ? { m: row.m } : {}), body }
+  }
+
+  /** Many bodies at once, at most `maxBytes` of them; the keys past that come back in `more`. */
+  function readMany(home: string, kind: unknown, keys: unknown, maxBytes: number): { files: Array<{ k: string; h: string; body: string }>; missing: string[]; more: string[] } | null {
+    if (!isKind(kind) || typeof home !== 'string' || !home || !Array.isArray(keys) || keys.length > MAX_ENTRIES) return null
+    const files: Array<{ k: string; h: string; body: string }> = []
+    const missing: string[] = []
+    const more: string[] = []
+    let bytes = 0
+    const index = load(home, kind).index
+    for (const k of keys) {
+      if (typeof k !== 'string') continue
+      if (more.length > 0) { more.push(k); continue }
+      const body = index[k] ? peekBody(home, kind, k) : null
+      if (body === null) { missing.push(k); continue }
+      const size = Buffer.byteLength(body) + k.length + 32
+      if (files.length > 0 && bytes + size > maxBytes) { more.push(k); continue }
+      bytes += size
+      files.push({ k, h: index[k].h, body })
+    }
+    return { files, missing, more }
+  }
+
+  return { sync, put, drop, status, answer, ops, has, keeps, memoryDocs, READ_OPS: Object.keys(READ_OPS), list, read, readMany, manifestHash }
 }
 
 export type HostReplica = ReturnType<typeof createHostReplica>

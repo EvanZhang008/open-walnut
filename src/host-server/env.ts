@@ -17,6 +17,12 @@ export interface HostServerEnv {
   followerToken: string
   /** The host's name in the Mac's settings, for the page a browser sees. */
   label: string
+  /**
+   * The Mac's key for this host (its `hosts` entry, a session record's `host`):
+   * a replica reads that host's sessions and files here (replica/self-host.ts,
+   * WP6). Absent from an older Mac: those reads go to the Mac.
+   */
+  hostKey?: string
 }
 
 function port(raw: string | undefined, name: string): number {

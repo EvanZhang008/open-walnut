@@ -709,8 +709,12 @@ const CHANGES_RPC_TIMEOUT_MS = 120_000;
 /** The daemon connection for a host IF it's already connected and speaks
  *  changes-v1. Never dials: a cold dial belongs to the reader path's laziness,
  *  and a disconnected host should fall back, not block. */
-async function changesCapableConnection(host: string | undefined): Promise<import('../providers/daemon-connection.js').DaemonConnection | null> {
+async function changesCapableConnection(host: string | undefined): Promise<Pick<import('../providers/daemon-connection.js').DaemonConnection, 'send' | 'hasCapability'> | null> {
   try {
+    // A host replica's own host: the follower link (replica/self-host.ts, WP6), owner scoped by the daemon.
+    const { selfHostConnection } = await import('../replica/self-host.js');
+    const self = host ? selfHostConnection(host) : null;
+    if (self) return self.connected && self.hasCapability('changes-v1') ? self : null;
     const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js');
     const conn = getConnectedDaemonConnection(host ?? '__local__');
     if (conn && conn.hasCapability('changes-v1')) return conn;

@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import { replicaNotesReads } from '../../replica/notes-routes.js'
 import type { MessageParam } from '../../model/model.js'
 import type { ProjectedTranscriptMessage } from '../../core/session-projection.js'
 import { VALID_PRIORITIES, type ChatEntry, type TaskPhase, type TaskPriority } from '../../core/types.js'
@@ -65,6 +66,8 @@ import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { log } from '../../logging/index.js'
 
 export const apiV1Router = Router()
+// A host replica reads its notes from the daemon's copy (WP6); a pass-through on the Mac and the companion.
+apiV1Router.use(replicaNotesReads('v1'))
 
 /** Default agent when the client doesn't pass ?agentId= (frozen v1 behavior). */
 const DEFAULT_AGENT_ID = 'general'

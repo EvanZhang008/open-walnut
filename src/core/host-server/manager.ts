@@ -363,7 +363,8 @@ export function createHostServerManager(deps: ManagerDeps) {
         ? {
             args: [`${install.appDir}/dist/cli.js`, 'web', '--replica'],
             // Its own run dir (hostServerEnv): a replica never writes the daemon's dir or /tmp/open-walnut.
-            env: { ...hostServerEnv, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host' },
+            // WALNUT_HOST_KEY: its sessions and files are read on the host itself (replica/self-host.ts, WP6).
+            env: { ...hostServerEnv, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_KEY: hostKey },
             // The daemon runs this by itself after a crash loop (it works while the Mac sleeps).
             fallback: { args: hostServerArgs, env: hostServerEnv },
           }

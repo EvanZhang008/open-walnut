@@ -13,6 +13,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import { replicaNotesReads } from '../../replica/notes-routes.js'
 import { NOTES_DIR, CLOUD_MODE } from '../../constants.js'
 import { companionSearchReady } from '../../core/search/companion-ready.js'
 import { isFollower } from '../../core/server-role.js'
@@ -78,6 +79,8 @@ import {
 export const MAX_NOTE_SIZE = 2_000_000 // 2 MB
 
 export const notesV2Router = Router()
+// A host replica reads its notes from the daemon's copy (WP6); a pass-through on the Mac and the companion.
+notesV2Router.use(replicaNotesReads('v2'))
 
 /**
  * Error with an HTTP status, thrown by the extracted note-op functions below

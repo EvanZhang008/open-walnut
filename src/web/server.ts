@@ -1058,6 +1058,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         walnutId: (env.WALNUT_WALNUT_ID ?? '').trim(),
         followerToken: secrets?.followerToken ?? '',
         label: (env.WALNUT_HOST_LABEL ?? '').trim() || 'this host',
+        hostKey: (env.WALNUT_HOST_KEY ?? '').trim() || undefined,
       },
       devices: replicaDeviceCopy(),
       acceptFromLeader: (stream) => hostReplicaDoor?.accept(stream),
@@ -1065,6 +1066,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       closeOwnSockets: (code, reason) => { ws.closeAllClients(code, reason) },
     })
     const front = hostReplicaFront
+    // Its notes: the copy the daemon keeps, read through the follower link (WP6).
+    const notes = await import('../replica/notes-source.js')
+    notes.installReplicaNotesSource(notes.createCopyNotesSource(notes.notesCopyReaderOver((cmd, params, timeoutMs) => {
+      if (!front.link.capabilities()?.includes('replica-reads-v1')) return Promise.reject(new Error('daemon_needs_upgrade: this host\'s daemon has no replica-reads-v1'))
+      return front.link.request(cmd, params, timeoutMs)
+    })))
     hostReplicaDoor = createLeaderDoor({
       devices: replicaDeviceCopy(),
       status: () => front.status(),
@@ -5961,6 +5968,7 @@ export async function stopServer(): Promise<void> {
     ws.setRpcGate(null)
     await hostReplicaFront.stop().catch(() => {})
     hostReplicaFront = null
+    ;(await import('../replica/notes-source.js')).installReplicaNotesSource(null)
   }
   if (bootPolicy('leader-heartbeat')) {
     try { await (await import('../core/leader/primary-leader.js')).announceLeaderRestart(800) } catch { /* best-effort */ }

@@ -81,6 +81,7 @@ import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
+import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
@@ -1786,7 +1787,7 @@ const core = createDaemonCore<SessionData>({
       hostResume.remember(payload.sid, { args: session.args, cwd: session.cwd, mode: session.mode, home: session.spawnInfo?.home, task: session.spawnInfo?.task })
     }
     for (const client of wsClients) {
-      sendEvent(client, 'session_state', payload)
+      if (followerHears(client, payload.sid)) sendEvent(client, 'session_state', payload)
     }
   },
   broadcastExitToWatchersFn: (session, code, stderrTail) => {
@@ -1954,6 +1955,8 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     logMsg('warn', 'follower: refused a command only the leader sends', { cmd: cmd.cmd, id })
     return safeSend(ws, JSON.stringify({ id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' }))
   }
+  // Owner scope (replica-reads-v1, follower-reads-core.ts): a follower reads its own Walnut only.
+  if (ws.data?.origin === 'follower' && followerScope(ws, id as number, cmd)) return
   // A lane carries the leader's streams and nothing else.
   if (ws.data?.origin === 'lane' && !LANE_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
     return safeSend(ws, JSON.stringify({ id, ok: false, error: 'a stream lane carries streams only, not ' + cmd.cmd, errorKind: 'lane_refused' }))
@@ -3773,6 +3776,63 @@ function cmdReplica(ws: ServerWebSocket<WsData>, id: number, op: 'sync' | 'put' 
   } catch (err) {
     sendError(ws, id, (err as Error).message)
   }
+}
+
+// ── Follower reads, owner scoped ('replica-reads-v1', follower-reads-core.ts;
+// docs/plan/walnut-replica-servers-impl.md WP6). A follower reads its own
+// Walnut's sessions, the files under that Walnut's session cwds and this host's
+// copy of its notes; anything of another Walnut on this host is not_found.
+// Keep in sync with daemon-source.ts.
+const followerReads = createFollowerReads({
+  path,
+  homeDir: HOME_DIR,
+  claudeProjectsDirs: [path.join(HOME_DIR, '.claude', 'projects'), ...(process.env.CLAUDE_CONFIG_DIR ? [path.join(process.env.CLAUDE_CONFIG_DIR, 'projects')] : [])],
+  streamsDir: STREAMS_DIR,
+  realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } },
+  sliceOwner: (sid) => offlineHost.ownerOf(sid),
+  journalOwner: (sid) => journaledHome(sid),
+  liveSessions: () => [...sessions].map(([sid, s]) => ({ sid, cwd: s.cwd })),
+  journalSize: () => { try { return fs.statSync(SPAWN_JOURNAL).size } catch { return -1 } },
+  readJournal: () => { try { return fs.readFileSync(SPAWN_JOURNAL, 'utf8') } catch { return '' } },
+  replica: hostReplica,
+  denyRoots: () => followerDenyRoots(),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+for (const c of followerReads.COMMANDS) FOLLOWER_ALLOWED_COMMANDS.add(c)
+
+/**
+ * Where no follower reads through, whatever session cwd lies above (the core's
+ * denyRoots): this daemon's own dirs (every Walnut's notes copy, logs, journals),
+ * every Walnut's data dir on this host, the CLI's config dirs, the streams dirs.
+ */
+function followerDenyRoots(): string[] {
+  const out = [DAEMON_DIR, REPLICA_DIR, HOST_SERVER_DIR, STREAMS_DIR,
+    path.join(HOME_DIR, '.open-walnut'), path.join(HOME_DIR, '.open-walnut-host'), path.join(HOME_DIR, '.claude')]
+  // The legacy streams dir is this daemon's only when it is the production one (an isolated daemon never looks there).
+  if (IS_PROD_DAEMON_DIR || process.env.WALNUT_LEGACY_STREAMS_DIR) out.push(LEGACY_STREAMS_DIR)
+  if (DAEMON_STATE_DIR) out.push(DAEMON_STATE_DIR)
+  if (process.env.CLAUDE_CONFIG_DIR) out.push(process.env.CLAUDE_CONFIG_DIR)
+  return out.concat(hostServers.dataDirs())
+}
+
+/** A session's broadcast reaches a follower of the Walnut that owns it only (every other client as before). */
+function followerHears(client: ServerWebSocket<WsData>, sid: string): boolean {
+  return client.data?.origin !== 'follower' || followerReads.ownRows(followerHomeOf(client), [{ sid }]).length === 1
+}
+
+/** A follower's frame, through the owner scope: true when it was answered here (refused or a copy read). */
+function followerScope(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>): boolean {
+  const d = followerReads.gate(followerHomeOf(ws), cmd)
+  if ('pass' in d) {
+    // The handler's answer is cut to this Walnut's scope on its way out (sendOk).
+    if (d.scope) followerReads.hold(ws, id, d.scope)
+    return false
+  }
+  if ('answer' in d) sendOk(ws, id, d.answer)
+  // An ordinary not_found (the core logged it at info): no 'command error' line.
+  else if ('refuse' in d) safeSend(ws, JSON.stringify({ errorKind: 'not_found', id, ok: false, error: d.refuse }))
+  else sendError(ws, id, d.error)
+  return true
 }
 
 function sendGatewayRequest(
@@ -8973,7 +9033,7 @@ function cmdList(ws: ServerWebSocket<WsData>, id: number) {
     }
   }
 
-  sendOk(ws, id, { sessions: result })
+  sendOk(ws, id, { sessions: ws.data?.origin === 'follower' ? followerReads.ownRows(followerHomeOf(ws), result) : result })
 }
 
 // ── Protocol helpers ──
@@ -9030,10 +9090,12 @@ function flushSendQueue(ws: ServerWebSocket<WsData>) {
 }
 
 function sendOk(ws: ServerWebSocket<WsData>, id: number | null, data: Record<string, unknown>) {
+  if (ws?.data?.origin === 'follower') data = followerReads.settle(ws, id, data) ?? data
   safeSend(ws, JSON.stringify({ id, ok: true, ...data }))
 }
 
 function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string, data?: Record<string, unknown>) {
+  if (ws?.data?.origin === 'follower') followerReads.settle(ws, id)
   logMsg('error', 'command error', { id, error })
   safeSend(ws, JSON.stringify({ ...data, id, ok: false, error }))
 }
@@ -10104,7 +10166,7 @@ if (action === '--start' || SERVICE_MODE) {
         return { pid: result.pid, startTime: sessions.get(sid)?.startTime ?? null }
       },
       changed: (record) => {
-        for (const ws of wsClients) sendEvent(ws, 'cron-supervision', {
+        for (const ws of wsClients) if (followerHears(ws, record.sid)) sendEvent(ws, 'cron-supervision', {
           sid: record.sid, enabled: record.enabled, state: record.state,
           reason: record.reason, generation: record.generation, retryAt: record.retryAt,
         })

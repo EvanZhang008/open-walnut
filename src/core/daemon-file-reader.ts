@@ -8,6 +8,7 @@
 import path from 'node:path'
 import { log } from '../logging/index.js'
 import { getDaemonConnection } from '../providers/daemon-connection.js'
+import { isSelfHost } from '../replica/self-host.js'
 import { getConfig } from './config-manager.js'
 import type { SshTarget } from '../providers/session-io.js'
 import type { SessionFileReader } from './session-file-reader.js'
@@ -48,6 +49,11 @@ export class DaemonFileReader implements SessionFileReader {
     // target so the shared signature holds; it is never dereferenced for local.
     if (this.host === '__local__') {
       this.sshTarget = { hostname: '__local__' }
+      return
+    }
+    // A host replica's own host: the follower link, no SSH target (replica/self-host.ts, WP6).
+    if (isSelfHost(this.host)) {
+      this.sshTarget = { hostname: this.host }
       return
     }
     const config = await getConfig()

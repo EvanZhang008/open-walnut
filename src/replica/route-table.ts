@@ -30,6 +30,20 @@ export interface RouteRow {
   away?: AwayRule
   /** Said in the 503 needs_leader body (and for the reader of this table). */
   why?: string
+  /**
+   * A `local` row answers here only for this host's data (self-host.ts, WP6):
+   * `session` = the `:id` session runs on this host, `host` = the request's
+   * `host` query names this host (a `sessionId` query never decides). Otherwise
+   * the row is a `leader` row, and its `away` says what happens while away.
+   */
+  local?: 'session' | 'host'
+  /**
+   * A `local` row whose answer here also needs this daemon capability: the
+   * changes view only when the daemon computes it host-local ('changes-v1');
+   * without it the reader path would miss the files the session wrote outside
+   * its cwd (the follower scope refuses them), so the Mac answers, as before WP6.
+   */
+  cap?: string
 }
 
 export interface RouteDecision {
@@ -54,10 +68,43 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'POST', pattern: '/api/v1/tasks', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: W, pattern: '/api/v1/tasks/:id', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: 'GET', pattern: '/api/v1/sessions', away: 'read' },
+  { method: 'GET', pattern: '/api/v1/sessions/list-dirs', away: 'needs-leader', why: 'files_need_mac' },
   { method: 'GET', pattern: '/api/v1/sessions/:id', away: 'read' },
-  { method: 'GET', pattern: '/api/v1/sessions/:id/history', away: 'read' },
-  { method: 'GET', pattern: '/api/v1/sessions/:id/transcript', away: 'read' },
+  { method: 'GET', pattern: '/api/v1/sessions/:id/history', cls: 'local', local: 'session', away: 'read' },
+  { method: 'GET', pattern: '/api/v1/sessions/:id/transcript', cls: 'local', local: 'session', away: 'read' },
   { method: W, pattern: '/api/v1/sessions/:id/messages', away: 'needs-leader', why: 'session_writes_need_mac' },
+  // Host data, answered on this host even while the Mac answers (WP6, self-host.ts):
+  // a session that runs here, a file or a diff of this host, read through the
+  // follower link. A session or a host elsewhere goes to the Mac as before.
+  { method: 'GET', pattern: '/api/sessions/:id/history', cls: 'local', local: 'session' },
+  { method: 'GET', pattern: '/api/sessions/:id/subagent/:agentId/history', cls: 'local', local: 'session' },
+  { method: 'GET', pattern: '/api/v1/sessions/:id/subagent/:agentId/history', cls: 'local', local: 'session' },
+  { method: 'GET', pattern: '/api/sessions/:id/changes', cls: 'local', local: 'session', cap: 'changes-v1' },
+  { method: 'GET', pattern: '/api/sessions/:id/changes/file', cls: 'local', local: 'session', cap: 'changes-v1' },
+  { method: 'GET', pattern: '/api/v1/sessions/:id/changes', cls: 'local', local: 'session', cap: 'changes-v1' },
+  // A file read with no `host` (the Mac's own file) or of another host is the
+  // Mac's even while it is away: the handlers would read it from this replica's
+  // disk, outside the daemon's owner scope (and it is not this host's file).
+  { method: 'GET', pattern: '/api/file-content', cls: 'local', local: 'host', away: 'needs-leader', why: 'files_need_mac' },
+  { method: 'GET', pattern: '/api/files/list', cls: 'local', local: 'host', away: 'needs-leader', why: 'files_need_mac' },
+  { method: 'GET', pattern: '/api/files/resolve-path', cls: 'local', local: 'host', away: 'needs-leader', why: 'files_need_mac' },
+  { method: 'GET', pattern: '/api/files/references', cls: 'local', local: 'host', away: 'needs-leader', why: 'files_need_mac' },
+  // The phone's twins of the same reads (files-v1.ts calls the same functions).
+  { method: 'GET', pattern: '/api/v1/file-content', cls: 'local', local: 'host', away: 'needs-leader', why: 'files_need_mac' },
+  { method: 'GET', pattern: '/api/v1/files/list', cls: 'local', local: 'host', away: 'needs-leader', why: 'files_need_mac' },
+  { method: 'GET', pattern: '/api/v1/files/resolve-path', cls: 'local', local: 'host', away: 'needs-leader', why: 'files_need_mac' },
+  { method: 'GET', pattern: '/api/v1/file-raw/*', away: 'needs-leader', why: 'files_need_mac' },
+  // The new-session dir picker lists a host's (or, with no host, the Mac's) dirs
+  // (the phone's twin sits above /api/v1/sessions/:id, which would take it).
+  { method: 'GET', pattern: '/api/sessions/list-dirs', away: 'needs-leader', why: 'files_need_mac' },
+  // The other reads of a file by path: the Mac's (forwarded), and while it is
+  // away nobody's here (this replica's disk is not the Mac's, and the daemon's
+  // owner scope would not apply to a read of it).
+  { method: 'GET', pattern: '/api/file-raw/*', away: 'needs-leader', why: 'files_need_mac' },
+  { method: 'GET', pattern: '/api/file-history/*', away: 'needs-leader', why: 'files_need_mac' },
+  { method: 'GET', pattern: '/api/local-image/*', away: 'needs-leader', why: 'files_need_mac' },
+  // This server's own health.
+  { method: 'GET', pattern: '/api/health', cls: 'local' },
   // The terminal is a /ws RPC; node-pty is not on hosts (section 3).
   // Plugin routes are the leader's by prefix (their credentials stay on the Mac;
   // plugins do not load on a replica, so even their reads need it).

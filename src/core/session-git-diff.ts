@@ -47,6 +47,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { getConfig } from './config-manager.js';
 import { getDaemonConnection } from '../providers/daemon-connection.js';
+import { hostEntryOf } from '../replica/self-host.js';
 import {
   computeGitDiff,
   GitDiffError,
@@ -104,7 +105,7 @@ async function runGitDiffForRepo(
   if (host) {
     // Remote: the daemon runs the SAME core on the host (no per-file SSH hops).
     const config = await getConfig();
-    const hostDef = config.hosts?.[host];
+    const hostDef = hostEntryOf(config.hosts, host);
     if (!hostDef) throw new Error(`Unknown host: ${host}`);
     const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string;
     if (!hostname) throw new Error(`Host ${host} missing hostname`);

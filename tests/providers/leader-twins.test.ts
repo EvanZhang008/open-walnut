@@ -17,6 +17,7 @@ import { createOfflineSearch } from '../../src/providers/offline-search-core.js'
 import { createHostServerSupervisor } from '../../src/providers/host-server-core.js'
 import { createStreamRelay } from '../../src/providers/stream-relay-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { createFollowerReads } from '../../src/providers/follower-reads-core.js'
 
 const root = path.join(import.meta.dirname, '..', '..')
 const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf-8')
@@ -386,5 +387,73 @@ describe('the source twin template', () => {
       expect(text).not.toMatch(/__name\(|__vite|import\(/)
       expect(rendered).toContain(text)
     }
+  })
+})
+
+describe('owner-scoped follower reads, replica-reads-v1 (replica plan WP6)', () => {
+  const reads = createFollowerReads({
+    path, homeDir: '/nonexistent', realpath: () => null, sliceOwner: () => undefined, journalOwner: () => undefined,
+    liveSessions: () => [], journalSize: () => -1, readJournal: () => '', replica: { list: () => null, read: () => null, readMany: () => null }, log: () => {},
+  })
+  const WRITES = ['fs.write', 'fs.mkdir', 'fs.rename', 'fs.rm', 'fs.copy', 'git.commitStart', 'git.commitPlan', 'git.ensureExcluded', 'replica.sync', 'replica.put', 'replica.drop', 'start', 'send', 'stop']
+
+  it('adds exactly the reads WP6 names, and no write', () => {
+    expect([...reads.COMMANDS].sort()).toEqual([
+      'changes.compute', 'changes.file', 'fs.find', 'fs.grep', 'fs.ls', 'fs.read', 'fs.readRange', 'fs.resolvePath', 'fs.stat',
+      'git.diff', 'git.fileLog', 'git.fileShow', 'replica.list', 'replica.read', 'replica.readMany',
+    ])
+    for (const w of WRITES) expect(reads.COMMANDS).not.toContain(w)
+  })
+
+  it('both twins: the effective follower allowlist (the literal set plus the core\'s reads) is the same set, and has no write', () => {
+    const effective = (src: string) => new Set([...setEntries(src, 'FOLLOWER_ALLOWED_COMMANDS'), ...reads.COMMANDS.map((c) => `'${c}'`)])
+    expect(effective(twins.source)).toEqual(effective(twins.standalone))
+    for (const w of WRITES) expect(effective(twins.standalone).has(`'${w}'`)).toBe(false)
+    expect(twins.standalone).toMatch(/for \(const c of followerReads\.COMMANDS\) FOLLOWER_ALLOWED_COMMANDS\.add\(c\)/)
+    expect(twins.source).toMatch(/followerReads\.COMMANDS\.forEach\(function \(c\) \{ FOLLOWER_ALLOWED_COMMANDS\.add\(c\); \}\)/)
+  })
+
+  for (const [name, src] of Object.entries(twins)) {
+    it(`${name}: the owner scope runs right after the follower allowlist, before any handler, and list keeps the follower's rows`, () => {
+      const allow = src.search(/origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS\.has\(cmd\.cmd( as string)?\)\) \{/)
+      const scope = src.search(/origin === 'follower' && followerScope\(ws, id( as number)?, cmd\)\) return/)
+      const lane = src.search(/origin === 'lane' && !LANE_ALLOWED_COMMANDS\.has/)
+      expect(allow).toBeGreaterThan(0)
+      expect(scope).toBeGreaterThan(allow)
+      expect(lane).toBeGreaterThan(scope)
+      expect(fnBody(src, 'followerScope')).toMatch(/followerReads\.gate\(followerHomeOf\(ws\), cmd\)/)
+      expect(fnBody(src, 'followerScope')).toMatch(/errorKind: 'not_found'/)
+      expect(fnBody(src, 'cmdList')).toMatch(/origin === 'follower' \? followerReads\.ownRows\(followerHomeOf\(ws\), result\) : result/)
+      // Ownership: the slice first, then the spawn journal; cwds from the live map and the journal.
+      expect(src).toMatch(/sliceOwner: [^\n]*offlineHost\.ownerOf\(sid\)/)
+      expect(src).toMatch(/journalOwner: [^\n]*journaledHome\(sid\)/)
+      expect(src).toMatch(/replica: hostReplica,/)
+      // The one broadcast every client hears names a session: a follower hears its own Walnut's only.
+      expect(src).toMatch(/if \(followerHears\(client, (payload\.)?sid\)\) (\{ try \{ client\.send|sendEvent\(client, 'session_state')/)
+      expect(fnBody(src, 'followerHears')).toMatch(/origin !== 'follower' \|\| followerReads\.ownRows\(followerHomeOf\(client\), \[\{ sid(: sid)? \}\]\)\.length === 1/)
+      // WP6 fix round: a whole-repository answer is cut on its way out; a refusal is no 'command error'.
+      expect(fnBody(src, 'followerScope')).toMatch(/if \(d\.scope\) followerReads\.hold\(ws, id, d\.scope\)/)
+      expect(fnBody(src, 'followerScope')).not.toMatch(/sendError\(ws, id, d\.refuse/)
+      expect(fnBody(src, 'sendOk')).toMatch(/origin === 'follower'\) data = followerReads\.settle\(ws, id, data\)/)
+      expect(fnBody(src, 'sendError')).toMatch(/origin === 'follower'\) followerReads\.settle\(ws, id\)/)
+      expect(src).toMatch(/denyRoots: [^\n]*followerDenyRoots\(\)/)
+      for (const dir of ['DAEMON_DIR', 'REPLICA_DIR', 'HOST_SERVER_DIR', 'STREAMS_DIR', 'LEGACY_STREAMS_DIR', 'DAEMON_STATE_DIR', 'hostServers.dataDirs()', "'.claude'", "'.open-walnut'", "'.open-walnut-host'"]) {
+        expect(fnBody(src, 'followerDenyRoots'), dir).toContain(dir)
+      }
+      // Cron supervision names a session too: a follower hears its own Walnut's only.
+      expect(src).toMatch(/for \(const ws of wsClients\) if \(followerHears\(ws, record\.sid\)\) sendEvent\(ws, 'cron-supervision'/)
+    })
+  }
+
+  it('advertised by both twins, and the core is part of the version hash and the build script', () => {
+    expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('replica-reads-v1')
+    expect(REQUIRED_DAEMON_CAPABILITIES).not.toContain('replica-reads-v1')
+    expect(read('src/providers/daemon-version-check.ts')).toContain("'src/providers/follower-reads-core.ts'")
+    expect(read('scripts/build-daemon.sh')).toContain('src/providers/follower-reads-core.ts')
+    const rendered = getDaemonSource()
+    expect(rendered).not.toContain('__CREATE_FOLLOWER_READS__')
+    const text = createFollowerReads.toString()
+    expect(text).not.toMatch(/__name\(|__vite|import\(/)
+    expect(rendered).toContain(text)
   })
 })

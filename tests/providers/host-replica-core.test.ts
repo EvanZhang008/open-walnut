@@ -250,3 +250,53 @@ describe('the offline host answers reads from the copy', () => {
     for (const name of ['task_send', 'task_update', 'task_complete', 'note_write', 'board_set', 'toString', '__proto__', undefined, 7]) expect(h.answersRead(name, HOME)).toBe(false)
   })
 })
+
+describe('reads for the replica server (replica-reads-v1, WP6)', () => {
+  it('list: every entry in key order with its hash and metadata, the age, and a manifest hash that moves with the copy', () => {
+    const r = make()
+    expect(r.list(HOME, 'notes')).toMatchObject({ entries: [], asOf: null })
+    fill(r)
+    const l = r.list(HOME, 'notes')!
+    expect(l.entries.map((e) => e.k)).toEqual(Object.keys(notes).sort())
+    expect(l.entries[0]).toMatchObject({ k: 'Projects/Release plan.md', h: sha12(notes['Projects/Release plan.md'].body), m: { title: 'Release plan', id: 'n_rel01' } })
+    expect(l.asOf).toBe(new Date(clock).toISOString())
+    const before = l.manifestHash
+    expect(r.list(HOME, 'notes')!.manifestHash).toBe(before)
+    // A body that changed: a new hash once its body arrived. A title alone moving: also new.
+    clock += 1000
+    fill(r, { ...notes, 'health/Checkup.md': { body: '# Checkup\nMoved to Monday.', m: notes['health/Checkup.md'].m } })
+    const changed = r.list(HOME, 'notes')!.manifestHash
+    expect(changed).not.toBe(before)
+    clock += 1000
+    fill(r, { ...notes, 'health/Checkup.md': { body: '# Checkup\nMoved to Monday.', m: { ...notes['health/Checkup.md'].m, title: 'Checkup (Mon)' } } })
+    expect(r.list(HOME, 'notes')!.manifestHash).not.toBe(changed)
+    expect(r.list(HOME, 'secrets')).toBeNull()
+    expect(r.list('', 'notes')).toBeNull()
+  })
+
+  it('read: one body byte for byte (Unicode, CRLF), null for a key it does not hold or another Walnut\'s', () => {
+    const r = make()
+    const uni = { 'journal/\u00e9t\u00e9.md': { body: '# \u00c9t\u00e9\r\n\u2603 \u{1F330}\r\n', m: { title: '\u00c9t\u00e9' } } }
+    fill(r, { ...notes, ...uni })
+    expect(r.read(HOME, 'notes', 'journal/\u00e9t\u00e9.md')).toMatchObject({ k: 'journal/\u00e9t\u00e9.md', body: '# \u00c9t\u00e9\r\n\u2603 \u{1F330}\r\n', h: sha12(uni['journal/\u00e9t\u00e9.md'].body) })
+    expect(r.read(HOME, 'notes', 'missing.md')).toBeNull()
+    expect(r.read('/fixture/other-home', 'notes', 'Projects/Retro.md')).toBeNull()
+    expect(r.read(HOME, 'notes', 42)).toBeNull()
+  })
+
+  it('readMany: bodies up to the byte budget, the rest in more, unknown keys in missing; the search cache does not grow', () => {
+    const r = make()
+    fill(r)
+    const keys = Object.keys(notes)
+    const all = r.readMany(HOME, 'notes', [...keys, 'gone.md'], 4 * 1024 * 1024)!
+    expect(all.files.map((f) => f.k)).toEqual(keys)
+    expect(all.missing).toEqual(['gone.md'])
+    expect(all.more).toEqual([])
+    const small = r.readMany(HOME, 'notes', keys, 100)!
+    // At least one per answer, so a reader always moves forward.
+    expect(small.files).toHaveLength(1)
+    expect(small.more).toEqual(keys.slice(1))
+    expect(r.readMany(HOME, 'notes', 'x', 100)).toBeNull()
+    expect(r.readMany(HOME, 'secrets', keys, 100)).toBeNull()
+  })
+})

@@ -76,6 +76,7 @@ import {
 import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
 import { markLinkFailure } from './link-failure.js'
+import { selfHostConnection } from '../replica/self-host.js'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
@@ -5770,6 +5771,9 @@ export function pushTriggersToAllHosts(): void {
  * with repeated SSH timeout attempts when a host is unreachable.
  */
 export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget): Promise<DaemonConnection> {
+  // A host replica reads its own host through the follower link (replica/self-host.ts, WP6); null elsewhere.
+  const self = selfHostConnection(hostKey)
+  if (self) return self as unknown as DaemonConnection
   // Every failure here is the LINK's (no connection could be had), tagged so a
   // request path tells it from a command's own error by kind (link-failure.ts).
   return getDaemonConnectionOrThrow(hostKey, sshTarget).catch((err) => { throw markLinkFailure(err, 'no-link') })

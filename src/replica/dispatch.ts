@@ -138,6 +138,12 @@ export interface DispatchDeps {
   writeBudgetMs?: number
   /** Tests: a fixed table. */
   classify?(method: string, path: string): RouteDecision
+  /**
+   * A `local` row with a condition (`local: 'session' | 'host'`): whether this
+   * request is this host's data (self-host.ts, WP6). False: it is a leader
+   * route. Absent: every local row runs here.
+   */
+  localHere?(req: IncomingMessage, decision: RouteDecision): boolean | Promise<boolean>
 }
 
 export interface Dispatcher {
@@ -518,35 +524,52 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     socket.once('close', () => { if (h) handshakes.delete(h) })
   }
 
+  /** A request for the leader (or answered as away): the forward path every leader row takes. */
+  function routeOn(req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void, decision: RouteDecision): void {
+    const route = deps.route()
+    if (route.kind === 'alone') return answerAway(req, res, next, decision, route.why)
+    const write = !isRead(req.method ?? 'GET')
+    forward(req, res, route, write, (err, sent) => {
+      deps.suspect(route.kind, err)
+      if (!write) {
+        // A read may go to the next one, and is answered here when nobody else can.
+        const nextRoute = deps.route()
+        if (nextRoute.kind !== 'alone' && nextRoute.kind !== route.kind) {
+          forward(req, res, nextRoute, false, (err2) => {
+            deps.suspect(nextRoute.kind, err2)
+            answerAway(req, res, next, decision, 'nobody-answers')
+          })
+          return
+        }
+        return answerAway(req, res, next, decision, nextRoute.kind === 'alone' ? nextRoute.why : 'unreachable')
+      }
+      // A write that may have reached the target is never repeated nor journaled here.
+      if (sent) {
+        deps.log('warn', 'replica: a forwarded write got no answer', { to: route.kind, opId: req.headers[OP_ID_HEADER], method: req.method, path: pathOf(req), error: err.message })
+        return timedOut(res, true)
+      }
+      // Provably not sent: answered as away.
+      answerAway(req, res, next, decision, 'unreachable')
+    })
+  }
+
   return {
     middleware(req, res, next) {
       const decision = decide(req.method ?? 'GET', pathOf(req))
-      if (decision.cls === 'local' || decision.cls === 'feature') return next()
-      const route = deps.route()
-      if (route.kind === 'alone') return answerAway(req, res, next, decision, route.why)
-      const write = !isRead(req.method ?? 'GET')
-      forward(req, res, route, write, (err, sent) => {
-        deps.suspect(route.kind, err)
-        if (!write) {
-          // A read may go to the next one, and is answered here when nobody else can.
-          const nextRoute = deps.route()
-          if (nextRoute.kind !== 'alone' && nextRoute.kind !== route.kind) {
-            forward(req, res, nextRoute, false, (err2) => {
-              deps.suspect(nextRoute.kind, err2)
-              answerAway(req, res, next, decision, 'nobody-answers')
-            })
-            return
-          }
-          return answerAway(req, res, next, decision, nextRoute.kind === 'alone' ? nextRoute.why : 'unreachable')
-        }
-        // A write that may have reached the target is never repeated nor journaled here.
-        if (sent) {
-          deps.log('warn', 'replica: a forwarded write got no answer', { to: route.kind, opId: req.headers[OP_ID_HEADER], method: req.method, path: pathOf(req), error: err.message })
-          return timedOut(res, true)
-        }
-        // Provably not sent: answered as away.
-        answerAway(req, res, next, decision, 'unreachable')
-      })
+      if (decision.cls === 'feature') return next()
+      if (decision.cls === 'local') {
+        if (!decision.row?.local) return next()
+        // A row with a condition and nobody to judge it is the leader's, as before WP6.
+        const localHere = deps.localHere
+        if (!localHere) return routeOn(req, res, next, decision)
+        // Asked once, then here or to the leader as any read.
+        Promise.resolve().then(() => localHere(req, decision)).catch(() => false).then((here) => {
+          if (here) return next()
+          routeOn(req, res, next, decision)
+        })
+        return
+      }
+      routeOn(req, res, next, decision)
     },
 
     upgrade(req, socket, head) {

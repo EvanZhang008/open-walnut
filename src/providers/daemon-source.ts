@@ -54,6 +54,7 @@ import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
+import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
@@ -246,6 +247,7 @@ export function getDaemonSource(): string {
     ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
     ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
+    ['__CREATE_FOLLOWER_READS__', createFollowerReads.toString()],
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
@@ -398,6 +400,16 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const noDir = { readFileSync: () => { throw new Error('none') } } as unknown as typeof fs
       const replica = createReplica({ fs: noDir, path, dir: '/nonexistent', now: () => 0, keyOf: () => 'k', hash: () => '000000000000', log: () => {} })
       if (replica.answer('/x', 'note_read', { path: 'a' }, '') !== null || replica.READ_OPS.indexOf('note_read') === -1) throw new Error('host copy did not build')
+    }
+    // Follower reads smoke: a reconstructed gate must refuse another Walnut's
+    // session and pass its own, without touching disk.
+    const createReads = reconstructed['__CREATE_FOLLOWER_READS__'] as typeof createFollowerReads | undefined
+    if (createReads) {
+      const reads = createReads({
+        path, homeDir: '/nonexistent', realpath: () => null, sliceOwner: (sid) => (sid === 'own' ? 'a' : 'b'), journalOwner: () => undefined,
+        liveSessions: () => [], journalSize: () => -1, readJournal: () => '', replica: { list: () => null, read: () => null, readMany: () => null }, log: () => {},
+      })
+      if (!('pass' in reads.gate('a', { cmd: 'status', sid: 'own' })) || !('refuse' in reads.gate('a', { cmd: 'status', sid: 'other' })) || reads.COMMANDS.indexOf('replica.read') === -1) throw new Error('follower reads did not build')
     }
     // Open items smoke: a reconstructed formatter must say nothing for nothing
     // open, and name an open subtask.
@@ -1701,7 +1713,7 @@ function broadcastSessionState(sid, state, extra) {
   }
   const payload = Object.assign({ sid, state }, extra || {});
   for (const client of wsClients) {
-    try { client.send(JSON.stringify(Object.assign({ ev: 'session_state' }, payload))); } catch {}
+    if (followerHears(client, sid)) { try { client.send(JSON.stringify(Object.assign({ ev: 'session_state' }, payload))); } catch {} }
   }
 }
 
@@ -3080,6 +3092,8 @@ function handleCommand(ws, msg) {
     try { ws.send(JSON.stringify({ id: id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' })); } catch (e) {}
     return;
   }
+  // Owner scope (replica-reads-v1, follower-reads-core.ts, inlined): a follower reads its own Walnut only.
+  if (ws.origin === 'follower' && followerScope(ws, id, cmd)) return;
   // A lane carries the leader's streams and nothing else.
   if (ws.origin === 'lane' && !LANE_ALLOWED_COMMANDS.has(cmd.cmd)) {
     try { ws.send(JSON.stringify({ id: id, ok: false, error: 'a stream lane carries streams only, not ' + cmd.cmd, errorKind: 'lane_refused' })); } catch (e) {}
@@ -4325,7 +4339,7 @@ function primaryClientFor(home) {
 }
 
 function streamTarget(ws, to) {
-  if (ws.origin === 'follower') {
+  if (ws && ws.origin === 'follower') {
     var fhome = ws.followerHome;
     if (!fhome || followerSockets.get(fhome) !== ws) return { why: 'send follower.hello first' };
     if (to === 'primary') {
@@ -4728,6 +4742,54 @@ function cmdReplica(ws, id, op, cmd) {
   } catch (err) {
     sendError(ws, id, err.message);
   }
+}
+
+// Follower reads, owner scoped ('replica-reads-v1', follower-reads-core.ts,
+// inlined). Twin of the daemon-standalone.ts block (rationale there).
+var followerReads = (__CREATE_FOLLOWER_READS__)({
+  path: path,
+  homeDir: HOME_DIR,
+  claudeProjectsDirs: [path.join(HOME_DIR, '.claude', 'projects')].concat(process.env.CLAUDE_CONFIG_DIR ? [path.join(process.env.CLAUDE_CONFIG_DIR, 'projects')] : []),
+  streamsDir: STREAMS_DIR,
+  realpath: function (p) { try { return fs.realpathSync(p); } catch (e) { return null; } },
+  sliceOwner: function (sid) { return offlineHost.ownerOf(sid); },
+  journalOwner: function (sid) { return journaledHome(sid); },
+  liveSessions: function () { var out = []; sessions.forEach(function (s, sid) { out.push({ sid: sid, cwd: s.cwd }); }); return out; },
+  journalSize: function () { try { return fs.statSync(SPAWN_JOURNAL).size; } catch (e) { return -1; } },
+  readJournal: function () { try { return fs.readFileSync(SPAWN_JOURNAL, 'utf8'); } catch (e) { return ''; } },
+  replica: hostReplica,
+  denyRoots: function () { return followerDenyRoots(); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+followerReads.COMMANDS.forEach(function (c) { FOLLOWER_ALLOWED_COMMANDS.add(c); });
+
+// Where no follower reads through (twin of daemon-standalone.ts followerDenyRoots).
+function followerDenyRoots() {
+  var out = [DAEMON_DIR, REPLICA_DIR, HOST_SERVER_DIR, STREAMS_DIR,
+    path.join(HOME_DIR, '.open-walnut'), path.join(HOME_DIR, '.open-walnut-host'), path.join(HOME_DIR, '.claude')];
+  if (IS_PROD_DAEMON_DIR || process.env.WALNUT_LEGACY_STREAMS_DIR) out.push(LEGACY_STREAMS_DIR);
+  if (DAEMON_STATE_DIR) out.push(DAEMON_STATE_DIR);
+  if (process.env.CLAUDE_CONFIG_DIR) out.push(process.env.CLAUDE_CONFIG_DIR);
+  return out.concat(hostServers.dataDirs());
+}
+
+// A session's broadcast reaches a follower of the Walnut that owns it only (twin of daemon-standalone.ts).
+function followerHears(client, sid) {
+  return client.origin !== 'follower' || followerReads.ownRows(followerHomeOf(client), [{ sid: sid }]).length === 1;
+}
+
+function followerScope(ws, id, cmd) {
+  var d = followerReads.gate(followerHomeOf(ws), cmd);
+  if (d.pass) {
+    // The handler's answer is cut to this Walnut's scope on its way out (sendOk).
+    if (d.scope) followerReads.hold(ws, id, d.scope);
+    return false;
+  }
+  if (d.answer) sendOk(ws, id, d.answer);
+  // An ordinary not_found (the core logged it at info): no 'command error' line.
+  else if (d.refuse) { try { ws.send(JSON.stringify({ errorKind: 'not_found', id: id, ok: false, error: d.refuse })); } catch (e) {} }
+  else sendError(ws, id, d.error);
+  return true;
 }
 
 function sendGatewayRequest(capability, callerSid, payload, respond) {
@@ -10862,7 +10924,7 @@ function cmdList(ws, id) {
     }
   }
 
-  sendOk(ws, id, { sessions: result });
+  sendOk(ws, id, { sessions: ws.origin === 'follower' ? followerReads.ownRows(followerHomeOf(ws), result) : result });
 }
 
 // ── Protocol helpers ──
@@ -10874,10 +10936,12 @@ function cmdList(ws, id) {
 // this asymmetry by porting the queue; do keep it in mind if the transport
 // ever changes.
 function sendOk(ws, id, data) {
+  if (ws && ws.origin === 'follower') data = followerReads.settle(ws, id, data) || data;
   try { ws.send(JSON.stringify({ id, ok: true, ...data })); } catch {}
 }
 
 function sendError(ws, id, error, data) {
+  if (ws && ws.origin === 'follower') followerReads.settle(ws, id);
   logMsg('error', 'command error', { id, error });
   try { ws.send(JSON.stringify({ ...data, id, ok: false, error })); } catch {}
 }
@@ -12065,7 +12129,7 @@ async function startDaemon() {
         return { pid: result.pid, startTime: current ? current.startTime : null };
       },
       changed: function (record) {
-        for (const ws of wsClients) sendEvent(ws, 'cron-supervision', {
+        for (const ws of wsClients) if (followerHears(ws, record.sid)) sendEvent(ws, 'cron-supervision', {
           sid: record.sid, enabled: record.enabled, state: record.state,
           reason: record.reason, generation: record.generation, retryAt: record.retryAt,
         });

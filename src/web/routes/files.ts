@@ -20,6 +20,7 @@ import os from 'node:os'
 import fsp from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { getConfig } from '../../core/config-manager.js'
+import { hostEntryOf } from '../../replica/self-host.js'
 import { getFrequentDirs } from '../../core/frequent-dirs.js'
 import { recordMentionDir, getMentionDirs } from '../../core/mention-dirs.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
@@ -129,7 +130,7 @@ async function resolveViaHost(
   }
 
   const config = await getConfig()
-  const hostDef = config.hosts?.[host]
+  const hostDef = hostEntryOf(config.hosts, host)
   if (!hostDef?.hostname) return null
 
   let res
@@ -319,7 +320,7 @@ export async function resolveSessionPath(
   if (host) {
     // ── Remote: stat each candidate via daemon fs.stat ──
     const config = await getConfig()
-    const hostDef = config.hosts?.[host]
+    const hostDef = hostEntryOf(config.hosts, host)
     if (!hostDef?.hostname) {
       return { path: fallback, resolved: false, ...pos }
     }
@@ -462,7 +463,7 @@ filesRouter.get('/references', async (req: Request, res: Response, next: NextFun
 
     // ── Remote host: same connection shape as resolveViaHost ──
     const config = await getConfig()
-    const hostDef = config.hosts?.[host]
+    const hostDef = hostEntryOf(config.hosts, host)
     if (!hostDef?.hostname) {
       res.status(404).json({ error: `Unknown host: ${host}` })
       return
@@ -609,7 +610,7 @@ async function listOneDir(
   if (host) {
     // ── Remote ──
     const config = await getConfig()
-    const hostDef = config.hosts?.[host]
+    const hostDef = hostEntryOf(config.hosts, host)
     if (!hostDef) throw new FilesOpError(`Unknown host: ${host}`, 400)
     const hostname = hostDef.hostname
     if (!hostname) throw new FilesOpError(`Host "${host}" has no hostname`, 400)

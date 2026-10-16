@@ -96,3 +96,33 @@ describe('the table itself', () => {
     }
   })
 })
+
+describe('local rows (WP6)', () => {
+  it('a host session\'s history, transcript and changes, a file of a host, and health are local; their condition is on the row', () => {
+    for (const p of ['/api/sessions/s1/history', '/api/sessions/s1/subagent/a1/history', '/api/sessions/s1/changes', '/api/sessions/s1/changes/file', '/api/v1/sessions/s1/history', '/api/v1/sessions/s1/transcript', '/api/v1/sessions/s1/changes', '/api/v1/sessions/s1/subagent/a1/history']) {
+      const d = classify('GET', p)
+      expect(d, p).toMatchObject({ cls: 'local', away: 'read' })
+      expect(d.row?.local, p).toBe('session')
+    }
+    // The changes view is local only when the daemon computes it host-local.
+    for (const p of ['/api/sessions/s1/changes', '/api/sessions/s1/changes/file', '/api/v1/sessions/s1/changes']) expect(classify('GET', p).row?.cap, p).toBe('changes-v1')
+    for (const p of ['/api/sessions/s1/history', '/api/v1/sessions/s1/transcript', '/api/file-content']) expect(classify('GET', p).row?.cap, p).toBeUndefined()
+    for (const p of ['/api/file-content', '/api/files/list', '/api/files/resolve-path', '/api/files/references', '/api/v1/file-content', '/api/v1/files/list', '/api/v1/files/resolve-path']) {
+      expect(classify('GET', p).row?.local, p).toBe('host')
+      // Not this host's file (no host, or another one): the Mac's, and while it is away nobody's here.
+      expect(classify('GET', p), p).toMatchObject({ cls: 'local', away: 'needs-leader', why: 'files_need_mac' })
+    }
+    for (const p of ['/api/file-raw/devbox/etc/hosts', '/api/file-history', '/api/file-history/version', '/api/local-image', '/api/v1/file-raw/devbox/etc/hosts', '/api/v1/file-raw/local/etc/hosts', '/api/sessions/list-dirs', '/api/v1/sessions/list-dirs']) {
+      expect(classify('GET', p), p).toMatchObject({ cls: 'leader', away: 'needs-leader', why: 'files_need_mac' })
+    }
+    expect(classify('GET', '/api/health')).toMatchObject({ cls: 'local' })
+    expect(classify('GET', '/api/health').row?.local).toBeUndefined()
+  })
+
+  it('file writes, git commits and the terminal stay the Mac\'s', () => {
+    for (const [m, p] of [['PUT', '/api/file-content'], ['POST', '/api/files/rename'], ['POST', '/api/sessions/s1/commit'], ['POST', '/api/sessions/s1/changes/file']]) {
+      expect(classify(m!, p!), `${m} ${p}`).toMatchObject({ cls: 'leader', away: 'needs-leader' })
+    }
+    expect(classify('GET', '/api/sessions/s1/changes/summary').cls).toBe('leader')
+  })
+})

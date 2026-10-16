@@ -455,9 +455,11 @@ describe('walnut web --replica boots safely', () => {
   })
 
   it('a notes route on it opens no notes index: no started line, no notes-index.sqlite', async () => {
+    // A host replica reads its notes from the host daemon's copy (WP6, replica/notes-routes.ts).
+    // No daemon answers here, so the read says the Mac answers it, and no local index opens.
     const r = await get('/api/notes-v2/tags', PHONE_TOKEN)
-    expect(r.status).toBe(200)
-    expect(r.body).toEqual({ tags: [] })
+    expect(r.status).toBe(503)
+    expect(r.body).toMatchObject({ code: 'needs_leader', why: 'copy_unreadable' })
     await sleep(2_500) // the bootstrap is async, and the logger flushes on a 2 s timer
     expect(serverLog()).not.toContain('notes-index: started')
     expect(fs.existsSync(path.join(dirs.data, 'notes-index.sqlite'))).toBe(false)

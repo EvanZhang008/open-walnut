@@ -24,6 +24,7 @@ import { log } from '../logging/index.js'
 import { getBuildInfo } from '../lib/build-info.js'
 import { placement, role, setLeaderPresence } from '../core/server-role.js'
 import { createFollowerLink, type FollowerLink } from '../core/link/follower-link.js'
+import { clearSelfHost, installSelfHost, isLocalHere } from './self-host.js'
 import type { HostServerEnv } from '../host-server/env.js'
 import type { Route } from '../host-server/route.js'
 import { createHostExpose, followExposeSettings, type HostExpose } from '../host-server/expose.js'
@@ -74,6 +75,12 @@ export interface ReplicaFront {
   stop(): Promise<void>
 }
 
+/** Where a session runs, from this replica's session store (the copy, WP4). */
+async function lookupSessionHost(sessionId: string): Promise<{ host?: string | null } | null> {
+  const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+  return (await getSessionByClaudeId(sessionId)) ?? null
+}
+
 export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   const env = opts.env
   const startedAt = Date.now()
@@ -100,6 +107,9 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     accept: (info) => (info.from === 'primary' ? (stream: Duplex) => opts.acceptFromLeader(stream) : null),
     log: (level, msg, data) => log.web[level](msg, data),
   })
+  // The Mac's name for this host resolves to this link (self-host.ts, WP6).
+  installSelfHost({ aliases: env.hostKey ? [env.hostKey] : [], link })
+  log.web.info('replica: self host', { host: env.label, hostKey: env.hostKey ?? null, home: env.leaderHome })
   link.on('view', (view) => {
     followSettings((view as { settings: Record<string, unknown> }).settings)
     look()
@@ -169,6 +179,8 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       return caps === null ? null : caps.includes(REPLICA_OPS_CAP)
     },
     linked: () => link.linkState() === 'following',
+    // WP6: a session or a file of this host is read here, through the follower link (self-host.ts).
+    localHere: (req, decision) => (decision.row?.local ? isLocalHere(req.url ?? '', decision.row.local, lookupSessionHost, decision.row.cap) : true),
     ownUpgrade: (req, socket, head) => {
       if (ownUpgrade) return ownUpgrade(req, socket, head)
       socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
@@ -249,6 +261,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       clearInterval(reportTimer)
       clearInterval(tick)
       link.stop()
+      clearSelfHost()
       await expose.stop()
     },
   }
