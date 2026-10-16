@@ -3,14 +3,18 @@
  * (web/routes/bridge-replica.ts createLinkedReplicaRouter, what a host
  * replica's leader door serves) on a local port, and a host replica target
  * that reaches it over HTTP, mapped as core/host-server/index.ts maps the
- * stream answer. Every step is recorded.
+ * stream answer. Every step is recorded, with the exact text that crossed the link.
  */
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { CloudReplicaReply } from '../../src/core/cloud-ingest.js'
 import type { CopyTarget } from '../../src/core/replication/kinds/copy-kind.js'
 
-export interface StepCall { op: string; kind: string; n: number; digest?: boolean; bytes: number }
+export interface StepCall {
+  op: string; kind: string; n: number; digest?: boolean; bytes: number
+  /** The step's body as sent to the follower route, byte for byte. */
+  text: string
+}
 
 export interface CopyHarness {
   target: CopyTarget
@@ -40,7 +44,7 @@ export async function startCopyHarness(opts: { id?: string; copies?: () => Promi
       const text = JSON.stringify(payload)
       const body = JSON.parse(text) as Record<string, unknown>
       const n = Array.isArray(body.rows) ? body.rows.length : Array.isArray(body.entries) ? body.entries.length : 1
-      calls.push({ op: String(body.op), kind: String(body.kind), n, ...(typeof body.digest === 'string' ? { digest: true } : {}), bytes: text.length })
+      calls.push({ op: String(body.op), kind: String(body.kind), n, ...(typeof body.digest === 'string' ? { digest: true } : {}), bytes: text.length, text })
       if (failing > 0) { failing--; return { ok: false, outcome: 'failed', error: 'connection lost' } }
       try {
         const res = await fetch(`http://127.0.0.1:${port}/bridge/replica`, {

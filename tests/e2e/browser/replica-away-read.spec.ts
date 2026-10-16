@@ -26,10 +26,10 @@
  * GET is ever answered 504, and no
  * other 5xx. A second test keeps a draft typed before the Mac slept through the
  * sleep and the wake, then sends it (the person's words land before the reply,
- * and the session goes idle). A third measures the away load (worst of 5).
- *
- * TODO(WP5): the Routines and config views join step 3 when their copies land
- * (asserted here then, never a skipped test).
+ * and the session goes idle). A third loads the page while the Mac sleeps, so
+ * nothing on it can be the Mac's own answer: the Routines page, Settings (where a
+ * save says "Needs your Mac" with the reason and changes nothing), the favorites
+ * and the layout come from the WP5 copies. A fourth measures the away load (worst of 5).
  *
  * The first load of the tunnel address is a `goto`: opening a link is what the
  * person does. Everything after it is a click.
@@ -49,12 +49,18 @@ const QUIET_MS = 6_000
 // A Unicode title, as test data (\u escapes).
 const UNICODE_TITLE = 'Fix the flaky build \u00e9t\u00e9'
 const NEEDS_MAC = 'Needs your Mac. Changing a task needs your Mac for now.'
+/** A settings save away: the why's words (web/src/api/leader-presence.ts), shown as they are. */
+const NEEDS_MAC_SETTINGS = 'Needs your Mac. Changing settings needs your Mac.'
 
 interface Ready {
   ids: { board: string; other: string; macSid: string; hostSid: string }
   hostTurn: { asked: string; answered: string }
   note: { path: string; name: string; text: string }
   letter: { subject: string; text: string }
+  routine: { name: string; text: string }
+  favorites: { projects: string[]; notes: string[] }
+  theme: { key: string; value: string }
+  userName: string
 }
 
 async function control<T = Record<string, any>>(method: string, p: string, body?: unknown): Promise<T> {
@@ -223,9 +229,11 @@ function watchAnswers(page: Page) {
 
 /**
  * The 503s the console is expected to get away (`<status> <method> <path>` and
- * the why it is told): its writes (a task edit says why; the background writes
- * of prefs, seen marks and read marks carry the presence's own why), the Mac
- * session's reads, and a session's budget (the Mac's usage store).
+ * the why it is told): its writes (a task edit, a settings save and the layout
+ * prefs say why; the background writes of seen marks and read marks carry the
+ * presence's own why), the Mac session's reads, a session's budget (the Mac's
+ * usage store), and what WP5 does not copy (a chat's messages, the first
+ * conversation of an agent with no list).
  */
 function expected503(ids: Ready['ids']): Array<{ test: RegExp; whys: string[] }> {
   // These writes have no why of their own (the presence's), and the page never
@@ -233,7 +241,21 @@ function expected503(ids: Ready['ids']): Array<{ test: RegExp; whys: string[] }>
   const presence = ['mac-away', 'unreachable', 'body-unread']
   return [
     { test: /^503 (PATCH|POST|PUT|DELETE) \/api\/tasks\//, whys: ['task_writes_need_mac'] },
-    { test: /^503 (PUT|POST|PATCH) \/api\/(ui-prefs|notifications\/[^/]+|v1\/tasks\/[^/]+\/board\/[^/]+)$/, whys: presence },
+    // The layout prefs say which store (a row of their own, WP5); the page never reads that answer either.
+    { test: /^503 PUT \/api\/ui-prefs$/, whys: ['prefs_writes_need_mac', 'body-unread'] },
+    // A settings save (WP5): the Mac owns config.yaml.
+    { test: /^503 PUT \/api\/config$/, whys: ['config_writes_need_mac'] },
+    { test: /^503 (PUT|POST|PATCH) \/api\/(notifications\/[^/]+|v1\/tasks\/[^/]+\/board\/[^/]+)$/, whys: presence },
+    // The console's log lines, posted while its socket is down (a reload away): the
+    // old page's keepalive post has no body to read once the page is gone.
+    { test: /^503 POST \/api\/browser-logs$/, whys: [...presence, 'not-json'] },
+    // The chat list of an agent the Mac keeps no list for yet (the note agent, its
+    // Notes page never opened while the Mac answered): its first conversation is
+    // made on the Mac (WP5, core/conversations.ts getMainConversationId).
+    { test: /^503 GET \/api\/agents\/[^/]+\/conversations$/, whys: ['conversation_writes_need_mac'] },
+    // A chat's messages (a task's triage history in its detail): only the lists are
+    // copied, the bodies stay on the Mac (WP5, route-table.ts).
+    { test: /^503 GET \/api\/chat\/(history|stats|triage)$/, whys: ['conversation_bodies_need_mac'] },
     { test: new RegExp(`^503 GET /api/(v1/)?sessions/${ids.macSid}/`), whys: ['session_on_mac'] },
     { test: /^503 GET \/api\/usage\/sessions\/[^/]+$/, whys: ['usage_needs_mac'] },
   ]
@@ -409,7 +431,6 @@ test('the console reads its copies while the Mac sleeps, and comes back with no 
     if (isPhone()) await page.locator('.phone-topbar').getByRole('button', { name: 'Back' }).click()
     else await page.keyboard.press('Escape')
     await expect(center).toHaveCount(0, { timeout: 15_000 })
-    // TODO(WP5): Routines and the config views, from their copies.
   })
 
   await test.step('4. the Mac wakes: the line goes, no reload, no host problem, live data again', async () => {
@@ -439,9 +460,9 @@ test('the console reads its copies while the Mac sleeps, and comes back with no 
   expect(answers.got504.filter((r) => r.method === 'GET')).toEqual([])
   // A write in flight at the flip may be cut (504, "Nothing was saved"); one sent away never is.
   expect(answers.got504.filter((r) => !r.beforeAway)).toEqual([])
-  // The replica's refusals are the console's writes, a Mac session's reads and a
-  // budget read, nothing else: each matches one expected refusal, and the two the
-  // steps made are there.
+  // The replica's refusals are the ones expected503 names (the console's writes, a
+  // Mac session's reads, a budget read, what WP5 does not copy), nothing else: each
+  // matches one expected refusal, and the two the steps made are there.
   const all = JSON.stringify(answers.why503)
   const refused = answers.why503.filter((r) => r.via === 'replica')
   const allowed = expected503(ids)
@@ -505,6 +526,137 @@ test('a draft typed before the Mac sleeps survives the sleep and the wake, then 
   await expect.poll(async () => (await pageGet(page, `/api/sessions/${ids.macSid}`)).json?.session?.process_status, { timeout: 60_000 }).toBe('idle')
   await shot(page, 'd4-draft-sent')
   expect(pageErrors).toEqual([])
+})
+
+/**
+ * WP5: a page loaded while the Mac sleeps holds nothing the Mac answered (its
+ * routines store, its config, its favorites and its layout are read at boot), so
+ * what it shows is the replica's copies. The theme is taken out of this browser
+ * first (it may hold the Mac's from the sign-in): only the prefs copy brings it back.
+ */
+test('a page loaded while the Mac sleeps shows Routines, Settings, its favorites and its layout from the copies', async ({ page }) => {
+  const { ids, favorites, theme, note, routine, userName } = await control<Ready>('GET', '/control/ready')
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => { if (!/due to access control checks|Load failed/.test(e.message)) pageErrors.push(e.message) })
+  const answers = watchAnswers(page)
+  await signIn(page)
+  await control('POST', '/control/sleep')
+  await expect(page.getByTestId('away-line')).toBeVisible({ timeout: QUIET_MS + 5_000 })
+  answers.state.awaySeen = true
+  const rawTheme = (remove: boolean) => page.evaluate(([key, drop]) => {
+    const raw = (Storage.prototype as unknown as Record<symbol, { get: Storage['getItem']; remove: Storage['removeItem'] } | undefined>)[Symbol.for('open-walnut.ui-prefs-sync.raw-storage')]
+    if (!raw) throw new Error('ui-prefs-sync is not running on this page')
+    if (drop) raw.remove.call(localStorage, key)
+    return raw.get.call(localStorage, key)
+  }, [theme.key, remove] as const)
+  // Every GET the page loaded away makes, by path: the first answer of each.
+  const reads = new Map<string, Response>()
+  const keep = (r: Response) => {
+    const url = new URL(r.url())
+    if (r.request().method() === 'GET' && !reads.has(url.pathname)) reads.set(url.pathname, r)
+  }
+  const readOf = async (pathname: string) => {
+    await expect.poll(() => reads.has(pathname), { timeout: 30_000, message: `GET ${pathname}` }).toBe(true)
+    const r = reads.get(pathname)!
+    expect([pathname, r.status()]).toEqual([pathname, 200])
+    expect(offlineOf(r)).toBeGreaterThan(0)
+    return r
+  }
+  const back = async () => {
+    // A Settings pane and the Settings list are layers over a phone's page: Back leaves them.
+    if (!isPhone()) return
+    const menu = page.getByRole('button', { name: 'Menu', exact: true })
+    for (let i = 0; i < 3 && !(await menu.isVisible()); i++) {
+      await page.locator('.phone-topbar').getByRole('button', { name: 'Back' }).click()
+      await page.waitForTimeout(400)
+    }
+    await expect(menu).toBeVisible({ timeout: 15_000 })
+  }
+  let failure: unknown = null
+  try {
+    expect(await rawTheme(true)).toBeNull()
+    page.on('response', keep)
+    await page.reload()
+    await expect(page.getByTestId('away-line')).toBeVisible({ timeout: 30_000 })
+    // The boot merge of the layout prefs and the favorites read: the replica's, from its copy.
+    await readOf('/api/ui-prefs')
+    await readOf('/api/favorites')
+    // The layout: the Mac's theme, adopted before the first render (a view reads it
+    // when it mounts: Settings shows it below; the page's own colours take it on the
+    // next load, as they do for any window, ui-prefs-sync.ts).
+    expect(await rawTheme(false)).toBe(theme.value)
+    // The favorites: the Mac's star on its project.
+    expect(favorites.projects).toContain('Acme')
+    const header = page.locator('.todo-group-project-header').filter({ has: page.locator('.todo-group-project-name').filter({ hasText: /^Acme$/ }) }).first()
+    await expect(header).toBeVisible({ timeout: 30_000 })
+    const star = header.locator('.todo-group-fav-btn')
+    await expect(star).toHaveAttribute('title', 'Unfavorite project')
+    await expect(star).toHaveText('\u2605')
+    await expect(star).toBeVisible()
+    await shot(page, 'f1-away-loaded-favorite')
+
+    // The Routines page: the Mac's routine, from the routines copy.
+    await navTo(page, 'Routines')
+    const card = page.locator('.routine-card').filter({ has: page.locator('.cron-job-name', { hasText: new RegExp(`^\\s*${escapeRe(routine.name)}\\s*$`) }) })
+    await expect(card.first()).toBeVisible({ timeout: 30_000 })
+    const listed = await (await readOf('/api/routines')).json() as { jobs?: Array<{ name?: string }> }
+    expect(listed.jobs?.map((j) => j.name)).toContain(routine.name)
+    await shot(page, 'f2-away-routines')
+
+    // Settings: the Mac's values, from the config copy, and its layout pref.
+    await navTo(page, 'Settings')
+    await page.getByTestId('settings-nav-general').click()
+    const name = page.locator('#settings-name')
+    await expect(name).toHaveValue(userName, { timeout: 30_000 })
+    const config = await (await readOf('/api/config')).json() as { config?: { user?: { name?: string } } }
+    expect(config.config?.user?.name).toBe(userName)
+    await expect(page.getByTestId(`settings-theme-${theme.value}`)).toHaveAttribute('aria-checked', 'true')
+    // A save: refused with the reason in words, the text kept for the person, nothing written.
+    const saved = page.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/config', { timeout: 30_000 })
+    await name.fill(`${userName} away`)
+    await name.press('Enter')
+    expect((await saved).status()).toBe(503)
+    // The row's error sits right after the row (SettingsRow), as an alert.
+    const nameError = page.locator('.settings-row:has(#settings-name) + .settings-row-error[role="alert"]')
+    await expect(nameError).toHaveText(NEEDS_MAC_SETTINGS, { timeout: 15_000 })
+    await expect(page.locator('.settings-row:has(#settings-name)')).toHaveAttribute('data-state', 'error')
+    await expect(name).toHaveValue(`${userName} away`)
+    await shot(page, 'f3-away-settings-needs-mac')
+    // Escape puts the saved value back (the person gives up): nothing is left to save on the way out.
+    await name.press('Escape')
+    await expect(name).toHaveValue(userName)
+    const held = JSON.stringify((await control<{ config: unknown }>('GET', '/control/stores')).config)
+    expect(held).toContain(userName)
+    expect(held).not.toContain(`${userName} away`)
+    await back()
+
+    // The notes bookmark: the Mac's favorite note, under Bookmarks.
+    await navTo(page, 'Notes')
+    const bookmark = page.locator('.notes-bookmarks-group .notes-bookmark-row', { hasText: note.name }).first()
+    await expect(bookmark).toBeVisible({ timeout: 30_000 })
+    expect(favorites.notes).toContain(note.path)
+    await shot(page, 'f4-away-notes-bookmark')
+  } catch (err) {
+    failure = err
+  }
+  page.off('response', keep)
+  // The Mac wakes either way (the next test needs it); a failure above is the one reported.
+  const woke = await control('POST', '/control/wake').then(() => null, (err: unknown) => err)
+  if (failure) {
+    if (woke) test.info().annotations.push({ type: 'wake-failed', description: String(woke) })
+    throw failure
+  }
+  if (woke) throw woke
+  await expect(page.getByTestId('away-line')).toHaveCount(0, { timeout: 30_000 })
+  await answers.settle()
+  expect(pageErrors).toEqual([])
+  expect(answers.other5xx).toEqual([])
+  expect(answers.got504.filter((r) => r.method === 'GET')).toEqual([])
+  const all = JSON.stringify(answers.why503)
+  const refused = answers.why503.filter((r) => r.via === 'replica')
+  const allowed = expected503(ids)
+  expect(refused.filter((r) => !allowed.some((e) => e.test.test(r.path) && e.whys.includes(r.why))), all).toEqual([])
+  expect(refused.some((r) => r.why === 'config_writes_need_mac' && r.path === '503 PUT /api/config'), all).toBe(true)
 })
 
 /**

@@ -43,6 +43,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import type { Task, TaskPhase } from '../../core/types.js'
 import { isKnownEngine } from '../../core/agents/engine-registry.js'
 import { PIN_TIER_POLICY, SESSION_ENGINE_IDS, migrateFocusTier } from '../../core/types.js'
+import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const taskV1Router = Router()
 
@@ -648,6 +649,9 @@ taskV1Router.get('/focus/tiers', async (_req: Request, res: Response, next: Next
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.
 taskV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  // A host replica's refusal of a store it only holds a copy of: the app's error
+  // handler answers it 503 needs_leader with its why, never a 500 card.
+  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
   log.web.error('api-v1 task route error', {
     error: err instanceof Error ? err.message : String(err),
   })

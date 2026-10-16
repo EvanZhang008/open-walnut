@@ -129,6 +129,26 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // with that answer.
   { method: 'GET', pattern: '/api/v1/conversations/:id/messages', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
   { method: 'GET', pattern: '/api/v1/chat/stats', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
+  // The writes of those copied stores: the Mac owns each store, so each says which
+  // one it is (the same why the replica's own refusal of it carries). Exact
+  // methods: a routine's `:id` would also take /draft, /check-test and /trigger,
+  // which change no routine and keep the plain away answer.
+  { method: 'PUT', pattern: '/api/config', away: 'needs-leader', why: 'config_writes_need_mac' },
+  ...['/api/routines', '/api/cron', '/api/v1/routines'].flatMap((base): RouteRow[] => [
+    { method: 'POST', pattern: base, away: 'needs-leader', why: 'routine_writes_need_mac' },
+    { method: 'PATCH', pattern: `${base}/:id`, away: 'needs-leader', why: 'routine_writes_need_mac' },
+    { method: 'DELETE', pattern: `${base}/:id`, away: 'needs-leader', why: 'routine_writes_need_mac' },
+    { method: 'POST', pattern: `${base}/:id/toggle`, away: 'needs-leader', why: 'routine_writes_need_mac' },
+  ]),
+  { method: 'PUT', pattern: '/api/ui-prefs', away: 'needs-leader', why: 'prefs_writes_need_mac' },
+  { method: W, pattern: '/api/favorites/*', away: 'needs-leader', why: 'prefs_writes_need_mac' },
+  { method: 'POST', pattern: '/api/agents/:agentId/conversations', away: 'needs-leader', why: 'conversation_writes_need_mac' },
+  { method: 'PUT', pattern: '/api/agents/:agentId/conversations/active', away: 'needs-leader', why: 'conversation_writes_need_mac' },
+  { method: 'PATCH', pattern: '/api/agents/:agentId/conversations/:cid', away: 'needs-leader', why: 'conversation_writes_need_mac' },
+  { method: 'DELETE', pattern: '/api/agents/:agentId/conversations/:cid', away: 'needs-leader', why: 'conversation_writes_need_mac' },
+  { method: 'PUT', pattern: '/api/v1/conversations/active', away: 'needs-leader', why: 'conversation_writes_need_mac' },
+  { method: 'PATCH', pattern: '/api/v1/conversations/:id', away: 'needs-leader', why: 'conversation_writes_need_mac' },
+  { method: 'DELETE', pattern: '/api/v1/conversations/:id', away: 'needs-leader', why: 'conversation_writes_need_mac' },
   // Everything else: writes need the Mac until WP10 gives them a journal.
   { method: W, pattern: '/api/v1/*', away: 'needs-leader' },
   { method: W, pattern: '/api/*', away: 'needs-leader' },

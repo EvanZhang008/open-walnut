@@ -348,9 +348,11 @@ function collapseTwinsForWrite(
  * The index file is deliberately NOT rewritten from a READ: a write would race
  * the very sync that produces the duplicates. The writers below repair it inside
  * their own locked write instead, so the two paths agree on the winner
- * (pickConversationRow) and disk converges on its own.
+ * (pickConversationRow) and disk converges on its own. The conversations copy
+ * kind (replication/kinds/conversations.ts) reads the Mac's lists through it
+ * too: one row per conversation id, the same winner the Mac's list shows.
  */
-function dedupeConversations(agentId: string, list: ConversationMeta[]): ConversationMeta[] {
+export function dedupeConversations(agentId: string, list: ConversationMeta[]): ConversationMeta[] {
   const winners = new Map<string, ConversationMeta>();
   const duplicated = new Set<string>();
   for (const c of list) {

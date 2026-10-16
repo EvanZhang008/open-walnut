@@ -18,6 +18,8 @@ import path from 'node:path';
 import type { CronStoreFile, CronStateFile, CronJobState, CronServiceState } from './types.js';
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js';
 import { noteStoreWrite } from '../replication/store-writes.js';
+import { isHostReplicaProgram } from '../server-role.js';
+import { NeedsLeaderError } from '../replication/needs-leader.js';
 import { recomputeNextRuns } from './jobs.js';
 import { syncExecutorFields } from './executor-compat.js';
 
@@ -153,6 +155,11 @@ export async function ensureLoaded(
  * mass-deletion (e.g., a test suite sweeping all jobs via REST API).
  */
 export async function persist(state: CronServiceState): Promise<void> {
+  // On a host replica cron-jobs.json and cron-state.json are the Mac's routines
+  // copy (replication/kinds/routines-follower.ts): only the copy round writes
+  // them. The engine there is registered but never started, and a list that
+  // recomputed a next run would rewrite the copy away from the Mac's rows.
+  if (isHostReplicaProgram()) throw new NeedsLeaderError('routine_writes_need_mac');
   if (!state.store) return;
 
   // Before overwriting with 0 jobs, check if the on-disk file has jobs

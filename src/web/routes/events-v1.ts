@@ -43,6 +43,7 @@ import { LEADER_HEARTBEAT_KIND } from '../../core/leader/protocol.js'
 import { SEND_PATH_READY_KIND } from '../../core/send-path-announce.js'
 import { log } from '../../logging/index.js'
 import type { Task } from '../../core/types.js'
+import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const eventsV1Router = Router()
 
@@ -411,6 +412,9 @@ eventsV1Router.get('/events', async (_req: Request, res: Response, next: NextFun
 
 // Router-level error funnel — frozen error shape (same as the other v1 routers).
 eventsV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  // A host replica's refusal of a store it only holds a copy of: the app's error
+  // handler answers it 503 needs_leader with its why, never a 500 card.
+  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
   log.web.error('api-v1 events error', {
     error: err instanceof Error ? err.message : String(err),
   })

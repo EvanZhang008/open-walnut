@@ -255,6 +255,79 @@ describe('the Routines page on the replica', () => {
     for (const w of writes) await expect(w()).rejects.toMatchObject({ code: 'needs_leader', why: 'routine_writes_need_mac' })
     expect(fs.readFileSync(CRON_FILE, 'utf8')).toBe(before)
   })
+
+  it("the phone's routes say the same: 503 needs_leader with the why, never the v1 funnel's 500", async () => {
+    const [{ default: express }, { routinesV1Router }, { errorHandler }] = await Promise.all([
+      import('express'), import('../../../../src/web/routes/routines-v1.js'), import('../../../../src/web/middleware/error-handler.js'),
+    ])
+    const app = express()
+    app.use(express.json())
+    app.use('/api/v1', routinesV1Router)
+    app.use(errorHandler)
+    const server = await new Promise<import('node:http').Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)) })
+    try {
+      const base = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}/api/v1`
+      const none = await fetch(`${base}/routines?includeDisabled=true`)
+      expect(none.status).toBe(503)
+      expect(await none.json()).toMatchObject({ error: { code: 'needs_leader', why: 'kind_not_copied' } })
+      await round()
+      const list = await fetch(`${base}/routines?includeDisabled=true`)
+      expect(list.status).toBe(200)
+      expect(((await list.json()) as { jobs: unknown[] }).jobs).toHaveLength(8)
+      const before = fs.readFileSync(CRON_FILE, 'utf8')
+      const add = await fetch(`${base}/routines`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'x', schedule: { kind: 'every', everyMs: 3_600_000 }, payload: { kind: 'systemEvent', text: 'x' } }) })
+      expect(add.status).toBe(503)
+      expect(await add.json()).toMatchObject({ error: { code: 'needs_leader', why: 'routine_writes_need_mac' } })
+      expect(fs.readFileSync(CRON_FILE, 'utf8')).toBe(before)
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()))
+    }
+  })
+})
+
+describe("the replica's own routines engine never writes the copy", () => {
+  it('registered but not started: no caller drives it, and its one write point refuses', async () => {
+    await round()
+    // The copied next runs are in the past: an engine list would recompute them and persist.
+    const bytes = () => `${fs.readFileSync(CRON_FILE, 'utf8')}\n${fs.readFileSync(stateFile(), 'utf8')}`
+    const before = bytes()
+    // The engine every server builds (server.ts), over the same two files, which on a
+    // host replica are the copy's. Registered, never started (boot policy `cron`).
+    const { CronService } = await import('../../../../src/core/cron/service.js')
+    const quiet = { debug() {}, info() {}, warn() {}, error() {} }
+    const engine = new CronService({
+      storePath: CRON_FILE, cronEnabled: true, log: quiet,
+      broadcastCronNotification: () => {}, runMainAgentWithPrompt: async () => undefined,
+      runIsolatedAgentJob: async () => ({ status: 'ok', summary: 'done' }), runExecutor: async () => ({ status: 'ok' }), onEvent: () => {},
+    } as never)
+    const { setCronService, getCronService } = await import('../../../../src/web/routes/cron.js')
+    setCronService(engine)
+    try {
+      // What reached the engine on a replica: the trigger push at every daemon connect,
+      // a daemon's check report, the timeline's tracking read.
+      const { compileTriggersForHost } = await import('../../../../src/core/routines/trigger-push.js')
+      const armed = await compileTriggersForHost('__local__')
+      const { handleTriggerChecked } = await import('../../../../src/core/routines/trigger-events.js')
+      await handleTriggerChecked('devbox', {
+        type: 'trigger.checked', id: job(1).id, atMs: Date.now(), outcome: 'quiet', reason: 'fire-false', durationMs: 5, nextRunAtMs: Date.now() + 300_000, consecutiveErrors: 0,
+      } as never)
+      expect(bytes()).toBe(before)
+      // A trigger set that is null is "the engine is not running": never an empty set, which would disarm the host.
+      expect(armed).toBeNull()
+      expect(getCronService()).toBeNull()
+      // The engine itself, to whoever holds it: its one write point refuses, the copy stays.
+      await expect(engine.list({ includeDisabled: true })).rejects.toMatchObject({ code: 'needs_leader', why: 'routine_writes_need_mac' })
+      expect(bytes()).toBe(before)
+      // The page still reads the copy.
+      expect(((await core.listRoutines(true)).jobs as unknown[]).length).toBe(8)
+      // On the Mac the same registration is the engine.
+      setReplica(false)
+      expect(getCronService()).toBe(engine)
+    } finally {
+      setCronService(null)
+      setReplica(true)
+    }
+  })
 })
 
 describe('the host turned the routines copy off', () => {
@@ -330,6 +403,9 @@ describe('a routine with something secret-shaped in it never reaches a host', ()
     const text = fs.readFileSync(CRON_FILE, 'utf8') + fs.readFileSync(stateFile(), 'utf8')
     expect(text).not.toContain(TOKEN)
     expect(text).not.toContain('whatever-it-holds')
+    // Nor did any step that crossed the link (the host would refuse such a row, which hides a leak from the files).
+    expect(h.calls.length).toBeGreaterThan(0)
+    for (const c of h.calls) expect([c.op, c.text.includes(TOKEN), c.text.includes('whatever-it-holds')]).toEqual([c.op, false, false])
   })
 
   it('an error that quoted a header leaves the routine out too', async () => {

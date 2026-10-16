@@ -15,6 +15,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import type { CronService } from '../../core/cron/index.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
+import { isHostReplicaProgram } from '../../core/server-role.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import {
   listRoutines, getRoutine, createRoutine, patchRoutine, deleteRoutine,
@@ -30,8 +31,15 @@ export function setCronService(service: CronService | null): void {
   _cronService = service
 }
 
+/**
+ * The running routines engine, or null. A host replica has none: its routines
+ * are the Mac's copy (core/replication/kinds/routines.ts), read through
+ * routines-core.ts, and every caller here (trigger push and reports, triage,
+ * wake, timeline) treats null as "the engine is not running", never as an
+ * empty store. The engine object server.ts builds there is never handed out.
+ */
 export function getCronService(): CronService | null {
-  return _cronService
+  return isHostReplicaProgram() ? null : _cronService
 }
 
 // ── Router factory ──

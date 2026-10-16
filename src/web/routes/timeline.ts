@@ -126,14 +126,13 @@ export async function getTimelineForDate(rawDate: unknown): Promise<TimelineResp
   // Check if tracking is enabled (look for a matching cron job)
   let tracking = false
   try {
-    const cronService = getCronService()
-    if (cronService) {
-      const jobs = await cronService.list({ includeDisabled: true })
-      const trackerJob = jobs.find(
-        (j) => j.initProcessor?.actionId === 'screenshot-track',
-      )
-      tracking = trackerJob?.enabled ?? false
-    }
+    // routines-core: the engine on the Mac, the routines copy on a host replica.
+    const { listRoutines } = await import('../../core/routines/routines-core.js')
+    const jobs = (await listRoutines(true)).jobs as Array<{ enabled?: boolean; initProcessor?: { actionId?: string } }>
+    const trackerJob = jobs.find(
+      (j) => j.initProcessor?.actionId === 'screenshot-track',
+    )
+    tracking = trackerJob?.enabled ?? false
   } catch (err) {
     log.web.debug('cron service not available for tracking status', { error: err instanceof Error ? err.message : String(err) })
   }

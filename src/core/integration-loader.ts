@@ -32,6 +32,7 @@ import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
 import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
 import { getConfig, updatePluginConfig } from './config-manager.js';
+import { isHostReplicaProgram } from './server-role.js';
 import { bulkMigrateTasks } from './task-manager.js';
 import { ensureExtIndexes } from './task-db.js';
 import { setExtIndexes } from './ext-index-registry.js';
@@ -2323,6 +2324,10 @@ const COPIED_NOT_MOVED_CONFIG_KEYS = new Set(['calendar']);
  * moves what qualifies, writes back. Safe to call repeatedly — no-ops once done.
  */
 export async function migrateConfigToPlugins(): Promise<boolean> {
+  // A host replica writes no config.yaml (its config is the Mac's copy, migrated
+  // there; core/config-manager.ts refuses every config write on one). This runs
+  // at every boot, before the plugins, and wrote the file directly.
+  if (isHostReplicaProgram()) return false;
   let raw: Record<string, unknown>;
   try {
     const content = await fsp.readFile(CONFIG_FILE, 'utf-8');

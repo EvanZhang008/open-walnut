@@ -144,6 +144,12 @@ export interface RowSetSpec<Row> {
    */
   digest?: boolean
   /**
+   * A `keep` key that covers more than its own row (default: only the row of
+   * that key). The conversations kind names an agent whose list the leader
+   * could not read, and this side keeps every conversation row of that agent.
+   */
+  keptBy?(localKey: string, keep: ReadonlySet<string>): boolean
+  /**
    * The host's choice turned this kind off (WP4, replication/kinds/gate.ts):
    * remove the kind's store and its copy state, leave the off marker. A kind
    * without one answers `purge` with `400 unknown_op`.
@@ -254,7 +260,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     for (const id of local) {
       if (wanted.has(id)) continue
       if (held.has(id)) { heldCount++; continue }
-      if (kept.has(id)) { keptCount++; continue }
+      if (kept.has(id) || spec.keptBy?.(id, kept)) { keptCount++; continue }
       removeIds.push(id)
     }
     // A leader that lost its store (an empty or damaged database at boot) must

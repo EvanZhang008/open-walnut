@@ -32,22 +32,32 @@ async function canonicalProjectName(name: string): Promise<string> {
   }
 }
 
+/**
+ * The favorites a GET answers (this route and the phone's GET /api/v1/favorites).
+ * A host replica holds the Mac's favorites in its prefs copy
+ * (core/replication/kinds/prefs.ts); with no copy yet (or the host turned it
+ * off) it answers needs_leader kind_not_copied, never "no favorites".
+ */
+export async function readFavorites(): Promise<{ projects: string[]; notes: string[] }> {
+  if (isHostReplicaProgram()) {
+    const fav = await (await import('../../core/replication/kinds/prefs.js')).readFavoritesCopy()
+    if (!fav) throw new NeedsLeaderError(KIND_NOT_COPIED)
+    return { projects: fav.projects ?? [], notes: fav.notes ?? [] }
+  }
+  const config = await getConfig()
+  return { projects: config.favorites?.projects ?? [], notes: config.favorites?.notes ?? [] }
+}
+
+// A host replica's favorites are the Mac's copy: every change waits for the Mac.
+favoritesRouter.use((req: Request, _res: Response, next: NextFunction) => {
+  if (isHostReplicaProgram() && req.method !== 'GET' && req.method !== 'HEAD') return next(new NeedsLeaderError('prefs_writes_need_mac'))
+  next()
+})
+
 // GET /api/favorites
 favoritesRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    // A host replica holds the Mac's favorites in its prefs copy (core/replication/kinds/prefs.ts).
-    if (isHostReplicaProgram()) {
-      const fav = await (await import('../../core/replication/kinds/prefs.js')).readFavoritesCopy()
-      // No copy yet (or the host turned it off): not "no favorites".
-      if (!fav) throw new NeedsLeaderError(KIND_NOT_COPIED)
-      res.json({ projects: fav.projects ?? [], notes: fav.notes ?? [] })
-      return
-    }
-    const config = await getConfig()
-    res.json({
-      projects: config.favorites?.projects ?? [],
-      notes: config.favorites?.notes ?? [],
-    })
+    res.json(await readFavorites())
   } catch (err) {
     next(err)
   }

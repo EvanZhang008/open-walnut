@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 import { replicaNotesReads } from '../../replica/notes-routes.js'
 import type { MessageParam } from '../../model/model.js'
 import type { ProjectedTranscriptMessage } from '../../core/session-projection.js'
@@ -4219,6 +4220,9 @@ apiV1Router.use(instanceRoutesV1Router)
 // ─── Router-level error handler: frozen error shape ────────────────────────
 
 apiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  // A host replica's refusal of a store it only holds a copy of: the app's error
+  // handler answers it 503 needs_leader with its why, never a 500 card.
+  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
   const message = err instanceof Error ? err.message : String(err)
   log.web.error('api-v1 unhandled error', { error: message })
   if (res.headersSent) { res.end(); return }

@@ -12,7 +12,8 @@
  *     |   for an install: <base>/app/dist/cli.js runs this tree's src/cli.ts under tsx
  *     v
  *   the replica child (`web --replica`), supervised by that daemon; the Mac sends
- *     it its copies (tasks, sessions, boards, requests, inbox, devices)
+ *     it its copies (tasks, sessions, boards, requests, inbox, devices, and WP5's
+ *     routines, conversation lists, config and prefs)
  *
  * The manager's two host probes (`node -v`, free ports) run on this machine: the
  * test transport IS this machine, so the Mac boot script routes `runRemoteScript`
@@ -76,6 +77,15 @@ export const HOST_SID = 'bbbbbbbb-7002-4002-8002-000000000002'
 export const MAC_NOTE = { path: 'Acme/Release notes.md', name: 'Release notes', text: 'The rollback drill checklist for Friday.' } as const
 /** A letter in the Mac's inbox (its copy reaches the replica, the inbox kind). */
 export const MAC_LETTER = { subject: 'Rollback drill report', text: 'The drill ran green on devbox.' } as const
+
+/** A routine on the Mac (its copy reaches the replica, the routines kind, WP5). */
+export const MAC_ROUTINE = { name: 'Acme nightly digest', text: 'Summarize the Acme board.' } as const
+/** The Mac's favorites (config.yaml; their copy rides the prefs kind, WP5). */
+export const MAC_FAVORITES = { projects: ['Acme'], notes: ['Acme/Release notes.md'] } as const
+/** A layout pref of the Mac (config/share/ui-prefs.json; the prefs kind): the theme, Light. */
+export const MAC_THEME = { key: 'open-walnut-theme', value: 'light' } as const
+/** The Mac's name for its user (config.yaml; its copy rides the config kind, WP5). */
+export const MAC_USER_NAME = 'Tester'
 
 /** The host session's one turn, in its stream file and its CLI transcript on the host (read away through the replica). */
 export const HOST_TURN = { asked: 'Why does the build fail on devbox?', answered: 'echo: Why does the build fail on devbox?' } as const
@@ -359,7 +369,7 @@ async function startHostDaemon(twin: Twin, dir: string, home: string, bin: strin
 function macConfig(): string {
   return [
     'version: 1',
-    'user:', '  name: Tester',
+    'user:', `  name: ${MAC_USER_NAME}`,
     'defaults:', '  priority: none', '  platform: local',
     'provider:', '  type: claude-code',
     'hosts:',
@@ -371,6 +381,9 @@ function macConfig(): string {
     '    server:',
     '      enabled: true',
     `      node: ${JSON.stringify(process.execPath)}`,
+    'favorites:',
+    '  projects:', ...MAC_FAVORITES.projects.map((x) => `    - ${JSON.stringify(x)}`),
+    '  notes:', ...MAC_FAVORITES.notes.map((x) => `    - ${JSON.stringify(x)}`),
     '',
   ].join('\n')
 }
@@ -414,6 +427,9 @@ nfs.writeFileSync(npath.join(c.NOTES_DIR, ${JSON.stringify(MAC_NOTE.path)}), ${J
 ${MAC_NOTE.text}
 `)})
 const inbox = await import(${src('src/core/human-inbox/store.ts')})
+// A routine (WP5: its copy is what the Routines page reads away). Once a day: it never fires in a run.
+const rc = await import(${src('src/core/routines/routines-core.ts')})
+await rc.createRoutine({ name: ${JSON.stringify(MAC_ROUTINE.name)}, enabled: true, schedule: { kind: 'every', everyMs: 86400000 }, sessionTarget: 'main', payload: { kind: 'systemEvent', text: ${JSON.stringify(MAC_ROUTINE.text)} } })
 await inbox.sendLetter({ subject: ${JSON.stringify(MAC_LETTER.subject)}, type: 'info', markdown: ${JSON.stringify(MAC_LETTER.text)}, sender: { sessionId: ${JSON.stringify(MAC_SID)}, sessionTitle: 'Release checklist', host: '__local__' } })
 // The direct link IS the host's link: every lookup of devbox (the host status, a
 // session's host, the server manager) gets it, as an ssh link would be pooled.
@@ -494,6 +510,9 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp }
   writeStubBin(d.bin)
   writeAppDir(d.app, app)
   fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig())
+  // A layout pref the Mac's console saved (its copy rides the prefs kind).
+  fs.mkdirSync(path.join(d.macData, 'config', 'share'), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(d.macData, 'config', 'share', 'ui-prefs.json'), JSON.stringify({ [MAC_THEME.key]: { v: MAC_THEME.value, ts: Date.now() } }))
   const macLog = { text: '' }
   let paused = false
   let stopped = false
@@ -629,6 +648,11 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp }
     // The note's copy on the host (the daemon's), the letter's on the replica.
     await waitFor(() => treeHolds(path.join(d.hostDaemon, 'host-replica'), MAC_NOTE.text), 180_000, 'the note to reach the host')
     await waitFor(() => treeHolds(path.join(replicaData, 'human-inbox'), MAC_LETTER.subject), 180_000, 'the letter to reach the replica')
+    // The WP5 copies: the routines, the config, and the prefs (the favorites and the theme).
+    const holds = (rel: string, ...needles: string[]) => { try { const t = fs.readFileSync(path.join(replicaData, rel), 'utf8'); return needles.every((x) => t.includes(x)) } catch { return false } }
+    await waitFor(() => holds('cron-jobs.json', MAC_ROUTINE.name), 180_000, 'the routine to reach the replica')
+    await waitFor(() => holds(path.join('cache', 'replica', 'config.json'), MAC_USER_NAME, 'devbox.invalid'), 180_000, 'the config copy to reach the replica')
+    await waitFor(() => holds(path.join('cache', 'replica', 'prefs.json'), MAC_THEME.key, MAC_FAVORITES.notes[0]!), 180_000, 'the prefs copy to reach the replica')
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err))
     e.message += `\n--- mac ---\n${macLog.text.slice(-4000)}\n--- replica ---\n${replicaLog().slice(-4000)}`
@@ -702,6 +726,10 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp }
         sessions: copyState('replica/sessions.json'),
         boards: copyState('replica/boards.json'),
         taskRows: list.map((t) => ({ id: t.id, title: t.title, phase: t.phase })),
+        // The WP5 copies as the replica holds them (read only).
+        config: copyState('replica/config.json'),
+        prefs: copyState('replica/prefs.json'),
+        routines: (() => { try { return JSON.parse(fs.readFileSync(path.join(replicaData, 'cron-jobs.json'), 'utf8')) } catch { return null } })(),
       }
     },
     logs: () => ({ mac: macLog.text.slice(-20_000), replica: replicaLog() }),

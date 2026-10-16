@@ -81,6 +81,8 @@ describe('optimistic setting reducer', () => {
 
   it('error copy', () => {
     expect(couldntSave('x')).toBe("Couldn't save: x")
+    // A host replica's away refusal is already plain words about the Mac.
+    expect(couldntSave('Needs your Mac. Changing settings needs your Mac.')).toBe('Needs your Mac. Changing settings needs your Mac.')
   })
 })
 

@@ -1,9 +1,11 @@
 /**
  * The `conversations` copy kind (docs/plan/walnut-replica-servers-impl.md, WP5): each
  * agent's conversation list (the Ask history list, conversations/<agent>/_index.json)
- * to a host replica, index only. On the replica the list, the active id and the main
- * id read the copy and never write it; a list write answers needs_leader. Real files,
- * real route, real follower, real conversations module.
+ * to a host replica, index only, one row per conversation. On the replica the list,
+ * the active id and the main id read the copy and never write it; a list write
+ * answers needs_leader. A list the Mac lost (an emptied, empty or missing index, a
+ * missing dir) never removes the host's copy below the half rule. Real files, real
+ * route, real follower, real conversations module.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
@@ -20,7 +22,8 @@ import { runCopyRound, syncCopyKinds } from '../../../../src/core/replication/ki
 import { CONVERSATIONS_KIND, WITHHELD_TITLE, agentSegmentOk, readConversationRows } from '../../../../src/core/replication/kinds/conversations.js'
 import { _resetConversationsCopyForTesting } from '../../../../src/core/replication/kinds/conversations-follower.js'
 import { buildCopyManifest } from '../../../../src/core/replication/kinds/copy-kind.js'
-import { _resetReplicaStatusForTesting, forgetKindManifests } from '../../../../src/core/replication/replica-status.js'
+import { confirmKindRemoval } from '../../../../src/core/replication/kind-leader.js'
+import { _resetReplicaStatusForTesting, forgetKindManifests, peekKindState } from '../../../../src/core/replication/replica-status.js'
 import * as conv from '../../../../src/core/conversations.js'
 import type { ConversationMeta } from '../../../../src/core/types.js'
 
@@ -82,8 +85,9 @@ beforeEach(async () => {
 
 describe('a host replica keeps the conversation lists', () => {
   it('writes each index as the Mac sent it, at 0600 in 0700 dirs, and never a body', async () => {
-    expect(await round()).toMatchObject({ action: 'synced', entries: 2, sent: 2 })
-    expect(stepsSince(h.calls)).toEqual(['sync:conversations', 'put:conversations:2'])
+    // One row per conversation: three of general, two of mentor.
+    expect(await round()).toMatchObject({ action: 'synced', entries: 5, sent: 5 })
+    expect(stepsSince(h.calls)).toEqual(['sync:conversations', 'put:conversations:5'])
     const file = path.join(CONVERSATIONS_DIR, 'general', '_index.json')
     expect(fs.statSync(file).mode & 0o777).toBe(0o600)
     expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700)
@@ -142,6 +146,31 @@ describe('a host replica keeps the conversation lists', () => {
     expect((await conv.listConversations('general')).length).toBe(3)
   })
 
+  it('a conversations dir missing on the Mac skips the round too (not "no chats")', async () => {
+    await round()
+    await fsp.rm(macRoot, { recursive: true })
+    h.calls.length = 0
+    expect(await syncCopyKinds([kind], { targets: () => [h.target] })).toEqual([])
+    expect(h.calls).toEqual([])
+    expect((await conv.listConversations('general')).length).toBe(3)
+    expect((await conv.listConversations('mentor')).length).toBe(2)
+  })
+
+  it('an empty index, or one missing from its agent dir, rides in keep: the host keeps every conversation of that agent', async () => {
+    await round()
+    // A truncated write (zero bytes) reads as no list on the Mac: never as an empty one here.
+    await fsp.writeFile(path.join(macRoot, 'general', '_index.json'), '')
+    // The mentor dir is still there, its index is not (removed by hand, or not written back yet).
+    await fsp.rm(path.join(macRoot, 'mentor', '_index.json'))
+    const m = await buildCopyManifest(kind)
+    expect(m.keep).toEqual(['general', 'mentor'])
+    expect(m.entries).toEqual([])
+    expect(await runCopyRound(kind, m, h.target, { asOf: Date.now() })).toMatchObject({ action: 'synced', removed: 0 })
+    expect((await conv.listConversations('general')).map((c) => c.id)).toEqual([meta('general', 1).id, meta('general', 2).id, meta('general', 3).id])
+    expect((await conv.listConversations('mentor')).length).toBe(2)
+    expect(await conv.getActiveConversationId('general')).toBe(meta('general', 3).id)
+  })
+
   it('agent dir names that walk out are never copied or written', () => {
     for (const bad of ['', '.', '..', 'a/b', 'a\\b']) expect([bad, agentSegmentOk(bad)]).toEqual([bad, false])
     expect(agentSegmentOk('general')).toBe(true)
@@ -152,6 +181,33 @@ describe('a host replica keeps the conversation lists', () => {
     await fsp.mkdir(CONVERSATIONS_DIR, { recursive: true })
     await fsp.cp(path.join(macRoot, 'general'), path.join(CONVERSATIONS_DIR, 'general'), { recursive: true })
     expect((await conv.listConversations('general')).length).toBe(3)
+  })
+})
+
+describe('the half rule counts conversations', () => {
+  it('an index the Mac emptied by accident is refused once the host holds 50; a few go; the user may confirm a real prune', async () => {
+    const general = Array.from({ length: 40 }, (_, i) => meta('general', i + 1, i === 0 ? { isMain: true } : {}))
+    const mentor = Array.from({ length: 20 }, (_, i) => meta('mentor', i + 1))
+    await writeMacIndex('general', general)
+    await writeMacIndex('mentor', mentor)
+    expect(await round()).toMatchObject({ action: 'synced', entries: 60, sent: 60 })
+    // A valid but empty list (a Mac that rewrote its index from nothing): 40 of the 60 would go.
+    await writeMacIndex('general', [], null)
+    for (let i = 0; i < 3; i++) await expect(round()).rejects.toThrow(/manifest_removes_most_rows/)
+    expect((await conv.listConversations('general')).length).toBe(40)
+    expect((await conv.listConversations('mentor')).length).toBe(20)
+    // The list comes back on the Mac and a few really go: those few go here.
+    await writeMacIndex('general', general.slice(0, 37))
+    expect(await round()).toMatchObject({ action: 'synced', removed: 3 })
+    expect((await conv.listConversations('general')).length).toBe(37)
+    // A real prune of most of them, confirmed by the user after three refused rounds.
+    await writeMacIndex('general', general.slice(0, 2))
+    await writeMacIndex('mentor', mentor.slice(0, 2))
+    for (let i = 0; i < 3; i++) await expect(round()).rejects.toThrow(/manifest_removes_most_rows/)
+    expect(peekKindState(h.target.id, 'conversations')!.refusals).toBe(3)
+    expect(confirmKindRemoval(h.target, 'conversations', { entries: 4 })).toBe(true)
+    expect(await round()).toMatchObject({ action: 'synced', removed: 53 })
+    expect((await conv.listConversations('general')).map((c) => c.id)).toEqual([general[0]!.id, general[1]!.id])
   })
 })
 
@@ -193,18 +249,20 @@ describe('a title that looks like a secret never reaches a host', () => {
   it('the Mac withholds it (the conversation stays listed, untitled); the copy holds no trace of it', async () => {
     await writeMacIndex('general', [meta('general', 1), meta('general', 2, { title: `use ${KEY} for the build` }), meta('general', 3)])
     const rows = await kind.rows()
-    const listed = rows.find((r) => r.agent === 'general')!.index.conversations
+    const listed = rows.filter((r) => r.agent === 'general').map((r) => r.meta)
     expect(listed.map((c) => c.title)).toEqual(['Ask 1 about acme', WITHHELD_TITLE, 'Ask 3 about acme'])
     expect(await round()).toMatchObject({ action: 'synced' })
     const text = fs.readFileSync(path.join(CONVERSATIONS_DIR, 'general', '_index.json'), 'utf8')
     expect(text).not.toContain('acmePastedKey')
+    // Nor did any step that crossed the link (the host withholds it again, which would hide a leak from the file).
+    expect(h.calls.length).toBeGreaterThan(0)
+    for (const c of h.calls) expect([c.op, c.text.includes('acmePastedKey')]).toEqual([c.op, false])
     expect((await conv.listConversations('general')).map((c) => c.id)).toContain('conv-general-0002')
   })
 
   it('the host withholds one sent anyway (an older Mac)', async () => {
     const { followerStep } = await import('../../../../src/core/replication/kind-follower.js')
-    const index = { version: 1, activeConversationId: null, conversations: [meta('general', 1, { title: `token ${KEY}` })] }
-    const r = await followerStep({ op: 'put', kind: 'conversations', schemaVersion: 1, rows: [{ agent: 'general', index }], last: true })
+    const r = await followerStep({ op: 'put', kind: 'conversations', schemaVersion: 2, rows: [{ agent: 'general', meta: meta('general', 1, { title: `token ${KEY}` }) }], last: true })
     expect(r).toMatchObject({ ok: true })
     const text = fs.readFileSync(path.join(CONVERSATIONS_DIR, 'general', '_index.json'), 'utf8')
     expect(text).not.toContain('acmePastedKey')

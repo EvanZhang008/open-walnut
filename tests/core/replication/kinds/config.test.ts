@@ -93,8 +93,18 @@ describe('a round of the full fixture config', () => {
       const text = fs.readFileSync(f, 'utf8')
       for (const s of PLANTED_SECRETS) expect([path.relative(WALNUT_HOME, f), s, text.includes(s)]).toEqual([path.relative(WALNUT_HOME, f), s, false])
     }
-    // Nothing a step carried held one either (what crossed the link).
-    expect(h.calls.length).toBe(2)
+    // What crossed the link: the bytes of every step, not only how many there were.
+    // The host checks each row again before it writes, so the data dir alone would
+    // not show a secret the Mac sent and the host then refused.
+    expect(h.calls.map((c) => `${c.op}:${c.kind}`)).toEqual(['sync:config', 'put:config'])
+    for (const c of h.calls) {
+      for (const s of PLANTED_SECRETS) expect([c.op, s, c.text.includes(s)]).toEqual([c.op, s, false])
+      // No masked value (a client view's bullets) either.
+      expect(c.text).not.toContain('\u2022')
+    }
+    // The bytes are the real rows (the scan above is not reading an empty body).
+    expect(h.calls[1]!.text).toContain('acme-model-large')
+    expect(h.calls[1]!.text).toContain('devbox.example.com')
   })
 
   it('getConfig() on the replica reads the copy: the views get their settings, never a secret', async () => {
@@ -170,6 +180,19 @@ describe('config writes on the replica', () => {
     await expect(cm.migrateConfigFileToProjectOnly()).resolves.toBe(false)
     expect(fs.readFileSync(CONFIG_FILE, 'utf8')).toBe(before)
     expect(fs.existsSync(`${CONFIG_FILE}.bak`)).toBe(false)
+  })
+
+  it("the boot's plugin-config migration (a direct writer of config.yaml) writes nothing on the replica", async () => {
+    // A section an old migration swept into plugins.*: the Mac's boot moves it back and rewrites the file.
+    const legacy = yaml.dump({ version: 1, plugins: { ui: { enabled: true, session_panels: '2' } } })
+    await fsp.writeFile(CONFIG_FILE, legacy)
+    const { migrateConfigToPlugins } = await import('../../../../src/core/integration-loader.js')
+    await expect(migrateConfigToPlugins()).resolves.toBe(false)
+    expect(fs.readFileSync(CONFIG_FILE, 'utf8')).toBe(legacy)
+    // The same boot step on the Mac does write (the test can see a write).
+    setReplica(false)
+    await expect(migrateConfigToPlugins()).resolves.toBe(true)
+    expect((yaml.load(fs.readFileSync(CONFIG_FILE, 'utf8')) as { ui?: unknown }).ui).toEqual({ session_panels: '2' })
   })
 
   it('on the leader the same writers write as before', async () => {

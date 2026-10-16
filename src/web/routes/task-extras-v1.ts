@@ -33,6 +33,7 @@ import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { PIN_TIER_POLICY, RETIRED_PIN_TIERS } from '../../core/types.js'
+import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const taskExtrasV1Router = Router()
 
@@ -450,6 +451,9 @@ taskExtrasV1Router.delete('/focus/tiers/:id', async (req: Request, res: Response
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.
 taskExtrasV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  // A host replica's refusal of a store it only holds a copy of: the app's error
+  // handler answers it 503 needs_leader with its why, never a 500 card.
+  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
   log.web.error('api-v1 task extras route error', {
     error: err instanceof Error ? err.message : String(err),
   })

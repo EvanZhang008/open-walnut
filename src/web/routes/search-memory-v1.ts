@@ -45,6 +45,7 @@ import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
+import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const searchMemoryV1Router = Router()
 
@@ -371,12 +372,9 @@ searchMemoryV1Router.post('/notifications/dismiss', async (req: Request, res: Re
 // GET /api/v1/favorites → { projects, notes }
 searchMemoryV1Router.get('/favorites', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { getConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    res.json({
-      projects: config.favorites?.projects ?? [],
-      notes: config.favorites?.notes ?? [],
-    })
+    // The web route's read: on a host replica, the prefs copy (routes/favorites.ts).
+    const { readFavorites } = await import('./favorites.js')
+    res.json(await readFavorites())
   } catch (err) {
     next(err)
   }
@@ -514,6 +512,9 @@ searchMemoryV1Router.post('/notes/folder', async (req: Request, res: Response, n
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.
 searchMemoryV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  // A host replica's refusal of a store it only holds a copy of: the app's error
+  // handler answers it 503 needs_leader with its why, never a 500 card.
+  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
   log.web.error('api-v1 search/memory route error', {
     error: err instanceof Error ? err.message : String(err),
   })

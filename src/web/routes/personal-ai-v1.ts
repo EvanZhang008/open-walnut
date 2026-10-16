@@ -50,6 +50,7 @@ import { listConversations } from '../../core/conversations.js'
 // Type-only (erased at compile time): session-controls.ts dynamically imports THIS
 // module for the `server.chat.model` relay, so a value import would be a cycle.
 import type { SessionControlAction } from '../../core/sessions/session-controls.js'
+import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const personalAiV1Router = Router()
 
@@ -633,6 +634,9 @@ personalAiV1Router.post('/conversations/:id/answer', async (req: Request, res: R
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.
 personalAiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  // A host replica's refusal of a store it only holds a copy of: the app's error
+  // handler answers it 503 needs_leader with its why, never a 500 card.
+  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
   log.web.error('api-v1 Personal AI route error', {
     error: err instanceof Error ? err.message : String(err),
   })

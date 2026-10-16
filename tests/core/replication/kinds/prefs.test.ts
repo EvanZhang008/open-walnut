@@ -56,14 +56,16 @@ beforeAll(async () => {
   for (const k of ENV) saved[k] = process.env[k]
   setReplica(true)
   h = await startCopyHarness()
-  const [{ default: express }, { favoritesRouter }, { uiPrefsRouter }, { errorHandler }] = await Promise.all([
+  const [{ default: express }, { favoritesRouter }, { uiPrefsRouter }, { searchMemoryV1Router }, { errorHandler }] = await Promise.all([
     import('express'), import('../../../../src/web/routes/favorites.js'), import('../../../../src/web/routes/ui-prefs.js'),
-    import('../../../../src/web/middleware/error-handler.js'),
+    import('../../../../src/web/routes/search-memory-v1.js'), import('../../../../src/web/middleware/error-handler.js'),
   ])
   const app = express()
   app.use(express.json())
   app.use('/api/favorites', favoritesRouter)
   app.use('/api/ui-prefs', uiPrefsRouter)
+  // The phone's twin of GET /api/favorites (the frozen /api/v1).
+  app.use('/api/v1', searchMemoryV1Router)
   app.use(errorHandler)
   api = await new Promise<Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)) })
   base = `http://127.0.0.1:${(api.address() as AddressInfo).port}`
@@ -104,6 +106,8 @@ describe('a round of the prefs copy', () => {
     const text = fs.readFileSync(copyFile(), 'utf8')
     for (const s of PLANTED_SECRETS) expect([s, text.includes(s)]).toEqual([s, false])
     expect(text).not.toContain('devbox')
+    // Nor did any step that crossed the link.
+    for (const c of h.calls) for (const s of [...PLANTED_SECRETS, 'devbox']) expect([c.op, s, c.text.includes(s)]).toEqual([c.op, s, false])
     forgetKindManifests(['prefs'])
     const from = h.calls.length
     expect(await round()).toMatchObject({ action: 'synced', sent: 0 })
@@ -158,7 +162,10 @@ describe('the routes on the replica', () => {
     expect(await put.json()).toMatchObject({ error: { code: 'needs_leader', why: 'prefs_writes_need_mac' } })
     const add = await fetch(`${base}/api/favorites/projects/Marina`, { method: 'POST' })
     expect(add.status).toBe(503)
-    expect(await add.json()).toMatchObject({ error: { code: 'needs_leader', why: 'config_writes_need_mac' } })
+    expect(await add.json()).toMatchObject({ error: { code: 'needs_leader', why: 'prefs_writes_need_mac' } })
+    const note = await fetch(`${base}/api/favorites/notes`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'Notes/marina.md' }) })
+    expect(note.status).toBe(503)
+    expect(await note.json()).toMatchObject({ error: { code: 'needs_leader', why: 'prefs_writes_need_mac' } })
     expect(fs.readFileSync(CONFIG_FILE, 'utf8')).toBe(configBefore)
     expect(fs.readFileSync(UI_PREFS_FILE, 'utf8')).toBe(prefsBefore)
   })
@@ -170,6 +177,37 @@ describe('the routes on the replica', () => {
     const prefs = await (await fetch(`${base}/api/ui-prefs`)).json() as { prefs: Record<string, unknown> }
     expect(prefs.prefs['open-walnut-sidebar-width']).toEqual({ v: '500', ts: 99_999 })
     expect(await (await fetch(`${base}/api/favorites`)).json()).toEqual({ projects: ['Acme'], notes: ['Notes/acme.md'] })
+  })
+})
+
+describe('every favorites read on the replica is the prefs copy', () => {
+  it('getConfig(), the phone GET /api/v1/favorites and the project list read it; before the first round none of them invents favorites', async () => {
+    // A project on the replica's task store, as its task copy would hold it.
+    setReplica(false)
+    const { addTask } = await import('../../../../src/core/task-manager.js')
+    await addTask({ title: 'Acme release', project: 'Acme' })
+    setReplica(true)
+    const cm = await import('../../../../src/core/config-manager.js')
+    const { buildProjectsPayload } = await import('../../../../src/web/routes/projects.js')
+    const acmeFavorite = async () => ((await buildProjectsPayload()).projects.find((p) => p.name === 'Acme') as { favorite?: boolean } | undefined)?.favorite
+
+    // No copy yet: the phone is told so, as the web route tells it; nothing reads as a favorite.
+    const none = await fetch(`${base}/api/v1/favorites`)
+    expect(none.status).toBe(503)
+    expect(await none.json()).toMatchObject({ error: { code: 'needs_leader', why: 'kind_not_copied' } })
+    expect((await cm.getConfig()).favorites).toBeUndefined()
+    expect(await acmeFavorite()).toBe(false)
+
+    await round()
+    // The Mac's own config.yaml (one home for both sides here) is never what the replica reads.
+    await fsp.writeFile(CONFIG_FILE, yaml.dump({ ...fullConfigFixture(), favorites: { projects: ['Marina'], notes: [] } }))
+    const want = { projects: ['Acme'], notes: ['Notes/acme.md'] }
+    expect((await cm.getConfig()).favorites).toEqual(want)
+    const v1 = await fetch(`${base}/api/v1/favorites`)
+    expect(v1.status).toBe(200)
+    expect(await v1.json()).toEqual(want)
+    expect(await (await fetch(`${base}/api/favorites`)).json()).toEqual(want)
+    expect(await acmeFavorite()).toBe(true)
   })
 })
 

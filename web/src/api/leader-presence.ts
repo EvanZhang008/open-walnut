@@ -282,6 +282,13 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   copy_unreadable: 'The copy on this host could not be read.',
   no_spawn_template: 'Starting a session here needs your Mac once first.',
   persona_not_copied: 'This host has no copy of the agent yet.',
+  // A host replica's own refusals of what it keeps a copy of (WP5: config, routines, prefs, chat lists).
+  config_writes_need_mac: 'Changing settings needs your Mac.',
+  routine_writes_need_mac: 'Changing a routine needs your Mac.',
+  prefs_writes_need_mac: 'Changing favorites or the layout needs your Mac.',
+  conversation_writes_need_mac: 'Changing the chat list needs your Mac.',
+  conversation_bodies_need_mac: 'The messages of a chat are on your Mac; this host keeps only the list.',
+  other_hosts_need_mac: 'Reaching another host goes through your Mac.',
   // Where the replica's route stands (presence.ts, dispatch.ts): the why of a write with no row of its own.
   'mac-away': 'Your Mac is away right now.',
   'no-daemon': 'This host\'s Walnut daemon is not answering.',

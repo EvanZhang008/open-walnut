@@ -10,6 +10,9 @@
  *     replica's error bodies, the daemon's `fail('needs_leader', ..., {detail:{why}})`)
  *   - the last argument of every `needsLeader(...)` call: a literal, or a
  *     `const NAME = '<code>'` it names (away-session-reads.ts)
+ *   - the first argument of every `new NeedsLeaderError(...)` (a host replica's
+ *     own refusals of a copied store, core/replication/needs-leader.ts, answered
+ *     503 needs_leader by the error handler), the same two ways
  *   - the literals `answerAway(...)` passes on as the why (dispatch.ts: a row
  *     with no why of its own answers with the route's), and the whys of every
  *     `kind: 'alone'` route (presence.ts), comparisons left out
@@ -77,16 +80,17 @@ function collect(): Map<string, string[]> {
       for (const m of line.matchAll(/\bwhy\s*:\s*['"]([\w-]+)['"]/g)) add(m[1]!, `${rel}:${i + 1}`)
       for (const m of line.matchAll(/\bwhy\s*\?\?\s*['"]([\w-]+)['"]/g)) add(m[1]!, `${rel}:${i + 1}`)
     })
-    for (const args of callArgs(text, 'needsLeader')) {
-      const last = args[args.length - 1] ?? ''
-      const literal = /^['"]([\w-]+)['"]$/.exec(last)
-      if (literal) add(literal[1]!, `${rel} needsLeader()`)
-      else if (/^[A-Z][A-Z0-9_]*$/.test(last)) {
-        const code = consts.get(last)
+    const addArg = (arg: string, call: string) => {
+      const literal = /^['"]([\w-]+)['"]$/.exec(arg)
+      if (literal) add(literal[1]!, `${rel} ${call}()`)
+      else if (/^[A-Z][A-Z0-9_]*$/.test(arg)) {
+        const code = consts.get(arg)
         // A constant the scan cannot resolve is a code with no words: fail on it by name.
-        add(code ?? `<unresolved ${last}>`, `${rel} needsLeader(${last})`)
+        add(code ?? `<unresolved ${arg}>`, `${rel} ${call}(${arg})`)
       }
     }
+    for (const args of callArgs(text, 'needsLeader')) addArg(args[args.length - 1] ?? '', 'needsLeader')
+    for (const args of callArgs(text, 'NeedsLeaderError')) addArg(args[0] ?? '', 'NeedsLeaderError')
     for (const args of callArgs(text, 'answerAway')) {
       for (const code of codesIn(args[args.length - 1] ?? '')) add(code, `${rel} answerAway()`)
     }
@@ -104,7 +108,10 @@ describe('needs_leader reasons ratchet', () => {
     for (const code of ['task_writes_need_mac', 'session_writes_need_mac', 'files_need_mac', 'terminal_needs_mac', 'needs_mac',
       'session_on_mac', 'session_files_need_mac', 'history_pages_need_mac', 'daemon_unreachable', 'daemon_needs_upgrade',
       'not_queueable', 'mac_too_old', 'board_not_here', 'copy_unreadable', 'kind_not_copied', 'unreachable', 'mac-away',
-      'nobody-answers', 'no-daemon', 'draining']) {
+      'nobody-answers', 'no-daemon', 'draining',
+      // WP5: a host replica's own refusals of its copies (NeedsLeaderError) and the conversation bodies' rows.
+      'config_writes_need_mac', 'routine_writes_need_mac', 'prefs_writes_need_mac', 'conversation_writes_need_mac',
+      'other_hosts_need_mac', 'conversation_bodies_need_mac']) {
       expect(found.has(code), `${code} not found by the scan`).toBe(true)
     }
     expect(found.size).toBeGreaterThanOrEqual(20)

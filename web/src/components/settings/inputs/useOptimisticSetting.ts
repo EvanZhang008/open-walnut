@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { saveErrorMessage, useRowFailure, useSettingsSaved } from '../settings-pane-context'
+import { isLeaderWords } from '@/api/leader-presence'
 
 export interface OptimisticState<T> {
   /** The value shown instead of the server value, while a write is open or just landed. */
@@ -23,8 +24,13 @@ export type OptimisticEvent<T> =
   | { type: 'rejected'; seq: number; message: string }
   | { type: 'server-changed' }
 
+/**
+ * The row error for a failed save. A host replica's refusal while the Mac is away
+ * is already a sentence about the Mac ("Needs your Mac. Changing settings needs
+ * your Mac."): shown as it is, with no "Couldn't save:" in front.
+ */
 export function couldntSave(message: string): string {
-  return `Couldn't save: ${message}`
+  return isLeaderWords(message) ? message : `Couldn't save: ${message}`
 }
 
 export function optimisticReducer<T>(state: OptimisticState<T>, event: OptimisticEvent<T>): OptimisticState<T> {

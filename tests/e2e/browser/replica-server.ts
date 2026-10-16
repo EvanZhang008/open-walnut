@@ -15,13 +15,13 @@
  *                        Mac is away. Build first: npm run build, then the web build.
  *
  * Control port PW_TEST_PORT + 1 (default 3473), loopback only:
- *   GET  /control/ready    the cluster is up, its ids
+ *   GET  /control/ready    the cluster is up, its ids and its seed (a note, a letter, a routine, the favorites, a theme)
  *   GET  /control/code     a browser sign-in code minted on the Mac
  *   POST /control/pair     {name}: a device token made on the Mac, once its copy is on the replica
  *   POST /control/sleep    SIGSTOP the Mac and its daemon; answers once the replica answers away
  *   POST /control/wake     SIGCONT; answers once the replica forwards to the Mac again
  *   POST /control/drain    waits for the Mac's return to settle (WP10 adds the journal drain)
- *   GET  /control/stores   read-only summary of the copies (the replica's task rows among them)
+ *   GET  /control/stores   read-only summary of the copies (the replica's task rows, its config, prefs and routines copies among them)
  *   GET  /control/devices  how many devices the replica's copy holds
  *   POST /control/mac-edit {taskId, title}: an edit made on the Mac itself (live data)
  *
@@ -35,7 +35,7 @@
 import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
-import { HOST_TURN, MAC_LETTER, MAC_NOTE, startReplicaCluster, type ReplicaCluster, type Twin } from '../../helpers/replica-cluster.js'
+import { HOST_TURN, MAC_FAVORITES, MAC_LETTER, MAC_NOTE, MAC_ROUTINE, MAC_THEME, MAC_USER_NAME, startReplicaCluster, type ReplicaCluster, type Twin } from '../../helpers/replica-cluster.js'
 import { startFakeTunnel, type FakeTunnel } from './replica-tunnel.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3472)
@@ -123,7 +123,11 @@ control = http.createServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://control')
       const body = raw ? JSON.parse(raw) as Record<string, unknown> : {}
       if (req.method === 'GET' && url.pathname === '/control/ready') {
-        return reply(200, { ids: c.ids, hostTurn: HOST_TURN, note: MAC_NOTE, letter: MAC_LETTER, twin, app: c.app, replicaPort: c.replicaPort, asleep: c.asleep() })
+        return reply(200, {
+          ids: c.ids, hostTurn: HOST_TURN, note: MAC_NOTE, letter: MAC_LETTER,
+          routine: MAC_ROUTINE, favorites: MAC_FAVORITES, theme: MAC_THEME, userName: MAC_USER_NAME,
+          twin, app: c.app, replicaPort: c.replicaPort, asleep: c.asleep(),
+        })
       }
       if (req.method === 'GET' && url.pathname === '/control/code') return reply(200, { code: await c.browserCode() })
       // A device token made on the Mac, its copy on the replica (the iOS stub flows pair with it).

@@ -28,7 +28,7 @@ const WP5 = ['routines', 'conversations', 'prefs', 'config']
 const BODIES: Array<Record<string, unknown>> = [
   { op: 'status', digest: '0.0' },
   { op: 'sync', entries: [{ k: 'ui', h: 'aaaaaaaaaaaa' }], asOf: 1, schemaVersion: 99 },
-  { op: 'put', rows: [{ key: 'ui', value: { session_panels: 'auto' } }, { id: 'rt-1', job: { id: 'rt-1' }, status: {} }, { agent: 'general', index: { version: 1, activeConversationId: null, conversations: [] } }], last: true, schemaVersion: 1 },
+  { op: 'put', rows: [{ key: 'ui', value: { session_panels: 'auto' } }, { id: 'rt-1', job: { id: 'rt-1' }, status: {} }, { agent: 'general', meta: { id: 'conv-acme-1', title: 'Acme', createdAt: '2026-10-01T00:00:00.000Z', lastMessageAt: '2026-10-01T00:00:00.000Z' } }], last: true, schemaVersion: 1 },
   { op: 'purge' },
 ]
 

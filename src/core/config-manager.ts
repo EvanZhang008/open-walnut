@@ -176,10 +176,13 @@ async function readRawConfigContent(): Promise<string | null> {
       backup: CONFIG_BACKUP_FILE,
     });
     // Put the primary back so the rest of the system (and the user's editor)
-    // sees a real file again. Best-effort: recovery must not throw.
-    try {
-      await fs.writeFile(CONFIG_FILE, backup, 'utf-8');
-    } catch { /* read-only FS or a racing writer — the in-memory value still holds */ }
+    // sees a real file again. Best-effort: recovery must not throw. Never on a
+    // host replica, which writes no config.yaml (its config is the Mac's copy).
+    if (!isHostReplicaProgram()) {
+      try {
+        await fs.writeFile(CONFIG_FILE, backup, 'utf-8');
+      } catch { /* read-only FS or a racing writer: the in-memory value still holds */ }
+    }
     return backup;
   }
 }
@@ -254,11 +257,19 @@ export async function readStoredConfig(): Promise<Partial<Config> | null> {
  * getConfig() on a host replica (docs/plan/walnut-replica-servers-impl.md WP5): the
  * Mac's config as the copy holds it (allowlisted keys only, replication/config-allowlist.ts)
  * over the defaults, the defaults alone before the first round. No ssh hosts merged,
- * no cloud box row: a replica reaches no host of its own.
+ * no cloud box row: a replica reaches no host of its own. `favorites` is not in
+ * the config copy (the allowlist drops it): it is the prefs copy's
+ * (replication/kinds/prefs.ts), so every favorites read through getConfig() (the
+ * project list, the phone's GET /api/v1/favorites, the notes routes) gets the
+ * Mac's favorites, and none when that copy is not here.
  */
 async function replicaConfig(): Promise<Config> {
-  const copy = await (await import('./replication/kinds/config.js')).readConfigCopy();
-  return normalizeReadConfig({ ...DEFAULT_CONFIG, ...(copy ?? {}) } as Config);
+  const [copy, favorites] = await Promise.all([
+    import('./replication/kinds/config.js').then((m) => m.readConfigCopy()),
+    import('./replication/kinds/prefs.js').then((m) => m.readFavoritesCopy()),
+  ]);
+  const { favorites: _never, ...copied } = (copy ?? {}) as Record<string, unknown>;
+  return normalizeReadConfig({ ...DEFAULT_CONFIG, ...copied, ...(favorites ? { favorites } : {}) } as Config);
 }
 
 /**
