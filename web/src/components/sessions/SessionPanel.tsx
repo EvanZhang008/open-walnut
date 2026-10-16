@@ -121,6 +121,8 @@ import { COMPOSER_INSERT_EVENT, leadStoredDraft, sessionDraftKey, type ComposerI
 import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
 import { WaitingComposerLine, WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
+import { MacAwayComposer } from '@/components/layout/AwayLine';
+import { useMacSessionAway } from '@/hooks/useLeaderPresence';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
 import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
@@ -326,6 +328,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const enabledModes = useEnabledModes();
   const [sessionRecord, setSession] = useState<SessionRecord | null>(null);
   const session = useResolvedSessionRecord(sessionRecord);
+  // A host replica with the Mac away: a session that runs on the Mac (or another host) cannot be written to.
+  const macSessionAway = useMacSessionAway(session);
   // The host line explains a known host problem; the generic suggestion then stays quiet.
   const hostHasProblem = useSessionHostHasProblem(session?.host);
   const liveStatus = useSessionStatus(sessionId);
@@ -2143,6 +2147,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           <ChatInput
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
+            sendBlocked={macSessionAway}
             plusMenuActions={engineSettingsEntry.plusMenuActions}
             addMenuControls={{ handleRef: planComposerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
             controlsSlot={session ? (
@@ -2738,7 +2743,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           {/* A Waiting task leaves Waiting on a message: say so where one is written. */}
           <WaitingComposerLine task={sessionTask} />
           <SessionBudgetStatus data={budgetUsage.data} onOpen={openUsageDialog} />
+          {/* A host replica's console with the Mac away: a session the Mac runs gets
+              the line, and its composer stays mounted with the send controls hidden,
+              so a presence flip never takes what is being typed. */}
+          {macSessionAway && <MacAwayComposer />}
           <ChatInput
+            sendBlocked={macSessionAway}
             focusNonce={composerFocusNonce}
             // Dictating into this box takes focus and so collapses the page's
             // selection: let the quote pill hold the passage first (holdDictationSelection).

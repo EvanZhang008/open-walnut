@@ -208,6 +208,20 @@ export function presenceWatch(deps: PresenceWatchDeps): () => Presence {
   }
 }
 
+/**
+ * What browsers are told (the `replica:presence` event, the
+ * x-walnut-presence-seq header): whether the Mac answers, why not, and where a
+ * request goes now (the route's kind). `seq` counts every change of those
+ * three in this process, from 1; `boot` names the process, so a client resets
+ * its count when the replica restarted.
+ */
+export interface ToldPresence {
+  answers: boolean
+  why: PresenceWhy
+  route: Route['kind']
+  seq: number
+}
+
 export interface LeaderPresenceWiring {
   input: () => PresenceInput
   marks: SuspectMarks
@@ -215,10 +229,17 @@ export interface LeaderPresenceWiring {
   dispatcher: () => { presenceChanged(answers: boolean): void }
   /** Opens one stream to the Mac and closes it: resolves when it opened. */
   probe: () => Promise<void>
-  /** Presence changed (answers or why): tell the replica's own clients. */
+  /** The same for the companion (a move of the replica's own sockets to it waits for one); absent: they move at once. */
+  probeCompanion?: () => Promise<void>
+  /** Presence changed (answers or why): the log, the server role. */
   changed: (p: Presence) => void
-  /** The Mac is back and a probe opened: close the replica's own sockets (4002). */
-  closeOwnSockets?: () => void
+  /** What browsers are told changed (see ToldPresence): tell the replica's own clients. */
+  told?: (t: ToldPresence) => void
+  /**
+   * The replica's own sockets must move (4002): the Mac is back and a probe to
+   * it opened, or the companion took the requests and a probe to it opened.
+   */
+  closeOwnSockets?: (to: 'leader' | 'companion') => void
   /** A forward failed and marked the target suspect for `skipMs`. */
   failed?: (kind: 'leader' | 'companion', err: Error, skipMs: number) => void
 }
@@ -228,15 +249,32 @@ export interface LeaderPresenceWiring {
  * tests drive it): a real absence (macAway) cuts the Mac's in-flight forwards
  * and spliced sockets once; a bare suspect mark only steers new requests; back
  * means a probe stream opened, then the replica's own sockets close.
+ *
+ * What browsers are told follows presence, with one lag: a move OFF this
+ * replica (the Mac answers again, or the companion stands in) is told only
+ * once a probe stream to that side opened, and only then are the replica's own
+ * sockets closed 4002. A Mac whose frames flow while its stream door refuses
+ * would otherwise be told back and away again at every suspect mark (and its
+ * browsers moved each time). A move to this replica is told at once.
  */
 export function wireLeaderPresence(w: LeaderPresenceWiring): {
   look: () => Presence
   onSuspect: (kind: 'leader' | 'companion', err: Error) => void
+  told: () => ToldPresence
 } {
-  const look = presenceWatch({
+  let told: ToldPresence | null = null
+  const tell = (t: Omit<ToldPresence, 'seq'>): void => {
+    if (told && told.answers === t.answers && told.why === t.why && told.route === t.route) return
+    told = { ...t, seq: (told?.seq ?? 0) + 1 }
+    w.told?.(told)
+  }
+  // The cut of a real absence runs after the new presence is told: a read it
+  // answers from the copies carries the seq of the absence, not the one before.
+  let cutPending = false
+  const raw = presenceWatch({
     presence: () => presenceOf(w.input()),
     changed: w.changed,
-    away: () => w.dispatcher().presenceChanged(false),
+    away: () => { cutPending = true },
     back: () => backToLeader(),
   })
   const backToLeader = leaderReturn({
@@ -244,15 +282,53 @@ export function wireLeaderPresence(w: LeaderPresenceWiring): {
     answers: () => presenceOf(w.input()).answers,
     close: () => {
       w.dispatcher().presenceChanged(true)
-      w.closeOwnSockets?.()
+      tell({ answers: true, why: 'answers', route: 'leader' })
+      w.closeOwnSockets?.('leader')
     },
     answered: () => w.marks.answered('leader'),
     failed: (err) => onSuspect('leader', err),
   })
+  const routeKind = (): Route['kind'] => chooseReplicaRoute(w.input()).kind
+  const toCompanion = w.probeCompanion
+    ? leaderReturn({
+      probe: w.probeCompanion,
+      // Still the companion's requests when the probe is back.
+      answers: () => routeKind() === 'companion',
+      close: () => {
+        const p = presenceOf(w.input())
+        tell({ answers: p.answers, why: p.why, route: 'companion' })
+        w.closeOwnSockets?.('companion')
+      },
+      answered: () => w.marks.answered('companion'),
+      failed: (err) => onSuspect('companion', err),
+    })
+    : null
+
+  function look(): Presence {
+    const p = raw()
+    settle(p)
+    if (cutPending) {
+      cutPending = false
+      w.dispatcher().presenceChanged(false)
+    }
+    return p
+  }
+  function settle(p: Presence): void {
+    const route = routeKind()
+    if (!told) { tell({ answers: p.answers, why: p.why, route }); return }
+    // Back to the Mac: told by backToLeader's close, once its probe opened.
+    if (p.answers) return
+    if (told.route === 'alone' && route === 'companion') {
+      if (toCompanion) toCompanion()
+      else { tell({ answers: false, why: p.why, route }); w.closeOwnSockets?.('companion') }
+      return
+    }
+    tell({ answers: false, why: p.why, route })
+  }
   function onSuspect(kind: 'leader' | 'companion', err: Error): void {
     const ms = w.marks.fail(kind, Date.now())
     w.failed?.(kind, err, ms)
     look()
   }
-  return { look, onSuspect }
+  return { look, onSuspect, told: () => { if (!told) look(); return told! } }
 }

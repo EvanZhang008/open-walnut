@@ -10,7 +10,7 @@ import {
 } from '@/cache/session-cache';
 import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
-import { planDeltaMerge, foldFullPayload, prependOlderPage, mergeHistoryBackfill } from './history-merge';
+import { planDeltaMerge, foldFullPayload, prependOlderPage, mergeHistoryBackfill, sourceCountOf } from './history-merge';
 import { fillGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
 import { visibleInterval } from '@/utils/page-visibility';
 import type { SessionHistoryResult } from '@/api/sessions';
@@ -66,6 +66,8 @@ interface UseSessionHistoryReturn {
   /** The older part of a windowed transcript cannot be paged (a fork, a journal,
    *  a rewound transcript): there is nothing to offer past the loaded tail. */
   olderUnavailable: boolean;
+  /** The server's reason the older part cannot be paged (`unavailable`), when it gave one. */
+  olderUnavailableWhy: string | null;
   /** Counts the older pages added above the tail, so the view can reveal the
    *  newest one and keep the reader's place. */
   olderPageSeq: number;
@@ -158,6 +160,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const [olderHidden, setOlderHidden] = useState(0);
   const [olderWindowed, setOlderWindowed] = useState(false);
   const [olderUnavailable, setOlderUnavailable] = useState(false);
+  const [olderUnavailableWhy, setOlderUnavailableWhy] = useState<string | null>(null);
   const [olderPageSeq, setOlderPageSeq] = useState(0);
   const pagedSessionRef = useRef<string | null>(null);
   // Gaps inside the held rows (history-gap.ts). The ref is what folds read, so a
@@ -238,6 +241,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setOlderHidden(0);
       setOlderWindowed(false);
       setOlderUnavailable(false);
+      setOlderUnavailableWhy(null);
       setOlderPageSeq(0);
       setGaps([]);
       setGapStatus({});
@@ -256,6 +260,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     if (pagedSessionRef.current !== sessionId) {
       pagedSessionRef.current = sessionId;
       setOlderUnavailable(false);
+      setOlderUnavailableWhy(null);
       setOlderPageSeq(0);
       setGaps([]);
       setGapStatus({});
@@ -509,8 +514,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // scrolled up, shoving the conversation down under their eyes.
           // Phase 2 re-derives both from cursor immediately after.
           setOlderWindowed(!!result.windowed);
-          if (result.total != null && result.total > result.messages.length) {
-            const offset = result.total - result.messages.length;
+          const sourceCount = sourceCountOf(result);
+          if (sourceCount != null && sourceCount > result.messages.length) {
+            const offset = sourceCount - result.messages.length;
             baseOffsetRef.current = offset;
             setOlderHidden(offset);
           }
@@ -705,6 +711,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (page.unavailable) {
             setOlderWindowed(false);
             setOlderUnavailable(true);
+            setOlderUnavailableWhy(page.unavailable);
             log.info('session-history', `older history cannot be paged (${page.unavailable})`, { sessionId });
             return;
           }
@@ -844,5 +851,5 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // Only the gaps still inside the rows, with their sides read from them.
   const shownGaps = useMemo(() => liveGaps(messages, gaps), [messages, gaps]);
 
-  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
+  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
 }

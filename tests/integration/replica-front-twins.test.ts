@@ -384,6 +384,10 @@ describe.each(['source', 'standalone'] as const)('a host replica supervised by t
     const devices = [{ id: 'd1a2b3c4d5e6f7', name: 'acme-phone', tokenHash: sha256(PHONE_TOKEN) }]
     const put = await macAsks(rig!.mac, 'POST', '/bridge/replica', { op: 'put', kind: 'devices', devices, hash: deviceListHash(devices) })
     expect(put.status, JSON.stringify(put.json)).toBe(200)
+    // One whole tasks round (an empty manifest needs nothing): the copies now have an age,
+    // which an away answer's x-walnut-offline carries (the copies' last round, not presence).
+    const round = await macAsks(rig!.mac, 'POST', '/bridge/replica', { op: 'sync', kind: 'tasks', entries: [], asOf: Date.now() })
+    expect(round.status, JSON.stringify(round.json)).toBe(200)
   }, 60_000)
 
   it('the Mac asleep: inside the window the daemon still refuses a follower write; past it the replica answers away and the spliced socket closes 4001', async () => {

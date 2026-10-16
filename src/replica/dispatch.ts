@@ -19,12 +19,18 @@
  *     a write failed after it was written: 504 primary_timeout (never journaled)
  *     a write failed before the stream opened: away (provably not sent)
  *     the Mac really away (presence.ts macAway: the quiet window, no daemon,
- *                   the companion leads): every in-flight forward answered 504
- *                   at once; a suspect mark (one failed stream) cuts nothing
+ *                   the companion leads): every in-flight forward to it is cut at
+ *                   once: a GET/HEAD with no answer byte sent yet runs again on
+ *                   the copies (as if it had been routed away), a write is 504
+ *                   ("Nothing was saved" when its stream never opened); a suspect
+ *                   mark (one failed stream) cuts nothing
  *     a browser that went away (abort, reload) is no failure of the Mac: no suspect
  *   the companion stands in   forwarded as the host server does today
+ *   every answer   x-walnut-presence-seq and x-walnut-presence-boot (front.ts header:
+ *                  the seq in force when the request was routed)
  *   else away (answerAway)
- *     read          next() on the copies, x-walnut-offline: <asOf ms>
+ *     read          next() on the copies, x-walnut-offline: <asOf ms> and
+ *                   x-walnut-offline-why: away | suspect (a known device only)
  *     host-write / queue:<kind> / note-write
  *                   next() with req.replicaWrite (the route's write goes to the
  *                   daemon with follower.op, WP10); `leader_answers` from the
@@ -76,7 +82,14 @@ const MAX_BODY_BYTES = 15 * 1024 * 1024
 export const OP_ID_HEADER = 'x-walnut-op-id'
 export const FORWARDED_AT_HEADER = 'x-walnut-forwarded-at'
 export const OFFLINE_HEADER = 'x-walnut-offline'
+/** Beside x-walnut-offline: `suspect` (a stream to a live Mac failed) or `away`. */
+export const OFFLINE_WHY_HEADER = 'x-walnut-offline-why'
 export const ANSWERED_VIA_HEADER = 'x-walnut-answered-via'
+/** On every answer: the count of presence changes told in this process, and the process's id (front.ts). */
+export const PRESENCE_SEQ_HEADER = 'x-walnut-presence-seq'
+export const PRESENCE_BOOT_HEADER = 'x-walnut-presence-boot'
+
+export type OfflineWhy = 'away' | 'suspect'
 /** How long the client waits for this write (web/src/api/op-id.ts): the write budget, when longer. */
 export const WAIT_HEADER = 'x-walnut-wait-ms'
 
@@ -107,16 +120,20 @@ declare module 'node:http' {
 export interface DispatchDeps {
   /** Where a request goes right now (presence.ts chooseReplicaRoute). */
   route(): Route
-  /** When the copies were last made fresh (the Mac last heard), for x-walnut-offline. */
+  /** When the copies were last made whole (their last completed round; 0 when not known), for x-walnut-offline. */
   asOf(): number
+  /** Why an answer comes from the copies now (x-walnut-offline-why); absent: `away`. */
+  offlineWhy?(): OfflineWhy
+  /** The presence headers every answer carries (x-walnut-presence-seq, -boot); absent: none. */
+  presenceHeaders?(): Record<string, string>
   /** A stream to the leader or the companion through the daemon. */
   connect(kind: Target['kind']): Promise<Duplex>
   /** A stream to `kind` failed: skip it for a few seconds. */
   suspect(kind: Target['kind'], err: Error): void
   /** `kind` answered a forward (a response or a 101): its suspect marks stop doubling (presence.ts SuspectMarks). */
   answered?(kind: Target['kind']): void
-  /** The page an HTML navigation gets while away (WP7 retires it for the console). */
-  answerAlone(req: IncomingMessage, res: ServerResponse, why: string): void
+  /** The page an HTML navigation gets while away; absent (the replica, WP7): the console, from the copies. */
+  answerAlone?(req: IncomingMessage, res: ServerResponse, why: string): void
   /** `follower.op` on the link (cap replica-ops-v1); absent: away writes need the Mac. */
   followerOp?(params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>
   /**
@@ -244,8 +261,10 @@ interface Flight {
   to: Target['kind']
   write: boolean
   done: boolean
-  /** Answered 504 by a presence flip: the forward's own outcome is ignored. */
+  /** Answered by a presence flip: the forward's own outcome is ignored. */
   flipped: boolean
+  /** A read's way to the copies, when the Mac went away before any answer byte (flip). */
+  away?: () => void
 }
 
 /** A WebSocket handshake waiting on its target, or a socket spliced to it. */
@@ -288,8 +307,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
    * fully written to the first answer byte and answers that request alone with
    * 504: a Mac that is slow at one request is not away for the others.
    */
-  function forward(req: IncomingMessage, res: ServerResponse, route: Target, write: boolean, onFail: (err: Error, sent: boolean) => void, body?: Buffer): void {
-    const flight: Flight = { res, up: null, to: route.kind, write, done: false, flipped: false }
+  function forward(
+    req: IncomingMessage, res: ServerResponse, route: Target, write: boolean, onFail: (err: Error, sent: boolean) => void,
+    extra: { body?: Buffer; away?: () => void } = {},
+  ): void {
+    const body = extra.body
+    const flight: Flight = { res, up: null, to: route.kind, write, done: false, flipped: false, ...(extra.away && !write ? { away: extra.away } : {}) }
     flights.add(flight)
     let sent = false
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -336,9 +359,15 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     return !deps.authorized || deps.authorized(req)
   }
 
-  /** When the Mac was last heard (when it went to sleep) is told to a known device only. */
+  /** How old the copies are, and why they answer, is told to a known device only. */
   function offlineHeader(req: IncomingMessage): Record<string, string> {
-    return known(req) ? { [OFFLINE_HEADER]: String(deps.asOf()) } : {}
+    return known(req) ? { [OFFLINE_HEADER]: String(deps.asOf()), [OFFLINE_WHY_HEADER]: deps.offlineWhy?.() ?? 'away' } : {}
+  }
+
+  /** The presence headers, as they stand now (every answer; again once the route was decided). */
+  function stampPresence(res: ServerResponse): void {
+    if (res.headersSent || !deps.presenceHeaders) return
+    for (const [k, v] of Object.entries(deps.presenceHeaders())) res.setHeader(k, v)
   }
 
   function needsLeader(req: IncomingMessage, res: ServerResponse, why: string): void {
@@ -403,12 +432,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             deps.log('info', 'replica: the daemon says the Mac answers, forwarding the write once', { opId, op })
             // The Mac answers this one: it is no away answer.
             res.removeHeader(OFFLINE_HEADER)
+            res.removeHeader(OFFLINE_WHY_HEADER)
             res.removeHeader(ANSWERED_VIA_HEADER)
             forward(req, res, { kind: 'leader' }, true, (err, sent) => {
               deps.suspect('leader', err)
               if (sent) return timedOut(res, true)
               sendJson(res, 503, { error: { code: 'leader_unsure', retryAfter: 5, message: MESSAGES.leader_unsure } }, { 'retry-after': '5' })
-            }, raw)
+            }, { body: raw })
             return { kind: 'answered' }
           }
           return { kind: 'refused', code: typeof r.errorKind === 'string' ? r.errorKind : 'refused', message: String(r.error ?? 'the daemon refused the write') }
@@ -432,10 +462,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   }
 
   function answerAway(req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void, decision: RouteDecision, why: string): void {
+    // A failed forward may have changed what is told: the answer carries the seq it is made under.
+    stampPresence(res)
     if (decision.away === 'read') {
-      if (isNavigation(req, pathOf(req))) return deps.answerAlone(req, res, why)
-      // The auth middleware's 401 to a caller with no token carries no last-heard time.
-      if (known(req)) res.setHeader(OFFLINE_HEADER, String(deps.asOf()))
+      if (deps.answerAlone && isNavigation(req, pathOf(req))) return deps.answerAlone(req, res, why)
+      // The auth middleware's 401 to a caller with no token carries no copy age.
+      for (const [k, v] of Object.entries(offlineHeader(req))) res.setHeader(k, v)
       res.setHeader(ANSWERED_VIA_HEADER, 'replica')
       return next()
     }
@@ -457,7 +489,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         }
       }
       req.replicaWrite = replicaWrite(req, res, decision.away, raw)
-      res.setHeader(OFFLINE_HEADER, String(deps.asOf()))
+      for (const [k, v] of Object.entries(offlineHeader(req))) res.setHeader(k, v)
       res.setHeader(ANSWERED_VIA_HEADER, 'replica')
       next()
     }, (err: Error & { status?: number }) => {
@@ -476,7 +508,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     flights.delete(f)
     if (f.up) detach(f.up)
     if (f.res.headersSent) { f.res.destroy(); return }
-    // `up` null: its stream never opened (a read changes nothing either way).
+    // A read with no answer byte sent yet changes nothing either way: it runs again on the copies.
+    if (f.away) { f.away(); return }
+    // A write: `up` null, its stream never opened (provably not sent, "Nothing was saved").
     timedOut(f.res, f.write && f.up !== null)
   }
 
@@ -527,8 +561,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   /** A request for the leader (or answered as away): the forward path every leader row takes. */
   function routeOn(req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void, decision: RouteDecision): void {
     const route = deps.route()
+    stampPresence(res)
     if (route.kind === 'alone') return answerAway(req, res, next, decision, route.why)
     const write = !isRead(req.method ?? 'GET')
+    // A read the Mac went away under (a flip, before any answer byte): the copies answer it.
+    const away = () => { if (!res.headersSent && !res.destroyed) answerAway(req, res, next, decision, 'mac-away') }
     forward(req, res, route, write, (err, sent) => {
       deps.suspect(route.kind, err)
       if (!write) {
@@ -550,11 +587,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       }
       // Provably not sent: answered as away.
       answerAway(req, res, next, decision, 'unreachable')
-    })
+    }, { away })
   }
 
   return {
     middleware(req, res, next) {
+      // Every answer of this replica says which presence it was made under (front.ts header).
+      stampPresence(res)
       const decision = decide(req.method ?? 'GET', pathOf(req))
       if (decision.cls === 'feature') return next()
       if (decision.cls === 'local') {

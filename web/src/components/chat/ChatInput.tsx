@@ -66,6 +66,15 @@ interface ChatInputProps {
   onInterruptSend?: (text: string, images?: ImageAttachment[]) => void | Promise<boolean>;
   onClearQueue?: () => void;
   disabled?: boolean;
+  /**
+   * Nothing can be sent right now (a host replica's console while the Mac that
+   * runs this session is away), but the composer stays as it is: the box keeps
+   * its text, images, focus and an IME composition in progress, and only the
+   * send controls (the send / stop cluster, the controls slot, the send slot)
+   * are hidden. Enter does nothing. Unlike `disabled`, which disables the box
+   * itself and so blurs it. The owner says why next to the composer.
+   */
+  sendBlocked?: boolean;
   isStreaming?: boolean;
   focusedTaskTitle?: string;
   /** Task object for inline context pill inside the input box */
@@ -213,7 +222,7 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -282,6 +291,20 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const draftTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
+  // The save the debounce still owes, under the key it was typed for: written at
+  // once when the composer unmounts or moves to another key, so the last
+  // keystrokes before either are never dropped.
+  const pendingDraftRef = useRef<{ key: string; text: string } | null>(null);
+  const flushDraft = useCallback(() => {
+    clearTimeout(draftTimerRef.current);
+    const pending = pendingDraftRef.current;
+    pendingDraftRef.current = null;
+    if (!pending) return;
+    try {
+      if (pending.text) localStorage.setItem(pending.key, pending.text);
+      else localStorage.removeItem(pending.key);
+    } catch { /* quota exceeded or unavailable */ }
+  }, []);
 
   // Track whether the component has mounted so the effect below can skip the
   // initial run (the useState initializer above already handles first render).
@@ -290,10 +313,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // Restore draft when switching sessions (draftKey change).
   // Initial mount is handled by useState initializer above — skip here to avoid double-read.
   useEffect(() => {
-    // Cancel any pending debounce timer for the previous session's key before
-    // restoring the new session's draft. Without this, the stale timer could
-    // fire after the key has changed and write the old text under the new key.
-    clearTimeout(draftTimerRef.current);
+    // Write the previous key's pending save now, under that key, before the new
+    // key's draft is restored (a timer left to fire later used to write the old
+    // text under the new key, and cancelling it lost the last keystrokes).
+    flushDraft();
 
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -316,10 +339,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     } catch { /* localStorage unavailable */ }
   }, [draftKey]);
 
-  // Cancel pending debounce timer on unmount
+  // Unmount: the pending save is written now, not dropped with its timer.
   useEffect(() => {
-    return () => { clearTimeout(draftTimerRef.current); };
-  }, []);
+    return () => { flushDraft(); };
+  }, [flushDraft]);
 
   // External prefill (e.g. "Create by chat" agent-builder template): replace the
   // input value + focus + cursor-to-end, but DON'T send — the user reviews/edits
@@ -343,7 +366,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // away, and its reference table with it.
     const split = applyText(next, { keepRefs: prefillMode !== 'replace' });
     const composed = composeRefs(split.body, split.table);
-    // Persist immediately (don't rely on the later-declared debounced saveDraft).
+    // Persist immediately (don't rely on the later-declared debounced saveDraft),
+    // and drop a save still owed for the text this replaces: written later, it
+    // would put the old text back in storage.
+    clearTimeout(draftTimerRef.current);
+    pendingDraftRef.current = null;
     try { if (draftKeyRef.current) localStorage.setItem(draftKeyRef.current, composed); } catch { /* unavailable */ }
     // Focus + caret-to-end, RETRIED until the box is actually focusable. A
     // hidden textarea (`display:none` — e.g. the session's chat column is
@@ -626,15 +653,12 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   const saveDraft = useCallback((text: string) => {
     clearTimeout(draftTimerRef.current);
-    draftTimerRef.current = setTimeout(() => {
-      const key = draftKeyRef.current;
-      if (!key) return;
-      try {
-        if (text) localStorage.setItem(key, text);
-        else localStorage.removeItem(key);
-      } catch { /* quota exceeded or unavailable */ }
-    }, 300);
-  }, []);
+    // The key it is typed under now: a key change before the timer fires flushes it there.
+    const key = draftKeyRef.current;
+    pendingDraftRef.current = key ? { key, text } : null;
+    if (!key) return;
+    draftTimerRef.current = setTimeout(flushDraft, 300);
+  }, [flushDraft]);
 
   /** Persist the draft in its composed form (tags in place of the tokens): ONE
    *  key, and it comes back as the same tokens on the next mount. */
@@ -644,6 +668,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   const clearDraft = useCallback(() => {
     clearTimeout(draftTimerRef.current);
+    pendingDraftRef.current = null;
     const key = draftKeyRef.current;
     if (!key) return;
     try { localStorage.removeItem(key); } catch { /* ignore */ }
@@ -721,7 +746,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const text = composeRefs(value, tableRef.current);
     // A token the table knows was swapped, so the message carries a reference.
     const hasRefs = text !== body;
-    if ((!text && images.length === 0 && !allowEmptySend) || disabled || queueFull) return;
+    if ((!text && images.length === 0 && !allowEmptySend) || disabled || sendBlocked || queueFull) return;
 
     // Sending is the user saying they are done talking. Stop the mic and drop the
     // audio: the words are already in the message, so a transcription arriving
@@ -1284,7 +1309,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const handleInterruptSend = () => {
     setSendMenuOpen(false);
     const text = composeRefs(value, tableRef.current);
-    if ((!text && images.length === 0) || disabled || !onInterruptSend) return;
+    if ((!text && images.length === 0) || disabled || sendBlocked || !onInterruptSend) return;
     dispatchSend(onInterruptSend, text, images);
   };
 
@@ -1294,7 +1319,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const hasInput = !!(value.trim() || images.length > 0);
-  const canSend = !disabled && !queueFull && (hasInput || !!allowEmptySend);
+  const canSend = !disabled && !sendBlocked && !queueFull && (hasInput || !!allowEmptySend);
 
   // Claude-style primary action swap: while a turn is streaming and the composer is
   // EMPTY, the primary button is a square STOP (there is nothing to send anyway).
@@ -1348,6 +1373,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   return (
     <div
       className={`chat-input-container${compact ? ' is-compact' : ''}${dragOver ? ' drag-over' : ''}`}
+      // Only while blocked: a composer that can send renders exactly as before.
+      data-send-blocked={sendBlocked ? 'true' : undefined}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1467,7 +1494,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             {...NO_AUTOFILL_PROPS}
           />
           {/* Compact: the send button sits IN the text row — no controls row at all. */}
-          {compact && <div className="chat-input-compact-actions">{primaryButton}</div>}
+          {compact && !sendBlocked && <div className="chat-input-compact-actions">{primaryButton}</div>}
           {/* Controls row inside the card */}
           {!compact && (
           <div className="chat-input-controls">
@@ -1646,7 +1673,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             </div>
           )}
         </div>
-        {controlsSlot}
+        {/* Blocked: the send controls go, the box and its mic and "+" stay. */}
+        {!sendBlocked && controlsSlot}
         <span className="chat-input-controls-spacer" />
         <MicButton
           onTranscribe={(text) => writeDictation(text, false)}
@@ -1663,10 +1691,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />
-        {sendSlot}
+        {!sendBlocked && sendSlot}
         {/* Send — icon button (↑). While streaming with an EMPTY composer the
             primary swaps to a square STOP (Claude-style); typing flips it back
             to send, which grows a split "▾" exposing Interrupt & send. */}
+        {!sendBlocked && (
         <div className={`chat-send-group${showSendMenu ? ' has-menu' : ''}`} ref={sendGroupRef}>
           {primaryButton}
           {showSendMenu && (
@@ -1716,6 +1745,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             </>
           )}
         </div>
+        )}
           </div>
           )}{/* .chat-input-controls */}
         </div>{/* .chat-input-box */}

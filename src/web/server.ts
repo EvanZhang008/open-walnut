@@ -1064,6 +1064,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       acceptFromLeader: (stream) => hostReplicaDoor?.accept(stream),
       broadcast: (name, data) => ws.broadcastEvent(name, data),
       closeOwnSockets: (code, reason) => { ws.closeAllClients(code, reason) },
+      ...((env.WALNUT_HOST_KEY ?? '').trim() ? { hostKey: (env.WALNUT_HOST_KEY ?? '').trim() } : {}),
     })
     const front = hostReplicaFront
     // Its notes: the copy the daemon keeps, read through the follower link (WP6).
@@ -1079,6 +1080,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
     ws.setUpgradeInterceptor((request, socket, head, own) => { front.upgrade(request, socket, head, own); return true })
     ws.setRpcGate((method) => front.rpcGate(method))
+    // Every browser socket here learns at once whether the Mac answers (WP7).
+    ws.setConnectEvent(() => ({ name: 'replica:presence', data: front.presenceEvent() }))
   }
 
   const port = options.port ?? DEFAULT_PORT
@@ -1500,6 +1503,33 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   // Auth middleware: this machine passes, every other caller needs a Bearer credential
   app.use('/api', authMiddleware)
+  // A host replica answering alone (the Mac away, no companion standing in): a
+  // session that runs on the Mac (or another host) cannot be read here beyond
+  // its row; its reads answer needs_leader. This host's sessions are WP6's
+  // routes' (or, with an older daemon, read from their stream files) (WP7).
+  if (hostReplicaFront) {
+    const front = hostReplicaFront
+    const [{ awaySessionReads }, { getSessionByClaudeId }, { isSelfHost }] = await Promise.all([
+      import('../replica/away-session-reads.js'), import('../core/session-tracker.js'), import('../replica/self-host.js'),
+    ])
+    const hostKey = (process.env.WALNUT_HOST_KEY ?? '').trim() || null
+    app.use('/api', awaySessionReads({
+      alone: () => front.route().kind === 'alone',
+      offlineHeaders: () => front.offlineHeaders(),
+      hostKey: () => hostKey,
+      hostOf: async (sid) => { const r = await getSessionByClaudeId(sid); return r ? (r.host ?? undefined) : null },
+      selfHost: (h) => isSelfHost(h) && front.link.state() === 'up',
+      // A session on this host, an older daemon: its stream file through the follower link (owner scoped).
+      readHostHistory: (sid, tailBytes) => front.link.request('read-history', { sid, tailBytes }, 20_000),
+      log: (level, msg, data) => log.web[level](msg, data),
+    }))
+    // The copies' age as the last process left it (kind-follower.ts copiesAsOf), before
+    // any round: a replica restarted while the Mac is away still says how old its copy is.
+    void (async () => {
+      await (await import('./routes/bridge-replica.js')).registerBuiltinReplicaKinds()
+      await (await import('../core/replication/kind-follower.js')).primeCopyRoundClock()
+    })().catch((err) => log.web.warn('replica: the copies\' age could not be read at boot', { error: err instanceof Error ? err.message : String(err) }))
+  }
   // Paste spill-over (>200K chars from the web UI): needs req.body, so it
   // mounts after the json parser, and writes to disk, so after auth too.
   app.use('/api/pastes', pastesRouter)
@@ -5968,6 +5998,7 @@ export async function stopServer(): Promise<void> {
     const ws = await import('./ws/handler.js')
     ws.setUpgradeInterceptor(null)
     ws.setRpcGate(null)
+    ws.setConnectEvent(null)
     await hostReplicaFront.stop().catch(() => {})
     hostReplicaFront = null
     ;(await import('../replica/notes-source.js')).installReplicaNotesSource(null)

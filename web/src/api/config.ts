@@ -1,6 +1,7 @@
 import { apiGet, apiPut, apiPost } from './client';
 import type { Config } from '@open-walnut/core';
 import { invalidateSharedGet, sharedGet } from './shared-get';
+import { noteReplicaConfig } from './leader-presence';
 
 const CONFIG_URL = '/api/config';
 // After a reconnect the answer may predate a change whose event this socket missed.
@@ -8,7 +9,12 @@ const CONFIG_CHANGE_EVENTS = ['config:changed', '_ws:reconnected'] as const;
 
 /** fetchConfig and the page-lifetime helpers below read ONE shared request. */
 function fetchConfigResponse<T>(): Promise<T> {
-  return sharedGet(CONFIG_URL, () => apiGet<T>(CONFIG_URL), { invalidateOn: CONFIG_CHANGE_EVENTS });
+  return sharedGet(CONFIG_URL, () => apiGet<T>(CONFIG_URL).then((res) => {
+    // A host replica names this host (`replica.hostKey`), so its own sessions keep
+    // their composer while the Mac is away; absent on the Mac and the companion.
+    noteReplicaConfig(res);
+    return res;
+  }), { invalidateOn: CONFIG_CHANGE_EVENTS });
 }
 
 export async function fetchConfig(): Promise<Config & { _envTokenHint?: string }> {

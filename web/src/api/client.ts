@@ -2,6 +2,7 @@ import { getDeviceToken } from './device-token';
 import { noteAuthRefusal } from './unpaired';
 import { asDeadlineError } from '../utils/request-failure';
 import { mintOpId, isWriteMethod, OP_ID_HEADER, WAIT_HEADER, DEFAULT_WRITE_WAIT_MS } from './op-id';
+import { leaderErrorMessage, noteResponseHeaders } from './leader-presence';
 
 class ApiError extends Error {
   constructor(
@@ -259,6 +260,8 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     throw err;
   }
   const elapsed = Math.round(performance.now() - t0);
+  // A host replica says who answered (api/leader-presence.ts): the away line reads it.
+  noteResponseHeaders(res.headers);
   if (!res.ok) {
     let message = res.statusText;
     let errBody: unknown;
@@ -268,6 +271,8 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
       // A replica's answer is { error: { code, message } }: its message, never "[object Object]".
       if (typeof data.error === 'string') message = data.error;
       else if (typeof data.error?.message === 'string') message = data.error.message;
+      // A host replica's answer while the Mac is away: plain words, "Needs your Mac" with the reason.
+      message = leaderErrorMessage(data) ?? message;
     } catch {
       // use statusText
     }

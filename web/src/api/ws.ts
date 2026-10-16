@@ -8,6 +8,7 @@
 import { log } from '@/utils/log';
 import { getDeviceToken } from './device-token';
 import { mintOpId } from './op-id';
+import { leaderErrorMessage, WS_LEADER_AWAY, WS_LEADER_BACK } from './leader-presence';
 
 /** WebSocket frame types matching the server protocol. */
 export interface WsEventFrame {
@@ -82,6 +83,7 @@ const WS_CLOSE_CODES: Record<number, string> = {
   1000: 'normal', 1001: 'going away', 1002: 'protocol error',
   1003: 'unsupported', 1006: 'abnormal (no close frame)',
   1011: 'server error', 1012: 'server restart', 1013: 'try again later',
+  4001: 'leader away (host replica)', 4002: 'leader back (host replica)',
 };
 
 /**
@@ -121,6 +123,8 @@ class WsClient {
   // eventListeners so the named path stays a plain Map lookup.
   private anyEventListeners = new Set<AnyEventCallback>();
   private connectionListeners = new Set<ConnectionCallback>();
+  /** Told every close code (api/leader-presence.ts reads the replica's 4001/4002). */
+  private closeListeners = new Set<(code: number) => void>();
   private pendingRpc = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; lowValue?: boolean }>();
   // RPCs issued before the socket reaches OPEN (cold-load race: useChat/session
   // hooks fire RPCs in the first ~200-500ms while the lazy WS handshake is still
@@ -194,7 +198,15 @@ class WsClient {
       this.ws = null;
       this.setState('disconnected');
       this.rejectPending('WebSocket disconnected');
-      if (!this.disposed) this.scheduleReconnect();
+      for (const cb of [...this.closeListeners]) {
+        try { cb(ev.code); } catch { /* one listener never stops the reconnect */ }
+      }
+      // A host replica's handover (4001 leader_away, 4002 leader_back): the next
+      // socket lands on the side that answers now, so reconnect at once, with
+      // the backoff reset. No reload: `_ws:reconnected` refetches every store.
+      const handover = ev.code === WS_LEADER_AWAY || ev.code === WS_LEADER_BACK;
+      if (handover) this.reconnectDelay = 1000;
+      if (!this.disposed) this.scheduleReconnect(handover ? 0 : undefined);
     };
 
     ws.onerror = () => {
@@ -270,6 +282,12 @@ class WsClient {
     return () => {
       this.anyEventListeners.delete(cb);
     };
+  }
+
+  /** Every close of the socket, with its code. */
+  onClose(cb: (code: number) => void): () => void {
+    this.closeListeners.add(cb);
+    return () => { this.closeListeners.delete(cb); };
   }
 
   onConnectionChange(cb: ConnectionCallback) {
@@ -467,7 +485,10 @@ class WsClient {
       pending.resolve(frame.payload);
     } else {
       log.warn('ws', `RPC:${frame.id} ← ERROR`, { error: frame.error });
-      pending.reject(new Error(frame.error ?? 'RPC error'));
+      // A host replica refuses a write while the Mac is away as `needs_leader: <why>`: say it in words.
+      const away = /^needs_leader: ([\w-]+)$/.exec(frame.error ?? '');
+      const words = away ? leaderErrorMessage({ error: { code: 'needs_leader', why: away[1] } }) : null;
+      pending.reject(new Error(words ?? frame.error ?? 'RPC error'));
     }
   }
 
@@ -492,14 +513,16 @@ class WsClient {
     }
   }
 
-  private scheduleReconnect() {
+  /** `delayMs` (a handover's 0) leaves the backoff as it is; the plain path grows it. */
+  private scheduleReconnect(delayMs?: number) {
     if (this.reconnectTimer) return;
-    log.info('ws', 'reconnecting', { delayMs: this.reconnectDelay });
+    const delay = delayMs ?? this.reconnectDelay;
+    log.info('ws', 'reconnecting', { delayMs: delay });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, this.reconnectDelay);
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
+    }, delay);
+    if (delayMs === undefined) this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
   }
 
   /**

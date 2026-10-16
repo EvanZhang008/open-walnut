@@ -1,0 +1,30 @@
+/* The quiet line of a host replica's console while the Mac is away
+   (components/layout/AwayLine.tsx). One muted band at the top of the content,
+   in flow, so nothing under it is covered; it wraps on a phone. */
+.away-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  align-items: baseline;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary, var(--bg));
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.away-line-text { color: var(--fg); }
+.away-line-prompts { color: var(--fg-muted); }
+
+/* A session the Mac runs: the notice right above its composer (which stays, send controls hidden). */
+.mac-away-composer {
+  margin: 6px 12px 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.mac-away-composer strong { color: var(--fg); font-weight: 600; }

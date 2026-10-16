@@ -102,6 +102,16 @@ export function setRpcGate(fn: ((method: string) => string | null) | null): void
   rpcGate = fn
 }
 
+/**
+ * A host replica's word to each new socket (its `replica:presence`, WP7): sent
+ * right after the connection opens, so a console that just moved here learns at
+ * once that the Mac is away and whose copy it reads. Null on every other server.
+ */
+let connectEvent: (() => { name: string; data: unknown } | null) | null = null
+export function setConnectEvent(fn: (() => { name: string; data: unknown } | null) | null): void {
+  connectEvent = fn
+}
+
 /** Close every browser socket with a code (a host replica's 4002 leader_back). */
 export function closeAllClients(code: number, reason: string): number {
   let n = 0
@@ -486,6 +496,14 @@ export function attachWss(server: HttpServer): WebSocketServer {
     const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set() }
     clients.add(client)
     log.ws.info('client connected', { clientCount: clients.size })
+    if (connectEvent) {
+      try {
+        const ev = connectEvent()
+        if (ev) sendToClient(ws, ev.name, ev.data)
+      } catch (err) {
+        log.ws.warn('connect event failed', { error: err instanceof Error ? err.message : String(err) })
+      }
+    }
 
     ws.on('pong', () => {
       client.alive = true

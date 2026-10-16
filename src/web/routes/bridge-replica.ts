@@ -36,6 +36,10 @@ const BODY_LIMIT = '8mb'
 type DevicesStep = (body: Record<string, unknown>) => { ok: true; hash: string; devices: number } | { ok: false; status: 400; error: string }
 
 let builtins: Promise<void> | null = null
+/** The kinds every follower serves, registered once (a host replica's boot primes the copies' age from them). */
+export function registerBuiltinReplicaKinds(): Promise<void> {
+  return builtinKinds()
+}
 /** The kinds every follower serves, registered once (core/replication/kind-follower.ts). */
 function builtinKinds(): Promise<void> {
   builtins ??= (async () => {

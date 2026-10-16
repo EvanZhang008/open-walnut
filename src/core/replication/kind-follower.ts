@@ -151,6 +151,48 @@ export interface RowSetSpec<Row> {
   purge?(): Promise<{ removed: number }>
 }
 
+/**
+ * When this side's copies were last made whole (WP7: the age a host replica's
+ * console shows, "the copy on <host> from 2 min ago"). Per row-set kind, the
+ * leader's clock of the last round that left this side holding every row of a
+ * manifest: a manifest that needed nothing, the last batch of its bodies with
+ * none refused, or a digest that matched. A round the leader skips because
+ * nothing changed sends no step, and every kind is sent its manifest again at
+ * least every sweep (5 min), so this is a lower bound that is never newer than
+ * the truth. The copies' age is the OLDEST kind's: a kind not proven fresh
+ * makes the whole copy no fresher. Kinds never completed here do not count.
+ */
+const roundClock = new Map<string, number>()
+/** The row-set kinds' own state loads, for priming the clock at a boot (primeCopyRoundClock). */
+const roundClockLoads = new Map<string, () => Promise<RowSetState>>()
+
+function noteRoundComplete(kind: string, asOf: number): void {
+  if (!Number.isFinite(asOf) || asOf <= 0) return
+  if (asOf > (roundClock.get(kind) ?? 0)) roundClock.set(kind, asOf)
+}
+
+/** The copies' age (the oldest completed round of every kind that has one), or null when none completed. */
+export function copiesAsOf(): number | null {
+  let oldest: number | null = null
+  for (const at of roundClock.values()) if (oldest === null || at < oldest) oldest = at
+  return oldest
+}
+
+/**
+ * At a boot, before any round: each kind's persisted `asOf` (the last manifest
+ * it took). A manifest whose bodies were still on their way when the process
+ * stopped counts as taken here, the one case this may say a little newer than
+ * the copy; the first round after the boot corrects it. Never throws.
+ */
+export async function primeCopyRoundClock(): Promise<void> {
+  await Promise.all([...roundClockLoads.entries()].map(async ([kind, load]) => {
+    try {
+      const s = await load()
+      if (!roundClock.has(kind)) noteRoundComplete(kind, s.asOf)
+    } catch { /* no state yet */ }
+  }))
+}
+
 export type Refusal = string | { status: 400 | 404 | 409; error: string } | null
 
 /** A refusal as a step's answer (null: go on). */
@@ -186,6 +228,7 @@ export function rowSetDigest(localKeys: readonly string[], hashes: Readonly<Reco
  * round's `last` batch, which takes the manifest's order.
  */
 export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower {
+  roundClockLoads.set(spec.kind, () => spec.load())
   const sync = (body: Record<string, unknown>): Promise<ReplicaStepResult> => spec.serial(async () => {
     const refused = refusalAnswer(await spec.refuse?.() ?? null)
     if (refused) return refused
@@ -241,6 +284,8 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     s.asOf = Number(body.asOf) || Date.now()
     s.at = Date.now()
     await spec.save()
+    // Nothing to send: this side holds the manifest's rows now.
+    if (need.length === 0) noteRoundComplete(spec.kind, s.asOf)
     if (removeIds.length > 0 || need.length > 0 || keptCount > 0) {
       spec.log.info(`${spec.label}: manifest`, {
         kind: spec.kind, entries: entries.length, need: need.length, held: heldCount, removed: removeIds.length, reordered: reorder, ...(keptCount > 0 ? { kept: keptCount } : {}),
@@ -277,6 +322,9 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
       await spec.save()
       spec.changed()
     }
+    // A manifest round's last batch, every row of it stored: the manifest is whole
+    // here. A delta's put (it names a digest) is proven by its digest instead.
+    if (body.last === true && typeof body.digest !== 'string' && stored === sentRows.length) noteRoundComplete(spec.kind, s.asOf)
     // A refused row counts as held: the leader sends the manifest again.
     const answer: ReplicaStepResult = { ok: true, stored, held: sentRows.length - stored }
     // A put sent without a manifest (the leader's delta) asks whether this side now matches.
@@ -296,6 +344,8 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
    */
   const heardAsOf = async (s: RowSetState, raw: unknown): Promise<void> => {
     const asOf = Number(raw)
+    // Proven whole as of `asOf` (an equal digest), whatever the stored clock says.
+    noteRoundComplete(spec.kind, asOf)
     if (!Number.isFinite(asOf) || asOf <= s.asOf) return
     s.asOf = asOf
     s.at = Date.now()
@@ -318,6 +368,8 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     const refused = refusalAnswer(await spec.refuse?.() ?? null)
     if (refused) return refused
     const { removed } = await spec.purge!()
+    // A kind turned off here keeps no copy: it no longer counts toward the copies' age.
+    roundClock.delete(spec.kind)
     spec.changed()
     spec.log.info(`${spec.label}: purged, the host's choice turned this kind off`, { kind: spec.kind, removed })
     return { ok: true, purged: true, removed }
@@ -336,4 +388,9 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
 /** Tests only. */
 export function _resetFollowerKindsForTesting(): void {
   handlers.clear()
+}
+
+/** Tests only. */
+export function _resetCopyRoundClockForTesting(): void {
+  roundClock.clear()
 }

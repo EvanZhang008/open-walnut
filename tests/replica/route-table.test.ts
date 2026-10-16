@@ -126,3 +126,22 @@ describe('local rows (WP6)', () => {
     expect(classify('GET', '/api/sessions/s1/changes/summary').cls).toBe('leader')
   })
 })
+
+describe('the console\'s own writes away (WP7)', () => {
+  it('a task write and a session write say why they need the Mac; reads of them stay reads; others keep the default', () => {
+    for (const [m, p] of [['POST', '/api/tasks'], ['PATCH', '/api/tasks/t1'], ['DELETE', '/api/tasks/t1'], ['POST', '/api/tasks/t1/complete']]) {
+      expect(classify(m, p)).toMatchObject({ cls: 'leader', away: 'needs-leader', why: 'task_writes_need_mac' })
+    }
+    for (const [m, p] of [['POST', '/api/sessions/s1/interrupt'], ['PATCH', '/api/sessions/s1'], ['POST', '/api/sessions/quick-start']]) {
+      expect(classify(m, p)).toMatchObject({ away: 'needs-leader', why: 'session_writes_need_mac' })
+    }
+    expect(classify('GET', '/api/tasks/t1')).toMatchObject({ away: 'read' })
+    expect(classify('GET', '/api/sessions/s1/history')).toMatchObject({ away: 'read' })
+    expect(classify('POST', '/api/acme/items').why).toBeUndefined()
+    // A session's budget read needs the Mac's usage store: refused with a why, never this replica's own 503.
+    for (const p of ['/api/usage/sessions/s1', '/API/Usage/Sessions/s1']) expect(classify('GET', p), p).toMatchObject({ cls: 'leader', away: 'needs-leader', why: 'usage_needs_mac' })
+    expect(classify('GET', '/api/usage/summary')).toMatchObject({ away: 'read' })
+    // None of them journals: WP10 gives those writes exact rows of their own.
+    expect(ROUTE_TABLE.filter((r) => journals(r.away))).toEqual([])
+  })
+})

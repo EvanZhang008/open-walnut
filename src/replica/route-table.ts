@@ -103,12 +103,21 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'GET', pattern: '/api/file-raw/*', away: 'needs-leader', why: 'files_need_mac' },
   { method: 'GET', pattern: '/api/file-history/*', away: 'needs-leader', why: 'files_need_mac' },
   { method: 'GET', pattern: '/api/local-image/*', away: 'needs-leader', why: 'files_need_mac' },
+  // A session's spend and budget: the Mac's usage store plus the daemon's budget
+  // file under the Mac's data home. Neither is copied, so this replica's own
+  // route could only fail (a 503 with no why, seen in the away console).
+  { method: 'GET', pattern: '/api/usage/sessions/:sid', away: 'needs-leader', why: 'usage_needs_mac' },
   // This server's own health.
   { method: 'GET', pattern: '/api/health', cls: 'local' },
   // The terminal is a /ws RPC; node-pty is not on hosts (section 3).
   // Plugin routes are the leader's by prefix (their credentials stay on the Mac;
   // plugins do not load on a replica, so even their reads need it).
   { method: '*', pattern: '/api/plugins/*', cls: 'leader', away: 'needs-leader', why: 'plugins_need_mac' },
+  // The console's own writes while away (WP7): each says why it needs the Mac, so
+  // the console says it in words ("Needs your Mac. Changing a task ..."). WP10
+  // gives the task and session writes exact rows of their own that journal.
+  { method: W, pattern: '/api/tasks/*', away: 'needs-leader', why: 'task_writes_need_mac' },
+  { method: W, pattern: '/api/sessions/*', away: 'needs-leader', why: 'session_writes_need_mac' },
   // Everything else: writes need the Mac until WP10 gives them a journal.
   { method: W, pattern: '/api/v1/*', away: 'needs-leader' },
   { method: W, pattern: '/api/*', away: 'needs-leader' },

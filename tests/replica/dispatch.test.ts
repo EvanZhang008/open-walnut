@@ -46,6 +46,8 @@ function door(name: string) {
       seen.push({ method: req.method!, url: req.url!, headers: req.headers, body: Buffer.concat(parts).toString() })
       if (req.url?.includes('/hang')) return
       if (req.url?.includes('/drop')) { req.socket.destroy(); return }
+      // The head and the first bytes of a body, then nothing more (a Mac frozen mid-answer).
+      if (req.url?.includes('/half')) { res.writeHead(200, { 'content-type': 'application/json' }); res.write('{"from":"mac","part'); return }
       const slow = /\/slow\/(\d+)/.exec(req.url ?? '')
       const answer = () => {
         res.writeHead(200, { 'content-type': 'application/json' })
@@ -116,6 +118,11 @@ const state = {
   /** WP6: whether a conditional local row is this host's data (null: never asked, a leader row). */
   localHere: null as ((req: IncomingMessage, d: RouteDecision) => boolean | Promise<boolean>) | null,
   localAsked: [] as string[],
+  /** What front.ts would say: the presence seq in force, and why the copies answer. */
+  seq: 1,
+  offlineWhy: 'away' as 'away' | 'suspect',
+  /** The seq a suspect mark moves to (front.ts: a mark changes what is told), or null. */
+  seqOnSuspect: null as number | null,
 }
 
 function reset(): void {
@@ -128,6 +135,7 @@ function reset(): void {
   state.table = null
   state.linked = true; state.opsCap = true; state.opsWhileDown = 0; state.downAfterOps = null
   state.localHere = null; state.localAsked = []
+  state.seq = 1; state.offlineWhy = 'away'; state.seqOnSuspect = null
   mac.seen.length = 0; companion.seen.length = 0
   mac.partials.length = 0
 }
@@ -160,6 +168,8 @@ beforeAll(async () => {
   const deps: DispatchDeps = {
     route: () => state.route,
     asOf: () => AS_OF,
+    offlineWhy: () => state.offlineWhy,
+    presenceHeaders: () => ({ 'x-walnut-presence-seq': String(state.seq), 'x-walnut-presence-boot': 'boot-acme' }),
     connect: async (kind) => {
       state.connects.push(kind)
       if (state.connectDelayMs) await new Promise((r) => setTimeout(r, state.connectDelayMs))
@@ -169,6 +179,7 @@ beforeAll(async () => {
     suspect: (kind) => {
       state.suspects.push(kind)
       if (state.routeAfterFail) state.route = state.routeAfterFail
+      if (state.seqOnSuspect !== null) state.seq = state.seqOnSuspect
     },
     answerAlone: (_req, res, why) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(`<p data-why="${why}">alone</p>`) },
     followerOp: async (params) => {
@@ -333,10 +344,14 @@ describe('a write to the Mac that fails', () => {
 
   it('before its stream opened: provably not sent, so answered away (503 needs_leader for a write that needs the Mac)', async () => {
     state.failConnect.add('leader')
-    const r = await call('POST', '/api/tasks', { body: '{}' })
+    const r = await call('POST', '/api/acme/items', { body: '{}' })
     expect(r.status).toBe(503)
     expect(r.json.error).toMatchObject({ code: 'needs_leader', why: 'unreachable', retryAfter: 5 })
     expect(r.headers['retry-after']).toBe('5')
+    // A write whose row says why (WP7: the console's task writes) says that instead.
+    const task = await call('POST', '/api/tasks', { body: '{}' })
+    expect(task.status).toBe(503)
+    expect(task.json.error).toMatchObject({ code: 'needs_leader', why: 'task_writes_need_mac', retryAfter: 5 })
     expect(mac.seen).toEqual([])
   })
 
@@ -382,6 +397,56 @@ describe('the Mac away', () => {
     const r = await call('POST', '/api/queued/x', { body: '{not json' })
     expect(r.status).toBe(400)
     expect(state.ops).toEqual([])
+  })
+})
+
+describe('what every answer says about presence (front.ts header: the contract with the console)', () => {
+  const SEQ = 'x-walnut-presence-seq'
+  const BOOT = 'x-walnut-presence-boot'
+
+  it('a forwarded answer, a local row\'s answer and a refused caller all carry the seq and the boot; none of them an offline mark', async () => {
+    state.seq = 7
+    const fwd = await call('GET', '/api/tasks')
+    expect(fwd.json).toMatchObject({ from: 'mac' })
+    expect([fwd.headers[SEQ], fwd.headers[BOOT], fwd.headers[OFFLINE_HEADER]]).toEqual(['7', 'boot-acme', undefined])
+    const local = await call('GET', '/api/health')
+    expect(local.json).toMatchObject({ from: 'replica' })
+    expect([local.headers[SEQ], local.headers[BOOT], local.headers[OFFLINE_HEADER]]).toEqual(['7', 'boot-acme', undefined])
+    state.route = { kind: 'alone', why: 'mac-away' }
+    state.table = QUEUE_ROW
+    state.authorized = false
+    const refused = await call('POST', '/api/queued/x', { body: '{}' })
+    expect(refused.status).toBe(401)
+    expect(refused.headers[SEQ]).toBe('7')
+    expect(refused.headers[OFFLINE_HEADER]).toBeUndefined()
+  })
+
+  it('an answer from the copies: x-walnut-offline with the copies\' age and its why, away or suspect', async () => {
+    state.route = { kind: 'alone', why: 'mac-away' }
+    const away = await call('GET', '/api/tasks')
+    expect([away.headers[OFFLINE_HEADER], away.headers['x-walnut-offline-why'], away.headers[SEQ]]).toEqual([String(AS_OF), 'away', '1'])
+    state.offlineWhy = 'suspect'
+    const suspect = await call('GET', '/api/tasks')
+    expect(suspect.headers['x-walnut-offline-why']).toBe('suspect')
+    // A refusal from here says it too (the copies' age, and why the Mac did not take it).
+    const refusal = await call('PATCH', '/api/tasks/t1', { body: '{}' })
+    expect(refusal.status).toBe(503)
+    expect([refusal.headers[OFFLINE_HEADER], refusal.headers['x-walnut-offline-why']]).toEqual([String(AS_OF), 'suspect'])
+    // A caller with no known token learns neither.
+    state.authorized = false
+    const stranger = await call('GET', '/api/tasks')
+    expect([stranger.headers[OFFLINE_HEADER], stranger.headers['x-walnut-offline-why'], stranger.headers[SEQ]]).toEqual([undefined, undefined, '1'])
+  })
+
+  it('a read whose forward failed is answered under the seq the failure made (the mark is a presence change)', async () => {
+    state.failConnect.add('leader')
+    state.routeAfterFail = { kind: 'alone', why: 'unreachable' }
+    // The front's mark changes what is told, and so its seq (suspect() stands in for it here).
+    state.seqOnSuspect = 2
+    state.offlineWhy = 'suspect'
+    const r = await call('GET', '/api/tasks')
+    expect(r.json).toEqual({ from: 'replica', offline: String(AS_OF) })
+    expect([r.headers[SEQ], r.headers['x-walnut-offline-why']]).toEqual(['2', 'suspect'])
   })
 })
 
@@ -576,20 +641,66 @@ describe('WebSockets and presence flips', () => {
     expect((await openWs()).status).toBe(418)
   })
 
-  it('a flip to away answers every in-flight forward to the Mac 504 at once', async () => {
+  it('a flip to away answers an in-flight write 504 at once, and runs an in-flight read again on the copies', async () => {
     const t0 = Date.now()
     const pending = [call('PUT', '/hang/one', { body: '{}' }), call('GET', '/hang/two')]
     await until(() => mac.seen.length === 2)
     expect(dispatcher.counts().inFlight).toBe(2)
     dispatcher.presenceChanged(true) // still answering: nothing moves
     expect(dispatcher.counts().inFlight).toBe(2)
+    // The Mac is away now: a read routed from here on is answered from the copies.
+    state.route = { kind: 'alone', why: 'mac-away' }
     dispatcher.presenceChanged(false)
     const [w, r] = await Promise.all(pending)
     expect(w.status).toBe(504)
-    expect(r.status).toBe(504)
+    expect(w.json.error).toMatchObject({ code: 'primary_timeout', sent: true })
+    // No answer byte had gone out: the read is the copies' answer, marked offline, never a 504.
+    expect(r.status).toBe(200)
+    expect(r.json).toEqual({ from: 'replica', offline: String(AS_OF) })
+    expect(r.headers[OFFLINE_HEADER]).toBe(String(AS_OF))
+    expect(r.headers['x-walnut-answered-via']).toBe('replica')
     expect(Date.now() - t0).toBeLessThan(state.writeBudgetMs)
     expect(dispatcher.counts().inFlight).toBe(0)
     expect(state.logs.find((l) => l.msg.startsWith('replica: the Mac went away'))?.data).toMatchObject({ forwards: 2 })
+  })
+
+  it('a flip while a read\'s stream is still opening: the copies answer it, and it never reaches the Mac', async () => {
+    state.connectDelayMs = 400
+    const pending = call('GET', '/api/tasks')
+    await until(() => dispatcher.counts().inFlight === 1)
+    state.route = { kind: 'alone', why: 'mac-away' }
+    dispatcher.presenceChanged(false)
+    const r = await pending
+    expect(r.status).toBe(200)
+    expect(r.json).toEqual({ from: 'replica', offline: String(AS_OF) })
+    await new Promise((res) => setTimeout(res, 600))
+    expect(mac.seen).toEqual([])
+  })
+
+  it('a flip after the Mac began its answer: the read is cut (its bytes cannot be taken back), never answered twice', async () => {
+    const got = new Promise<{ status: number; text: string; ended: boolean }>((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port: pubPort, method: 'GET', path: '/half/answer', agent: false }, (res) => {
+        let text = ''
+        res.setEncoding('utf8')
+        res.on('data', (c) => { text += c })
+        res.on('error', () => { /* the cut */ })
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, text, ended: true }))
+        res.on('close', () => resolve({ status: res.statusCode ?? 0, text, ended: false }))
+      })
+      req.on('error', () => resolve({ status: -1, text: '', ended: false }))
+      req.end()
+    })
+    await until(() => mac.seen.some((s) => s.url === '/half/answer'))
+    // The door has written its head and the first bytes of the body; the rest never comes.
+    await new Promise((r) => setTimeout(r, 200))
+    state.route = { kind: 'alone', why: 'mac-away' }
+    dispatcher.presenceChanged(false)
+    const r = await got
+    expect(r.status).toBe(200)
+    expect(r.text).toBe('{"from":"mac","part')
+    // Cut, never completed, and never the copies' answer on top of the Mac's bytes.
+    expect(r.ended).toBe(false)
+    expect(r.text).not.toContain('replica')
   })
 
   it('a flip to away closes every socket spliced to the Mac with 4001 leader_away', async () => {

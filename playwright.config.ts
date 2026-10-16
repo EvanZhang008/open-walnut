@@ -12,6 +12,9 @@ engageGate(testPort)
 
 export default defineConfig({
   testDir: 'tests/e2e/browser',
+  // Its own fixture and config (tests/e2e/browser/replica.config.ts); the main
+  // config runs replica-smoke.spec.ts for that path instead.
+  testIgnore: ['**/replica-away-read.spec.ts'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -38,7 +41,8 @@ export default defineConfig({
     },
     // The desktop app is a WKWebView, so a desktop-only scroll/paint bug needs a
     // WebKit run to count as verified. Opt in: PW_WEBKIT=1 … --project webkit
-    ...(process.env.PW_WEBKIT ? [{ name: 'webkit', use: { ...devices['Desktop Safari'] } }] : []),
+    // The replica smoke is one chromium spec (its WebKit runs are replica.config.ts's).
+    ...(process.env.PW_WEBKIT ? [{ name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: ['**/replica-away-read.spec.ts', '**/replica-smoke.spec.ts'] }] : []),
   ],
 
   webServer: {

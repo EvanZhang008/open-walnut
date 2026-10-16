@@ -456,9 +456,31 @@ for (const twin of ['source', 'standalone'] as const) {
     it('while the Mac is away: the terminal needs the Mac, and the notes come from the daemon\'s copy (3,000 notes, 13 MB: tree under 1 s warm)', async () => {
       const server = await import('../../src/web/server.js')
       const front = server.getHostReplicaFront()!
+      // This host's session, read while the Mac answers (WP6's routes, through the daemon) ...
+      const changesHere = front.link.capabilities()?.includes('changes-v1') === true
+      const sessionReads = [`/api/sessions/${SID}/history`, `/api/v1/sessions/${SID}/history`, `/api/v1/sessions/${SID}/transcript`,
+        ...(changesHere ? [`/api/sessions/${SID}/changes?base=uncommitted`, `/api/sessions/${SID}/changes`, `/api/sessions/${SID}/changes/file?path=${encodeURIComponent(editedFile)}`] : [])]
+      const awake = new Map<string, string>()
+      for (const p of sessionReads) {
+        const r = await get(port, p)
+        expect(r.status, `${p}: ${r.text.slice(0, 200)}`).toBe(200)
+        expect(r.json, p).not.toMatchObject({ from: 'mac' })
+        awake.set(p, r.text)
+      }
       mac.silence()
       await waitFor(() => front.route().kind === 'alone', 20_000, 'the replica to call the Mac away')
       expect(front.rpcGate('terminal:open')).toBe('needs_leader: terminal_needs_mac')
+      // ... answers the same while the Mac is away: the same routes, the same JSON, never the stream-file fallback.
+      for (const [p, text] of awake) {
+        const r = await get(port, p)
+        expect(r.status, `${p}: ${r.text.slice(0, 200)}`).toBe(200)
+        // The transcript's export stamp is the time of the answer.
+        const same = (t: string) => { const j = JSON.parse(t); delete j.exportedAt; return j }
+        expect(same(r.text), p).toEqual(same(text))
+      }
+      const history = JSON.parse(awake.get(`/api/sessions/${SID}/history`)!)
+      expect(history.windowed).toBeUndefined()
+      expect((history.messages as Array<{ text: string }>).map((m) => m.text)).toContain('Tagged v2.4.0.')
       // A file with no host (the Mac's) or of another host needs the Mac; never this disk.
       const own = path.join(cwdA, 'src', 'own.txt')
       for (const p of [`/api/file-content?path=${encodeURIComponent(own)}&sessionId=${SID}`, `/api/files/list?path=${encodeURIComponent(cwdA)}`, `/api/file-content?host=other-box&path=${encodeURIComponent(own)}`,

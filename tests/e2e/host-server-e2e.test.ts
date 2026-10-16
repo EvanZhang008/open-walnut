@@ -388,6 +388,12 @@ describe.each(PROGRAMS)('%s, linked to its daemon only', (program) => {
     const devices = [{ id: 'd0a1b2c3d4e5f6', name: 'marina-phone', tokenHash: crypto.createHash('sha256').update(PHONE_TOKEN, 'utf-8').digest('hex') }]
     const put = await macAsks('POST', '/bridge/replica', { op: 'put', kind: 'devices', devices, hash: deviceListHash(devices) })
     expect(put.status).toBe(200)
+    if (program === 'replica') {
+      // One whole tasks round (an empty manifest needs nothing): the copies have an age,
+      // which an away answer's x-walnut-offline carries (their last round, not presence).
+      const round = await macAsks('POST', '/bridge/replica', { op: 'sync', kind: 'tasks', entries: [], asOf: Date.now() })
+      expect(round.status, JSON.stringify(round.json)).toBe(200)
+    }
     // And its report reaches the Mac through the daemon.
     const reported = await waitFor(async () => {
       const r = await mac!.cmd({ cmd: 'server.status', home: HOME })
@@ -411,20 +417,26 @@ describe.each(PROGRAMS)('%s, linked to its daemon only', (program) => {
     for (const s of companionSockets) s.terminate()
     companionBridge.close()
     await waitFor(() => under!.route() === 'alone', 15_000, 'alone')
-    // A page of its own (host-server/alone-page.ts): it names nothing until a device token holds.
     const page = await get('/', { accept: 'text/html' })
-    expect(page.status).toBe(200)
-    expect(page.body).toContain('Walnut on devbox')
-    expect(page.body).toContain('data-why="nobody-answers"')
-    expect(page.body).toContain('Neither your Mac nor your cloud companion is answering')
-    expect(page.headers.get('content-security-policy')).toMatch(/script-src 'nonce-/)
     if (program === 'host-server') {
+      // A page of its own (host-server/alone-page.ts): it names nothing until a device token holds.
+      expect(page.status).toBe(200)
+      expect(page.body).toContain('Walnut on devbox')
+      expect(page.body).toContain('data-why="nobody-answers"')
+      expect(page.body).toContain('Neither your Mac nor your cloud companion is answering')
+      expect(page.headers.get('content-security-policy')).toMatch(/script-src 'nonce-/)
       const api = await get('/api/tasks')
       expect(api.status).toBe(503)
       expect(JSON.parse(api.body).error.code).toBe('leader_away')
       expect(await wsEcho(`ws://127.0.0.1:${publicPort}/ws`, 'x')).toBe('status 503')
       return
     }
+    // The replica has no alone page (WP7): a page is the console, from the
+    // replica's own app (this test runs it with dev: true, which serves no SPA,
+    // so the app answers its own 404), never the host server's page.
+    expect(page.body).not.toContain('data-why=')
+    expect(page.body).not.toContain('Neither your Mac nor your cloud companion is answering')
+    expect(page.headers.get('x-walnut-answered-via')).toBe('replica')
     // The replica answers a read itself, on its copies, and says how fresh they are.
     const api = await get('/api/tasks', { authorization: `Bearer ${PHONE_TOKEN}` })
     expect(api.status).toBe(200)

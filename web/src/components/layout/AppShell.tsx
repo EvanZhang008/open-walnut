@@ -23,6 +23,7 @@ import { useVisualViewportInset } from '@/hooks/useVisualViewportInset';
 import { usePhoneResync } from '@/hooks/usePhoneResync';
 import { installStandaloneLinks } from '@/utils/standalone-links';
 import { PhoneTopBar } from './PhoneTopBar';
+import { AwayLine } from './AwayLine';
 import '@/styles/phone-layout.css';
 import '@/styles/phone-fixes.css';
 import '@/styles/phone-fixes-r2.css';
@@ -282,6 +283,8 @@ function AppShellInner({ children }: AppShellProps) {
         />
       )}
       <main className="main-content" inert={sidebarOpen && isMobileSidebar}>
+        {/* A host replica's console while the Mac is away (nothing otherwise). */}
+        <AwayLine />
         <div
           ref={contentRef}
           className="app-content-area"

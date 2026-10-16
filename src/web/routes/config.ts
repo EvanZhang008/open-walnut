@@ -128,7 +128,11 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // carries: push device tokens and secret-shaped values in the free-form maps
     // masked in every mode, every secret on a replica, since any paired device can
     // read this route there.
-    res.json({ config: configForClients(shown), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo() })
+    // A host replica (WP7): the Mac's name for this host, the `host` of the sessions
+    // that run here, so the console tells a session here from one on the Mac. Absent
+    // everywhere else (the Mac, the companion): their answer is unchanged.
+    const replicaHostKey = role() === 'replica' && placement() === 'host' ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
+    res.json({ config: configForClients(shown), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
   } catch (err) {
     next(err)
   }

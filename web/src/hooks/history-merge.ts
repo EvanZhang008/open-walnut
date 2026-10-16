@@ -147,6 +147,17 @@ export function prependOlderPage<T extends RowIdentity>(held: readonly T[], page
 }
 
 /**
+ * How many messages the source holds, from a payload's own numbers: its `cursor`
+ * (the count the next delta extends) when it has one, else its `total`. Phase 1
+ * (the streams read) carries only `total` on the Mac, where nothing changes; a
+ * host replica's copy answers both reads with its own `cursor`, so the older-
+ * messages hint counts what the copy can serve, not rows only the Mac can page.
+ */
+export function sourceCountOf(result: { cursor?: number; total?: number }): number | undefined {
+  return result.cursor ?? result.total;
+}
+
+/**
  * Fold a FULL payload into the array the client will hold. A non-windowed payload
  * is the whole answer. A windowed one is only the server's tail, so the older
  * pages already loaded stay above it, and the cursor (a count of the array the

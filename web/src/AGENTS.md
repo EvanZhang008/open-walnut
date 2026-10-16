@@ -298,6 +298,18 @@ show inline after the open ones, other completed hits that show the query fold i
   `tests/web/project-registry-recovery.test.ts`, `tests/e2e/browser/folder-registry-recovery.spec.ts`
   (+ the `.webkit` twin: kills the first registry GETs at the network layer and requires the
   name to arrive with no reload).
+- **The away console reads ONE presence state** (`api/leader-presence.ts`, a host replica's
+  console while the Mac is away). Every signal (the `replica:presence` event, the
+  `x-walnut-offline` / `x-walnut-answered-via` headers, the 4001/4002 closes) goes through its
+  state machine, which drops a signal stamped with an older `x-walnut-presence-seq` than the last
+  one applied (a new `x-walnut-presence-boot` starts the count again) and never sets away from an
+  `x-walnut-offline-why: suspect` answer. Never read those headers anywhere else. A presence flip
+  never unmounts a composer: a Mac session keeps its `ChatInput` with `sendBlocked` (send controls
+  hidden, the box, its text, images and focus kept) under the "Your Mac is away" notice, so typed
+  text survives the flip. A console with no replica headers renders exactly as before. Every
+  `needs_leader` why has words in `NEEDS_LEADER_REASONS` (ratchet:
+  `tests/replica/needs-leader-reasons-ratchet.test.ts`). Tests: `tests/web/leader-presence*.test.ts`,
+  `tests/web/chat-input-away-draft.test.ts`.
 - Use the structured logger `import { log } from '@/utils/log'` — never raw `console.log`;
   never `console.debug` (invisible to the disk forwarder). IDs full, never truncated.
 - **`<suggest>` action cards render in BOTH lanes through one module**

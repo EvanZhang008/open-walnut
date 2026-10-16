@@ -2,13 +2,16 @@
  * The top of task detail on a phone: the title as a 16 px field (renaming lives
  * here since a title tap on the home row always opens; C59) and the phase
  * choice (PhonePhaseSheet, C58). A save shows `Saving...`, then `Saved`; a
- * failure puts the old title back and says `Couldn't save. Try again.`.
+ * failure puts the old title back and says `Couldn't save. Try again.`, or, on a
+ * host replica's console with the Mac away, the refusal's own words ("Needs your
+ * Mac. ..."). A phase change that fails says the same.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { updateTask as apiUpdateTask } from '@/api/tasks';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
+import { isLeaderWords } from '@/api/leader-presence';
 import { PhonePhaseSheet } from './PhonePhaseSheet';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'failed';
@@ -21,10 +24,17 @@ const SAVE_TEXT: Record<Exclude<SaveState, 'idle'>, string> = {
 
 const SAVED_SHOW_MS = 1500;
 
+/** What a failed save says: the replica's plain words about the Mac as they are, else the generic line. */
+export function saveFailedText(err: unknown): string {
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  return isLeaderWords(message) ? message : SAVE_TEXT.failed;
+}
+
 export function PhoneTaskDetailHead({ task }: { task: Task }) {
   const store = useTasksContextSafe();
   const [draft, setDraft] = useState(task.title);
   const [save, setSave] = useState<SaveState>('idle');
+  const [failedText, setFailedText] = useState<string>(SAVE_TEXT.failed);
   const editingRef = useRef(false);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -47,6 +57,7 @@ export function PhoneTaskDetailHead({ task }: { task: Task }) {
     } catch (err) {
       log.warn('phone-task-detail', 'title save failed', { taskId: task.id, error: String(err) });
       setDraft(task.title);
+      setFailedText(saveFailedText(err));
       setSave('failed');
     }
   }, [draft, store, task.id, task.title]);
@@ -55,6 +66,8 @@ export function PhoneTaskDetailHead({ task }: { task: Task }) {
     if (store?.tasks.some((t) => t.id === task.id)) { store.setPhase(task.id, phase); return; }
     void apiUpdateTask(task.id, { phase }).catch((err) => {
       log.warn('phone-task-detail', 'phase save failed', { taskId: task.id, error: String(err) });
+      setFailedText(saveFailedText(err));
+      setSave('failed');
     });
   }, [store, task.id]);
 
@@ -76,7 +89,7 @@ export function PhoneTaskDetailHead({ task }: { task: Task }) {
         }}
       />
       {save !== 'idle' && (
-        <p className={`phone-detail-save is-${save}`} role={save === 'failed' ? 'alert' : 'status'}>{SAVE_TEXT[save]}</p>
+        <p className={`phone-detail-save is-${save}`} role={save === 'failed' ? 'alert' : 'status'}>{save === 'failed' ? failedText : SAVE_TEXT[save]}</p>
       )}
       <PhonePhaseSheet task={task} onSetPhase={setPhase} />
     </div>

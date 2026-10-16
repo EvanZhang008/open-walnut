@@ -82,6 +82,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { useSelectionScrollGuard, useSelectionFrozenWith, useSelectionAnchoredScroll } from '@/utils/selection-guard';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
+import { historyErrorText, olderUnavailableText } from './history-notice-text';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 
 /**
@@ -528,7 +529,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, stale, loadingFrom, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  const { messages, loading, phase2Pending, error, stale, loadingFrom, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
   // Where each gap inside the loaded rows sits: the index of the row after it.
   const gapAt = useMemo(() => {
     const at = new Map<number, HistoryGap>();
@@ -3677,7 +3678,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             </div>
           ) : (
             <div className="session-history-empty">
-              <p className="text-muted">{`Failed to load history: ${error}`}</p>
+              {/* A host replica's "Needs your Mac. ..." is already the words (history-notice-text.ts). */}
+              <p className="text-muted">{historyErrorText(error)}</p>
             </div>
           )
         )}
@@ -3772,7 +3774,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             rewound transcript): say so rather than leave a button that does nothing. */}
         {!onQuestionPage && hiddenOnPage === 0 && olderUnavailable && (
           <div className="session-earlier-unavailable" data-testid="session-earlier-unavailable">
-            Earlier messages of this session are too large to load here.
+            {olderUnavailableText(olderUnavailableWhy)}
           </div>
         )}
         {/* ── Stack page: the passage it exists for, then its own turns ──
