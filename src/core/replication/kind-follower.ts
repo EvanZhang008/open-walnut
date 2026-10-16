@@ -16,6 +16,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { writeJsonFile } from '../../utils/fs.js'
+import { DigestMap } from './search-digest.js'
 import {
   OPS, REFUSAL_ERROR, confirmMatches, entriesOf, removesMost, sameOrder, sha12, stepSchemaVersion, type ReplicaOp, type ReplicaStepResult,
 } from './kind.js'
@@ -72,7 +73,7 @@ export function serialChain(): <T>(fn: () => Promise<T>) => Promise<T> {
 
 /** What a row-set kind keeps about the leader's rows (persisted by the kind). */
 export interface RowSetState {
-  /** The leader's clock when it built the last manifest. */
+  /** The leader's clock when it built the last manifest (or a delta or status this side matched). */
   asOf: number
   /** This box's clock when that manifest arrived. */
   at: number
@@ -109,9 +110,27 @@ export interface RowSetSpec<Row> {
   apply(change: { rows?: readonly Row[]; removeIds?: readonly string[]; order?: readonly string[] }): Promise<{ skipped: readonly string[] }>
   held(): Promise<HeldSource>
   changed(): void
+  /**
+   * The row's hash as the leader worked it out (default sha256-12 of the row).
+   * A kind whose hash leaves volatile fields out (sessions) gives the same
+   * function on both sides, or every manifest would ask for every row again.
+   */
+  hash?(row: Row): string
+  /**
+   * A digest kind (WP4): answers `status {digest}` with its own digest (count
+   * plus 48-bit sum over each stored row's key and hash, search-digest.ts), and
+   * a put that names `digest` answers this side's digest after it stored.
+   */
+  digest?: boolean
+  /**
+   * The host's choice turned this kind off (WP4, replication/kinds/gate.ts):
+   * remove the kind's store and its copy state, leave the off marker. A kind
+   * without one answers `purge` with `400 unknown_op`.
+   */
+  purge?(): Promise<{ removed: number }>
 }
 
-export type Refusal = string | { status: 400 | 409; error: string } | null
+export type Refusal = string | { status: 400 | 404 | 409; error: string } | null
 
 /** A refusal as a step's answer (null: go on). */
 export function refusalAnswer(r: Refusal): ReplicaStepResult | null {
@@ -122,6 +141,19 @@ export function refusalAnswer(r: Refusal): ReplicaStepResult | null {
 export interface RowSetFollower extends FollowerKindHandler {
   sync(body: Record<string, unknown>): Promise<ReplicaStepResult>
   put(body: Record<string, unknown>): Promise<ReplicaStepResult>
+}
+
+/**
+ * The digest of what this side stores: every local row with the hash the
+ * leader sent for it (a row with none counts as an empty hash, so it never
+ * matches). Equal digests on both sides mean the same keys at the same hashes.
+ */
+export function rowSetDigest(localKeys: readonly string[], hashes: Readonly<Record<string, string>>, ordered = false): string {
+  const map = new DigestMap()
+  let i = 0
+  for (const k of localKeys) map.set(i++, k, hashes[k] ?? '')
+  // An ordered kind's digest names its order too: a move alone changes no row's hash.
+  return ordered ? `${map.digest}.${sha12(localKeys.join('\n'))}` : map.digest
 }
 
 /**
@@ -210,14 +242,56 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
       for (const r of rows) {
         const k = spec.key(r)
         if (refusedRows.has(k)) continue // not stored: asked for again next round
-        s.hashes[k] = sha12(JSON.stringify(r))
+        s.hashes[k] = hashRow(r)
         stored++
       }
       await spec.save()
       spec.changed()
     }
     // A refused row counts as held: the leader sends the manifest again.
-    return { ok: true, stored, held: sentRows.length - stored }
+    const answer: ReplicaStepResult = { ok: true, stored, held: sentRows.length - stored }
+    // A put sent without a manifest (the leader's delta) asks whether this side now matches.
+    if (spec.digest && typeof body.digest === 'string') {
+      answer.digest = rowSetDigest(await spec.localKeys(), s.hashes, spec.ordered)
+      if (answer.digest === body.digest) await heardAsOf(s, body.asOf)
+    }
+    return answer
+  })
+
+  const hashRow = (r: Row): string => (spec.hash ? spec.hash(r) : sha12(JSON.stringify(r)))
+
+  /**
+   * A delta's last put or a status step whose digest matched: this side holds
+   * the leader's rows as of the leader's `asOf`, as after a manifest (the hold
+   * after ack of WP10 reads it). Never moves back.
+   */
+  const heardAsOf = async (s: RowSetState, raw: unknown): Promise<void> => {
+    const asOf = Number(raw)
+    if (!Number.isFinite(asOf) || asOf <= s.asOf) return
+    s.asOf = asOf
+    s.at = Date.now()
+    await spec.save()
+  }
+
+  /** Digest kinds: this side's digest, so an equal round ends without a manifest. */
+  const status = (body: Record<string, unknown>): Promise<ReplicaStepResult> => spec.serial(async () => {
+    const refused = refusalAnswer(await spec.refuse?.() ?? null)
+    if (refused) return refused
+    const s = await spec.load()
+    const digest = rowSetDigest(await spec.localKeys(), s.hashes, spec.ordered)
+    const inSync = typeof body.digest === 'string' && body.digest === digest
+    if (inSync) await heardAsOf(s, body.asOf)
+    return { ok: true, digest, inSync }
+  })
+
+  /** The kind turned off by the host's choice: no half rule, the user asked for it on the Mac. */
+  const purge = (): Promise<ReplicaStepResult> => spec.serial(async () => {
+    const refused = refusalAnswer(await spec.refuse?.() ?? null)
+    if (refused) return refused
+    const { removed } = await spec.purge!()
+    spec.changed()
+    spec.log.info(`${spec.label}: purged, the host's choice turned this kind off`, { kind: spec.kind, removed })
+    return { ok: true, purged: true, removed }
   })
 
   return {
@@ -225,7 +299,8 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     schemaVersion: spec.schemaVersion,
     sync,
     put,
-    step: (op, body) => (op === 'sync' ? sync(body) : op === 'put' ? put(body) : { ok: false, status: 400, error: 'unknown_op' }),
+    step: (op, body) => (op === 'sync' ? sync(body) : op === 'put' ? put(body) : op === 'status' && spec.digest ? status(body)
+      : op === 'purge' && spec.purge ? purge() : { ok: false, status: 400, error: 'unknown_op' }),
   }
 }
 

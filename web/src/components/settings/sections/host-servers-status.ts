@@ -23,10 +23,26 @@ export interface HostServerView {
   } | null;
 }
 
+export interface HostCopyChoice { sessions: boolean; requests: boolean; boards: boolean; inbox: boolean; inbox_bodies: boolean }
+
+/** The copy choices in the order Settings lists them, each with its label. */
+export const HOST_COPY_ROWS: ReadonlyArray<{ key: keyof HostCopyChoice; label: string }> = [
+  { key: 'sessions', label: 'Sessions' },
+  { key: 'requests', label: 'Reply requests' },
+  { key: 'boards', label: 'Boards' },
+  { key: 'inbox', label: 'Inbox' },
+  { key: 'inbox_bodies', label: 'Letter bodies' },
+];
+
 export interface HostServerEntry {
   hostKey: string;
   label: string;
-  settings: { enabled: boolean; expose: { enabled: boolean; provider: string | null; options: Record<string, string> }; node?: string };
+  settings: {
+    enabled: boolean; expose: { enabled: boolean; provider: string | null; options: Record<string, string> }; node?: string;
+    /** What the Mac copies to the host's replica (WP4), defaults filled in by the server. */
+    copies?: HostCopyChoice;
+    program?: 'replica' | 'host-server';
+  };
   view: HostServerView | null;
 }
 

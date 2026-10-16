@@ -20,6 +20,7 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
+import { isHostReplica } from './server-role.js';
 import type { SessionRecord } from './types.js';
 
 /** SQLite file path. Sits next to the legacy sessions.json in WALNUT_HOME. */
@@ -181,14 +182,21 @@ export function getDb(): DatabaseType | null {
     handle.pragma('foreign_keys = ON');
 
     handle.exec(SCHEMA_SQL);
-    ensureSessionStatusColumns(handle);
+    // A host replica's file is the Mac's rows, kept by the follower apply
+    // connection (sessions kind, replication/kinds/sessions.ts): its own data
+    // fixes and WAL truncation would change the copy behind its hashes, so it
+    // adds missing columns only (task-db.ts does the same).
+    const copy = isHostReplica();
+    ensureSessionStatusColumns(handle, undefined, { backfill: !copy });
 
     // Truncate the WAL on open (see task-db.ts:128 — same rationale).
     let checkpoint: unknown = null;
-    try {
-      checkpoint = handle.pragma('wal_checkpoint(TRUNCATE)');
-    } catch (err) {
-      log.session.warn('session-db: WAL checkpoint on open failed', { err: String(err) });
+    if (!copy) {
+      try {
+        checkpoint = handle.pragma('wal_checkpoint(TRUNCATE)');
+      } catch (err) {
+        log.session.warn('session-db: WAL checkpoint on open failed', { err: String(err) });
+      }
     }
 
     // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
@@ -210,11 +218,50 @@ export function openCopyApplyConnection(): DatabaseType {
   return openApplyConnection(SESSION_DB_PATH, 'sessions');
 }
 
+let applyHandle: DatabaseType | null = null;
+
+/** The ids this store holds (the sessions copy's local keys). */
+export function sessionIdsInStore(): string[] {
+  const handle = getDb();
+  if (!handle) return [];
+  return handle.prepare('SELECT claude_session_id FROM sessions').pluck().all() as string[];
+}
+
+/**
+ * The sessions copy's one write (replication/kinds/sessions.ts): rows in as
+ * they came (INSERT OR REPLACE, every column), removed ids out, one
+ * transaction. On a host replica it runs on the follower apply connection, the
+ * only handle that may write the copy; session-tracker's read cache sees the
+ * commit through `PRAGMA data_version`. Off a host replica (tests) it uses the
+ * shared handle.
+ */
+export function applySessionCopy(change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[] }): void {
+  const shared = getDb();
+  if (!shared) throw new Error('session-db: applySessionCopy() called before database was successfully opened');
+  const handle = isHostReplica() ? (applyHandle ??= openCopyApplyConnection()) : shared;
+  const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload'];
+  const ins = handle.prepare(`INSERT OR REPLACE INTO sessions (${cols.join(', ')}) VALUES (${cols.map((c) => '@' + c).join(', ')})`);
+  const del = handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?');
+  handle.transaction(() => {
+    for (const id of change.removeIds ?? []) del.run(id);
+    for (const r of change.rows ?? []) {
+      const row = sessionToRow(r);
+      const bound: Record<string, unknown> = {};
+      for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
+      ins.run(bound);
+    }
+  })();
+}
+
 /**
  * Close the handle. Safe to call when already closed or never opened.
  * Intended for test teardown and graceful shutdown.
  */
 export function closeDb(): void {
+  if (applyHandle) {
+    try { applyHandle.close(); } catch (err) { log.session.warn('session-db apply connection close error', { err: String(err) }); }
+    applyHandle = null;
+  }
   if (db) {
     try { db.close(); } catch (err) { log.session.warn('session-db close error', { err: String(err) }); }
     db = null;
@@ -245,6 +292,7 @@ export function transaction<T>(fn: (db: DatabaseType) => T): T {
 export function ensureSessionStatusColumns(
   handle: DatabaseType,
   now = new Date().toISOString(),
+  opts: { backfill?: boolean } = {},
 ): void {
   const columns = handle.pragma('table_info(sessions)') as Array<{ name: string }>;
   const names = new Set(columns.map((column) => column.name));
@@ -257,6 +305,7 @@ export function ensureSessionStatusColumns(
     if (!names.has('status_updated_at')) {
       handle.exec('ALTER TABLE sessions ADD COLUMN status_updated_at TEXT');
     }
+    if (opts.backfill === false) return;
     handle.prepare(`
       UPDATE sessions
       SET status_revision = 1

@@ -22,6 +22,8 @@ let port: number
 
 const SESSION = { 'content-type': 'application/json', 'x-walnut-caller-sid': 'sess-1' }
 const PERSON = { 'content-type': 'application/json' }
+// The copies choice the route reports with defaults filled in (no `copies` in the config yet).
+const DEFAULT_COPIES = { sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false }
 
 function api(pathname: string, init?: RequestInit) {
   return fetch(`http://localhost:${port}${pathname}`, init)
@@ -48,7 +50,7 @@ describe('a host\'s Walnut, as a setting', () => {
     const body = await res.json() as { hosts: Array<Record<string, any>>; providers: unknown[] }
     expect(body.hosts).toEqual([expect.objectContaining({
       hostKey: 'devbox', label: 'Dev box',
-      settings: { enabled: false, expose: { enabled: false, provider: null, options: {} } },
+      settings: { enabled: false, expose: { enabled: false, provider: null, options: {} }, copies: DEFAULT_COPIES },
     })])
     expect(Array.isArray(body.providers)).toBe(true)
   })
@@ -73,7 +75,7 @@ describe('a host\'s Walnut, as a setting', () => {
     })
     expect(res.status).toBe(200)
     const { host } = await res.json() as { host: Record<string, any> }
-    expect(host.settings).toEqual({ enabled: true, expose: { enabled: true, provider: 'mytunnel', options: { name: 'devbox' } } })
+    expect(host.settings).toEqual({ enabled: true, expose: { enabled: true, provider: 'mytunnel', options: { name: 'devbox' } }, copies: DEFAULT_COPIES })
     expect((await getConfig()).hosts?.devbox?.server).toEqual({ enabled: true, expose: { enabled: true, provider: 'mytunnel', options: { name: 'devbox' } } })
     // Settings (and the Remote Hosts card) re-read the config on this.
     bus.unsubscribe('test-host-servers-config')
@@ -107,6 +109,20 @@ describe('a host\'s Walnut, as a setting', () => {
     expect((await put({ expose: { provider: 'Not An Id' } })).status).toBe(400)
     expect((await put({ expose: { options: { name: 'x'.repeat(201) } } })).status).toBe(400)
     expect((await api('/api/host-servers/nohost', { method: 'PUT', headers: PERSON, body: '{}' })).status).toBe(404)
+  })
+
+  it('saves the copied kinds; the inbox turned off turns its letter bodies off too', async () => {
+    const put = (body: unknown) => api('/api/host-servers/devbox', { method: 'PUT', headers: PERSON, body: JSON.stringify(body) })
+    expect((await put({ copies: { inbox_bodies: 'yes' } })).status).toBe(400)
+    expect((await put({ copies: { letters: true } })).status).toBe(400)
+    expect((await put({ copies: { inbox_bodies: true } })).status).toBe(200)
+    expect((await getConfig()).hosts?.devbox?.server).toMatchObject({ copies: { inbox_bodies: true } })
+    const off = await put({ copies: { inbox: false } })
+    expect(((await off.json()) as { host: { settings: { copies: unknown } } }).host.settings.copies).toEqual({ ...DEFAULT_COPIES, inbox: false, inbox_bodies: false })
+    expect(((await getConfig()).hosts?.devbox?.server as { copies?: unknown })?.copies).toEqual({ inbox_bodies: false, inbox: false })
+    // On again: the bodies stay off until chosen again.
+    const on = await put({ copies: { inbox: true } })
+    expect(((await on.json()) as { host: { settings: { copies: unknown } } }).host.settings.copies).toEqual(DEFAULT_COPIES)
   })
 
   it('turning it off writes it off', async () => {

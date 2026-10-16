@@ -25,6 +25,17 @@ export interface ReplicaTarget {
   post(payload: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<CloudReplicaReply>
   /** Set up and reachable enough to build a manifest for. */
   available(): Promise<boolean>
+  /**
+   * A host's choice of copied kinds (hosts.<key>.server.copies, its Settings
+   * row; kinds/copy-kind.ts copyChoiceFrom fills the defaults). None: the defaults.
+   */
+  copies?(): Promise<unknown>
+  /**
+   * A host's program (core/host-server/manager.ts view): 'replica' only where
+   * the host opted in and its daemon runs `web --replica`; 'host-server' and the
+   * daemon's 'fallback' keep no copies (kinds/copy-kind.ts sends them none).
+   */
+  program?(): string | undefined
 }
 
 const COMPANION: ReplicaTarget = {

@@ -75,6 +75,7 @@ import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingPlainText } from '../core/sessions/launch-naming.js'
 import { noteSessionProgress } from '../core/sessions/session-progress.js'
 import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
+import { processActionsRefused, refuseProcessAction } from '../core/sessions/replica-process-guard.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { compactOpenItemsHooks } from './compact-open-items-hook.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
@@ -6728,7 +6729,8 @@ export class ClaudeCodeSession {
         if (this._transport?.isRemote) {
           // Remote: process.kill can't reach remote PID. Trust hasPipe instead.
           processStillAlive = this._transport.hasPipe
-        } else if (this.pid !== null) {
+        } else if (this.pid !== null && !processActionsRefused()) {
+          // (A host replica runs no session of its own: it never probes a pid.)
           try { process.kill(this.pid, 0); processStillAlive = true } catch { /* dead */ }
         }
         if (this._transport?.hasPipe && processStillAlive) {
@@ -11132,6 +11134,8 @@ export class SessionRunner {
       }
     }
     if (record.pid == null) return false
+    // A host replica's rows are copies of the Mac's: no pid in one is probed here.
+    if (refuseProcessAction('pid_probe', record.claudeSessionId)) return false
     try {
       process.kill(record.pid, 0)
       return true

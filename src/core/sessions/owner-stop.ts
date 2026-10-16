@@ -45,6 +45,7 @@ import { log } from '../../logging/index.js'
 import type { SessionRecord } from '../types.js'
 import { engineCaps } from '../agents/engine-registry.js'
 import { stopProvenance, type StopInitiator } from './stop-provenance.js'
+import { refuseProcessAction } from './replica-process-guard.js'
 
 /** Daemon capability that answers orphan stops with an ownership proof. */
 export const ORPHAN_STOP_CAPABILITY = 'orphan-stop-v1'
@@ -135,6 +136,8 @@ export async function stopThroughOwner(
   deps: Partial<OwnerStopDeps> = {},
   initiator: StopInitiator = 'automatic',
 ): Promise<OwnerStopOutcome> {
+  // A host replica's rows are copies of the Mac's: it never asks a daemon to stop one.
+  if (refuseProcessAction(`owner_stop:${why}`, row.claudeSessionId)) return 'refused'
   const sessionId = row.claudeSessionId
   const host = ownerHostKey(row)
   let conn: OwnerConnection | null = null
@@ -180,6 +183,7 @@ export async function stopAcpThroughOwner(
   deps: Partial<OwnerStopDeps> = {},
   opts: { ephemeral?: boolean } = {},
 ): Promise<OwnerStopOutcome> {
+  if (refuseProcessAction(`owner_acp_stop:${why}`, row.claudeSessionId)) return 'refused'
   const sessionId = row.claudeSessionId
   const host = ownerHostKey(row)
   const runtimeId = row.acpRuntimeId
@@ -281,6 +285,7 @@ export function sweepOrphansThroughOwner(
   source: string,
   deps: Partial<OrphanSweepDeps> = {},
 ): Promise<OrphanOutcome[]> {
+  if (refuseProcessAction(`orphan_sweep:${source}`)) return Promise.resolve([])
   if (sweepInFlight) return sweepInFlight
   const run = runSweep(rows, source, { ...defaultOrphanDeps, ...deps }).finally(() => { sweepInFlight = null })
   sweepInFlight = run

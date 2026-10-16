@@ -1177,6 +1177,15 @@ export interface Config {
         provider?: string;
         options?: Record<string, string>;
       };
+      /** What the Mac copies to this host's replica (docs/plan/walnut-replica-servers-impl.md, WP4).
+       *  Unset keys keep the default: every kind on, inbox bodies off (fetched while the Mac answers). */
+      copies?: {
+        sessions?: boolean;
+        requests?: boolean;
+        boards?: boolean;
+        inbox?: boolean;
+        inbox_bodies?: boolean;
+      };
     };
     /** Which program that server is: 'replica' runs the full Walnut server as this
      *  host's replica (docs/plan/walnut-replica-servers-impl.md) where the host's

@@ -129,6 +129,10 @@ export const SLOW_TEST_FILES = [
   'tests/replica/leader-door.test.ts',
   'tests/replica/env-scrub.test.ts',
   'tests/replica/route-table-coverage.test.ts', // ~7s: boots the real startServer as a host replica to walk its routes
+  // The WP4 copies: 5,000 session rows through the real follower route into a real SQLite copy.
+  'tests/core/replication/sessions-scale.test.ts',
+  // A real `sleep` child whose pid the copied rows name (it must survive every process path).
+  'tests/core/sessions/replica-process-guard.test.ts',
 ] as const
 
 /**

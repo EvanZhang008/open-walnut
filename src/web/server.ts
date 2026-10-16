@@ -2089,7 +2089,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // checks while it answers alone; core/replication/device-replica.ts).
     const { startDeviceReplicaSync } = await import('../core/replication/device-replica.js')
     const deviceReplica = startDeviceReplicaSync()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop() } }
+    // Each host replica's copies of the sessions, requests, boards and inbox (core/replication/kinds/).
+    const copies = (await import('../core/replication/kinds/index.js')).startCopyKinds()
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop() } }
     log.leader.info('leader loops: started (heartbeat, copies to the followers)')
   }
   // A follower (the cloud companion, a server on a host) keeps the leader's

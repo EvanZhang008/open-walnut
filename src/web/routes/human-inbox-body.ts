@@ -29,6 +29,7 @@ import type { Request, Response } from 'express'
 import { createReadStream } from 'node:fs'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import { isHostReplicaProgram } from '../../core/server-role.js'
 import { HUMAN_INBOX_CHUNK_BYTES } from '../../core/human-inbox/types.js'
 import type { LetterBodyStat } from '../../core/human-inbox/store.js'
 import { callPrimaryControl, sendV1Error as sendError } from './v1-control-relay.js'
@@ -368,6 +369,25 @@ async function serveFramed(res: Response, id: string, turn: number | undefined):
   res.end()
 }
 
+/**
+ * A host replica holds the letter index but not this body (letter bodies are
+ * copied only when the host chose them, and never over the copy cap:
+ * core/replication/kinds/inbox.ts): the body needs the Mac. Answers the same
+ * 503 the dispatcher gives a write while away (replica/dispatch.ts). False when
+ * the inbox is copied here and the letter is not in its index (the 404 below says so).
+ */
+async function bodyNotCopied(res: Response, id: string): Promise<boolean> {
+  const { readLetterIndexForReplica } = await import('../../core/human-inbox/store.js')
+  // The host's choice turned the inbox off: its index is gone, so any letter needs the Mac.
+  const { copyKindOff } = await import('../../core/replication/kinds/gate.js')
+  if (!(await copyKindOff('inbox')) && !(await readLetterIndexForReplica()).some((l) => l.id === id)) return false
+  log.notif.info('human-inbox: letter body not kept on this host replica, it needs the Mac', { letterId: id })
+  res.status(503).set('retry-after', '5').json({
+    error: { code: 'needs_leader', why: 'kind_not_copied', retryAfter: 5, message: 'This needs your Mac, which is not answering right now.' },
+  })
+  return true
+}
+
 /** Write `carry`, then pull+write the rest of the file in bounded slices. */
 async function streamRest(
   res: Response,
@@ -401,6 +421,8 @@ async function streamRest(
  */
 export async function serveLetterBody(req: Request, res: Response, id: string): Promise<void> {
   const turn = parseTurn(req.query.turn)
+  // A host replica answers here only while the Mac is away (it forwards otherwise).
+  if (isHostReplicaProgram() && (await localBodyIfComplete(id, turn)) === null && (await bodyNotCopied(res, id))) return
   if (req.query.frame === '1') {
     await serveFramed(res, id, turn)
     return

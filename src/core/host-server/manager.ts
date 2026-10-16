@@ -64,6 +64,12 @@ export interface HostServerSettings {
   expose: { enabled: boolean; provider: string | null; options: Record<string, string> }
   /** The host's opt-in (`hosts.<key>.server_program`): 'replica' runs `web --replica` where the daemon can. */
   program?: 'replica' | 'host-server'
+  /**
+   * Which kinds the Mac copies to this host's replica (`hosts.<key>.server.copies`,
+   * the host's Settings row): sessions, requests, boards, inbox, inbox bodies.
+   * Unset: replication/kinds/copy-kind.ts DEFAULT_COPY_CHOICE (inbox bodies off).
+   */
+  copies?: Record<string, boolean>
 }
 
 export type HostServerPhase =
@@ -111,7 +117,12 @@ export interface ManagerDeps {
   stateFile: string
   now(): number
   /** Copies for the follower (core/replication/replica-targets.ts). */
-  registerTarget?(hostKey: string, post: (body: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<Response>): () => void
+  registerTarget?(
+    hostKey: string,
+    post: (body: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<Response>,
+    /** The host's choice of copied kinds, read at each round (its Settings row). */
+    copies?: () => Promise<Record<string, boolean> | undefined>,
+  ): () => void
   /** A view changed (the settings page listens). */
   changed?(view: HostServerView): void
   /** The host's server answers again (its phase became 'running') with a copy target registered: the copies go now. */
@@ -398,7 +409,7 @@ export function createHostServerManager(deps: ManagerDeps) {
           if (!h?.connected) throw new Error('the host is not connected')
           const stream = await h.openStream('follower', 'replica')
           return requestOver(stream, 'POST', '/bridge/replica', Buffer.from(JSON.stringify(body)), opts?.timeoutMs ?? 60_000)
-        })
+        }, async () => (await deps.settingsOf(hostKey))?.copies)
       }
       // Up once it reports through its daemon.
       const until = deps.now() + (deps.firstReportMs ?? FIRST_REPORT_MS)

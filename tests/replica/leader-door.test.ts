@@ -33,10 +33,16 @@ const KINDS: Array<Record<string, unknown>> = [
   { op: 'put', kind: 'tasks', rows: [{ id: 't-acme-1', title: 'acme', phase: 'TODO' }] },
   { op: 'put', kind: 'registry', registry: { projects: {}, task_groups: {}, custom_tiers: [] } },
   { op: 'put', kind: 'sessions', rows: [] },
+  { op: 'status', kind: 'sessions', digest: '0.0' },
+  { op: 'sync', kind: 'requests', entries: [], asOf: 1 },
+  { op: 'sync', kind: 'boards', entries: [], asOf: 1 },
+  { op: 'status', kind: 'inbox', digest: '0.0' },
+  { op: 'put', kind: 'inbox-bodies', rows: [] },
 ]
 
 /** The files a copy step could write. */
 const copyFiles = (rel: string) => rel.startsWith('replica') || rel.startsWith('cache') || /^(tasks|sessions)\.sqlite/.test(rel)
+  || rel.startsWith('boards') || rel.startsWith('human-inbox') || rel === 'session-requests.json'
 
 async function post(port: number, p: string, body: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
   const r = await fetch(`http://127.0.0.1:${port}${p}`, { method: 'POST', headers: { 'content-type': 'application/json', connection: 'close', ...headers }, body: JSON.stringify(body) })
@@ -149,7 +155,7 @@ describe('the leader door (a primary stream)', () => {
     expect(api.status).toBe(200)
   })
 
-  it('serves every kind: the steps reach their stores (search, tasks and registry 200; a kind not kept yet 404 unknown_kind)', async () => {
+  it('serves every kind: the steps reach their stores (search, tasks, registry and the WP4 copies 200)', async () => {
     const answers: Array<[string, number, unknown]> = []
     for (const body of KINDS.slice(1)) {
       const r = await post(doorPort, '/bridge/replica', body)
@@ -162,8 +168,11 @@ describe('the leader door (a primary stream)', () => {
     for (const [k, status, error] of answers.filter(([k]) => k.endsWith(':tasks') || k.endsWith(':registry'))) {
       expect([k, status, error]).toEqual([k, 200, null])
     }
-    // The sessions kind arrives with WP4; until then the dispatcher names it unknown.
-    expect(answers.find(([k]) => k === 'put:sessions')).toEqual(['put:sessions', 404, 'unknown_kind'])
+    // WP4: the sessions, requests, boards and inbox copies are kept on a host replica.
+    for (const [k, status, error] of answers.filter(([k]) => /:(sessions|requests|boards|inbox|inbox-bodies)$/.test(k))) {
+      expect([k, status, error]).toEqual([k, 200, null])
+    }
+    expect(answers.filter(([k]) => /:(sessions|requests|boards|inbox|inbox-bodies)$/.test(k))).toHaveLength(6)
     const { listTasks } = await import('../../src/core/task-manager.js')
     expect((await listTasks()).map((t) => t.id)).toContain('t-acme-1')
     // Every file of the replica's data dir is 0600 and every dir 0700, after the

@@ -45,10 +45,11 @@ function builtinKinds(): Promise<void> {
       import('../../core/replication/search-replica-store.js'),
     ])
     tasks.registerTaskFollowerKinds()
+    ;(await import('../../core/replication/kinds/index.js')).registerCopyFollowerKinds()
     registerFollowerKind({
       kind: 'search',
       schemaVersion: 1,
-      step: (op, body) => (op === 'status' ? search.searchReplicaStatus(body) : op === 'sync' ? search.searchReplicaSync(body) : search.searchReplicaPut(body)),
+      step: (op, body) => (op === 'status' ? search.searchReplicaStatus(body) : op === 'sync' ? search.searchReplicaSync(body) : op === 'put' ? search.searchReplicaPut(body) : { ok: false, status: 400, error: 'unknown_op' }),
     })
   })().catch((err) => { builtins = null; throw err })
   return builtins

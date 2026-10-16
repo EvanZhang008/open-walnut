@@ -17,11 +17,12 @@ import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { CopyButton } from '../inputs/CopyButton';
 import { saveErrorMessage } from '../settings-pane-context';
 import { describeExpose } from './cloud/browser-access-status';
-import { describeHostServer, hostServersPollMs, type HostServerEntry, type HostServersResponse } from './host-servers-status';
+import { HOST_COPY_ROWS, describeHostServer, hostServersPollMs, type HostCopyChoice, type HostServerEntry, type HostServersResponse } from './host-servers-status';
 import '@/styles/browser-access.css';
 
 const PATH = '/api/host-servers';
@@ -91,7 +92,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
     }
   };
 
-  const write = (hostKey: string, body: { enabled?: boolean; expose?: ExposePatch }, optionKey?: string) =>
+  const write = (hostKey: string, body: { enabled?: boolean; expose?: ExposePatch; copies?: Partial<HostCopyChoice> }, optionKey?: string) =>
     call(hostKey, () => apiPut<{ host: HostServerEntry | null }>(`${PATH}/${encodeURIComponent(hostKey)}`, body), optionKey);
 
   if (!data || data.hosts.length === 0) return null;
@@ -163,6 +164,27 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                 </span>
               }
             />
+            {on && host.settings.program === 'replica' && host.settings.copies && (
+              <div className="settings-disclosure-content host-server-copies" data-testid={`host-server-copies-${host.hostKey}`}>
+                <SettingsRow label="Kept on this host" help="What this host still shows while your Mac sleeps. Letter bodies are read from your Mac unless kept here." />
+                {HOST_COPY_ROWS.map((row) => {
+                  const copies = host.settings.copies!;
+                  return (
+                    <SettingsCheckbox
+                      key={row.key}
+                      id={`host-server-copy-${host.hostKey}-${row.key}`}
+                      checked={copies[row.key]}
+                      disabled={busy === host.hostKey || (row.key === 'inbox_bodies' && !copies.inbox)}
+                      label={row.label}
+                      data-testid={`host-server-copy-${host.hostKey}-${row.key}`}
+                      // Bodies ride with the index: the inbox turned off turns its bodies off too, so
+                      // turning it on again never brings back a body choice the row showed as off.
+                      onChange={(v) => { void write(host.hostKey, { copies: row.key === 'inbox' && !v ? { inbox: false, inbox_bodies: false } : { [row.key]: v } }); }}
+                    />
+                  );
+                })}
+              </div>
+            )}
             {on && (providers.length === 0 ? (
               <SettingsRow indent label="Tunnel" help="No tunnel is set up for hosts; add a tunnel plugin." data-testid={`host-server-no-provider-${host.hostKey}`} />
             ) : (

@@ -857,6 +857,24 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   ending changes one row: one put, manifest skipped by digest).
 - Acceptance: a copied session row can never reach `process.kill` (ratchet); 5,000 session rows first
   round under 5 s.
+- As built: the kinds go to HOST targets running the replica PROGRAM only (`kinds/copy-kind.ts`
+  `keepsCopiesTarget`, the manager's view `program`); the plain host server, its daemon fallback and the
+  companion get none, and the follower gate is the program too (`server-role.ts` `isHostReplicaProgram`,
+  `kinds/gate.ts`), so WALNUT_HOST_SERVER=1 alone answers `404 unknown_kind`. A kind the host's choice
+  turns off gets one `purge` step: the host drops that kind's store, leaves `cache/replica/<kind>.json`
+  as `{v:1, off:true}` (read by `copyKindOff`, a letter body then answers `503 needs_leader
+  {why:'kind_not_copied'}` while away), and the next round after it is turned on again is a full
+  manifest. A choice change starts a round within the debounce. The companion keeps its session
+  projection and answers these kinds `404 unknown_kind` as before (WP13 moves it). The process guard
+  keys on placement host, not `role()=='replica'`: the companion is a replica too and, with cloud exec,
+  stops its own sessions (`src/core/sessions/replica-process-guard.ts`, funnels in `owner-stop.ts`,
+  `session-tracker.ts`, `utils/session-liveness.ts`, and the two pid probes in
+  `providers/claude-code-session.ts`); off a host replica every copy kind answers `404 unknown_kind`
+  for any op and schema version (`kinds/index.ts` `hostReplicaOnly`). Digest kinds put only the changed rows when the
+  target took the previous manifest and nothing was removed, and confirm by the follower's digest on the
+  last put; an ordered kind's digest names its order. Inbox bodies are their own kind (`inbox-bodies`,
+  keyed by file name, hashed by content), and a host that keeps no inbox keeps no bodies either. The
+  choice lives in `hosts.<key>.server.copies`.
 
 ### WP5 Copies: routines, conversations, prefs and favorites, sanitized config
 - Depends on: WP3.

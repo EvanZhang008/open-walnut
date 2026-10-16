@@ -326,6 +326,116 @@ describe('signal-call ratchet', () => {
   });
 });
 
+/**
+ * The replica wall (docs/plan/walnut-replica-servers-impl.md, WP4): a host
+ * replica's sessions are COPIES of the Mac's, so no path may reach a process
+ * from one there. Every pid probe in session code, and each funnel every stop
+ * goes through (owner-stop.ts), asks sessions/replica-process-guard.ts first.
+ * The other kill-shaped calls in session code are session-manager RPCs to a
+ * daemon; each file is listed with why it never runs on a host replica.
+ */
+const REPLICA_GUARDS = ['refuseProcessAction', 'processActionsRefused'];
+const STOP_FUNNELS = ['stopThroughOwner', 'stopAcpThroughOwner', 'sweepOrphansThroughOwner'];
+const REPLICA_UNREACHABLE: Record<string, string> = {
+  'src/core/session-health-monitor.ts': 'the health monitor and its reapers are off on a replica (boot policy)',
+  'src/core/sessions/session-lifecycle.ts': 'a registered session manager: a replica starts no session and registers none',
+  'src/providers/claude-code-session.ts': 'the runner\'s own live sessions: a replica runs none (no local daemon)',
+  'src/providers/session-host.ts': 'its own host-probe child, not a session process',
+  'src/web/routes/sessions.ts': 'retiring a live plan session of this server: a replica has none; stops away are needs_leader',
+};
+
+/** Functions (by name) whose body has a `process.kill(` call, and whether that body asks a replica guard. */
+export function probeSitesAndGuards(fileName: string, text: string): Array<{ fn: string; guarded: boolean }> {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.ES2022, true);
+  const out: Array<{ fn: string; guarded: boolean }> = [];
+  const isGuardCall = (c: ts.CallExpression) => ts.isIdentifier(c.expression) && REPLICA_GUARDS.includes(c.expression.text);
+  const isProcessKill = (c: ts.CallExpression) => ts.isPropertyAccessExpression(c.expression) && c.expression.name.text === 'kill'
+    && ts.isIdentifier(c.expression.expression) && c.expression.expression.text === 'process';
+  const visit = (node: ts.Node): void => {
+    if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && node.body) {
+      const firstOwn = (n: ts.Node, pred: (c: ts.CallExpression) => boolean): number => {
+        // The first such call in this body (source order), not in a nested function's; -1 when none.
+        let at = -1;
+        const v = (x: ts.Node): void => {
+          if (at !== -1) return;
+          if (x !== node.body && (ts.isFunctionDeclaration(x) || ts.isArrowFunction(x) || ts.isFunctionExpression(x) || ts.isMethodDeclaration(x))) return;
+          if (ts.isCallExpression(x) && pred(x)) { at = x.getStart(sf); return; }
+          ts.forEachChild(x, v);
+        };
+        v(n);
+        return at;
+      };
+      const kill = firstOwn(node.body, isProcessKill);
+      if (kill !== -1) {
+        const name = node.name && ts.isIdentifier(node.name) ? node.name.text : '<anonymous>';
+        // The guard is asked BEFORE the first kill in source order: one after it (or only after it) guards nothing.
+        let guard = -1;
+        const g = (x: ts.Node): void => {
+          if (guard !== -1 || x.getStart(sf) >= kill) return;
+          // A guard in a nested function (a callback defined here) is not asked by this body.
+          if (ts.isFunctionDeclaration(x) || ts.isArrowFunction(x) || ts.isFunctionExpression(x) || ts.isMethodDeclaration(x)) return;
+          if (ts.isCallExpression(x) && isGuardCall(x)) { guard = x.getStart(sf); return; }
+          ts.forEachChild(x, g);
+        };
+        ts.forEachChild(node.body, g);
+        out.push({ fn: name, guarded: guard !== -1 && guard < kill });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+describe('the replica wall: no signal path reachable on a host replica', () => {
+  const read = (rel: string) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+
+  it('counts a guard only when it is asked before the first kill', () => {
+    const sites = probeSitesAndGuards('x.ts', [
+      'function before(pid: number) { if (processActionsRefused()) return false; process.kill(pid, 0); return true }',
+      'function after(pid: number) { process.kill(pid, 0); if (refuseProcessAction("probe")) return false; return true }',
+      'function nested(pid: number) { const f = () => processActionsRefused(); process.kill(pid, 0); return f }',
+      'function none(pid: number) { process.kill(pid, 0) }',
+    ].join('\n'));
+    expect(sites).toEqual([
+      { fn: 'before', guarded: true }, { fn: 'after', guarded: false }, { fn: 'nested', guarded: false }, { fn: 'none', guarded: false },
+    ]);
+  });
+
+  it('every pid probe in session code asks the replica guard first', () => {
+    const files = sourceFiles().map((f) => path.relative(repoRoot, f).split(path.sep).join('/'))
+      .filter((rel) => (isSessionStoreFile(rel) || rel === 'src/utils/session-liveness.ts') && !EXEMPT.has(rel));
+    const unguarded: string[] = [];
+    let probes = 0;
+    for (const rel of files) {
+      for (const site of probeSitesAndGuards(rel, read(rel))) {
+        probes++;
+        if (!site.guarded) unguarded.push(`${rel} ${site.fn}`);
+      }
+    }
+    expect(probes).toBeGreaterThanOrEqual(3);
+    expect(unguarded, `a process.kill in session code must ask refuseProcessAction() / processActionsRefused() (sessions/replica-process-guard.ts) first:\n${unguarded.join('\n')}`).toEqual([]);
+  });
+
+  it('each stop funnel asks the replica guard before it reaches a daemon', () => {
+    const sf = ts.createSourceFile('owner-stop.ts', read('src/core/sessions/owner-stop.ts'), ts.ScriptTarget.ES2022, true);
+    const guarded = new Map<string, boolean>();
+    sf.forEachChild((node) => {
+      if (ts.isFunctionDeclaration(node) && node.name && STOP_FUNNELS.includes(node.name.text) && node.body) {
+        const first = node.body.statements.slice(0, 3).map((st) => st.getText(sf)).join('\n');
+        guarded.set(node.name.text, /refuseProcessAction\(/.test(first));
+      }
+    });
+    expect(Object.fromEntries(guarded)).toEqual(Object.fromEntries(STOP_FUNNELS.map((f) => [f, true])));
+  });
+
+  it('every other kill-shaped call in session code is in a file listed with why a replica never runs it', () => {
+    const { byFile } = scan();
+    const files = [...byFile.keys()].filter((rel) => isSessionStoreFile(rel)).sort();
+    expect(files).toEqual(Object.keys(REPLICA_UNREACHABLE).sort());
+  });
+});
+
 describe('findSignalSites: what counts', () => {
   const sites = (code: string) => findSignalSites('x.ts', code);
 

@@ -111,6 +111,49 @@ test.describe('Walnut on a host', () => {
     await expect(page.getByTestId(`host-server-enabled-${KEY}`)).toHaveAttribute('aria-checked', 'true')
   })
 
+  test('a replica host lists what it keeps while the Mac sleeps, and the choice is saved', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 900 })
+    const hosts = await hostsNow(page)
+    await putHosts(page, { ...hosts, [KEY]: { ...hosts[KEY], server_program: 'replica' } })
+    const group = await openRemoteHosts(page)
+    const copies = page.getByTestId(`host-server-copies-${KEY}`)
+    await expect(copies).toBeVisible({ timeout: 15_000 })
+    await expect(copies).toContainText('Kept on this host')
+    const box = (key: string) => page.getByTestId(`host-server-copy-${KEY}-${key}`)
+    // Default: every kind kept, letter bodies read from the Mac.
+    for (const key of ['sessions', 'requests', 'boards', 'inbox']) await expect(box(key)).toBeChecked()
+    await expect(box('inbox_bodies')).not.toBeChecked()
+    await copies.scrollIntoViewIfNeeded()
+    await shot(page, '2b-copies-default', group)
+
+    await copies.getByText('Letter bodies', { exact: true }).click()
+    await expect(box('inbox_bodies')).toBeChecked({ timeout: 15_000 })
+    await expect.poll(async () => ((await hostsNow(page))[KEY]?.server as { copies?: Record<string, boolean> })?.copies, { timeout: 15_000 })
+      .toMatchObject({ inbox_bodies: true })
+    await copies.getByText('Inbox', { exact: true }).click()
+    await expect(box('inbox')).not.toBeChecked({ timeout: 15_000 })
+    // Bodies ride with the index: without the inbox there is nothing to keep them for.
+    await expect(box('inbox_bodies')).toBeDisabled()
+    await expect(box('inbox_bodies')).not.toBeChecked()
+    await expect.poll(async () => ((await hostsNow(page))[KEY]?.server as { copies?: Record<string, boolean> })?.copies, { timeout: 15_000 })
+      .toEqual({ inbox_bodies: false, inbox: false })
+    await shot(page, '2c-copies-chosen', group)
+    // The inbox on again: bodies stay off until the user picks them again.
+    await copies.getByText('Inbox', { exact: true }).click()
+    await expect(box('inbox')).toBeChecked({ timeout: 15_000 })
+    await expect(box('inbox_bodies')).toBeEnabled()
+    await expect(box('inbox_bodies')).not.toBeChecked()
+    await expect.poll(async () => ((await hostsNow(page))[KEY]?.server as { copies?: Record<string, boolean> })?.copies, { timeout: 15_000 })
+      .toEqual({ inbox_bodies: false, inbox: true })
+    await copies.getByText('Inbox', { exact: true }).click()
+    await expect(box('inbox')).not.toBeChecked({ timeout: 15_000 })
+
+    await page.reload()
+    await expect(page.getByTestId(`host-server-copies-${KEY}`)).toBeVisible({ timeout: 30_000 })
+    await expect(box('inbox')).not.toBeChecked()
+    await expect(box('sessions')).toBeChecked()
+  })
+
   test('turn it off', async ({ page }) => {
     await page.setViewportSize({ width: 1200, height: 900 })
     const group = await openRemoteHosts(page)

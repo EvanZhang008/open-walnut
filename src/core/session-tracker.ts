@@ -18,6 +18,7 @@ import type {
 import { getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transaction as sessionDbTx } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
+import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
 import { bus, EventNames, type EmitOptions } from './event-bus.js';
 import type { SessionStatusChangedEvent } from './event-types.js';
 // Snapshot enforce-mode legacy-writer gate. session-snapshot-gate has ZERO
@@ -516,6 +517,7 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
         const changed = db ? totalChanges(db) - changesBefore : 0;
         if (touched === null || changed > touched.size) invalidateSessionStoreCache();
         else patchSessionCacheRows(touched);
+        if (changed > 0) noteSessionStoreWrite();
         return value;
       },
       (err) => { invalidateSessionStoreCache(); throw err; },
@@ -553,6 +555,31 @@ function isNoOpUpdate(
     return false;
   }
   return true;
+}
+
+// --- Store writes, for the leader's sessions copy (replication/kinds/sessions.ts) ---
+const storeWriteListeners = new Set<() => void>();
+
+function noteSessionStoreWrite(): void {
+  for (const cb of storeWriteListeners) {
+    try { cb(); } catch { /* one listener never stops the others */ }
+  }
+}
+
+/** Called after every committed write of this process's session store. Returns the stop. */
+export function onSessionStoreWrite(cb: () => void): () => void {
+  storeWriteListeners.add(cb);
+  return () => { storeWriteListeners.delete(cb); };
+}
+
+/**
+ * Every row of the store as the canonical cached objects (the sessions copy
+ * hashes each one once and keeps the hash against the object, which a write
+ * replaces). READ ONLY: never mutate a row or the array, and collect what you
+ * need before any await (a write patches the array in place).
+ */
+export async function sessionRowsForReplica(): Promise<readonly SessionRecord[]> {
+  return [...await readStoreView()];
 }
 
 /**
@@ -869,14 +896,17 @@ export async function checkSessionLimit(
     }
   }
 
-  if (staleIds.length > 0) {
+  // A host replica repairs no copied row and evicts no session: both act on
+  // the Mac's processes (sessions/replica-process-guard.ts).
+  const copyOnly = processActionsRefused();
+  if (staleIds.length > 0 && !copyOnly) {
     fixStaleRecords(staleIds);
   }
 
   // Tier 2: idle limit — auto-evict oldest idle CLI sessions if exceeded
   const evicted: SessionRecord[] = [];
 
-  if (maxIdle > 0 && idleSessions.length >= maxIdle) {
+  if (maxIdle > 0 && idleSessions.length >= maxIdle && !refuseProcessAction('capacity_eviction')) {
     // Only evict CLI sessions (a daemon holds their process and can stop it).
     // SDK/embedded sessions have no process: evicting them frees nothing.
     const evictable = idleSessions
@@ -1284,6 +1314,8 @@ async function firstAnswer<T>(work: Promise<T>, ms: number): Promise<T | 'pendin
 /** Existence probe (signal 0 delivers nothing). EPERM still means the pid exists. */
 function pidExists(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  // A host replica probes nothing: a pid in its copy is a process on the Mac.
+  if (refuseProcessAction('pid_probe')) return false;
   try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 

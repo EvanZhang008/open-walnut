@@ -128,7 +128,24 @@ async function withStoreStamped<R>(fn: (store: LetterStoreFile) => R): Promise<{
     try { fs.renameSync(INDEX_FILE, `${INDEX_FILE}.corrupt`); } catch { /* already gone */ }
     await updateJsonFile<unknown>(INDEX_FILE, null, apply);
   }
+  for (const cb of storeWriteListeners) {
+    try { cb(); } catch { /* one listener never stops the others */ }
+  }
   return { out, stamp };
+}
+
+// --- For the leader's inbox copy (replication/kinds/inbox.ts) ---
+const storeWriteListeners = new Set<() => void>();
+
+/** Called after every write of the letter index by this process (a body is written before its index row). Returns the stop. */
+export function onLetterStoreWritten(cb: () => void): () => void {
+  storeWriteListeners.add(cb);
+  return () => { storeWriteListeners.delete(cb); };
+}
+
+/** The index as stored, in its order (the inbox copy's leader rows). */
+export async function readLetterIndexForReplica(): Promise<LetterRecord[]> {
+  return normalizeStore(await readJsonFile<unknown>(INDEX_FILE, null)).letters;
 }
 
 // ── Ids + body files ──

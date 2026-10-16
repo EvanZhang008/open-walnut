@@ -20,6 +20,11 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostSer
   const s = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; node?: unknown; build_env?: unknown
     expose?: { enabled?: unknown; provider?: unknown; options?: unknown }
+    copies?: unknown
+  }
+  const copies: Record<string, boolean> = {}
+  for (const [k, v] of Object.entries(s.copies && typeof s.copies === 'object' ? s.copies : {})) {
+    if (typeof v === 'boolean') copies[k] = v
   }
   const buildEnv: Record<string, string> = {}
   for (const [k, v] of Object.entries(s.build_env && typeof s.build_env === 'object' ? s.build_env : {})) {
@@ -40,6 +45,8 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostSer
     },
     // The per-host opt-in for the replica program (off unless set: D13's rollout gate).
     ...(program === 'replica' || program === 'host-server' ? { program } : {}),
+    // The host's choice of copied kinds (replication/kinds/copy-kind.ts fills the defaults).
+    ...(Object.keys(copies).length > 0 ? { copies } : {}),
   }
 }
 
@@ -81,7 +88,7 @@ export function getHostServerManager(): HostServerManager | null {
     // on the host, and (tests only) a local tree run in place of an installed build.
     ...(process.env.WALNUT_HOST_SERVER_ROOT?.trim() ? { hostRoot: process.env.WALNUT_HOST_SERVER_ROOT.trim() } : {}),
     ...(process.env.WALNUT_HOST_SERVER_APP_DIR?.trim() ? { appDir: process.env.WALNUT_HOST_SERVER_APP_DIR.trim() } : {}),
-    registerTarget: (hostKey, post) => {
+    registerTarget: (hostKey, post, copies) => {
       let unregister: () => void = () => {}
       void import('../replication/replica-targets.js').then(({ registerReplicaTarget }) => {
         unregister = registerReplicaTarget({
@@ -89,6 +96,9 @@ export function getHostServerManager(): HostServerManager | null {
           kind: 'host',
           label: hostKey,
           available: async () => manager?.view(hostKey).phase === 'running',
+          ...(copies ? { copies } : {}),
+          // Read at each round: a rollback to the host server, or the daemon's fallback, stops the copies.
+          program: () => manager?.view(hostKey).program,
           post: async (payload, opts): Promise<CloudReplicaReply> => {
             try {
               const res = await post(payload, opts)

@@ -98,7 +98,7 @@ let settings: HostServerSettings
 let tunnelPort = 5555
 let released: string[] = []
 let held: string[] = []
-let targets: Array<{ id: string; post?: (body: Record<string, unknown>) => Promise<Response> }> = []
+let targets: Array<{ id: string; post?: (body: Record<string, unknown>) => Promise<Response>; copies?: () => Promise<Record<string, boolean> | undefined> }> = []
 
 function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
   return {
@@ -114,7 +114,7 @@ function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
     }),
     stateFile: path.join(dir, 'host-servers.json'),
     now: Date.now,
-    registerTarget: (hostKey, post) => { targets.push({ id: `+${hostKey}`, post }); return () => targets.push({ id: `-${hostKey}` }) },
+    registerTarget: (hostKey, post, copies) => { targets.push({ id: `+${hostKey}`, post, copies }); return () => targets.push({ id: `-${hostKey}` }) },
     installPollMs: 1,
     pollMs: 60_000,
     ...over,
@@ -198,6 +198,10 @@ describe('host server manager', () => {
     expect(await res.json()).toEqual({ ok: true, need: [] })
     expect(host.streams).toEqual(['follower:replica'])
     expect(posted).toEqual([{ url: '/bridge/replica', body: JSON.stringify({ op: 'sync', kind: 'tasks', entries: [] }) }])
+    // The host's choice of copied kinds (its Settings row) reaches the copy kinds, read at each round (WP4).
+    expect(await targets[0]!.copies!()).toBeUndefined()
+    settings = { ...settings, copies: { inbox_bodies: true, boards: false } }
+    expect(await targets[0]!.copies!()).toEqual({ inbox_bodies: true, boards: false })
   })
 
   it('the next connect keeps its port, and installs nothing already installed', async () => {

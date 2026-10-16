@@ -64,7 +64,9 @@ replicasStatusRouter.post('/replicas/confirm-removal', async (req: Request, res:
   }
   const body = (req.body ?? {}) as { target?: unknown; kind?: unknown; entries?: unknown; keys?: unknown }
   const target = typeof body.target === 'string' ? body.target : ''
-  const kind = body.kind === 'registry' ? 'registry' : body.kind === undefined || body.kind === 'tasks' ? 'tasks' : null
+  const { COPY_KIND_NAMES, confirmCopyKindRemoval } = await import('../../core/replication/kinds/copy-kind.js')
+  const copyKind = typeof body.kind === 'string' && (COPY_KIND_NAMES as readonly string[]).includes(body.kind) ? body.kind : null
+  const kind = copyKind ?? (body.kind === 'registry' ? 'registry' : body.kind === undefined || body.kind === 'tasks' ? 'tasks' : null)
   const entries = body.entries === undefined ? undefined : Number.isInteger(body.entries) && (body.entries as number) >= 0 ? body.entries as number : null
   const keys = body.keys === undefined ? undefined : typeof body.keys === 'string' && /^[0-9a-f]{12}$/.test(body.keys) ? body.keys : null
   if (!target || !kind || entries === null || keys === null) {
@@ -73,7 +75,9 @@ replicasStatusRouter.post('/replicas/confirm-removal', async (req: Request, res:
   }
   const { confirmTaskReplicaRemoval } = await import('../../core/replication/task-replica.js')
   const seen = { ...(entries === undefined ? {} : { entries }), ...(keys === undefined ? {} : { keys }) }
-  if (!(await confirmTaskReplicaRemoval(target, kind, seen))) {
+  // The WP4 copies (sessions, requests, boards, inbox) have their own scheduler.
+  const confirmed = copyKind ? await confirmCopyKindRemoval(target, copyKind, seen) : await confirmTaskReplicaRemoval(target, kind as 'tasks' | 'registry', seen)
+  if (!confirmed) {
     res.status(409).json({ ok: false, error: 'not_refused' })
     return
   }

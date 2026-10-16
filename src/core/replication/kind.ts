@@ -45,7 +45,12 @@ export const CONFIRM_AFTER_REFUSALS = 3
 /** A confirm the user gave and no round has sent yet expires after this (one sweep). */
 export const CONFIRM_TTL_MS = 5 * 60_000
 
-export const OPS = ['status', 'sync', 'put'] as const
+/**
+ * `purge` (WP4): the host's choice turned a copy kind off, the follower drops
+ * that kind's store (replication/kinds/gate.ts). A kind without one answers
+ * `400 unknown_op`, as an older follower does.
+ */
+export const OPS = ['status', 'sync', 'put', 'purge'] as const
 export type ReplicaOp = (typeof OPS)[number]
 
 /**

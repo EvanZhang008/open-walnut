@@ -22,6 +22,7 @@ import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { getHostServerManager, hostServerSettingsFrom } from '../../core/host-server/index.js'
 import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
+import { DEFAULT_COPY_CHOICE, copyChoiceChanged, copyChoiceFrom } from '../../core/replication/kinds/copy-kind.js'
 import { isPersonAtThisMachine } from './expose.js'
 
 export const hostServersRouter = Router()
@@ -46,6 +47,9 @@ async function hostEntry(hostKey: string) {
       enabled: settings.enabled,
       expose: { ...settings.expose, options: maskSecretShapes(settings.expose.options) },
       ...(settings.node ? { node: settings.node } : {}),
+      // Which kinds the Mac copies to this host's replica (WP4), defaults filled in.
+      copies: copyChoiceFrom((host.server as { copies?: unknown } | undefined)?.copies),
+      ...(host.server_program ? { program: host.server_program } : {}),
     },
     view: getHostServerManager()?.view(hostKey) ?? null,
   }
@@ -74,7 +78,7 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
       res.status(404).json({ error: `No host named ${hostKey}` })
       return
     }
-    const body = (req.body ?? {}) as { enabled?: unknown; expose?: { enabled?: unknown; provider?: unknown; options?: unknown } }
+    const body = (req.body ?? {}) as { enabled?: unknown; expose?: { enabled?: unknown; provider?: unknown; options?: unknown }; copies?: unknown }
     if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
       res.status(400).json({ error: 'enabled is true or false' })
       return
@@ -105,12 +109,28 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
         options: e.options !== undefined ? restoreMaskedSecrets(options, before.options, `hosts.${hostKey}.server.expose.options`) : before.options,
       }
     }
+    if (body.copies !== undefined) {
+      const c = body.copies as Record<string, unknown> | null
+      const known = Object.keys(DEFAULT_COPY_CHOICE)
+      if (!c || typeof c !== 'object' || Array.isArray(c) || Object.entries(c).some(([k, v]) => !known.includes(k) || typeof v !== 'boolean')) {
+        res.status(400).json({ error: `copies names only ${known.join(', ')}, each true or false` })
+        return
+      }
+      const before = ((await getConfig()).hosts?.[hostKey]?.server as { copies?: Record<string, boolean> } | undefined)?.copies ?? {}
+      const next: Record<string, boolean> = { ...before, ...(c as Record<string, boolean>) }
+      // Bodies ride with the index: turning the inbox off turns bodies off too, so
+      // turning the inbox on again never brings back a body choice the user cannot see.
+      if (next.inbox === false) next.inbox_bodies = false
+      patch.copies = next
+    }
     await updateHostServerConfig(hostKey, patch)
     // Settings re-reads the config on this (the Remote Hosts card shows the hosts too).
     // In the client view, like GET /api/config: `web-ui` sends it to every connected client.
     emitConfigChanged(await getConfig(), ['web-ui'], { source: 'api' })
-    log.web.info('host server settings changed', { host: hostKey, enabled: patch.enabled, expose: patch.expose ? (patch.expose as { enabled: boolean }).enabled : undefined })
+    log.web.info('host server settings changed', { host: hostKey, enabled: patch.enabled, expose: patch.expose ? (patch.expose as { enabled: boolean }).enabled : undefined, ...(patch.copies ? { copies: patch.copies } : {}) })
     void getHostServerManager()?.reconcile(hostKey)
+    // A kind turned on copies now, one turned off is purged now (not at the next sweep).
+    if (patch.copies) copyChoiceChanged()
     res.json({ host: await hostEntry(hostKey) })
   } catch (err) {
     if (err instanceof MaskedValueError) {

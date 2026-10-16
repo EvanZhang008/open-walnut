@@ -28,6 +28,19 @@ export interface LeaderKind<Row> {
   encodePut?(rows: readonly Row[], last: boolean): Record<string, unknown>
   /** One document (the registry): a put only when the target names its key, never batched. */
   single?: boolean
+  /**
+   * The row as a put carries it, read only when a put needs it (WP4 inbox
+   * bodies: a manifest row holds the hash, not the text). Undefined: the row
+   * went away since the manifest, skip it (the next round asks again).
+   */
+  loadRow?(row: Row): Promise<Row | undefined>
+}
+
+/** The row a put sends for `k` (kind.loadRow when the kind has one). */
+export async function putRow<Row>(kind: LeaderKind<Row>, manifest: KindManifest<Row>, k: string): Promise<Row | undefined> {
+  const row = manifest.byKey.get(k)
+  if (row === undefined || !kind.loadRow) return row
+  return kind.loadRow(row)
 }
 
 export interface KindManifest<Row> {
@@ -179,7 +192,7 @@ function confirmForRound(
 async function putSingle<Row>(kind: LeaderKind<Row>, manifest: KindManifest<Row>, need: string[], target: Pick<ReplicaTarget, 'post'>): Promise<number> {
   let sent = 0
   for (const k of need) {
-    const row = manifest.byKey.get(k)
+    const row = await putRow(kind, manifest, k)
     if (row === undefined) continue
     await step(target, { op: 'put', kind: kind.kind, schemaVersion: kind.schemaVersion, ...encode(kind, [row], true) })
     sent++
@@ -206,7 +219,7 @@ async function putBatches<Row>(
     bytes = 0
   }
   for (const k of need) {
-    const row = manifest.byKey.get(k)
+    const row = await putRow(kind, manifest, k)
     if (row === undefined) continue
     const size = Buffer.byteLength(JSON.stringify(row))
     if (batch.length > 0 && bytes + size > PUT_BATCH_BYTES) await flush()

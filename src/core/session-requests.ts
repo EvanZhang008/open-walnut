@@ -88,6 +88,28 @@ interface RequestStore { requests: SessionRequest[] }
 
 const EMPTY: RequestStore = { requests: [] };
 
+// --- Writes, for the leader's requests copy (replication/kinds/requests.ts) ---
+const writeListeners = new Set<() => void>();
+
+/** Called after every write of the requests file by this process. Returns the stop. */
+export function onSessionRequestsWritten(cb: () => void): () => void {
+  writeListeners.add(cb);
+  return () => { writeListeners.delete(cb); };
+}
+
+/** Every write of the file goes through here. */
+async function updateRequests(fn: (store: RequestStore) => RequestStore | Promise<RequestStore> | undefined | Promise<undefined>): Promise<void> {
+  await updateJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, fn);
+  for (const cb of writeListeners) {
+    try { cb(); } catch { /* one listener never stops the others */ }
+  }
+}
+
+/** Every request as stored (the requests copy's leader rows). */
+export async function listAllSessionRequests(): Promise<SessionRequest[]> {
+  return [...((await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY)).requests ?? [])];
+}
+
 function prune(requests: SessionRequest[]): SessionRequest[] {
   const cutoff = Date.now() - SETTLED_RETENTION_MS;
   const kept = requests.filter(
@@ -135,7 +157,7 @@ export async function createSessionRequest(input: {
     createdAt: new Date().toISOString(),
     deadlineAt: Date.now() + clampReplyTimeoutSecs(input.replyTimeoutSecs, input.implicit) * 1000,
   };
-  await updateJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, (store) => ({
+  await updateRequests((store) => ({
     requests: [...prune(store.requests ?? []), request],
   }));
   return request;
@@ -153,7 +175,7 @@ export async function getSessionRequest(id: string): Promise<SessionRequest | un
  * pending row — a row someone already settled is left alone.
  */
 export async function deletePendingRequest(id: string): Promise<void> {
-  await updateJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, (store) => {
+  await updateRequests((store) => {
     const requests = store.requests ?? [];
     const idx = requests.findIndex((r) => r.id === id && r.status === 'pending');
     if (idx === -1) return undefined;
@@ -172,7 +194,7 @@ async function settle(
   outcome?: SessionRequestOutcome,
 ): Promise<SessionRequest | null> {
   let settled: SessionRequest | null = null;
-  await updateJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, (store) => {
+  await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === id);
     if (idx === -1 || requests[idx].status !== 'pending') return undefined;
@@ -211,7 +233,7 @@ export async function withdrawRequest(id: string): Promise<SessionRequest | null
 /** Put a withdrawn request back to pending (its asker's task was reopened). Null when it is not withdrawn. */
 export async function restoreRequest(id: string): Promise<SessionRequest | null> {
   let restored: SessionRequest | null = null;
-  await updateJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, (store) => {
+  await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === id);
     if (idx === -1 || requests[idx].status !== 'withdrawn') return undefined;
@@ -304,7 +326,7 @@ export async function listPendingRequests(): Promise<SessionRequest[]> {
  */
 export async function importOfflineRequest(row: SessionRequest): Promise<boolean> {
   let changed = false;
-  await updateJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, (store) => {
+  await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === row.id);
     if (idx === -1) {

@@ -50,6 +50,11 @@ export interface ReplicaRemovalRow {
 export function rowNoun(kind: string): string {
   if (kind === 'tasks') return 'tasks';
   if (kind === 'registry') return 'project and folder entries';
+  if (kind === 'sessions') return 'sessions';
+  if (kind === 'requests') return 'reply requests';
+  if (kind === 'boards') return 'boards';
+  if (kind === 'inbox') return 'letters';
+  if (kind === 'inbox-bodies') return 'letter bodies';
   return `${kind} rows`;
 }
 

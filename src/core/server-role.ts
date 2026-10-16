@@ -69,6 +69,18 @@ export function role(): ServerRole { return current().role }
 export function placement(): Placement { return current().placement }
 /** A server on a host the user picked, running the full program (`walnut web --replica`). */
 export function isHostReplica(): boolean { return current().placement === 'host' }
+let replicaProgram: boolean | null = null
+/**
+ * The full replica PROGRAM on a host (`walnut web --replica`, which sets
+ * WALNUT_ROLE=replica), the per-host opt-in of D13. Not the plain host server
+ * (`walnut host-server`, WALNUT_HOST_SERVER=1 alone, the default and the
+ * daemon's crash-loop fallback): its role is replica and its placement host by
+ * default, but it never opted in to the copies the Mac sends a replica.
+ */
+export function isHostReplicaProgram(): boolean {
+  replicaProgram ??= isHostReplica() && (process.env.WALNUT_ROLE ?? '').trim() === 'replica'
+  return replicaProgram
+}
 /** This server may run a local session daemon: the Mac, or the companion with cloud.exec on (checked by its caller). */
 export function hasLocalDaemon(): boolean { return current().placement !== 'host' }
 /** Sessions run where this server is: the Mac, or (WP12) the host. */
@@ -78,6 +90,7 @@ export function canStandIn(allowed: boolean): boolean { return current().placeme
 
 export function _resetServerRoleForTesting(): void {
   facts = null
+  replicaProgram = null
 }
 
 export function isFollower(): boolean {

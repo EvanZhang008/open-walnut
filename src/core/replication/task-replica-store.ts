@@ -187,7 +187,7 @@ async function claimStamp(me: LeaderStamp): Promise<LeaderStamp | null> {
   }
 }
 
-async function leaderRefusal(): Promise<Refusal> {
+export async function leaderRefusal(): Promise<Refusal> {
   if (followerKind() !== 'host') return null
   const me: LeaderStamp = { walnutId: (process.env.WALNUT_WALNUT_ID ?? '').trim(), home: (process.env.WALNUT_LEADER_HOME ?? '').trim() }
   if (!me.walnutId) return null // names no leader: nothing to tell apart
