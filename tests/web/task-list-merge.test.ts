@@ -248,6 +248,45 @@ describe('overlayLaterEdits and an edit still waiting for its write', () => {
   });
 });
 
+describe('overlayLaterEdits and a write answered after the request left', () => {
+  // 2026-10-17: a rename on a host replica. Its list read left 2 ms after the write,
+  // was answered at once from the copy (the old title), while the write waited on the
+  // host's journal; the rename's own echo is eaten by the echo guard, so the old title
+  // stayed until the next refetch.
+  it('keeps the edit over an answer that left before the write was answered, and only that', async () => {
+    const { overlayLaterEdits } = await import('@/hooks/task-list-merge');
+    // Made at 100, the list request left at 102, the write answered at 140.
+    const edits = new Map([['r', { at: 100, fields: { title: 'Renamed' }, pending: 0, settledAt: 140 }]]);
+    const [out] = overlayLaterEdits([task({ id: 'r', title: 'Old' })], edits, 102);
+    expect(out.title).toBe('Renamed');
+    expect(edits.has('r')).toBe(true);
+    // A request that left after the answer holds the write: taken as is, the edit forgotten.
+    const fetched = [task({ id: 'r', title: 'Renamed on the server' })];
+    expect(overlayLaterEdits(fetched, edits, 150)).toBe(fetched);
+    expect(edits.size).toBe(0);
+  });
+
+  it('an edit without a settle time keeps the old rule (made before the request left, answered: dropped)', async () => {
+    const { overlayLaterEdits } = await import('@/hooks/task-list-merge');
+    const edits = new Map([['r', { at: 100, fields: { title: 'Local' }, pending: 0 }]]);
+    const fetched = [task({ id: 'r', title: 'Server' })];
+    expect(overlayLaterEdits(fetched, edits, 102)).toBe(fetched);
+    expect(edits.size).toBe(0);
+  });
+});
+
+describe('changedFields (what a one-row optimistic write holds)', () => {
+  it('names the changed fields, keeps a cleared one as undefined, and is empty for no change', async () => {
+    const { changedFields } = await import('@/hooks/task-list-merge');
+    const before = task({ id: 'c', title: 'A', phase: 'TODO', group_id: 'g' });
+    const after = { ...before, title: 'B', phase: 'COMPLETE', group_id: undefined } as Task;
+    const f = changedFields(before, after);
+    expect(f).toEqual({ title: 'B', phase: 'COMPLETE', group_id: undefined });
+    expect('group_id' in f).toBe(true);
+    expect(changedFields(before, { ...before })).toEqual({});
+  });
+});
+
 describe('a host replica\'s mark on a row (WP10, replica_sync)', () => {
   it('a refetch whose only change is the mark is not row equal, coming or going; rows without it still are', () => {
     const a = task({ id: 'a' })

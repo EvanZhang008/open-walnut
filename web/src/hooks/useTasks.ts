@@ -9,7 +9,7 @@ import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import { scrollLog } from '@/utils/scroll-debug';
 import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
-import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, type LocalEdit } from './task-list-merge';
+import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, changedFields, type LocalEdit } from './task-list-merge';
 import { normalizeTags } from '../../../src/core/tag-model';
 import { deletedTaskId } from '../../../src/core/task-deleted-id';
 import { markFirstScreen } from '@/utils/after-first-screen';
@@ -474,10 +474,26 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     }
   };
   const settleLocalEdits = (ids: readonly string[]) => {
+    const now = performance.now();
     for (const id of ids) {
       const edit = localEdits.current.get(id);
-      if (edit?.pending) edit.pending -= 1;
+      if (edit?.pending) { edit.pending -= 1; edit.settledAt = now; }
     }
+  };
+  // A one-row optimistic write (a rename, a complete, a phase) held as a pending edit
+  // until it is answered: a list answer read before the write landed would draw the old
+  // values back, and the write's own echo, eaten by guardEcho, would never correct them
+  // (2026-10-17: a rename on a host replica, whose list read is answered while its write
+  // waits on the host's journal, showed the old title until the next refetch). Returns
+  // the settle to call once, when the write is answered or fails.
+  const holdOptimistic = (id: string, apply: (rows: Task[]) => Task[]): (() => void) => {
+    const current = tasksNow.current.find((t) => t.id === id);
+    const next = current ? apply([current]).find((t) => t.id === id) : undefined;
+    const fields = current && next ? changedFields(current, next) : {};
+    if (Object.keys(fields).length === 0) return () => {};
+    noteLocalEdits({ [id]: fields }, true);
+    let settled = false;
+    return () => { if (!settled) { settled = true; settleLocalEdits([id]); } };
   };
   // True once the first fetch has populated the list — gates the loading spinner so
   // later background re-syncs (WS / post-mutation) don't blank the list into a spinner.
@@ -1018,25 +1034,37 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // Tag instructions count: they carry no value to spread, but the resulting
     // `tags` array is computable from the row (applyTagInstructions).
     const hasOptimistic = Object.keys(updates).some(k => OPTIMISTIC_FIELDS.has(k) || TAG_INSTRUCTION_FIELDS.has(k));
+    let settle = () => {};
     if (hasOptimistic) {
       const onlyReadMarker = Object.keys(updates).every((key) => READ_MARKER_KEYS.includes(key));
       // A read's generic echo guard can swallow an unrelated phase commit arriving first.
       if (!onlyReadMarker) guardEcho(`update:${id}`);
-      setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
+      const apply = (rows: Task[]) => applyFieldUpdate(rows, id, updates as Record<string, unknown>);
+      // Held only when its echo is guarded: a read's echo flows, and a newer phase or
+      // unread from the server must win over the read (task-store-mutators.test.ts).
+      if (!onlyReadMarker) settle = holdOptimistic(id, apply);
+      setTasks(apply);
     }
-    withWriteRetry((opId) => tasksApi.updateTask(id, updates, { opId })).catch((err: Error) => onOpError(err, [id]));
+    withWriteRetry((opId) => tasksApi.updateTask(id, updates, { opId }))
+      .then(() => settle(), (err: Error) => { settle(); onOpError(err, [id]); });
   }, [guardEcho, onOpError]);
 
   const toggleComplete = useCallback((id: string) => {
     guardEcho(`complete:${id}`);
-    setTasks(prev => applyToggleComplete(prev, id));
-    withWriteRetry((opId) => tasksApi.toggleCompleteTask(id, { opId })).catch((err: Error) => onOpError(err, [id]));
+    const apply = (rows: Task[]) => applyToggleComplete(rows, id);
+    const settle = holdOptimistic(id, apply);
+    setTasks(apply);
+    withWriteRetry((opId) => tasksApi.toggleCompleteTask(id, { opId }))
+      .then(() => settle(), (err: Error) => { settle(); onOpError(err, [id]); });
   }, [guardEcho, onOpError]);
 
   const setPhase = useCallback((id: string, phase: string) => {
     guardEcho(`phase:${id}`);
-    setTasks(prev => applyPhaseChange(prev, id, phase));
-    withWriteRetry((opId) => tasksApi.updateTask(id, { phase }, { opId })).catch((err: Error) => onOpError(err, [id]));
+    const apply = (rows: Task[]) => applyPhaseChange(rows, id, phase);
+    const settle = holdOptimistic(id, apply);
+    setTasks(apply);
+    withWriteRetry((opId) => tasksApi.updateTask(id, { phase }, { opId }))
+      .then(() => settle(), (err: Error) => { settle(); onOpError(err, [id]); });
   }, [guardEcho, onOpError]);
 
   const reorder = useCallback((project: string, taskIds: string[]) => {

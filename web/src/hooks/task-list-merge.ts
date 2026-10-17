@@ -127,22 +127,40 @@ export function mergeFetchedTasks(prev: Task[], fetched: Task[], retain?: Readon
 }
 
 /** An optimistic write's fields and when it was made (performance.now clock).
- *  `pending` counts the writes behind it the server has not answered yet. */
-export interface LocalEdit { at: number; fields: Partial<Task>; pending?: number }
+ *  `pending` counts the writes behind it the server has not answered yet;
+ *  `settledAt` is when the last of them was answered. */
+export interface LocalEdit { at: number; fields: Partial<Task>; pending?: number; settledAt?: number }
 
 /**
  * A list answer read when its request left (`sentAt`), with the optimistic fields
- * written after that, or still waiting for their write, laid back over it: the answer
- * cannot hold them, and adopting it as is drew a dragged card back where it came from
- * until the next refetch. Edits the answer holds (written before it left, and
- * answered) are dropped from `edits`.
+ * written after that, still waiting for their write, or answered only after it left,
+ * laid back over it: the answer cannot be trusted to hold them, and adopting it as is
+ * drew a dragged card back where it came from until the next refetch. A request that
+ * left before the write was answered may have been read before the write landed: a
+ * host replica answers a list read at once while its write waits on the host's
+ * journal (2026-10-17: a rename showed the old title again). Edits the answer holds
+ * (written and answered before it left) are dropped from `edits`.
  */
 export function overlayLaterEdits(fetched: Task[], edits: Map<string, LocalEdit>, sentAt: number): Task[] {
   const later = new Map<string, Partial<Task>>();
   for (const [id, edit] of edits) {
-    if (edit.at > sentAt || (edit.pending ?? 0) > 0) later.set(id, edit.fields);
+    if (edit.at > sentAt || (edit.pending ?? 0) > 0 || (edit.settledAt ?? -Infinity) > sentAt) later.set(id, edit.fields);
     else edits.delete(id);
   }
   if (later.size === 0) return fetched;
   return fetched.map((t) => { const f = later.get(t.id); return f ? { ...t, ...f } : t; });
+}
+
+/**
+ * The fields an optimistic write changed on one row (`before` to `after`), with a
+ * cleared field kept as `undefined`: what a LocalEdit holds for it.
+ */
+export function changedFields(before: Task, after: Task): Partial<Task> {
+  const fields: Record<string, unknown> = {};
+  const a = after as unknown as Record<string, unknown>;
+  const b = before as unknown as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(b), ...Object.keys(a)])) {
+    if (a[k] !== b[k]) fields[k] = a[k];
+  }
+  return fields as Partial<Task>;
 }

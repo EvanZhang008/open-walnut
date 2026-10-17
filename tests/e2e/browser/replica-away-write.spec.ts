@@ -58,6 +58,23 @@ const row = (page: Page, title: string) => page.locator('.todo-panel .todo-panel
   .filter({ has: page.locator('.todo-item-title, .todo-pinned-title', { hasText: new RegExp(`^\\s*${escapeRe(title)}\\s*$`) }) }).first()
 const isPhone = () => test.info().project.name.endsWith('-phone')
 
+/**
+ * The title of a marked row stays readable: the mark gives way, not the title
+ * (2026-10-17: a 290 px desktop list cut both marked titles to one letter).
+ * The title keeps 45% of its row or 100 px (about a dozen characters), whichever is
+ * less: a row also holds its hover buttons, and a phone row its indent. It wraps or
+ * clamps, so its scroll width says nothing.
+ */
+async function expectTitleReadable(page: Page, title: string): Promise<void> {
+  const r = row(page, title)
+  const t = r.locator('.todo-item-title, .todo-pinned-title').first()
+  await expect.poll(async () => t.evaluate((el) => {
+    const w = (el as HTMLElement).clientWidth
+    const rowW = (el.closest('.todo-panel-item, .todo-pinned-card, .todo-focus-card') as HTMLElement | null)?.clientWidth ?? 0
+    return rowW > 0 && w >= Math.min(rowW * 0.45, 100) ? 'readable' : `title ${w}px of a ${rowW}px row`
+  }), { timeout: 5_000, message: `the title of "${title}" next to its mark` }).toBe('readable')
+}
+
 /** A fresh browser shows the project folded: open it as the person does (replica-away-read.spec.ts openAcme). */
 async function openAcme(page: Page): Promise<void> {
   if (!isPhone()) return openListProject(page, 'Acme')
@@ -172,6 +189,7 @@ test('the console writes while the Mac sleeps: each write is kept on the host wi
       await editing.press('Enter')
     }
     await expect(row(page, renamed).getByTestId('away-sync-mark')).toHaveText(AWAY_SYNC, { timeout: 15_000 })
+    await expectTitleReadable(page, renamed)
     await shot(page, '1-renamed')
   })
 
@@ -193,6 +211,7 @@ test('the console writes while the Mac sleeps: each write is kept on the host wi
     await input.press('Enter')
     await input.press('Escape')
     await expect(row(page, madeTitle).getByTestId('away-sync-mark')).toHaveText(AWAY_SYNC, { timeout: 15_000 })
+    await expectTitleReadable(page, madeTitle)
     await shot(page, '2-made')
   })
 

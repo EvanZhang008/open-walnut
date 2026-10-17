@@ -20,6 +20,17 @@
   background: rgba(245, 166, 35, 0.16);
   border: 1px solid rgba(245, 166, 35, 0.45);
 }
+/* In a task row the title comes first (2026-10-17: a 290 px list cut both marked
+   titles to one letter beside the whole sentence). A row shows the short "Syncs
+   later" and never shrinks it; the sentence stays the mark's text (what a screen
+   reader and its tooltip give), and the Board bar, which has room, shows it whole. */
+.away-sync-mark.away-sync-mark:not(.away-sync-board) {
+  font-size: 0;
+}
+.away-sync-mark.away-sync-mark:not(.away-sync-board)::after {
+  content: 'Syncs later' / '';
+  font-size: 10px;
+}
 /* On a Board's bar: centred in the row; a bar too narrow for the mark (a phone)
    wraps its buttons to a second line rather than pushing them off the edge.
    Only a bar that holds the mark wraps, so the Mac's bar is unchanged. */
