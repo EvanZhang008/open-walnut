@@ -1796,6 +1796,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const routinesRouter = createCronRouter(cronService)
   app.use('/api/routines', routinesRouter)
   app.use('/api/cron', routinesRouter)
+  // The companion only: the console's task-store writes go to the Mac while it answers, the
+  // one writer (replica plan WP13, v1-forward/proxy.ts consoleMiddleware). Away, or refused by
+  // an older Mac, they fall through to the routes below: a local write, then an op or the queue.
+  if (bootPolicy('v1-forward')) {
+    const { getV1Forward } = await import('./v1-forward/proxy.js')
+    app.use(['/api/tasks', '/api/focus'], getV1Forward().consoleMiddleware)
+  }
   app.use('/api/tasks', tasksRouter)
   app.use('/api/dashboard', dashboardRouter)
   // Per-turn snapshots + the rewind guard (routes/session-turns.ts); the

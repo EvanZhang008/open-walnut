@@ -6,9 +6,10 @@
  * link (providers/daemon-connection.ts), which plugs it in here.
  *
  * The same rules as the server.http forward (target.ts), on bytes instead of
- * one JSON frame, so no size cap: only /api/v1, never a route the companion
- * keeps (policy.ts), only the content and cache headers cross (never a
- * credential or a Walnut caller header), and every call reaches this server's
+ * one JSON frame, so no size cap: only /api/v1 (and the console's task-store
+ * writes on the exact list in policy.ts), never a route the companion keeps,
+ * only the content and cache headers cross (never a credential or a Walnut
+ * caller header), and every call reaches this server's
  * own routes over loopback labelled `x-walnut-origin: remote-http`. Every route
  * then applies the rule it applies to a paired phone. A call refused here
  * answers with `x-walnut-forward-refused: 1`, so the companion answers it itself.
@@ -28,7 +29,7 @@ import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
 import { controlRefusedForHost, controlRelayOrigin } from '../../core/sessions/control-host-policy.js'
 import { bootPolicy } from '../../core/boot-policy.js'
-import { FORWARD_METHODS, companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseForwardUrl } from './policy.js'
+import { FORWARD_METHODS, companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseConsoleTaskWrite, parseForwardUrl } from './policy.js'
 
 /** Set on an answer the door gave itself: nothing ran here, the companion may answer the call. */
 export const FORWARD_REFUSED_HEADER = 'x-walnut-forward-refused'
@@ -66,14 +67,21 @@ export interface CompanionDoorOptions {
   afterAnswerMs?: number
 }
 
-type Checked = { ok: true; path: string; rel: string } | { ok: false; status: number; message: string }
+export type Checked = { ok: true; path: string; rel: string } | { ok: false; status: number; message: string }
 
-/** The target target.ts checks for a server.http call, for one request line. */
-function check(method: string | undefined, url: string | undefined): Checked {
+/**
+ * The target target.ts checks for a server.http call, for one request line: a /api/v1
+ * call the companion does not keep, or a console task-store write on the exact list.
+ */
+export function checkForwardedCall(method: string | undefined, url: string | undefined): Checked {
   const m = (method ?? '').toUpperCase()
   if (!FORWARD_METHODS.has(m)) return { ok: false, status: 405, message: 'Unsupported method' }
   const parsed = parseForwardUrl(url)
-  if (!parsed) return { ok: false, status: 400, message: 'Invalid forwarded path' }
+  if (!parsed) {
+    const write = parseConsoleTaskWrite(m, url)
+    if (!write) return { ok: false, status: 400, message: 'Invalid forwarded path' }
+    return { ok: true, path: write.pathname, rel: write.rel }
+  }
   const kept = companionAnswers(m, parsed.rel)
   if (kept) return { ok: false, status: 400, message: `The companion answers ${parsed.pathname} itself (${kept})` }
   return { ok: true, path: `${parsed.pathname}${parsed.search}`, rel: parsed.rel }
@@ -131,7 +139,7 @@ export function createCompanionDoor(opts: CompanionDoorOptions = {}): CompanionD
     const stream = req.socket as unknown as Duplex
     disarm(stream)
     res.on('close', () => { if (!stream.destroyed) arm(stream, opts.afterAnswerMs ?? STREAM_AFTER_ANSWER_MS) })
-    const c = check(req.method, req.url)
+    const c = checkForwardedCall(req.method, req.url)
     const method = (req.method ?? '').toUpperCase()
     const port = ownPort()
     const bodyOnRead = (method === 'GET' || method === 'HEAD') && (Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'] !== undefined)

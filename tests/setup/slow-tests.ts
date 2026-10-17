@@ -107,6 +107,7 @@ export const SLOW_TEST_FILES = [
   'tests/web/routes/api-v1-notes-extras.test.ts', // real QMD note indexing
   'tests/web/routes/sessions-compare-modes-diverge.test.ts', // 2s
   'tests/web/routes/sessions-git-diff.test.ts', // 2s
+  'tests/web/routes/companion-bases-wiring-cloud.test.ts', // 2s: the real startServer in CLOUD_MODE, a copy round over /bridge/replica (WP13)
   'tests/web/human-inbox-routes.test.ts', // boots a real server (route mount + ops parity)
   'tests/web/repo-size-recovery.test.ts', // ~70s: two real server boots, each waiting out one 30s git tick for the size sentinel
   // Boots a real server + a real notes vault and waits on the debounced notes

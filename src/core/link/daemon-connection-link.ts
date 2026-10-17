@@ -30,7 +30,7 @@ export interface DaemonConnectionLinkOptions {
 }
 
 export interface DaemonConnectionLink extends Link {
-  /** Stop the state watch and the event fan-out. */
+  /** Stop the state watch and the event fan-out, for good: a later on() arms nothing. */
   close(): void
 }
 
@@ -39,6 +39,7 @@ export function createDaemonConnectionLink(opts: DaemonConnectionLinkOptions): D
   const now = opts.now ?? Date.now
   const events = createLinkEvents()
   let stateListeners = 0
+  let closed = false
   let last: LinkState | null = null
   let timer: ReturnType<typeof setInterval> | null = null
   const state = (): LinkState => (conn.connected ? 'up' : 'down')
@@ -62,6 +63,8 @@ export function createDaemonConnectionLink(opts: DaemonConnectionLinkOptions): D
     },
     request: async (cmd, params, timeoutMs) => (await conn.send(cmd, params ?? {}, timeoutMs)) as Record<string, unknown>,
     on(event, cb) {
+      // A closed link emits nothing and arms nothing (no watch close() could stop).
+      if (closed) return () => {}
       const off = events.on(event, cb)
       if (event !== 'state') return off
       if (stateListeners++ === 0) {
@@ -69,8 +72,14 @@ export function createDaemonConnectionLink(opts: DaemonConnectionLinkOptions): D
         timer = setInterval(watch, opts.stateEveryMs ?? 1_000)
         timer.unref?.()
       }
+      // Counted once: a second call of this off, or one after close() let every
+      // listener go, never takes the count below the listeners still there.
+      let counted = true
       return () => {
         off()
+        if (!counted) return
+        counted = false
+        if (closed) return
         if (--stateListeners === 0 && timer) { clearInterval(timer); timer = null }
       }
     },
@@ -79,6 +88,8 @@ export function createDaemonConnectionLink(opts: DaemonConnectionLinkOptions): D
       return conn.openStream('follower', door)
     },
     close() {
+      if (closed) return
+      closed = true
       offEvents()
       if (timer) { clearInterval(timer); timer = null }
       stateListeners = 0

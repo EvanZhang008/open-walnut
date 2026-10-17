@@ -965,3 +965,56 @@ describe('server.tasks.get (full-row readback relay, primary side)', () => {
     expect(missing).toMatchObject({ ok: false, errorKind: 'not_found' });
   });
 });
+
+// WP13 review: a live op on its way to the Mac holds its task's base the way a queued
+// op does. Before, a copy round that landed while the op was in flight took the Mac's
+// row from before the write as the base, and the next write here read as a second
+// writer on the Mac (a false conflict letter).
+describe('a live op on its way holds its task\'s base against a copy round (WP13)', () => {
+  const iso = (ms: number): string => new Date(ms).toISOString();
+
+  it.each([
+    ['the Mac applies it', { ok: true, result: { applied: true, reason: 'updated' } }],
+    ['it is queued', { ok: false, failure: { kind: 'bridge_offline', message: 'down' } }],
+  ] as const)('until %s', async (_until, reply) => {
+    current = await load(true);
+    const { queue } = current;
+    const store = await import('../../src/core/replication/task-replica-store.js');
+    const bases = await import('../../src/core/companion-bases.js');
+    try {
+      const mac = snapshot({ id: 'inflight-1', title: 'Mac title', updated_at: iso(1_000) });
+      // The copy took the Mac's row: the base of the next write here.
+      expect(await store.replicaPut({ kind: 'tasks', rows: [mac] })).toMatchObject({ ok: true, stored: 1, held: 0 });
+      const written = { ...mac, title: 'Phone title', updated_at: iso(2_000), field_at: { title: iso(2_000) } };
+      const fields = queue.companionFieldWrites(written as never, ['title']);
+      expect(fields?.title).toEqual({ base: 'Mac title', value: 'Phone title', at: 2_000 });
+
+      // The relay answers only when the test says so: the op is on its way.
+      const gate: { answer: ((r: RelayReply) => void) | null } = { answer: null };
+      relayImpl = (() => new Promise<RelayReply>((resolve) => { gate.answer = resolve; })) as never;
+      const sending = queue.dispatchTaskOp({ type: 'update', task: written as never, touched: ['title'], fields });
+      for (let i = 0; i < 100 && !gate.answer; i++) await new Promise((r) => setTimeout(r, 5));
+      expect(gate.answer).not.toBeNull();
+      expect(queue.taskOpInFlight('inflight-1')).toBe(true);
+      expect(queue.liveTaskOpsInFlight()).toBe(1);
+
+      // A copy round lands meanwhile, with the Mac's row from before this write: the row
+      // is held (as for a queued op), and so is the base, also when the round's put had
+      // already chosen its rows before the write (noteKnownTaskRows itself).
+      expect(await store.replicaPut({ kind: 'tasks', rows: [mac] })).toMatchObject({ ok: true, stored: 0, held: 1 });
+      queue.noteKnownTaskRows([mac as never]);
+      queue.forgetKnownTaskRows(['inflight-1']);
+
+      gate.answer!(reply as RelayReply);
+      await sending;
+      expect(queue.taskOpInFlight('inflight-1')).toBe(false);
+      expect(queue.liveTaskOpsInFlight()).toBe(0);
+
+      // The next write here goes with this box's own last write as its base.
+      const next = queue.companionFieldWrites({ ...written, title: 'Again', updated_at: iso(3_000), field_at: { title: iso(3_000) } } as never, ['title']);
+      expect(next?.title).toEqual({ base: 'Phone title', value: 'Again', at: 3_000 });
+    } finally {
+      bases._closeCompanionBasesForTesting();
+    }
+  });
+});

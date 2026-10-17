@@ -145,6 +145,55 @@ export function parseForwardUrl(url: unknown): { rel: string; pathname: string; 
   return { rel: pathname.slice(V1_PREFIX.length), pathname, search }
 }
 
+/**
+ * The web console's task-store writes (web/src/api/tasks.ts, focus.ts) that the companion
+ * forwards while the Mac answers, so the Mac is their one writer (replica plan WP13):
+ * create, update, delete, complete or reopen, phase, reorder, and the focus moves. Exact
+ * method and full path, never a prefix. Everything else under /api/tasks and /api/focus
+ * (a parse, telemetry, plugin fields and sync, folders, a merge, custom tiers) is not on
+ * the list: the Mac's door refuses it and the companion keeps its own path, as before. A
+ * route added there later is refused until it is listed here on purpose
+ * (tests/web/routes/v1-forward-console-writes.test.ts walks both routers).
+ */
+export const CONSOLE_TASK_WRITES: ReadonlyArray<{ method: string; route: string }> = [
+  { method: 'POST', route: '/api/tasks' },
+  { method: 'PATCH', route: '/api/tasks/reorder' },
+  { method: 'POST', route: '/api/tasks/batch/phase' },
+  { method: 'PATCH', route: '/api/tasks/:id' },
+  { method: 'DELETE', route: '/api/tasks/:id' },
+  { method: 'POST', route: '/api/tasks/:id/complete' },
+  { method: 'POST', route: '/api/tasks/:id/toggle-complete' },
+  { method: 'POST', route: '/api/tasks/:id/notes' },
+  { method: 'PUT', route: '/api/tasks/:id/note' },
+  { method: 'PUT', route: '/api/tasks/:id/description' },
+  { method: 'PUT', route: '/api/tasks/:id/summary' },
+  { method: 'PUT', route: '/api/tasks/:id/depends-on' },
+  { method: 'POST', route: '/api/focus/batch' },
+  { method: 'POST', route: '/api/focus/tasks/:id' },
+  { method: 'DELETE', route: '/api/focus/tasks/:id' },
+  { method: 'PUT', route: '/api/focus/reorder' },
+  { method: 'PUT', route: '/api/focus/tasks/:id/tier' },
+]
+
+const CONSOLE_WRITE_RES = CONSOLE_TASK_WRITES.map((w) => ({
+  method: w.method,
+  re: new RegExp(`^${w.route.split('/').map((s) => (s === ':id' ? '[^/]+' : s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('/')}$`),
+}))
+
+/**
+ * A console task write (CONSOLE_TASK_WRITES) as a forwarded call, or null. The same
+ * checks as parseForwardUrl, and no query string: none of these writes takes one, and
+ * a delete's `?force=true` stops the task's sessions, which stays the Mac's own call.
+ * `rel` is the path under /api, the shape isTaskCopyWrite reads.
+ */
+export function parseConsoleTaskWrite(method: unknown, url: unknown): { rel: string; pathname: string; search: '' } | null {
+  if (typeof method !== 'string' || typeof url !== 'string' || url.length === 0 || url.length > 4096) return null
+  if (/[\0#\\\r\n?]/.test(url) || url.includes('//') || hasDotSegment(url)) return null
+  const m = method.toUpperCase()
+  if (!CONSOLE_WRITE_RES.some((w) => w.method === m && w.re.test(url))) return null
+  return { rel: url.slice('/api'.length), pathname: url, search: '' }
+}
+
 /** The request headers that cross: what a route reads to understand the body and the cache. */
 const REQUEST_HEADERS = new Set([
   'accept', 'accept-language', 'content-type',

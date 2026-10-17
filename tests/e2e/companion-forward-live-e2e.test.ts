@@ -20,6 +20,9 @@
  * WP13 (bridge-stream-v1): the forward rides a stream through the Mac's own daemon
  * (no size cap: a 4 MB body there and a 4 MB reply back); with the cap dropped from
  * the daemon's bridge hello (an older daemon) it goes through server.http as before.
+ * The web console's task writes (/api/tasks, /api/focus) take the same path: once on
+ * the Mac while it answers, never first on the companion; away, a local write queued
+ * by field, which reaches the Mac when it wakes.
  *
  * Isolation as in leader-takeover-live-e2e.test.ts: own HOME, data dir and
  * daemon dir per server under one temp base, fresh random tokens, a `claude`
@@ -292,6 +295,37 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     expect(queued).toEqual([])
   }, 60_000)
 
+  // WP13 review: the web console's task writes take the same one-writer path. Before, the
+  // companion applied them to its own store first and then sent an op to the Mac.
+  const CONSOLE_TITLE = 'Marina console plan'
+  let consoleTaskId = ''
+  const queuedOps = (): Array<Record<string, any>> => {
+    const dir = path.join(companion.data, 'cache', 'task-queue')
+    try { return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort().map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))) } catch { return [] }
+  }
+  const titled = (list: unknown): string[] => ((list as Array<Record<string, unknown>> | undefined) ?? []).filter((t) => t.title === CONSOLE_TITLE).map((t) => String(t.id))
+
+  it('a console task write goes to the Mac while it answers: applied once there, never first on the companion', async () => {
+    const created = await phone('/api/tasks', { method: 'POST', body: JSON.stringify({ title: CONSOLE_TITLE, project: 'Acme', client_request_id: 'c-live-1' }) })
+    expect(created).toMatchObject({ status: 201, by: 'primary' })
+    consoleTaskId = created.json.task.id as string
+    const patched = await phone(`/api/tasks/${encodeURIComponent(consoleTaskId)}`, { method: 'PATCH', body: JSON.stringify({ priority: 'important' }) })
+    expect(patched).toMatchObject({ status: 200, by: 'primary' })
+    expect(patched.json.task).toMatchObject({ id: consoleTaskId, priority: 'important' })
+    const tier = await phone(`/api/focus/tasks/${encodeURIComponent(consoleTaskId)}/tier`, { method: 'PUT', body: JSON.stringify({ tier: 'focus' }) })
+    expect(tier).toMatchObject({ status: 200, by: 'primary' })
+    // The companion's copy shows the Mac's row (its id, its values) after the round the Mac sends at once.
+    await waitFor(async () => {
+      const r = await phone(`/api/tasks/${encodeURIComponent(consoleTaskId)}`)
+      return r.json.task?.priority === 'important' && r.json.task?.focus_tier === 'focus' ? r : null
+    }, 30_000, 'the companion\'s copy to show the console writes')
+    // A second copy would come from an op the companion sent after a local write: give it time to land.
+    await sleep(2_000)
+    expect(titled((await mac('/api/tasks')).json.tasks)).toEqual([consoleTaskId])
+    expect(titled((await phone('/api/tasks')).json.tasks)).toEqual([consoleTaskId])
+    expect(queuedOps()).toEqual([])
+  }, 60_000)
+
   it('the Mac\'s own rules hold: an op only this Mac may run is refused, as for any paired client', async () => {
     const r = await phone('/api/v1/actions/invoke', { method: 'POST', body: JSON.stringify({ tool: 'health_status' }) })
     expect(r).toMatchObject({ status: 403, by: 'primary' })
@@ -334,7 +368,15 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     const status = (await leaderView()).forward
     expect(status.answeredHere).toMatchObject({ unanswered: 1, 'primary-suspect': 1 })
     expect((status.answeredHere['primary-silent'] ?? 0) + (status.answeredHere['no-bridge'] ?? 0)).toBeGreaterThanOrEqual(1)
-  }, 90_000)
+    // WP13 review: away, a console task write runs here at once and is queued for the
+    // Mac by field, its base the value the companion's copy took from the Mac.
+    const edit = await phone(`/api/tasks/${encodeURIComponent(consoleTaskId)}`, { method: 'PATCH', body: JSON.stringify({ title: `${CONSOLE_TITLE}, edited away` }) })
+    expect(edit).toMatchObject({ status: 200, by: 'companion' })
+    expect(edit.ms).toBeLessThan(2_000)
+    expect(edit.json.task).toMatchObject({ id: consoleTaskId, title: `${CONSOLE_TITLE}, edited away` })
+    const op = await waitFor(() => queuedOps().find((o) => o.type === 'update' && o.task?.id === consoleTaskId) ?? null, 40_000, 'the console edit to be queued')
+    expect(op.fields?.title).toMatchObject({ base: CONSOLE_TITLE, value: `${CONSOLE_TITLE}, edited away` })
+  }, 150_000)
 
   it('keeps seven-minute voice and completed text on the companion while the Mac sleeps, then copies both after wake', async () => {
     const id = crypto.randomUUID()
@@ -380,7 +422,14 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
       return x.by === 'primary' ? x : null
     }, 60_000, 'the Mac to answer after it wakes')
     expect(r.json.content).toMatch(/written from the phone/)
-  }, 90_000)
+    // The console edit queued while away reaches the Mac, merged by field, and leaves the queue.
+    await waitFor(async () => {
+      const t = (await mac(`/api/tasks/${encodeURIComponent(consoleTaskId)}`)).json.task
+      return t?.title === `${CONSOLE_TITLE}, edited away` && t?.priority === 'important' ? t : null
+    }, 90_000, 'the queued console edit to reach the Mac')
+    await waitFor(() => queuedOps().every((o) => o.task?.id !== consoleTaskId), 30_000, 'the queue to let the console edit go')
+    expect(titled((await mac('/api/tasks')).json.tasks)).toEqual([])
+  }, 200_000)
 
   // WP13: an older daemon (its bridge hello without bridge-stream-v1, the cap dropped
   // with WALNUT_BRIDGE_HIDE_CAPS): the Mac and its daemon start again, and the companion

@@ -130,15 +130,50 @@ function baseRowOf(task: Task): Record<string, unknown> {
   return row;
 }
 
-/** The task copy took these rows from the Mac (replication/task-replica-store.ts). */
-export function noteKnownTaskRows(rows: readonly Task[], skipped: readonly string[] = []): void {
-  const held = new Set(skipped);
-  putCompanionBases(rows.filter((t) => t && typeof t.id === 'string' && !held.has(t.id)).map((t) => ({ id: t.id, row: baseRowOf(t) })));
+/**
+ * Tasks with a live op on its way to the Mac: sent, neither applied there nor queued
+ * here yet. Such a task's base is held the way a queued op holds it (task-replica-store.ts
+ * heldIds, and the two functions below): a copy round that lands meanwhile carries the
+ * Mac's row from before this write, and taking that as the base would make this box's
+ * next write to the field read as a second writer on the Mac (a false conflict letter).
+ * A count per task: two writes to one task may be on their way at once.
+ */
+const liveInFlight = new Map<string, number>();
+/** Every live op on its way, the order ops (no task) included. */
+let liveOps = 0;
+
+/** Whether a live op for this task is on its way to the Mac (dispatchTaskOp). */
+export function taskOpInFlight(id: string): boolean {
+  return liveInFlight.has(id);
 }
 
-/** These tasks are gone here: their bases go with them. */
+/** How many live ops are on their way, any kind (a forwarded task write waits behind them, v1-forward/proxy.ts). */
+export function liveTaskOpsInFlight(): number {
+  return liveOps;
+}
+
+function holdLive(id: string): void {
+  liveInFlight.set(id, (liveInFlight.get(id) ?? 0) + 1);
+}
+
+function releaseLive(id: string): void {
+  const n = (liveInFlight.get(id) ?? 0) - 1;
+  if (n > 0) liveInFlight.set(id, n);
+  else liveInFlight.delete(id);
+}
+
+/**
+ * The task copy took these rows from the Mac (replication/task-replica-store.ts). A row
+ * the copy did not store (`skipped`) or whose live op is still on its way keeps its base.
+ */
+export function noteKnownTaskRows(rows: readonly Task[], skipped: readonly string[] = []): void {
+  const held = new Set(skipped);
+  putCompanionBases(rows.filter((t) => t && typeof t.id === 'string' && !held.has(t.id) && !liveInFlight.has(t.id)).map((t) => ({ id: t.id, row: baseRowOf(t) })));
+}
+
+/** These tasks are gone here: their bases go with them (not one whose live op is on its way). */
 export function forgetKnownTaskRows(ids: readonly string[]): void {
-  forgetCompanionBases(ids);
+  forgetCompanionBases(ids.filter((id) => !liveInFlight.has(id)));
 }
 
 /**
@@ -166,6 +201,7 @@ export function companionFieldWrites(task: Task, touched: readonly string[] | un
 
 /** Tests only. */
 export function _resetKnownTaskRowsForTesting(): void {
+  liveInFlight.clear();
   _clearCompanionBasesForTesting();
 }
 
@@ -277,6 +313,11 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
   if (input.type === 'delete') { recordDeleteTombstone(input.id); forgetCompanionBases([input.id]); }
   if (input.type === 'reorder' || input.type === 'reorder-pins') noteLocalOrderOp();
   const op = buildTaskOp(input);
+  // From here until the Mac applied it, refused it, or it is queued, the task's base is
+  // held (liveInFlight above). Taken at once: the local write already happened.
+  const heldId = taskIdOf(op);
+  if (heldId) holdLive(heldId);
+  liveOps++;
   try {
     // An older op for the same task still queued goes first: the Mac applies them in
     // the order they were made (a newer edit ahead of an older one of the same field
@@ -302,6 +343,10 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
       opId: op.opId, err: String(err),
     });
     await enqueue(op).catch(() => {});
+  } finally {
+    // Applied, refused, or queued (a queued op holds the task from its file).
+    if (heldId) releaseLive(heldId);
+    liveOps--;
   }
 }
 

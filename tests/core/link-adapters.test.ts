@@ -71,6 +71,42 @@ describe('the DaemonConnection Link', () => {
     await expect(link.openStream('companion', 'web')).rejects.toThrow(/follower only/)
     link.close()
   })
+
+  it('an off called twice counts once: the other listener keeps its state events', async () => {
+    const f = fakeConn()
+    const link = createDaemonConnectionLink({ conn: f.conn, walnutId: 'w', stateEveryMs: 10 })
+    const a: unknown[] = []
+    const b: unknown[] = []
+    const offA = link.on('state', (s) => a.push(s))
+    const offB = link.on('state', (s) => b.push(s))
+    offA()
+    offA()
+    f.conn.connected = false
+    await new Promise((r) => setTimeout(r, 40))
+    expect(a).toEqual([])
+    expect(b).toEqual(['down'])
+    offB()
+    link.close()
+  })
+
+  it('an off after close never takes the count below zero; a closed link arms no watch', async () => {
+    const f = fakeConn()
+    const link = createDaemonConnectionLink({ conn: f.conn, walnutId: 'w', stateEveryMs: 10 })
+    const off = link.on('state', () => {})
+    link.close()
+    off()
+    // Subscribing after close starts nothing that close() could no longer stop (the
+    // count left at -1 used to arm a watch on the second subscriber).
+    const late: unknown[] = []
+    const offLate1 = link.on('state', (s) => late.push(s))
+    const offLate2 = link.on('state', (s) => late.push(s))
+    f.conn.connected = false
+    await new Promise((r) => setTimeout(r, 40))
+    expect(late).toEqual([])
+    offLate1()
+    offLate2()
+    link.close()
+  })
 })
 
 function fakeRegistry(over: Partial<{ connected: boolean; inbound: number | null; caps: string[] }> = {}) {

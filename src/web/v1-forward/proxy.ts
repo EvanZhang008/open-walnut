@@ -16,6 +16,10 @@
  * says `bridge-stream-v1`, with no size cap; else the `server.http` frame as
  * before. A stream refused at once was never sent and goes as that frame; one
  * the daemon or the Mac never answers counts as an unanswered call.
+ *
+ * The web console's task-store writes take the same ladder (consoleMiddleware,
+ * mounted on /api/tasks and /api/focus by server.ts on the companion only): one
+ * writer while the Mac answers, the companion's own route while it is away.
  */
 
 import type { NextFunction, Request, Response } from 'express'
@@ -25,7 +29,7 @@ import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { setLeaderPresence } from '../../core/server-role.js'
 import { LEADER_HEARTBEAT_MS } from '../../core/leader/protocol.js'
 import type { RelayFailure } from '../routes/v1-control-relay.js'
-import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders } from './policy.js'
+import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleTaskWrite } from './policy.js'
 import { forwardOnStream } from './stream-forward.js'
 
 /** What the companion knows of the Mac right now. */
@@ -58,6 +62,13 @@ export interface ForwardDeps {
    * `capable()` (the Mac's daemon said it can), else `call` (server.http) as before.
    */
   stream?: { capable: () => boolean | Promise<boolean>; open: () => Promise<Duplex> }
+  /**
+   * This box still holds task writes for the Mac (a queued op, or a live op on its way,
+   * core/task-queue.ts). A new task write then runs here and joins them, in order, rather
+   * than overtake them on the forward: the Mac applies a task's writes in the order they
+   * were made, and a newer one ahead of an older one of the same field reads as two writers.
+   */
+  taskWritesPending?: () => boolean | Promise<boolean>
 }
 
 /** A read waits this long for the Mac before the companion answers it from its copy. */
@@ -145,9 +156,35 @@ export function createV1Forward(deps: ForwardDeps) {
     if (deps.ownCall?.(req)) return answerHere('own-call', req, res, next)
     const kept = companionAnswers(method, req.path)
     if (kept) return answerHere(kept, req, res, next)
+    return toMac(req, res, next, method, isTaskCopyWrite(method, req.path))
+  }
+
+  /**
+   * The web console's task-store writes (policy.ts CONSOLE_TASK_WRITES), mounted on
+   * /api/tasks and /api/focus: while the Mac answers, the Mac is their one writer
+   * (replica plan WP13) and nothing is applied here; its copy shows the write after the
+   * round the Mac sends at once. Away, or refused by an older Mac, they fall through to
+   * this server's own route: a local write, sent to the Mac as an op or queued by field.
+   * Every other call on these routes (the reads, the writes not on the list) passes by.
+   */
+  async function consoleMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+    const method = req.method.toUpperCase()
+    if (!parseConsoleTaskWrite(method, req.originalUrl)) return next()
+    if (!deps.enabled()) return answerHere('turned-off', req, res, next)
+    if (deps.ownCall?.(req)) return answerHere('own-call', req, res, next)
+    return toMac(req, res, next, method, true)
+  }
+
+  /**
+   * The one ladder both mounts take once the call is the Mac's to answer. `taskWrite`:
+   * a write of the task store, which waits behind this box's own pending task writes.
+   */
+  async function toMac(req: Request, res: Response, next: NextFunction, method: string, taskWrite: boolean): Promise<void> {
     const now = deps.now()
     const why = macAnswers(await deps.primary(), now, suspectAt, unsupportedUntil)
     if (why) return answerHere(why, req, res, next)
+    // Order: a task write never overtakes this box's queued ones (they drain first).
+    if (taskWrite && deps.taskWritesPending && await deps.taskWritesPending()) return answerHere('queue-first', req, res, next)
     const body = bodyOf(req)
     if (body === 'unsupported') return answerHere('body-kind', req, res, next)
     // A stream has no size cap; the server.http frame keeps its own.
@@ -220,11 +257,22 @@ export function createV1Forward(deps: ForwardDeps) {
     // It went out and no answer came: the Mac is not asked again until it is heard.
     suspectAt = deps.now()
     if (isRead) return answerHere('unanswered', req, res, next)
+    unansweredWrite(req, res, method, f.kind, f.message)
+  }
+
+  /**
+   * A write that went out and got no answer: never applied here (the Mac may have run
+   * it), and `sent: true` so the web client does not retry it (web/src/api/write-retry.ts):
+   * a retry would be answered here now that the Mac is suspect, a second copy of a write
+   * the Mac may hold already.
+   */
+  function unansweredWrite(req: Request, res: Response, method: string, kind: string, message: string): void {
     status.unanswered++
-    log.web.warn('v1 forward: a write got no answer from the Mac', { method, path: req.path, kind: f.kind, message: f.message })
+    log.web.warn('v1 forward: a write got no answer from the Mac', { method, path: req.originalUrl.split('?')[0], kind, message })
     res.status(504).json({
       error: {
         code: 'primary_timeout',
+        sent: true,
         message: 'Your Mac did not answer in time. It may have applied this change: check before you try again.',
       },
     })
@@ -266,19 +314,16 @@ export function createV1Forward(deps: ForwardDeps) {
     }
     suspectAt = deps.now()
     if (isRead) return answerHere('unanswered', req, res, next)
-    status.unanswered++
-    log.web.warn('v1 forward: a write got no answer from the Mac', { method, path: req.path, kind: 'stream', message: o.message })
-    res.status(504).json({
-      error: {
-        code: 'primary_timeout',
-        message: 'Your Mac did not answer in time. It may have applied this change: check before you try again.',
-      },
-    })
+    unansweredWrite(req, res, method, 'stream', o.message)
   }
 
   return {
     middleware: (req: Request, res: Response, next: NextFunction): void => {
       middleware(req, res, next).catch(next)
+    },
+    /** The console's task-store writes on /api/tasks and /api/focus (consoleMiddleware above). */
+    consoleMiddleware: (req: Request, res: Response, next: NextFunction): void => {
+      consoleMiddleware(req, res, next).catch(next)
     },
     /**
      * The Mac is away by the companion's own view: no bridge, silent, a forward
@@ -338,6 +383,10 @@ export function getV1Forward(): ReturnType<typeof createV1Forward> {
     call: async (params, timeoutMs) => {
       const { callPrimaryControl } = await import('../routes/v1-control-relay.js')
       return callPrimaryControl('server.http', '__server__', params, timeoutMs)
+    },
+    taskWritesPending: async () => {
+      const q = await import('../../core/task-queue.js')
+      return q.liveTaskOpsInFlight() > 0 || (await q.queuedTaskOpCount()) > 0
     },
     stream: {
       capable: async () => {

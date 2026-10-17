@@ -1,7 +1,9 @@
 /**
  * The Mac's half of the companion's forward (policy.ts): run one /api/v1 call
  * the companion carried here (`server.http` over the bridge) against this
- * server's own routes, as the paired client it came from.
+ * server's own routes, as the paired client it came from. The console's
+ * task-store writes on the exact list in policy.ts (CONSOLE_TASK_WRITES) come
+ * the same way; no other path outside /api/v1 is run.
  *
  * The call is a loopback request to this server, labelled with the caller's
  * class (`x-walnut-origin: remote-http`), exactly as the plugin HTTP relay and
@@ -16,7 +18,7 @@ import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
 import {
   FORWARD_METHODS, FORWARD_TARGET_TIMEOUT_MS, MAX_FORWARD_REQUEST_BYTES, MAX_FORWARD_RESPONSE_BYTES,
-  companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseForwardUrl,
+  companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseConsoleTaskWrite, parseForwardUrl,
 } from './policy.js'
 
 /**
@@ -88,9 +90,11 @@ async function readUpTo(response: Response, limit: number): Promise<Buffer | nul
 export async function runForwardedCall(params: Record<string, unknown>, relayOrigin?: string): Promise<ForwardReply> {
   const method = typeof params.method === 'string' ? params.method.toUpperCase() : ''
   if (!FORWARD_METHODS.has(method)) throw refuse('Unsupported method', 405)
-  const url = parseForwardUrl(params.url)
+  const v1 = parseForwardUrl(params.url)
+  // Else one of the console's task-store writes, exactly as listed (policy.ts CONSOLE_TASK_WRITES).
+  const url = v1 ?? parseConsoleTaskWrite(method, params.url)
   if (!url) throw refuse('Invalid forwarded path')
-  const kept = companionAnswers(method, url.rel)
+  const kept = v1 ? companionAnswers(method, v1.rel) : null
   if (kept) throw refuse(`The companion answers ${url.pathname} itself (${kept})`)
   const body = decodeBody(params.data, params.size)
   if ((method === 'GET' || method === 'HEAD') && body.byteLength > 0) throw refuse(`${method} cannot have a body`)
