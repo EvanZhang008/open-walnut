@@ -327,7 +327,7 @@ describe('what an answer from the copies says', { timeout: 20_000 }, () => {
     expect(away.headers['x-walnut-offline-why']).toBe('away')
     expect(away.headers['x-walnut-presence-seq']).toBe('3')
     // A write away is refused with the same marks.
-    const write = await call('POST', '/api/v1/tasks', AUTH)
+    const write = await call('DELETE', '/api/v1/tasks/t1', AUTH)
     expect(write.status).toBe(503)
     expect(write.headers['x-walnut-offline-why']).toBe('away')
     expect(write.headers['x-walnut-presence-seq']).toBe('3')
@@ -369,7 +369,7 @@ describe('x-walnut-presence-seq and x-walnut-presence-boot on every answer', { t
     expect(front.presenceEvent()).toMatchObject({ seq: 1, boot: front.boot, answers: true })
 
     daemon.heardAgoMs = 31_000
-    const refused = await call('POST', '/api/v1/tasks', AUTH)
+    const refused = await call('DELETE', '/api/v1/tasks/t1', AUTH)
     expect(refused.status).toBe(503)
     expect(refused.headers['x-walnut-presence-seq']).toBe('2')
     expect(refused.headers['x-walnut-presence-boot']).toBe(front.boot)

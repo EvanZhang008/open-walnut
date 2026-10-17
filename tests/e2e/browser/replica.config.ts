@@ -1,5 +1,6 @@
 /**
- * The host replica's browser specs (docs/plan/walnut-replica-servers-impl.md, WP7):
+ * The host replica's browser specs (docs/plan/walnut-replica-servers-impl.md, WP7 reads,
+ * WP10 writes):
  * their own fixture (replica-server.ts: a real Mac, a host daemon twin, the
  * replica it supervises, a fake tunnel), because the shared :3457 fixture has
  * no host and no replica.
@@ -27,7 +28,8 @@ const desktop = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 }
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'replica-away-read.spec.ts',
+  // The read spec first (it leaves the Mac awake and the journal empty), then the write spec.
+  testMatch: ['replica-away-read.spec.ts', 'replica-away-write.spec.ts'],
   fullyParallel: false,
   workers: 1,
   retries: 0,

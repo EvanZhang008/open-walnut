@@ -603,6 +603,8 @@ let searchCopyHandle: { stop: () => Promise<void> } | null = null
 let hostReplicaDoor: import('../replica/leader-door.js').LeaderDoor | null = null
 /** A host replica's front (replica/front.ts): follower link, presence, dispatcher. Null elsewhere. */
 let hostReplicaFront: import('../replica/front.js').ReplicaFront | null = null
+/** The away writes of a host replica (WP10): its overlay timer, copy watcher and RPC answer, stopped with the server. */
+let hostReplicaAway: { stop(): void } | null = null
 export function getHostReplicaFront(): import('../replica/front.js').ReplicaFront | null {
   return hostReplicaFront
 }
@@ -1509,8 +1511,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // routes' (or, with an older daemon, read from their stream files) (WP7).
   if (hostReplicaFront) {
     const front = hostReplicaFront
-    const [{ awaySessionReads }, { getSessionByClaudeId }, { isSelfHost }] = await Promise.all([
+    const [{ awaySessionReads }, { getSessionByClaudeId }, { isSelfHost }, wsHandlerForReplica] = await Promise.all([
       import('../replica/away-session-reads.js'), import('../core/session-tracker.js'), import('../replica/self-host.js'),
+      import('./ws/handler.js'),
     ])
     const hostKey = (process.env.WALNUT_HOST_KEY ?? '').trim() || null
     app.use('/api', awaySessionReads({
@@ -1523,6 +1526,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       readHostHistory: (sid, tailBytes) => front.link.request('read-history', { sid, tailBytes }, 20_000),
       log: (level, msg, data) => log.web[level](msg, data),
     }))
+    // Writes while the Mac is away (WP10): the overlay of this host's journal over
+    // the copies, the write port, its routes, and the /ws RPC writes.
+    const away = await (await import('../replica/away-wiring.js')).wireAwayWrites({
+      link: front.link,
+      devices: (await import('../replica/auth.js')).replicaDeviceCopy(),
+      broadcast: (name, data) => wsHandlerForReplica.broadcastEvent(name, data),
+      hostKey,
+      setRpcAnswer: (fn) => wsHandlerForReplica.setRpcAnswer(fn),
+      macAnswers: () => front.presence().answers,
+    })
+    hostReplicaAway = away
+    app.use('/api', away.reads)
+    app.use('/api', away.writes)
     // The copies' age as the last process left it (kind-follower.ts copiesAsOf), before
     // any round: a replica restarted while the Mac is away still says how old its copy is.
     void (async () => {
@@ -6007,6 +6023,11 @@ export async function stopServer(): Promise<void> {
   await hostReplicaDoor?.close().catch(() => {})
   hostReplicaDoor = null
   currentApp = null
+  // Before the front: its watch timer asks the link, and its copy watcher and RPC answer are module globals.
+  if (hostReplicaAway) {
+    try { hostReplicaAway.stop() } catch { /* best-effort */ }
+    hostReplicaAway = null
+  }
   if (hostReplicaFront) {
     const ws = await import('./ws/handler.js')
     ws.setUpgradeInterceptor(null)

@@ -189,6 +189,8 @@ export type OfflineRecordV2 =
   | { kind: 'task-move'; taskId: string; anchor: { after?: string; before?: string } | null; tier?: string; base?: unknown }
   | { kind: 'board'; op: string; args: Record<string, unknown>; postId?: string }
   | { kind: 'note'; path: string; noteId?: string; mode: 'put' | 'create' | 'delete'; baseHash: string | null; baseBlob: string | null; oursBlob: string | null }
+  /** A paired device removed itself while the Mac was away (WP10): the Mac revokes it on drain. */
+  | { kind: 'device-revoke'; deviceId: string; name?: string }
 
 /** Every record a drain may hand out: the v1 shapes plus the v2 bookkeeping and kinds. */
 export type OfflineJournalRecord = (OfflineRecord | (OfflineRecordV2 & { seq: number; at: number; online?: true })) & {
@@ -588,10 +590,20 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * number is an old Mac's `upTo`, which drops only seqs a drain handed it. Then the rows
    * it now owns are dropped too.
    */
-  function ack(home: string, req: number | { seqs?: unknown; upTo?: unknown }): { remaining: number; ignored?: number[]; error?: string } {
+  /**
+   * The leading server's clock minus this host's, per home, measured at its last ack
+   * (`leaderNow`, its Date.now() as it sent the ack, after it applied the records). A
+   * host replica puts its own time of an ack on the Mac's clock with it, to compare it
+   * with a copy manifest's asOf (overlay.ts). The ack's travel makes it short by that
+   * delay, which only moves the replica's estimate later than the Mac's ack: never early.
+   */
+  const leaderOffsets = new Map<string, number>()
+  function ack(home: string, req: number | { seqs?: unknown; upTo?: unknown; leaderNow?: unknown }): { remaining: number; ignored?: number[]; error?: string } {
     const asked = typeof req === 'number' ? { upTo: req } : (req ?? {})
     if (typeof asked.upTo !== 'number' && !Array.isArray(asked.seqs)) return { remaining: recordsOf(home).length }
-    const r = journal.ack(home, asked)
+    const leaderNow = (asked as { leaderNow?: unknown }).leaderNow
+    if (typeof leaderNow === 'number' && Number.isFinite(leaderNow)) leaderOffsets.set(home, Math.round(leaderNow - deps.now()))
+    const r = journal.ack(home, { ...(Array.isArray(asked.seqs) ? { seqs: asked.seqs } : {}), ...(typeof asked.upTo === 'number' ? { upTo: asked.upTo } : {}) })
     const handed = new Set<string>()
     for (const x of r.acked) if (x.kind === 'row') handed.add((x as unknown as { row: OfflineRequestRow }).row.id)
     // A row whose latest state the server took is the server's now; a later
@@ -1327,7 +1339,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   // ── follower.op: the replica's writes while the Mac is away (replica-ops-v1) ──
 
-  const FOLLOWER_OP_KINDS: Record<string, string> = { task_update: 'task-fields', task_complete: 'task-fields', task_create: 'task-create', task_move: 'task-move' }
+  const FOLLOWER_OP_KINDS: Record<string, string> = { task_update: 'task-fields', task_complete: 'task-fields', task_create: 'task-create', task_move: 'task-move', device_revoke: 'device-revoke' }
   const OP_ID_RE = /^[A-Za-z0-9_-]{1,80}$/
 
   function actorOf(given: unknown): import('./offline-journal-core.js').JournalActor | null {
@@ -1359,7 +1371,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         const first = journal.byOpId(home, req.opId)
         if (first) {
           deps.log('info', 'offline host: follower write retried', { home, op: name, opId: req.opId, seq: first.seq })
-          return ok({ queued: true, offline: true, kind: first.kind, seq: first.seq, opId: String(first.opId), rev: first.rev ?? 1, duplicate: true })
+          // A create's retry names the task the first attempt made (the retry minted another id).
+          const firstTask = (first as { taskId?: unknown }).taskId
+          return ok({ queued: true, offline: true, kind: first.kind, seq: first.seq, opId: String(first.opId), rev: first.rev ?? 1, duplicate: true, ...(typeof firstTask === 'string' ? { taskId: firstTask } : {}) })
         }
       }
       const opId = typeof req.opId === 'string' ? req.opId : `op-${deps.randomHex(8)}`
@@ -1400,10 +1414,20 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           ? (typeof an.after === 'string' ? { after: an.after } : typeof an.before === 'string' ? { before: an.before } : null)
           : null
         record = { kind: 'task-move', taskId, anchor, ...(typeof args.tier === 'string' ? { tier: args.tier } : {}), base: given ?? 'unknown' }
+      } else if (kind === 'device-revoke') {
+        // Only a device's own sign-out: removing another needs the owner's rights, which the Mac holds.
+        const deviceId = typeof args.deviceId === 'string' ? args.deviceId : ''
+        if (!OP_ID_RE.test(deviceId)) return fail('bad_request', 'device_revoke needs "deviceId"')
+        if (actor.kind !== 'device' || actor.deviceId !== deviceId) {
+          return fail('needs_leader', 'removing another device needs your Mac', { detail: { why: 'device_changes_need_mac' } })
+        }
+        record = { kind: 'device-revoke', deviceId, ...(typeof args.name === 'string' && args.name ? { name: args.name.slice(0, 80) } : {}) }
       } else {
         const kit = deps.boards!
         const boardId = typeof args.task === 'string' ? args.task : ''
-        const board = boardId ? boardWithOverlay(home, boardId) : undefined
+        // A Board outside this host's copy (no session of its team runs here) is checked
+        // against the one the replica showed (its copy plus overlay), as a task is.
+        const board = boardId ? boardWithOverlay(home, boardId) ?? boardOfBase(given, boardId) : undefined
         if (!board && name !== 'board_set') return fail('needs_leader', 'that Board is not kept on this host', { detail: { why: 'board_not_here' } })
         const by = actor.kind === 'device' ? `device:${actor.name ?? actor.deviceId}` : 'task:'
         const prepared = kit.prepare(board, name, args, by)
@@ -1431,6 +1455,13 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       deps.log('error', 'offline host: follower write failed', { home, error: (err as Error).message })
       return fail('internal', `offline host error: ${(err as Error).message}`)
     }
+  }
+
+  /** The Board a follower write names as its base (the replica's copy plus overlay), or undefined. */
+  function boardOfBase(given: Record<string, unknown> | null, boardId: string): OfflineSliceBoard | undefined {
+    if (!given || typeof given.html !== 'string' || typeof given.version !== 'number') return undefined
+    const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, never> : {})
+    return { taskId: boardId, html: given.html, version: given.version, threads: obj(given.threads), marks: obj(given.marks), projects: obj(given.projects), choices: obj(given.choices) }
   }
 
   // ── the Board copy (offline-board-core.ts) ──
@@ -1929,6 +1960,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * typed it, and journaled for the server that takes this host back: it reopens
    * a completed task as a person's message does.
    */
+  /** A person's message being delivered now, by home, session and message id (a retry waits for it). */
+  const humanInFlight = new Map<string, Promise<GatewayResult>>()
   async function deliverHuman(home: string, sid: string, text: unknown, given: unknown): Promise<GatewayResult> {
     try {
       if (!slices.get(home)) return fail('not_found', 'this host holds no copy for that Walnut')
@@ -1939,11 +1972,35 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const denied = roomFor(home)
       if (denied) return denied
       const mid = messageId(given)
-      const delivered = await deps.deliver(sid, body, mid)
-      if (!delivered.ok) return fail('internal', `delivery failed: ${delivered.reason}`)
-      append(home, { kind: 'delivery', fromSessionId: '', toSessionId: sid, messageId: mid })
-      deps.log('info', 'offline host: a person wrote to a session while no server leads', { home, to: sid, messageId: mid })
-      return ok({ delivered: true, targetSessionId: sid, messageId: mid })
+      // A replica asking again after a lost answer (the same message id, write-port.ts):
+      // the first delivery answers, the session never gets the words twice. A retry can
+      // arrive while the first is still delivering (the replica's 5 s timeout against a
+      // session that is starting): it waits for that one instead of queueing its own.
+      const key = typeof given === 'string' ? `${home}\n${sid}\n${mid}` : ''
+      let seen: Promise<GatewayResult> | undefined
+      for (let running = key ? humanInFlight.get(key) : undefined; running && running !== seen; running = humanInFlight.get(key)) {
+        seen = running
+        const first = await running
+        if (first.ok) {
+          deps.log('info', 'offline host: a person\'s message asked again while it was delivering, delivered once', { home, to: sid, messageId: mid })
+          return ok({ ...first.result, duplicate: true })
+        }
+      }
+      if (key && recordsOf(home).some((r) => r.kind === 'delivery' && r.messageId === mid && r.toSessionId === sid)) {
+        deps.log('info', 'offline host: a person\'s message asked again, delivered once', { home, to: sid, messageId: mid })
+        return ok({ delivered: true, targetSessionId: sid, messageId: mid, duplicate: true })
+      }
+      const run = (async (): Promise<GatewayResult> => {
+        const delivered = await deps.deliver(sid, body, mid)
+        if (!delivered.ok) return fail('internal', `delivery failed: ${delivered.reason}`)
+        append(home, { kind: 'delivery', fromSessionId: '', toSessionId: sid, messageId: mid })
+        deps.log('info', 'offline host: a person wrote to a session while no server leads', { home, to: sid, messageId: mid })
+        return ok({ delivered: true, targetSessionId: sid, messageId: mid })
+      })()
+      if (!key) return await run
+      const tracked = run.catch((err: Error) => fail('internal', `offline host error: ${err.message}`))
+      humanInFlight.set(key, tracked)
+      try { return await run } finally { if (humanInFlight.get(key) === tracked) humanInFlight.delete(key) }
     } catch (err) {
       deps.log('error', 'offline host: a person\'s message failed', { home, sid, error: (err as Error).message })
       return fail('internal', `offline host error: ${(err as Error).message}`)
@@ -1993,7 +2050,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   /** The replica's overlay (`follower.pending`): pending records past `sinceSeq` and their blobs. */
   function pendingFor(home: string, sinceSeq: unknown) {
-    return journal.pending(home, typeof sinceSeq === 'number' && sinceSeq > 0 ? sinceSeq : 0)
+    const out = journal.pending(home, typeof sinceSeq === 'number' && sinceSeq > 0 ? sinceSeq : 0)
+    const offset = leaderOffsets.get(home)
+    return offset === undefined ? out : { ...out, leaderOffsetMs: offset }
   }
 
   /** The journal line of `follower.status` (the away line and observability). */

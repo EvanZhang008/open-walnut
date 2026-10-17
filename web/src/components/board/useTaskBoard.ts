@@ -68,6 +68,8 @@ export function normalizeBoardPayload(data: BoardPayload): BoardPayload {
   };
   if (typeof data?.board_task_id === 'string' && data.board_task_id) out.board_task_id = data.board_task_id;
   if (typeof data?.board_task_title === 'string') out.board_task_title = data.board_task_title;
+  // A host replica's "Syncs when your Mac is back" (AwaySyncMark); absent on the Mac.
+  if (data?.replica_sync === 'pending' || data?.replica_sync === 'awaiting') out.replica_sync = data.replica_sync;
   return out;
 }
 

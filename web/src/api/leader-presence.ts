@@ -277,6 +277,10 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   mac_too_old: 'Your Mac runs an older Walnut that cannot take this change later.',
   fields: 'Some of these fields can only be changed while your Mac answers.',
   board_not_here: 'This Board is not kept on this host.',
+  // The away writes of a host replica (replica/away-writes.ts, ws-writes.ts).
+  reorder_needs_mac: 'Only one task can be moved at a time while your Mac is away.',
+  list_order_needs_mac: 'Reordering a list needs your Mac; the Focus bar can be reordered while it is away.',
+  images_need_mac: 'Pictures reach a session through your Mac; send the text alone, or wait for your Mac.',
   // The copies (kinds/gate.ts, notes-routes.ts).
   kind_not_copied: 'This host keeps no copy of it.',
   copy_unreadable: 'The copy on this host could not be read.',

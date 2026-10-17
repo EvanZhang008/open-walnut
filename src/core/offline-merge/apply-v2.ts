@@ -28,7 +28,7 @@ import { applyFields, entryBase, exactTask, opKeyOf, pairValidator, resolveTaskI
 export { RefusedWrite };
 
 /** The v2 kinds this Mac applies (`offline.drain {kinds}`). */
-export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board'] as const;
+export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke'] as const;
 /** What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks. */
 export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor'];
 
@@ -313,6 +313,33 @@ async function applyBoard(ctx: V2Context, record: V2Record): Promise<void> {
   log.session.info('offline handover: board write applied', { host: ctx.hostKey, op, boardTaskId: args.task, seq: record.seq, opId: record.opId });
 }
 
+/**
+ * A paired device that removed itself while the Mac was away (WP10): the same revoke the
+ * device's own sign-out makes online (its push tokens and its copies go with it). Always
+ * safe on drain: a device already gone is a no-op, and only the device itself may name
+ * itself (a record for another device is refused, the answer the same call online gets).
+ */
+async function applyDeviceRevoke(ctx: V2Context, record: V2Record): Promise<void> {
+  const deviceId = String(record.deviceId ?? '');
+  if (!deviceId) throw new RefusedWrite('device-revoke without a device id');
+  if (record.actor?.kind !== 'device' || record.actor.deviceId !== deviceId) {
+    throw new RefusedWrite('a device may only remove itself while your Mac is away');
+  }
+  const { readRegistry } = await import('../device-store.js');
+  const row = (await readRegistry()).devices.find((d) => d.id === deviceId);
+  if (!row) {
+    ctx.result.skipped++;
+    log.session.info('offline handover: a device removed while away was already gone', { host: ctx.hostKey, deviceId, seq: record.seq, opId: record.opId });
+    return;
+  }
+  const { revokePairingAs } = await import('../device-auth.js');
+  const { LOCAL_ACTOR } = await import('../device-actor.js');
+  // The device's own word (checked above), replayed by this Mac on its behalf.
+  await revokePairingAs(row.name, { by: LOCAL_ACTOR });
+  ctx.result.replayed++;
+  log.session.info('offline handover: a device removed itself while away, revoked here', { host: ctx.hostKey, deviceId, name: row.name, seq: record.seq, opId: record.opId });
+}
+
 /** Apply one v2 record. Throws RefusedWrite for the Mac's refusals, anything else for a retry. */
 export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
   switch (record.kind) {
@@ -320,6 +347,7 @@ export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
     case 'task-create': return applyTaskCreate(ctx, record);
     case 'task-move': return applyTaskMove(ctx, record);
     case 'board': return applyBoard(ctx, record);
+    case 'device-revoke': return applyDeviceRevoke(ctx, record);
     default: throw new Error(`unknown journal kind ${record.kind}`);
   }
 }

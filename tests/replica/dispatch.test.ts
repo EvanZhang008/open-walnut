@@ -349,7 +349,7 @@ describe('a write to the Mac that fails', () => {
     expect(r.json.error).toMatchObject({ code: 'needs_leader', why: 'unreachable', retryAfter: 5 })
     expect(r.headers['retry-after']).toBe('5')
     // A write whose row says why (WP7: the console's task writes) says that instead.
-    const task = await call('POST', '/api/tasks', { body: '{}' })
+    const task = await call('DELETE', '/api/tasks/t1', { body: '{}' })
     expect(task.status).toBe(503)
     expect(task.json.error).toMatchObject({ code: 'needs_leader', why: 'task_writes_need_mac', retryAfter: 5 })
     expect(mac.seen).toEqual([])
@@ -379,7 +379,7 @@ describe('the Mac away', () => {
   })
 
   it('a write that needs the Mac is 503 needs_leader with its reason', async () => {
-    const r = await call('PATCH', '/api/v1/tasks/t1', { body: '{}' })
+    const r = await call('DELETE', '/api/v1/tasks/t1', { body: '{}' })
     expect(r.status).toBe(503)
     expect(r.json.error).toMatchObject({ code: 'needs_leader', why: 'task_writes_need_mac', retryAfter: 5 })
     expect(r.headers[OFFLINE_HEADER]).toBe(String(AS_OF))
@@ -429,7 +429,7 @@ describe('what every answer says about presence (front.ts header: the contract w
     const suspect = await call('GET', '/api/tasks')
     expect(suspect.headers['x-walnut-offline-why']).toBe('suspect')
     // A refusal from here says it too (the copies' age, and why the Mac did not take it).
-    const refusal = await call('PATCH', '/api/tasks/t1', { body: '{}' })
+    const refusal = await call('DELETE', '/api/tasks/t1', { body: '{}' })
     expect(refusal.status).toBe(503)
     expect([refusal.headers[OFFLINE_HEADER], refusal.headers['x-walnut-offline-why']]).toEqual([String(AS_OF), 'suspect'])
     // A caller with no known token learns neither.

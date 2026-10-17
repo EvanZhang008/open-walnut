@@ -444,10 +444,11 @@ describe.each(PROGRAMS)('%s, linked to its daemon only', (program) => {
     expect(api.headers.get('x-walnut-answered-via')).toBe('replica')
     // It trusts no loopback caller: no token is 401.
     expect((await get('/api/tasks')).status).toBe(401)
-    // A write that needs the Mac says so.
-    const write = await fetch(`http://127.0.0.1:${publicPort}/api/tasks`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${PHONE_TOKEN}` }, body: '{}' })
+    // A write that needs the Mac says so (WP10 journals a create or an edit on this
+    // host; deleting a task still needs the Mac).
+    const write = await fetch(`http://127.0.0.1:${publicPort}/api/tasks/t-host-none`, { method: 'DELETE', headers: { authorization: `Bearer ${PHONE_TOKEN}` } })
     expect(write.status).toBe(503)
-    expect((await write.json()).error.code).toBe('needs_leader')
+    expect((await write.json()).error).toMatchObject({ code: 'needs_leader', why: 'task_writes_need_mac' })
     // A WebSocket is the replica's own: refused without a token, nothing spliced anywhere.
     const seen = macDoor.seen.length + companionDoor.seen.length
     expect(await wsEcho(`ws://127.0.0.1:${publicPort}/ws`, 'x')).toBe('status 401')

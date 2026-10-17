@@ -46,6 +46,19 @@ export interface DeviceCopy {
   /** Whether the Mac ever sent one: without it no token can be checked here. */
   held(): boolean
   hash(): string | null
+  /**
+   * A device revoked on this host while the Mac is away (replica/away-writes.ts,
+   * section 7): its row goes at once, and its token stays refused through every
+   * later list the Mac sends until one no longer names it (the Mac applied the
+   * revoke). False: no row of that id.
+   */
+  revoke(id: string): boolean
+  /**
+   * Whether the Mac's last list (in this process) still names the device of `id`, or
+   * no list came since this process started (unknown counts as named): a revoke made
+   * here is applied on the Mac once a later list no longer names it.
+   */
+  namedByMac(id: string): boolean
 }
 
 function sha256Hex(text: string): string {
@@ -76,16 +89,21 @@ export function createDeviceCopy(file: string): DeviceCopy {
   // What is on disk, ids included: a list the Mac resends with ids it did not
   // send before is written although its hash is the same.
   let stored = ''
+  // Token hashes revoked here and still named by the Mac's last list (none on a host server).
+  let revoked: string[] = []
+  // The ids the Mac's last list named (null: no list since this process started).
+  let lastSentIds: Set<string> | null = null
   try {
-    const onDisk = JSON.parse(fs.readFileSync(file, 'utf8')) as { devices?: unknown }
+    const onDisk = JSON.parse(fs.readFileSync(file, 'utf8')) as { devices?: unknown; revoked?: unknown }
     const list = clean(onDisk.devices)
     if (list) { devices = list; hash = listHash(list); stored = JSON.stringify(list) }
+    if (Array.isArray(onDisk.revoked)) revoked = onDisk.revoked.filter((h): h is string => typeof h === 'string' && HASH_RE.test(h))
   } catch { /* none yet: the Mac's first round brings it */ }
 
   function write(list: DeviceCopyEntry[]): void {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const tmp = `${file}.${process.pid}.tmp`
-    fs.writeFileSync(tmp, JSON.stringify({ v: 1, at: new Date().toISOString(), devices: list }), { mode: 0o600 })
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, at: new Date().toISOString(), devices: list, ...(revoked.length ? { revoked } : {}) }), { mode: 0o600 })
     fs.renameSync(tmp, file)
   }
 
@@ -101,8 +119,14 @@ export function createDeviceCopy(file: string): DeviceCopy {
 
   return {
     put(body) {
-      const list = clean(body.devices)
-      if (!list) return { ok: false, status: 400, error: 'devices must be a list of {name, tokenHash}' }
+      const sent = clean(body.devices)
+      if (!sent) return { ok: false, status: 400, error: 'devices must be a list of {name, tokenHash}' }
+      lastSentIds = new Set(sent.map((d) => d.id).filter((x): x is string => typeof x === 'string'))
+      // A revoke made here holds until the Mac's list drops that token (it applied the revoke).
+      const before = revoked.length
+      revoked = revoked.filter((h) => sent.some((d) => d.tokenHash === h))
+      const list = revoked.length ? sent.filter((d) => !revoked.includes(d.tokenHash)) : sent
+      if (revoked.length !== before) stored = ''
       const next = listHash(list)
       const content = JSON.stringify(list)
       if (next !== hash || content !== stored) {
@@ -119,5 +143,17 @@ export function createDeviceCopy(file: string): DeviceCopy {
     verifyDevice,
     held: () => devices !== null,
     hash: () => hash,
+    namedByMac: (id) => lastSentIds === null || lastSentIds.has(id),
+    revoke(id) {
+      const row = devices?.find((d) => d.id === id)
+      if (!devices || !row) return false
+      if (!revoked.includes(row.tokenHash)) revoked = [...revoked, row.tokenHash]
+      const list = devices.filter((d) => d !== row)
+      write(list)
+      devices = list
+      hash = listHash(list)
+      stored = JSON.stringify(list)
+      return true
+    },
   }
 }

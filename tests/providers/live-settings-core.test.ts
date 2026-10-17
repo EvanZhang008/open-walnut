@@ -179,6 +179,23 @@ describe('permission answer (leader.control)', () => {
       .toEqual({ behavior: 'deny', message: 'User denied permission' })
   })
 
+  it('a prompt answered here and asked again (its reply lost) is resolved again with the first answer, nothing to write', () => {
+    const live = harness().live
+    const first = live.permissionAnswer(pending, { requestId: 'req-1', allow: true }, 'sid-a')
+    expect(first).toMatchObject({ ok: true, allow: true })
+    live.noteAnswered('sid-a', 'req-1', true)
+    // The prompt is gone (pendingCtrl cleared by the first answer).
+    expect(live.permissionAnswer(null, { requestId: 'req-1', allow: true }, 'sid-a')).toEqual({ ok: true, duplicate: true, allow: true })
+    // Another session, another request, or no session named: not found, as before.
+    expect(live.permissionAnswer(null, { requestId: 'req-1', allow: true }, 'sid-b')).toMatchObject({ ok: false, code: 'not_found' })
+    expect(live.permissionAnswer(null, { requestId: 'req-2', allow: true }, 'sid-a')).toMatchObject({ ok: false, code: 'not_found' })
+    expect(live.permissionAnswer(null, { requestId: 'req-1', allow: true })).toMatchObject({ ok: false, code: 'not_found' })
+    // Bounded: the oldest answers go first.
+    for (let i = 0; i < 250; i++) live.noteAnswered('sid-a', `req-x${i}`, false)
+    expect(live.permissionAnswer(null, { requestId: 'req-1', allow: true }, 'sid-a')).toMatchObject({ ok: false, code: 'not_found' })
+    expect(live.permissionAnswer(null, { requestId: 'req-x249', allow: true }, 'sid-a')).toEqual({ ok: true, duplicate: true, allow: false })
+  })
+
   it('another request, no prompt, or a prompt that is not a tool permission: nothing to answer', () => {
     const live = harness().live
     for (const p of [null, pending, { reqId: 'req-1', request: { subtype: 'mcp_message' } }]) {

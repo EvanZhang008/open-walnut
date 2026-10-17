@@ -38,7 +38,9 @@ export type LiveModeResult =
 export interface PendingPrompt { reqId: string; request: Record<string, unknown> }
 
 export type PermissionAnswer =
-  | { ok: true; line: string; allow: boolean }
+  | { ok: true; line: string; allow: boolean; duplicate?: undefined }
+  /** The same prompt answered here before (a retry after a lost answer): nothing to write. */
+  | { ok: true; duplicate: true; allow: boolean }
   | { ok: false; error: string; code: 'bad_request' | 'not_found' }
 
 export function createLiveSettings(deps: LiveSettingsDeps) {
@@ -142,7 +144,21 @@ export function createLiveSettings(deps: LiveSettingsDeps) {
    * carries the tool input (with the user's answers for AskUserQuestion), deny
    * carries the message. Null pending, or another request id: nothing to answer.
    */
-  function permissionAnswer(pending: PendingPrompt | null, raw: { requestId?: unknown; allow?: unknown; message?: unknown; answers?: unknown }): PermissionAnswer {
+  /**
+   * Prompts answered here, by session and request id, so an answer asked again after
+   * its reply was lost (a replica's retry) is told it was answered, not "not found".
+   * A request id names one prompt, so an old entry never answers a new prompt.
+   */
+  const answered = new Map<string, boolean>()
+  const ANSWERED_CAP = 200
+  function noteAnswered(sid: string, requestId: string, allow: boolean): void {
+    const key = `${sid}\n${requestId}`
+    answered.delete(key)
+    answered.set(key, allow)
+    while (answered.size > ANSWERED_CAP) answered.delete(answered.keys().next().value as string)
+  }
+
+  function permissionAnswer(pending: PendingPrompt | null, raw: { requestId?: unknown; allow?: unknown; message?: unknown; answers?: unknown }, sid?: string): PermissionAnswer {
     if (typeof raw.requestId !== 'string' || !raw.requestId || typeof raw.allow !== 'boolean') {
       return { ok: false, error: 'requestId (string) and allow (boolean) are required', code: 'bad_request' }
     }
@@ -159,6 +175,8 @@ export function createLiveSettings(deps: LiveSettingsDeps) {
       if (entries.length > 0) answers = raw.answers as Record<string, string>
     }
     if (!pending || pending.reqId !== raw.requestId || pending.request.subtype !== 'can_use_tool') {
+      const before = sid ? answered.get(`${sid}\n${raw.requestId}`) : undefined
+      if (before !== undefined) return { ok: true, duplicate: true, allow: before }
       return { ok: false, error: 'Permission request not found or already resolved', code: 'not_found' }
     }
     const input = (pending.request.input && typeof pending.request.input === 'object' ? pending.request.input : {}) as Record<string, unknown>
@@ -178,7 +196,7 @@ export function createLiveSettings(deps: LiveSettingsDeps) {
     settle(requestId, resp ?? null)
   }
 
-  return { apply, setMode, permissionAnswer, noteResponse, pending: () => waiters.size, modes: () => ({ ...MODES }) }
+  return { apply, setMode, permissionAnswer, noteAnswered, noteResponse, pending: () => waiters.size, modes: () => ({ ...MODES }) }
 }
 
 export type LiveSettings = ReturnType<typeof createLiveSettings>

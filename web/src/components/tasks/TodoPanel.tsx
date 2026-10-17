@@ -52,6 +52,7 @@ import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
+import { AwaySyncMark } from './AwaySyncMark';
 import { countSubtasksByParent, resolveParentRef, withSubtaskContext } from './task-tree-index';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
@@ -1281,6 +1282,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <TaskTagPills task={task} />
           <SubtaskPill task={task} />
           <LeaderPill task={task} />
+          <AwaySyncMark item={task} />
           {/* Info pills + kebab — same line as title, no second row */}
           {startDateLabel && (
             <span className="todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
@@ -2303,6 +2305,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       </span>
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
+      <AwaySyncMark item={task} />
       {ago && <span className="todo-recent-ago" title={recentActivityTitle(activity)}>{ago}</span>}
       {/* One-click ▶ Start — hover-revealed, before the kebab */}
       <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />

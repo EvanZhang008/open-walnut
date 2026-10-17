@@ -32,6 +32,9 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
     'wait_until',
   ];
   for (const k of scalarKeys) if (a[k] !== b[k]) return false;
+  // A host replica's mark on a row with a write still on its way to the Mac (WP10;
+  // never on the Mac's own rows, where both sides lack it).
+  if ((a as { replica_sync?: unknown }).replica_sync !== (b as { replica_sync?: unknown }).replica_sync) return false;
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
   for (const k of arrKeys) {
     const av = (a[k] as string[] | undefined) ?? [];

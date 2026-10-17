@@ -112,6 +112,31 @@ export interface HeldSource {
 
 export const NOTHING_HELD: HeldSource = { has: () => false, orderWriteRecent: () => false }
 
+/**
+ * Who waits for the leader's row of a key to be stored here (a host replica's
+ * overlay, replica/overlay.ts: a row a journal record wrote stays marked as
+ * `awaiting copy` until a manifest later than the record's ack stored it). A
+ * row-set kind tells it, after each manifest step and each put, which of the
+ * keys it watches now hold the leader's row, and the manifest's asOf. None by
+ * default: the leader, the companion and a host server never set one.
+ */
+export interface CopyWatcher {
+  watching(kind: string): readonly string[]
+  stored(kind: string, keys: string[], asOf: number): void
+}
+
+let copyWatcher: CopyWatcher | null = null
+
+export function setCopyWatcher(w: CopyWatcher | null): void {
+  copyWatcher = w
+}
+
+function tellStored(kind: string, has: (key: string) => boolean, asOf: number): void {
+  if (!copyWatcher) return
+  const keys = copyWatcher.watching(kind).filter(has)
+  if (keys.length) copyWatcher.stored(kind, keys, asOf)
+}
+
 export interface RowSetSpec<Row> {
   kind: string
   schemaVersion: number
@@ -292,6 +317,14 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     await spec.save()
     // Nothing to send: this side holds the manifest's rows now.
     if (need.length === 0) noteRoundComplete(spec.kind, s.asOf)
+    // The watched keys this manifest names at the hash already held here, and the ones it
+    // does not name at all (nor keeps unread): the leader holds no such row (a create it took
+    // as a duplicate of its op id, a write it dropped), and the copy now shows that.
+    const needSet = new Set(need)
+    const hashOf = new Map(entries.map((e) => [e.k, e.h]))
+    tellStored(spec.kind, (k) => !held.has(k) && (hashOf.has(k)
+      ? !needSet.has(k) && localSet.has(k) && s.hashes[k] === hashOf.get(k)
+      : !kept.has(k)), s.asOf)
     if (removeIds.length > 0 || need.length > 0 || keptCount > 0) {
       spec.log.info(`${spec.label}: manifest`, {
         kind: spec.kind, entries: entries.length, need: need.length, held: heldCount, removed: removeIds.length, reordered: reorder, ...(keptCount > 0 ? { kept: keptCount } : {}),
@@ -327,6 +360,8 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
       }
       await spec.save()
       spec.changed()
+      const storedKeys = new Set(rows.map((r) => spec.key(r)).filter((k) => !refusedRows.has(k)))
+      tellStored(spec.kind, (k) => storedKeys.has(k), s.asOf)
     }
     // A manifest round's last batch, every row of it stored: the manifest is whole
     // here. A delta's put (it names a digest) is proven by its digest instead.

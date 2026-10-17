@@ -109,3 +109,35 @@ describe('the replica cluster\'s mock CLI', () => {
     expect(secondStart).toBeGreaterThan(firstIdle)
   })
 })
+
+describe('the mock CLI asks before a tool (WP10 W9)', () => {
+  it('"please run <command>" raises a can_use_tool prompt and answers by the control_response', async () => {
+    const m = start({ MOCK_THINK_MS: '50' })
+    m.send(user('aaaaaaaa-0000-4000-8000-00000000000a', 'please run ls -la'))
+    await m.until((ls) => ls.some((l) => l.o.type === 'control_request'))
+    const ask = m.lines.find((l) => l.o.type === 'control_request')!.o
+    expect(ask.request).toMatchObject({ subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls -la' } })
+    // No answer yet: the turn waits on it.
+    expect(m.lines.some((l) => l.o.type === 'result')).toBe(false)
+    m.send({ type: 'control_response', response: { subtype: 'success', request_id: ask.request_id, response: { behavior: 'allow', updatedInput: { command: 'ls -la' } } } })
+    await m.until((ls) => idles(ls).length >= 1)
+    expect(m.lines.find((l) => l.o.type === 'result')!.o.result).toBe('echo: ran ls -la')
+    m.send(user('aaaaaaaa-0000-4000-8000-00000000000b', 'please run rm -rf build'))
+    await m.until((ls) => ls.filter((l) => l.o.type === 'control_request').length >= 2)
+    const second = m.lines.filter((l) => l.o.type === 'control_request')[1]!.o
+    m.send({ type: 'control_response', response: { subtype: 'success', request_id: second.request_id, response: { behavior: 'deny', message: 'no' } } })
+    await m.until((ls) => idles(ls).length >= 2)
+    expect(m.lines.filter((l) => l.o.type === 'result')[1]!.o.result).toBe('echo: did not run rm -rf build')
+  })
+
+  it('"please ask <question>" raises an AskUserQuestion prompt and answers with the person\'s answer', async () => {
+    const m = start({ MOCK_THINK_MS: '50' })
+    m.send(user('aaaaaaaa-0000-4000-8000-00000000000c', 'please ask Which day is the drill?'))
+    await m.until((ls) => ls.some((l) => l.o.type === 'control_request'))
+    const ask = m.lines.find((l) => l.o.type === 'control_request')!.o
+    expect(ask.request).toMatchObject({ subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: [{ question: 'Which day is the drill?' }] } })
+    m.send({ type: 'control_response', response: { subtype: 'success', request_id: ask.request_id, response: { behavior: 'allow', updatedInput: { ...ask.request.input, answers: { 'Which day is the drill?': 'Friday' } } } } })
+    await m.until((ls) => idles(ls).length >= 1)
+    expect(m.lines.find((l) => l.o.type === 'result')!.o.result).toBe('echo: answered Friday')
+  })
+})

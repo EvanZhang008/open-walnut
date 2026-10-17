@@ -201,7 +201,7 @@ export async function waitFor<T>(fn: () => T | Promise<T>, timeoutMs: number, wh
 const MOCK_CLI_NAME = 'mock-claude.cjs'
 
 /** `<bin>`: a mock `claude` (this cluster's own copy of the mock CLI), and an `ssh` that refuses at once (nothing here may reach a real host). */
-function writeStubBin(bin: string): void {
+export function writeStubBin(bin: string): void {
   fs.mkdirSync(bin, { recursive: true, mode: 0o700 })
   fs.copyFileSync(path.join(import.meta.dirname, 'replica-mock-cli.cjs'), path.join(bin, MOCK_CLI_NAME))
   fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(bin, MOCK_CLI_NAME))} "$@"\n`, { mode: 0o755 })
@@ -323,7 +323,7 @@ function pidsRunning(prefix: string): number[] {
   }).filter((r) => r.pid > 1 && r.pid !== process.pid && r.command.startsWith(prefix)).map((r) => r.pid)
 }
 
-/** The signal guards, for tests/replica/cluster-signal-safety.test.ts only. */
+/** The signal guards, for tests/replica/cluster-signal-safety.test.ts and tests/e2e/replica-old-mac-e2e.test.ts only. */
 export const _signalSafetyForTesting = { pin, stillPinned, signalPinned, signalChild, pidsRunning, readPid } as const
 
 const windowEnv = (): Record<string, string> => ({
@@ -332,8 +332,11 @@ const windowEnv = (): Record<string, string> => ({
   WALNUT_LEADER_TAKEOVER_MS: String(WINDOWS.takeoverMs),
 })
 
-/** The host daemon: a minimal env of its own (no variable of the runner leaks into it, or into the replica it starts). */
-async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string): Promise<{ proc: ChildProcess; pid: number; port: number }> {
+/**
+ * The host daemon: a minimal env of its own (no variable of the runner leaks into it, or into the replica it starts).
+ * Also tests/e2e/replica-old-mac-e2e.test.ts (an old Mac in front of the same daemon).
+ */
+export async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string): Promise<{ proc: ChildProcess; pid: number; port: number }> {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const env: Record<string, string> = {
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, TMPDIR: os.tmpdir(),

@@ -469,7 +469,7 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const live = createLive({ writeLine: async () => 'not_found', randomHex: () => '00', now: () => 0, log: () => {} })
       if (typeof live.apply !== 'function' || live.pending() !== 0) throw new Error('live settings did not build')
       const answer = live.permissionAnswer({ reqId: 'r1', request: { subtype: 'can_use_tool', input: { q: 1 } } }, { requestId: 'r1', allow: true, answers: { a: 'b' } })
-      if (!answer.ok || !answer.line.includes('"updatedInput":{"q":1,"answers":{"a":"b"}}')) throw new Error('live settings built a wrong permission answer')
+      if (!answer.ok || answer.duplicate || !answer.line.includes('"updatedInput":{"q":1,"answers":{"a":"b"}}')) throw new Error('live settings built a wrong permission answer')
     }
     // Offline search smoke: a reconstructed copy must find a task by a word of its title.
     const createSearch = reconstructed['__CREATE_OFFLINE_SEARCH__'] as typeof createOfflineSearch | undefined
@@ -4599,10 +4599,16 @@ async function cmdLeaderControl(ws, id, cmd) {
 async function answerPermission(sid, raw, label) {
   var session = sessions.get(sid);
   var pending = session && session.pendingCtrl ? { reqId: session.pendingCtrl.reqId, request: session.pendingCtrl.request } : null;
-  var answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers });
+  var answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers }, sid);
   if (!answer.ok) return { ok: false, error: answer.error, errorKind: answer.code };
+  // Answered here already (a retry after its reply was lost): resolved, nothing written again.
+  if (answer.duplicate) {
+    logMsg('info', label + ': permission asked again, answered once', { sid: sid, requestId: raw.requestId, allow: answer.allow });
+    return { ok: true, allow: answer.allow };
+  }
   var wrote = await writeSessionLine(sid, answer.line);
   if (wrote !== 'ok') return { ok: false, error: 'the session could not be reached', errorKind: 'not_live' };
+  liveSettings.noteAnswered(sid, raw.requestId, answer.allow);
   var now = sessions.get(sid);
   if (now && now.pendingCtrl && now.pendingCtrl.reqId === raw.requestId) {
     now.pendingCtrl = null;
@@ -4754,7 +4760,8 @@ function cmdOfflineAck(ws, id, cmd) {
   var seqs = Array.isArray(cmd.seqs) ? cmd.seqs : undefined;
   if (typeof cmd.home !== 'string' || !cmd.home || (typeof cmd.upTo !== 'number' && !seqs)) return sendError(ws, id, 'offline.ack: missing home, seqs or upTo');
   var held = offlineHost.triggerHolds().size;
-  var r = offlineHost.ack(cmd.home, seqs ? { seqs: seqs } : cmd.upTo);
+  // now: the Mac's clock as it acks (a host replica's overlay compares on it, overlay.ts).
+  var r = offlineHost.ack(cmd.home, seqs ? Object.assign({ seqs: seqs }, typeof cmd.now === 'number' ? { leaderNow: cmd.now } : {}) : cmd.upTo);
   if (r.error) return sendError(ws, id, 'offline.ack: ' + r.error, { errorKind: 'journal_unwritable' });
   logMsg('info', 'journal: acked', Object.assign({ home: cmd.home }, seqs ? { seqs: seqs.length } : { upTo: cmd.upTo }, { remaining: r.remaining }, r.ignored ? { ignored: r.ignored.length } : {}));
   sendOk(ws, id, r);

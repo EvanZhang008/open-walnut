@@ -8,12 +8,14 @@
  * Away read and one away write: signed in through the tunnel with a code the
  * Mac made, the Mac sleeps, the away line comes by itself, the board reads
  * from the copy (titles matched exactly), a task's Board page this page never
- * loaded opens from the copy (x-walnut-offline on its request), and an edit
- * says "Needs your Mac" and leaves the task open (WP10 turns this row into a
- * write kept on the host, "Syncs when your Mac is back"); the Mac wakes and the
- * line goes with no reload. The full matrix (both engines, both viewports,
+ * loaded opens from the copy (x-walnut-offline on its request), and a complete
+ * is kept on the host (WP10): the row shows done with "Syncs when your Mac is
+ * back" while the replica's copy stays the Mac's; the Mac wakes, the line goes
+ * with no reload, the Mac's store has the task complete and the mark goes. The full matrix (both engines, both viewports,
  * sessions, notes, the inbox) is replica-away-read.spec.ts on replica.config.ts.
  */
+import { createRequire } from 'node:module'
+import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import { startReplicaCluster, WINDOWS, type ReplicaCluster } from '../../helpers/replica-cluster.js'
 import { startFakeTunnel, type FakeTunnel } from './replica-tunnel.js'
@@ -25,6 +27,14 @@ let cluster: ReplicaCluster | null = null
 let tunnel: FakeTunnel | null = null
 
 const NEEDS_MAC = 'Needs your Mac. Changing a task needs your Mac for now.'
+const AWAY_SYNC = 'Syncs when your Mac is back'
+
+/** A task's phase in the Mac's own store on disk (read only). */
+function macPhase(c: ReplicaCluster, id: string): string | null {
+  const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { get(id: string): unknown }; close(): void }
+  const db = new Database(path.join(c.macData, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
+  try { return ((db.prepare('SELECT phase FROM tasks WHERE id = ?').get(id) as { phase?: string } | undefined)?.phase) ?? null } finally { db.close() }
+}
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** A task row whose title is exactly `title`. */
 const row = (page: Page, title: string) => page.locator('.todo-panel .todo-panel-item')
@@ -44,7 +54,7 @@ test.afterAll(async () => {
   await cluster?.stop()
 })
 
-test('a host replica: sign in through it, read away, an away edit needs the Mac, back with no reload', async ({ page }) => {
+test('a host replica: sign in through it, read away, an away complete kept on the host, back with no reload', async ({ page }) => {
   test.setTimeout(300_000)
   const c = cluster!
   const errors: string[] = []
@@ -91,16 +101,22 @@ test('a host replica: sign in through it, read away, an away edit needs the Mac,
   const exit = page.getByRole('button', { name: 'Exit full screen' })
   for (let i = 0; i < 3 && (await exit.count()) > 0; i++) { await exit.first().click(); await page.waitForTimeout(300) }
 
+  // The away write (WP10): kept on the host, the row done with its mark at once (it
+  // stays in view for the completion's grace window, about 3 s).
   await row(page, 'Release plan').getByRole('button', { name: 'Mark complete' }).click()
-  await expect(page.getByText(NEEDS_MAC, { exact: true }).first()).toBeVisible({ timeout: 15_000 })
-  // Refused: the task is still open, on the page and in the replica's copy.
-  await page.waitForTimeout(1_500)
-  await expect(row(page, 'Release plan').getByRole('button', { name: 'Mark complete' })).toBeVisible()
+  const done = row(page, 'Release plan')
+  await expect(done.getByTestId('away-sync-mark')).toHaveText(AWAY_SYNC, { timeout: 2_500 })
+  await expect(done.getByRole('button', { name: 'Reopen (mark To Do)' })).toBeVisible()
+  await expect(page.getByText(NEEDS_MAC, { exact: true })).toHaveCount(0)
+  // The replica's copy is the Mac's alone: the write is in the host's journal, not in it.
   const copied = (c.stores().taskRows as Array<{ id: string; phase: string }>).find((t) => t.id === c.ids.board)
   expect(copied?.phase).not.toBe('COMPLETE')
 
   c.wakeMac()
   await expect(page.getByTestId('away-line')).toHaveCount(0, { timeout: 60_000 })
+  // The Mac drained it: its store on disk has the task complete, once.
+  await expect.poll(() => macPhase(c, c.ids.board), { timeout: 60_000 }).toBe('COMPLETE')
+  await expect(page.getByTestId('away-sync-mark')).toHaveCount(0, { timeout: 60_000 })
   expect(await page.evaluate(() => (window as unknown as { __replicaMarker?: string }).__replicaMarker)).toBe('kept')
   expect(errors).toEqual([])
 })

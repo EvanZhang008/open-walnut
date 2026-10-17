@@ -52,6 +52,7 @@ import { BoardViewToggle } from './BoardViewToggle';
 import { ASK_FOR_BOARD_TEXT, useAskForBoard } from './useAskForBoard';
 import { useBoardItemSaves } from './useBoardItemSaves';
 import { boardErrorMessage, boardPath, useTaskBoard } from './useTaskBoard';
+import { AwaySyncMark } from '@/components/tasks/AwaySyncMark';
 import { useBoardView } from './useBoardView';
 import { useTeamOverview } from './useTeamOverview';
 import { keepIfSame, NO_PROJECTS, projectsOfTeam, type ProjectOf } from './board-view-projects';
@@ -439,6 +440,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             v{board.version} · updated {timeAgo(board.updated_at, { long: true })} by {boardWriterLabel(board.updated_by, ownerId)}
           </span>
         )}
+        <AwaySyncMark item={payload} className="away-sync-board" />
         <div className="task-board-bar-right">
           <button
             type="button"

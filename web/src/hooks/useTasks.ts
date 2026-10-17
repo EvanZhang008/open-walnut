@@ -817,13 +817,30 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   });
 
   // Session phase hints are not task commits; see docs/decision/task-session-status.md.
+  /**
+   * The echo of this page's own write, from a host replica while the Mac is away:
+   * the optimistic row stays, and only the replica's mark ("Syncs when your Mac is
+   * back", `replica_sync`) is taken from it. The Mac's events never carry the field.
+   */
+  const takeAwayMark = useCallback((task: Task) => {
+    if (!Object.prototype.hasOwnProperty.call(task, 'replica_sync')) return;
+    const mark = (task as { replica_sync?: unknown }).replica_sync ?? null;
+    setTasks((prev) => {
+      const idx = prev.findIndex((t) => t.id === task.id);
+      if (idx === -1 || ((prev[idx] as { replica_sync?: unknown }).replica_sync ?? null) === mark) return prev;
+      const next = prev.slice();
+      next[idx] = { ...prev[idx], replica_sync: mark } as Task;
+      return next;
+    });
+  }, []);
+
   useEvent('task:updated', (data) => {
     wsEventCounts.current.updated++;
     const { task } = data as { task?: Task };
     if (!task) { log.info('tasks', 'ws task:updated bulk → refetch (debounced)'); scrollLog('drag-trace-ws-updated-bulk-refetch'); scheduleBulkRefetch(); return; }
-    if (consumeEcho(`move:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-move', { id: task.id.slice(0,12) }); return; }
-    if (consumeEcho(`update:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-update', { id: task.id.slice(0,12) }); return; }
-    if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); return; }
+    if (consumeEcho(`move:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-move', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
+    if (consumeEcho(`update:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-update', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
+    if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
     retainServerTask(task.id);
     // An optimistic edit still waiting for its write wins over this echo (localEdits).
     const held = localEdits.current.get(task.id);

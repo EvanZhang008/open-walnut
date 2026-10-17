@@ -8,5 +8,5 @@
 
 export type WsFrame =
   | { type: 'event'; name: string; data: unknown; seq: number }
-  | { type: 'req'; id: string; method: string; payload: unknown }
+  | { type: 'req'; id: string; method: string; payload: unknown; opId?: string }
   | { type: 'res'; id: string; ok: boolean; payload?: unknown; error?: string }

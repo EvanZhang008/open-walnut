@@ -65,13 +65,17 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'POST', pattern: '/api/v1/devices/self', away: 'needs-leader', why: 'device_changes_need_mac' },
   { method: 'GET', pattern: '/api/v1/tasks', away: 'read' },
   { method: 'GET', pattern: '/api/v1/tasks/:id', away: 'read' },
-  { method: 'POST', pattern: '/api/v1/tasks', away: 'needs-leader', why: 'task_writes_need_mac' },
+  { method: 'POST', pattern: '/api/v1/tasks', away: 'host-write' },
+  // A list's own order: the journal has no record for it (a Focus bar move is a task-move).
+  { method: 'PATCH', pattern: '/api/v1/tasks/reorder', away: 'needs-leader', why: 'list_order_needs_mac' },
+  { method: 'PATCH', pattern: '/api/v1/tasks/:id', away: 'host-write' },
   { method: W, pattern: '/api/v1/tasks/:id', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: 'GET', pattern: '/api/v1/sessions', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/list-dirs', away: 'needs-leader', why: 'files_need_mac' },
   { method: 'GET', pattern: '/api/v1/sessions/:id', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/:id/history', cls: 'local', local: 'session', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/:id/transcript', cls: 'local', local: 'session', away: 'read' },
+  { method: 'POST', pattern: '/api/v1/sessions/:id/messages', away: 'host-write' },
   { method: W, pattern: '/api/v1/sessions/:id/messages', away: 'needs-leader', why: 'session_writes_need_mac' },
   // Host data, answered on this host even while the Mac answers (WP6, self-host.ts):
   // a session that runs here, a file or a diff of this host, read through the
@@ -113,9 +117,37 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // Plugin routes are the leader's by prefix (their credentials stay on the Mac;
   // plugins do not load on a replica, so even their reads need it).
   { method: '*', pattern: '/api/plugins/*', cls: 'leader', away: 'needs-leader', why: 'plugins_need_mac' },
-  // The console's own writes while away (WP7): each says why it needs the Mac, so
-  // the console says it in words ("Needs your Mac. Changing a task ..."). WP10
-  // gives the task and session writes exact rows of their own that journal.
+  // WP10: the writes a person makes while the Mac is away, journaled by this host's
+  // daemon through the write port (write-port.ts; the handlers: away-writes.ts,
+  // which names the same paths). Each row is exact. Every other task and session
+  // write needs the Mac and says why, so the console says it in words.
+  { method: 'PATCH', pattern: '/api/tasks/reorder', away: 'needs-leader', why: 'list_order_needs_mac' },
+  { method: 'POST', pattern: '/api/tasks', away: 'host-write' },
+  { method: 'PATCH', pattern: '/api/tasks/:id', away: 'host-write' },
+  { method: 'POST', pattern: '/api/tasks/:id/complete', away: 'host-write' },
+  { method: 'POST', pattern: '/api/tasks/:id/toggle-complete', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/tasks/:id/note', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/tasks/:id/description', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/tasks/:id/summary', away: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/tasks/:id/complete', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/v1/tasks/:id/note', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/v1/tasks/:id/description', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/v1/tasks/:id/summary', away: 'host-write' },
+  { method: 'POST', pattern: '/api/focus/tasks/:id', away: 'host-write' },
+  { method: 'DELETE', pattern: '/api/focus/tasks/:id', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/focus/tasks/:id/tier', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/focus/reorder', away: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/focus/tasks/:id', away: 'host-write' },
+  { method: 'DELETE', pattern: '/api/v1/focus/tasks/:id', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/v1/focus/tasks/:id/tier', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/v1/focus/reorder', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/v1/tasks/:id/board', away: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/tasks/:id/board/edits', away: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/tasks/:id/board/threads/:thread', away: 'host-write' },
+  { method: 'PUT', pattern: '/api/v1/tasks/:id/board/projects/:project', away: 'host-write' },
+  { method: 'POST', pattern: '/api/sessions/:id/permission', away: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/sessions/:id/permission', away: 'host-write' },
+  { method: 'DELETE', pattern: '/api/devices/:name', away: 'host-write' },
   { method: W, pattern: '/api/tasks/*', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: W, pattern: '/api/sessions/*', away: 'needs-leader', why: 'session_writes_need_mac' },
   // WP5 copies: the conversation lists, routines, prefs, favorites and the config

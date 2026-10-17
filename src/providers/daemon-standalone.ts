@@ -3617,10 +3617,16 @@ async function cmdLeaderControl(ws: ServerWebSocket<WsData>, id: number, cmd: Re
 async function answerPermission(sid: string, raw: Record<string, unknown>, label: string): Promise<{ ok: true; allow: boolean } | { ok: false; error: string; errorKind: string }> {
   const session = sessions.get(sid)
   const pending = session?.pendingCtrl ? { reqId: session.pendingCtrl.reqId, request: session.pendingCtrl.request } : null
-  const answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers })
+  const answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers }, sid)
   if (!answer.ok) return { ok: false, error: answer.error, errorKind: answer.code }
+  // Answered here already (a retry after its reply was lost): resolved, nothing written again.
+  if (answer.duplicate) {
+    logMsg('info', label + ': permission asked again, answered once', { sid, requestId: raw.requestId, allow: answer.allow })
+    return { ok: true, allow: answer.allow }
+  }
   const wrote = await core.handleSendRawCommand(sid, answer.line)
   if ('error' in wrote || !wrote.ok) return { ok: false, error: 'the session could not be reached', errorKind: 'not_live' }
+  liveSettings.noteAnswered(sid, raw.requestId as string, answer.allow)
   const now = sessions.get(sid)
   if (now?.pendingCtrl?.reqId === raw.requestId) {
     now.pendingCtrl = null
@@ -3785,7 +3791,8 @@ function cmdOfflineAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   const seqs = Array.isArray(cmd.seqs) ? cmd.seqs : undefined
   if (typeof cmd.home !== 'string' || !cmd.home || (typeof cmd.upTo !== 'number' && !seqs)) return sendError(ws, id, 'offline.ack: missing home, seqs or upTo')
   const held = offlineHost.triggerHolds().size
-  const r = offlineHost.ack(cmd.home, seqs ? { seqs } : (cmd.upTo as number))
+  // `now`: the Mac's clock as it acks (a host replica's overlay compares on it, overlay.ts).
+  const r = offlineHost.ack(cmd.home, seqs ? { seqs, ...(typeof cmd.now === 'number' ? { leaderNow: cmd.now } : {}) } : (cmd.upTo as number))
   if (r.error) return sendError(ws, id, 'offline.ack: ' + r.error, { errorKind: 'journal_unwritable' })
   logMsg('info', 'journal: acked', { home: cmd.home, ...(seqs ? { seqs: seqs.length } : { upTo: cmd.upTo }), remaining: r.remaining, ...(r.ignored ? { ignored: r.ignored.length } : {}) })
   sendOk(ws, id, r)

@@ -120,6 +120,8 @@ export interface BoardPayload {
   /** The team board's owner (`?team=1`): the task itself, the nearest ancestor with a board, or the root. */
   board_task_id?: string;
   board_task_title?: string;
+  /** A host replica's mark while a write to this Board waits for the Mac (src/replica/away-reads.ts); the Mac never sends it. */
+  replica_sync?: 'pending' | 'awaiting';
   /** Kanban (always present after normalizeBoardPayload, board null too). The stored lanes; null = on the template. */
   lanes: BoardLane[] | null;
   /** The lanes to draw: stored, or the template the server picked. The web never guesses a template. */

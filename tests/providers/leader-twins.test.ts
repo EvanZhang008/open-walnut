@@ -131,6 +131,12 @@ describe('leader protocol: both twins', () => {
       const answer = fnBody(src, 'answerPermission')
       expect(answer).toMatch(/liveSettings\.permissionAnswer\(/)
       expect(answer).toMatch(/core\.handleSendRawCommand\(sid, answer\.line\)|writeSessionLine\(sid, answer\.line\)/)
+      // A retry after a lost reply (a replica's follower.permission): answered once, resolved again.
+      expect(answer).toMatch(/liveSettings\.permissionAnswer\(pending, \{[^}]*\}, sid\)/)
+      const dup = answer.indexOf('answer.duplicate')
+      expect(dup).toBeGreaterThan(-1)
+      expect(dup).toBeLessThan(answer.indexOf('answer.line'))
+      expect(answer.indexOf('liveSettings.noteAnswered(sid, raw.requestId')).toBeGreaterThan(answer.indexOf('answer.line'))
       // A mode follows the daemon's auto-answer policy and is kept for the primary.
       expect(body.indexOf('applyModePolicy(')).toBeGreaterThan(body.indexOf('liveSettings.setMode('))
       expect(body).toMatch(/offlineHost\.noteSettings\(f\.home, sid, \{ mode: r\.mode \}\)/)

@@ -13,6 +13,8 @@
  *   - the first argument of every `new NeedsLeaderError(...)` (a host replica's
  *     own refusals of a copied store, core/replication/needs-leader.ts, answered
  *     503 needs_leader by the error handler), the same two ways
+ *   - the first argument of every `needsLeaderAnswer(...)` call (write-port.ts) and
+ *     every `'needs_leader: <code>'` text an RPC refusal carries (ws-writes.ts)
  *   - the literals `answerAway(...)` passes on as the why (dispatch.ts: a row
  *     with no why of its own answers with the route's), and the whys of every
  *     `kind: 'alone'` route (presence.ts), comparisons left out
@@ -91,6 +93,13 @@ function collect(): Map<string, string[]> {
     }
     for (const args of callArgs(text, 'needsLeader')) addArg(args[args.length - 1] ?? '', 'needsLeader')
     for (const args of callArgs(text, 'NeedsLeaderError')) addArg(args[0] ?? '', 'NeedsLeaderError')
+    // The write port's own refusals (write-port.ts needsLeaderAnswer: the why is the first argument),
+    // and the RPC refusals the replica throws as text (`needs_leader: <code>`, ws-writes.ts).
+    for (const args of callArgs(text, 'needsLeaderAnswer')) {
+      const literal = /^['"]([\w-]+)['"]$/.exec(args[0] ?? '')
+      if (literal) add(literal[1]!, `${rel} needsLeaderAnswer()`)
+    }
+    for (const m of text.matchAll(/['"`]needs_leader: ([\w-]+)['"`]/g)) add(m[1]!, `${rel} needs_leader text`)
     for (const args of callArgs(text, 'answerAway')) {
       for (const code of codesIn(args[args.length - 1] ?? '')) add(code, `${rel} answerAway()`)
     }
@@ -111,7 +120,9 @@ describe('needs_leader reasons ratchet', () => {
       'nobody-answers', 'no-daemon', 'draining',
       // WP5: a host replica's own refusals of its copies (NeedsLeaderError) and the conversation bodies' rows.
       'config_writes_need_mac', 'routine_writes_need_mac', 'prefs_writes_need_mac', 'conversation_writes_need_mac',
-      'other_hosts_need_mac', 'conversation_bodies_need_mac']) {
+      'other_hosts_need_mac', 'conversation_bodies_need_mac',
+      // WP10: the write port's and the away routes' refusals.
+      'fields', 'reorder_needs_mac', 'list_order_needs_mac', 'images_need_mac', 'device_changes_need_mac']) {
       expect(found.has(code), `${code} not found by the scan`).toBe(true)
     }
     expect(found.size).toBeGreaterThanOrEqual(20)

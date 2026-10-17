@@ -364,8 +364,9 @@ describe('runOfflineHandover over journal v2', () => {
     await runOfflineHandover(d.conn)
     expect(await task(t1)).toMatchObject({ title: 'v1 title', priority: 'immediate' })
     const drain = d.calls.find((c) => c.cmd === 'offline.drain')!
-    expect(drain.params).toEqual({ home: WALNUT_HOME, kinds: ['task-fields', 'task-create', 'task-move', 'board'] })
-    expect(d.calls.filter((c) => c.cmd === 'offline.ack').map((c) => c.params)).toEqual([{ home: WALNUT_HOME, seqs: [1, 2] }])
+    expect(drain.params).toEqual({ home: WALNUT_HOME, kinds: ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke'] })
+    // `now`: the Mac's clock as it acks (a host replica's overlay compares a manifest's asOf on it).
+    expect(d.calls.filter((c) => c.cmd === 'offline.ack').map((c) => c.params)).toEqual([{ home: WALNUT_HOME, seqs: [1, 2], now: expect.any(Number) }])
     expect(d.pending.size).toBe(0)
   })
 
@@ -400,6 +401,20 @@ describe('runOfflineHandover over journal v2', () => {
       _setHandoverBackoffForTesting(null)
     }
   }, 30_000)
+
+  it('a v1 record queued after a v2 record of the same task (an old Mac led between them) applies after it: the drain\'s own write is not a newer edit (R25)', async () => {
+    const t = await newTask('Rolled back between two writes')
+    const before = await task(t)
+    const at = Date.now()
+    const d = v2Daemon([
+      v2(1, t, { title: { base: 'Rolled back between two writes', value: 'the newer Mac\'s title' } }, { at: at - 2_000 }),
+      { seq: 2, at: at - 1_000, kind: 'op', op: 'task_update', args: { id: t, title: 'the old Mac\'s later title' }, callerSid: B, base: String(before.updated_at) },
+    ])
+    await runOfflineHandover(d.conn)
+    expect(d.pending.size).toBe(0)
+    // In seq order, each once: the later write wins.
+    expect((await task(t)).title).toBe('the old Mac\'s later title')
+  })
 
   it('a RefusedWrite is lettered at once; an unknown kind is left unacked', async () => {
     const t = await newTask('Refused v2')

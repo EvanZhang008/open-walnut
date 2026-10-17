@@ -354,6 +354,12 @@ export function copyChoiceChanged(): void {
   copySoon?.()
 }
 
+/** A drain took away writes: every copy kind's manifest goes again (task-replica.ts resendTaskReplicaSoon). */
+export function resendCopyKindsSoon(): void {
+  forgetKindManifests([...COPY_KIND_NAMES])
+  copySoon?.()
+}
+
 /**
  * Leader only: rounds of the copy kinds. A kind's store write brings a round
  * of that kind within COPY_DEBOUNCE_MS, a follower joining or becoming

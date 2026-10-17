@@ -19,6 +19,7 @@ import { TriggerPill } from '@/components/routines/TriggerPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
+import { AwaySyncMark } from './AwaySyncMark';
 import { PhoneRowExtras } from './PhoneRowExtras';
 import { PhoneTierEmpty } from './PhoneTierEmpty';
 import { TaskTagPills } from './TaskTagPills';
@@ -528,6 +529,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       <TaskTagPills task={task} />
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
+      <AwaySyncMark item={task} />
       <CronPill sessionId={resolveTaskSessionId(task)} />
       <TriggerPill taskId={task.id} />
       <WorkspacePill task={task} />

@@ -46,15 +46,18 @@ describe('classify', () => {
     }
   })
 
-  it('the phone app\'s calls each have their row: reads read, writes need the Mac with a reason', () => {
+  it('the phone app\'s calls each have their row: reads read, writes journal or need the Mac with a reason', () => {
     for (const p of ['/api/v1/status', '/api/v1/instance', '/api/v1/me', '/api/v1/tasks', '/api/v1/tasks/t1', '/api/v1/sessions', '/api/v1/sessions/s1', '/api/v1/sessions/s1/history']) {
       const d = classify('GET', p)
       expect(d.away, p).toBe('read')
       expect(d.row?.pattern.includes('*'), p).toBe(false)
     }
-    expect(classify('POST', '/api/v1/tasks')).toMatchObject({ away: 'needs-leader', why: 'task_writes_need_mac' })
-    expect(classify('PATCH', '/api/v1/tasks/t1')).toMatchObject({ away: 'needs-leader', why: 'task_writes_need_mac' })
-    expect(classify('POST', '/api/v1/sessions/s1/messages')).toMatchObject({ away: 'needs-leader', why: 'session_writes_need_mac' })
+    // WP10: the phone's task edit, create and send journal on this host; a delete needs the Mac.
+    expect(classify('POST', '/api/v1/tasks')).toMatchObject({ away: 'host-write' })
+    expect(classify('PATCH', '/api/v1/tasks/t1')).toMatchObject({ away: 'host-write' })
+    expect(classify('POST', '/api/v1/sessions/s1/messages')).toMatchObject({ away: 'host-write' })
+    expect(classify('DELETE', '/api/v1/tasks/t1')).toMatchObject({ away: 'needs-leader', why: 'task_writes_need_mac' })
+    expect(classify('PUT', '/api/v1/sessions/s1/messages')).toMatchObject({ away: 'needs-leader', why: 'session_writes_need_mac' })
     expect(classify('POST', '/api/v1/devices/self')).toMatchObject({ away: 'needs-leader', why: 'device_changes_need_mac' })
   })
 
@@ -64,8 +67,9 @@ describe('classify', () => {
   })
 
   it('a path is decoded and its double slashes folded before matching (no way around a row)', () => {
-    expect(classify('PATCH', '/api/v1//tasks/t1')).toMatchObject({ why: 'task_writes_need_mac' })
-    expect(classify('PATCH', '/api/v1/%74asks/t1')).toMatchObject({ why: 'task_writes_need_mac' })
+    expect(classify('DELETE', '/api/v1//tasks/t1')).toMatchObject({ why: 'task_writes_need_mac' })
+    expect(classify('DELETE', '/api/v1/%74asks/t1')).toMatchObject({ why: 'task_writes_need_mac' })
+    expect(classify('PATCH', '/api/v1//tasks/t1')).toMatchObject({ away: 'host-write' })
     expect(classify('GET', '/api/plugins/%zz')).toMatchObject({ why: 'plugins_need_mac' })
   })
 
@@ -80,8 +84,14 @@ describe('classify', () => {
 })
 
 describe('the table itself', () => {
-  it('journals nothing yet: no host-write, queue or note-write row before WP10 and WP11', () => {
-    expect(ROUTE_TABLE.filter((r) => journals(r.away))).toEqual([])
+  it('journals only host-write rows (WP10), each exact; no queue or note-write row before WP11', () => {
+    const journaling = ROUTE_TABLE.filter((r) => journals(r.away))
+    expect(journaling.length).toBeGreaterThan(20)
+    for (const r of journaling) {
+      expect(r.away, r.pattern).toBe('host-write')
+      expect(r.pattern.includes('*'), r.pattern).toBe(false)
+      expect(r.method, r.pattern).not.toBe('WRITE')
+    }
     expect(journals('queue:task-fields')).toBe(true)
     expect(journals('note-write')).toBe(true)
     expect(journals('read')).toBe(false)
@@ -129,8 +139,14 @@ describe('local rows (WP6)', () => {
 
 describe('the console\'s own writes away (WP7)', () => {
   it('a task write and a session write say why they need the Mac; reads of them stay reads; others keep the default', () => {
-    for (const [m, p] of [['POST', '/api/tasks'], ['PATCH', '/api/tasks/t1'], ['DELETE', '/api/tasks/t1'], ['POST', '/api/tasks/t1/complete']]) {
-      expect(classify(m, p)).toMatchObject({ cls: 'leader', away: 'needs-leader', why: 'task_writes_need_mac' })
+    // WP10 journals an edit, a create, a complete; a delete and the rest still need the Mac.
+    for (const [m, p] of [['POST', '/api/tasks'], ['PATCH', '/api/tasks/t1'], ['POST', '/api/tasks/t1/complete'], ['PUT', '/api/focus/reorder']]) {
+      expect(classify(m, p), `${m} ${p}`).toMatchObject({ cls: 'leader', away: 'host-write' })
+    }
+    // A list's own order has no journal record (a Focus bar move is a task-move): it says so.
+    for (const p of ['/api/tasks/reorder', '/api/v1/tasks/reorder']) expect(classify('PATCH', p), p).toMatchObject({ away: 'needs-leader', why: 'list_order_needs_mac' })
+    for (const [m, p] of [['DELETE', '/api/tasks/t1'], ['POST', '/api/tasks/groups'], ['POST', '/api/tasks/t1/merge'], ['PUT', '/api/tasks/t1/depends-on']]) {
+      expect(classify(m, p), `${m} ${p}`).toMatchObject({ cls: 'leader', away: 'needs-leader', why: 'task_writes_need_mac' })
     }
     for (const [m, p] of [['POST', '/api/sessions/s1/interrupt'], ['PATCH', '/api/sessions/s1'], ['POST', '/api/sessions/quick-start']]) {
       expect(classify(m, p)).toMatchObject({ away: 'needs-leader', why: 'session_writes_need_mac' })
@@ -141,7 +157,7 @@ describe('the console\'s own writes away (WP7)', () => {
     // A session's budget read needs the Mac's usage store: refused with a why, never this replica's own 503.
     for (const p of ['/api/usage/sessions/s1', '/API/Usage/Sessions/s1']) expect(classify('GET', p), p).toMatchObject({ cls: 'leader', away: 'needs-leader', why: 'usage_needs_mac' })
     expect(classify('GET', '/api/usage/summary')).toMatchObject({ away: 'read' })
-    // None of them journals: WP10 gives those writes exact rows of their own.
-    expect(ROUTE_TABLE.filter((r) => journals(r.away))).toEqual([])
+    // The writes WP10 journals each have an exact row of their own (no wildcard journals).
+    expect(ROUTE_TABLE.filter((r) => journals(r.away) && r.pattern.includes('*'))).toEqual([])
   })
 })

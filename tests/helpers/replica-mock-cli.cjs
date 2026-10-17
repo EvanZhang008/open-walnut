@@ -14,6 +14,13 @@
  * a parentUuid chain, the user line under the uuid Walnut gave it), where Walnut's
  * history reads it.
  *
+ * "please run <command>" asks for the Bash tool first: a can_use_tool control
+ * request on stdout, as the real CLI makes in default mode; the turn answers
+ * "echo: ran <command>" (allowed) or "echo: did not run <command>" once the
+ * matching control_response arrives on stdin. "please ask <question>" asks the
+ * person with AskUserQuestion (which the daemon never answers by itself, in any
+ * mode): "echo: answered <their answer>" once the answer comes, else "echo: not answered".
+ *
  * Copied into the cluster's own bin dir, so its command line names that dir.
  */
 'use strict'
@@ -87,8 +94,28 @@ function runNext() {
   out({ type: 'system', subtype: 'session_state_changed', state: 'running' })
   file({ type: 'user', uuid: userUuid, parentUuid: parent, message: { role: 'user', content: raw } })
   parent = userUuid
-  setTimeout(() => {
-    const reply = `echo: ${words}`
+  // "please run <command>": the turn asks for the Bash tool first (a can_use_tool prompt,
+  // as the real CLI does in default mode) and answers once the prompt is answered.
+  const ask = /^please run (.+)$/i.exec(words.trim())
+  if (ask) {
+    const requestId = `req-${crypto.randomBytes(6).toString('hex')}`
+    out({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: ask[1] } } })
+    waiting.set(requestId, (r) => finish(r.behavior === 'allow' ? `echo: ran ${ask[1]}` : `echo: did not run ${ask[1]}`))
+    return
+  }
+  const question = /^please ask (.+)$/i.exec(words.trim())
+  if (question) {
+    const q = question[1]
+    const requestId = `req-${crypto.randomBytes(6).toString('hex')}`
+    out({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: [{ question: q, header: 'Ask', multiSelect: false, options: [{ label: 'Friday', description: 'After the drill' }, { label: 'Monday', description: 'Next week' }] }] } } })
+    waiting.set(requestId, (r) => {
+      const answers = r.behavior === 'allow' && r.updatedInput && r.updatedInput.answers
+      finish(answers && typeof answers[q] === 'string' ? `echo: answered ${answers[q]}` : 'echo: not answered')
+    })
+    return
+  }
+  setTimeout(() => finish(`echo: ${words}`), THINK_MS)
+  function finish(reply) {
     const message = {
       id: `msg_${crypto.randomBytes(6).toString('hex')}`, type: 'message', role: 'assistant', model: 'mock-model',
       content: [{ type: 'text', text: reply }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
@@ -102,8 +129,10 @@ function runNext() {
     out({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
     busy = false
     runNext()
-  }, THINK_MS)
+  }
 }
+/** Prompts this CLI asked and waits on (request id -> its answer). */
+const waiting = new Map()
 
 let buf = ''
 process.stdin.on('error', () => {})
@@ -116,6 +145,12 @@ process.stdin.on('data', (chunk) => {
     let msg
     try { msg = JSON.parse(line) } catch { continue }
     if (msg.type === 'control_request') { out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id } }); continue }
+    if (msg.type === 'control_response') {
+      const r = msg.response || {}
+      const answer = waiting.get(r.request_id)
+      if (answer) { waiting.delete(r.request_id); answer(r.response || {}) }
+      continue
+    }
     if (msg.type !== 'user') continue
     queue.push(msg)
     runNext()

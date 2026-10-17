@@ -575,6 +575,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // task-move, board) for a Mac that drains them; a retry with the same opId is answered,
   // not written again; `needs_leader {why:'mac_too_old'}` for an older Mac. Both twins.
   // Optional: without it a write away answers needs_leader {why:'daemon_needs_upgrade'}.
+  // WP10 grew it without a new name, because each addition degrades to a refusal on a
+  // daemon that lacks it: `device_revoke` (a device's own sign-out, a `device-revoke`
+  // record; an older daemon answers needs_leader `not_queueable`), a Board outside the
+  // host copy checked against the replica's base (older: `board_not_here`), a create's
+  // retry naming its first task id (older: the answer names none, still one record), and
+  // `follower.send` answering a retried message id once.
   'replica-ops-v1',
   // 'bridge-stream-v1' (docs/plan/walnut-replica-servers-impl.md WP13): the bridge may
   // send `stream.open {sid, to:'primary'}`, and only to the primary (the server its

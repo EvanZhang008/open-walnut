@@ -100,14 +100,17 @@ export type ReplicaWriteResult =
   | { kind: 'applied'; reply: Record<string, unknown> }
   /** The dispatcher answered the request itself (forwarded to the leader, or 503). */
   | { kind: 'answered' }
-  | { kind: 'refused'; code: string; message: string }
+  | { kind: 'refused'; code: string; message: string; detail?: unknown; retryAfterMs?: number }
 
 export interface ReplicaWrite {
   opId: string
   away: AwayRule
   /** The raw body as the client sent it. */
   raw: Buffer
-  submit(op: string, args: Record<string, unknown>, base?: unknown): Promise<ReplicaWriteResult>
+  /** `follower.op {op, args, opId, base?, actor?}` (write-port.ts builds each part). */
+  submit(op: string, args: Record<string, unknown>, base?: unknown, actor?: object): Promise<ReplicaWriteResult>
+  /** Another follower write command (`follower.send`, `follower.permission`), with the same retry and forward rules. */
+  call(cmd: string, params: Record<string, unknown>): Promise<ReplicaWriteResult>
 }
 
 declare module 'node:http' {
@@ -136,6 +139,8 @@ export interface DispatchDeps {
   answerAlone?(req: IncomingMessage, res: ServerResponse, why: string): void
   /** `follower.op` on the link (cap replica-ops-v1); absent: away writes need the Mac. */
   followerOp?(params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>
+  /** Any follower command on the link (follower.send, follower.permission); absent: those writes need the Mac. */
+  followerCall?(cmd: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>
   /**
    * Whether the daemon advertises replica-ops-v1 right now (null: not known yet,
    * no hello answered). Absent: followerOp alone says. False: an older daemon,
@@ -391,9 +396,15 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   /** The route's away write: follower.op with this request's op id (WP10 calls it). */
   function replicaWrite(req: IncomingMessage, res: ServerResponse, away: AwayRule, raw: Buffer): ReplicaWrite {
     const opId = ensureOpId(req)
-    return {
-      opId, away, raw,
-      async submit(op, args, base) {
+    /** One follower write command, its answer lost asked again under the same op id. */
+    const run = async (cmd: string, params: Record<string, unknown>, op: string): Promise<ReplicaWriteResult> => {
+      const send = cmd === 'follower.op'
+        ? (p: Record<string, unknown>) => deps.followerOp!(p, OP_TIMEOUT_MS)
+        : deps.followerCall
+          ? (p: Record<string, unknown>) => deps.followerCall!(cmd, p, OP_TIMEOUT_MS)
+          : null
+      if (!send) { needsLeader(req, res, 'daemon_needs_upgrade'); return { kind: 'answered' } }
+      {
         // Whether an earlier try may have reached the daemon (a timeout, or `closed` after it
         // was written): only then may it be journaled. A try the link refused never left here.
         let lost = false
@@ -402,7 +413,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           if (attempt > 1) await relinked(relinkBy)
           let r: Record<string, unknown>
           try {
-            r = await deps.followerOp!({ op, args, opId, ...(base === undefined ? {} : { base }) }, OP_TIMEOUT_MS)
+            r = await send(params)
           } catch (err) {
             const error = err instanceof Error ? err.message : String(err)
             if (wasNotSent(err)) {
@@ -441,7 +452,10 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             }, { body: raw })
             return { kind: 'answered' }
           }
-          return { kind: 'refused', code: typeof r.errorKind === 'string' ? r.errorKind : 'refused', message: String(r.error ?? 'the daemon refused the write') }
+          return {
+            kind: 'refused', code: typeof r.errorKind === 'string' ? r.errorKind : 'refused', message: String(r.error ?? 'the daemon refused the write'),
+            ...(r.detail !== undefined ? { detail: r.detail } : {}), ...(typeof r.retryAfterMs === 'number' ? { retryAfterMs: r.retryAfterMs } : {}),
+          }
         }
         if (!lost) {
           // No try ever left this server: nothing can be journaled, so the client may try again.
@@ -451,7 +465,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         }
         sendJson(res, 503, { error: { code: 'journal_unwritable', why: 'no_answer', retryAfter: 5, message: MESSAGES.journal_unsure } }, { 'retry-after': '5' })
         return { kind: 'answered' }
-      },
+      }
+    }
+    return {
+      opId, away, raw,
+      submit: (op, args, base, actor) => run('follower.op', { op, args, opId, ...(base === undefined ? {} : { base }), ...(actor ? { actor } : {}) }, op),
+      call: (cmd, params) => run(cmd, { ...params, opId }, cmd),
     }
   }
 

@@ -10,9 +10,10 @@
  *      within LEADER_QUIET_MS + 5 s with no user action, the spliced socket was
  *      closed 4001 (the browser's own log line says so), and the line names the
  *      copies' age ("the copy on devbox from ...": the replica sends it)
- *   3. away, from the copies: the task rows (a Unicode title, matched exactly), an
- *      edit says "Needs your Mac" and changes nothing (the row stays open, the
- *      replica's copy too), on a phone a rename in Details too; a Mac session
+ *   3. away, from the copies: the task rows (a Unicode title, matched exactly), a
+ *      delete says "Needs your Mac" and changes nothing (the row stays, the
+ *      replica's copy too; an edit is kept on the host since WP10:
+ *      replica-away-write.spec.ts); a Mac session
  *      keeps its composer mounted but cannot send; a task's Board page opens (a
  *      view never loaded before, x-walnut-offline on its request); this host's
  *      session shows its history and keeps its composer; the notes tree, a note
@@ -319,38 +320,22 @@ test('the console reads its copies while the Mac sleeps, and comes back with no 
     await shot(page, '2-away-board')
   })
 
-  await test.step('3b. an edit says "Needs your Mac" and changes nothing', async () => {
-    if (isPhone()) {
-      // A phone's row circle is a picture (phone-row-behavior.ts): the task is
-      // renamed and completed in task detail, from the row's menu.
-      await row(page, UNICODE_TITLE).getByRole('button', { name: 'More actions' }).click()
-      await page.locator('.task-kebab-item').filter({ has: page.locator('span', { hasText: /^Details$/ }) }).first().click()
-      const title = page.locator('.phone-detail-head .phone-detail-title')
-      await expect(title).toHaveValue(UNICODE_TITLE)
-      await title.fill(`${UNICODE_TITLE}, renamed away`)
-      await title.press('Enter')
-      await expect(page.getByText(NEEDS_MAC, { exact: true }).first()).toBeVisible({ timeout: 15_000 })
-      await expect(title).toHaveValue(UNICODE_TITLE)
-      await shot(page, '3-away-rename-needs-mac')
-      await page.getByTestId('phone-phase-row').click()
-      await page.getByTestId('phone-phase-sheet').getByRole('option', { name: 'Complete' }).click()
-      await page.getByTestId('phone-complete-confirm').getByRole('button', { name: 'Complete', exact: true }).click()
-    } else {
-      await row(page, UNICODE_TITLE).getByRole('button', { name: 'Mark complete' }).click()
-    }
+  await test.step('3b. a write the host cannot keep (a delete) says "Needs your Mac" and changes nothing', async () => {
+    // WP10 keeps an edit, a create and a complete on the host (replica-away-write.spec.ts);
+    // a delete is still the Mac's.
+    await row(page, UNICODE_TITLE).getByRole('button', { name: 'More actions' }).click()
+    await page.locator('.task-kebab-item').filter({ has: page.locator('span', { hasText: /^Delete$/ }) }).first().click()
     await expect(page.getByText(NEEDS_MAC, { exact: true }).first()).toBeVisible({ timeout: 15_000 })
     await shot(page, '3-away-needs-mac')
     await backToTasks(page)
-    // Nothing changed: the row is still open under its own title, and so is the replica's copy.
+    // Nothing changed: the row is still there under its own title, and so is the replica's copy.
     await page.waitForTimeout(1_500)
-    await expect(row(page, UNICODE_TITLE)).toBeVisible()
-    if (!isPhone()) await expect(row(page, UNICODE_TITLE).getByRole('button', { name: 'Mark complete' })).toBeVisible()
+    await expect(row(page, UNICODE_TITLE)).toBeVisible({ timeout: 15_000 })
     const stores = await control<{ taskRows: Array<{ id: string; title: string; phase: string }> }>('GET', '/control/stores')
     const copied = stores.taskRows.find((t) => t.id === ids.other)
     expect(copied).toMatchObject({ title: UNICODE_TITLE })
     expect(copied!.phase).not.toBe('COMPLETE')
   })
-
   await test.step('3c. a Mac session keeps its composer, unable to send; its task\'s Board opens from the copy', async () => {
     await row(page, 'Release plan').locator('.todo-item-title').click()
     const panel = panelOf(page, ids.macSid)

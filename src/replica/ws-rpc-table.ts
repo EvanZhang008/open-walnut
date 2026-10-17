@@ -27,10 +27,12 @@ export const WS_RPC_TABLE: Readonly<Record<string, RpcRow>> = {
   'session:team-info': { kind: 'read', away: 'read' },
   'session:team-agent-subscribe': { kind: 'read', away: 'read' },
   'session:team-agent-unsubscribe': { kind: 'read', away: 'read' },
-  // Writes: the Mac's until WP10/WP12 give them a journal.
+  // A message to a session that runs on this host goes to it through the daemon
+  // (follower.send, ws-writes.ts); one to a Mac session needs the Mac (WP10).
+  'session:send': { kind: 'write', away: 'host-write', why: 'session_on_mac' },
+  // Writes: the Mac's until WP12 gives them a journal.
   'chat': { kind: 'write', away: 'needs-leader', why: 'ask_needs_mac' },
   'chat:stop': { kind: 'write', away: 'needs-leader', why: 'ask_needs_mac' },
-  'session:send': { kind: 'write', away: 'needs-leader', why: 'session_writes_need_mac' },
   'session:start': { kind: 'write', away: 'needs-leader', why: 'session_writes_need_mac' },
   'session:interrupt': { kind: 'write', away: 'needs-leader', why: 'session_writes_need_mac' },
   'session:edit-queued': { kind: 'write', away: 'needs-leader', why: 'session_writes_need_mac' },

@@ -103,6 +103,18 @@ export function setRpcGate(fn: ((method: string) => string | null) | null): void
 }
 
 /**
+ * A host replica's own answer to an RPC write it journals or relays while the Mac
+ * is away (WP10: `session:send` to a session on this host): a promise of the
+ * answer, or null for the usual path. Gets the frame's client op id. Null on
+ * every other server.
+ */
+type RpcAnswer = (method: string, payload: unknown, opId: string | undefined) => Promise<unknown> | null
+let rpcAnswer: RpcAnswer | null = null
+export function setRpcAnswer(fn: RpcAnswer | null): void {
+  rpcAnswer = fn
+}
+
+/**
  * A host replica's word to each new socket (its `replica:presence`, WP7): sent
  * right after the connection opens, so a console that just moved here learns at
  * once that the Mac is away and whose copy it reads. Null on every other server.
@@ -224,6 +236,16 @@ async function handleMessage(client: Client, raw: string): Promise<void> {
   }
 
   if (frame.type !== 'req') return // only handle RPC requests from clients
+
+  const own = rpcAnswer?.(frame.method, frame.payload, typeof frame.opId === 'string' ? frame.opId : undefined) ?? null
+  if (own) {
+    try {
+      sendResponse(client.ws, frame.id, true, (await own) ?? undefined)
+    } catch (err) {
+      sendResponse(client.ws, frame.id, false, undefined, err instanceof Error ? err.message : String(err))
+    }
+    return
+  }
 
   const refusal = rpcGate?.(frame.method) ?? null
   if (refusal) {

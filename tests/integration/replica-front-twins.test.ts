@@ -19,7 +19,7 @@
  * forwarded to the Mac; the Mac paused with `ws._socket.pause()` (a sleeping
  * Mac keeps its socket open and silent): inside the window the daemon still
  * refuses a follower write (`leader_answers`), past it a GET is answered on the
- * replica's copies (`x-walnut-offline`), a POST is 503 needs_leader, the daemon
+ * replica's copies (`x-walnut-offline`), a write the journal does not take is 503 needs_leader, the daemon
  * lets a follower write past its leader check, and the WebSocket spliced to the
  * Mac is closed with 4001; the Mac awake again, the replica's own sockets close
  * with 4002 and requests reach the Mac. Then a replica build that crashes only
@@ -409,11 +409,12 @@ describe.each(['source', 'standalone'] as const)('a host replica supervised by t
     expect(g.status, g.text.slice(0, 300)).toBe(200)
     expect(Number(g.headers['x-walnut-offline'])).toBeGreaterThan(0)
     expect(g.headers['x-walnut-answered-via']).toBe('replica')
-    // A write that needs the Mac says so; nothing reached the Mac.
+    // A write that needs the Mac says so; nothing reached the Mac. (WP10 journals a
+    // create, an edit or a complete on this host; deleting a task still needs the Mac.)
     const seen = rig!.door.seen.length
-    const w = await call(port(), 'POST', '/api/tasks', { body: '{}', headers: { 'content-type': 'application/json', ...asPhone } })
+    const w = await call(port(), 'DELETE', '/api/tasks/t-twins-none', { headers: asPhone })
     expect(w.status).toBe(503)
-    expect(JSON.parse(w.text).error).toMatchObject({ code: 'needs_leader', retryAfter: 5 })
+    expect(JSON.parse(w.text).error).toMatchObject({ code: 'needs_leader', why: 'task_writes_need_mac', retryAfter: 5 })
     expect(rig!.door.seen.length).toBe(seen)
     // And the daemon agrees: a follower write now passes its leader check (the session is unknown here).
     expect(await probe(rig!, '/follower-send')).toMatchObject({ ok: false, errorKind: 'not_found' })
@@ -421,12 +422,17 @@ describe.each(['source', 'standalone'] as const)('a host replica supervised by t
 
   it('the Mac awake again: the replica\'s own sockets close with 4002, and requests reach the Mac', async () => {
     const own = await openWs(port(), `/ws?token=${PHONE_TOKEN}`)
-    // The replica's own socket runs reads; a write RPC needs the Mac (src/replica/ws-rpc-table.ts).
+    // The replica's own socket runs reads; a write RPC needs the Mac (src/replica/ws-rpc-table.ts),
+    // and a send to a session that does not run on this host needs it too (WP10, ws-writes.ts).
     const isRes = (id: string) => (m: string) => { try { const f = JSON.parse(m); return f.type === 'res' && f.id === id } catch { return false } }
-    own.ws.send(JSON.stringify({ type: 'req', id: 'w1', method: 'session:send', payload: { sessionId: 'x', message: 'hi' }, opId: 'op-twins-ws-1' }))
+    own.ws.send(JSON.stringify({ type: 'req', id: 'w1', method: 'session:start', payload: { taskId: 'x', message: 'hi' }, opId: 'op-twins-ws-1' }))
     const refused = JSON.parse(await own.next(isRes('w1')))
     expect(refused).toMatchObject({ ok: false })
     expect(String(refused.error)).toMatch(/^needs_leader: session_writes_need_mac/)
+    own.ws.send(JSON.stringify({ type: 'req', id: 'w2', method: 'session:send', payload: { sessionId: 'x', message: 'hi' }, opId: 'op-twins-ws-2' }))
+    const elsewhere = JSON.parse(await own.next(isRes('w2')))
+    expect(elsewhere).toMatchObject({ ok: false })
+    expect(String(elsewhere.error)).toMatch(/^needs_leader: session_on_mac/)
     own.ws.send(JSON.stringify({ type: 'req', id: 'r1', method: 'set-interest', payload: { mode: 'global' } }))
     expect(String(JSON.parse(await own.next(isRes('r1'))).error ?? '')).not.toMatch(/needs_leader/)
     wakeMac(await macOf(rig!))

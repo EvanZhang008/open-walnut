@@ -20,10 +20,17 @@
  *   POST /control/pair     {name}: a device token made on the Mac, once its copy is on the replica
  *   POST /control/sleep    SIGSTOP the Mac and its daemon; answers once the replica answers away
  *   POST /control/wake     SIGCONT; answers once the replica forwards to the Mac again
- *   POST /control/drain    waits for the Mac's return to settle (WP10 adds the journal drain)
+ *   POST /control/drain    waits for the Mac's return to settle: it forwards again and has
+ *                          drained the host's journal (every record acked, WP10)
  *   GET  /control/stores   read-only summary of the copies (the replica's task rows, its config, prefs and routines copies among them)
  *   GET  /control/devices  how many devices the replica's copy holds
  *   POST /control/mac-edit {taskId, title}: an edit made on the Mac itself (live data)
+ *   POST /control/mac-task {title, project, pinned?}: a task made on the Mac itself (unpinned unless asked), once its copy is on the replica
+ *   POST /control/mac-board {taskId, html}: a Board page set on the Mac itself, once its copy is on the replica
+ *   GET  /control/mac-tasks the Mac's task rows (id, title, phase) read from its store on disk (read only)
+ *   GET  /control/mac-board?taskId the Mac's Board file of a task, read from disk
+ *   GET  /control/journal  the host daemon's journal: each record's seq, kind, op id, task and field
+ *                          names (a task's records), and whether it is acked
  *
  * Never :3456 or :3457, never the developer's data: everything lives under the
  * cluster's temp base, removed on shutdown. REPLICA_TWIN=standalone runs the bun twin.
@@ -32,7 +39,9 @@
  * is still starting waits for it, then stops it (an early signal used to end the
  * fixture with the default action, leaving the cluster's processes behind).
  */
+import fs from 'node:fs'
 import http from 'node:http'
+import { createRequire } from 'node:module'
 import net from 'node:net'
 import path from 'node:path'
 import { HOST_TURN, MAC_FAVORITES, MAC_LETTER, MAC_NOTE, MAC_ROUTINE, MAC_THEME, MAC_USER_NAME, startReplicaCluster, type ReplicaCluster, type Twin } from '../../helpers/replica-cluster.js'
@@ -76,6 +85,45 @@ if (stopping) await new Promise(() => { /* shutdown() stops it and exits */ })
 const c = cluster
 // The fixture's own probe device: it polls the replica to know when it answers away or forwards again.
 const probeToken = await c.pairDevice('fixture-probe')
+
+/** The host daemon's journal (its own dir in the cluster's base): records and the seqs acked. */
+function journalOf(cl: ReplicaCluster): Array<{ seq: number; kind: string; opId: string; taskId?: string; fields?: string[]; acked: boolean }> {
+  const dir = path.join(cl.base, 'hd', 'offline-host')
+  const records: Array<{ seq: number; kind: string; opId: string; taskId?: string; fields?: string[] }> = []
+  const acked = new Set<number>()
+  let names: string[] = []
+  try { names = fs.readdirSync(dir).filter((n) => /^journal-.*\.ndjson$/.test(n)) } catch { /* none yet */ }
+  for (const n of names) {
+    for (const line of fs.readFileSync(path.join(dir, n), 'utf8').split('\n')) {
+      let o: Record<string, unknown>
+      try { o = JSON.parse(line) } catch { continue }
+      if (typeof o.seq === 'number') {
+        records.push({
+          seq: o.seq, kind: String(o.kind), opId: String(o.opId ?? ''),
+          ...(typeof o.taskId === 'string' ? { taskId: o.taskId } : {}),
+          ...(o.fields && typeof o.fields === 'object' ? { fields: Object.keys(o.fields as Record<string, unknown>).sort() } : {}),
+        })
+      }
+      if (Array.isArray(o.ack)) for (const q of o.ack) acked.add(Number(q))
+    }
+  }
+  return records.map((r) => ({ ...r, acked: acked.has(r.seq) }))
+}
+
+/** The Mac's task rows, read only from its store on disk. */
+function macTaskRows(cl: ReplicaCluster): Array<{ id: string; title: string; phase: string }> {
+  const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { all(): unknown[] }; close(): void }
+  const db = new Database(path.join(cl.macData, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
+  try { return db.prepare('SELECT id, title, phase FROM tasks').all() as Array<{ id: string; title: string; phase: string }> } finally { db.close() }
+}
+
+const waitUntil = async (fn: () => boolean, ms: number, what: string): Promise<void> => {
+  const until = Date.now() + ms
+  while (!fn()) {
+    if (Date.now() > until) throw new Error(`timed out waiting for ${what}`)
+    await new Promise((r) => setTimeout(r, 250))
+  }
+}
 
 const freePort = () => new Promise<number>((resolve, reject) => {
   const s = net.createServer()
@@ -134,7 +182,35 @@ control = http.createServer((req, res) => {
       if (req.method === 'POST' && url.pathname === '/control/pair') return reply(200, { token: await c.pairDevice(String(body.name ?? 'ios-sim')) })
       if (req.method === 'POST' && url.pathname === '/control/sleep') { c.sleepMac(); return reply(200, { ms: await c.waitAway(probeToken) }) }
       if (req.method === 'POST' && url.pathname === '/control/wake') { c.wakeMac(); return reply(200, { ms: await c.waitBack(probeToken) }) }
-      if (req.method === 'POST' && url.pathname === '/control/drain') return reply(200, { ms: await c.waitBack(probeToken) })
+      if (req.method === 'POST' && url.pathname === '/control/drain') {
+        const t0 = Date.now()
+        await c.waitBack(probeToken)
+        await waitUntil(() => journalOf(c).every((r) => r.acked), 120_000, 'the Mac to drain the host journal')
+        return reply(200, { ms: Date.now() - t0 })
+      }
+      if (req.method === 'GET' && url.pathname === '/control/journal') return reply(200, { records: journalOf(c) })
+      if (req.method === 'GET' && url.pathname === '/control/mac-tasks') return reply(200, { tasks: macTaskRows(c) })
+      if (req.method === 'GET' && url.pathname === '/control/mac-board') {
+        const id = url.searchParams.get('taskId') ?? ''
+        if (!/^[A-Za-z0-9-]+$/.test(id)) return reply(400, { error: 'bad taskId' })
+        try { return reply(200, JSON.parse(fs.readFileSync(path.join(c.macData, 'boards', `${id}.json`), 'utf8'))) } catch { return reply(404, { error: 'no board' }) }
+      }
+      if (req.method === 'POST' && url.pathname === '/control/mac-task') {
+        // In the project's own list (not pinned), as the read spec's tasks are, unless the spec asks.
+        const r = await c.mac('POST', '/api/tasks', { title: String(body.title), project: String(body.project ?? 'Acme'), pinned: body.pinned === true })
+        if (r.status !== 201) return reply(r.status, r.json)
+        const id = String(r.json.task.id)
+        await waitUntil(() => (c.stores().taskRows as Array<{ id: string }>).some((t) => t.id === id), 60_000, 'the task copy to hold the new task')
+        return reply(201, { id })
+      }
+      if (req.method === 'POST' && url.pathname === '/control/mac-board') {
+        const id = String(body.taskId)
+        const r = await c.mac('PUT', `/api/v1/tasks/${id}/board`, { html: String(body.html) })
+        if (r.status >= 300) return reply(r.status, r.json)
+        const file = path.join(c.replicaData, 'boards', `${id}.json`)
+        await waitUntil(() => { try { return (JSON.parse(fs.readFileSync(file, 'utf8')) as { html?: string }).html === String(body.html) } catch { return false } }, 60_000, 'the Board copy to hold the page')
+        return reply(200, r.json)
+      }
       if (req.method === 'GET' && url.pathname === '/control/stores') return reply(200, c.stores())
       if (req.method === 'GET' && url.pathname === '/control/devices') {
         const copy = c.deviceCopy() as { devices?: unknown[] } | null

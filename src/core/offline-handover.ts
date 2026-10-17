@@ -191,7 +191,16 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
       log.session.warn('offline handover: could not look at the sessions the host resumed', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) });
     }
   }
-  if (result.records > 0) log.session.info('offline handover: done', { host: conn.hostKey, ...result });
+  if (result.records > 0) {
+    log.session.info('offline handover: done', { host: conn.hostKey, ...result });
+    // The replicas' copies go again now: a host replica lets an "awaiting copy" mark go
+    // once a manifest from after the ack stored the key, and a write that changed no row
+    // (a duplicate create, a refused one) brings no round of its own.
+    void (async () => {
+      (await import('./replication/task-replica.js')).resendTaskReplicaSoon();
+      (await import('./replication/kinds/copy-kind.js')).resendCopyKindsSoon();
+    })().catch((err) => log.session.warn('offline handover: could not send the copies again', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) }));
+  }
   return result;
 }
 
@@ -222,7 +231,9 @@ async function drainRounds(
     // Every conflict of what is acked is on disk BEFORE the ack (a write failure throws: no ack).
     batch.conflicts.flush();
     if (v2) {
-      if (acked.length) await conn.send('offline.ack', { home: WALNUT_HOME, seqs: acked }, RPC_TIMEOUT_MS);
+      // `now`: this server's clock after it applied them, so a host replica can tell a copy
+      // manifest built after this ack from one built before it (replica/overlay.ts).
+      if (acked.length) await conn.send('offline.ack', { home: WALNUT_HOME, seqs: acked, now: Date.now() }, RPC_TIMEOUT_MS);
     } else {
       // An old daemon acks by watermark: only the prefix before the first record that waits.
       let upTo = 0;
@@ -385,6 +396,13 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
     return 'ack';
   }
   if (actor?.kind === 'device' && !(await devicePaired(String(actor.deviceId ?? '')))) {
+    // A device that removed itself and is already gone here: nothing is lost, nothing to tell.
+    if ((record as { kind: string }).kind === 'device-revoke') {
+      if (key) recordApplied(key, { outcome: 'noop', detail: 'device already gone', source: 'drain' });
+      batch.result.skipped++;
+      log.session.info('offline handover: a device removed while away was already gone', { host, seq: (record as { seq?: number }).seq, opId, deviceId: actor.deviceId });
+      return 'ack';
+    }
     if (!letter('actor-dropped', `${actor.name ?? actor.deviceId} is no longer paired with this Mac`)) return 'stop';
     if (key) recordApplied(key, { outcome: 'refused', detail: 'device no longer paired', source: 'drain' });
     batch.result.skipped++;
@@ -525,6 +543,13 @@ function createdAs(
   return 'ok';
 }
 
+/** The task's updated_at before this drain writes to it (0 for a task not made yet: nothing on it is newer). */
+async function keepBaseline(baseline: Map<string, number>, taskId: string): Promise<void> {
+  const { getTask } = await import('./task-manager.js');
+  const task = await getTask(taskId).catch(() => null);
+  baseline.set(task?.id ?? taskId, task ? Date.parse(task.updated_at ?? '') || 0 : 0);
+}
+
 /** Apply a record the ledger does not hold, then record it (after its letter entries are on disk). */
 async function applyTaken(
   batch: Batch, record: OfflineRecord,
@@ -543,6 +568,10 @@ async function applyTaken(
     if (V1_KINDS.has(record.kind)) {
       await applyRecord(host, record, batch.baseline, batch.result, batch.unapplied);
     } else {
+      // A v1 record of this task later in the drain (an old Mac led between the two, R25)
+      // judges "a newer edit" against the task as it was before this drain wrote to it:
+      // this record was queued before that one, so its write is never the newer edit.
+      if (taskId && !batch.baseline.has(taskId)) await keepBaseline(batch.baseline, taskId);
       await applyV2({ hostKey: host, at: record.at + batch.offset, offset: batch.offset, conflicts: batch.conflicts, remap: batch.remap, result: batch.result }, record as unknown as V2Record);
     }
     // Every entry the apply wrote is on disk already (addDurable); this is the round's no-op.

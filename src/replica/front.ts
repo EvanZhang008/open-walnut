@@ -246,6 +246,8 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     suspect: onSuspect,
     answered: (kind) => { marks.answered(kind) },
     followerOp: (params, timeoutMs) => link.request('follower.op', params, timeoutMs),
+    // A message to, or an answer for, a session that runs here (write-port.ts send, permission).
+    followerCall: (cmd, params, timeoutMs) => link.request(cmd, params, timeoutMs),
     // An older daemon has no follower.op: its away writes need the Mac (needs_leader daemon_needs_upgrade).
     followerOpCap: () => {
       const caps = link.capabilities()

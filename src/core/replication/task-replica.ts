@@ -187,6 +187,18 @@ export function taskReplicaRoundNow(): void {
 let schedulers = 0
 
 /**
+ * A drain of a host's journal took away writes (offline-handover.ts): every manifest
+ * goes again within the debounce, so a host replica's "awaiting copy" marks resolve in
+ * seconds. A create the ledger took as a duplicate of its op id, or a write refused
+ * into the letter, changes no row, so no store event would bring a round before the
+ * sweep (WP10, docs/plan/walnut-replica-servers-impl.md section 4 "Hold after ack").
+ */
+export function resendTaskReplicaSoon(): void {
+  forgetTaskReplica()
+  soonHook?.()
+}
+
+/**
  * The user confirmed a removal the half rule refused three rounds in a row
  * (the Settings row): the next round on that target sends `confirm:true`,
  * only while the leader still has the refused count and keys (kind-leader.ts).

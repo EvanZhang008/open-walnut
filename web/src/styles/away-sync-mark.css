@@ -1,0 +1,42 @@
+/* The "Syncs when your Mac is back" mark (AwaySyncMark.tsx): an informational
+   pill in a title row, the soft rounded look of the date pills, in the away
+   line's amber so the two read as one state. Two classes per selector: this file
+   loads before globals.css. */
+.away-sync-mark.away-sync-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0 6px;
+  height: 16px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #8a5a00;
+  background: rgba(245, 166, 35, 0.16);
+  border: 1px solid rgba(245, 166, 35, 0.45);
+}
+/* On a Board's bar: centred in the row; a bar too narrow for the mark (a phone)
+   wraps its buttons to a second line rather than pushing them off the edge.
+   Only a bar that holds the mark wraps, so the Mac's bar is unchanged. */
+.away-sync-mark.away-sync-board {
+  align-self: center;
+}
+.task-board-bar:has(> .away-sync-board) {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+:root[data-theme='dark'] .away-sync-mark.away-sync-mark {
+  color: #f5c46b;
+  background: rgba(245, 166, 35, 0.14);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .away-sync-mark.away-sync-mark {
+    color: #f5c46b;
+    background: rgba(245, 166, 35, 0.14);
+  }
+}

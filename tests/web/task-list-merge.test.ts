@@ -247,3 +247,19 @@ describe('overlayLaterEdits and an edit still waiting for its write', () => {
     expect(edits.size).toBe(0);
   });
 });
+
+describe('a host replica\'s mark on a row (WP10, replica_sync)', () => {
+  it('a refetch whose only change is the mark is not row equal, coming or going; rows without it still are', () => {
+    const a = task({ id: 'a' })
+    const marked = { ...a, replica_sync: 'pending' } as Task
+    expect(listRowEqual(a, marked)).toBe(false)
+    expect(listRowEqual(marked, { ...marked })).toBe(true)
+    expect(listRowEqual(marked, { ...a, replica_sync: 'awaiting' } as Task)).toBe(false)
+    expect(listRowEqual(marked, a)).toBe(false)
+    const prev = [a]
+    const next = mergeFetchedTasks(prev, [marked])
+    expect((next[0] as { replica_sync?: string }).replica_sync).toBe('pending')
+    // The Mac's rows never carry it: identity kept as before.
+    expect(mergeFetchedTasks(prev, [{ ...a }])).toBe(prev)
+  })
+})

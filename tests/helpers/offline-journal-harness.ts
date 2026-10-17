@@ -73,7 +73,7 @@ export function jslice(overrides: Partial<HostSlice> = {}): HostSlice {
 }
 
 /** An offline host over a real journal store; `drains.kinds` is what the leading Mac drains. */
-export function journalHost(dir: string, clock: Clock, opts: { drains?: string[] | null; journal?: Partial<OfflineJournalDeps>; boards?: boolean } = {}) {
+export function journalHost(dir: string, clock: Clock, opts: { drains?: string[] | null; journal?: Partial<OfflineJournalDeps>; boards?: boolean; deliver?: OfflineHostDeps['deliver'] } = {}) {
   const drains = { kinds: opts.drains === undefined ? JOURNAL_V2_DRAINS.slice() : opts.drains }
   const journal = journalStore(dir, clock, opts.journal)
   const deps: OfflineHostDeps = {
@@ -81,7 +81,7 @@ export function journalHost(dir: string, clock: Clock, opts: { drains?: string[]
     randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf, kit: createEnvelopeKit(), log: () => {},
     isLive: () => true, turnActive: () => false, streamOffset: () => undefined,
-    deliver: async () => ({ ok: true }),
+    deliver: opts.deliver ?? (async () => ({ ok: true })),
     journal,
     drainsOf: () => drains.kinds,
     ...(opts.boards ? { boards: createBoardOffline() } : {}),
