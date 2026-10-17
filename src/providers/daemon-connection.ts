@@ -3925,6 +3925,10 @@ export class DaemonConnection {
       return
     }
     if (this._directDial) return this._directDial
+    // A dial after disconnect() clears the destroyed mark, as connect() does: a
+    // connected instance still marked destroyed ignored its next socket close and
+    // stayed "connected" over a dead socket (2026-10-17, the pool kept handing it out).
+    this._destroyed = false
     // Under _connecting, a reconnect timer that fires waits a step (scheduleReconnect).
     this._connecting = true
     const dial: Promise<void> = this.dialDirect(wsUrl).finally(() => {
@@ -4486,7 +4490,7 @@ export class DaemonConnection {
       this.pingTimer = null
     }
 
-    if (this._destroyed || !this._connected) return
+    if (!this._connected) return
 
     this.setConnected(false)
 
@@ -4501,6 +4505,9 @@ export class DaemonConnection {
     }
     // The daemon drops the streams of the closed socket too.
     this.streams?.closeAll(`the link to ${this.hostKey} closed`)
+
+    // Torn down on purpose: the loss is recorded above, and nothing re-dials it.
+    if (this._destroyed) return
 
     log.session.info('DaemonConnection: connection lost, scheduling reconnect', {
       host: this.hostKey, delayMs: DaemonConnection.RECONNECT_DELAY_MS,
