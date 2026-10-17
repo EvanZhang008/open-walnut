@@ -16,7 +16,9 @@
  * twin alone otherwise; REPLICA_CLUSTER_TWINS=source|standalone|source,standalone picks.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BUN, HOST_TURN, startReplicaCluster, WINDOWS, type ReplicaCluster, type Twin } from '../helpers/replica-cluster.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { BUN, HOST_TURN, startReplicaCluster, waitFor, WINDOWS, type ReplicaCluster, type Twin } from '../helpers/replica-cluster.js'
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
 
@@ -108,6 +110,18 @@ describe.each(TWINS)('the iOS app against a host replica with the Mac asleep (%s
     const edit = await phone('PATCH', `/api/v1/tasks/${c.ids.board}`, { title: 'Release plan, moved' })
     expect(edit.status, edit.text.slice(0, 300)).toBe(200)
     expect(edit.json).toMatchObject({ queued: true, offline: true, task: { id: c.ids.board, title: 'Release plan, moved', replica_sync: 'pending' } })
+    // The replica's request log has the away write like any route's: method, path, status,
+    // ms, its request id, and the op id the dispatcher minted (the phone sends none).
+    const reqId = String(edit.headers['x-request-id'] ?? '')
+    expect(reqId).toMatch(/^[0-9a-f]{8}$/)
+    const logged = await waitFor(() => {
+      let text = ''
+      try { text = fs.readFileSync(path.join(c.base, 'hr', 'logs', 'server.log'), 'utf8') } catch { return null }
+      return text.split('\n').find((l) => l.includes(`PATCH /api/v1/tasks/${c.ids.board} `) && l.includes(`"reqId":"${reqId}"`)) ?? null
+    }, 10_000, 'the away edit in the replica\'s request log', 100)
+    expect(logged).toMatch(/ 200 \(\d+ms\)/)
+    expect(logged).toMatch(/"opId":"op-[0-9a-f]{16}"/)
+    expect(logged).toContain('"answeredVia":"replica"')
     const made = await phone('POST', '/api/v1/tasks', { title: 'Made on the phone' })
     expect(made.status, made.text.slice(0, 300)).toBe(201)
     madeId = made.json.task.id as string

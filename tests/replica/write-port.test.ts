@@ -158,21 +158,30 @@ describe('write port: refusals and retries', () => {
     expect(r.records()).toHaveLength(0)
   })
 
-  it('the write budget is per device: one device slowed down, another still writes', async () => {
+  it('the write budget is per device, and a coalesced save is exempt: the throttled device\'s next save of the same note still lands, its plain write does not', async () => {
     const r = rig()
-    // Creates (a save onto the same task and field by the same device coalesces, and is not charged).
-    for (let i = 0; i < 30; i++) {
+    // The phone's first save of the note: a record of its own, charged (1 of 30).
+    expect(await r.port.taskUpdate(r.write(), PHONE, TASK_A, { note: 'draft 1' })).toMatchObject({ status: 200 })
+    // 29 creates use up the rest of its budget.
+    for (let i = 0; i < 29; i++) {
       const a = await r.port.taskCreate(r.write(), PHONE, { title: `Errand ${i}` })
       expect(a, `write ${i}`).toMatchObject({ status: 201 })
     }
+    // The phone is throttled now: a plain write (a new record) is refused.
     const over = await r.port.taskCreate(r.write(), PHONE, { title: 'one too many' })
     expect(over).toMatchObject({ status: 429, body: { error: { code: 'throttled' } } })
-    const other = await r.port.taskCreate(r.write(), TABLET, { title: 'from the tablet' })
-    expect(other).toMatchObject({ status: 201 })
-    // A coalesced save from the slowed device still lands (not charged).
-    const save1 = await r.port.taskUpdate(r.write(), TABLET, TASK_A, { note: 'draft 1' })
-    expect(save1).toMatchObject({ status: 200 })
-    expect(r.records().filter((x) => x.kind === 'task-create')).toHaveLength(31)
+    const otherField = await r.port.taskUpdate(r.write(), PHONE, COPY_ONLY.id, { note: 'another task' })
+    expect(otherField).toMatchObject({ status: 429, body: { error: { code: 'throttled' } } })
+    // The SAME phone's next save of the same note folds into its pending record: not charged, it lands.
+    const save2 = await r.port.taskUpdate(r.write(), PHONE, TASK_A, { note: 'draft 2' })
+    expect(save2).toMatchObject({ status: 200 })
+    const notes = r.records().filter((x) => x.kind === 'task-fields' && x.taskId === TASK_A)
+    expect(notes[notes.length - 1]).toMatchObject({ rev: 2, fields: { note: { value: 'draft 2' } } })
+    expect(r.overlay.task(TASK_A, r.copy.get(TASK_A)!)).toMatchObject({ note: 'draft 2', replica_sync: 'pending' })
+    // Another device is not slowed by the phone's budget.
+    expect(await r.port.taskCreate(r.write(), TABLET, { title: 'from the tablet' })).toMatchObject({ status: 201 })
+    expect(r.records().filter((x) => x.kind === 'task-create')).toHaveLength(30)
+    expect(r.records().some((x) => x.taskId === COPY_ONLY.id)).toBe(false)
   })
 
   it('a host failure (internal) is transient: 503 with retryAfter, never a 409 conflict', () => {
@@ -213,9 +222,68 @@ describe('write port: refusals and retries', () => {
     const again = await r.port.taskCreate(r.write('op-client-made-0001'), PHONE, { title: 'Book the rollback room', project: 'Acme' })
     expect(again).toMatchObject({ status: 201, body: { task: { id: madeId, title: 'Book the rollback room', replica_sync: 'pending' } } })
     expect(r.records().filter((x) => x.kind === 'task-create')).toEqual([expect.objectContaining({ taskId: madeId, opId: 'op-client-made-0001' })])
+    // The overlay is told about the retry under the first attempt's task, never the retry's minted id.
+    expect(r.written.map((e) => e.record.taskId)).toEqual([madeId, madeId])
     // The overlay shows the one task, never a second made only by the retry's minted id.
     await r.overlay.refresh()
     expect(r.overlay.createdTaskIds()).toEqual([madeId])
+  })
+
+  it('a create whose first answer was lost keeps the page\'s correlation id: the retry\'s answer hands it on with the task the first attempt made', async () => {
+    const r = rig({ lose: (n) => n === 1 })
+    const made = await r.port.taskCreate(r.write('op-client-lost-made-01'), PHONE, { title: 'Order the chairs', project: 'Acme', client_request_id: 'tmp-acme-0002' })
+    expect(made).toMatchObject({ answered: false, status: 201 })
+    const id = (made as { body: { task: { id: string } } }).body.task.id
+    // The daemon took the first try (its answer lost) and answered the second as a duplicate.
+    expect(r.requests.map((q) => q.params.opId)).toEqual(['op-client-lost-made-01', 'op-client-lost-made-01'])
+    expect(r.records().filter((x) => x.kind === 'task-create')).toEqual([expect.objectContaining({ taskId: id })])
+    // Nobody heard of the first try: the duplicate is what tells the overlay and the page.
+    expect(r.written).toEqual([expect.objectContaining({ kind: 'task-create', clientRequestId: 'tmp-acme-0002', record: expect.objectContaining({ taskId: id }) })])
+    expect(r.overlay.task(id, null)).toMatchObject({ id, title: 'Order the chairs', replica_sync: 'pending' })
+  })
+
+  it('an op id the daemon holds for another kind of change answers 409 op_id_reused: nothing journaled, no row shown', async () => {
+    const r = rig()
+    expect(await r.port.taskUpdate(r.write('op-client-reused-001'), PHONE, TASK_A, { title: 'Renamed once' })).toMatchObject({ status: 200 })
+    const create = await r.port.taskCreate(r.write('op-client-reused-001'), PHONE, { title: 'A phantom task' })
+    expect(create).toMatchObject({ answered: false, status: 409, body: { error: { code: 'op_id_reused' } } })
+    expect(r.records().map((x) => x.kind)).toEqual(['task-fields'])
+    expect(r.overlay.createdTaskIds()).toEqual([])
+    // The same change asked again under its op id is still the first one's answer.
+    expect(await r.port.taskUpdate(r.write('op-client-reused-001'), PHONE, TASK_A, { title: 'Renamed once' })).toMatchObject({ status: 200, body: { task: { title: 'Renamed once' } } })
+    expect(r.records()).toHaveLength(1)
+  })
+
+  it('a write is checked as the Mac checks it before anything is sent; a bare status shows the phase the Mac derives from it', async () => {
+    const r = rig()
+    for (const [patch, words] of [
+      [{ priority: 'whenever' }, /priority must be one of/],
+      [{ phase: 'SOMEDAY' }, /phase must be one of/],
+      [{ status: 'finished' }, /status must be one of/],
+      [{ title: '   ' }, /title must be a non-empty string/],
+      [{ due_date: '2030-02-30' }, /due_date must be an ISO-8601 date/],
+      [{ pinned: 'yes' }, /pinned must be a boolean/],
+      [{ tags: 'one,two' }, /tags must be an array of strings/],
+      [{ end_date: '2030-01-02' }, /end_date requires a start_date/],
+    ] as const) {
+      const a = await r.port.taskUpdate(r.write(), PHONE, TASK_A, patch as Record<string, unknown>)
+      expect(a, JSON.stringify(patch)).toMatchObject({ answered: false, status: 400, body: { error: { code: 'bad_request', message: expect.stringMatching(words) } } })
+    }
+    const badCreate = await r.port.taskCreate(r.write(), PHONE, { title: 'Book it', priority: 'whenever' })
+    expect(badCreate).toMatchObject({ status: 400, body: { error: { code: 'bad_request' } } })
+    expect(r.requests).toHaveLength(0)
+    expect(r.records()).toHaveLength(0)
+    // A status alone is the phase it names, as the Mac stores it: done is COMPLETE, with its completion time.
+    const done = await r.port.taskUpdate(r.write(), PHONE, TASK_A, { status: 'done' })
+    expect(done).toMatchObject({ status: 200, body: { task: { status: 'done', phase: 'COMPLETE', completed_at: new Date(T0).toISOString() } } })
+    expect(r.overlay.task(TASK_A, r.copy.get(TASK_A)!)).toMatchObject({ status: 'done', phase: 'COMPLETE', replica_sync: 'pending' })
+    // A status the phase already shows moves nothing (IN_PROGRESS is in_progress).
+    const same = await r.port.taskUpdate(r.write(), TABLET, COPY_ONLY.id, { status: 'todo' })
+    expect(same).toMatchObject({ status: 200, body: { task: { status: 'todo', phase: 'TODO' } } })
+    const moved = await r.port.taskUpdate(r.write(), TABLET, COPY_ONLY.id, { status: 'in_progress' })
+    expect(moved).toMatchObject({ status: 200, body: { task: { status: 'in_progress', phase: 'IN_PROGRESS' } } })
+    // The record is what the person asked: the status, with the status it was shown over.
+    expect(r.records()[0]).toMatchObject({ fields: { status: { base: 'unknown', value: 'done' } } })
   })
 
   it('every answer lost: journal_unwritable (it may have been kept), never a second record', async () => {
@@ -225,7 +293,7 @@ describe('write port: refusals and retries', () => {
     expect(r.records()).toHaveLength(1)
   })
 
-  it('a device removes only itself; a Board post on a Board this host keeps has a minted post id', async () => {
+  it('a device revoke while away is that device\'s own sign-out only (removing another needs the owner\'s rights, which only the Mac can check: plan WP10); a Board post on a Board this host keeps has a minted post id', async () => {
     const r = rig()
     const other = await r.port.deviceRevoke(r.write(), PHONE, TABLET.deviceId, TABLET.name!)
     expect(other).toMatchObject({ status: 503, body: { error: { code: 'needs_leader', why: 'device_changes_need_mac' } } })

@@ -1516,6 +1516,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       import('./ws/handler.js'),
     ])
     const hostKey = (process.env.WALNUT_HOST_KEY ?? '').trim() || null
+    // Every answer below is logged like the Mac's routes (method, path, status, ms, reqId,
+    // the write's op id): the away routes answer before the logger's own mount further on,
+    // which then skips a request already logged. The op-id middleware does NOT run on an
+    // away write: its op id (the client's, or minted by the dispatcher) is what the daemon
+    // dedupes while the record is pending and the Mac's ledger dedupes at the drain; the
+    // middleware's ledger here would answer a retry after the ack from this replica's own
+    // file (W11 must journal it again) and record a journaled write as applied.
+    app.use('/api', requestLogger)
     app.use('/api', awaySessionReads({
       alone: () => front.route().kind === 'alone',
       offlineHeaders: () => front.offlineHeaders(),

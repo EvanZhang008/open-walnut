@@ -156,6 +156,20 @@ describe('the words', () => {
     expect(e({ code: 'leader_unsure', why: 'lost_answer' })).toBe('Your Mac just came back. This host may have kept the change; check it before you try again.')
     expect(e({ code: 'primary_timeout', sent: true })).toBe('Your Mac did not answer in time, and it may have kept the change; check it before you try again.')
     expect(e({ code: 'primary_timeout', sent: false })).toBe('Your Mac did not answer in time. Nothing was saved; try again.')
+    // A host journal that did not take the write (row R20): full, or not writable.
+    expect(leaderErrorMessage({ error: { code: 'queue_full', message: 'this host already holds 1000 records for the Walnut server; wait for it to reconnect', retryAfter: 5 } }, 503))
+      .toBe('This host already keeps as many changes as it can until your Mac is back; this one was not kept. Try it again once your Mac is back.')
+    expect(leaderErrorMessage({ error: { code: 'queue_full', why: 'blobs' } }, 503)).toMatch(/^This host already keeps as many changes/)
+    expect(e({ code: 'journal_unwritable', why: 'disk_full', message: 'this host could not save the change: ENOSPC' }))
+      .toBe('This host could not keep this change: its disk is full. The changes it kept before are safe.')
+    for (const why of ['permission', 'io', 'locked', 'not_owner', 'state_unreadable', 'migrating', undefined]) {
+      expect(e({ code: 'journal_unwritable', ...(why ? { why } : {}) }), String(why)).toBe('This host could not keep this change. The changes it kept before are safe; try again in a moment.')
+    }
+    // The dispatcher's: every try went unanswered, so it may be kept.
+    expect(e({ code: 'journal_unwritable', why: 'no_answer' })).toBe('This host did not answer, and it may have kept the change; check it before you try again.')
+    // A busy session's queue on the Mac (429) keeps its own words: it is no host journal.
+    expect(leaderErrorMessage({ error: { code: 'queue_full', message: 'session abc already has 50 queued messages' } }, 429)).toBeNull()
+    expect(e({ code: 'queue_full' })).toBeNull()
     // Not a replica's: left to the caller.
     expect(e({ code: 'not_found' })).toBeNull()
     expect(leaderErrorMessage({ error: 'Task not found' })).toBeNull()
@@ -165,8 +179,9 @@ describe('the words', () => {
 
   it('its words are told from any other message, so a surface shows them with no "Failed to ..." in front', () => {
     for (const error of [{ code: 'needs_leader', why: 'session_on_mac' }, { code: 'needs_leader' }, { code: 'leader_unsure' },
-      { code: 'leader_unsure', why: 'lost_answer' }, { code: 'primary_timeout', sent: true }, { code: 'primary_timeout', sent: false }]) {
-      expect(isLeaderWords(leaderErrorMessage({ error }))).toBe(true)
+      { code: 'leader_unsure', why: 'lost_answer' }, { code: 'primary_timeout', sent: true }, { code: 'primary_timeout', sent: false },
+      { code: 'queue_full' }, { code: 'journal_unwritable', why: 'disk_full' }, { code: 'journal_unwritable', why: 'io' }, { code: 'journal_unwritable', why: 'no_answer' }]) {
+      expect(isLeaderWords(leaderErrorMessage({ error }, 503)), JSON.stringify(error)).toBe(true)
     }
     for (const other of ['Task not found', 'Needs your Mac', 'Your Mac is away.', 'HTTP 503', '', null, undefined, 42]) {
       expect(isLeaderWords(other)).toBe(false)

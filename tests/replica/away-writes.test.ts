@@ -28,6 +28,8 @@ import { createWritePort, type TaskRow } from '../../src/replica/write-port.js'
 import { linkWrite } from '../../src/replica/ws-writes.js'
 import { applyVoiceReply, VOICE_REPLY_MARKER } from '../../src/core/sessions/voice-reply.js'
 import { createDeviceCopy } from '../../src/host-server/device-copy.js'
+import type { OfflineJournalDeps } from '../../src/providers/offline-journal-core.js'
+import { isLeaderWords, leaderErrorMessage } from '../../web/src/api/leader-presence'
 
 const T0 = Date.parse('2026-10-14T12:00:00Z')
 const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
@@ -36,10 +38,10 @@ const TABLET_TOKEN = 'acme-tablet-token-0002'
 
 afterEach(() => cleanupJournalDirs())
 
-function rig(delivered: string[] = []) {
+function rig(delivered: string[] = [], opts: { journal?: Partial<OfflineJournalDeps> } = {}) {
   const dir = journalTmpDir()
   const clock = { now: T0 }
-  const { host } = journalHost(dir, clock, { boards: true, deliver: async (_sid, body) => { delivered.push(body); return { ok: true } } })
+  const { host } = journalHost(dir, clock, { boards: true, deliver: async (_sid, body) => { delivered.push(body); return { ok: true } }, ...(opts.journal ? { journal: opts.journal } : {}) })
   host.configure(jslice({ boards: [{ taskId: TASK_A, html: '<p id="build">Build: green</p>', version: 2, threads: {} }] }))
   const copy: TaskRow[] = [
     { id: TASK_A, title: 'Leader work', phase: 'IN_PROGRESS', project: 'Acme', pinned: true, pin_order: 0, focus_tier: 'focus' },
@@ -91,7 +93,7 @@ function rig(delivered: string[] = []) {
   // TASK_B is TASK_A's worker: its team Board (?team=1) is the leader's, as board-v1.ts answers it.
   app.get('/api/v1/tasks/:id/board', (req, res) => { res.json({ board_task_id: req.params.id === TASK_B && req.query.team === '1' ? TASK_A : req.params.id, board: { html: '<p id="build">Build: green</p>', version: 2, updated_at: '2026-10-14T11:00:00.000Z', updated_by: 'human' }, threads: {}, marks: {}, board_version: 2 }) })
   const records = () => journalLines(dir).map((l) => JSON.parse(l)).filter((r) => typeof r.seq === 'number')
-  return { dir, host, app, records, devices, copy }
+  return { dir, host, app, records, devices, copy, clock }
 }
 
 const auth = { authorization: `Bearer ${PHONE_TOKEN}` }
@@ -263,7 +265,7 @@ describe('away routes: what a person\'s write becomes', () => {
     expect(own.body.replica_sync).toBeUndefined()
   })
 
-  it('a device removes itself: off the device copy at once, journaled; another device needs the Mac', async () => {
+  it('a device revoke while away is that device\'s own sign-out only: off the device copy at once, journaled; removing another device needs the Mac (plan WP10)', async () => {
     const r = rig()
     const other = await request(r.app).delete('/api/devices/Acme%20tablet').set(auth)
     expect(other.status).toBe(503)
@@ -299,5 +301,77 @@ describe('away routes: what a person\'s write becomes', () => {
     const anon = await request(r.app).patch(`/api/tasks/${TASK_A}`).set({ authorization: 'Bearer nobody' }).send({ title: 'x' })
     expect(anon.status).toBe(503)
     expect(anon.body.error).toMatchObject({ why: 'device_changes_need_mac' })
+  })
+})
+
+describe('away routes: a journal that does not take the write (row R20)', () => {
+  it('a full journal answers 503 queue_full and keeps what it holds; the console says so in plain words', async () => {
+    const r = rig([], { journal: { maxRecords: 2 } })
+    expect((await request(r.app).patch(`/api/tasks/${TASK_A}`).set(auth).send({ title: 'First away edit' })).status).toBe(200)
+    expect((await request(r.app).post('/api/tasks').set(auth).send({ title: 'Second away write', project: 'Acme' })).status).toBe(201)
+    const before = r.records()
+    const full = await request(r.app).post(`/api/tasks/${TASK_B}/complete`).set(auth)
+    expect(full.status).toBe(503)
+    expect(full.headers['retry-after']).toBe('5')
+    expect(full.body.error).toMatchObject({ code: 'queue_full', retryAfter: 5 })
+    // Nothing of it was kept, and nothing earlier was lost.
+    expect(r.records()).toEqual(before)
+    const list = await request(r.app).get('/api/tasks').set(auth).set('x-test-away', '1')
+    const byId = new Map((list.body.tasks as Array<{ id: string }>).map((t) => [t.id, t]))
+    expect(byId.get(TASK_A)).toMatchObject({ title: 'First away edit', replica_sync: 'pending' })
+    expect(byId.get(TASK_B)).toMatchObject({ phase: 'IN_PROGRESS' })
+    expect(byId.get(TASK_B)).not.toHaveProperty('replica_sync')
+    // The words the console shows for this answer (web/src/api/client.ts reads the body and its status).
+    const words = leaderErrorMessage(full.body, full.status)
+    expect(words).toBe('This host already keeps as many changes as it can until your Mac is back; this one was not kept. Try it again once your Mac is back.')
+    expect(isLeaderWords(words)).toBe(true)
+  })
+
+  it('a journal that cannot be written (a full disk) answers 503 journal_unwritable, keeps what it holds, and takes the same write once the disk has room', async () => {
+    const disk = { full: false }
+    const fullDiskFs = {
+      ...fs,
+      writeSync: (...a: Parameters<typeof fs.writeSync>) => {
+        if (disk.full) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+        return (fs.writeSync as (...b: unknown[]) => number)(...a)
+      },
+    } as unknown as typeof fs
+    const r = rig([], { journal: { fs: fullDiskFs } })
+    expect((await request(r.app).patch(`/api/tasks/${TASK_A}`).set(auth).send({ title: 'Kept before the disk filled' })).status).toBe(200)
+    const before = r.records()
+    disk.full = true
+    const refused = await request(r.app).patch(`/api/tasks/${TASK_B}`).set(auth).set('x-walnut-op-id', 'op-console-disk-0001').send({ title: 'Written on a full disk' })
+    expect(refused.status).toBe(503)
+    expect(refused.headers['retry-after']).toBe('5')
+    expect(refused.body.error).toMatchObject({ code: 'journal_unwritable', why: 'disk_full' })
+    expect(r.records()).toEqual(before)
+    const words = leaderErrorMessage(refused.body, refused.status)
+    expect(words).toBe('This host could not keep this change: its disk is full. The changes it kept before are safe.')
+    expect(isLeaderWords(words)).toBe(true)
+    // The earlier write still shows; the refused one shows nowhere.
+    const list = await request(r.app).get('/api/tasks').set(auth).set('x-test-away', '1')
+    const byId = new Map((list.body.tasks as Array<{ id: string; title: string }>).map((t) => [t.id, t]))
+    expect(byId.get(TASK_A)).toMatchObject({ title: 'Kept before the disk filled', replica_sync: 'pending' })
+    expect(byId.get(TASK_B)).toMatchObject({ title: 'Worker: build the page' })
+    // Room again: the same write (its op id kept) is journaled once.
+    disk.full = false
+    const again = await request(r.app).patch(`/api/tasks/${TASK_B}`).set(auth).set('x-walnut-op-id', 'op-console-disk-0001').send({ title: 'Written on a full disk' })
+    expect(again.status).toBe(200)
+    expect(r.records().filter((x) => x.opId === 'op-console-disk-0001')).toHaveLength(1)
+  })
+})
+
+describe('away routes: the Mac\'s checks and derivations', () => {
+  it('a bare status shows the phase the Mac will store; a field the Mac would refuse answers 400 and journals nothing', async () => {
+    const r = rig()
+    const done = await request(r.app).patch(`/api/tasks/${TASK_B}`).set(auth).send({ status: 'done' })
+    expect(done.status).toBe(200)
+    expect(done.body.task).toMatchObject({ id: TASK_B, status: 'done', phase: 'COMPLETE', replica_sync: 'pending' })
+    const one = await request(r.app).get(`/api/tasks/${TASK_B}`).set(auth).set('x-test-away', '1')
+    expect(one.body.task).toMatchObject({ status: 'done', phase: 'COMPLETE', replica_sync: 'pending' })
+    const bad = await request(r.app).patch(`/api/tasks/${TASK_A}`).set(auth).send({ priority: 'whenever' })
+    expect(bad.status).toBe(400)
+    expect(bad.body.error).toMatchObject({ code: 'bad_request', message: expect.stringMatching(/^priority must be one of/) })
+    expect(r.records().map((x) => x.taskId)).toEqual([TASK_B])
   })
 })

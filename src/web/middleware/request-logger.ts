@@ -159,8 +159,9 @@ function safeQuery(query: Record<string, unknown>): Record<string, unknown> | un
  * Express middleware: log every API request with timing + request ID.
  */
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
-  // Skip noisy endpoints entirely
-  if (SKIP_PATHS.has(req.path)) {
+  // Skip noisy endpoints entirely; and a request an earlier mount already logs (a host
+  // replica mounts this before its away routes, server.ts) gets one line, not two.
+  if (SKIP_PATHS.has(req.path) || req.reqId) {
     next()
     return
   }
@@ -225,6 +226,12 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     if (typeof origin === 'string' && origin) meta.origin = origin.slice(0, 64)
     const answeredBy = res.getHeader('x-walnut-answered-by')
     if (typeof answeredBy === 'string') meta.answeredBy = answeredBy
+    // A write's op id (one per user action): grep it from the browser to the Mac's drain.
+    // On a host replica, who answered: `replica` is an away answer (a journaled write).
+    const opId = req.headers['x-walnut-op-id']
+    if (typeof opId === 'string' && opId && method !== 'GET' && method !== 'HEAD') meta.opId = opId.slice(0, 80)
+    const answeredVia = res.getHeader('x-walnut-answered-via')
+    if (typeof answeredVia === 'string') meta.answeredVia = answeredVia
 
     const line = `${method} ${url} → ${status} (${duration}ms)`
 

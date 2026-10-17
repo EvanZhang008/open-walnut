@@ -432,4 +432,48 @@ describe('runOfflineHandover over journal v2', () => {
     expect(letters.length).toBe(lettersBefore + 1)
     expect(JSON.stringify(letters)).toContain('cwd')
   })
+
+  it('a record this Mac applied whose ack never reached the host (killed after apply, R14) is drained again on the next connect and lands once, by the applied-ops ledger', async () => {
+    // A Board with a thread: a post is the write the ledger alone keeps from landing twice
+    // (the drain posts under an id of its own; a create also has created_by_op).
+    await api('PUT', `/api/v1/tasks/${parent}/board`, { html: '<h1>Drill</h1><walnut-thread id="drill" title="Drill"></walnut-thread>' })
+    const posts = async () => (((await api('GET', `/api/v1/tasks/${parent}/board`)).threads as Record<string, Array<{ text: string }>> | undefined)?.drill ?? [])
+      .filter((m) => m.text === 'Posted while the Mac was away, drained twice')
+    const madeId = `${Date.now().toString(36)}-0f1e2d3c4b5a6978`
+    const recs = [
+      { v: 2, seq: 1, at: Date.now(), kind: 'board', opId: 'op-int-redrain-post1', rev: 1, actor: { kind: 'session', sid: B }, op: 'board_post', args: { task: parent, thread: 'drill', text: 'Posted while the Mac was away, drained twice' }, postId: 'bm-host-0011223344556677' },
+      { v: 2, seq: 2, at: Date.now(), kind: 'task-create', opId: 'op-int-redrain-made1', rev: 1, actor: { kind: 'session', sid: B }, taskId: madeId, fields: { title: 'Made away, drained twice' }, placement: { project: 'Acme' } },
+    ]
+    // The host's journal: the first ack is lost (the Mac died right after it applied the batch).
+    const pending = new Map(recs.map((r) => [r.seq, r]))
+    const calls: Array<{ cmd: string; params: Record<string, unknown> }> = []
+    let lostAcks = 1
+    const conn = {
+      hostKey: 'devbox', journalV2: true, alive: () => true,
+      send: async (cmd: string, params: Record<string, unknown> = {}) => {
+        calls.push({ cmd, params })
+        if (cmd === 'offline.drain') return { ok: true, records: [...pending.values()].sort((a, b) => a.seq - b.seq), more: false, now: Date.now() }
+        if (cmd === 'offline.ack') {
+          if (lostAcks-- > 0) throw new Error('the link to the host dropped before the ack')
+          for (const s of (params.seqs as number[]) ?? []) pending.delete(s)
+          return { ok: true, remaining: pending.size }
+        }
+        return { ok: true }
+      },
+    }
+    await expect(runOfflineHandover(conn)).rejects.toThrow(/dropped before the ack/)
+    // Applied once, and still on the host: nothing was acked.
+    expect(await posts()).toHaveLength(1)
+    expect(pending.size).toBe(2)
+    const { lookupJournaled } = await import('../../src/core/offline-merge/ledger.js')
+    for (const r of recs) expect(lookupJournaled({ hostKey: 'devbox', home: WALNUT_HOME, opId: r.opId, rev: 1 }), r.opId).toMatchObject({ outcome: 'applied' })
+    // The next connect drains the same two records again: the ledger skips both, and acks them.
+    const second = await runOfflineHandover(conn)
+    expect(second).toMatchObject({ records: 2, replayed: 0 })
+    expect(pending.size).toBe(0)
+    expect(calls.filter((c) => c.cmd === 'offline.ack').map((c) => c.params.seqs)).toEqual([[1, 2], [1, 2]])
+    expect(await posts()).toHaveLength(1)
+    const all = (await api('GET', '/api/tasks')).tasks as Array<{ title: string }>
+    expect(all.filter((t) => t.title === 'Made away, drained twice')).toHaveLength(1)
+  })
 })

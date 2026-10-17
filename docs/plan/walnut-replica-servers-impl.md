@@ -1116,6 +1116,26 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
   `git archive 1fe1fd194`, rows R10 and R25).
 - Acceptance: every write made away is on the Mac exactly once after wake, checked against the stores on
   disk; nothing is applied on the replica's stores directly (asserted: copy files change only by puts).
+- Decision (device revoke away): a device may revoke only ITSELF while the Mac is away (its own sign-out);
+  removing another device, or a pairing on the companion (`?target=`), answers `needs_leader
+  {why:'device_changes_need_mac'}`. Section 7 says the replica "accepts a device revoke" without naming
+  who may make it; the Mac's own rule (`src/core/device-actor.ts` `deviceChangeDecision`) lets a paired
+  device remove only itself, unless it holds the owner's rights (it owns the machine credentials), and
+  the replica's device copy carries phones and browsers only, never machine credentials
+  (`src/host-server/device-copy.ts`), so self is the one case the replica can check. The narrow reading
+  also keeps the drain safe: `applyDeviceRevoke` replays with this Mac's own rights, which a record
+  naming another device would borrow. The daemon (`offline-host-core.ts` `device_revoke`) and the drain
+  (`apply-v2.ts`) refuse a record for another device too. Tests name the rule: "a device revoke while
+  away is that device's own sign-out only" in `tests/replica/write-port.test.ts`,
+  `tests/replica/away-writes.test.ts` and `tests/e2e/replica-cluster-e2e.test.ts`.
+- Decision (op ids of away writes): an away write does not run the Mac's op-id middleware. Its op id
+  (the client's, or minted by the dispatcher) is what the daemon dedupes while the record is pending,
+  and the Mac's applied-ops ledger dedupes the drained record by the same id; the middleware's ledger on
+  the replica would answer a retry after the ack from the replica's own file (W11 must journal it
+  again) and record a journaled write as applied. The two middleware answers that still matter are
+  kept: a retry under the same id gets the first record's answer (the daemon's), and the same id for
+  another kind of change is `409 op_id_reused` (`write-port.ts`). The request logger runs before the
+  away routes, so every away write is logged with its op id (`server.ts`).
 
 ### WP11 Notes writable while away, merged on return
 - Depends on: WP6, WP9, WP10.
@@ -1257,15 +1277,15 @@ is the prod dir) and an old leader booted from `git archive 1fe1fd194` into a te
 | R9 | daemon without `journal-v2`/`replica-ops-v1` | away writes `needs_leader {why:'daemon_needs_upgrade'}` | `replica-cluster-e2e` R9 |
 | R10 | old Mac with a new daemon | `host-server` program; v1 journal only; no v2 kind written | `tests/e2e/replica-old-mac-e2e.test.ts` (old leader from the archive) |
 | R11 | Mac upgrades the replica | runKey change restarts with a new token, front door gap < 15 s, copies kept | `tests/integration/replica-front-twins.test.ts` |
-| R12 | write in flight at sleep | 504 `sent: true` to the client at once when the quiet window flips presence. Dedupe by op id holds for a client that sends one (the web: `withWriteRetry` keeps the id, and does not retry a 504 `sent: true` by itself; a retry the user makes is journaled with a new id): after wake the forwarded copy is refused `409 stale_forward` (older than 20 s) or deduped by the ledger, so an id is applied exactly once, and a create retried under the same id gives ONE task. The iOS app sends no id, so each phone retry gets a new replica-minted one: its only guards are `409 stale_forward` on the late forwarded copy and the 504 message ("check it before you try again") | `replica-cluster-e2e` W1, `tests/replica/dispatch.test.ts`, `op-id.test.ts` |
+| R12 | write in flight at sleep | 504 `sent: true` to the client at once when the quiet window flips presence. Dedupe by op id holds for a client that sends one (the web: `withWriteRetry` keeps the id, and does not retry a 504 `sent: true` by itself; a retry the user makes is journaled with a new id): after wake the forwarded copy is refused `409 stale_forward` (older than 20 s) or deduped by the ledger, so an id is applied exactly once, and a create retried under the same id gives ONE task. The iOS app sends no id, so each phone retry gets a new replica-minted one: its only guards are `409 stale_forward` on the late forwarded copy and the 504 message ("check it before you try again") | `replica-cluster-e2e` W1 (a write started after the SIGSTOP is 504 `sent: false`: the stream to the stopped Mac is never accepted; its retry under the same id lands once), `tests/replica/dispatch.test.ts` (504 `sent: true` at the flip), `op-id.test.ts` (the late copy: `stale_forward`, the ledger's first answer) |
 | R13 | restarts away: replica, host daemon, host reboot (new daemon dir, `WALNUT_JOURNAL_DIR` kept) | replica answers at boot from disk; journal kept; follower re-hello; after a daemon restart the follower view counts the Mac as unheard until a frame, while the companion's takeover still waits `takeoverMs`; R13c starts the daemon ONLY through the service path (the systemd user unit, a test unit dir), and an upgrade boot with a v1 journal plus records drains all of them | `replica-cluster-e2e` R13a to R13c, `journal-v2-twins` |
-| R14 | duplicate drains (Mac killed after apply, before ack) | applied once | `replica-cluster-e2e` W8, ledger and property tests |
+| R14 | duplicate drains (Mac killed after apply, before ack) | applied once | `tests/integration/offline-handover.test.ts` (a Board post and a create whose ack was lost, drained again on the next connect, land once by the ledger), `replica-cluster-e2e` W11 (an op id journaled again after its ack), ledger and property tests |
 | R15 | concurrent edits on both sides (task fields, notes) | section 6 and 7 rules, one letter | `task-fields-property`, `notes-property`, `replica-away-notes.spec` |
 | R16 | Unicode and large notes (1 MB, `\u` escapes, CRLF) | byte exact round trip, merge correct | `three-way-merge` tests, `notes-source`, `note-journal-twins` |
 | R17 | thousands: 6,500 tasks, 5,000 sessions, 3,000 notes | first copy round < 10 s, away board load < 3 s | `task-replica-host-target`, `sessions-scale`, `replica-scale-e2e` |
 | R18 | another Walnut on the host | no reads across homes, no copy, no journal | `follower-owner-scope-twins` |
 | R19 | replica crash loop | back to `host-server` after 3 crashes in 10 min | `host-server-manager`, `replica-front-twins` |
-| R20 | journal full / disk full | `queue_full` / `journal_unwritable` shown, nothing earlier lost | `offline-host-journal-v2`, `replica-away-write.spec` |
+| R20 | journal full / disk full | `queue_full` / `journal_unwritable` shown, nothing earlier lost | `offline-host-journal-v2`, `tests/replica/away-writes.test.ts` (the routes over a full journal and a full disk: 503, earlier records and rows kept, the same write taken once there is room, and the console's words for both), `tests/web/leader-presence.test.ts` (the words) |
 | R21 | clock skew +/- 10 min | merge by shifted time | `task-fields-property` |
 | R22 | phone write at the 30 to 45 s edge | one writer: daemon and replica use one window | `replica-front-twins`, `leader-twins` |
 | R23 | new ask while away; message to a stopped host session | session on the host; resumed; adopted on wake | `replica-ask-e2e`, `replica-ask-twins`, `replica-away-ask.spec` |
@@ -1273,7 +1293,7 @@ is the prod dir) and an old leader booted from `git archive 1fe1fd194` into a te
 | R25 | old or rolled-back Mac drains a mixed v1 and v2 journal | v1 records apply; no v2 record is handed out, acked or lost; a newer Mac drains them later | `replica-old-mac-e2e`, `offline-host-v1-parity` |
 | R26 | `/bridge/replica` and `/git/data` through the public tunnel port | 404, no file changes | `tests/replica/leader-door.test.ts`, adversarial (1) |
 | R27 | phone paired from a QR, Mac SIGSTOPped within 1 s | the phone works away (device round fired on create) | `replica-cluster-e2e` R27 |
-| R28 | device revoked away; device unpaired on the Mac just before sleep | revoke applies on the replica at once; that device's queued records refused and lettered on drain | `replica-cluster-e2e` R28, `task-fields.test.ts` |
+| R28 | a device revokes itself away; device unpaired on the Mac just before sleep | the revoke applies on the replica at once (another device's needs the Mac: WP10 decision); that device's queued records refused and lettered on drain | `replica-cluster-e2e` ("a device revoke while away is that device's own sign-out only"), `tests/replica/away-writes.test.ts`, `task-fields.test.ts` |
 | R29 | the iOS app's `/api/v1` calls with the Mac asleep | every call answered from copies or `needs_leader`, none 5xx | `replica-api-v1-away`, iOS stub flows once |
 | R30 | daemon downgrade then upgrade while away writes happen | every v1 record written by the old daemon is migrated at the next boot | `journal-v2-twins` |
 | R31 | two daemon processes on one journal root | unique seqs, no lost line; the non-owner refuses writes | `journal-v2-twins` |

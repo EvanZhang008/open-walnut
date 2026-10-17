@@ -320,17 +320,33 @@ function sentence(text: string): string {
  * the Mac, so a surface shows it as it is, with no "Failed to ..." in front.
  */
 export function isLeaderWords(message: unknown): boolean {
-  return typeof message === 'string' && /^(Needs your Mac\. |Your Mac (just came back|did not answer in time))/.test(message)
+  return typeof message === 'string' && /^(Needs your Mac\. |Your Mac (just came back|did not answer in time)|This host (already keeps|could not keep|did not answer))/.test(message)
 }
+
+/**
+ * The words for a host journal that did not take a write while the Mac is away
+ * (plan section 5 "Limits", row R20): full (`queue_full`, 1000 records or the note
+ * bodies' budget), or not writable (`journal_unwritable`: a full disk, a lost lock,
+ * a daemon that no longer owns its dir). Either way the changes it kept before are
+ * kept. `no_answer` is the dispatcher's: every try went unanswered, so it may be kept.
+ */
+const JOURNAL_WORDS = {
+  full: 'This host already keeps as many changes as it can until your Mac is back; this one was not kept. Try it again once your Mac is back.',
+  diskFull: 'This host could not keep this change: its disk is full. The changes it kept before are safe.',
+  unwritable: 'This host could not keep this change. The changes it kept before are safe; try again in a moment.',
+  noAnswer: 'This host did not answer, and it may have kept the change; check it before you try again.',
+} as const
 
 /**
  * The message for a replica's error body, or null when it is not one: "Needs
  * your Mac" with the reason for needs_leader (the why's words, else the server's
- * own message, else the generic words), and the plain words for leader_unsure and
- * primary_timeout. Two shapes: `{error:{code, why, message, sent}}` and the
- * console's flat `{error: '<message>', code, why}`.
+ * own message, else the generic words), and the plain words for leader_unsure,
+ * primary_timeout and a host journal that did not take the write. Two shapes:
+ * `{error:{code, why, message, sent}}` and the console's flat `{error: '<message>', code, why}`.
+ * `status`: the answer's HTTP status; a `queue_full` is the journal's only as a 503
+ * (a busy session's queue on the Mac answers 429 with words of its own).
  */
-export function leaderErrorMessage(body: unknown): string | null {
+export function leaderErrorMessage(body: unknown, status?: number): string | null {
   if (!body || typeof body !== 'object') return null
   const b = body as { error?: unknown; code?: unknown; why?: unknown }
   let e: { code?: unknown; why?: unknown; sent?: unknown; message?: unknown }
@@ -350,6 +366,10 @@ export function leaderErrorMessage(body: unknown): string | null {
     return e.sent === false
       ? 'Your Mac did not answer in time. Nothing was saved; try again.'
       : 'Your Mac did not answer in time, and it may have kept the change; check it before you try again.'
+  }
+  if (e.code === 'queue_full' && status === 503) return JOURNAL_WORDS.full
+  if (e.code === 'journal_unwritable') {
+    return why === 'no_answer' ? JOURNAL_WORDS.noAnswer : why === 'disk_full' ? JOURNAL_WORDS.diskFull : JOURNAL_WORDS.unwritable
   }
   return null
 }

@@ -272,7 +272,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
       if (typeof data.error === 'string') message = data.error;
       else if (typeof data.error?.message === 'string') message = data.error.message;
       // A host replica's answer while the Mac is away: plain words, "Needs your Mac" with the reason.
-      message = leaderErrorMessage(data) ?? message;
+      message = leaderErrorMessage(data, res.status) ?? message;
     } catch {
       // use statusText
     }

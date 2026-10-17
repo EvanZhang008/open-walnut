@@ -129,7 +129,7 @@ describe('overlay: pending, awaiting copy, released', () => {
     expect(o.entries()).toEqual([])
   })
 
-  it('a coalesced save is no ack, and a record written after the ask began is not taken for acked', async () => {
+  it('a coalesced save is no ack, and a write the port saw answered shows at once, before the next ask', async () => {
     const r = rig()
     const o = r.make()
     const first = r.write({ id: TASK_A, note: 'draft 1' })
@@ -144,6 +144,49 @@ describe('overlay: pending, awaiting copy, released', () => {
     const third = r.write({ id: TASK_B, title: 'New worker title' })
     o.noteWritten({ opId: third.opId, seq: third.seq, rev: 1, kind: third.kind, at: r.clock.now, record: { taskId: TASK_B, op: 'task_update', fields: { title: { base: 'Worker: build the page', value: 'New worker title' } } } })
     expect(o.markOf('tasks', TASK_B)).toBe('pending')
+  })
+
+  it('a record written while an ask is in flight is not taken for acked when that ask\'s answer comes back without it', async () => {
+    const r = rig()
+    // follower.pending as the daemon answers it: read when asked, delivered when the test lets it go.
+    const held: { current: { answer: { nextSeq: number; records: Array<{ seq: number }> }; release: () => void } | null } = { current: null }
+    let holdNext = false
+    const o = createOverlay({
+      now: () => r.clock.now,
+      fetchPending: async () => {
+        const answer = r.host.pendingFor(JHOME, 0)
+        if (!holdNext) return answer as never
+        holdNext = false
+        return await new Promise<never>((resolve) => { held.current = { answer: answer as never, release: () => resolve(answer as never) } })
+      },
+    })
+    const a = r.write({ id: TASK_A, title: 'Renamed away' })
+    await o.refresh()
+    expect(o.markOf('tasks', TASK_A)).toBe('pending')
+    // The Mac acks A; then an ask begins and the daemon reads its journal for the answer.
+    r.ack([a.seq])
+    holdNext = true
+    const asking = o.refresh()
+    await new Promise((res) => setTimeout(res, 0))
+    const asked = held.current
+    if (!asked) throw new Error('the ask did not reach the daemon')
+    expect(asked.answer.nextSeq).toBe(a.seq + 1)
+    expect(asked.answer.records.some((x) => x.seq === a.seq)).toBe(false)
+    // While that answer is on its way, a new write is journaled and the port notes it.
+    const b = r.write({ id: TASK_B, title: 'Written during the ask' })
+    expect(b.seq).toBe(a.seq + 1)
+    o.noteWritten({ opId: b.opId, seq: b.seq, rev: b.rev, kind: b.kind, at: r.clock.now, record: { taskId: TASK_B, op: 'task_update', fields: { title: { base: 'Worker: build the page', value: 'Written during the ask' } } } })
+    // The answer arrives: it names neither A (acked) nor B (written after it was read).
+    asked.release()
+    await asking
+    expect(o.markOf('tasks', TASK_A)).toBe('awaiting')
+    expect(o.markOf('tasks', TASK_B)).toBe('pending')
+    expect([...o.heldKeys('tasks')]).toEqual([TASK_B])
+    expect(o.watching('tasks')).toEqual([TASK_A])
+    // The next ask names B: still pending, never awaiting in between.
+    await o.refresh()
+    expect(o.markOf('tasks', TASK_B)).toBe('pending')
+    expect(o.task(TASK_B, { id: TASK_B, title: 'Worker: build the page', phase: 'IN_PROGRESS' })).toMatchObject({ title: 'Written during the ask', replica_sync: 'pending' })
   })
 
   it('two edits of one task folded into one record show both fields, from the port\'s note and from the next ask', async () => {

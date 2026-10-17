@@ -142,8 +142,13 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     noteWritten: (e) => {
       // A create's first word to browsers is task:created with the page's correlation
       // id (tasks.ts does the same), so the creating page swaps its optimistic row.
-      if (e.clientRequestId && typeof e.record.taskId === 'string') created.set(e.record.taskId, e.clientRequestId)
+      const taskId = typeof e.record.taskId === 'string' ? e.record.taskId : ''
+      if (e.clientRequestId && taskId) created.set(taskId, e.clientRequestId)
       overlay.noteWritten(e)
+      // A retry whose first answer was lost, and whose record the overlay already held
+      // (an ask in between): the overlay told nobody now, and the page still waits for
+      // its id. `tell` takes the id from `created` before its first await.
+      if (e.clientRequestId && taskId && created.get(taskId) === e.clientRequestId) void tell([{ kind: 'tasks', id: taskId }])
     },
     log: (level, msg, data) => log.web[level](msg, data),
   })

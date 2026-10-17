@@ -179,7 +179,7 @@ test('the console writes while the Mac sleeps: each write is kept on the host wi
     // The project's menu opens its "Add to" row (a phone's stacked list shows no such row
     // until asked, and a desktop list mounts it under the project's last task).
     const header = page.locator('.todo-group-project-header').filter({ has: page.locator('.todo-group-project-name').filter({ hasText: /^Acme$/ }) }).first()
-    // Its "···" takes the pointer only while the row is hovered (home-navigation.css).
+    // Its menu button takes the pointer only while the row is hovered (home-navigation.css).
     const menu = page.locator('[data-testid="project-ctx-menu"]')
     await expect(async () => {
       await header.hover()

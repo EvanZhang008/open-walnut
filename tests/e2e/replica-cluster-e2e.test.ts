@@ -14,14 +14,21 @@
  * copy file's content after the run is a state the Mac sent, never one the replica
  * wrote: the replica's journal-held rows are an overlay, not a copy write).
  *
- *   W1  a write in flight at sleep: 504 sent:true; retried under the same op id once
- *       away, journaled; after wake ONE task (the late forwarded copy refused or deduped)
+ *   W1  a write in flight at sleep: forwarded to the Mac that just stopped, it is 504
+ *       sent:false ("Nothing was saved": a stream to the Mac opens only with its accept,
+ *       link-stream.ts, so the request never left this host); retried under the same op
+ *       id once away, journaled once; after wake ONE task. The late forwarded copy of a
+ *       write the Mac did take (504 sent:true) is pinned where it can be made exactly:
+ *       tests/web/middleware/op-id.test.ts (stale_forward, the ledger's first answer)
+ *       and tests/replica/dispatch.test.ts (sent:true at the flip)
  *   W2  task edit           W3  create            W4  complete       W5  reopen
  *   W6  move (one task, anchored)                  W7  Board post and Board edit
  *   W8  a message to a session that runs on the host (follower.send)
  *   W9  an answer to that session's prompt (follower.permission)
  *   W10 a note edit: needs the Mac until WP11 (nothing journaled)
  *   W11 a duplicate drain: the same op id journaled again after its first drain applies once
+ *       (a record the Mac applied whose ack was lost, drained again on the next connect,
+ *       row R14, is pinned in tests/integration/offline-handover.test.ts)
  *   W12 a refused parent link: dropped, and lettered (one letter for the drain)
  *   W13 a write with one non-queueable field: refused whole, nothing journaled
  *   W14 a record that fails (its letter cannot be written) and later succeeds keeps the
@@ -239,8 +246,8 @@ describe.each(TWINS)('writes while the Mac is away (%s twin)', (twin) => {
     // Forwarded to the Mac (it was answering a moment ago); the quiet window flips presence and cuts it.
     const cut = await phone('POST', '/api/tasks', { title: 'In flight at sleep', project: 'Acme' }, { 'x-walnut-op-id': W1_OP })
     expect(cut.status, cut.text).toBe(504)
-    expect(cut.json.error).toMatchObject({ code: 'primary_timeout' })
-    expect(typeof cut.json.error.sent).toBe('boolean')
+    // The stream to the stopped Mac was never accepted: provably not sent, nothing kept anywhere.
+    expect(cut.json.error).toMatchObject({ code: 'primary_timeout', sent: false, message: 'Your Mac did not answer in time. Nothing was saved; try again.' })
     await reallyAway()
     // The copies as the Mac last sent them: from here to the wake nothing but a put may change them.
     copiesAway = copyDigests(c)
@@ -344,7 +351,7 @@ describe.each(TWINS)('writes while the Mac is away (%s twin)', (twin) => {
     expect(mac.json.error).toMatchObject({ code: 'needs_leader', why: 'session_on_mac' })
   }, 180_000)
 
-  it('a device removes itself away: off the replica at once, journaled for the Mac', async () => {
+  it('a device revoke while away is that device\'s own sign-out only: off the replica at once, journaled for the Mac; removing another device needs the Mac', async () => {
     const r = await c.replica('DELETE', `/api/devices/${encodeURIComponent('acme-old-phone')}`, { token: oldPhone })
     expect(r.status, r.text).toBe(200)
     expect((await c.replica('GET', '/api/tasks', { token: oldPhone })).status).toBe(401)
@@ -439,7 +446,7 @@ describe.each(TWINS)('writes while the Mac is away (%s twin)', (twin) => {
     await waitFor(() => (pendingOf(c).length === 0 ? true : null), 120_000, 'the journal to be drained')
     const rows = macTasks(c)
     const titled = (t: string) => rows.filter((r) => r.title === t)
-    // W1: one task (the late forwarded copy refused as stale or deduped by the ledger); W3 and W11: one task.
+    // W1: one task (the 504 never reached the Mac; its retry, journaled under the same op id, drained once); W3 and W11: one task.
     expect(titled('In flight at sleep')).toHaveLength(1)
     expect(titled('Book the rollback room')).toHaveLength(1)
     expect(rows.find((r) => r.id === c.ids.other)?.title).toBe('Fix the flaky build on devbox')

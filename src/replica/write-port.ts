@@ -23,6 +23,13 @@
  *             applied-ops ledger is what keeps a replayed post from landing twice)
  *   all or nothing: a write naming ANY field outside the queueable set answers
  *     `needs_leader {why:'fields', fields}` and nothing of it is sent
+ *   checked as the Mac checks it: the field rules the Mac's drain runs on the patch
+ *     (core/offline-merge/patch-check.ts, the twin of the Mac's task routes) run here
+ *     first, so a write the Mac would refuse answers 400 now and is never kept
+ *   one op id, one change: the daemon answers a retry with its first record; an op
+ *     id it holds for another kind of change answers `409 op_id_reused` (the Mac's
+ *     op-id middleware answers the same), and a retry is shown and correlated as the
+ *     first attempt (a create names the task the first attempt made)
  *
  *   follower.send {sid, text, messageId}     a message to a session that runs here
  *   follower.permission {sid, requestId, ...} an answer to that session's prompt
@@ -34,8 +41,9 @@
 
 import crypto from 'node:crypto'
 import type { ReplicaWrite, ReplicaWriteResult } from './dispatch.js'
-import { deriveStatusFromPhase, phaseDerivedFields } from '../core/phase.js'
-import type { Task, TaskPhase } from '../core/types.js'
+import { deriveStatusFromPhase, phaseDerivedFields, phaseFromStatus } from '../core/phase.js'
+import { PIN_TIER_POLICY, type Task, type TaskPhase, type TaskStatus } from '../core/types.js'
+import { RefusedWrite, checkResolvedPatch } from '../core/offline-merge/patch-check.js'
 
 /**
  * The fields a task write may queue (the task-outbox whitelist plus phase, parent,
@@ -105,6 +113,32 @@ const STATUS_OF: Readonly<Record<string, number>> = {
   needs_leader: 503, queue_full: 503, journal_unwritable: 503, leader_unsure: 503, internal: 503,
   throttled: 429, not_found: 404, no_board: 404, bad_request: 400, bad_id: 400, message_too_long: 400,
   board_too_large: 413, board_version_conflict: 409, status_set_by_user: 409, not_running: 409, edit_not_found: 409,
+  op_id_reused: 409,
+}
+
+/** The built-in Focus tiers; a custom tier is checked by the Focus routes (away-writes.ts), which know the board's. */
+const BUILTIN_TIERS: readonly string[] = PIN_TIER_POLICY.map((p) => p.tier as string)
+/** A wait clock as a duration ("6h", "3d"): the drain turns it into a time (patch-check.ts normalizeQueuedFields). */
+const DURATION_RE = /^\d+(?:\.\d+)?\s*(ms|s|m|h|d)$/i
+
+/**
+ * The Mac's field rules on a write, before anything is sent (patch-check.ts, which the
+ * drain runs on the same patch): null when the Mac would take it, else its sentence.
+ * `row` is the task as this replica shows it (the rules that read the row, a wait clock
+ * on a task that is not waiting or an end date with no start, read it too). A custom
+ * Focus tier and a wait duration are left to the routes and the drain that know them.
+ */
+export function macRefusalOf(row: Record<string, unknown>, values: Record<string, unknown>): string | null {
+  const patch = { ...values }
+  if (typeof patch.focus_tier === 'string' && !BUILTIN_TIERS.includes(patch.focus_tier)) delete patch.focus_tier
+  if (typeof patch.wait_until === 'string' && DURATION_RE.test(patch.wait_until.trim())) delete patch.wait_until
+  try {
+    checkResolvedPatch(row as unknown as Task, patch)
+    return null
+  } catch (err) {
+    if (err instanceof RefusedWrite) return err.message
+    throw err
+  }
 }
 
 /** The fields of `values` a task write may not queue (empty: all of them may). */
@@ -195,17 +229,30 @@ export function createWritePort(deps: WritePortDeps): WritePort {
     const reply = r.reply
     const seq = typeof reply.seq === 'number' ? reply.seq : 0
     const opId = typeof reply.opId === 'string' ? reply.opId : ''
-    // A retry's answer names the first attempt's record: the overlay holds that one already.
-    if (opId && seq > 0 && typeof reply.kind === 'string' && reply.duplicate !== true) {
-      deps.noteWritten({ opId, seq, rev: typeof reply.rev === 'number' ? reply.rev : 1, kind: reply.kind, at: now(), actor, record: { ...record, kind: reply.kind }, ...(clientRequestId ? { clientRequestId } : {}) })
+    const duplicate = reply.duplicate === true
+    // The daemon holds this op id for another kind of change (a client that reused it):
+    // the Mac's op-id middleware refuses the same, and nothing of this write was kept.
+    if (duplicate && typeof reply.kind === 'string' && typeof record.kind === 'string' && reply.kind !== record.kind) {
+      log('warn', 'replica: an away write reused the op id of another change', { opId, kind: record.kind, heldKind: reply.kind, deviceId: actor.deviceId })
+      return refusalAnswer('op_id_reused', 'This op id was already used for another change; nothing of this one was saved.')
     }
-    log('info', 'replica: an away write was journaled', { opId, seq, kind: reply.kind, duplicate: reply.duplicate === true, deviceId: actor.deviceId })
+    // A retry's answer names the first attempt's record (a create, the task it made). The
+    // overlay is told either way: its first answer may be the one that was lost, so neither
+    // the row nor the page's correlation id (task:created) reached anyone yet.
+    if (opId && seq > 0 && typeof reply.kind === 'string') {
+      const firstTask = typeof reply.taskId === 'string' && reply.taskId ? reply.taskId : undefined
+      const noted = reply.kind === 'task-create' && firstTask ? { ...record, taskId: firstTask } : record
+      deps.noteWritten({ opId, seq, rev: typeof reply.rev === 'number' ? reply.rev : 1, kind: reply.kind, at: now(), actor, record: { ...noted, kind: reply.kind }, ...(clientRequestId ? { clientRequestId } : {}) })
+    }
+    log('info', 'replica: an away write was journaled', { opId, seq, kind: reply.kind, duplicate, deviceId: actor.deviceId })
     return ok(reply)
   }
 
   async function fieldsWrite(w: ReplicaWrite, actor: WriteActor, taskId: string, op: 'task_update' | 'task_complete', values: Record<string, unknown>): Promise<PortAnswer> {
     const row = await deps.task(taskId)
     if (!row) return refusalAnswer('not_found', `Task ${taskId} not found`)
+    const refused = macRefusalOf(row, values)
+    if (refused) return refusalAnswer('bad_request', refused)
     const base = fieldBases(row, values)
     const args = op === 'task_complete' ? { id: taskId } : { id: taskId, ...values }
     const r = await w.submit(op, args, base, actor)
@@ -256,6 +303,9 @@ export function createWritePort(deps: WritePortDeps): WritePort {
         ...(str(all.group_id) ? { groupId: str(all.group_id) } : {}),
         ...(str(all.focus_tier) ? { tier: str(all.focus_tier) } : {}),
       }
+      // The new task's fields by the same rules, on the row the Mac's create starts from.
+      const refused = macRefusalOf(createdRow(id, {}, placement, at, madeByHuman(actor)), fields)
+      if (refused) return refusalAnswer('bad_request', refused)
       const args: Record<string, unknown> = { id, ...fields }
       for (const k of ['parent_task_id', 'project', 'group_id', 'focus_tier', 'order']) if (all[k] !== undefined) args[k] = all[k]
       const r = await w.submit('task_create', args, undefined, actor)
@@ -324,12 +374,21 @@ export function sendMessageId(given: string | undefined, opId: string): string {
  * A row with an away write's values on it, and what a phase write derives with them
  * (status, completed_at, the read marker: core/phase.ts, the rule the Mac's drain
  * applies), so a task completed here shows as done, with its completion time, as on
- * the Mac (the console keeps a just-completed row in view by that time).
+ * the Mac (the console keeps a just-completed row in view by that time). A status
+ * written without a phase is the phase it names when it moves the task's, as the Mac
+ * stores it (task-manager.ts updateTask, offline-merge/apply-fields.ts phaseWritten);
+ * a status the phase already shows changes nothing.
  */
 export function withValues(row: Record<string, unknown>, values: Record<string, unknown>, atIso: string): Record<string, unknown> {
   const out: Record<string, unknown> = { ...row, ...values }
-  const phase = values.phase
+  let phase = values.phase
+  if ((typeof phase !== 'string' || !phase) && typeof values.status === 'string' && values.status) {
+    const shown = typeof row.phase === 'string' && row.phase ? deriveStatusFromPhase(row.phase as TaskPhase) : row.status
+    if (values.status === shown) { out.status = shown; return out }
+    phase = phaseFromStatus(values.status as TaskStatus)
+  }
   if (typeof phase !== 'string' || !phase) return out
+  out.phase = phase
   out.status = deriveStatusFromPhase(phase as TaskPhase)
   const derived = phaseDerivedFields(out as Partial<Task>, phase as TaskPhase, atIso)
   Object.assign(out, derived.set)
