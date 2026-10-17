@@ -16,7 +16,7 @@ import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
 import {
   FORWARD_METHODS, FORWARD_TARGET_TIMEOUT_MS, MAX_FORWARD_REQUEST_BYTES, MAX_FORWARD_RESPONSE_BYTES,
-  companionAnswers, forwardRequestHeaders, forwardResponseHeaders, parseForwardUrl,
+  companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseForwardUrl,
 } from './policy.js'
 
 /**
@@ -119,6 +119,7 @@ export async function runForwardedCall(params: Record<string, unknown>, relayOri
   } catch (err) {
     throw new ForwardError(`The reply broke off: ${err instanceof Error ? err.message : String(err)}`, 502, 'forward_failed')
   }
+  noteForwardedTaskWrite(method, url.rel, response.status)
   const replyHeaders = forwardResponseHeaders(Object.fromEntries(response.headers.entries()))
   if (content === null) return { status: response.status, headers: replyHeaders, size: MAX_FORWARD_RESPONSE_BYTES + 1, tooLarge: true }
   return { status: response.status, headers: replyHeaders, size: content.byteLength, data: content.toString('base64') }

@@ -215,7 +215,14 @@ function refuse(): Refusal | Promise<Refusal> {
 /** On a host replica the copy's one writer is the apply connection (task-db.ts withCopyApply). */
 async function applyToStore(change: Parameters<typeof import('../task-manager.js')['applyTaskReplica']>[0]): Promise<{ skipped: readonly string[] }> {
   const [tm, db] = await Promise.all([import('../task-manager.js'), import('../task-db.js')])
-  return db.withCopyApply(() => tm.applyTaskReplica(change))
+  const r = await db.withCopyApply(() => tm.applyTaskReplica(change))
+  // The companion's base of its next write to each row (task-queue.ts, WP13).
+  if ((change.rows?.length || change.removeIds?.length) && followerKind() === 'companion') {
+    const q = await import('../task-queue.js')
+    if (change.rows?.length) q.noteKnownTaskRows(change.rows, r.skipped)
+    if (change.removeIds?.length) q.forgetKnownTaskRows(change.removeIds.filter((id) => !r.skipped.includes(id)))
+  }
+  return r
 }
 
 function makeTasksFollower(): RowSetFollower {

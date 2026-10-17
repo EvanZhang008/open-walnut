@@ -34,6 +34,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import { rememberAskWalnutSessionPick } from './ask-walnut-launch.js';
+import { parseCompanionFields } from '../offline-merge/companion-op.js';
 
 export class SessionControlError extends Error {
   constructor(
@@ -1094,10 +1095,17 @@ function parseTaskOpParams(p: Record<string, unknown>): import('../task-outbox.j
     ? (raw.touched as string[])
     : undefined;
   const appendNote = (raw.append as Record<string, unknown> | undefined)?.note;
+  // Per-field bases (WP13): checked whole, a malformed map takes the old path.
+  const fields = parseCompanionFields(raw.fields);
+  const flush = typeof raw.flush === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(raw.flush) ? raw.flush : undefined;
+  const sentAt = typeof raw.sentAt === 'number' && Number.isFinite(raw.sentAt) ? raw.sentAt : undefined;
   return {
     opId, type: 'update', at, task: task as Task,
     ...(touched?.length ? { touched } : {}),
     ...(typeof appendNote === 'string' && appendNote ? { append: { note: appendNote } } : {}),
+    ...(fields ? { fields } : {}),
+    ...(flush ? { flush } : {}),
+    ...(sentAt !== undefined ? { sentAt } : {}),
   };
 }
 
@@ -1533,6 +1541,8 @@ export async function handleSessionControlRelay(
       // same op also arriving as a legacy git file) is safe.
       case 'server.tasks.apply': {
         const op = parseTaskOpParams(p);
+        // The companion's clock, read off the op as it arrives (its field times are shifted by it).
+        if (op.type === 'update' && op.sentAt !== undefined) (await import('../offline-merge/companion-op.js')).measureCompanionClock(op.sentAt);
         const { applyTaskOp } = await import('../task-outbox.js');
         const outcome = await applyTaskOp(op);
         result = { ...outcome, opId: op.opId };

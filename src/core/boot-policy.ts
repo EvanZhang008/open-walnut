@@ -63,6 +63,9 @@ export const BOOT_POLICY = [
   { job: 'send-path-canary', leader: true, replicaHost: false, replicaCloud: true, why: OFF_HOST_DAEMON },
   { job: 'primary-store-jobs', leader: true, replicaHost: false, replicaCloud: false, why: 'projections, backups, auto-continue are the Mac' },
   { job: 'companion-queues', leader: false, replicaHost: false, replicaCloud: true, why: 'writes away go to the host journal (WP10)' },
+  // The companion on the same path (WP13): its forward rides a stream through the Mac's own daemon.
+  { job: 'companion-stream-door', leader: true, replicaHost: false, replicaCloud: false, why: 'only the leader takes the companion\'s forward streams' },
+  { job: 'companion-stream-forward', leader: false, replicaHost: false, replicaCloud: true, why: 'the host replica front (WP2) forwards on its own link' },
   { job: 'hook-task-domains', leader: true, replicaHost: false, replicaCloud: false, why: 'task and cron hook actions fire on the Mac' },
   { job: 'session-request-sweep', leader: true, replicaHost: false, replicaCloud: false, why: OFF_HOST_DATA },
   { job: 'lane-orphan-passes', leader: true, replicaHost: false, replicaCloud: false, why: OFF_HOST_DATA },

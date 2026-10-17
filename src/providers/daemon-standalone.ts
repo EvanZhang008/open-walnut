@@ -787,14 +787,26 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // bounded (ids and bytes), and the answer is ids the caller already holds.
   'markers.find',
   // The companion's end of a stream a host server opened to it ('stream-relay-v1'):
-  // frames of a stream on this socket only. NOT stream.open: the bridge opens
-  // no stream to anyone.
+  // frames of a stream on this socket only.
   'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
+  // The companion's forward to the Mac ('bridge-stream-v1'): a stream to the
+  // primary only (streamTarget), where the Mac's own door gives it the rights
+  // of a paired device, as the server.http forward has. Never to a follower.
+  'stream.open',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
   // SSH-tunneled walnut client.
 ])
+
+/**
+ * What the bridge hello tells the companion this daemon does for it. Keep in sync with
+ * daemon-source.ts. WALNUT_BRIDGE_HIDE_CAPS (comma list, tests) leaves some out, so a
+ * companion meets this daemon as an older one and takes its older path; refused for the
+ * prod daemon dir, as every test knob that changes what a daemon does (section 10).
+ */
+const BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR ? [] : (process.env.WALNUT_BRIDGE_HIDE_CAPS ?? '').split(',').map((x) => x.trim())
+const BRIDGE_CAPABILITIES = ['bridge-stream-v1'].filter((c) => !BRIDGE_HIDDEN_CAPS.includes(c))
 
 /**
  * What a follower socket (the host server) may ask ('follower-v1'): who leads,
@@ -3343,6 +3355,26 @@ function primaryClientFor(home: string): ServerWebSocket<WsData> | null {
   return best
 }
 
+/**
+ * The primary socket a companion stream goes to ('bridge-stream-v1'): a server
+ * socket that named its Walnut here (host.slice, leader.configure), the one heard
+ * last, never a quiet one. Its bulk channel names none and drops stream frames.
+ * Keep in sync with daemon-source.ts.
+ */
+function primaryForBridge(): ServerWebSocket<WsData> | null {
+  const now = Date.now()
+  let best: ServerWebSocket<WsData> | null = null
+  let bestAt = -Infinity
+  for (const client of wsClients) {
+    if (!isServerClient(client) || !gatewayClientHomes.has(client)) continue
+    const at = typeof client.data?.lastHeardAt === 'number' ? client.data.lastHeardAt : now
+    if (now - at > TRUSTED_CLIENT_QUIET_MS || at <= bestAt) continue
+    best = client
+    bestAt = at
+  }
+  return best
+}
+
 /** Where a stream `ws` opens to `to` goes, or why it cannot. */
 function streamTarget(ws: ServerWebSocket<WsData>, to: unknown): { link: ServerWebSocket<WsData>; meta: Record<string, unknown> } | { why: string } {
   if (ws.data?.origin === 'follower') {
@@ -3362,6 +3394,13 @@ function streamTarget(ws: ServerWebSocket<WsData>, to: unknown): { link: ServerW
     const link = laneHome && to === 'follower' ? followerSockets.get(laneHome) : undefined
     if (link) return { link, meta: { from: 'primary', home: laneHome } }
     return { why: to === 'follower' ? 'no server on this host follows that Walnut' : 'a lane opens streams to the follower only' }
+  }
+  // The companion ('bridge-stream-v1'): to the primary only, the server its
+  // server.http relay reaches (pickTrustedClient). Keep in sync with daemon-source.ts.
+  if (ws.data?.origin === 'bridge') {
+    if (to !== 'primary') return { why: 'the companion opens streams to the primary only' }
+    const link = primaryForBridge()
+    return link ? { link, meta: { from: 'companion', home: gatewayClientHomes.get(link) } } : { why: 'no primary server connected' }
   }
   const home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined
   if (home && to === 'follower') {
@@ -9941,6 +9980,8 @@ function dialBridge(gen: number): void {
       sids: [...sessions.keys()],
       connId,
       uplink: 1,
+      // What the companion may ask of this daemon ('bridge-stream-v1': its forward on a stream).
+      capabilities: BRIDGE_CAPABILITIES,
     }))
     logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias, wsId: wsId(adapter) })
     // The silence watchdog: see BRIDGE_SILENT_PINGS.

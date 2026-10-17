@@ -49,6 +49,8 @@ import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 import type { TaskOp } from './task-outbox.js';
+import { QUEUEABLE_TASK_FIELDS } from '../providers/offline-host-core.js';
+import { _clearCompanionBasesForTesting, companionBaseOf, forgetCompanionBases, putCompanionBases } from './companion-bases.js';
 
 /** Placeholder sessionId for box-level `server.*` relay actions (routines-v1 uses the same). */
 const SERVER_RELAY_SID = '__server__';
@@ -78,7 +80,7 @@ function mintOpId(): string {
  *  whole-list ordering (no per-row LWW clock). */
 export type TaskOpInput =
   | { type: 'create'; task: Task }
-  | { type: 'update'; task: Task; touched?: string[]; append?: { note?: string } }
+  | { type: 'update'; task: Task; touched?: string[]; append?: { note?: string }; fields?: TaskFieldWrites }
   | { type: 'delete'; id: string }
   | { type: 'reorder'; project: string; taskIds: string[] }
   | { type: 'reorder-pins'; taskIds: string[] };
@@ -100,8 +102,71 @@ export function buildTaskOp(op: TaskOpInput): TaskOp {
         opId, type: 'update', at, task: op.task,
         ...(op.touched?.length ? { touched: op.touched } : {}),
         ...(op.append?.note ? { append: { note: op.append.note } } : {}),
+        ...(op.fields && Object.keys(op.fields).length ? { fields: op.fields } : {}),
       };
   }
+}
+
+// ── Per-field bases (WP13): the companion's queue merged by the section 7 rules ──
+
+/** One field of an update: what the row held before, what was written, when (this box's clock, ms). */
+export type TaskFieldWrites = Record<string, { base: unknown; value: unknown; at: number }>;
+
+/** Fields the Mac merges (offline-host-core.ts QUEUEABLE_TASK_FIELDS). */
+const MERGEABLE = new Set<string>(QUEUEABLE_TASK_FIELDS);
+/** Derived by the write that sets the phase, never written on their own. */
+const DERIVED = new Set(['completed_at', 'updated_at']);
+/** A field this box has no value for: the Mac takes the newer write (task-fields.ts UNKNOWN_BASE). */
+const UNKNOWN_BASE = 'unknown';
+
+/**
+ * The last value of each field of a task this box knows: the Mac's row as the task
+ * copy took it, then every write made here. The base of the next write here.
+ * On disk (companion-bases.ts), so a restart or a task not copied since boot keeps it.
+ */
+function baseRowOf(task: Task): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  for (const f of MERGEABLE) row[f] = (task as unknown as Record<string, unknown>)[f] ?? null;
+  return row;
+}
+
+/** The task copy took these rows from the Mac (replication/task-replica-store.ts). */
+export function noteKnownTaskRows(rows: readonly Task[], skipped: readonly string[] = []): void {
+  const held = new Set(skipped);
+  putCompanionBases(rows.filter((t) => t && typeof t.id === 'string' && !held.has(t.id)).map((t) => ({ id: t.id, row: baseRowOf(t) })));
+}
+
+/** These tasks are gone here: their bases go with them. */
+export function forgetKnownTaskRows(ids: readonly string[]): void {
+  forgetCompanionBases(ids);
+}
+
+/**
+ * The per-field writes of one update made here, with their bases, or undefined
+ * when a field it set is one the Mac does not merge (the op then goes as before).
+ * Remembers the row as written: the base of the next write.
+ */
+export function companionFieldWrites(task: Task, touched: readonly string[] | undefined): TaskFieldWrites | undefined {
+  const known = companionBaseOf(task.id);
+  try {
+    const fields = (touched ?? []).filter((f) => !DERIVED.has(f));
+    if (fields.length === 0 || fields.some((f) => !MERGEABLE.has(f))) return undefined;
+    const row = task as unknown as Record<string, unknown>;
+    const fallback = Date.parse(task.updated_at) || Date.now();
+    const out: TaskFieldWrites = {};
+    for (const f of fields) {
+      const at = Date.parse(task.field_at?.[f] ?? '') || fallback;
+      out[f] = { base: known && f in known ? known[f] : UNKNOWN_BASE, value: row[f] ?? null, at };
+    }
+    return out;
+  } finally {
+    putCompanionBases([{ id: task.id, row: baseRowOf(task) }]);
+  }
+}
+
+/** Tests only. */
+export function _resetKnownTaskRowsForTesting(): void {
+  _clearCompanionBasesForTesting();
 }
 
 function queueFile(opId: string): string {
@@ -157,10 +222,15 @@ async function writeLegacyOutboxFallback(op: TaskOp): Promise<void> {
 
 type SendOutcome = 'applied' | 'retry' | 'needs_upgrade' | 'rejected' | 'primary_error';
 
-/** One `server.tasks.apply` RPC. Never throws. */
-async function sendOp(op: TaskOp): Promise<SendOutcome> {
+/**
+ * One `server.tasks.apply` RPC. Never throws. An update goes with this box's clock
+ * (`sentAt`, the Mac measures the offset of its field times from it) and the flush
+ * it is part of (`flush`: one drain on the Mac, one letter); neither is stored.
+ */
+async function sendOp(op: TaskOp, flush?: string): Promise<SendOutcome> {
   const { callPrimaryControl } = await import('../web/routes/v1-control-relay.js');
-  const reply = await callPrimaryControl('server.tasks.apply', SERVER_RELAY_SID, { op }, TASK_RPC_TIMEOUT_MS);
+  const sent: TaskOp = op.type === 'update' ? { ...op, sentAt: Date.now(), ...(flush ? { flush } : {}) } : op;
+  const reply = await callPrimaryControl('server.tasks.apply', SERVER_RELAY_SID, { op: sent }, TASK_RPC_TIMEOUT_MS);
   if (reply.ok) {
     log.task.info('task-queue: op applied on primary via bridge RPC', {
       opId: op.opId, type: op.type,
@@ -204,10 +274,18 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
   // Tombstone BEFORE the RPC: the projection import must never resurrect a
   // locally-deleted row, and the race window opens the moment the local
   // delete committed (the caller emits the bus event after its own write).
-  if (input.type === 'delete') recordDeleteTombstone(input.id);
+  if (input.type === 'delete') { recordDeleteTombstone(input.id); forgetCompanionBases([input.id]); }
   if (input.type === 'reorder' || input.type === 'reorder-pins') noteLocalOrderOp();
   const op = buildTaskOp(input);
   try {
+    // An older op for the same task still queued goes first: the Mac applies them in
+    // the order they were made (a newer edit ahead of an older one of the same field
+    // would read as two writers), so this one joins the queue behind it.
+    if (await queuedForSameTask(op)) {
+      await enqueue(op);
+      void flushTaskQueue();
+      return;
+    }
     const outcome = await sendOp(op);
     if (outcome === 'applied') {
       // A successful RPC means the bridge is up — good moment to drain anything
@@ -228,6 +306,24 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
 }
 
 let flushing = false;
+/** A flush was asked for while one ran: it runs again after (an op queued behind it). */
+let flushAgain = false;
+let flushSeq = 0;
+
+/** The task an op writes (none for the order ops). */
+function taskIdOf(op: TaskOp): string | undefined {
+  if (op.type === 'create' || op.type === 'update') return op.task?.id;
+  if (op.type === 'delete') return op.id;
+  return undefined;
+}
+
+/** True when an op for the same task is still queued (the common empty queue costs one readdir). */
+async function queuedForSameTask(op: TaskOp): Promise<boolean> {
+  const id = taskIdOf(op);
+  if (!id) return false;
+  if ((await queuedTaskOpCount()) === 0) return false;
+  return (await listQueuedOps()).some((q) => taskIdOf(q) === id);
+}
 
 /**
  * Sweep cache/task-queue/ oldest-first: RPC each op, delete on success, keep on
@@ -236,9 +332,14 @@ let flushing = false;
  * the remaining 99 ops will fail identically.
  */
 export async function flushTaskQueue(): Promise<number> {
-  if (!CLOUD_MODE || flushing) return 0;
+  if (!CLOUD_MODE) return 0;
+  if (flushing) { flushAgain = true; return 0; }
   flushing = true;
+  flushAgain = false;
   let sent = 0;
+  let stopped = false;
+  // One name for the ops this sweep sends: the Mac merges them as one drain, one letter.
+  const flush = `f${Date.now().toString(36)}-${(flushSeq++).toString(36)}`;
   try {
     let names: string[];
     try {
@@ -258,7 +359,8 @@ export async function flushTaskQueue(): Promise<number> {
         await fsp.rm(file, { force: true }).catch(() => {});
         continue;
       }
-      const outcome = await sendOp(op);
+      const outcome = await sendOp(op, flush);
+      if (outcome !== 'applied' && outcome !== 'rejected') stopped = true;
       if (outcome === 'retry') break; // bridge down — the rest would fail too
       // The primary's store is struggling (lock timeout / EIO). Keep the file
       // and stop the sweep: the remaining ops would contend for the same lock
@@ -277,6 +379,8 @@ export async function flushTaskQueue(): Promise<number> {
     return sent;
   } finally {
     flushing = false;
+    // An op queued behind this sweep (dispatchTaskOp's same-task rule) goes now, not in 60s.
+    if (flushAgain && !stopped) { flushAgain = false; void flushTaskQueue(); }
   }
 }
 

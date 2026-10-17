@@ -74,9 +74,10 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // Data the Mac takes only from the phone's own device token.
   { re: /^\/(health|places)(\/|$)/, why: 'device-data' },
   { re: /^\/time\/heartbeats$/, why: 'device-data' },
-  // The companion's exact copy of the task store: its writes already go to the
-  // Mac and keep the copy in step, and its reads are as fresh as the Mac's.
-  { re: /^\/(tasks|focus)(\/|$)/, unless: /^\/tasks\/[^/]+\/board(\/|$)/, why: 'task-copy' },
+  // The companion's exact copy of the task store: its reads are as fresh as the
+  // Mac's. Its writes go to the Mac while it answers (one writer, replica plan
+  // WP13); away, the companion's own route applies them and queues them by field.
+  { methods: ['GET'], re: /^\/(tasks|focus)(\/|$)/, unless: /^\/tasks\/[^/]+\/board(\/|$)/, why: 'task-copy' },
   // Long pages with their own paged relays.
   { methods: ['GET'], re: /^\/sessions$/, why: 'paged' },
   { methods: ['GET'], re: /^\/sessions\/[^/]+\/(transcript|history)$/, why: 'paged' },
@@ -84,6 +85,23 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   { re: /^\/sessions\/launch-options$/, why: 'launch' },
   { methods: ['POST'], re: /^\/sessions$/, why: 'launch' },
 ]
+
+/**
+ * A write the companion forwards to the Mac whose result its task copy shows (the
+ * copy's reads stay on the companion): the Mac then sends the copy a round at once
+ * (task-replica.ts taskReplicaRoundNow), not after the 3 s debounce.
+ */
+export function isTaskCopyWrite(method: string, rel: string): boolean {
+  const m = method.toUpperCase()
+  if (m === 'GET' || m === 'HEAD') return false
+  return /^\/(tasks|focus)(\/|$)/.test(rel) && !/^\/tasks\/[^/]+\/board(\/|$)/.test(rel)
+}
+
+/** A forwarded task write ran here and was answered 2xx: the follower copies get it now. */
+export function noteForwardedTaskWrite(method: string, rel: string, status: number): void {
+  if (status < 200 || status >= 300 || !isTaskCopyWrite(method, rel)) return
+  void import('../../core/replication/task-replica.js').then((m) => m.taskReplicaRoundNow()).catch(() => {})
+}
 
 /** Why the companion answers this call itself, or null when the Mac should. `rel` is the path under /api/v1. */
 export function companionAnswers(method: string, rel: string): CompanionReason | null {

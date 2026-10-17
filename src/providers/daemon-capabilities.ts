@@ -576,6 +576,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // not written again; `needs_leader {why:'mac_too_old'}` for an older Mac. Both twins.
   // Optional: without it a write away answers needs_leader {why:'daemon_needs_upgrade'}.
   'replica-ops-v1',
+  // 'bridge-stream-v1' (docs/plan/walnut-replica-servers-impl.md WP13): the bridge may
+  // send `stream.open {sid, to:'primary'}`, and only to the primary (the server its
+  // server.http relay reaches); the Mac plugs it into its companion door
+  // (web/v1-forward/stream-door.ts), which gives each call the rights of a paired
+  // device. The bridge hello says it (`capabilities`), so the companion forwards on a
+  // stream only to a daemon that has it and uses server.http otherwise. Both twins.
+  // Optional.
+  'bridge-stream-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

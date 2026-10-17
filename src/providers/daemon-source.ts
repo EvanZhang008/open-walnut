@@ -3026,13 +3026,25 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   // bounded (ids and bytes), and the answer is ids the caller already holds.
   'markers.find',
   // The companion's end of a stream a host server opened to it (stream-relay-v1).
-  // NOT stream.open. Twin of daemon-standalone.ts.
+  // Twin of daemon-standalone.ts.
   'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
+  // The companion's forward to the Mac ('bridge-stream-v1'): a stream to the
+  // primary only (streamTarget), where the Mac's own door gives it the rights
+  // of a paired device, as the server.http forward has. Never to a follower.
+  'stream.open',
   // DELIBERATELY ABSENT: the fs.rename / fs.rm / fs.copy mutation family (and
   // fs.write / fs.mkdir). A compromised cloud box must never be able to move or
   // delete files on an exec host — mutation is reachable only over the trusted
   // SSH-tunneled walnut client.
 ]);
+
+// What the bridge hello tells the companion this daemon does for it. Twin of
+// daemon-standalone.ts BRIDGE_CAPABILITIES (WALNUT_BRIDGE_HIDE_CAPS, tests: an older daemon;
+// refused for the prod daemon dir).
+var BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR ? [] : (process.env.WALNUT_BRIDGE_HIDE_CAPS || '').split(',').map(function (x) { return x.trim(); });
+var BRIDGE_CAPABILITIES = ['bridge-stream-v1'].filter(function (c) {
+  return BRIDGE_HIDDEN_CAPS.indexOf(c) === -1;
+});
 
 // What a follower socket (the host server) may ask (follower-v1). Twin of
 // daemon-standalone.ts FOLLOWER_ALLOWED_COMMANDS.
@@ -4338,6 +4350,22 @@ function primaryClientFor(home) {
   return best;
 }
 
+// The primary socket a companion stream goes to (bridge-stream-v1): a server
+// socket that named its Walnut here, the one heard last, never a quiet one. Its
+// bulk channel names none and drops stream frames. Twin of daemon-standalone.ts.
+function primaryForBridge() {
+  var now = Date.now();
+  var best = null, bestAt = -Infinity;
+  for (const client of wsClients) {
+    if (!isServerClient(client) || !gatewayClientHomes.has(client)) continue;
+    var at = typeof client.lastHeardAt === 'number' ? client.lastHeardAt : now;
+    if (now - at > TRUSTED_CLIENT_QUIET_MS || at <= bestAt) continue;
+    best = client;
+    bestAt = at;
+  }
+  return best;
+}
+
 function streamTarget(ws, to) {
   if (ws && ws.origin === 'follower') {
     var fhome = ws.followerHome;
@@ -4356,6 +4384,13 @@ function streamTarget(ws, to) {
     var lf = lhome && to === 'follower' ? followerSockets.get(lhome) : undefined;
     if (lf) return { link: lf, meta: { from: 'primary', home: lhome } };
     return { why: to === 'follower' ? 'no server on this host follows that Walnut' : 'a lane opens streams to the follower only' };
+  }
+  // The companion ('bridge-stream-v1'): to the primary only, the server its
+  // server.http relay reaches (pickTrustedClient). Twin of daemon-standalone.ts.
+  if (ws.origin === 'bridge') {
+    if (to !== 'primary') return { why: 'the companion opens streams to the primary only' };
+    var pc = primaryForBridge();
+    return pc ? { link: pc, meta: { from: 'companion', home: gatewayClientHomes.get(pc) } } : { why: 'no primary server connected' };
   }
   var home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined;
   if (home && to === 'follower') {
@@ -11510,6 +11545,8 @@ function dialBridge(gen) {
       sids: [...sessions.keys()],
       connId: connId,
       uplink: 1,
+      // What the companion may ask of this daemon ('bridge-stream-v1': its forward on a stream).
+      capabilities: BRIDGE_CAPABILITIES,
     }));
     logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias });
     // The silence watchdog: see BRIDGE_SILENT_PINGS.

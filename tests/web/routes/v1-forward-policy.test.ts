@@ -45,12 +45,10 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['GET', '/places/status', 'device-data'],
     ['POST', '/time/heartbeats', 'device-data'],
     ['GET', '/tasks', 'task-copy'],
-    ['POST', '/tasks', 'task-copy'],
+    ['HEAD', '/tasks', 'task-copy'],
     ['GET', '/tasks/t1', 'task-copy'],
-    ['PATCH', '/tasks/t1', 'task-copy'],
-    ['POST', '/tasks/t1/complete', 'task-copy'],
     ['GET', '/tasks/meta/tags', 'task-copy'],
-    ['PUT', '/focus/reorder', 'task-copy'],
+    ['GET', '/focus', 'task-copy'],
     ['GET', '/sessions', 'paged'],
     ['GET', '/sessions/abc/transcript', 'paged'],
     ['GET', '/sessions/abc/history', 'paged'],
@@ -61,6 +59,12 @@ describe('companionAnswers: the routes the companion keeps', () => {
   })
 
   it.each([
+    // Task writes go to the Mac while it answers: one writer (replica plan WP13).
+    ['POST', '/tasks'],
+    ['PATCH', '/tasks/t1'],
+    ['POST', '/tasks/t1/complete'],
+    ['DELETE', '/tasks/t1'],
+    ['PUT', '/focus/reorder'],
     ['GET', '/usage/overview'],
     ['GET', '/usage/summary'],
     ['PATCH', '/projects/Acme'],

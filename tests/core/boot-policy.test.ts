@@ -56,6 +56,8 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'send-path-canary': always,
   'primary-store-jobs': leaderOnly,
   'companion-queues': cloudOnly,
+  'companion-stream-door': leaderOnly, // new in WP13: the Mac's door for the companion's forward streams
+  'companion-stream-forward': cloudOnly, // new in WP13: the companion's forward on a stream (cap bridge-stream-v1)
   'hook-task-domains': leaderOnly,
   'session-request-sweep': leaderOnly,
   'lane-orphan-passes': leaderOnly,

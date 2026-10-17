@@ -318,6 +318,47 @@ describe('flushTaskQueue', () => {
     expect(await queue.queuedTaskOpCount()).toBe(0);
   });
 
+  it('a new op for a task with an older op still queued goes behind it, in order (WP13)', async () => {
+    current = await load(true);
+    const { queue } = current;
+
+    relayReply = { ok: false, failure: { kind: 'bridge_offline', message: 'down' } };
+    await queue.dispatchTaskOp({ type: 'update', task: snapshot({ id: 'ord-1', title: 'older' }) as never, touched: ['title'] });
+    expect(await queue.queuedTaskOpCount()).toBe(1);
+
+    // The Mac answers again; the newer edit of the same task must not overtake the queued one.
+    relayCalls.length = 0;
+    relayReply = { ok: true, result: { applied: true, reason: 'updated' } };
+    await queue.dispatchTaskOp({ type: 'update', task: snapshot({ id: 'ord-1', title: 'newer' }) as never, touched: ['title'] });
+    for (let i = 0; i < 40 && (await queue.queuedTaskOpCount()) > 0; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(await queue.queuedTaskOpCount()).toBe(0);
+    const sent = relayCalls.map((c) => (c.params as { op: { task: { title: string }; flush?: string; sentAt?: number } }).op);
+    expect(sent.map((o) => o.task.title)).toEqual(['older', 'newer']);
+    // One flush, one name: the Mac merges them as one drain (one letter); each carries this box's clock.
+    expect(sent[0].flush).toMatch(/^f[0-9a-z]+-[0-9a-z]+$/);
+    expect(sent[1].flush).toBe(sent[0].flush);
+    for (const o of sent) expect(typeof o.sentAt).toBe('number');
+    // Another task's op is not held behind it.
+    relayCalls.length = 0;
+    await queue.dispatchTaskOp({ type: 'update', task: snapshot({ id: 'ord-2', title: 'other' }) as never, touched: ['title'] });
+    expect(relayCalls.length).toBe(1);
+    expect((relayCalls[0].params as { op: { flush?: string } }).op.flush).toBeUndefined();
+  });
+
+  it('a queued op file never stores the flush name or the send clock', async () => {
+    current = await load(true);
+    const { queue } = current;
+    relayReply = { ok: false, failure: { kind: 'bridge_offline', message: 'down' } };
+    await queue.dispatchTaskOp({ type: 'update', task: snapshot({ id: 'file-1', title: 'x' }) as never, touched: ['title'] });
+    await queue.flushTaskQueue();
+    const [name] = await listJson(QUEUE_DIR);
+    const stored = JSON.parse(await fsp.readFile(path.join(QUEUE_DIR, name), 'utf-8')) as Record<string, unknown>;
+    expect(stored.flush).toBeUndefined();
+    expect(stored.sentAt).toBeUndefined();
+  });
+
   it('drops an unreadable queue file instead of wedging behind it', async () => {
     current = await load(true);
     const { queue } = current;

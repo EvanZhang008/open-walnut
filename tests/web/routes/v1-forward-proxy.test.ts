@@ -271,3 +271,321 @@ describe('the forward middleware', () => {
     expect(h.fwd.status().answeredHere.busy).toBe(1)
   })
 })
+
+// The forward on a stream ('bridge-stream-v1', replica plan WP13).
+//
+// Real pieces end to end, in one process: the companion's stream endpoint
+// (link-stream.ts), the daemon's pair table (stream-relay-core.ts, the bridge
+// may open to the primary only), the Mac's endpoint, the Mac's companion door
+// (stream-door.ts) and a stand-in for the Mac's own routes listening on a port.
+import http from 'node:http'
+import net from 'node:net'
+import { WebSocketServer, WebSocket } from 'ws'
+import { createStreamRelay } from '../../../src/providers/stream-relay-core.js'
+import { createStreamEndpoint, type StreamEndpoint } from '../../../src/lib/link-stream.js'
+import { createCompanionDoor } from '../../../src/web/v1-forward/stream-door.js'
+import { forwardUpgrade } from '../../../src/host-server/proxy.js'
+import { afterAll } from 'vitest'
+
+type RelayLink = { name: 'bridge' | 'primary'; ep: StreamEndpoint | null; up: boolean }
+
+/** The Mac's own routes: echo what crossed (method, path, the caller headers, the body size). */
+async function macRoutes(): Promise<{ port: number; seen: Array<Record<string, unknown>>; wss: WebSocketServer; close: () => Promise<void> }> {
+  const seen: Array<Record<string, unknown>> = []
+  const app = express()
+  app.use(express.json({ limit: '15mb' }))
+  app.all('/api/v1/*rest', (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? JSON.stringify(req.body) : ''
+    seen.push({ method: req.method, path: req.originalUrl, origin: req.headers['x-walnut-origin'], auth: req.headers.authorization ?? null, size: body.length })
+    if (req.path === '/api/v1/big') { res.status(200).type('application/octet-stream').send(Buffer.alloc(3 * 1024 * 1024 + 5, 7)); return }
+    res.status(req.method === 'GET' ? 200 : 201).setHeader('x-walnut-op', 'mac').json({ from: 'mac', size: body.length })
+  })
+  const server = http.createServer(app)
+  const wss = new WebSocketServer({ noServer: true })
+  server.on('upgrade', (req, socket, head) => {
+    if (req.url !== '/api/v1/live') { socket.destroy(); return }
+    seen.push({ upgrade: req.url, origin: req.headers['x-walnut-origin'], auth: req.headers.authorization ?? null })
+    wss.handleUpgrade(req, socket, head, (ws) => { ws.on('message', (m) => ws.send(`mac:${m.toString()}`)) })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+  return { port: (server.address() as net.AddressInfo).port, seen, wss, close: () => new Promise((r) => { wss.close(); server.close(() => r()) }) }
+}
+
+/** The bridge (companion) and the Mac's link on one in-memory daemon. */
+function streamHarness(macPort: () => number | null, opts: { macAccepts?: boolean; relayOrigin?: string; idleMs?: number; afterAnswerMs?: number } = {}) {
+  const relay = createStreamRelay<RelayLink>({
+    send: (link, ev, data) => { queueMicrotask(() => { if (link.up) link.ep?.handle({ ev, ...data }) }) },
+    log: () => {},
+  })
+  const bridge: RelayLink = { name: 'bridge', ep: null, up: true }
+  const primary: RelayLink = { name: 'primary', ep: null, up: true }
+  const opens: Array<{ to: unknown }> = []
+  const daemonGets = (from: RelayLink) => (frame: Record<string, unknown>) => {
+    if (!from.up) throw new Error('link down')
+    queueMicrotask(() => {
+      const cmd = String(frame.cmd)
+      if (cmd === 'stream.open') {
+        opens.push({ to: frame.to })
+        // The daemon's rule (streamTarget): the bridge opens to the primary only.
+        const to = from === bridge && frame.to === 'primary' && primary.up ? primary : null
+        relay.open(from, frame.sid, to, { from: 'companion' }, from === bridge && frame.to !== 'primary' ? 'the companion opens streams to the primary only' : 'no primary server connected')
+      } else relay.frame(from, cmd.slice('stream.'.length), frame)
+    })
+  }
+  const door = createCompanionDoor({ root: () => (macPort() ? `http://127.0.0.1:${macPort()}` : null), idleMs: opts.idleMs, afterAnswerMs: opts.afterAnswerMs })
+  bridge.ep = createStreamEndpoint({ send: daemonGets(bridge), openTimeoutMs: 2_000 })
+  primary.ep = createStreamEndpoint({
+    send: daemonGets(primary), openTimeoutMs: 2_000,
+    accept: (info) => (info.from === 'companion' && opts.macAccepts !== false ? (s) => door.accept(s, opts.relayOrigin) : null),
+  })
+  return { relay, bridge, primary, door, opens }
+}
+
+function forwardOver(s: ReturnType<typeof streamHarness>, opts: { capable?: () => boolean; open?: () => Promise<import('node:stream').Duplex> } = {}) {
+  const calls: Array<Record<string, unknown>> = []
+  const fwd = createV1Forward({
+    now: () => Date.now(),
+    enabled: () => true,
+    primary: async () => fresh({ lastSeenAt: Date.now() - 1_000 }),
+    call: async (params) => { calls.push(params); return reply(200, { from: 'mac-over-server-http' }) },
+    stream: { capable: opts.capable ?? (() => true), open: opts.open ?? (() => s.bridge.ep!.open('primary', { purpose: 'web' })) },
+  })
+  const app = express()
+  app.use(express.json({ limit: '15mb' }))
+  app.use('/api/v1', fwd.middleware)
+  app.all('/api/v1/*rest', (req, res) => { res.status(200).json({ from: 'companion', path: req.path }) })
+  return { app, fwd, calls }
+}
+
+describe('the forward on a stream (bridge-stream-v1)', () => {
+  let mac: Awaited<ReturnType<typeof macRoutes>>
+  const closers: Array<() => unknown> = []
+  afterAll(async () => { for (const c of closers) await c(); await mac?.close() })
+  const setup = async (opts?: { macAccepts?: boolean }) => {
+    mac ??= await macRoutes()
+    const s = streamHarness(() => mac.port, opts)
+    closers.push(() => s.door.close())
+    return s
+  }
+
+  it('a call goes on the stream: the Mac\'s status, headers and body; the phone\'s token never crosses', async () => {
+    const s = await setup()
+    const h = forwardOver(s)
+    const r = await request(h.app).patch('/api/v1/projects/Acme?x=1').set('Authorization', 'Bearer phone-token').send({ name: 'Acme 2' })
+    expect(r.status).toBe(201)
+    expect(r.headers['x-walnut-answered-by']).toBe('primary')
+    expect(r.headers['x-walnut-op']).toBe('mac')
+    expect(r.body).toEqual({ from: 'mac', size: JSON.stringify({ name: 'Acme 2' }).length })
+    expect(mac.seen.at(-1)).toMatchObject({ method: 'PATCH', path: '/api/v1/projects/Acme?x=1', origin: 'remote-http', auth: null })
+    expect(h.calls).toHaveLength(0)
+    expect(h.fwd.status()).toMatchObject({ forwarded: 1, streamed: 1 })
+    expect(s.opens).toEqual([{ to: 'primary' }])
+  })
+
+  it('no size cap: a 4 MB body goes to the Mac and a 3 MB reply comes back', async () => {
+    const s = await setup()
+    const h = forwardOver(s)
+    const big = { text: 'x'.repeat(4 * 1024 * 1024) }
+    const w = await request(h.app).post('/api/v1/notes/content/big.md').send(big)
+    expect(w.status).toBe(201)
+    expect(w.body.size).toBe(JSON.stringify(big).length)
+    const r = await request(h.app).get('/api/v1/big').buffer(true).parse((res, cb) => { const parts: Buffer[] = []; res.on('data', (b: Buffer) => parts.push(b)); res.on('end', () => cb(null, Buffer.concat(parts))) })
+    expect(r.status).toBe(200)
+    expect((r.body as Buffer).length).toBe(3 * 1024 * 1024 + 5)
+    expect(h.calls).toHaveLength(0)
+    // The same body over server.http stays on the companion (its frame keeps the 1 MB cap).
+    const old = forwardOver(s, { capable: () => false })
+    const o = await request(old.app).post('/api/v1/notes/content/big.md').send(big)
+    expect(o.body).toMatchObject({ from: 'companion' })
+    expect(old.fwd.status().answeredHere).toMatchObject({ 'body-size': 1 })
+  })
+
+  it('a daemon without the cap: server.http as today', async () => {
+    const s = await setup()
+    const h = forwardOver(s, { capable: () => false })
+    const r = await request(h.app).get('/api/v1/usage/overview')
+    expect(r.body).toEqual({ from: 'mac-over-server-http' })
+    expect(h.calls).toHaveLength(1)
+    expect(h.fwd.status()).toMatchObject({ forwarded: 1, streamed: 0, streamRefused: 0 })
+  })
+
+  it('a stream refused at once was never sent: the call goes as one server.http frame, as before; the Mac is not suspect', async () => {
+    const s = await setup()
+    s.primary.up = false
+    const h = forwardOver(s)
+    const w = await request(h.app).put('/api/v1/heartbeat/checklist').send({ content: 'x' })
+    expect(w.body).toEqual({ from: 'mac-over-server-http' })
+    expect(h.calls).toHaveLength(1)
+    expect(h.fwd.status()).toMatchObject({ forwarded: 1, streamed: 0, streamRefused: 1, suspectAt: null })
+    // ...its frame cap included: a 2 MB body stays on the companion.
+    const big = await request(h.app).put('/api/v1/heartbeat/checklist').send({ content: 'y'.repeat(2 * 1024 * 1024) })
+    expect(big.body).toMatchObject({ from: 'companion' })
+    expect(h.fwd.status().answeredHere).toMatchObject({ 'body-size': 1 })
+    // A Mac whose link takes no companion stream: the same.
+    const s2 = await setup({ macAccepts: false })
+    const h2 = forwardOver(s2)
+    expect((await request(h2.app).get('/api/v1/usage/overview')).body).toEqual({ from: 'mac-over-server-http' })
+    expect(h2.calls).toHaveLength(1)
+  })
+
+  it('a stream the daemon or the Mac never answers: no second wait, the Mac is suspect until heard', async () => {
+    const s = await setup()
+    const h = forwardOver(s, { open: () => new Promise(() => { /* the daemon is frozen */ }) })
+    const started = Date.now()
+    const r = await request(h.app).get('/api/v1/usage/overview')
+    expect(r.body).toMatchObject({ from: 'companion' })
+    expect(Date.now() - started).toBeGreaterThanOrEqual(7_500)
+    expect(h.fwd.status().answeredHere).toMatchObject({ unanswered: 1 })
+    expect(h.fwd.status().suspectAt).not.toBeNull()
+    const again = Date.now()
+    const r2 = await request(h.app).get('/api/v1/usage/overview')
+    expect(r2.body).toMatchObject({ from: 'companion' })
+    expect(Date.now() - again).toBeLessThan(1_000)
+    expect(h.calls).toHaveLength(0)
+  }, 30_000)
+
+  it('the Mac\'s door refuses what it would not run: answered here, nothing ran there', async () => {
+    const s = streamHarness(() => null)
+    closers.push(() => s.door.close())
+    mac ??= await macRoutes()
+    const before = mac.seen.length
+    const h = forwardOver(s)
+    const w = await request(h.app).post('/api/v1/actions/invoke').send({ tool: 'x' })
+    expect(w.body).toMatchObject({ from: 'companion' })
+    expect(h.fwd.status().answeredHere).toMatchObject({ refused: 1 })
+    expect(mac.seen.length).toBe(before)
+    expect(s.door.stats()).toMatchObject({ refused: 1, served: 0 })
+  })
+})
+
+describe('no WebSocket crosses the stream (the Mac serves none under /api/v1)', () => {
+  it('an upgrade sent on a stream is refused at the door, nothing reaches the Mac\'s routes', async () => {
+    const mac = await macRoutes()
+    const s = streamHarness(() => mac.port)
+    // A companion that handed an upgrade to the stream, as proxy.ts hands a host server's.
+    const companion = http.createServer()
+    companion.on('upgrade', (req, socket, head) => {
+      forwardUpgrade(req, socket, head, { kind: 'leader', connect: () => s.bridge.ep!.open('primary', { purpose: 'web' }) }, () => socket.destroy())
+    })
+    await new Promise<void>((r) => companion.listen(0, '127.0.0.1', () => r()))
+    const port = (companion.address() as net.AddressInfo).port
+    try {
+      for (const path of ['/api/v1/live', '/api/v1/events']) {
+        const got = await new Promise<{ status: number; refused: unknown }>((resolve) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers: { Authorization: 'Bearer phone-token' } })
+          ws.on('unexpected-response', (_req, res) => resolve({ status: res.statusCode ?? 0, refused: res.headers['x-walnut-forward-refused'] }))
+          ws.on('open', () => { ws.close(); resolve({ status: 101, refused: null }) })
+          ws.on('error', () => resolve({ status: -1, refused: null }))
+        })
+        expect(got).toEqual({ status: 404, refused: '1' })
+      }
+      expect(mac.seen.filter((x) => 'upgrade' in x)).toHaveLength(0)
+      expect(s.door.stats()).toMatchObject({ refused: 2, served: 0 })
+    } finally {
+      s.door.close()
+      await new Promise<void>((r) => companion.close(() => r()))
+      await mac.close()
+    }
+  })
+})
+
+describe('the Mac takes a companion stream through its own daemon only (control-host-policy.ts, as server.http)', () => {
+  it('through the Mac\'s own daemon the door takes it; through another host\'s daemon it is refused at the open', async () => {
+    const { companionStreamAcceptor } = await import('../../../src/web/v1-forward/stream-door.js')
+    expect(typeof companionStreamAcceptor('__local__', 's-acme-1')).toBe('function')
+    expect(companionStreamAcceptor('marina', 's-acme-2')).toBeNull()
+    expect(companionStreamAcceptor('', 's-acme-3')).toBeNull()
+  })
+
+  it('a call acts for whom the relaying daemon acts: a paired client, never above it', async () => {
+    const mac = await macRoutes()
+    try {
+      // The relay origin of a remote host (kept for safety, as target.ts keeps it) lowers the call.
+      const s = streamHarness(() => mac.port, { relayOrigin: 'host:marina' })
+      const h = forwardOver(s)
+      expect((await request(h.app).get('/api/v1/usage/overview')).status).toBe(200)
+      expect(mac.seen.at(-1)).toMatchObject({ origin: 'host:marina', auth: null })
+      // A local origin never lifts it above a paired client.
+      const s2 = streamHarness(() => mac.port, { relayOrigin: '__local__' })
+      const h2 = forwardOver(s2)
+      expect((await request(h2.app).get('/api/v1/usage/overview')).status).toBe(200)
+      expect(mac.seen.at(-1)).toMatchObject({ origin: 'remote-http', auth: null })
+      s.door.close()
+      s2.door.close()
+    } finally {
+      await mac.close()
+    }
+  })
+})
+
+describe('the Mac\'s door when its own route cannot be reached (the listener closing in a shutdown)', () => {
+  it('a read is answered from the copy, a write is told it may have applied; no loopback detail reaches the phone', async () => {
+    // A port that took a listener and lost it: the door's own call is refused.
+    const gone = http.createServer()
+    await new Promise<void>((r) => gone.listen(0, '127.0.0.1', () => r()))
+    const port = (gone.address() as net.AddressInfo).port
+    await new Promise<void>((r) => gone.close(() => r()))
+    const s = streamHarness(() => port)
+    try {
+      const h = forwardOver(s)
+      const r = await request(h.app).get('/api/v1/usage/overview')
+      expect(r.body).toMatchObject({ from: 'companion' })
+      expect(h.fwd.status().answeredHere).toMatchObject({ unanswered: 1 })
+      expect(h.fwd.status().suspectAt).not.toBeNull()
+      const h2 = forwardOver(s)
+      const w = await request(h2.app).put('/api/v1/heartbeat/checklist').send({ content: 'x' })
+      expect(w.status).toBe(504)
+      expect(w.body.error.code).toBe('primary_timeout')
+      expect(JSON.stringify(w.body)).not.toMatch(/ECONNREFUSED|127\.0\.0\.1/)
+      expect(h2.calls).toHaveLength(0)
+    } finally {
+      s.door.close()
+    }
+  })
+})
+
+describe('the door closes a stream that idles (a stream has no socket timeouts)', () => {
+  it('a stream that sends no request is closed; one left open after its answer is closed too', async () => {
+    const mac = await macRoutes()
+    const s = streamHarness(() => mac.port, { idleMs: 150, afterAnswerMs: 150 })
+    try {
+      const closed = (d: import('node:stream').Duplex) => new Promise<number>((resolve) => {
+        const t0 = Date.now()
+        d.on('close', () => resolve(Date.now() - t0))
+        d.on('end', () => resolve(Date.now() - t0))
+        d.on('error', () => resolve(Date.now() - t0))
+        d.resume()
+      })
+      const quiet = await s.bridge.ep!.open('primary', { purpose: 'web' })
+      expect(await closed(quiet)).toBeLessThan(3_000)
+      // A keep-alive call whose companion never closes the stream after the answer.
+      const kept = await s.bridge.ep!.open('primary', { purpose: 'web' })
+      const answered = new Promise<string>((resolve) => { let got = ''; kept.on('data', (b: Buffer) => { got += b.toString(); if (got.includes('"from":"mac"')) resolve(got) }) })
+      const done = closed(kept)
+      kept.write('GET /api/v1/usage/overview HTTP/1.1\r\nHost: primary\r\nConnection: keep-alive\r\n\r\n')
+      expect(await answered).toMatch(/^HTTP\/1\.1 200/)
+      expect(await done).toBeLessThan(3_000)
+    } finally {
+      s.door.close()
+      await mac.close()
+    }
+  })
+})
+
+describe('the door is off by boot policy: refused at the open, never a request with no answer', () => {
+  it('a server that takes no companion stream refuses the open (the call goes as one server.http frame)', async () => {
+    const { companionStreamAcceptor } = await import('../../../src/web/v1-forward/stream-door.js')
+    const { _resetServerRoleForTesting } = await import('../../../src/core/server-role.js')
+    const was = process.env.WALNUT_HOST_SERVER
+    process.env.WALNUT_HOST_SERVER = '1'
+    _resetServerRoleForTesting()
+    try {
+      expect(companionStreamAcceptor('__local__', 's-acme-9')).toBeNull()
+    } finally {
+      if (was === undefined) delete process.env.WALNUT_HOST_SERVER
+      else process.env.WALNUT_HOST_SERVER = was
+      _resetServerRoleForTesting()
+    }
+    expect(typeof companionStreamAcceptor('__local__', 's-acme-10')).toBe('function')
+  })
+})

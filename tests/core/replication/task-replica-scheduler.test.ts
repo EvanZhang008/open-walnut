@@ -107,6 +107,31 @@ afterEach(async () => {
 })
 
 describe('the task copy round scheduler', () => {
+  it('a task write the companion forwarded here gets its round at once, not after the debounce (WP13)', async () => {
+    const { noteForwardedTaskWrite } = await import('../../../src/web/v1-forward/policy.js')
+    registerReplicaTarget(follower('host:marina', { holdOnce: 0, refuse: false, up: true }))
+    await start()
+    await advance(FIRST_ROUND_MS)
+    expect(views).toBe(1)
+    // The write's own event arms the debounce; the forward's answer runs the round now.
+    tasks = tasks.map((t, j) => (j === 0 ? { ...t, title: 'acme from the phone' } : t))
+    taskEvent()
+    noteForwardedTaskWrite('PATCH', '/tasks/t-0', 200)
+    await advance(0)
+    await settle()
+    expect(views).toBe(2)
+    await advance(DEBOUNCE_MS + 10)
+    const settled = views
+    // A read, a failed write, or a write outside the copy runs nothing early.
+    noteForwardedTaskWrite('GET', '/tasks', 200)
+    noteForwardedTaskWrite('PATCH', '/tasks/t-0', 409)
+    noteForwardedTaskWrite('POST', '/tasks/t-0/board/post', 200)
+    noteForwardedTaskWrite('POST', '/projects', 201)
+    await advance(0)
+    await settle()
+    expect(views).toBe(settled)
+  })
+
   it('a follower starts nothing: no timer, no round on any event', async () => {
     process.env.WALNUT_HOST_SERVER = '1'
     _resetServerRoleForTesting()

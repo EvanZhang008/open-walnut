@@ -1192,7 +1192,10 @@ Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<a
 - Delivers: no size caps on the companion forward; one forward implementation; companion queues kept (C3)
   and merged by the same rules as a host journal, so two offline writers end the same in either order.
 - Tests: `tests/web/routes/v1-forward-proxy.test.ts` (extend: stream path, fallback); `tests/e2e/companion-forward-live-e2e.test.ts`
-  (extend: 4 MB body and a WebSocket through the stream; old daemon via cap drop uses `server.http`);
+  (extend: 4 MB body through the stream; old daemon via cap drop uses `server.http`. No WebSocket crosses the
+  stream: the Mac serves none under /api/v1, `ws/handler.ts` takes `/ws` only, and the phone's `/ws` and
+  `/api/v1/events` stay on the companion, so the Mac's door refuses an upgrade like any call it would not run,
+  pinned in `tests/web/routes/v1-forward-proxy.test.ts`);
   `tests/providers/leader-twins.test.ts` (bridge set gains only `stream.open`); `tests/core/task-queue-merge.test.ts`
   (new: a companion queue record and a host journal record on the same field, both drain orders give
   the same task; an old queue file without bases still replays as today). The host-first order is the

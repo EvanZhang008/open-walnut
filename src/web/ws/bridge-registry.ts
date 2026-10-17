@@ -24,6 +24,7 @@
  */
 
 import net from 'node:net'
+import type { Duplex } from 'node:stream'
 import type { WebSocket } from 'ws'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../lib/link-stream.js'
 import { getSelfApiRoot } from '../../lib/self-api-root.js'
@@ -70,6 +71,8 @@ interface BridgeConn {
   chunks: ChunkAssembler
   /** Streams a server on that host opened to this companion (stream-relay-v1). */
   streams: StreamEndpoint
+  /** What the daemon's hello said it does for the companion ('bridge-stream-v1'); empty for an older daemon. */
+  capabilities: readonly string[]
 }
 
 /**
@@ -685,6 +688,7 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     stats,
     chunks: createChunkAssembler(),
     streams: bridgeStreams(ws, hostAlias),
+    capabilities: Array.isArray(hello.capabilities) ? hello.capabilities.filter((c): c is string => typeof c === 'string').slice(0, 32) : [],
   }
   bridges.set(hostAlias, conn)
   // The link is back: this host has no outage to report until it drops again.
@@ -798,6 +802,25 @@ function dropBridge(conn: BridgeConn, reason: string): void {
 }
 
 // ─── Public API (used by routes/session-stream-v1.ts + status) ─────────────
+
+// ── Streams the companion opens through a host's daemon ('bridge-stream-v1', replica plan WP13) ──
+
+/** Whether the host's daemon said, in its bridge hello, that it does `cap`. */
+export function bridgeHasCapability(hostAlias: string, cap: string): boolean {
+  return bridges.get(hostAlias)?.capabilities.includes(cap) ?? false
+}
+
+/** When the host's bridge last sent a frame (ms epoch), or null with no bridge (core/link/bridge-link.ts heard()). */
+export function bridgeLastInbound(hostAlias: string): number | null {
+  return bridges.get(hostAlias)?.lastInbound ?? null
+}
+
+/** A byte stream to `to` through the host's daemon (its bridge socket); rejects when the host has no bridge. */
+export function openBridgeStream(hostAlias: string, to: 'primary', purpose?: string): Promise<Duplex> {
+  const conn = bridges.get(hostAlias)
+  if (!conn) return Promise.reject(new Error(`no bridge from ${hostAlias}`))
+  return conn.streams.open(to, purpose ? { purpose } : {})
+}
 
 export function bridgeForHost(hostAlias: string): { connected: boolean } {
   return { connected: bridges.has(hostAlias) }

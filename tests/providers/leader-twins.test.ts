@@ -246,9 +246,17 @@ describe('leader protocol: both twins', () => {
     it(`${name}: streams go only where each link may open them, and end with the link`, () => {
       const bridge = src.slice(src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(['), src.indexOf('])', src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(['))).replace(/\/\/[^\n]*/g, '')
       for (const c of ['stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close']) expect(bridge).toContain(`'${c}'`)
-      // The bridge opens no stream to anyone.
-      expect(bridge).not.toContain(`'stream.open'`)
+      // The bridge opens streams to the primary only ('bridge-stream-v1', WP13), never to a follower.
+      expect(bridge).toContain(`'stream.open'`)
       const target = fnBody(src, 'streamTarget')
+      const bridgeBranch = target.slice(target.search(/origin === 'bridge'\) \{/))
+      expect(bridgeBranch).toMatch(/if \(to !== 'primary'\) return \{ why: 'the companion opens streams to the primary only' \}/)
+      expect(bridgeBranch).toMatch(/primaryForBridge\(\)/)
+      expect(bridgeBranch).toMatch(/from: 'companion'/)
+      // The server socket that named its Walnut (never its bulk channel), heard last, never a quiet one.
+      const pick = fnBody(src, 'primaryForBridge')
+      expect(pick).toMatch(/!isServerClient\(client\) \|\| !gatewayClientHomes\.has\(client\)\) continue/)
+      expect(pick).toMatch(/now - at > TRUSTED_CLIENT_QUIET_MS/)
       // A follower: to the primary of its own Walnut or the companion; the primary: to its follower.
       expect(target).toMatch(/origin === 'follower'/)
       expect(target).toMatch(/followerSockets\.get\(\w+\) !== ws\) return \{ why: 'send follower\.hello first' \}/)
@@ -293,6 +301,35 @@ describe('leader protocol: both twins', () => {
       expect(src).toMatch(/origin === 'lane' && [\w.?]*laneHome\) laneClosedAt\.set\([\w.?]*laneHome, Date\.now\(\)\)/)
     })
   }
+
+  // WP13: the companion's forward on a stream. The bridge set is today's set plus
+  // exactly `stream.open`: nothing else a compromised companion could reach.
+  const BRIDGE_SET_BEFORE_WP13 = [
+    'appendUserMarker', 'attach', 'bridge.peer', 'bridgeResume', 'fs.readBounded', 'fs.readImage', 'gateway-result', 'image.save',
+    'leader.claim', 'leader.control', 'leader.deliver', 'leader.settings', 'leader.witness', 'markers.find', 'ping', 'read-history',
+    'send', 'session.control', 'session.launch', 'session.message', 'status', 'stream.accept', 'stream.ack', 'stream.close',
+    'stream.data', 'stream.end', 'stt',
+  ]
+  for (const [name, src] of Object.entries(twins)) {
+    it(`${name}: the bridge set gains exactly stream.open (bridge-stream-v1) and nothing else`, () => {
+      const set = [...new Set(allowlist(src).match(/'[\w.-]+'/g)!.map((x) => x.slice(1, -1)))].sort()
+      expect(set).toEqual([...BRIDGE_SET_BEFORE_WP13, 'stream.open'].sort())
+    })
+
+    it(`${name}: the bridge hello says what the daemon does for the companion, and a test can hide it`, () => {
+      expect(src).toMatch(/BRIDGE_CAPABILITIES = \['bridge-stream-v1'\]\.filter\(/)
+      expect(src).toMatch(/WALNUT_BRIDGE_HIDE_CAPS/)
+      // The knob is refused for the prod daemon dir (section 10): it is read only off it.
+      expect(src).toMatch(/BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR \? \[\] : \(process\.env\.WALNUT_BRIDGE_HIDE_CAPS/)
+      expect(src.match(/WALNUT_BRIDGE_HIDE_CAPS \|\||WALNUT_BRIDGE_HIDE_CAPS \?\?/g)).toHaveLength(1)
+      expect(src).toMatch(/uplink: 1,\s+\/\/[^\n]*\n\s+capabilities: BRIDGE_CAPABILITIES,/)
+    })
+  }
+
+  it('bridge-stream-v1 is advertised, optional, and documented', () => {
+    expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('bridge-stream-v1')
+    expect(REQUIRED_DAEMON_CAPABILITIES as readonly string[]).not.toContain('bridge-stream-v1')
+  })
 
   it('both cores are part of the daemon version hash, in the build script', () => {
     const versionSrc = read('src/providers/daemon-version-check.ts')

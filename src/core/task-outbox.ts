@@ -82,6 +82,14 @@ export type TaskOp =
        *  onto its own note instead of taking the snapshot's note, because the
        *  replica's prior note copy is blind (note isn't in the projection). */
       append?: { note?: string };
+      /** Per-field writes with their bases (additive, WP13): what the companion's row held
+       *  before, what it wrote, and when. Present = the Mac merges by field (section 7,
+       *  offline-merge/companion-op.ts) instead of the whole-row updated_at gate. */
+      fields?: Record<string, { base: unknown; value: unknown; at?: number }>;
+      /** The companion's queue flush this op was sent in (one drain, one letter), never stored. */
+      flush?: string;
+      /** The companion's clock when it sent the op (its offset is measured from it), never stored. */
+      sentAt?: number;
     }
   | { opId: string; type: 'delete'; at: string; id: string }
   /** Whole-project row reorder (additive). No per-row LWW clock — arrival
@@ -265,7 +273,7 @@ export function _resetAppliedOpIdsForTesting(): void {
 export interface ApplyTaskOpResult {
   applied: boolean;
   /** Why an op did NOT change the store (or how it was consumed). */
-  reason?: 'replay' | 'stale' | 'missing' | 'blocked' | 'unchanged' | 'created' | 'updated' | 'deleted' | 'reordered';
+  reason?: 'replay' | 'stale' | 'missing' | 'blocked' | 'unchanged' | 'created' | 'updated' | 'deleted' | 'reordered' | 'refused';
 }
 
 /**
@@ -323,6 +331,21 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
 
   const snapshot = op.task;
   const existing = await tm.getTask(snapshot.id).catch(() => undefined);
+
+  // A companion write that carries its bases is merged by field (WP13): the same rules a
+  // host journal record gets, so the drain order of the two never matters. A missing row
+  // is a task the Mac deleted (delete wins, listed), never a create.
+  // Checked here too: a legacy outbox file (applyOutboxOnPrimary) hands `fields` over as
+  // raw JSON; a malformed map takes the old path whole.
+  if (op.type === 'update' && op.fields) {
+    const { applyCompanionFields, parseCompanionFields } = await import('./offline-merge/companion-op.js');
+    const fields = parseCompanionFields(op.fields);
+    if (fields) {
+      const r = await applyCompanionFields(op, fields);
+      rememberOpId(op.opId);
+      return { applied: r.applied, reason: r.reason };
+    }
+  }
 
   if (!existing) {
     // Born on the cloud box. Insert with the SAME id (prevents dup when

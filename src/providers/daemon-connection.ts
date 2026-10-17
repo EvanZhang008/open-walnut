@@ -79,6 +79,8 @@ import { markLinkFailure } from './link-failure.js'
 import { selfHostConnection } from '../replica/self-host.js'
 import { isHostReplicaProgram } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
+// The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
+import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
@@ -708,6 +710,9 @@ export class DaemonConnection {
   }
 
   get connected(): boolean { return this._connected }
+  /** When the daemon last sent a frame or a pong (ms epoch, 0 before any): core/link/daemon-connection-link.ts heard(). */
+  lastHeardAt(): number { return Math.max(this._lastFrameAt, this.lastPongAt) }
+  private _lastFrameAt = 0
   get disconnectedSince(): number | null { return this._disconnectedSince }
   /** Host key this connection serves ('__local__' for the local daemon). */
   get host(): string { return this.hostKey }
@@ -2079,7 +2084,9 @@ export class DaemonConnection {
         },
         // A host server's browser reaching this Mac: into the tunnel port, which
         // trusts nothing on loopback (the same door a tunnel here uses).
-        accept: (info) => (info.from === 'follower' ? (stream) => { void this.plugFollowerStream(stream) } : null),
+        // The companion's forward ('bridge-stream-v1'): into its own door (web/v1-forward/stream-door.ts).
+        accept: (info) => (info.from === 'follower' ? (stream) => { void this.plugFollowerStream(stream) }
+          : info.from === 'companion' ? companionStreamAcceptor(this.hostKey, info.sid) : null),
       })
     }
     return this.streams
@@ -4173,6 +4180,7 @@ export class DaemonConnection {
   }
 
   private handleMessage(raw: string): void {
+    this._lastFrameAt = Date.now()
     let msg: Record<string, unknown>
     try { msg = JSON.parse(raw) } catch { return }
 

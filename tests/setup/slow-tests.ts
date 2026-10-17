@@ -58,6 +58,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/remote-session-manager-session-state.test.ts', // 2s
   'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout
   'tests/integration/host-server-twins.test.ts', // ~40s: both daemon twins as processes, a 5s restart backoff, a daemon restart each
+  'tests/integration/bridge-stream-twins.test.ts', // ~20s: both daemon twins as processes dial a /bridge, streams to the primary (WP13)
   'tests/integration/replica-front-twins.test.ts', // ~4 min: both daemon twins supervise a real `web --replica` (tsx), a 6s quiet window, a crash loop to the fallback
   'tests/integration/journal-v2-twins.test.ts', // ~3 min: both daemon twins as processes, SIGKILL and reboot, a 1fe1fd194 daemon, 1,000 appends, a 30s quiet window
   'tests/integration/replica-local-routes-twins.test.ts', // both daemon twins as processes, the real startServer as their host replica, a 13 MB copy

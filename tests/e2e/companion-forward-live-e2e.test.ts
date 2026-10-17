@@ -17,6 +17,10 @@
  * silent): the first call waits out its read budget and is answered by the
  * companion, every later one at once. The Mac wakes: the Mac answers again.
  *
+ * WP13 (bridge-stream-v1): the forward rides a stream through the Mac's own daemon
+ * (no size cap: a 4 MB body there and a 4 MB reply back); with the cap dropped from
+ * the daemon's bridge hello (an older daemon) it goes through server.http as before.
+ *
  * Isolation as in leader-takeover-live-e2e.test.ts: own HOME, data dir and
  * daemon dir per server under one temp base, fresh random tokens, a `claude`
  * that refuses to run, every process stopped by the pid it wrote.
@@ -252,6 +256,42 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     expect((await phone('/api/v1/heartbeat/checklist')).json.content).toBe(next)
   })
 
+  // WP13: the Mac's own daemon says bridge-stream-v1 in its bridge hello, so the
+  // forward rides a stream through it: no size cap either way.
+  it('the forward rides a stream through the Mac\'s daemon: a 4 MB body reaches the Mac, a 4 MB reply comes back', async () => {
+    const big = '# Mac checklist\n- written from the phone\n' + 'x'.repeat(4 * 1024 * 1024) + '\n'
+    const before = (await leaderView()).forward.streamed as number
+    const w = await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: big }) })
+    expect(w).toMatchObject({ status: 200, by: 'primary' })
+    expect(fs.readFileSync(path.join(primary.data, 'HEARTBEAT.md'), 'utf8')).toBe(big)
+    const r = await phone('/api/v1/heartbeat/checklist')
+    expect(r).toMatchObject({ status: 200, by: 'primary' })
+    expect(r.json.content).toBe(big)
+    expect((await leaderView()).forward.streamed).toBeGreaterThanOrEqual(before + 2)
+    const small = '# Mac checklist\n- written from the phone\n'
+    expect((await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: small }) })).status).toBe(200)
+    expect(fs.readFileSync(path.join(companion.data, 'HEARTBEAT.md'), 'utf8')).toBe(COMPANION_CHECKLIST)
+  }, 120_000)
+
+  // WP13: the companion's task writes go to the Mac while it answers (one writer); its
+  // reads stay on its own copy, and nothing is queued on the companion.
+  it('a task write goes to the Mac while it answers (one writer); the read stays on the copy, nothing is queued', async () => {
+    const created = await phone('/api/v1/tasks', { method: 'POST', body: JSON.stringify({ title: 'Marina harbour plan', project: 'Acme' }) })
+    expect(created).toMatchObject({ status: 201, by: 'primary' })
+    const id = created.json.task.id as string
+    const patched = await phone(`/api/v1/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ priority: 'important' }) })
+    expect(patched).toMatchObject({ status: 200, by: 'primary' })
+    expect(patched.json.task).toMatchObject({ id, priority: 'important' })
+    const onMac = await waitFor(async () => {
+      const list = (await mac('/api/v1/tasks')).json.tasks as Array<Record<string, unknown>> | undefined
+      return list?.find((t) => t.id === id && t.priority === 'important') ?? null
+    }, 30_000, 'the Mac to list the task the phone wrote')
+    expect(onMac.title).toBe('Marina harbour plan')
+    expect((await phone('/api/v1/tasks')).by).toBe('companion')
+    const queued = (() => { try { return fs.readdirSync(path.join(companion.data, 'cache', 'task-queue')).filter((f) => f.endsWith('.json')) } catch { return [] } })()
+    expect(queued).toEqual([])
+  }, 60_000)
+
   it('the Mac\'s own rules hold: an op only this Mac may run is refused, as for any paired client', async () => {
     const r = await phone('/api/v1/actions/invoke', { method: 'POST', body: JSON.stringify({ tool: 'health_status' }) })
     expect(r).toMatchObject({ status: 403, by: 'primary' })
@@ -341,4 +381,38 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     }, 60_000, 'the Mac to answer after it wakes')
     expect(r.json.content).toMatch(/written from the phone/)
   }, 90_000)
+
+  // WP13: an older daemon (its bridge hello without bridge-stream-v1, the cap dropped
+  // with WALNUT_BRIDGE_HIDE_CAPS): the Mac and its daemon start again, and the companion
+  // forwards through server.http as before, its 1 MB frame cap included.
+  it('an old daemon (the cap dropped): the companion forwards through server.http, as today', async () => {
+    const proc = primary.proc!
+    const exited = new Promise<void>((r) => proc.once('exit', () => r()))
+    proc.kill('SIGTERM')
+    await Promise.race([exited, sleep(30_000)])
+    const daemonPid = pidIn(primary.daemonDir)
+    if (daemonPid) {
+      try { process.kill(daemonPid, 'SIGTERM') } catch { /* gone */ }
+      await waitFor(() => { try { process.kill(daemonPid, 0); return false } catch { return true } }, 30_000, 'the Mac\'s daemon to stop')
+    }
+    await bootServer(primary, 'primary-old-daemon', false, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500', WALNUT_BRIDGE_HIDE_CAPS: 'bridge-stream-v1' }))
+    const before = (await leaderView()).forward
+    const r = await waitFor(async () => {
+      const x = await phone('/api/v1/heartbeat/checklist')
+      return x.by === 'primary' ? x : null
+    }, 180_000, 'the Mac to answer again with the older daemon')
+    expect(r.json.content).toMatch(/written from the phone/)
+    const write = await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: '# Mac checklist\n- over server.http\n' }) })
+    expect(write).toMatchObject({ status: 200, by: 'primary' })
+    expect(fs.readFileSync(path.join(primary.data, 'HEARTBEAT.md'), 'utf8')).toBe('# Mac checklist\n- over server.http\n')
+    const after = (await leaderView()).forward
+    expect(after.streamed).toBe(before.streamed)
+    // Not a stream that was refused and fell back: the companion never tried one (the hello had no cap).
+    expect(after.streamRefused).toBe(before.streamRefused)
+    expect(after.forwarded).toBeGreaterThanOrEqual(before.forwarded + 2)
+    // The server.http frame keeps its cap: a 2 MB body stays on the companion.
+    const big = await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: 'y'.repeat(2 * 1024 * 1024) }) })
+    expect(big).toMatchObject({ status: 200, by: 'companion' })
+    expect((await leaderView()).forward.answeredHere['body-size']).toBeGreaterThanOrEqual(1)
+  }, 300_000)
 })

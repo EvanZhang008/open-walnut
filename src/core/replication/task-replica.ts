@@ -174,6 +174,16 @@ async function serveTarget(
 }
 
 let soonHook: (() => void) | null = null
+let nowHook: (() => void) | null = null
+
+/**
+ * A follower's forwarded task write ran here (v1-forward policy.ts
+ * noteForwardedTaskWrite): a round now, not after the debounce, so the
+ * companion's copy, which answers the phone's task reads, shows it at once.
+ */
+export function taskReplicaRoundNow(): void {
+  nowHook?.()
+}
 let schedulers = 0
 
 /**
@@ -232,6 +242,12 @@ export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void
     if (!stopped) unlistenTargets = onReplicaTargetsChanged(soon)
   })
   soonHook = soon
+  const now = (): void => {
+    if (stopped) return
+    if (timer) { clearTimeout(timer); timer = null }
+    round()
+  }
+  nowHook = now
   const first = setTimeout(round, FIRST_ROUND_MS)
   first.unref?.()
   const sweep = setInterval(() => { forgetTaskReplica(); round() }, SWEEP_MS)
@@ -240,6 +256,7 @@ export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void
     stop: () => {
       stopped = true
       if (soonHook === soon) soonHook = null
+      if (nowHook === now) nowHook = null
       unlistenTargets?.()
       if (timer) clearTimeout(timer)
       if (retry) clearTimeout(retry)

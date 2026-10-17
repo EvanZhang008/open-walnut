@@ -3028,7 +3028,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Reader half (projection import) is triggered by the Phase 3 bridge push
       // (events-v1) and by reconcileAfterPull() from the auto-commit loop below.
       const { importProjectionOnCloud } = await import('../core/task-outbox.js')
-      const { dispatchTaskOp, startTaskQueueFlush } = await import('../core/task-queue.js')
+      const { dispatchTaskOp, startTaskQueueFlush, companionFieldWrites, noteKnownTaskRows } = await import('../core/task-queue.js')
       const { companionDeleteId } = await import('../core/task-deleted-id.js')
       bus.subscribe('task-outbox', (event) => {
         // Ops the apply path itself produced (import/apply) are event-silent, but
@@ -3050,7 +3050,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           const id = companionDeleteId(event)
           if (id) void dispatchTaskOp({ type: 'delete', id })
         } else if (event.name === EventNames.TASK_CREATED) {
-          if (data.task) void dispatchTaskOp({ type: 'create', task: data.task })
+          if (data.task) { noteKnownTaskRows([data.task]); void dispatchTaskOp({ type: 'create', task: data.task }) }
         } else if (event.name === EventNames.TASK_REORDERED) {
           if (!Array.isArray(data.taskIds) || data.taskIds.length === 0) return
           if (data.pins) void dispatchTaskOp({ type: 'reorder-pins', taskIds: data.taskIds })
@@ -3058,10 +3058,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             void dispatchTaskOp({ type: 'reorder', project: data.project, taskIds: data.taskIds })
           }
         } else if (data.task) {
+          const touched = Array.isArray(data.fields) && data.fields.length > 0 ? data.fields : undefined
+          const appendNote = typeof data.appendNote === 'string' && data.appendNote ? data.appendNote : undefined
+          // Each field with its base, so the Mac merges it by field (WP13). An append carries
+          // them too (its time, delete wins); the Mac concatenates it by its own rule.
+          const fields = companionFieldWrites(data.task, touched)
           void dispatchTaskOp({
             type: 'update', task: data.task,
-            ...(Array.isArray(data.fields) && data.fields.length > 0 ? { touched: data.fields } : {}),
-            ...(typeof data.appendNote === 'string' && data.appendNote ? { append: { note: data.appendNote } } : {}),
+            ...(touched ? { touched } : {}),
+            ...(appendNote ? { append: { note: appendNote } } : {}),
+            ...(fields ? { fields } : {}),
           })
         }
         // Interest is the EXACT primary-write event set — derived events

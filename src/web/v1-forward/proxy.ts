@@ -10,15 +10,23 @@
  * refusal before the route ran, an old Mac) is answered here instead. A forward
  * that went out and got no answer is answered here only for a read; a write may
  * have been applied, so the phone is told that, never given a second copy.
+ *
+ * The carrier (replica plan WP13): a byte stream through the Mac's own daemon
+ * (stream-forward.ts, the Mac's door is stream-door.ts) when its bridge hello
+ * says `bridge-stream-v1`, with no size cap; else the `server.http` frame as
+ * before. A stream refused at once was never sent and goes as that frame; one
+ * the daemon or the Mac never answers counts as an unanswered call.
  */
 
 import type { NextFunction, Request, Response } from 'express'
+import type { Duplex } from 'node:stream'
 import { log } from '../../logging/index.js'
 import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { setLeaderPresence } from '../../core/server-role.js'
 import { LEADER_HEARTBEAT_MS } from '../../core/leader/protocol.js'
 import type { RelayFailure } from '../routes/v1-control-relay.js'
 import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders } from './policy.js'
+import { forwardOnStream } from './stream-forward.js'
 
 /** What the companion knows of the Mac right now. */
 export interface PrimarySnapshot {
@@ -45,6 +53,11 @@ export interface ForwardDeps {
    * answering itself, so it keeps its own path and never reaches the Mac as a phone.
    */
   ownCall?: (req: Request) => boolean
+  /**
+   * The forward on a stream ('bridge-stream-v1', stream-forward.ts): taken when
+   * `capable()` (the Mac's daemon said it can), else `call` (server.http) as before.
+   */
+  stream?: { capable: () => boolean | Promise<boolean>; open: () => Promise<Duplex> }
 }
 
 /** A read waits this long for the Mac before the companion answers it from its copy. */
@@ -83,6 +96,10 @@ const PRESENCE_TICK_MS = 5_000
 
 export interface ForwardStatus {
   forwarded: number
+  /** Of `forwarded`, the calls carried on a stream (bridge-stream-v1). */
+  streamed: number
+  /** Streams refused at once (nothing sent) whose call then went as one server.http frame. */
+  streamRefused: number
   /** Calls answered here, by why. */
   answeredHere: Record<string, number>
   /** Writes that went out and got no answer (the phone was told it may have been applied). */
@@ -104,7 +121,7 @@ function bodyOf(req: Request): Buffer | null | 'unsupported' {
 }
 
 export function createV1Forward(deps: ForwardDeps) {
-  const status: ForwardStatus = { forwarded: 0, answeredHere: {}, unanswered: 0, lastForwardAt: null, lastAnsweredHere: null }
+  const status: ForwardStatus = { forwarded: 0, streamed: 0, streamRefused: 0, answeredHere: {}, unanswered: 0, lastForwardAt: null, lastAnsweredHere: null }
   let suspectAt = 0
   let unsupportedUntil = 0
   let inflightReads = 0
@@ -133,11 +150,21 @@ export function createV1Forward(deps: ForwardDeps) {
     if (why) return answerHere(why, req, res, next)
     const body = bodyOf(req)
     if (body === 'unsupported') return answerHere('body-kind', req, res, next)
-    if (body && body.byteLength > MAX_FORWARD_REQUEST_BYTES) return answerHere('body-size', req, res, next)
+    // A stream has no size cap; the server.http frame keeps its own.
+    const onStream = deps.stream ? await deps.stream.capable() : false
+    if (!onStream && body && body.byteLength > MAX_FORWARD_REQUEST_BYTES) return answerHere('body-size', req, res, next)
     const isRead = method === 'GET' || method === 'HEAD'
     if (isRead && inflightReads >= MAX_INFLIGHT_READS) return answerHere('busy', req, res, next)
 
     const timeoutMs = isRead ? FORWARD_READ_TIMEOUT_MS : FORWARD_WRITE_TIMEOUT_MS
+    if (onStream && deps.stream) return viaStream(req, res, next, method, body, isRead, timeoutMs, deps.stream.open)
+    return viaCall(req, res, next, method, body, isRead, timeoutMs)
+  }
+
+  /** The call as one server.http frame over the bridge (the forward before bridge-stream-v1). */
+  async function viaCall(
+    req: Request, res: Response, next: NextFunction, method: string, body: Buffer | null, isRead: boolean, timeoutMs: number,
+  ): Promise<void> {
     const params: Record<string, unknown> = {
       method,
       url: req.originalUrl,
@@ -203,6 +230,52 @@ export function createV1Forward(deps: ForwardDeps) {
     })
   }
 
+  /** The same ladder as the server.http answer below, for a call carried on a stream. */
+  async function viaStream(
+    req: Request, res: Response, next: NextFunction, method: string, body: Buffer | null,
+    isRead: boolean, timeoutMs: number, open: () => Promise<Duplex>,
+  ): Promise<void> {
+    if (isRead) inflightReads++
+    let o: Awaited<ReturnType<typeof forwardOnStream>>
+    try {
+      o = await forwardOnStream({ req, res, method, body, timeoutMs, open })
+    } finally {
+      if (isRead) inflightReads--
+    }
+    if (o.kind === 'answered') {
+      status.forwarded++
+      status.streamed++
+      status.lastForwardAt = deps.now()
+      return
+    }
+    if (o.kind === 'refused') return answerHere('refused', req, res, next)
+    if (o.kind === 'not-sent') {
+      // Nothing reached the Mac, whatever the method. Refused at once (no primary
+      // socket that takes streams): the server.http frame, as before, cap included.
+      // A daemon or Mac that did not answer the open in time is not asked again
+      // until it is heard (as below).
+      if (!o.slow) {
+        status.streamRefused++
+        log.web.info('v1 forward: no stream to the Mac, the call goes as one frame', { method, path: req.path, message: o.message })
+        if (body && body.byteLength > MAX_FORWARD_REQUEST_BYTES) return answerHere('body-size', req, res, next)
+        return viaCall(req, res, next, method, body, isRead, timeoutMs)
+      }
+      suspectAt = deps.now()
+      log.web.info('v1 forward: the Mac did not take a stream in time', { method, path: req.path, message: o.message })
+      return answerHere('unanswered', req, res, next)
+    }
+    suspectAt = deps.now()
+    if (isRead) return answerHere('unanswered', req, res, next)
+    status.unanswered++
+    log.web.warn('v1 forward: a write got no answer from the Mac', { method, path: req.path, kind: 'stream', message: o.message })
+    res.status(504).json({
+      error: {
+        code: 'primary_timeout',
+        message: 'Your Mac did not answer in time. It may have applied this change: check before you try again.',
+      },
+    })
+  }
+
   return {
     middleware: (req: Request, res: Response, next: NextFunction): void => {
       middleware(req, res, next).catch(next)
@@ -234,6 +307,7 @@ export function createV1Forward(deps: ForwardDeps) {
 // ── The cloud box's one instance ──
 
 let instance: ReturnType<typeof createV1Forward> | null = null
+let primaryBridge: import('../../core/link/bridge-link.js').BridgeLink | null = null
 
 export function getV1Forward(): ReturnType<typeof createV1Forward> {
   if (instance) return instance
@@ -265,6 +339,23 @@ export function getV1Forward(): ReturnType<typeof createV1Forward> {
       const { callPrimaryControl } = await import('../routes/v1-control-relay.js')
       return callPrimaryControl('server.http', '__server__', params, timeoutMs)
     },
+    stream: {
+      capable: async () => {
+        if (process.env.WALNUT_COMPANION_STREAM === '0') return false
+        const [{ bootPolicy }, { bridgeHasCapability }] = await Promise.all([
+          import('../../core/boot-policy.js'), import('../ws/bridge-registry.js'),
+        ])
+        return bootPolicy('companion-stream-forward') && bridgeHasCapability('__local__', 'bridge-stream-v1')
+      },
+      // Through the primary's bridge Link (core/link/bridge-link.ts): to the primary only.
+      open: async () => {
+        if (!primaryBridge) {
+          const [registry, { createBridgeLink }] = await Promise.all([import('../ws/bridge-registry.js'), import('../../core/link/bridge-link.js')])
+          primaryBridge = createBridgeLink({ hostAlias: '__local__', walnutId: '', registry })
+        }
+        return primaryBridge.openStream('primary', 'web')
+      },
+    },
   })
   return instance
 }
@@ -294,5 +385,7 @@ export function stopLeaderPresenceTick(): void {
 /** Tests only. */
 export function _resetV1ForwardForTesting(): void {
   instance = null
+  primaryBridge?.close()
+  primaryBridge = null
   stopLeaderPresenceTick()
 }
