@@ -500,9 +500,11 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
       response: { subtype: 'success', request_id: reqId, response: { behavior: 'allow', updatedInput: { command: 'ls docs/' } } },
     })
     expect(await pendingOf('oldbox', B)).toBeNull()
-    // Answered once: the same answer again finds nothing to answer.
+    // Answered once: the same prompt asked again (a retry whose reply was lost) is told
+    // the answer it already has, even when it now says otherwise, and nothing is written
+    // again (WP10, live-settings-core.ts noteAnswered).
     const again = await request('oldbox', 'leader.control', { walnutId: WALNUT, epoch: 2, sid: B, action: 'permission', requestId: reqId, allow: false })
-    expect(again).toMatchObject({ ok: false, errorKind: 'not_found' })
+    expect(again, JSON.stringify(again)).toMatchObject({ ok: true, allow: true })
     expect(respOf(oldbox, B)).toHaveLength(1)
   }, 60_000)
 
