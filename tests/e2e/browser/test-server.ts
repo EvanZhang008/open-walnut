@@ -4104,6 +4104,18 @@ if (!mockDaemon) {
 }
 if (mockDaemon) {
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${mockDaemon.port}`)
+  // A stop the server decides on (a completed task, an idle reap) goes to the daemon
+  // that spawned the session, this one, not to the isolated real local daemon that
+  // the pool lookup finds first: that one refuses it ("not_journaled"), the CLI
+  // lives on, and the next message lands in it warm instead of a cold resume.
+  {
+    const { __setOwnerConnectionForTesting } = await import('../../../src/core/sessions/owner-stop.js')
+    const { getDirectDaemonConnection, getConnectedDaemonConnection } = await import('../../../src/providers/daemon-connection.js')
+    const wsUrl = `ws://127.0.0.1:${mockDaemon.port}`
+    __setOwnerConnectionForTesting(async (host) => (host === '__local__'
+      ? getDirectDaemonConnection('__local__', wsUrl)
+      : getConnectedDaemonConnection(host)))
+  }
   // Task workspaces run on the daemon this fixture's sessions use (MockDaemon runs the
   // real workspace core), never on the isolated real local daemon, whose prebuilt
   // binary may predate 'workspace-v1'. Only the pool lookup is swapped.

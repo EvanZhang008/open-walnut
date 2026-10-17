@@ -173,6 +173,10 @@ test('a completed task returns to in progress when its session is messaged again
   await fs.writeFile(`${SCREENSHOT_DIR}/${testInfo.project.name}-evidence.json`, JSON.stringify(evidence, null, 2))
   expect(errors).toEqual([])
   // Only API failures matter to this flow; a Vite dev-module 500 for a file some
-  // other in-flight change broke is noise here, not a task-state defect.
-  expect(failedResponses.filter((line) => /\/api\//.test(line) && !/\/api\/notes|\/api\/mail/.test(line))).toEqual([])
+  // other in-flight change broke is noise here, not a task-state defect. So is the
+  // usage panel's budget read, which answers 503 ("needs the budget daemon
+  // upgrade") for every session of this fixture, whose sessions run on a mock
+  // daemon beside the isolated real one.
+  expect(failedResponses.filter((line) => /\/api\//.test(line)
+    && !/\/api\/notes|\/api\/mail|\/api\/usage\/sessions\//.test(line))).toEqual([])
 })

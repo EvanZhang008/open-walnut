@@ -22,6 +22,11 @@ const SID = (k: Key) => `pw-close-${k}-session`
 const TID = (k: Key) => `pw-task-close-${k}`
 const SHOTS = '/tmp/column-complete-close'
 
+// One worker, in order: every test drives the same three seeded tasks and resets them
+// afterwards, so under fullyParallel one test's reset or ring click landed in another's
+// (2026-10-17: 6 of 13 red in parallel, 13 of 13 green with one worker).
+test.describe.configure({ mode: 'default' })
+
 const col = (page: Page, k: Key) => page.locator(`.main-page-session-column[data-column-id="${SID(k)}"]`)
 const ring = (page: Page, k: Key) => col(page, k).locator('.task-quick-phase-btn')
 const undoToast = (page: Page) => page

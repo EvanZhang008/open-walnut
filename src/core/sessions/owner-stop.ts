@@ -100,7 +100,19 @@ export function ownerHostKey(row: Pick<SessionRecord, 'host'>): string {
 // module. A test's fake daemon then saw only some of the stops.
 let daemonConnectionModule: Promise<typeof import('../../providers/daemon-connection.js')> | null = null
 
+// Test-only: the browser fixture runs its sessions on a mock daemon beside the
+// isolated real local daemon, both pooled as '__local__', and the pool lookup
+// finds the real one first. That daemon never spawned the session, so it refused
+// every stop and a completed task's CLI kept running (2026-10-17).
+let connectionOverride: ((hostKey: string) => Promise<OwnerConnection | null>) | null = null
+
+/** Test-only: the daemon a stop goes to for a host (null restores the pool lookup). */
+export function __setOwnerConnectionForTesting(fn: ((hostKey: string) => Promise<OwnerConnection | null>) | null): void {
+  connectionOverride = fn
+}
+
 async function pooledConnection(hostKey: string): Promise<OwnerConnection | null> {
+  if (connectionOverride) return connectionOverride(hostKey)
   try {
     daemonConnectionModule ??= import('../../providers/daemon-connection.js')
     const { getConnectedDaemonConnection } = await daemonConnectionModule
