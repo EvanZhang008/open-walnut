@@ -6,6 +6,39 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-10-17
+
+### Added
+
+- The replica's front sends browsers to the Mac while it answers
+- Walnut in a phone browser feels like a phone app
+- A session hears where its task stands after a move
+- A session filing work in another project says why
+- A session's message to a completed task needs a reason
+- A replica server boots safe by construction
+- Pause sessions at verified lifetime budgets
+- An install link opens Walnut on the plugin, from the Mac app, a browser or the CLI
+- A plugin can restart an MCP server, at most once per two minutes
+- A host answers its trigger ops while its Walnut is away
+
+### Fixed
+
+- A session record is born with the prompt it runs
+- An auto-allowed prompt stays the daemon's, and a rename never drops an answer
+- The companion transcribes phone recordings while the Mac sleeps
+- A reply to a mail whose listing names no addresses still has its recipients
+- A refused upload login says what ssh said
+- An upload never rides the shared SSH connection
+- Preserve Sol cache totals without guessing cost
+- Reconcile session costs against response evidence
+- Open tasks directly from Inbox letters without losing replies
+- A phone pans a streaming transcript, and the page itself never moves
+- The console fills a phone screen, one surface at a time
+- Page conversation history by user turns
+- Keep visible directories in sync with external changes
+- Keep an early incoming-stream refusal from crashing the server
+- Fit the default day and persist confirmed drag edits
+
 ## [0.6.13] - 2026-10-16
 
 ### Fixed
