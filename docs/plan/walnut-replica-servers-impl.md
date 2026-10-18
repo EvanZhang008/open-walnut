@@ -720,8 +720,8 @@ IDs are names, not the build order. Build order (first value early, Ask before n
 | 7 | WP11 | notes writable away |
 | 8 | WP13, WP14 | companion path, release gate |
 
-Rollout gate: `web --replica` ships OFF by default, a per-host opt-in (`hosts.<alias>.server_program:
-'replica'`), until the WP14 release gate passes; only then does the default flip (D13).
+Rollout gate: `web --replica` shipped OFF by default, a per-host opt-in (`hosts.<alias>.server_program:
+'replica'`), until the WP14 release gate passed; then the default flipped (D13, done 2026-10-18).
 
 ### WP1 Role, placement, boot policy; `walnut web --replica` boots safely
 - Depends on: none.

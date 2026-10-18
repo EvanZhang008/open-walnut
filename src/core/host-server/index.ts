@@ -44,7 +44,7 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostSer
       provider: typeof s.expose?.provider === 'string' && s.expose.provider ? s.expose.provider : null,
       options,
     },
-    // The per-host opt-in for the replica program (off unless set: D13's rollout gate).
+    // The host's program: 'host-server' keeps the plain host server (the D13 rollback); unset runs the replica where the daemon can.
     ...(program === 'replica' || program === 'host-server' ? { program } : {}),
     // The host's choice of copied kinds (replication/kinds/copy-kind.ts fills the defaults).
     ...(Object.keys(copies).length > 0 ? { copies } : {}),

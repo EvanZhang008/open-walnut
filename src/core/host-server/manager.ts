@@ -15,11 +15,11 @@
  *      settings; the daemon keeps it running
  *   6. its first report, through the daemon (`server.status`)
  *
- * Which program: the host's opt-in `hosts.<key>.server_program: 'replica'` on a
- * daemon with `replica-host-v1` runs the full server program as a follower
- * (`web --replica`, docs/plan/walnut-replica-servers-impl.md WP2), with the plain
- * host server as the daemon's own crash-loop `fallback`; everything else runs
- * `host-server` as before.
+ * Which program: a daemon with `replica-host-v1` runs the full server program as a
+ * follower (`web --replica`, docs/plan/walnut-replica-servers-impl.md WP2, the
+ * default since D13), with the plain host server as the daemon's own crash-loop
+ * `fallback`; `hosts.<key>.server_program: 'host-server'` (the rollback) and an
+ * older daemon run `host-server` as before.
  *
  * There is no other connection: the host server links to its daemon only, and
  * everything between it and this Mac is a stream on the two links
@@ -62,7 +62,7 @@ export interface HostServerSettings {
   node?: string
   buildEnv: Record<string, string>
   expose: { enabled: boolean; provider: string | null; options: Record<string, string> }
-  /** The host's opt-in (`hosts.<key>.server_program`): 'replica' runs `web --replica` where the daemon can. */
+  /** The host's choice (`hosts.<key>.server_program`): 'host-server' keeps the plain host server; else `web --replica` where the daemon can (D13). */
   program?: 'replica' | 'host-server'
   /**
    * Which kinds the Mac copies to this host's replica (`hosts.<key>.server.copies`,
@@ -379,8 +379,9 @@ export function createHostServerManager(deps: ManagerDeps) {
         WALNUT_HOST_LABEL: await deps.label(hostKey),
         WALNUT_NO_AUTO_UPDATE: '1',
       }
-      // The full program as this host's replica: only where the daemon can, and the host opted in.
-      const replica = settings!.program === 'replica' && host.hasCapability('replica-host-v1')
+      // The full program as this host's replica wherever the daemon can (D13: the default since
+      // the WP14 release gate); `server_program: 'host-server'` keeps the plain host server.
+      const replica = settings!.program !== 'host-server' && host.hasCapability('replica-host-v1')
       const run = replica
         ? {
             args: [`${install.appDir}/dist/cli.js`, 'web', '--replica'],
@@ -393,8 +394,8 @@ export function createHostServerManager(deps: ManagerDeps) {
             fallback: { args: hostServerArgs, env: hostServerEnv },
           }
         : { args: hostServerArgs, env: hostServerEnv }
-      if (settings!.program === 'replica' && !replica) {
-        log.session.info('host server: the host opted in to the replica, its daemon cannot run it yet', { host: hostKey })
+      if (settings!.program !== 'host-server' && !replica) {
+        log.session.info('host server: the host would run the replica, its daemon cannot run it yet', { host: hostKey })
       }
       const spec = {
         v: 1, home: deps.home, walnutId: await deps.walnutId(),

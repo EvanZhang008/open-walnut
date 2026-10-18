@@ -12,7 +12,7 @@
  *     compares digests and an equal one ends the round. Anything else runs
  *     the full manifest round;
  *   - the targets: HOST replicas only, and only a host whose program is the
- *     replica (D13's per-host opt-in; the plain host server and the daemon's
+ *     replica (the default since D13; the plain host server and the daemon's
  *     fallback keep no copies). The companion keeps its own session projection
  *     and has no copy of the others yet (WP13 moves it to this path), so it is
  *     never sent these kinds;

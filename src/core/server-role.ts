@@ -72,10 +72,10 @@ export function isHostReplica(): boolean { return current().placement === 'host'
 let replicaProgram: boolean | null = null
 /**
  * The full replica PROGRAM on a host (`walnut web --replica`, which sets
- * WALNUT_ROLE=replica), the per-host opt-in of D13. Not the plain host server
- * (`walnut host-server`, WALNUT_HOST_SERVER=1 alone, the default and the
- * daemon's crash-loop fallback): its role is replica and its placement host by
- * default, but it never opted in to the copies the Mac sends a replica.
+ * WALNUT_ROLE=replica), every host's default since D13. Not the plain host server
+ * (`walnut host-server`, WALNUT_HOST_SERVER=1 alone, the rollback, an older
+ * daemon's program and the daemon's crash-loop fallback): its role is replica and
+ * its placement host by default, but it keeps none of the copies the Mac sends a replica.
  */
 export function isHostReplicaProgram(): boolean {
   replicaProgram ??= isHostReplica() && (process.env.WALNUT_ROLE ?? '').trim() === 'replica'

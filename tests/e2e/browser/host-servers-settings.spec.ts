@@ -111,10 +111,13 @@ test.describe('Walnut on a host', () => {
     await expect(page.getByTestId(`host-server-enabled-${KEY}`)).toHaveAttribute('aria-checked', 'true')
   })
 
-  test('a replica host lists what it keeps while the Mac sleeps, and the choice is saved', async ({ page }) => {
+  test('a replica host (every host by default) lists what it keeps while the Mac sleeps, the choice is saved, and the rollback hides it', async ({ page }) => {
     await page.setViewportSize({ width: 1200, height: 900 })
     const hosts = await hostsNow(page)
-    await putHosts(page, { ...hosts, [KEY]: { ...hosts[KEY], server_program: 'replica' } })
+    // No program named: the replica (D13).
+    const plain: Record<string, unknown> = { ...(hosts[KEY] ?? {}) }
+    delete plain.server_program
+    await putHosts(page, { ...hosts, [KEY]: plain })
     const group = await openRemoteHosts(page)
     const copies = page.getByTestId(`host-server-copies-${KEY}`)
     await expect(copies).toBeVisible({ timeout: 15_000 })
@@ -152,6 +155,14 @@ test.describe('Walnut on a host', () => {
     await expect(page.getByTestId(`host-server-copies-${KEY}`)).toBeVisible({ timeout: 30_000 })
     await expect(box('inbox')).not.toBeChecked()
     await expect(box('sessions')).toBeChecked()
+
+    // The rollback to the plain host server keeps no copies: the list goes.
+    const now = await hostsNow(page)
+    await putHosts(page, { ...now, [KEY]: { ...now[KEY], server_program: 'host-server' } })
+    await page.reload()
+    await expect(page.getByTestId(`host-server-enabled-${KEY}`)).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId(`host-server-copies-${KEY}`)).toHaveCount(0)
+    await putHosts(page, { ...now, [KEY]: { ...now[KEY] } })
   })
 
   test('turn it off', async ({ page }) => {

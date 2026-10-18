@@ -410,8 +410,20 @@ describe('host server manager: which program (WP2)', () => {
     expect(m.view('devbox').program).toBe('host-server')
   })
 
-  it('a daemon with replica-host-v1 and no opt-in runs host-server exactly as before', async () => {
-    for (const program of [undefined, 'host-server'] as const) {
+  it('D13: a daemon with replica-host-v1 runs the replica when the host names no program', async () => {
+    settings = { enabled: true, buildEnv: {}, expose: { enabled: false, provider: null, options: {} } }
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.caps.add('replica-host-v1')
+    await m.connected(host)
+    const spec = host.specs[0]!
+    expect(spec.args).toEqual([cli, 'web', '--replica'])
+    expect(spec.fallback?.args).toEqual([cli, 'host-server'])
+    expect(m.view('devbox').program).toBe('replica')
+  })
+
+  it('the rollback: server_program host-server on a daemon with replica-host-v1 runs host-server exactly as before', async () => {
+    for (const program of ['host-server'] as const) {
       settings = { enabled: true, buildEnv: {}, expose: { enabled: false, provider: null, options: {} }, ...(program ? { program } : {}) }
       const m = createHostServerManager(deps())
       const host = fakeHost()

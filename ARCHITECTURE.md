@@ -579,8 +579,9 @@ Mac (leader, walnut web) ── copies (one generic kind) ──► host daemon 
   forward`, `journal append`, `journal drain`, ...), `GET /api/replicas/status` (copy ages, journal size,
   drainable and parked counts, program, fallback), and the host-side lines through the daemon's
   `logs.tail` (`scripts/walnut-logs.sh replica --host <alias>`).
-- **Rollout**: `hosts.<alias>.server_program: 'replica'` opts a host in; until the release gate the
-  default stays the plain host server (`src/host-server/main.ts`).
+- **Rollout**: since the release gate (D13) every host whose daemon has `replica-host-v1` runs the
+  replica; `hosts.<alias>.server_program: 'host-server'` keeps the plain host server
+  (`src/host-server/main.ts`), which an older daemon runs as before.
 
 ---
 
