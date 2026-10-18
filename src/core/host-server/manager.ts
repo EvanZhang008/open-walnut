@@ -70,6 +70,8 @@ export interface HostServerSettings {
    * Unset: replication/kinds/copy-kind.ts DEFAULT_COPY_CHOICE (inbox bodies off).
    */
   copies?: Record<string, boolean>
+  /** `hosts.<key>.server.ask_bypass`: a new ask on the host while the Mac is away may start in bypass (WP12). */
+  askBypass?: boolean
 }
 
 export type HostServerPhase =
@@ -93,6 +95,8 @@ export interface HostServerView {
     version?: string
     commit?: string | null
     daemon?: { state?: string; lastError?: string | null }
+    /** The host's journal (its daemon's follower.status line), a replica's report only (WP14). */
+    journal?: Record<string, unknown> | null
   } | null
   port?: number
   /**
@@ -180,6 +184,12 @@ export function createHostServerManager(deps: ManagerDeps) {
   const exposeRetries = new Map<string, number>()
   /** The program each host's daemon was told to run. */
   const asked = new Map<string, 'replica' | 'host-server'>()
+  /**
+   * The node and app entry last configured per host (WP12: the walnut MCP mount of a session
+   * there). Kept across a disconnect, unlike `links`: the drain that adopts a host's away ask
+   * runs on the reconnect, before this host's reconcile has configured it again.
+   */
+  const configured = new Map<string, { command: string; args: string[] }>()
   /** The program the view shows: the daemon's own word wins (its fallback runs while the Mac sleeps too). */
   const programOf = (hostKey: string, status: HostServerStatus | undefined): HostServerView['program'] =>
     status?.program === 'fallback' ? 'fallback' : asked.get(hostKey)
@@ -334,6 +344,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         }
       }
       dropLink(hostKey)
+      configured.delete(hostKey)
       host?.keepStreamLane?.(false)
       await deps.releaseTunnelPort(`host-server:${hostKey}`)
       set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined })
@@ -400,10 +411,23 @@ export function createHostServerManager(deps: ManagerDeps) {
       const reply = await host.send('server.configure', { home: deps.home, spec }, 15_000)
       if (reply.ok !== true) throw new Error(`the host's daemon refused the server: ${String(reply.error ?? '')}`)
       asked.set(hostKey, replica ? 'replica' : 'host-server')
+      configured.set(hostKey, { command: node, args: [...run.args] })
       set(hostKey, { daemon: reply.status as HostServerStatus, program: programOf(hostKey, reply.status as HostServerStatus) })
       const link = links.get(hostKey) ?? {}
       link.spec = spec
       links.set(hostKey, link)
+      // A new ask on the host while the Mac is away (WP12): the spawn template its daemon
+      // fills from validated fields only (spawn-template.ts, host-start-core.ts). Asks run in
+      // the replica's data dir, the host's counterpart of this Mac's WALNUT_HOME.
+      if (replica) {
+        try {
+          const { pushHostSpawnTemplate } = await import('../../providers/spawn-template.js')
+          const pushed = await pushHostSpawnTemplate(host, { home: deps.home, hostKey, cwd: install.dataDir, bypassAllowed: settings!.askBypass === true })
+          if (pushed) log.session.info('host server: spawn template pushed', { host: hostKey, cwd: install.dataDir, bypass: settings!.askBypass === true })
+        } catch (err) {
+          log.session.warn('host server: the spawn template was not pushed; a new ask there needs this Mac', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+        }
+      }
       // The copies (task store, search index) for this follower, on a stream through its daemon.
       if (deps.registerTarget && !link.unregister) {
         link.unregister = deps.registerTarget(hostKey, async (body, opts) => {
@@ -473,6 +497,15 @@ export function createHostServerManager(deps: ManagerDeps) {
     },
     reconcile,
     views: (): HostServerView[] => [...views.values()].map((v) => ({ ...v })),
+    /**
+     * The program this Mac configured on a host (its node and `<appDir>/dist/cli.js`), or
+     * null: the walnut MCP mount of a session that runs there (WP12), so a cold resume on
+     * the host never mounts this Mac's execPath.
+     */
+    programOf: (hostKey: string): { command: string; args: string[] } | null => {
+      const p = configured.get(hostKey)
+      return p ? { command: p.command, args: [...p.args] } : null
+    },
     view: (hostKey: string): HostServerView => ({ ...view(hostKey) }),
     /** Ask the host server to start its tunnel again now (a new retry count in its settings). */
     async retryExpose(hostKey: string): Promise<void> {

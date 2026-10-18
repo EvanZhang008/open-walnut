@@ -590,6 +590,40 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // stream only to a daemon that has it and uses server.http otherwise. Both twins.
   // Optional.
   'bridge-stream-v1',
+  // 'note-journal-v1' (docs/plan/walnut-replica-servers-impl.md WP11, section 6): notes
+  // are writable while the Mac is away. A phone save (`follower.op note_put|note_delete`)
+  // and a session's `note_write` / `note_edit` at the gateway are checked against what
+  // the overlay shows (409 `conflict {serverHash, serverContent}` on a stale hash) and
+  // journaled as `note` records (bodies as blobs, coalesced by append); every copy read
+  // (`note_read`, `replica.list/read/readMany`) shows the pending write; `replica.sync`
+  // keeps a held key (pending, or acked and awaiting a later copy) and answers `held`,
+  // and refuses a manifest removing more than half of 200 or more notes
+  // (`manifest_removes_most_rows`) unless `confirm:true` names it. Both twins (the cores
+  // are text-injected into the source twin), not bridge-reachable. Optional: a Mac that
+  // does not drain `note` records (its leader.configure drains lack 'note') gets today's
+  // answer, a note write away needs the Mac.
+  'note-journal-v1',
+  // 'replica-start-v1' (docs/plan/walnut-replica-servers-impl.md section 8, WP12): a new
+  // Ask Walnut session on this host while the Mac is away. The Mac pushes a per-home spawn
+  // template on its trusted socket (`leader.spawnTemplate`, built by spawn-template.ts the
+  // way claude-code-session.ts builds a start); the follower's `follower.start {sid, taskId,
+  // agentId, title, model, effort, mode, persona, firstMessage}` fills only its slots, each
+  // value validated (host-start-core.ts), journals a `session` record (the Mac adopts it on
+  // its drain) and starts the CLI with the spawn journal naming the follower's Walnut, so a
+  // stop from the Mac after adoption is honoured by owner-home-v1. A person's message to a
+  // stopped session of this host while away resumes it (journaled `resume`). Both twins.
+  // Optional: without it a new ask away answers needs_leader {why:'daemon_needs_upgrade'}.
+  'replica-start-v1',
+  // 'replica-logs-v1' (replica-logs-core.ts, docs/plan/walnut-replica-servers-impl.md
+  // WP14): `logs.tail {home, sources, n, match?}` answers the newest lines of the
+  // structured log of the replica this daemon runs for `home` ('replica'), its stdout
+  // log ('stdout'), and this daemon's own journal lines for `home` ('journal'). A
+  // trusted leader socket whose leader.configure named `home` only; never a path from
+  // the request; at most 2000 lines per source. The supervisor also caps a running
+  // server's stdout log by size (host-server-core.ts capLog). Both twins (the core is
+  // text-injected), not bridge-reachable, not for followers. Optional: without it
+  // `walnut-logs.sh replica --host` shows the Mac's own lines only.
+  'replica-logs-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

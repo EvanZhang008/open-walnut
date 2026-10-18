@@ -110,6 +110,12 @@ export interface HostServerDeps {
   baseEnv: () => Record<string, string>
   /** A fresh secret (hex). */
   randomToken: () => string
+  /**
+   * The stdout log's size cap (default 20 MB; WP14). Checked at every start and,
+   * while the server runs, every few seconds: over it, the log is copied to
+   * `<log>.1` and emptied in place (the server appends, so it writes on at 0).
+   */
+  maxLogBytes?: number
 }
 
 export function createHostServerSupervisor(deps: HostServerDeps) {
@@ -119,7 +125,9 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
   const STEADY_MS = 10 * 60_000
   const POLL_MS = 5_000
   const KILL_AFTER_MS = 10_000
-  const MAX_LOG_BYTES = 20 * 1024 * 1024
+  const MAX_LOG_BYTES = typeof deps.maxLogBytes === 'number' && deps.maxLogBytes > 0 ? deps.maxLogBytes : 20 * 1024 * 1024
+  /** How often a running server's log size is looked at. */
+  const LOG_CHECK_MS = 5_000
   const MAX_SETTINGS_CHARS = 64 * 1024
   const MAX_REPORT_CHARS = 16 * 1024
   const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -152,6 +160,8 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     exitTimes: number[]
     fallback?: { since: number; until: number; lastError?: string }
     backTimer?: unknown
+    /** The running server's log size check (WP14). */
+    logPoll?: unknown
   }
   const entries = new Map<string, Entry>()
 
@@ -258,6 +268,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
   function clearTimers(e: Entry): void {
     if (e.timer) { deps.clearTimer(e.timer); e.timer = undefined }
     if (e.poll) { deps.clearTimer(e.poll); e.poll = undefined }
+    if (e.logPoll) { deps.clearTimer(e.logPoll); e.logPoll = undefined }
   }
 
   function openLog(file: string): number {
@@ -266,6 +277,40 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
       if (fs.statSync(file).size > MAX_LOG_BYTES) fs.renameSync(file, `${file}.1`)
     } catch { /* no log yet */ }
     return fs.openSync(file, 'a', 0o600)
+  }
+
+  /**
+   * The log of a server that runs, kept under its cap (WP14): the server holds
+   * the file open for appending, so a rename would leave it writing to `.1`.
+   * The bytes are copied to `<log>.1` and the file emptied in place instead;
+   * lines written between the copy and the truncate are lost (a few at most).
+   */
+  function capLog(e: Entry): void {
+    const file = e.spec.log
+    let size = 0
+    try {
+      const st = fs.lstatSync(file)
+      if (!st.isFile()) return
+      size = st.size
+    } catch { return }
+    if (size <= MAX_LOG_BYTES) return
+    try {
+      fs.copyFileSync(file, `${file}.1`)
+      fs.truncateSync(file, 0)
+      deps.log('info', 'host server: log capped', { home: e.spec.home, bytes: size, maxBytes: MAX_LOG_BYTES, kept: `${file}.1` })
+    } catch (err) {
+      deps.log('warn', 'host server: log not capped', { home: e.spec.home, bytes: size, error: (err as Error).message })
+    }
+  }
+
+  function watchLog(e: Entry, gen: number): void {
+    if (e.logPoll) deps.clearTimer(e.logPoll)
+    e.logPoll = deps.setTimer(() => {
+      e.logPoll = undefined
+      if (gen !== e.gen || e.state !== 'running') return
+      capLog(e)
+      watchLog(e, gen)
+    }, LOG_CHECK_MS)
   }
 
   function ours(e: Entry): boolean {
@@ -277,6 +322,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
   function exited(e: Entry, gen: number, code: number | null, signal: string | null, error?: string): void {
     if (gen !== e.gen) return
     if (e.poll) { deps.clearTimer(e.poll); e.poll = undefined }
+    if (e.logPoll) { deps.clearTimer(e.logPoll); e.logPoll = undefined }
     const ranMs = e.startedAt ? deps.now() - e.startedAt : 0
     e.lastExit = { code, signal, at: deps.now() }
     if (error) e.lastError = error
@@ -353,6 +399,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     e.lastError = undefined
     try { writeAtomic(pidFile(e.spec.home), JSON.stringify({ pid: e.pid, startTime: e.startTime })) } catch { /* adoption only */ }
     setState(e, 'running')
+    watchLog(e, gen)
     deps.log('info', 'host server: started', { home: e.spec.home, pid: e.pid, port: e.spec.port, ...(e.spec.fallback ? { program: e.program } : {}) })
   }
 
@@ -475,6 +522,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
         setState(e, 'running')
         deps.log('info', 'host server: adopted', { home: spec.home, pid })
         watch(e, e.gen)
+        watchLog(e, e.gen)
       } else {
         start(e)
       }
@@ -495,6 +543,11 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     },
     /** The settings the leader gave the server for `home`. */
     settingsOf: (home: string): Record<string, unknown> => entries.get(home)?.spec.settings ?? {},
+    /** The program the leader configured for `home` (its node and `<appDir>/dist/cli.js`), or null: an ask's MCP mount (host-start-core.ts). */
+    programOf: (home: string): { command: string; args: string[] } | null => {
+      const e = entries.get(home)
+      return e ? { command: e.spec.command, args: [...e.spec.args] } : null
+    },
     /** The server says how it is (kept in memory only). False when too large or unknown. */
     report: (home: string, body: unknown): boolean => {
       const e = entries.get(home)
@@ -515,6 +568,21 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
         }
       }
       return out
+    },
+    /**
+     * Where the server for `home` writes its logs (logs.tail, WP14): its stdout
+     * log and its own run dir (WALNUT_DAEMON_DIR of its spec and of its
+     * fallback), absolute paths only; null when this Walnut runs nothing here.
+     */
+    logsOf: (home: string): { stdout: string; dirs: string[] } | null => {
+      const e = entries.get(home)
+      if (!e) return null
+      const dirs: string[] = []
+      for (const env of [e.spec.env, e.spec.fallback?.env]) {
+        const dir = env?.WALNUT_DAEMON_DIR
+        if (typeof dir === 'string' && dir.startsWith('/') && dirs.indexOf(dir) === -1) dirs.push(dir)
+      }
+      return { stdout: e.spec.log, dirs }
     },
   }
 }

@@ -487,7 +487,14 @@ async function bootMac(script: string, file: string, env: Record<string, string>
   })
 }
 
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp }): Promise<ReplicaCluster> {
+/**
+ * `seedMac` (WP14, the scale test): writes the Mac's data before the Mac boots (its
+ * stores at `macData`, under the Mac's env), e.g. thousands of rows through the real
+ * stores. Runs once, after the host daemon started and before the Mac server.
+ */
+export type SeedMac = (o: { base: string; macData: string; env: Record<string, string> }) => void | Promise<void>
+
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; seedMac?: SeedMac }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
@@ -611,6 +618,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp }
       ...(app === 'built' ? { WALNUT_WEB_STATIC_DIR: path.join(ROOT, 'dist', 'web', 'static') } : {}),
       ...windowEnv(), NODE_ENV: 'production',
     }
+    if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
     mac = await bootMac(macBoot({ macData: d.macData, daemonPort: hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built' }), macBootFile, macEnv, macLog)
     // The server mac-boot runs (tsx's child): its command line runs that file.
     macPin = pin('mac', mac.pid, (c) => c.startsWith(`${process.execPath} `) && c.includes(macBootFile))

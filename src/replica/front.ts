@@ -219,7 +219,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     changed: (p) => {
       last = p
       setLeaderPresence(p.answers, p.why)
-      log.web.info('replica: presence', { answers: p.answers, why: p.why, asOf: p.asOf, host: env.label, home: env.leaderHome })
+      log.web.info('replica presence', { answers: p.answers, why: p.why, asOf: p.asOf, host: env.label, hostKey: env.hostKey ?? null, home: env.leaderHome })
     },
     told: (t) => {
       const ev = presenceEventOf(t)
@@ -294,6 +294,8 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       expose: expose.status(),
       deviceCopy: opts.devices.hash(),
       forwards: dispatcher.counts(),
+      // The host's journal as its daemon says it (follower.status): the Mac's /api/replicas/status shows it.
+      journal: (view?.view as { journal?: unknown } | undefined)?.journal ?? null,
     }
   }
 

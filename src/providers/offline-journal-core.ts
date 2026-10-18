@@ -309,7 +309,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
   }
 
   /** Take the per-home writer lock; the returned function releases it. Throws a refusal. */
-  function lock(key: string): () => void {
+  function lock(key: string, home?: string): () => void {
     const file = fileOf(key, 'lock')
     // This hold's own nonce after the pid and start time (older daemons read the first two).
     const token = `${ownToken()} ${deps.randomHex(6)}`
@@ -354,7 +354,11 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
           raw = ''
         }
         // Not removed (a live lock put back, or a dir that refuses the rename): wait as for a live holder.
-        if (staleLock(file, raw) && breakStaleLock(file, judged, raw)) continue
+        if (staleLock(file, raw) && breakStaleLock(file, judged, raw)) {
+          // Section 13 observability: who held it (the token's pid and start time).
+          deps.log('warn', 'journal lock', { home: home ?? null, key, owner: raw.split(' ').slice(0, 2).join(' '), outcome: 'stale-broken' })
+          continue
+        }
         // One hold of the lock: its file (a new hold is a new file) and the holder's token.
         let holder = ''
         try {
@@ -364,7 +368,10 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
         const known = wedged.get(key)
         const stuck = !!holder && !!known && known.token === holder && Date.now() < known.until
         if (stuck || Date.now() > deadline) {
-          if (holder && !stuck) wedged.set(key, { token: holder, until: Date.now() + 10_000 })
+          if (holder && !stuck) {
+            wedged.set(key, { token: holder, until: Date.now() + 10_000 })
+            deps.log('warn', 'journal lock', { home: home ?? null, key, owner: raw.split(' ').slice(0, 2).join(' '), outcome: 'refused', waitedMs: LOCK_WAIT_MS })
+          }
           throw refuse('journal_unwritable', 'another process holds this journal', { why: 'locked' })
         }
         sleep(2)
@@ -619,7 +626,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
   function locked<T>(home: string, fn: (j: HomeJournal) => T): T {
     const j = journalOf(home)
     ensureDir()
-    const release = lock(j.key)
+    const release = lock(j.key, j.home)
     try {
       readTail(j, true)
       // A state.json not read yet is read in full, or nothing runs (a refusal for this home).
@@ -1740,6 +1747,11 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     append: on(append), appendNote: on(appendNote), drain: on(drain), ack: on(ack), records: on(records), pending: on(pending),
     drainableCount: on(drainableCount), drainableRecords: on(drainableRecords), stats: on(stats), state: on(state), persist: on(persist),
     markDirty: on(markDirty), readBlob, migrateV1: on(migrateV1), migrateSlices: on(migrateSlices),
+    /** A whole note body by its sha256 (the offline host's read overlay, WP11), or null. */
+    blobBody: (sha: unknown): Buffer | null => {
+      if (typeof sha !== 'string' || !SHA_RE.test(sha)) return null
+      try { return fs.readFileSync(path.join(blobDir(), sha)) } catch { return null }
+    },
     compact: on(compact), close, byOpId: on(byOpId), sweepBlobs: on(sweepBlobs),
     /** A body stored on its own (no record names it yet: the hour-old orphan sweep may take it). */
     putBlob: on((home: string, body: Uint8Array): { ok: true; sha: string } | JournalRefusal => {

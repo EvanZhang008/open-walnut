@@ -1390,8 +1390,14 @@ Safe check on the real dev box (never the user's prod data, never port 3456, nev
 2. `npm run dev:ephemeral` on the Mac with `WALNUT_EPHEMERAL_REMOTE_HOSTS=1` and a host entry that points
    at the isolated daemon's dir. An ephemeral server is `isReadOnlyRemote` for every non-local host (C10),
    so WP14 adds a narrow opt-in `WALNUT_EPHEMERAL_REPLICA_HOST=<alias>` that lifts `isReadOnlyRemote`
-   ONLY for that host and ONLY when its configured daemon dir is not the prod dir (refused otherwise,
-   with a test).
+   ONLY for that host and ONLY when its daemon dir is not the prod dir (refused otherwise,
+   with a test). A host entry names no daemon dir (the connection probes for one), so the isolated
+   dir is given beside the alias: `WALNUT_EPHEMERAL_REPLICA_DIR=<abs dir>`, refused when it is
+   `/tmp/open-walnut`, `~/.cache/open-walnut`, `~/.open-walnut` or inside one; the lifted host
+   uses that dir and its own streams dir (`src/providers/ephemeral-replica-host.ts`). The lift is also
+   refused for the companion's box (it comes through its tunnel, not ssh) and unless step 3's
+   `WALNUT_HOST_SERVER_ROOT` is set to a root other than `~/.open-walnut-host`; a lifted host never
+   probes or updates the box's service daemon.
 3. The ephemeral Walnut has its own home, so the copies, journal, leader book and host server live under a
    different home key (`src/providers/host-server-core.ts:130`); its host-server manager installs to
    `WALNUT_HOST_SERVER_ROOT=~/.open-walnut-host-eph` (WP2 knob). Verify with `follower.status` that the

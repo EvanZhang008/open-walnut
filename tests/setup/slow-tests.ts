@@ -62,6 +62,10 @@ export const SLOW_TEST_FILES = [
   'tests/integration/replica-front-twins.test.ts', // ~4 min: both daemon twins supervise a real `web --replica` (tsx), a 6s quiet window, a crash loop to the fallback
   'tests/integration/journal-v2-twins.test.ts', // ~3 min: both daemon twins as processes, SIGKILL and reboot, a 1fe1fd194 daemon, 1,000 appends, a 30s quiet window
   'tests/integration/replica-local-routes-twins.test.ts', // both daemon twins as processes, the real startServer as their host replica, a 13 MB copy
+  'tests/integration/note-journal-twins.test.ts', // both daemon twins as processes, a follower and a session saving one note, 120 autosaves, a drain (WP11)
+  'tests/core/offline-merge/notes-property.test.ts', // ~90s: 1,000 seeded runs, three drain orders each, every one in a fresh temp vault (WP11)
+  'tests/core/offline-merge/notes.test.ts', // ~3s: two 1 MB merges in a worker thread under the stall recorder, one waits out the 2 s deadline (WP11)
+  'tests/integration/replica-ask-twins.test.ts', // both daemon twins as processes, mock CLIs spawned from the spawn template, a resume, ten asks an hour
   'tests/providers/follower-owner-scope-twins.test.ts', // both daemon twins as processes, two Walnuts and mock CLIs (WP6 owner scope)
   'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
   'tests/utils/file-lock-multiprocess.test.ts', // ~1.5s idle, 3s+ under load: four real locker processes
@@ -135,6 +139,8 @@ export const SLOW_TEST_FILES = [
   'tests/core/replication/sessions-scale.test.ts',
   // A real `sleep` child whose pid the copied rows name (it must survive every process path).
   'tests/core/sessions/replica-process-guard.test.ts',
+  // WP14: logs.tail and the running log cap on both daemon twins as processes (~30s).
+  'tests/integration/replica-logs-twins.test.ts',
 ] as const
 
 /**

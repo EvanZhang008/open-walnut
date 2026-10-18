@@ -183,6 +183,17 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   }
   const resumed = resumesToRescue.get(conn.hostKey);
   resumesToRescue.delete(conn.hostKey);
+  // Asks the host started while this Mac was away (WP12): adopted by the drain, attached now.
+  const { adoptedSessions } = await import('./offline-merge/apply-session.js');
+  const adopted = adoptedSessions.get(conn.hostKey);
+  adoptedSessions.delete(conn.hostKey);
+  if (adopted?.size) {
+    try {
+      await conn.rescue?.([...adopted]);
+    } catch (err) {
+      log.session.warn('offline handover: could not look at the asks the host started', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
   if (resumed && resumed.size > 0) {
     try {
       await conn.rescue?.([...resumed]);
@@ -192,13 +203,21 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
     }
   }
   if (result.records > 0) {
-    log.session.info('offline handover: done', { host: conn.hostKey, ...result });
+    // Section 13 observability: one line per drain, with what it applied, merged and lettered.
+    const conflicts = batch.conflicts.entries;
+    log.session.info('journal drain', {
+      host: conn.hostKey, drainId: batch.conflicts.drainId, ...result,
+      applied: result.replayed + result.imported + result.settled,
+      merged: new Set(conflicts.map((e) => e.seq)).size,
+      conflicts: conflicts.length,
+    });
     // The replicas' copies go again now: a host replica lets an "awaiting copy" mark go
     // once a manifest from after the ack stored the key, and a write that changed no row
     // (a duplicate create, a refused one) brings no round of its own.
     void (async () => {
       (await import('./replication/task-replica.js')).resendTaskReplicaSoon();
       (await import('./replication/kinds/copy-kind.js')).resendCopyKindsSoon();
+      if (batch.notesAcked) (await import('../providers/daemon-connection.js')).getConnectedDaemonConnection(conn.hostKey)?.pushHostReplica();
     })().catch((err) => log.session.warn('offline handover: could not send the copies again', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) }));
   }
   return result;
@@ -234,6 +253,11 @@ async function drainRounds(
       // `now`: this server's clock after it applied them, so a host replica can tell a copy
       // manifest built after this ack from one built before it (replica/overlay.ts).
       if (acked.length) await conn.send('offline.ack', { home: WALNUT_HOME, seqs: acked, now: Date.now() }, RPC_TIMEOUT_MS);
+      // WP11: the host holds an acked note until a copy round from after the ack: send its notes again.
+      if (records.some((r) => (r.kind as string) === 'note' && acked.includes(r.seq))) {
+        (await import('./host-replica.js')).noteRecordsAcked(conn.hostKey);
+        batch.notesAcked = true;
+      }
     } else {
       // An old daemon acks by watermark: only the prefix before the first record that waits.
       let upTo = 0;
@@ -261,6 +285,8 @@ interface Batch {
   offset: number;
   /** A record waits for its backoff: drain again after this many ms. */
   retryIn: number | null;
+  /** Note records were acked (WP11): the host's notes copy goes again after the drain. */
+  notesAcked?: boolean;
 }
 
 /** v1 kinds keep their meaning; v2 kinds the Mac applies are APPLIED_V2_KINDS. */
@@ -273,7 +299,8 @@ const failing = new Map<string, { count: number; nextAt: number; reason: string 
  * Records whose letter entry could not be written (a full disk), by the same key: they back
  * off like a failed apply, and once the steps are spent the record is acked with its entry
  * kept in that drain's letter only (HEAD acked them), so the host's gateway is not held
- * offline for as long as the disk stays full.
+ * offline for as long as the disk stays full. A note record is the exception: its text
+ * exists only on the host until the ack, so it waits at the last step until the log takes it.
  */
 const letterFailing = new Map<string, { count: number; nextAt: number }>();
 /** Hosts whose conflict log write failure was logged as an error (once, until a write works). */
@@ -367,14 +394,24 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
     batch.retryIn = Math.min(batch.retryIn ?? Infinity, letterWait.nextAt - Date.now());
     return 'stop';
   }
+  /** A note record's bodies, read from the host once per take (noteBodies). */
+  let bodies: Promise<NoteBodies | null> | undefined;
   /**
    * A letter entry for this record, durable BEFORE the ledger row or the ack that would
    * let a redrain skip it (offline-merge/conflict-log.ts addDurable). False: the log could
    * not be written, nothing is recorded, and the record waits for its backoff
-   * (letterNotWritten; true once the steps are spent, the entry kept in memory).
+   * (letterNotWritten; true once the steps are spent, the entry kept in memory). A note
+   * record's entry carries its bodies in full (the host frees them at the ack); false
+   * when they cannot be read from the host.
    */
-  const letter = (kind: import('./offline-merge/conflict-log.js').ConflictKind, reason: string): boolean => {
-    const entry = { kind, seq: record.seq, ...(opId ? { opId } : {}), recordKind: record.kind, ...(taskId ? { taskId } : {}), reason, record, ...(actor ? { actor } : {}) };
+  const letter = async (kind: import('./offline-merge/conflict-log.js').ConflictKind, reason: string): Promise<boolean> => {
+    let attached: NoteBodies | null = {};
+    if (isNoteRecord(record)) {
+      bodies ??= noteBodies(batch, record);
+      attached = await bodies;
+      if (!attached) return false;
+    }
+    const entry = { kind, seq: record.seq, ...(opId ? { opId } : {}), recordKind: record.kind, ...(taskId ? { taskId } : {}), reason, record, ...(actor ? { actor } : {}), ...attached };
     try {
       batch.conflicts.addDurable([entry]);
       letterFailing.delete(retryKey);
@@ -389,8 +426,9 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
   // task's earlier records.
   const early = key ? lookupJournaled(key) : null;
   if (early) return ledgerHit(batch, record, early, { retryKey, taskId, callerSid, opName, letter });
-  if (taskId && batch.givenUp.has(taskId)) {
-    if (!letter('given-up', 'an earlier change to this task could not be applied, so this later one was not applied either')) return 'stop';
+  if (giveUpKeys(record, taskId).some((k) => batch.givenUp.has(k))) {
+    const what = isNoteRecord(record) ? 'note' : 'task';
+    if (!(await letter('given-up', `an earlier change to this ${what} could not be applied, so this later one was not applied either`))) return 'stop';
     if (key) recordApplied(key, { outcome: 'given-up', detail: 'earlier record of the task given up', source: 'drain' });
     batch.result.failed++;
     return 'ack';
@@ -403,7 +441,7 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
       log.session.info('offline handover: a device removed while away was already gone', { host, seq: (record as { seq?: number }).seq, opId, deviceId: actor.deviceId });
       return 'ack';
     }
-    if (!letter('actor-dropped', `${actor.name ?? actor.deviceId} is no longer paired with this Mac`)) return 'stop';
+    if (!(await letter('actor-dropped', `${actor.name ?? actor.deviceId} is no longer paired with this Mac`))) return 'stop';
     if (key) recordApplied(key, { outcome: 'refused', detail: 'device no longer paired', source: 'drain' });
     batch.result.skipped++;
     log.session.warn('offline handover: a change from a device no longer paired is dropped', { host, seq: record.seq, opId, deviceId: actor.deviceId });
@@ -453,6 +491,15 @@ function letterNotWritten(
   const host = batch.conn.hostKey;
   const error = err instanceof Error ? err.message : String(err);
   const count = (letterFailing.get(retryKey)?.count ?? 0) + 1;
+  if (count > retryBackoffMs.length && isNoteRecord(record)) {
+    // A note's text lives only on the host until the ack frees it: an entry kept in this
+    // process alone would be gone with it. The record waits at the last step instead.
+    const wait = retryBackoffMs[retryBackoffMs.length - 1] ?? RESERVED_RETRY_MS;
+    letterFailing.set(retryKey, { count: retryBackoffMs.length, nextAt: Date.now() + wait });
+    batch.retryIn = Math.min(batch.retryIn ?? Infinity, wait);
+    log.session.warn('offline handover: a note change waits on the host until the conflict log can be written', { host, seq: record.seq, opId: entry.opId, retryInMs: wait, error });
+    return false;
+  }
   if (count > retryBackoffMs.length) {
     letterFailing.delete(retryKey);
     batch.conflicts.addMemoryOnly(entry);
@@ -476,7 +523,79 @@ interface TakeState {
   taskId: string | undefined;
   callerSid: string | undefined;
   opName: string;
-  letter: (kind: import('./offline-merge/conflict-log.js').ConflictKind, reason: string) => boolean;
+  letter: (kind: import('./offline-merge/conflict-log.js').ConflictKind, reason: string) => Promise<boolean>;
+}
+
+/** A note record's texts for its letter entry: the base it was made on and the save itself. */
+type NoteBodies = { notePath?: string; base?: string; replica?: string; bodiesLost?: true };
+
+function isNoteRecord(record: OfflineRecord): boolean {
+  return (record.kind as string) === 'note';
+}
+
+/**
+ * What a give-up of this record gives up with it: its task, or for a note record its
+ * path and id, so a later save of that note never merges onto a base that went into the
+ * letter (a note record names no task).
+ */
+function giveUpKeys(record: OfflineRecord, taskId: string | undefined): string[] {
+  if (!isNoteRecord(record)) return taskId ? [taskId] : [];
+  const r = record as { path?: unknown; noteId?: unknown };
+  return [
+    ...(typeof r.path === 'string' && r.path ? [`note:${r.path}`] : []),
+    ...(typeof r.noteId === 'string' && r.noteId ? [`note-id:${r.noteId}`] : []),
+  ];
+}
+
+/**
+ * The texts of a note record acked without being applied (given up, refused, dropped):
+ * the daemon frees a record's bodies at its ack (offline-journal-core.ts), so the letter
+ * entry carries them in full ("the change is attached"). Null when the host cannot hand
+ * one over: the record is not acked and waits for a later drain.
+ */
+async function noteBodies(batch: Batch, record: OfflineRecord): Promise<NoteBodies | null> {
+  const r = record as { path?: unknown; baseBlob?: unknown; oursBlob?: unknown; seq: number; opId?: unknown };
+  const { fetchOfflineBlob } = await import('./offline-merge/blob.js');
+  const text = async (sha: unknown): Promise<string | undefined> =>
+    typeof sha === 'string' && sha ? (await fetchOfflineBlob(batch.conn, sha, RPC_TIMEOUT_MS)).toString('utf8') : undefined;
+  /** One body; `lost` when the host answers that it does not hold it (the other may still be there). */
+  const each = async (sha: unknown): Promise<string | undefined | 'lost'> => {
+    try { return await text(sha) } catch (err) { if ((err as { code?: unknown }).code === 'not_found') return 'lost'; throw err }
+  };
+  try {
+    const base = await each(r.baseBlob);
+    const replica = await each(r.oursBlob);
+    // The away text is what the letter is for: a lost base never costs it.
+    if (replica !== 'lost' || base !== 'lost') {
+      if (replica === 'lost' || base === 'lost') {
+        log.session.warn('offline handover: a note change that was not applied lost one of its texts on the host; lettered with the other', {
+          host: batch.conn.hostKey, seq: r.seq, opId: typeof r.opId === 'string' ? r.opId : undefined, lost: replica === 'lost' ? 'replica' : 'base',
+        });
+      }
+      return {
+        ...(typeof r.path === 'string' && r.path ? { notePath: r.path } : {}),
+        ...(base !== undefined && base !== 'lost' ? { base } : {}), ...(replica !== undefined && replica !== 'lost' ? { replica } : {}),
+        ...(replica === 'lost' ? { bodiesLost: true as const } : {}),
+      };
+    }
+    throw Object.assign(new Error('offline.blob: not on the host'), { code: 'not_found' });
+  } catch (err) {
+    // The host answered that it does not hold the body (cleaned up, a damaged journal): no
+    // later take reads it either, and waiting would hold every later record of the host. The
+    // letter says the text is gone; the record is acked.
+    if ((err as { code?: unknown }).code === 'not_found') {
+      log.session.warn('offline handover: a note change that was not applied has no text left on the host; lettered without it', {
+        host: batch.conn.hostKey, seq: r.seq, opId: typeof r.opId === 'string' ? r.opId : undefined,
+      });
+      return { ...(typeof r.path === 'string' && r.path ? { notePath: r.path } : {}), bodiesLost: true };
+    }
+    const wait = retryBackoffMs[retryBackoffMs.length - 1] ?? RESERVED_RETRY_MS;
+    batch.retryIn = Math.min(batch.retryIn ?? Infinity, wait);
+    log.session.warn('offline handover: a note change that was not applied waits on the host: its text could not be read for the letter', {
+      host: batch.conn.hostKey, seq: r.seq, opId: typeof r.opId === 'string' ? r.opId : undefined, retryInMs: wait, error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 /**
@@ -485,20 +604,23 @@ interface TakeState {
  * the replica answered 504, the client retried and the replica journaled it), is the
  * user's change that did not land: it is lettered with the Mac's answer, never dropped.
  */
-function ledgerHit(
+async function ledgerHit(
   batch: Batch, record: OfflineRecord, hit: import('./offline-merge/ledger.js').LedgerEntry, st: TakeState,
-): 'ack' | 'stop' {
+): Promise<'ack' | 'stop'> {
   const host = batch.conn.hostKey;
   const opId = recordOpId(record);
   if ((hit.outcome === 'refused' || hit.outcome === 'given-up') && hit.source !== 'drain') {
     const answer = hit.detail ?? (hit.body ? hit.body.slice(0, 500) : '');
     const reason = `the Mac refused this write when it first reached it${hit.status ? ` (HTTP ${hit.status})` : ''}${answer ? `: ${answer}` : ''}`;
-    if (!st.letter('refused', reason)) return 'stop';
+    if (!(await st.letter('refused', reason))) return 'stop';
     batch.result.failed++;
     if (st.callerSid) batch.unapplied.push({ callerSid: st.callerSid, op: st.opName, taskId: st.taskId ?? '', reason });
     log.session.warn('offline handover: a journaled retry of a write the Mac refused is lettered', { host, seq: record.seq, opId, status: hit.status });
   } else {
-    if ((record.kind as string) === 'task-create' && hit.source !== 'drain' && createdAs(batch, record, hit, st) === 'stop') return 'stop';
+    // Given up by an earlier drain whose ack was lost: the later records of the same task or
+    // note in this handover are given up with it, as on that drain.
+    if (hit.outcome === 'given-up') for (const k of giveUpKeys(record, st.taskId)) batch.givenUp.add(k);
+    if ((record.kind as string) === 'task-create' && hit.source !== 'drain' && (await createdAs(batch, record, hit, st)) === 'stop') return 'stop';
     batch.result.skipped++;
     log.session.info('offline handover: record already applied (ledger)', { host, seq: record.seq, opId });
   }
@@ -514,9 +636,9 @@ function ledgerHit(
  * way a collision re-mint is, so those records follow it. An answer that was not kept
  * (too large) cannot be followed: it is lettered, never acked in silence.
  */
-function createdAs(
+async function createdAs(
   batch: Batch, record: OfflineRecord, hit: import('./offline-merge/ledger.js').LedgerEntry, st: TakeState,
-): 'ok' | 'stop' {
+): Promise<'ok' | 'stop'> {
   const host = batch.conn.hostKey;
   const minted = String((record as { taskId?: unknown }).taskId ?? '');
   if (!minted) return 'ok';
@@ -528,7 +650,7 @@ function createdAs(
   } catch { created = undefined; }
   if (created === undefined) {
     const reason = `the Mac created this task when the write first reached it, under an id it did not keep; changes made while away to ${minted} after it may be missing`;
-    return st.letter('create-collision', reason) ? 'ok' : 'stop';
+    return (await st.letter('create-collision', reason)) ? 'ok' : 'stop';
   }
   if (created === minted) return 'ok';
   try {
@@ -572,7 +694,7 @@ async function applyTaken(
       // judges "a newer edit" against the task as it was before this drain wrote to it:
       // this record was queued before that one, so its write is never the newer edit.
       if (taskId && !batch.baseline.has(taskId)) await keepBaseline(batch.baseline, taskId);
-      await applyV2({ hostKey: host, at: record.at + batch.offset, offset: batch.offset, conflicts: batch.conflicts, remap: batch.remap, result: batch.result }, record as unknown as V2Record);
+      await applyV2({ hostKey: host, at: record.at + batch.offset, offset: batch.offset, conflicts: batch.conflicts, remap: batch.remap, result: batch.result, conn: batch.conn }, record as unknown as V2Record);
     }
     // Every entry the apply wrote is on disk already (addDurable); this is the round's no-op.
     batch.conflicts.flush();
@@ -593,7 +715,7 @@ async function applyTaken(
     return 'ack';
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    if (err instanceof RefusedWrite && letter((record.kind as string) === 'board' || (record.kind === 'op' && record.op.startsWith('board_')) ? 'board' : 'refused', reason)) {
+    if (err instanceof RefusedWrite && await letter((record.kind as string) === 'board' || (record.kind === 'op' && record.op.startsWith('board_')) ? 'board' : 'refused', reason)) {
       // The server's own answer to the write, the one the same call made online gets:
       // lettered (on disk first) and acked at once, and the session that made it is told.
       batch.result.failed++;
@@ -613,16 +735,20 @@ async function applyTaken(
       batch.result.failed++;
       // Walnut could not apply its own record: an error named by the session it concerns,
       // so the card retires on that session's next clean turn. Later records wait.
+      // Section 13 observability (a warn: the error line below is the notification center's, unchanged).
+      log.session.warn('drain record failed', { host, seq: record.seq, kind: record.kind, opId, attempt: count, nextRetryMs: wait, error: reason });
       log.session.error('offline handover: record failed', { host, seq: record.seq, kind: record.kind, opId, attempt: count, retryInMs: wait, error: reason, ...await recordScope(record) });
       return 'stop';
     }
-    // Retries spent: given up into the letter with the change attached, and every later
-    // record of the same task with it. A letter that cannot be written keeps the record.
-    if (!letter('given-up', reason)) return 'stop';
+    // Retries spent: given up into the letter with the change attached (a note's texts in
+    // full), and every later record of the same task or note with it. A letter that cannot
+    // be written, or a note text the host cannot hand over, keeps the record.
+    if (!(await letter('given-up', reason))) return 'stop';
     failing.delete(retryKey);
     batch.result.failed++;
-    if (taskId) batch.givenUp.add(taskId);
+    for (const k of giveUpKeys(record, taskId)) batch.givenUp.add(k);
     if (key) recordApplied(key, { outcome: 'given-up', detail: reason, source: 'drain' });
+    log.session.warn('drain record failed', { host, seq: record.seq, kind: record.kind, opId, attempt: count, nextRetryMs: null, givenUp: true, error: reason });
     log.session.error('offline handover: record failed', { host, seq: record.seq, kind: record.kind, error: reason, givenUp: true, ...await recordScope(record) });
     if (callerSid) batch.unapplied.push({ callerSid, op: opName, taskId: taskId ?? '', reason });
     return 'ack';

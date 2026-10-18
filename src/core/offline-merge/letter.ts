@@ -42,6 +42,9 @@ function preview(v: unknown): string {
   return s.length > VALUE_PREVIEW ? `${s.slice(0, VALUE_PREVIEW)}...` : s;
 }
 
+/** A note change lettered after the host had freed its text (offline-handover.ts noteBodies). */
+const LOST = ' Its text was no longer on the host, so it could not be attached.';
+
 const fieldName = (f: string | undefined): string => (f === 'project+group_id' ? 'project and folder' : f ?? 'change');
 
 function itemLine(e: ConflictEntry): string {
@@ -51,13 +54,33 @@ function itemLine(e: ConflictEntry): string {
       return `${fieldName(e.field)}: kept ${kept}. Mac: "${preview(e.mac)}"; while away: "${preview(e.replica)}".`;
     }
     case 'task-deleted': return `the task was deleted on the Mac; a change made while away was dropped (${fieldName(e.field)}: "${preview(e.replica)}").`;
-    case 'refused': return `the Mac refused a change made while away: ${preview(e.reason)}.`;
-    case 'given-up': return `could not apply: ${preview(e.reason)}. The change is attached.`;
+    case 'refused': return `the Mac refused a change made while away: ${preview(e.reason)}.${e.bodiesLost ? LOST : ''}`;
+    case 'given-up': return `could not apply: ${preview(e.reason)}.${e.bodiesLost ? LOST : ' The change is attached.'}`;
     case 'actor-dropped': return `a change from a device that is no longer paired was not applied${e.reason ? ` (${preview(e.reason)})` : ''}.`;
     case 'parent-refused': return `the parent link was not applied: ${preview(e.reason)}.`;
     case 'create-collision': return `a task created while away got a new id (${preview(e.reason)}).`;
     case 'board': return `a Board edit conflicted; the Mac's page was kept: ${preview(e.reason)}.`;
+    case 'note': return noteLine(e);
   }
+}
+
+function noteLine(e: ConflictEntry): string {
+  const copy = e.copyPath ? ` The other version is the note [${e.copyPath}](${noteLink(e.copyPath)}).` : '';
+  switch (e.why) {
+    case 'conflict': return `both sides changed the same lines; the newer change is in the note.${copy}`;
+    case 'over-budget': case 'deadline': return `the note was too large to merge line by line; the newer version is the note.${copy}`;
+    case 'mac-deleted': return `the note was deleted on the Mac, so the change made while away was kept as a copy.${copy}`;
+    case 'create-exists': return `a note made while away has the path of a note on the Mac; the Mac's note stays.${copy}`;
+    case 'create-both': return `two notes were made at this path while away; the newer one is the note.${copy}`;
+    case 'delete-kept': return 'the note was deleted while away but edited since; it was kept.';
+    case 'restored': return 'the note was deleted while away and also edited; the edit won and the note is back.';
+    default: return `${preview(e.reason)}.${copy}`;
+  }
+}
+
+/** A note in the console (the Notes page opens it by its vault path, `/notes?path=`). */
+export function noteLink(rel: string): string {
+  return `/notes?path=${encodeURIComponent(rel)}`;
 }
 
 /** The letter for a log, or null when the log holds nothing that needs the user. */
@@ -73,7 +96,8 @@ export function buildConflictLetter(file: ConflictLogFile): ConflictLetter | nul
   for (let i = 0; i < n; i++) {
     const e = file.entries[i];
     const entryLink = conflictEntryLink(file.drainId, i);
-    const target = e.taskId ? `[task ${e.taskId}](${taskLink(e.taskId)})` : e.boardTaskId ? `[Board of ${e.boardTaskId}](${taskLink(e.boardTaskId)})` : 'a change';
+    const target = e.taskId ? `[task ${e.taskId}](${taskLink(e.taskId)})` : e.boardTaskId ? `[Board of ${e.boardTaskId}](${taskLink(e.boardTaskId)})`
+      : e.notePath ? `[note ${e.notePath}](${noteLink(e.notePath)})` : 'a change';
     const line = `- ${target}: ${itemLine(e)} [Full entry](${entryLink})\n`;
     if (Buffer.byteLength(body) + Buffer.byteLength(line) > LETTER_BODY_MAX - 200) break;
     body += line;

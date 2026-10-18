@@ -109,8 +109,12 @@ export interface ReplicaWrite {
   raw: Buffer
   /** `follower.op {op, args, opId, base?, actor?}` (write-port.ts builds each part). */
   submit(op: string, args: Record<string, unknown>, base?: unknown, actor?: object): Promise<ReplicaWriteResult>
-  /** Another follower write command (`follower.send`, `follower.permission`), with the same retry and forward rules. */
-  call(cmd: string, params: Record<string, unknown>): Promise<ReplicaWriteResult>
+  /**
+   * Another follower write command (`follower.send`, `follower.permission`, `follower.start`),
+   * with the same retry and forward rules. `timeoutMs`: each try's wait, for a command that
+   * takes longer than a journal write (a CLI start).
+   */
+  call(cmd: string, params: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<ReplicaWriteResult>
 }
 
 declare module 'node:http' {
@@ -322,8 +326,23 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     let sent = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const finish = () => { flight.done = true; flights.delete(flight); if (timer) clearTimeout(timer) }
+    // One line per forward, by outcome (section 13 observability; walnut-logs.sh replica).
+    const startedAt = now()
+    let told = false
+    const tell = (outcome: string, extra?: Record<string, unknown>): void => {
+      if (told) return
+      told = true
+      const length = Number(res.getHeader('content-length'))
+      deps.log('info', 'replica forward', {
+        outcome, to: route.kind, method: req.method, path: pathOf(req), write, status: res.statusCode, ms: now() - startedAt,
+        bytes: (body?.length ?? 0) + (Number.isFinite(length) ? length : 0),
+        ...(write ? { opId: req.headers[OP_ID_HEADER] } : {}), ...extra,
+      })
+    }
     res.once('finish', finish)
     res.once('close', finish)
+    res.once('finish', () => tell(flight.flipped ? 'flipped' : 'answered'))
+    res.once('close', () => tell(flight.flipped ? 'flipped' : 'closed'))
     const budget = write ? writeBudgetOf(req, writeBudget) : 0
     const headers: Record<string, string> = write ? { [OP_ID_HEADER]: ensureOpId(req) } : {}
     forwardHttp(req, res, target(route), (err) => {
@@ -331,6 +350,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       finish()
       // A browser that went away is no failure of the target (proxy.ts never calls for it; kept here too).
       if (res.destroyed) return
+      tell(sent ? 'lost' : 'unreachable', { error: err.message })
       onFail(err, sent)
     }, {
       headers,
@@ -351,6 +371,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             finish()
             detach(up)
             deps.log('warn', 'replica: a forwarded write got no answer within its budget', { to: route.kind, opId: req.headers[OP_ID_HEADER], method: req.method, path: pathOf(req), budgetMs: budget })
+            tell('timeout', { budgetMs: budget })
             timedOut(res, true)
           }, budget)
           timer.unref?.()
@@ -397,11 +418,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   function replicaWrite(req: IncomingMessage, res: ServerResponse, away: AwayRule, raw: Buffer): ReplicaWrite {
     const opId = ensureOpId(req)
     /** One follower write command, its answer lost asked again under the same op id. */
-    const run = async (cmd: string, params: Record<string, unknown>, op: string): Promise<ReplicaWriteResult> => {
+    const run = async (cmd: string, params: Record<string, unknown>, op: string, timeoutMs = OP_TIMEOUT_MS): Promise<ReplicaWriteResult> => {
       const send = cmd === 'follower.op'
-        ? (p: Record<string, unknown>) => deps.followerOp!(p, OP_TIMEOUT_MS)
+        ? (p: Record<string, unknown>) => deps.followerOp!(p, timeoutMs)
         : deps.followerCall
-          ? (p: Record<string, unknown>) => deps.followerCall!(cmd, p, OP_TIMEOUT_MS)
+          ? (p: Record<string, unknown>) => deps.followerCall!(cmd, p, timeoutMs)
           : null
       if (!send) { needsLeader(req, res, 'daemon_needs_upgrade'); return { kind: 'answered' } }
       {
@@ -470,7 +491,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     return {
       opId, away, raw,
       submit: (op, args, base, actor) => run('follower.op', { op, args, opId, ...(base === undefined ? {} : { base }), ...(actor ? { actor } : {}) }, op),
-      call: (cmd, params) => run(cmd, { ...params, opId }, cmd),
+      call: (cmd, params, opts) => run(cmd, { ...params, opId }, cmd, opts?.timeoutMs ?? OP_TIMEOUT_MS),
     }
   }
 
@@ -483,6 +504,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   function answerAway(req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void, decision: RouteDecision, why: string): void {
     // A failed forward may have changed what is told: the answer carries the seq it is made under.
     stampPresence(res)
+    // Section 13 observability: what the replica answered itself, and under which row.
+    deps.log('info', 'replica away answer', { route: decision.row?.pattern ?? pathOf(req), path: pathOf(req), method: req.method, cls: decision.cls, away: decision.away, why })
     if (decision.away === 'read') {
       if (deps.answerAlone && isNavigation(req, pathOf(req))) return deps.answerAlone(req, res, why)
       // The auth middleware's 401 to a caller with no token carries no copy age.

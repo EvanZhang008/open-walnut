@@ -84,11 +84,14 @@ describe('classify', () => {
 })
 
 describe('the table itself', () => {
-  it('journals only host-write rows (WP10), each exact; no queue or note-write row before WP11', () => {
+  it('journals only host-write rows (WP10), note-write rows (WP11) and the two new-ask rows (WP12), each exact', () => {
     const journaling = ROUTE_TABLE.filter((r) => journals(r.away))
     expect(journaling.length).toBeGreaterThan(20)
+    // A new Ask Walnut while away (replica/ask-launch.ts): the console's and the phone's launch, POST only.
+    const asks = journaling.filter((r) => r.away === 'queue:ask').map((r) => `${r.method} ${r.pattern}`)
+    expect(asks).toEqual(['POST /api/sessions/quick-start', 'POST /api/v1/sessions'])
     for (const r of journaling) {
-      expect(r.away, r.pattern).toBe('host-write')
+      if (r.away !== 'queue:ask') expect(['host-write', 'note-write'], r.pattern).toContain(r.away)
       expect(r.pattern.includes('*'), r.pattern).toBe(false)
       expect(r.method, r.pattern).not.toBe('WRITE')
     }
@@ -148,9 +151,11 @@ describe('the console\'s own writes away (WP7)', () => {
     for (const [m, p] of [['DELETE', '/api/tasks/t1'], ['POST', '/api/tasks/groups'], ['POST', '/api/tasks/t1/merge'], ['PUT', '/api/tasks/t1/depends-on']]) {
       expect(classify(m, p), `${m} ${p}`).toMatchObject({ cls: 'leader', away: 'needs-leader', why: 'task_writes_need_mac' })
     }
-    for (const [m, p] of [['POST', '/api/sessions/s1/interrupt'], ['PATCH', '/api/sessions/s1'], ['POST', '/api/sessions/quick-start']]) {
+    for (const [m, p] of [['POST', '/api/sessions/s1/interrupt'], ['PATCH', '/api/sessions/s1']]) {
       expect(classify(m, p)).toMatchObject({ away: 'needs-leader', why: 'session_writes_need_mac' })
     }
+    // WP12: a new ask runs on this host (replica/ask-launch.ts); its other launches name why they need the Mac.
+    expect(classify('POST', '/api/sessions/quick-start')).toMatchObject({ cls: 'leader', away: 'queue:ask', why: 'ask_needs_mac' })
     expect(classify('GET', '/api/tasks/t1')).toMatchObject({ away: 'read' })
     expect(classify('GET', '/api/sessions/s1/history')).toMatchObject({ away: 'read' })
     expect(classify('POST', '/api/acme/items').why).toBeUndefined()

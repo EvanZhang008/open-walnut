@@ -58,6 +58,8 @@ import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
+import { createHostStart } from './host-start-core.js'
+import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
@@ -251,6 +253,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
+    ['__CREATE_HOST_START__', createHostStart.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
@@ -275,6 +278,7 @@ export function getDaemonSource(): string {
     ['__LINE_TORN_END__', lineTornEnd.toString()],
     ['__LINE_WRITE_BEGUN__', lineWriteBegun.toString()],
     ['__LINE_WRITE_CUT__', lineWriteCut.toString()],
+    ['__CREATE_REPLICA_LOGS__', createReplicaLogs.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -462,6 +466,25 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const hr = createResume({ fs, path, dir: '/nonexistent', now: () => 0, log: () => {}, modeCli: { plan: 'plan' } })
       const a = hr.resumeArgs(['claude', '--session-id', 's1', '--dangerously-skip-permissions', '--permission-mode', 'default'], 's1', 'plan')
       if (a.join(' ') !== 'claude --allow-dangerously-skip-permissions --permission-mode plan --resume s1') throw new Error('host resume built a wrong command')
+    }
+    // Host start smoke (replica-start-v1): a reconstructed copy with no template must
+    // answer needs_leader no_spawn_template, without touching disk.
+    const createStart = reconstructed['__CREATE_HOST_START__'] as typeof createHostStart | undefined
+    if (createStart) {
+      const noDir = { readFileSync: () => { throw new Error('none') } } as unknown as typeof fs
+      const hs = createStart({ fs: noDir, path, dir: '/nonexistent', keyOf: () => 'k', now: () => 0, log: () => {}, busy: () => 0 })
+      const r = hs.plan('/h', { sid: 'aaaaaaaa-1111-4111-8111-111111111111', taskId: 't' }, 'h')
+      if (r.ok || r.code !== 'needs_leader' || r.detail?.why !== 'no_spawn_template') throw new Error('host start did not build')
+    }
+    // Replica logs smoke (logs.tail, WP14): a reconstructed reader must refuse an
+    // unknown source and read nothing for a Walnut that runs nothing here.
+    const createLogs = reconstructed['__CREATE_REPLICA_LOGS__'] as typeof createReplicaLogs | undefined
+    if (createLogs) {
+      const noDir = { readdirSync: () => { throw new Error('none') } } as unknown as typeof fs
+      const logs = createLogs({ fs: noDir, path, daemonDir: '/nonexistent', logsOf: () => null })
+      const bad = logs.tail('h', ['etc'], 5)
+      const none = logs.tail('h', ['replica', 'journal'], 5)
+      if (bad.ok || !none.ok || none.lines.length !== 0 || none.running) throw new Error('replica logs did not build')
     }
     // Live settings smoke: a reconstructed copy must refuse a value the CLI would ACK and ignore.
     const createLive = reconstructed['__CREATE_LIVE_SETTINGS__'] as typeof createLiveSettings | undefined
@@ -3057,6 +3080,9 @@ var FOLLOWER_ALLOWED_COMMANDS = new Set([
   // Journal v2 (journal-v2, replica-ops-v1): the replica's writes while the Mac is away,
   // and its read of what is pending; each scoped to the follower's own Walnut.
   'follower.op', 'follower.pending',
+  // A new ask while the Mac is away ('replica-start-v1'): the Mac's template, filled
+  // from the follower's validated fields only (host-start-core.ts).
+  'follower.start',
   // Streams to the leader or the companion (stream-relay-v1); where an open may go is streamTarget's call.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
 ]);
@@ -3324,6 +3350,9 @@ function dispatchCommand(ws, id, cmd) {
     case 'follower.permission': return daemonCommands.run(function () { return cmdFollowerPermission(ws, id, cmd); });
     case 'follower.op': return cmdFollowerOp(ws, id, cmd);
     case 'follower.pending': return cmdFollowerPending(ws, id, cmd);
+    // A new ask while the Mac is away ('replica-start-v1', WP12). Twin of daemon-standalone.ts.
+    case 'follower.start': return daemonCommands.run(function () { return cmdFollowerStart(ws, id, cmd); });
+    case 'leader.spawnTemplate': return cmdLeaderSpawnTemplate(ws, id, cmd);
     // Streams between servers through this daemon (stream-relay-v1): frames,
     // never answered by id. Twin of daemon-standalone.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd);
@@ -3418,6 +3447,7 @@ function dispatchCommand(ws, id, cmd) {
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
     });
+    case 'logs.tail': return cmdLogsTail(ws, id, cmd);
     default: return sendError(ws, id, 'unknown command: ' + cmd.cmd);
   }
 }
@@ -4269,7 +4299,22 @@ var hostServers = (__CREATE_HOST_SERVER__)({
     return env;
   },
   randomToken: function () { return crypto.randomBytes(32).toString('hex'); },
+  // The stdout log's cap while the server runs (WP14; tests set a small one). Twin of daemon-standalone.ts.
+  maxLogBytes: Number(process.env.WALNUT_HOST_SERVER_LOG_MAX_BYTES) || undefined,
 });
+
+// logs.tail ('replica-logs-v1', replica-logs-core.ts, inlined; WP14): the Mac reads
+// what its replica on this host and this daemon's journal logged here. A trusted
+// leader socket whose leader.configure named home only. Twin of daemon-standalone.ts.
+var replicaLogs = (__CREATE_REPLICA_LOGS__)({ fs: fs, path: path, daemonDir: DAEMON_DIR, logsOf: function (home) { return hostServers.logsOf(home); } });
+function cmdLogsTail(ws, id, cmd) {
+  if (ws.origin === 'bridge' || ws.origin === 'follower' || ws.origin === 'lane') return sendError(ws, id, 'logs.tail: trusted clients only', { errorKind: 'refused' });
+  var home = typeof cmd.home === 'string' ? cmd.home : '';
+  if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'logs.tail: send leader.configure for this Walnut first', { errorKind: 'not_owner' });
+  var r = replicaLogs.tail(home, cmd.sources, cmd.n, cmd.match);
+  if (!r.ok) return sendError(ws, id, 'logs.tail: ' + r.message, { errorKind: r.code });
+  sendOk(ws, id, r);
+}
 
 // The socket that speaks as the follower of each Walnut. Twin of daemon-standalone.ts.
 var followerSockets = new Map();
@@ -4726,6 +4771,125 @@ function cmdFollowerPending(ws, id, cmd) {
   sendOk(ws, id, offlineHost.pendingFor(home, cmd.sinceSeq));
 }
 
+// A new ask while the Mac is away ('replica-start-v1', host-start-core.ts; WP12). Twin of
+// daemon-standalone.ts hostStart, cmdLeaderSpawnTemplate and cmdFollowerStart.
+var hostStart = (__CREATE_HOST_START__)({
+  fs: fs, path: path,
+  dir: OFFLINE_HOST_DIR,
+  keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
+  now: function () { return Date.now(); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  busy: function () {
+    var n = 0;
+    for (const s of sessions.values()) if (s.state === 'running' && s.foldState && s.foldState.turnActive) n++;
+    return n;
+  },
+});
+
+function cmdLeaderSpawnTemplate(ws, id, cmd) {
+  if (!isServerClient(ws)) return sendError(ws, id, 'leader.spawnTemplate: the leader only');
+  var home = typeof cmd.home === 'string' ? cmd.home : '';
+  if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'leader.spawnTemplate: send leader.configure for this Walnut first');
+  try {
+    var t = hostStart.setTemplate(home, cmd.template);
+    sendOk(ws, id, { builtAt: t.builtAt });
+  } catch (err) {
+    sendError(ws, id, err.message);
+  }
+}
+
+// A follower.start answer: the reply, or the refusal with its kind (a retry gets the same one).
+function sendStartAnswer(ws, id, a, duplicate) {
+  if (a.ok) return sendOk(ws, id, duplicate ? Object.assign({}, a.reply, { duplicate: true }) : a.reply);
+  sendError(ws, id, a.error, a.extra);
+}
+
+function startRefusal(error) {
+  return {
+    ok: false, error: 'follower.start: ' + error.message,
+    extra: Object.assign({ errorKind: error.code }, error.detail !== undefined ? { detail: error.detail } : {}, error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}),
+  };
+}
+
+// The replica's new ask while the Mac is away: every check, then the CLI from the
+// template, then its session record. check: true runs the checks only (the replica
+// journals the ask's task after they pass). Twin of daemon-standalone.ts cmdFollowerStart.
+async function cmdFollowerStart(ws, id, cmd) {
+  var home = followerHomeOf(ws);
+  if (!home) return sendError(ws, id, 'follower.start: send follower.hello first');
+  if (!followerMayWrite(home)) return sendError(ws, id, 'follower.start: your Mac answers again; start the ask through it', { errorKind: 'leader_answers' });
+  if (!ownsDaemonDir()) {
+    return sendError(ws, id, 'follower.start: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } });
+  }
+  var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
+  var check = cmd.check === true;
+  // A retry (its answer lost, or asked again while the CLI still starts): the first
+  // attempt's answer once it comes, never a second plan or a second CLI.
+  var first = sid ? hostStart.firstStart(home, sid) : null;
+  if (first === 'taken') return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' });
+  if (first) {
+    logMsg('info', 'follower.start: asked again, answered by the first start', { home: home, sid: sid, check: check });
+    if (check) return sendOk(ws, id, { sid: sid, checked: true, duplicate: true });
+    return sendStartAnswer(ws, id, await first, true);
+  }
+  if (sid && offlineHost.ownerOf(sid) === home) {
+    logMsg('info', 'follower.start: asked again, started once', { home: home, sid: sid });
+    return sendOk(ws, id, check ? { sid: sid, checked: true, duplicate: true } : { sid: sid, duplicate: true });
+  }
+  if (sid && (sessions.has(sid) || journaledIds().has(sid))) return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' });
+  if (check) {
+    var no = hostStart.precheck(home, cmd);
+    if (no) return sendStartAnswer(ws, id, startRefusal(no));
+    var room = offlineHost.checkSession(home, sid, cmd.actor);
+    if (!room.ok) return sendStartAnswer(ws, id, startRefusal(room.error));
+    return sendOk(ws, id, { sid: sid, checked: true });
+  }
+  var planned = hostStart.plan(home, cmd, typeof cmd.host === 'string' ? cmd.host : '');
+  if (!planned.ok) return sendStartAnswer(ws, id, startRefusal(planned));
+  var p = planned.plan;
+  var answer = hostStart.once(home, p.sid, function () { return startHostAsk(home, p, cmd); });
+  if (answer === 'taken') return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' });
+  sendStartAnswer(ws, id, await answer);
+}
+
+// One ask's start: refusals before the CLI, the record after it runs (a failed start leaves none).
+async function startHostAsk(home, p, cmd) {
+  var release = hostStart.begin(home);
+  try {
+    var room = offlineHost.checkSession(home, p.sid, cmd.actor);
+    if (!room.ok) return startRefusal(room.error);
+    await sessionStartGate.run(p.sid, function () {
+      return startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home: home, task: p.taskId } });
+    });
+    // The request's op id names its task-create too (the same request): the session record takes its own.
+    var opId = typeof cmd.opId === 'string' && /^[A-Za-z0-9_-]{1,72}$/.test(cmd.opId) ? cmd.opId + '-session' : undefined;
+    var saved = offlineHost.noteSession(home, p.record, opId, cmd.actor);
+    if (!saved.ok) {
+      // Nothing would tell the Mac about this CLI: it must not run unseen. Not stamped as an
+      // intentional stop (only the idle scan, cmdStop and a budget pause are): no record names
+      // this session, so how its death reads matters to no one.
+      var s = sessions.get(p.sid);
+      if (s && s.pid) killProcessGroup(s.pid, 'SIGTERM');
+      logMsg('warn', 'follower.start: the session record was not kept, the CLI is stopped', { home: home, sid: p.sid, code: saved.error.code });
+      return startRefusal(saved.error);
+    }
+    var messageId = typeof cmd.messageId === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(cmd.messageId) ? cmd.messageId : 'qm-ask-' + crypto.randomBytes(8).toString('hex');
+    if (p.message) {
+      try {
+        var started = sessions.get(p.sid);
+        if (started) appendUserMarkerLine(p.sid, started, p.message, messageId, false);
+      } catch (err) { logMsg('warn', 'follower.start: no turn-start marker', { sid: p.sid, error: err && err.message }); }
+    }
+    logMsg('info', 'follower.start: an ask started on this host while the Mac is away', { home: home, sid: p.sid, taskId: p.taskId, mode: p.mode, seq: saved.result.seq });
+    return { ok: true, reply: { sid: p.sid, taskId: p.taskId, mode: p.mode, cwd: p.cwd, messageId: messageId, seq: saved.result.seq } };
+  } catch (err) {
+    logMsg('warn', 'follower.start: the ask did not start', { home: home, sid: p.sid, taskId: p.taskId, error: err && err.message });
+    return { ok: false, error: 'follower.start: ' + (err && err.message), extra: { errorKind: 'internal' } };
+  } finally {
+    release();
+  }
+}
+
 // A note body a journal record names (journal-v2): at most 2 MB per reply. Trusted only.
 function cmdOfflineBlob(ws, id, cmd) {
   if (ws.origin === 'bridge' || ws.origin === 'follower') return sendError(ws, id, 'offline.blob: trusted clients only');
@@ -4776,13 +4940,15 @@ function cmdReplica(ws, id, op, cmd) {
   if (ws.origin === 'bridge') return sendError(ws, id, 'replica.' + op + ': trusted clients only');
   try {
     var home = cmd.home;
-    if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts));
+    // confirm/confirmFor (note-journal-v1): the leader's override of the half rule, bound to its manifest.
+    if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts, { confirm: cmd.confirm, confirmFor: cmd.confirmFor }));
     if (op === 'put') return sendOk(ws, id, hostReplica.put(home, cmd.kind, cmd.files));
     if (op === 'drop') return sendOk(ws, id, hostReplica.drop(home, cmd.kind));
     if (typeof home !== 'string' || !home) return sendError(ws, id, 'replica.status: missing home');
     return sendOk(ws, id, { kinds: hostReplica.status(home) });
   } catch (err) {
-    sendError(ws, id, err.message);
+    // A refusal the leader reads (manifest_removes_most_rows) carries its code and sizes.
+    sendError(ws, id, err.message, typeof err.code === 'string' ? Object.assign({ errorKind: err.code }, err.detail && typeof err.detail === 'object' ? { detail: err.detail } : {}) : undefined);
   }
 }
 

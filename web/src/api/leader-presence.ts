@@ -301,6 +301,10 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   unreachable: 'Your Mac did not answer just now; try again in a moment.',
   // leader_unsure (dispatch.ts).
   lost_answer: 'This host may have kept the change; check it before you try again.',
+  // Notes while the Mac is away (WP11: route-table.ts, offline-host-core.ts notePut).
+  note_changes_need_mac: 'Editing a note works while your Mac is away; moving, renaming, folders and pictures need your Mac.',
+  note_not_kept: 'This host keeps no copy of this note, so it can only be changed on your Mac.',
+  note_too_large: 'Notes over 1 MB can only be changed on your Mac.',
 }
 
 const GENERIC_REASON = 'Your Mac is not answering right now.'

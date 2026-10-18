@@ -6,8 +6,9 @@
  *   - while the Mac answers, /_alone/ says so and answers nothing else;
  *   - the Mac gone: the page names nothing; a browser whose token the Mac's copy
  *     names lists this Walnut's sessions here (lane sessions left out), reads a
- *     conversation, writes to the running one and answers its prompt; a stopped
- *     session, an unknown one, a token the copy does not name, are refused;
+ *     conversation, writes to the running one and answers its prompt; a message
+ *     starts the stopped one again here (WP12); an unknown session and a token the
+ *     copy does not name are refused;
  *   - the Mac back: it drains the person's message from the journal, and the
  *     page's API answers 409 again;
  *   - the Mac asleep with its socket open (no frame at all from it): alone after
@@ -135,10 +136,13 @@ describe.each(twins)('a host server answering alone (%s twin)', (twin) => {
     expect(rows.some((m) => m.role === 'user' && m.text === 'hello from the phone')).toBe(true)
   })
 
-  it('refuses a stopped session, an unknown one, an empty message and a bad id', async () => {
+  it('a message starts a stopped session again here (WP12); an unknown one, an empty message and a bad id are refused', async () => {
+    // A person's message to a stopped session of this host, while no server leads: the
+    // daemon resumes it with the command it last ran, and the words reach the new CLI.
     const stopped = await call(port, 'POST', `/_alone/sessions/${STOPPED}/messages`, { token: TOKEN, body: { text: 'are you there' } })
-    expect(stopped.status).toBe(409)
-    expect(stopped.json.error.code).toBe('not_running')
+    expect(stopped.status, stopped.body).toBe(200)
+    expect(stopped.json).toMatchObject({ status: 'delivered', sessionId: STOPPED })
+    await waitFor(() => h.inbox(STOPPED).includes('are you there'), 20_000, 'the resumed CLI got it')
     const unknown = await call(port, 'POST', '/_alone/sessions/dddddddd-4444-4444-8444-444444444444/messages', { token: TOKEN, body: { text: 'hi' } })
     expect(unknown.status).toBe(404)
     expect((await call(port, 'POST', `/_alone/sessions/${LIVE}/messages`, { token: TOKEN, body: { text: '   ' } })).status).toBe(400)

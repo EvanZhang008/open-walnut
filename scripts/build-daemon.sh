@@ -133,12 +133,14 @@ SOURCES=(
   src/providers/host-server-core.ts
   src/providers/stream-relay-core.ts
   src/providers/host-resume-core.ts
+  src/providers/host-start-core.ts
   src/core/sessions/open-items-text.ts
   src/providers/git-diff-core.ts
   src/providers/bridge-uplink-core.ts
   src/providers/workspace-core.ts
   src/providers/line-fate-core.ts
   src/providers/marker-find-core.ts
+  src/providers/replica-logs-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

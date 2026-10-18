@@ -13,7 +13,8 @@
  *         needs-leader  503 needs_leader (the default for every non-GET)
  *
  * Patterns are express-like: `:name` is one segment, a trailing `*` is any rest
- * (none included). First match wins. Ratchet: tests/replica/route-table-coverage.test.ts
+ * (none included), a trailing `:name+` is one note path (one or more segments: an
+ * exact route whose last parameter is a vault path, WP11). First match wins. Ratchet: tests/replica/route-table-coverage.test.ts
  * walks the real app and fails on a write route with no explicit away row, and
  * on a journaling away (`host-write`, `queue:*`, `note-write`) on a wildcard
  * row, so a new write never journals by accident.
@@ -58,6 +59,11 @@ const W = 'WRITE'
 
 /** The table. Order matters: the first matching row decides. */
 export const ROUTE_TABLE: readonly RouteRow[] = [
+  // WP12: a new Ask Walnut while the Mac is away runs as a session on this host
+  // (replica/ask-launch.ts: its task journaled, the daemon starts it from the Mac's
+  // template). A folder session, a retry and pictures still need the Mac (its answers).
+  { method: 'POST', pattern: '/api/sessions/quick-start', away: 'queue:ask', why: 'ask_needs_mac' },
+  { method: 'POST', pattern: '/api/v1/sessions', away: 'queue:ask', why: 'ask_needs_mac' },
   // The phone app's calls (iOS, the frozen /api/v1): every one has its row.
   { method: 'GET', pattern: '/api/v1/status', away: 'read' },
   { method: 'GET', pattern: '/api/v1/instance', away: 'read' },
@@ -181,6 +187,17 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'PUT', pattern: '/api/v1/conversations/active', away: 'needs-leader', why: 'conversation_writes_need_mac' },
   { method: 'PATCH', pattern: '/api/v1/conversations/:id', away: 'needs-leader', why: 'conversation_writes_need_mac' },
   { method: 'DELETE', pattern: '/api/v1/conversations/:id', away: 'needs-leader', why: 'conversation_writes_need_mac' },
+  // WP11: a note written while away (away-notes.ts answers these in the Mac's own shapes,
+  // through the daemon's note journal). `:path+` is the vault path (exact routes: the
+  // ratchet's wildcard rule reads `*`). Moves, folders, attachments and the index need
+  // the Mac and say so.
+  { method: 'PUT', pattern: '/api/notes-v2/content/:path+', away: 'note-write' },
+  { method: 'DELETE', pattern: '/api/notes-v2/content/:path+', away: 'note-write' },
+  { method: 'PUT', pattern: '/api/v1/notes/content/:path+', away: 'note-write' },
+  { method: 'POST', pattern: '/api/v1/notes', away: 'note-write' },
+  { method: 'DELETE', pattern: '/api/v1/notes/:path+', away: 'note-write' },
+  { method: W, pattern: '/api/notes-v2/*', away: 'needs-leader', why: 'note_changes_need_mac' },
+  { method: W, pattern: '/api/v1/notes/*', away: 'needs-leader', why: 'note_changes_need_mac' },
   // Everything else: writes need the Mac until WP10 gives them a journal.
   { method: W, pattern: '/api/v1/*', away: 'needs-leader' },
   { method: W, pattern: '/api/*', away: 'needs-leader' },
@@ -197,6 +214,10 @@ export function patternMatches(pattern: string, path: string): boolean {
   for (let i = 0; i < want.length; i++) {
     const w = want[i]!
     if (w === '*' && i === want.length - 1) return true
+    // A note path: one or more segments, none of them `..`.
+    if (i === want.length - 1 && w.startsWith(':') && w.endsWith('+')) {
+      return got.length > i && got.slice(i).every((g) => g !== '..')
+    }
     const g = got[i]
     if (g === undefined) return false
     if (w.startsWith(':')) continue

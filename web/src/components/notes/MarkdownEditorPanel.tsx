@@ -509,6 +509,7 @@ export function MarkdownEditorPanel({
       {pendingExternal && pendingExternal.path === key && (
         <ReloadBanner
           kind={pendingExternal.kind}
+          message={pendingExternal.message}
           onApply={onApplyExternal}
           onDismiss={onDismissExternal}
         />
@@ -608,13 +609,26 @@ function CodeIcon() {
  */
 function ReloadBanner({
   kind,
+  message,
   onApply,
   onDismiss,
 }: {
   kind: PendingExternalChange['kind'];
+  message?: string;
   onApply?: () => void;
   onDismiss?: () => void;
 }) {
+  if (kind === 'needs-leader') {
+    // A save this host could not keep while the Mac is away (WP11): the editor keeps the text.
+    return (
+      <div className="notes-reload-banner conflict" role="status" data-testid="notes-needs-leader-banner">
+        <span className="notes-reload-banner-text">{message ?? 'This change needs your Mac.'} Your text stays here, unsaved.</span>
+        <div className="notes-reload-banner-actions">
+          <button className="notes-reload-banner-btn" onClick={onDismiss}>Keep editing</button>
+        </div>
+      </div>
+    );
+  }
   const conflict = kind === 'conflict';
   return (
     <div className={`notes-reload-banner ${conflict ? 'conflict' : ''}`} role="status">

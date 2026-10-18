@@ -24,7 +24,11 @@ export async function fetchOfflineBlob(conn: BlobConnection, sha: string, timeou
   let offset = 0;
   for (let i = 0; i < 1000; i++) {
     const r = await conn.send('offline.blob', { sha, offset }, timeoutMs);
-    if (r.ok === false) throw new Error(String(r.error ?? 'offline.blob refused'));
+    if (r.ok === false) {
+      // `code` says why (`not_found`: the host does not hold that body), so a caller can tell a
+      // body that is gone from a link that failed.
+      throw Object.assign(new Error(String(r.message ?? r.error ?? 'offline.blob refused')), typeof r.code === 'string' ? { code: r.code } : {});
+    }
     const size = Number(r.size);
     if (!Number.isFinite(size) || size < 0 || size > MAX_BLOB_BYTES) throw new Error(`offline.blob: a body of ${String(r.size)} bytes is out of range`);
     if (Number(r.offset) !== offset) throw new Error(`offline.blob: asked for offset ${offset}, got ${String(r.offset)}`);

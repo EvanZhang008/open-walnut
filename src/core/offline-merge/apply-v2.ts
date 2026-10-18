@@ -27,8 +27,8 @@ import { applyFields, entryBase, exactTask, opKeyOf, pairValidator, resolveTaskI
 
 export { RefusedWrite };
 
-/** The v2 kinds this Mac applies (`offline.drain {kinds}`). */
-export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke'] as const;
+/** The v2 kinds this Mac applies (`offline.drain {kinds}`); `note` since WP11 (offline-merge/notes.ts). */
+export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session'] as const;
 /** What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks. */
 export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor'];
 
@@ -54,6 +54,8 @@ export interface V2Context {
   /** This batch's cache of re-minted create ids (old id -> the id minted here); the ledger keeps them. */
   remap: Map<string, string>;
   result: { replayed: number; skipped: number };
+  /** The host's link, for a note record's bodies (`offline.blob`). */
+  conn?: { send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> };
 }
 
 export { resolveTaskId };
@@ -348,8 +350,21 @@ export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
     case 'task-move': return applyTaskMove(ctx, record);
     case 'board': return applyBoard(ctx, record);
     case 'device-revoke': return applyDeviceRevoke(ctx, record);
+    case 'note': return applyNote(ctx, record);
+    // A new ask the host started while this Mac was away (WP12).
+    case 'session': return (await import('./apply-session.js')).applySession(ctx, record);
     default: throw new Error(`unknown journal kind ${record.kind}`);
   }
+}
+
+/** A note written while away (section 6): merged by offline-merge/notes.ts, its conflicts lettered. */
+async function applyNote(ctx: V2Context, record: V2Record): Promise<void> {
+  if (!ctx.conn) throw new Error('a note record needs its host link for the bodies');
+  const notes = await import('./notes.js');
+  const deps = await notes.macNoteDeps(ctx.hostKey, ctx.conn);
+  const out = await notes.applyNoteRecord(deps, { conflicts: (entries) => ctx.conflicts.addDurable(entries) }, record as unknown as import('./notes.js').NoteRecordLike, ctx.at);
+  log.session.info('offline handover: note record applied', { host: ctx.hostKey, seq: record.seq, opId: record.opId, path: out.path, action: out.action, copies: out.copies, conflicts: out.entries.length });
+  if (out.action === 'noop') ctx.result.skipped++; else ctx.result.replayed++;
 }
 
 /** Is the device that made a record still paired with this Mac? */

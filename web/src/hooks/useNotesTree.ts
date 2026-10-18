@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { fetchNotesTree, createFolder, deleteNote, deleteFolder, deleteAttachment, moveNote } from '@/api/notes-v2';
 import type { NoteTreeNode } from '@/api/notes-v2';
 import { useEvent } from '@/hooks/useWebSocket';
+import { wsClient, type ConnectionState } from '@/api/ws';
 
 /**
  * The last tree any mount saw, kept for the page lifetime. Leaving the Notes
@@ -59,6 +60,20 @@ export function useNotesTree() {
   // vault watcher relays those). Without this, the sidebar tree never shows it
   // until the user happens to trigger some other refresh (new note, rename).
   useEvent('notes:tree-changed', () => { refresh(); });
+
+  // A reconnect means events were missed while the socket was down (as the corpus
+  // store knows): e.g. a host replica's console whose Mac came back and drained the
+  // notes written away, making conflict copies before this socket was spliced to it.
+  useEffect(() => {
+    let wasConnected = wsClient.state === 'connected';
+    const onState = (state: ConnectionState) => {
+      const connected = state === 'connected';
+      if (connected && !wasConnected) void refresh();
+      wasConnected = connected;
+    };
+    wsClient.onConnectionChange(onState);
+    return () => { wsClient.offConnectionChange(onState); };
+  }, [refresh]);
 
   const addFolder = useCallback(async (folderPath: string) => {
     await createFolder(folderPath);

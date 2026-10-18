@@ -28,8 +28,10 @@ const desktop = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 }
 
 export default defineConfig({
   testDir: '.',
-  // The read spec first (it leaves the Mac awake and the journal empty), then the write spec.
-  testMatch: ['replica-away-read.spec.ts', 'replica-away-write.spec.ts'],
+  // The read spec first (it leaves the Mac awake and the journal empty), then the write
+  // spec, then the notes written away (WP11), then the new ask on the host (WP12), which
+  // also leaves the journal drained.
+  testMatch: ['replica-away-read.spec.ts', 'replica-away-write.spec.ts', 'replica-away-notes.spec.ts', 'replica-away-ask.spec.ts'],
   fullyParallel: false,
   workers: 1,
   retries: 0,

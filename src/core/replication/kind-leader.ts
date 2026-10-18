@@ -123,6 +123,7 @@ export async function runKindRound<Row>(
   kind: LeaderKind<Row>, manifest: KindManifest<Row>, target: Pick<ReplicaTarget, 'id' | 'kind' | 'label' | 'post'>, opts: KindRoundOptions = {},
 ): Promise<KindRoundResult> {
   const now = opts.now ?? Date.now
+  const startedAt = now()
   const st = kindState(target, kind.kind)
   if (st.restUntil > now()) return { kind: kind.kind, action: 'unsupported', error: st.restWhy }
   const confirm = confirmForRound(st, manifest, now(), target.id, kind.kind, opts)
@@ -161,6 +162,8 @@ export async function runKindRound<Row>(
   st.manifest = held === 0 ? manifest.hash : null
   const removed = Number(reply.removed) || 0
   Object.assign(st, { action: 'synced', entries: manifest.entries.length, held, sent, removed, asOf, syncedAt: now(), error: undefined })
+  // Section 13 observability: a round that sent a manifest (an unchanged one is not a round).
+  opts.log?.info('replica copy round', { kind: kind.kind, target: target.id, need: need.length, held, removed, sent, entries: manifest.entries.length, ms: now() - startedAt })
   return kind.single
     ? { kind: kind.kind, action: 'synced', sent }
     : { kind: kind.kind, action: 'synced', entries: manifest.entries.length, sent, held, removed }

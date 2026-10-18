@@ -35,6 +35,29 @@ export interface ReplicaFile { k: string; body: string }
 export interface ReplicaSyncOptions {
   /** notes: folders the primary's own search leaves out (config search.excluded_folders). */
   searchExclude?: string[]
+  /** notes: folders this host does not keep (hosts.<key>.keep.notes_exclude): never written here while away. */
+  keepExclude?: string[]
+  /** notes: notes the primary keeps to itself because they are too large to copy: never written here while away. */
+  tooBig?: string[]
+}
+
+/** The half rule's override (section 4): the leader confirms a removal of most rows, bound to its manifest. */
+export interface ReplicaSyncGuard {
+  confirm?: unknown
+  /** `{entries, keys}`: the manifest's count and the sha256-12 of its sorted keys joined by newlines. */
+  confirmFor?: unknown
+}
+
+/**
+ * The journal's view of the notes (WP11), set by the daemon once the offline host
+ * exists: what a pending away write changed (read through every copy read here and
+ * on the follower link) and which keys a manifest must not replace or remove.
+ */
+export interface ReplicaJournalView {
+  /** key -> the note as the pending write leaves it, or null for a pending delete. */
+  overlay(home: string): Map<string, { body: string; h: string; n: number; m?: Record<string, unknown> } | null> | null
+  /** Keys a manifest of this asOf must not replace or remove (pending, or acked and awaiting a later copy). */
+  held(home: string, asOf: number): Set<string>
 }
 
 type GatewayResult = { ok: true; result: Record<string, unknown> } | { ok: false; error: { code: string; message: string; detail?: unknown } }
@@ -144,7 +167,9 @@ export function createHostReplica(deps: HostReplicaDeps) {
   }
 
   function has(home: string, kind: ReplicaKind): boolean {
-    return Object.keys(load(home, kind).index).length > 0
+    const index = load(home, kind).index
+    for (const k in index) if (Object.prototype.hasOwnProperty.call(index, k)) return true
+    return false
   }
 
   /** This host can answer `name` for `home` from its copy (the op is a copy read and that kind is kept). */
@@ -155,19 +180,55 @@ export function createHostReplica(deps: HostReplicaDeps) {
 
   // ── the primary's side: manifest, bodies, removal ──
 
-  function sync(home: string, kind: unknown, entries: unknown, asOf: unknown, opts?: ReplicaSyncOptions): { need: string[]; entries: number } {
+  /** Below this many rows a copy takes any manifest; at it, one removing more than half is refused. */
+  const REMOVAL_FLOOR = 200
+  let journalView: ReplicaJournalView | null = null
+
+  function folders(raw: unknown, max: number): string[] | undefined {
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string').slice(0, max) : undefined
+  }
+
+  /** A refusal the leader can read (`errorKind`), the copy left as it was. */
+  function refused(code: string, message: string, detail: Record<string, unknown>): Error {
+    return Object.assign(new Error(`${code}: ${message}`), { code, detail })
+  }
+
+  function sync(home: string, kind: unknown, entries: unknown, asOf: unknown, opts?: ReplicaSyncOptions, guard?: ReplicaSyncGuard): { need: string[]; entries: number; held: number; heldKeys?: string[]; removed: number } {
     if (typeof home !== 'string' || !home) throw new Error('replica.sync: missing home')
     if (!isKind(kind)) throw new Error(`replica.sync: unknown kind ${String(kind)}`)
     if (!Array.isArray(entries) || entries.length > MAX_ENTRIES) throw new Error('replica.sync: bad entries')
     const st = load(home, kind)
+    const at = typeof asOf === 'number' && Number.isFinite(asOf) ? asOf : deps.now()
+    // A key an away write holds (pending, or acked and not yet in a later copy) is
+    // neither replaced nor removed: the copy keeps the base that write was made on.
+    let holds = new Set<string>()
+    if (kind === 'notes' && journalView) { try { holds = journalView.held(home, at) } catch { holds = new Set() } }
     const seen = new Set<string>()
-    const need: string[] = []
-    st.pending = {}
-    st.pendingMeta = {}
+    const rows: ReplicaEntry[] = []
     for (const raw of entries as ReplicaEntry[]) {
       if (!raw || typeof raw.k !== 'string' || !raw.k || raw.k.length > MAX_KEY || typeof raw.h !== 'string' || !HASH_RE.test(raw.h)) continue
       if (seen.has(raw.k)) continue
       seen.add(raw.k)
+      rows.push(raw)
+    }
+    const removing = Object.keys(st.index).filter((k) => !seen.has(k) && !holds.has(k))
+    const local = Object.keys(st.index).length
+    if (local >= REMOVAL_FLOOR && removing.length * 2 > local) {
+      // The half rule (section 4): a leader that lost its store must not empty this copy.
+      const c = guard?.confirmFor as { entries?: unknown; keys?: unknown } | undefined
+      const keys = deps.hash([...seen].sort().join('\n'))
+      const confirmed = guard?.confirm === true && !!c && c.entries === seen.size && c.keys === keys
+      if (!confirmed) {
+        deps.log('warn', 'host replica: a manifest that removes most of the copy was refused', { kind, local, removing: removing.length, entries: seen.size })
+        throw refused('manifest_removes_most_rows', `the manifest would remove ${removing.length} of ${local} ${kind} kept here`, { local, removing: removing.length, entries: seen.size, keys })
+      }
+      deps.log('warn', 'host replica: the leader confirmed a removal of most of the copy', { kind, local, removing: removing.length, entries: seen.size })
+    }
+    const need: string[] = []
+    const heldKeys: string[] = []
+    st.pending = {}
+    st.pendingMeta = {}
+    for (const raw of rows) {
       const meta = raw.m && typeof raw.m === 'object' ? raw.m : undefined
       const prev = st.index[raw.k]
       if (prev && prev.h === raw.h) {
@@ -175,6 +236,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
         st.index[raw.k] = { ...prev, n: raw.n, m: meta }
         continue
       }
+      if (holds.has(raw.k)) { heldKeys.push(raw.k); continue }
       // A changed entry keeps its old body until the new one arrives: a read
       // in between answers the older text, with the copy's age, not "missing".
       st.pending[raw.k] = raw.h
@@ -183,15 +245,19 @@ export function createHostReplica(deps: HostReplicaDeps) {
     }
     for (const k of Object.keys(st.index)) {
       if (seen.has(k)) continue
+      if (holds.has(k)) { heldKeys.push(k); continue }
       try { fs.rmSync(bodyFile(home, kind, st.index[k].f), { force: true }) } catch { /* gone already */ }
       delete st.index[k]
       forget(home, kind, k)
     }
-    st.opts = opts && typeof opts === 'object' ? { searchExclude: Array.isArray(opts.searchExclude) ? opts.searchExclude.filter((s) => typeof s === 'string').slice(0, 200) : undefined } : {}
-    const at = typeof asOf === 'number' && Number.isFinite(asOf) ? asOf : deps.now()
+    st.opts = opts && typeof opts === 'object' ? {
+      searchExclude: folders(opts.searchExclude, 200),
+      ...(kind === 'notes' ? { keepExclude: folders(opts.keepExclude, 200), tooBig: folders(opts.tooBig, 5_000) } : {}),
+    } : {}
     if (need.length === 0) { st.asOf = at; st.pendingAsOf = 0 } else st.pendingAsOf = at
     persist(home, kind, st)
-    return { need, entries: seen.size }
+    if (heldKeys.length) deps.log('info', 'host replica: keys an away write holds were kept', { kind, held: heldKeys.length })
+    return { need, entries: seen.size, held: heldKeys.length, ...(heldKeys.length ? { heldKeys: heldKeys.slice(0, 100) } : {}), removed: removing.length }
   }
 
   function put(home: string, kind: unknown, files: unknown): { stored: number; rejected: number; remaining: number } {
@@ -249,9 +315,50 @@ export function createHostReplica(deps: HostReplicaDeps) {
 
   // ── answering reads ──
 
-  function readBody(home: string, kind: ReplicaKind, k: string): string | null {
-    const row = load(home, kind).index[k]
+  type ViewRow = IndexRow & { body?: string }
+  /**
+   * The copy as every read sees it: the index with the pending away writes over it
+   * (notes, WP11). Taken ONCE per read and passed down, never a copy of the index: a
+   * copy per key made a search of N notes O(N^2) on the daemon's loop.
+   */
+  interface View {
+    index: Record<string, IndexRow>
+    ov: Map<string, { body: string; h: string; n: number; m?: Record<string, unknown> } | null> | null
+  }
+
+  function viewOf(home: string, kind: ReplicaKind): View {
+    const index = load(home, kind).index
+    if (kind !== 'notes' || !journalView) return { index, ov: null }
+    let ov: ReturnType<ReplicaJournalView['overlay']> = null
+    try { ov = journalView.overlay(home) } catch (err) {
+      deps.log('warn', 'host replica: the away writes could not be read over the copy', { error: (err as Error).message })
+    }
+    return { index, ov: ov && ov.size > 0 ? ov : null }
+  }
+
+  /** One key of a view: the away write over it first, then the copy's own row. */
+  function rowIn(v: View, k: string): ViewRow | undefined {
+    const own = Object.prototype.hasOwnProperty.call(v.index, k) ? v.index[k] : undefined
+    if (!v.ov || !v.ov.has(k)) return own
+    const o = v.ov.get(k)
+    if (!o) return undefined
+    return { h: o.h, n: o.n, m: { ...(own?.m ?? {}), ...(o.m ?? {}) }, f: own?.f ?? '', body: o.body }
+  }
+
+  /** Every key of a view, in the copy's order, then the notes made while away. */
+  function keysOf(v: View): string[] {
+    const keys = Object.keys(v.index)
+    const ov = v.ov
+    if (!ov) return keys
+    const out = keys.filter((k) => !(ov.has(k) && ov.get(k) === null))
+    for (const [k, o] of ov) if (o !== null && !Object.prototype.hasOwnProperty.call(v.index, k)) out.push(k)
+    return out
+  }
+
+  function readBody(home: string, kind: ReplicaKind, k: string, v: View = viewOf(home, kind)): string | null {
+    const row = rowIn(v, k)
     if (!row) return null
+    if (row.body !== undefined) return row.body
     const cacheKey = stateKey(home, kind)
     const cached = bodies.get(cacheKey)?.get(k)
     if (cached !== undefined) return cached
@@ -294,33 +401,34 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return s
   }
 
-  function resolveNote(home: string, args: Record<string, unknown>): { k?: string; error?: GatewayResult } {
+  function resolveNote(v: View, args: Record<string, unknown>): { k?: string; error?: GatewayResult } {
     const id = str(args.id)
     const p = str(args.path)
     if (!id && !p) return { error: fail('bad_request', 'pass path (vault-relative note path) or id (from note_search)') }
-    const index = load(home, 'notes').index
+    const keys = keysOf(v)
     const ref = id || p
     if (id || /^n_[a-z0-9]+$/i.test(p)) {
-      for (const k of Object.keys(index)) if (index[k].m && index[k].m!.id === ref) return { k }
+      for (const k of keys) { const row = rowIn(v, k); if (row && row.m && row.m.id === ref) return { k } }
       if (id) return { error: fail('not_found', `No note with id ${ref} in this host's copy`) }
     }
     const direct = normalizeNotePath(p)
-    if (index[direct]) return { k: direct }
+    if (rowIn(v, direct)) return { k: direct }
     // A title, as online: the note whose title or file name is the text.
     const want = p.replace(/\.md$/i, '').toLowerCase()
-    const hits = Object.keys(index).filter((k) => titleOf(k, index[k]).toLowerCase() === want || path.posix.basename(k).replace(/\.md$/i, '').toLowerCase() === want)
+    const hits = keys.filter((k) => titleOf(k, rowIn(v, k)!).toLowerCase() === want || path.posix.basename(k).replace(/\.md$/i, '').toLowerCase() === want)
     if (hits.length === 1) return { k: hits[0] }
     if (hits.length > 1) return { error: fail('ambiguous', `"${p}" names ${hits.length} notes in this host's copy; pass the path`, { candidates: hits.slice(0, 20) }) }
     return { error: fail('not_found', `Note not found in this host's copy: ${p}`) }
   }
 
   function noteRead(home: string, args: Record<string, unknown>, why: string): GatewayResult {
-    const r = resolveNote(home, args)
+    const v = viewOf(home, 'notes')
+    const r = resolveNote(v, args)
     if (r.error) return r.error
     const k = r.k!
-    const row = load(home, 'notes').index[k]
-    const content = readBody(home, 'notes', k)
-    if (content === null) return fail('not_found', `Note not found in this host's copy: ${k}`)
+    const row = rowIn(v, k)
+    const content = row ? readBody(home, 'notes', k, v) : null
+    if (!row || content === null) return fail('not_found', `Note not found in this host's copy: ${k}`)
     const updatedAt = row.m && typeof row.m.updatedAt === 'string' ? row.m.updatedAt : undefined
     const noteId = row.m && typeof row.m.id === 'string' ? row.m.id : undefined
     return ok({
@@ -355,15 +463,16 @@ export function createHostReplica(deps: HostReplicaDeps) {
     const limit = Math.min(MAX_LIMIT, Math.max(1, typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.floor(args.limit) : DEFAULT_LIMIT))
     const tokens = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, MAX_TOKENS)
     const st = load(home, 'notes')
+    const v = viewOf(home, 'notes')
     const phrase = q.toLowerCase()
     type Hit = { k: string; title: string; matched: number; score: number; first: string }
     const hits: Hit[] = []
-    for (const k of Object.keys(st.index)) {
+    for (const k of keysOf(v)) {
       if (excluded(k, st.opts.searchExclude)) continue
-      const row = st.index[k]
+      const row = rowIn(v, k)!
       const title = titleOf(k, row)
       const head = `${title}\n${k}`.toLowerCase()
-      const body = (readBody(home, 'notes', k) ?? '').toLowerCase()
+      const body = (readBody(home, 'notes', k, v) ?? '').toLowerCase()
       let matched = 0
       let score = 0
       let first = ''
@@ -386,11 +495,11 @@ export function createHostReplica(deps: HostReplicaDeps) {
     const kept = hits.filter((h) => h.matched === best)
     kept.sort((a, b) => b.score - a.score || a.k.localeCompare(b.k))
     const results = kept.slice(0, limit).map((h) => {
-      const row = st.index[h.k]
+      const row = rowIn(v, h.k)!
       const noteId = row.m && typeof row.m.id === 'string' ? row.m.id : undefined
       return {
         id: noteId ?? h.k.replace(/\.md$/i, ''), path: h.k.replace(/\.md$/i, ''), title: h.title,
-        snippet: snippetOf(readBody(home, 'notes', h.k) ?? '', h.first),
+        snippet: snippetOf(readBody(home, 'notes', h.k, v) ?? '', h.first),
         matchType: 'exact', score: h.score,
       }
     })
@@ -464,22 +573,25 @@ export function createHostReplica(deps: HostReplicaDeps) {
   const manifestMemo = new Map<string, { sig: string; hash: string }>()
 
   /** One hash over the manifest (every key, body hash and metadata, in key order). */
-  function manifestHash(home: string, kind: ReplicaKind): string {
+  function manifestHash(home: string, kind: ReplicaKind, v: View = viewOf(home, kind)): string {
     const st = load(home, kind)
-    const keys = Object.keys(st.index)
+    const overlaid = !!v.ov
+    const keys = keysOf(v)
     const sig = `${st.asOf}:${st.pendingAsOf}:${keys.length}:${Object.keys(st.pending).length}`
     const memo = manifestMemo.get(stateKey(home, kind))
-    if (memo && memo.sig === sig) return memo.hash
+    // An away write moves the view without moving the index: never the memo then.
+    if (!overlaid && memo && memo.sig === sig) return memo.hash
     keys.sort()
-    const hash = deps.hash(keys.map((k) => `${k}\u0000${st.index[k].h}\u0000${st.index[k].m ? JSON.stringify(st.index[k].m) : ''}`).join('\n'))
-    manifestMemo.set(stateKey(home, kind), { sig, hash })
+    const hash = deps.hash(keys.map((k) => { const row = rowIn(v, k)!; return `${k}\u0000${row.h}\u0000${row.m ? JSON.stringify(row.m) : ''}` }).join('\n'))
+    if (!overlaid) manifestMemo.set(stateKey(home, kind), { sig, hash })
     return hash
   }
 
   /** A body without growing the search cache (a whole-vault read would hold every note). */
-  function peekBody(home: string, kind: ReplicaKind, k: string): string | null {
-    const row = load(home, kind).index[k]
+  function peekBody(home: string, kind: ReplicaKind, k: string, v: View = viewOf(home, kind)): string | null {
+    const row = rowIn(v, k)
     if (!row) return null
+    if (row.body !== undefined) return row.body
     const cached = bodies.get(stateKey(home, kind))?.get(k)
     if (cached !== undefined) return cached
     try { return fs.readFileSync(bodyFile(home, kind, row.f), 'utf8') } catch { return null }
@@ -489,18 +601,20 @@ export function createHostReplica(deps: HostReplicaDeps) {
   function list(home: string, kind: unknown): { entries: Array<{ k: string; h: string; n?: number; m?: Record<string, unknown> }>; asOf: string | null; manifestHash: string } | null {
     if (!isKind(kind) || typeof home !== 'string' || !home) return null
     const st = load(home, kind)
-    const entries = Object.keys(st.index).sort().map((k) => {
-      const row = st.index[k]
+    const v = viewOf(home, kind)
+    const entries = keysOf(v).sort().map((k) => {
+      const row = rowIn(v, k)!
       return { k, h: row.h, ...(row.n !== undefined ? { n: row.n } : {}), ...(row.m ? { m: row.m } : {}) }
     })
-    return { entries, asOf: st.asOf ? new Date(st.asOf).toISOString() : null, manifestHash: manifestHash(home, kind) }
+    return { entries, asOf: st.asOf ? new Date(st.asOf).toISOString() : null, manifestHash: manifestHash(home, kind, v) }
   }
 
   /** One entry with its body, or null (no such key in this copy). */
   function read(home: string, kind: unknown, key: unknown): { k: string; h: string; n?: number; m?: Record<string, unknown>; body: string } | null {
     if (!isKind(kind) || typeof home !== 'string' || !home || typeof key !== 'string' || !key || key.length > MAX_KEY) return null
-    const row = load(home, kind).index[key]
-    const body = row ? peekBody(home, kind, key) : null
+    const v = viewOf(home, kind)
+    const row = rowIn(v, key)
+    const body = row ? peekBody(home, kind, key, v) : null
     if (!row || body === null) return null
     return { k: key, h: row.h, ...(row.n !== undefined ? { n: row.n } : {}), ...(row.m ? { m: row.m } : {}), body }
   }
@@ -512,21 +626,45 @@ export function createHostReplica(deps: HostReplicaDeps) {
     const missing: string[] = []
     const more: string[] = []
     let bytes = 0
-    const index = load(home, kind).index
+    const v = viewOf(home, kind)
     for (const k of keys) {
       if (typeof k !== 'string') continue
       if (more.length > 0) { more.push(k); continue }
-      const body = index[k] ? peekBody(home, kind, k) : null
-      if (body === null) { missing.push(k); continue }
+      const row = rowIn(v, k)
+      const body = row ? peekBody(home, kind, k, v) : null
+      if (!row || body === null) { missing.push(k); continue }
       const size = Buffer.byteLength(body) + k.length + 32
       if (files.length > 0 && bytes + size > maxBytes) { more.push(k); continue }
       bytes += size
-      files.push({ k, h: index[k].h, body })
+      files.push({ k, h: row.h, body })
     }
     return { files, missing, more }
   }
 
-  return { sync, put, drop, status, answer, ops, has, keeps, memoryDocs, READ_OPS: Object.keys(READ_OPS), list, read, readMany, manifestHash }
+  // ── the journal's side (WP11): notes written while away ──
+
+  /** The offline host's view of its pending note writes; set once both exist. */
+  function setJournalView(view: ReplicaJournalView | null): void { journalView = view }
+
+  /** The copy's own body of a note (no away write over it): the base of the first away edit. */
+  function copyBody(home: string, k: string): string | null {
+    const row = load(home, 'notes').index[k]
+    if (!row) return null
+    try { return fs.readFileSync(bodyFile(home, 'notes', row.f), 'utf8') } catch { return null }
+  }
+
+  /** What the leader keeps from this host (folders, too large notes): writes there need the leader. */
+  function notesKeep(home: string): { keepExclude: string[]; tooBig: string[] } {
+    const o = load(home, 'notes').opts
+    return { keepExclude: o.keepExclude ?? [], tooBig: o.tooBig ?? [] }
+  }
+
+  return {
+    sync, put, drop, status, answer, ops, has, keeps, memoryDocs, READ_OPS: Object.keys(READ_OPS), list, read, readMany,
+    manifestHash: (home: string, kind: ReplicaKind) => manifestHash(home, kind),
+    setJournalView, copyBody, notesKeep, peekNote: (home: string, k: string) => peekBody(home, 'notes', k), noteRow: (home: string, k: string): { h: string; n?: number; m?: Record<string, unknown> } | null => rowIn(viewOf(home, 'notes'), k) ?? null,
+    hashOf: (body: string) => deps.hash(body),
+  }
 }
 
 export type HostReplica = ReturnType<typeof createHostReplica>

@@ -8,11 +8,17 @@ import {
 import type { Editor } from '@tiptap/core';
 import { log } from '@/utils/log';
 import { splitFrontmatter, joinFrontmatter } from '@/components/notes/frontmatter';
+import { threeWayMerge } from '@open-walnut/three-way-merge';
+import { leaderErrorMessage } from '@/api/leader-presence';
+import { entityRefsToMarkdownLinks } from '@/utils/markdown';
+import { normalizeForEditor } from '@/components/notes/notes-content-preprocess';
 import {
   dropCachedNote, getCachedNote, loadNoteIntoCache, peekCachedNote, putCachedNote, wireNoteContentCacheEvents, type CachedNote,
 } from '@/stores/note-content-cache';
 
 const DEBOUNCE_MS = 500;
+/** Three-way merges after 409s in a row before the conflict is surfaced instead. */
+const MAX_MERGES = 3;
 
 /**
  * A pending external/AI write that arrived while the user was mid-edit.
@@ -20,10 +26,16 @@ const DEBOUNCE_MS = 500;
  * instead of silently blowing the live doc away (§6.2 dirty-guard).
  */
 export interface PendingExternalChange {
-  /** Source: a WS notes:updated event, or a true write-write 409 conflict. */
-  kind: 'external' | 'conflict';
+  /**
+   * Source: a WS notes:updated event, a true write-write 409 conflict (one the
+   * three-way merge could not resolve), or a save the host refused while the Mac
+   * is away (`needs-leader`, WP11: `message` says why in plain words).
+   */
+  kind: 'external' | 'conflict' | 'needs-leader';
   /** The note path the change applies to (guards against stale applies after switch). */
   path: string;
+  /** needs-leader: the reason (NEEDS_LEADER_REASONS words). */
+  message?: string;
 }
 
 export function useNoteContent(notePath: string | null) {
@@ -133,6 +145,55 @@ export function useNoteContent(notePath: string | null) {
     const snap = departedEditRef.current;
     return snap && snap.path === path ? snap.md : null;
   }, []);
+
+  /** 409s merged in a row for one note (a merge whose save 409s again merges again, up to MAX_MERGES). */
+  const mergeTriesRef = useRef(0);
+
+  /**
+   * A 409 on save: merge three ways like the Files panel (useLiveEdit) instead of
+   * dropping the typing. base = the bytes our hash referred to, ours = the editor
+   * NOW, theirs = the note as the server holds it (the 409's `serverContent` when it
+   * carries one, else a read). Everything after the read runs in one tick, so no
+   * keystroke lands between reading the editor and showing the merge. Clean: the
+   * editor shows the merge, theirs becomes the base and the next save writes it.
+   * Overlap (or MAX_MERGES): false, and the caller surfaces the conflict as before.
+   */
+  const mergeAfterConflict = useCallback(async (pathToSave: string, err: { body?: unknown }): Promise<boolean> => {
+    const base = lastWrittenRef.current;
+    const editor = editorRef.current;
+    if (base == null || !editor || editor.isDestroyed || mergeTriesRef.current >= MAX_MERGES) return false;
+    mergeTriesRef.current++;
+    const b = (err.body && typeof err.body === 'object' ? err.body : {}) as { serverContent?: unknown; serverHash?: unknown; currentHash?: unknown };
+    const givenHash = typeof b.serverHash === 'string' ? b.serverHash : typeof b.currentHash === 'string' ? b.currentHash : null;
+    let theirs: { content: string; contentHash: string } | null = typeof b.serverContent === 'string' && givenHash ? { content: b.serverContent, contentHash: givenHash } : null;
+    if (!theirs) {
+      try {
+        const r = await fetchNoteContent(pathToSave);
+        theirs = { content: r.content, contentHash: r.contentHash };
+      } catch { return false; }
+    }
+    if (currentPathRef.current !== pathToSave || editorRef.current !== editor || editor.isDestroyed) return false;
+    const ours = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
+    const merge = threeWayMerge(base, ours, theirs.content, { idFrom: 'theirs' });
+    if (!merge.ok) {
+      log.warn('notes', 'note save conflict did not merge cleanly', { path: pathToSave, conflicts: merge.conflicts, overBudget: merge.overBudget });
+      return false;
+    }
+    contentHashRef.current = theirs.contentHash;
+    lastWrittenRef.current = theirs.content;
+    const { frontmatter, body } = splitFrontmatter(merge.merged);
+    frontmatterRef.current = frontmatter;
+    if (body !== editor.storage.markdown.getMarkdown()) {
+      const { from, to } = editor.state.selection;
+      editor.commands.setContent(normalizeForEditor(entityRefsToMarkdownLinks(body)), { emitUpdate: false });
+      const max = editor.state.doc.content.size;
+      editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) });
+    }
+    dirtyRef.current = merge.merged !== theirs.content;
+    setContent(body);
+    log.info('notes', 'note save conflict merged three ways', { path: pathToSave, attempt: mergeTriesRef.current, resave: dirtyRef.current });
+    return true;
+  }, [setContent]);
 
   // ── Reload helper (used by WS handler and 409 recovery) ──
   const reloadContent = useCallback((targetPath: string) => {
@@ -532,8 +593,14 @@ export function useNoteContent(notePath: string | null) {
           setPendingExternal(pending);
         }
       }
+      mergeTriesRef.current = 0;
       // Only update if we're still on the same note
       if (currentPathRef.current === pathToSave) {
+        // A save that lands lifts a refusal shown for this note (WP11).
+        if (pendingExternalRef.current?.kind === 'needs-leader' && pendingExternalRef.current.path === pathToSave) {
+          pendingExternalRef.current = null;
+          setPendingExternal(null);
+        }
         setUpdatedAt(result.updatedAt);
         contentHashRef.current = result.contentHash;
         // First save of a brand-new note: the server just stamped the id into a
@@ -573,8 +640,15 @@ export function useNoteContent(notePath: string | null) {
       // losing at most one debounce window (~500ms) of un-flushed typing. The loss is
       // SURFACED (not a silent reload): show a conflict affordance so the user knows the
       // on-disk version diverged before we converge on it (§6.2 conflict honesty).
+      // A change made elsewhere since our base: merged three ways first (WP11); the
+      // finally below saves the merge.
+      if (err?.status === 409 && currentPathRef.current === pathToSave && await mergeAfterConflict(pathToSave, err)) {
+        setSaveStatus('idle');
+        return;
+      }
       if (err?.status === 409 && currentPathRef.current === pathToSave) {
-        log.warn('notes', 'Note save conflict (write-write) — surfacing before reload', { path: pathToSave });
+        mergeTriesRef.current = 0;
+        log.warn('notes', 'Note save conflict (write-write), surfacing before reload', { path: pathToSave });
         const conflict: PendingExternalChange = { kind: 'conflict', path: pathToSave };
         pendingExternalRef.current = conflict;
         setPendingExternal(conflict);
@@ -582,6 +656,16 @@ export function useNoteContent(notePath: string | null) {
         // Stop treating local edits as savable — the agent's write wins; the user
         // applies (reload) from the surfaced affordance. Bound the loss here.
         dirtyRef.current = false;
+        return;
+      }
+      // A host replica that cannot keep this save while the Mac is away says why (WP11).
+      const away = err?.status === 503 ? leaderErrorMessage(err?.body) : null;
+      if (away && currentPathRef.current === pathToSave) {
+        log.warn('notes', 'Note save needs the Mac', { path: pathToSave, message: away });
+        const blocked: PendingExternalChange = { kind: 'needs-leader', path: pathToSave, message: away };
+        pendingExternalRef.current = blocked;
+        setPendingExternal(blocked);
+        setSaveStatus('error');
         return;
       }
       log.error('notes', 'Failed to save note', { path: pathToSave, error: err.message });
@@ -600,7 +684,7 @@ export function useNoteContent(notePath: string | null) {
         }, DEBOUNCE_MS);
       }
     }
-  }, [reloadContent]);
+  }, [reloadContent, mergeAfterConflict]);
 
   // Debounced editor update handler.
   //

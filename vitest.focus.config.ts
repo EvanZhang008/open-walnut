@@ -30,6 +30,7 @@ const config = mergeConfig(
         '@open-walnut/task-query': path.resolve(import.meta.dirname, 'src/core/task-query.ts'),
         '@open-walnut/host-problem': path.resolve(import.meta.dirname, 'src/core/hosts/host-problem.ts'),
         '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
+        '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
       },
     },
     test: {

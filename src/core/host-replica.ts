@@ -64,6 +64,13 @@ export interface ReplicaEntry { k: string; h: string; n: number; m?: Record<stri
 
 interface NoteCacheRow { mtimeMs: number; size: number; h: string; m: Record<string, unknown> }
 const noteCache = new Map<string, NoteCacheRow>()
+/** Notes the last walk of a root left out for their size (WP11: a host refuses away writes to them). */
+const tooBigByRoot = new Map<string, string[]>()
+
+/** The notes too large to copy, as the last walk of `root` found them (capped). */
+export function notesTooBig(root = NOTES_DIR): string[] {
+  return tooBigByRoot.get(root) ?? []
+}
 
 function inFolder(rel: string, folders: string[]): boolean {
   return folders.some((f) => rel === f || rel.startsWith(`${f}/`))
@@ -99,6 +106,7 @@ export function noteEntries(exclude: string[], root = NOTES_DIR): Promise<Replic
 async function walkNotes(exclude: string[], root: string): Promise<ReplicaEntry[]> {
   const out: ReplicaEntry[] = []
   const seen = new Set<string>()
+  const tooBig: string[] = []
   const walk = async (dir: string, relDir: string): Promise<void> => {
     let names: import('node:fs').Dirent[]
     try { names = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
@@ -114,7 +122,7 @@ async function walkNotes(exclude: string[], root: string): Promise<ReplicaEntry[
       const abs = path.join(dir, d.name)
       let st: import('node:fs').Stats
       try { st = await fsp.stat(abs) } catch { continue }
-      if (st.size > MAX_NOTE_BYTES) continue
+      if (st.size > MAX_NOTE_BYTES) { if (tooBig.length < 5_000) tooBig.push(rel); continue }
       seen.add(abs)
       let row = noteCache.get(abs)
       if (!row || row.mtimeMs !== st.mtimeMs || row.size !== st.size) {
@@ -127,6 +135,7 @@ async function walkNotes(exclude: string[], root: string): Promise<ReplicaEntry[
     }
   }
   await walk(root, '')
+  tooBigByRoot.set(root, tooBig.sort())
   // A note deleted since the last round leaves the cache with it.
   for (const abs of noteCache.keys()) if (abs.startsWith(root + path.sep) && !seen.has(abs)) noteCache.delete(abs)
   return out
@@ -161,7 +170,47 @@ export interface ReplicaTarget {
   send: (cmd: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>
 }
 
-export interface ReplicaRoundResult { kind: ReplicaKind; action: 'synced' | 'unchanged' | 'dropped' | 'failed'; entries?: number; sent?: number; error?: string }
+export interface ReplicaRoundResult { kind: ReplicaKind; action: 'synced' | 'unchanged' | 'dropped' | 'failed'; entries?: number; sent?: number; held?: number; error?: string }
+
+/**
+ * The half rule's leader side for a host copy (section 4): a refused manifest counts
+ * toward the Settings row while it holds still; a confirm the user gave rides along only
+ * for that count and key set.
+ */
+async function removalGuard(hostKey: string, kind: ReplicaKind, entries: ReplicaEntry[]): Promise<{
+  params: Record<string, unknown>; refused: (reply: Record<string, unknown>) => Promise<void>; accepted: () => void
+}> {
+  const status = await import('./replication/replica-status.js')
+  const { manifestKeysHashOf } = await import('./replication/kind.js')
+  const kindName = `host-${kind}`
+  const st = status.peekKindState(`host:${hostKey}`, kindName)
+  const keys = manifestKeysHashOf(entries)
+  const now = Date.now()
+  const c = st?.confirmNext ? st.confirmFor : undefined
+  const confirm = c && c.expiresAt > now && c.entries === entries.length && c.keys === keys ? { entries: c.entries, keys: c.keys } : null
+  return {
+    params: confirm ? { confirm: true, confirmFor: confirm } : {},
+    refused: async (reply) => {
+      const s = status.kindState(statusTarget(hostKey), kindName)
+      if (confirm) { s.confirmNext = false; s.confirmFor = undefined }
+      s.refusals = s.lastRefusal && s.lastRefusal.entries === entries.length && s.lastRefusal.keys === keys ? s.refusals + 1 : 1
+      const d = (reply.detail && typeof reply.detail === 'object' ? reply.detail : {}) as { local?: unknown; removing?: unknown }
+      s.lastRefusal = {
+        error: 'manifest_removes_most_rows', at: now, entries: entries.length, keys,
+        ...(typeof d.local === 'number' ? { local: d.local } : {}), ...(typeof d.removing === 'number' ? { removing: d.removing } : {}),
+      }
+      s.action = 'failed'
+      log.session.warn('host replica: the host refused a manifest that removes most of its copy', { host: hostKey, kind, entries: entries.length, refusals: s.refusals })
+    },
+    accepted: () => {
+      if (!st) return
+      st.refusals = 0
+      st.lastRefusal = undefined
+      if (confirm) { st.confirmNext = false; st.confirmFor = undefined }
+      st.action = 'synced'
+    },
+  }
+}
 
 /** The manifest last sent per host and kind on its current connection. */
 const lastManifest = new Map<string, string>()
@@ -169,6 +218,58 @@ const lastManifest = new Map<string, string>()
 /** A host's connection changed: its next round sends every manifest again. */
 export function forgetHostReplica(hostKey: string): void {
   for (const key of [...lastManifest.keys()]) if (key.startsWith(`${hostKey}\u0000`)) lastManifest.delete(key)
+}
+
+// ── WP11: notes written on the host while away (section 4 "held", section 6) ──
+
+/** A round the host answered with held keys runs again after this long. */
+export const HELD_RERUN_MS = 35_000
+const heldReruns = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * A drain acked note records of this host: its next round sends the notes manifest again
+ * (the copy holds those keys until a manifest from after the ack stored them).
+ */
+export function noteRecordsAcked(hostKey: string): void {
+  lastManifest.delete(`${hostKey}\u0000notes`)
+}
+
+function scheduleHeldRerun(target: ReplicaTarget, kind: ReplicaKind, held: number): void {
+  if (heldReruns.has(target.hostKey)) return
+  log.session.info('host replica: the host holds keys an away write made; the round runs again', { host: target.hostKey, kind, held, inMs: HELD_RERUN_MS })
+  const timer = setTimeout(() => {
+    heldReruns.delete(target.hostKey)
+    void syncHostReplica(target)
+  }, HELD_RERUN_MS)
+  timer.unref?.()
+  heldReruns.set(target.hostKey, timer)
+}
+
+/** Tests: no rerun left armed. */
+export function _resetHostReplicaForTesting(): void {
+  for (const t of heldReruns.values()) clearTimeout(t)
+  heldReruns.clear()
+  lastManifest.clear()
+}
+
+/** The Settings row's target for a host's copy (replica-status.ts), the half rule's refusals. */
+function statusTarget(hostKey: string): { id: string; kind: 'host'; label: string } {
+  return { id: `host:${hostKey}`, kind: 'host', label: hostKey }
+}
+
+/**
+ * The user confirmed a removal the half rule refused three rounds in a row (the Settings
+ * row, POST /api/replicas/confirm-removal kind `host-<kind>`): the next round sends
+ * `confirm:true` bound to that manifest's count and keys.
+ */
+export async function confirmHostReplicaRemoval(hostKey: string, kind: ReplicaKind, seen: { entries?: number; keys?: string } = {}): Promise<boolean> {
+  const status = await import('./replication/replica-status.js')
+  if (!status.peekKindState(`host:${hostKey}`, `host-${kind}`)) return false
+  const { confirmKindRemoval } = await import('./replication/kind-leader.js')
+  if (!confirmKindRemoval(statusTarget(hostKey), `host-${kind}`, seen)) return false
+  lastManifest.delete(`${hostKey}\u0000${kind}`)
+  log.session.warn('host replica: the user confirmed a removal of most of a host copy', { host: hostKey, kind })
+  return true
 }
 
 async function searchExclude(config: Config): Promise<string[]> {
@@ -194,11 +295,19 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     bodies = await jsonBodies(kind)
     entries = [...bodies].map(([k, body]) => ({ k, h: sha12(body), n: Buffer.byteLength(body) }))
   }
-  const opts = kind === 'notes' ? { searchExclude: await searchExclude(config) } : undefined
+  const opts = kind === 'notes'
+    ? { searchExclude: await searchExclude(config), keepExclude: keep.notesExclude, tooBig: notesTooBig() }
+    : undefined
   const manifestHash = sha12(JSON.stringify([entries, opts ?? null]))
   if (lastManifest.get(memoKey) === manifestHash) return { kind, action: 'unchanged', entries: entries.length }
-  const reply = await target.send('replica.sync', { home, kind, entries, asOf: Date.now(), ...(opts ? { opts } : {}) })
-  if (reply.ok !== true) throw new Error(typeof reply.error === 'string' ? reply.error : 'replica.sync refused')
+  const guard = await removalGuard(target.hostKey, kind, entries)
+  const reply = await target.send('replica.sync', { home, kind, entries, asOf: Date.now(), ...(opts ? { opts } : {}), ...guard.params })
+  if (reply.ok !== true) {
+    if (reply.errorKind === 'manifest_removes_most_rows') await guard.refused(reply)
+    throw new Error(typeof reply.error === 'string' ? reply.error : 'replica.sync refused')
+  }
+  guard.accepted()
+  const held = typeof reply.held === 'number' ? reply.held : 0
   const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
   const wanted = new Map(entries.map((e) => [e.k, e.h]))
   let batch: Array<{ k: string; body: string }> = []
@@ -224,9 +333,11 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   }
   await flush()
   // A body that moved under us leaves the daemon one short: send the manifest again next round.
-  if (skipped === 0) lastManifest.set(memoKey, manifestHash)
+  // Keys an away write holds there (WP11) are not in the copy yet: the round runs again later.
+  if (skipped === 0 && held === 0) lastManifest.set(memoKey, manifestHash)
   else lastManifest.delete(memoKey)
-  return { kind, action: 'synced', entries: entries.length, sent }
+  if (held > 0) scheduleHeldRerun(target, kind, held)
+  return { kind, action: 'synced', entries: entries.length, sent, ...(held ? { held } : {}) }
 }
 
 const inFlight = new Map<string, { rerun: boolean }>()

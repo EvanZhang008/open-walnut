@@ -124,8 +124,8 @@ describe('kinds (docs/plan/walnut-replica-servers-impl.md, section 4, WP3)', () 
     expect(tasks.ok).toBe(true)
   })
 
-  it('the copy kinds of a host replica (WP4, WP5) are 404 unknown_kind here, any op, any schema', async () => {
-    for (const kind of ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config']) {
+  it('the copy kinds of a host replica (WP4, WP5, WP12) are 404 unknown_kind here, any op, any schema', async () => {
+    for (const kind of ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas']) {
       for (const body of [{ op: 'status', digest: '0.0' }, { op: 'sync', entries: [{ k: 'k1', h: 'aaaaaaaaaaaa' }], asOf: 1, schemaVersion: 99 }, { op: 'put', rows: [{ key: 'ui', value: {} }], last: true, schemaVersion: 1 }, { op: 'purge' }]) {
         expect([kind, body.op, await post(T.local, { ...body, kind })]).toEqual([kind, body.op, { status: 404, body: { ok: false, error: 'unknown_kind' } }])
       }

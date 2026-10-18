@@ -14,6 +14,17 @@
  * and the report the Mac reads back. It opens no other connection and listens
  * on one port. It keeps no data of its own beyond its tunnel settings and the
  * copies the Mac sends.
+ *
+ * Beside the replica (docs/plan/walnut-replica-servers.md): this is the PLAIN
+ * host server, `walnut host-server`. A host that opted in
+ * (`hosts.<alias>.server_program: 'replica'`, on a daemon with `replica-host-v1`)
+ * runs the full program instead, `walnut web --replica` (src/replica/front.ts):
+ * the same front door, plus the copies and writes while the Mac is away. This
+ * program stays for three cases: a host that did not opt in (the default until
+ * the replica's release gate), a daemon too old for the replica, and the
+ * daemon's own fallback when the replica crash-loops (3 exits in 10 min run this
+ * one for an hour, with no Mac involved; host-server-core.ts). While the Mac is
+ * away it shows the "alone" page (this host's sessions only), not the console.
  */
 
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'

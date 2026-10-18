@@ -211,7 +211,7 @@ export function opIdMiddleware(opts: OpIdOptions = {}): RequestHandler {
       if (offset !== null) {
         const ageMs = (arrivedAt(req) ?? now()) - (forwardedAt + offset);
         if (ageMs > STALE_FORWARD_MS) {
-          log.web.warn('op id: a forwarded write is too old and is not applied', {
+          log.web.warn('forward stale refused', {
             method: req.method, path: req.originalUrl, hostKey, opId, ageMs, offsetMs: offset,
           });
           return refuse(res, 409, 'stale_forward', 'this write waited too long on its way to the Mac and was not applied; send it again', { ageMs });

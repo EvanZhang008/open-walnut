@@ -546,6 +546,44 @@ See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task 
 
 ---
 
+## Replica servers (the same server on a host)
+
+Design: [docs/plan/walnut-replica-servers.md](./docs/plan/walnut-replica-servers.md); the
+build and its rules: [docs/plan/walnut-replica-servers-impl.md](./docs/plan/walnut-replica-servers-impl.md).
+
+```
+Mac (leader, walnut web) ── copies (one generic kind) ──► host daemon ──► replica (walnut web --replica)
+        ▲                                                   │  journal (one root per host)     │
+        └──── drain v2 (per record, per field, letter) ◄────┘◄── follower.op while away ◄──────┘
+```
+
+- **Role and placement** (`src/core/server-role.ts`, `src/core/boot-policy.ts`): `leader` on the Mac;
+  `replica` on the companion (`placement: cloud`) and on a host (`placement: host`). One
+  `bootPolicy(job)` per gate decides what a replica runs; a ratchet lists every raw `CLOUD_MODE` read.
+- **Front** (`src/replica/front.ts`, `dispatch.ts`, `route-table.ts`, `presence.ts`): every request is
+  classed by the route table. While the Mac answers it is forwarded on a stream through the host's daemon;
+  while the Mac is away (one quiet window, `LEADER_QUIET_MS`) a read is answered from the copies and a
+  queueable write goes to the daemon's journal (`follower.op`), anything else answers `503 needs_leader`.
+- **Copies** (`src/core/replication/`): the Mac sends tasks, sessions, requests, boards, inbox, routines,
+  conversations, prefs and a sanitized config with the manifest protocol of `kind-leader.ts` /
+  `kind-follower.ts` (held rows, the half rule). Notes, memory and skills: the daemon's own copy, read
+  through owner-scoped follower reads.
+- **Journal and drain** (`src/providers/offline-host-core.ts`, `offline-journal-core.ts`,
+  `src/core/offline-handover.ts`, `src/core/offline-merge/`): the daemon journals the replica's writes
+  with op ids and bases; the Mac drains when it is back, acks exact seqs, merges per field, and writes one
+  letter for real conflicts.
+- **Supervision** (`src/providers/host-server-core.ts`): the daemon runs the replica, restarts it, falls
+  back to the plain host server after a crash loop, and caps its stdout log while it runs; the replica
+  prunes its log dir daily.
+- **Observability**: the structured lines of the impl plan's section 13 (`replica presence`, `replica
+  forward`, `journal append`, `journal drain`, ...), `GET /api/replicas/status` (copy ages, journal size,
+  drainable and parked counts, program, fallback), and the host-side lines through the daemon's
+  `logs.tail` (`scripts/walnut-logs.sh replica --host <alias>`).
+- **Rollout**: `hosts.<alias>.server_program: 'replica'` opts a host in; until the release gate the
+  default stays the plain host server (`src/host-server/main.ts`).
+
+---
+
 ## CLI — an HTTP client, never a second writer
 
 `open-walnut add|tasks|done|recall|projects|sessions|start|tools` are HTTP clients of the running server's `/api/v1` facade (`src/utils/api-client.ts`; base URL `OPEN_WALNUT_API_URL`, default `http://127.0.0.1:3456`). They used to import `core/task-manager` and write SQLite from the CLI process, which made every invocation a SECOND WRITER racing the server — two processes each holding a stale in-memory store delete each other's rows. The server is now the single writer; localhost requests bypass auth, so no token plumbing is needed.

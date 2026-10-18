@@ -31,6 +31,12 @@
  *   GET  /control/mac-board?taskId the Mac's Board file of a task, read from disk
  *   GET  /control/journal  the host daemon's journal: each record's seq, kind, op id, task and field
  *                          names (a task's records), and whether it is acked
+ *   POST /control/mac-note {path, content} or {path, find, replace, sleep?}: a note written on the
+ *                          Mac through its own API. The first waits for the host's copy to hold it;
+ *                          the second edits what the Mac holds and, with `sleep`, puts the Mac to
+ *                          sleep at once, before its 3 s debounced round tells the host (WP11)
+ *   GET  /control/mac-note?path  the Mac's note file and the notes beside it, read from disk
+ *   GET  /control/mac-letters    the Mac's inbox letters (id, subject, time), read from disk
  *
  * Never :3456 or :3457, never the developer's data: everything lives under the
  * cluster's temp base, removed on shutdown. REPLICA_TWIN=standalone runs the bun twin.
@@ -39,6 +45,7 @@
  * is still starting waits for it, then stops it (an early signal used to end the
  * fixture with the default action, leaving the cluster's processes behind).
  */
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import { createRequire } from 'node:module'
@@ -216,13 +223,90 @@ control = http.createServer((req, res) => {
         const copy = c.deviceCopy() as { devices?: unknown[] } | null
         return reply(200, { count: Array.isArray(copy?.devices) ? copy!.devices.length : 0 })
       }
+      // WP12: what a new ask on the host needs from the Mac (its personas copy on the
+      // replica, its spawn template on the host daemon), and the Mac's record of a session.
+      if (req.method === 'GET' && url.pathname === '/control/ask-ready') {
+        let personas = false
+        try { personas = fs.readFileSync(path.join(c.replicaData, 'cache', 'replica', 'personas.json'), 'utf8').includes('"general"') } catch { /* not yet */ }
+        let template = false
+        try { template = fs.readdirSync(path.join(c.base, 'hd', 'offline-host')).some((n) => /^spawn-template-[0-9a-f]+\.json$/.test(n)) } catch { /* not yet */ }
+        return reply(200, { personas, template })
+      }
+      if (req.method === 'GET' && url.pathname === '/control/mac-session') {
+        const sid = url.searchParams.get('sid') ?? ''
+        if (!/^[0-9a-f-]{36}$/.test(sid)) return reply(400, { error: 'bad sid' })
+        const r = await c.mac('GET', `/api/v1/sessions/${sid}`)
+        return reply(200, { status: r.status, session: r.json })
+      }
+      // The Mac's and the replica's log tails, for a failed test's report.
+      if (req.method === 'GET' && url.pathname === '/control/logs') return reply(200, c.logs())
       if (req.method === 'POST' && url.pathname === '/control/mac-edit') {
         const r = await c.mac('PATCH', `/api/tasks/${String(body.taskId)}`, { title: String(body.title) })
         return reply(r.status, r.json)
       }
+      // -- WP11: notes written while the Mac is away (replica-away-notes.spec.ts) --
+      if (url.pathname === '/control/mac-note' || url.pathname === '/control/mac-letters') return reply(...await noteControl(req.method ?? 'GET', url, body))
       reply(404, { error: 'not_found' })
     })().catch((err) => reply(500, { error: err instanceof Error ? err.message : String(err) }))
   })
 })
+// -- WP11: notes written while the Mac is away --
+
+const sha12 = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 12)
+const noteRel = (p: string) => (/\.md$/i.test(p) ? p : `${p}.md`)
+const notesApi = (rel: string) => `/api/notes-v2/content/${rel.split('/').map(encodeURIComponent).join('/')}`
+
+/** The hash the host daemon's copy holds for a note (its index), or null. */
+function hostCopyHash(rel: string): string | null {
+  const root = path.join(c.base, 'hd', 'host-replica')
+  let homes: string[] = []
+  try { homes = fs.readdirSync(root) } catch { return null }
+  for (const h of homes) {
+    try {
+      const idx = JSON.parse(fs.readFileSync(path.join(root, h, 'notes', 'index.json'), 'utf8')) as { index?: Record<string, { h?: string }> }
+      const row = idx.index?.[rel]
+      if (row?.h) return row.h
+    } catch { /* not this home */ }
+  }
+  return null
+}
+
+async function noteControl(method: string, url: URL, body: Record<string, unknown>): Promise<[number, unknown]> {
+  if (method === 'GET' && url.pathname === '/control/mac-letters') {
+    try {
+      const idx = JSON.parse(fs.readFileSync(path.join(c.macData, 'human-inbox', 'index.json'), 'utf8')) as { letters?: Array<{ id: string; subject: string; createdAt: number }> }
+      return [200, { letters: (idx.letters ?? []).map((l) => ({ id: l.id, subject: l.subject, createdAt: l.createdAt })) }]
+    } catch { return [200, { letters: [] }] }
+  }
+  if (method === 'GET') {
+    const rel = noteRel(url.searchParams.get('path') ?? '')
+    if (!rel || rel.split('/').includes('..')) return [400, { error: 'bad path' }]
+    const abs = path.join(c.macData, 'notes', rel)
+    let content: string | null = null
+    try { content = fs.readFileSync(abs, 'utf8') } catch { /* none */ }
+    let beside: string[] = []
+    try { beside = fs.readdirSync(path.dirname(abs)).filter((n) => n.endsWith('.md')).sort() } catch { /* none */ }
+    return [200, { content, beside, hostCopyHash: hostCopyHash(rel) }]
+  }
+  const rel = noteRel(String(body.path ?? ''))
+  if (!rel || rel.split('/').includes('..')) return [400, { error: 'bad path' }]
+  if (typeof body.content === 'string') {
+    const r = await c.mac('PUT', notesApi(rel), { content: body.content })
+    if (r.status >= 300) return [r.status, r.json]
+    const written = fs.readFileSync(path.join(c.macData, 'notes', rel), 'utf8')
+    await waitUntil(() => hostCopyHash(rel) === sha12(written), 60_000, 'the host copy to hold the note')
+    return [200, { contentHash: sha12(written), content: written }]
+  }
+  // An edit of what the Mac holds now, once the host's copy holds that too.
+  const now = fs.readFileSync(path.join(c.macData, 'notes', rel), 'utf8')
+  await waitUntil(() => hostCopyHash(rel) === sha12(now), 60_000, 'the host copy to hold the Mac\'s note')
+  const find = String(body.find)
+  if (!now.includes(find)) return [409, { error: `"${find}" is not in the note`, content: now }]
+  const r = await c.mac('PUT', notesApi(rel), { content: now.replace(find, String(body.replace)), expectedHash: sha12(now) })
+  if (r.status >= 300) return [r.status, r.json]
+  if (body.sleep === true) { c.sleepMac(); return [200, { ...r.json, ms: await c.waitAway(probeToken) }] }
+  return [200, r.json]
+}
+
 await new Promise<void>((r) => control!.listen(port + 1, '127.0.0.1', () => r()))
 process.stdout.write(`REPLICA_FIXTURE_READY ${JSON.stringify({ port, control: port + 1, twin, app: c.app, base: c.base })}\n`)

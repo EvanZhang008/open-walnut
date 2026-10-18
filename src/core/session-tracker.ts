@@ -586,9 +586,28 @@ export async function sessionRowsForReplica(): Promise<readonly SessionRecord[]>
  * List all tracked sessions. readStore() already returns isolated shallow
  * clones, so callers may freely sort/mutate the result.
  */
+// ── Sessions a host replica started while the Mac is away (WP12) ──
+// Not in the sessions copy until the Mac adopts them and copies them back; the
+// replica installs their rows (replica/ask-launch.ts). A copy row of the same id
+// wins. Nothing installs this on the Mac or the companion.
+let awaySessionRows: (() => SessionRecord[]) | null = null;
+export function installAwaySessions(fn: (() => SessionRecord[]) | null): void {
+  awaySessionRows = fn;
+}
+function awayRows(): SessionRecord[] {
+  if (!awaySessionRows) return [];
+  try { return awaySessionRows(); } catch { return []; }
+}
+function withAway(rows: SessionRecord[], keep: (s: SessionRecord) => boolean = () => true): SessionRecord[] {
+  const extra = awayRows();
+  if (!extra.length) return rows;
+  const have = new Set(rows.map((r) => r.claudeSessionId));
+  return rows.concat(extra.filter((r) => !have.has(r.claudeSessionId) && keep(r)).map((r) => ({ ...r })));
+}
+
 export async function listSessions(): Promise<SessionRecord[]> {
   const store = await readStore();
-  return store.sessions;
+  return awaySessionRows ? withAway(store.sessions) : store.sessions;
 }
 
 /**
@@ -605,7 +624,7 @@ export async function listSessionsForTasks(
   for (const s of view) {
     if ((s.taskId && taskIds.has(s.taskId)) || sessionIds.has(s.claudeSessionId)) linked.push(cloneSession(s));
   }
-  return linked;
+  return awaySessionRows ? withAway(linked, (s) => (!!s.taskId && taskIds.has(s.taskId)) || sessionIds.has(s.claudeSessionId)) : linked;
 }
 
 export async function listPendingSessionStops(host: string): Promise<SessionRecord[]> {
@@ -984,7 +1003,9 @@ export function getSessionByClaudeIdSync(claudeSessionId: string): SessionRecord
   const row = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
     | Record<string, any>
     | undefined;
-  return row ? rowToSession(row) : null;
+  if (row) return rowToSession(row);
+  const away = awaySessionRows ? awayRows().find((r) => r.claudeSessionId === claudeSessionId) : undefined;
+  return away ? { ...away } : null;
 }
 
 /**
@@ -1175,7 +1196,8 @@ export function getSessionsForTaskSync(taskId: string): SessionRecord[] {
   const db = getDb();
   if (!db) return [];
   const rows = db.prepare('SELECT * FROM sessions WHERE task_id = ?').all(taskId) as Record<string, any>[];
-  return rows.map(rowToSession);
+  const found = rows.map(rowToSession);
+  return awaySessionRows ? withAway(found, (r) => r.taskId === taskId) : found;
 }
 
 // ── Health-scan active-set queries (I1: periodic work = O(active), never O(history)) ──

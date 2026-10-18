@@ -25,6 +25,8 @@ import { COPY_KIND_NAMES, DEFAULT_COPY_CHOICE, copyChoiceFrom } from '../../../.
 const ENV = ['WALNUT_ROLE', 'WALNUT_PLACEMENT', 'WALNUT_HOST_SERVER'] as const
 const saved: Record<string, string | undefined> = {}
 const WP5 = ['routines', 'conversations', 'prefs', 'config']
+/** WP12's copy (the Ask personas), kept on a host replica only, like the WP5 ones. */
+const HOST_ONLY = [...WP5, 'personas']
 const BODIES: Array<Record<string, unknown>> = [
   { op: 'status', digest: '0.0' },
   { op: 'sync', entries: [{ k: 'ui', h: 'aaaaaaaaaaaa' }], asOf: 1, schemaVersion: 99 },
@@ -52,9 +54,9 @@ function nothingWritten(): void {
 
 describe('the WP5 kinds are registered and chosen like the WP4 ones', () => {
   it('each is a leader kind, a confirmable name, and on by default in the host choice', () => {
-    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', ...WP5])
-    for (const k of WP5) expect(COPY_KIND_NAMES).toContain(k)
-    expect(DEFAULT_COPY_CHOICE).toMatchObject({ routines: true, conversations: true, prefs: true, config: true })
+    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', ...HOST_ONLY])
+    for (const k of HOST_ONLY) expect(COPY_KIND_NAMES).toContain(k)
+    expect(DEFAULT_COPY_CHOICE).toMatchObject({ routines: true, conversations: true, prefs: true, config: true, personas: true })
     expect(copyChoiceFrom({ config: false, prefs: 'no' })).toMatchObject({ config: false, prefs: true })
   })
 })
@@ -64,7 +66,7 @@ describe('off a host replica', () => {
     for (const k of ENV) delete process.env[k]
     _resetServerRoleForTesting()
     expect(isHostReplica()).toBe(false)
-    for (const kind of WP5) for (const body of BODIES) {
+    for (const kind of HOST_ONLY) for (const body of BODIES) {
       expect([kind, body.op, await followerStep({ ...body, kind })]).toEqual([kind, body.op, { ok: false, status: 404, error: 'unknown_kind' }])
     }
     nothingWritten()
@@ -82,7 +84,7 @@ describe('off a host replica', () => {
     process.env.WALNUT_HOST_SERVER = '1'
     _resetServerRoleForTesting()
     expect([isHostReplica(), isHostReplicaProgram()]).toEqual([true, false])
-    for (const kind of WP5) for (const body of BODIES) {
+    for (const kind of HOST_ONLY) for (const body of BODIES) {
       expect([kind, body.op, await followerStep({ ...body, kind })]).toEqual([kind, body.op, { ok: false, status: 404, error: 'unknown_kind' }])
     }
     nothingWritten()

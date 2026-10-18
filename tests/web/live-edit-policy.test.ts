@@ -22,7 +22,7 @@ import {
   loadLiveEditPref, LIVE_EDIT_PREF_KEY, LIVE_WRITE_DEBOUNCE_MS,
   planLiveWrite,
 } from '../../web/src/hooks/useLiveEdit';
-import { threeWayMerge } from '../../web/src/utils/three-way-merge';
+import { threeWayMerge } from '../../src/lib/three-way-merge';
 import { computeContentHashClient } from '../../web/src/utils/content-hash';
 
 describe('decideAfterConflict', () => {

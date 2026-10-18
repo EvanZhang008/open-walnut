@@ -1,7 +1,9 @@
 /**
  * File transport — writes JSON-lines to /tmp/open-walnut/walnut-YYYY-MM-DD.log.
  *
- * initFileLogger()  : ensures the log directory exists & prunes files > 3 days old.
+ * initFileLogger()  : ensures the log directory exists & prunes files > 3 days old
+ *                     (on a replica, the companion or a host replica, again every day:
+ *                     it runs for weeks and never sees the Mac's restarts; WP14).
  * writeLogEntry()   : buffers one JSON line; flushed to disk every 2 s (async).
  * flushLogBuffer()  : manual flush (called on graceful shutdown).
  */
@@ -12,6 +14,7 @@ import path from 'node:path';
 import { LOG_DIR, LOG_PREFIX } from '../constants.js';
 import type { LogLevel } from './levels.js';
 import { redactSensitiveText } from './redact.js';
+import { followerKind } from '../core/server-role.js';
 
 // ── Types ──
 
@@ -165,7 +168,26 @@ export function initFileLogger(): void {
   // then mark dirEnsured so the first flush skips redundant mkdir.
   fs.mkdirSync(LOG_DIR, { recursive: true });
   dirEnsured = true;
-  pruneOldLogs(3);
+  pruneOldLogs(LOG_KEEP_DAYS);
+  // A replica (the companion, a host server or replica) runs for weeks: it prunes
+  // daily too. The Mac keeps its prune at start only, as before.
+  if (followerKind() !== null) startDailyLogPrune();
+}
+
+const LOG_KEEP_DAYS = 3;
+const PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
+let pruneTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Prune the log dir once a day while this process runs (a replica's; WP14). */
+export function startDailyLogPrune(): void {
+  if (pruneTimer) return;
+  pruneTimer = setInterval(() => { pruneOldLogs(LOG_KEEP_DAYS); }, PRUNE_EVERY_MS);
+  if (typeof pruneTimer === 'object' && 'unref' in pruneTimer) pruneTimer.unref();
+}
+
+/** Tests: whether the daily prune runs, and stop it. */
+export function _dailyLogPruneForTesting(): { running: boolean; stop: () => void } {
+  return { running: pruneTimer !== null, stop: () => { if (pruneTimer) clearInterval(pruneTimer); pruneTimer = null; } };
 }
 
 /**

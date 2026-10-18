@@ -24,7 +24,7 @@ import {
 } from '@/api/files';
 import { READ_ONLY_TOOLS } from '@/utils/embedded-image-freshness';
 import { deleteFileDraft } from '@/utils/file-drafts';
-import { threeWayMerge, type MergeResult } from '@/utils/three-way-merge';
+import { threeWayMerge, type MergeResult } from '@open-walnut/three-way-merge';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import { getHostStatus } from '@/hooks/useHostStatus';

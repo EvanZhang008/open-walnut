@@ -154,7 +154,8 @@ describe('a round', () => {
   it('the search exclusions travel with the manifest', async () => {
     config = { search: { excluded_folders: ['health'] } } as unknown as Config
     await syncHostReplica(target)
-    expect(calls[0].params.opts).toEqual({ searchExclude: ['health'] })
+    // WP11: the folders this host does not keep and the notes too large to copy travel too (its away writes refuse them).
+    expect(calls[0].params.opts).toEqual({ searchExclude: ['health'], keepExclude: [], tooBig: ['Big.md'] })
     const r = read('note_search', { q: 'blood' }) as { ok: true; result: { results: unknown[] } }
     expect(r.result.results).toEqual([])
   })
@@ -230,4 +231,59 @@ describe('a round', () => {
     // The rerun found nothing new to send for notes, so it asked once per kind in round two.
     expect(syncs).toBe(3)
   })
+})
+
+// -- WP11 (docs/plan/walnut-replica-servers-impl.md sections 4 and 6): a note an away
+// write holds on the host, merged by the drain, and the copy catching up after the ack. --
+
+import { HELD_RERUN_MS, noteRecordsAcked, _resetHostReplicaForTesting } from '../../src/core/host-replica.js'
+import { applyNoteRecord, sha256 as sha256Full } from '../../src/core/offline-merge/notes.js'
+import { mergeVersions } from '../../src/lib/three-way-merge.js'
+import { withNoteId } from '../../src/core/parse-frontmatter.js'
+
+describe('away notes: held on the host, merged on the Mac, copied after the ack', () => {
+  afterEach(() => { _resetHostReplicaForTesting(); vi.useRealTimers() })
+
+  it('the drain merges a note while the host holds it; after the ack the copy is the Mac\'s text within one rerun', async () => {
+    await syncHostReplica(target)
+    const base = fs.readFileSync(path.join(NOTES_DIR, 'Projects/Retro.md'), 'utf8')
+    const away = '# Retro\nThe build broke twice.\nWritten on the host while away.'
+    // The host's journal: one pending write of Retro, then acked by the drain.
+    let pending = true
+    let ackAt = 0
+    daemon.setJournalView({
+      overlay: () => (pending ? new Map([['Projects/Retro.md', { body: away, h: sha12(away), n: away.length }]]) : null),
+      held: (_home, asOf) => (pending || asOf <= ackAt ? new Set(['Projects/Retro.md']) : new Set()),
+    })
+    // The Mac edits the note itself; its round finds the key held and arms a rerun.
+    write('Projects/Retro.md', '# Retro (Mac)\nThe build broke twice.')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    calls = []
+    const first = await syncHostReplica(target)
+    expect(first.find((r) => r.kind === 'notes')).toMatchObject({ action: 'synced', held: 1 })
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: away } })
+    // The drain merges the away write into the Mac's note while the host still holds it.
+    const blobs = new Map([[sha256Full(base), base], [sha256Full(away), away]])
+    const out = await applyNoteRecord({
+      root: NOTES_DIR, cacheDir: path.join(WALNUT_HOME, 'cache'), hostLabel: 'devbox', hostKey: 'devbox',
+      fetchBlob: async (sha) => Buffer.from(blobs.get(sha)!, 'utf8'),
+      merge: async (b, v, o) => mergeVersions(b, v, o), pathOfId: () => undefined, lock: (_a, fn) => fn(),
+      written: () => undefined, remove: async () => undefined, ensureId: (c, cur) => withNoteId(c, cur).content,
+    }, { conflicts: () => undefined }, { seq: 1, at: Date.now(), opId: 'op-r1', path: 'Projects/Retro.md', mode: 'put', baseBlob: sha256Full(base), oursBlob: sha256Full(away) }, Date.now())
+    expect(out.action).toBe('merged')
+    const merged = fs.readFileSync(path.join(NOTES_DIR, 'Projects/Retro.md'), 'utf8')
+    expect(merged).toContain('# Retro (Mac)')
+    expect(merged).toContain('Written on the host while away.')
+    // The ack: the record leaves the journal; the key waits for a copy made after it.
+    pending = false
+    ackAt = Date.now() - 1
+    noteRecordsAcked('devbox')
+    calls = []
+    await new Promise((r) => setImmediate(r))
+    await vi.advanceTimersByTimeAsync(HELD_RERUN_MS + 10)
+    for (let i = 0; i < 400 && !cmds().includes('replica.put:notes'); i++) await new Promise((r) => setImmediate(r))
+    for (let i = 0; i < 400 && cmds().length < 2; i++) await new Promise((r) => setImmediate(r))
+    expect(cmds()).toContain('replica.put:notes')
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: merged, contentHash: sha12(merged) } })
+  }, 30_000)
 })

@@ -47,10 +47,12 @@ export const DELTA_MAX_ROWS = 1_000
 export interface CopyChoice {
   sessions: boolean; requests: boolean; boards: boolean; inbox: boolean; inbox_bodies: boolean
   routines: boolean; conversations: boolean; prefs: boolean; config: boolean
+  /** WP12: the Ask personas, so a new ask starts on the host while the Mac is away. */
+  personas: boolean
 }
 export const DEFAULT_COPY_CHOICE: Readonly<CopyChoice> = Object.freeze({
   sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false,
-  routines: true, conversations: true, prefs: true, config: true,
+  routines: true, conversations: true, prefs: true, config: true, personas: true,
 })
 
 /** The choice from config, defaults filled in (anything but a boolean keeps the default). */
@@ -327,7 +329,7 @@ let schedulers = 0
 let copySoon: ((kind?: string) => void) | null = null
 
 /** Every copy kind's name (web/routes/replicas-status.ts accepts a confirm for these). */
-export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config'] as const
+export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas'] as const
 
 /**
  * The user confirmed a removal the half rule refused three rounds in a row (the

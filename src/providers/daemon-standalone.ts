@@ -85,6 +85,8 @@ import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
+import { createHostStart, type HostStartAnswer, type HostStartPlan } from './host-start-core.js'
+import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import {
@@ -826,6 +828,9 @@ const FOLLOWER_ALLOWED_COMMANDS = new Set([
   // away, and its read of what is pending (its overlay). Each is scoped to the follower's
   // own Walnut and checks the leader itself.
   'follower.op', 'follower.pending',
+  // A new ask while the Mac is away ('replica-start-v1'): the Mac's template, filled
+  // from the follower's validated fields only (host-start-core.ts).
+  'follower.start',
   // Streams to the leader or the companion ('stream-relay-v1'): the frames of a
   // stream on this socket only; where an open may go is checked in streamTarget.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
@@ -2150,6 +2155,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'follower.permission': return daemonCommands.run(() => cmdFollowerPermission(ws, id as number, cmd))
     case 'follower.op': return cmdFollowerOp(ws, id as number, cmd)
     case 'follower.pending': return cmdFollowerPending(ws, id as number, cmd)
+    // A new ask while the Mac is away ('replica-start-v1', WP12). Keep in sync with daemon-source.ts.
+    case 'follower.start': return daemonCommands.run(() => cmdFollowerStart(ws, id as number, cmd))
+    case 'leader.spawnTemplate': return cmdLeaderSpawnTemplate(ws, id as number, cmd)
     // Streams between servers through this daemon ('stream-relay-v1',
     // stream-relay-core.ts): frames, never answered by id. Keep in sync with daemon-source.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd)
@@ -2225,6 +2233,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
     })
+    case 'logs.tail': return cmdLogsTail(ws, id as number, cmd)
     default: return sendError(ws, id as number, 'unknown command: ' + cmd.cmd)
   }
 }
@@ -3270,7 +3279,24 @@ const hostServers = createHostServerSupervisor({
     WALNUT_HOST_DAEMON_DIR: DAEMON_DIR,
   }),
   randomToken: () => crypto.randomBytes(32).toString('hex'),
+  // The stdout log's cap while the server runs (WP14; tests set a small one). Keep in sync with daemon-source.ts.
+  maxLogBytes: Number(process.env.WALNUT_HOST_SERVER_LOG_MAX_BYTES) || undefined,
 })
+
+// ── logs.tail ('replica-logs-v1', replica-logs-core.ts; WP14) ──
+// The Mac reads what its replica on this host and this daemon's journal logged
+// here. A trusted leader socket whose leader.configure named `home` only:
+// another Walnut's logs are never readable. Keep in sync with daemon-source.ts.
+const replicaLogs = createReplicaLogs({ fs, path, daemonDir: DAEMON_DIR, logsOf: (home) => hostServers.logsOf(home) })
+function cmdLogsTail(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const origin = ws.data?.origin
+  if (origin === 'bridge' || origin === 'follower' || origin === 'lane') return sendError(ws, id, 'logs.tail: trusted clients only', { errorKind: 'refused' })
+  const home = typeof cmd.home === 'string' ? cmd.home : ''
+  if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'logs.tail: send leader.configure for this Walnut first', { errorKind: 'not_owner' })
+  const r = replicaLogs.tail(home, cmd.sources, cmd.n, cmd.match)
+  if (!r.ok) return sendError(ws, id, 'logs.tail: ' + r.message, { errorKind: r.code })
+  sendOk(ws, id, r as unknown as Record<string, unknown>)
+}
 
 /** The socket that speaks as the follower of each Walnut (the server this daemon started). */
 const followerSockets = new Map<string, ServerWebSocket<WsData>>()
@@ -3759,6 +3785,127 @@ function cmdFollowerPending(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   sendOk(ws, id, offlineHost.pendingFor(home, cmd.sinceSeq) as unknown as Record<string, unknown>)
 }
 
+// ── A new ask while the Mac is away ('replica-start-v1', host-start-core.ts; WP12) ──
+// The Mac pushes its spawn template for its Walnut (leader.spawnTemplate, trusted socket);
+// the replica's follower.start fills only its slots, each value validated. The spawn
+// journal names the follower's Walnut, so a stop from the Mac after it adopted the
+// session is honoured (owner-home-v1). Keep in sync with daemon-source.ts.
+const hostStart = createHostStart({
+  fs, path,
+  dir: OFFLINE_HOST_DIR,
+  keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
+  now: () => Date.now(),
+  log: (level, msg, data) => logMsg(level, msg, data),
+  busy: () => {
+    let n = 0
+    for (const s of sessions.values()) if (s.state === 'running' && s.foldState?.turnActive) n++
+    return n
+  },
+})
+
+/** The leader's spawn template for its Walnut: the socket its leader.configure tagged only. */
+function cmdLeaderSpawnTemplate(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (!isServerClient(ws)) return sendError(ws, id, 'leader.spawnTemplate: the leader only')
+  const home = typeof cmd.home === 'string' ? cmd.home : ''
+  if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'leader.spawnTemplate: send leader.configure for this Walnut first')
+  try {
+    const t = hostStart.setTemplate(home, cmd.template)
+    sendOk(ws, id, { builtAt: t.builtAt })
+  } catch (err) {
+    sendError(ws, id, (err as Error).message)
+  }
+}
+
+/** A follower.start answer: the reply, or the refusal with its kind (a retry gets the same one). */
+function sendStartAnswer(ws: ServerWebSocket<WsData>, id: number, a: HostStartAnswer, duplicate = false) {
+  if (a.ok) return sendOk(ws, id, duplicate ? { ...a.reply, duplicate: true } : a.reply)
+  sendError(ws, id, a.error, a.extra)
+}
+
+function startRefusal(error: { code: string; message: string; detail?: unknown; retryAfterMs?: number }): HostStartAnswer {
+  return {
+    ok: false, error: 'follower.start: ' + error.message,
+    extra: { errorKind: error.code, ...(error.detail !== undefined ? { detail: error.detail } : {}), ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}) },
+  }
+}
+
+/**
+ * The replica's new ask while the Mac is away: every check, then the CLI from the
+ * template, then its `session` record. `check: true` runs the checks only (the replica
+ * journals the ask's task after they pass). Keep in sync with daemon-source.ts.
+ */
+async function cmdFollowerStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = followerHomeOf(ws)
+  if (!home) return sendError(ws, id, 'follower.start: send follower.hello first')
+  if (!followerMayWrite(home)) return sendError(ws, id, 'follower.start: your Mac answers again; start the ask through it', { errorKind: 'leader_answers' })
+  if (!ownsDaemonDir()) {
+    return sendError(ws, id, 'follower.start: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } })
+  }
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+  const check = cmd.check === true
+  // A retry (its answer lost, or asked again while the CLI still starts): the first
+  // attempt's answer once it comes, never a second plan or a second CLI.
+  const first = sid ? hostStart.firstStart(home, sid) : null
+  if (first === 'taken') return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' })
+  if (first) {
+    logMsg('info', 'follower.start: asked again, answered by the first start', { home, sid, check })
+    if (check) return sendOk(ws, id, { sid, checked: true, duplicate: true })
+    return sendStartAnswer(ws, id, await first, true)
+  }
+  if (sid && offlineHost.ownerOf(sid) === home) {
+    logMsg('info', 'follower.start: asked again, started once', { home, sid })
+    return sendOk(ws, id, check ? { sid, checked: true, duplicate: true } : { sid, duplicate: true })
+  }
+  if (sid && (sessions.has(sid) || journaledIds().has(sid))) return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' })
+  if (check) {
+    const no = hostStart.precheck(home, cmd)
+    if (no) return sendStartAnswer(ws, id, startRefusal(no))
+    const room = offlineHost.checkSession(home, sid, cmd.actor)
+    if (!room.ok) return sendStartAnswer(ws, id, startRefusal(room.error))
+    return sendOk(ws, id, { sid, checked: true })
+  }
+  const planned = hostStart.plan(home, cmd, typeof cmd.host === 'string' ? cmd.host : '')
+  if (!planned.ok) return sendStartAnswer(ws, id, startRefusal(planned))
+  const p = planned.plan
+  const answer = hostStart.once(home, p.sid, () => startHostAsk(home, p, cmd))
+  if (answer === 'taken') return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' })
+  sendStartAnswer(ws, id, await answer)
+}
+
+/** One ask's start: refusals before the CLI, the record after it runs (a failed start leaves none). */
+async function startHostAsk(home: string, p: HostStartPlan, cmd: Record<string, unknown>): Promise<HostStartAnswer> {
+  const release = hostStart.begin(home)
+  try {
+    const room = offlineHost.checkSession(home, p.sid, cmd.actor)
+    if (!room.ok) return startRefusal(room.error)
+    await sessionStartGate.run(p.sid, () => startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home, task: p.taskId } }))
+    // The request's op id names its task-create too (the same request): the session record takes its own.
+    const opId = typeof cmd.opId === 'string' && /^[A-Za-z0-9_-]{1,72}$/.test(cmd.opId) ? cmd.opId + '-session' : undefined
+    const saved = offlineHost.noteSession(home, p.record, opId, cmd.actor)
+    if (!saved.ok) {
+      // Nothing would tell the Mac about this CLI: it must not run unseen. Not stamped as an
+      // intentional stop (only the idle scan, cmdStop and a budget pause are): no record names
+      // this session, so how its death reads matters to no one.
+      const s = sessions.get(p.sid)
+      if (s?.pid) killProcessGroup(s.pid, 'SIGTERM')
+      logMsg('warn', 'follower.start: the session record was not kept, the CLI is stopped', { home, sid: p.sid, code: saved.error.code })
+      return startRefusal(saved.error)
+    }
+    // The turn start in the stream (the CLI never echoes its stdin), as a host resume writes it.
+    const messageId = typeof cmd.messageId === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(cmd.messageId) ? cmd.messageId : `qm-ask-${crypto.randomBytes(8).toString('hex')}`
+    if (p.message) {
+      try { core.handleAppendUserMarker(p.sid, p.message, messageId) } catch (err) { logMsg('warn', 'follower.start: no turn-start marker', { sid: p.sid, error: (err as Error).message }) }
+    }
+    logMsg('info', 'follower.start: an ask started on this host while the Mac is away', { home, sid: p.sid, taskId: p.taskId, mode: p.mode, seq: (saved.result as { seq?: number }).seq })
+    return { ok: true, reply: { sid: p.sid, taskId: p.taskId, mode: p.mode, cwd: p.cwd, messageId, seq: (saved.result as { seq?: number }).seq } }
+  } catch (err) {
+    logMsg('warn', 'follower.start: the ask did not start', { home, sid: p.sid, taskId: p.taskId, error: (err as Error).message })
+    return { ok: false, error: 'follower.start: ' + (err as Error).message, extra: { errorKind: 'internal' } }
+  } finally {
+    release()
+  }
+}
+
 /** The Walnut a session belongs to: the home whose copy lists it. */
 function gatewayOwnerHome(callerSid: string): string | undefined {
   return offlineHost.ownerOf(callerSid)
@@ -3814,13 +3961,16 @@ function cmdReplica(ws: ServerWebSocket<WsData>, id: number, op: 'sync' | 'put' 
   if (ws.data?.origin === 'bridge') return sendError(ws, id, `replica.${op}: trusted clients only`)
   try {
     const home = cmd.home as string
-    if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts as Record<string, unknown> | undefined))
+    // `confirm`/`confirmFor` (note-journal-v1): the leader's override of the half rule, bound to its manifest.
+    if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts as Record<string, unknown> | undefined, { confirm: cmd.confirm, confirmFor: cmd.confirmFor }))
     if (op === 'put') return sendOk(ws, id, hostReplica.put(home, cmd.kind, cmd.files))
     if (op === 'drop') return sendOk(ws, id, hostReplica.drop(home, cmd.kind))
     if (typeof home !== 'string' || !home) return sendError(ws, id, 'replica.status: missing home')
     return sendOk(ws, id, { kinds: hostReplica.status(home) })
   } catch (err) {
-    sendError(ws, id, (err as Error).message)
+    // A refusal the leader reads (manifest_removes_most_rows) carries its code and sizes.
+    const e = err as Error & { code?: unknown; detail?: unknown }
+    sendError(ws, id, e.message, typeof e.code === 'string' ? { errorKind: e.code, ...(e.detail && typeof e.detail === 'object' ? { detail: e.detail } : {}) } : undefined)
   }
 }
 

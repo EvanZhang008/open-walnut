@@ -301,7 +301,8 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
         return r ? { answer: r as unknown as Record<string, unknown> } : { error: `replica.list: unknown kind ${String(cmd.kind)}` }
       }
       if (c === 'replica.read') {
-        if (deps.replica.list(home, cmd.kind) === null) return { error: `replica.read: unknown kind ${String(cmd.kind)}` }
+        // A kind check, not a list: one read must not sort and hash the whole copy.
+        if (['notes', 'memory', 'skills'].indexOf(String(cmd.kind)) === -1) return { error: `replica.read: unknown kind ${String(cmd.kind)}` }
         const r = deps.replica.read(home, cmd.kind, cmd.key)
         return r ? { answer: r as unknown as Record<string, unknown> } : refuse(home, c)
       }

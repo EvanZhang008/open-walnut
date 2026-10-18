@@ -300,3 +300,152 @@ describe('reads for the replica server (replica-reads-v1, WP6)', () => {
     expect(r.readMany(HOME, 'secrets', keys, 100)).toBeNull()
   })
 })
+
+// -- WP11 (docs/plan/walnut-replica-servers-impl.md sections 4 and 6): keys an away write
+// holds, the half rule and its confirmation, and the away writes read over the copy. --
+
+describe('away notes: held keys, the half rule, the overlay', () => {
+  /** A journal view: `pending` keys always held; `acked` keys held until a manifest later than their ack. */
+  function view(pending: Record<string, string | null>, acked: Record<string, number> = {}) {
+    return {
+      overlay: () => new Map(Object.entries(pending).map(([k, body]) => [k, body === null ? null : { body, h: sha12(body), n: Buffer.byteLength(body), m: { title: 'away' } }])),
+      held: (_home: string, asOf: number) => new Set([...Object.keys(pending), ...Object.keys(acked).filter((k) => asOf <= acked[k])]),
+    }
+  }
+
+  it('a key a pending away write holds is neither replaced nor removed by a manifest', () => {
+    const r = make()
+    fill(r)
+    r.setJournalView(view({ 'Projects/Retro.md': '# Retro\nEdited while away.' }))
+    clock += 60_000
+    const changed = { ...notes, 'Projects/Retro.md': { body: '# Retro\nThe Mac wrote this.', m: notes['Projects/Retro.md'].m } }
+    const res = r.sync(HOME, 'notes', manifest(changed), clock)
+    expect(res).toMatchObject({ need: [], held: 1, heldKeys: ['Projects/Retro.md'], removed: 0 })
+    // A manifest without the note: still kept.
+    const without = { ...notes } as Record<string, { body: string; m: Record<string, unknown> }>
+    delete without['Projects/Retro.md']
+    expect(r.sync(HOME, 'notes', manifest(without), clock)).toMatchObject({ held: 1, removed: 0 })
+    // Every read sees the away write over the copy.
+    expect(JSON.stringify(r.answer(HOME, 'note_read', { path: 'Projects/Retro' }, ''))).toContain('Edited while away.')
+    expect(r.read(HOME, 'notes', 'Projects/Retro.md')).toMatchObject({ body: '# Retro\nEdited while away.' })
+    expect(r.list(HOME, 'notes')!.entries.find((e) => e.k === 'Projects/Retro.md')).toMatchObject({ h: sha12('# Retro\nEdited while away.') })
+    // The base the write was made on is what the copy itself still holds.
+    r.setJournalView(null)
+    expect(r.read(HOME, 'notes', 'Projects/Retro.md')).toMatchObject({ body: notes['Projects/Retro.md'].body })
+  })
+
+  it('a pending delete hides the note from every read, and the copy keeps it', () => {
+    const r = make()
+    fill(r)
+    r.setJournalView(view({ 'health/Checkup.md': null }))
+    expect(r.read(HOME, 'notes', 'health/Checkup.md')).toBeNull()
+    expect(r.list(HOME, 'notes')!.entries.map((e) => e.k)).not.toContain('health/Checkup.md')
+    expect(r.answer(HOME, 'note_read', { path: 'health/Checkup' }, '')).toMatchObject({ ok: false })
+    r.setJournalView(null)
+    expect(r.read(HOME, 'notes', 'health/Checkup.md')).not.toBeNull()
+  })
+
+  it('with away writes pending, every read of 3,000 notes takes the overlay once, never once per note', () => {
+    // Before: each key's lookup read the overlay again and copied the whole index, so a
+    // search or a readMany of N notes was O(N^2) on the daemon's loop (a second at 3,000).
+    const r = make()
+    const many: Record<string, { body: string; m: Record<string, unknown> }> = {}
+    for (let i = 0; i < 3000; i++) {
+      many[`bulk/n${String(i).padStart(4, '0')}.md`] = { body: `# Note ${i}\nplain words ${i}`, m: { title: `Note ${i}`, updatedAt: '2026-10-01T10:00:00.000Z' } }
+    }
+    fill(r, many)
+    const edited = '# Note 7\nrewritten while away'
+    const made = '# Fresh\nwritten while away'
+    const ov = new Map<string, { body: string; h: string; n: number; m?: Record<string, unknown> } | null>([
+      ['bulk/n0007.md', { body: edited, h: sha12(edited), n: edited.length, m: { title: 'Note 7' } }],
+      ['bulk/n0008.md', null],
+      ['bulk/fresh.md', { body: made, h: sha12(made), n: made.length, m: { title: 'Fresh' } }],
+    ])
+    let calls = 0
+    r.setJournalView({ overlay: () => { calls++; return ov }, held: () => new Set(ov.keys()) })
+    const counted = <T>(fn: () => T): { value: T; calls: number } => { calls = 0; const value = fn(); return { value, calls } }
+
+    const search = counted(() => r.answer(HOME, 'note_search', { q: 'away', limit: 100 }, '') as { ok: true; result: { results: Array<{ path: string; snippet: string }> } })
+    expect(search.calls).toBe(1)
+    expect(search.value.result.results.map((x) => x.path)).toEqual(['bulk/fresh', 'bulk/n0007'])
+    expect(search.value.result.results[1].snippet).toContain('rewritten while away')
+
+    const keys = [...Object.keys(many), 'bulk/fresh.md']
+    const bulk = counted(() => r.readMany(HOME, 'notes', keys, 64 * 1024 * 1024)!)
+    expect(bulk.calls).toBe(1)
+    expect(bulk.value.files).toHaveLength(3000)
+    expect(bulk.value.missing).toEqual(['bulk/n0008.md'])
+    expect(bulk.value.files.find((f) => f.k === 'bulk/n0007.md')).toMatchObject({ h: sha12(edited), body: edited })
+    expect(bulk.value.files.find((f) => f.k === 'bulk/fresh.md')).toMatchObject({ body: made })
+
+    const listed = counted(() => r.list(HOME, 'notes')!)
+    expect(listed.calls).toBe(1)
+    expect(listed.value.entries).toHaveLength(3000)
+    expect(listed.value.entries.map((e) => e.k)).not.toContain('bulk/n0008.md')
+
+    expect(counted(() => r.answer(HOME, 'note_read', { path: 'bulk/n0007' }, '')).calls).toBe(1)
+    expect(counted(() => r.read(HOME, 'notes', 'bulk/fresh.md')).calls).toBe(1)
+    expect(counted(() => r.answer(HOME, 'note_read', { path: 'Fresh' }, '')).value).toMatchObject({ ok: true, result: { content: made } })
+    r.setJournalView(null)
+  })
+
+  it('an acked key awaits a copy made after the ack: an older manifest keeps it, a newer one replaces it', () => {
+    const r = make()
+    fill(r)
+    const ackAt = clock + 30_000
+    r.setJournalView(view({}, { 'Projects/Retro.md': ackAt }))
+    const changed = { ...notes, 'Projects/Retro.md': { body: '# Retro\nMerged on the Mac.', m: notes['Projects/Retro.md'].m } }
+    expect(r.sync(HOME, 'notes', manifest(changed), ackAt - 1)).toMatchObject({ need: [], held: 1 })
+    expect(r.sync(HOME, 'notes', manifest(changed), ackAt + 1)).toMatchObject({ need: ['Projects/Retro.md'], held: 0 })
+  })
+})
+
+describe('the half rule (section 4): a manifest that would empty most of a large copy', () => {
+  const many = (n: number, from = 0) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`bulk/n${from + i}.md`, { body: `# Note ${from + i}\nbody ${from + i}`, m: { title: `Note ${from + i}` } }]))
+  const keysHash = (src: Record<string, unknown>) => sha12(Object.keys(src).sort().join('\n'))
+
+  it('at 200 rows, removing more than half is refused with its sizes; the copy is left as it was', () => {
+    const r = make()
+    const all = many(200)
+    fill(r, all)
+    const kept = many(99)
+    let err: (Error & { code?: string; detail?: Record<string, unknown> }) | null = null
+    try { r.sync(HOME, 'notes', manifest(kept), clock + 1) } catch (e) { err = e as typeof err }
+    expect(err?.code).toBe('manifest_removes_most_rows')
+    expect(err?.detail).toEqual({ local: 200, removing: 101, entries: 99, keys: keysHash(kept) })
+    expect(r.status(HOME).notes.entries).toBe(200)
+    expect(r.read(HOME, 'notes', 'bulk/n150.md')).not.toBeNull()
+    // Exactly half is not most: taken.
+    expect(r.sync(HOME, 'notes', manifest(many(100)), clock + 2)).toMatchObject({ removed: 100 })
+  })
+
+  it('below the floor any manifest is taken, an empty one too', () => {
+    const r = make()
+    fill(r, many(199))
+    expect(r.sync(HOME, 'notes', [], clock + 1)).toMatchObject({ removed: 199 })
+    expect(r.status(HOME).notes.entries).toBe(0)
+  })
+
+  it('confirm:true bound to this manifest (its count and the hash of its sorted keys) takes it; bound to another, refused', () => {
+    const r = make()
+    fill(r, many(240))
+    const kept = many(10, 500)
+    const wrong = () => r.sync(HOME, 'notes', manifest(kept), clock + 1, undefined, { confirm: true, confirmFor: { entries: 10, keys: keysHash(many(10)) } })
+    expect(wrong).toThrow(/manifest_removes_most_rows/)
+    expect(() => r.sync(HOME, 'notes', manifest(kept), clock + 1, undefined, { confirm: true })).toThrow(/manifest_removes_most_rows/)
+    expect(() => r.sync(HOME, 'notes', manifest(kept), clock + 1, undefined, { confirm: false, confirmFor: { entries: 10, keys: keysHash(kept) } })).toThrow(/manifest_removes_most_rows/)
+    const ok = r.sync(HOME, 'notes', manifest(kept), clock + 1, undefined, { confirm: true, confirmFor: { entries: 10, keys: keysHash(kept) } })
+    expect(ok).toMatchObject({ removed: 240, need: Object.keys(kept) })
+  })
+
+  it('keys an away write holds count as kept, not as removed', () => {
+    const r = make()
+    const all = many(200)
+    fill(r, all)
+    // 120 of the 200 are held: the manifest of 0 removes 80, under half.
+    const held = new Set(Object.keys(all).slice(0, 120))
+    r.setJournalView({ overlay: () => null, held: () => held })
+    expect(r.sync(HOME, 'notes', [], clock + 1)).toMatchObject({ removed: 80, held: 120 })
+    expect(r.status(HOME).notes.entries).toBe(120)
+  })
+})

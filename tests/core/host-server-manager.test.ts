@@ -300,6 +300,20 @@ describe('host server manager', () => {
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
   })
 
+  it('the program configured on a host outlives a disconnect (the walnut mount of its sessions, WP12) and goes when it is turned off', async () => {
+    const m = createHostServerManager(deps())
+    expect(m.programOf('devbox')).toBeNull()
+    await m.connected(fakeHost())
+    const program = { command: '/opt/node24/bin/node', args: ['/home/me/.open-walnut-host/app/0.6.7-abc1234/dist/cli.js', 'host-server'] }
+    expect(m.programOf('devbox')).toEqual(program)
+    // The Mac woke and the host is back: its drain asks before this host is configured again.
+    m.disconnected('devbox')
+    expect(m.programOf('devbox')).toEqual(program)
+    settings = { ...settings, enabled: false }
+    await m.reconcile('devbox')
+    expect(m.programOf('devbox')).toBeNull()
+  })
+
   it('the copy target hears when the server answers: once it runs, and again after it comes back', async () => {
     const readies: string[] = []
     const phases: string[] = []

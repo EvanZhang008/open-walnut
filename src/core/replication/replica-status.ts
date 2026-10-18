@@ -57,6 +57,8 @@ export interface KindStatus {
   removed?: number
   asOf?: number
   syncedAt?: number
+  /** How old the target's copy is: now minus its last synced round (WP14, section 13). */
+  ageMs?: number
   error?: string
   refusals: number
   lastRefusal?: KindRefusal
@@ -125,6 +127,7 @@ export function kindStatusOf(s: KindState, now = Date.now()): KindStatus {
     if (s[k] !== undefined) (out as unknown as Record<string, unknown>)[k] = s[k]
   }
   if (s.restUntil > now) out.restingUntil = s.restUntil
+  if (typeof s.syncedAt === 'number') out.ageMs = Math.max(0, now - s.syncedAt)
   if (confirmArmed(s, now)) out.confirmArmed = { ...s.confirmFor! }
   out.needsConfirm = needsConfirm(s, now)
   return out

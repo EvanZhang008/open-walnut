@@ -20,11 +20,13 @@ import { CONVERSATIONS_KIND } from './conversations.js'
 import { conversationsFollower } from './conversations-follower.js'
 import { PREFS_KIND, prefsFollower } from './prefs.js'
 import { CONFIG_KIND, configFollower } from './config.js'
+// WP12: the Ask personas, so a new ask starts on the host while the Mac is away.
+import { PERSONAS_KIND, personasFollower } from './personas.js'
 
 /** The leader's copy kinds, in the order a round serves them. */
 export function copyKinds(): CopyKind<any>[] {
   return [SESSIONS_KIND, REQUESTS_KIND, BOARDS_KIND, INBOX_KIND, INBOX_BODIES_KIND,
-    ROUTINES_KIND, CONVERSATIONS_KIND, PREFS_KIND, CONFIG_KIND]
+    ROUTINES_KIND, CONVERSATIONS_KIND, PREFS_KIND, CONFIG_KIND, PERSONAS_KIND]
 }
 
 /**
@@ -45,7 +47,7 @@ export function hostReplicaOnly(h: FollowerKindHandler): FollowerKindHandler {
 /** The follower side of every copy kind, for POST /bridge/replica. Returns the unregister. */
 export function registerCopyFollowerKinds(): () => void {
   const off = [sessionsFollower(), requestsFollower(), boardsFollower(), inboxFollower(), inboxBodiesFollower(),
-    routinesFollower(), conversationsFollower(), prefsFollower(), configFollower()].map((h) => registerFollowerKind(hostReplicaOnly(h)))
+    routinesFollower(), conversationsFollower(), prefsFollower(), configFollower(), personasFollower()].map((h) => registerFollowerKind(hostReplicaOnly(h)))
   return () => { for (const u of off) u() }
 }
 

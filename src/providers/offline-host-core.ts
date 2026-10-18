@@ -191,6 +191,8 @@ export type OfflineRecordV2 =
   | { kind: 'note'; path: string; noteId?: string; mode: 'put' | 'create' | 'delete'; baseHash: string | null; baseBlob: string | null; oursBlob: string | null }
   /** A paired device removed itself while the Mac was away (WP10): the Mac revokes it on drain. */
   | { kind: 'device-revoke'; deviceId: string; name?: string }
+  /** A new ask started on this host while the Mac was away (WP12, host-start-core.ts): the Mac adopts it on drain. */
+  | { kind: 'session'; sid: string; taskId: string; host: string; cwd: string; agentId: string; model?: string; effort?: string; mode: string; title: string; startedAt: number; firstMessage?: string }
 
 /** Every record a drain may hand out: the v1 shapes plus the v2 bookkeeping and kinds. */
 export type OfflineJournalRecord = (OfflineRecord | (OfflineRecordV2 & { seq: number; at: number; online?: true })) & {
@@ -537,7 +539,62 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   /** The Walnut whose copy lists this session (at most one: session ids are UUIDs). */
   function ownerOf(sid: string): string | undefined {
     for (const [home, slice] of slices) if (slice.sessions.some((s) => s.sid === sid)) return home
+    for (const [home, started] of hostStarted) if (started.has(sid)) return home
     return undefined
+  }
+
+  // ── Sessions started here while the Mac was away (WP12, replica-start-v1) ──
+  // The slice overlay: a `session` record makes the session this Walnut's on this host
+  // (ownerOf, the gateway, follower.send) before the Mac has adopted it, and after its
+  // ack until the Mac's next slice lists it. Kept in memory; the pending records rebuild it.
+  const hostStarted = new Map<string, Map<string, OfflineSliceSession>>()
+  function noteStarted(home: string, s: { sid: string; taskId?: string; title?: string }): void {
+    const m = hostStarted.get(home) ?? new Map<string, OfflineSliceSession>()
+    m.set(s.sid, { sid: s.sid, ...(s.taskId ? { taskId: s.taskId } : {}), ...(s.title ? { title: s.title } : {}) })
+    hostStarted.set(home, m)
+  }
+  function startedOf(home: string): OfflineSliceSession[] {
+    for (const r of recordsOf(home)) if (r.kind === 'session' && !hostStarted.get(home)?.has(r.sid)) noteStarted(home, r)
+    const listed = new Set((slices.get(home)?.sessions ?? []).map((s) => s.sid))
+    const m = hostStarted.get(home)
+    if (!m) return []
+    // The Mac's slice lists it now: the slice row wins and this one goes.
+    for (const sid of [...m.keys()]) if (listed.has(sid)) m.delete(sid)
+    return [...m.values()]
+  }
+  /** Who asked for a host-started session, or why its record could not be kept. */
+  function sessionActor(home: string, sid: string, by: unknown): { ok: true; actor: import('./offline-journal-core.js').JournalActor } | { ok: false; refused: GatewayResult } {
+    if (!slices.get(home)) return { ok: false, refused: fail('not_found', 'this host holds no copy for that Walnut') }
+    // Who asked: the paired device the replica names (the Mac drops a record of a device
+    // no longer paired); absent, the session itself.
+    const actor = by === undefined ? { kind: 'session' as const, sid } : actorOf(by)
+    if (!actor) return { ok: false, refused: fail('bad_request', 'follower.start: bad actor') }
+    if (actor.kind === 'device' && !drainsKind(home, 'device-actor')) return { ok: false, refused: fail('needs_leader', 'your Mac runs an older Walnut that cannot take a new ask later; it needs your Mac', { detail: { why: 'mac_too_old' } }) }
+    if (!drainsKind(home, 'session')) return { ok: false, refused: fail('needs_leader', 'your Mac runs an older Walnut that cannot take a new ask later; it needs your Mac', { detail: { why: 'mac_too_old' } }) }
+    const denied = roomFor(home)
+    if (denied) return { ok: false, refused: denied }
+    return { ok: true, actor }
+  }
+
+  /** Whether a host-started session's record would be kept (noteSession's checks), journaling nothing: the twin asks before it starts a CLI. */
+  function checkSession(home: string, sid: string, by?: unknown): GatewayResult {
+    const a = sessionActor(home, sid, by)
+    return a.ok ? ok({ checked: true, sid }) : a.refused
+  }
+
+  /**
+   * Journal a host-started session (the twin calls this once its CLI runs).
+   * Written only for a Mac that drains `session`; an older one: needs_leader mac_too_old.
+   */
+  function noteSession(home: string, rec: Extract<OfflineRecordV2, { kind: 'session' }>, opId?: string, by?: unknown): GatewayResult {
+    const a = sessionActor(home, rec.sid, by)
+    if (!a.ok) return a.refused
+    const actor = a.actor
+    const saved = append(home, rec as OfflineRecordV2 & Record<string, unknown>, false, { actor, ...(opId ? { opId } : {}), limit: true })
+    if (!saved.ok) return refusal(saved) ?? fail('journal_unwritable', 'the session record was not saved')
+    noteStarted(home, rec)
+    deps.log('info', 'offline host: a session started here while the Mac is away', { home, sid: rec.sid, taskId: rec.taskId, seq: saved.seq })
+    return ok({ queued: true, offline: true, kind: 'session', seq: saved.seq, sid: rec.sid, taskId: rec.taskId })
   }
 
   /**
@@ -604,6 +661,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const leaderNow = (asked as { leaderNow?: unknown }).leaderNow
     if (typeof leaderNow === 'number' && Number.isFinite(leaderNow)) leaderOffsets.set(home, Math.round(leaderNow - deps.now()))
     const r = journal.ack(home, { ...(Array.isArray(asked.seqs) ? { seqs: asked.seqs } : {}), ...(typeof asked.upTo === 'number' ? { upTo: asked.upTo } : {}) })
+    // WP11: a note the Mac took stays held here until a copy round from after this ack.
+    notesAcked(home, r.acked as unknown as Array<Record<string, unknown>>, typeof leaderNow === 'number' && Number.isFinite(leaderNow) ? leaderNow : deps.now() + (leaderOffsets.get(home) ?? 0))
     const handed = new Set<string>()
     for (const x of r.acked) if (x.kind === 'row') handed.add((x as unknown as { row: OfflineRequestRow }).row.id)
     // A row whose latest state the server took is the server's now; a later
@@ -674,7 +733,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   }
 
   function sessionOf(home: string, sid: string): OfflineSliceSession | undefined {
-    return slices.get(home)?.sessions.find((s) => s.sid === sid)
+    return slices.get(home)?.sessions.find((s) => s.sid === sid) ?? startedOf(home).find((s) => s.sid === sid)
   }
 
   function callerIdentity(home: string, sid: string): { title: string; taskId?: string } {
@@ -793,7 +852,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return {
       host: slice.host,
       asOf: asOf(home),
-      sessions: slice.sessions.filter((s) => !s.aside).map((s) => {
+      sessions: slice.sessions.filter((s) => !s.aside).concat(startedOf(home)).map((s) => {
         const task = s.taskId ? tasks.get(s.taskId) : undefined
         return {
           sid: s.sid,
@@ -1373,10 +1432,15 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           deps.log('info', 'offline host: follower write retried', { home, op: name, opId: req.opId, seq: first.seq })
           // A create's retry names the task the first attempt made (the retry minted another id).
           const firstTask = (first as { taskId?: unknown }).taskId
-          return ok({ queued: true, offline: true, kind: first.kind, seq: first.seq, opId: String(first.opId), rev: first.rev ?? 1, duplicate: true, ...(typeof firstTask === 'string' ? { taskId: firstTask } : {}) })
+          // A note save's retry hands the editor its lock again (WP11): the hash it saved.
+          const n = first as unknown as { oursHash?: unknown; noteId?: unknown }
+          const noteBits = first.kind === 'note' ? { ...(typeof n.oursHash === 'string' ? { contentHash: n.oursHash } : {}), ...(typeof n.noteId === 'string' ? { noteId: n.noteId } : {}) } : {}
+          return ok({ queued: true, offline: true, kind: first.kind, seq: first.seq, opId: String(first.opId), rev: first.rev ?? 1, duplicate: true, ...(typeof firstTask === 'string' ? { taskId: firstTask } : {}), ...noteBits })
         }
       }
       const opId = typeof req.opId === 'string' ? req.opId : `op-${deps.randomHex(8)}`
+      // WP11: a note save (cap note-journal-v1); its own checks and lock.
+      if (name === 'note_put' || name === 'note_delete') return followerNote(home, name, args, actor, opId)
       const kind = FOLLOWER_OP_KINDS[name] ?? (deps.boards && deps.boards.WRITE_OPS.indexOf(name) !== -1 ? 'board' : '')
       if (!kind) return fail('needs_leader', `${name || 'that write'} needs your Mac`, { detail: { why: 'not_queueable' } })
       if (!drainsKind(home, kind) || (actor.kind === 'device' && !drainsKind(home, 'device-actor'))) {
@@ -1445,7 +1509,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const appendCpuMs = (cpu.user + cpu.system) / 1000
       const no = refusal(saved)
       if (no || !saved.ok) return no ?? fail('internal', 'not saved')
-      deps.log('info', 'offline host: follower write queued', { home, op: name, kind, opId: saved.opId, seq: saved.seq, rev: saved.rev, actor: budgetKey, ...(saved.coalesced ? { coalesced: true } : {}), ...(saved.duplicate ? { duplicate: true } : {}) })
+      deps.log('info', 'journal append', { home, op: name, kind, opId: saved.opId, seq: saved.seq, rev: saved.rev, actor: budgetKey, ...(saved.coalesced ? { coalesced: true } : {}), ...(saved.duplicate ? { duplicate: true } : {}) })
       return ok({
         queued: true, offline: true, kind, seq: saved.seq, opId: saved.opId, rev: saved.rev,
         appendMs: Math.round(appendMs * 1000) / 1000, appendCpuMs: Math.round(appendCpuMs * 1000) / 1000,
@@ -1730,6 +1794,12 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         case 'trigger_pause': case 'trigger_resume': case 'trigger_delete':
           if (deps.triggers) return opTriggerWrite(home, callerSid, name, args)
           return needsServer(`"${name}"`)
+        // WP11: a note written while away, when the leading Mac drains notes and this host keeps them.
+        case 'note_write': case 'note_edit':
+          if (deps.replica && deps.replica.has(home, 'notes') && drainsKind(home, 'note')) {
+            return name === 'note_write' ? opNoteWrite(home, callerSid, args) : opNoteEdit(home, callerSid, args)
+          }
+          return needsServer(`"${name}"`)
         default: {
           const fromCopy = deps.replica ? deps.replica.answer(home, name, args, offlineNote(home)) : null
           if (fromCopy) return fromCopy
@@ -1968,7 +2038,20 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (!sessionOf(home, sid)) return fail('not_found', 'no session of that Walnut with that id on this host')
       const body = typeof text === 'string' ? text.trim() : ''
       if (!body) return fail('bad_request', 'text must be a non-empty string')
-      if (!deps.isLive(sid)) return fail('not_running', 'this session is not running; the Walnut server resumes it when it is back')
+      if (!deps.isLive(sid)) {
+        // A stopped session of this host (WP12): the person's message starts it again with
+        // the command it last ran (resumeForTrigger's path and limits), journaled `resume`.
+        if (!deps.resume) return fail('not_running', 'this session is not running; the Walnut server resumes it when it is back')
+        const full = roomFor(home)
+        if (full) return full
+        const mid = messageId(given)
+        const taskId = sessionOf(home, sid)?.taskId ?? ''
+        const resumed = await deps.resume(home, sid, body, mid, taskId)
+        if (!resumed.ok) return fail('not_running', `this session is stopped and could not be started again here: ${resumed.reason}`)
+        append(home, { kind: 'resume', sid, ...(taskId ? { taskId } : {}), messageId: mid })
+        deps.log('info', 'offline host: a person\'s message resumed a stopped session while no server leads', { home, sid, taskId, messageId: mid })
+        return ok({ delivered: true, resumed: true, targetSessionId: sid, messageId: mid })
+      }
       const denied = roomFor(home)
       if (denied) return denied
       const mid = messageId(given)
@@ -2060,11 +2143,217 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return journal.stats(home, drainsOf(home))
   }
 
+  // ── notes written while away (WP11, docs/plan/walnut-replica-servers-impl.md section 6) ──
+  // One writer per home on this host: a phone save (through the replica's follower.op)
+  // and a session's note_write / note_edit (through the gateway) both land here, are
+  // checked against what the overlay shows (the pending save, else the copy), and are
+  // journaled as `note` records that coalesce by append. The copy keeps its base until
+  // the Mac took the record and a later copy round stored the note (held keys).
+
+  const NOTE_MAX_BYTES = 1024 * 1024
+  const NOTE_AWAIT_MS = 10 * 60_000
+  /** home -> note key -> the leader's clock at the ack that took its last record (awaiting a copy). */
+  const noteAwait = new Map<string, Map<string, number>>()
+  /** home -> the read overlay of its pending note records, keyed by the records it was built from. */
+  const noteViews = new Map<string, { sig: string; view: Map<string, { body: string; h: string; n: number; m?: Record<string, unknown> } | null> }>()
+
+  function noteKeyOf(raw: unknown): string | null {
+    let s = typeof raw === 'string' ? raw.trim().split('\\').join('/').replace(/^\.\/+/, '').replace(/^\/+/, '') : ''
+    if (!s || /[\u0000-\u001f\u007f]/.test(s)) return null
+    if (!/\.md$/i.test(s)) s += '.md'
+    if (s.split('/').some((seg) => seg === '..' || seg === '' || seg.startsWith('.'))) return null
+    return s.length > 1024 ? null : s
+  }
+
+  /** The pending note records of a home, the latest per key (seq order). */
+  function pendingNotes(home: string): Map<string, OfflineRecordV2 & Record<string, unknown>> {
+    const out = new Map<string, OfflineRecordV2 & Record<string, unknown>>()
+    for (const r of recordsOf(home)) {
+      const rec = r as unknown as OfflineRecordV2 & Record<string, unknown>
+      if (rec.kind === 'note' && typeof rec.path === 'string' && !rec.dropped) out.set(rec.path, rec)
+    }
+    return out
+  }
+
+  function frontmatterId(body: string): string | undefined {
+    const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(body)
+    const line = m ? /(?:^|\n)id:[ \t]*([^\r\n]*)/.exec(m[1]) : null
+    const v = line ? line[1].trim().replace(/^["']|["']$/g, '') : ''
+    return v || undefined
+  }
+
+  function noteTitle(key: string, body: string): string {
+    const m = /^#\s+(.+)$/m.exec(body)
+    return m ? m[1].trim() : path.posix.basename(key).replace(/\.md$/i, '')
+  }
+
+  /** What every copy read shows for this home's pending note writes (host-replica-core rowsOf). */
+  function noteOverlay(home: string): Map<string, { body: string; h: string; n: number; m?: Record<string, unknown> } | null> | null {
+    if (!deps.replica) return null
+    const recs = pendingNotes(home)
+    if (recs.size === 0) { noteViews.delete(home); return null }
+    const sig = [...recs.values()].map((r) => `${r.seq}:${r.rev ?? 1}`).join(',')
+    const memo = noteViews.get(home)
+    if (memo && memo.sig === sig) return memo.view
+    const view = new Map<string, { body: string; h: string; n: number; m?: Record<string, unknown> } | null>()
+    for (const [key, r] of recs) {
+      if (r.mode === 'delete') { view.set(key, null); continue }
+      const buf = journal.blobBody(r.oursBlob)
+      if (!buf) continue // a body a sweep took: the copy answers until the record is acked
+      const body = buf.toString('utf8')
+      const id = frontmatterId(body) ?? (typeof r.noteId === 'string' ? r.noteId : undefined)
+      view.set(key, { body, h: deps.replica.hashOf(body), n: buf.length, m: { title: noteTitle(key, body), updatedAt: new Date(typeof r.at === 'number' ? r.at : deps.now()).toISOString(), ...(id ? { id } : {}) } })
+    }
+    noteViews.set(home, { sig, view })
+    return view
+  }
+
+  /** Keys a copy manifest of `asOf` (the leader's clock) must not replace or remove. */
+  function notesHeld(home: string, asOf: number): Set<string> {
+    const out = new Set<string>(pendingNotes(home).keys())
+    const waits = noteAwait.get(home)
+    if (waits) {
+      for (const [key, ackAt] of [...waits]) {
+        // Let go once a manifest from after the ack stored it, or after 10 minutes.
+        if (asOf > ackAt || deps.now() + (leaderOffsets.get(home) ?? 0) - ackAt > NOTE_AWAIT_MS) waits.delete(key)
+        else out.add(key)
+      }
+      if (waits.size === 0) noteAwait.delete(home)
+    }
+    return out
+  }
+
+  /** Acked note records: their keys wait for a copy round from after the ack. */
+  function notesAcked(home: string, acked: Array<Record<string, unknown>>, leaderAt: number): void {
+    const keys = acked.filter((r) => r.kind === 'note' && typeof r.path === 'string').map((r) => String(r.path))
+    if (!keys.length) return
+    let waits = noteAwait.get(home)
+    if (!waits) { waits = new Map(); noteAwait.set(home, waits) }
+    for (const k of keys) waits.set(k, leaderAt)
+    noteViews.delete(home)
+    deps.log('info', 'offline host: note records acked, their copies wait for a later round', { home, notes: keys.length })
+  }
+
+  // A replica with no journal view (a partial one) keeps today's copy: nothing is held.
+  if (deps.replica && typeof deps.replica.setJournalView === 'function') deps.replica.setJournalView({ overlay: noteOverlay, held: notesHeld })
+
+  /**
+   * One note save while away, checked against what the overlay shows (the pending save,
+   * else the copy) and journaled as a `note` record. `expectedHash` (the notes
+   * contentHash, 12 hex) is the lock: a mismatch answers 409 `conflict` with
+   * `{serverHash, serverContent}`, as the v1 route does, so the editor merges.
+   */
+  function notePut(home: string, req: {
+    path: unknown; content?: unknown; expectedHash?: unknown; mode?: 'put' | 'delete'; createOnly?: boolean
+    actor: import('./offline-journal-core.js').JournalActor; opId?: string; budgetKey: string
+  }): GatewayResult {
+    const replica = deps.replica
+    if (!replica || !replica.has(home, 'notes')) return fail('needs_leader', 'this host keeps no copy of the notes; that needs your Mac', { detail: { why: 'kind_not_copied' } })
+    if (!drainsKind(home, 'note')) return fail('needs_leader', 'your Mac runs an older Walnut that cannot take a note change later; it needs your Mac', { detail: { why: 'mac_too_old' } })
+    const key = noteKeyOf(req.path)
+    if (!key) return fail('bad_request', 'a note save needs a vault-relative path')
+    const keep = replica.notesKeep(home)
+    // Case-insensitive: the Mac's vault (APFS by default) is, so `private/x.md` is `Private/x.md` there.
+    const lower = key.toLowerCase()
+    if (keep.keepExclude.some((f) => { const lf = f.toLowerCase(); return lower === lf || lower.startsWith(`${lf}/`) }) || keep.tooBig.some((t) => t.toLowerCase() === lower)) {
+      return fail('needs_leader', 'this note is not kept on this host, so it can only be changed on your Mac', { detail: { why: 'note_not_kept' } })
+    }
+    const view = noteOverlay(home)
+    const shown = view && view.has(key) ? view.get(key) : undefined
+    const current = shown === undefined ? replica.copyBody(home, key) : shown === null ? null : shown.body
+    const currentHash = current === null ? null : replica.hashOf(current)
+    const expected = typeof req.expectedHash === 'string' && req.expectedHash ? req.expectedHash : null
+    const content = req.mode === 'delete' ? null : req.content
+    if (req.mode === 'delete') {
+      if (current === null) return fail('not_found', 'Note not found')
+    } else {
+      if (typeof content !== 'string') return fail('bad_request', 'content (string) is required')
+      if (Buffer.byteLength(content) > NOTE_MAX_BYTES) return fail('needs_leader', 'notes over 1 MB can only be changed on your Mac', { detail: { why: 'note_too_large' } })
+      if (req.createOnly && current !== null) return fail('conflict', 'Note already exists', { detail: { serverHash: currentHash, serverContent: current } })
+    }
+    if (expected && current !== null && currentHash !== expected) {
+      return fail('conflict', 'Note was modified since it was read', { detail: { serverHash: currentHash, serverContent: current } })
+    }
+    const mode = req.mode === 'delete' ? 'delete' as const : current === null ? 'create' as const : 'put' as const
+    // The id the Mac's copy shows, never one from a pending save (a body the writer chose):
+    // an `id:` line typed into a save must not send it to another note on the drain.
+    const copied = replica.copyBody(home, key)
+    const noteId = (copied !== null ? frontmatterId(copied) : undefined) ?? (() => {
+      const row = replica.noteRow(home, key)
+      return row && row.m && typeof row.m.id === 'string' ? row.m.id : undefined
+    })()
+    const oursHash = typeof content === 'string' ? replica.hashOf(content) : null
+    const saved = journal.appendNote(home, {
+      path: key, ...(noteId ? { noteId } : {}), mode, baseHash: currentHash,
+      base: current === null ? null : Buffer.from(current, 'utf8'), ours: typeof content === 'string' ? Buffer.from(content, 'utf8') : null, oursHash,
+    }, {
+      actor: req.actor, ...(req.opId ? { opId: req.opId } : {}),
+      admit: (() => admitWrite(req.budgetKey)) as unknown as () => { ok: false; error: { code: string; message: string; retryAfterMs?: number } } | null,
+    })
+    const no = refusal(saved)
+    if (no || !saved.ok) return no ?? fail('internal', 'not saved')
+    noteViews.delete(home)
+    if (!saved.duplicate) { try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ } }
+    deps.log('info', 'offline host: note write queued', {
+      home, path: key, mode, opId: saved.opId, seq: saved.seq, rev: saved.rev, actor: req.budgetKey,
+      ...(saved.coalesced ? { coalesced: true } : {}), ...(saved.duplicate ? { duplicate: true } : {}), ...(saved.dropped ? { dropped: true } : {}),
+    })
+    return ok({
+      queued: true, offline: true, kind: 'note', path: key.replace(/\.md$/i, ''), mode, seq: saved.seq, opId: saved.opId, rev: saved.rev,
+      // `noteId`, never `id`: the daemon's reply spreads this over its own `{ id }` (the request id).
+      ...(oursHash ? { contentHash: oursHash } : {}), ...(noteId ? { noteId } : {}), updatedAt: new Date(deps.now()).toISOString(),
+      ...(saved.coalesced ? { coalesced: true } : {}), ...(saved.duplicate ? { duplicate: true } : {}),
+      outcome: `Saved on this host; the Walnut server applies it when it is back. ${offlineNote(home)}`,
+    })
+  }
+
+  /** The gateway's note_write while away (a session on this host): as the op online, create-only without expectedHash. */
+  function opNoteWrite(home: string, callerSid: string, args: Record<string, unknown>): GatewayResult {
+    const r = notePut(home, { path: args.path, content: args.content, expectedHash: args.expectedHash, createOnly: args.expectedHash === undefined, actor: { kind: 'session', sid: callerSid }, budgetKey: callerSid })
+    if (!r.ok && r.error.code === 'conflict' && args.expectedHash === undefined) {
+      return fail('conflict', `note exists; pass expectedHash from note_read to update ${String(args.path)} (note_read, then note_write), or use note_edit for a partial change`, { detail: r.error.detail })
+    }
+    return r
+  }
+
+  /** The gateway's note_edit while away: the replacement made on what this host shows, locked by its hash. */
+  function opNoteEdit(home: string, callerSid: string, args: Record<string, unknown>): GatewayResult {
+    const read = deps.replica!.answer(home, 'note_read', { ...(args.path !== undefined ? { path: args.path } : {}), ...(args.id !== undefined ? { id: args.id } : {}) }, '')
+    if (!read) return needsServer('"note_edit"')
+    if (!read.ok) return read
+    const note = read.result as { path: string; content: string; contentHash: string }
+    const oldStr = typeof args.old_str === 'string' ? args.old_str : ''
+    const newStr = typeof args.new_str === 'string' ? args.new_str : ''
+    if (!oldStr) return fail('bad_request', 'old_str is required')
+    if (typeof args.expectedHash === 'string' && args.expectedHash && args.expectedHash !== note.contentHash) {
+      return fail('conflict', `conflict: ${note.path} changed since you read it (expectedHash ${args.expectedHash}, current ${note.contentHash}); note_read it again and redo the edit on the current text`)
+    }
+    const occurrences = note.content.split(oldStr).length - 1
+    if (occurrences === 0) return fail('bad_request', `old_str not found in ${note.path}; it must match the note byte-for-byte (whitespace and line breaks included)`)
+    if (occurrences > 1 && args.replace_all !== true) return fail('bad_request', `old_str appears ${occurrences} times in ${note.path}; include more surrounding text or pass replace_all: true`)
+    const next = args.replace_all === true ? note.content.split(oldStr).join(newStr) : note.content.replace(oldStr, () => newStr)
+    const r = notePut(home, { path: note.path, content: next, expectedHash: note.contentHash, actor: { kind: 'session', sid: callerSid }, budgetKey: callerSid })
+    if (!r.ok) return r
+    return ok({ ...r.result, replacements: args.replace_all === true ? occurrences : 1 })
+  }
+
+  /** follower.op note_put / note_delete: a phone save through the replica (WP11). */
+  function followerNote(home: string, name: string, args: Record<string, unknown>, actor: import('./offline-journal-core.js').JournalActor, opId: string): GatewayResult {
+    const budgetKey = actor.kind === 'device' ? `device:${actor.deviceId}` : actor.kind === 'session' ? actor.sid : `trigger:${actor.id}`
+    if (actor.kind === 'device' && !drainsKind(home, 'device-actor')) {
+      return fail('needs_leader', 'your Mac runs an older Walnut that cannot take this change later; it needs your Mac', { detail: { why: 'mac_too_old' } })
+    }
+    return notePut(home, {
+      path: args.path, content: args.content, expectedHash: args.expectedHash, ...(name === 'note_delete' ? { mode: 'delete' as const } : {}),
+      createOnly: args.createOnly === true, actor, opId, budgetKey,
+    })
+  }
+
   return {
     /** The slices on disk again (the boot migration copied some here). */
     reloadSlices: load,
     configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower,
-    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf,
+    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession,
     triggerHolds, homes: () => [...slices.keys()], journal, QUEUEABLE, RETIRED_TASK_INPUTS,
   }
 }

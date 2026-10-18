@@ -82,13 +82,15 @@ export async function buildSessionContext(
   taskId: string,
   _cwd?: string,
   _host?: string,
+  /** The task as the caller holds it (a host replica's ask made while the Mac is away, WP12: not in its copy yet). */
+  opts?: { task?: import('../types.js').Task },
 ): Promise<SessionContext> {
   let taskLine = ''
   let ask = false
   if (taskId) {
     try {
       const { getTask } = await import('../task-manager.js')
-      const task = await getTask(taskId)
+      const task = opts?.task ?? await getTask(taskId)
       const project = task.project ? `project "${task.project}"` : 'the Inbox (no project)'
       // The folder too: where its work lands (caller-placement.ts). A move after
       // spawn reaches the session as a place notice (place-notice.ts), which reads

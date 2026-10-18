@@ -63,6 +63,7 @@ import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
   buildLiveDaemonScanScript, liveDaemonScanFoundNone, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
 } from './remote-daemon-dir.js'
+import { ephemeralReplicaDirEnv, ephemeralReplicaHost, type EphemeralReplicaDecision } from './ephemeral-replica-host.js'
 import {
   buildBunInstallScript, buildBunProbeScript, installTailForError, isRuntimeStartFailure, nextRuntimeAfterStartFailure,
   parseBunInstall, parseBunProbe, type RemoteRuntime,
@@ -649,7 +650,25 @@ export class DaemonConnection {
    * same machine + same binary version means ensureRunning() reuses rather than fights.
    */
   private get isReadOnlyRemote(): boolean {
-    return IS_EPHEMERAL && this.hostKey !== '__local__'
+    return IS_EPHEMERAL && this.hostKey !== '__local__' && !this.ephemeralReplica.lifted
+  }
+
+  private _ephemeralReplica: EphemeralReplicaDecision | null = null
+  /**
+   * The replica check's one lifted host (ephemeral-replica-host.ts, WP14):
+   * WALNUT_EPHEMERAL_REPLICA_HOST names it and WALNUT_EPHEMERAL_REPLICA_DIR its
+   * isolated daemon dir, never a production one. Decided once, logged once.
+   */
+  private get ephemeralReplica(): EphemeralReplicaDecision {
+    if (this._ephemeralReplica) return this._ephemeralReplica
+    const d = ephemeralReplicaHost(this.hostKey, process.env, IS_EPHEMERAL)
+    this._ephemeralReplica = d
+    if (d.lifted) {
+      log.session.warn('DaemonConnection: ephemeral replica host, read only lifted for its isolated daemon dir', { host: this.hostKey, dir: d.dir })
+    } else if (d.asked) {
+      log.session.warn('DaemonConnection: ephemeral replica host refused, the host stays read only', { host: this.hostKey, reason: d.reason, ...(d.dir ? { dir: d.dir } : {}) })
+    }
+    return d
   }
 
   /**
@@ -2514,7 +2533,11 @@ export class DaemonConnection {
     }
     if (probe.arch) this._remoteArch = probe.arch.trim() === 'aarch64' ? 'arm64' : 'x64'
     if (probe.home) this._remoteHome = probe.home
-    const choice = chooseDaemonDir(probe)
+    // The replica check's lifted host: its isolated dir, never the probe's (a production one).
+    const lifted = this.ephemeralReplica
+    const choice: DaemonDirChoice = lifted.lifted
+      ? { path: lifted.dir, fallback: true, reason: 'the replica check runs an isolated daemon there (WALNUT_EPHEMERAL_REPLICA_DIR)' }
+      : chooseDaemonDir(probe)
     if (choice.path !== this._remoteDir || choice.fallback !== this._dirChoice?.fallback) {
       const logFn = choice.fallback || choice.unusable ? log.session.warn : log.session.info
       logFn.call(log.session, 'DaemonConnection: daemon dir chosen', {
@@ -2528,6 +2551,8 @@ export class DaemonConnection {
 
   /** Env the daemon needs for the chosen dir (empty on /tmp). */
   private get dirEnv(): Record<string, string> {
+    const lifted = this.ephemeralReplica
+    if (lifted.lifted) return ephemeralReplicaDirEnv(lifted.dir)
     return daemonDirEnv(this._dirChoice, this._remoteHome ?? undefined)
   }
 
@@ -2604,8 +2629,10 @@ export class DaemonConnection {
     // reused as-is (never upgraded/killed from here), and its momentary absence
     // must NOT fall through to deploy + nohup — that squats the runtime dir and
     // wedges every future managed start behind "service handover is required".
-    // Ephemeral servers already refuse every destructive path, so skip the probe.
-    const service: RemoteServiceTakeover = this.isReadOnlyRemote
+    // Ephemeral servers already refuse every destructive path, so skip the probe. So does
+    // a lifted replica-check host (WALNUT_EPHEMERAL_REPLICA_HOST): its daemon is the isolated
+    // one in its own dir, never the box's service, which the probe's fixed $HOME paths name.
+    const service: RemoteServiceTakeover = this.isReadOnlyRemote || IS_EPHEMERAL
       ? { managed: false, present: [], unknown: [] }
       : await this.detectServiceTakeover()
     // A real answer replaces the stand-in a recent stop of our own provides.
@@ -2974,7 +3001,8 @@ export class DaemonConnection {
   }
 
   private async updateManagedDaemon(takeover: ServiceTakeover, expected: string): Promise<boolean> {
-    if (this.isReadOnlyRemote || takeover.unknown.length
+    // An ephemeral server never updates a box's service daemon, a lifted host's included.
+    if (this.isReadOnlyRemote || IS_EPHEMERAL || takeover.unknown.length
       || !takeover.present.includes('$HOME/.config/systemd/user/open-walnut-daemon.service')
       || takeover.present.includes('/etc/systemd/system/open-walnut-daemon.service')) return false
     if (this._lastUpgradeAttempt?.expected === expected

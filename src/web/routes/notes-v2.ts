@@ -668,40 +668,48 @@ notesV2Router.delete('/content/*path', async (req: Request, res: Response, next:
     if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
 
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
-    const relPath = toRelPath(filePath)
-
-    try {
-      await fsp.unlink(filePath)
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
-        res.status(404).json({ error: 'Note not found' })
-        return
-      }
-      throw err
+    if (!(await deleteNoteFile(filePath))) {
+      res.status(404).json({ error: 'Note not found' })
+      return
     }
-
-    // Try to remove empty parent directories
-    try {
-      let dir = path.dirname(filePath)
-      while (dir !== NOTES_DIR && dir.startsWith(NOTES_DIR)) {
-        const entries = await fsp.readdir(dir)
-        if (entries.length > 0) break
-        await fsp.rmdir(dir)
-        dir = path.dirname(dir)
-      }
-    } catch { /* best-effort cleanup */ }
-
-    invalidateNotesTree()
     log.memory.info('Note deleted', { path: notePath })
-    // Reconcile the deletion (removes the row, marks inbound links unresolved).
-    scheduleNotesIndexUpdate(relPath)
-    // A bookmark for a note that no longer exists is a row that re-creates it.
-    await pruneFavoriteNotes({ kind: 'delete', relPath })
     res.json({ ok: true })
   } catch (err) {
     next(err)
   }
 })
+
+/**
+ * Delete a note file and everything that follows from it: empty parent folders, the
+ * tree snapshot, the index row (inbound links become unresolved) and its bookmarks.
+ * Shared by DELETE /content/*path and the Mac's drain of a note deleted while it was
+ * away (core/offline-merge/notes.ts). False when the note was not there.
+ */
+export async function deleteNoteFile(filePath: string): Promise<boolean> {
+  const relPath = toRelPath(filePath)
+  try {
+    await fsp.unlink(filePath)
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return false
+    throw err
+  }
+  // Try to remove empty parent directories
+  try {
+    let dir = path.dirname(filePath)
+    while (dir !== NOTES_DIR && dir.startsWith(NOTES_DIR)) {
+      const entries = await fsp.readdir(dir)
+      if (entries.length > 0) break
+      await fsp.rmdir(dir)
+      dir = path.dirname(dir)
+    }
+  } catch { /* best-effort cleanup */ }
+  invalidateNotesTree()
+  // Reconcile the deletion (removes the row, marks inbound links unresolved).
+  scheduleNotesIndexUpdate(relPath)
+  // A bookmark for a note that no longer exists is a row that re-creates it.
+  await pruneFavoriteNotes({ kind: 'delete', relPath })
+  return true
+}
 
 /**
  * Delete a binary attachment (the note-delete path force-appends .md, so

@@ -50,7 +50,7 @@ export function watchMaxAgeMs(entries: ReadonlyArray<Pick<OverlayEntry, 'state'>
 }
 
 export type SyncMark = 'pending' | 'awaiting'
-export type OverlayKind = 'tasks' | 'boards' | 'devices'
+export type OverlayKind = 'tasks' | 'boards' | 'devices' | 'sessions'
 
 export interface OverlayEntry {
   opId: string
@@ -92,6 +92,8 @@ export function keyOfRecord(r: Record<string, unknown>): { kind: OverlayKind; id
     return typeof task === 'string' && task ? { kind: 'boards', id: task } : null
   }
   if (kind === 'device-revoke') return typeof r.deviceId === 'string' && r.deviceId ? { kind: 'devices', id: r.deviceId } : null
+  // A new ask started on this host while the Mac is away (WP12, replica/ask-launch.ts).
+  if (kind === 'session') return typeof r.sid === 'string' && r.sid ? { kind: 'sessions', id: r.sid } : null
   if (kind === 'op') {
     // A v1 gateway write (a session's task_update / task_complete while the Mac was away).
     const op = String(r.op ?? '')

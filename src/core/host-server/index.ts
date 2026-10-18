@@ -21,6 +21,7 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostSer
     enabled?: unknown; node?: unknown; build_env?: unknown
     expose?: { enabled?: unknown; provider?: unknown; options?: unknown }
     copies?: unknown
+    ask_bypass?: unknown
   }
   const copies: Record<string, boolean> = {}
   for (const [k, v] of Object.entries(s.copies && typeof s.copies === 'object' ? s.copies : {})) {
@@ -47,6 +48,8 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostSer
     ...(program === 'replica' || program === 'host-server' ? { program } : {}),
     // The host's choice of copied kinds (replication/kinds/copy-kind.ts fills the defaults).
     ...(Object.keys(copies).length > 0 ? { copies } : {}),
+    // A new ask away may start in bypassPermissions there (WP12; off unless set).
+    ...(s.ask_bypass === true ? { askBypass: true } : {}),
   }
 }
 
@@ -156,4 +159,9 @@ export function _resetHostServerManagerForTesting(): void {
   manager = null
   unsubscribe = null
   packageCache = null
+}
+
+/** The host servers' views without making the manager (GET /api/replicas/status, WP14). */
+export function peekHostServerViews(): ReturnType<HostServerManager['views']> {
+  return manager ? manager.views() : []
 }

@@ -1536,9 +1536,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }))
     // Writes while the Mac is away (WP10): the overlay of this host's journal over
     // the copies, the write port, its routes, and the /ws RPC writes.
+    const replicaDevices = (await import('../replica/auth.js')).replicaDeviceCopy()
     const away = await (await import('../replica/away-wiring.js')).wireAwayWrites({
       link: front.link,
-      devices: (await import('../replica/auth.js')).replicaDeviceCopy(),
+      devices: replicaDevices,
       broadcast: (name, data) => wsHandlerForReplica.broadcastEvent(name, data),
       hostKey,
       setRpcAnswer: (fn) => wsHandlerForReplica.setRpcAnswer(fn),
@@ -1546,6 +1547,34 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
     hostReplicaAway = away
     app.use('/api', away.reads)
+    // WP11: note writes while away, before the task writes (which refuse a journaled write they do not know).
+    app.use('/api', away.notes)
+    // A new Ask Walnut while the Mac is away (WP12): a session on this host, started by its
+    // daemon from the Mac's template. Before away.writes, which answers only its own rows.
+    {
+      const [{ createAskLaunch }, { readPersonaCopy }, { installAwaySessions }, { buildSessionContext }] = await Promise.all([
+        import('../replica/ask-launch.js'), import('../core/replication/kinds/personas.js'),
+        import('../core/session-tracker.js'), import('../core/sessions/session-context.js'),
+      ])
+      const asks = createAskLaunch({
+        port: away.port,
+        actorOf: (req) => {
+          const h = req.headers.authorization
+          const d = typeof h === 'string' && h.startsWith('Bearer ') ? replicaDevices.verifyDevice(h.slice(7)) : null
+          return d && d.id ? { kind: 'device', deviceId: d.id, name: d.name } : null
+        },
+        hostKey,
+        persona: (agentId) => readPersonaCopy(agentId),
+        capabilities: () => front.link.capabilities(),
+        request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
+        broadcast: (name, data) => wsHandlerForReplica.broadcastEvent(name, data),
+        sessionContext: async (task, cwd) => (await buildSessionContext(task.id, cwd, hostKey ?? undefined, { task })).systemPrompt,
+        pendingSessions: () => away.overlay.entries().filter((e) => e.kind === 'session').map((e) => e.record),
+        log: (level, msg, data) => log.web[level](msg, data),
+      })
+      installAwaySessions(() => asks.rows())
+      app.use('/api', asks.handler)
+    }
     app.use('/api', away.writes)
     // The copies' age as the last process left it (kind-follower.ts copiesAsOf), before
     // any round: a replica restarted while the Mac is away still says how old its copy is.

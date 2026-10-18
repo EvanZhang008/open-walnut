@@ -25,7 +25,8 @@
  *   W6  move (one task, anchored)                  W7  Board post and Board edit
  *   W8  a message to a session that runs on the host (follower.send)
  *   W9  an answer to that session's prompt (follower.permission)
- *   W10 a note edit: needs the Mac until WP11 (nothing journaled)
+ *   W10 a note edit: journaled once (WP11), read back from the overlaid copy, in the
+ *       Mac's note after the drain
  *   W11 a duplicate drain: the same op id journaled again after its first drain applies once
  *       (a record the Mac applied whose ack was lost, drained again on the next connect,
  *       row R14, is pinned in tests/integration/offline-handover.test.ts)
@@ -185,6 +186,7 @@ describe.each(TWINS)('writes while the Mac is away (%s twin)', (twin) => {
   const ids = { reopen: '', close: '', one: '', two: '', three: '', link: '', chat: '', chatSid: '', w1: '', w3: '' }
   const W1_OP = 'op-w1-inflight-0001'
   const W3_OP = 'op-w3-create-00001'
+  const NOTE_AWAY = 'An away edit of the note.'
   let lettersBefore = 0
   let copiesAway: Map<string, string> | null = null
   const opOf = (title: string) => journal(c).records.filter((r) => r.kind === 'task-create' && r.fields?.title === title)
@@ -305,15 +307,20 @@ describe.each(TWINS)('writes while the Mac is away (%s twin)', (twin) => {
     expect(JSON.stringify(board.json.threads)).toContain('The drill ran green on devbox')
   }, 120_000)
 
-  it('W10, W13: a note edit needs the Mac, and so does a write with one field the journal does not take: nothing journaled', async () => {
+  it('W10, W13: a note edit journals once and reads back; a write with one field the journal does not take needs the Mac and journals nothing', async () => {
     const before = journal(c).records.length
-    const note = await phone('PUT', `/api/notes-v2/content/${encodeURI(MAC_NOTE.path)}`, { content: 'An away edit of the note.' })
-    expect(note.status, note.text).toBe(503)
-    expect(note.json.error).toMatchObject({ code: 'needs_leader' })
+    const note = await phone('PUT', `/api/notes-v2/content/${encodeURI(MAC_NOTE.path)}`, { content: NOTE_AWAY })
+    expect(note.status, note.text).toBe(200)
+    const noteRecs = journal(c).records.slice(before)
+    expect(noteRecs.map((r) => r.kind)).toEqual(['note'])
+    expect(noteRecs[0]).toMatchObject({ path: MAC_NOTE.path })
+    const readBack = await phone('GET', `/api/notes-v2/content/${encodeURI(MAC_NOTE.path)}`)
+    expect(readBack.status, readBack.text).toBe(200)
+    expect(readBack.text).toContain(NOTE_AWAY)
     const mixed = await phone('PATCH', `/api/tasks/${c.ids.other}`, { title: 'Half of a change', walnut_agent: true })
     expect(mixed.status, mixed.text).toBe(503)
     expect(mixed.json.error).toMatchObject({ code: 'needs_leader', why: 'fields' })
-    expect(journal(c).records.length).toBe(before)
+    expect(journal(c).records.length).toBe(before + 1)
     const row = (await phone('GET', `/api/tasks/${c.ids.other}`)).json.task
     expect(row.title).toBe('Fix the flaky build on devbox')
   }, 60_000)
@@ -454,6 +461,8 @@ describe.each(TWINS)('writes while the Mac is away (%s twin)', (twin) => {
     expect(rows.find((r) => r.id === ids.reopen)?.phase).toBe('TODO')
     expect(mine(macPins(c))).toEqual([ids.three, ids.one, ids.two])
     expect(rows.find((r) => r.id === ids.link)).toMatchObject({ title: 'Linked later, kept', parent_task_id: null })
+    // W10: the note edit is in the Mac's note (nobody changed it there, so no conflict copy).
+    expect(fs.readFileSync(path.join(c.macData, 'notes', MAC_NOTE.path), 'utf8')).toContain(NOTE_AWAY)
     // W13 changed nothing.
     expect(titled('Half of a change')).toHaveLength(0)
     // W7 and R4b: the Board file holds both edits and the post once.

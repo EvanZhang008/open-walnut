@@ -32,11 +32,16 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..')
 export const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 
-/** Answers a person's message with "echo: <text>", and asks to run a tool for one with "ASK:". */
+/**
+ * Answers a person's message with "echo: <text>", and asks to run a tool for one with "ASK:".
+ * Its words are `<sid> <dir>`; a host resume (WP12: a person's message to the stopped one)
+ * adds the CLI's flags around them (`--allow-dangerously-skip-permissions`, `--resume <sid>`).
+ */
 const MOCK_CLI = `
 const fs = require('fs')
-const sid = process.argv[2]
-const dir = process.argv[3]
+const words = process.argv.slice(2).filter((a, i, all) => !a.startsWith('--') && all[i - 1] !== '--resume' && all[i - 1] !== '--permission-mode')
+const sid = words[0]
+const dir = words[1]
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
 out({ type: 'system', subtype: 'init', session_id: sid })
 out({ type: 'result', subtype: 'success', is_error: false, result: 'ready', session_id: sid })
@@ -241,8 +246,11 @@ export async function startHostAloneHarness(opts: { twin?: 'source' | 'standalon
   // The two sessions the daemon runs: one live, and one that stopped (it stays in the copy).
   const mock = path.join(base, 'mock-cli.cjs')
   fs.writeFileSync(mock, MOCK_CLI)
+  // ONE program as argv[0], as `claude` is: a host resume puts its flags right after it.
+  const cli = path.join(base, 'mock-claude')
+  fs.writeFileSync(cli, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(mock)} "$@"\n`, { mode: 0o755 })
   for (const sid of [LIVE, STOPPED]) {
-    const started = await macCmd({ cmd: 'start', sid, cwd: base, message: 'init', args: [process.execPath, mock, sid, base], origin: { home: HOME, ...(sid === LIVE ? { task: TASK } : {}) } })
+    const started = await macCmd({ cmd: 'start', sid, cwd: base, message: 'init', args: [cli, sid, base], origin: { home: HOME, ...(sid === LIVE ? { task: TASK } : {}) } })
     if (!started.ok) throw new Error('start: ' + JSON.stringify(started))
     await waitFor(() => { try { return fs.readFileSync(path.join(daemonDir, 'streams', `${sid}.jsonl`), 'utf8').includes('"state":"idle"') } catch { return false } }, 30_000, `${sid} idle`)
   }

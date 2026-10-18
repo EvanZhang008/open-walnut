@@ -28,9 +28,12 @@ import { ANSWERED_VIA_HEADER } from './dispatch.js'
 import { createOverlay, watchMaxAgeMs, type Overlay, type OverlayKind } from './overlay.js'
 import { createWritePort, type BoardBase, type TaskRow, type WriteActor, type WritePort } from './write-port.js'
 import { awayWrites } from './away-writes.js'
+import { awayNotes } from './away-notes.js'
 import { awayReads, overlayBoard, overlayTiers, SYNC_FIELD } from './away-reads.js'
 import { wsWrites } from './ws-writes.js'
 
+/** The daemon capability note writes away ride on (WP11). */
+const NOTE_JOURNAL_CAP = 'note-journal-v1'
 /** The daemon capability `follower.pending` rides on. */
 export const JOURNAL_V2_CAP = 'journal-v2'
 const PENDING_TIMEOUT_MS = 3_000
@@ -46,6 +49,8 @@ export interface AwayWiring {
   port: WritePort
   reads: RequestHandler
   writes: RequestHandler
+  /** WP11: the note writes while away (away-notes.ts), mounted before `writes`. */
+  notes: RequestHandler
   stop(): void
 }
 
@@ -175,6 +180,11 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     revokeLocally: (deviceId) => { opts.devices.revoke(deviceId) },
     log: (level, msg, data) => log.web[level](msg, data),
   })
+  // WP11: note writes while away, journaled by this host's daemon (mounted before `writes`).
+  const notes = awayNotes({
+    actorOf, log: (level, msg, data) => log.web[level](msg, data),
+    capable: () => { const caps = link.capabilities(); return caps === null ? null : caps.includes(NOTE_JOURNAL_CAP) },
+  })
   const reads = awayReads({ overlay, answeredAway: (res: Response) => res.getHeader(ANSWERED_VIA_HEADER) === 'replica' })
   opts.setRpcAnswer(wsWrites({
     port, sessionHere, linked,
@@ -198,7 +208,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   watch.unref?.()
   log.web.info('replica: away writes wired', { hostKey: opts.hostKey, home: WALNUT_HOME })
   return {
-    overlay, port, reads, writes,
+    overlay, port, reads, writes, notes,
     stop() {
       clearInterval(watch)
       setCopyWatcher(null)

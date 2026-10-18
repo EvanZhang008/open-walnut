@@ -562,8 +562,20 @@ export async function refreshWalnutSessionProfile(sessionId: string): Promise<vo
     if (!task?.walnut_agent) return;
     // Rebuild the persona the task was launched with: an "Ask Mentor" must not
     // be repaired into the Personal AI.
-    const { profile } = await buildLaneProfile(await getConfig(), task.agent_id || 'general');
-    if (record.profile.systemPrompt === profile.systemPrompt) return;
+    let { profile } = await buildLaneProfile(await getConfig(), task.agent_id || 'general');
+    // An ask on another host (WP12: started there while the Mac was away) takes no walnut
+    // MCP mount, as no session this Mac runs on a remote host does: its walnut tools are
+    // the `walnut` CLI there, which the host's daemon points at its gateway socket. This
+    // Mac's execPath does not exist there, and the host's own app would talk to that
+    // host's 127.0.0.1:3456. A record that holds a mount loses it here, before a cold
+    // resume reads it.
+    let mountChanged = false;
+    if (record.host && record.host !== '__local__') {
+      const { mcpServers: _mac, ...rest } = profile;
+      profile = rest;
+      mountChanged = record.profile.mcpServers !== undefined;
+    }
+    if (record.profile.systemPrompt === profile.systemPrompt && !mountChanged) return;
     // Persona only. An Ask Walnut session's effort is the user's (its launch
     // memory or the session picker — see ask-walnut-launch), never the lane
     // default this builder returns, so the repair must not touch it.

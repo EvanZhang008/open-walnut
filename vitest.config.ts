@@ -22,6 +22,7 @@ export default defineConfig({
       '@open-walnut/history-turn-window': path.resolve(import.meta.dirname, 'src/lib/history-turn-window.ts'),
       '@open-walnut/history-injected-banner': path.resolve(import.meta.dirname, 'src/lib/history-injected-banner.ts'),
       '@open-walnut/history-session-envelope': path.resolve(import.meta.dirname, 'src/lib/history-session-envelope.ts'),
+      '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
     },
   },
   test: {

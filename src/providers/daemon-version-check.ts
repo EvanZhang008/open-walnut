@@ -185,6 +185,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/stream-relay-core.ts',
   // A stopped session resumed on its host for a trigger fire (trigger-host-resume-v1): same rule.
   'src/providers/host-resume-core.ts',
+  // A new ask while the Mac is away (replica-start-v1): same import-or-inline rule.
+  'src/providers/host-start-core.ts',
   'src/core/sessions/open-items-text.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
@@ -197,6 +199,8 @@ const DAEMON_SOURCE_FILES = [
   // markers.find (the delivery-marker lookup): imported by the binary,
   // hand-inlined in the source twin.
   'src/providers/marker-find-core.ts',
+  // logs.tail (replica-logs-v1, WP14): same import-or-inline rule.
+  'src/providers/replica-logs-core.ts',
 ] as const
 
 /**

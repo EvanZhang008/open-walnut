@@ -30,7 +30,8 @@ export type ConflictKind =
   | 'actor-dropped'   // the device that made it is no longer paired with this Mac
   | 'parent-refused'  // a parent link the Mac refused (missing, a cycle, too deep)
   | 'create-collision'// a created task's id was taken; it got a new id
-  | 'board';          // a Board edit that conflicted (the Mac's html kept)
+  | 'board'           // a Board edit that conflicted (the Mac's html kept)
+  | 'note';           // a note write made while away that needed a choice (WP11, offline-merge/notes.ts)
 
 export interface ConflictEntry {
   kind: ConflictKind;
@@ -51,6 +52,13 @@ export interface ConflictEntry {
   actor?: unknown;
   /** The record as the host journaled it, for given-up and dropped writes ("the change is attached"). */
   record?: unknown;
+  /** note: the vault path the record landed at, and the conflict copy holding the other version. */
+  notePath?: string;
+  copyPath?: string;
+  /** note: the host no longer held the record's text when it was lettered (nothing is attached). */
+  bodiesLost?: boolean;
+  /** note: the version that lost a region ('mac' or a host's record). */
+  lostVersion?: string;
 }
 
 export interface ConflictLogFile {
@@ -156,12 +164,25 @@ export class ConflictLog {
 
   add(entry: ConflictEntry): void {
     this.data.entries.push(entry);
+    this.told([entry]);
+  }
+
+  /** Section 13 observability: one line per conflict, with the item's full id. */
+  private told(entries: readonly ConflictEntry[]): void {
+    for (const e of entries) {
+      log.session.info('offline merge conflict', {
+        kind: e.kind, id: e.taskId ?? e.boardTaskId ?? e.opId ?? null, recordKind: e.recordKind, seq: e.seq,
+        host: this.data.hostKey, drainId: this.data.drainId,
+        ...(e.opId ? { opId: e.opId } : {}), ...(e.field ? { field: e.field } : {}), ...(e.kept ? { kept: e.kept } : {}),
+      });
+    }
   }
 
   /** Keep an entry for this drain's letter without writing it (the log cannot be written). */
   addMemoryOnly(entry: ConflictEntry): void {
     this.data.entries.push(entry);
     this.memoryOnly.add(entry);
+    this.told([entry]);
   }
 
   /**
@@ -179,6 +200,7 @@ export class ConflictLog {
       this.data.entries.splice(before, entries.length);
       throw err;
     }
+    this.told(entries);
   }
 
   /**

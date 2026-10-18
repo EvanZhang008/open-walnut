@@ -16,7 +16,7 @@
  *     side is thrown away by a guess,
  *   - switching files lands the outgoing file's last burst under ITS path.
  *
- * The merge rule itself has 28 unit tests (tests/web/three-way-merge.test.ts);
+ * The merge rule itself has 28 unit tests (tests/lib/three-way-merge.test.ts);
  * these are the wiring tests through the real components.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'

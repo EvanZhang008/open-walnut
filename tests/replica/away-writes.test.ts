@@ -22,6 +22,7 @@ import crypto from 'node:crypto'
 import { JHOME, TASK_A, TASK_B, SID_A, journalTmpDir, cleanupJournalDirs, journalHost, jslice, journalLines } from '../helpers/offline-journal-harness.js'
 import { ROUTE_TABLE, classify, journals } from '../../src/replica/route-table.js'
 import { AWAY_WRITE_PATTERNS, awayWrites, singleMove } from '../../src/replica/away-writes.js'
+import { ASK_LAUNCH_PATTERNS } from '../../src/replica/ask-launch.js'
 import { awayReads, overlayTiers } from '../../src/replica/away-reads.js'
 import { createOverlay } from '../../src/replica/overlay.js'
 import { createWritePort, type TaskRow } from '../../src/replica/write-port.js'
@@ -106,8 +107,10 @@ describe('away routes: the table and the handlers agree', () => {
     // Each journaling row is a handler's.
     const handled = new Set(AWAY_WRITE_PATTERNS.map((r) => `${r.method} ${r.pattern}`))
     for (const r of ROUTE_TABLE.filter((x) => x.away === 'host-write')) expect(handled.has(`${r.method} ${r.pattern}`), `${r.method} ${r.pattern}`).toBe(true)
-    // No other journaling kind is used before WP11/WP12.
-    expect(ROUTE_TABLE.filter((r) => journals(r.away) && r.away !== 'host-write')).toEqual([])
+    // The only other journaling kinds: WP11's note writes (tests/replica/away-notes.test.ts) and
+    // WP12's new ask (replica/ask-launch.ts answers exactly its rows).
+    expect(ROUTE_TABLE.filter((r) => journals(r.away) && r.away !== 'host-write' && r.away !== 'note-write').map((r) => `${r.away} ${r.method} ${r.pattern}`))
+    .toEqual(ASK_LAUNCH_PATTERNS.map((r) => `queue:ask ${r.method} ${r.pattern}`))
   })
 
   it('a reorder is one move with its anchor; more than one move is not', () => {

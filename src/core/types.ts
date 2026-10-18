@@ -1189,7 +1189,13 @@ export interface Config {
         conversations?: boolean;
         prefs?: boolean;
         config?: boolean;
+        /** The Ask personas, so a new ask starts on the host while the Mac is away (WP12). */
+        personas?: boolean;
       };
+      /** A new ask on this host while the Mac is away may start in bypassPermissions
+       *  (docs/plan/walnut-replica-servers-impl.md section 8). Off: the host default is
+       *  `default` (the CLI asks), and plan. */
+      ask_bypass?: boolean;
     };
     /** Which program that server is: 'replica' runs the full Walnut server as this
      *  host's replica (docs/plan/walnut-replica-servers-impl.md) where the host's

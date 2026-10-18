@@ -30,6 +30,7 @@
 #   scripts/walnut-logs.sh loop [mins]          ⭐ event-loop health for the window (default 24h): probe-late count/sum/max, stall families, slow routes, slow health-monitor and plugin ticks, process RSS/CPU — the daily "is the server responsive?" check
 #   scripts/walnut-logs.sh errors [n]           last n ERR/WARN lines (default 40)
 #   scripts/walnut-logs.sh desktop [mins]       ⭐ Mac app page-process memory curve + recycles/crashes (default 24h) — "Mac app laggy?" starts here
+#   scripts/walnut-logs.sh replica --host <alias> [mins]  one host replica: presence changes, forwards by outcome, away answers, journal appends + drains, conflicts, letters, copy rounds (host lines via the Mac's GET /api/replicas/logs)
 #   scripts/walnut-logs.sh grep <pattern>       raw grep across today's JSON log
 #   scripts/walnut-logs.sh tail [n]             follow the live JSON log (n lines back, default 40)
 #
@@ -702,6 +703,60 @@ PY
       "\(.time[11:19]) \(.level[0:4]|ascii_upcase) \(($a.footprintMB // "?")|tostring|.+"MB"|.[0:7]) \(($a.level // "-")|.[0:8]) age=\(($a.processAgeMin // "?")|tostring)m idle=\(($a.idleSec // "?")|tostring)s vis=\(($a.visible // "?")|tostring|.[0:1]) pid=\(($a.pid // "?")|tostring) \(.message|sub("^\\[webcontent\\] ";""))\(if $a.reason then " reason=\($a.reason)" else "" end)\(if $a.why then " why=\($a.why)" else "" end)"'
     echo ""
     echo "(shell-side log: ~/Library/Application\\ Support/Walnut/desktop.log — events webcontent_sample / webcontent_recycled / webcontent_recycle_suppressed / webcontent_terminated)"
+    ;;
+
+  replica)
+    # replica --host <alias> [mins]: one host replica's story, last <mins> (default 24h)
+    # (docs/plan/walnut-replica-servers-impl.md section 13, WP14): presence changes,
+    # forwards by outcome, away answers, journal appends and drains, conflicts, letters,
+    # copy rounds. The host-side lines (presence, forwards, away answers, journal
+    # appends and locks) live ON the host: they come through this Mac's own server
+    # (GET /api/replicas/logs, the daemon's logs.tail, read only) by
+    # scripts/replica-logs-fetch.mjs. WALNUT_LOGS_API_URL picks another server.
+    host=""; mins="1440"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --host) host="${2:-}"; shift 2 ;;
+        *) mins="$1"; shift ;;
+      esac
+    done
+    [[ -n "$host" ]] || die "usage: replica --host <alias> [mins]"
+    if [[ "$mins" == "0" ]]; then since="1970-01-01T00:00:00"; else
+      since=$(date -u -v "-${mins}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d "-${mins} minutes" '+%Y-%m-%dT%H:%M:%S')
+    fi
+    here=$(mktemp "${TMPDIR:-/tmp}/walnut-logs-replica.XXXXXX"); there=$(mktemp "${TMPDIR:-/tmp}/walnut-logs-replica.XXXXXX")
+    trap 'rm -f "$here" "$there"' EXIT
+    logs=$(recent_logs)
+    if [[ -n "$logs" ]]; then
+      # shellcheck disable=SC2086
+      cat $logs | grep -aE '"message":"(journal drain|drain record failed|offline merge conflict|replica copy round|forward stale refused|offline drain: conflict letter)' \
+        | jq -c --arg h "$host" --arg since "$since" 'select(.time >= $since) | select(((.host // .hostKey // .target // "") | tostring) as $x | $x == $h or $x == ("host:" + $h))' > "$here"
+    fi
+    "${WALNUT_NODE:-node}" "$(dirname "$0")/replica-logs-fetch.mjs" --host "$host" --n 2000 --sources replica,journal \
+      --match "replica presence,replica forward,replica away answer,journal" 2>&1 >"$there" | sed 's/^/  (host) /'
+    jq -c --arg since "$since" 'select((.time // "") >= $since)' "$there" > "$there.f" 2>/dev/null && mv "$there.f" "$there"
+    echo "── replica ${host}, last ${mins}min (since ${since}Z): $(wc -l < "$there" | tr -d ' ') host lines, $(wc -l < "$here" | tr -d ' ') Mac lines ──"
+    echo "presence changes (host):"
+    jq -r 'select(.message == "replica presence") | "  \(.time) answers=\(.answers) why=\(.why // "-")"' "$there"
+    echo "forwards by outcome (host):"
+    jq -rs 'map(select(.message == "replica forward")) | group_by(.outcome) | .[] |
+      (map(.ms // 0) | sort) as $ms |
+      "  \(.[0].outcome): n=\(length) writes=\(map(select(.write == true)) | length) p50=\($ms[(length/2|floor)])ms max=\($ms[-1])ms bytes=\(map(.bytes // 0) | add)"' "$there"
+    echo "away answers (host):"
+    jq -rs 'map(select(.message == "replica away answer")) | group_by("\(.cls)/\(.away)/\(.why)") | .[] | "  \(.[0].cls) \(.[0].away) why=\(.[0].why): n=\(length)"' "$there"
+    echo "journal appends (host):"
+    jq -rs 'map(select(.message == "journal append")) | group_by(.kind) | .[] | "  \(.[0].kind): n=\(length) coalesced=\(map(select(.coalesced == true)) | length) last opId=\(.[-1].opId)"' "$there"
+    jq -r 'select(.message == "journal lock") | "  lock \(.outcome): \(.time) owner=\(.owner)"' "$there"
+    jq -r 'select((.message // "") | test("^journal: (drained|acked)")) | "  \(.time) \(.message) records=\(.records // "-") seqs=\(.seqs // "-") remaining=\(.remaining // "-")"' "$there"
+    echo "drains (Mac):"
+    jq -r 'select(.message == "journal drain") | "  \(.time) drain=\(.drainId) records=\(.records) applied=\(.applied) merged=\(.merged) conflicts=\(.conflicts) failed=\(.failed)"' "$here"
+    jq -r 'select(.message == "drain record failed") | "  \(.time) record failed seq=\(.seq) kind=\(.kind) attempt=\(.attempt) nextRetryMs=\(.nextRetryMs) \(.error // "")"' "$here"
+    jq -rs 'map(select(.message == "offline merge conflict")) | group_by(.kind) | .[] | "  conflict \(.[0].kind): n=\(length) ids=\(map(.id) | unique | .[0:5] | join(","))"' "$here"
+    echo "letters (Mac):"
+    jq -r 'select((.message // "") | startswith("offline drain: conflict letter")) | "  \(.time) \(.message) items=\(.items // "-")"' "$here"
+    echo "copy rounds and stale forwards (Mac):"
+    jq -rs 'map(select(.message == "replica copy round")) | group_by(.kind) | .[] | "  \(.[0].kind): rounds=\(length) need=\(map(.need) | add) held=\(.[-1].held) removed=\(map(.removed) | add) max=\(map(.ms) | max)ms"' "$here"
+    jq -r 'select(.message == "forward stale refused") | "  \(.time) stale forward refused opId=\(.opId) ageMs=\(.ageMs)"' "$here"
     ;;
 
   grep)
