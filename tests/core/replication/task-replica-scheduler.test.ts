@@ -6,8 +6,10 @@
  * sweep forgets every memo and sends the manifests again; a follower that
  * joins, or one registered while it was not reachable yet that becomes
  * reachable (a host server that was still starting), gets a round within the
- * debounce; the user's confirm rides on a round within the debounce; a
- * follower starts nothing. Real rounds (kind-leader.ts) against registered
+ * debounce, and one that restarted under the same registration a real step
+ * (its memo and rests forgotten); the user's confirm rides on a round within
+ * the debounce, and a confirm whose step was lost goes again within seconds,
+ * backing off; a follower starts nothing. Real rounds (kind-leader.ts) against registered
  * targets (replica-targets.ts), the real event bus; only the clock is fake
  * (setTimeout and setInterval; setImmediate stays real).
  */
@@ -18,7 +20,8 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-task-repl
 
 import { confirmTaskReplicaRemoval, startTaskReplicaSync, _resetTaskReplicaForTesting, type TaskReplicaDeps } from '../../../src/core/replication/task-replica.js'
 import { registerReplicaTarget, replicaTargetAvailable, replicaTargets, _resetReplicaTargetsForTesting, type ReplicaTarget } from '../../../src/core/replication/replica-targets.js'
-import { CONFIRM_TTL_MS, HELD_RETRY_MS } from '../../../src/core/replication/kind.js'
+import { CONFIRM_RETRY_MAX_MS, CONFIRM_RETRY_MS, CONFIRM_TTL_MS, HELD_RETRY_MS, confirmRetryMs } from '../../../src/core/replication/kind.js'
+import { peekKindState } from '../../../src/core/replication/replica-status.js'
 import { _resetServerRoleForTesting } from '../../../src/core/server-role.js'
 import { bus } from '../../../src/core/event-bus.js'
 import type { Task } from '../../../src/core/types.js'
@@ -30,7 +33,7 @@ const NOW = '2026-10-14T08:00:00.000Z'
 
 let tasks: Task[] = []
 let views = 0
-let steps: Array<{ target: string; op: string; kind: string; confirm?: boolean; confirmFor?: unknown }> = []
+let steps: Array<{ target: string; op: string; kind: string; confirm?: boolean; confirmFor?: unknown; lost?: boolean }> = []
 let stop: (() => void) | null = null
 
 const deps: TaskReplicaDeps = {
@@ -44,13 +47,23 @@ interface FakeFollower {
   /** Refuse a tasks manifest without a confirm (the half rule). */
   refuse: boolean
   up: boolean
+  /** Lose this many confirm steps on the way (a stream reset, the host not connected). */
+  loseConfirm?: number
+  /** A kind this follower's build does not keep (404 unknown_kind). */
+  unknown?: string
 }
 
 function follower(id: string, f: FakeFollower): ReplicaTarget {
   return {
     id, kind: 'host', label: id.replace('host:', ''), available: async () => f.up,
     post: async (payload) => {
-      steps.push({ target: id, op: String(payload.op), kind: String(payload.kind), ...(payload.confirm === true ? { confirm: true, confirmFor: payload.confirmFor } : {}) })
+      const lost = payload.confirm === true && (f.loseConfirm ?? 0) > 0
+      steps.push({ target: id, op: String(payload.op), kind: String(payload.kind), ...(payload.confirm === true ? { confirm: true, confirmFor: payload.confirmFor } : {}), ...(lost ? { lost } : {}) })
+      if (lost) {
+        f.loseConfirm = f.loseConfirm! - 1
+        return { ok: false, outcome: 'failed', error: 'the host is not connected' }
+      }
+      if (payload.kind === f.unknown) return { ok: false, outcome: 'unsupported', status: 404, error: 'unknown_kind' }
       if (payload.op === 'sync' && payload.kind === 'tasks' && f.refuse && payload.confirm !== true) {
         return { ok: false, outcome: 'failed', status: 400, error: 'manifest_removes_most_rows', body: { ok: false, error: 'manifest_removes_most_rows', local: 100, removing: 97 } }
       }
@@ -256,17 +269,99 @@ describe('the scheduler and followers that join, and the user\'s confirm', () =>
     expect(DEBOUNCE_MS).toBeLessThan(CONFIRM_TTL_MS)
   })
 
-  it('a second scheduler that stops does not take the first one\'s confirm hook with it', async () => {
+  it('an older scheduler that stops does not take the newer one\'s confirm hook with it', async () => {
     const f: FakeFollower = { holdOnce: 0, refuse: true, up: true }
     registerReplicaTarget(follower('host:marina', f))
-    const other = startTaskReplicaSync(deps)
+    const older = startTaskReplicaSync(deps)
     await start()
-    other.stop()
+    older.stop()
     await advance(FIRST_ROUND_MS)
     for (let i = 0; i < 2; i++) { taskEvent(); await advance(DEBOUNCE_MS) }
     expect(await confirmTaskReplicaRemoval('host:marina', 'tasks')).toBe(true)
     await advance(DEBOUNCE_MS)
     expect(syncsTo('host:marina').at(-1)).toMatchObject({ confirm: true })
+  })
+
+  it('a newer scheduler that stops leaves the older one its confirm and round-now hooks', async () => {
+    const f: FakeFollower = { holdOnce: 0, refuse: true, up: true }
+    registerReplicaTarget(follower('host:marina', f))
+    await start()
+    const newer = startTaskReplicaSync(deps)
+    await settle()
+    newer.stop()
+    await advance(FIRST_ROUND_MS)
+    for (let i = 0; i < 2; i++) { taskEvent(); await advance(DEBOUNCE_MS) }
+    expect(syncsTo('host:marina').length).toBe(3)
+    expect(await confirmTaskReplicaRemoval('host:marina', 'tasks')).toBe(true)
+    await advance(DEBOUNCE_MS - 1)
+    expect(syncsTo('host:marina').length).toBe(3)
+    await advance(1)
+    expect(syncsTo('host:marina').at(-1)).toMatchObject({ confirm: true })
+    // A write the companion forwarded still gets its round at once (WP13).
+    const { noteForwardedTaskWrite } = await import('../../../src/web/v1-forward/policy.js')
+    const seen = views
+    noteForwardedTaskWrite('PATCH', '/tasks/t-0', 200)
+    await advance(0)
+    expect(views).toBe(seen + 1)
+  })
+
+  it('a confirm whose step was lost on the way goes again within seconds, backing off, until one is answered', async () => {
+    const f: FakeFollower = { holdOnce: 0, refuse: true, up: true, loseConfirm: Infinity }
+    registerReplicaTarget(follower('host:marina', f))
+    await start()
+    await advance(FIRST_ROUND_MS)
+    for (let i = 0; i < 2; i++) { taskEvent(); await advance(DEBOUNCE_MS) }
+    expect(await confirmTaskReplicaRemoval('host:marina', 'tasks')).toBe(true)
+    await advance(DEBOUNCE_MS)
+    const tries = () => syncsTo('host:marina').filter((s) => s.confirm)
+    expect(tries().map((s) => s.lost)).toEqual([true])
+    // No task event, no sweep: the scheduler itself sends it again, waiting longer each time.
+    let waited = 0
+    for (let n = 1; n <= 6; n++) {
+      const wait = confirmRetryMs(n)
+      await advance(wait - 1)
+      expect(tries().length).toBe(n)
+      await advance(1)
+      expect(tries().length).toBe(n + 1)
+      waited += wait
+    }
+    expect([confirmRetryMs(1), confirmRetryMs(2), confirmRetryMs(5), confirmRetryMs(9)]).toEqual([CONFIRM_RETRY_MS, 2 * CONFIRM_RETRY_MS, CONFIRM_RETRY_MAX_MS, CONFIRM_RETRY_MAX_MS])
+    expect(waited).toBeLessThan(SWEEP_MS - FIRST_ROUND_MS - 3 * DEBOUNCE_MS)
+    // The link is back: the next try is answered, the confirm is used, and nothing more goes.
+    f.loseConfirm = 0
+    await advance(CONFIRM_RETRY_MAX_MS)
+    expect(tries().at(-1)).toMatchObject({ confirm: true, confirmFor: { entries: 3 } })
+    expect(tries().at(-1)?.lost).toBeUndefined()
+    expect(peekKindState('host:marina', 'tasks')).toMatchObject({ confirmNext: false, refusals: 0 })
+    const after = tries().length
+    await advance(CONFIRM_RETRY_MAX_MS * 3)
+    expect(tries().length).toBe(after)
+    // A confirm outlives the sweep that would send it at the latest, and every retry before it.
+    expect(CONFIRM_TTL_MS).toBeGreaterThan(SWEEP_MS + CONFIRM_RETRY_MAX_MS)
+  })
+
+  it('a follower that restarted under the same registration gets a real step: its memo and its rests are forgotten', async () => {
+    // A host server back with its copy gone, on a newer build that keeps the registry now.
+    const f: FakeFollower = { holdOnce: 0, refuse: false, up: true, unknown: 'registry' }
+    registerReplicaTarget(follower('host:marina', f))
+    await start()
+    await advance(FIRST_ROUND_MS)
+    expect(syncsTo('host:marina').length).toBe(1)
+    expect(syncsTo('host:marina', 'registry').length).toBe(1)
+    expect(peekKindState('host:marina', 'registry')?.restUntil).toBeGreaterThan(0)
+    f.unknown = undefined
+    // The same server answering again (a phase flap) changes nothing: memo and rest hold.
+    replicaTargetAvailable('host:marina')
+    await advance(DEBOUNCE_MS)
+    expect(views).toBe(2)
+    expect(syncsTo('host:marina').length).toBe(1)
+    expect(syncsTo('host:marina', 'registry').length).toBe(1)
+    // Another process answers: the next round sends the manifest and asks the rested kind.
+    replicaTargetAvailable('host:marina', { restarted: true })
+    await advance(DEBOUNCE_MS)
+    expect(syncsTo('host:marina').length).toBe(2)
+    expect(syncsTo('host:marina', 'registry').length).toBe(2)
+    expect(peekKindState('host:marina', 'registry')).toMatchObject({ restUntil: 0, action: 'synced' })
   })
 
   it('stop clears every timer: no round after it, from any source', async () => {

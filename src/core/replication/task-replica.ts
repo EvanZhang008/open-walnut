@@ -27,11 +27,11 @@ import type { CloudReplicaReply } from '../cloud-ingest.js'
 import { isFollower } from '../server-role.js'
 import type { Task } from '../types.js'
 import type { TaskReplicaRegistry } from '../task-manager.js'
-import { HELD_RETRY_MS, sha12 } from './kind.js'
+import { HELD_RETRY_MS, confirmRetryMs, sha12 } from './kind.js'
 // One build sends the schema its own follower side stores.
 import { REGISTRY_SCHEMA_VERSION, TASKS_SCHEMA_VERSION } from './task-replica-store.js'
 import { buildKindManifest, confirmKindRemoval, runKindRound, StepFailed, type KindManifest, type LeaderKind } from './kind-leader.js'
-import { _resetReplicaStatusForTesting, dropTargetsNotIn, forgetKindManifests, peekKindState } from './replica-status.js'
+import { _resetReplicaStatusForTesting, confirmWaiting, dropTargetsNotIn, forgetKindManifests, peekKindState } from './replica-status.js'
 import type { ReplicaTarget } from './replica-targets.js'
 
 const DEBOUNCE_MS = 3_000
@@ -173,8 +173,10 @@ async function serveTarget(
   }
 }
 
-let soonHook: (() => void) | null = null
-let nowHook: (() => void) | null = null
+/** Every running scheduler's "round soon" and "round now": a scheduler that stops takes only its own. */
+const soonHooks = new Set<() => void>()
+const nowHooks = new Set<() => void>()
+const soonAll = (): void => { for (const soon of soonHooks) soon() }
 
 /**
  * A follower's forwarded task write ran here (v1-forward policy.ts
@@ -182,7 +184,7 @@ let nowHook: (() => void) | null = null
  * companion's copy, which answers the phone's task reads, shows it at once.
  */
 export function taskReplicaRoundNow(): void {
-  nowHook?.()
+  for (const now of nowHooks) now()
 }
 let schedulers = 0
 
@@ -195,7 +197,7 @@ let schedulers = 0
  */
 export function resendTaskReplicaSoon(): void {
   forgetTaskReplica()
-  soonHook?.()
+  soonAll()
 }
 
 /**
@@ -211,14 +213,15 @@ export async function confirmTaskReplicaRemoval(targetId: string, kind: 'tasks' 
   if (!target || !peekKindState(targetId, kind)) return false
   if (!confirmKindRemoval(target, kind, opts)) return false
   log.task.warn('task replica: the user confirmed a removal of most rows', { target: targetId, kind, entries: peekKindState(targetId, kind)?.confirmFor?.entries })
-  soonHook?.()
+  soonAll()
   return true
 }
 
 /**
  * Primary only: a round a few seconds after a task or registry change or a
  * follower joining, a first one shortly after boot, one more after rows a
- * follower held, and the sweep every 5 minutes.
+ * follower held, one soon after a round that lost the step of a confirm the
+ * user gave (backing off, while the confirm holds), and the sweep every 5 minutes.
  */
 export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void } {
   if (isFollower()) return { stop: () => {} }
@@ -227,11 +230,18 @@ export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void
   let timer: ReturnType<typeof setTimeout> | null = null
   let retry: ReturnType<typeof setTimeout> | null = null
   let stopped = false
+  /** Rounds in a row that lost a confirm's step (stream reset, host not connected, timeout). */
+  let confirmTries = 0
   const round = (): void => {
     if (stopped) return
     void syncTaskReplica(deps).then((results) => {
-      if (stopped || retry || !results.some((r) => (r.held ?? 0) > 0)) return
-      retry = setTimeout(() => { retry = null; round() }, HELD_RETRY_MS)
+      // No results: no follower, or the round already running took this request (its caller reads them).
+      if (stopped || results.length === 0) return
+      // A lost step keeps the confirm (kind-leader.ts), but no store event may come to send it.
+      const lost = results.some((r) => r.action === 'failed' && KINDS.some((k) => confirmWaiting(r.target ?? 'companion', k)))
+      confirmTries = lost ? confirmTries + 1 : 0
+      if (retry || (!lost && !results.some((r) => (r.held ?? 0) > 0))) return
+      retry = setTimeout(() => { retry = null; round() }, lost ? confirmRetryMs(confirmTries) : HELD_RETRY_MS)
       retry.unref?.()
     })
   }
@@ -253,13 +263,13 @@ export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void
   void import('./replica-targets.js').then(({ onReplicaTargetsChanged }) => {
     if (!stopped) unlistenTargets = onReplicaTargetsChanged(soon)
   })
-  soonHook = soon
+  soonHooks.add(soon)
   const now = (): void => {
     if (stopped) return
     if (timer) { clearTimeout(timer); timer = null }
     round()
   }
-  nowHook = now
+  nowHooks.add(now)
   const first = setTimeout(round, FIRST_ROUND_MS)
   first.unref?.()
   const sweep = setInterval(() => { forgetTaskReplica(); round() }, SWEEP_MS)
@@ -267,8 +277,8 @@ export function startTaskReplicaSync(deps?: TaskReplicaDeps): { stop: () => void
   return {
     stop: () => {
       stopped = true
-      if (soonHook === soon) soonHook = null
-      if (nowHook === now) nowHook = null
+      soonHooks.delete(soon)
+      nowHooks.delete(now)
       unlistenTargets?.()
       if (timer) clearTimeout(timer)
       if (retry) clearTimeout(retry)

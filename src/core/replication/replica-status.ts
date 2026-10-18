@@ -23,6 +23,9 @@ export interface KindRefusal { error: string; at: number; entries: number; keys?
 /** The confirm the user gave: bound to the refused manifest's count and keys, until `expiresAt`. */
 export interface KindConfirm extends ConfirmFor { at: number; expiresAt: number }
 
+/** A confirm the follower refused anyway (its build is older than the confirm, kind-leader.ts): what it was for, and when. */
+export interface KindConfirmRefused extends ConfirmFor { at: number }
+
 /** One kind on one target. The memo fields are the leader's; the rest is what Settings shows. */
 export interface KindState {
   kind: string
@@ -37,6 +40,8 @@ export interface KindState {
   /** The user confirmed the removal: the next sync carries `confirm:true`, if `confirmFor` still matches. */
   confirmNext: boolean
   confirmFor?: KindConfirm
+  /** The follower refused a confirm: Settings says to update it there, until a refusal names its size. */
+  confirmRefused?: KindConfirmRefused
   action?: string
   entries?: number
   held?: number
@@ -66,6 +71,12 @@ export interface KindStatus {
   needsConfirm: boolean
   /** A confirm the user gave that no round has sent yet (it goes only for this count and these keys). */
   confirmArmed?: KindConfirm
+  /**
+   * The follower refused a confirm the user gave: its Walnut is older than the
+   * confirm, so Settings says to update it there instead of offering it again.
+   * Only while the refusals would offer one (three in a row).
+   */
+  confirmRefused?: KindConfirmRefused
   restingUntil?: number
 }
 
@@ -104,6 +115,19 @@ export function forgetKindManifests(kinds: readonly string[]): void {
   for (const t of targets.values()) for (const s of t.kinds.values()) if (want.has(s.kind)) s.manifest = null
 }
 
+/**
+ * A follower that restarted (a new server process on a host): every kind's
+ * manifest goes again and every rest ends, so its next round sends a real
+ * step (its copy may be gone, or its build newer). The refusals stay.
+ */
+export function forgetTarget(id: string): void {
+  for (const s of targets.get(id)?.kinds.values() ?? []) {
+    s.manifest = null
+    s.restUntil = 0
+    s.restWhy = undefined
+  }
+}
+
 /** A target that left (unregistered): its states go with it. */
 export function dropTargetsNotIn(ids: readonly string[]): void {
   const keep = new Set(ids)
@@ -129,6 +153,7 @@ export function kindStatusOf(s: KindState, now = Date.now()): KindStatus {
   if (s.restUntil > now) out.restingUntil = s.restUntil
   if (typeof s.syncedAt === 'number') out.ageMs = Math.max(0, now - s.syncedAt)
   if (confirmArmed(s, now)) out.confirmArmed = { ...s.confirmFor! }
+  if (s.confirmRefused && s.refusals >= CONFIRM_AFTER_REFUSALS && !confirmArmed(s, now)) out.confirmRefused = { ...s.confirmRefused }
   out.needsConfirm = needsConfirm(s, now)
   return out
 }
@@ -138,9 +163,15 @@ export function confirmArmed(s: KindState, now = Date.now()): boolean {
   return s.confirmNext && !!s.confirmFor && s.confirmFor.expiresAt > now
 }
 
-/** Three refused rounds in a row of a stable leader manifest, and no confirm armed. */
+/** A confirm is armed on this target's kind (a round should send it). */
+export function confirmWaiting(targetId: string, kind: string, now = Date.now()): boolean {
+  const s = peekKindState(targetId, kind)
+  return !!s && confirmArmed(s, now)
+}
+
+/** Three refused rounds in a row of a stable leader manifest, no confirm armed, and a follower that takes one. */
 export function needsConfirm(s: KindState, now = Date.now()): boolean {
-  return s.refusals >= CONFIRM_AFTER_REFUSALS && !confirmArmed(s, now)
+  return s.refusals >= CONFIRM_AFTER_REFUSALS && !confirmArmed(s, now) && !s.confirmRefused
 }
 
 

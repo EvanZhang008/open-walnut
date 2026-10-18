@@ -141,11 +141,12 @@ export async function runKindRound<Row>(
   } catch (err) {
     // A confirm is used up only by an answer (an older follower refusing it anyway);
     // a step lost on the way keeps it for the next round (while it still matches).
-    if (confirm && err instanceof StepFailed && err.code === REFUSAL_ERROR) dropConfirm(st)
+    if (err instanceof StepFailed && err.code === REFUSAL_ERROR) noteConfirmAnswer(st, confirm, err, now(), target.id, kind.kind, opts)
     throw noteFailure(st, kind.kind, target.id, manifest, err, now(), opts)
   }
   if (confirm) {
     dropConfirm(st)
+    st.confirmRefused = undefined
     opts.log?.warn('replica: a removal of most rows was confirmed and sent', { target: target.id, kind: kind.kind, entries: manifest.entries.length })
   }
   st.refusals = 0
@@ -172,6 +173,27 @@ export async function runKindRound<Row>(
 function dropConfirm(st: KindState): void {
   st.confirmNext = false
   st.confirmFor = undefined
+}
+
+/**
+ * A half-rule refusal, with or without the user's confirm. A follower that takes
+ * a confirm takes every one bound to its manifest, so one that refused it runs an
+ * older build: Settings says to update it there rather than offering the same
+ * confirm again (it would be refused again). A later refusal that names its size
+ * (`local`, `removing`, which came in the same change as the confirm) is from a
+ * build that takes one: the confirm is offered again.
+ */
+function noteConfirmAnswer(
+  st: KindState, confirm: ConfirmFor | null, err: StepFailed, at: number, targetId: string, kind: string, opts: KindRoundOptions,
+): void {
+  if (confirm) {
+    dropConfirm(st)
+    st.confirmRefused = { ...confirm, at }
+    opts.log?.warn('replica: a follower refused a confirmed removal: its Walnut is older than the confirm', { target: targetId, kind, entries: confirm.entries })
+    return
+  }
+  const size = removalSize(err.body)
+  if (st.confirmRefused && size.local !== undefined && size.removing !== undefined) st.confirmRefused = undefined
 }
 
 /**

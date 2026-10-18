@@ -3,8 +3,10 @@
  * and the rows Settings shows from them: one per follower and kind whose copy
  * refused, three rounds in a row, a manifest that removes most of its rows
  * (docs/plan/walnut-replica-servers-impl.md, section 4), and one per confirm the
- * user gave that no round has sent yet. Nothing else: a copy that works says
- * nothing here. Pure: ReplicaRemovalGroup renders it, tests read it.
+ * user gave that no round has sent yet. A copy whose Walnut is too old for the
+ * confirm (it refused one anyway) says it must be updated there first, and
+ * offers no confirm. Nothing else: a copy that works says nothing here. Pure:
+ * ReplicaRemovalGroup renders it, tests read it.
  */
 
 export type ReplicaTargetKind = 'companion' | 'host'
@@ -27,6 +29,8 @@ export interface ReplicaKindStatus {
   needsConfirm: boolean;
   lastRefusal?: ReplicaRefusal;
   confirmArmed?: { entries: number; keys: string; at: number; expiresAt: number };
+  /** The copy refused a confirm the user gave (its Walnut is older than the confirm), while it refuses still. */
+  confirmRefused?: { entries: number; keys: string; at: number };
 }
 
 export interface ReplicaTargetStatus { id: string; kind: ReplicaTargetKind; label: string; kinds: ReplicaKindStatus[] }
@@ -40,8 +44,13 @@ export interface ReplicaRemovalRow {
   targetKind: ReplicaTargetKind;
   label: string;
   kind: string;
-  state: 'refused' | 'armed';
+  state: 'refused' | 'armed' | 'outdated';
   text: string;
+  /**
+   * What the row says, as a key: the same while the refusal holds still (a new
+   * round of it changes only its time). An error under the row is about this.
+   */
+  about: string;
   /** What the confirm names: the refusal the user read (state `refused` only). */
   confirm?: { target: string; kind: string; entries: number; keys: string };
 }
@@ -63,12 +72,19 @@ function clock(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function refusedText(kind: string, r: ReplicaRefusal): string {
+function sizeText(kind: string, r: ReplicaRefusal): string {
   const noun = rowNoun(kind);
-  const size = typeof r.local === 'number' && typeof r.removing === 'number'
+  return typeof r.local === 'number' && typeof r.removing === 'number'
     ? `This Mac has ${r.entries} ${noun} now, and the copy there would drop ${r.removing} of its ${r.local}.`
     : `This Mac has ${r.entries} ${noun} now, far fewer than the copy there.`;
-  return `${size} Walnut held off in case this Mac lost them. If you removed them on purpose, remove them there too.`;
+}
+
+export function refusedText(kind: string, r: ReplicaRefusal): string {
+  return `${sizeText(kind, r)} Walnut held off in case this Mac lost them. If you removed them on purpose, remove them there too.`;
+}
+
+export function outdatedText(kind: string, r: ReplicaRefusal): string {
+  return `${sizeText(kind, r)} That copy runs an older Walnut that cannot take your confirm: update Walnut there first, then confirm here again.`;
 }
 
 export function armedText(kind: string, armed: { entries: number; expiresAt: number }): string {
@@ -82,11 +98,15 @@ export function replicaRemovalRows(data: ReplicasStatusResponse | null, only?: R
     if (only && t.kind !== only) continue;
     for (const k of t.kinds) {
       const base = { id: `${t.id}/${k.kind}`, target: t.id, targetKind: t.kind, label: t.label, kind: k.kind };
+      const r = k.lastRefusal;
+      const seen = r ? `${r.entries}/${r.keys ?? ''}/${r.local ?? ''}/${r.removing ?? ''}` : '';
       if (k.confirmArmed) {
-        out.push({ ...base, state: 'armed', text: armedText(k.kind, k.confirmArmed) });
-      } else if (k.needsConfirm && k.lastRefusal?.keys) {
-        const r = k.lastRefusal;
-        out.push({ ...base, state: 'refused', text: refusedText(k.kind, r), confirm: { target: t.id, kind: k.kind, entries: r.entries, keys: r.keys! } });
+        const a = k.confirmArmed;
+        out.push({ ...base, state: 'armed', text: armedText(k.kind, a), about: `armed/${a.entries}/${a.keys}/${a.expiresAt}` });
+      } else if (k.confirmRefused && r) {
+        out.push({ ...base, state: 'outdated', text: outdatedText(k.kind, r), about: `outdated/${seen}` });
+      } else if (k.needsConfirm && r?.keys) {
+        out.push({ ...base, state: 'refused', text: refusedText(k.kind, r), about: `refused/${seen}`, confirm: { target: t.id, kind: k.kind, entries: r.entries, keys: r.keys } });
       }
     }
   }

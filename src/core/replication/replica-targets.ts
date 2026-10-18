@@ -15,6 +15,7 @@
 
 import type { CloudReplicaReply } from '../cloud-ingest.js'
 import type { FollowerKind } from '../server-role.js'
+import { forgetTarget } from './replica-status.js'
 
 export interface ReplicaTarget {
   /** 'companion' | `host:<hostKey>` */
@@ -75,10 +76,15 @@ export function registerReplicaTarget(target: ReplicaTarget): () => void {
  * A registered follower became reachable: its server answers now (a host server
  * is registered while it is still starting, and comes back after a restart
  * under the same registration). Every copy runs a round within its debounce,
- * as for a follower that joins.
+ * as for a follower that joins. `restarted`: another server process answers
+ * than the last time (its copy may be gone, its build newer), so that round
+ * sends every manifest and asks every rested kind again (replica-status.ts
+ * forgetTarget), instead of finding its memo and sending nothing.
  */
-export function replicaTargetAvailable(id: string): void {
-  if (registered.has(id)) changed()
+export function replicaTargetAvailable(id: string, opts: { restarted?: boolean } = {}): void {
+  if (!registered.has(id)) return
+  if (opts.restarted) forgetTarget(id)
+  changed()
 }
 
 export function onReplicaTargetsChanged(cb: () => void): () => void {

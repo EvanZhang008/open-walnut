@@ -92,10 +92,13 @@ export function getHostServerManager(): HostServerManager | null {
     ...(process.env.WALNUT_HOST_SERVER_ROOT?.trim() ? { hostRoot: process.env.WALNUT_HOST_SERVER_ROOT.trim() } : {}),
     ...(process.env.WALNUT_HOST_SERVER_APP_DIR?.trim() ? { appDir: process.env.WALNUT_HOST_SERVER_APP_DIR.trim() } : {}),
     registerTarget: (hostKey, post, copies) => {
+      // One id for the target and its ready: a ready under another name reaches no target.
+      const id = `host:${hostKey}`
+      const targets = import('../replication/replica-targets.js')
       let unregister: () => void = () => {}
-      void import('../replication/replica-targets.js').then(({ registerReplicaTarget }) => {
+      void targets.then(({ registerReplicaTarget }) => {
         unregister = registerReplicaTarget({
-          id: `host:${hostKey}`,
+          id,
           kind: 'host',
           label: hostKey,
           available: async () => manager?.view(hostKey).phase === 'running',
@@ -117,10 +120,11 @@ export function getHostServerManager(): HostServerManager | null {
           },
         })
       })
-      return () => unregister()
-    },
-    targetReady: (hostKey) => {
-      void import('../replication/replica-targets.js').then(({ replicaTargetAvailable }) => replicaTargetAvailable(`host:${hostKey}`))
+      return {
+        unregister: () => unregister(),
+        // Registered first (the same promise, its callbacks in order), so the ready finds it.
+        ready: (restarted) => { void targets.then(({ replicaTargetAvailable }) => replicaTargetAvailable(id, { restarted })) },
+      }
     },
   })
   void import('../event-bus.js').then(({ bus, EventNames }) => {

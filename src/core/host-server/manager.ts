@@ -109,6 +109,9 @@ export interface HostServerView {
 
 interface PortsRecord { publicPort: number }
 
+/** A host's copy target: `ready` when its server answers, `restarted` when another process answers than last time. */
+export interface HostCopyTarget { unregister(): void; ready(restarted: boolean): void }
+
 export interface ManagerDeps {
   settingsOf(hostKey: string): Promise<HostServerSettings | null>
   label(hostKey: string): Promise<string>
@@ -120,17 +123,15 @@ export interface ManagerDeps {
   buildPackage(): Promise<HostAppPackage>
   stateFile: string
   now(): number
-  /** Copies for the follower (core/replication/replica-targets.ts). */
+  /** Copies for the follower (core/replication/replica-targets.ts); `ready` once its server answers. */
   registerTarget?(
     hostKey: string,
     post: (body: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<Response>,
     /** The host's choice of copied kinds, read at each round (its Settings row). */
     copies?: () => Promise<Record<string, boolean> | undefined>,
-  ): () => void
+  ): HostCopyTarget
   /** A view changed (the settings page listens). */
   changed?(view: HostServerView): void
-  /** The host's server answers again (its phase became 'running') with a copy target registered: the copies go now. */
-  targetReady?(hostKey: string): void
   pollMs?: number
   installPollMs?: number
   /** How long a started server has to send its first report. */
@@ -178,8 +179,8 @@ export function createHostServerManager(deps: ManagerDeps) {
   const running = new Map<string, Promise<void>>()
   const rerun = new Set<string>()
   const polls = new Map<string, ReturnType<typeof setInterval>>()
-  /** Per host set up: the copy target's unregister, the spec last sent (for a tunnel retry). */
-  const links = new Map<string, { unregister?: () => void; spec?: Record<string, unknown> }>()
+  /** Per host set up: the copy target, the spec last sent (for a tunnel retry), the server pid the target last heard of. */
+  const links = new Map<string, { target?: HostCopyTarget; spec?: Record<string, unknown>; ranAs?: number }>()
   /** Bumped by "retry the tunnel": the server retries when it sees it change. */
   const exposeRetries = new Map<string, number>()
   /** The program each host's daemon was told to run. */
@@ -208,8 +209,13 @@ export function createHostServerManager(deps: ManagerDeps) {
     if (patch.phase !== undefined && patch.message === undefined && phaseChanged) v.message = undefined
     deps.changed?.({ ...v })
     // The copy target is registered while the server still starts; its first
-    // round (and the one after a restart) waits for this, not for a task event.
-    if (phaseChanged && v.phase === 'running' && links.get(hostKey)?.unregister) deps.targetReady?.(hostKey)
+    // round (and the one after a restart) waits for this, not for a task event;
+    // a reconcile cycles the phase of the same process (same pid): no restart.
+    const link = links.get(hostKey)
+    if (phaseChanged && v.phase === 'running' && link?.target) {
+      link.target.ready(v.daemon?.pid === undefined || v.daemon.pid !== link.ranAs)
+      link.ranAs = v.daemon?.pid
+    }
   }
 
   function readPorts(): Record<string, PortsRecord> {
@@ -319,7 +325,7 @@ export function createHostServerManager(deps: ManagerDeps) {
   }
 
   function dropLink(hostKey: string): void {
-    links.get(hostKey)?.unregister?.()
+    links.get(hostKey)?.target?.unregister()
     links.delete(hostKey)
   }
 
@@ -430,8 +436,8 @@ export function createHostServerManager(deps: ManagerDeps) {
         }
       }
       // The copies (task store, search index) for this follower, on a stream through its daemon.
-      if (deps.registerTarget && !link.unregister) {
-        link.unregister = deps.registerTarget(hostKey, async (body, opts) => {
+      if (deps.registerTarget && !link.target) {
+        link.target = deps.registerTarget(hostKey, async (body, opts) => {
           const h = hosts.get(hostKey)
           if (!h?.connected) throw new Error('the host is not connected')
           const stream = await h.openStream('follower', 'replica')

@@ -99,6 +99,8 @@ let tunnelPort = 5555
 let released: string[] = []
 let held: string[] = []
 let targets: Array<{ id: string; post?: (body: Record<string, unknown>) => Promise<Response>; copies?: () => Promise<Record<string, boolean> | undefined> }> = []
+/** Each `ready` the copy target heard: `<host>` or `<host> restarted`. */
+let readies: string[] = []
 
 function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
   return {
@@ -114,7 +116,10 @@ function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
     }),
     stateFile: path.join(dir, 'host-servers.json'),
     now: Date.now,
-    registerTarget: (hostKey, post, copies) => { targets.push({ id: `+${hostKey}`, post, copies }); return () => targets.push({ id: `-${hostKey}` }) },
+    registerTarget: (hostKey, post, copies) => {
+      targets.push({ id: `+${hostKey}`, post, copies })
+      return { unregister: () => targets.push({ id: `-${hostKey}` }), ready: (restarted) => readies.push(restarted ? `${hostKey} restarted` : hostKey) }
+    },
     installPollMs: 1,
     pollMs: 60_000,
     ...over,
@@ -128,6 +133,7 @@ beforeEach(async () => {
   released = []
   held = []
   targets = []
+  readies = []
   posted = []
   _resetExposeProvidersForTesting()
   follower = http.createServer((req, res) => {
@@ -315,26 +321,38 @@ describe('host server manager', () => {
   })
 
   it('the copy target hears when the server answers: once it runs, and again after it comes back', async () => {
-    const readies: string[] = []
     const phases: string[] = []
-    const m = createHostServerManager(deps({ targetReady: (k) => readies.push(k), changed: (v) => phases.push(v.phase), pollMs: 5 }))
+    const m = createHostServerManager(deps({ changed: (v) => phases.push(v.phase), pollMs: 5 }))
     const host = fakeHost()
+    host.statusExtra = { pid: 4242 }
     try {
       await m.connected(host)
       // Registered at 'starting' (before the server answers), told at 'running'.
       expect(ids()).toEqual(['+devbox'])
       expect(phases.indexOf('starting')).toBeLessThan(phases.indexOf('running'))
-      expect(readies).toEqual(['devbox'])
+      expect(readies).toEqual(['devbox restarted'])
       // A poll that sees the same running server tells nothing again.
       await new Promise((r) => setTimeout(r, 30))
-      expect(readies).toEqual(['devbox'])
-      // The server stops answering (a restart on the host), then answers again.
+      expect(readies).toEqual(['devbox restarted'])
+      // The server stops answering for a while, then the same process answers again.
       host.reports = false
       await expect.poll(() => m.view('devbox').phase, { timeout: 5_000, interval: 5 }).toBe('starting')
-      expect(readies).toEqual(['devbox'])
+      expect(readies).toEqual(['devbox restarted'])
       host.reports = true
       await expect.poll(() => m.view('devbox').phase, { timeout: 5_000, interval: 5 }).toBe('running')
-      expect(readies).toEqual(['devbox', 'devbox'])
+      expect(readies).toEqual(['devbox restarted', 'devbox'])
+      // A settings change reconciles: the phase cycles, the process is the same.
+      await m.reconcile('devbox')
+      const flow = phases.filter((p, i) => p !== phases[i - 1])
+      expect(flow.slice(-3)).toEqual(['checking', 'starting', 'running'])
+      expect(readies).toEqual(['devbox restarted', 'devbox', 'devbox'])
+      // A restart on the host: another process answers (the daemon names its pid).
+      host.reports = false
+      await expect.poll(() => m.view('devbox').phase, { timeout: 5_000, interval: 5 }).toBe('starting')
+      host.statusExtra = { pid: 5151, restarts: 1 }
+      host.reports = true
+      await expect.poll(() => readies.length, { timeout: 5_000, interval: 5 }).toBe(4)
+      expect(readies.at(-1)).toBe('devbox restarted')
     } finally {
       m.stop()
     }

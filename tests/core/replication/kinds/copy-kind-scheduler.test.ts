@@ -4,7 +4,8 @@
  * that kind alone after the 3 s debounce, a target joining one of every kind,
  * held rows one more after 35 s, the sweep every 5 minutes asks by digest, a
  * follower starts nothing, the companion is never sent these kinds, and stop
- * clears every timer. The follower here is the real row-set follower over an
+ * clears every timer; a scheduler that stops leaves another its "round soon",
+ * and a confirm whose step was lost goes again within seconds. The follower here is the real row-set follower over an
  * in-memory store (kind-follower.ts createRowSetFollower), so the steps are
  * answered as a replica answers them.
  */
@@ -14,10 +15,10 @@ import { createMockConstants } from '../../../helpers/mock-constants.js'
 vi.mock('../../../../src/constants.js', () => createMockConstants('walnut-copy-scheduler', { CLOUD_MODE: false }))
 
 import { _resetServerRoleForTesting } from '../../../../src/core/server-role.js'
-import { COPY_DEBOUNCE_MS, COPY_FIRST_ROUND_MS, COPY_SWEEP_MS, copyChoiceChanged, startCopyKindsSync, type CopyKind, type CopyTarget } from '../../../../src/core/replication/kinds/copy-kind.js'
+import { COPY_DEBOUNCE_MS, COPY_FIRST_ROUND_MS, COPY_SWEEP_MS, confirmCopyKindRemoval, copyChoiceChanged, startCopyKindsSync, type CopyKind, type CopyTarget } from '../../../../src/core/replication/kinds/copy-kind.js'
 import { NOTHING_HELD, createRowSetFollower, serialChain, type HeldSource, type RowSetState } from '../../../../src/core/replication/kind-follower.js'
-import { HELD_RETRY_MS, sha12 } from '../../../../src/core/replication/kind.js'
-import { _resetReplicaStatusForTesting } from '../../../../src/core/replication/replica-status.js'
+import { HELD_RETRY_MS, confirmRetryMs, sha12 } from '../../../../src/core/replication/kind.js'
+import { _resetReplicaStatusForTesting, peekKindState } from '../../../../src/core/replication/replica-status.js'
 import { _resetReplicaTargetsForTesting, registerReplicaTarget } from '../../../../src/core/replication/replica-targets.js'
 
 interface Row { id: string; v: number }
@@ -217,6 +218,53 @@ describe('startCopyKindsSync', () => {
     await tick(COPY_DEBOUNCE_MS + 10)
     expect(steps).toEqual(['host:devbox sync:beta', 'host:devbox put:beta'])
     expect([...followers.beta.store.keys()]).toEqual(['b1'])
+    s.stop()
+  })
+
+  it('a newer scheduler that stops leaves the older one its round soon', async () => {
+    const targets = () => [target('host:devbox', 'host')]
+    const older = startCopyKindsSync(kinds, { targets })
+    const newer = startCopyKindsSync(kinds, { targets })
+    newer.stop()
+    await tick(COPY_FIRST_ROUND_MS + COPY_DEBOUNCE_MS + 10)
+    rowsRead = []
+    copyChoiceChanged()
+    await tick(COPY_DEBOUNCE_MS + 10)
+    expect(rowsRead.sort()).toEqual(['alpha', 'beta'])
+    older.stop()
+  })
+
+  it('a confirm whose step was lost on the way goes again within seconds, until it is answered', async () => {
+    let lose = 1
+    const real = target('host:devbox', 'host')
+    const lossy: CopyTarget = {
+      ...real,
+      post: async (payload) => {
+        if (payload.confirm === true && lose > 0) { lose--; steps.push('host:devbox lost:confirm'); return { ok: false, outcome: 'failed', error: 'the host is not connected' } }
+        return real.post(payload)
+      },
+    }
+    registerReplicaTarget(lossy)
+    leader.alpha = Array.from({ length: 60 }, (_, i) => ({ id: `a${i}`, v: 1 }))
+    const s = startCopyKindsSync([kindOf('alpha')], {})
+    await tick(COPY_FIRST_ROUND_MS + COPY_DEBOUNCE_MS + 10)
+    expect(followers.alpha.store.size).toBe(60)
+    leader.alpha = leader.alpha.slice(0, 10)
+    for (let i = 0; i < 3; i++) { watchers.alpha(); await tick(COPY_DEBOUNCE_MS + 10) }
+    expect(peekKindState('host:devbox', 'alpha')).toMatchObject({ refusals: 3 })
+    expect(await confirmCopyKindRemoval('host:devbox', 'alpha')).toBe(true)
+    steps = []
+    await tick(COPY_DEBOUNCE_MS + 10)
+    expect(steps).toEqual(['host:devbox lost:confirm'])
+    expect(followers.alpha.store.size).toBe(60)
+    // No store write, no sweep: the scheduler sends it again by itself.
+    await tick(confirmRetryMs(1))
+    expect(steps.slice(1)).toEqual(['host:devbox sync:alpha'])
+    expect(followers.alpha.store.size).toBe(10)
+    expect(peekKindState('host:devbox', 'alpha')).toMatchObject({ refusals: 0, confirmNext: false })
+    steps = []
+    await tick(confirmRetryMs(9) * 3)
+    expect(steps).toEqual([])
     s.stop()
   })
 })

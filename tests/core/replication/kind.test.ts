@@ -355,6 +355,45 @@ describe('a confirm is bound to the manifest the user confirmed', () => {
     expect(f.ids().length).toBe(40)
   })
 
+  it('a follower too old for the confirm refuses it anyway: the status says so and offers no confirm until a refusal names its size', async () => {
+    const f = memFollower({ floor: 50 })
+    const current = await refusedThrice(f, 100, 40)
+    // An older build: it knows no confirm (it never sees one) and names no size in its refusal.
+    const older = {
+      ...current,
+      post: async (p: Record<string, unknown>, o?: { timeoutMs?: number }) => {
+        const { confirm: _c, confirmFor: _cf, ...asOld } = p
+        const r = await current.post(asOld, o)
+        if (r.ok || !r.body) return r
+        const { local: _l, removing: _r, ...body } = r.body
+        return { ...r, body }
+      },
+    }
+    const roundOn = async (t: typeof current) => {
+      const manifest = await buildKindManifest(KIND, leader, async () => {})
+      return runKindRound(KIND, manifest, t).catch((err: StepFailed) => ({ action: err.outcome, error: err.message }))
+    }
+    expect(confirmKindRemoval(current, KIND.kind)).toBe(true)
+    calls.length = 0
+    expect(await roundOn(older)).toMatchObject({ action: 'failed', error: 'manifest_removes_most_rows' })
+    expect(calls.find((c) => c.op === 'sync')?.confirm).toBeUndefined() // what the older build saw
+    expect(f.ids().length).toBe(100)
+    const kindRow = async () => (await replicaStatuses())[0].kinds[0]
+    expect(await kindRow()).toMatchObject({ refusals: 4, needsConfirm: false, confirmRefused: { entries: 40, keys: expect.stringMatching(/^[0-9a-f]{12}$/) } })
+    expect((await kindRow()).confirmArmed).toBeUndefined()
+    // More refused rounds of the older build change nothing: no confirm is offered again.
+    await roundOn(older)
+    expect(await kindRow()).toMatchObject({ refusals: 5, needsConfirm: false, confirmRefused: { entries: 40 } })
+    // Updated there: its refusal names its size, so the confirm is offered again, and taken.
+    await roundOn(current)
+    const row = await kindRow()
+    expect(row).toMatchObject({ refusals: 6, needsConfirm: true, lastRefusal: { local: 100, removing: 60 } })
+    expect(row.confirmRefused).toBeUndefined()
+    expect(confirmKindRemoval(current, KIND.kind)).toBe(true)
+    expect(await roundOn(current)).toMatchObject({ action: 'synced', removed: 60 })
+    expect(f.ids().length).toBe(40)
+  })
+
   it('the follower refuses a confirm whose confirmFor does not match the manifest it came with', async () => {
     const f = memFollower({ floor: 50 })
     leader = rows(100)

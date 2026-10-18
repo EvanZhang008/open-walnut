@@ -27,10 +27,10 @@
 
 import { log } from '../../../logging/index.js'
 import { isFollower } from '../../server-role.js'
-import { HELD_RETRY_MS, PUT_BATCH_BYTES, PUT_TIMEOUT_MS, REST_ERRORS, keptManifestHash, sha12 } from '../kind.js'
+import { HELD_RETRY_MS, PUT_BATCH_BYTES, PUT_TIMEOUT_MS, REST_ERRORS, confirmRetryMs, keptManifestHash, sha12 } from '../kind.js'
 import { buildKindManifest, confirmKindRemoval, putRow, runKindRound, StepFailed, type KindManifest, type KindRoundResult, type LeaderKind } from '../kind-leader.js'
 import { DigestMap } from '../search-digest.js'
-import { forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
+import { confirmWaiting, forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
 import type { ReplicaTarget } from '../replica-targets.js'
 
 export const COPY_DEBOUNCE_MS = 3_000
@@ -325,8 +325,9 @@ async function purgeKind(kind: CopyKind<unknown>, target: CopyTarget, st: KindSt
 }
 
 let schedulers = 0
-/** The running scheduler's "round soon" (one per leader), for a confirm the user gave. */
-let copySoon: ((kind?: string) => void) | null = null
+/** Every running scheduler's "round soon", for a confirm the user gave: a scheduler that stops takes only its own. */
+const copySoons = new Set<(kind?: string) => void>()
+const copySoon = (kind?: string): void => { for (const soon of copySoons) soon(kind) }
 
 /** Every copy kind's name (web/routes/replicas-status.ts accepts a confirm for these). */
 export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas'] as const
@@ -343,7 +344,7 @@ export async function confirmCopyKindRemoval(targetId: string, kind: string, opt
   if (!target || target.kind !== 'host' || !peekKindState(targetId, kind)) return false
   if (!confirmKindRemoval(target, kind, opts)) return false
   log.session.warn('copies: the user confirmed a removal of most rows', { target: targetId, kind, entries: peekKindState(targetId, kind)?.confirmFor?.entries })
-  copySoon?.(kind)
+  copySoon(kind)
   return true
 }
 
@@ -353,22 +354,23 @@ export async function confirmCopyKindRemoval(targetId: string, kind: string, opt
  * purged now, not at the next store write or sweep.
  */
 export function copyChoiceChanged(): void {
-  copySoon?.()
+  copySoon()
 }
 
 /** A drain took away writes: every copy kind's manifest goes again (task-replica.ts resendTaskReplicaSoon). */
 export function resendCopyKindsSoon(): void {
   forgetKindManifests([...COPY_KIND_NAMES])
-  copySoon?.()
+  copySoon()
 }
 
 /**
  * Leader only: rounds of the copy kinds. A kind's store write brings a round
  * of that kind within COPY_DEBOUNCE_MS, a follower joining or becoming
  * reachable one of every kind, a round with held rows one more after
- * HELD_RETRY_MS, and the sweep every 5 minutes asks every target again (by
- * digest where the kind has one). One round at a time; a request during a
- * round runs one more after it. Returns the stop.
+ * HELD_RETRY_MS, one that lost the step of a confirm the user gave one more
+ * soon (backing off, while the confirm holds), and the sweep every 5 minutes
+ * asks every target again (by digest where the kind has one). One round at a
+ * time; a request during a round runs one more after it. Returns the stop.
  */
 export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKindsDeps = {}): { stop: () => void } {
   if (isFollower() || kinds.length === 0) return { stop: () => {} }
@@ -376,6 +378,9 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | null = null
   let retry: ReturnType<typeof setTimeout> | null = null
+  let confirmRetry: ReturnType<typeof setTimeout> | null = null
+  /** Rounds in a row that lost a confirm's step (stream reset, host not connected, timeout). */
+  let confirmTries = 0
   const dirty = new Set<string>()
   /** Kinds a follower held rows of, in any round since the retry was set: all go again with it. */
   const pendingHeld = new Set<string>()
@@ -398,6 +403,17 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
           }, HELD_RETRY_MS)
           retry.unref?.()
         }
+        // A lost step keeps the confirm (kind-leader.ts), but no store write may come to send it.
+        const lost = new Set(results.filter((r) => r.action === 'failed' && confirmWaiting(r.target, r.kind)).map((r) => r.kind))
+        confirmTries = lost.size > 0 ? confirmTries + 1 : 0
+        if (lost.size > 0 && !confirmRetry && !stopped) {
+          confirmRetry = setTimeout(() => {
+            confirmRetry = null
+            for (const k of lost) dirty.add(k)
+            void round()
+          }, confirmRetryMs(confirmTries))
+          confirmRetry.unref?.()
+        }
       }
     } catch (err) {
       log.session.warn('copies: scheduler round failed', { scheduler: id, error: err instanceof Error ? err.message : String(err) })
@@ -412,7 +428,7 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
     timer = setTimeout(() => { timer = null; void round() }, COPY_DEBOUNCE_MS)
     timer.unref?.()
   }
-  copySoon = soon
+  copySoons.add(soon)
   const unwatch = kinds.map((k) => k.watch(() => soon(k.kind)))
   let unlistenTargets: (() => void) | null = null
   void import('../replica-targets.js').then(({ onReplicaTargetsChanged }) => {
@@ -425,11 +441,12 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
   return {
     stop: () => {
       stopped = true
-      if (copySoon === soon) copySoon = null
+      copySoons.delete(soon)
       for (const u of unwatch) { try { u() } catch { /* best effort */ } }
       unlistenTargets?.()
       if (timer) clearTimeout(timer)
       if (retry) clearTimeout(retry)
+      if (confirmRetry) clearTimeout(confirmRetry)
       clearTimeout(first)
       clearInterval(sweep)
     },

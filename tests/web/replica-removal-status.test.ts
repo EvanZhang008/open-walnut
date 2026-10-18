@@ -2,7 +2,9 @@
  * The rows "Copies that held off" shows from GET /api/replicas/status
  * (web/src/components/settings/sections/replica-removal-status.ts): a row only
  * for a refusal three rounds in a row or an armed confirm, its sentence naming
- * the size of the removal, and the confirm naming exactly the refusal read.
+ * the size of the removal, and the confirm naming exactly the refusal read; a
+ * copy too old for the confirm says to update it there, with no confirm; and
+ * the key (`about`) an error under the row is bound to.
  */
 import { describe, expect, it } from 'vitest'
 import { replicaRemovalRows, refusedText, type ReplicasStatusResponse } from '../../web/src/components/settings/sections/replica-removal-status.js'
@@ -66,6 +68,32 @@ describe('the rows of copies that held off', () => {
       'This Mac has 3 tasks', 'This Mac has 3 project and folder entries', 'This Mac has 3 sessions', 'This Mac has 3 reply requests',
       'This Mac has 3 boards', 'This Mac has 3 letters', 'This Mac has 3 letter bodies', 'This Mac has 3 search rows',
     ])
+  })
+
+  it('a copy that refused the confirm anyway (an older Walnut) says to update it there first, and offers no confirm', () => {
+    const s = status()
+    const older = { error: 'manifest_removes_most_rows', at: 9, entries: 3, keys: 'abcdef012345' }
+    s.targets[0].kinds[0] = { kind: 'tasks', refusals: 4, needsConfirm: false, lastRefusal: older, confirmRefused: { entries: 3, keys: 'abcdef012345', at: 8 } }
+    const [row] = replicaRemovalRows(s, 'companion')
+    expect(row).toMatchObject({ id: 'companion/tasks', state: 'outdated' })
+    expect(row.confirm).toBeUndefined()
+    expect(row.text).toBe('This Mac has 3 tasks now, far fewer than the copy there. That copy runs an older Walnut that cannot take your confirm: update Walnut there first, then confirm here again.')
+  })
+
+  it('a row\'s key holds still while the refusal does (a new round of it only moves its time), and moves with its size or its state', () => {
+    const aboutOf = (edit: (s: ReplicasStatusResponse) => void) => {
+      const s = status()
+      edit(s)
+      return replicaRemovalRows(s)[0].about
+    }
+    const k = (s: ReplicasStatusResponse) => s.targets[1].kinds[0]
+    const base = aboutOf(() => {})
+    expect(aboutOf((s) => { k(s).lastRefusal = { ...refusal, at: 99 } })).toBe(base)
+    for (const moved of [{ entries: 4 }, { local: 101 }, { removing: 96 }, { keys: '0123456789ab' }]) {
+      expect(aboutOf((s) => { k(s).lastRefusal = { ...refusal, ...moved } })).not.toBe(base)
+    }
+    expect(aboutOf((s) => { k(s).confirmArmed = { entries: 3, keys: 'abcdef012345', at: 1, expiresAt: 2 } })).not.toBe(base)
+    expect(aboutOf((s) => { k(s).confirmRefused = { entries: 3, keys: 'abcdef012345', at: 1 } })).not.toBe(base)
   })
 
   it('a refusal with no key set (nothing to bind a confirm to) offers no confirm', () => {

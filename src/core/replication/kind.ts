@@ -24,7 +24,9 @@
  *     with `confirmFor:{entries, keys}` only while the leader's manifest still
  *     names that many rows and that set of keys, and only for CONFIRM_TTL_MS;
  *     a follower refuses a confirm whose `confirmFor` does not match the
- *     manifest it came with;
+ *     manifest it came with. A follower that refuses a matching confirm runs a
+ *     build older than the confirm (one without it names no `local`/`removing`
+ *     either): the leader stops offering it there until a refusal names them;
  *   - `keep` (WP4): keys the leader has but could not read this round (a board
  *     file it failed to open or parse). The follower neither asks for them nor
  *     removes them, so a read error on the Mac never deletes the copy. The
@@ -47,8 +49,20 @@ export const HELD_RETRY_MS = 35_000
 export const UNSUPPORTED_REST_MS = 10 * 60_000
 /** Refused rounds in a row (with a stable leader count) before `confirm:true` may be sent. */
 export const CONFIRM_AFTER_REFUSALS = 3
-/** A confirm the user gave and no round has sent yet expires after this (one sweep). */
-export const CONFIRM_TTL_MS = 5 * 60_000
+/**
+ * A confirm the user gave and no round has sent yet expires after this: two
+ * sweeps, so a confirm whose step was lost on the way still has its retries
+ * (CONFIRM_RETRY_MS) and at least one sweep before it lapses.
+ */
+export const CONFIRM_TTL_MS = 10 * 60_000
+/** A kept confirm whose step was lost goes again after this, doubling up to CONFIRM_RETRY_MAX_MS. */
+export const CONFIRM_RETRY_MS = 5_000
+export const CONFIRM_RETRY_MAX_MS = 60_000
+
+/** The wait before the `tries`-th retry of a lost confirm (1, 2, ...). */
+export function confirmRetryMs(tries: number): number {
+  return Math.min(CONFIRM_RETRY_MS * 2 ** Math.max(0, tries - 1), CONFIRM_RETRY_MAX_MS)
+}
 
 /**
  * `purge` (WP4): the host's choice turned a copy kind off, the follower drops

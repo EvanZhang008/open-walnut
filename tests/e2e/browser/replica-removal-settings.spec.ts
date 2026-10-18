@@ -3,8 +3,9 @@
  * section 4): a host's copy refused, three rounds in a row, a copy that would remove
  * most of its tasks. The row says how many would go; "Remove them there" takes two
  * clicks and posts exactly the refusal the user read (count and keys); the row then
- * says the next copy takes it. A 409 (the rows moved) says so under the row. No row
- * at all while every copy works.
+ * says the next copy takes it. A 409 (the rows moved) says so under the row, until a
+ * later read shows the refusal moved again. A copy too old to take the confirm says
+ * to update it there first, with no button. No row at all while every copy works.
  *
  * The fixture server has no follower to refuse anything, so this spec answers
  * GET /api/replicas/status and POST /api/replicas/confirm-removal itself
@@ -23,18 +24,30 @@ const ROW = `${TARGET}/tasks`
 const KEYS = 'abcdef012345'
 
 interface Fake {
-  state: 'ok' | 'refused' | 'armed'
+  /** `outdated`: the copy refused the confirm anyway (an older Walnut there). */
+  state: 'ok' | 'refused' | 'armed' | 'outdated'
   posts: Array<Record<string, unknown>>
-  /** Answer the next confirm with 409 not_refused. */
+  /** Answer the next confirm with 409 not_refused (the rows moved: one more row here). */
   conflict: boolean
+  /** The rows this Mac has, as the refusal names them (3 unless set). */
+  entries?: number
+  /** The read after an armed one: the round sent the confirm and that copy refused it. */
+  refuseConfirm?: boolean
+  reads?: number
 }
 
 function statusBody(f: Fake): Record<string, unknown> {
-  const tasks: Record<string, unknown> = { kind: 'tasks', refusals: 0, needsConfirm: false, action: 'synced', entries: 3 }
-  if (f.state !== 'ok') {
-    Object.assign(tasks, { action: 'failed', refusals: 3, lastRefusal: { error: 'manifest_removes_most_rows', at: Date.now(), entries: 3, keys: KEYS, local: 100, removing: 97 } })
+  f.reads = (f.reads ?? 0) + 1
+  const entries = f.entries ?? 3
+  const tasks: Record<string, unknown> = { kind: 'tasks', refusals: 0, needsConfirm: false, action: 'synced', entries }
+  if (f.state === 'outdated') {
+    // An older build names no size in its refusal, and refused the confirm the user gave.
+    Object.assign(tasks, { action: 'failed', refusals: 4, lastRefusal: { error: 'manifest_removes_most_rows', at: Date.now(), entries, keys: KEYS }, confirmRefused: { entries, keys: KEYS, at: Date.now() } })
+  } else if (f.state !== 'ok') {
+    Object.assign(tasks, { action: 'failed', refusals: 3, lastRefusal: { error: 'manifest_removes_most_rows', at: Date.now(), entries, keys: KEYS, local: 100, removing: 100 - entries } })
     tasks.needsConfirm = f.state === 'refused'
-    if (f.state === 'armed') tasks.confirmArmed = { entries: 3, keys: KEYS, at: Date.now(), expiresAt: Date.now() + 5 * 60_000 }
+    if (f.state === 'armed') tasks.confirmArmed = { entries, keys: KEYS, at: Date.now(), expiresAt: Date.now() + 10 * 60_000 }
+    if (f.state === 'armed' && f.refuseConfirm) f.state = 'outdated'
   }
   return { ok: true, targets: [{ id: TARGET, kind: 'host', label: 'pw-rr-box', kinds: [tasks, { kind: 'registry', refusals: 0, needsConfirm: false }] }] }
 }
@@ -46,6 +59,7 @@ async function fakeReplicas(page: Page, f: Fake): Promise<void> {
     f.posts.push(body)
     if (f.conflict) {
       f.conflict = false
+      f.entries = (f.entries ?? 3) + 1
       await route.fulfill({ status: 409, json: { ok: false, error: 'not_refused' } })
       return
     }
@@ -129,7 +143,62 @@ test.describe('Copies that held off', () => {
     await expect(page.getByTestId('replica-removals-host').getByRole('alert')).toContainText('The rows changed since you read this')
     await expect(row).toHaveAttribute('data-state', 'error')
     await expect(row).toHaveAttribute('data-removal', 'refused')
+    // The row shows the refusal as it is now, and the error is about it.
+    await expect(page.getByTestId(`replica-removal-text-${ROW}`)).toContainText('This Mac has 4 tasks now')
     expect(f.posts.length).toBe(1)
     await shot(page, 'conflict')
+  })
+
+  test('an error under the row stays while the refusal holds, and goes once a later read shows it moved', async ({ page }) => {
+    await page.clock.install()
+    const f: Fake = { state: 'refused', posts: [], conflict: true }
+    await fakeReplicas(page, f)
+    await openRemoteHosts(page)
+    const button = page.getByTestId(`replica-removal-confirm-${ROW}`)
+    await expect(button).toBeVisible({ timeout: 30_000 })
+    await button.click()
+    await button.click()
+    const group = page.getByTestId('replica-removals-host')
+    const row = page.getByTestId(`replica-removal-${ROW}`)
+    const text = page.getByTestId(`replica-removal-text-${ROW}`)
+    await expect(group.getByRole('alert')).toContainText('The rows changed since you read this')
+    await expect(text).toContainText('This Mac has 4 tasks now')
+    // The next read (30 s later) shows the same refusal: the error stays.
+    let reads = f.reads ?? 0
+    await page.clock.fastForward(31_000)
+    await expect.poll(() => f.reads ?? 0).toBeGreaterThan(reads)
+    await expect(text).toContainText('This Mac has 4 tasks now')
+    await expect(group.getByRole('alert')).toContainText('The rows changed since you read this')
+    // This Mac's rows move again: the row says the new count and the old error is gone.
+    f.entries = 5
+    reads = f.reads ?? 0
+    await page.clock.fastForward(31_000)
+    await expect.poll(() => f.reads ?? 0).toBeGreaterThan(reads)
+    await expect(text).toContainText('This Mac has 5 tasks now')
+    await expect(group.getByRole('alert')).toHaveCount(0)
+    await expect(row).toHaveAttribute('data-state', 'warning')
+    await expect(button).toBeVisible()
+    await shot(page, 'conflict-cleared')
+  })
+
+  test('a copy too old to take the confirm says to update it there first, and offers no button', async ({ page }) => {
+    const f: Fake = { state: 'refused', posts: [], conflict: false, refuseConfirm: true }
+    await fakeReplicas(page, f)
+    await openRemoteHosts(page)
+    const button = page.getByTestId(`replica-removal-confirm-${ROW}`)
+    await expect(button).toBeVisible({ timeout: 30_000 })
+    await button.click()
+    await button.click()
+    const row = page.getByTestId(`replica-removal-${ROW}`)
+    // Armed, then the round sends it and that copy refuses it anyway (read every 5 s while armed).
+    await expect(row).toHaveAttribute('data-removal', 'outdated', { timeout: 20_000 })
+    await expect(page.getByTestId(`replica-removal-text-${ROW}`)).toHaveText(
+      'This Mac has 3 tasks now, far fewer than the copy there. That copy runs an older Walnut that cannot take your confirm: update Walnut there first, then confirm here again.',
+    )
+    await expect(row).toHaveAttribute('data-state', 'warning')
+    await expect(page.getByTestId(`replica-removal-confirm-${ROW}`)).toHaveCount(0)
+    await expect(page.getByTestId('replica-removals-host').getByRole('alert')).toHaveCount(0)
+    expect(f.posts.length).toBe(1)
+    await shot(page, 'outdated')
   })
 })

@@ -820,8 +820,13 @@ Rollout gate: `web --replica` shipped OFF by default, a per-host opt-in (`hosts.
   `web/src/components/settings/sections/ReplicaRemovalGroup.tsx` + `replica-removal-status.ts` (new: the
   Settings row a refusal three rounds in a row raises, in Remote Hosts for a host and in Cloud Companion for
   the companion; it names the leader's count and the follower's `local`/`removing`, and its two-click confirm
-  posts the count and keys the user read); `src/core/host-server/manager.ts` (`targetReady`: a host's copy
-  target, registered while its server starts, gets its round when the server answers, also after a restart).
+  posts the count and keys the user read; an error under it lasts while the refusal it was about holds; a
+  follower too old for the confirm, which refused one anyway, gets a row saying to update it there first,
+  with no button); `src/core/host-server/manager.ts` (the copy target and its `ready`, registered under one
+  id while its server starts: its round runs when the server answers, and when another server process
+  answers, by the daemon's pid, its memo and rests are forgotten so the round sends a real step).
+  A confirm whose step was lost goes again within seconds, backing off up to a minute, and lives
+  `CONFIRM_TTL_MS` (10 minutes, two sweeps).
 - Delivers: section 4 protocol (with `schemaVersion`, `409 schema_newer`, the `confirm:true` mass-removal
   path, file modes); tasks and registry reach host replicas; held rows on a host come from the journal
   overlay (stub that holds nothing until WP10); the companion keeps its held sources.
