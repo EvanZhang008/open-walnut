@@ -175,6 +175,10 @@ describe(`R17: a host replica at real density (${TWIN} twin)`, () => {
         const r = await phone('/api/notes-v2')
         return r.status === 200 && uniq(r.text, /Big \d+\.md/g) >= BIG_NOTES ? true : null
       }, 180_000, 'the big notes in the copy', 2_000)
+      // The Mac back first (the board test above woke it a moment ago): otherwise the replica's
+      // view can still say away from that sleep while its daemon heard the Mac just now, and a
+      // write is forwarded to the Mac this test stops (leader_unsure).
+      await c.waitBack(token)
       c.sleepMac()
       try {
         await c.waitAway(token, 90_000)
