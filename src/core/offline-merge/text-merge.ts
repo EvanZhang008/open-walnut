@@ -149,7 +149,7 @@ parentPort.postMessage(merge(workerData.base, workerData.mac, workerData.replica
 
 let diffPath: string | undefined;
 
-/** The deadline's answer: the Mac's text is kept, one conflict listed. */
+/** The deadline's answer: as a merge over its step budget (task-fields.ts keeps the newer side and lists one conflict). */
 const TIMED_OUT: TextMergeResult = { clean: false, conflicts: 1, overBudget: true, timedOut: true };
 
 /**

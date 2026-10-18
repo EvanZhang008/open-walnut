@@ -686,10 +686,14 @@ the user"). The letter lists each item with a link (note, conflict copy, task) a
 - The daemon appends a `session` record and adds the session to the slice overlay so `ownerOf(sid)`,
   the gateway and `follower.send` know it (`src/providers/offline-host-core.ts:430-433`); the ask's
   `task-create` record is in `tasksWithOverlay` and `resolveTask` (section 5), so the session's own
-  `walnut task_get`/`task_update` finds its task.
+  `walnut task_get`/`task_update` finds its task. The start is kept on disk (`pending-starts/`,
+  `src/providers/host-start-core.ts`) from before the CLI is spawned until that record is kept, so a
+  daemon that dies in between journals the record at its next boot, under the same op id.
 - A person's message to a STOPPED host session while away resumes it through the `resumeForTrigger`
   path instead of `not_running` (`src/providers/offline-host-core.ts:1607`), journaled as `resume`.
-- Mac adoption on drain: `session` record -> `createSessionRecord` (`src/core/session-tracker.ts:1342`)
+- Mac adoption on drain: only a task that host's own journal created (its `created_by_op` is an op
+  drained from that host) and only a mode the Mac's template for that host allows (else `default`);
+  `session` record -> `createSessionRecord` (`src/core/session-tracker.ts:1342`)
   with host = this host's alias, then the existing rescue (`src/core/offline-handover.ts:360-370`)
   attaches. The ask keeps its host: `refreshWalnutSessionProfile` (`src/core/sessions/personal-ai-lane.ts:544-571`)
   computes the MCP mount per session host (host app path from the host-server install record) so a
@@ -1258,7 +1262,7 @@ Windows: `WALNUT_LEADER_QUIET_MS=6000`, `WALNUT_TRUSTED_CLIENT_BEAT_MS=1000`, `W
 (beat x 3 < quiet < takeover with seconds of margin, because load averages above 100 are recorded on this
 machine; the 2026 flake lesson at `tests/e2e/leader-takeover-live-e2e.test.ts:43-49`). The harness asserts
 that ordering itself at start and refuses to run otherwise.
-Old builds: a capability-drop knob `WALNUT_DAEMON_DROP_CAPS` in both twins (refused when the daemon dir
+Old builds: a capability-drop knob `WALNUT_BRIDGE_HIDE_CAPS` in both twins (refused when the daemon dir
 is the prod dir) and an old leader booted from `git archive 1fe1fd194` into a temp dir with
 `node_modules` symlinked.
 

@@ -13,6 +13,9 @@
  * mounts no walnut MCP server: its walnut tools are the `walnut` CLI on its PATH, which
  * the daemon points at its gateway socket, as for every session the Mac runs on a host.
  *
+ * A daemon that dies between an ask's CLI and its record (WALNUT_TEST_DIE_AFTER_ASK_SPAWN,
+ * honoured outside the real daemon dir only) journals the record at its next boot, once.
+ *
  * Hygiene: every dir is a temp dir; every daemon is stopped by the pid it wrote into its
  * own temp dir, the fake host server by the pid it logged, each mock CLI by the pid it
  * recorded; nothing touches a real daemon dir or journal.
@@ -106,7 +109,7 @@ let base = ''
 const started: number[] = []
 const fakePids: number[] = []
 
-async function spawnDaemon(name: string, twin: Twin): Promise<Daemon> {
+async function spawnDaemon(name: string, twin: Twin, extraEnv: Record<string, string> = {}): Promise<Daemon> {
   const dir = path.join(base, name)
   const jdir = path.join(base, name + '-j')
   fs.mkdirSync(dir, { recursive: true })
@@ -117,6 +120,7 @@ async function spawnDaemon(name: string, twin: Twin): Promise<Daemon> {
     WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
     WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_GATEWAY_TIMEOUT_MS: '3000',
+    ...extraEnv,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR
@@ -619,6 +623,59 @@ for (const twin of ['source', 'standalone'] as const) {
       expect(await sessionRecords(F)).toEqual([])
       expect(readLines<Call>(path.join(gone.out, 'calls.jsonl'))).toEqual([])
       follower.close()
+      await teardown(d)
+    }, 240_000)
+  })
+}
+
+for (const twin of ['source', 'standalone'] as const) {
+  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a daemon that dies while an ask starts`, () => {
+    it('dies after the CLI is spawned and before its record: the next boot journals the record, once, the CLI keeps running, and the replica reads its history by the journal', async () => {
+      const name = `${twin}-crash`
+      let d = await spawnDaemon(name, twin, { WALNUT_TEST_DIE_AFTER_ASK_SPAWN: '1' })
+      const m = mockFor(name)
+      let mac = await macConnects(d)
+      const { ws: follower } = await followerSocket(d, mac, { app: false })
+      await macPushesTemplateAndLeaves(mac, template(m.mock, m.cwd))
+      const TASK = `mtask-crash-${twin}`
+      const S = newSid()
+      const made = await cmd(follower, { cmd: 'follower.op', op: 'task_create', args: { id: TASK, title: 'Ask Walnut', project: 'Ask Walnut' }, actor: DEVICE, opId: `op-crash-${twin}` })
+      expect(made.ok, JSON.stringify(made)).toBe(true)
+      // The start's answer never comes: the daemon dies right after the spawn.
+      void cmd(follower, startCmd(S, TASK, { opId: `op-crash-${twin}` })).catch(() => null)
+      const c = await callOf(m.out, S)
+      await waitFor(() => !alive(d.pid), 20_000, 'the daemon death')
+      follower.close()
+      expect(alive(c.pid)).toBe(true)
+      const reboot = async (): Promise<void> => {
+        for (const f of ['daemon.port', 'daemon.pid', 'agent-gateway.sock']) { try { fs.unlinkSync(path.join(d.dir, f)) } catch { /* gone */ } }
+        d = await spawnDaemon(name, twin)
+      }
+      // The next daemon on the same dirs: its boot journals the record the dead one never wrote.
+      await reboot()
+      expect(alive(c.pid)).toBe(true)
+      // One more boot before the Mac drains: the session is this Walnut's by its journal alone
+      // (no copy lists it yet), and the replica still reads its history.
+      await stopDaemon(d)
+      await reboot()
+      mac = await macConnects(d)
+      const { ws: again } = await followerSocket(d, mac, { app: false })
+      const hist = await cmd(again, { cmd: 'read-history', sid: S })
+      expect(hist.ok, JSON.stringify(hist)).toBe(true)
+      again.close()
+      const drained = await macDrains(mac)
+      const sessions = drained.filter((x) => x.kind === 'session' && x.sid === S)
+      expect(sessions, JSON.stringify(drained.map((x) => x.kind))).toHaveLength(1)
+      expect(sessions[0]).toMatchObject({ sid: S, taskId: TASK, mode: 'default', opId: `op-crash-${twin}-session`, actor: { kind: 'device', deviceId: DEVICE.deviceId } })
+      expect(drained.some((x) => x.kind === 'task-create' && x.taskId === TASK)).toBe(true)
+      expect(fs.readdirSync(path.join(d.jdir, 'offline-host', 'pending-starts')).filter((f) => f.endsWith('.json'))).toEqual([])
+      mac.close()
+      // Another boot finds nothing left to journal.
+      await stopDaemon(d)
+      await reboot()
+      mac = await macConnects(d)
+      expect((await macDrains(mac)).filter((x) => x.kind === 'session')).toEqual([])
+      mac.close()
       await teardown(d)
     }, 240_000)
   })

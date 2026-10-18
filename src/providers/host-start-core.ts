@@ -145,6 +145,14 @@ export interface HostStartDeps {
   busy: () => number
 }
 
+/** A start whose CLI may run before its `session` record is kept (startHostAsk in the twins). */
+export interface PendingStart {
+  sid: string
+  record: HostStartPlan['record']
+  opId?: string
+  actor?: unknown
+}
+
 export interface HostStart {
   /** The Mac's template for a Walnut (trusted socket only; the twin checks). Throws on a bad one. */
   setTemplate(home: string, raw: unknown): SpawnTemplate
@@ -163,6 +171,15 @@ export interface HostStart {
   once(home: string, sid: string, run: () => Promise<HostStartAnswer>): Promise<HostStartAnswer> | 'taken'
   /** The start of `sid` this daemon holds (running, or answered within 10 minutes), 'taken' for another Walnut's, or null. */
   firstStart(home: string, sid: string): Promise<HostStartAnswer> | 'taken' | null
+  /**
+   * Keep a start on disk before its CLI is spawned, until its `session` record is kept: a
+   * daemon that dies in between journals the record at its next boot (pendingStarts), so
+   * the Mac never loses an ask whose CLI runs. Throws when it cannot be written.
+   */
+  holdPending(home: string, entry: PendingStart): void
+  releasePending(home: string, sid: string): void
+  /** Every start kept on disk (an unreadable one is dropped with a warning). */
+  pendingStarts(): Array<PendingStart & { home: string; at: number }>
 }
 
 export function createHostStart(deps: HostStartDeps): HostStart {
@@ -493,5 +510,48 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     return entry.answer
   }
 
-  return { setTemplate, templateOf, plan, precheck, begin, once, firstStart }
+  function pendingDir(): string {
+    return path.join(deps.dir, 'pending-starts')
+  }
+
+  function pendingFile(home: string, sid: string): string {
+    return path.join(pendingDir(), deps.keyOf(home) + '-' + sid + '.json')
+  }
+
+  function holdPending(home: string, entry: PendingStart): void {
+    if (!SID_RE.test(entry.sid) || !isRecord(entry.record) || entry.record.sid !== entry.sid) throw new Error('pending start: bad entry')
+    writeAtomic(pendingFile(home, entry.sid), JSON.stringify({ v: 1, home, ...entry, at: deps.now() }))
+  }
+
+  function releasePending(home: string, sid: string): void {
+    if (!SID_RE.test(sid)) return
+    try { fs.unlinkSync(pendingFile(home, sid)) } catch { /* none, or gone */ }
+  }
+
+  function pendingStarts(): Array<PendingStart & { home: string; at: number }> {
+    let names: string[] = []
+    try { names = fs.readdirSync(pendingDir()) } catch { return [] }
+    const out: Array<PendingStart & { home: string; at: number }> = []
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      const file = path.join(pendingDir(), name)
+      let e: Record<string, unknown> | null = null
+      try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); e = isRecord(v) ? v : null } catch { e = null }
+      const home = e && typeof e.home === 'string' ? e.home : ''
+      const sid = e && typeof e.sid === 'string' ? e.sid : ''
+      const record = e && isRecord(e.record) ? e.record : null
+      if (!e || e.v !== 1 || !home || !SID_RE.test(sid) || !record || record.kind !== 'session' || record.sid !== sid || name !== deps.keyOf(home) + '-' + sid + '.json') {
+        deps.log('warn', 'host start: an unreadable pending start is dropped', { file: name })
+        try { fs.unlinkSync(file) } catch { /* gone */ }
+        continue
+      }
+      out.push({
+        home, sid, record: record as PendingStart['record'], at: Number(e.at) || 0,
+        ...(typeof e.opId === 'string' ? { opId: e.opId } : {}), ...(e.actor !== undefined ? { actor: e.actor } : {}),
+      })
+    }
+    return out
+  }
+
+  return { setTemplate, templateOf, plan, precheck, begin, once, firstStart, holdPending, releasePending, pendingStarts }
 }

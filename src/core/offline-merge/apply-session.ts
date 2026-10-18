@@ -20,11 +20,19 @@
  *
  * Idempotent: an existing record for the sid is a no-op. A task the Mac never got (its
  * create was refused) refuses the session too, into the letter.
+ *
+ * What a host may claim: only a task its OWN journal created (the task's created_by_op is
+ * an op this Mac drained from that host), so a compromised host can never attach a session
+ * to one of this Mac's tasks or stamp it as an ask; and only a mode this Mac's template for
+ * that host allows (bypass only with the host's ask_bypass), else the record takes the
+ * plain default (a resume from this Mac never runs in a mode the user did not allow).
  */
 
 import { log } from '../../logging/index.js';
+import { WALNUT_HOME } from '../../constants.js';
 import { RefusedWrite } from './patch-check.js';
 import { resolveTaskId } from './apply-fields.js';
+import { lookupDrained } from './ledger.js';
 import type { V2Context, V2Record } from './apply-v2.js';
 import { SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from '../types.js';
 
@@ -53,13 +61,16 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
   const taskId = resolveTaskId(ctx.hostKey, String(record.taskId ?? ''), ctx.remap);
   const task = await getTask(taskId).catch(() => null);
   if (!task || task.id !== taskId) throw new RefusedWrite(`the task of that ask (${taskId}) is not on this Mac`);
+  if (!task.created_by_op || lookupDrained(WALNUT_HOME, task.created_by_op, ctx.hostKey)?.outcome !== 'applied') {
+    throw new RefusedWrite(`the task of that ask (${taskId}) was not created by ${ctx.hostKey} while this Mac was away`);
+  }
   const agentId = typeof record.agentId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(record.agentId) ? record.agentId : 'general';
   if (!task.walnut_agent || (agentId !== 'general' && task.agent_id !== agentId)) {
     // agent_id is create-time data for updateTask; the raw write takes it (lane-ask-link.ts stampAsAsk).
     await updateTaskRaw(taskId, { walnut_agent: true, ...(agentId !== 'general' ? { agent_id: agentId } : {}) }, { source: 'offline-handover' });
   }
   const cwd = typeof record.cwd === 'string' && record.cwd.startsWith('/') ? record.cwd : undefined;
-  const mode = typeof record.mode === 'string' && VALID_SESSION_MODE_IDS.has(record.mode) ? record.mode as SessionMode : undefined;
+  const mode = await allowedMode(ctx.hostKey, record.mode, sid);
   const effort = typeof record.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(record.effort) ? record.effort as SessionEffort : undefined;
   const model = typeof record.model === 'string' && record.model ? (SESSION_MODEL_CLI_MAP[record.model] ?? record.model) : undefined;
   // The persona this Mac renders for that agent, without this Mac's walnut mount (see above).
@@ -98,6 +109,18 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
   ctx.result.replayed++;
   log.session.info('offline handover: adopted an ask the host started while this Mac was away', { host: ctx.hostKey, sessionId: sid, taskId, agentId, mode, model });
   scheduleFollowups(sid, taskId, cwd ?? '', typeof record.firstMessage === 'string' ? record.firstMessage : '', task.title ?? '', task.project ?? '');
+}
+
+/** The record's mode when this Mac's template for that host allows it; else the plain default. */
+async function allowedMode(hostKey: string, raw: unknown, sid: string): Promise<SessionMode | undefined> {
+  if (typeof raw !== 'string' || !VALID_SESSION_MODE_IDS.has(raw)) return undefined;
+  const [{ hostAskModes }, { getConfig }] = await Promise.all([
+    import('../../providers/spawn-template.js'), import('../config-manager.js'),
+  ]);
+  const bypass = (await getConfig()).hosts?.[hostKey]?.server?.ask_bypass === true;
+  if (Object.prototype.hasOwnProperty.call(hostAskModes(bypass).modes, raw)) return raw as SessionMode;
+  log.session.warn('offline handover: an adopted ask names a mode its host may not start; it keeps the default', { host: hostKey, sessionId: sid, mode: raw });
+  return 'default';
 }
 
 /** The rescue after the batch looks at the adopted session's CLI as a reconnect does. */

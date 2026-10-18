@@ -192,11 +192,12 @@ describe('leader protocol: both twins', () => {
       expect(fnBody(src, 'cmdOfflineBlob')).toMatch(/origin === 'bridge' \|\| [\w.?]*origin === 'follower'/)
       expect(fnBody(src, 'cmdFollowerSend')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.send'\)[\s\S]*offlineHost\.deliverHuman\(t\.home, t\.sid, cmd\.text, cmd\.messageId\)/)
       expect(fnBody(src, 'cmdFollowerPermission')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.permission'\)[\s\S]*answerPermission\(t\.sid, cmd, 'follower\.permission'\)/)
-      // read-history: a session id names a stream file and nothing else; a follower reads its own Walnut's.
+      // read-history: a session id names a stream file and nothing else; a follower reads its own
+      // Walnut's, owned as every follower read decides (the copy, then the journal).
       const rh = fnBody(src, 'cmdReadHistory')
       expect(rh).not.toMatch(/canonicalPath/)
       expect(rh).toMatch(/!\/\^\[A-Za-z0-9\]\[A-Za-z0-9_\.-\]\{0,127\}\$\/\.test\(sid\) \|\| sid\.includes\('\.\.'\)/)
-      expect(rh).toMatch(/origin === 'follower' && offlineHost\.ownerOf\(sid\) !== [\w.?]*followerHome/)
+      expect(rh).toMatch(/origin === 'follower' && followerReads\.ownerOf\(sid\) !== [\w.?]*followerHome/)
       expect(rh.indexOf('ownerOf(sid)')).toBeLessThan(rh.indexOf('readTailWindow('))
     })
 

@@ -353,3 +353,33 @@ describe('an injection string in every field', () => {
     expect(hs.plan(HOME, fields({ persona: { text: 'x', mode: INJECT } }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
   })
 })
+
+describe('a start kept on disk until its session record is (a daemon death in between)', () => {
+  const SID = 'cccccccc-3333-4333-8333-000000000001'
+  const record = { kind: 'session' as const, sid: SID, taskId: 'mtask-ask', host: 'marina', cwd: '/srv/asks', agentId: 'general', mode: 'default', title: 'Ask Walnut', startedAt: 1 }
+
+  it('holds, lists (a new core reads it back), and releases a start', () => {
+    const hs = make()
+    hs.holdPending(HOME, { sid: SID, record, opId: 'op-1-session', actor: { kind: 'device', deviceId: 'd1' } })
+    const file = path.join(dir, 'pending-starts', `k1-${SID}.json`)
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700)
+    expect(make().pendingStarts()).toEqual([{ home: HOME, sid: SID, record, opId: 'op-1-session', actor: { kind: 'device', deviceId: 'd1' }, at: now }])
+    hs.releasePending(HOME, SID)
+    expect(make().pendingStarts()).toEqual([])
+    hs.releasePending(HOME, SID)
+  })
+
+  it('refuses a bad entry, and drops a file that does not read back as one start of its own name', () => {
+    const hs = make()
+    expect(() => hs.holdPending(HOME, { sid: 'not-a-uuid', record: { ...record, sid: 'not-a-uuid' } })).toThrow()
+    expect(() => hs.holdPending(HOME, { sid: SID, record: { ...record, sid: 'cccccccc-3333-4333-8333-000000000002' } })).toThrow()
+    const pd = path.join(dir, 'pending-starts')
+    fs.mkdirSync(pd, { recursive: true })
+    fs.writeFileSync(path.join(pd, 'k1-torn.json'), '{"v":1,')
+    fs.writeFileSync(path.join(pd, `k9-${SID}.json`), JSON.stringify({ v: 1, home: HOME, sid: SID, record, at: 1 }))
+    fs.writeFileSync(path.join(pd, `k1-${SID}.json`), JSON.stringify({ v: 1, home: HOME, sid: SID, record: { ...record, kind: 'note' }, at: 1 }))
+    expect(hs.pendingStarts()).toEqual([])
+    expect(fs.readdirSync(pd)).toEqual([])
+  })
+})

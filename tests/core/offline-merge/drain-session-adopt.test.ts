@@ -10,7 +10,10 @@
  *     and the drain asks the connection to look at it (the rescue);
  *   - a non-Walnut agent's ask keeps its agent (agent_id, read back from the store);
  *   - a lost ack drains the session again: adopted once;
- *   - a session whose task never reached the Mac is refused (nothing made), and acked.
+ *   - a session whose task never reached the Mac is refused (nothing made), and acked;
+ *   - a host may claim only a task its own journal created: one of this Mac's tasks, or one
+ *     another host created away, is refused, and the task is neither stamped nor linked;
+ *   - a mode the host may not start (bypass without its ask_bypass) is kept as the default.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest'
 import os from 'node:os'
@@ -20,7 +23,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-drain-session-adopt'))
 
 import { runOfflineHandover, _resetOfflineHandoverForTesting, _setHandoverBackoffForTesting } from '../../../src/core/offline-handover.js'
-import { getTask } from '../../../src/core/task-manager.js'
+import { addTask, getTask } from '../../../src/core/task-manager.js'
+import { updateConfig } from '../../../src/core/config-manager.js'
 import { getSessionByClaudeId, getSessionsForTaskSync, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { refreshWalnutSessionProfile } from '../../../src/core/sessions/personal-ai-lane.js'
 import { closeDb } from '../../../src/core/task-db.js'
@@ -153,6 +157,46 @@ describe('a new ask a host started while the Mac was away', () => {
     const after = await getSessionByClaudeId(sid)
     expect(after!.profile?.mcpServers).toBeUndefined()
     expect(after!.profile?.systemPrompt).toBe(before!.profile!.systemPrompt)
+  })
+
+  it("a session naming one of this Mac's own tasks is refused: no record, no link, the task is not stamped as an ask", async () => {
+    const { task: mine } = await addTask({ title: 'Quarterly plan', project: 'Acme' })
+    const sid = 'dddddddd-4444-4444-8444-000000000007'
+    const j = journal('marina', [sessionRec(sid, mine.id)])
+    await runOfflineHandover(j.conn as never)
+    expect(j.pending).toHaveLength(0)
+    expect(await getSessionByClaudeId(sid)).toBeNull()
+    const after = await getTask(mine.id)
+    expect(after.walnut_agent).toBeFalsy()
+    expect(after.session_ids ?? []).not.toContain(sid)
+    expect(after.session_id).toBeUndefined()
+  })
+
+  it('a session naming a task another host created away is refused', async () => {
+    const minted = 'mtaskask0000adopt0008'
+    const sid = 'dddddddd-4444-4444-8444-000000000008'
+    await runOfflineHandover(journal('acme', [createRec(minted)]).conn as never)
+    const theirs = await getTask(minted)
+    expect(theirs.created_by_op).toBeTruthy()
+    const j = journal('marina', [sessionRec(sid, minted)])
+    await runOfflineHandover(j.conn as never)
+    expect(j.pending).toHaveLength(0)
+    expect(await getSessionByClaudeId(sid)).toBeNull()
+    expect((await getTask(minted)).session_ids ?? []).not.toContain(sid)
+  })
+
+  it('a bypass ask from a host without ask_bypass keeps the default mode; with it, bypass', async () => {
+    const sidA = 'dddddddd-4444-4444-8444-000000000009'
+    const sidB = 'dddddddd-4444-4444-8444-00000000000a'
+    await runOfflineHandover(journal('marina', [createRec('mtaskask0000adopt0009'), sessionRec(sidA, 'mtaskask0000adopt0009', { mode: 'bypass' })]).conn as never)
+    expect((await getSessionByClaudeId(sidA))?.mode).toBe('default')
+    await updateConfig({ hosts: { marina: { hostname: 'marina.example', server: { ask_bypass: true } } } } as never)
+    try {
+      await runOfflineHandover(journal('marina', [createRec('mtaskask0000adopt000a'), sessionRec(sidB, 'mtaskask0000adopt000a', { mode: 'bypass' })]).conn as never)
+      expect((await getSessionByClaudeId(sidB))?.mode).toBe('bypass')
+    } finally {
+      await updateConfig({ hosts: {} } as never)
+    }
   })
 
   it('a session whose task never reached this Mac is refused: nothing is made, and the record is taken', async () => {

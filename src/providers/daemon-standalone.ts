@@ -3422,7 +3422,9 @@ function streamTarget(ws: ServerWebSocket<WsData>, to: unknown): { link: ServerW
     return { why: to === 'follower' ? 'no server on this host follows that Walnut' : 'a lane opens streams to the follower only' }
   }
   // The companion ('bridge-stream-v1'): to the primary only, the server its
-  // server.http relay reaches (pickTrustedClient). Keep in sync with daemon-source.ts.
+  // server.http relay reaches. It is the primary socket heard last (primaryForBridge), which can
+  // differ from pickTrustedClient's pick while the daemon and the companion disagree on who
+  // leads; a stream whose request is never written is then answered on the companion. Keep in sync with daemon-source.ts.
   if (ws.data?.origin === 'bridge') {
     if (to !== 'primary') return { why: 'the companion opens streams to the primary only' }
     const link = primaryForBridge()
@@ -3816,6 +3818,36 @@ function cmdLeaderSpawnTemplate(ws: ServerWebSocket<WsData>, id: number, cmd: Re
   }
 }
 
+/** Tests only (never in the real daemon dir): die right after a host ask's CLI is spawned, before its record. */
+const DIE_AFTER_ASK_SPAWN = !IS_PROD_DAEMON_DIR && process.env.WALNUT_TEST_DIE_AFTER_ASK_SPAWN === '1'
+
+/**
+ * Asks a daemon death cut between their CLI and their `session` record (startHostAsk keeps
+ * each start on disk until its record is): one whose CLI ran is journaled now, under the
+ * same op id, so the Mac adopts it; one that never started leaves nothing. Runs at boot,
+ * after the sessions are adopted and before any client connects. Keep in sync with daemon-source.ts.
+ */
+function recoverPendingAsks() {
+  for (const p of hostStart.pendingStarts()) {
+    try {
+      const ran = sessions.has(p.sid) || fs.existsSync(path.join(STREAMS_DIR, p.sid + '.jsonl'))
+      if (ran && offlineHost.ownerOf(p.sid) !== p.home) {
+        const saved = offlineHost.noteSession(p.home, p.record, p.opId, p.actor)
+        if (saved.ok) {
+          logMsg('info', 'startup: an ask cut before its session record is journaled now', { home: p.home, sid: p.sid, taskId: p.record.taskId })
+        } else {
+          const s = sessions.get(p.sid)
+          if (s?.pid) killProcessGroup(s.pid, 'SIGTERM')
+          logMsg('warn', 'startup: an ask cut before its session record could not be kept, the CLI is stopped', { home: p.home, sid: p.sid, code: saved.error.code })
+        }
+      }
+    } catch (err) {
+      logMsg('warn', 'startup: a pending ask was not recovered', { sid: p.sid, error: (err as Error).message })
+    }
+    hostStart.releasePending(p.home, p.sid)
+  }
+}
+
 /** A follower.start answer: the reply, or the refusal with its kind (a retry gets the same one). */
 function sendStartAnswer(ws: ServerWebSocket<WsData>, id: number, a: HostStartAnswer, duplicate = false) {
   if (a.ok) return sendOk(ws, id, duplicate ? { ...a.reply, duplicate: true } : a.reply)
@@ -3878,10 +3910,22 @@ async function startHostAsk(home: string, p: HostStartPlan, cmd: Record<string, 
   try {
     const room = offlineHost.checkSession(home, p.sid, cmd.actor)
     if (!room.ok) return startRefusal(room.error)
-    await sessionStartGate.run(p.sid, () => startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home, task: p.taskId } }))
     // The request's op id names its task-create too (the same request): the session record takes its own.
-    const opId = typeof cmd.opId === 'string' && /^[A-Za-z0-9_-]{1,72}$/.test(cmd.opId) ? cmd.opId + '-session' : undefined
+    const opId = typeof cmd.opId === 'string' && /^[A-Za-z0-9_-]{1,72}$/.test(cmd.opId) ? cmd.opId + '-session' : 'session-' + p.sid
+    // On disk before the CLI runs: a daemon that dies before the record below is kept
+    // journals it at its next boot (recoverPendingAsks), so the Mac still adopts the ask.
+    try { hostStart.holdPending(home, { sid: p.sid, record: p.record, opId, ...(cmd.actor !== undefined ? { actor: cmd.actor } : {}) }) } catch (err) {
+      return startRefusal({ code: 'journal_unwritable', message: 'this host could not keep the start: ' + (err as Error).message })
+    }
+    try {
+      await sessionStartGate.run(p.sid, () => startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home, task: p.taskId } }))
+    } catch (err) {
+      hostStart.releasePending(home, p.sid)
+      throw err
+    }
+    if (DIE_AFTER_ASK_SPAWN) process.kill(process.pid, 'SIGKILL')
     const saved = offlineHost.noteSession(home, p.record, opId, cmd.actor)
+    hostStart.releasePending(home, p.sid)
     if (!saved.ok) {
       // Nothing would tell the Mac about this CLI: it must not run unseen. Not stamped as an
       // intentional stop (only the idle scan, cmdStop and a budget pause are): no record names
@@ -7507,7 +7551,7 @@ function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   // and a follower reach this command, and neither may read any other file.
   if (typeof sid !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(sid) || sid.includes('..')) return sendError(ws, id, 'read-history: missing or invalid sid')
   // A follower reads its own Walnut's sessions only.
-  if (ws.data?.origin === 'follower' && offlineHost.ownerOf(sid) !== ws.data.followerHome) return sendError(ws, id, 'read-history: not a session of this Walnut on this host', { errorKind: 'not_found' })
+  if (ws.data?.origin === 'follower' && followerReads.ownerOf(sid) !== ws.data.followerHome) return sendError(ws, id, 'read-history: not a session of this Walnut on this host', { errorKind: 'not_found' })
 
   try {
     // Read main JSONL. tailBytes > 0 = tail-only read (mobile transcript):
@@ -10344,6 +10388,7 @@ if (action === '--start' || SERVICE_MODE) {
   try { backfillSpawnJournal() } catch (err) {
     logMsg('warn', 'spawn journal backfill failed', { error: (err as Error).message })
   }
+  recoverPendingAsks()
   logMsg('info', 'startup: complete — sessions ready', {
     totalSessions: sessions.size,
     sids: [...sessions.keys()],

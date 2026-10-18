@@ -3,14 +3,16 @@
  * sections 5 and 7): task-fields, task-create, task-move, board. offline-handover.ts
  * owns the batch (order, ledger, failure policy, ack); this file owns one record.
  *
- * Every kind is idempotent on its own, so a crash between an apply and its ledger row
- * is harmless:
+ * Every kind but a Board post is idempotent on its own, so a crash between an apply and
+ * its ledger row is harmless:
  *   task-fields  a field whose Mac value already equals the record's value is a no-op, and
  *                the record's op key rides in the same row write (task.applied_ops)
  *   task-create  the task stores created_by_op; the same id with the same op only lands
  *                the fields a crash kept from landing; a re-minted id is in the ledger
  *   task-move    an anchor placement already in place is a no-op; the last move wins
- *   board        replayed through the op, whose own version checks decide
+ *   board        replayed through the op, whose own version checks decide; a board_post
+ *                has none, so a crash between its apply and its ledger row posts it once
+ *                more (rare; nothing is lost)
  *
  * A refusal the Mac makes (the answer the same call online gets) throws RefusedWrite:
  * the batch acks it into the conflict log. Anything else thrown is retried.
