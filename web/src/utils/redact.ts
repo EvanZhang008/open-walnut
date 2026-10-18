@@ -18,6 +18,8 @@ const patterns: Array<{ re: RegExp; replacement: string }> = [
   },
   // Bearer tokens: Authorization: Bearer <token>
   { re: /(Bearer\s+)\S+/gi, replacement: `$1${REDACTED}` },
+  // A device token as a WebSocket subprotocol entry (walnut.bearer.<base64url>)
+  { re: /(\bwalnut\.bearer\.)[A-Za-z0-9_-]+/g, replacement: `$1${REDACTED}` },
   // OpenAI / Anthropic style keys: sk-... (at least 20 chars after prefix)
   { re: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: REDACTED },
   // AWS access key IDs: AKIA...

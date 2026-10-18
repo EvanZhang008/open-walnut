@@ -7,8 +7,10 @@
  * localStorage, and then:
  *   - HTTP: client.ts attaches `Authorization: Bearer <token>`, and so does
  *           every other same-origin `/api/` fetch (auth-fetch.ts)
- *   - WS:   ws.ts appends `?token=<token>` (browser WebSocket API cannot set
- *           an Authorization header; see src/web/ws/handler.ts)
+ *   - WS:   ws.ts offers the token as a `walnut.bearer.<base64url>`
+ *           subprotocol beside `walnut.v1` (the browser WebSocket API cannot set
+ *           an Authorization header, and a `?token=` URL would land in every
+ *           tunnel's and proxy's access log; src/lib/ws-bearer-protocol.ts)
  *   - media: an `<img src="/api/...">`, an HTML preview frame or a download
  *           cannot carry a header either, so the token is mirrored into the
  *           `walnut_device` cookie, which the server accepts for GET and HEAD

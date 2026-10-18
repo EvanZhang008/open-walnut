@@ -6,6 +6,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import { redactSensitiveText } from '../../src/logging/redact.js';
+import { redactText } from '../../web/src/utils/redact';
+import { encodeBearerProtocol } from '../../src/lib/ws-bearer-protocol.js';
 
 describe('redactSensitiveText', () => {
   it('masks Anthropic/OpenAI API keys (sk-...)', () => {
@@ -29,6 +31,16 @@ describe('redactSensitiveText', () => {
     expect(result).not.toContain('eyJhbGciOiJIUzI1NiJ9.xxxxx');
     // The "Bearer " prefix should be preserved
     expect(result).toContain('Bearer');
+  });
+
+  it('masks a device token in a WebSocket bearer subprotocol, in the server and the crash-report twin', () => {
+    const entry = encodeBearerProtocol('0f1e2d3c4b5a69788796a5b4c3d2e1f0');
+    const input = `Sec-WebSocket-Protocol: walnut.v1, ${entry}`;
+    for (const result of [redactSensitiveText(input), redactText(input)]) {
+      expect(result).toBe('Sec-WebSocket-Protocol: walnut.v1, walnut.bearer.[REDACTED]');
+    }
+    // The app protocol alone is not a credential.
+    expect(redactSensitiveText('offered walnut.v1')).toBe('offered walnut.v1');
   });
 
   it('masks PEM private key blocks', () => {

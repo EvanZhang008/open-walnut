@@ -44,8 +44,9 @@ interface BrowserCode {
   code: string;
   expiresAt: number;
   addresses: SignInAddress[];
-  /** The address shown, and its QR. A host's always-on server comes first: a phone
-   *  signed in there keeps working while this Mac sleeps. */
+  /** The address shown, and its QR. A host's always-on server comes first: while this
+   *  Mac sleeps, a phone signed in there still opens the copy that host keeps, and its
+   *  task and note edits sync when the Mac wakes. */
   shown?: string;
   qr?: Record<string, string>;
 }
@@ -325,7 +326,7 @@ export function BrowserAccessGroup() {
                 {qr && <img className="browser-access-qr" src={qr} alt="QR code that opens Walnut on the phone, signed in" width={220} height={220} data-testid="browser-access-qr" />}
                 <p className="settings-row-help" data-testid="browser-access-address-note">
                   {address.alwaysOn
-                    ? `The phone connects through ${address.label}: it reaches this computer from there, and keeps working while this computer sleeps.`
+                    ? `The phone connects through ${address.label}: while this computer sleeps, the phone still opens the copy kept on ${address.label}, and task and note edits sync when this computer wakes.`
                     : "The phone connects through this computer's own tunnel: it works while this computer is awake."}
                   {` Good until ${until}.`}
                 </p>

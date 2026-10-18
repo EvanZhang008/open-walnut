@@ -61,9 +61,14 @@ async function refuseWrongToken(): Promise<401 | 429> {
   return 401
 }
 
-/** The /ws upgrade of a host replica: the same rule as its /api auth. */
-export async function verifyReplicaUpgrade(token: string): Promise<'ok' | 401 | 429> {
-  if (verifyReplicaToken(token)) return 'ok'
+/**
+ * The /ws upgrade of a host replica: the same rule as its /api auth. `token` is
+ * what the upgrade presented (src/web/ws/upgrade-credential.ts: the SPA's
+ * `walnut.bearer.` subprotocol entry, else Authorization, else `?token=`);
+ * null is a bearer entry that did not decode, a wrong token like any other.
+ */
+export async function verifyReplicaUpgrade(token: string | null): Promise<'ok' | 401 | 429> {
+  if (token !== null && verifyReplicaToken(token)) return 'ok'
   const status = await refuseWrongToken()
   log.ws.warn('replica ws upgrade refused: token not in the device copy', { status })
   return status

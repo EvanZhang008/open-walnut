@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test'
 
 /**
  * "Sign in a browser" with more than one address (BrowserAccessGroup.tsx): the
- * code's QR opens a host server's always-on tunnel first (it keeps working while
- * this computer sleeps), the person can switch to this computer's own tunnel,
+ * code's QR opens a host server's always-on tunnel first (while this computer
+ * sleeps it still opens that host's copy), the person can switch to this computer's own tunnel,
  * and the link and QR follow the choice. An older server's one-link answer still
  * renders one QR.
  *
@@ -51,7 +51,9 @@ test('the QR opens the host server first, and follows a switch to this computer'
   await page.getByTestId('browser-access-make-code').click()
   await expect(page.getByTestId('browser-access-code-value')).toHaveText('ABCD-EFGH')
   await expect(page.getByTestId('browser-access-link')).toHaveText('devbox.example.test/#pair=ABCD-EFGH')
-  await expect(page.getByTestId('browser-access-address-note')).toContainText('connects through Dev box: it reaches this computer from there, and keeps working while this computer sleeps')
+  // What the phone gets while this computer sleeps: the host's copy, edits that wait. Never "keeps working".
+  await expect(page.getByTestId('browser-access-address-note')).toContainText('The phone connects through Dev box: while this computer sleeps, the phone still opens the copy kept on Dev box, and task and note edits sync when this computer wakes.')
+  await expect(page.getByTestId('browser-access-address-note')).not.toContainText('keeps working')
   await expect(page.getByTestId('browser-access-address-devbox')).toHaveText('Dev box (always on)')
   // The QR is the way in; the link and the typed code wait under "Can't scan it?".
   await expect(page.getByTestId('browser-access-code-value')).toBeHidden()

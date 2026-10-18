@@ -16,6 +16,8 @@ import { OwnedRegistry } from '../../core/plugins/owned-registry.js'
 import { log } from '../../logging/index.js'
 import { DAEMON_TUNNEL_PATH } from '../../core/hosts/cloud-box-host.js'
 import { configChangedForClients } from '../../core/config-broadcast.js'
+import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
+import { upgradeCredential } from './upgrade-credential.js'
 
 export type RpcHandler = (payload: unknown, client: WebSocket) => unknown | Promise<unknown>
 
@@ -307,10 +309,10 @@ function registerSetInterest(): void {
 
 /**
  * Cloud-mode WS upgrade gate: accept a device token (or legacy API key) from
- * the `?token=` query param, or an Authorization: Bearer header for
- * non-browser clients. Failures count toward the per-IP auth rate limit.
- * Returns the validated credential (caller enforces per-path kind rules) or
- * null on failure.
+ * the SPA's `walnut.bearer.` subprotocol entry, an Authorization: Bearer
+ * header, or the legacy `?token=` (upgrade-credential.ts). Failures count
+ * toward the per-IP auth rate limit. Returns the validated credential (caller
+ * enforces per-path kind rules) or null on failure.
  */
 async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{ name: string; kind: 'device' | 'api_key' | 'machine'; bridgeScope?: 'status-only'; stillValid: () => Promise<boolean> } | null> {
   // Rate-limit key: behind the local reverse proxy every socket peer is
@@ -324,16 +326,20 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{
     log.ws.warn('cloud ws upgrade: rate limited', { ip })
     return null
   }
-  const header = request.headers.authorization
-  const token = url.searchParams.get('token')
-    ?? (header?.startsWith('Bearer ') ? header.slice(7) : null)
-  if (!token) {
+  const presented = upgradeCredential(request, url)
+  if (presented.kind === 'none') {
     // Token-absent upgrade = unpaired SPA booting, not a guess — don't feed the
     // limiter (mirrors the HTTP middleware + git-http; a missing token can't
     // brute-force anything).
     log.ws.warn('cloud ws upgrade: missing token', { ip })
     return null
   }
+  if (presented.kind === 'malformed') {
+    recordAuthFailure(ip, presented.raw)
+    log.ws.warn('cloud ws upgrade: unreadable bearer subprotocol', { ip })
+    return null
+  }
+  const token = presented.token
   const { validateBearerCredential } = await import('../middleware/auth.js')
   const cred = await validateBearerCredential(token)
   if (!cred) {
@@ -359,7 +365,8 @@ function ignoreSocketError(): void { /* see the upgrade handler */ }
  * session:start, so it gets the HTTP middleware's rule (local-trust.ts): this
  * machine's own pages connect freely; a WebSocket is never stopped by CORS, so
  * a page on another site is refused by its Origin; every other caller sends a
- * device token (`?token=`, as the SPA does, or an Authorization header). So
+ * device token (the SPA in its `walnut.bearer.` subprotocol entry, else an
+ * Authorization header or the legacy `?token=`, upgrade-credential.ts). So
  * does a loopback upgrade that says, in x-walnut-origin, it acts for a caller
  * off this Mac (request-origin.ts): the header only ever lowers trust.
  */
@@ -369,14 +376,14 @@ async function verifyPrimaryUpgrade(url: URL, request: IncomingMessage): Promise
   if (isLocalOrigin(requestOrigin(request))) return 'ok'
   const { classifyLocalRequest, isCrossSiteRefusal } = await import('../middleware/local-trust.js')
   const trust = classifyLocalRequest(request)
-  const header = request.headers.authorization
-  const token = url.searchParams.get('token')
-    ?? (header?.startsWith('Bearer ') ? header.slice(7) : null)
+  const presented = upgradeCredential(request, url)
   const ip = request.socket.remoteAddress ?? 'unknown'
-  if (!token) {
+  if (presented.kind === 'none') {
     log.ws.warn('ws upgrade refused: no credential', { ip, reason: trust.trusted ? 'on-behalf-of' : trust.reason, origin: request.headers.origin, host: request.headers.host })
     return isCrossSiteRefusal(trust) ? 403 : 401
   }
+  // An unreadable bearer entry is a wrong credential: refused and counted like one.
+  const token = presented.kind === 'token' ? presented.token : null
   // A host replica: every caller comes through the tunnel over loopback, so its
   // failures are not keyed by address, and a good token always passes (replica/auth.ts).
   if (isHostReplica()) return (await import('../../replica/auth.js')).verifyReplicaUpgrade(token)
@@ -386,11 +393,11 @@ async function verifyPrimaryUpgrade(url: URL, request: IncomingMessage): Promise
     return 429
   }
   const { validateBearerCredential } = await import('../middleware/auth.js')
-  const cred = await validateBearerCredential(token)
+  const cred = token === null ? null : await validateBearerCredential(token)
   // Machine tokens are bridge-only: a daemon credential must not open the RPC surface.
   if (!cred || cred.kind === 'machine') {
-    recordAuthFailure(ip, token)
-    log.ws.warn('ws upgrade refused: invalid credential', { ip, machine: cred?.kind === 'machine' })
+    recordAuthFailure(ip, presented.kind === 'token' ? presented.token : presented.raw)
+    log.ws.warn('ws upgrade refused: invalid credential', { ip, machine: cred?.kind === 'machine', unreadable: token === null })
     return 401
   }
   return 'ok'
@@ -413,7 +420,13 @@ export function attachWss(server: HttpServer): WebSocketServer {
   // refuses oversized frames locally (MAX_RPC_FRAME_BYTES in web ws.ts), so
   // this cap is a last-resort backstop — generous enough that a future bug
   // degrades to a slow frame instead of a dead connection.
-  wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 })
+  //
+  // handleProtocols: the SPA offers `walnut.v1` plus its `walnut.bearer.` entry
+  // (src/lib/ws-bearer-protocol.ts). A browser that offered subprotocols fails
+  // the handshake unless the answer names one of them, and the `ws` default
+  // answers the FIRST one offered, which could be the bearer entry: the token
+  // echoed back in a response header. So the answer is `walnut.v1` or nothing.
+  wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024, handleProtocols: (protocols) => selectWsProtocol(protocols) })
   registerSetInterest()
 
   server.on('upgrade', (request: IncomingMessage, socket, head) => {
@@ -479,11 +492,11 @@ export function attachWss(server: HttpServer): WebSocketServer {
     }
 
     // Cloud mode: WS upgrades must carry a valid device token. The browser
-    // WebSocket API can't set an Authorization header, so the token rides a
-    // `?token=` query param (chosen over Sec-WebSocket-Protocol — the SPA's
-    // WsClient only needs to append one query param; a subprotocol would also
-    // change the server's protocol negotiation). Primary mode: the same rule
-    // as the HTTP middleware, see verifyPrimaryUpgrade.
+    // WebSocket API can't set an Authorization header, so the SPA sends the
+    // token as a `walnut.bearer.` subprotocol entry, never in the URL, where
+    // every proxy and tunnel in front of this server would log it
+    // (upgrade-credential.ts; `?token=` stays accepted for older clients).
+    // Primary mode: the same rule as the HTTP middleware, see verifyPrimaryUpgrade.
     if (CLOUD_MODE) {
       verifyCloudUpgrade(url, request).then((cred) => {
         // Machine tokens are bridge-only — a daemon credential must not open

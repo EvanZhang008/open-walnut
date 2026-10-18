@@ -25,6 +25,7 @@ import { createDispatcher, closeFrame, ensureOpId, writeBudgetOf, WRITE_BUDGET_M
 import { classify, type RouteDecision } from '../../src/replica/route-table.js'
 import type { Route } from '../../src/host-server/route.js'
 import { notSent } from '../../src/host-server/daemon-link.js'
+import { encodeBearerProtocol, offeredProtocols, selectWsProtocol, wsProtocolsFor, WS_APP_PROTOCOL } from '../../src/lib/ws-bearer-protocol.js'
 
 interface Seen { method: string; url: string; headers: http.IncomingHttpHeaders; body: string }
 
@@ -58,8 +59,11 @@ function door(name: string) {
     })
   })
   server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)) })
-  const wss = new WebSocketServer({ noServer: true })
+  // Answers `walnut.v1` when offered, as the real server does (src/lib/ws-bearer-protocol.ts).
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: (p) => selectWsProtocol(p) })
+  const upgrades: http.IncomingHttpHeaders[] = []
   server.on('upgrade', (req, socket, head) => {
+    upgrades.push(req.headers)
     if (req.url?.includes('/ws-hang')) { socket.on('error', () => {}); return }
     if (req.url?.includes('/ws-partial')) {
       socket.on('error', () => {})
@@ -70,7 +74,7 @@ function door(name: string) {
     }
     wss.handleUpgrade(req, socket, head, (ws) => ws.on('message', (m) => ws.send(`${name}:${String(m)}`)))
   })
-  return { server, seen, sockets, partials, port: 0 }
+  return { server, seen, sockets, partials, upgrades, port: 0 }
 }
 
 function listen(server: http.Server): Promise<number> {
@@ -137,6 +141,7 @@ function reset(): void {
   state.localHere = null; state.localAsked = []
   state.seq = 1; state.offlineWhy = 'away'; state.seqOnSuspect = null
   mac.seen.length = 0; companion.seen.length = 0
+  mac.upgrades.length = 0; companion.upgrades.length = 0
   mac.partials.length = 0
 }
 
@@ -603,9 +608,9 @@ async function until(fn: () => boolean, ms = 5_000): Promise<void> {
   }
 }
 
-function openWs(p = '/ws'): Promise<{ ws: WebSocket; closed: Promise<{ code: number; reason: string }>; status?: number }> {
+function openWs(p = '/ws', protocols?: string[]): Promise<{ ws: WebSocket; closed: Promise<{ code: number; reason: string }>; status?: number }> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${pubPort}${p}`)
+    const ws = new WebSocket(`ws://127.0.0.1:${pubPort}${p}`, protocols)
     const closed = new Promise<{ code: number; reason: string }>((r) => ws.once('close', (code, reason) => r({ code, reason: String(reason) })))
     ws.once('open', () => resolve({ ws, closed }))
     ws.once('unexpected-response', (_req, res) => { resolve({ ws, closed, status: res.statusCode }); ws.terminate() })
@@ -633,6 +638,23 @@ describe('WebSockets and presence flips', () => {
     b.ws.close()
     state.route = { kind: 'alone', why: 'mac-away' }
     expect((await openWs()).status).toBe(418)
+  })
+
+  it('the SPA\'s bearer subprotocol reaches the Mac and the companion as sent, and their answer comes back', async () => {
+    const offered = wsProtocolsFor('acme-browser-token')
+    const a = await openWs('/ws', offered)
+    expect(a.ws.protocol).toBe(WS_APP_PROTOCOL)
+    expect(await echo(a.ws, 'hello')).toBe('mac:hello')
+    expect(offeredProtocols(mac.upgrades.at(-1)!['sec-websocket-protocol'])).toEqual(offered)
+    a.ws.close()
+    await a.closed
+    state.route = { kind: 'companion', origin: 'https://companion.example' }
+    // The bearer entry first: the companion's answer still names walnut.v1, passed on as it came.
+    const b = await openWs('/ws', [encodeBearerProtocol('acme-browser-token'), WS_APP_PROTOCOL])
+    expect(b.ws.protocol).toBe(WS_APP_PROTOCOL)
+    expect(await echo(b.ws, 'hi')).toBe('companion:hi')
+    expect(offeredProtocols(companion.upgrades.at(-1)!['sec-websocket-protocol'])).toEqual([encodeBearerProtocol('acme-browser-token'), WS_APP_PROTOCOL])
+    b.ws.close()
   })
 
   it('an upgrade whose stream cannot open, the Mac now away: the replica\'s own socket', async () => {

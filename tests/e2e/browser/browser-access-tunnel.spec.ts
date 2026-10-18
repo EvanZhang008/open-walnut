@@ -215,6 +215,13 @@ test.describe('Open from a browser', () => {
   test('through the tunnel: a wrong code says why, the right one signs the browser in', async ({ page, browser }) => {
     expect(tunnelUrl).not.toBe('')
     const phone = await tunnelPage(browser)
+    // Every WebSocket this browser opens, and whether the server took it (sent it a frame).
+    const sockets: Array<{ url: string; answered: boolean }> = []
+    phone.on('websocket', (ws) => {
+      const seen = { url: ws.url(), answered: false }
+      sockets.push(seen)
+      ws.on('framereceived', () => { seen.answered = true })
+    })
     await phone.goto(tunnelUrl)
     const notice = phone.getByTestId('unpaired-notice')
     await expect(notice).toBeVisible({ timeout: 30_000 })
@@ -257,6 +264,15 @@ test.describe('Open from a browser', () => {
     }), method)
     expect(await xhr('GET')).toBe(200)
     expect(await xhr('POST')).toBe(401)
+    // The live socket gets in through the tunnel, which this server does not trust, with
+    // the token in its subprotocol: no URL this browser opened carries it (a tunnel logs URLs).
+    // (Only Walnut's /ws: the dev page server's own hot-reload socket is not Walnut's.)
+    const walnutSockets = () => sockets.filter((ws) => new URL(ws.url).pathname === '/ws')
+    await expect.poll(() => walnutSockets().some((ws) => ws.answered), { timeout: 30_000 }).toBe(true)
+    for (const ws of walnutSockets()) {
+      expect(ws.url).not.toContain('token=')
+      expect(new URL(ws.url).search).toBe('')
+    }
     await phone.waitForTimeout(1_500)
     await expect(notice).toBeHidden()
     await shot(phone, '4-tunnel-signed-in')

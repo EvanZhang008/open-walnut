@@ -121,6 +121,15 @@ const patterns: Array<{ re: RegExp; replacement: string }> = [
     replacement: `$1${REDACTED}`,
   },
 
+  // A device token as a WebSocket subprotocol entry (src/lib/ws-bearer-protocol.ts),
+  // e.g. a `Sec-WebSocket-Protocol: walnut.v1, walnut.bearer.<base64url>` header.
+  // Base64url hides the token from every pattern below, and the prefix is
+  // Walnut's own, so no prose looks like it.
+  {
+    re: /(\bwalnut\.bearer\.)[A-Za-z0-9_-]+/g,
+    replacement: `$1${REDACTED}`,
+  },
+
   // OpenAI / Anthropic style keys: sk-... (at least 20 chars after prefix)
   {
     re: /\bsk-[A-Za-z0-9_-]{20,}\b/g,

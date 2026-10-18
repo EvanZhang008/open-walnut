@@ -7,6 +7,7 @@
 
 import { log } from '@/utils/log';
 import { getDeviceToken } from './device-token';
+import { wsProtocolsFor } from '../../../src/lib/ws-bearer-protocol';
 import { mintOpId } from './op-id';
 import { leaderErrorMessage, WS_LEADER_AWAY, WS_LEADER_BACK } from './leader-presence';
 
@@ -157,13 +158,15 @@ class WsClient {
     this.setState('connecting');
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    // Cloud-mode auth: browsers can't set an Authorization header on a
-    // WebSocket, so the device token (when stored) rides a query param.
-    // On the server's own machine no token is stored → bare /ws.
+    // Browsers can't set an Authorization header on a WebSocket, so the device
+    // token (when stored) rides a `walnut.bearer.` subprotocol entry, never the
+    // URL: a URL lands in the access log of every tunnel and proxy on the way
+    // (src/lib/ws-bearer-protocol.ts). On the server's own machine no token is
+    // stored → a bare /ws with no subprotocol.
     const deviceToken = getDeviceToken();
-    const url = `${proto}://${window.location.host}/ws${deviceToken ? `?token=${encodeURIComponent(deviceToken)}` : ''}`;
-    log.info('ws', 'connecting', { url: `${proto}://${window.location.host}/ws` });
-    const ws = new WebSocket(url);
+    const url = `${proto}://${window.location.host}/ws`;
+    log.info('ws', 'connecting', { url });
+    const ws = deviceToken ? new WebSocket(url, wsProtocolsFor(deviceToken)) : new WebSocket(url);
 
     ws.onopen = () => {
       const isReconnect = this.hasConnectedBefore;
