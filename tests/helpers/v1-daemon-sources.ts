@@ -11,11 +11,45 @@ import os from 'node:os'
 import path from 'node:path'
 
 export const OLD_BUILD = '1fe1fd194'
+/** Its full sha: a shallow clone fetches a commit only by the whole name. */
+export const OLD_BUILD_SHA = '1fe1fd19431ee0accf9bff5839f4ef005b5df894'
 const ROOT = path.resolve(__dirname, '../..')
 const tmp: string[] = []
 
+const hasOldBuild = (): boolean => {
+  try {
+    execFileSync('git', ['-C', ROOT, 'cat-file', '-e', `${OLD_BUILD_SHA}^{commit}`], { stdio: 'ignore' })
+    return true
+  } catch { return false }
+}
+
+/**
+ * Make the old build readable. CI checks out one commit (actions/checkout's
+ * depth 1), so `git show 1fe1fd194:…` found no such object and every journal v2
+ * test failed there while passing in a full clone (CI run 39381410474). The commit
+ * is fetched by its sha, alone and without history. Several test files may ask at
+ * once, and two fetches into one repo can trip on its shallow file, so a failed
+ * fetch is looked at again and retried before it counts.
+ */
+export function ensureOldBuild(): void {
+  for (let attempt = 0; !hasOldBuild(); attempt++) {
+    try {
+      execFileSync('git', ['-C', ROOT, 'fetch', '--quiet', '--no-tags', '--depth=1', 'origin', OLD_BUILD_SHA],
+        { stdio: ['ignore', 'ignore', 'pipe'], timeout: 120_000 })
+    } catch (err) {
+      if (hasOldBuild()) return
+      if (attempt >= 3) {
+        const why = String((err as { stderr?: unknown }).stderr ?? (err as Error).message).trim()
+        throw new Error(`the journal v2 tests read the ${OLD_BUILD} build, which this clone lacks and could not fetch: ${why}`)
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000 * (attempt + 1))
+    }
+  }
+}
+
 function oldSource(file: string): string {
-  return execFileSync('git', ['-C', ROOT, 'show', `${OLD_BUILD}:${file}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+  ensureOldBuild()
+  return execFileSync('git', ['-C', ROOT, 'show', `${OLD_BUILD_SHA}:${file}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
 }
 
 function tempFile(name: string, body: string): string {
