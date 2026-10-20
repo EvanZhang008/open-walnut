@@ -40,9 +40,11 @@ jobs:
             bash /w/scripts/stt-runtime/build-llama.sh "${{ inputs.llama_tag }}" /w/out ${{ matrix.target }}
       - name: It starts on the oldest and the newest supported system
         run: |
+          # Unpack on the runner: minimal images (amazonlinux:2023) ship no tar,
+          # and the test is whether the binary starts there, not the unpacking.
+          mkdir unpacked && tar -xzf out/*.tar.gz -C unpacked
           for img in debian:11 ubuntu:24.04 amazonlinux:2023; do
-            docker run --rm -v "$PWD/out:/o" "$img" sh -c \
-              'mkdir /r && tar -xzf /o/*.tar.gz -C /r && /r/llama-server/llama-server --version' || exit 1
+            docker run --rm -v "$PWD/unpacked:/r:ro" "$img" /r/llama-server/llama-server --version || exit 1
           done
       - uses: actions/upload-artifact@v5
         with:
