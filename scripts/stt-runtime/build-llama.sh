@@ -22,7 +22,8 @@ cp -P "$BUILD"/bin/*.so* "$STAGE/" 2>/dev/null || true
 find "$BUILD" -name '*.so*' -path '*/bin/*' -exec cp -Pn {} "$STAGE/" \;
 # The CPU backends use OpenMP; its runtime is not on a minimal system, so it ships
 # alongside them (the rpath is $ORIGIN).
-GOMP=$(ldd "$STAGE"/*.so* | awk '/libgomp\.so/ {print $3; exit}')
+# awk reads to the end: leaving early would SIGPIPE ldd under pipefail.
+GOMP=$(ldd "$STAGE"/*.so* | awk '/libgomp\.so/ && !seen {print $3; seen=1}')
 [ -f "$GOMP" ] || { echo "libgomp not found" >&2; exit 1; }
 cp -L "$GOMP" "$STAGE/"
 printf '%s\n' "$TAG" > "$STAGE/VERSION"
