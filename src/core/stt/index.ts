@@ -17,6 +17,7 @@ import { createOpenAiEngine } from './engine-openai.js';
 import { createWhisperCppEngine } from './engine-whisper-cpp.js';
 import { createWhisperServerEngine } from './engine-whisper-server.js';
 import { createMlxEngine } from './engine-mlx.js';
+import { createQwenEngine } from './engine-qwen.js';
 import { writeRecordingSecondary } from './recordings.js';
 
 export type { SttEngine, SttRequest, SttResult } from './types.js';
@@ -67,6 +68,8 @@ export function createEngineByName(engine: EngineName, stt: SttSection): SttEngi
           ? stt.whisper_server_idle_ttl_minutes * 60_000
           : undefined,
       });
+    case 'qwen':
+      return createQwenEngine(stt);
     case 'mlx':
       return createMlxEngine({
         pythonPath: stt.mlx_python_path ?? '',
@@ -107,7 +110,7 @@ let cachedSecondaryKey = '';
 function engineKey(engine: string | undefined, s: SttSection | undefined): string {
   if (!engine || !s) return '';
   // Note: prompt is NOT in the key — vocab is loaded per-request from stt-vocab.txt, no engine restart needed.
-  return `${engine}|${s.whisper_server_path ?? ''}|${s.whisper_server_model ?? ''}|${s.whisper_server_port ?? ''}|${s.whisper_server_idle_ttl_minutes ?? ''}|${s.whisper_cpp_path ?? ''}|${s.whisper_cpp_model ?? ''}|${s.openai_api_key ?? ''}|${s.sherpa_model_dir ?? ''}|${s.mlx_python_path ?? ''}|${s.mlx_model ?? ''}|${s.mlx_port ?? ''}|${s.mlx_idle_ttl_minutes ?? ''}`;
+  return `${engine}|${s.whisper_server_path ?? ''}|${s.whisper_server_model ?? ''}|${s.whisper_server_port ?? ''}|${s.whisper_server_idle_ttl_minutes ?? ''}|${s.whisper_cpp_path ?? ''}|${s.whisper_cpp_model ?? ''}|${s.openai_api_key ?? ''}|${s.sherpa_model_dir ?? ''}|${s.mlx_python_path ?? ''}|${s.mlx_model ?? ''}|${s.mlx_port ?? ''}|${s.mlx_idle_ttl_minutes ?? ''}|${s.qwen_size ?? ''}`;
 }
 
 export function getOrCreateEngine(config: Config): SttEngine | null {

@@ -3,16 +3,20 @@
  *  - the picker offers three engines (Qwen3-ASR, Whisper, OpenAI-compatible API),
  *    a legacy engine only when it is the active one;
  *  - with no engine configured the recommended one is PRESELECTED but not saved;
- *  - ONE "Set up dictation" row says what will happen and has one button;
+ *  - Qwen3-ASR is installed by the server itself: its row shows the install
+ *    (progress, failure, ready) and Install starts it;
+ *  - for the hand-set MLX env and Whisper, ONE "Set up dictation" row says what
+ *    will happen and has one button;
  *  - the setup keeps running (and keeps its progress) across a pane switch, and
  *    finishing it writes the engine config;
  *  - the unconfigured mic says "Set up dictation" and lands on that row.
  *
  * Detection is REAL: the fixture server runs on this machine (Apple Silicon), so
  * Qwen3-ASR is the recommended engine, with the fixture's throwaway HOME (no
- * venv, no model cache). Nothing installs or downloads: config writes are
- * intercepted, and the one test that presses Set up answers /api/stt/setup
- * itself. Run both engines: PW_WEBKIT=1 ... --project webkit for the Mac app.
+ * venv, no model cache). The fixture is an isolated server, so it never starts
+ * the Qwen install on its own. Nothing installs or downloads: config writes are
+ * intercepted, and the tests that press Set up or Install answer the setup
+ * endpoints themselves. Run both engines: PW_WEBKIT=1 ... --project webkit for the Mac app.
  * Screenshots: /tmp/onboarding-walk/stt/ (never committed).
  */
 import { test, expect, type Page, type Request } from '@playwright/test'
@@ -77,7 +81,7 @@ async function openVoice(page: Page) {
 
 const optionTexts = (page: Page) => page.locator('#stt-engine option').allTextContents()
 
-test('unconfigured Mac: Qwen3-ASR preselected, three engines, one Set up row, nothing saved', async ({ page }) => {
+test('unconfigured Mac: Qwen3-ASR preselected, three engines, its install row, nothing saved', async ({ page }) => {
   const writes = await recordWrites(page)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -85,7 +89,7 @@ test('unconfigured Mac: Qwen3-ASR preselected, three engines, one Set up row, no
   await openVoice(page)
 
   const select = page.getByTestId('stt-engine-select')
-  await expect(select).toHaveValue('mlx')
+  await expect(select).toHaveValue('qwen')
   expect(await optionTexts(page)).toEqual(['Qwen3-ASR', 'Whisper', 'OpenAI-compatible API'])
   const selectText = (await select.textContent()) ?? ''
   expect(selectText).not.toContain('Whisper CLI')
@@ -93,11 +97,11 @@ test('unconfigured Mac: Qwen3-ASR preselected, three engines, one Set up row, no
   expect(selectText).not.toContain('Choose an engine')
 
   const engineRow = page.locator('.stt-service-dropdown')
-  await expect(engineRow).toContainText('Best for Chinese and English, runs on Apple Silicon.')
+  await expect(engineRow).toContainText('Best for Chinese and English. Walnut installs it on this server by itself.')
   await expect(engineRow.locator('.settings-tag', { hasText: 'Recommended' })).toBeVisible()
   await expect(engineRow.locator('.settings-tag', { hasText: 'Local' })).toBeVisible()
   // The select keeps its accessible name with the tags beside the label.
-  await expect(page.getByLabel('Engine', { exact: true })).toHaveValue('mlx')
+  await expect(page.getByLabel('Engine', { exact: true })).toHaveValue('qwen')
   // The engine's one-line description stays one line (no jump when the scan lands).
   const help = await engineRow.locator('.settings-row-help').evaluate((el) => {
     const lh = parseFloat(getComputedStyle(el).lineHeight) || 16
@@ -117,12 +121,12 @@ test('unconfigured Mac: Qwen3-ASR preselected, three engines, one Set up row, no
   const caps = (copy.match(/\b[A-Z][A-Z0-9]{3,}\b/g) ?? []).filter((w) => !['TTS', 'STT', 'API'].includes(w))
   expect(caps).toEqual([])
 
-  const setup = page.getByTestId('stt-setup-row')
-  await expect(setup).toHaveCount(1)
-  await expect(setup).toContainText('Set up dictation')
-  // This machine has ffmpeg and uv; the fixture HOME has no venv and no model cache.
-  await expect(setup.locator('.settings-row-help')).toHaveText('Creates a Python environment with mlx-audio (about 400 MB), downloads Qwen3-ASR (2.3 GB).')
-  await expect(setup.getByRole('button', { name: 'Set up' })).toBeVisible()
+  // The server installs Qwen itself; on this isolated fixture it has not started.
+  const qwen = page.getByTestId('stt-qwen-row')
+  await expect(qwen).toHaveCount(1)
+  await expect(qwen.locator('.settings-row-help')).toHaveText('Walnut downloads Qwen3-ASR to this server and turns dictation on.')
+  await expect(qwen.getByRole('button', { name: 'Install' })).toBeVisible()
+  await expect(page.getByTestId('stt-setup-row')).toHaveCount(0)
   // No model catalog, no install banner: one row, one button.
   await expect(page.locator('.stt-install-banner')).toHaveCount(0)
   await expect(page.locator('.stt-model-manager')).toHaveCount(0)
@@ -160,8 +164,9 @@ test('a legacy engine that is active stays listed, labelled legacy, with its row
   await expect(page.getByTestId('stt-setup-row')).toHaveCount(0)
 })
 
-test('Set up runs its steps, keeps them across a pane switch, then writes the Qwen config', async ({ page }) => {
+test('own MLX env: Set up runs its steps, keeps them across a pane switch, then writes the config', async ({ page }) => {
   const writes = await recordWrites(page)
+  await withStt(page, { engine: 'mlx' })
   const calls: string[] = []
   let release: () => void = () => {}
   const gate = new Promise<void>((r) => { release = r })
@@ -178,6 +183,9 @@ test('Set up runs its steps, keeps them across a pane switch, then writes the Qw
   })
   await openSettings(page)
   await openVoice(page)
+  const setupRow = page.getByTestId('stt-setup-row')
+  // This machine has ffmpeg and uv; the fixture HOME has no venv and no model cache.
+  await expect(setupRow.locator('.settings-row-help')).toHaveText('Creates a Python environment with mlx-audio (about 400 MB), downloads Qwen3-ASR (2.3 GB).')
   await page.getByTestId('stt-setup-button').click()
 
   const progress = page.getByTestId('stt-setup-progress')
@@ -207,6 +215,7 @@ test('Set up runs its steps, keeps them across a pane switch, then writes the Qw
 
 test('a failed step says why and offers Retry', async ({ page }) => {
   await recordWrites(page)
+  await withStt(page, { engine: 'mlx' })
   await page.route('**/api/stt/setup', (route) => route.fulfill({
     status: 200, contentType: 'text/event-stream',
     body: `data: ${JSON.stringify({ type: 'error', message: 'Installing mlx-audio failed (exit 1): no matching distribution' })}\n\n`,
@@ -235,5 +244,58 @@ test('the unconfigured mic says Set up dictation and lands on the setup row', as
   await expect(mic).toHaveAttribute('title', 'Set up dictation', { timeout: 20_000 })
   await mic.click()
   await expect(page).toHaveURL(/\/settings#stt$/)
-  await expect(page.getByTestId('stt-setup-row')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('stt-qwen-row')).toBeVisible({ timeout: 30_000 })
+})
+
+test('Install saves Qwen, starts the server install, and shows its progress until ready', async ({ page }) => {
+  const writes = await recordWrites(page)
+  let setup: Record<string, unknown> = { state: 'skipped', message: 'isolated server' }
+  let engine: string | null = null
+  let available = false
+  let retries = 0
+  await page.route('**/api/stt/qwen-setup/retry', (route) => {
+    retries++
+    setup = { state: 'installing', runtime: 'mlx', percent: 40, message: 'Downloading the model' }
+    return route.fulfill({ status: 200, json: { setup } })
+  })
+  await page.route('**/api/stt/status', (route) => route.fulfill({
+    status: 200, json: { engine, available, ...(available ? {} : { error: 'The voice model is still being installed' }), setup },
+  }))
+  await openSettings(page)
+  await openVoice(page)
+  await page.getByTestId('stt-qwen-row').getByRole('button', { name: 'Install' }).click()
+
+  await expect.poll(() => writes.filter((w) => w.path === '/api/config').length, { timeout: 20_000 }).toBeGreaterThan(0)
+  expect(JSON.parse(writes.find((w) => w.path === '/api/config')!.body).stt.engine).toBe('qwen')
+  await expect.poll(() => retries, { timeout: 20_000 }).toBe(1)
+  const row = page.getByTestId('stt-qwen-row')
+  await expect(row).toHaveAttribute('data-state', 'installing', { timeout: 20_000 })
+  await expect(row.locator('.settings-progress-pct')).toHaveText('40%')
+  await shot(page, 'qwen-installing')
+
+  // The install finishes: the row's own poll picks it up.
+  engine = 'qwen'
+  available = true
+  setup = { state: 'ready', runtime: 'mlx', percent: 100, message: 'Voice model ready' }
+  await expect(row).toHaveAttribute('data-state', 'ready', { timeout: 20_000 })
+  await expect(row).toContainText('Runs on this server (mlx).')
+})
+
+test('a failed Qwen install says why and offers Retry now', async ({ page }) => {
+  await recordWrites(page)
+  await withStt(page, { engine: 'qwen' })
+  await page.route('**/api/stt/status', (route) => route.fulfill({
+    status: 200,
+    json: {
+      engine: 'qwen', available: false, error: 'The voice model is still being installed',
+      setup: { state: 'failed', runtime: 'mlx', error: 'Not enough disk space for voice transcription', retryAt: new Date(Date.now() + 60_000).toISOString() },
+    },
+  }))
+  await openSettings(page)
+  await openVoice(page)
+  const row = page.getByTestId('stt-qwen-row')
+  await expect(row).toHaveAttribute('data-state', 'failed', { timeout: 20_000 })
+  await expect(row).toContainText('Not enough disk space for voice transcription')
+  await expect(row.getByRole('button', { name: 'Retry now' })).toBeVisible()
+  await shot(page, 'qwen-failed')
 })

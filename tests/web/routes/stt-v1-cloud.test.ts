@@ -31,6 +31,12 @@ vi.mock('../../../src/core/stt/engine-openai.js', () => ({
   createOpenAiEngine: () => ({ name: 'openai', transcribe: (...args: unknown[]) => hostedTranscribe(...args) }),
 }));
 
+// The companion's own voice model install: idle unless a test says otherwise.
+const setupStatus = vi.fn(() => ({ state: 'idle' }));
+vi.mock('../../../src/core/stt/auto-setup.js', () => ({
+  getQwenSetupStatus: () => setupStatus(),
+}));
+
 import express from 'express';
 import request from 'supertest';
 import { sttV1Router } from '../../../src/web/routes/stt-v1.js';
@@ -57,6 +63,29 @@ describe('POST /api/v1/stt/transcribe (cloud companion)', () => {
     // developer's environment would silently turn every no-key assertion below
     // into a live OpenAI call.
     vi.stubEnv('OPENAI_API_KEY', '');
+    setupStatus.mockReset();
+    setupStatus.mockReturnValue({ state: 'idle' });
+  });
+
+  // Voice stays on the user's own machines: a key in the process env (the old
+  // SSM-fed fallback) is never used, only one the person put in config.
+  it('never sends audio to the hosted API on a key from the environment', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-from-env');
+    bridgeRequest.mockRejectedValue(new Error('bridge offline'));
+    hostedTranscribe.mockResolvedValue({ text: 'hosted words', durationMs: 90 });
+    const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.status).toBe(503);
+    expect(hostedTranscribe).not.toHaveBeenCalled();
+  });
+
+  it('says the voice model is installing while the companion sets it up', async () => {
+    setupStatus.mockReturnValue({ state: 'installing', percent: 40 });
+    bridgeRequest.mockRejectedValue(new Error('bridge offline'));
+    const res = await post({ audio: 'aGVsbG8=', format: 'm4a' });
+    expect(res.status).toBe(503);
+    expect(res.body.error.code).toBe('stt_unavailable');
+    expect(res.body.error.message).toContain('still being installed');
+    expect(transcribeAudio).not.toHaveBeenCalled();
   });
 
   it('serves a relayed transcription as via=bridge', async () => {

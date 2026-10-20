@@ -137,7 +137,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     whisper_server_port: 'a port on the Mac', whisper_server_idle_ttl_minutes: 'a speech server of the Mac',
     mlx_python_path: 'a binary path on the Mac', mlx_model: 'a model of the Mac', mlx_port: 'a port on the Mac',
     mlx_idle_ttl_minutes: 'a speech server of the Mac', cleanup_model: 'a model of the Mac', cleanup_port: 'a port on the Mac',
-    prewarm_on_start: 'a speech server of the Mac',
+    prewarm_on_start: 'a speech server of the Mac', qwen_size: 'a speech model of the Mac',
   },
 })
 

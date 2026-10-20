@@ -36,10 +36,21 @@ export interface VoiceRecording {
   secondary?: { engine: string; text?: string; durationMs?: number; error?: string };
 }
 
+/** The voice model the server installs for itself (src/core/stt/auto-setup.ts). */
+export interface QwenSetupStatus {
+  state: 'idle' | 'skipped' | 'installing' | 'ready' | 'failed';
+  runtime?: string;
+  message?: string;
+  percent?: number;
+  error?: string;
+  retryAt?: string;
+}
+
 export interface SttStatus {
   engine: string | null;
   available: boolean;
   error?: string;
+  setup?: QwenSetupStatus;
 }
 
 export interface DetectionItem {
@@ -277,6 +288,11 @@ export function addVocabWord(word: string): Promise<{ added: boolean; word: stri
 
 export function fetchSttStatus(): Promise<SttStatus> {
   return apiGet<SttStatus>('/api/stt/status');
+}
+
+/** Start the voice model install now (after picking Qwen, or after a failure). */
+export function retryQwenSetup(): Promise<{ setup: QwenSetupStatus }> {
+  return apiPost<{ setup: QwenSetupStatus }>('/api/stt/qwen-setup/retry', {});
 }
 
 // ── Voice recording history (server-side, survives lost responses) ──

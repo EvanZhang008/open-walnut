@@ -3,16 +3,17 @@
  * of: the "Set up dictation" row (the engine is not working yet), the setup
  * progress, or the engine's own rows (models, API fields). Then the language.
  *
- * Offered engines: Qwen3-ASR (Apple Silicon), Whisper, an OpenAI-compatible
- * API; the legacy engines appear only for an install already using one. With
- * no engine in config the recommended one is PRESELECTED here but not written:
- * config changes only when Set up finishes or the user picks an engine. The
+ * Offered engines: Qwen3-ASR (Apple Silicon and Linux, installed by the server
+ * itself), Whisper, an OpenAI-compatible API; the legacy engines appear only
+ * for an install already using one. With no engine in config the recommended
+ * one is PRESELECTED here but not written: config changes when the server's own
+ * install finishes, when Set up finishes, or when the user picks an engine. The
  * section's Save button commits the drafts (language, API fields).
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import type { Config } from '@open-walnut/core';
-import { fetchSttDetection, DEFAULT_MLX_MODEL, type DetectionResult } from '@/api/stt';
+import { fetchSttDetection, retryQwenSetup, DEFAULT_MLX_MODEL, type DetectionResult } from '@/api/stt';
 import { SettingsRow, SettingsTag } from '../SettingsSection';
 import { sttScanSummary } from './stt-scan-summary';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -21,6 +22,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { SttSetupProgress } from './SttSetupProgress';
 import { SttSetupRow } from './SttSetupRow';
+import { SttQwenRow } from './SttQwenRow';
 import { WhisperModelRows, QwenModelRow, SherpaModelRows, activeModelFromConfig } from './SttModelRows';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { refreshSttStatus, useSttStatus } from '@/hooks/useSttStatus';
@@ -107,6 +109,8 @@ export function SttDetectionPanel({ config, onSave, onConfigured, draft, onDraft
     (config.stt?.engine as SttEngine | undefined) ?? '',
     async (e) => {
       await save((c) => ({ stt: { ...c.stt, engine: e || undefined } as Config['stt'] }), { rowKey: 'stt.engine' });
+      // Picking Qwen starts its install now; the server also resumes it at boot.
+      if (e === 'qwen') await retryQwenSetup().catch(() => {});
       refreshSttStatus();
       onConfigured();
     },
@@ -201,6 +205,11 @@ export function SttDetectionPanel({ config, onSave, onConfigured, draft, onDraft
     if (steps.length > 0) startSttSetupJob({ kind: 'install', engine: 'whisper-cpp', steps });
   };
 
+  const startQwen = () => {
+    if (configured !== 'qwen') { engineSetting.set('qwen'); return; }
+    void retryQwenSetup().catch(() => {}).finally(refreshSttStatus);
+  };
+
   const progressJob = job && (job.kind === 'setup' || job.kind === 'install') ? job : null;
   const jobRunning = job?.status === 'running';
 
@@ -287,6 +296,14 @@ export function SttDetectionPanel({ config, onSave, onConfigured, draft, onDraft
       )}
 
       {engine === 'mlx' && ready && <QwenModelRow detection={detection} config={config} onRefresh={refresh} />}
+
+      {engine === 'qwen' && !progressJob && (
+        <SttQwenRow
+          setup={status.setup}
+          ready={configured === 'qwen' && status.engine === 'qwen' && status.isAvailable}
+          onStart={startQwen}
+        />
+      )}
 
       {engine === 'whisper-cpp' && !loading && detection && !cliReady && !progressJob && (
         <SettingsRow

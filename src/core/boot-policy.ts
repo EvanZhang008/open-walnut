@@ -92,6 +92,7 @@ export const BOOT_POLICY = [
   { job: 'wait-until', leader: true, replicaHost: false, replicaCloud: false, why: 'the wait_until clock runs on the Mac' },
   { job: 'title-reconciler', leader: true, replicaHost: false, replicaCloud: false, why: 'titles are written on the Mac' },
   { job: 'notes-indexer', leader: true, replicaHost: false, replicaCloud: true, why: 'notes live in the daemon copy (WP6)' },
+  { job: 'stt-auto-setup', leader: true, replicaHost: false, replicaCloud: true, why: 'voice is answered by the Mac or the companion' },
 ] as const satisfies readonly BootRow[]
 
 export type BootJob = (typeof BOOT_POLICY)[number]['job']

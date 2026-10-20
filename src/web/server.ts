@@ -2690,6 +2690,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }
 
+  // -- Voice model: install this platform's Qwen3-ASR in the background --
+  if (bootPolicy('stt-auto-setup')) {
+    void (async () => {
+      const { startQwenAutoSetup, isIsolatedServer } = await import('../core/stt/auto-setup.js')
+      await startQwenAutoSetup({ isolated: await isIsolatedServer() })
+    })().catch((err) => {
+      log.web.warn('STT auto-setup failed to start', { error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
   // -- Audio transcription + capture (macOS ScreenCaptureKit — not on cloud) --
   if (!bootPolicy('audio')) {
     log.web.info(`${offByPolicy()}: skipping audio transcriber + capture resume`)

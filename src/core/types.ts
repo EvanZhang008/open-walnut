@@ -1520,14 +1520,21 @@ export interface Config {
   };
   /** Speech-to-text configuration for voice input */
   stt?: {
-    engine?: 'sherpa-onnx' | 'openai' | 'whisper-cpp' | 'whisper-server' | 'mlx';
+    /**
+     * `qwen` is Qwen3-ASR with the runtime this platform runs (MLX on an Apple
+     * Silicon Mac, llama.cpp on Linux), set up by the server itself
+     * (src/core/stt/auto-setup.ts). Unset = the server installs and picks `qwen`.
+     */
+    engine?: 'qwen' | 'sherpa-onnx' | 'openai' | 'whisper-cpp' | 'whisper-server' | 'mlx';
     /**
      * Optional shadow engine for A/B comparison during an engine transition.
      * Runs AFTER the primary engine answers (never blocks the response); its
      * text lands in the recording's metadata and shows in the mic dropdown.
      * Reuses the same per-engine config fields as `engine`.
      */
-    secondary_engine?: 'sherpa-onnx' | 'openai' | 'whisper-cpp' | 'whisper-server' | 'mlx';
+    secondary_engine?: 'qwen' | 'sherpa-onnx' | 'openai' | 'whisper-cpp' | 'whisper-server' | 'mlx';
+    /** qwen on Linux: model size (default: 1.7B with 4+ cores and 16 GB, else 0.6B). */
+    qwen_size?: '0.6B' | '1.7B';
     /** ISO 639-1 language hint (e.g. zh, en). Empty = auto-detect. */
     language?: string;
     // sherpa-onnx — local (SenseVoice / Whisper / Paraformer / other ONNX models)

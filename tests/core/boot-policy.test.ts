@@ -85,6 +85,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'wait-until': leaderOnly,
   'title-reconciler': leaderOnly,
   'notes-indexer': always,
+  'stt-auto-setup': always, // new: installs the voice model on the Mac and on the companion
 }
 
 /**

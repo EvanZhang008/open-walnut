@@ -128,6 +128,7 @@ describe('the source: config:changed carries a config only through the helper', 
     expect(callers).toEqual([
       'src/core/config-broadcast.ts',
       'src/core/plugins/server-api.ts',
+      'src/core/stt/auto-setup.ts',
       'src/web/routes/config.ts',
       'src/web/routes/hooks.ts',
       'src/web/routes/host-servers.ts',

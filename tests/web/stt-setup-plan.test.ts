@@ -44,30 +44,37 @@ function freshMac(overrides: Partial<DetectionResult> = {}): DetectionResult {
 const labels = (opts: { label: string }[]) => opts.map((o) => o.label);
 
 describe('engineOptionsFor: the picker offers exactly three engines', () => {
-  it('Apple Silicon: Qwen3-ASR (recommended), Whisper, the cloud API', () => {
-    const opts = engineOptionsFor(MAC, null);
-    expect(labels(opts)).toEqual(['Qwen3-ASR', 'Whisper', 'OpenAI-compatible API']);
-    expect(opts.map((o) => o.value)).toEqual(['mlx', 'whisper-server', 'openai']);
-    expect(opts.filter((o) => o.recommended).map((o) => o.value)).toEqual(['mlx']);
-    expect(opts.map((o) => o.badge)).toEqual(['Local', 'Local', 'Cloud']);
-  });
-
-  it('Intel Mac or Linux: no Qwen3-ASR, Whisper is recommended', () => {
-    for (const p of [INTEL_MAC, LINUX]) {
+  it('Apple Silicon and Linux: Qwen3-ASR (recommended), Whisper, the cloud API', () => {
+    for (const p of [MAC, LINUX, { os: 'linux', arch: 'arm64' }]) {
       const opts = engineOptionsFor(p, null);
-      expect(labels(opts)).toEqual(['Whisper', 'OpenAI-compatible API']);
-      expect(opts.find((o) => o.recommended)?.value).toBe('whisper-server');
+      expect(labels(opts)).toEqual(['Qwen3-ASR', 'Whisper', 'OpenAI-compatible API']);
+      expect(opts.map((o) => o.value)).toEqual(['qwen', 'whisper-server', 'openai']);
+      expect(opts.filter((o) => o.recommended).map((o) => o.value)).toEqual(['qwen']);
+      expect(opts.map((o) => o.badge)).toEqual(['Local', 'Local', 'Cloud']);
     }
   });
 
+  it('Intel Mac: no Qwen3-ASR, Whisper is recommended', () => {
+    const opts = engineOptionsFor(INTEL_MAC, null);
+    expect(labels(opts)).toEqual(['Whisper', 'OpenAI-compatible API']);
+    expect(opts.find((o) => o.recommended)?.value).toBe('whisper-server');
+  });
+
   it('keeps Qwen3-ASR listed when it is the active engine on a server that cannot run it', () => {
-    expect(labels(engineOptionsFor(INTEL_MAC, 'mlx'))).toEqual(['Qwen3-ASR', 'Whisper', 'OpenAI-compatible API']);
+    expect(labels(engineOptionsFor(INTEL_MAC, 'qwen'))).toEqual(['Qwen3-ASR', 'Whisper', 'OpenAI-compatible API']);
+  });
+
+  it('keeps a hand-set MLX env as its own option beside the automatic one', () => {
+    const opts = engineOptionsFor(MAC, 'mlx');
+    expect(labels(opts)).toEqual(['Qwen3-ASR', 'Qwen3-ASR (own Python env)', 'Whisper', 'OpenAI-compatible API']);
+    expect(opts.find((o) => o.value === 'mlx')?.recommended).toBeFalsy();
+    expect(labels(engineOptionsFor(INTEL_MAC, 'mlx'))).toEqual(['Qwen3-ASR (own Python env)', 'Whisper', 'OpenAI-compatible API']);
   });
 
   it('offers a legacy engine only to the install already using it, labelled legacy', () => {
     expect(labels(engineOptionsFor(MAC, 'whisper-cpp'))).toEqual(['Qwen3-ASR', 'Whisper', 'Whisper CLI (legacy)', 'OpenAI-compatible API']);
     expect(labels(engineOptionsFor(MAC, 'sherpa-onnx'))).toEqual(['Qwen3-ASR', 'Whisper', 'sherpa-onnx (legacy)', 'OpenAI-compatible API']);
-    for (const current of [null, 'mlx', 'whisper-server', 'openai'] as const) {
+    for (const current of [null, 'qwen', 'mlx', 'whisper-server', 'openai'] as const) {
       const text = labels(engineOptionsFor(MAC, current)).join(' ');
       expect(text).not.toMatch(/Whisper CLI|sherpa-onnx/);
     }
@@ -80,10 +87,12 @@ describe('engineOptionsFor: the picker offers exactly three engines', () => {
   });
 
   it('recommendedEngine / qwenSupported follow the server platform', () => {
-    expect(recommendedEngine(MAC)).toBe('mlx');
+    expect(recommendedEngine(MAC)).toBe('qwen');
+    expect(recommendedEngine(LINUX)).toBe('qwen');
     expect(recommendedEngine(INTEL_MAC)).toBe('whisper-server');
-    expect(recommendedEngine(LINUX)).toBe('whisper-server');
-    expect(qwenSupported({ os: 'linux', arch: 'arm64' })).toBe(false);
+    expect(qwenSupported({ os: 'linux', arch: 'arm64' })).toBe(true);
+    expect(qwenSupported({ os: 'linux', arch: 'ia32' })).toBe(false);
+    expect(qwenSupported({ os: 'win32', arch: 'x64' })).toBe(false);
   });
 });
 

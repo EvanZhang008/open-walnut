@@ -27,7 +27,7 @@ import { stat } from 'node:fs/promises';
 import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
 import { PYTHON_STDIN_SCRIPT, feedDaemonSource } from './daemon-source.js';
-import { convertToWav, cleanupTempFile, isFfmpegAvailable } from './audio-convert.js';
+import { convertToWav, cleanupTempFile } from './audio-convert.js';
 import {
   probeDaemonPatiently, identifyWalnutDaemon, retireDaemon, isDaemonConnectionLost, QUICK_PROBE_MS,
 } from './daemon-health.js';
@@ -424,9 +424,8 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
           return { available: false, error: `mlx-audio not installed in ${cfg.pythonPath} (pip install mlx-audio)` };
         }
       }
-      if (!(await isFfmpegAvailable())) {
-        return { available: false, error: 'ffmpeg is required for audio conversion but not found' };
-      }
+      // No ffmpeg check: WAV and the phone's CAF convert in-process, and any
+      // other format names ffmpeg in its own error (convertToWav).
       return { available: true };
     },
 

@@ -15,6 +15,7 @@ import { cleanupTranscript, warmupCleanup, isCleanupAvailable } from '../../core
 import { detectSystem } from '../../core/stt/detect.js';
 import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, BREW_PACKAGES, type SetupEvent } from '../../core/stt/setup.js';
 import { setupMlxEnv, downloadMlxModel, isAllowedMlxModel, DEFAULT_MLX_MODEL } from '../../core/stt/setup-mlx.js';
+import { bootPolicy } from '../../core/boot-policy.js';
 import { log } from '../../logging/index.js';
 
 export const sttRouter = Router();
@@ -501,6 +502,26 @@ sttRouter.post('/vocab', express.json(), async (req: Request, res: Response, nex
  * Returns the healed engine, or null when nothing local was found.
  */
 async function tryAutoHealSttConfig(): Promise<SttEngine | null> {
+  // Qwen is the default. Once this server has set it up, it is the engine to
+  // restore; while it is still installing (or will retry), an older Whisper on
+  // disk must not take its place. A server that never ran the setup (skipped,
+  // or not started) heals from Whisper as before.
+  const { getQwenSetupStatus, isIsolatedServer, hostFacts } = await import('../../core/stt/auto-setup.js');
+  const setup = getQwenSetupStatus();
+  if (setup.state === 'ready') {
+    const existing = await getConfig();
+    await updateConfig({ stt: { ...existing.stt, engine: 'qwen' } });
+    log.stt.warn('STT config was missing — restored the installed Qwen3-ASR');
+    return getOrCreateEngine(await getConfig());
+  }
+  if (setup.state === 'installing') return null;
+  // The first failures are usually the network; after a few, a working Whisper beats a dead mic.
+  if (setup.state === 'failed' && (setup.attempts ?? 1) < 3) return null;
+  // Boot has not reached the install yet (it starts a moment after listening).
+  if (setup.state === 'idle' && bootPolicy('stt-auto-setup') && !(await isIsolatedServer())) {
+    const { planQwen } = await import('../../core/stt/qwen-plan.js');
+    if (planQwen(hostFacts()).runtime !== 'none') return null;
+  }
   const detection = await detectSystem();
   const rec = detection.recommendation;
   // Only local engines are self-healable — `openai` needs a key we can't invent.
@@ -545,18 +566,36 @@ async function tryAutoHealSttConfig(): Promise<SttEngine | null> {
 sttRouter.get('/status', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const config = await getConfig();
+    // The voice model this server installs for itself (auto-setup.ts).
+    const { getQwenSetupStatus } = await import('../../core/stt/auto-setup.js');
+    const setup = getQwenSetupStatus();
     let engine = getOrCreateEngine(config);
     if (!engine) {
+      if (setup.state === 'installing') {
+        res.json({ engine: null, available: false, error: 'The voice model is still being installed', setup });
+        return;
+      }
       // Nothing configured — but this box may already have whisper installed
       // (e.g. the config was lost). Recover instead of greying out the mic.
       engine = await tryAutoHealSttConfig().catch(() => null);
       if (!engine) {
-        res.json({ engine: null, available: false, error: 'No STT engine configured' });
+        res.json({ engine: null, available: false, error: 'No STT engine configured', setup });
         return;
       }
     }
     const status = await engine.isAvailable();
-    res.json({ engine: engine.name, ...status });
+    res.json({ engine: engine.name, ...status, setup });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** POST /api/stt/qwen-setup/retry: try a failed voice model install again now. */
+sttRouter.post('/qwen-setup/retry', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { retryQwenAutoSetup, isIsolatedServer, getQwenSetupStatus } = await import('../../core/stt/auto-setup.js');
+    await retryQwenAutoSetup({ isolated: await isIsolatedServer(), userAsked: true });
+    res.json({ setup: getQwenSetupStatus() });
   } catch (err) {
     next(err);
   }

@@ -129,7 +129,10 @@ export async function convertToWav(audioBase64: string, inputFormat: string): Pr
       '-ac', '1',         // mono
       '-c:a', 'pcm_s16le', // 16-bit PCM
       outputPath,
-    ], { timeout: 30_000, env: sttSpawnEnv() });
+    ], { timeout: 30_000, env: sttSpawnEnv() }).catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') throw new Error(`Reading ${inputFormat} audio needs ffmpeg, which is not installed`);
+      throw err;
+    });
     return outputPath;
   } finally {
     await unlink(inputPath).catch(() => {});

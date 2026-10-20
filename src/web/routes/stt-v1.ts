@@ -21,9 +21,10 @@
  * Cloud box: relay the audio over the daemon bridge to the primary box
  * ('__local__' dials out from the Mac) and let its engine transcribe; when the
  * Mac is unreachable (bridge down, relay error, or audio too big for a bridge
- * frame) use an engine set up on the companion itself, then the OpenAI Whisper
- * API with the companion's own key. None available → 503 with a clear message,
- * so the phone can tell the user why voice input is offline.
+ * frame) use the companion's own engine (the Qwen3-ASR it installs for itself,
+ * src/core/stt/auto-setup.ts), then a hosted API only when the person put a key
+ * in the companion's config. None available → 503 with a clear message, so the
+ * phone can tell the user why voice input is offline.
  *
  * Frozen-contract note: additive (docs/reference/api-v1.md).
  */
@@ -40,7 +41,7 @@ export const sttV1Router = Router()
 const ALLOWED_FORMATS = new Set(['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'flac', 'caf'])
 // Bridge WS frames are capped at 4MB (security audit) — leave headroom for
 // the JSON envelope. Bigger audio skips the relay and goes straight to the
-// OpenAI fallback (which has no such cap).
+// companion's own engine.
 const BRIDGE_MAX_AUDIO_B64 = 3 * 1024 * 1024
 const BRIDGE_STT_TIMEOUT_MS = 100_000
 
@@ -182,8 +183,13 @@ export function noKeyNotice(
       // Too big for a bridge frame, so the Mac was never asked and its
       // reachability is unknown to us. Reaching the Mac would not help either:
       // this path is skipped by SIZE, not by connectivity.
-      return 'That recording is too long to transcribe from the cloud — add an OpenAI key to the companion for long recordings'
+      return 'That recording is too long to send to your Mac from the cloud, and this server has no voice model of its own yet'
   }
+}
+
+/** The companion's own voice model is still downloading. */
+export function installingNotice(): string {
+  return 'The voice model is still being installed on the cloud server. Your recording is kept, try again in a few minutes'
 }
 
 interface SttInput { audio: string; format: string; language?: string }
@@ -235,13 +241,22 @@ export function sttEngines(config: Config, follower: boolean): Array<FeatureEngi
   engines.push({
     id: follower ? 'local' : 'primary',
     // A primary always asks its engine (its "not set up" is the sentence to show).
-    unavailable: () => (!follower ? null : !stt?.engine ? 'not-set-up' : stt.engine === 'openai' ? 'hosted' : null),
+    async unavailable() {
+      if (!follower) return null
+      if (stt?.engine === 'openai') return 'hosted'
+      if (stt?.engine) return null
+      // No engine yet: the voice model may be installing on its own (auto-setup.ts).
+      const { getQwenSetupStatus } = await import('../../core/stt/auto-setup.js')
+      return getQwenSetupStatus().state === 'installing' ? 'installing' : 'not-set-up'
+    },
     async run(input) {
       const { transcribeAudio } = await import('../../core/stt/index.js')
       return transcribeAudio(config, input)
     },
   })
-  const key = resolveSecret(stt?.openai_api_key) ?? (follower ? process.env.OPENAI_API_KEY : undefined) ?? ''
+  // Only a key the person put in this server's config: voice stays on the user's
+  // own machines unless they chose a hosted API themselves.
+  const key = resolveSecret(stt?.openai_api_key) ?? ''
   engines.push({
     id: 'openai',
     unavailable: () => (!key ? 'no-key' : !follower && stt?.engine === 'openai' ? 'already-tried' : null),
@@ -260,6 +275,9 @@ export function sttEngines(config: Config, follower: boolean): Array<FeatureEngi
 function unavailableNotice(attempts: FeatureAttempt[]): string {
   const failed = attempts.find((a) => a.outcome === 'failed' && !(a.error instanceof SttRelayError))
   if (failed) return sttEngineNotice(failed.reason)
+  if (attempts.some((a) => a.id === 'local' && a.outcome === 'skipped' && a.reason === 'installing')) {
+    return installingNotice()
+  }
   const relay = attempts.find((a) => a.id === 'bridge')
   const outcome = relay?.error instanceof SttRelayError ? relay.error.outcome : 'not-attempted'
   return noKeyNotice(outcome)

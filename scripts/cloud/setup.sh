@@ -544,21 +544,20 @@ ENV_FILE="$ETC_WALNUT/walnut.env"
 env_set() {
   { if [ -f "$ENV_FILE" ]; then grep -v "^$1=" "$ENV_FILE" || true; fi; printf '%s=%s\n' "$1" "$2"; } | put_file "$ENV_FILE" 600
 }
-# Secrets the companion needs at runtime (e.g. OPENAI_API_KEY for the voice
-# STT fallback) live in SSM Parameter Store under /walnut/* and materialize
+# Secrets the companion needs at runtime (e.g. TAVILY_API_KEY for web search)
+# live in SSM Parameter Store under /walnut/* and materialize
 # into walnut.env here. Config.yaml is the wrong home for them: it git-syncs
 # through the data hub, and cloud-held secrets must never ride a repo.
 # Idempotent and best-effort: a missing parameter just means that feature stays
 # off. Non-AWS providers (and a hand-run of this script off-instance) have no
 # aws CLI; every lookup is optional, so skip the whole block rather than eating
 # a `command not found` per parameter.
+# Voice is transcribed on the companion itself (it installs Qwen3-ASR on its
+# own), so the old hosted-STT key is dropped from an env file that still has it.
+if [ -f "$ENV_FILE" ] && grep -q '^OPENAI_API_KEY=' "$ENV_FILE"; then
+  { grep -v '^OPENAI_API_KEY=' "$ENV_FILE" || true; } | put_file "$ENV_FILE" 600
+fi
 if command -v aws >/dev/null 2>&1; then
-  if OPENAI_KEY=$(aws ssm get-parameter --name /walnut/openai-api-key \
-      --with-decryption --query Parameter.Value --output text 2>/dev/null); then
-    env_set OPENAI_API_KEY "$OPENAI_KEY"
-  else
-    echo "    (no /walnut/openai-api-key in SSM — voice STT cloud fallback disabled)"
-  fi
   # web_search (Tavily) — same pattern: config.yaml is machine-local and never
   # carries secrets, so the key rides SSM → env. web-search-tool falls back to
   # TAVILY_API_KEY when tools.web_search.api_key is absent from config.

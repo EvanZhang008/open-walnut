@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { fetchSttStatus, type SttStatus } from '@/api/stt';
+import { fetchSttStatus, type SttStatus, type QwenSetupStatus } from '@/api/stt';
 import { visibleInterval } from '@/utils/page-visibility';
 
 interface SttStatusState {
@@ -19,6 +19,8 @@ interface SttStatusState {
   error: string | null;
   /** Still loading initial status */
   isLoading: boolean;
+  /** The voice model the server installs for itself */
+  setup: QwenSetupStatus | null;
 }
 
 // Module-level cache — shared by all hook consumers
@@ -128,5 +130,5 @@ export function useSttStatus(): SttStatusState {
         ? status.error ?? 'STT engine not available'
         : null;
 
-  return { engine: status?.engine ?? null, isConfigured, isAvailable, error, isLoading: loading };
+  return { engine: status?.engine ?? null, isConfigured, isAvailable, error, isLoading: loading, setup: status?.setup ?? null };
 }

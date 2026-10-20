@@ -63,6 +63,10 @@ async function transcribe(id: string, language?: string): Promise<VoiceTranscrip
       const failure = sttEngineFailure(result.verdict.reason)
       throw new VoiceArchiveError(failure.status, failure.code, failure.message)
     }
+    if (result.attempts.some((a) => a.id === 'local' && a.reason === 'installing')) {
+      const { installingNotice } = await import('../../web/routes/stt-v1.js')
+      throw new VoiceArchiveError(503, 'stt_unavailable', installingNotice())
+    }
     throw new VoiceArchiveError(503, 'stt_unavailable', 'Transcription is unavailable; your recording remains saved')
   }
   const saved = await voiceArchive.saveText(id, result.output.text, result.via)

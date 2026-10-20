@@ -6,7 +6,7 @@
 import type { DetectionResult } from '@/api/stt';
 import { MODEL_CATALOG, MLX_MODEL } from '@/api/stt';
 
-export type SttEngine = 'whisper-cpp' | 'whisper-server' | 'sherpa-onnx' | 'openai' | 'mlx';
+export type SttEngine = 'qwen' | 'whisper-cpp' | 'whisper-server' | 'sherpa-onnx' | 'openai' | 'mlx';
 /** The engines the one-button setup knows how to install. */
 export type SetupEngine = 'mlx' | 'whisper-server';
 
@@ -20,7 +20,9 @@ export interface EngineOption {
 
 export interface ServerPlatform { os: string; arch: string }
 
-const QWEN: EngineOption = { value: 'mlx', label: 'Qwen3-ASR', badge: 'Local', description: 'Best for Chinese and English, runs on Apple Silicon.' };
+const QWEN: EngineOption = { value: 'qwen', label: 'Qwen3-ASR', badge: 'Local', description: 'Best for Chinese and English. Walnut installs it on this server by itself.' };
+/** Qwen3-ASR through a Python env set up by hand or by the older Set up button. */
+const QWEN_MLX: EngineOption = { value: 'mlx', label: 'Qwen3-ASR (own Python env)', badge: 'Local', description: 'Qwen3-ASR on Apple Silicon, through the Python env in config.' };
 const WHISPER: EngineOption = { value: 'whisper-server', label: 'Whisper', badge: 'Local', description: 'Runs on this Mac; works on any Mac.' };
 const OPENAI: EngineOption = { value: 'openai', label: 'OpenAI-compatible API', badge: 'Cloud', description: 'OpenAI, Groq or Fireworks; nothing runs on this Mac.' };
 /** Still valid config values; offered only to the install already using one. */
@@ -29,24 +31,31 @@ const LEGACY: Partial<Record<SttEngine, EngineOption>> = {
   'sherpa-onnx': { value: 'sherpa-onnx', label: 'sherpa-onnx (legacy)', badge: 'Local', description: 'SenseVoice and Paraformer models, tuned for Chinese.' },
 };
 
-/** Qwen3-ASR runs on MLX, which needs Apple Silicon. */
+/**
+ * Qwen3-ASR runs where the server has a runtime for it: MLX on Apple Silicon,
+ * llama.cpp on Linux (src/core/stt/qwen-plan.ts).
+ */
 export function qwenSupported(platform: ServerPlatform | null | undefined): boolean {
-  return platform?.os === 'darwin' && platform.arch === 'arm64';
+  if (!platform) return false;
+  if (platform.os === 'darwin') return platform.arch === 'arm64';
+  return platform.os === 'linux' && (platform.arch === 'x64' || platform.arch === 'arm64');
 }
 
-export function recommendedEngine(platform: ServerPlatform | null | undefined): SetupEngine {
-  return qwenSupported(platform) ? 'mlx' : 'whisper-server';
+export function recommendedEngine(platform: ServerPlatform | null | undefined): 'qwen' | 'whisper-server' {
+  return qwenSupported(platform) ? 'qwen' : 'whisper-server';
 }
 
 /**
- * The picker's options: Qwen3-ASR (Apple Silicon only), Whisper, the cloud API,
- * plus the current engine when it is one of the legacy ones (or Qwen on a
- * server that could not run it), so nobody's working setup vanishes from the list.
+ * The picker's options: Qwen3-ASR (where the server can run it), Whisper, the
+ * cloud API, plus the current engine when it is one of the legacy ones, the
+ * hand-set MLX env, or Qwen on a server that could not run it, so nobody's
+ * working setup vanishes from the list.
  */
 export function engineOptionsFor(platform: ServerPlatform | null | undefined, current: SttEngine | null | undefined): EngineOption[] {
   const recommended = platform ? recommendedEngine(platform) : null;
   const options: EngineOption[] = [];
-  if (qwenSupported(platform) || current === 'mlx') options.push({ ...QWEN, recommended: recommended === 'mlx' });
+  if (qwenSupported(platform) || current === 'qwen') options.push({ ...QWEN, recommended: recommended === 'qwen' });
+  if (current === 'mlx') options.push(QWEN_MLX);
   options.push({ ...WHISPER, recommended: recommended === 'whisper-server' });
   const legacy = current ? LEGACY[current] : undefined;
   if (legacy) options.push(legacy);

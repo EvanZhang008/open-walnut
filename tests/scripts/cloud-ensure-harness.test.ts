@@ -1149,7 +1149,7 @@ describe('setup.sh root-side blocks, run for real', () => {
       const { etc, vars } = layout(dir)
       fs.writeFileSync(path.join(etc, 'setup-token'), 'a1b2c3d4e5f60718293a4b5c6d7e8f90', { mode: 0o600 })
       fs.writeFileSync(path.join(etc, 'walnut.env'), 'OPENAI_API_KEY=old\nKEEP=me\n', { mode: 0o644 })
-      // An aws CLI that answers both SSM lookups.
+      // An aws CLI that answers the SSM lookup.
       fs.writeFileSync(path.join(bin, 'aws'), '#!/bin/sh\ncase "$*" in *openai*) echo sk-new ;; *tavily*) echo tv-1 ;; esac\n', { mode: 0o755 })
       const res = runBlock(bin, vars, block('etc-walnut'))
       expect(res.status, res.stderr).toBe(0)
@@ -1157,7 +1157,8 @@ describe('setup.sh root-side blocks, run for real', () => {
       expect(fs.statSync(path.join(etc, 'claim', 'setup-token')).mode & 0o777).toBe(0o600)
       expect(lexists(path.join(etc, 'setup-token'))).toBe(false)
       const env = fs.readFileSync(path.join(etc, 'walnut.env'), 'utf-8').split('\n').filter(Boolean).sort()
-      expect(env).toEqual(['KEEP=me', 'OPENAI_API_KEY=sk-new', 'TAVILY_API_KEY=tv-1'])
+      // The hosted-STT key is gone: voice runs on the companion's own model.
+      expect(env).toEqual(['KEEP=me', 'TAVILY_API_KEY=tv-1'])
       expect(fs.statSync(path.join(etc, 'walnut.env')).mode & 0o777).toBe(0o600)
     })
 

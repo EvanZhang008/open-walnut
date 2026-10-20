@@ -395,8 +395,12 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
 
   // Unconfigured: the click lands on the one-button setup, so say that, not the
   // server's "No STT engine configured". Configured but broken: name the problem.
+  // The server installing its own voice model is neither: say how far along it is.
+  const installing = sttStatus.setup?.state === 'installing';
   const title = sttUnavailable
-    ? (sttStatus.isConfigured ? `Dictation is not ready: ${sttStatus.error ?? 'engine not available'}. Click to fix it.` : 'Set up dictation')
+    ? installing
+      ? `Installing the voice model${sttStatus.setup?.percent !== undefined ? ` (${sttStatus.setup.percent}%)` : ''}`
+      : sttStatus.isConfigured ? `Dictation is not ready: ${sttStatus.error ?? 'engine not available'}. Click to fix it.` : 'Set up dictation'
     : error
       ? `Error: ${error}`
       : isTranscribing
