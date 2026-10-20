@@ -328,10 +328,14 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
         // (a judge that moved it aside and puts it back finds it free, never wedged), then
         // the path is removed only while it still names this file (a lock judged stale and
         // removed is not ours, and the path may already name the next holder's).
+        // The mark is written over the token, then the file is cut to its length, never to
+        // zero first: ext4 flushes a file truncated to zero and written again when it is
+        // closed (auto_da_alloc), which cost every append 0.9 ms (p99 3.4) on a Linux dev box.
+        // Between the two calls a judge reads "free" plus the token's tail: no pid, so it waits.
         return () => {
           try {
             const mine = fs.fstatSync(fd).ino
-            try { fs.ftruncateSync(fd, 0); fs.writeSync(fd, LOCK_FREE, 0) } catch { /* unlinked below */ }
+            try { fs.writeSync(fd, LOCK_FREE, 0); fs.ftruncateSync(fd, LOCK_FREE.length) } catch { /* unlinked below */ }
             if (fs.statSync(file).ino === mine) fs.unlinkSync(file)
           } catch { /* gone already */ } finally {
             try { fs.closeSync(fd) } catch { /* closed */ }

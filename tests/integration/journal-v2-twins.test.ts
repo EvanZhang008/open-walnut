@@ -387,7 +387,11 @@ for (const twin of ['source', 'standalone'] as const) {
       // the disk's own durable append at p99 0.4 (CI runs 39381410474, 39388152389).
       // So the wall budget is 2 ms over what this machine adds, measured here beside
       // the journal with an op of the same shape (the appends' median CPU, then one
-      // durable write); the CPU budget stays 2 ms flat.
+      // durable write); the CPU budget stays 2 ms flat. A miss beyond that is the code's:
+      // in CI run 39392417001 the wall p99 was 2.65 to 2.87 ms against 0.71 to 0.84 for
+      // the same-shaped op, because the lock release cut its file to zero and wrote it
+      // again, which ext4 flushes at close (0.9 ms per append, p99 3.4, on a Linux dev
+      // box). The release now writes over the token and cuts to the mark's length.
       const p = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length * q)]
       const shape = machineAppendMs(jdir, p(cpus, 0.5), 500)
       const machine = Math.max(0, p(shape, 0.99) - p(cpus, 0.5))
