@@ -82,6 +82,21 @@ describe('registry', () => {
     }
   }, 120_000)
 
+  it('moves its dist-tags while it runs (a release published under a running install)', async () => {
+    const registry = await startRegistry({ tarballs: [{ file: A }, { file: B }], distTags: { latest: '1.0.0' }, upstream: 'http://127.0.0.1:9' })
+    try {
+      expect(await (await fetch(registry.distTagsUrl)).json()).toEqual({ latest: '1.0.0' })
+      registry.setDistTags({ latest: '1.1.0' })
+      expect(await (await fetch(registry.distTagsUrl)).json()).toEqual({ latest: '1.1.0' })
+      const packument = await (await fetch(`${registry.url}/open-walnut`)).json()
+      expect(packument['dist-tags']).toEqual({ latest: '1.1.0' })
+      expect(Object.keys(packument.versions).sort()).toEqual(['1.0.0', '1.1.0'])
+      expect((await fetch(`${registry.url}/open-walnut/-/open-walnut-1.0.0.tgz`)).status).toBe(200)
+    } finally {
+      await registry.close()
+    }
+  })
+
   it('passes other packages through, decoded, with a correct length', async () => {
     const body = JSON.stringify({ name: 'left-pad', 'dist-tags': { latest: '1.3.0' } })
     const upstream = http.createServer((req, res) => {

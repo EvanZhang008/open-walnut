@@ -23,6 +23,10 @@
  *              local registry whose `latest` is B.
  *   field      (--field latest) the same, starting from the version on npm today:
  *              the update every existing install will take.
+ *   field-work (--field latest) that update onto an install already in use: the
+ *              npm version keeps a task and a session with a live CLI, its server
+ *              restarts into the update, and the task, the history, the session
+ *              (a third message) and B's daemon are there afterwards.
  *   archive*   (--runtime: built from --older, updated to --current; --archive:
  *              a built one, alone) the self-contained archive install.sh puts
  *              in place, run with no Node on PATH (runtime.mjs).
@@ -121,6 +125,88 @@ async function rehearseUpdate(work, label, fromTgz, toTgz) {
   }
 }
 
+/** What the install's own daemon dir says: the running daemon's version and pid. */
+function daemonOf(w) {
+  const read = (f) => { try { return fs.readFileSync(path.join(w.daemonDir, f), 'utf8').trim() } catch { return null } }
+  return { version: read('daemon.version'), pid: read('daemon.pid') }
+}
+
+/** The process groups of the CLIs the daemon spawned (its streams dir records them). */
+function cliGroups(w) {
+  const streams = `${w.daemonDir}-streams`
+  return (fs.existsSync(streams) ? fs.readdirSync(streams) : []).filter((f) => f.endsWith('.pgid'))
+    .map((f) => fs.readFileSync(path.join(streams, f), 'utf8').trim()).sort()
+}
+
+/**
+ * An install that already holds work updates the way every user's does: A serves
+ * (its registry's `latest` is A), keeps a task and a session whose CLI stays alive,
+ * then the server stops while its daemon and that CLI go on (a user's restart),
+ * `latest` becomes B, and the next start updates itself to B before it serves.
+ * The task, the session's history and the session itself carry over (a third
+ * message is answered), and the daemon that runs it is B's. The detail names
+ * whether the same CLI answered: here it is a new one (resumed), because a
+ * daemon in its own dir ends its sessions when its server is gone (the parent
+ * watchdog every test daemon has); a user's daemon in the default dir outlives
+ * the restart and its upgrade adopts the running CLIs.
+ */
+async function rehearseUpdateWithWork(work, label, fromTgz, toTgz) {
+  const from = readPackedManifest(fromTgz)
+  const to = readPackedManifest(toTgz)
+  if (compareVersions(to.version, from.version) <= 0) return `skipped: ${to.version} is not newer than ${from.version}`
+  const registry = await startRegistry({ tarballs: [{ file: fromTgz }, { file: toTgz }], distTags: { latest: from.version } })
+  try {
+    const w = new IsolatedWalnut({
+      work, name: label,
+      extraEnv: { npm_config_registry: `${registry.url}/`, WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl },
+    })
+    walnuts.push(w)
+    await w.install(`open-walnut@${from.version}`, allowedScripts(from))
+    await w.start({ timeoutMs: 600_000 })
+    const before = await w.api('GET', '/api/v1/status')
+    if (before.json?.version !== from.version) throw new Error(`${from.version} with latest=${from.version} serves ${before.json?.version ?? before.text.slice(0, 200)}`)
+    const title = `rehearsal task ${nonce()}`
+    const made = await w.api('POST', '/api/v1/tasks', { title })
+    const taskId = made.json?.task?.id
+    if (made.status !== 201 || !taskId) throw new Error(`POST /api/v1/tasks answered ${made.status} ${made.text.slice(0, 300)}`)
+    const marks = [nonce(), nonce(), nonce()]
+    const one = ask('one', marks[0])
+    const res = await w.api('POST', '/api/v1/sessions', { cwd: w.project, message: one.text })
+    const sessionId = res.json?.sessionId
+    if (res.status !== 201 || !sessionId) throw new Error(`POST /api/v1/sessions answered ${res.status} ${res.text.slice(0, 300)}`)
+    await w.waitForAnswer(sessionId, one.answer)
+    const two = ask('two', marks[1])
+    const send = await w.api('POST', '/api/v1/messages', { to: sessionId, text: two.text })
+    if (send.status !== 202) throw new Error(`POST /api/v1/messages answered ${send.status} ${send.text.slice(0, 300)}`)
+    await w.waitForAnswer(sessionId, two.answer)
+    const oldDaemon = daemonOf(w)
+    const oldClis = cliGroups(w)
+
+    await w.stop()
+    registry.setDistTags({ latest: to.version })
+    await w.start({ timeoutMs: 600_000 })
+    const status = await w.api('GET', '/api/v1/status')
+    if (status.json?.version !== to.version) throw new Error(`restarted ${from.version} with latest=${to.version}, serving ${status.json?.version ?? status.text.slice(0, 200)}`)
+    if (!reports(w.version(), to.version)) throw new Error(`after the update the binary reports ${w.version()}`)
+    const tasks = await w.api('GET', '/api/v1/tasks')
+    const kept = (tasks.json?.tasks ?? []).find((t) => t.id === taskId)
+    if (!kept || kept.title !== title) throw new Error(`task ${taskId} ("${title}") is not in ${to.version}'s list (${tasks.status} ${tasks.text.slice(0, 200)})`)
+    const history = await w.waitForAnswer(sessionId, two.answer, 120_000)
+    if (!history.some((m) => m.role === 'assistant' && m.text?.includes(one.answer))) throw new Error('the first turn is gone from the history after the update')
+    const three = ask('three', marks[2])
+    const again = await w.api('POST', '/api/v1/messages', { to: sessionId, text: three.text })
+    if (again.status !== 202) throw new Error(`POST /api/v1/messages after the update answered ${again.status} ${again.text.slice(0, 300)}`)
+    await w.waitForAnswer(sessionId, three.answer)
+    const newDaemon = daemonOf(w)
+    const cli = cliGroups(w).join(',') === oldClis.join(',') ? 'the same CLI process' : 'a new CLI process'
+    const daemon = newDaemon.version === oldDaemon.version ? `daemon ${newDaemon.version} kept` : `daemon ${oldDaemon.version} -> ${newDaemon.version}`
+    await w.shutdown()
+    return `${from.version} -> ${to.version}: task, history and session kept (third message answered by ${cli}); ${daemon}`
+  } finally {
+    await registry.close()
+  }
+}
+
 /** Stop what is left, print the table, and fail unless `expected` scenarios ran and passed. */
 async function finish(opts, work, title, expected) {
   // A scenario that failed half way left its server and daemon running.
@@ -214,11 +300,18 @@ async function main() {
       const entry = Array.isArray(packed) ? packed[0] : Object.values(packed)[0]
       return rehearseUpdate(work, 'field', path.join(dir, entry.filename), opts.current)
     })
+    // The same release, onto an install that already holds a task and a running session.
+    await scenario('field-work', async () => {
+      const dir = path.join(work, 'field-pack')
+      const tgz = fs.readdirSync(dir).find((f) => f.endsWith('.tgz'))
+      if (!tgz) throw new Error(`no packed open-walnut@latest in ${dir}`)
+      return rehearseUpdateWithWork(work, 'field-work', path.join(dir, tgz), opts.current)
+    })
   }
 
   if (opts.runtime) await rehearseRuntime({ work, fromTgz: opts.older, toTgz: opts.current, scenario, walnuts })
 
-  const expected = 4 + (opts.older ? 1 : 0) + (opts.field === 'latest' ? 1 : 0) + (opts.runtime ? 3 + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) + (process.env.WALNUT_REHEARSAL_APP ? 1 : 0) : 0)
+  const expected = 4 + (opts.older ? 1 : 0) + (opts.field === 'latest' ? 2 : 0) + (opts.runtime ? 3 + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) + (process.env.WALNUT_REHEARSAL_APP ? 1 : 0) : 0)
   return finish(opts, work, `open-walnut@${current.version}`, expected)
 }
 

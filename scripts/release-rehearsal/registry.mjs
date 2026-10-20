@@ -108,6 +108,8 @@ export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM })
     url,
     hits,
     distTagsUrl: `${url}/-/package/${PACKAGE}/dist-tags`,
+    /** Move the dist-tags (a release published while an install runs). */
+    setDistTags: (tags) => { packument = buildPackument({ tarballs, distTags: tags, baseUrl: url }) },
     close: () => new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections() }),
   }
 }
