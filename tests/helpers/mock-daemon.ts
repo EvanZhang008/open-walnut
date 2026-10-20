@@ -25,6 +25,7 @@ import { resolveAgentCommand } from '../../src/providers/agent-command-map.js'
 import { createTurnSnapshots, type TurnSnapshotExecFile, type TurnSnapshotFs } from '../../src/providers/turn-snapshot-core.js'
 import { createTurnGuard } from '../../src/providers/turn-guard-core.js'
 import { computeHostLocalChanges } from '../../src/providers/session-changes-core.js'
+import { scanSessionCost } from '../../src/providers/session-cost-core.js'
 import { createWorkspaceCore, type WorkspaceCoreDeps } from '../../src/providers/workspace-core.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
@@ -56,6 +57,9 @@ export interface MockDaemonOptions {
    * no test session ever writes hidden refs into a real repository.
    */
   turnSnapshotRoot?: string
+  /** `usage.sessionCost` reads transcripts here (the real session-cost-core). Unset: the command answers "unknown". */
+  claudeProjectsDir?: string
+  codexHome?: string
 }
 
 /**
@@ -106,11 +110,13 @@ export class MockDaemon {
   private _acp: ReturnType<typeof createAcpDaemon<WebSocket>>
 
   get port(): number { return this._port }
+  private usageDirs: { projects?: string; codex?: string }
 
   constructor(options: MockDaemonOptions = {}) {
     this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-daemon-'))
     this.streamsDir = options.streamsDir ?? path.join(this.tmpDir, 'streams')
     this.turnSnapshotRoot = options.turnSnapshotRoot ?? null
+    this.usageDirs = { projects: options.claudeProjectsDir, codex: options.codexHome }
     fs.mkdirSync(this.streamsDir, { recursive: true })
     this._acp = createAcpDaemon<WebSocket>({
       streamsDir: options.acpStreamsDir ?? this.streamsDir,
@@ -294,6 +300,14 @@ export class MockDaemon {
         return
       }
       case 'fs.read': return this.cmdFsRead(ws, id, cmd)
+      case 'usage.sessionCost': {
+        const projectsDir = this.usageDirs.projects
+        if (!projectsDir) return this.sendError(ws, id, 'unknown command: usage.sessionCost')
+        void scanSessionCost({ engine: String(cmd.engine ?? 'claude'), sessionId: String(cmd.sid), cwd: cmd.cwd as string | undefined,
+          thresholds: (cmd.thresholds as number[] | undefined) ?? [], projectsDir, codexHome: this.usageDirs.codex })
+          .then(result => this.sendOk(ws, id, { result }), err => this.sendError(ws, id, String(err)))
+        return
+      }
       case 'fs.readRange': return this.cmdFsReadRange(ws, id, cmd)
       case 'fs.readImage': return this.cmdFsReadImage(ws, id, cmd)
       case 'fs.mkdir': return this.cmdFsMkdir(ws, id, cmd)

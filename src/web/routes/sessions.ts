@@ -2269,6 +2269,22 @@ sessionsRouter.get('/:sessionId/settings', async (req: Request, res: Response, n
   }
 })
 
+// GET /api/sessions/:sessionId/cost: what the session cost, priced per request
+// from the engine's own usage records (core/usage/session-cost.ts). Answers within
+// its own deadline with status 'unavailable' rather than hanging on a slow host.
+sessionsRouter.get('/:sessionId/cost', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { getSessionCost } = await import('../../core/usage/session-cost.js')
+    res.json(await getSessionCost(String(req.params.sessionId)))
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode === 404) {
+      res.status(404).json({ error: 'session not found' })
+      return
+    }
+    next(err)
+  }
+})
+
 // GET /api/sessions/:sessionId/slash-commands?fresh=1 — the composer palette for
 // ONE live session: the command set the CLI itself advertised in its init line,
 // decorated with descriptions. `source` tells the client whether it got the CLI

@@ -148,7 +148,7 @@ import {
 } from './trigger-check-core.js'
 import { buildTriggerMessage } from './trigger-envelope-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
-import { scanHostUsage, scanCostState, createUsagePages } from './usage-host-core.js'
+import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
 import { createUsageBudgetRuntime } from './usage-budget-runtime.js'
 import { createBudgetControl } from './usage-budget-control.js'
 import { ensureUsageBudgetDirectory } from './usage-budget-core.js'
@@ -2085,6 +2085,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'git.commitJob': return sendOk(ws, id as number, { job: gitCommit.job(cmd.jobId) })
     case 'usage.scan': return cmdUsageScan(ws, id as number, cmd)
     case 'usage.costState': return cmdUsageCostState(ws, id as number, cmd)
+    case 'usage.sessionCost': return cmdUsageSessionCost(ws, id as number, cmd)
     case 'usage.budget.get': return cmdUsageBudget(ws, id as number, cmd, false)
     case 'usage.budget.configure': return cmdUsageBudget(ws, id as number, cmd, true)
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
@@ -8900,6 +8901,22 @@ async function cmdUsageCostState(ws: ServerWebSocket<WsData>, id: number, cmd: R
     })
     sendOk(ws, id, { result })
   } catch (err) { sendError(ws, id, 'usage.costState failed: ' + (err as Error).message) }
+}
+
+// 'session-cost-v1': one session's per-request usage, folded host-side from the
+// engine's own records (session-cost-core.ts). Keep in sync with daemon-source.ts.
+async function cmdUsageSessionCost(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (typeof cmd.sid !== 'string' || !cmd.sid) return sendError(ws, id, 'usage.sessionCost: missing sid')
+  try {
+    const result = await scanSessionCost({
+      engine: typeof cmd.engine === 'string' ? cmd.engine : 'claude',
+      sessionId: cmd.sid,
+      ...(typeof cmd.cwd === 'string' ? { cwd: cmd.cwd } : {}),
+      thresholds: Array.isArray(cmd.thresholds) ? cmd.thresholds.filter((t): t is number => typeof t === 'number') : [],
+      projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+    })
+    sendOk(ws, id, { result })
+  } catch (err) { sendError(ws, id, 'usage.sessionCost failed: ' + (err as Error).message) }
 }
 
 async function cmdChangesCompute(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {

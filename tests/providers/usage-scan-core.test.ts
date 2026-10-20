@@ -429,13 +429,13 @@ describe('cost-state restoration', () => {
     ]);
     await log('project/main/subagents/agent-one.jsonl', [cost('main', 100)]);
     const result = await scanCanonicalUsage({ projectsDir: root, since: LATER, sessionIds: ['main'] });
-    expect(result.costStates).toEqual([{ sessionId: 'main', totalCostUsd: 3, timestamp: TODAY }]);
+    expect(result.costStates).toEqual([{ sessionId: 'main', totalCostUsd: 3, timestamp: TODAY, apiDurationMs: 1, durationMs: 3 }]);
     expect(await scanCostState({ projectsDir: root, sessionId: 'main' })).toEqual(result.costStates[0]);
   });
 
   it('does not guess a timestamp from startTime or a neighbouring transcript line', async () => {
     await log('project/main.jsonl', [assistant('msg'), cost('main', 4), cost('main', 2, { startTime: -1 })]);
-    expect(await scanCostState({ projectsDir: root, sessionId: 'main' })).toEqual({ sessionId: 'main', totalCostUsd: 4 });
+    expect(await scanCostState({ projectsDir: root, sessionId: 'main' })).toEqual({ sessionId: 'main', totalCostUsd: 4, apiDurationMs: 1, durationMs: 3 });
   });
 
   it('validates model counters, limits and optional state fields like the official schema', async () => {
@@ -446,7 +446,7 @@ describe('cost-state restoration', () => {
       cost('main', 5, { modelUsage: { first: { ...valid.modelUsage['claude-opus-4-8'], inputTokens: 6e14 },
         second: { ...valid.modelUsage['claude-opus-4-8'], inputTokens: 6e14 } } }),
     ]);
-    expect(await scanCostState({ projectsDir: root, sessionId: 'main' })).toEqual({ sessionId: 'main', totalCostUsd: 1 });
+    expect(await scanCostState({ projectsDir: root, sessionId: 'main' })).toEqual({ sessionId: 'main', totalCostUsd: 1, apiDurationMs: 1, durationMs: 3 });
   });
 
   it('uses cwd project first and reads only that main file, never FIFO or copied parent state', async () => {
@@ -454,7 +454,7 @@ describe('cost-state restoration', () => {
     await log('-work-acme/main.jsonl', [cost('main', 2)]);
     await log('-work-acme/fork.jsonl', [cost('main', 90)]);
     execFileSync('mkfifo', [path.join(root, 'a-project', 'not-a-session.jsonl')]);
-    expect(await scanCostState({ projectsDir: root, sessionId: 'main', cwd: '/work/acme' })).toEqual({ sessionId: 'main', totalCostUsd: 2 });
+    expect(await scanCostState({ projectsDir: root, sessionId: 'main', cwd: '/work/acme' })).toEqual({ sessionId: 'main', totalCostUsd: 2, apiDurationMs: 1, durationMs: 3 });
     expect(await scanCostState({ projectsDir: root, sessionId: 'fork', cwd: '/work/acme' })).toBeUndefined();
     expect(await scanCostState({ projectsDir: root, sessionId: 'not-a-session' })).toBeUndefined();
     expect(await scanCostState({ projectsDir: root, sessionId: 'missing' })).toBeUndefined();

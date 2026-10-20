@@ -1,0 +1,110 @@
+/* The model picker's session cost line (SessionCostBlock). Sits in the same
+   muted card as the live details, one line until opened. */
+.session-cost {
+  padding: 6px 10px;
+}
+
+.session-cost-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-cost-head:disabled {
+  cursor: default;
+}
+
+.session-cost-title {
+  color: var(--fg, inherit);
+}
+
+.session-cost-title strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-cost-times {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-cost-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-cost-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.session-cost-model-row:hover {
+  background: var(--bg-subtle, rgba(128, 128, 128, 0.12));
+}
+
+.session-cost-model-name {
+  color: var(--fg, inherit);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-cost-model-meta,
+.session-cost-model-usd {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-cost-model-usd {
+  color: var(--fg, inherit);
+  font-weight: 600;
+  min-width: 52px;
+  text-align: right;
+}
+
+.session-cost-model-detail {
+  margin: 1px 0 6px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.4;
+}
+
+.session-cost-muted {
+  color: var(--fg-muted, #888);
+}
+
+.session-cost-warn {
+  color: var(--warning, #e6a700);
+}
+
+.session-cost-foot {
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+/* Several models open at once hold more than the details card's 260px. */
+.model-picker-details.session-cost {
+  max-height: 340px;
+}

@@ -1037,7 +1037,11 @@ export interface Config {
   providers?: Record<string, import('../model/providers/types.js').ProviderConfig>;
   /** Per-engine settings, keyed by engine id (`custom`, `codex`, ...). */
   engines?: Record<string, EngineConfigEntry>;
-  usage?: { proxy_log_dirs?: Record<string, string> };
+  usage?: {
+    proxy_log_dirs?: Record<string, string>;
+    /** Your own per-model rates (USD per million tokens); they win over every other price source. */
+    prices?: Record<string, import('./usage/price-book.js').UserPriceRates>;
+  };
   agent?: AgentConfig;
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;

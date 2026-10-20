@@ -1,5 +1,5 @@
 /** Prices are in USD per million tokens. */
-export const PRICING_VERSION = '2026-10-14';
+export const PRICING_VERSION = '2026-10-20';
 
 export interface PricingRates {
   input: number;
@@ -53,7 +53,10 @@ export interface UsagePrice {
  */
 export const DEFAULT_PRICING: PricingEntry[] = [
   // Public standard/global token rates: https://platform.claude.com/docs/en/about-claude/pricing
+  { pattern: 'claude-mythos-5-1',   input: 10.00, output: 50.00, cacheWrite: 12.50, cacheWrite1h: 20.00, cacheRead: 0.25 },
   { pattern: 'claude-fable-5-1',    input: 10.00, output: 50.00, cacheWrite: 12.50, cacheWrite1h: 20.00, cacheRead: 0.25 },
+  // Fable 5 kept a higher cache-read rate than 5.1.
+  { pattern: 'claude-fable-5',      input: 10.00, output: 50.00, cacheWrite: 12.50, cacheWrite1h: 20.00, cacheRead: 1.00 },
   { pattern: 'claude-opus-5-5-fast', input: 8.00, output: 40.00, cacheWrite: 10.00, cacheWrite1h: 16.00, cacheRead: 0.40 },
   { pattern: 'claude-opus-5-5',     input: 4.00,  output: 20.00, cacheWrite: 5.00, cacheWrite1h: 8.00, cacheRead: 0.20 },
   { pattern: 'claude-opus-5-fast',  input: 10.00, output: 50.00, cacheWrite: 12.50,  cacheWrite1h: 20.00, cacheRead: 1.00 },
@@ -64,9 +67,9 @@ export const DEFAULT_PRICING: PricingEntry[] = [
   { pattern: 'claude-opus-4-5',     input: 5.00,  output: 25.00, cacheWrite: 6.25,   cacheWrite1h: 10.00, cacheRead: 0.50 },
   { pattern: 'claude-opus-4-1',     input: 15.00, output: 75.00, cacheWrite: 18.75,  cacheWrite1h: 30.00, cacheRead: 1.50 },
   { pattern: 'claude-opus-4',       input: 15.00, output: 75.00, cacheWrite: 18.75,  cacheWrite1h: 30.00, cacheRead: 1.50 },
-  // Sonnet 5.5 (2026-09-28) kept Sonnet 5's list price. Its row sits above
-  // 'claude-sonnet-5', which is a substring of it.
-  { pattern: 'claude-sonnet-5-5',   input: 2.00,  output: 10.00, cacheWrite: 2.50,   cacheWrite1h: 4.00, cacheRead: 0.20 },
+  // Sonnet 5.5 (2026-09-28) kept Sonnet 5's token rates but halved cache reads.
+  // Its row sits above 'claude-sonnet-5', which is a substring of it.
+  { pattern: 'claude-sonnet-5-5',   input: 2.00,  output: 10.00, cacheWrite: 2.50,   cacheWrite1h: 4.00, cacheRead: 0.10 },
   { pattern: 'claude-sonnet-5',     input: 2.00,  output: 10.00, cacheWrite: 2.50,   cacheWrite1h: 4.00, cacheRead: 0.20 },
   { pattern: 'claude-sonnet-4-5',   input: 3.00,  output: 15.00, cacheWrite: 3.75,   cacheWrite1h: 6.00, cacheRead: 0.30 },
   { pattern: 'claude-sonnet-4',     input: 3.00,  output: 15.00, cacheWrite: 3.75,   cacheWrite1h: 6.00, cacheRead: 0.30 },
@@ -87,7 +90,9 @@ export const DEFAULT_PRICING: PricingEntry[] = [
     longContext: { input: 4.00, output: 15.00, cacheRead: 0.20, cacheWrite: 5.00 },
   },
   // Public standard token rates: https://developers.openai.com/api/docs/pricing
-  { pattern: 'gpt-6-sol',          input: 2.00,  output: 10.00, cacheRead: 0.20, separateCacheCreation: true },
+  { pattern: 'gpt-6-sol', input: 2.00, output: 10.00, cacheRead: 0.20, cacheWrite: 2.50,
+    separateCacheCreation: true, contextThreshold: 272_000,
+    longContext: { input: 4.00, output: 15.00, cacheRead: 0.40, cacheWrite: 5.00 } },
   { pattern: 'gpt-6-luna', input: 0.10, output: 0.50, cacheRead: 0.01, cacheWrite: 0.125,
     separateCacheCreation: true, contextThreshold: 272_000,
     longContext: { input: 0.20, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 } },
@@ -96,7 +101,16 @@ export const DEFAULT_PRICING: PricingEntry[] = [
     separateCacheCreation: true, contextThreshold: 272_000,
     longContext: { input: 20.00, output: 75.00, cacheRead: 2.00, cacheWrite: 25.00 },
   },
-  { pattern: 'gpt-5.6',            input: 8.80,  output: 33.00, cacheRead: 0.88 },
+  { pattern: 'gpt-5.6-luna', input: 0.20, output: 1.20, cacheRead: 0.02, cacheWrite: 0.25,
+    separateCacheCreation: true, contextThreshold: 272_000,
+    longContext: { input: 0.40, output: 1.80, cacheRead: 0.04, cacheWrite: 0.50 } },
+  { pattern: 'gpt-5.6-terra', input: 2.00, output: 12.00, cacheRead: 0.20, cacheWrite: 2.50,
+    separateCacheCreation: true, contextThreshold: 272_000,
+    longContext: { input: 4.00, output: 18.00, cacheRead: 0.40, cacheWrite: 5.00 } },
+  // 'gpt-5.6' and 'gpt-5.6-sol' are the same model.
+  { pattern: 'gpt-5.6', input: 4.00, output: 20.00, cacheRead: 0.40, cacheWrite: 5.00,
+    separateCacheCreation: true, contextThreshold: 272_000,
+    longContext: { input: 8.00, output: 30.00, cacheRead: 0.80, cacheWrite: 10.00 } },
 
   // ── Zhipu GLM (docs.z.ai international USD pricing) ──
   { pattern: 'glm-4.7-flashx',     input: 0.07,  output: 0.40,  cacheRead: 0.01 },
@@ -137,7 +151,7 @@ export function findPricing(modelId: string, customPricing?: PricingEntry[]): Pr
     const suffix = entry.pattern === 'jev'
       ? '(?:-(?:latest|\\d+(?:-\\d+)*))?'
       : '(?:-(?:\\d{8}|v\\d+))*(?::\\d+)?';
-    const family = entry.pattern === 'gpt-5.6' ? '(?:-(?:sol|luna|astra))?' : '';
+    const family = entry.pattern === 'gpt-5.6' ? '(?:-sol)?' : '';
     return new RegExp(`(?:^|[./:])${pattern}${family}${suffix}$`).test(normalized);
   });
 }
@@ -170,7 +184,15 @@ export function priceUsage(params: PriceUsageParams): UsagePrice {
     || (params.speed != null && !['standard', 'fast'].includes(params.speed))
     || (params.service_tier != null && params.service_tier !== 'standard')
     || (params.inference_geo != null && !['', 'global', 'us'].includes(params.inference_geo))) return unpriced();
+  return priceWithEntry(entry, params);
+}
 
+/**
+ * Prices token counts against one rate row. `long` forces the rate tier: a sum
+ * of many requests can only be priced when the caller already knows which tier
+ * each of them fell in (the sum's own size says nothing about one request's).
+ */
+export function priceWithEntry(entry: PricingEntry, params: PriceUsageParams, options: { long?: boolean } = {}): UsagePrice {
   const read = params.cache_read_input_tokens ?? 0;
   const write5m = params.cache_creation?.ephemeral_5m_input_tokens ?? 0;
   const write1h = params.cache_creation?.ephemeral_1h_input_tokens ?? 0;
@@ -183,9 +205,8 @@ export function priceUsage(params: PriceUsageParams): UsagePrice {
   if (![params.input_tokens, params.output_tokens, read, creation, write5m, write1h, context].every(validTokens)
     || (hasDetails && creation !== write5m + write1h)) return unpriced();
 
-  const rates = entry.contextThreshold !== undefined && context > entry.contextThreshold
-    ? entry.longContext
-    : entry;
+  const long = options.long ?? (entry.contextThreshold !== undefined && context > entry.contextThreshold);
+  const rates = long ? entry.longContext : entry;
   if (!rates) return unpriced();
 
   const separate = entry.separateCacheCreation === true;

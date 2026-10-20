@@ -90,13 +90,29 @@ describe('pricing', () => {
       expect(findPricing('global.anthropic.claude-opus-5[1m]')!.pattern).toBe('claude-opus-5');
     });
 
-    it('prices Sonnet 5.5 and Sonnet 5 at $2 / $10', () => {
+    it('prices Sonnet 5.5 and Sonnet 5 at $2 / $10, Sonnet 5.5 cache reads at $0.10', () => {
       const s55 = findPricing('global.anthropic.claude-sonnet-5-5');
       expect(s55!.pattern).toBe('claude-sonnet-5-5');
-      expect([s55!.input, s55!.output, s55!.cacheWrite, s55!.cacheRead]).toEqual([2.00, 10.00, 2.50, 0.20]);
+      expect([s55!.input, s55!.output, s55!.cacheWrite, s55!.cacheRead]).toEqual([2.00, 10.00, 2.50, 0.10]);
+      expect(findPricing('claude-sonnet-5')!.cacheRead).toBe(0.20);
       expect(findPricing('global.anthropic.claude-sonnet-5[1m]')!.pattern).toBe('claude-sonnet-5');
       // Sonnet 4.x keeps its own $3 / $15 row.
       expect(findPricing('global.anthropic.claude-sonnet-4-5-20250929-v1:0')!.input).toBe(3.00);
+    });
+
+    it('keeps Fable 5 at its own $1 cache read and prices Mythos 5.1 like Fable 5.1', () => {
+      expect(findPricing('claude-fable-5')!.cacheRead).toBe(1.00);
+      expect(findPricing('global.anthropic.claude-fable-5-1')!.cacheRead).toBe(0.25);
+      expect(findPricing('claude-mythos-5-1')!.pattern).toBe('claude-mythos-5-1');
+    });
+
+    it('prices the GPT rows at their published tiers', () => {
+      const sol6 = findPricing('openai.gpt-6-sol')!;
+      expect([sol6.input, sol6.output, sol6.cacheRead, sol6.cacheWrite, sol6.contextThreshold]).toEqual([2, 10, 0.2, 2.5, 272_000]);
+      expect(findPricing('gpt-5.6-sol')!.pattern).toBe('gpt-5.6');
+      expect(findPricing('gpt-5.6')!.input).toBe(4);
+      expect(findPricing('gpt-5.6-luna')!.input).toBe(0.2);
+      expect(findPricing('gpt-5.6-terra')!.output).toBe(12);
     });
 
     it('prices Haiku 5.5 at $0.10 / $0.50 and keeps Haiku 4.5 at $1 / $5', () => {

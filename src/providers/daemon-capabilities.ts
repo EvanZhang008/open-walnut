@@ -273,6 +273,9 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'snapshot-v1',
   'snapshot-memory-v1',
   'usage-scan-v1',
+  // One session's per-request usage (usage.sessionCost, session-cost-core.ts), folded
+  // host-side from the engine's own records; sidecar-gated in the source twin.
+  'session-cost-v1',
   // Persistent session budgets, enforced on the owning host before CLI delivery.
   'budget-v1',
   'cron-metadata-v1',

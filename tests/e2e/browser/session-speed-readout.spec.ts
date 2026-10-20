@@ -240,7 +240,8 @@ async function assertFinalReadout(page: Page, model: string): Promise<number> {
   // The CLI's own count, and the "~" of the interim estimate is gone.
   await expect(r.getByTestId('speed-tokens')).toHaveText('50 tok')
   await expect(r.getByTestId('speed-duration')).toHaveText('9.0s')
-  await expect(r.getByTestId('speed-cost')).toHaveText('$0.01')
+  // Cost lives in the picker's session cost line, not in the turn readout.
+  await expect(r.getByTestId('speed-cost')).toHaveCount(0)
   await expect(r.getByTestId('speed-ttft')).toHaveText(/^first \d+(\.\d)?s$/)
   await expect(r.getByTestId('speed-flag')).toHaveCount(0)
   const tpsText = (await r.getByTestId('speed-tps').textContent())?.trim() ?? ''

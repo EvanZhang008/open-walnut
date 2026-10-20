@@ -202,7 +202,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'budget-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3286,6 +3286,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'git.commitJob': return sendOk(ws, id, { job: gitCommit.job(cmd.jobId) });
     case 'usage.scan': return cmdUsageScan(ws, id, cmd);
     case 'usage.costState': return cmdUsageCostState(ws, id, cmd);
+    case 'usage.sessionCost': return cmdUsageSessionCost(ws, id, cmd);
     case 'usage.budget.get': return cmdUsageBudget(ws, id, cmd, false);
     case 'usage.budget.configure': return cmdUsageBudget(ws, id, cmd, true);
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
@@ -10631,6 +10632,7 @@ function daemonCapabilities() {
   if (acp && typeof acp.modelCatalog === 'function') caps.push('acp-model-catalog-v1');
   if (changesCore) caps.push('changes-v1');
   if (usageCore) caps.push('usage-scan-v1');
+  if (usageCore && typeof usageCore.scanSessionCost === 'function') caps.push('session-cost-v1');
   if (usageBudget && budgetControl) caps.push('budget-v1');
   if (externalScanCore) caps.push('external-scan-v1');
   if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');
@@ -10893,6 +10895,23 @@ async function cmdUsageCostState(ws, id, cmd) {
     });
     sendOk(ws, id, { result });
   } catch (err) { sendError(ws, id, 'usage.costState failed: ' + err.message); }
+}
+
+// 'session-cost-v1': one session's per-request usage (session-cost-core.ts via the
+// usage-core.cjs sidecar). Keep in sync with daemon-standalone.ts.
+async function cmdUsageSessionCost(ws, id, cmd) {
+  if (!usageCore || typeof usageCore.scanSessionCost !== 'function') return sendError(ws, id, 'usage.sessionCost unsupported: sidecar not loaded');
+  if (typeof cmd.sid !== 'string' || !cmd.sid) return sendError(ws, id, 'usage.sessionCost: missing sid');
+  try {
+    const result = await usageCore.scanSessionCost({
+      engine: typeof cmd.engine === 'string' ? cmd.engine : 'claude',
+      sessionId: cmd.sid,
+      ...(typeof cmd.cwd === 'string' ? { cwd: cmd.cwd } : {}),
+      thresholds: Array.isArray(cmd.thresholds) ? cmd.thresholds.filter((t) => typeof t === 'number') : [],
+      projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+    });
+    sendOk(ws, id, { result });
+  } catch (err) { sendError(ws, id, 'usage.sessionCost failed: ' + err.message); }
 }
 
 async function cmdChangesCompute(ws, id, cmd) {

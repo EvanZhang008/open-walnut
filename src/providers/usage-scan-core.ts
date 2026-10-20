@@ -27,6 +27,10 @@ export interface CanonicalCostState {
   sessionId: string;
   totalCostUsd: number;
   timestamp?: string;
+  /** The CLI's cumulative model time (retries and parallel subagents included). */
+  apiDurationMs?: number;
+  /** The CLI's cumulative process time, idle stretches included. */
+  durationMs?: number;
 }
 
 export interface UsageScanDiagnostics {
@@ -382,7 +386,8 @@ function costState(row: JsonObject, sessionId: string): CanonicalCostState | und
     }
   }
   const time = timestamp(row.timestamp);
-  return { sessionId, totalCostUsd: row.totalCostUSD, ...(time !== undefined ? { timestamp: new Date(time).toISOString() } : {}) };
+  return { sessionId, totalCostUsd: row.totalCostUSD, ...(time !== undefined ? { timestamp: new Date(time).toISOString() } : {}),
+    apiDurationMs: row.totalAPIDuration as number, durationMs: row.totalDuration as number };
 }
 
 function responseIdentity(row: JsonObject, diag: UsageScanDiagnostics): { key: string; id: string; model: string; time: number; message: JsonObject } | undefined {
@@ -396,19 +401,196 @@ function responseIdentity(row: JsonObject, diag: UsageScanDiagnostics): { key: s
   return { key: JSON.stringify([model, message.id]), id: message.id, model, time, message };
 }
 
-export async function scanCanonicalUsage(options: CanonicalUsageScanOptions): Promise<{
-  records: CanonicalUsageRecord[]; diagnostics: UsageScanDiagnostics; costStates: CanonicalCostState[];
-}> {
+type CanonicalScanResult = { records: CanonicalUsageRecord[]; diagnostics: UsageScanDiagnostics; costStates: CanonicalCostState[] };
+
+export async function scanCanonicalUsage(options: CanonicalUsageScanOptions): Promise<CanonicalScanResult> {
   await assertRoot(options.projectsDir);
   const since = boundary(options.since, -Infinity), until = boundary(options.until, Infinity);
   if (since >= until) throw new Error('Usage since must precede until');
   const selected = options.sessionIds ? new Set(options.sessionIds) : undefined;
-  const diag = diagnostics(), costs = new Map<string, CanonicalCostState>();
+  const diag = diagnostics();
+  return scanLogFiles(canonicalFiles(options.projectsDir, diag), diag, { since, until, selected });
+}
+
+/** What one session's files have been folded into so far, so a grown transcript is read from where the last read stopped. */
+export interface SessionFoldState {
+  files: Map<string, SessionFoldFile>;
+}
+interface SessionFoldFile {
+  file: LogFile; ino: number; offset: number; line: number;
+  /** The file's first bytes when folding began: different bytes mean it was rewritten in place. */
+  head: string;
+  snapshots: Map<string, ResponseSnapshot>; cost?: CanonicalCostState;
+}
+
+export function newSessionFoldState(): SessionFoldState { return { files: new Map() }; }
+
+const NEWLINE = 10;
+const CANDIDATES = [Buffer.from('"assistant"'), Buffer.from('"cost-state"')];
+const CHUNK_BYTES = 4 * 1024 * 1024;
+
+/** Start offsets of the complete lines in buf[0, end) that hold a candidate pattern, in order. */
+function candidateLines(buf: Buffer, end: number): number[] {
+  const starts = new Set<number>();
+  for (const pattern of CANDIDATES) {
+    let at = buf.indexOf(pattern, 0);
+    while (at !== -1 && at < end) {
+      const lineStart = buf.lastIndexOf(NEWLINE, at) + 1;
+      starts.add(lineStart);
+      const lineEnd = buf.indexOf(NEWLINE, at);
+      if (lineEnd === -1) break;
+      at = buf.indexOf(pattern, lineEnd + 1);
+    }
+  }
+  return [...starts].sort((a, b) => a - b);
+}
+
+function foldRow(entry: SessionFoldFile, row: JsonObject, sessionId: string, diag: UsageScanDiagnostics): void {
+  const file = entry.file;
+  entry.line++;
+  if (!file.agentId) {
+    const state = costState(row, sessionId);
+    if (state) entry.cost = state;
+  }
+  const identity = responseIdentity(row, diag);
+  if (!identity) return;
+  const { key, id, model, time, message } = identity;
+  if (invalidUsage(message.usage)) diag.invalid_usage++;
+  let snapshot = entry.snapshots.get(key);
+  if (!snapshot) {
+    snapshot = { file, responseId: id, model, time, line: entry.line, ...sourceOwner(row, file), counters: {}, maxOutput: undefined, final: false, finalUsage: false, lines: 0 };
+    entry.snapshots.set(key, snapshot);
+  } else {
+    diag.duplicate_usage_lines++;
+    const candidate = { file, time, line: entry.line, ...sourceOwner(row, file) };
+    if (ownerBefore(candidate, snapshot)) Object.assign(snapshot, candidate);
+  }
+  updateUsage(snapshot, message);
+  snapshot.lines++;
+}
+
+function parseLine(buf: Buffer, start: number, end: number, diag: UsageScanDiagnostics): JsonObject | undefined {
+  const text = buf.toString('utf8', start, end).replace(/^\0+/, '');
+  if (!text.trim()) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (object(parsed)) return parsed;
+  } catch { /* counted below */ }
+  diag.invalid_lines++;
+  return undefined;
+}
+
+/** Folds the bytes a file gained since the last read (all of it after a rewrite). */
+async function foldTail(state: SessionFoldState, file: LogFile, sessionId: string, diag: UsageScanDiagnostics,
+  pause: () => Promise<void> | undefined, progress: { read: number }): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    if (!(await lstat(file.path)).isFile()) { diag.skipped_non_regular_files++; return; }
+    handle = await open(file.path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+    const stat = await handle.stat();
+    if (!stat.isFile()) { diag.skipped_non_regular_files++; return; }
+    diag.files_scanned++;
+    const headBuf = Buffer.alloc(Math.min(256, stat.size));
+    if (headBuf.length) await handle.read(headBuf, 0, headBuf.length, 0);
+    const head = headBuf.toString('hex');
+    let entry = state.files.get(file.path);
+    const shared = Math.min(head.length, entry?.head.length ?? 0);
+    if (!entry || entry.ino !== stat.ino || stat.size < entry.offset || head.slice(0, shared) !== entry.head.slice(0, shared)) {
+      entry = { file, ino: stat.ino, offset: 0, line: 0, head, snapshots: new Map() };
+      state.files.set(file.path, entry);
+    }
+    if (head.length > entry.head.length) entry.head = head;
+    progress.read += entry.offset;
+    let rest = Buffer.alloc(0);
+    let position = entry.offset;
+    const chunk = Buffer.allocUnsafe(CHUNK_BYTES);
+    for (;;) {
+      const { bytesRead } = await handle.read(chunk, 0, CHUNK_BYTES, position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      progress.read += bytesRead;
+      const buf = rest.length ? Buffer.concat([rest, chunk.subarray(0, bytesRead)]) : chunk.subarray(0, bytesRead);
+      const complete = buf.lastIndexOf(NEWLINE) + 1;
+      for (const start of candidateLines(buf, complete)) {
+        const wait = pause();
+        if (wait) await wait;
+        const row = parseLine(buf, start, buf.indexOf(NEWLINE, start), diag);
+        if (row) foldRow(entry, row, sessionId, diag);
+      }
+      entry.offset += complete;
+      rest = Buffer.from(buf.subarray(complete));
+    }
+    // A last line without its newline may still be mid-write: fold it if it parses, and read it again next time.
+    if (rest.length && CANDIDATES.some(p => rest.includes(p))) {
+      const text = rest.toString('utf8');
+      try {
+        const row: unknown = JSON.parse(text);
+        if (object(row)) { foldRow(entry, row, sessionId, diag); entry.line--; }
+      } catch { /* still being written */ }
+    }
+  } catch { diag.unreadable_files++; }
+  finally { await handle?.close().catch(() => {}); }
+}
+
+/**
+ * The canonical fold over ONE session's own files (its transcript and its
+ * subagent transcripts), in one pass and incrementally: pass the state back and
+ * only the bytes the files gained are read. A response another session owns (a
+ * fork's inherited history, a copied line) is dropped exactly as the full scan
+ * drops it.
+ */
+export async function scanCanonicalSessionUsage(options: {
+  sessionId: string; files: { path: string; agentId?: string }[]; state?: SessionFoldState;
+  progress?: { read: number };
+}): Promise<CanonicalScanResult & { state: SessionFoldState }> {
+  const diag = diagnostics();
+  const state = options.state ?? newSessionFoldState();
+  const progress = options.progress ?? { read: 0 };
+  const selected = new Set([options.sessionId]);
+  const pause = yieldBudget(diag);
+  const wanted = new Set(options.files.map(f => f.path));
+  for (const known of [...state.files.keys()]) if (!wanted.has(known)) state.files.delete(known);
+  for (const f of options.files) {
+    const file: LogFile = { path: f.path, sessionId: options.sessionId, ...(f.agentId ? { agentId: f.agentId } : {}) };
+    await foldTail(state, file, options.sessionId, diag, pause, progress);
+  }
+  const groups = new Map<string, ResponseGroup>();
+  for (const entry of state.files.values()) {
+    for (const [key, stored] of entry.snapshots) {
+      const wait = pause();
+      if (wait) await wait;
+      // chooseOwner marks its pick; keep the stored snapshot clean for the next fold.
+      const snapshot = { ...stored };
+      const group = groups.get(key);
+      if (!group) groups.set(key, { owner: snapshot, maxOutput: snapshot.maxOutput, ...(snapshot.finalUsage ? { finalCopy: snapshot } : {}) });
+      else {
+        if (snapshot.maxOutput !== undefined) group.maxOutput = Math.max(group.maxOutput ?? 0, snapshot.maxOutput);
+        if (JSON.stringify(group.owner.counters) !== JSON.stringify(snapshot.counters)) diag.changed_usage_duplicates++;
+        group.owner = chooseOwner(snapshot, group.owner, selected);
+        if (strongerFinal(snapshot, group.finalCopy)) group.finalCopy = snapshot;
+      }
+    }
+  }
+  const records: CanonicalUsageRecord[] = [];
+  for (const group of groups.values()) {
+    if (!selected.has(group.owner.sourceSessionId)) continue;
+    records.push(toRecord(group, diag));
+  }
+  const costStates: CanonicalCostState[] = [];
+  for (const entry of state.files.values()) if (!entry.file.agentId && entry.cost) costStates.push(entry.cost);
+  return { records, diagnostics: diag, costStates, state };
+}
+
+async function scanLogFiles(source: AsyncIterable<LogFile>, diag: UsageScanDiagnostics, scope: {
+  since: number; until: number; selected?: Set<string>;
+}): Promise<CanonicalScanResult> {
+  const { since, until, selected } = scope;
+  const costs = new Map<string, CanonicalCostState>();
   // Historical identities need only their earliest timestamp, not counters or copied content.
   const owners = new Map<string, ResponseOwner | number>();
   const files: { file: LogFile; size: number }[] = [];
   const pause = yieldBudget(diag);
-  for await (const file of canonicalFiles(options.projectsDir, diag)) {
+  for await (const file of source) {
     let size: number;
     try { size = (await lstat(file.path)).size; } catch { diag.unreadable_files++; continue; }
     files.push({ file, size });

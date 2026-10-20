@@ -7,7 +7,7 @@ import '@/styles/session-speed.css';
 
 /**
  * The speed readout row of a session: model, output tokens, time to first
- * token, tokens per second, turn wall time, cost. One line, the same slots in
+ * token, tokens per second, turn wall time. One line, the same slots in
  * the same order on every panel, so two panels side by side (Session panels =
  * 2) compare at a glance. It lives in the composer's model picker (the row
  * under the live-settings strip), next to the model it describes, rather than
@@ -83,10 +83,10 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
     'first: your message to the first visible token (a fresh session includes its startup). tok/s: CLI output tokens, thinking included, over the time the model spent generating (tool runs excluded).',
     r.partial ? 'This turn was only partly observed (server attached mid-turn), so tok/s covers what it saw.' : '',
     speed.tokenScope === 'last-call'
-      ? `The engine reports usage for its last model call only: tokens and tok/s describe that call (1 of ${speed.messages}), and the turn's cost is unknown.`
+      ? `The engine reports usage for its last model call only: tokens and tok/s describe that call (1 of ${speed.messages}).`
       : '',
     usageBreakdown(speed),
-    r.tokensEstimated || r.tpsEstimated || r.costEstimated
+    r.tokensEstimated || r.tpsEstimated
       ? (r.live
         ? '~ marks an estimate that the CLI’s own count replaces at the next message boundary.'
         : '~ marks an estimate: the CLI never counted this part (the turn was stopped before it finished).')
@@ -99,7 +99,7 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
       data-testid="session-speed-readout"
       data-live={r.live ? 'true' : 'false'}
       title={title}
-      aria-label={`Turn speed: ${model}, ${r.tokens}${r.ttft ? `, first token ${r.ttft}` : ''}${r.tps ? `, ${r.tps}` : ''}${r.duration ? `, ${r.duration}` : ''}${r.cost ? ', cost unverified' : ''}`}
+      aria-label={`Turn speed: ${model}, ${r.tokens}${r.ttft ? `, first token ${r.ttft}` : ''}${r.tps ? `, ${r.tps}` : ''}${r.duration ? `, ${r.duration}` : ''}`}
     >
       <span className="session-speed-kicker">{r.live ? 'This turn' : 'Last turn'}</span>
       <span className="session-speed-model" data-testid="speed-model">{model}</span>
@@ -116,9 +116,6 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
       )}
       {r.duration && (
         <span className="session-speed-stat" data-testid="speed-duration">{r.duration}</span>
-      )}
-      {r.cost && (
-        <span className="session-speed-stat is-estimate" data-testid="speed-cost" title="This turn has not been checked against independent token evidence.">Cost unverified</span>
       )}
       {r.interrupted && <span className="session-speed-stat session-speed-flag" data-testid="speed-flag">stopped</span>}
       {r.partial && !r.interrupted && <span className="session-speed-stat session-speed-flag" data-testid="speed-flag">partial</span>}

@@ -24,6 +24,7 @@ import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
 import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
+import { SessionCostBlock } from './SessionCostBlock';
 
 const EFFORTS = SESSION_EFFORTS;
 
@@ -750,6 +751,7 @@ export function ModelPicker({
         </div>
       )}
       {sessionId && renderedSpeedReadout}
+      {sessionId && <SessionCostBlock sessionId={sessionId} />}
       {sessionId && acpContext && acpContext.used > 0 && (
         <div className="model-picker-details" data-testid="picker-acp-context">
           <div className="model-picker-details-block">
@@ -1028,7 +1030,7 @@ export function ModelPicker({
             className="model-picker-details-toggle"
             data-testid="picker-details-toggle"
             onClick={toggleDetails}
-            title="Pull the CLI's own context breakdown, cost and version (get_context_usage / get_usage)"
+            title="Pull the CLI's own context breakdown and version (get_context_usage / get_usage)"
           >
             {detailsOpen ? '▾ details' : '▸ details'}
           </button>
@@ -1038,6 +1040,9 @@ export function ModelPicker({
       {/* How fast the last (or running) turn went on this session's model:
           Walnut's own measurement over the CLI stream, see SessionSpeedReadout. */}
       {sessionId && renderedSpeedReadout}
+
+      {/* What the session cost, priced per request (SessionCostBlock). */}
+      {sessionId && <SessionCostBlock sessionId={sessionId} liveApiMs={details?.usage?.total_api_duration_ms ?? null} />}
 
       {/* Live details — collapsed by default. Everything here is the CLI's OWN
           accounting pulled on expand: context breakdown (same source as the
@@ -1092,24 +1097,10 @@ export function ModelPicker({
                 </div>
                 );
               })()}
-              {details.usage && (
-                <div className="model-picker-details-block">
-                  <div className="model-picker-details-title">
-                    Cost: Unverified
-                    {details.usage.total_lines_added != null
-                      ? ` · +${details.usage.total_lines_added}/-${details.usage.total_lines_removed ?? 0} lines`
-                      : ''}
-                  </div>
-                  {Object.entries(details.usage.model_usage ?? {}).map(([m, u]) => (
-                    <div key={m} className="model-picker-details-row">
-                      <span>{shortModelLabel(m)}</span>
-                      <span>
-                        {fmtTokens((u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0))} in
-                        {' · '}{fmtTokens(u.outputTokens)} out
-                        {' · Cost unverified'}
-                      </span>
-                    </div>
-                  ))}
+              {details.usage?.total_lines_added != null && (
+                <div className="model-picker-details-row">
+                  <span>Lines changed</span>
+                  <span>+{details.usage.total_lines_added}/-{details.usage.total_lines_removed ?? 0}</span>
                 </div>
               )}
               {details.binaryVersion?.version && (
