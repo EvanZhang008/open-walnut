@@ -311,8 +311,11 @@ export class SyncReconciler {
   private refusalStreaks = new Map<string, number>();
   private readonly fullPullTimeoutMs: number;
 
+  // The sync dir is made on the first save, never here: this class's singleton is
+  // built when the module is imported, and a dir written into at import is no
+  // longer empty when a host replica's boot looks at it, so the boot leaves its
+  // modes alone (src/replica/boot-guard.ts claimReplicaDir; CI run 39381410474).
   constructor(options: { fullPullTimeoutMs?: number } = {}) {
-    fs.mkdirSync(SYNC_DIR, { recursive: true });
     this.fullPullTimeoutMs = options.fullPullTimeoutMs ?? FULL_PULL_TIMEOUT_MS;
   }
 
@@ -1159,6 +1162,7 @@ export class SyncReconciler {
     state.updatedAt = new Date().toISOString();
     this.stateCache.set(pluginId, state);
     try {
+      fs.mkdirSync(SYNC_DIR, { recursive: true });
       fs.writeFileSync(this.stateFile(pluginId), JSON.stringify(state, null, 2));
     } catch (err) {
       log.web.warn('sync-reconciler: failed to save state', {

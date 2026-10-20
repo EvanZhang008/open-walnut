@@ -52,7 +52,12 @@ async function post(port: number, p: string, body: unknown, headers: Record<stri
   return { status: r.status, body: parsed }
 }
 
+// CI's umask (022), not the Mac shell's 077: under 077 every dir is born 0700, so
+// the modes check below could not see a data dir the boot left as it found it
+// (CI run 39381410474: written into at import, never claimed, left 0755).
+let savedUmask = 0
 beforeAll(async () => {
+  savedUmask = process.umask(0o022)
   const c = await import('../../src/constants.js')
   home = c.WALNUT_HOME
   env = useHostReplicaEnv(home)
@@ -71,6 +76,7 @@ beforeAll(async () => {
 }, 120_000)
 
 afterAll(async () => {
+  process.umask(savedUmask)
   await new Promise<void>((r) => (doorServer ? doorServer.close(() => r()) : r()))
   try { await stopServer?.() } catch { /* already down */ }
   env?.restore()
