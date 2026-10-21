@@ -55,7 +55,9 @@ const CHUNK_TIMEOUT_MS = 120_000
 const STEP_TIMEOUT_MS = 30_000
 const INSTALL_DEADLINE_MS = 25 * 60_000
 const ACTIVATE_DEADLINE_MS = 15 * 60_000
-const UNMANAGED_REST_MS = 60 * 60_000
+// Short: the row tells the user to update the box once, and after they did it
+// should not say so for long. A look costs one small GET.
+const UNMANAGED_REST_MS = 10 * 60_000
 const REFUSED_REST_MS = 10 * 60_000
 const MAX_OFFSET_MISMATCHES = 3
 

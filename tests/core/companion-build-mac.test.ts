@@ -374,14 +374,26 @@ describe('tickCompanionBuild', () => {
     expect(companionBuildView().state).toBe('no_companion')
   })
 
-  it('an older companion (404) is unmanaged and rests an hour', async () => {
+  it('an older companion (404) is unmanaged and rests ten minutes, then looks again', async () => {
     box.mode = 'not_found'
     await tickCompanionBuild('probe')
     expect(companionBuildView().state).toBe('unmanaged')
+    // The user updates the box by hand; the next probe inside the rest does not look.
     box.mode = 'normal'
+    box.running = { id: h.mine, version: '0.6.14', commit: '5408d5875', base: true, trial: false }
     await tickCompanionBuild('probe')
     expect(box.gets).toBe(0)
     expect(companionBuildView().state).toBe('unmanaged')
+    // Ten minutes on, a probe looks again and finds the box on this build.
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 10 * 60_000 + 1)
+    try {
+      await tickCompanionBuild('probe')
+    } finally {
+      clock.mockRestore()
+    }
+    expect(box.gets).toBe(1)
+    expect(companionBuildView().state).toBe('current')
   })
 
   it('a refused credential (401) asks for a new one once and rests', async () => {
