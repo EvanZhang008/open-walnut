@@ -993,6 +993,9 @@ export type SessionControlAction =
   // never writes the conversation file) and hands it over here once the bridge
   // is back; idempotent by turnId. See core/cloud-chat-outbox.ts.
   | 'server.chat.adopt'
+  // The cloud companion holds writes it took while this box was away, in its journal
+  // (core/companion-journal.ts): drain them now (core/companion-journal-drain.ts).
+  | 'server.journal.due'
   // Read ONE page of a conversation's messages from the primary. Same reason as
   // the two actions below: a Personal AI turn sent from the web console runs in a
   // lane-bound CLI session, so the transcript lives in that session's JSONL on the
@@ -1582,6 +1585,14 @@ export async function handleSessionControlRelay(
           if (err instanceof CloudTurnAdoptError) throw new SessionControlError(err.message, err.statusCode);
           throw err;
         }
+        break;
+      }
+      // The companion's journal has records: the handover runs (joined when one does),
+      // and this answers at once; the companion's next sweep asks again if it failed.
+      case 'server.journal.due': {
+        const { drainCompanionJournalNow } = await import('../companion-journal-drain.js');
+        void drainCompanionJournalNow();
+        result = { started: true };
         break;
       }
       // One page of a conversation's messages, read on the box that owns the

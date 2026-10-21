@@ -264,19 +264,25 @@ change to the session daemons. The Mac drains it with the same handover
   `cache/journal/`, one fixed home (the companion has one Mac; the door answers the
   Mac's `home` with it), `keepOpen`, no owner check (one process). An append is one
   O_DSYNC write on the loop; the companion takes a few writes a minute at most.
-- **The writer.** What `handleFollower` checks on a host, for the kinds the
-  companion writes: an op id (`x-walnut-op-id` when the client sent one, else
-  minted), a retry answered from `byOpId`, a field set checked like a host's
-  (`taskFieldsRecord`), the per-actor budget, and only kinds the Mac said it drains
-  (the `kinds` of its last `offline.drain`, kept on disk; none known yet: the old
-  queue).
+- **The writer.** The queue's dispatch stays the one place an away write leaves
+  from (`task-queue.ts dispatchTaskOp`): it tries the Mac live first, as before, and
+  only a write the Mac did not answer becomes a record (`companion-journal.ts`). The
+  record carries the queue's op id, so a live send that landed but timed out is
+  applied once (the task's `applied_ops` key `companion|<opId>|<rev>` is the same on
+  both paths). Only kinds the Mac said it drains are written (the `kinds` of its last
+  `offline.drain`, kept in `cache/journal/drains.json`); none known yet: the old
+  queue. The field set is the queue's (`companionFieldWrites`, the fields the Mac
+  merges), and the journal's own budget (`limit`) applies.
 - **The door.** `/bridge/journal`, mounted beside `/bridge/replica` with the same
   `authenticate` (the Mac's machine credential only), answers the daemon's reply
   shapes. `offline.blob` errors carry `code` (the Mac's blob reader reads it).
-- **The trigger.** When the primary bridge connects, and on the queues' 60 s sweep
-  while records wait, the companion relays `server.journal.due`; the Mac runs the
-  handover for `companion` (joined, if one runs). Nothing new on the bridge
-  allowlist: the relay is the queues' `session.control` path.
+- **The trigger.** The companion relays `server.journal.due`; the Mac runs the
+  handover for `companion` (joined, if one runs). It asks when the primary bridge
+  connects (always: that drain is how the companion learns the kinds, so a Mac that
+  never drained would otherwise never be asked), and while records wait on a frame
+  from the Mac (at most every 15 s: a Mac that slept wakes on a socket that never
+  closed) and on the queues' 60 s sweep. Nothing new on the bridge allowlist: the
+  relay is the queues' `session.control` path. An older Mac refuses the action.
 - **The local write stays.** Unlike a host replica (which never writes its copy
   and reads copy plus overlay), the companion writes its own task store and holds
   those rows against copy rounds until the Mac has them. A row with a pending
@@ -294,10 +300,13 @@ change to the session daemons. The Mac drains it with the same handover
 | 3c | inbox flags (`inbox-state`, folded per letter and flag) with the inbox copy reader; chat turns (`chat-turn`, texts as blobs) with the conversation copy reader | |
 | 3d | task creates (`task-create`) and single moves (`task-move`) | deletes and whole-list reorders keep the task queue: no journal kind takes them (a host refuses both while the Mac is away) |
 
-An op for a task that still has an op in `task-queue` joins that queue, so one
-task's writes reach the Mac in the order they were made. At the start of each
-slice, the files its kind replaces are left to drain the old way (they are
-minutes of writes at most), and new writes take the journal.
+One task's writes reach the Mac in the order they were made: an op for a task
+that still has an op in `task-queue` joins that queue; an op for a task that still
+has a record joins the journal (a second field write coalesces into the record)
+or, when the journal cannot take it (an appended note, a delete), waits in the
+queue, which skips it until the Mac acked the record and flushes it then. At the
+start of each slice, the files its kind replaces are left to drain the old way
+(they are minutes of writes at most), and new writes take the journal.
 
 - **send-queue stays.** A queued send waits on the session's host, not on the Mac,
   and carries delivery fates and held images; the journal adds nothing there.

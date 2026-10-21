@@ -21,8 +21,8 @@
  * (no size cap: a 4 MB body there and a 4 MB reply back); with the cap dropped from
  * the daemon's bridge hello (an older daemon) it goes through server.http as before.
  * The web console's task writes (/api/tasks, /api/focus) take the same path: once on
- * the Mac while it answers, never first on the companion; away, a local write queued
- * by field, which reaches the Mac when it wakes.
+ * the Mac while it answers, never first on the companion; away, a local write kept by
+ * field in the companion's journal (stage 3a), which the Mac drains when it wakes.
  *
  * Isolation as in leader-takeover-live-e2e.test.ts: own HOME, data dir and
  * daemon dir per server under one temp base, fresh random tokens, a `claude`
@@ -303,6 +303,21 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     const dir = path.join(companion.data, 'cache', 'task-queue')
     try { return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort().map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))) } catch { return [] }
   }
+  // Stage 3a: the companion's journal v2 (core/companion-journal.ts), read from its files:
+  // the records not acked yet, and the kinds the Mac said it drains.
+  const journalRecords = (): Array<Record<string, any>> => {
+    const dir = path.join(companion.data, 'cache', 'journal')
+    const lines: Array<Record<string, any>> = []
+    try {
+      for (const f of fs.readdirSync(dir).filter((n) => /^journal-.*\.ndjson$/.test(n))) {
+        for (const l of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) { try { lines.push(JSON.parse(l)) } catch { /* header, torn tail */ } }
+      }
+    } catch { return [] }
+    const acked = new Set(lines.flatMap((l) => (Array.isArray(l.ack) ? l.ack : [])))
+    const superseded = new Set(lines.map((l) => l.supersedes).filter((n) => typeof n === 'number'))
+    return lines.filter((l) => typeof l.seq === 'number' && typeof l.kind === 'string' && !acked.has(l.seq) && !superseded.has(l.seq))
+  }
+  const drainsKnown = (): string[] => { try { return JSON.parse(fs.readFileSync(path.join(companion.data, 'cache', 'journal', 'drains.json'), 'utf8')).kinds ?? [] } catch { return [] } }
   const titled = (list: unknown): string[] => ((list as Array<Record<string, unknown>> | undefined) ?? []).filter((t) => t.title === CONSOLE_TITLE).map((t) => String(t.id))
 
   it('a console task write goes to the Mac while it answers: applied once there, never first on the companion', async () => {
@@ -351,6 +366,9 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
   }, 60_000)
 
   it('the Mac sleeps: the first call waits out its read budget, every later one is answered at once', async () => {
+    // Stage 3a: the Mac drained the companion's journal when its bridge connected, so the
+    // companion knows the Mac takes task-fields records.
+    await waitFor(() => drainsKnown().includes('task-fields'), 30_000, 'the Mac to have drained the companion\'s journal once')
     for (const pid of macPids()) process.kill(pid, 'SIGSTOP')
     const stoppedAt = Date.now()
     const first = await phone('/api/v1/heartbeat/checklist')
@@ -368,14 +386,16 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     const status = (await leaderView()).forward
     expect(status.answeredHere).toMatchObject({ unanswered: 1, 'primary-suspect': 1 })
     expect((status.answeredHere['primary-silent'] ?? 0) + (status.answeredHere['no-bridge'] ?? 0)).toBeGreaterThanOrEqual(1)
-    // WP13 review: away, a console task write runs here at once and is queued for the
-    // Mac by field, its base the value the companion's copy took from the Mac.
+    // WP13 review: away, a console task write runs here at once. Stage 3a: it is kept for
+    // the Mac in the companion's journal by field (not the queue), its base the value the
+    // companion's copy took from the Mac.
     const edit = await phone(`/api/tasks/${encodeURIComponent(consoleTaskId)}`, { method: 'PATCH', body: JSON.stringify({ title: `${CONSOLE_TITLE}, edited away` }) })
     expect(edit).toMatchObject({ status: 200, by: 'companion' })
     expect(edit.ms).toBeLessThan(2_000)
     expect(edit.json.task).toMatchObject({ id: consoleTaskId, title: `${CONSOLE_TITLE}, edited away` })
-    const op = await waitFor(() => queuedOps().find((o) => o.type === 'update' && o.task?.id === consoleTaskId) ?? null, 40_000, 'the console edit to be queued')
-    expect(op.fields?.title).toMatchObject({ base: CONSOLE_TITLE, value: `${CONSOLE_TITLE}, edited away` })
+    const rec = await waitFor(() => journalRecords().find((r) => r.kind === 'task-fields' && r.taskId === consoleTaskId) ?? null, 40_000, 'the console edit in the journal')
+    expect(rec.fields?.title).toMatchObject({ base: CONSOLE_TITLE, value: `${CONSOLE_TITLE}, edited away` })
+    expect(queuedOps().filter((o) => o.task?.id === consoleTaskId)).toEqual([])
   }, 150_000)
 
   it('keeps seven-minute voice and completed text on the companion while the Mac sleeps, then copies both after wake', async () => {
@@ -422,12 +442,14 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
       return x.by === 'primary' ? x : null
     }, 60_000, 'the Mac to answer after it wakes')
     expect(r.json.content).toMatch(/written from the phone/)
-    // The console edit queued while away reaches the Mac, merged by field, and leaves the queue.
+    // The console edit kept while away reaches the Mac (its drain of the journal), merged by
+    // field, and leaves the journal; nothing of it was queued.
     await waitFor(async () => {
       const t = (await mac(`/api/tasks/${encodeURIComponent(consoleTaskId)}`)).json.task
       return t?.title === `${CONSOLE_TITLE}, edited away` && t?.priority === 'important' ? t : null
-    }, 90_000, 'the queued console edit to reach the Mac')
-    await waitFor(() => queuedOps().every((o) => o.task?.id !== consoleTaskId), 30_000, 'the queue to let the console edit go')
+    }, 90_000, 'the journaled console edit to reach the Mac')
+    await waitFor(() => journalRecords().every((r) => r.taskId !== consoleTaskId), 30_000, 'the journal to let the console edit go')
+    expect(queuedOps().filter((o) => o.task?.id === consoleTaskId)).toEqual([])
     expect(titled((await mac('/api/tasks')).json.tasks)).toEqual([])
   }, 200_000)
 

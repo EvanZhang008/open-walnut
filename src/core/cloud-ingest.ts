@@ -220,6 +220,46 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
   }
 }
 
+/**
+ * One command of the Mac's handover to the companion's journal (`POST
+ * /bridge/journal`, web/routes/bridge-journal.ts; stage 3 of
+ * docs/plan/walnut-companion-unified-replica.md): `offline.drain`, `offline.ack`
+ * or `offline.blob`, answered with a daemon's reply shape. Throws when it got no
+ * answer (the handover keeps the records for its next run); a refusal is the
+ * answer `{ok:false, error}`. Each command is idempotent (a redrain hands out the
+ * same frozen records), so a reused socket reset before any answer goes once more.
+ */
+export async function postToCloudJournal(cmd: string, params: Record<string, unknown> = {}, opts: { timeoutMs?: number } = {}): Promise<Record<string, unknown>> {
+  if (cloudIngestResting()) throw new Error('the companion refused this Mac\'s credential')
+  const ep = await resolveEndpoint()
+  if (!ep) throw new Error('no cloud companion is set up')
+  const url = ep.url.replace(/\/ingest$/, '/journal')
+  await acquireSlot()
+  try {
+    const body = await gzip(Buffer.from(JSON.stringify({ cmd, params }), 'utf8'))
+    const send = (): Promise<globalThis.Response> => fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
+      body,
+      signal: AbortSignal.timeout(opts.timeoutMs ?? timeoutMs),
+    })
+    const res = await send().catch((err: unknown) => {
+      if (!staleSocketReset(err)) throw err
+      return send()
+    })
+    const json = await res.json().catch(() => null) as Record<string, unknown> | null
+    if (res.status === 401 || res.status === 403) {
+      unsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
+      endpoint = null
+      throw new Error(`the companion refused this Mac's credential (${res.status})`)
+    }
+    if (!json) throw new Error(`the companion answered ${res.status} without a journal answer (an older build)`)
+    return json
+  } finally {
+    releaseSlot()
+  }
+}
+
 export interface CloudSessionSend {
   host: string
   sessionId: string
