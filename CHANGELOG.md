@@ -6,6 +6,39 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-10-21
+
+### Added
+
+- The replica is the default host server (D13)
+- Notes, a new ask and the replica's logs while the Mac is away
+- The console keeps writing tasks and sessions while the Mac is away
+- The companion forwards through the stream link and boots by policy
+- Replica servers keep copies of routines, conversations, config and prefs
+- The console stays readable while the Mac is away
+- Replica servers hold copies of sessions, requests, boards and inbox
+- A replica answers host reads from its own copy
+- The Mac drains journal v2 and keeps every away edit it can prove
+- Offline journal v2 that survives daemon upgrades
+- A compaction never leaves a session with its old place
+- Every replica server holds an exact copy of the tasks
+
+### Fixed
+
+- A lock release writes over its token instead of cutting the file to zero
+- The reconciler makes its dir on the first save, not at import
+- The device token rides a subprotocol, not the URL
+- The task copy's confirm, host restarts and older copies
+- An away ask is adopted only from its own host, and survives a daemon death mid-start
+- A rename or a complete is not undone by a list read that crossed it
+- A link dialled again after a disconnect notices its next loss
+- Away writes are checked, logged and deduped the way the Mac does them
+- The console's task writes go to the Mac while it answers, and a live op holds its base
+- Copies of routines, conversations, config and prefs hold when the Mac's store is odd
+- Copy kinds keep what the Mac could not read, and every replica guard is tested
+- Files in the Mac's data dir open from the companion's synced copy
+- The reader keeps the sender readable on a narrow reader
+
 ## [0.6.14] - 2026-10-17
 
 ### Added
