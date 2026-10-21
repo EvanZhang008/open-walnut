@@ -212,7 +212,12 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   }
   const chosen = plan.target.cwd === 'auto' ? (place?.cwd ?? plan.source.cwd) : plan.target.cwd;
   const cwd = expandHome(chosen, plan.target.host, profile);
-  const repoRoot = place ? expandHome(place.repoRoot, plan.target.host, profile) : cwd;
+  // A directory the user named is where the workspace goes, even when the host
+  // knows the repository elsewhere (2026-10-21: a transfer back to this Mac into
+  // a new folder set itself up in the original checkout instead).
+  const knownRoot = place ? expandHome(place.repoRoot, plan.target.host, profile) : cwd;
+  const repoRoot = plan.target.cwd === 'auto' ? knownRoot : cwd;
+  const repoKnown = !!place?.known && repoRoot === knownRoot;
   const { ensureCwd } = await import('../sessions/ensure-cwd.js');
   await ensureCwd(cwd, plan.target.host === LOCAL_HOST ? undefined : plan.target.host);
 
@@ -251,7 +256,7 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
 
   const message = composeMessage({
     task, plan, cwd, history: historyText, transcriptPath,
-    workspace: moved && place ? workspaceInstructions(moved, { repoRoot, known: place.known }) : undefined,
+    workspace: moved && place ? workspaceInstructions(moved, { repoRoot, known: repoKnown }) : undefined,
     // A summary that knows nothing says nothing a session on the same machine needs.
     host: profile && (plan.changesHost || profile.probed || profile.notes.length > 0)
       ? hostProfileSummary(profile, hostLabel(plan.target.host)) : undefined,
