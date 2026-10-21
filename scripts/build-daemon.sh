@@ -72,6 +72,7 @@ SOURCES=(
   src/providers/session-changes-core.ts
   src/providers/usage-host-core.ts
   src/providers/usage-scan-core.ts
+  src/providers/session-cost-core.ts
   src/providers/usage-reconcile-core.ts
   src/providers/usage-budget-core.ts
   src/providers/usage-budget-persistence.ts
