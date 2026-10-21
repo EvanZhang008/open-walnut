@@ -123,7 +123,7 @@ describe('mergeText', () => {
 import { runOfflineHandover, _resetOfflineHandoverForTesting, _setHandoverBackoffForTesting } from '../../../src/core/offline-handover.js'
 import { addTask, getTask, deleteTask, createFolder, getProjectRecord, togglePin, listTasks } from '../../../src/core/task-manager.js'
 import { closeDb } from '../../../src/core/task-db.js'
-import { _resetHostClocksForTesting } from '../../../src/core/offline-merge/host-clock.js'
+import { _resetHostClocksForTesting, hostClockOffset, shiftHostTime } from '../../../src/core/offline-merge/host-clock.js'
 import { _setLedgerFileForTesting } from '../../../src/core/offline-merge/ledger.js'
 import fs from 'node:fs'
 import { WALNUT_HOME } from '../../../src/constants.js'
@@ -194,8 +194,12 @@ describe('the drain applies task-fields', () => {
     expect(first.acked).toEqual([rec.seq])
     const t = await getTask(id)
     expect(t).toMatchObject({ title: 'After', priority: 'immediate' })
-    expect(t.field_at?.title).toBe(new Date(at).toISOString())
-    expect(t.field_at?.priority).toBe(new Date(at).toISOString())
+    // The drain shifts the record time by the clock it measured on this link. The fake
+    // daemon shares this clock, so the offset is only the rounding of rtt/2 (CI run
+    // 39562756085: 1 ms), never zero by construction.
+    expect(Math.abs(hostClockOffset('marina') ?? 0)).toBeLessThan(50)
+    expect(t.field_at?.title).toBe(new Date(shiftHostTime('marina', at)).toISOString())
+    expect(t.field_at?.priority).toBe(new Date(shiftHostTime('marina', at)).toISOString())
     expect(first.drainIds).toEqual([])
     const again = await drain([{ ...rec, seq: ++seq, opId: nextOp() }])
     expect(again.result.replayed).toBe(0)

@@ -16,6 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
+import { SendHeldError } from '../../src/providers/delivery-failure.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 
@@ -234,9 +235,13 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
       .mockResolvedValueOnce({ ok: false, reason: 'rejected' })
     const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('resume text')
     try {
-      await expect(mgr.start({ args: [], cwd: '/tmp', message: 'resume text', resume: true,
+      // A refusal is not a death verdict (5408d5875): the first line is held, and the
+      // start still rejects, so the resume is never counted a success.
+      const started = mgr.start({ args: [], cwd: '/tmp', message: 'resume text', resume: true,
         markers: [{ message: 'resume text', messageId: 'qm-failed' }], onOutput, onExit,
-      })).rejects.toThrow('queued message was not delivered')
+      })
+      await expect(started).rejects.toBeInstanceOf(SendHeldError)
+      await expect(started).rejects.toThrow('the session host refused delivery (rejected)')
       expect(send.mock.calls.map(([command]) => command)).toEqual(['start', 'send'])
     } finally {
       connect.mockRestore()
@@ -252,7 +257,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: false, reason: 'rejected' })
     const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('text')
     try {
-      expect(await mgr.writeMessage('text', { markers: [{ message: 'text', messageId: 'qm-failed' }] })).toBe(false)
+      await expect(mgr.writeMessage('text', { markers: [{ message: 'text', messageId: 'qm-failed' }] })).rejects.toBeInstanceOf(SendHeldError)
       expect(send.mock.calls).toEqual([['send', { sid: 'sid-test', message: 'text' }]])
     } finally {
       capability.mockRestore()
