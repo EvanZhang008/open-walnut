@@ -3,9 +3,11 @@
  * (docs/plan/walnut-control-plane.md "Model and effort while the Mac is away").
  * Cloud box only; while the Mac answers, the phone's call is the Mac's (web/v1-forward/).
  *
- * Reading: the session's row in the projection the Mac last pushed (its CLI
- * model, effort and host) and that host's model catalog riding beside it, or
- * the static registry when the Mac never sent one. Same shape the Mac answers.
+ * Reading: the session's row in the session projection (its CLI model, effort
+ * and host) and that host's model catalog beside it, or the static registry when
+ * the Mac never sent one. Same shape the Mac answers. The projection is the one
+ * built from the box's copies of the Mac's sessions and model catalogs once it
+ * holds them (stage 2c, core/companion-sessions.ts), else the one the Mac pushed.
  *
  * Changing: only while the companion leads the session's host. The host's
  * daemon writes the CLI's own apply_flag_settings line into the live session
@@ -46,7 +48,7 @@ function error(status: number, code: string, message: string): CopyAnswer {
 }
 
 export function createModelCopy(deps: ModelCopyDeps) {
-  /** What this companion applied on a host since the Mac's last push: shown until the Mac pushes again. */
+  /** What this companion applied on a host since the Mac's rows were read: shown until newer ones arrive. */
   const appliedHere = new Map<string, { cliModel?: string; effort?: string; at: number }>()
 
   async function rowOf(sessionId: string): Promise<{ row: ProjectedSession; projection: SessionProjection } | null> {

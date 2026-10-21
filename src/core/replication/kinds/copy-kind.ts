@@ -336,6 +336,8 @@ async function purgeKind(kind: CopyKind<unknown>, target: CopyTarget, st: KindSt
       purged.add(st)
       const removed = Number(r.reply.removed) || 0
       if (removed > 0) log.session.info('copies: the host dropped a kind its choice turned off', { target: target.id, kind: kind.kind, removed })
+      // The companion reads the pushed session projection again: it goes there at once.
+      if (target.kind === 'companion' && kind.choice === 'sessions') (await import('../../projection-push-state.js')).forgetUnread()
       return removed
     }
     if (!r.ok && (r.outcome === 'unsupported' || REST_ERRORS.has(r.error ?? ''))) purged.add(st)
@@ -352,7 +354,7 @@ const copySoons = new Set<(kind?: string) => void>()
 const copySoon = (kind?: string): void => { for (const soon of copySoons) soon(kind) }
 
 /** Every copy kind's name (web/routes/replicas-status.ts accepts a confirm for these). */
-export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies'] as const
+export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs'] as const
 
 /**
  * The user confirmed a removal the half rule refused three rounds in a row (the

@@ -267,7 +267,8 @@ answers, it is the Mac's, as every other call. While the Mac is away the
 companion answers from what it holds (`src/core/sessions/model-options-copy.ts`):
 
 ```
-phone ──► companion ──(Mac away)──► the session's row in the Mac's last push
+phone ──► companion ──(Mac away)──► the session's row in its copy of the Mac's
+                                     sessions, else the Mac's last push
                                      (cli_model, effort, host) + that host's
                                      model catalog (host_model_catalogs)
        change, while it leads the host:
@@ -285,7 +286,9 @@ phone ──► companion ──(Mac away)──► the session's row in the Mac
 - **Reading**: the session's row carries its CLI model and the effort in effect;
   the push to the companion carries each host's catalog beside the rows (only
   the models and their age; the Mac's own cache and the phone's projection stay
-  without them). A host with no catalog gets the static model list. The answer
+  without them). A companion holding its copies of the Mac's sessions and of the
+  `model-catalogs` kind reads both from those instead (stage 2c of
+  `walnut-companion-unified-replica.md`). A host with no catalog gets the static model list. The answer
   is the Mac's shape plus `offline: true` and `asOf`. A session the copy does not
   list is asked of the Mac as before.
 - **Changing**: only while the companion leads the session's host, and only for

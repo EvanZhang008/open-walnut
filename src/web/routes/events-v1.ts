@@ -367,8 +367,9 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
   let tasks: unknown[] = []
   try {
     if (CLOUD_MODE) {
-      // Sessions: the bridge-pushed projection cache (legacy git-synced file
-      // as transition fallback) is the replica's best truth.
+      // Sessions: the projection from the box's copy of the Mac's sessions once
+      // held (stage 2c), else the bridge-pushed projection cache (legacy
+      // git-synced file as transition fallback).
       const { readSessionProjection } = await import('../../core/session-projection.js')
       sessions = (await readSessionProjection())?.sessions ?? []
     } else {

@@ -101,6 +101,8 @@ describe('projection and hash', () => {
     for (const f of [...PROCESS_FIELDS, 'workerPid', 'helper_pid', 'pgid', 'sessionPgid', 'sideOutputFile', 'profile']) expect(p, f).not.toHaveProperty(f)
     expect(JSON.stringify(p)).not.toContain('never-copied')
     expect(p.process_status).toBe('running')
+    // The stop the user asked for is a label too: the companion's stop fence reads it.
+    expect(p.stopRequest).toEqual({ id: 's', requestedAt: T0, state: 'pending' })
     expect(p.title).toBe('Session 1')
     expect(p.pendingPermission).toEqual({ requestId: 'r1', receivedAt: T0 })
     expect(p.status_history).toEqual([{ from: 'running', to: 'stopped', at: T0 }])
@@ -119,6 +121,8 @@ describe('projection and hash', () => {
     expect(sessionCopyHash(JSON.parse(JSON.stringify(base)))).toBe(sessionCopyHash(base))
     // A process field never moves the hash (the follower projects again before it stores).
     expect(sessionCopyHash({ ...base, pid: 1 } as SessionRecord)).toBe(sessionCopyHash(base))
+    // A stop does: a pending stop must reach the companion before the session stops.
+    expect(sessionCopyHash({ ...base, stopRequest: { id: 's', requestedAt: T0, state: 'pending' } })).not.toBe(sessionCopyHash(base))
   })
 })
 
@@ -139,6 +143,19 @@ describe('a host replica keeps the sessions copy', () => {
     // The shared handle reads only; the copy's one writer is the apply connection.
     expect(sessionDb.getDb()!.pragma('query_only', { simple: true })).toBe(1)
     expect(() => sessionDb.getDb()!.prepare("UPDATE sessions SET title = 'x'").run()).toThrow(/readonly/)
+  })
+
+  it('a stop is sent but never stored here: the replica\'s stop machinery finds no pending stop of the Mac\'s', async () => {
+    leaderRows[2] = { ...leaderRows[2], stopRequest: { id: 'stop-1', requestedAt: T0, state: 'pending' } } as SessionRecord
+    expect(await round()).toMatchObject({ action: 'synced', sent: 12 })
+    expect(String(rawRow('sid-marina-00002')!.payload ?? '')).not.toContain('stopRequest')
+    expect((await tracker.getSessionByClaudeId('sid-marina-00002'))?.stopRequest).toBeUndefined()
+    expect(await tracker.listPendingSessionStops('__local__')).toEqual([])
+    // The follower keeps the hash the leader sent (the row with its stop): the next round is unchanged.
+    forgetKindManifests(['sessions'])
+    const from = h.calls.length
+    expect((await round()).action).toBe('unchanged')
+    expect(stepsSince(h.calls, from)).toEqual(['status:sessions'])
   })
 
   it('a digest ends an unchanged round: the sweep sends one status step, no manifest', async () => {

@@ -234,25 +234,51 @@ Mac, and the readers switch then (the inbox in 3c, the conversations in 3e, belo
 The sessions copy lives in its own `cache/replica/home/sessions.sqlite`
 (`session-db.ts` `applyCompanionSessionCopy`, the box's live registry untouched:
 it holds the sessions the box runs itself). Rows are projected again before they
-are stored, so no stored row names a process.
+are stored, so no stored row names a process. A row keeps `stopRequest` (the stop
+the user asked for, a label like `process_status`): the companion's stop fence
+reads it. A host replica's live store leaves it out (`HOST_STORE_DROPPED_FIELDS`
+in `kinds/sessions.ts`), because the stop machinery there would act on a pending one.
 
-The first reader is the session list (`GET /api/v1/sessions`): once a whole round
-arrived, the box builds it the way the Mac builds the pushed one
-(`session-projection.ts` `buildSessionProjection`, same eligibility, order and
-budgets) over the copy's rows, the task fields from its task copy, the host labels
-from its config copy, with `x-walnut-copy-as-of` (`companion-sessions.ts`). The
-box's own sessions are joined in as before. The copy is the Mac's whole store
-(about 5,000 rows, 18 MB of JSON measured), so the rows a list can show (not
-archived, live or active in the last 30 days) are parsed once, in slices, and then
-kept up to date by every copy write; a write that lands while they are parsed is
-applied after. A purge (the kind turned off for the companion) puts the pushed
-list back.
+The hosts' model catalogs are a kind of their own, `model-catalogs`
+(`kinds/model-catalogs.ts`, `cache/replica/model-catalogs.json`): one row per host
+from the Mac's catalog store, without the cwd and spawn time only the Mac uses.
+Not in the config copy (that is config.yaml through an allowlist, and a host's
+`getConfig` reads it) and not in prefs (the user's layout): the catalogs have their
+own store and their own write, which brings a round. The kind rides the `sessions`
+choice, so turning sessions off for a box drops both.
 
-Still on the pushed projection: the model picker (its host catalogs ride the
-push), the transcript tails, the events snapshot. They move to the copy next, and
-the projection push stops once none of them reads it. `cloudOwnedSession` then
-reads ownership from the row (`owner: 'cloud'`, written where the box starts a
-session) instead of inferring it from an empty host.
+Every companion reader of the session projection reads the copy once a whole round
+arrived, through the one seam (`session-projection.ts` `readSessionProjection`, and
+`readSessionProjectionWithAsOf` where the answer carries `x-walnut-copy-as-of`):
+the box builds the projection the way the Mac builds the pushed one
+(`buildSessionProjection`, same eligibility, order and budgets) over the copy's
+rows, the task fields from its task copy, the host labels from its config copy,
+and the catalogs from its catalogs copy (`companion-sessions.ts`). The readers:
+the session list and `/sessions/recent`, the events snapshot, the model picker
+(`model-options-copy.ts`), the session controls while the box leads a host
+(`host-session-control.ts`), the backup gateway's session list, the stop fence
+(`cloud-stop-fence.ts`), and the lookups of one session's host (`cloud-session-host.ts`,
+the degraded detail, the host's name in a sentence, the media route). The box's own
+sessions are joined in as before. The copy is the Mac's whole store (about 5,000
+rows, 18 MB of JSON measured), so the rows a view can show (not archived, live or
+active in the last 30 days) are parsed once, in slices, and then kept up to date by
+every copy write; a write that lands while they are parsed is applied after.
+Before the sessions copy is held, and after a purge, the pushed projection answers
+as before; until the catalogs copy is held, the picker takes the catalogs the last
+push carried.
+
+The push stops for such a box. Once it holds both copies, the companion answers the
+Mac's sessions projection push (`POST /bridge/ingest`) with `unread: true`
+(`companionReadsSessionsCopy`), still writing it as the fallback. The Mac then sends
+that push on neither lane for 10 minutes (`projection-push-state.ts` `noteUnread`),
+after which one push asks again; a companion build change or the Mac purging the
+box's sessions copy ends the rest at once. An older companion never says the word
+and keeps getting every push; an older Mac ignores it. The task list and the
+transcript tails are pushed as before (the tails are not part of this stage).
+
+`cloudOwnedSession` keeps reading the box's live registry: with the copy in a file
+of its own, that registry holds only the sessions the box runs itself, so an empty
+host there still means the box's own.
 
 ## Stage 3: writes while the Mac is away go to journal v2
 

@@ -22,7 +22,12 @@ import { log } from '../logging/index.js'
 
 const gzip = promisify(zlib.gzip)
 
-export type CloudIngestOutcome = 'sent' | 'failed' | 'unsupported'
+/**
+ * 'unread': delivered, and the companion said it no longer reads this payload (a
+ * session projection once it lists sessions from its copy, stage 2c of
+ * docs/plan/walnut-companion-unified-replica.md): the caller stops pushing it there.
+ */
+export type CloudIngestOutcome = 'sent' | 'unread' | 'failed' | 'unsupported'
 
 const INGEST_TIMEOUT_MS = 30_000
 const UNSUPPORTED_BACKOFF_MS = 10 * 60_000
@@ -84,6 +89,14 @@ async function lookupEndpoint(gen: number): Promise<{ url: string; token: string
   return value
 }
 
+function unreadAnswer(text: string): boolean {
+  try {
+    return (JSON.parse(text) as { unread?: unknown } | null)?.unread === true
+  } catch {
+    return false
+  }
+}
+
 /** Is the lane worth trying right now (no known refusal in the last 10 minutes)? */
 export function cloudIngestResting(): boolean {
   return Date.now() < unsupportedUntil
@@ -123,8 +136,9 @@ export async function postToCloudIngest(
       signal: AbortSignal.timeout(timeoutMs),
     })
     status = res.status
-    await res.arrayBuffer().catch(() => undefined) // release the socket
-    if (res.ok) return 'sent'
+    // Read whole (it also releases the socket): a few bytes of JSON.
+    const answer = await res.text().catch(() => '')
+    if (res.ok) return unreadAnswer(answer) ? 'unread' : 'sent'
     if (status === 404 || status === 405 || status === 401 || status === 403) {
       unsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
       endpoint = null // a refused token may be re-minted before the lane is tried again

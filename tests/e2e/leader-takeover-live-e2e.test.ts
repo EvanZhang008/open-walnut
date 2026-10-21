@@ -513,14 +513,17 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
       return r.json.primaryHeard === true ? r : null
     }, 120_000, 'the companion to hear the heartbeat')
     expect(box.json).toMatchObject({ role: 'backup', leading: [] })
-    // The companion knows both sessions (the projection the primary pushes): it needs them to route.
-    await waitFor(() => {
+    // The companion knows both sessions: it needs them to route. From its copy of the
+    // primary's sessions (the copy's state names every row it holds), or, before that
+    // copy, from the projection the primary pushes (which stops once the copy serves
+    // the companion's readers: docs/plan/walnut-companion-unified-replica.md, 2c).
+    const knows = (file: string): boolean => {
       try {
-        const p = JSON.parse(fs.readFileSync(path.join(companion.data, 'cache', 'projections', 'sessions.json'), 'utf8'))
-        const text = JSON.stringify(p)
+        const text = fs.readFileSync(path.join(companion.data, 'cache', file), 'utf8')
         return text.includes(A) && text.includes(B)
       } catch { return false }
-    }, 120_000, 'the session projection on the companion')
+    }
+    await waitFor(() => knows(path.join('replica', 'sessions.json')) || knows(path.join('projections', 'sessions.json')), 120_000, 'the primary\'s sessions on the companion')
     // Stays that way while the Mac is up.
     await sleep(2 * T)
     expect(await companionLeads()).toEqual([])

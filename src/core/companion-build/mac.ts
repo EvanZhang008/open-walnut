@@ -128,14 +128,16 @@ function setView(gen: number, next: Partial<CompanionBuildView> & { state: Compa
  * started counts too: a rest from before it is gone with the process anyway.
  */
 function companionBuildChanged(was: string | null, now: string): void {
-  void Promise.all([import('../replication/replica-status.js'), import('../replication/kinds/copy-kind.js'), import('../host-replica.js'), import('../cloud-ingest.js')])
-    .then(([status, copies, notes, ingest]) => {
+  void Promise.all([import('../replication/replica-status.js'), import('../replication/kinds/copy-kind.js'), import('../host-replica.js'), import('../cloud-ingest.js'), import('../projection-push-state.js')])
+    .then(([status, copies, notes, ingest, pushState]) => {
       status.forgetTarget('companion')
       copies.copyTargetChanged()
       // The notes, memory and skills copy too (stage 4): an older build's rest ends, the round goes now.
       ingest.forgetCloudHostReplicaRest()
       notes.forgetCompanionHostReplica()
       void notes.syncCompanionHostReplica()
+      // Whether it reads the pushed session projection is asked again (stage 2c).
+      pushState.forgetUnread()
       if (was) log.session.info('companion build: the companion changed build, its copies go again', { was, now })
     })
     .catch(() => { /* the next sweep asks again */ })

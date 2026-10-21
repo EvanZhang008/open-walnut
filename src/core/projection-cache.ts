@@ -34,7 +34,7 @@ import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
 import * as ingest from './cloud-ingest.js';
 import {
-  INGEST_LANE, SELF_HEAL_INTERVAL_MS, alreadyHeld, forgetDelivery, preparePush, rememberDelivery,
+  INGEST_LANE, SELF_HEAL_INTERVAL_MS, alreadyHeld, forgetDelivery, noteUnread, preparePush, rememberDelivery, unreadResting,
   _resetProjectionPushStateForTesting,
 } from './projection-push-state.js';
 
@@ -246,6 +246,8 @@ export function pushProjectionToCloud(
  *      and deliberately NOT retried on the bridge (see that file).
  *   2. The daemon's bridge `mobile-event`, when the replica has no ingest route
  *      or no companion is configured.
+ * Neither, while the key rests after the replica answered a push of it `unread`
+ * (the companion reading its sessions copy: projection-push-state.ts noteUnread).
  * `bridgeConnId` lets the sweep ask the daemon which bridge connection is up
  * once instead of per push.
  */
@@ -255,6 +257,9 @@ export async function pushProjectionToCloudNow(
   opts?: { bridgeConnId?: () => Promise<string | null> },
 ): Promise<ProjectionPushOutcome> {
   if (CLOUD_MODE) return 'skipped'; // cloud is the receiver, never the pusher
+  // The replica said it does not read this (its sessions copy serves its readers):
+  // not sent on either lane, and not even serialized, until the rest ends.
+  if (unreadResting(pushKey(kind, payload))) return 'unchanged';
   try {
     let prepared: { wire: string; hash: string } | null;
     try {
@@ -280,15 +285,17 @@ export async function pushProjectionToCloudNow(
     // BOTH lanes run inside the key's order, so a push that finds the lane
     // resting cannot overtake an ingest request of the same key still in flight.
     return await ingest.runLatestPerKey(key, async (): Promise<ProjectionPushOutcome> => {
+      if (unreadResting(key)) return 'unchanged'; // answered `unread` while this one waited
       if (ingest.cloudIngestResting()) return bridge();
       if (alreadyHeld(kind, key, prepared.hash, INGEST_LANE)) {
         settleTranscript(kind, payload);
         return 'unchanged';
       }
       const outcome = await ingest.postToCloudIngest(kind, prepared.wire);
-      if (outcome === 'sent') {
+      if (outcome === 'sent' || outcome === 'unread') {
         rememberDelivery(key, prepared.hash, INGEST_LANE);
         settleTranscript(kind, payload);
+        if (outcome === 'unread') noteUnread(key);
         return 'sent';
       }
       if (outcome === 'failed') {
