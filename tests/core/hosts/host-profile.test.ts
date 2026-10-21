@@ -87,6 +87,9 @@ describe('learning a host over time', () => {
 
   it('refuses an alias that is not a plain host name', async () => {
     await expect(readHostProfile('../etc')).rejects.toThrow(/Invalid host alias/);
+    // This Mac and the cloud box have internal aliases; both keep a profile.
+    await expect(readHostProfile('__local__')).resolves.toMatchObject({ host: '__local__' });
+    await expect(readHostProfile('__cloudbox__')).resolves.toMatchObject({ host: '__cloudbox__' });
   });
 
   it('a repository key never carries credentials', () => {

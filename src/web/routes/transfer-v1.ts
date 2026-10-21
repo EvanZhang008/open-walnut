@@ -54,9 +54,14 @@ transferV1Router.get('/tasks/:id/transfer-options', async (req: Request, res: Re
     const hosts = await enabledHosts()
     const engines = [...ENGINE_REGISTRY.values()].map((c) => ({ id: c.id, displayName: c.displayName }))
     const { readHostProfile } = await import('../../core/hosts/host-profile.js')
+    const { getConfig } = await import('../../core/config-manager.js')
+    const { hostDisplayName } = await import('../../core/hosts/host-display-name.js')
+    const hostRows = (await getConfig()).hosts ?? {}
     const profiles = await Promise.all([LOCAL_HOST, ...hosts].map(async (alias) => {
       const p = await readHostProfile(alias).catch(() => null)
-      return { alias, kind: p?.kind ?? 'unknown', probedAt: p?.probed?.probedAt ?? null }
+      // The name a person knows the host by (the cloud box's alias is internal).
+      const label = alias === LOCAL_HOST ? undefined : hostDisplayName(alias, (hostRows[alias] as { label?: unknown } | undefined)?.label)
+      return { alias, ...(label && label !== alias ? { label } : {}), kind: p?.kind ?? 'unknown', probedAt: p?.probed?.probedAt ?? null }
     }))
     res.json({
       taskId: task.id,

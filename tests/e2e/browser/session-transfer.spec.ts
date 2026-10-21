@@ -35,12 +35,15 @@ const OPTIONS = {
   hosts: [
     { alias: '__local__', kind: 'laptop', probedAt: null },
     { alias: 'devbox', kind: 'dev-box', probedAt: null },
+    { alias: '__cloudbox__', label: 'Cloud', kind: 'public-cloud-vm', probedAt: null },
   ],
   options: [
     { engine: 'claude', host: '__local__' },
     { engine: 'claude', host: 'devbox' },
+    { engine: 'claude', host: '__cloudbox__' },
     { engine: 'codex', host: '__local__' },
     { engine: 'codex', host: 'devbox', blockedReason: BLOCKED },
+    { engine: 'codex', host: '__cloudbox__', blockedReason: BLOCKED },
   ],
 }
 
@@ -117,6 +120,9 @@ test('transfer from the session menu: blocked pair, nothing-changes guard, submi
   await expect(dialog.getByTestId('xfer-host-__local__')).toHaveAttribute('aria-checked', 'true')
   await expect(dialog.getByTestId('xfer-host-devbox')).toContainText('Dev box')
   await expect(dialog.getByTestId('xfer-host-__local__')).toContainText('Laptop')
+  // An internal alias shows the host's name, never the alias.
+  await expect(dialog.getByTestId('xfer-host-__cloudbox__')).toContainText('Cloud')
+  await expect(dialog.getByTestId('xfer-host-__cloudbox__')).not.toContainText('__cloudbox__')
 
   // Nothing would change: same engine, host and directory.
   const submit = dialog.getByTestId('xfer-submit')
