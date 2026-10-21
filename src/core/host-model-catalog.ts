@@ -57,6 +57,8 @@ let cache: StoreShape | null = null;
 let loadPromise: Promise<StoreShape> | null = null;
 // Serialize writes so concurrent session fetches can't interleave partial files.
 let writeChain: Promise<void> = Promise.resolve();
+// Told after every accepted write (onHostModelCatalogWritten).
+const writeListeners = new Set<() => void>();
 
 async function load(): Promise<StoreShape> {
   if (cache) return cache;
@@ -131,7 +133,14 @@ export async function saveHostModelCatalog(
     ...(sourceSpawnTs ? { sourceSpawnTs } : {}),
   };
   persist();
+  for (const cb of writeListeners) { try { cb(); } catch { /* a listener never fails a write */ } }
   return true;
+}
+
+/** Called after every accepted catalog write (the companion's copy of the catalogs follows it). Returns the stop. */
+export function onHostModelCatalogWritten(cb: () => void): () => void {
+  writeListeners.add(cb);
+  return () => { writeListeners.delete(cb); };
 }
 
 /** Last-known catalog for a host, or null if this host never answered list_models. */

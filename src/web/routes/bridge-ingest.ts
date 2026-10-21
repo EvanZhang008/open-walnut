@@ -68,6 +68,15 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
   next()
 }
 
+async function sessionsProjectionUnread(kind: string, data: unknown): Promise<boolean> {
+  if (kind !== 'projection-upsert' || (data as { which?: unknown } | null)?.which !== 'sessions') return false
+  try {
+    return await (await import('../../core/companion-sessions.js')).companionReadsSessionsCopy()
+  } catch {
+    return false
+  }
+}
+
 async function ingest(req: Request, res: Response): Promise<void> {
   const started = Date.now()
   const body = req.body as { kind?: unknown; data?: unknown } | undefined
@@ -83,7 +92,11 @@ async function ingest(req: Request, res: Response): Promise<void> {
       res.status(400).json({ error: 'invalid_payload' })
       return
     }
-    res.json({ ok: true })
+    // A session projection this box no longer reads (its readers read its copy of
+    // the Mac's sessions, stage 2c): the answer says so, and the Mac stops pushing
+    // it here (projection-push-state.ts). Still written: it is the fallback should
+    // the copy go away. An older Mac ignores the word.
+    res.json(await sessionsProjectionUnread(kind, body?.data) ? { ok: true, unread: true } : { ok: true })
     log.web.debug('bridge ingest: stored', {
       kind,
       wireBytes: Number(req.headers['content-length']) || null,

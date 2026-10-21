@@ -6,14 +6,17 @@
  *   leader    session-tracker's rows, each sent as its projection: no pid, no
  *             output file, no process group, no field that names a process or
  *             a position in one (PROCESS_FIELDS); `process_status` stays as a
- *             label. The hash leaves the volatile fields out (lastActiveAt,
- *             activity, contextTokens), so a busy session costs no put until
- *             something else about it changes.
+ *             label, and so does `stopRequest` (the stop the user asked for, which
+ *             the companion's stop fence reads). The hash leaves the volatile
+ *             fields out (lastActiveAt, activity, contextTokens), so a busy
+ *             session costs no put until something else about it changes.
  *   follower  the replica's OWN sessions.sqlite (never the Mac's file), written
  *             only through session-db's apply connection; rows are projected
  *             again before they are stored, so a row that names a pid never
- *             lands. Refuses everywhere but the replica program on a host (`404 unknown_kind`,
- *             what the companion and the leader answered before this kind).
+ *             lands, and a host replica's live store leaves `stopRequest` out too
+ *             (HOST_STORE_DROPPED_FIELDS). The cloud companion keeps them in a
+ *             file of its own (stage 2c of docs/plan/walnut-companion-unified-replica.md).
+ *             Refuses on the plain host server and the leader (`404 unknown_kind`).
  *
  * Unordered, half rule from 200 rows, digest (copy-kind.ts shortcut).
  */
@@ -41,7 +44,7 @@ export const SESSIONS_REMOVAL_FLOOR = 200
 export const PROCESS_FIELDS: readonly string[] = [
   'pid', 'outputFile', 'pgid', 'costWatermark', 'costWatermarkPid', 'lineLifecyclePid', 'lineQueuedPid',
   'consumedOffset', 'streamEpoch', 'acpRuntimeId', 'acpJournalPath', 'pendingResumeSessionAt',
-  'appliedAppendSystemPrompt', 'stopRequest', 'autoRecover', 'mcpMountStatus', 'hostname',
+  'appliedAppendSystemPrompt', 'autoRecover', 'mcpMountStatus', 'hostname',
   // The spawn bundle (system prompt, MCP servers with their env): it only feeds
   // the Mac's argv builder, and an MCP server's env may hold a credential.
   'profile',
@@ -50,6 +53,21 @@ const PROCESS_SET = new Set(PROCESS_FIELDS)
 
 export function isProcessField(key: string): boolean {
   return PROCESS_SET.has(key) || /(^|_)pid$|[a-z0-9]Pid$|pgid|Pgid/.test(key) || /(^|_)output_?[fF]ile$|[a-z]OutputFile$/.test(key)
+}
+
+/**
+ * Sent, hashed, and kept by the companion's copy file, but never written to a host
+ * replica's live store: a pending stop there would be acted on as the replica's own
+ * (session-stop.ts takes every pending `stopRequest` in its store and asks the daemon
+ * again). The companion's copy is read by nothing that acts, only by its readers
+ * (the stop fence, the session's host lookup).
+ */
+export const HOST_STORE_DROPPED_FIELDS: readonly string[] = ['stopRequest']
+
+function forHostStore(row: SessionRecord): SessionRecord {
+  const out: Record<string, unknown> = { ...row }
+  for (const f of HOST_STORE_DROPPED_FIELDS) delete out[f]
+  return out as unknown as SessionRecord
 }
 
 /** Left out of the hash (still sent with the next real change). */
@@ -203,9 +221,9 @@ export function sessionsFollower(): RowSetFollower {
     apply: async ({ rows, removeIds }) => {
       const db = await import('../../session-db.js')
       // Projected again here: whatever a leader sends, no stored row names a process.
-      const change = { rows: (rows ?? []).map(projectSession), removeIds }
-      if (onCompanion()) db.applyCompanionSessionCopy(companionCopyFile(), change)
-      else db.applySessionCopy(change)
+      const projected = (rows ?? []).map(projectSession)
+      if (onCompanion()) db.applyCompanionSessionCopy(companionCopyFile(), { rows: projected, removeIds })
+      else db.applySessionCopy({ rows: projected.map(forHostStore), removeIds })
       return { skipped: [] }
     },
     held: async () => (await import('../../../replica/journal-overlay.js')).journalHeld('sessions'),

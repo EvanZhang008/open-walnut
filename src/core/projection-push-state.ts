@@ -99,7 +99,39 @@ export function preparePush(payload: unknown): { wire: string; hash: string } | 
   return { wire, hash: sha1(`${headJson}\n${restJson}`) }
 }
 
+// -- Payloads the replica does not read ------------------------------------------
+
+/**
+ * How long a push the replica answered `unread` rests (the companion lists sessions
+ * from its copy, stage 2c of docs/plan/walnut-companion-unified-replica.md). After it,
+ * one push goes again and its answer decides anew, so a companion whose copy went
+ * away (or an older build) gets the projection back within this. Ended at once when
+ * the companion changes build or the Mac drops its sessions copy (forgetUnread).
+ */
+export const UNREAD_REST_MS = 10 * 60_000
+const unreadUntil = new Map<string, number>()
+
+/** The replica answered this key's push `unread`: no push of it before the rest ends. */
+export function noteUnread(key: string | null, now = Date.now()): void {
+  if (key) unreadUntil.set(key, now + UNREAD_REST_MS)
+}
+
+/** True while this key's push rests after an `unread` answer. */
+export function unreadResting(key: string | null, now = Date.now()): boolean {
+  const until = key ? unreadUntil.get(key) : undefined
+  if (until === undefined) return false
+  if (now < until) return true
+  unreadUntil.delete(key!)
+  return false
+}
+
+/** Every `unread` rest ends: the next push of each key goes and asks again. */
+export function forgetUnread(): void {
+  unreadUntil.clear()
+}
+
 /** Tests only. */
 export function _resetProjectionPushStateForTesting(): void {
   records.clear()
+  unreadUntil.clear()
 }

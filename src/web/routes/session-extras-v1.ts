@@ -114,16 +114,18 @@ sessionExtrasV1Router.get('/sessions/list-dirs', async (req: Request, res: Respo
 // sessions in the SAME slim projection shape as the frozen GET /v1/sessions
 // (one v1 session shape everywhere; the web's raw-record shape stays
 // internal). Works on both boxes: the primary refreshes the projection
-// inline, a REPLICA serves the git-synced file. Registered BEFORE the :id
+// inline, the companion serves its sessions copy (else the pushed file). Registered BEFORE the :id
 // routes (and forwarded by session-lifecycle's RESERVED_SESSION_SUBPATHS).
 sessionExtrasV1Router.get('/sessions/recent', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const limit = Math.min(Math.max(parseInt(String(req.query.limit), 10) || 10, 1), 100)
-    const { readSessionProjection, exportSessionProjection } = await import('../../core/session-projection.js')
+    const { readSessionProjectionWithAsOf, exportSessionProjection } = await import('../../core/session-projection.js')
     if (!CLOUD_MODE) {
       await exportSessionProjection().catch(() => { /* serve last good file below */ })
     }
-    const projection = await readSessionProjection()
+    // The companion: from its copy of the Mac's sessions once held (stage 2c).
+    const { projection, copyAsOf } = await readSessionProjectionWithAsOf()
+    if (copyAsOf !== null) res.setHeader('x-walnut-copy-as-of', String(copyAsOf))
     if (!projection) {
       sendError(res, 503, 'unavailable', 'Session projection not synced yet')
       return

@@ -14,8 +14,12 @@
  * pre-cache code keeps working off git-sync.
  * Cloud box: the pushed frames land in the same cache paths (events-v1 →
  * projection-cache); readSessionProjection() serves GET /api/v1/sessions
- * from the cache (legacy git file as transition fallback) — the pushed
- * projection IS the replica.
+ * from the cache (legacy git file as transition fallback) until the box holds
+ * its copy of the Mac's sessions (stage 2c of
+ * docs/plan/walnut-companion-unified-replica.md): from then on every reader gets
+ * this same projection built from that copy (core/companion-sessions.ts), the box
+ * answers the push `unread`, and the Mac stops sending it to that box
+ * (projection-push-state.ts).
  *
  * "Open a session" from the companion: alongside the list, the primary
  * exports a TRANSCRIPT TAIL per alive session to `cache/transcripts/<sid>.json`
@@ -849,7 +853,8 @@ export async function exportSessionTranscripts(): Promise<number> {
   transcriptSweepRunning = true
   lastTranscriptSweep = Date.now()
   try {
-    const projection = await readSessionProjection()
+    // The Mac's own exported file (the exporter runs on the Mac only).
+    const projection = await readPushedSessionProjection()
     if (!projection) return 0
     const legacy = await legacyProjectionFilesEnabled()
     if (legacy) await fsp.mkdir(SESSION_TRANSCRIPTS_DIR, { recursive: true })
@@ -934,11 +939,32 @@ function parseSessionProjection(raw: unknown): SessionProjection | null {
 }
 
 /**
- * Read the session projection (both boxes): projection cache vs the legacy
+ * Read the session projection, every server's one seam for it. On the cloud
+ * companion holding the Mac's sessions copy (stage 2c), the projection built from
+ * that copy (companion-sessions.ts); anywhere else, and before the copy is held,
+ * the pushed one (readPushedSessionProjection). Null when there is neither.
+ */
+export async function readSessionProjection(): Promise<SessionProjection | null> {
+  return (await readSessionProjectionWithAsOf()).projection
+}
+
+/** readSessionProjection, plus when the copy it came from was the Mac's (null: not from a copy). */
+export async function readSessionProjectionWithAsOf(): Promise<{ projection: SessionProjection | null; copyAsOf: number | null }> {
+  try {
+    const fromCopy = await (await import('./companion-sessions.js')).companionSessionList()
+    if (fromCopy) return { projection: fromCopy.projection, copyAsOf: fromCopy.asOf }
+  } catch (err) {
+    log.session.warn('companion: the sessions copy could not be read, serving the pushed projection', { error: err instanceof Error ? err.message : String(err) })
+  }
+  return { projection: await readPushedSessionProjection(), copyAsOf: null }
+}
+
+/**
+ * The pushed session projection (both boxes): projection cache vs the legacy
  * git-synced transition fallback, fresher exportedAt wins. Null when
  * absent/corrupt.
  */
-export async function readSessionProjection(): Promise<SessionProjection | null> {
+export async function readPushedSessionProjection(): Promise<SessionProjection | null> {
   const cached = parseSessionProjection(await readProjectionCache('sessions'))
   let legacy: SessionProjection | null = null
   try {

@@ -142,7 +142,10 @@ Five rules keep one busy Mac and one busy phone from knocking the link over.
   refusal lands are not sent: on the companion each wrong token is a strike
   against the caller's IP (10 in 60s lock that IP out, the phone behind the
   same NAT included), so the lane spends at most 2 per rest. See "Why bulk
-  uploads leave the bridge" below.
+  uploads leave the bridge" below. A companion that reads its own copies of the
+  Mac's sessions and model catalogs answers the session list `unread`; the Mac
+  then sends it there on neither lane for 10 minutes, after which one push asks
+  again (stage 2c of `docs/plan/walnut-companion-unified-replica.md`).
 
 - **The daemon paces its uplink** (`src/providers/bridge-uplink-core.ts`, both
   daemon twins, capability `bridge-uplink-v1`). At most 1MB may be on the wire
