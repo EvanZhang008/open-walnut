@@ -63,6 +63,8 @@ struct SessionConversationView: View {
     /// `voiceModeOnOpen` is honoured once: a page shown again keeps the mode the
     /// person left it in.
     @State private var voiceModeOnOpenDone = false
+    /// The page's own height, which caps the permission cards' scroll box.
+    @State private var pageHeight: CGFloat = 0
 
     init(session: WalnutSession, voiceModeOnOpen: VoiceModeOnOpen = .off) {
         self.session = session
@@ -101,27 +103,26 @@ struct SessionConversationView: View {
             if let confirmation = lifecycle.confirmation {
                 ConfirmationBanner(text: confirmation) { lifecycle.confirmation = nil }
             }
-            ForEach(lifecycle.pendingPermissions) { request in
-                PermissionRequestCard(
-                    request: request,
-                    answering: lifecycle.answeringIds.contains(request.requestId),
-                    onRespond: { allow in
-                        Task { await lifecycle.respondPermission(request, allow: allow) }
-                    },
-                    // AskUserQuestion: the ALLOW response carries the answers.
-                    onAnswer: { answers in
-                        Task { await lifecycle.respondPermission(request, allow: true, answers: answers) }
-                    },
-                    // Refusing the ask is a deny with the reason the model reads.
-                    onDismissQuestions: {
-                        Task {
-                            await lifecycle.respondPermission(
-                                request, allow: false, message: "User dismissed the questions"
-                            )
-                        }
+            PendingPermissionStack(
+                requests: lifecycle.pendingPermissions,
+                pageHeight: pageHeight,
+                isAnswering: { lifecycle.answeringIds.contains($0.requestId) },
+                onRespond: { request, allow in
+                    Task { await lifecycle.respondPermission(request, allow: allow) }
+                },
+                // AskUserQuestion: the ALLOW response carries the answers.
+                onAnswer: { request, answers in
+                    Task { await lifecycle.respondPermission(request, allow: true, answers: answers) }
+                },
+                // Refusing the ask is a deny with the reason the model reads.
+                onDismissQuestions: { request in
+                    Task {
+                        await lifecycle.respondPermission(
+                            request, allow: false, message: "User dismissed the questions"
+                        )
                     }
-                )
-            }
+                }
+            )
             messageList
                 // The short-absence chip floats over the timeline instead of
                 // pushing it down: a transient state must not move the rows.
@@ -135,12 +136,14 @@ struct SessionConversationView: View {
                 }
                 .animation(.easeInOut(duration: 0.2), value: store.connectionNotice)
         }
-        // Same keyboard-safety rule as ChatView, and this page needs it more: the
-        // permission cards above are unbounded siblings (an AskUserQuestion with
-        // several options), and any sibling that overflows the keyboard-shrunk
-        // proposal pushes the inset composer down by half that overflow, straight
-        // under the predictive bar. See `KeyboardSafeComposerContent`.
+        // Same keyboard-safety rule as ChatView: any sibling that overflows the
+        // keyboard-shrunk proposal pushes the inset composer down by half that
+        // overflow, straight under the predictive bar. See
+        // `KeyboardSafeComposerContent`. The pin is also why the permission cards
+        // need their own capped scroll box (`PendingPermissionStack`).
         .keyboardSafeComposerContent()
+        // Measured after the pin: the height the page offers, not the stack's own.
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let voiceMode {
                 VoiceModeBar(

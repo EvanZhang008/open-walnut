@@ -1,5 +1,80 @@
 import SwiftUI
 
+/// The pending-permission cards above a session's transcript, in a scroll box of
+/// their own. The page pins its content to the height it was offered (so the
+/// composer never slides under the keyboard), which means a card taller than that
+/// was simply cut off: an AskUserQuestion with several questions lost its later
+/// options and its Submit below the fold, and no swipe could reach them. Here the
+/// cards take their natural height up to `maxHeight(pageHeight:)` and scroll
+/// beyond it, leaving the rest of the page to the transcript.
+struct PendingPermissionStack: View {
+    let requests: [PendingPermission]
+    let pageHeight: CGFloat
+    var isAnswering: (PendingPermission) -> Bool
+    var onRespond: (PendingPermission, Bool) -> Void
+    var onAnswer: (PendingPermission, [String: String]) -> Void
+    var onDismissQuestions: (PendingPermission) -> Void
+
+    @State private var naturalHeight: CGFloat = 0
+    /// The free-text field being typed in, kept in view when it gains focus and
+    /// when the keyboard shrinks the box.
+    @State private var focusedField: String?
+
+    /// Share of the page the cards may take before they scroll.
+    static let pageShare: CGFloat = 0.6
+    /// Floor for a very short page (keyboard up on a small phone), so a card is
+    /// never squeezed to a sliver; never more than the page itself.
+    static let minCap: CGFloat = 180
+
+    nonisolated static func maxHeight(pageHeight: CGFloat) -> CGFloat {
+        guard pageHeight > 0 else { return .infinity }
+        return min(pageHeight, max(minCap, (pageHeight * pageShare).rounded(.down)))
+    }
+
+    private var cap: CGFloat { Self.maxHeight(pageHeight: pageHeight) }
+
+    private func reveal(_ proxy: ScrollViewProxy) {
+        guard let focusedField else { return }
+        proxy.scrollTo(focusedField, anchor: .bottom)
+    }
+
+    var body: some View {
+        if !requests.isEmpty {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(requests) { request in
+                            PermissionRequestCard(
+                                request: request,
+                                answering: isAnswering(request),
+                                onRespond: { onRespond(request, $0) },
+                                onAnswer: { onAnswer(request, $0) },
+                                onDismissQuestions: { onDismissQuestions(request) },
+                                onFocusField: { focusedField = $0 }
+                            )
+                        }
+                    }
+                    .padding(.bottom, 6)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { naturalHeight = $0 }
+                }
+                .onChange(of: focusedField) { reveal(proxy) }
+                // Not on content height: picking an option elsewhere while the
+                // field keeps focus would yank the reader back to the field.
+                .onChange(of: cap) { reveal(proxy) }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollIndicatorsFlash(onAppear: true)
+            .scrollDismissesKeyboard(.interactively)
+            .frame(height: min(naturalHeight, cap))
+            // Cards scrolled past the box's top edge stay inside it instead of
+            // drawing under the navigation bar.
+            .clipped()
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("session.permissionStack")
+        }
+    }
+}
+
 /// Permission-request banner shown at the top of a session conversation page
 /// when the CLI is blocked on a tool-permission prompt. One card per pending
 /// request (usually a single one — prompts serialize the turn), with the tool
@@ -20,12 +95,16 @@ struct PermissionRequestCard: View {
     /// Optional so existing call sites and previews stay valid.
     var onAnswer: (([String: String]) -> Void)?
     var onDismissQuestions: (() -> Void)?
+    /// The scroll id of the free-text field gaining focus, nil when it loses it.
+    var onFocusField: ((String?) -> Void)?
 
     var body: some View {
         if let questions = request.askQuestions {
             AskUserQuestionCard(
                 questions: questions,
                 answering: answering,
+                fieldScope: request.requestId,
+                onFocusField: onFocusField,
                 onSubmit: { answers in
                     if let onAnswer { onAnswer(answers) } else { onRespond(true) }
                 },
@@ -102,6 +181,8 @@ struct PermissionRequestCard: View {
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
+        // `.contain` keeps Allow/Deny addressable (see AskUserQuestionCard).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("session.permissionCard")
     }
 }
@@ -120,6 +201,9 @@ struct PermissionRequestCard: View {
 struct AskUserQuestionCard: View {
     let questions: [AskQuestion]
     let answering: Bool
+    /// Prefix that keeps the free-text fields' scroll ids unique across cards.
+    var fieldScope: String = ""
+    var onFocusField: ((String?) -> Void)?
     var onSubmit: ([String: String]) -> Void
     var onDismiss: () -> Void
 
@@ -127,6 +211,9 @@ struct AskUserQuestionCard: View {
     @State private var selections: [String: [String]] = [:]
     /// question text → free-text override ("Other…"), which beats the pills.
     @State private var otherText: [String: String] = [:]
+    @FocusState private var focusedQuestion: String?
+
+    private func fieldID(_ question: AskQuestion) -> String { "\(fieldScope)|\(question.question)" }
 
     private var complete: Bool {
         AskUserQuestion.allAnswered(
@@ -164,6 +251,9 @@ struct AskUserQuestionCard: View {
         // (or VoiceOver user) could address them individually.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("session.askQuestionCard")
+        .onChange(of: focusedQuestion) { _, question in
+            onFocusField?(questions.first { $0.question == question }.map(fieldID))
+        }
     }
 
     @ViewBuilder
@@ -206,6 +296,8 @@ struct AskUserQuestionCard: View {
             .padding(.vertical, 8)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .disabled(answering)
+            .focused($focusedQuestion, equals: question.question)
+            .id(fieldID(question))
             .accessibilityIdentifier("session.askQuestion.other")
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -76,16 +76,49 @@ struct AskQuestionHarnessView: View {
         reason: nil
     )
 
+    @State private var pageHeight: CGFloat = 0
+
+    /// The session page's layout, not a ScrollView around the card: the harness
+    /// used to scroll the card itself, so it never saw the page cut a tall card
+    /// off with no way to reach its Submit.
     var body: some View {
+        VStack(spacing: 0) {
+            PendingPermissionStack(
+                requests: dismissed || submitted != nil ? [] : [Self.request],
+                pageHeight: pageHeight,
+                isAnswering: { _ in false },
+                onRespond: { _, _ in },
+                onAnswer: { _, answers in submitted = answers },
+                onDismissQuestions: { _ in dismissed = true }
+            )
+            transcript
+        }
+        .keyboardSafeComposerContent()
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Text("Composer")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(.bar)
+                .accessibilityIdentifier("askq.harness.composer")
+        }
+        .navigationTitle("AskUserQuestion")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.visible, for: .navigationBar)
+    }
+
+    /// Stand-in transcript: the rows the user should still see under the card.
+    private var transcript: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                PermissionRequestCard(
-                    request: Self.request,
-                    answering: false,
-                    onRespond: { _ in },
-                    onAnswer: { submitted = $0 },
-                    onDismissQuestions: { dismissed = true }
-                )
+                ForEach(0..<12, id: \.self) { index in
+                    Text("Transcript row \(index + 1)")
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .accessibilityIdentifier("askq.harness.row")
+                }
                 // Read-back of what WOULD go on the wire, so a screenshot run can
                 // prove the answer payload without a live session.
                 if let submitted {
@@ -110,10 +143,8 @@ struct AskQuestionHarnessView: View {
                         .accessibilityIdentifier("askq.harness.dismissed")
                 }
             }
-            .padding(.bottom, 24)
+            .padding(.vertical, 12)
         }
-        .navigationTitle("AskUserQuestion")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 #endif

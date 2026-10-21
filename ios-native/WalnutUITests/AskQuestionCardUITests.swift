@@ -34,26 +34,100 @@ final class AskQuestionCardUITests: XCTestCase {
     /// the screen (three questions, every option, every description — nothing is
     /// truncated to fit), so Submit and the later options start below the fold;
     /// SwiftUI doesn't always publish far-offscreen elements to the
-    /// accessibility tree, so plain `waitForExistence` isn't enough.
+    /// accessibility tree, so plain `waitForExistence` isn't enough. The swipe
+    /// lands on the cards' own scroll box, the only thing a user can drag there.
     @discardableResult
-    private func scrollTo(_ element: XCUIElement, in app: XCUIApplication, swipes: Int = 6) -> Bool {
+    private func scrollTo(_ element: XCUIElement, in app: XCUIApplication, swipes: Int = 14) -> Bool {
         for _ in 0..<swipes {
-            if element.exists && element.isHittable { return true }
-            app.swipeUp()
+            if element.exists && element.isHittable && onScreen(element, in: app) { return true }
+            swipeToward(element, in: app)
         }
-        return element.exists && element.isHittable
+        return element.exists && element.isHittable && onScreen(element, in: app)
+    }
+
+    /// One short drag down through the cards. Downward only: XCUITest's frames lag
+    /// for rows scrolled back above the box, so callers walk the cards top to
+    /// bottom instead of seeking back up.
+    private func swipeToward(_ element: XCUIElement, in app: XCUIApplication) {
+        let box = id("session.permissionStack", in: app)
+        // A fixed-distance drag that holds at the end: a flick's momentum carried
+        // a short row clean past the box in one swipe, so it was never inside it.
+        // Always downward through the cards; callers start from the top.
+        box.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).press(
+            forDuration: 0.05,
+            thenDragTo: box.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)),
+            withVelocity: .slow, thenHoldForDuration: 0.3
+        )
     }
 
     /// Scroll an element into the tree WITHOUT requiring it to be hittable — a
     /// DISABLED button (Submit before every question is answered) exists and is
     /// on screen but reports `isHittable == false`.
     @discardableResult
-    private func scrollToExists(_ element: XCUIElement, in app: XCUIApplication, swipes: Int = 8) -> Bool {
+    private func scrollToExists(_ element: XCUIElement, in app: XCUIApplication, swipes: Int = 14) -> Bool {
         for _ in 0..<swipes {
-            if element.exists { return true }
-            app.swipeUp()
+            if element.exists && onScreen(element, in: app) { return true }
+            swipeToward(element, in: app)
         }
-        return element.exists
+        return element.exists && onScreen(element, in: app)
+    }
+
+    /// Inside the visible part of the cards' scroll box: an element the page cut
+    /// off still exists in the tree, which is how the old layout passed.
+    private func onScreen(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        let box = id("session.permissionStack", in: app).frame
+        let frame = element.frame
+        return !frame.isEmpty && frame.minY >= box.minY - 1 && frame.maxY <= box.maxY + 1
+    }
+
+    /// The reported bug: a card with many questions was taller than the page and
+    /// the page cut it off, so the later options and Submit could not be reached
+    /// by any swipe. The cards now scroll in a box of at most ~60% of the page,
+    /// and the transcript stays visible under them.
+    func testTallCardScrollsWithinCapAndKeepsTranscriptVisible() {
+        let app = launch()
+        let stack = id("session.permissionStack", in: app)
+        XCTAssertTrue(stack.waitForExistence(timeout: 30))
+
+        let window = app.windows.firstMatch.frame
+        XCTAssertLessThanOrEqual(
+            stack.frame.height, window.height * 0.62,
+            "the cards must not take the whole page"
+        )
+        XCTAssertGreaterThan(stack.frame.height, 150, "the cards must still have room to read")
+        let row = app.staticTexts["Transcript row 1"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5) && row.isHittable, "the transcript stays visible")
+        XCTAssertTrue(id("askq.harness.composer", in: app).isHittable, "the composer stays visible")
+
+        // Submit starts below the box's fold and is reached by scrolling the box.
+        let submit = id("session.askQuestion.submit", in: app)
+        XCTAssertFalse(submit.exists && onScreen(submit, in: app), "the harness card must be taller than its box")
+        XCTAssertTrue(scrollToExists(submit, in: app), "Submit must be reachable by swiping the cards")
+        XCTAssertTrue(id("session.askQuestion.dismiss", in: app).isHittable)
+
+        // Typing into the LAST question's free-text field: it stays on screen
+        // above the keyboard, and the composer is not pushed under it.
+        let others = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@", "session.askQuestion.other"))
+        let lastOther = others.element(boundBy: others.count - 1)
+        XCTAssertTrue(scrollTo(lastOther, in: app))
+        lastOther.tap()
+        lastOther.typeText("Both, staged")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        // The box shrinks when the keyboard comes up; the field being typed in
+        // must still sit wholly inside it, not cut at its bottom edge. Waited
+        // for first: the box resizes and scrolls after the keyboard lands.
+        let settled = expectation(for: NSPredicate { _, _ in self.onScreen(lastOther, in: app) }, evaluatedWith: nil)
+        wait(for: [settled], timeout: 5)
+        XCTAssertTrue(lastOther.isHittable, "the focused field stays visible above the keyboard")
+        XCTAssertLessThanOrEqual(
+            lastOther.frame.maxY, app.keyboards.firstMatch.frame.minY + 1,
+            "the focused field must not sit under the keyboard"
+        )
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "typing-last-question"
+        shot.lifetime = .keepAlways
+        add(shot)
     }
 
     /// The regression itself: question text and option labels + descriptions are
@@ -99,7 +173,7 @@ final class AskQuestionCardUITests: XCTestCase {
             )
         }
         // Multi-select is signposted, so a user knows several are allowed.
-        XCTAssertTrue(scrollToExists(app.staticTexts["Choose one or more"], in: app))
+        XCTAssertTrue(app.staticTexts["Choose one or more"].exists)
     }
 
     /// Submit is gated on EVERY question, and the submitted map is keyed by
@@ -109,35 +183,39 @@ final class AskQuestionCardUITests: XCTestCase {
         let app = launch()
         XCTAssertTrue(id("session.askQuestionCard", in: app).waitForExistence(timeout: 30))
 
-        // Answer question 1 only, then try to submit → still incomplete, so
-        // nothing may be emitted.
-        let firstOption = app.buttons
-            .containing(NSPredicate(format: "label BEGINSWITH %@", "In-memory")).firstMatch
-        XCTAssertTrue(scrollTo(firstOption, in: app), "question 1's option should be reachable")
-        firstOption.tap()
-
-        // Submit EXISTS but is disabled (hence not hittable) — that IS the gate:
-        // a partial answer set can't be sent, so the agent never receives a
-        // half-answered question set.
-        let submit = id("session.askQuestion.submit", in: app)
-        XCTAssertTrue(scrollToExists(submit, in: app), "Submit should be reachable by scrolling")
-        XCTAssertFalse(submit.isHittable, "Submit must stay inert until every question is answered")
-        XCTAssertFalse(
-            id("askq.harness.submitted", in: app).exists,
-            "a partial answer set must not submit"
-        )
-
-        // Answer the remaining two (question 3 is multi-select: two taps).
-        for label in ["Block until fresh", "Web console", "Phone app"] {
+        // One pass down the cards (XCUITest's frames lag for rows scrolled back
+        // above the box, so a tap there misses): answer questions 1 and 2, leave
+        // 3 open, and Submit must still be inert.
+        for label in ["In-memory", "Block until fresh"] {
             let option = app.buttons
                 .containing(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
             XCTAssertTrue(scrollTo(option, in: app), "option should be reachable: \(label)")
             option.tap()
         }
 
-        let submitButton = id("session.askQuestion.submit", in: app)
-        XCTAssertTrue(scrollTo(submitButton, in: app))
-        submitButton.tap()
+        // Submit is on screen but disabled — that IS the gate: a partial answer
+        // set can't be sent, so the agent never receives a half-answered set.
+        // (This used to assert "not hittable", which held only because the page
+        // cut Submit off: the bug itself.)
+        let submit = id("session.askQuestion.submit", in: app)
+        XCTAssertTrue(scrollToExists(submit, in: app), "Submit should be reachable by scrolling")
+        XCTAssertFalse(submit.isEnabled, "Submit must stay inert until every question is answered")
+        submit.tap()
+        XCTAssertFalse(
+            id("askq.harness.submitted", in: app).exists,
+            "a partial answer set must not submit"
+        )
+
+        // Question 3 sits right above Submit: multi-select, two taps.
+        for label in ["Web console", "Phone app"] {
+            let option = app.buttons
+                .containing(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+            XCTAssertTrue(scrollTo(option, in: app), "option should be reachable: \(label)")
+            option.tap()
+        }
+
+        XCTAssertTrue(submit.isEnabled, "a complete set enables Submit")
+        submit.tap()
 
         let readback = id("askq.harness.submitted", in: app)
         XCTAssertTrue(readback.waitForExistence(timeout: 10), "a complete set should submit")

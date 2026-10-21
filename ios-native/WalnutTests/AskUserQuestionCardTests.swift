@@ -287,3 +287,21 @@ final class AskUserQuestionCardTests: XCTestCase {
         XCTAssertNil(try encode(nil)["answers"])
     }
 }
+
+/// The cards' scroll box cap: a share of the page, never a sliver, never more
+/// than the page.
+final class PendingPermissionStackCapTests: XCTestCase {
+    func testCapIsAShareOfThePage() {
+        XCTAssertEqual(PendingPermissionStack.maxHeight(pageHeight: 700), 420)
+        XCTAssertEqual(PendingPermissionStack.maxHeight(pageHeight: 701), 420)
+    }
+
+    func testShortPageKeepsAFloorButNeverExceedsThePage() {
+        XCTAssertEqual(PendingPermissionStack.maxHeight(pageHeight: 250), 180)
+        XCTAssertEqual(PendingPermissionStack.maxHeight(pageHeight: 120), 120)
+    }
+
+    func testUnmeasuredPageDoesNotCapYet() {
+        XCTAssertEqual(PendingPermissionStack.maxHeight(pageHeight: 0), .infinity)
+    }
+}
