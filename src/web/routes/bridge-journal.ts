@@ -6,7 +6,7 @@
  * runs unchanged over it:
  *
  *   {cmd:'offline.drain', params:{home, kinds}}  -> {ok, records, more, now}
- *   {cmd:'offline.ack',   params:{home, seqs}}   -> {ok, remaining, ignored?}
+ *   {cmd:'offline.ack',   params:{home, seqs, now}} -> {ok, remaining, ignored?}
  *   {cmd:'offline.blob',  params:{sha, offset}}  -> {ok, sha, offset, size, data, done}
  *
  * `home` is the Mac's data dir; the companion has one Mac and one journal, so it
@@ -38,7 +38,7 @@ async function journal(req: Request, res: Response): Promise<void> {
         res.status(400).json({ ok: false, error: 'offline.ack: missing seqs', code: 'bad_request' })
         return
       }
-      const r = j.ackCompanionJournal(params.seqs)
+      const r = await j.ackCompanionJournal(params.seqs, params.now)
       res.json(r.ok ? r : { ok: false, error: `offline.ack: ${r.error}`, code: 'journal_unwritable' })
       return
     }

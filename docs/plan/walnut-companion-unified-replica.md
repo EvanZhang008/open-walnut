@@ -223,11 +223,11 @@ time), the Mac ends the rests of its copy kinds and sends a round at once
 (`companion-build/mac.ts` `companionBuildChanged`), so a kind an older build
 refused does not wait out its 10 minutes.
 
-The inbox and the conversation index are not copied to the companion yet: the box
-writes both itself (inbox flags while away, the conversation list always), so a
-copy would hide its own writes until they came back through the Mac. They move
+The inbox and the conversation index are not copied to the companion in stage 2:
+the box writes both itself (inbox flags while away, the conversation list always),
+so a copy would hide its own writes until they came back through the Mac. They move
 with stage 3, whose `inbox-state` and `chat-turn` records hand those writes to the
-Mac, and the readers switch then.
+Mac, and the readers switch then (the inbox in 3c, below).
 
 ### 2c: sessions
 
@@ -297,8 +297,9 @@ change to the session daemons. The Mac drains it with the same handover
 |---|---|---|
 | 3a | the door, the trigger, the drain; a task update whose fields the Mac merges (`task-fields`, the op the queue already sends with `fields`) | everything else in `task-queue` |
 | 3b | session metadata (`session-meta`: title, archived, note, output mode, thread fields), applied with the online patch's own call; a refusal becomes a letter naming the session by its title, instead of a silent drop | the live mode change (a relay) |
-| 3c | inbox flags (`inbox-state`, folded per letter and flag) with the inbox copy reader; chat turns (`chat-turn`, texts as blobs) with the conversation copy reader | |
+| 3c | inbox flags (`inbox-state`) with the inbox copy reader | |
 | 3d | task creates (`task-create`) and single moves (`task-move`) | deletes and whole-list reorders keep the task queue: no journal kind takes them (a host refuses both while the Mac is away) |
+| 3e | chat turns (`chat-turn`, texts as blobs) with the conversation copy reader, after stage 4 brings the conversation bodies as a copy (the copy kind is index only today, and the box's list reads git's) | `cloud-chat-outbox` until then |
 
 One task's writes reach the Mac in the order they were made: an op for a task
 that still has an op in `task-queue` joins that queue; an op for a task that still
@@ -307,6 +308,18 @@ or, when the journal cannot take it (an appended note, a delete), waits in the
 queue, which skips it until the Mac acked the record and flushes it then. At the
 start of each slice, the files its kind replaces are left to drain the old way
 (they are minutes of writes at most), and new writes take the journal.
+
+**3c, the inbox.** The companion keeps `inbox` and `inbox-bodies` (bodies on for it
+by default: git sync already brings them to the box) in `cache/replica/home/human-inbox/`.
+The away inbox reads (`human-inbox/replica-state.ts`: the list, one letter) take that
+copy once it is held, with its leader clock in place of the git index's `lastUpdated`;
+before, the files git sync wrote. A flag the human sets while the Mac does not answer
+is an `inbox-state` record (`letterId`, `field`, `value`, `madeAt`); a queued change of
+the same flag goes, being older. The Mac applies it as the relayed replay was
+(`setLetterState` with `since` = `madeAt` on its clock), so a newer change made on
+the Mac wins; a letter gone is skipped quietly. Until the ack the record is shown on
+top of the copy; at the ack it becomes an applied entry stamped with the Mac's ack
+clock, shown until the copy passes that clock (the copy rounds the drain sends again).
 
 - **send-queue stays.** A queued send waits on the session's host, not on the Mac,
   and carries delivery fates and held images; the journal adds nothing there.

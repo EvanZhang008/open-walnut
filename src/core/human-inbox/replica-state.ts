@@ -122,8 +122,35 @@ async function readEntry(letterId: string, field: LetterStateField): Promise<Let
   }
 }
 
-/** Every valid entry, oldest change first. An unreadable file is removed. */
+/**
+ * Every change this box took and the copy may not show yet, oldest first: the queue's
+ * files, and the flag records in the companion's journal (stage 3c, pending until the
+ * Mac acks them; then an applied file takes over, noteJournalStateAcked).
+ */
 export async function readStateEntries(): Promise<LetterStateEntry[]> {
+  const files = await readFileEntries();
+  const journaled = await journalEntries();
+  return journaled.length ? [...files, ...journaled].sort((a, b) => a.at - b.at) : files;
+}
+
+/** The flag records still in the companion's journal, as pending entries. */
+async function journalEntries(): Promise<LetterStateEntry[]> {
+  try {
+    const { companionJournalRecords } = await import('../companion-journal.js');
+    const out: LetterStateEntry[] = [];
+    for (const r of companionJournalRecords()) {
+      if (r.kind !== 'inbox-state') continue;
+      const e = { letterId: r.letterId, field: r.field, value: r.value, at: r.madeAt, state: 'pending' as const };
+      if (isEntry(e)) out.push(e);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Every valid queue file, oldest change first. An unreadable file is removed. */
+async function readFileEntries(): Promise<LetterStateEntry[]> {
   let names: string[];
   try {
     names = await fsp.readdir(HUMAN_INBOX_QUEUE_DIR);
@@ -193,10 +220,43 @@ export async function noteStateApplied(
   }
 }
 
-/** Queue a change the primary could not take. False when it could not be stored. */
+/**
+ * The Mac acked these journal records (its clock `macNow` when it had applied them):
+ * a flag record becomes an applied entry, shown until the copy (or the git index)
+ * passes that clock, as a relayed change's is.
+ */
+export async function noteJournalStateAcked(records: ReadonlyArray<Record<string, unknown>>, macNow: number): Promise<void> {
+  const stamp = new Date(Number.isFinite(macNow) && macNow > 0 ? macNow : Date.now()).toISOString();
+  for (const r of records) {
+    if (r.kind !== 'inbox-state') continue;
+    const e = { letterId: r.letterId, field: r.field, value: r.value, at: r.madeAt, state: 'applied' as const, storeUpdatedAt: stamp, appliedAt: Date.now() };
+    if (!isEntry(e)) continue;
+    try { await putEntry(e); } catch (err) {
+      log.notif.warn('human-inbox replica: could not record an acked state change', { letterId: e.letterId, field: e.field, err: String(err) });
+    }
+  }
+}
+
+/**
+ * Queue a change the primary could not take. False when it could not be stored.
+ * Stage 3c: into the companion's journal once the Mac drains `inbox-state` (a queued
+ * change of the same flag is older, so it goes); else a queue file, as before.
+ */
 export async function queueStateChange(
   letterId: string, field: LetterStateField, value: boolean, at: number,
 ): Promise<boolean> {
+  if (!LETTER_ID_RE.test(letterId)) return false;
+  try {
+    const { journalInboxState } = await import('../companion-journal.js');
+    const r = journalInboxState({ letterId, field, value, madeAt: at });
+    if (r?.ok) {
+      const older = await readEntry(letterId, field);
+      if (older && older.state === 'pending' && older.at <= at) await settleEntry(older, null);
+      return true;
+    }
+  } catch (err) {
+    log.notif.warn('human-inbox replica: the journal did not take a state change, queueing it', { letterId, field, err: String(err) });
+  }
   try {
     await putEntry({ letterId, field, value, at, state: 'pending' });
     log.notif.info('human-inbox replica: state change queued (primary unreachable)', { letterId, field, value });
@@ -214,20 +274,37 @@ export async function pendingStateCount(): Promise<number> {
 // ── The git-synced copy ──
 
 /**
+ * Where the box's copy of the inbox is: the companion's copy store once the Mac's copy
+ * of `kind` is held (stage 3c of docs/plan/walnut-companion-unified-replica.md), else
+ * the files git sync writes. `asOf` (the copy's leader clock: every write the Mac made
+ * before it is in the copy) takes the place of the git index's `lastUpdated`.
+ */
+async function mirrorSource(kind: 'inbox' | 'inbox-bodies'): Promise<{ dir: string; asOf: number | null }> {
+  const { humanInboxPaths } = await import('./store.js');
+  const gate = await import('../replication/kinds/gate.js');
+  if (!gate.keepsCopies(kind)) return { dir: humanInboxPaths.dir, asOf: null };
+  const asOf = await gate.copyKindAsOf(kind);
+  return asOf === null ? { dir: humanInboxPaths.dir, asOf: null } : { dir: gate.copyPath(humanInboxPaths.dir), asOf };
+}
+
+/**
  * The replica's copy of the index, or null when there is none (a box that never
  * received the inbox) or it cannot be parsed after a few tries.
  */
 export async function readMirrorIndex(): Promise<LetterStoreFile | null> {
-  const { humanInboxPaths } = await import('./store.js');
+  const src = await mirrorSource('inbox');
+  // The copy's clock stands in for the index's own (the copy never writes one).
+  const stamped = (store: LetterStoreFile): LetterStoreFile => (src.asOf !== null ? { ...store, lastUpdated: new Date(src.asOf).toISOString() } : store);
   for (let attempt = 1; attempt <= MIRROR_READ_ATTEMPTS; attempt++) {
     let raw: string;
     try {
-      raw = await fsp.readFile(humanInboxPaths.indexFile, 'utf-8');
+      raw = await fsp.readFile(path.join(src.dir, 'index.json'), 'utf-8');
     } catch {
-      return null;
+      // A held copy of an empty inbox is an answer; no git copy is none.
+      return src.asOf !== null ? stamped(normalizeStore({})) : null;
     }
     try {
-      if (raw.trim()) return normalizeStore(JSON.parse(raw));
+      if (raw.trim()) return stamped(normalizeStore(JSON.parse(raw)));
     } catch { /* half written by a checkout: read again */ }
     if (attempt < MIRROR_READ_ATTEMPTS) await new Promise(r => setTimeout(r, MIRROR_RETRY_MS));
   }
@@ -308,13 +385,16 @@ export async function mirrorRecord(id: string): Promise<LetterRecord | null> {
 export async function mirrorLetter(id: string): Promise<LetterDetail | null> {
   const index = await readMirrorIndex();
   if (!index || !index.letters.some(l => l.id === id)) return null;
-  const { getLetter } = await import('./store.js');
+  const { getLetter, humanInboxPaths } = await import('./store.js');
+  // The copy's letter needs the copy's bodies too; else the files git sync wrote.
+  const [own, bodies] = await Promise.all([mirrorSource('inbox'), mirrorSource('inbox-bodies')]);
+  const dir = own.asOf !== null && bodies.asOf !== null ? own.dir : humanInboxPaths.dir;
   // getLetter reads the index again; a checkout landing between the two reads
   // can hand it a half-written file, so one miss is retried.
-  let detail = await getLetter(id);
+  let detail = await getLetter(id, { dir });
   if (!detail) {
     await new Promise(r => setTimeout(r, MIRROR_RETRY_MS));
-    detail = await getLetter(id);
+    detail = await getLetter(id, { dir });
   }
   if (!detail) return null;
   return overlay(detail, await liveEntries(index.lastUpdated));
@@ -345,7 +425,8 @@ export async function flushStateQueue(opts: { budgetMs?: number } = {}): Promise
 
 async function replayPending(budgetMs: number): Promise<number> {
   const startedAt = Date.now();
-  const pending = (await readStateEntries()).filter(e => e.state === 'pending');
+  // Only the queue's files: the journal's records go to the Mac by its drain.
+  const pending = (await readFileEntries()).filter(e => e.state === 'pending');
   if (pending.length === 0) return 0;
   const { callPrimaryControl } = await import('../../web/routes/v1-control-relay.js');
   let settled = 0;

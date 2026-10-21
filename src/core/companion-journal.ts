@@ -15,7 +15,8 @@
  *
  * Slice 3a writes `task-fields` (a task update whose fields the Mac merges), 3b
  * `session-meta` (a session's title, archive flag, note, output mode, thread
- * fields); the other queues are unchanged until their slice. A record carries no device actor
+ * fields), 3c `inbox-state` (a letter's read, pinned or archived flag); the other
+ * queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -159,6 +160,26 @@ export function journalSessionMeta(input: { sessionId: string; patch: Record<str
   return r
 }
 
+/**
+ * Save one inbox flag the human set (slice 3c): `inbox-state`, `madeAt` the human's
+ * moment on this box's clock (the Mac judges it against its own later changes, as a
+ * relayed replay's `since`). Null when the Mac does not drain the kind: the caller
+ * queues as before (human-inbox/replica-state.ts).
+ */
+export function journalInboxState(input: { letterId: string; field: 'read' | 'pinned' | 'archived'; value: boolean; madeAt: number }): AppendResult | null {
+  if (!macDrains('inbox-state')) return null
+  const r = journalOf().append(COMPANION_JOURNAL_HOME, {
+    kind: 'inbox-state', letterId: input.letterId, field: input.field, value: input.value, madeAt: input.madeAt,
+  }, { limit: true })
+  if (r.ok) {
+    log.notif.info('companion journal: saved an inbox change for the Mac', { letterId: input.letterId, field: input.field, value: input.value, opId: r.opId, seq: r.seq })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+  } else {
+    log.notif.error('companion journal: an inbox change was refused', { letterId: input.letterId, field: input.field, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
 /** Sessions a record still names (their queued patches wait behind them). */
 export function companionJournalSessionIds(): Set<string> {
   const out = new Set<string>()
@@ -246,7 +267,17 @@ export async function drainCompanionJournal(kinds: string[] | null): Promise<{ o
   return { ok: true, ...out }
 }
 
-export function ackCompanionJournal(seqs: unknown): { ok: boolean; remaining: number; ignored?: number[]; error?: string } {
+/** `macNow`: the Mac's clock after it applied them (the handover sends it with the ack). */
+export async function ackCompanionJournal(seqs: unknown, macNow?: unknown): Promise<{ ok: boolean; remaining: number; ignored?: number[]; error?: string }> {
+  // An inbox flag the Mac took stays on the box's inbox until its copy shows it
+  // (replica-state.ts): written before the record goes, so a read between the two
+  // never shows the flag as it was.
+  const named = new Set(Array.isArray(seqs) ? seqs : [])
+  const flags = companionJournalRecords().filter((x) => x.kind === 'inbox-state' && named.has(x.seq))
+  if (flags.length) {
+    const { noteJournalStateAcked } = await import('./human-inbox/replica-state.js')
+    await noteJournalStateAcked(flags, typeof macNow === 'number' ? macNow : Date.now())
+  }
   const r = journalOf().ack(COMPANION_JOURNAL_HOME, { seqs })
   if (r.error) return { ok: false, remaining: r.remaining, error: r.error }
   if (r.acked.length) {

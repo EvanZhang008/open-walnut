@@ -83,10 +83,13 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Read-only snapshot. Unparseable / missing file → empty store, never throws. */
-async function readStore(): Promise<LetterStoreFile> {
+/**
+ * Read-only snapshot. Unparseable / missing file → empty store, never throws.
+ * `dir`: another inbox in the same layout (the companion's copy, replica-state.ts).
+ */
+async function readStore(dir = INBOX_DIR): Promise<LetterStoreFile> {
   try {
-    return normalizeStore(await readJsonFile<unknown>(INDEX_FILE, null));
+    return normalizeStore(await readJsonFile<unknown>(dir === INBOX_DIR ? INDEX_FILE : path.join(dir, 'index.json'), null));
   } catch (err) {
     log.notif.warn('human-inbox: failed to read index', { error: errMsg(err) });
     return emptyStore();
@@ -301,9 +304,10 @@ export interface LetterBodyStat {
 export async function statLetterBody(
   id: string,
   turn?: number,
+  dir = INBOX_DIR,
 ): Promise<LetterBodyStat | null> {
   if (typeof id !== 'string' || !LETTER_ID_RE.test(id)) return null;
-  const { letters } = await readStore();
+  const { letters } = await readStore(dir);
   const record = letters.find(l => l.id === id);
   if (!record) return null;
 
@@ -327,7 +331,7 @@ export async function statLetterBody(
     log.notif.warn('human-inbox: refusing suspicious body file name', { fileName });
     return null;
   }
-  const full = path.join(BODIES_DIR, fileName);
+  const full = path.join(dir === INBOX_DIR ? BODIES_DIR : path.join(dir, 'bodies'), fileName);
   try {
     const st = await fsp.stat(full);
     if (!st.isFile()) return null;
@@ -396,13 +400,13 @@ export async function readLetterBodyRange(
  * comes off a JSON index that another process wrote, so treating it as a path
  * would be a traversal hole (`../../config.yaml`).
  */
-async function readBodyFile(fileName: string): Promise<string | null> {
+async function readBodyFile(fileName: string, dir = INBOX_DIR): Promise<string | null> {
   if (!BODY_FILE_RE.test(fileName)) {
     log.notif.warn('human-inbox: refusing suspicious body file name', { fileName });
     return null;
   }
   try {
-    return await fsp.readFile(path.join(BODIES_DIR, fileName), 'utf-8');
+    return await fsp.readFile(path.join(dir === INBOX_DIR ? BODIES_DIR : path.join(dir, 'bodies'), fileName), 'utf-8');
   } catch {
     return null;
   }
@@ -603,22 +607,23 @@ export async function listLetters(opts: { archived?: boolean } = {}): Promise<Le
  */
 export async function getLetter(
   id: string,
-  opts: { inlineMaxBytes?: number } = {},
+  opts: { inlineMaxBytes?: number; dir?: string } = {},
 ): Promise<LetterDetail | null> {
   if (typeof id !== 'string' || !LETTER_ID_RE.test(id)) return null;
-  const { letters } = await readStore();
+  const dir = opts.dir ?? INBOX_DIR;
+  const { letters } = await readStore(dir);
   const record = letters.find(l => l.id === id);
   if (!record) return null;
   const inlineMax = opts.inlineMaxBytes ?? LETTER_INLINE_BODY_MAX_BYTES;
 
-  const ownStat = await statLetterBody(id);
+  const ownStat = await statLetterBody(id, undefined, dir);
   const deferOwn = ownStat !== null && ownStat.bytes > inlineMax;
-  const body = deferOwn ? null : await readBodyFile(`${record.id}.${bodyExt(record.bodyFormat)}`);
+  const body = deferOwn ? null : await readBodyFile(`${record.id}.${bodyExt(record.bodyFormat)}`, dir);
 
   const thread: LetterThreadEntry[] = [];
   for (const [turn, entry] of record.thread.entries()) {
     if (!entry.bodyFile) { thread.push({ ...entry }); continue; }
-    const turnStat = await statLetterBody(id, turn);
+    const turnStat = await statLetterBody(id, turn, dir);
     if (turnStat !== null && turnStat.bytes > inlineMax) {
       thread.push({
         ...entry,
@@ -628,7 +633,7 @@ export async function getLetter(
       });
       continue;
     }
-    const turnBody = await readBodyFile(entry.bodyFile);
+    const turnBody = await readBodyFile(entry.bodyFile, dir);
     thread.push(turnBody === null
       ? { ...entry, bodyMissing: true }
       // Recorded size stays when the file is gone: spreading `undefined` over it

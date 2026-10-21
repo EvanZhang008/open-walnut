@@ -16,6 +16,9 @@
  *     record keeps to the journal, and an op the journal cannot take (an appended
  *     note) waits in the queue until the Mac acked the record, then flushes;
  *   - a copy round from the Mac does not undo a journaled write (the row is held);
+ *   - slice 3c: an inbox flag the Mac did not take is an `inbox-state` record (a queued
+ *     change of the same flag goes); after the ack it stays on the box's inbox until
+ *     the copy passes the Mac's clock;
  *   - slice 3b: a session metadata patch the Mac did not answer is a `session-meta`
  *     record by the same rules (its session's queued patches first; a patch queued
  *     behind its records waits for the ack);
@@ -67,7 +70,8 @@ import {
 } from '../../../src/core/companion-journal.js'
 import { flushTaskQueue, listQueuedOps } from '../../../src/core/task-queue.js'
 import { enqueueSessionPatch, flushControlQueue } from '../../../src/core/control-queue.js'
-import { CONTROL_QUEUE_DIR } from '../../../src/constants.js'
+import { CONTROL_QUEUE_DIR, HUMAN_INBOX_QUEUE_DIR } from '../../../src/constants.js'
+import { humanInboxPaths, sendLetter } from '../../../src/core/human-inbox/store.js'
 import type { Task } from '../../../src/core/types.js'
 
 let server: HttpServer
@@ -126,6 +130,16 @@ async function queuedPatches(sid: string): Promise<Array<{ opId: string; patch: 
   return out
 }
 const sessionRecords = (sid: string) => companionJournalRecords().filter((r) => r.kind === 'session-meta' && r.sid === sid)
+// Slice 3c: inbox flags, on a letter git sync brought to the box.
+let L = ''
+const flagFiles = async (): Promise<Array<Record<string, unknown>>> => {
+  let names: string[] = []
+  try { names = (await fs.readdir(HUMAN_INBOX_QUEUE_DIR)).filter((n) => n.endsWith('.json')).sort() } catch { return [] }
+  return Promise.all(names.map(async (n) => JSON.parse(await fs.readFile(path.join(HUMAN_INBOX_QUEUE_DIR, n), 'utf8'))))
+}
+const flagRecords = () => companionJournalRecords().filter((r) => r.kind === 'inbox-state')
+const setFlag = (action: 'read' | 'pin' | 'archive', body: Record<string, boolean>) => call(`/api/v1/human-inbox/${L}/${action}`, { method: 'POST', body: JSON.stringify(body) })
+const inboxLetter = async () => ((await call('/api/v1/human-inbox')).body.letters as Array<{ id: string; read: boolean; pinned: boolean }>).find((l) => l.id === L)
 
 beforeAll(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true })
@@ -135,6 +149,7 @@ beforeAll(async () => {
     { name: 'bridge-local', id: 'd00000000000000d4', tokenHash: sha(T.local), createdAt: now, kind: 'machine' },
     { name: 'bridge-devbox', id: 'd00000000000000e5', tokenHash: sha(T.otherMachine), createdAt: now, kind: 'machine' },
   ] }), { mode: 0o600 })
+  L = (await sendLetter({ subject: 'Acme weekly digest', type: 'review', markdown: '# Digest', sender: { sessionId: 'sess-box', host: 'workstation' } })).id
   _resetDeviceAuthForTesting()
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
@@ -179,6 +194,14 @@ describe('the Mac away, before it ever drained the journal', () => {
     const [op] = await waitFor(async () => { const q = await queuedFor(A); return q.length ? q : null }, 'the edit of A to be queued')
     expect(op).toMatchObject({ type: 'update', fields: { title: { base: 'Acme alpha', value: 'Acme alpha, edited away' } } })
     expect(companionJournalRecords()).toEqual([])
+  })
+
+  it('an inbox flag is queued as before, not journaled', async () => {
+    const r = await setFlag('read', { read: true })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ queued: true, letter: { id: L, read: true } })
+    expect((await flagFiles()).map((e) => `${e.field}:${e.value}:${e.state}`)).toEqual(['read:true:pending'])
+    expect(flagRecords()).toEqual([])
   })
 
   it('a session change is queued as before, not journaled', async () => {
@@ -245,6 +268,20 @@ describe('the Mac drained once: away writes go into the journal', () => {
     expect((await patchSession(S2, { output_mode: 'compact' })).status).toBeLessThan(500)
   })
 
+  it('an inbox flag (slice 3c) is an inbox-state record; a newer one of a queued flag takes its place', async () => {
+    const pin = await setFlag('pin', { pinned: true })
+    expect(pin.body).toMatchObject({ queued: true, letter: { id: L, pinned: true, read: true } })
+    expect(flagRecords().map((r) => `${r.letterId === L}:${r.field}:${r.value}`)).toEqual(['true:pinned:true'])
+    expect(typeof flagRecords()[0].madeAt).toBe('number')
+    // The read flag was queued: the newer change goes into the journal, the queued one goes.
+    const unread = await setFlag('read', { read: false })
+    expect(unread.body).toMatchObject({ queued: true, letter: { id: L, read: false, pinned: true } })
+    expect(flagRecords().map((r) => `${r.field}:${r.value}`)).toEqual(['pinned:true', 'read:false'])
+    expect(await flagFiles()).toEqual([])
+    // The list (the git copy) shows both, with the changes on top.
+    expect(await inboxLetter()).toMatchObject({ read: false, pinned: true })
+  })
+
   it('a copy round from the Mac does not undo the journaled write', async () => {
     await round()
     const b = await call(`/api/tasks/${B}`)
@@ -272,6 +309,8 @@ describe('the Mac comes back', () => {
         applied.push(`${op.task?.id}:${op.opId}`)
         return { ok: true, result: { applied: true, reason: 'updated' } }
       }
+      // The inbox is read from the box's copy here (the Mac's own inbox relay is not under test).
+      if (action.startsWith('server.human-inbox')) return { ok: false, failure: { kind: 'bridge_offline', message: 'not under test', notSent: true } }
       return { ok: true, result: { started: true } }
     }) as Relay
     try {
@@ -299,13 +338,24 @@ describe('the Mac comes back', () => {
       // The Mac drains the journal (the handover's two calls).
       const drained = await postToCloudJournal('offline.drain', { home: '/Users/someone/.open-walnut', kinds: [...APPLIED_V2_KINDS] })
       const kinds = drained.records.map((r: { kind: string; taskId?: string; sid?: string }) => `${r.kind}:${r.taskId ?? r.sid}`)
-      expect(kinds).toEqual([`task-fields:${B}`, `session-meta:${S2}`, `session-meta:${S2}`])
+      expect(kinds).toEqual([`task-fields:${B}`, `session-meta:${S2}`, `session-meta:${S2}`, 'inbox-state:undefined', 'inbox-state:undefined'])
       // A redrain before the ack hands the same records (frozen, as on a host).
       const seqs = drained.records.map((r: { seq: number }) => r.seq)
       const again = await postToCloudJournal('offline.drain', { home: '/x', kinds: [...APPLIED_V2_KINDS] })
       expect(again.records.map((r: { seq: number }) => r.seq)).toEqual(seqs)
-      expect(await postToCloudJournal('offline.ack', { home: '/x', seqs, now: Date.now() })).toMatchObject({ ok: true, remaining: 0 })
+      const macNow = Date.now() + 5_000
+      expect(await postToCloudJournal('offline.ack', { home: '/x', seqs, now: macNow })).toMatchObject({ ok: true, remaining: 0 })
       expect(companionJournalRecords()).toEqual([])
+      // The flags the Mac took stay on the inbox until the copy passes the Mac's clock.
+      expect((await flagFiles()).map((e) => `${e.field}:${e.value}:${e.state}:${e.storeUpdatedAt}`).sort())
+        .toEqual([`pinned:true:applied:${new Date(macNow).toISOString()}`, `read:false:applied:${new Date(macNow).toISOString()}`])
+      expect(await inboxLetter()).toMatchObject({ read: false, pinned: true })
+      const idx = JSON.parse(await fs.readFile(humanInboxPaths.indexFile, 'utf8'))
+      idx.letters = idx.letters.map((l: Record<string, unknown>) => (l.id === L ? { ...l, read: false, pinned: true } : l))
+      idx.lastUpdated = new Date(macNow + 1).toISOString()
+      await fs.writeFile(humanInboxPaths.indexFile, JSON.stringify(idx))
+      expect(await inboxLetter()).toMatchObject({ read: false, pinned: true })
+      expect(await flagFiles()).toEqual([])
       await waitFor(async () => (await queuedPatches(S2)).length === 0, 'the patch of S2 to leave the queue')
       expect(sentPatches.at(-1)).toEqual({ sid: S2, patch: { title: 'Acme two, queued behind' } })
 
