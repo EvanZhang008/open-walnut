@@ -46,8 +46,11 @@ import { bus, EventNames } from '../../core/event-bus.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { companionMemoryRoutes } from '../../replica/companion-copy-routes.js'
 
 export const searchMemoryV1Router = Router()
+// The companion's memory reads and saves take the Mac's copy and its journal (stage 4d); a pass-through elsewhere.
+searchMemoryV1Router.use(companionMemoryRoutes('v1'))
 
 /** Placeholder sessionId for the box-level `server.*` relay actions. */
 const SERVER_RELAY_SID = '__server__'

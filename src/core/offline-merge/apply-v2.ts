@@ -31,10 +31,10 @@ export { RefusedWrite };
 
 /**
  * The v2 kinds this Mac applies (`offline.drain {kinds}`); `note` since WP11 (offline-merge/notes.ts);
- * `session-meta`, `inbox-state` and `chat-turn` only the cloud companion writes (apply-session-meta.ts,
- * apply-inbox-state.ts, apply-chat-turn.ts).
+ * `session-meta`, `inbox-state`, `chat-turn` and `memory` only the cloud companion writes (apply-session-meta.ts,
+ * apply-inbox-state.ts, apply-chat-turn.ts, apply-memory.ts).
  */
-export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn'] as const;
+export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory'] as const;
 /** What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks. */
 export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor'];
 
@@ -367,6 +367,8 @@ export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
     case 'inbox-state': return (await import('./apply-inbox-state.js')).applyInboxState(ctx, record);
     // A chat turn the cloud companion answered itself while away (stage 3e).
     case 'chat-turn': return (await import('./apply-chat-turn.js')).applyChatTurn(ctx, record);
+    // MEMORY.md or USER.md saved on the cloud companion while away (stage 4d).
+    case 'memory': return (await import('./apply-memory.js')).applyMemory(ctx, record);
     default: throw new Error(`unknown journal kind ${record.kind}`);
   }
 }

@@ -50,8 +50,11 @@ import { log } from '../../logging/index.js'
 import { SKILL_READ_ONLY_INSTALL } from '../../core/skill-errors.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { companionSkillRoutes } from '../../replica/companion-copy-routes.js'
 
 export const libraryV1Router = Router()
+// The companion's skill writes need the Mac while its copy is held (stage 4d); a pass-through elsewhere.
+libraryV1Router.use(companionSkillRoutes('v1'))
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
 

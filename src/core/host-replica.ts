@@ -230,11 +230,12 @@ export const HELD_RERUN_MS = 35_000
 const heldReruns = new Map<string, ReturnType<typeof setTimeout>>()
 
 /**
- * A drain acked note records of this host: its next round sends the notes manifest again
- * (the copy holds those keys until a manifest from after the ack stored them).
+ * A drain acked note records of this host (or, from the companion, memory records): its
+ * next round sends that manifest again (the copy holds those keys until a manifest from
+ * after the ack stored them).
  */
-export function noteRecordsAcked(hostKey: string): void {
-  lastManifest.delete(`${hostKey}\u0000notes`)
+export function noteRecordsAcked(hostKey: string, kind: ReplicaKind = 'notes'): void {
+  lastManifest.delete(`${hostKey}\u0000${kind}`)
 }
 
 function scheduleHeldRerun(target: ReplicaTarget, kind: ReplicaKind, held: number): void {

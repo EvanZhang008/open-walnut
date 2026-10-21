@@ -392,6 +392,46 @@ describe('the Mac drains the companion\'s journal', () => {
     expect(companion.journal.companionJournalRecords()).toEqual([])
   })
 
+  it('a memory save from the companion lands; a Mac edit elsewhere merges; the same line is lettered with both versions', async () => {
+    const file = constantsBase.MEMORY_FILE as string
+    const sha12 = (t: string) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 12)
+    const save = (base: string | null, ours: string) => companion.journal.journalMemory({
+      doc: 'global', baseHash: base === null ? null : sha12(base), base: base === null ? null : Buffer.from(base), ours: Buffer.from(ours), oursHash: sha12(ours),
+    })
+    await fsp.mkdir(path.dirname(file), { recursive: true })
+    const base = '# Memory\n\n- first rule\n\n- second rule\n\n- third rule\n'
+    await fsp.writeFile(file, base)
+    // A plain save over the doc as the Mac has it, then a second one on top of it.
+    const one = base.replace('third rule', 'third rule, from the phone')
+    expect(save(base, one)).toMatchObject({ ok: true })
+    const two = `${one}\n- fourth rule\n`
+    expect(save(one, two)).toMatchObject({ ok: true })
+    // The Mac changes the first line meanwhile: both changes stay.
+    await fsp.writeFile(file, base.replace('first rule', 'first rule, from the Mac'))
+    await mac.drain.drainCompanionJournalNow()
+    const merged = await fsp.readFile(file, 'utf8')
+    expect(merged).toContain('first rule, from the Mac')
+    expect(merged).toContain('third rule, from the phone')
+    expect(merged).toContain('fourth rule')
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    // The same line on both sides: the newer side is the doc, the other is in the letter in full.
+    const conflictsBefore = fs.existsSync(mac.conflicts.conflictDir()) ? fs.readdirSync(mac.conflicts.conflictDir()).filter((n) => n.endsWith('.json')).length : 0
+    const ours = merged.replace('second rule', 'second rule, from the phone')
+    expect(save(merged, ours)).toMatchObject({ ok: true })
+    const macText = merged.replace('second rule', 'second rule, from the Mac')
+    await fsp.writeFile(file, macText)
+    const old = new Date(Date.now() - 3_600_000)
+    await fsp.utimes(file, old, old)
+    await mac.drain.drainCompanionJournalNow()
+    expect(await fsp.readFile(file, 'utf8')).toContain('second rule, from the phone')
+    const logs = fs.readdirSync(mac.conflicts.conflictDir()).filter((n) => n.endsWith('.json'))
+    expect(logs.length).toBe(conflictsBefore + 1)
+    const log = logs.map((n) => mac.conflicts.readConflictLog(n.slice(0, -5))).find((l) => l?.entries.some((e) => e.kind === 'memory'))
+    expect(log?.entries.find((e) => e.kind === 'memory')).toMatchObject({ field: 'MEMORY.md', kept: 'replica', mac: macText, replica: ours })
+    expect(mac.letter.buildConflictLetter(log!)?.markdown).toContain('- MEMORY.md: both sides changed the same lines')
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+  })
+
   it('a drain with nothing waiting is quiet', async () => {
     expect(companion.journal.companionJournalRecords()).toEqual([])
     const r = await mac.drain.drainCompanionJournalNow()

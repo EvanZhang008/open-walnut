@@ -18,7 +18,8 @@
  * fields), 3c `inbox-state` (a letter's read, pinned or archived flag), 3d
  * `task-create` (a task born here), 4c `note` (a note saved here, its bodies as
  * blobs: companion-notes.ts), 3e `chat-turn` (a chat turn this box answered itself, its
- * texts as blobs: companion-chat-turns.ts); the other queues are unchanged until their slice. A record carries no device actor
+ * texts as blobs: companion-chat-turns.ts), 4d `memory` (MEMORY.md or USER.md saved here:
+ * companion-memory.ts); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -178,6 +179,34 @@ export function journalNote(note: Parameters<OfflineJournal['appendNote']>[1]): 
     for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
   } else {
     log.session.error('companion journal: a note change was refused', { path: note.path, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
+/**
+ * Save one MEMORY.md or USER.md change for the Mac (stage 4d): a `memory` record naming
+ * the text it was made on and the new text as blobs, merged on the Mac three-way
+ * (offline-merge/apply-memory.ts). Never coalesced (the core folds notes and task fields
+ * only): each save is a record whose base is the one before it. Null when the Mac does
+ * not drain the kind: the caller keeps the old path. The lock check is the caller's
+ * (companion-memory.ts).
+ */
+export function journalMemory(input: { doc: 'global' | 'user'; baseHash: string | null; base: Buffer | null; ours: Buffer; oursHash: string }): AppendResult | null {
+  if (!macDrains('memory')) return null
+  const j = journalOf()
+  // A body stored before its record is safe from the orphan sweep for an hour.
+  const base = input.base ? j.putBlob(COMPANION_JOURNAL_HOME, input.base) : null
+  if (base && !base.ok) return base
+  const ours = j.putBlob(COMPANION_JOURNAL_HOME, input.ours)
+  if (!ours.ok) return ours
+  const r = j.append(COMPANION_JOURNAL_HOME, {
+    kind: 'memory', doc: input.doc, baseHash: input.baseHash, baseBlob: base ? base.sha : null, oursBlob: ours.sha, oursHash: input.oursHash,
+  }, { limit: true })
+  if (r.ok) {
+    log.memory.info('companion journal: saved a memory change for the Mac', { doc: input.doc, opId: r.opId, seq: r.seq })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+  } else {
+    log.memory.error('companion journal: a memory change was refused', { doc: input.doc, code: r.code, why: r.why, error: r.message })
   }
   return r
 }
@@ -368,6 +397,9 @@ export async function ackCompanionJournal(seqs: unknown, macNow?: unknown): Prom
   // texts are read here, before the ack frees them.
   const turns = acked.filter((x) => x.kind === 'chat-turn')
   if (turns.length) (await import('./companion-chat-turns.js')).companionChatTurnsAcked(turns)
+  // A memory doc the same way (4d).
+  const memory = acked.filter((x) => x.kind === 'memory')
+  if (memory.length) (await import('./companion-memory.js')).companionMemoryAcked(memory, at)
   const r = journalOf().ack(COMPANION_JOURNAL_HOME, { seqs })
   if (r.error) return { ok: false, remaining: r.remaining, error: r.error }
   if (r.acked.length) {

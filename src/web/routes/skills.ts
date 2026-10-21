@@ -13,9 +13,12 @@ import {
   getReference,
 } from '../../core/skill-store.js';
 import { SKILL_READ_ONLY_INSTALL } from '../../core/skill-errors.js';
+import { companionSkillRoutes } from '../../replica/companion-copy-routes.js';
 
 export function createSkillsRouter(): Router {
   const router = Router();
+  // The companion's skill reads take the Mac's copy, its skill writes need the Mac (stage 4d); a pass-through elsewhere.
+  router.use(companionSkillRoutes('web'));
 
   // GET /api/skills — list all skills
   router.get('/', async (_req: Request, res: Response, next: NextFunction) => {

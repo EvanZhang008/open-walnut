@@ -31,7 +31,8 @@ export type ConflictKind =
   | 'parent-refused'  // a parent link the Mac refused (missing, a cycle, too deep)
   | 'create-collision'// a created task's id was taken; it got a new id
   | 'board'           // a Board edit that conflicted (the Mac's html kept)
-  | 'note';           // a note write made while away that needed a choice (WP11, offline-merge/notes.ts)
+  | 'note'            // a note write made while away that needed a choice (WP11, offline-merge/notes.ts)
+  | 'memory';         // MEMORY.md or USER.md saved on the companion that conflicted (offline-merge/apply-memory.ts)
 
 export interface ConflictEntry {
   kind: ConflictKind;

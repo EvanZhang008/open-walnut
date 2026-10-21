@@ -305,6 +305,9 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   note_changes_need_mac: 'Editing a note works while your Mac is away; moving, renaming, folders and pictures need your Mac.',
   note_not_kept: 'This host keeps no copy of this note, so it can only be changed on your Mac.',
   note_too_large: 'Notes over 1 MB can only be changed on your Mac.',
+  // The cloud companion's memory and skills (stage 4d: companion-memory.ts, companion-copy-routes.ts).
+  memory_too_large: 'A memory document over 1 MB can only be changed on your Mac.',
+  skill_changes_need_mac: 'Skills here are a copy of the ones on your Mac, so a skill is changed on your Mac.',
 }
 
 const GENERIC_REASON = 'Your Mac is not answering right now.'
