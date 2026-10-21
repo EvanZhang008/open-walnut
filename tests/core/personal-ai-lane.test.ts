@@ -732,7 +732,9 @@ describe('an ACP lane', () => {
     ])
     const started0 = started.length
     const pending = getOrCreateLaneSession('general', 'conv-acp', { firstMessage: 'hello acp', engine: 'codex' })
-    await new Promise((r) => setTimeout(r, 50))
+    // The start event lands after the mint's async work, which a loaded runner can
+    // stretch past any fixed sleep (flake hunt 39585349533): wait for it, then count.
+    await vi.waitFor(() => expect(started.length).toBeGreaterThan(started0), { timeout: 10_000 })
     expect(started.length).toBe(started0 + 1)
     const ev = started[started0]
     expect(ev.profile).toBeUndefined()   // still no system-prompt channel
@@ -767,7 +769,9 @@ describe('an ACP lane', () => {
     ])
     const started0 = started.length
     void getOrCreateLaneSession('general', 'conv-acp-quiet', { engine: 'codex' })
-    await new Promise((r) => setTimeout(r, 50))
+    // The start event lands after the mint's async work, which a loaded runner can
+    // stretch past any fixed sleep (flake hunt 39585349533): wait for it, then count.
+    await vi.waitFor(() => expect(started.length).toBeGreaterThan(started0), { timeout: 10_000 })
     expect(started.length).toBe(started0 + 1)
     expect(started[started0].message ?? '').toBe('')
     expect((await storeOf('conv-acp-quiet')).laneSeen).toBeUndefined()
