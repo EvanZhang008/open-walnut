@@ -231,12 +231,28 @@ Mac, and the readers switch then (the inbox in 3c, below).
 
 ### 2c: sessions
 
-The sessions copy, in its own `cache/replica/home/sessions.sqlite`, replaces the
-projection push and the transcript tails for a companion that took it; the box's
-own sessions stay in its live registry. `cloudOwnedSession` then reads ownership
-from the row (`owner: 'cloud'`, written where the box starts a session) instead of
-inferring it from an empty host. The session reads (list, detail, history) are
-specified when this part starts.
+The sessions copy lives in its own `cache/replica/home/sessions.sqlite`
+(`session-db.ts` `applyCompanionSessionCopy`, the box's live registry untouched:
+it holds the sessions the box runs itself). Rows are projected again before they
+are stored, so no stored row names a process.
+
+The first reader is the session list (`GET /api/v1/sessions`): once a whole round
+arrived, the box builds it the way the Mac builds the pushed one
+(`session-projection.ts` `buildSessionProjection`, same eligibility, order and
+budgets) over the copy's rows, the task fields from its task copy, the host labels
+from its config copy, with `x-walnut-copy-as-of` (`companion-sessions.ts`). The
+box's own sessions are joined in as before. The copy is the Mac's whole store
+(about 5,000 rows, 18 MB of JSON measured), so the rows a list can show (not
+archived, live or active in the last 30 days) are parsed once, in slices, and then
+kept up to date by every copy write; a write that lands while they are parsed is
+applied after. A purge (the kind turned off for the companion) puts the pushed
+list back.
+
+Still on the pushed projection: the model picker (its host catalogs ride the
+push), the transcript tails, the events snapshot. They move to the copy next, and
+the projection push stops once none of them reads it. `cloudOwnedSession` then
+reads ownership from the row (`owner: 'cloud'`, written where the box starts a
+session) instead of inferring it from an empty host.
 
 ## Stage 3: writes while the Mac is away go to journal v2
 
