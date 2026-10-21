@@ -107,7 +107,7 @@ describe('GET /:sessionId/history?before=', () => {
 
   it('never stamps a page row unsettled: the client would re-ask for ids the tail cannot answer', async () => {
     const sid = 'before-unsettled-001';
-    await createSessionRecord(sid, '/tmp/marina/pages', 'p');
+    await createSessionRecord(sid, `task-${sid}`, 'p');
     const openCall = row(1, { role: 'assistant', tools: [{ toolUseId: 'tu-1', name: 'Bash' }] });
     pageAnswer = { messages: [openCall], reachedStart: true };
 
@@ -120,7 +120,7 @@ describe('GET /:sessionId/history?before=', () => {
 
   it('counts a page in prose: the human\'s words and the assistant\'s, not injected lines or empty rows', async () => {
     const sid = 'before-prose-001';
-    await createSessionRecord(sid, '/tmp/marina/pages', 'p');
+    await createSessionRecord(sid, `task-${sid}`, 'p');
     await request(createApp()).get(`/api/sessions/${sid}/history`).query({ before: BEFORE });
 
     const { isText, minText } = calls[0].want;
@@ -133,7 +133,7 @@ describe('GET /:sessionId/history?before=', () => {
 
   it('a fork answers unavailable (its history is its ancestors plus this file), never a wrong page', async () => {
     const sid = 'before-fork-001';
-    await createSessionRecord(sid, '/tmp/marina/pages', 'p');
+    await createSessionRecord(sid, `task-${sid}`, 'p');
     await updateSessionRecord(sid, { forkedFromSessionId: 'some-parent' });
 
     const res = await request(createApp()).get(`/api/sessions/${sid}/history`).query({ before: BEFORE });
@@ -151,7 +151,7 @@ describe('GET /:sessionId/history?before=', () => {
 
   it('a transcript the window reader cannot read (rewound, path unresolved) answers unavailable: unreadable', async () => {
     const sid = 'before-unreadable-001';
-    await createSessionRecord(sid, '/tmp/marina/pages', 'p');
+    await createSessionRecord(sid, `task-${sid}`, 'p');
     pageAnswer = null;
 
     const res = await request(createApp()).get(`/api/sessions/${sid}/history`).query({ before: BEFORE });
@@ -162,7 +162,7 @@ describe('GET /:sessionId/history?before=', () => {
 
   it('a reader failure is a 502 the client can retry, and the full read never runs', async () => {
     const sid = 'before-fail-001';
-    await createSessionRecord(sid, '/tmp/marina/pages', 'p');
+    await createSessionRecord(sid, `task-${sid}`, 'p');
     pageAnswer = new Error('Remote read timeout (30s)');
 
     const res = await request(createApp()).get(`/api/sessions/${sid}/history`).query({ before: BEFORE });
@@ -173,7 +173,7 @@ describe('GET /:sessionId/history?before=', () => {
 
   it('a before that is not a timestamp is a 400 and reads nothing', async () => {
     const sid = 'before-bad-001';
-    await createSessionRecord(sid, '/tmp/marina/pages', 'p');
+    await createSessionRecord(sid, `task-${sid}`, 'p');
 
     const res = await request(createApp()).get(`/api/sessions/${sid}/history`).query({ before: 'yesterday-ish' });
 

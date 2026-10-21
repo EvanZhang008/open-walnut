@@ -78,6 +78,7 @@ import {
   _resetForTesting as resetTaskManager,
 } from '../../../src/core/task-manager.js';
 import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
+import { TaskSessionTakenError } from '../../../src/core/sessions/one-session-per-task.js';
 import { closeDb as closeTaskDb } from '../../../src/core/task-db.js';
 import { bus } from '../../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
@@ -325,14 +326,15 @@ describe('GET /api/sessions/summaries', () => {
 describe('GET /api/sessions/task/:taskId', () => {
   it('returns sessions for a task', async () => {
     await createSessionRecord('s1', 'task-x', 'proj');
-    await createSessionRecord('s2', 'task-x', 'proj');
+    // A task has exactly one session: a second one for task-x is refused.
+    await expect(createSessionRecord('s2', 'task-x', 'proj')).rejects.toBeInstanceOf(TaskSessionTakenError);
     await createSessionRecord('s3', 'task-y', 'proj');
 
     const app = createApp();
     const res = await request(app).get('/api/sessions/task/task-x');
 
     expect(res.status).toBe(200);
-    expect(res.body.sessions).toHaveLength(2);
+    expect(res.body.sessions.map((s: { claudeSessionId: string }) => s.claudeSessionId)).toEqual(['s1']);
   });
 
   it('returns empty array for unknown task', async () => {
@@ -973,7 +975,9 @@ describe('POST /api/sessions/:sessionId/execute', () => {
     await fs.mkdir(WALNUT_HOME, { recursive: true });
     await fs.writeFile(planFilePath, '# Test Plan\n1. Step one\n2. Step two\n');
 
-    await createSessionRecord('plan-sess-1', 'task-1', 'my-project', '/tmp', {
+    // The plan's task must exist: executing runs the plan in a new task beside it.
+    const { task: planTask } = await addTask({ title: 'Plan task', project: 'my-project', source: 'local' });
+    await createSessionRecord('plan-sess-1', planTask.id, 'my-project', '/tmp', {
       mode: 'plan',
       planFile: planFilePath,
       planCompleted: true,
@@ -1004,14 +1008,17 @@ describe('POST /api/sessions/:sessionId/execute', () => {
     await fs.mkdir(WALNUT_HOME, { recursive: true });
     await fs.writeFile(planFilePath, '# Plan\nDo stuff\n');
 
-    await createSessionRecord('orig-plan', 'task-1', 'my-project', '/tmp', {
+    const { task: planTask } = await addTask({ title: 'Plan task', project: 'my-project', source: 'local' });
+    await createSessionRecord('orig-plan', planTask.id, 'my-project', '/tmp', {
       mode: 'plan',
       planFile: planFilePath,
       planCompleted: true,
     });
 
-    // Create an execution session that points back to the plan session
-    await createSessionRecord('exec-sess-1', 'task-1', 'my-project', '/tmp', {
+    // Create an execution session that points back to the plan session. It runs
+    // in its own task beside the plan's: a task has exactly one session.
+    const { task: execTask } = await addTask({ title: 'Execute: Plan task', project: 'my-project', source: 'local' });
+    await createSessionRecord('exec-sess-1', execTask.id, 'my-project', '/tmp', {
       mode: 'bypass',
       fromPlanSessionId: 'orig-plan',
     });

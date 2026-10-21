@@ -38,7 +38,7 @@ describe('the leader rows of the sessions copy', () => {
     await tracker.createSessionRecord('sid-marina-lead-1', 'task-marina', 'Marina', '/home/acme/marina', {
       pid: 4242, outputFile: '/tmp/streams/sid-marina-lead-1.jsonl', title: 'Lead', appliedAppendSystemPrompt: 'a long prompt', host: 'devbox',
     })
-    await tracker.createSessionRecord('sid-marina-lead-2', 'task-marina', 'Marina', undefined, { pid: 4243, title: 'Worker' })
+    await tracker.createSessionRecord('sid-marina-lead-2', 'task-marina-worker', 'Marina', undefined, { pid: 4243, title: 'Worker' })
     expect(woke).toBeGreaterThanOrEqual(2)
     const rows = await SESSIONS_KIND.rows()
     expect(rows.map((r) => r.claudeSessionId).sort()).toEqual(['sid-marina-lead-1', 'sid-marina-lead-2'])

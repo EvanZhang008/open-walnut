@@ -261,7 +261,7 @@ export async function promoteSessionSideQuestion(
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const sessionRecord = await getSessionByClaudeId(sessionId);
   const parentTaskId = sessionRecord?.taskId?.trim() || undefined;
-  const { addTask, linkSession } = await import('../task-manager.js');
+  const { addTask } = await import('../task-manager.js');
   const { task } = await addTask({
     title: entry.question,
     description: entry.answer,
@@ -270,8 +270,8 @@ export async function promoteSessionSideQuestion(
     // hand-made task (Satellite = pinned, no stored tier).
     pinned: true,
   });
-  // Link the task back to the session so it shows under that session's history.
-  await linkSession(task.id, sessionId);
+  // No session link: the session belongs to its own task (one-session-per-task.ts).
+  // The Q&A rides the description, and the parent link leads back to it.
   await markPromoted(sessionId, id, task.id);
   return { taskId: task.id, ...(task.parent_task_id ? { parentTaskId: task.parent_task_id } : {}) };
 }

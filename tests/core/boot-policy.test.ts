@@ -46,6 +46,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'session-auto-recover': leaderOnly,
   'session-reconcile': leaderOnly,
   'completed-task-session-migration': always,
+  'one-session-per-task': leaderOnly, // new 2026-10-21: the companion's session copy is the apply connection's
   'stream-file-cleanup': always,
   'session-integrity-check': leaderOnly,
   'notes-watcher': always,

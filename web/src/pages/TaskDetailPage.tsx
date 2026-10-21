@@ -29,6 +29,9 @@ import { openSessionOnHome } from '@/utils/open-session';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { resolveSessionRecordStatus } from '@/stores/session-status-store';
+import { resolveTaskSessionId } from '@/utils/session-status';
+import { EarlierSessions, taskSessionLayout } from '@/components/tasks/TaskSessionHistory';
+import { TransferLinks } from '@/components/transfer/TransferLinks';
 
 /**
  * Route entry. Resolves the task id and the operation-error reporter from
@@ -96,7 +99,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const [showDepPicker, setShowDepPicker] = useState(false);
   const [depSearch, setDepSearch] = useState('');
   const [depSearchResults, setDepSearchResults] = useState<Task[]>([]);
-  const [archivedOpen, setArchivedOpen] = useState(false);
   // The task went away under the page (task-gone.ts). Keyed to the page id it
   // applies to, so a link to another task in the same window shows that task.
   const [gone, setGone] = useState<TaskGone | null>(null);
@@ -245,7 +247,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   useEffect(() => {
     if (!task) return;
     refetchSessions();
-  }, [task?.session_ids?.length, task?.exec_session_id, task?.plan_session_id, refetchSessions]);
+  }, [task?.session_ids?.length, task?.session_id, task?.exec_session_id, task?.plan_session_id, refetchSessions]);
 
   // ── Live updates via WebSocket ──
   // All handlers use resolved `taskId` (full ID) for matching — never raw URL param.
@@ -290,16 +292,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   });
   // Auto-select the most recent active session
   useEffect(() => {
-    const activeIds = [task?.plan_session_id, task?.exec_session_id].filter(Boolean) as string[];
-    if (activeIds.length > 0) {
-      // If current selection is still active, keep it; otherwise pick the last
-      if (!activeSessionId || !activeIds.includes(activeSessionId)) {
-        setActiveSessionId(activeIds[activeIds.length - 1]);
-      }
-    } else {
-      setActiveSessionId(null);
-    }
-  }, [task?.plan_session_id, task?.exec_session_id, activeSessionId]);
+    const sid = task ? resolveTaskSessionId(task) : null;
+    if (sid !== activeSessionId) setActiveSessionId(sid);
+  }, [task?.session_id, task?.plan_session_id, task?.exec_session_id, task?.session_ids, activeSessionId]);
 
   // ── Writes ──
   // Anything the shared store carries goes THROUGH it (`sharedStore`), so the
@@ -363,31 +358,18 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     setNewNote('');
   };
 
-  const activeSessionIds = useMemo(
-    () => [task?.plan_session_id, task?.exec_session_id]
-      .filter((sid): sid is string => {
-        if (!sid) return false;
-        const record = sessionRecords.get(sid);
-        return !record || !resolveSessionRecordStatus(record).archived;
-      }),
-    [task?.plan_session_id, task?.exec_session_id, sessionRecords, statusEpoch],
+  // One session per task: its own session (inline chat), and the ones it held
+  // before that rule as "Earlier sessions" (TaskSessionHistory.tsx).
+  const sessionLayout = useMemo(
+    () => (task ? taskSessionLayout(task, sessionRecords.keys()) : { primary: null, earlier: [] as string[] }),
+    [task?.session_id, task?.session_ids, task?.plan_session_id, task?.exec_session_id, task?.legacy_session_ids, sessionRecords],
   );
-  // Merge task.session_ids with API-returned sessions (embedded sessions may not be in session_ids)
-  const { otherSessionIds, archivedSessionIds } = useMemo(() => {
-    const taskSids = task?.session_ids ?? [];
-    const apiSids = [...sessionRecords.keys()];
-    const allSids = [...new Set([...taskSids, ...apiSids])];
-    const nonActive = allSids.filter((sid) => !activeSessionIds.includes(sid));
-    const archived: string[] = [];
-    const other: string[] = [];
-    for (const sid of nonActive) {
-      const baseRecord = sessionRecords.get(sid);
-      const rec = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
-      if (rec?.archived) archived.push(sid);
-      else other.push(sid);
-    }
-    return { otherSessionIds: other, archivedSessionIds: archived };
-  }, [task?.session_ids, sessionRecords, activeSessionIds, statusEpoch]);
+  const primaryRecord = sessionLayout.primary ? sessionRecords.get(sessionLayout.primary) : undefined;
+  const primaryArchived = !!primaryRecord && !!resolveSessionRecordStatus(primaryRecord).archived;
+  const activeSessionIds = useMemo(
+    () => (sessionLayout.primary && !primaryArchived ? [sessionLayout.primary] : []),
+    [sessionLayout.primary, primaryArchived, statusEpoch],
+  );
 
   if (gone && gone.forId === id) {
     return <TaskGoneNotice gone={gone} isPopout={isPopout} onOpen={(to) => navigate(to)} onBack={handleBack} />;
@@ -425,6 +407,8 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           Delete
         </button>
       </div>
+
+      <TransferLinks task={task} onOpenTask={(tid) => navigate(taskHref(tid, isPopout))} className="tdv2-transfer" />
 
       <div className="tdv2-body">
       <div className="tdv2-main">
@@ -601,35 +585,10 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         </div>
       ) : null}
 
-      {/* Active Sessions — inline chat (always first via .tdv2-sessions order) */}
+      {/* The task's session — inline chat (always first via .tdv2-sessions order) */}
       {activeSessionIds.length > 0 && (
         <div className="card mb-4 tdv2-sessions">
-          <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>
-            Active Sessions
-            <span className="task-session-pill task-session-pill-running" style={{ marginLeft: 8 }}>
-              <span className="task-session-dot" />
-              {activeSessionIds.length}
-            </span>
-          </h2>
-          {activeSessionIds.length > 1 && (
-            <div className="task-session-tabs">
-              {activeSessionIds.map((sid) => {
-                const baseRecord = sessionRecords.get(sid);
-                const record = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
-                const label = record?.title || sid.slice(0, 12) + '\u2026';
-                return (
-                  <button
-                    key={sid}
-                    className={`task-session-tab${activeSessionId === sid ? ' active' : ''}`}
-                    onClick={() => setActiveSessionId(sid)}
-                  >
-                    <span className="session-pill-status-dot dot-active" />
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>Session</h2>
           {activeSessionId && (
             <div className="task-session-chat-container">
               <SessionChatHistory
@@ -660,97 +619,25 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         </div>
       )}
 
-      {/* Other Sessions */}
-      {otherSessionIds.length > 0 && (
+      {/* An archived session, then the sessions this task held before one-session-per-task. */}
+      {(primaryArchived || sessionLayout.earlier.length > 0) && (
         <div className="card mb-4">
-          <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>
-            {activeSessionIds.length > 0 ? 'Other Sessions' : 'Linked Sessions'}
-          </h2>
-          <div className="flex flex-col gap-2">
-            {otherSessionIds.map((sid) => {
-              const baseRecord = sessionRecords.get(sid);
-              const record = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
-              const label = record?.title || sid.slice(0, 12) + '\u2026';
-              const dotClass = record?.process_status === 'error' ? 'dot-error' : 'dot-completed';
-              return (
-                <div
-                  key={sid}
-                  className="tdv2-session-row"
-                  title={sid}
-                  onClick={() => openSessionOnHome(sid, navigate)}
-                >
-                  <span className={`session-pill-status-dot ${dotClass}`} />
-                  <span className="tdv2-session-label">{label}</span>
-                  {record?.process_status && (
-                    <span className="text-xs text-muted">{record.process_status}</span>
-                  )}
-                  {(record?.process_status === 'stopped' || record?.process_status === 'error') && (
-                    <button
-                      className="btn btn-sm"
-                      style={{ fontSize: '0.7rem', padding: '1px 6px', opacity: 0.7 }}
-                      onClick={(e) => { e.stopPropagation(); void updateSession(sid, { archived: true }).then(loadTask); }}
-                    >
-                      Archive
-                    </button>
-                  )}
-                  {/* Arrow must come from a JS string literal (an escape sequence in
-                      JSX *text* renders as the six literal characters), which is why
-                      the sibling ellipses above use '\u2026' the same way. */}
-                  <span className="tdv2-session-open">Open session {'\u2192'}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Archived Sessions */}
-      {archivedSessionIds.length > 0 && (
-        <div className="card mb-4">
-          <div className="session-detail-collapse">
-            <button
-              className="session-detail-collapse-toggle"
-              onClick={() => setArchivedOpen(!archivedOpen)}
-            >
-              <span className="session-detail-collapse-arrow">{archivedOpen ? '\u25BE' : '\u25B8'}</span>
-              Archived Sessions ({archivedSessionIds.length})
-            </button>
-            {archivedOpen && (
-              <div className="session-detail-collapse-body">
-                <div className="flex flex-col gap-2">
-                  {archivedSessionIds.map((sid) => {
-                    const baseRecord = sessionRecords.get(sid);
-                    const record = baseRecord ? resolveSessionRecordStatus(baseRecord) : undefined;
-                    const label = record?.title || sid.slice(0, 12) + '\u2026';
-                    return (
-                      <div key={sid} className="flex items-center gap-2" style={{ opacity: 0.6 }}>
-                        <span className="session-pill-status-dot dot-completed" />
-                        <span
-                          className="session-id-pill"
-                          title={sid}
-                          onClick={() => openSessionOnHome(sid, navigate)}
-                        >
-                          {label}
-                        </span>
-                        {record?.archive_reason && (
-                          <span className="text-xs text-muted" style={{ fontStyle: 'italic' }}>
-                            {record.archive_reason === 'plan_executed' ? 'plan executed' : record.archive_reason}
-                          </span>
-                        )}
-                        <button
-                          className="btn btn-sm"
-                          style={{ fontSize: '0.7rem', padding: '1px 6px' }}
-                          onClick={() => updateSession(sid, { archived: false })}
-                        >
-                          Unarchive
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+          {primaryArchived && sessionLayout.primary && (
+            <div className="tdv2-session-row" title={sessionLayout.primary} onClick={() => openSessionOnHome(sessionLayout.primary!, navigate)}>
+              <span className="session-pill-status-dot dot-completed" />
+              <span className="tdv2-session-label">{primaryRecord?.title || 'Untitled session'}</span>
+              <span className="text-xs text-muted">archived</span>
+              <button
+                className="btn btn-sm"
+                style={{ fontSize: '0.7rem', padding: '1px 6px' }}
+                onClick={(e) => { e.stopPropagation(); void updateSession(sessionLayout.primary!, { archived: false }).then(refetchSessions); }}
+              >
+                Unarchive
+              </button>
+              <span className="tdv2-session-open">Open session {'\u2192'}</span>
+            </div>
+          )}
+          <EarlierSessions ids={sessionLayout.earlier} onOpen={(sid) => openSessionOnHome(sid, navigate)} />
         </div>
       )}
 

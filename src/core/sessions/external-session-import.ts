@@ -280,8 +280,10 @@ async function cleanupLegacyBuckets(excludedCwds: Record<string, string[]>): Pro
       // Drop the session rows FIRST: their ids must vanish from the tracker so
       // the next scan's knownSessionIds doesn't hide them from re-import.
       const sessions = await getSessionsForTask(bucket.id);
+      // The one-session-per-task split detached all but one of a bucket's rows
+      // and listed them on it: they are the bucket's too.
       await deleteSessionRecords(
-        new Set(sessions.map((s) => s.claudeSessionId)),
+        new Set([...sessions.map((s) => s.claudeSessionId), ...(bucket.legacy_session_ids ?? [])]),
         'external-import v1 bucket migration (re-imported as one task per session)',
       );
       await deleteTask(bucket.id);

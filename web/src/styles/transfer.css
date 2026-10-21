@@ -1,0 +1,83 @@
+/* Transfer dialog (components/transfer/TransferDialog.tsx) and the "Moved from / to" lines. */
+
+.xfer-modal.app-modal {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  /* var(--card-bg) is glass in some themes; a form over a busy board must stay readable. */
+  background: var(--bg-primary, var(--card-bg, #1c1f26));
+}
+.xfer-head { display: flex; align-items: center; gap: 8px; }
+.xfer-head .app-modal-title { flex: 1; min-width: 0; }
+.xfer-close {
+  border: none; background: none; color: var(--fg-muted); font-size: 18px; line-height: 1;
+  cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.xfer-close:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.15)); color: var(--fg); }
+.xfer-intro { margin-top: 4px; font-size: 12.5px; color: var(--fg-muted); }
+.xfer-body { margin-top: 12px; overflow-y: auto; min-height: 0; padding-right: 2px; }
+.xfer-fields { border: none; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.xfer-fields:disabled { opacity: 0.7; }
+.xfer-status { font-size: 13px; color: var(--fg-muted); padding: 12px 0; display: flex; gap: 10px; align-items: center; }
+.xfer-status-error { color: var(--error, #e5484d); }
+
+.xfer-group { display: flex; flex-direction: column; gap: 6px; }
+.xfer-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.xfer-label-field { margin-bottom: -6px; }
+.xfer-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
+.xfer-opts.is-wide { grid-template-columns: 1fr; }
+
+.xfer-opt {
+  display: flex; flex-direction: column; gap: 2px; align-items: stretch; text-align: left;
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer;
+  min-width: 0;
+}
+.xfer-opt:hover:not(:disabled) { background: var(--bg-hover, rgba(127, 127, 127, 0.1)); }
+.xfer-opt.is-checked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.xfer-opt:disabled { cursor: not-allowed; opacity: 0.55; }
+.xfer-opt:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
+.xfer-opt-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.xfer-opt-dot {
+  flex: none; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--fg-muted);
+  box-sizing: border-box;
+}
+.xfer-opt.is-checked .xfer-opt-dot { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
+.xfer-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.xfer-opt-tag, .xfer-now {
+  flex: none; font-size: 10.5px; color: var(--fg-muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 0 6px; line-height: 16px;
+}
+.xfer-now { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.xfer-opt-sub { font-size: 11.5px; color: var(--fg-muted); padding-left: 19px; overflow-wrap: anywhere; }
+.xfer-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
+.xfer-path { margin-top: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; }
+
+.xfer-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.xfer-message { margin-top: 0; resize: vertical; min-height: 52px; font: inherit; font-size: 13px; }
+
+.xfer-error {
+  margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px;
+  color: var(--error, #e5484d); background: color-mix(in srgb, var(--error, #e5484d) 10%, transparent);
+  overflow-wrap: anywhere;
+}
+.xfer-actions { align-items: center; margin-top: 14px; }
+.xfer-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--fg-muted); }
+
+/* "Moved from <task>" / "Moved to <task>": one quiet line. */
+.xfer-links { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--fg-muted); }
+.xfer-links-panel { padding: 4px 14px; border-bottom: 1px solid var(--border-subtle, var(--border)); }
+.xfer-link-item { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; max-width: 100%; }
+.xfer-link-item .task-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+
+/* Earlier sessions (one-session-per-task history). */
+.tsh-toggle {
+  display: inline-flex; align-items: center; gap: 6px; border: none; background: none; padding: 2px 0;
+  font: inherit; font-size: 12px; color: var(--fg-muted); cursor: pointer;
+}
+.tsh-toggle:hover { color: var(--fg); }
+.tsh-arrow { display: inline-block; width: 10px; }
+.tsh-list { margin-top: 4px; }
+.tdp-transfer { margin-bottom: 2px; }
+.tdv2-transfer { margin: -4px 0 12px; }

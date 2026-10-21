@@ -20,6 +20,7 @@ import './health.js'
 import './places.js'
 import './time.js'
 import './mcp.js'
+import './transfer.js'
 
 export {
   defineOp,

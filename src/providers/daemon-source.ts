@@ -66,6 +66,9 @@ import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore } from './git-commit-core.js'
+import { createTransferCore } from './transfer-core.js'
+import { createTransferPack } from './transfer-pack-core.js'
+import { createHostFacts } from './host-facts-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
@@ -266,6 +269,9 @@ export function getDaemonSource(): string {
     ['__CREATE_FS_LS__', createFsLs.toString()],
     ['__CREATE_GIT_ATTRIBUTION__', createGitAttribution.toString()],
     ['__CREATE_GIT_COMMIT__', createGitCommitCore.toString()],
+    ['__CREATE_TRANSFER_CORE__', createTransferCore.toString()],
+    ['__CREATE_TRANSFER_PACK__', createTransferPack.toString()],
+    ['__CREATE_HOST_FACTS__', createHostFacts.toString()],
     ['__CREATE_TURN_SNAPSHOTS__', createTurnSnapshots.toString()],
     ['__CREATE_TURN_GUARD__', createTurnGuard.toString()],
     ['__CREATE_CLAUDE_CHECK__', createClaudeCheck.toString()],
@@ -596,6 +602,24 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
         const gc = createCommit({ spawn: () => { throw new Error('unused') }, fs: fs as never, path, tmpdir: () => '/tmp', env: {}, attribution: at })
         if (gc.job('none') !== null || gc.cleanMessage('  x  \n\n\n\ny\n') !== '  x\n\ny\n') throw new Error('git commit core did not build')
       }
+    }
+    // Workspace transfer smoke: the three factories must build from their text.
+    // Their behaviour is pinned by tests/providers/transfer-twin-parity.test.ts,
+    // which runs the inlined text against real files and a real repo.
+    const createTransfer = reconstructed['__CREATE_TRANSFER_CORE__'] as typeof createTransferCore | undefined
+    if (createTransfer) {
+      const tc = createTransfer({ fs: fs as never, path, crypto: {} as never, spawn: () => { throw new Error('unused') }, env: {}, home: '/h' })
+      if (tc.stagingSuffix !== '.walnut-part' || typeof tc.fetch !== 'function') throw new Error('transfer core did not build')
+    }
+    const createPack = reconstructed['__CREATE_TRANSFER_PACK__'] as typeof createTransferPack | undefined
+    if (createPack) {
+      const tp = createPack({ fs: fs as never, path, crypto: {} as never, spawn: () => { throw new Error('unused') }, env: {}, home: '/h' })
+      if (typeof tp.pack !== 'function') throw new Error('transfer pack core did not build')
+    }
+    const createFacts = reconstructed['__CREATE_HOST_FACTS__'] as typeof createHostFacts | undefined
+    if (createFacts) {
+      const hf = createFacts({ fs: fs as never, os: {} as never, execFile: () => null, http: {} as never, https: {} as never, env: {}, home: '/h', platform: 'linux', arch: 'x64' })
+      if (typeof hf.facts !== 'function') throw new Error('host facts core did not build')
     }
     // Turn snapshot smoke: the ref-record and diff parsers and the path rule ride
     // this text, so a reconstructed copy must read a record (with its JSON body),
@@ -3286,6 +3310,18 @@ function dispatchCommand(ws, id, cmd) {
     case 'git.commitPlan': return cmdGitCommitPlan(ws, id, cmd);
     case 'git.commitStart': return cmdGitCommitStart(ws, id, cmd);
     case 'git.commitJob': return sendOk(ws, id, { job: gitCommit.job(cmd.jobId) });
+    // 'fs-write-part-v1' / 'transfer-v1' / 'host-facts-v1' (transfer-core.ts,
+    // transfer-pack-core.ts, host-facts-core.ts): moving a workspace to another
+    // host. NOT in BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they
+    // write host files, run ssh/scp, or (host.facts) read what this host is,
+    // which only the trusted walnut socket asks, like host.preflight.
+    // Keep in sync with daemon-standalone.ts.
+    case 'fs.writePart': return replyTransfer(ws, id, 'fs.writePart', function () { return transferCore.writePart(cmd); }, false);
+    case 'transfer.pack': return replyTransfer(ws, id, 'transfer.pack', function () { return transferPack.pack(cmd); }, true);
+    case 'transfer.reach': return replyTransfer(ws, id, 'transfer.reach', function () { return transferCore.reach(cmd); }, false);
+    case 'transfer.fetch': return replyTransfer(ws, id, 'transfer.fetch', function () { return transferCore.fetch(cmd); }, true);
+    case 'transfer.realpath': return replyTransfer(ws, id, 'transfer.realpath', function () { return transferCore.realpath(cmd); }, false);
+    case 'host.facts': return replyTransfer(ws, id, 'host.facts', function () { return hostFacts.facts(cmd); }, false);
     case 'usage.scan': return cmdUsageScan(ws, id, cmd);
     case 'usage.costState': return cmdUsageCostState(ws, id, cmd);
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id, cmd);
@@ -11132,6 +11168,42 @@ function cmdGitCommitStart(ws, id, cmd) {
     });
   } catch (err) {
     sendError(ws, id, 'git.commitStart failed: ' + err.message, { code: err.code || 'failed' });
+  }
+}
+
+// ── Workspace transfer + host facts (host-local: 'fs-write-part-v1', 'transfer-v1',
+// 'host-facts-v1') ──
+// PARITY: keep in sync with daemon-standalone.ts. transfer-core.ts,
+// transfer-pack-core.ts and host-facts-core.ts are injected as text.
+const transferCore = (__CREATE_TRANSFER_CORE__)({
+  fs: fs, path: path, crypto: crypto, spawn: spawn, env: process.env, home: HOME_DIR,
+  randomId: function () { return crypto.randomBytes(6).toString('hex'); },
+});
+const transferPack = (__CREATE_TRANSFER_PACK__)({
+  fs: fs, path: path, crypto: crypto, spawn: spawn, env: process.env, home: HOME_DIR,
+});
+const hostFacts = (__CREATE_HOST_FACTS__)({
+  fs: fs, os: os, execFile: execFile, http: http, https: require('https'),
+  env: process.env, home: HOME_DIR, platform: process.platform, arch: process.arch,
+});
+
+// Answer one transfer-family command: its result, or {error, code, ...data}.
+// Tracked work (a pack, a fetch) rides the command drain, so a shutdown waits
+// for it instead of cutting a bundle or a download in half.
+function replyTransfer(ws, id, name, work, tracked) {
+  const answer = function () {
+    return work().then(
+      function (r) { sendOk(ws, id, r); },
+      function (err) {
+        const data = Object.assign({}, (err && err.data) || {}, { code: err && typeof err.code === 'string' ? err.code : 'failed' });
+        sendError(ws, id, name + ' failed: ' + (err && err.message), data);
+      },
+    );
+  };
+  try {
+    return tracked ? daemonCommands.run(answer) : answer();
+  } catch (err) {
+    sendError(ws, id, name + ' failed: ' + err.message, { code: 'shutting_down' });
   }
 }
 

@@ -528,6 +528,12 @@ export interface ForkSessionInput {
   /** Pre-built image context block ("read these files" annotation) — the web
    *  route builds it from uploaded images; v1/relay callers pass nothing. */
   imageContext?: string;
+  /** Internal (transfer, never an HTTP field): run the fork on another host or
+   *  in another directory. The caller has already put the source transcript
+   *  where the CLI looks for it there (~/.claude/projects/<encoded cwd>/). */
+  placeOverride?: { host?: string; cwd: string };
+  /** Internal (transfer): the message is sent as is, without the fork focus line. */
+  rawMessage?: boolean;
 }
 
 export interface ForkSessionResult {
@@ -708,7 +714,7 @@ export async function forkSessionToTask(
   input: ForkSessionInput,
   source = 'web-api',
 ): Promise<ForkSessionResult> {
-  const { task_id, create_child_task, child_title, message, title, model, imageContext } = input;
+  const { task_id, create_child_task, child_title, message, title, model, imageContext, placeOverride, rawMessage } = input;
 
   if (!task_id && !create_child_task) {
     throw new SessionControlError('Either task_id or create_child_task is required', 400);
@@ -737,6 +743,9 @@ export async function forkSessionToTask(
   if (!sourceRecord.cwd) {
     throw new SessionControlError('Source session has no working directory — cannot fork', 400);
   }
+
+  const forkCwd = placeOverride?.cwd ?? sourceRecord.cwd;
+  const forkHost = placeOverride ? placeOverride.host : sourceRecord.host;
 
   let task: Task | undefined;
   let childTaskCreated = false;
@@ -767,12 +776,13 @@ export async function forkSessionToTask(
     }
   }
 
-  // Check 1-session-per-task
-  const existingSessions = await getSessionsForTask(task.id);
-  const activeSessions = existingSessions.filter((s) => !s.archived);
-  if (activeSessions.length > 0) {
-    throw new SessionControlError('Target task already has a session', 409, {
-      existing_session_id: activeSessions[0].claudeSessionId,
+  // One session per task (one-session-per-task.ts): only a task with no
+  // conversation, archived or not, can take the fork.
+  const { taskConversation } = await import('./task-session-claim.js');
+  const existing = await taskConversation(task.id, { retire: true });
+  if (existing) {
+    throw new SessionControlError('Target task already has its session; fork into a new task instead', 409, {
+      existing_session_id: existing.claudeSessionId,
     });
   }
 
@@ -802,7 +812,9 @@ export async function forkSessionToTask(
       sourceSessionId, error: err instanceof Error ? err.message : String(err),
     });
   }
-  const forkMessage = `${handoffNotice}${FORK_FOCUS_PREFIX}${imageContext ?? ''}New request:\n${userRequest}`;
+  const forkMessage = rawMessage
+    ? `${handoffNotice}${userRequest}`
+    : `${handoffNotice}${FORK_FOCUS_PREFIX}${imageContext ?? ''}New request:\n${userRequest}`;
 
   // Mint the fork's session id up front (--session-id composes with --resume
   // --fork-session). Returning it lets the client open the real forked panel
@@ -818,10 +830,10 @@ export async function forkSessionToTask(
   // Seed the record before the spawn — the client opens the panel on this
   // response, and its first session read must not 404.
   try {
-    await createSessionRecord(forkSessionId, task.id, task.project ?? '', sourceRecord.cwd, {
+    await createSessionRecord(forkSessionId, task.id, task.project ?? '', forkCwd, {
       title: forkTitle,
       mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
-      host: sourceRecord.host,
+      host: forkHost,
       forkedFromSessionId: sourceSessionId,
       initialProcessStatus: 'idle',
       initialStatusReason: 'awaiting_spawn',
@@ -848,7 +860,7 @@ export async function forkSessionToTask(
     preassignedSessionId: forkSessionId,
     taskId: task.id,
     message: forkMessage,
-    cwd: sourceRecord.cwd,
+    cwd: forkCwd,
     project: task.project ?? '',
     mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
     // Fork must resume on the EXACT same model as the parent — the CLI does
@@ -858,7 +870,7 @@ export async function forkSessionToTask(
     // [1m] marker). An explicit request-body `model` still wins as override.
     model: model ?? sourceRecord.cliModel,
     title: forkTitle,
-    host: sourceRecord.host,
+    host: forkHost,
     forkedFromSessionId: sourceSessionId,
   }, ['session-runner'], { source });
 
@@ -869,7 +881,7 @@ export async function forkSessionToTask(
     taskId: task.id,
     title: forkTitle,
     ...(childTaskCreated ? { childTaskCreated: true } : {}),
-    ...(sourceRecord.host ? { host: sourceRecord.host } : {}),
+    ...(forkHost ? { host: forkHost } : {}),
   };
 }
 

@@ -118,22 +118,25 @@ async function stampAsAsk(task: Task, agent: AskAgentRef): Promise<void> {
   if (stamped) bus.emit(EventNames.TASK_UPDATED, { task: stamped }, ['web-ui'], { source: SOURCE });
 }
 
-/** Point every session of the chat at its ask, and tell the live CLI. */
+/**
+ * Point the chat's current session at its ask, and tell the live CLI. One
+ * session per task (one-session-per-task.ts): an ask that already holds a
+ * session takes no other, so older segments of a cleared chat stay unlinked.
+ */
 async function linkSegments(taskId: string, segments: readonly SessionRecord[]): Promise<number> {
   const { linkSessionToTask } = await import('../session-tracker.js');
-  let linked = 0;
-  for (const seg of segments) {
-    if (seg.taskId === taskId) continue;
-    // A segment some OTHER live task holds is that task's; never steal it.
-    if (seg.taskId && await taskOrNull(seg.taskId)) continue;
-    await linkSessionToTask(seg.claudeSessionId, taskId);
-    linked++;
-  }
+  const { otherTaskSessionIdFor } = await import('./task-session-claim.js');
+  const current = currentSegment(segments);
+  if (!current || current.taskId === taskId) return 0;
+  // A segment some OTHER live task holds is that task's; never steal it.
+  if (current.taskId && await taskOrNull(current.taskId)) return 0;
+  if (await otherTaskSessionIdFor(taskId, current.claudeSessionId)) return 0;
+  await linkSessionToTask(current.claudeSessionId, taskId);
   try {
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
-    for (const seg of segments) sessionRunner.syncTask(seg.claudeSessionId, taskId);
-  } catch { /* no runner (tests): the records above still hold */ }
-  return linked;
+    sessionRunner.syncTask(current.claudeSessionId, taskId);
+  } catch { /* no runner (tests): the record above still holds */ }
+  return 1;
 }
 
 /** The session an ask's slot holds: the live segment, else the newest. */
@@ -206,7 +209,34 @@ export async function askTaskForLaneMint(
 ): Promise<string> {
   if (CLOUD_MODE) return '';
   const lane = personalAiLaneKey(agentId, conversationId);
-  return serialized(lane, () => findOrCreateAsk(agentId, conversationId, lane, opts.create));
+  return serialized(lane, async () => {
+    const askId = await findOrCreateAsk(agentId, conversationId, lane, opts.create);
+    if (!askId || !opts.create) return askId;
+    // One session per task (one-session-per-task.ts): a chat cleared and started
+    // again is a new conversation, so it becomes a new ask; the old ask keeps
+    // the conversation it had.
+    const { taskConversation } = await import('./task-session-claim.js');
+    if (!(await taskConversation(askId, { retire: true }))) return askId;
+    return newAskForClearedChat(agentId, conversationId, askId);
+  });
+}
+
+async function newAskForClearedChat(agentId: string, conversationId: string, previousAskId: string): Promise<string> {
+  try {
+    const meta = await conversationMeta(agentId, conversationId);
+    const agent = await resolveAskAgent(agentId);
+    if (!meta || meta.isMain || !agent) return '';
+    const { clearConversationAskTask } = await import('../conversations.js');
+    await clearConversationAskTask(agentId, conversationId, previousAskId);
+    const bound = await createAsk(agentId, conversationId, meta, agent);
+    log.session.info('cleared chat became a new ask', { agentId, conversationId, previousAskId, taskId: bound });
+    return bound;
+  } catch (err) {
+    log.session.warn('chat: a new ask for a cleared chat failed; the chat runs without one', {
+      agentId, conversationId, previousAskId, error: err instanceof Error ? err.message : String(err),
+    });
+    return '';
+  }
 }
 
 /**
@@ -218,12 +248,20 @@ export async function adoptLaneSessionForTurn(agentId: string, conversationId: s
   if (CLOUD_MODE) return;
   const lane = personalAiLaneKey(agentId, conversationId);
   await serialized(lane, async () => {
-    const taskId = await findOrCreateAsk(agentId, conversationId, lane, true);
+    let taskId = await findOrCreateAsk(agentId, conversationId, lane, true);
     if (!taskId) return '';
     try {
       const { getSessionByClaudeId } = await import('../session-tracker.js');
       const record = await getSessionByClaudeId(sessionId);
       if (!record || record.taskId) return taskId;
+      // One session per task: an ask that already holds another conversation
+      // keeps it, and this session's chat becomes a new ask (askTaskForLaneMint's rule).
+      const { taskConversation } = await import('./task-session-claim.js');
+      const held = await taskConversation(taskId, { retire: true });
+      if (held && held.claudeSessionId !== sessionId) {
+        taskId = await newAskForClearedChat(agentId, conversationId, taskId);
+        if (!taskId) return '';
+      }
       const { linkSession } = await import('../task-manager.js');
       const { task } = await linkSession(taskId, sessionId);
       await linkSegments(taskId, [record]);
@@ -253,29 +291,39 @@ async function findOrCreateAsk(agentId: string, conversationId: string, lane: st
       return (await bindOrYield(agentId, conversationId, found)) ?? '';
     }
     if (!create) return '';
-    const project = askProjectFor(agent);
-    const { addTask } = await import('../task-manager.js');
-    const { task } = await addTask({
-      title: chatTitleForAsk(meta.title) ?? project,
-      project,
-      source: 'local',
-      cwd: WALNUT_HOME,
-      walnut_agent: true,
-      ...(agent.id !== 'general' ? { agent_id: agent.id } : {}),
-      // Born where an ask started on the Mac is born (ask-launch-plan.ts).
-      pinned: true,
-      focus_tier: ASK_DEFAULT_TIER,
-    });
-    bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: SOURCE });
-    const bound = await bindOrYield(agentId, conversationId, task);
+    const bound = await createAsk(agentId, conversationId, meta, agent);
     log.session.info('chat became an ask', { agentId, conversationId, taskId: bound });
-    return bound ?? '';
+    return bound;
   } catch (err) {
     log.session.warn('chat: making its ask failed; the chat runs without one', {
       agentId, conversationId, error: err instanceof Error ? err.message : String(err),
     });
     return '';
   }
+}
+
+/** Make the chat's ask and bind it; another ask that won the binding race wins. */
+async function createAsk(
+  agentId: string,
+  conversationId: string,
+  meta: ConversationMeta,
+  agent: AskAgentRef,
+): Promise<string> {
+  const project = askProjectFor(agent);
+  const { addTask } = await import('../task-manager.js');
+  const { task } = await addTask({
+    title: chatTitleForAsk(meta.title) ?? project,
+    project,
+    source: 'local',
+    cwd: WALNUT_HOME,
+    walnut_agent: true,
+    ...(agent.id !== 'general' ? { agent_id: agent.id } : {}),
+    // Born where an ask started on the Mac is born (ask-launch-plan.ts).
+    pinned: true,
+    focus_tier: ASK_DEFAULT_TIER,
+  });
+  bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: SOURCE });
+  return (await bindOrYield(agentId, conversationId, task)) ?? '';
 }
 
 export interface LaneAskReport {
@@ -400,7 +448,13 @@ export async function linkLaneAsks(opts: { now?: number } = {}): Promise<LaneAsk
             cwd: WALNUT_HOME,
             walnut_agent: true,
             ...(agent.id !== 'general' ? { agent_id: agent.id } : {}),
-            session_ids: segments.map((s) => s.claudeSessionId),
+            // One session per task: the ask holds the chat's current segment; the
+            // older ones stay unlinked and are listed as history.
+            session_ids: [(current ?? segments[0]).claudeSessionId],
+            ...(segments.length > 1 ? {
+              legacy_session_ids: segments.map((s) => s.claudeSessionId)
+                .filter((sid) => sid !== (current ?? segments[0]).claudeSessionId),
+            } : {}),
             ...(current ? { session_id: current.claudeSessionId } : {}),
             description: '',
             summary: '',

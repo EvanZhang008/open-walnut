@@ -53,6 +53,7 @@ export const BOOT_POLICY = [
   { job: 'session-auto-recover', leader: true, replicaHost: false, replicaCloud: false, why: OFF_HOST_DAEMON },
   { job: 'session-reconcile', leader: true, replicaHost: false, replicaCloud: false, why: OFF_HOST_DAEMON },
   { job: 'completed-task-session-migration', leader: true, replicaHost: false, replicaCloud: true, why: 'the session copy is written by the apply connection only' },
+  { job: 'one-session-per-task', leader: true, replicaHost: false, replicaCloud: false, why: 'the session copy is written by the apply connection only' },
   { job: 'stream-file-cleanup', leader: true, replicaHost: false, replicaCloud: true, why: 'a host replica keeps no session streams' },
   { job: 'session-integrity-check', leader: true, replicaHost: false, replicaCloud: false, why: OFF_HOST_DATA },
   { job: 'notes-watcher', leader: true, replicaHost: false, replicaCloud: true, why: 'notes live in the daemon copy (WP6)' },

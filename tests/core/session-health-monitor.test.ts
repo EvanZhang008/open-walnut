@@ -52,12 +52,11 @@ vi.mock('../../src/core/task-manager.js', () => ({
     { id: 'task-3', phase: 'IN_PROGRESS' },
     { id: 'task-4', phase: 'TODO' },
   ],
-  listTasksByIds: async (ids: string[]) => [
-    { id: 'task-1', phase: 'IN_PROGRESS' },
-    { id: 'task-2', phase: 'IN_PROGRESS' },
-    { id: 'task-3', phase: 'IN_PROGRESS' },
-    { id: 'task-4', phase: 'TODO' },
-  ].filter((task) => ids.includes(task.id)),
+  // One session per task: every session gets its own task id. A `task-N-<suffix>`
+  // id takes the phase of task-N.
+  listTasksByIds: async (ids: string[]) => ids
+    .filter((id) => /^task-[1-4](-|$)/.test(id))
+    .map((id) => ({ id, phase: id.startsWith('task-4') ? 'TODO' : 'IN_PROGRESS' })),
 }));
 
 // Mock event bus — we don't need to verify events in these unit tests
@@ -228,7 +227,7 @@ describe('SessionHealthMonitor: orphan sweep goes through the owning daemon, nev
     await fsp.mkdir(path.dirname(jsonlPath), { recursive: true });
     await fsp.writeFile(jsonlPath, '{"type":"assistant"}\n', 'utf-8'); // mtime = now → fresh
 
-    await createSessionRecord(sid, 'task-1', 'proj', undefined, { pid: IMPOSSIBLE_PID });
+    await createSessionRecord(sid, `task-1-${sid}`, 'proj', undefined, { pid: IMPOSSIBLE_PID });
     const old = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5min ago > 2min grace
     await updateSessionRecord(sid, { process_status: 'stopped', last_status_change: old });
 
@@ -264,7 +263,7 @@ describe('SessionHealthMonitor: orphan sweep goes through the owning daemon, nev
     const old = Date.now() - 10 * 60 * 1000;
     await fsp.utimes(jsonlPath, old / 1000, old / 1000);
 
-    await createSessionRecord(sid, 'task-1', 'proj', undefined, { pid: IMPOSSIBLE_PID + 1 });
+    await createSessionRecord(sid, `task-1-${sid}`, 'proj', undefined, { pid: IMPOSSIBLE_PID + 1 });
     await updateSessionRecord(sid, {
       process_status: 'stopped',
       status_reason: 'user_stopped',
@@ -302,7 +301,7 @@ describe('SessionHealthMonitor: idle reaps run concurrently with a small cap', (
       const outputFile = path.join(tmpDir, `${sid}.jsonl`);
       await fsp.writeFile(outputFile, '', 'utf-8');
       await fsp.utimes(outputFile, old / 1000, old / 1000);
-      await createSessionRecord(sid, 'task-1', 'proj', undefined, { pid: IMPOSSIBLE_PID + 10 + i, outputFile });
+      await createSessionRecord(sid, `task-1-${sid}`, 'proj', undefined, { pid: IMPOSSIBLE_PID + 10 + i, outputFile });
       await updateSessionRecord(sid, { process_status: 'idle', last_status_change: new Date(old).toISOString() });
       ids.push(sid);
     }
@@ -360,7 +359,7 @@ describe('SessionHealthMonitor: idle reaps run concurrently with a small cap', (
     const outputFile = path.join(tmpDir, 'idle-refused.jsonl');
     await fsp.writeFile(outputFile, '', 'utf-8');
     await fsp.utimes(outputFile, old / 1000, old / 1000);
-    await createSessionRecord('idle-refused', 'task-1', 'proj', undefined, { pid: IMPOSSIBLE_PID + 30, outputFile });
+    await createSessionRecord('idle-refused', 'task-1-idle-refused', 'proj', undefined, { pid: IMPOSSIBLE_PID + 30, outputFile });
     await updateSessionRecord('idle-refused', { process_status: 'idle', last_status_change: new Date(old).toISOString() });
     const asked: string[] = [];
     daemonHook.conn = {
@@ -395,7 +394,7 @@ describe('SessionHealthMonitor — idle-threshold source gating (DEFAULT_*_IDLE_
     const old = Date.now() - 70 * 60 * 1000;
     await fsp.utimes(outputFile, old / 1000, old / 1000);
 
-    await createSessionRecord('local-idle', 'task-1', 'proj', undefined, {
+    await createSessionRecord('local-idle', 'task-1-local-idle', 'proj', undefined, {
       pid: 999999999,  // irrelevant; isProcessAliveAsync mock returns false so session won't be killed via this path
       outputFile,
       // no `host` → local
@@ -450,7 +449,7 @@ describe('SessionHealthMonitor — in-loop budget enforcement', () => {
     // swept into the orphan dead-pool, which would bypass the liveness loop.
     const ids = ['budget-a', 'budget-b', 'budget-c', 'budget-d', 'budget-e', 'budget-f'];
     for (const id of ids) {
-      await createSessionRecord(id, 'task-4', 'proj', undefined, { pid: 999999999 });
+      await createSessionRecord(id, `task-4-${id}`, 'proj', undefined, { pid: 999999999 });
     }
 
     // Flip the budget as soon as the loop has processed its FIRST session, keyed on
@@ -502,7 +501,7 @@ describe('SessionHealthMonitor — in-loop budget enforcement', () => {
   it('processes every session when the budget is never exceeded', async () => {
     const ids = ['nb-a', 'nb-b', 'nb-c'];
     for (const id of ids) {
-      await createSessionRecord(id, 'task-4', 'proj', undefined, { pid: 999999999 });
+      await createSessionRecord(id, `task-4-${id}`, 'proj', undefined, { pid: 999999999 });
     }
 
     const monitor = new SessionHealthMonitor();

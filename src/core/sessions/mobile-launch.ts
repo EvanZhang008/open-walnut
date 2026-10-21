@@ -346,8 +346,11 @@ export async function performMobileLaunch(
     sessionId: preassignedSessionId, taskId: task.id, cwd: ask ? ASK_LAUNCH_CWD : wsPlace?.cwd ?? input.cwd, host: (wsPlace ? wsPlace.host : input.host) ?? '',
     ...(ask ? { ask: true, agentId: ask.agentId } : {}),
   });
+  // A task that already had its conversation continued it: answer with that id.
+  const { continuedSessionOf } = await import('./quick-start.js');
+  const sessionId = continuedSessionOf(task) ?? preassignedSessionId;
   return {
-    ...(preassignedSessionId ? { sessionId: preassignedSessionId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     taskId: task.id,
     title: task.title,
   };

@@ -89,7 +89,8 @@ afterEach(async () => {
 })
 
 async function seedAcp(sid: string, host?: string): Promise<void> {
-  await createSessionRecord(sid, 'task-acp', 'proj', undefined, {
+  // One session per task: each seeded session gets its own task.
+  await createSessionRecord(sid, `task-${sid}`, 'proj', undefined, {
     engine: 'codex', acpRuntimeId: `rt-${sid}`, pid: PID, ...(host ? { host } : {}),
   })
 }

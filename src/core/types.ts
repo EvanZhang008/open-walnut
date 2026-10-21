@@ -637,6 +637,14 @@ export interface Task {
   session_ids: string[];
   /** Single session slot — replaces plan_session_id + exec_session_id. */
   session_id?: string;
+  /** Sessions this task held before one-session-per-task (2026-10-21). They are
+   *  no longer linked to it (each carries `legacyTaskId`); kept so the task can
+   *  still list its old conversations. Read-only history, never a link. */
+  legacy_session_ids?: string[];
+  /** The task this one was transferred from (another engine or host). */
+  transferred_from?: string;
+  /** The task this one was transferred to. */
+  transferred_to?: string;
   /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
   last_start?: {
     id: string;
@@ -2421,6 +2429,9 @@ export interface SessionTurnSpeed {
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
+  /** The task this session belonged to before one-session-per-task detached it
+   *  (its task kept a newer session). History only: the session is not linked. */
+  legacyTaskId?: string;
   project: string;
   process_status: ProcessStatus;
   mode: SessionMode;

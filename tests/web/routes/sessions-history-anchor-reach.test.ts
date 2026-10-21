@@ -264,7 +264,8 @@ describe('turn-end delta whose anchor slid out of the 4 MB tail', () => {
       JSON.stringify({ type: 'user', uuid: 'p-ask-0', sessionId: PARENT, timestamp: new Date(Date.now() - 7_200_000).toISOString(), message: { role: 'user', content: 'parent ask 0' } }),
       JSON.stringify({ type: 'assistant', uuid: 'p-reply-0', sessionId: PARENT, timestamp: new Date(Date.now() - 7_199_000).toISOString(), message: { id: 'msg_parent_0', role: 'assistant', content: [{ type: 'text', text: 'parent reply 0' }] } }),
     ].join('\n') + '\n');
-    await createSessionRecord(PARENT, CWD, 'p');
+    // A fork is a sibling task: the parent session hangs on a task of its own.
+    await createSessionRecord(PARENT, 'anchor-reach-parent-task', 'p');
     // The whale itself is the fork child (beforeEach made it a plain session).
     await updateSessionRecord(WHALE_SESSION, { forkedFromSessionId: PARENT });
 

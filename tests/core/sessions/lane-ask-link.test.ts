@@ -219,10 +219,14 @@ describe('a new chat', () => {
     expect(after.session_ids).not.toContain(warm.sessionId);
     expect(after.updated_at).toBe(before.updated_at);
 
-    // The first real message is where the chat moves on, and the ask with it.
+    // The first real message is where the chat moves on. One session per task:
+    // the old ask keeps its conversation, and the chat gets a new ask.
     await getOrCreateLaneSession('general', chat.id, { firstMessage: 'it drains now' });
-    expect((await getTask(askId)).session_id).toBe(warm.sessionId);
-    expect((await queryTasks({})).filter((t) => t.walnut_agent)).toHaveLength(1);
+    expect((await getTask(askId)).session_id).toBe(first.sessionId);
+    const nextAsk = (await chatMeta('general', chat.id))!.askTaskId!;
+    expect(nextAsk).not.toBe(askId);
+    expect((await getTask(nextAsk)).session_id).toBe(warm.sessionId);
+    expect((await queryTasks({})).filter((t) => t.walnut_agent)).toHaveLength(2);
   });
 
   it("files another agent's chat under that agent's ask project with its stamp", async () => {
@@ -280,10 +284,12 @@ describe('the pass over chats that already had sessions', () => {
       session_id: oldSid,
     });
     expect(oldTask.pinned).toBeFalsy();
-    expect(oldTask.session_ids).toEqual([archivedSid, oldSid]);
-    for (const sid of [archivedSid, oldSid]) {
-      expect((await getSessionByClaudeId(sid))?.taskId).toBe(oldTask.id);
-    }
+    // One session per task: the ask holds the chat's current segment; the
+    // older (archived) segment stays unlinked, listed as history.
+    expect(oldTask.session_ids).toEqual([oldSid]);
+    expect(oldTask.legacy_session_ids).toEqual([archivedSid]);
+    expect((await getSessionByClaudeId(oldSid))?.taskId).toBe(oldTask.id);
+    expect((await getSessionByClaudeId(archivedSid))?.taskId).toBeFalsy();
 
     const recentTask = await getTask((await chatMeta('general', recent.id))!.askTaskId!);
     expect(recentTask).toMatchObject({ phase: 'NEED_ACTION', session_id: recentSid });
@@ -399,40 +405,42 @@ describe('the pass over chats that already had sessions', () => {
   // Seen live: a chat promoted to a work task long ago was opened on the phone;
   // its warm session became the task's main session (the Mac opened an empty
   // page) and moved the task to the top of both lists.
-  it('gives back a warm session that took over an ask with sessions of its own', async () => {
+  // One session per task (src/core/sessions/one-session-per-task.ts): a warm
+  // mint can no longer take over an ask that holds a session of its own, and
+  // the chat's next real message becomes a new ask instead.
+  it('never lets a warm session take over an ask with a session of its own', async () => {
     const chat = await makeChat('general', 'Burndown progress', {
       createdAt: '2026-09-20T10:00:00.000Z', lastMessageAt: '2026-09-23T07:50:00.000Z',
     });
     const { task } = await addTask({ title: 'Pipeline watch', project: 'Planning', source: 'local' });
     const { linkSession } = await import('../../../src/core/task-manager.js');
     const { linkSessionToTask, updateSessionRecord } = await import('../../../src/core/session-tracker.js');
-    const answered = await makeLaneSession('general', chat.id, {
-      taskId: task.id, archived: true, startedAt: '2026-09-20T10:00:05.000Z',
-    });
+    await makeLaneSession('general', chat.id, { archived: true, startedAt: '2026-09-20T10:00:05.000Z' });
     const work = randomUUID();
     await createSessionRecord(work, task.id, 'Planning', WALNUT_HOME, { title: 'work', initialProcessStatus: 'idle' });
     await updateSessionRecord(work, { startedAt: '2026-09-23T07:00:00.000Z', process_status: 'stopped' });
-    await linkSession(task.id, answered);
     await linkSession(task.id, work);
     const { setConversationAskTask } = await import('../../../src/core/conversations.js');
     await setConversationAskTask('general', chat.id, task.id);
-    // The warm mint as it was before the fix: the runner linked it as main.
+    // What the runner did before the fix (link the warm mint as main) is refused now.
     const warm = await makeLaneSession('general', chat.id, { startedAt: '2026-10-11T09:39:04.000Z' });
-    await linkSessionToTask(warm, task.id);
+    await expect(linkSessionToTask(warm, task.id)).rejects.toMatchObject({ code: 'task_has_session' });
     await updateSessionRecord(warm, { process_status: 'stopped' });
-    await linkSession(task.id, warm);
 
-    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ released: 1, removed: 0 });
+    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ released: 0, removed: 0, linkedSessions: 0 });
     const after = await getTask(task.id);
     expect(after.session_id).toBe(work);
-    expect(after.session_ids).toEqual([answered, work]);
-    expect(after.last_session_update).toBe('2026-09-23T07:50:00.000Z');
+    expect(after.session_ids).toEqual([work]);
     expect((await getSessionByClaudeId(warm))?.taskId).toBeFalsy();
-    expect(await linkLaneAsks({ now: NOW })).toMatchObject({ released: 0, removed: 0, linkedSessions: 0 });
+    expect((await getSessionByClaudeId(work))?.taskId).toBe(task.id);
 
-    // Talking in the chat again is where it moves on, and the ask with it.
+    // Talking in the chat again moves it on to a new ask; the old one keeps its work.
     await getOrCreateLaneSession('general', chat.id, { firstMessage: 'any update?' });
-    expect((await getTask(task.id)).session_id).toBe(warm);
+    const nextAsk = (await chatMeta('general', chat.id))?.askTaskId;
+    expect(nextAsk).toBeTruthy();
+    expect(nextAsk).not.toBe(task.id);
+    expect((await getTask(nextAsk!)).session_id).toBe(warm);
+    expect((await getTask(task.id)).session_id).toBe(work);
   });
 
   // History older than the chat's lane lives in the chat store, so its only lane

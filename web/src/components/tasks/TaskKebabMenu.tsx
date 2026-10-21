@@ -21,6 +21,7 @@ import { PluginFieldsSection } from './PluginFieldPicker';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
+import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from './TaskStatusControl';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 
@@ -662,6 +663,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
               <span>Select…</span>
             </button>
           )}
+
+          {/* Transfer: move the work to another engine or host (a new task takes it over) */}
+          <TransferMenuItem task={task} afterAction={closeMenu} />
 
           {/* Team: adopt a worker (any task can lead), or leave this task's leader */}
           <TeamMenuItems task={task} afterAction={closeMenu} />

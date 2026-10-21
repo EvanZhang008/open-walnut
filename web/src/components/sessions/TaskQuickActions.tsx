@@ -21,6 +21,7 @@ import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 import { TeamMenuItems } from '@/components/tasks/TeamMenuItems';
+import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
 
@@ -419,6 +420,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
 
           {/* Move to project — same section as the TodoPanel kebab */}
           <MoveToProjectSection current={task.project || ''} onMove={handleMoveToProject} afterAction={closeKebab} />
+
+          {/* Transfer to another engine or host — the same row as the board's task kebab. */}
+          <TransferMenuItem task={task} afterAction={closeKebab} />
 
           {/* Adopt a worker / Leave leader — the same rows as the board's task kebab. */}
           <TeamMenuItems task={task} afterAction={closeKebab} />

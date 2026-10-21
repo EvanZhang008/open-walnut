@@ -1,0 +1,99 @@
+import { z } from 'zod';
+import { defineOp } from './registry.js';
+import { withOutcome } from './outcome.js';
+
+const ENGINES = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
+
+defineOp({
+  name: 'task_transfer',
+  title: 'Move a task to another engine or host',
+  description:
+    'Move a task\'s work to another coding engine (e.g. Claude Code to Codex) and/or another host. ' +
+    'It always makes a NEW task beside this one (a task keeps one session for its whole life) and starts it; ' +
+    'the source task completes unless keep_source is true. ' +
+    'mode=carry (default) brings the conversation (Claude to Claude: the CLI\'s own transcript; other pairs: a transcript file plus a seed); ' +
+    'mode=brief starts the new task from a handoff brief instead. ' +
+    'On a host change the workspace (branch, uncommitted changes, untracked files) is packed and copied over, host to host when they can reach each other, ' +
+    'and the new session sets it up and installs what is missing. cwd="auto" (the default on a host change) lets Walnut pick the directory. ' +
+    'Engines other than Claude run on the primary machine only. Only transfer when the user asked for it.',
+  input: {
+    id: z.string().min(1).describe('Task id or unique prefix of the task to move'),
+    engine: z.enum(ENGINES).optional().describe('Target coding engine; omit to keep the current one'),
+    host: z.string().min(1).optional().describe('Target host alias ("__local__" = the primary machine); omit to keep the current one'),
+    cwd: z.string().min(1).optional().describe('Absolute directory on the target host, or "auto" to let Walnut choose (the default on a host change)'),
+    mode: z.enum(['carry', 'brief']).optional().describe('carry (default): bring the conversation; brief: start from a handoff brief'),
+    model: z.string().min(1).optional().describe('Model for the new session'),
+    message: z.string().min(1).optional().describe('What the new task should do first once it has the work'),
+    keep_source: z.boolean().optional().describe('Leave the source task open (a copy); default false: it completes'),
+    wait_ms: z.number().int().min(0).max(25_000).optional().describe('How long to wait for it to finish before answering "running" (default 20000)'),
+  },
+  bind: { method: 'POST', path: '/tasks/:id/transfer' },
+  timeoutMs: 60_000,
+  mapResult: ({ body }) => transferOutcome(body),
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+function transferOutcome(body: unknown): unknown {
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (b.state === 'running') {
+    return withOutcome(
+      b,
+      `Transfer ${String(b.transferId)} is still moving the work (packing and copying can take minutes).`,
+      `walnut tools call transfer_get '{"id":"${String(b.transferId)}"}' (it waits up to 25 s per call).`,
+    );
+  }
+  const target = (b.target ?? {}) as { engine?: string; host?: string; cwd?: string };
+  return withOutcome(
+    { ...b, ref: `<task-ref id="${String(b.taskId ?? '')}" label="${String(b.title ?? '').replace(/"/g, '&quot;')}"/>` },
+    `Task ${String(b.taskId)} took over the work (${target.engine} on ${target.host} in ${target.cwd}); `
+      + `the conversation came as ${String(b.history)}${b.sourceCompleted ? ', and the source task is complete' : ''}.`,
+    'Its session is starting; read it with task_history. Talk to it with task_send to the NEW task id.',
+  );
+}
+
+defineOp({
+  name: 'transfer_get',
+  title: 'Read a running task transfer',
+  description:
+    'Read back a transfer task_transfer started that was still running when it answered: the result once it is done, its error if it failed. '
+    + 'Waits up to wait_ms (default 25000) for it to finish.',
+  input: {
+    id: z.string().min(1).describe('Transfer id (xf-...) from task_transfer'),
+    wait_ms: z.number().int().min(0).max(25_000).default(25_000).describe('How long to wait for it to finish (default 25000)'),
+  },
+  bind: { method: 'GET', path: '/transfers/:id' },
+  timeoutMs: 40_000,
+  mapResult: ({ body }) => transferOutcome(body),
+  tags: { readonly: true, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
+  name: 'host_profile_get',
+  title: 'What Walnut knows about a host',
+  description:
+    'Read the profile Walnut keeps for an execution host: the kind of machine (laptop, public or private cloud VM, managed dev box), ' +
+    'the system and installed tools from its last probe, known repository paths, which hosts it can copy from directly, and notes earlier sessions left. ' +
+    'The `summary` is the short text a transferred session receives.',
+  input: {
+    host: z.string().min(1).describe('Host alias ("__local__" = the primary machine)'),
+  },
+  bind: { method: 'GET', path: '/hosts/:host/profile' },
+  tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
+  name: 'host_note_add',
+  title: 'Record a fact about a host',
+  description:
+    'Write down one fact about the host a session runs on, for the next work that comes there: a tool you installed and how, ' +
+    'where a repository lives, a proxy, registry or credential setup that differs, a command that behaves differently. ' +
+    'One line per fact; the same key replaces the older fact. Never record secrets.',
+  input: {
+    key: z.string().min(1).max(80).describe('Short key, e.g. "node", "repo:walnut", "npm-registry"'),
+    fact: z.string().min(1).max(600).describe('What is true on this host, in one sentence'),
+    evidence: z.string().max(600).optional().describe('How you know (the command and what it printed)'),
+    host: z.string().min(1).optional().describe('Host alias; omit for the host your session runs on'),
+  },
+  bind: { method: 'POST', path: '/host-notes' },
+  tags: { readonly: false, remote: 'allow' },
+});

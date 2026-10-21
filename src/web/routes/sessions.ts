@@ -720,6 +720,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       } else if (isWalnutAgent) {
         rememberAskModelPick(rawModel, existingTaskId)
       }
+      // The task already had its conversation: the message continued it.
+      const { continuedSessionOf } = await import('../../core/sessions/quick-start.js')
+      const continuedSid = continuedSessionOf(updatedTask)
+      if (continuedSid) {
+        res.json({ taskId: updatedTask.id, task: updatedTask, sessionId: continuedSid, continued: true })
+        return
+      }
       if (wsPlan?.begin) {
         res.json(await wsPlan.begin(updatedTask, {
           message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(mode ? { mode } : {}),
@@ -2654,7 +2661,6 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
       return
     }
 
-    const taskId = task_id ?? sourceRecord?.taskId
     const cwd = working_directory ?? sourceRecord?.cwd
     if (!cwd) {
       res.status(400).json({ error: 'working_directory is required (plan session has no stored cwd).' })
@@ -2673,6 +2679,56 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     // Use host from request body, or inherit from the plan session
     const execHost = host ?? sourceRecord?.host
 
+    // Nobody is listening for SESSION_START → nothing will ever start the session,
+    // so the 30s wait below can only end in a timeout. Fail immediately instead of
+    // holding the request open for half a minute: the answer is already known.
+    //
+    // This is not a test-only path. If the session runner is not subscribed (it
+    // failed to init, or was torn down), every /execute call blocks its connection
+    // for 30s before returning the same 502 — a slow failure that reads like a hang.
+    if (!bus.has('session-runner')) {
+      log.web.error('execute: no session-runner subscribed, cannot start execution session', {
+        planSessionId,
+      })
+      res.status(502).json({
+        error: 'Session runner is not available — cannot start the execution session',
+        planSessionId,
+        planPreserved: true,
+      })
+      return
+    }
+
+    // One session per task (core/sessions/one-session-per-task.ts): a clean
+    // context is a new conversation, so it runs in a new task beside the plan's
+    // (or in an explicit task_id that has no session yet).
+    const planTaskId = sourceRecord.taskId || undefined
+    let taskId: string | undefined
+    let createdExecTaskId: string | undefined
+    try {
+      if (task_id) {
+        const { claimTaskForNewSession } = await import('../../core/sessions/task-session-claim.js')
+        await claimTaskForNewSession(task_id)
+        taskId = task_id
+      } else if (planTaskId) {
+        const { getTask } = await import('../../core/task-manager.js')
+        const { createForkSiblingTask } = await import('../../core/sessions/session-controls.js')
+        const planTask = await getTask(planTaskId).catch(() => null)
+        if (!planTask) {
+          res.status(404).json({ error: `The plan's task ${planTaskId} no longer exists`, planSessionId, planPreserved: true })
+          return
+        }
+        const { task: execTask } = await createForkSiblingTask(planTaskId, {
+          childTitle: `Execute: ${planTask.title}`.slice(0, 120), source: 'plan-execute',
+        })
+        taskId = execTask.id
+        createdExecTaskId = execTask.id
+      }
+    } catch (err) {
+      const status = (err as { status?: number }).status ?? 500
+      res.status(status).json({ error: err instanceof Error ? err.message : String(err), planSessionId, planPreserved: true })
+      return
+    }
+
     // ── Start new session FIRST, archive old plan only after confirmation ──
     // This prevents the user from ending up with an archived plan and no execution
     // session if the new session fails to start (e.g. CLI not found, SSH failure).
@@ -2683,25 +2739,6 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     // getOrAttachLiveSession (not findByClaudeId) so a plan session that survived
     // a server restart (alive CLI, not in the in-memory map) is also retired.
     const livePlanSession = await sessionRunner.getOrAttachLiveSession(planSessionId).catch(() => undefined)
-
-    // Nobody is listening for SESSION_START → nothing will ever start the session,
-    // so the 30s wait below can only end in a timeout. Fail immediately instead of
-    // holding the request open for half a minute: the answer is already known.
-    //
-    // This is not a test-only path. If the session runner is not subscribed (it
-    // failed to init, or was torn down), every /execute call blocks its connection
-    // for 30s before returning the same 502 — a slow failure that reads like a hang.
-    if (!bus.has('session-runner')) {
-      log.web.error('execute: no session-runner subscribed, cannot start execution session', {
-        planSessionId, taskId,
-      })
-      res.status(502).json({
-        error: 'Session runner is not available — cannot start the execution session',
-        planSessionId,
-        planPreserved: true,
-      })
-      return
-    }
 
     // Set up a temporary bus listener BEFORE emitting SESSION_START so we
     // catch the status-changed event that carries the new session's ID,
@@ -2755,6 +2792,15 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
       log.web.error('execute: new session failed to start, plan NOT archived', {
         planSessionId, taskId, error: waitErr instanceof Error ? waitErr.message : String(waitErr),
       })
+      // A start that died (not one still coming up after the wait) leaves nothing
+      // in the task made for it: remove it, so a retry does not add another.
+      const timedOut = waitErr instanceof Error && waitErr.message.startsWith('Timed out')
+      if (createdExecTaskId && !timedOut) {
+        const { deleteTask } = await import('../../core/task-manager.js')
+        await deleteTask(createdExecTaskId).catch((delErr) => log.web.warn('execute: could not remove the task made for a failed start', {
+          taskId: createdExecTaskId, error: delErr instanceof Error ? delErr.message : String(delErr),
+        }))
+      }
       res.status(502).json({
         error: waitErr instanceof Error ? waitErr.message : 'Execution session failed to start',
         planSessionId,
@@ -2794,14 +2840,18 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
       })
     }
 
-    // Clear task session slot so UI no longer shows archived plan as active
-    if (taskId) {
+    // The plan task's work (the plan) is done; it points at the task carrying it out.
+    if (planTaskId && taskId && taskId !== planTaskId) {
       try {
-        const { clearSession, clearSessionSlot } = await import('../../core/task-manager.js')
-        await clearSession(taskId, planSessionId)
-        const { task } = await clearSessionSlot(taskId, planSessionId)
-        bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-archived' })
-      } catch { /* task may not exist */ }
+        const { updateTask, updateTaskRaw } = await import('../../core/task-manager.js')
+        await updateTaskRaw(taskId, { transferred_from: planTaskId }, { source: 'plan-execute' })
+        await updateTaskRaw(planTaskId, { transferred_to: taskId }, { source: 'plan-execute' })
+        await updateTask(planTaskId, { phase: 'COMPLETE' }, { source: 'plan-execute' })
+      } catch (linkErr) {
+        log.web.warn('execute: failed to close the plan task', {
+          planTaskId, taskId, error: linkErr instanceof Error ? linkErr.message : String(linkErr),
+        })
+      }
     }
 
     // Notify frontend about the archive

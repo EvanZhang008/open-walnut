@@ -5,7 +5,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-start'));
 const mocks = vi.hoisted(() => ({
   getTask: vi.fn(), getProjectMetadata: vi.fn(), linkSession: vi.fn(), updateTaskRaw: vi.fn(), getSessionsForTask: vi.fn(),
-  createSessionRecord: vi.fn(), updateSessionRecord: vi.fn(), resolveCaller: vi.fn(),
+  createSessionRecord: vi.fn(), updateSessionRecord: vi.fn(), deleteSessionRecords: vi.fn(), resolveCaller: vi.fn(), performSessionSend: vi.fn(),
   startSession: vi.fn(), notifyRequesterFallback: vi.fn(), cancelPendingStart: vi.fn(), hasCapability: vi.fn(),
 }));
 vi.mock('../../src/core/task-manager.js', () => ({ getTask: mocks.getTask, getProjectMetadata: mocks.getProjectMetadata, linkSession: mocks.linkSession, updateTaskRaw: mocks.updateTaskRaw }));
@@ -13,8 +13,9 @@ vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionsForTask: mocks.getSessionsForTask,
   createSessionRecord: mocks.createSessionRecord,
   updateSessionRecord: mocks.updateSessionRecord,
+  deleteSessionRecords: mocks.deleteSessionRecords,
 }));
-vi.mock('../../src/core/sessions/session-send-core.js', () => ({ resolveCaller: mocks.resolveCaller }));
+vi.mock('../../src/core/sessions/session-send-core.js', () => ({ resolveCaller: mocks.resolveCaller, performSessionSend: mocks.performSessionSend }));
 vi.mock('../../src/providers/claude-code-session.js', () => ({ sessionRunner: { startSession: mocks.startSession } }));
 vi.mock('../../src/providers/daemon-connection.js', () => ({
   getConnectedDaemonConnection: () => ({ send: mocks.cancelPendingStart, hasCapability: mocks.hasCapability }),
@@ -125,7 +126,26 @@ describe('task start confirmation and reply contract', () => {
       process_status: 'error', errorMessage: expect.stringContaining('/tmp/missing'),
     }));
     expect(mocks.notifyRequesterFallback).toHaveBeenCalledWith(expect.objectContaining({ toTaskId: task.id }), 'error');
+    // The failed row never ran a turn: the retry detaches it (kept as history) and
+    // the task's one session is the new one.
+    const failedSid = mocks.updateSessionRecord.mock.calls[0][0] as string;
+    mocks.getSessionsForTask.mockResolvedValue([{ claudeSessionId: failedSid, taskId: task.id, process_status: 'error', status_reason: 'api_error' }]);
     await expect(startSessionForTask(params)).resolves.toMatchObject({ taskId: task.id, started: true });
+    expect(mocks.updateSessionRecord).toHaveBeenCalledWith(failedSid, expect.objectContaining({ taskId: '', legacyTaskId: task.id }));
+    expect(mocks.deleteSessionRecords).not.toHaveBeenCalled();
+    expect(mocks.startSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('continues the task\'s one conversation instead of starting a second session', async () => {
+    mocks.getSessionsForTask.mockResolvedValue([{ claudeSessionId: 'conv-1', taskId: task.id, process_status: 'stopped', messageCount: 6, host: '', cwd: task.cwd }]);
+    mocks.performSessionSend.mockResolvedValue({ requestId: 'rq-000000000001', delivery: 'queued' });
+    await expect(startSessionForTask(params)).resolves.toMatchObject({ sessionId: 'conv-1', requestId: 'rq-000000000001', started: true, continued: true });
+    expect(mocks.performSessionSend).toHaveBeenCalledWith(expect.objectContaining({ to: 'conv-1', text: params.message }));
+    expect(mocks.createSessionRecord).not.toHaveBeenCalled();
+    expect(mocks.startSession).not.toHaveBeenCalled();
+    expect(mocks.deleteSessionRecords).not.toHaveBeenCalled();
+    // Another engine is another conversation, so it is another task.
+    await expect(startSessionForTask({ ...params, engine: 'codex' })).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('task_transfer') });
   });
 
   it('returns starting on a bounded wait without releasing the in-flight guard', async () => {

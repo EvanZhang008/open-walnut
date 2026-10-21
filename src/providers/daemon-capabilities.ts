@@ -627,6 +627,30 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // text-injected), not bridge-reachable, not for followers. Optional: without it
   // `walnut-logs.sh replica --host` shows the Mac's own lines only.
   'replica-logs-v1',
+  // 'fs-write-part-v1' (transfer-core.ts): `fs.writePart {path, offset, data, final?, size?,
+  // sha256?}` writes a file in chunks of at most 4 MB into a staging file next to it
+  // (`<path>.walnut-part`). Offset 0 starts over, a chunk already staged is acknowledged
+  // without writing, a chunk past the end answers code `gap` with `have`; the final chunk
+  // checks size and sha256 (`size_mismatch` / `checksum_mismatch`, staging left in place),
+  // fsyncs and renames. Both twins, not bridge-reachable, not for followers. Optional:
+  // without it a workspace move cannot relay files through the server to this host.
+  'fs-write-part-v1',
+  // 'transfer-v1' (transfer-pack-core.ts, transfer-core.ts): `transfer.pack {cwd, outDir}`
+  // packs a workspace host-side (meta.json, changes.patch, untracked.tgz, repo.bundle for
+  // commits no remote has, workspace.tgz for a plain folder) and answers each file's size
+  // and sha256; `transfer.reach {host}` and `transfer.fetch {host, files}` run on the
+  // receiving host and pull from the sending one over this host's own ssh (BatchMode,
+  // fixed argv, no agent forwarding, inputs validated, every file verified before its
+  // rename); `transfer.realpath {path}` names a directory the way a CLI started there
+  // sees its cwd (where it keeps its transcript). Both twins, not bridge-reachable,
+  // not for followers. Optional: without it a workspace cannot move off or onto this host.
+  'transfer-v1',
+  // 'host-facts-v1' (host-facts-core.ts): `host.facts {network?}` answers what this host is
+  // (OS and distro, CPU, memory, free disk, FQDN, which proxy variables are set but never
+  // their values, EC2 IMDSv2, whether github.com answers, toolchain versions). Read-only,
+  // every probe bounded (3 s each, 12 s in all), a failed probe is null. Both twins; like
+  // host.preflight, not bridge-reachable and not for followers. Optional.
+  'host-facts-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

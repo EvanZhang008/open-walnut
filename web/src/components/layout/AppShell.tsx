@@ -15,6 +15,7 @@ import { useAppCatalog } from '@/apps/hooks';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { startHostDismissPruner } from '@/utils/host-banner-dismiss';
 import { HostBannerAnnouncer } from '../common/HostBannerAnnouncer';
+import { TransferDialogHost } from '../transfer/TransferDialogHost';
 import { PHONE_LAYOUT_QUERY } from '@/hooks/usePhoneLayout';
 import {
   installPhoneOverlayHistory, usePhoneOverlay, usePhoneOverlayEdgeSwipe, isStandaloneDisplay,
@@ -297,6 +298,7 @@ function AppShellInner({ children }: AppShellProps) {
       <NotificationToaster />
       <OperationErrorBridge />
       <HostBannerAnnouncer />
+      <TransferDialogHost />
     </div>
   );
 }

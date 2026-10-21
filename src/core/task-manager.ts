@@ -1,4 +1,6 @@
 import fsSync from 'node:fs';
+import { getDb as getSessionDb } from './session-db.js';
+import { TASK_SESSION_ROW_SQL, TaskSessionTakenError } from './sessions/one-session-per-task.js';
 import { CLOUD_MODE, TASKS_FILE } from '../constants.js';
 import { withFileLock } from '../utils/file-lock.js';
 import { log } from '../logging/index.js';
@@ -4986,7 +4988,8 @@ export class CircularDependencyError extends Error {
 }
 
 function slotSessionIds(task: Task): string[] {
-  return [task.session_id, task.plan_session_id, task.exec_session_id].filter(Boolean) as string[];
+  // The slots mirror one session now (one-session-per-task.ts): name it once.
+  return [...new Set([task.session_id, task.plan_session_id, task.exec_session_id].filter(Boolean) as string[])];
 }
 
 /**
@@ -5369,6 +5372,8 @@ async function mergeTaskIntoNow(
   if (survivorId === victimId) throw new Error('mergeTaskInto: survivor and victim are the same task');
   await ensureInit();
 
+  let detachedVictimSessions: string[] = [];
+  let inheritedLegacySessions: string[] = [];
   const merged = await withWriteLock(async () => {
     const store = await readStore();
     const survivor = store.tasks.find((t) => t.id === survivorId);
@@ -5376,21 +5381,35 @@ async function mergeTaskIntoNow(
     if (!survivor) throw new MergeTaskMissingError('survivor', survivorId);
     if (!victim) throw new MergeTaskMissingError('victim', victimId);
 
-    // Union session history; fill empty slots from the victim. A victim slot
-    // the survivor can't take (its own slot is occupied) must still land in
-    // session_ids — the UI joins on that array, and a slot id is not
-    // guaranteed to also appear there. Dropping it would lose the link this
-    // function exists to preserve.
-    const spilledSlots: string[] = [];
-    if (!survivor.session_id && victim.session_id) survivor.session_id = victim.session_id;
-    else if (victim.session_id) spilledSlots.push(victim.session_id);
-    if (!survivor.plan_session_id && victim.plan_session_id) survivor.plan_session_id = victim.plan_session_id;
-    else if (victim.plan_session_id) spilledSlots.push(victim.plan_session_id);
-    if (!survivor.exec_session_id && victim.exec_session_id) survivor.exec_session_id = victim.exec_session_id;
-    else if (victim.exec_session_id) spilledSlots.push(victim.exec_session_id);
-    survivor.session_ids = [...new Set([
-      ...(survivor.session_ids ?? []), ...(victim.session_ids ?? []), ...spilledSlots,
-    ])];
+    // One session per task (sessions/one-session-per-task.ts): the survivor keeps
+    // its own session; the victim's follows only when the survivor has none. A
+    // victim session that cannot follow is detached and listed as history.
+    const owned = (taskId: string) => taskSessionIdsSync(taskId);
+    // A slot naming a session another task now owns is history, not the
+    // survivor's conversation (a slot with no row at all still counts).
+    const ownedByOther = (sid: string): boolean => {
+      const row = getSessionDb()?.prepare('SELECT task_id FROM sessions WHERE claude_session_id = ?').get(sid) as { task_id?: string | null } | undefined;
+      return !!row && row.task_id !== survivorId;
+    };
+    const survivorSid: string | undefined = owned(survivorId)[0]
+      ?? (survivor.session_id && !ownedByOther(survivor.session_id) ? survivor.session_id : undefined);
+    const victimSids = owned(victimId);
+    const follows = !survivorSid && victimSids.length > 0 ? victimSids[0] : undefined;
+    const keep = survivorSid ?? follows;
+    detachedVictimSessions = victimSids.filter((sid) => sid !== follows);
+    const survivorOldSlots = [survivor.session_id, survivor.plan_session_id, survivor.exec_session_id, ...(survivor.session_ids ?? [])];
+    survivor.session_id = keep;
+    survivor.session_ids = keep ? [keep] : [];
+    if (survivor.plan_session_id && survivor.plan_session_id !== keep) survivor.plan_session_id = undefined;
+    if (survivor.exec_session_id && survivor.exec_session_id !== keep) survivor.exec_session_id = undefined;
+    const legacy = new Set([
+      ...(survivor.legacy_session_ids ?? []), ...(victim.legacy_session_ids ?? []), ...detachedVictimSessions,
+      ...[victim.session_id, victim.plan_session_id, victim.exec_session_id, ...(victim.session_ids ?? []),
+        ...survivorOldSlots].filter((sid): sid is string => !!sid && sid !== keep),
+    ]);
+    // The victim's own history now lives on the survivor; its rows say so below.
+    inheritedLegacySessions = victim.legacy_session_ids ?? [];
+    if (legacy.size > 0) survivor.legacy_session_ids = [...legacy];
     // Keep the earliest birth time so the merged task's history stays honest.
     if (victim.created_at && (!survivor.created_at || victim.created_at < survivor.created_at)) {
       survivor.created_at = victim.created_at;
@@ -5434,7 +5453,13 @@ async function mergeTaskIntoNow(
   // still here: a delete of it meanwhile must not strand the rest on it.
   let sessionsRelinked = 0;
   try {
-    const { relinkSessionsToTask } = await import('./session-tracker.js');
+    const { relinkSessionsToTask, updateSessionRecord } = await import('./session-tracker.js');
+    for (const sid of detachedVictimSessions) {
+      await updateSessionRecord(sid, { taskId: '', legacyTaskId: survivorId });
+    }
+    for (const sid of inheritedLegacySessions) {
+      await updateSessionRecord(sid, { legacyTaskId: survivorId }).catch(() => { /* row gone */ });
+    }
     sessionsRelinked = await relinkSessionsToTask(victimId, survivorId, {
       toTaskExists: () => taskRowExists(survivorId),
     });
@@ -6562,19 +6587,60 @@ export async function linkSessionSlot(
   }
 
   const task = matches[0];
+  assertSessionBelongsToTask(task.id, sessionId);
+  pointTaskAtSession(task, sessionId);
   if (slot === 'plan') {
     task.plan_session_id = sessionId;
   } else {
     task.exec_session_id = sessionId;
-  }
-  if (!task.session_ids.includes(sessionId)) {
-    task.session_ids.push(sessionId);
   }
   task.updated_at = new Date().toISOString();
 
   await writeStore(store);
   return { task };
   });
+}
+
+/**
+ * One session per task (sessions/one-session-per-task.ts): every task-side field
+ * names the same session. The legacy plan/exec slots stay as mirrors of it for
+ * readers that still look there (the frozen API, the phone).
+ */
+function pointTaskAtSession(task: Task, sessionId: string): void {
+  task.session_id = sessionId;
+  task.session_ids = [sessionId];
+  if (task.plan_session_id && task.plan_session_id !== sessionId) task.plan_session_id = undefined;
+  if (task.exec_session_id && task.exec_session_id !== sessionId) task.exec_session_id = undefined;
+}
+
+/** The session rows that belong to `taskId` (one, once the legacy split ran). */
+function taskSessionIdsSync(taskId: string): string[] {
+  const db = getSessionDb();
+  if (!db) return [];
+  return db.prepare(`SELECT claude_session_id FROM sessions WHERE task_id = ? AND ${TASK_SESSION_ROW_SQL} ORDER BY last_active_at DESC`)
+    .pluck().all(taskId) as string[];
+}
+
+/** A session already owned by another task is never linked to this one, and a
+ *  task that owns another session row never points at a second one. */
+function assertSessionBelongsToTask(taskId: string, sessionId: string): void {
+  const other = taskSessionIdsSync(taskId).find((sid) => sid !== sessionId);
+  if (other) throw new TaskSessionTakenError(taskId, other, sessionId);
+  const db = getSessionDb();
+  const row = db?.prepare('SELECT task_id FROM sessions WHERE claude_session_id = ?').get(sessionId) as { task_id?: string | null } | undefined;
+  const owner = row?.task_id;
+  if (owner && owner !== taskId) {
+    throw new SessionOwnedByOtherTaskError(sessionId, owner, taskId);
+  }
+}
+
+export class SessionOwnedByOtherTaskError extends Error {
+  readonly status = 409;
+  readonly code = 'session_has_task';
+  constructor(readonly sessionId: string, readonly ownerTaskId: string, readonly taskId: string) {
+    super(`Session ${sessionId} belongs to task ${ownerTaskId}; a session belongs to exactly one task.`);
+    this.name = 'SessionOwnedByOtherTaskError';
+  }
 }
 
 /**
@@ -6658,9 +6724,8 @@ export async function addSessionToHistory(
     }
 
     const task = matches[0];
-    if (!task.session_ids.includes(sessionId)) {
-      task.session_ids.push(sessionId);
-    }
+    assertSessionBelongsToTask(task.id, sessionId);
+    if (task.session_ids?.length !== 1 || task.session_ids[0] !== sessionId) task.session_ids = [sessionId];
     task.updated_at = new Date().toISOString();
 
     await writeStore(store);
@@ -6731,11 +6796,8 @@ export async function linkSession(
     }
 
     const task = matches[0];
-    task.session_id = sessionId;
-    if (!task.session_ids) task.session_ids = [];
-    if (!task.session_ids.includes(sessionId)) {
-      task.session_ids.push(sessionId);
-    }
+    assertSessionBelongsToTask(task.id, sessionId);
+    pointTaskAtSession(task, sessionId);
     // Separate from updated_at: updated_at is bumped by any field change (plugin sync,
     // notes, phase changes) which would pollute "Recent" sort. last_session_update only
     // tracks actual user session interactions.

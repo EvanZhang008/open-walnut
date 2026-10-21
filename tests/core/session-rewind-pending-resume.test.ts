@@ -45,6 +45,12 @@ import { transcript, type TranscriptFixture } from '../helpers/transcript-fixtur
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
+// A fork lands in a new task beside its source; nothing here may reach a model
+// for that folder's label.
+vi.mock('../../src/core/fork-title.js', () => ({
+  summarizeForkPrompt: async () => null,
+  summarizeGroupLabel: async () => null,
+}));
 
 /** Session records live in a plain map; every write is captured verbatim. */
 const records = new Map<string, Record<string, unknown>>();
@@ -96,6 +102,7 @@ import { encodeProjectPath } from '../../src/core/session-history.js';
 import { previewSessionRewind, rewindSessionToMessage } from '../../src/core/sessions/session-rewind.js';
 import { sessionRunner } from '../../src/providers/claude-code-session.js';
 import { updateSessionRecord } from '../../src/core/session-tracker.js';
+import { addTask, getTask } from '../../src/core/task-manager.js';
 import type { InPlaceRewindCut } from '../../src/core/types.js';
 
 const tmpBase = CLAUDE_HOME as string;
@@ -632,7 +639,8 @@ describe('fork mode rewinds to the same point as in-place', () => {
     // inherited-ancestor cut (cutAncestorHistoryAtRewindPoint, inclusive of this
     // uuid) then drops the rewound message from the copy's history as well.
     const sid = 'rw-fork';
-    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude', taskId: 'task-9', title: 'Forkable' });
+    const { task: source } = await addTask({ title: 'Forkable task', project: 'Demo' });
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude', taskId: source.id, title: 'Forkable' });
     historyMessages = [
       { msgId: U1, role: 'user', text: 'first' },
       { msgId: U2, role: 'user', text: 'the ask being taken back' },
@@ -647,6 +655,10 @@ describe('fork mode rewinds to the same point as in-place', () => {
     expect(result.restoredPrompt).toBe('the ask being taken back');
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({ forkedFromSessionId: sid, rewoundAtMessageUuid: U1 });
+    // One session per task: the copy is a new conversation, so it lives in a new task.
+    expect(result.taskId).toBeTruthy();
+    expect(result.taskId).not.toBe(source.id);
+    expect(created[0].taskId).toBe(result.taskId);
     // A fork records no in-place cut: its own transcript starts truncated.
     expect(patches.some((p) => 'inPlaceRewinds' in p.patch)).toBe(false);
   });
@@ -657,7 +669,8 @@ describe('fork mode rewinds to the same point as in-place', () => {
     // source really was the abandoned branch). The flag is what makes the promise
     // true — without it the conversation the human chose to keep disappears.
     const sid = 'rw-fork-keep';
-    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude', taskId: 'task-10' });
+    const { task: keptTask } = await addTask({ title: 'Kept source', project: 'Demo' });
+    records.set(sid, { sessionId: sid, cwd: CWD, engine: 'claude', taskId: keptTask.id });
     historyMessages = [
       { msgId: U1, role: 'user', text: 'first' },
       { msgId: U2, role: 'user', text: 'second' },
@@ -667,14 +680,18 @@ describe('fork mode rewinds to the same point as in-place', () => {
     const kept = await rewindSessionToMessage(sid, { messageUuid: U2, mode: 'fork', keepSource: true });
     expect(kept.sourceArchived).toBe(false);
     expect(lifecyclePatches.some((p) => p.sessionId === sid && p.patch.archived === true)).toBe(false);
+    expect((await getTask(keptTask.id)).phase).not.toBe('COMPLETE');
 
     // Without the flag the same fork DOES archive it — so the flag is what the
     // dialog's promise rests on, not a default it happens to inherit.
     const sid2 = 'rw-fork-archive';
-    records.set(sid2, { sessionId: sid2, cwd: CWD, engine: 'claude', taskId: 'task-11' });
+    const { task: movedTask } = await addTask({ title: 'Moved source', project: 'Demo' });
+    records.set(sid2, { sessionId: sid2, cwd: CWD, engine: 'claude', taskId: movedTask.id });
     await writeTranscript(sid2, [U1, U2]);
     const archived = await rewindSessionToMessage(sid2, { messageUuid: U2, mode: 'fork' });
     expect(archived.sourceArchived).toBe(true);
     expect(lifecyclePatches.some((p) => p.sessionId === sid2 && p.patch.archived === true)).toBe(true);
+    // Not a copy: the work moved to the rewound task, so the source task is done.
+    expect((await getTask(movedTask.id))).toMatchObject({ phase: 'COMPLETE', transferred_to: archived.taskId });
   });
 });

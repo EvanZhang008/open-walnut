@@ -51,7 +51,7 @@ export interface SessionDelivery {
     host?: string;
   }>>;
   sendToSession(sessionId: string, message: string, taskId: string): Promise<void>;
-  getTask(taskId: string): Promise<{ id: string; cwd?: string; phase?: string } | null>;
+  getTask(taskId: string): Promise<{ id: string; cwd?: string; phase?: string; transferred_to?: string } | null>;
   /**
    * Returns the new session's id when the launch knows it up front (an id minted
    * for the launch, whose record exists before this returns). An engine that
@@ -109,7 +109,7 @@ function defaultDelivery(): SessionDelivery {
       // this session: its record is written before the launch returns.
       const engine = normalizeEngine(resolveDefaultEngine(await getConfig(), { host }));
       const sessionId = isAcpEngine(engine) ? undefined : randomUUID();
-      await quickStartSession({
+      const task = await quickStartSession({
         message: params.message,
         existingTaskId: params.taskId,
         cwd: params.cwd,
@@ -127,7 +127,10 @@ function defaultDelivery(): SessionDelivery {
       });
       // Never the task's slot: the task was read before the launch, so its slot
       // still named the session this launch replaced.
-      return sessionId ? { sessionId } : {};
+      // A task that already had its conversation continued it (one session per task).
+      const { continuedSessionOf } = await import('../../sessions/quick-start.js');
+      const delivered = continuedSessionOf(task) ?? sessionId;
+      return delivered ? { sessionId: delivered } : {};
     },
     async notify(input) {
       const { addNotification } = await import('../../notifications/store.js');
@@ -252,7 +255,14 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
   };
 
   async function deliver(job: CronJob, config: SessionExecutorConfig, message: string): Promise<ExecutorRunResult> {
-    const taskId = config.target;
+    // A task moved to another engine or host (task_transfer) completes and points
+    // at the task that took the work over: the fire follows it there.
+    let taskId = config.target;
+    for (let hop = 0; hop < 8; hop++) {
+      const moved = await delivery.getTask(taskId).catch(() => null);
+      if (!moved || moved.phase !== 'COMPLETE' || !moved.transferred_to) break;
+      taskId = moved.transferred_to;
+    }
     const envelope = envelopeFor(job, message, config.prompt);
 
     const sessions = await delivery.sessionsForTask(taskId);

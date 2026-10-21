@@ -79,7 +79,8 @@ afterAll(async () => {
 describe('versioned session status server-to-store pipeline', () => {
   it.each(['regular', 'conditional'])('pushes %s permission changes without REST hydration or a phantom turn', async (path) => {
     const sessionId = `permission-status-${path}`;
-    await createSessionRecord(sessionId, 'permission-status-task', 'Walnut', undefined, {
+    // One task per session (a task has exactly one session).
+    await createSessionRecord(sessionId, `permission-status-task-${path}`, 'Walnut', undefined, {
       initialProcessStatus: 'running',
     });
     const ws = await connectWs();

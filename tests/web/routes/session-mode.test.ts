@@ -68,6 +68,14 @@ async function seedSession(sessionId: string, taskId: string, mode: SessionMode,
   } as Parameters<typeof createSessionRecord>[4])
 }
 
+// A task has exactly one session (src/core/sessions/one-session-per-task.ts), so
+// every session these tests make gets a task of its own.
+async function seedOwnSession(sessionId: string, mode: SessionMode, extra?: Record<string, unknown>): Promise<void> {
+  const taskId = `task-${sessionId}`
+  await seedTask(taskId)
+  await seedSession(sessionId, taskId, mode, extra)
+}
+
 beforeAll(async () => {
   // closeDb before the rm: a task/session DB handle inherited from an earlier
   // file in this Vitest worker keeps its fd on the unlinked inode and would
@@ -97,7 +105,7 @@ afterEach(() => {
 
 describe('PATCH session mode', () => {
   it('updates mode from bypass to plan', async () => {
-    await seedSession('mode-patch-001', 'mode-test-task-001', 'bypass')
+    await seedOwnSession('mode-patch-001', 'bypass')
 
     const res = await fetch(apiUrl('/api/sessions/mode-patch-001'), {
       method: 'PATCH',
@@ -114,7 +122,7 @@ describe('PATCH session mode', () => {
   })
 
   it('updates mode from plan to bypass', async () => {
-    await seedSession('mode-patch-002', 'mode-test-task-001', 'plan')
+    await seedOwnSession('mode-patch-002', 'plan')
 
     const res = await fetch(apiUrl('/api/sessions/mode-patch-002'), {
       method: 'PATCH',
@@ -127,7 +135,7 @@ describe('PATCH session mode', () => {
   })
 
   it('rejects invalid mode', async () => {
-    await seedSession('mode-patch-003', 'mode-test-task-001', 'bypass')
+    await seedOwnSession('mode-patch-003', 'bypass')
 
     const res = await fetch(apiUrl('/api/sessions/mode-patch-003'), {
       method: 'PATCH',
@@ -160,7 +168,7 @@ describe('PATCH session mode', () => {
   // divergence risk is handled at the provider instead — a missing bypass
   // capability triggers a reinitialize so the CLI converges on the record.
   it('persists a mode change the live CLI rejects, and still notifies the CLI', async () => {
-    await seedSession('mode-live-rejected-001', 'mode-test-task-001', 'plan', {
+    await seedOwnSession('mode-live-rejected-001', 'plan', {
       pid: 98765,
       initialProcessStatus: 'idle',
     })
@@ -186,7 +194,7 @@ describe('PATCH session mode', () => {
   })
 
   it('mode toggle round-trip: bypass → plan → bypass', async () => {
-    await seedSession('mode-roundtrip-001', 'mode-test-task-001', 'bypass')
+    await seedOwnSession('mode-roundtrip-001', 'bypass')
 
     // bypass → plan
     let res = await fetch(apiUrl('/api/sessions/mode-roundtrip-001'), {
@@ -216,7 +224,7 @@ describe('PATCH session mode', () => {
 
 describe('planCompleted independence from mode toggle', () => {
   it('mode can be changed even when planCompleted=true', async () => {
-    await seedSession('plan-completed-001', 'mode-test-task-001', 'bypass', {
+    await seedOwnSession('plan-completed-001', 'bypass', {
       planCompleted: true,
       planFile: '/tmp/test-plan.md',
     })
@@ -250,7 +258,7 @@ describe('planCompleted independence from mode toggle', () => {
   })
 
   it('mode changes do not clear planCompleted', async () => {
-    await seedSession('plan-completed-002', 'mode-test-task-001', 'plan', {
+    await seedOwnSession('plan-completed-002', 'plan', {
       planCompleted: true,
     })
 
@@ -324,16 +332,25 @@ describe('Task slot promotion on mode change', () => {
   })
 
   it('does not overwrite existing plan slot owned by another session', async () => {
+    // One session per task: a second session can never join the task, and a
+    // session of another task can never take its slot, so the plan slot stays.
     const taskId = 'slot-guard-task-001'
     await seedTask(taskId)
     await seedSession('slot-guard-plan', taskId, 'plan')
-    await seedSession('slot-guard-exec', taskId, 'bypass')
+    await expect(seedSession('slot-guard-second', taskId, 'bypass'))
+      .rejects.toMatchObject({ code: 'task_has_session', existingSessionId: 'slot-guard-plan' })
+    await seedOwnSession('slot-guard-exec', 'bypass')
 
     const { linkSessionSlot, getTask } = await import('../../../src/core/task-manager.js')
     await linkSessionSlot(taskId, 'slot-guard-plan', 'plan')
-    await linkSessionSlot(taskId, 'slot-guard-exec', 'exec')
+    await expect(linkSessionSlot(taskId, 'slot-guard-exec', 'exec'))
+      .rejects.toMatchObject({ code: 'task_has_session', existingSessionId: 'slot-guard-plan' })
+    // Even a task with no session of its own cannot take another task's session
+    await seedTask('slot-guard-empty-001')
+    await expect(linkSessionSlot('slot-guard-empty-001', 'slot-guard-exec', 'plan'))
+      .rejects.toMatchObject({ code: 'session_has_task', ownerTaskId: 'task-slot-guard-exec' })
 
-    // Try to promote exec session to plan — should be blocked
+    // Promoting the other task's session to plan touches only its own task
     await fetch(apiUrl('/api/sessions/slot-guard-exec'), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -343,6 +360,7 @@ describe('Task slot promotion on mode change', () => {
     // Plan slot should still belong to the original plan session
     const task = await getTask(taskId)
     expect(task.plan_session_id).toBe('slot-guard-plan')
+    expect(task.session_ids).toEqual(['slot-guard-plan'])
     // But mode on the session record should still be updated
     const record = await getSessionByClaudeId('slot-guard-exec')
     expect(record?.mode).toBe('plan')

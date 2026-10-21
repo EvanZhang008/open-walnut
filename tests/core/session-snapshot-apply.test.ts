@@ -1700,11 +1700,16 @@ describe('applySnapshot settled task handback', () => {
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
   })
 
-  it('does not hand back while a sibling session is running', async () => {
+  it('refuses a second session for the task, and another task\'s running session does not hold the hand-back', async () => {
     const { taskId, sid } = await seed()
-    await createSessionRecord('handback-sibling', taskId, 'proj', '/tmp/snap-apply', { pid: 4243 })
+    // One session per task: the task cannot gain a sibling that would keep it busy.
+    await expect(createSessionRecord('handback-sibling', taskId, 'proj', '/tmp/snap-apply', { pid: 4243 }))
+      .rejects.toMatchObject({ code: 'task_has_session', taskId, existingSessionId: sid })
+    const { task: other } = await addTask({ title: 'Another task still running' })
+    await createSessionRecord('handback-other-task', other.id, 'proj', '/tmp/snap-apply', { pid: 4243 })
+    await updateSessionRecord('handback-other-task', { process_status: 'running' })
     await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 
   it('preserves a human choice when later control bytes advance an idle watermark', async () => {
@@ -1879,14 +1884,12 @@ describe('applySnapshot repeated terminal handback', () => {
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
   })
 
-  it.each(['pending', 'processing'])('respects a sibling queue written by another process: %s', async (status) => {
+  it.each(['pending', 'processing'])('respects a queue written by another process: %s', async (status) => {
+    // One session per task: the queue that can hold the task is its own session's.
     const { taskId, sid, snapshot } = await seed()
-    const sibling = `${sid}-sibling`
-    await createSessionRecord(sibling, taskId, 'proj', '/tmp/snap-apply')
-    await updateSessionRecord(sibling, { process_status: 'idle' })
-    await getQueue(sibling)
+    await getQueue(sid)
     await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues: {
-      [sibling]: [{ id: 'next-input', sessionId: sibling, status, message: 'Continue' }],
+      [sid]: [{ id: 'next-input', sessionId: sid, status, message: 'Continue' }],
     } }))
     await applySnapshot(sid, snapshot, 'pull-30s')
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')

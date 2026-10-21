@@ -548,9 +548,10 @@ export class DaemonConnection {
    * base64 images, git diffs up to 64MB) — routed to the bulk channel when
    * it's open. Everything else (fs.ls, status, sends, events) stays on the
    * main WS. Membership is by frame size, not command family: replica.put
-   * is the one whose REQUEST is big (a batch of note bodies, host-replica.ts).
+   * is the one whose REQUEST is big (a batch of note bodies, host-replica.ts),
+   * and so is fs.writePart (a relayed file chunk, transfer-core.ts).
    */
-  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put'])
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart'])
   /** Delay before re-dialing the bulk channel after it drops (main stays up). */
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */

@@ -4,10 +4,11 @@ import { mkdir } from 'node:fs/promises';
 import { getTask, getProjectMetadata, linkSession, updateTaskRaw } from '../task-manager.js';
 import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { QuickStartError } from './quick-start.js';
+import { continueTaskConversation, taskConversation } from './task-session-claim.js';
 import { inheritedLaunchPair } from './caller-placement.js';
 import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { Task, SessionEngine, SessionMode } from '../types.js';
-import { engineCaps, normalizeEngine } from '../agents/engine-registry.js';
+import { engineCaps, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
 import { deferTaskStart, workspaceCwdOf, workspaceStartPlace } from '../workspaces/launch.js';
@@ -34,6 +35,8 @@ export interface SessionStartResult {
   started: boolean;
   /** The task's isolated workspace is being made; the session starts in it once it is ready. */
   preparing?: boolean;
+  /** The task already had its one session: the message continued it (one-session-per-task.ts). */
+  continued?: boolean;
 }
 
 export class SessionExistsError extends QuickStartError {
@@ -104,6 +107,16 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     const previousConfirmed = previous && (previous.pid || previous.outputFile);
     if (live || (!previousConfirmed && (task.last_start?.state === 'unconfirmed' || task.last_start?.state === 'starting'))) {
       await cancelUnconfirmedStart(task, live ?? previous);
+    }
+    // One session per task: a task that already holds a conversation continues it.
+    const conversation = await taskConversation(task.id, { retire: true });
+    if (conversation) {
+      refuseDifferentPlace(task, conversation, params);
+      const sent = await continueTaskConversation(conversation, {
+        text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
+        callerSid: params.callerSid, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+      });
+      return { taskId: task.id, title: task.title, sessionId: sent.sessionId, requestId: sent.requestId, started: true, continued: true };
     }
     const launch = await prepareLaunch(task, { ...params, engine });
     let callerSessionId: string | undefined;
@@ -215,6 +228,28 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       releaseAdmission();
     }
   }
+}
+
+const LOCAL_ALIASES = new Set(['', 'local', '__local__']);
+const sameHost = (a?: string, b?: string) => (LOCAL_ALIASES.has(a ?? '') && LOCAL_ALIASES.has(b ?? '')) || a === b;
+
+/** A start that names another engine, host or directory than the task's
+ *  conversation is a new conversation, so it is a new task (task_transfer). */
+export function refuseDifferentPlace(
+  task: Task,
+  conversation: Awaited<ReturnType<typeof getSessionsForTask>>[number],
+  params: Pick<SessionStartParams, 'host' | 'cwd' | 'engine'>,
+): void {
+  const differs: string[] = [];
+  if (params.host !== undefined && !sameHost(params.host, conversation.host)) differs.push(`host ${conversation.host || 'local'}`);
+  if (params.cwd !== undefined && conversation.cwd && params.cwd !== conversation.cwd) differs.push(`directory ${conversation.cwd}`);
+  if (params.engine !== undefined && resolveEngine(params.engine) !== resolveEngine(conversation.engine)) {
+    differs.push(`engine ${resolveEngine(conversation.engine)}`);
+  }
+  if (differs.length === 0) return;
+  throw new QuickStartError(
+    `Task ${task.id} already has its one session (${differs.join(', ')}). A task keeps one conversation: `
+    + `continue it with task_send, or move the work with task_transfer {"id":"${task.id}"} to a new task on the other engine or host.`, 409);
 }
 
 async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<typeof getSessionsForTask>>[number]): Promise<void> {

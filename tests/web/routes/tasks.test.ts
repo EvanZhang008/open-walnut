@@ -860,11 +860,13 @@ describe('DELETE /api/tasks/:id', () => {
   });
 
   it('returns 409 with both slots occupied', async () => {
+    // A task has one session now, but a legacy task's slots can still name two
+    // (the boot split detaches the older one from its task): both block.
+    const { updateTaskRaw } = await import('../../../src/core/task-manager.js');
     const { task } = await addTask({ title: 'Multi session task' });
-    await createSessionRecord('sess-plan', task.id, '', undefined, { initialProcessStatus: 'idle' });
+    await createSessionRecord('sess-plan', '', '', undefined, { initialProcessStatus: 'idle' });
     await createSessionRecord('sess-exec', task.id, '', undefined, { initialProcessStatus: 'running' });
-    await linkSessionSlot(task.id, 'sess-plan', 'plan');
-    await linkSessionSlot(task.id, 'sess-exec', 'exec');
+    await updateTaskRaw(task.id, { plan_session_id: 'sess-plan', exec_session_id: 'sess-exec' });
 
     const app = createApp();
     const res = await request(app).delete(`/api/tasks/${task.id}`);
@@ -894,10 +896,13 @@ describe('DELETE /api/tasks/:id', () => {
 });
 
 describe('POST /api/tasks/:id/merge', () => {
-  it('merges victims into the survivor, unioning session links', async () => {
+  it('merges victims into the survivor: it keeps its one session and lists the victim\'s as history', async () => {
     const { linkSession } = await import('../../../src/core/task-manager.js');
+    const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js');
     const { task: survivor } = await addTask({ title: 'H-1B RFE follow-up' });
     const { task: victim } = await addTask({ title: 'H-1B RFE follow-up (copy)' });
+    await createSessionRecord('sess-a', survivor.id, 'P', '/tmp');
+    await createSessionRecord('sess-b', victim.id, 'P', '/tmp');
     await linkSession(survivor.id, 'sess-a');
     await linkSession(victim.id, 'sess-b');
 
@@ -907,9 +912,17 @@ describe('POST /api/tasks/:id/merge', () => {
       .send({ victim_ids: [victim.id] });
     expect(res.status).toBe(200);
     expect(res.body.merged).toBe(1);
-    expect(res.body.task.session_ids).toEqual(expect.arrayContaining(['sess-a', 'sess-b']));
+    // One session per task: the survivor's stays its session; the victim's is
+    // detached (it names the survivor as its old task) and listed, never lost.
+    expect(res.body.task.session_id).toBe('sess-a');
+    expect(res.body.task.session_ids).toEqual(['sess-a']);
+    expect(res.body.task.legacy_session_ids).toEqual(['sess-b']);
+    expect((await getSessionByClaudeId('sess-a'))?.taskId).toBe(survivor.id);
+    const detached = await getSessionByClaudeId('sess-b');
+    expect(detached?.taskId).toBeFalsy();
+    expect(detached?.legacyTaskId).toBe(survivor.id);
 
-    // Victim is gone; survivor holds both links.
+    // Victim is gone; the survivor is the one task left.
     const listRes = await request(app).get('/api/tasks');
     expect(listRes.body.tasks).toHaveLength(1);
     expect(listRes.body.tasks[0].id).toBe(survivor.id);
@@ -990,7 +1003,8 @@ describe('POST /api/tasks/:id/merge', () => {
       const { deleteTask, getTask } = await import('../../../src/core/task-manager.js');
       const { task: b } = await addTask({ title: 'Survivor' });
       const { task: a } = await addTask({ title: 'Survivor (copy)' });
-      for (const sid of ['l28-a1', 'l28-a2', 'l28-a3']) await createSessionRecord(sid, a.id, 'P', '/tmp');
+      // Stopped: the moved session becomes the survivor's, and a running one would block its delete.
+      await createSessionRecord('l28-a1', a.id, 'P', '/tmp', { initialProcessStatus: 'stopped' });
       const lock = await lockHeld();
       const answer = started(post(createApp(), b.id, [a.id]));
       await gone(a.id); // the merge committed its tasks and now waits to move the sessions
@@ -1003,33 +1017,35 @@ describe('POST /api/tasks/:id/merge', () => {
       expect(res.body).toMatchObject({ task: null, survivor_deleted: true, merged: 1, merged_ids: [a.id], sessions_relinked: 0 });
       expect(res.body.not_merged).toBeUndefined();
       await expect(getTask(a.id)).rejects.toThrow(/No task found/);
-      for (const sid of ['l28-a1', 'l28-a2', 'l28-a3']) expect(await taskOf(sid), sid).toBeUndefined();
+      expect(await taskOf('l28-a1')).toBeUndefined();
     });
 
     it('the survivor deleted after some sessions moved: 200 with the count that moved (L-28)', async () => {
-      const { deleteTask } = await import('../../../src/core/task-manager.js');
+      // A task has one session, so a merge moves at most one: the first victim's moves to the
+      // empty survivor, then the survivor is deleted before the second victim's turn.
+      const { deleteTask, getTask } = await import('../../../src/core/task-manager.js');
       const tracker = await import('../../../src/core/session-tracker.js');
       const { bus, EventNames } = await import('../../../src/core/event-bus.js');
       const { task: b } = await addTask({ title: 'Survivor' });
-      const { task: a } = await addTask({ title: 'Survivor (copy)' });
-      const ofA = Array.from({ length: 12 }, (_, i) => `l28k-a${i}`);
-      for (const sid of ofA) await createSessionRecord(sid, a.id, 'P', '/tmp');
+      const { task: a1 } = await addTask({ title: 'Survivor (copy)' });
+      const { task: a2 } = await addTask({ title: 'Survivor (second copy)' });
+      await createSessionRecord('l28k-a1', a1.id, 'P', '/tmp', { initialProcessStatus: 'stopped' });
+      await createSessionRecord('l28k-a2', a2.id, 'P', '/tmp', { initialProcessStatus: 'stopped' });
       let release!: () => void;
       const held = new Promise<void>((resolve) => { release = resolve; });
       releaseLock = release;
       let holding = false;
-      let moved = 0;
       bus.subscribe('l28k-hold', (event) => {
-        if (event.name !== EventNames.SESSION_STATUS_CHANGED || !ofA.includes((event.data as { sessionId: string }).sessionId)) return;
-        // After the fifth session moved, another writer holds the lock: the delete lands there.
-        if (++moved === 5 && !holding) {
+        if (event.name !== EventNames.SESSION_STATUS_CHANGED || (event.data as { sessionId: string }).sessionId !== 'l28k-a1') return;
+        // After the first session moved, another writer holds the lock: the delete lands there.
+        if (!holding && (event.data as { taskId?: string }).taskId === b.id) {
           holding = true;
           pending.push(tracker._withSessionWriteLockForTesting(() => held));
         }
       }, { global: true });
       tracker._setRetaskSliceMsForTesting(0);
       try {
-        const answer = started(post(createApp(), b.id, [a.id]));
+        const answer = started(post(createApp(), b.id, [a1.id, a2.id]));
         await vi.waitFor(() => { expect(holding).toBe(true); }, { timeout: 10_000, interval: 10 });
         const deleting = started(deleteTask(b.id));
         await gone(b.id);
@@ -1037,8 +1053,14 @@ describe('POST /api/tasks/:id/merge', () => {
         const res = await answer;
         await deleting;
         expect(res.status).toBe(200);
-        expect(res.body).toMatchObject({ task: null, survivor_deleted: true, merged: 1, sessions_relinked: 5 });
-        for (const sid of ofA) expect(await taskOf(sid), sid).toBeUndefined();
+        expect(res.body).toMatchObject({
+          task: null, survivor_deleted: true, merged: 1, merged_ids: [a1.id], sessions_relinked: 1,
+          not_merged: [{ id: a2.id, reason: 'survivor_gone' }],
+        });
+        // The moved session went with the deleted survivor's links; the second victim kept its own.
+        expect(await taskOf('l28k-a1')).toBeUndefined();
+        expect((await getTask(a2.id)).id).toBe(a2.id);
+        expect(await taskOf('l28k-a2')).toBe(a2.id);
       } finally {
         release();
         bus.unsubscribe('l28k-hold');
@@ -1051,9 +1073,9 @@ describe('POST /api/tasks/:id/merge', () => {
       const { task: b } = await addTask({ title: 'Survivor' });
       const { task: a } = await addTask({ title: 'Copy one' });
       const { task: c } = await addTask({ title: 'Copy two' });
-      await createSessionRecord('l29-a', a.id, 'P', '/tmp');
+      // Stopped: it becomes B's session, and a running one would block B's delete.
+      await createSessionRecord('l29-a', a.id, 'P', '/tmp', { initialProcessStatus: 'stopped' });
       await createSessionRecord('l29-c1', c.id, 'P', '/tmp');
-      await createSessionRecord('l29-c2', c.id, 'P', '/tmp');
       const lock = await lockHeld();
       const first = started(post(createApp(), b.id, [a.id]));
       await gone(a.id);
@@ -1071,7 +1093,7 @@ describe('POST /api/tasks/:id/merge', () => {
       expect(two.body.error).toContain(`survivor ${b.id} was deleted, or merged into another task, before this merge ran`);
       // The queued victim is untouched, sessions and all.
       expect((await getTask(c.id)).id).toBe(c.id);
-      for (const sid of ['l29-c1', 'l29-c2']) expect(await taskOf(sid), sid).toBe(c.id);
+      expect(await taskOf('l29-c1')).toBe(c.id);
     });
 
     it('a queued merge whose victim was deleted while it waited: 404; the merge ahead of it: 200 (L-29)', async () => {
@@ -1139,11 +1161,15 @@ describe('POST /api/tasks/:id/merge', () => {
       lock.release();
       const [one, two] = await Promise.all([first, second]);
       expect(one.status).toBe(200);
-      expect(one.body).toMatchObject({ task: { id: b.id }, merged: 2, merged_ids: [a1.id, a2.id], sessions_relinked: 2 });
+      // One session per task: B keeps its own, A1's and A2's are detached into its history.
+      expect(one.body).toMatchObject({ task: { id: b.id }, merged: 2, merged_ids: [a1.id, a2.id], sessions_relinked: 0 });
       expect(one.body.not_merged).toBeUndefined();
       expect(two.status).toBe(200);
-      expect(two.body).toMatchObject({ task: { id: c.id }, merged: 1, merged_ids: [b.id], sessions_relinked: 3 });
-      for (const sid of ['seq-a1', 'seq-a2', 'seq-b']) expect(await taskOf(sid), sid).toBe(c.id);
+      // C had no session, so B's follows it, and B's history comes along.
+      expect(two.body).toMatchObject({ task: { id: c.id, session_id: 'seq-b' }, merged: 1, merged_ids: [b.id], sessions_relinked: 1 });
+      expect([...two.body.task.legacy_session_ids].sort()).toEqual(['seq-a1', 'seq-a2']);
+      expect(await taskOf('seq-b')).toBe(c.id);
+      for (const sid of ['seq-a1', 'seq-a2']) expect(await taskOf(sid), sid).toBeFalsy();
       await expect(getTask(a2.id)).rejects.toThrow(/No task found/);
     });
 

@@ -58,6 +58,16 @@ export function registerSessionChatRpc(): void {
     }
 
     log.web.info('session start via RPC', { taskId: data.taskId, host: data.host, cwd: data.cwd, mode: data.mode })
+    // One session per task (core/sessions/one-session-per-task.ts): a start for a
+    // task that already holds a conversation continues it.
+    if (typeof data.taskId === 'string' && data.taskId) {
+      const { continueTaskConversation, taskConversation } = await import('../../core/sessions/task-session-claim.js')
+      const conversation = await taskConversation(data.taskId, { retire: true })
+      if (conversation) {
+        await continueTaskConversation(conversation, { text: data.message })
+        return
+      }
+    }
     bus.emit(EventNames.SESSION_START, {
       taskId: typeof data.taskId === 'string' ? data.taskId : '',
       message: data.message,

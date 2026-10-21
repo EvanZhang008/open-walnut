@@ -61,22 +61,26 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import type { SessionRecord } from '../../src/core/types.js';
 
 const STOPPED_ROWS = 40;
+// One session per task: each row has its own task. The "a" and "b" groups are
+// the tasks the old shared task-a / task-b names stood for.
+const TASKS_A = ['task-a1', 'task-a2', 'task-a3', 'task-a4', 'task-a5'];
+const TASKS_B = ['task-b1', 'task-b2', 'task-b3'];
 
 /** A store shaped like the live one: mostly stopped rows, a few live ones of every kind. */
 async function seedStore(): Promise<void> {
   for (let i = 0; i < STOPPED_ROWS; i++) {
-    await createSessionRecord(`stopped-${i}`, `task-old-${i % 7}`, 'proj', '/tmp', { initialProcessStatus: 'stopped' });
+    await createSessionRecord(`stopped-${i}`, `task-old-${i}`, 'proj', '/tmp', { initialProcessStatus: 'stopped' });
   }
-  await createSessionRecord('err-1', 'task-a', 'proj', '/tmp', { initialProcessStatus: 'error' });
-  await createSessionRecord('arch-1', 'task-a', 'proj', '/tmp');
+  await createSessionRecord('err-1', 'task-a1', 'proj', '/tmp', { initialProcessStatus: 'error' });
+  await createSessionRecord('arch-1', 'task-a2', 'proj', '/tmp');
   await updateSessionRecord('arch-1', { archived: true });
-  await createSessionRecord('run-local', 'task-a', 'proj', '/tmp', { title: 'alpha runner' });
-  await createSessionRecord('idle-local', 'task-a', 'proj', '/tmp', { initialProcessStatus: 'idle' });
-  await createSessionRecord('run-remote', 'task-b', 'proj', '/tmp', { host: 'devbox', title: 'alpha remote' });
-  await createSessionRecord('idle-remote', 'task-b', 'proj', '/tmp', { host: 'devbox', initialProcessStatus: 'idle' });
-  await createSessionRecord('side-1', 'task-b', 'proj', '/tmp', { lane: 'side:run-local' });
+  await createSessionRecord('run-local', 'task-a3', 'proj', '/tmp', { title: 'alpha runner' });
+  await createSessionRecord('idle-local', 'task-a4', 'proj', '/tmp', { initialProcessStatus: 'idle' });
+  await createSessionRecord('run-remote', 'task-b1', 'proj', '/tmp', { host: 'devbox', title: 'alpha remote' });
+  await createSessionRecord('idle-remote', 'task-b2', 'proj', '/tmp', { host: 'devbox', initialProcessStatus: 'idle' });
+  await createSessionRecord('side-1', 'task-b3', 'proj', '/tmp', { lane: 'side:run-local' });
   await createSessionRecord('lane-1', 'task-c', 'proj', '/tmp', { lane: 'chat:general:one', initialProcessStatus: 'idle' });
-  await createSessionRecord('emb-1', 'task-a', 'proj', '/tmp', { provider: 'embedded' });
+  await createSessionRecord('emb-1', 'task-a5', 'proj', '/tmp', { provider: 'embedded' });
   // Distinct activity stamps, newer than every other row, so newest-first order
   // is a real order and not a tie.
   const stamps: Record<string, string> = {
@@ -170,7 +174,7 @@ describe('filtered session reads', () => {
       ['getAllAliveSessionsByHost', async () => Object.values(await getAllAliveSessionsByHost()).flat().length],
       ['getRecentSessions', async () => (await getRecentSessions(3)).length],
       ['querySessions', async () => (await querySessions({ query: 'alpha', limit: 1 })).sessions.length],
-      ['listSessionsForTasks', async () => (await listSessionsForTasks(new Set(['task-b']), new Set(['run-local']))).length],
+      ['listSessionsForTasks', async () => (await listSessionsForTasks(new Set(TASKS_B), new Set(['run-local']))).length],
     ];
     for (const [name, call] of calls) {
       const m = await measure(call);
@@ -197,7 +201,7 @@ describe('filtered session reads', () => {
       ['getRecentSessions', () => getRecentSessions(10)],
       ['querySessions', async () => (await querySessions({})).sessions],
       ['checkSessionLimit', async () => (await checkSessionLimit('local', undefined, { max_idle: 0 })).runningSessions],
-      ['listSessionsForTasks', () => listSessionsForTasks(new Set(['task-a', 'task-b']))],
+      ['listSessionsForTasks', () => listSessionsForTasks(new Set([...TASKS_A, ...TASKS_B]))],
     ];
     for (const [name, read] of results) {
       const first = await read();
@@ -232,7 +236,7 @@ describe('filtered session reads', () => {
     for (const [name, read] of reads) {
       const before = await read();
       liveness.onProbe = async () => {
-        await createSessionRecord(`late-${name}`, 'task-a', 'proj', '/tmp');
+        await createSessionRecord(`late-${name}`, `task-late-${name}`, 'proj', '/tmp');
       };
       const during = await read();
       expect(liveness.onProbe, name).toBeNull();
@@ -243,10 +247,10 @@ describe('filtered session reads', () => {
   });
 
   it('listSessionsForTasks keeps sessions linked by taskId or named by id, in store order', async () => {
-    const rows = await listSessionsForTasks(new Set(['task-b', 'task-old-3']), new Set(['lane-1', 'err-1', 'no-such']));
+    const rows = await listSessionsForTasks(new Set([...TASKS_B, 'task-old-3']), new Set(['lane-1', 'err-1', 'no-such']));
     const all = await listSessions();
     const expected = all.filter((s) =>
-      s.taskId === 'task-b' || s.taskId === 'task-old-3' || s.claudeSessionId === 'lane-1' || s.claudeSessionId === 'err-1');
+      TASKS_B.includes(s.taskId ?? '') || s.taskId === 'task-old-3' || s.claudeSessionId === 'lane-1' || s.claudeSessionId === 'err-1');
     expect(ids(rows)).toEqual(ids(expected));
     expect(rows).toEqual(expected);
     expect(await listSessionsForTasks(new Set())).toEqual([]);
