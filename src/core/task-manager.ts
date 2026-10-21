@@ -41,7 +41,7 @@ import { folderProjectFor, trimDir } from './sessions/folder-project.js';
 import { isAwaitingTurnEnd } from './sessions/self-complete-stop.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
-import { linkUrlOfTag, newLinkTags, MAX_AUTO_LINKS } from './link-tags.js';
+import { linkTargetOfTag, newLinkTags, MAX_AUTO_LINKS } from './link-tags.js';
 import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import type { TaskMergedInto } from './event-types.js';
@@ -4428,7 +4428,7 @@ export async function updateTask(
     const added = newLinkTags(task, updates.add_link_tags);
     if (added.length) {
       task.tags = [...(task.tags ?? []), ...added];
-      task.auto_links = [...(task.auto_links ?? []), ...added.map((tag) => linkUrlOfTag(tag)!)].slice(-MAX_AUTO_LINKS);
+      task.auto_links = [...(task.auto_links ?? []), ...added.map((tag) => linkTargetOfTag(tag)!)].slice(-MAX_AUTO_LINKS);
     }
   }
 

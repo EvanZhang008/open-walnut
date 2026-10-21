@@ -1,5 +1,5 @@
 import React from 'react';
-import { linkLabel, linkUrlOfTag } from '../../../../src/core/link-tags';
+import { linkPathOfTag, linkTagLabel, linkUrlOfTag } from '../../../../src/core/link-tags';
 
 interface TagChipProps {
   tag: string;
@@ -17,6 +17,9 @@ interface TagChipProps {
   /** The tag is a link (a link rule, src/core/tag-display-rules.ts): the pill opens it in a new
    *  tab (the Mac app hands it to the default browser), never the row under it. */
   href?: string;
+  /** Opens a file-path link tag (`html:/tmp/run/result.html`) in the session's Files view.
+   *  Without it a path tag is a plain pill whose tooltip names the path. */
+  onOpenPath?: (path: string) => void;
 }
 
 function hostOf(href: string): string {
@@ -31,13 +34,17 @@ const keepToLink = (e: React.SyntheticEvent) => { e.stopPropagation(); };
  * Reusable tag pill component.
  * Parses "key:value" format for visual prefix distinction.
  */
-export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks, whole, valueOnly, href }: TagChipProps) {
+export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks, whole, valueOnly, href, onOpenPath }: TagChipProps) {
   const colonIdx = tag.indexOf(':');
   const hasPrefix = colonIdx > 0 && colonIdx < tag.length - 1;
-  const prefix = hasPrefix && !valueOnly ? tag.slice(0, colonIdx) : null;
-  // A link tag (`pr:https://…`) reads as its short label (`app#12`); the tooltip has the URL.
+  // A link tag (`pr:https://…`) always leads with its key, the kind of link it is, then a short
+  // label (`pr app#12`), whatever a value-only rule says; the tooltip has the URL.
   const ownUrl = linkUrlOfTag(tag);
-  const value = ownUrl ? linkLabel(ownUrl) : hasPrefix ? tag.slice(colonIdx + 1) : tag;
+  const ownPath = ownUrl ? undefined : linkPathOfTag(tag);
+  const isLink = !!(ownUrl || ownPath);
+  const prefix = hasPrefix && (!valueOnly || isLink) ? tag.slice(0, colonIdx) : null;
+  const value = isLink ? linkTagLabel(tag)! : hasPrefix ? tag.slice(colonIdx + 1) : tag;
+  const openPath = ownPath && onOpenPath && !onClick ? () => onOpenPath(ownPath) : undefined;
 
   const className = [
     'tag-chip',
@@ -46,8 +53,8 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
     active && 'tag-chip-active',
     hiddenOnTasks && 'tag-chip-hidden',
     whole && 'tag-chip-whole',
-    valueOnly && hasPrefix && 'tag-chip-value-only',
-    href && 'tag-chip-linked',
+    valueOnly && hasPrefix && !isLink && 'tag-chip-value-only',
+    (href || openPath) && 'tag-chip-linked',
   ].filter(Boolean).join(' ');
   const title = hiddenOnTasks ? `${tag} (not shown on tasks; Settings, Tasks, Tags)` : tag;
   const text = (
@@ -60,6 +67,25 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
     href, target: '_blank', rel: 'noopener noreferrer', draggable: false,
     onClick: keepToLink, onPointerDown: keepToLink, onMouseDown: keepToLink,
   } : null;
+
+  // A file-path link opens in the session's Files view, never the row under it.
+  if (openPath && !onRemove) {
+    return (
+      <span
+        className={className}
+        role="link"
+        tabIndex={0}
+        title={`${title} (opens in Files)`}
+        data-tag={tag}
+        onClick={(e) => { e.stopPropagation(); openPath(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); openPath(); } }}
+        onPointerDown={keepToLink}
+        onMouseDown={keepToLink}
+      >
+        {text}
+      </span>
+    );
+  }
 
   // A pill with nothing else in it IS the link (the pill rows lay out its parts as its own
   // children); one with a remove button keeps the button outside the link.

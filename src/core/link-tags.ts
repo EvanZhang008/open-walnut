@@ -117,7 +117,7 @@ export function linkTagsInText(text: string, patterns: readonly LinkPattern[]): 
   return out
 }
 
-/** The links a self-report's LINKS field names (`- <kind>: <url>` per line), as tags. A
+/** The links a self-report's LINKS field names (`- <kind>: <url or absolute path>` per line), as tags. A
  *  pattern's key and URL win over the kind and the exact URL the session wrote, so a link reads
  *  the same however it reached the task. */
 export function linkTagsFromField(field: string, patterns: readonly LinkPattern[]): string[] {
@@ -126,7 +126,16 @@ export function linkTagsFromField(field: string, patterns: readonly LinkPattern[
   for (const rawLine of field.split('\n')) {
     const line = rawLine.replace(/^[\s>*+-]*(?:\d+[.)]\s*)?/, '').trim()
     const urlAt = line.search(/https?:\/\//i)
-    if (urlAt < 0) continue
+    if (urlAt < 0) {
+      // A file to open (`- html: /tmp/run/result.html`): its kind before the colon, the path after.
+      const m = /^([^:\s]{1,64})\s*[:=]\s*(\S+)/.exec(line.replace(/[*`[\]()<>]/g, ''))
+      const path = m ? canonicalLinkPath(m[2]!) : undefined
+      if (!m || !path || seen.has(path)) continue
+      const named = m[1]!.trim().toLowerCase()
+      seen.add(path)
+      out.push(`${isTagKey(named) ? named : 'file'}:${path}`)
+      continue
+    }
     const candidate = urlCandidates(line.slice(urlAt))[0]
     if (!candidate) continue
     const hit = patternTag(candidate, patterns)
@@ -146,17 +155,54 @@ export function linkUrlOfTag(tag: string): string | undefined {
   return canonicalLinkUrl(parts.value) ?? parts.value
 }
 
+/** An absolute file path a person opens to see the work (`html:/tmp/run/result.html`), in the
+ *  form it is stored: `/…` or `~/…`, no whitespace, no `..` segment. */
+export function canonicalLinkPath(raw: string): string | undefined {
+  const text = raw.trim().replace(/^[`'"<]+|[`'">.,;:)]+$/g, '')
+  if (!/^(?:\/|~\/)\S/.test(text) || /[\s\u0000-\u001f\u007f]/.test(text)) return undefined
+  if (text.split('/').some((seg) => seg === '..')) return undefined
+  return text.length > 1 ? text.replace(/\/+$/, '') : undefined
+}
+
+/** The file path a tag holds as its value, or undefined when its value is not one. */
+export function linkPathOfTag(tag: string): string | undefined {
+  const parts = parseTag(tag)
+  return parts ? canonicalLinkPath(parts.value) : undefined
+}
+
+/** What a link tag points at, a URL or a file path; the identity link tags dedupe on. */
+export function linkTargetOfTag(tag: string): string | undefined {
+  return linkUrlOfTag(tag) ?? linkPathOfTag(tag)
+}
+
+/** True for a link tag (a URL or a file path as its value). */
+export function isLinkTag(tag: string): boolean {
+  return linkTargetOfTag(tag) !== undefined
+}
+
+/** The short label a link tag's pill reads after its key: a URL's label, a path's file name. */
+export function linkTagLabel(tag: string): string | undefined {
+  const url = linkUrlOfTag(tag)
+  if (url) return linkLabel(url)
+  const path = linkPathOfTag(tag)
+  return path ? clipLabel(path.split('/').filter(Boolean).at(-1) ?? path) : undefined
+}
+
 const TRACKER_ID_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/
 /** Path tails that name a view of a page, not the page (`…/d/<id>/edit`). */
 const GENERIC_SEGMENT_RE = /^(?:edit|view|preview|index\.html?|files|comments)$/i
-const MAX_LABEL = 24
+const MAX_LABEL = 16
+/** An opaque id (a UUID, a long hex or base64-ish token): only its head is worth reading. */
+const OPAQUE_ID_RE = /^(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{17,}$/
+const OPAQUE_HEAD = 8
 
 function decode(segment: string): string {
   try { return decodeURIComponent(segment) } catch { return segment }
 }
 
-/** The few characters a link's pill reads: `app#12` for a forge issue or pull request,
- *  `ABC-123` for a tracker id, else the last meaningful path segment, else the host. */
+/** The few characters a link's pill reads after its key: `app#12` for a forge issue or pull
+ *  request, `ABC-123` for a tracker id, a short id, the head of an opaque id (`e6f56131` of a
+ *  UUID), else the last meaningful path segment, else the host. At most 16 characters. */
 export function linkLabel(rawUrl: string): string {
   let url: URL
   try { url = new URL(rawUrl) } catch { return rawUrl.slice(0, MAX_LABEL) }
@@ -172,9 +218,11 @@ export function linkLabel(rawUrl: string): string {
   if (/(?:^|\.)slack\.com$/.test(url.host) && segments[0] === 'archives') return clipLabel(url.host.split('.')[0]!)
   const tracker = [...segments].reverse().find((s) => TRACKER_ID_RE.test(s))
   if (tracker) return clipLabel(tracker)
-  const withDigit = [...segments].reverse().find((s) => /\d/.test(s) && s.length <= MAX_LABEL)
+  const meaningful = segments.filter((seg) => !GENERIC_SEGMENT_RE.test(seg))
+  const withDigit = [...meaningful].reverse().find((s) => /\d/.test(s) && s.length <= MAX_LABEL)
   if (withDigit) return withDigit
-  const last = segments.filter((seg) => !GENERIC_SEGMENT_RE.test(seg)).at(-1)
+  const last = meaningful.at(-1)
+  if (last && OPAQUE_ID_RE.test(last)) return last.slice(0, OPAQUE_HEAD)
   return clipLabel(last ?? url.host.replace(/^www\./, ''))
 }
 
@@ -196,15 +244,15 @@ export function newLinkTags(
   const held = new Set<string>(task.auto_links ?? [])
   let count = 0
   for (const tag of task.tags ?? []) {
-    const url = linkUrlOfTag(tag)
-    if (url) { held.add(url); count++ }
+    const target = linkTargetOfTag(tag)
+    if (target) { held.add(target); count++ }
   }
   const out: string[] = []
   for (const tag of candidates) {
-    const url = linkUrlOfTag(tag)
+    const target = linkTargetOfTag(tag)
     // A tag past the stored length would be clipped, and a clipped URL opens the wrong page.
-    if (!url || tag.length > MAX_TAG_LENGTH || held.has(url) || count >= MAX_LINK_TAGS) continue
-    held.add(url)
+    if (!target || tag.length > MAX_TAG_LENGTH || held.has(target) || count >= MAX_LINK_TAGS) continue
+    held.add(target)
     count++
     out.push(tag)
   }

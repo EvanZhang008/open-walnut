@@ -2347,7 +2347,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               {/* The task's tags, as on its board row (the same rules: a ticket reads as its
                   id, a hidden key stays off). Beside the title, so the title and the tags
                   share the row and the tags give way first. */}
-              {!loading && sessionTask && <TaskTagPills task={sessionTask} className="session-panel-tag-pills" linksFirst />}
+              {!loading && sessionTask && <TaskTagPills task={sessionTask} className="session-panel-tag-pills" linksFirst menu max={1} onOpenPath={handleFileOpen} />}
             </div>
             {/* The one question control up here: the mode pill (Tree Mode /
                 Conversation Mode). Counts and the list live in the sidebar. */}

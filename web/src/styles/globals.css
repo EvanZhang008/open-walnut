@@ -12250,6 +12250,43 @@ body.walnut-dragging {
 .session-panel-title-area > .session-panel-tag-pills {
   max-width: 40%;
 }
+/* "+N" as a button (the session header): opens the rest of the tags as a list. */
+.tag-chip-overflow-btn {
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+.tag-chip-overflow-btn:hover,
+.tag-chip-overflow-btn.open {
+  background: rgba(175, 82, 222, 0.2);
+}
+.tag-pills-menu {
+  position: fixed;
+  z-index: 9500;
+  background: var(--bg-elevated, var(--bg));
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+  max-width: 320px;
+  overflow-y: auto;
+}
+.tag-pills-menu-row {
+  display: flex;
+  padding: 3px 4px;
+  border-radius: 6px;
+}
+.tag-pills-menu-row:hover {
+  background: var(--bg-secondary);
+}
+.tag-pills-menu-row .tag-chip {
+  font-size: 11px;
+}
 
 /* Deferred-start pill — future start_date; blue tint to read as "scheduled",
    not "late" */
