@@ -49,7 +49,7 @@ final class WebContentWatchdog {
         lastPid = 0
         loadedBundle = nil
         recycleInFlight = false
-        if timer == nil {
+        if timer == nil && WebContentPolicy.isEnabled(UserDefaults.standard) {
             let interval = policyProvider().sampleInterval
             let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
                 self?.tick()
@@ -65,8 +65,8 @@ final class WebContentWatchdog {
         guard let webView else { return }
         webView.evaluateJavaScript(
             "(() => { for (const s of document.scripts) { if (s.src) { const m = /assets\\/index-([A-Za-z0-9_-]+)\\.js/.exec(s.src); if (m) return m[1]; } } return null; })()"
-        ) { [weak self] result, _ in
-            guard let self, let id = result as? String else { return }
+        ) { [weak self, weak webView] result, _ in
+            guard let self, let webView, self.webView === webView, let id = result as? String else { return }
             self.loadedBundle = id
             self.servedBundle = id
         }
@@ -95,6 +95,8 @@ final class WebContentWatchdog {
             webView?.reload()
         }
     }
+
+    deinit { timer?.invalidate() }
 
     // MARK: Sampling
 
@@ -154,8 +156,8 @@ final class WebContentWatchdog {
         }
         guard case let .recycle(reason) = verdict else { return }
         recycleInFlight = true
-        checkUnsavedWork { [weak self] unsaved in
-            guard let self else { return }
+        checkUnsavedWork { [weak self, weak webView] unsaved in
+            guard let self, let webView, self.webView === webView else { return }
             if unsaved {
                 self.recycleInFlight = false
                 fields["reason"] = reason.rawValue
@@ -178,7 +180,7 @@ final class WebContentWatchdog {
     /// same rule its stale-asset reload uses); falls back to a DOM scan for an
     /// older bundle. Any error answers "unsaved": the cost of a wrong yes is one
     /// minute, the cost of a wrong no is lost text.
-    private func checkUnsavedWork(_ completion: @escaping (Bool) -> Void) {
+    func checkUnsavedWork(_ completion: @escaping (Bool) -> Void) {
         guard let webView else { completion(true); return }
         let js = """
         (() => {

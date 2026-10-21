@@ -1,9 +1,6 @@
 import Foundation
 
-/// LinkPolicy (desktop/LinkPolicy.swift): where a link clicked in the Mac app's
-/// single WKWebView goes. The failure this guards: a link to a dev server, a
-/// report, or a docs page replacing the console itself (2026-09-03 report,
-/// "links open in place instead of another window").
+// External pages must not replace the console or its unsent drafts.
 @main
 struct LinkPolicyTests {
     static func main() {
@@ -27,11 +24,20 @@ struct LinkPolicyTests {
         // The wider internet leaves the app on a click.
         precondition(policy.verdict(for: req("https://example.com/docs")) == .openExternally)
 
-        // target="_blank" / window.open asked for a new window; the default
-        // browser is the new window, even for our own origin.
         precondition(policy.verdict(for: req("https://example.com/", newWindow: true)) == .openExternally)
-        precondition(policy.verdict(for: req("http://localhost:3456/tasks", click: false, newWindow: true)) == .openExternally)
+        precondition(policy.verdict(for: req("http://localhost:5173/popout", newWindow: true)) == .openExternally)
+        precondition(policy.verdict(for: req("http://localhost:3456/tasks", click: false, newWindow: true)) == .openInAppWindow)
+        for host in ["localhost", "127.0.0.1", "[::1]"] {
+            for view in ["session", "file", "note", "task", "global-notes"] {
+                let url = "http://\(host):3456/popout?view=\(view)&id=abc&path=%2Fa%20b%2Ffile.md"
+                precondition(policy.verdict(for: req(url, newWindow: true)) == .openInAppWindow)
+            }
+        }
+        precondition(LinkPolicy(appPort: 4567).verdict(for: req("http://localhost:4567/popout", newWindow: true)) == .openInAppWindow)
+        precondition(policy.verdict(for: req("http://localhost.example.com:3456/popout", newWindow: true)) == .openExternally)
         precondition(policy.verdict(for: req("about:blank", click: false, newWindow: true)) == .ignore)
+        precondition(policy.verdict(for: req("data:text/html,test", newWindow: true)) == .ignore)
+        precondition(policy.verdict(for: req("blob:http://localhost:3456/abc", newWindow: true)) == .ignore)
 
         // Non-link navigations (SPA reload, JS location.href, iframe src) load in place.
         precondition(policy.verdict(for: req("http://localhost:3456/settings", click: false)) == .inPage)
@@ -46,6 +52,12 @@ struct LinkPolicyTests {
         precondition(policy.verdict(for: req("http://localhost:8443/?folder=x", main: false)) == .inPage)
         precondition(policy.verdict(for: req("https://example.com/", main: false)) == .openExternally)
 
+        let session = URL(string: "http://localhost:3456/popout?view=session&id=abc")!
+        precondition(policy.isSameWindowTarget(session, URL(string: "http://localhost:3456/popout?view=session&id=abc&cwd=%2Fworkspace&host=local")!))
+        precondition(!policy.isSameWindowTarget(session, URL(string: "http://localhost:3456/popout?view=session&id=other")!))
+        precondition(!policy.isSameWindowTarget(session, URL(string: "http://localhost:3456/popout?view=task&id=abc")!))
+        precondition(!policy.isSameWindowTarget(session, URL(string: "http://example.com:3456/popout?view=session&id=abc")!))
+        precondition(!policy.isSameWindowTarget(URL(string: "http://localhost:3456/popout?view=file&path=a&line=1")!, URL(string: "http://localhost:3456/popout?view=file&path=a&line=2")!))
         print("LinkPolicyTests: all passed")
     }
 }

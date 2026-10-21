@@ -22,9 +22,12 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
 
     func pushAppUpdateState(_ state: AppUpdateState) {
         refreshUpdateMenuItem(state)
-        webView?.evaluateJavaScript(
-            "window.dispatchEvent(new CustomEvent('walnut:app-update', { detail: \(state.json()) }))",
-            completionHandler: nil)
+        let views = [webView].compactMap { $0 } + popoutWindows.values.compactMap { $0.contentView as? WKWebView }
+        for view in views {
+            view.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('walnut:app-update', { detail: \(state.json()) }))",
+                completionHandler: nil)
+        }
     }
 
     // MARK: - The page's requests (T3's desktopBridge: getState / check / download / install)

@@ -1,19 +1,11 @@
 import Foundation
 
-// MARK: - Link routing: pure policy
-//
-// The Mac app is ONE WKWebView showing the console. A browser gives a link three
-// places to go (this tab, a new tab, another app); the shell has one window, so
-// every "somewhere else" becomes "the default browser". What must never happen is
-// the console itself navigating to an agent's dev server, a report, or a docs
-// page: that throws away the SPA, its sockets, and whatever was in the composer.
-//
-// Foundation only: `scripts/test-desktop.sh` compiles this file into a plain
-// test binary, so nothing here may touch AppKit or WebKit.
+// Foundation only: link routing can be tested without AppKit or WebKit.
 
 enum LinkVerdict: Equatable {
     /// Let WebKit load it where it was asked to (this frame).
     case inPage
+    case openInAppWindow
     /// Hand the URL to macOS (default browser / the scheme's app) and cancel here.
     case openExternally
     /// Nothing to load (about:blank, an empty window.open) — cancel quietly.
@@ -56,6 +48,22 @@ struct LinkPolicy {
         return port == appPort
     }
 
+    func isSameWindowTarget(_ current: URL, _ requested: URL) -> Bool {
+        guard isAppOrigin(current), isAppOrigin(requested),
+              current.path == "/popout", requested.path == "/popout",
+              let a = URLComponents(url: current, resolvingAgainstBaseURL: false),
+              let b = URLComponents(url: requested, resolvingAgainstBaseURL: false) else {
+            return current == requested
+        }
+        let view = a.queryItems?.first { $0.name == "view" }?.value
+        guard view == "session" || view == "task",
+              view == b.queryItems?.first(where: { $0.name == "view" })?.value,
+              let id = a.queryItems?.first(where: { $0.name == "id" })?.value, !id.isEmpty else {
+            return current == requested
+        }
+        return id == b.queryItems?.first(where: { $0.name == "id" })?.value
+    }
+
     func verdict(for request: LinkRequest) -> LinkVerdict {
         let url = request.url
         let scheme = url.scheme?.lowercased() ?? ""
@@ -63,9 +71,7 @@ struct LinkPolicy {
             return .openExternally
         }
         if request.targetsNewWindow {
-            // A new window was asked for and the shell has none to give; the
-            // default browser is the new window. about:blank / data: popups have
-            // nothing worth showing outside.
+            if isAppOrigin(url) { return .openInAppWindow }
             return (scheme == "http" || scheme == "https") ? .openExternally : .ignore
         }
         guard request.isLinkClick, scheme == "http" || scheme == "https" else {
