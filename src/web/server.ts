@@ -137,6 +137,7 @@ import { inboxPayloadTooLargeHandler } from './routes/human-inbox-v1.js'
 import { pastesRouter } from './routes/pastes.js'
 import { mediaV1Router } from './routes/media-v1.js'
 import { routinesV1Router } from './routes/routines-v1.js'
+import { triggerTemplatesV1Router } from './routes/trigger-templates-v1.js'
 import { projectsV1Router } from './routes/projects-v1.js'
 import { taskExtrasV1Router } from './routes/task-extras-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
@@ -2213,6 +2214,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Routines/cron (additive, Wave 2): full CRUD + toggle/run-now — B-class
   // relay on a REPLICA (the primary's cron engine is the single writer).
   app.use('/api/v1', routinesV1Router)
+  app.use('/api/v1', triggerTemplatesV1Router)
   // Projects registry (additive, Wave 2): list/create/ordering/favorites A;
   // rename/delete 501 on a REPLICA (no registry write-back channel).
   app.use('/api/v1', projectsV1Router)

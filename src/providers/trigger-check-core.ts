@@ -811,6 +811,17 @@ export function clampTimeoutSeconds(v: unknown): number {
 }
 
 /**
+ * A plugin template's command (`walnut trigger-check …`) runs the daemon's own
+ * `walnut`, which ships with the daemon and so always knows `trigger-check`,
+ * instead of whatever `walnut` the user's PATH finds first (none, or an older
+ * install). Every other check keeps the PATH it had.
+ */
+export function templateCheckEnv(run: string, env: NodeJS.ProcessEnv, shimDir: string | undefined): NodeJS.ProcessEnv {
+  if (!shimDir || !/^\s*walnut trigger-check /.test(run)) return env;
+  return { ...env, PATH: env.PATH ? `${shimDir}:${env.PATH}` : shimDir };
+}
+
+/**
  * Run `sh -c <run>` in its own process group with the stdin payload, a hard
  * deadline, and a stdout cap. The group kill is what makes the deadline real:
  * `sh -c "curl ... | jq"` is three processes, and killing only the shell would
@@ -819,7 +830,12 @@ export function clampTimeoutSeconds(v: unknown): number {
 export function runCheckProcess(
   spec: TriggerCheckSpec,
   stdinJson: string,
-  opts: { env?: NodeJS.ProcessEnv; nowMs?: () => number } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    nowMs?: () => number;
+    /** The daemon's own `walnut` dir, put first on PATH for a plugin template's command (templateCheckPath). */
+    templateShimDir?: string;
+  } = {},
 ): Promise<CheckProcessResult> {
   const now = opts.nowMs ?? Date.now;
   const startedAt = now();
@@ -860,7 +876,7 @@ export function runCheckProcess(
         cwd: spec.cwd || undefined,
         detached: true,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, ...(opts.env ?? {}) },
+        env: templateCheckEnv(spec.run, { ...process.env, ...(opts.env ?? {}) }, opts.templateShimDir),
       });
     } catch (err) {
       resolve({
@@ -1022,4 +1038,109 @@ function deliverSpecOf(raw: unknown): TriggerDeliverSpec | undefined {
   if (typeof d.home !== 'string' || !d.home || typeof d.taskId !== 'string' || !d.taskId.trim()) return undefined;
   if (typeof d.prompt !== 'string' || !d.prompt.trim() || d.prompt.length > DELIVER_PROMPT_MAX) return undefined;
   return { home: d.home, taskId: d.taskId.trim(), prompt: d.prompt };
+}
+
+// ── `walnut trigger-check`: the stored command of a plugin trigger template ──
+//
+// Both CLIs run it: the hub CLI (gateway first, HTTP when there is no daemon
+// socket) and the daemon's own `walnut` (a host with no installed CLI). They
+// share the input, the reading of a failure and the answer to it, so the same
+// failure means the same thing whichever ran.
+
+/** The key that marks a cursor kept while Walnut could not run the check. */
+const PENDING_KEY = '__walnutPending';
+
+/**
+ * How long a check may go unanswered before it counts as an error. Walnut being
+ * down (a deploy, a restart) or a companion leading is long; a template that is
+ * not registered (its plugin still loading, or reloading after an account
+ * change) is shorter, since a removed plugin should reach the user soon.
+ */
+export const TEMPLATE_WAIT_GRACE_MS = { unreachable: 2 * 3_600_000, missing: 30 * 60_000 } as const;
+
+export type TemplateCheckFailure = 'unreachable' | 'missing' | 'error';
+
+interface PendingMark { since: string; reason: string }
+
+export interface TemplateCheckInput {
+  state: unknown;
+  lastFireAt: string | null;
+  now: string;
+  /** Set while earlier runs could not reach the check: since when, and why. */
+  pending?: PendingMark;
+}
+
+/** The trigger input the daemon wrote on stdin (an empty one when it is not JSON), the plugin's own cursor unwrapped. */
+export function templateCheckInput(text: string, nowIso: string): TemplateCheckInput {
+  let raw: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(text || '{}') as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>;
+  } catch { /* an empty input below */ }
+  let state: unknown = raw.state ?? null;
+  let pending: PendingMark | undefined;
+  if (state && typeof state === 'object' && PENDING_KEY in (state as Record<string, unknown>)) {
+    const mark = (state as Record<string, unknown>)[PENDING_KEY] as Partial<PendingMark> | null;
+    if (mark && typeof mark.since === 'string') pending = { since: mark.since, reason: String(mark.reason ?? '') };
+    state = (state as Record<string, unknown>).state ?? null;
+  }
+  return {
+    state,
+    lastFireAt: typeof raw.lastFireAt === 'string' ? raw.lastFireAt : null,
+    now: typeof raw.now === 'string' ? raw.now : nowIso,
+    ...(pending ? { pending } : {}),
+  };
+}
+
+/** The input as the plugin's check sees it: no Walnut bookkeeping. */
+export function templateCheckRequestInput(input: TemplateCheckInput): { state: unknown; lastFireAt: string | null; now: string } {
+  return { state: input.state, lastFireAt: input.lastFireAt, now: input.now };
+}
+
+/** What a failed HTTP answer from the check route means. */
+export function classifyTemplateHttp(status: number, code: string): TemplateCheckFailure {
+  if (status === 503 || (status === 502 && code !== 'plugin_error')) return 'unreachable';
+  if (status === 404 && code === 'not_found') return 'missing';
+  return 'error';
+}
+
+/** What a failed gateway answer means (the op executor writes "Walnut API error (<code>): …"). */
+export function classifyTemplateGateway(code: string, message: string): TemplateCheckFailure {
+  if (code === 'hub_unreachable' || code === 'hub_timeout') return 'unreachable';
+  if (/Walnut server not running/.test(message)) return 'unreachable';
+  const api = /Walnut API error \(([a-z_0-9]+)\)/.exec(message)?.[1];
+  if (api === 'unavailable' || api === 'bridge_offline' || api === '503' || api === '502') return 'unreachable';
+  if (api === 'not_found') return 'missing';
+  return 'error';
+}
+
+/**
+ * The run's answer when Walnut could not run the check: a quiet line that keeps
+ * the plugin's cursor and remembers since when, so the next check picks up where
+ * this one would have. Five errors in a row stop a trigger, and a deploy restarts
+ * Walnut for a minute, so a short gap must not count. A gap past its grace is an
+ * error from then on, so a trigger that cannot work does not look healthy forever.
+ */
+export function templateCheckGap(
+  input: TemplateCheckInput,
+  failure: 'unreachable' | 'missing',
+  reason: string,
+  nowMs = Date.now(),
+): { line: string } | { error: string } {
+  const since = input.pending?.since ?? new Date(nowMs).toISOString();
+  const waited = nowMs - (Date.parse(since) || nowMs);
+  if (waited > TEMPLATE_WAIT_GRACE_MS[failure]) {
+    const minutes = Math.round(waited / 60_000);
+    return { error: `this check has not run for ${minutes} minutes: ${reason}` };
+  }
+  return { line: JSON.stringify({ fire: false, state: { [PENDING_KEY]: { since, reason: reason.slice(0, 300) }, state: input.state } }) };
+}
+
+/**
+ * How long the CLI waits for the check's answer: the daemon kills the whole
+ * command at 30s, and starting this process already took part of that.
+ */
+export function templateCheckReplyMs(sinceStartMs: number): number {
+  // An integer: AbortSignal.timeout and setTimeout refuse a fraction (performance.now() is one).
+  return Math.max(5_000, 27_000 - Math.ceil(Math.max(0, sinceStartMs)));
 }

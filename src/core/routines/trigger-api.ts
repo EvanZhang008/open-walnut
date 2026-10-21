@@ -16,7 +16,53 @@ import { MIN_EVERY_MS, clampTimeoutSeconds } from '../../providers/trigger-check
 import type { TriggersTestResult } from '../../providers/trigger-check-core.js';
 import { requireTriggerDaemon, triggerHost } from './trigger-daemon.js';
 import { createRoutine } from './routines-core.js';
-import { assertCheckHostAllowed } from './check-host-policy.js';
+import { assertCheckHostAllowed, checkCallerOrigin } from './check-host-policy.js';
+import {
+  TriggerTemplateError, exemptTemplateRun, parseTemplateRun, templateOriginRefusal, prepareTemplate, requireTriggerTemplate, templateRun,
+} from './trigger-templates.js';
+
+const LOCAL_HOST = '__local__';
+
+/** "every 15 minutes", "every hour", "every 30 seconds". */
+export function cadencePhrase(everyMs: number): string {
+  const unit = (n: number, one: string) => (n === 1 ? `every ${one}` : `every ${n} ${one}s`);
+  if (everyMs % 3_600_000 === 0) return unit(everyMs / 3_600_000, 'hour');
+  if (everyMs % 60_000 === 0) return unit(everyMs / 60_000, 'minute');
+  return unit(Math.round(everyMs / 1000), 'second');
+}
+
+/** What a template contributes to a trigger: its command and the words it is shown with. */
+async function templateTrigger(name: string, rawParams: unknown, host: string, rawEvery: unknown, origin?: string): Promise<{
+  run: string; prompt: string; description: string; label: string; every: string;
+  maxFiresPerDay?: number; template: { id: string; params: Record<string, string>; label: string };
+}> {
+  if (host && triggerHost(host) !== LOCAL_HOST) {
+    throw new SessionControlError('a template trigger runs on this machine; leave host out', 400);
+  }
+  try {
+    const record = requireTriggerTemplate(name);
+    const refusal = templateOriginRefusal(record, checkCallerOrigin(origin));
+    if (refusal) throw new SessionControlError(refusal, 403);
+    const prepared = await prepareTemplate(record, rawParams);
+    const every = record.every || '5m';
+    // The interval the user picked, not the template's default: the template's own words never name it.
+    const everyMs = parseEveryMs(rawEvery ?? every);
+    const cadence = everyMs ? ` Checks ${cadencePhrase(everyMs)}.` : '';
+    return {
+      run: templateRun(record.name, prepared.params),
+      prompt: prepared.prompt,
+      description: `${prepared.description.replace(/[.\s]*$/, '.')}${cadence}`.slice(0, TRIGGER_DESCRIPTION_MAX),
+      label: prepared.label,
+      every,
+      ...(typeof record.maxFiresPerDay === 'number' ? { maxFiresPerDay: record.maxFiresPerDay } : {}),
+      template: { id: record.name, params: prepared.params, label: prepared.label },
+    };
+  } catch (err) {
+    if (err instanceof TriggerTemplateError) throw new SessionControlError(err.message, err.status === 404 ? 400 : err.status);
+    throw err;
+  }
+}
+
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -65,10 +111,11 @@ export async function testRoutineCheck(
   if (!rawCheck) throw new SessionControlError('check is required', 400);
   const run = str(rawCheck.run);
   if (!run) throw new SessionControlError('check.run is required', 400);
-  const host = triggerHost(str(rawCheck.host) || await callerSessionHost(callerSid));
-  assertCheckHostAllowed(host, origin);
-  const conn = await requireTriggerDaemon(host);
+  const templateCheck = parseTemplateRun(run) !== null;
+  const host = templateCheck ? triggerHost(str(rawCheck.host) || LOCAL_HOST) : triggerHost(str(rawCheck.host) || await callerSessionHost(callerSid));
   const cwd = str(rawCheck.cwd);
+  if (!exemptTemplateRun({ run, cwd, host }, checkCallerOrigin(origin))) assertCheckHostAllowed(host, origin);
+  const conn = await requireTriggerDaemon(host);
   const check = {
     run,
     ...(cwd ? { cwd } : {}),
@@ -231,11 +278,16 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   wait: TriggerWaitResult;
 }> {
   const b = record(body) ?? {};
-  const run = str(b.run);
-  if (!run) throw new SessionControlError('run is required: the shell command that decides whether to fire', 400);
-  const prompt = str(b.prompt);
+  const fromTemplate = str(b.template) ? await templateTrigger(str(b.template), b.params, str(b.host), b.every, origin) : null;
+  const run = fromTemplate?.run ?? str(b.run);
+  if (!run) throw new SessionControlError('run is required: the shell command that decides whether to fire (or pass template + params)', 400);
+  // The user's words lead; a template's own prompt still follows, because it
+  // says how to read its items ("read it with mail_read when the preview is not enough").
+  const prompt = fromTemplate && str(b.prompt)
+    ? `${str(b.prompt)}\n\nFrom the ${fromTemplate.label} trigger (the instruction above wins where they differ): ${fromTemplate.prompt}`
+    : str(b.prompt) || fromTemplate?.prompt || '';
   if (!prompt) throw new SessionControlError('prompt is required: what the session should do when it fires', 400);
-  const description = str(b.description).replace(/\s+/g, ' ');
+  const description = (str(b.description) || fromTemplate?.description || '').replace(/\s+/g, ' ');
   if (!description) {
     throw new SessionControlError(
       'description is required: one or two plain sentences saying what this watches, when it fires, '
@@ -249,7 +301,7 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
       400,
     );
   }
-  const everyMs = parseEveryMs(b.every);
+  const everyMs = parseEveryMs(b.every ?? fromTemplate?.every);
   if (everyMs === null) {
     throw new SessionControlError('every is required: milliseconds, or a duration like "30s" / "5m" / "1h"', 400);
   }
@@ -271,9 +323,14 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   const session = str(b.session) || 'this';
   const resolved = await resolveTarget(session, callerSid);
   // createRoutine asks check-host-policy with `origin` before any daemon lookup.
-  const host = triggerHost(str(b.host) || resolved.host);
-  const cwd = str(b.cwd) || resolved.cwd || '';
-  const name = str(b.name) || defaultTriggerName(prompt);
+  // A template check calls this server, so it runs on this machine's daemon,
+  // never in the caller's directory on another host.
+  const host = fromTemplate ? LOCAL_HOST : triggerHost(str(b.host) || resolved.host);
+  // A template's command runs with no directory (exemptTemplateRun), so it never
+  // takes the caller's; one given explicitly still counts against it.
+  const cwd = fromTemplate ? '' : str(b.cwd) || (parseTemplateRun(run) ? '' : resolved.cwd) || '';
+  const name = str(b.name) || fromTemplate?.label || defaultTriggerName(prompt);
+  const maxFiresPerDay = b.maxFiresPerDay ?? fromTemplate?.maxFiresPerDay;
 
   const created = await createRoutine({
     name,
@@ -284,7 +341,8 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
       ...(cwd ? { cwd } : {}),
       host,
       ...(b.timeoutSeconds !== undefined ? { timeoutSeconds: b.timeoutSeconds } : {}),
-      ...(b.maxFiresPerDay !== undefined ? { maxFiresPerDay: b.maxFiresPerDay } : {}),
+      ...(maxFiresPerDay !== undefined ? { maxFiresPerDay } : {}),
+      ...(fromTemplate ? { template: fromTemplate.template } : {}),
     },
     executor: { type: 'session', config: { target: resolved.target, prompt } },
   }, origin);
@@ -299,7 +357,7 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
     : { parked: false, task_id: resolved.target, reason: b.wait === false ? 'wait_false' : 'other_task' };
 
   log.web.info('trigger created', {
-    host, target: resolved.target, everyMs,
+    host, target: resolved.target, everyMs, ...(fromTemplate ? { template: fromTemplate.template.id } : {}),
     jobId: (created.job as { id?: string } | undefined)?.id,
     parked: wait.parked, ...(wait.reason ? { notParked: wait.reason } : {}),
   });

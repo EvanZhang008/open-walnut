@@ -35,7 +35,7 @@ process.stdout.on('error', (e) => {
 });
 const originalWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = (...writeArgs) => { wroteStdout = true; return originalWrite(...writeArgs); };
-const LITE = new Set(['tools', 'add', 'tasks', 'done', 'recall', 'projects', 'sessions', 'start', 'guide', 'peers']);
+const LITE = new Set(['tools', 'add', 'tasks', 'done', 'recall', 'projects', 'sessions', 'start', 'guide', 'peers', 'trigger-check']);
 const args = process.argv.slice(2);
 const sub = args.find((a) => !a.startsWith('-'));
 const fast = process.env.WALNUT_CLI_DIRECT !== '1'

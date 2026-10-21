@@ -1121,6 +1121,71 @@ export interface PluginCommandDefinition {
   content: string
 }
 
+/** One input a trigger template asks for ("channel"). Values are always strings. */
+export interface PluginTriggerTemplateParam {
+  key: string
+  label: string
+  description?: string
+  required?: boolean
+  placeholder?: string
+  /** The template answers `options(key, query)` for this param, so a picker can list choices. */
+  options?: boolean
+}
+
+export interface PluginTriggerTemplateOption {
+  value: string
+  label: string
+  hint?: string
+}
+
+/**
+ * A ready-made trigger a plugin offers, e.g. "a new message in a Slack channel".
+ * The host names it `<pluginId>:<id>`. Arming one stores an ordinary trigger whose
+ * check runs on this machine's daemon on an interval and calls `check` once per run;
+ * the daemon keeps the dedup set (item ids), the fire budget and the error reporting,
+ * so `check` only answers "what is new since `state`" in the trigger check contract.
+ */
+export interface PluginTriggerTemplateDefinition {
+  id: string
+  title: string
+  description: string
+  params?: PluginTriggerTemplateParam[]
+  /** Default interval ("5m"). */
+  every?: string
+  /** Default fire budget per day; a chat source checked every 5 minutes wants 288. */
+  maxFiresPerDay?: number
+  examples?: string[]
+  /**
+   * A session on another host may arm and run it. Off by default: the items reach the session that
+   * armed it, so turn it on only when the plugin's own read ops already answer remote sessions.
+   */
+  remote?: boolean
+  /**
+   * Validate and normalize params (e.g. "#name" to an id). Throw an Error with a plain message to refuse.
+   * `description` says what is watched and what the session gets; leave the interval out, the host adds the one the user picked.
+   */
+  prepare(params: Record<string, string>): Promise<{
+    params: Record<string, string>
+    label: string
+    description: string
+    prompt: string
+  }> | { params: Record<string, string>; label: string; description: string; prompt: string }
+  options?(key: string, query: string): Promise<PluginTriggerTemplateOption[]> | PluginTriggerTemplateOption[]
+  /**
+   * One run. First run has `state: null`: record a cursor and answer `fire: false`, so arming a
+   * trigger never replays history. Each item needs a stable `id` (the dedup key).
+   */
+  check(
+    params: Record<string, string>,
+    input: { state: unknown; lastFireAt: string | null; now: string },
+  ): Promise<{
+    fire: boolean
+    items?: Array<{ id: string; title?: string; [key: string]: unknown }>
+    input?: string
+    state?: unknown
+  }>
+}
+
 /**
  * A directory of skills contributed by a plugin. `directory` is an ABSOLUTE path
  * holding one or more skills in the standard layout (`<directory>/<name>/SKILL.md`, or
@@ -1213,6 +1278,8 @@ export interface RegistryService {
    */
   agentContext(text: string): Disposable
   command(definition: PluginCommandDefinition): Disposable
+  /** Offer a ready-made trigger (see PluginTriggerTemplateDefinition). */
+  triggerTemplate(definition: PluginTriggerTemplateDefinition): Disposable
   skill(definition: PluginSkillDefinition): Disposable
 }
 

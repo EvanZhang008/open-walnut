@@ -18,6 +18,7 @@ import { MailFilterMover } from './mail-filter-moves.js'
 import { MailMessageTasks } from './message-tasks.js'
 import { createMailOps } from './ops.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
+import { createMailTriggerTemplate } from './trigger-template.js'
 import { MailRetention } from './retention.js'
 import { registerMailRoutes } from './routes.js'
 import { MailSends } from './sends.js'
@@ -384,6 +385,9 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
       for (const tool of createMailTools(agentDeps)) fresh.push(walnut.registry.tool(tool))
       for (const op of createMailOps(agentDeps)) fresh.push(walnut.registry.op(op))
       fresh.push(walnut.registry.skill({ id: 'walnut-mail', directory: SKILL_DIR }))
+      fresh.push(walnut.registry.triggerTemplate(createMailTriggerTemplate({
+        store, listAccounts: () => service.listAccounts({ capabilities: false }),
+      })))
       fresh.push(walnut.registry.agentContext(line))
     } catch (error) {
       for (const handle of fresh.splice(0)) {

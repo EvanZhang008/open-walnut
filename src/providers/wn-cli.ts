@@ -28,6 +28,9 @@ import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs } from './tool-args-source.js'
+import {
+  classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
+} from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
 import {
   MCP_CLI_HELP, formatMcpServers, formatMcpToolHelp, formatMcpTools, isNotReadOnlyRefusal, parseMcpCliArgs,
@@ -52,6 +55,7 @@ export type WalnutCliParsed =
   | { kind: 'tools.list'; json: boolean }
   | { kind: 'tools.help'; name: string }
   | { kind: 'tools.call'; name: string; rawJson: string | undefined }
+  | { kind: 'trigger-check'; template: string; paramsJson: string | undefined }
 
 /** `walnut wait` polling cadence + default budget. */
 export const WAIT_POLL_INTERVAL_MS = 5_000
@@ -73,6 +77,11 @@ export function parseWalnutCliArgs(argv: string[]): WalnutCliParsed {
     return { kind: 'guide' }
   }
   if (head === 'tools') return parseToolsArgs(rest)
+  if (head === 'trigger-check') {
+    // The stored command of a plugin trigger template; the daemon runs it with the trigger input on stdin.
+    if (!rest[0] || rest.length > 2) return { kind: 'usage-error', message: "trigger-check requires <template> ['{params}']" }
+    return { kind: 'trigger-check', template: rest[0], paramsJson: rest[1] }
+  }
   if (head === 'peers') {
     return {
       kind: 'usage-error',
@@ -379,7 +388,7 @@ export function resolveWalnutCliEndpoint(
 }
 
 /** Real probe for resolveWalnutCliEndpoint. Missing / unreadable path → null. */
-function probeSocket(socketPath: string): WalnutSocketInfo | null {
+export function probeSocket(socketPath: string): WalnutSocketInfo | null {
   try {
     const st = fs.statSync(socketPath)
     return { isSocket: st.isSocket(), uid: st.uid, mode: st.mode & 0o777 }
@@ -511,6 +520,55 @@ async function writeStdout(text: string): Promise<void> {
   })
 }
 
+/**
+ * `walnut trigger-check` through the daemon's gateway: one call to
+ * `trigger_template_check`, printed as the one JSON line a check must end with.
+ * A hub it cannot reach, or a template not loaded yet, is a quiet run that keeps
+ * the cursor until its grace runs out (trigger-check-core.ts templateCheckGap);
+ * anything else the hub refuses is an error.
+ */
+async function runTriggerCheckViaGateway(
+  socketPath: string,
+  sid: string,
+  parsed: { template: string; paramsJson: string | undefined },
+): Promise<number> {
+  let params: unknown = {}
+  try {
+    params = JSON.parse(parsed.paramsJson || '{}')
+  } catch {
+    process.stderr.write(`walnut trigger-check: params are not JSON: ${parsed.paramsJson}\n`)
+    return 2
+  }
+  const input = templateCheckInput(process.stdin.isTTY ? '' : await readStdin(), new Date().toISOString())
+  const gap = async (failure: 'unreachable' | 'missing', reason: string): Promise<number> => {
+    const answer = templateCheckGap(input, failure, reason)
+    if ('error' in answer) {
+      process.stderr.write(`walnut trigger-check ${parsed.template}: ${answer.error}\n`)
+      return 1
+    }
+    process.stderr.write(`walnut trigger-check: ${reason}; quiet this run\n`)
+    await writeStdout(answer.line + '\n')
+    return 0
+  }
+  let resp: GatewayResponse
+  try {
+    resp = await requestOverSocket(socketPath, {
+      v: 1, op: 'tools.call', sid,
+      args: { name: 'trigger_template_check', args: { template: parsed.template, params, input: templateCheckRequestInput(input) } },
+    }, templateCheckReplyMs(performance.now()))
+  } catch (err) {
+    return gap('unreachable', `the Walnut daemon did not answer (${err instanceof Error ? err.message : String(err)})`)
+  }
+  if (!resp.ok) {
+    const failure = classifyTemplateGateway(resp.error.code, resp.error.message)
+    if (failure !== 'error') return gap(failure, resp.error.message)
+    process.stderr.write(`walnut trigger-check ${parsed.template}: ${resp.error.message}\n`)
+    return 1
+  }
+  await writeStdout(JSON.stringify(resp.result) + '\n')
+  return 0
+}
+
 /** Drain stdin to a string (a payload too big for argv arrives here). */
 function readStdin(): Promise<string> {
   return new Promise<string>((resolve) => {
@@ -547,6 +605,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     return 6
   }
   const { socketPath, sid } = endpoint
+  if (parsed.kind === 'trigger-check') return runTriggerCheckViaGateway(socketPath, sid, parsed)
 
   // tools.call args: inline JSON, @file, - (stdin), or a piped stdin. A big
   // payload MUST use @file or stdin — one argv entry is capped at 128KB on

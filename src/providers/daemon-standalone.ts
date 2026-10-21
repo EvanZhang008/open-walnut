@@ -5473,6 +5473,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
   try {
     const proc = await runCheckProcess(entry.def.check, buildCheckStdin(entry.state, startedAt), {
       env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name },
+      templateShimDir: GATEWAY_SHIM_DIR,
     })
     const parsed = parseCheckStdout(proc.stdout)
     const error = checkErrorOf(proc, parsed)
@@ -5732,6 +5733,7 @@ async function runTriggerTest(check: unknown, targetId: string | undefined): Pro
         WALNUT_TRIGGER_ID: entry ? entry.def.id : (targetId ?? 'trigger-test'),
         WALNUT_TRIGGER_NAME: entry ? entry.def.name : 'trigger test',
       },
+      templateShimDir: GATEWAY_SHIM_DIR,
     })
     const parsed = parseCheckStdout(proc.stdout)
     const error = checkErrorOf(proc, parsed)
