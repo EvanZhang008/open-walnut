@@ -150,9 +150,14 @@ export interface FetchOptions extends SshPeer {
 }
 
 /** Have `host` pull files from `opts.host` with scp, each verified before it lands. */
-export function fetchFromHost(host: string, opts: FetchOptions): Promise<FetchReply> {
+export async function fetchFromHost(host: string, opts: FetchOptions): Promise<FetchReply> {
   const wait = (opts.timeoutMs ?? 600_000) + 30_000
-  return call<FetchReply>(host, TRANSFER_CAPABILITY, 'transfer.fetch', { ...opts }, wait)
+  const reply = await call<Partial<FetchReply>>(host, TRANSFER_CAPABILITY, 'transfer.fetch', { ...opts }, wait)
+  // call() drops the RPC's `ok`, which is also this reply's verdict: read it back
+  // from the files (2026-10-21: every direct copy that worked was taken for a
+  // failure, recorded as "copy failed", and sent through Walnut instead).
+  const results = Array.isArray(reply.results) ? reply.results : []
+  return { ...reply, results, ok: results.length > 0 && results.every((r) => r.ok) }
 }
 
 /** The path as the kernel on `host` names it (symlinks resolved). */
