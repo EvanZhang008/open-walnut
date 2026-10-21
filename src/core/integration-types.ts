@@ -163,6 +163,9 @@ export interface IntegrationSync {
    *  Return undefined/null to skip reconciliation for this tick. */
   fullPull?(ctx: SyncPollContext): Promise<RemoteSyncItem[] | undefined | null>;
 
+  /** Merge pulled tags with the current stored row under the write lock. */
+  mergePulledTags?(current: Readonly<Task>, incoming: readonly string[]): string[];
+
   /** Extract the remote ID from a local task's ext data.
    *  Used to join local tasks with fullPull results. */
   extractRemoteId?(task: Task): string | undefined;

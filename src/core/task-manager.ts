@@ -7964,11 +7964,16 @@ function isDayPrecisionEcho(existing: string | undefined, incoming: unknown): bo
 function prepareRawUpdate(
   task: Task,
   updates: Partial<Task>,
-  opts?: { reopenTerminal?: boolean; leaveHeld?: boolean },
+  opts?: { reopenTerminal?: boolean; leaveHeld?: boolean; pulledTags?: boolean },
 ): Partial<Task> | null {
   const { id: _ignoreId, ...safeUpdates } = updates as Record<string, unknown>;
   if (safeUpdates.priority !== undefined) {
     safeUpdates.priority = sanitizePriority(safeUpdates.priority as string);
+  }
+  if (Array.isArray(safeUpdates.tags)) {
+    const sync = opts?.pulledTags ? registry.get(task.source)?.sync : undefined;
+    if (sync?.mergePulledTags) safeUpdates.tags = sync.mergePulledTags(task, safeUpdates.tags as string[]);
+    safeUpdates.tags = normalizeTags(safeUpdates.tags as string[]);
   }
   // Day-precision echo guard: sync pull must not downgrade a time-level
   // due_date/start_date to its own truncated day (a genuinely different day
@@ -8102,6 +8107,7 @@ export async function updateTaskRaw(
      *  does (autoCompleteTaskSessions; `actorSid`'s own session at its turn end). The
      *  offline drain replays a session's away task_complete through here. */
     completeSessions?: boolean;
+    pulledTags?: boolean;
   },
 ): Promise<{ changed: boolean; task?: Task }> {
   await ensureInit();
@@ -8116,7 +8122,7 @@ export async function updateTaskRaw(
 
     const patch = typeof updates === 'function' ? updates(task) : updates;
     if (!patch) return undefined;
-    const prepared = prepareRawUpdate(task, patch, { reopenTerminal: opts?.reopenTerminal, leaveHeld: opts?.leaveHeld });
+    const prepared = prepareRawUpdate(task, patch, { reopenTerminal: opts?.reopenTerminal, leaveHeld: opts?.leaveHeld, pulledTags: opts?.pulledTags });
     if (!prepared) return undefined;
     // Per-field change times (task-field-times.ts), from the row as stored.
     const stamped = stampedFieldTimes(task, { ...task, ...prepared }, opts?.fieldTimes);
@@ -8253,6 +8259,7 @@ export async function setPluginTaskField(
  */
 export async function updateTasksBulk(
   updates: Array<{ id: string; patch: Partial<Task> }>,
+  opts?: { pulledTags?: boolean },
 ): Promise<{ changed: Task[] }> {
   if (!updates.length) return { changed: [] };
   await ensureInit();
@@ -8267,7 +8274,7 @@ export async function updateTasksBulk(
         const row = sel.get(id) as Record<string, any> | undefined;
         if (!row) continue;
         const task = rowToTask(row);
-        const prepared = prepareRawUpdate(task, patch);
+        const prepared = prepareRawUpdate(task, patch, opts);
         if (!prepared) continue;
         // Per-field change times (task-field-times.ts), from the row as stored.
         const bulkTimes = stampedFieldTimes(task, { ...task, ...prepared });
