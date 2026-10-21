@@ -327,6 +327,12 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
       void flushTaskQueue();
       return;
     }
+    // Records of this task still in the journal go first too: this one joins them, or
+    // waits in the queue until the Mac took them (flushTaskQueue holds it).
+    if (heldId && (await journaledTaskIds()).has(heldId)) {
+      if (!(await journalOp(op))) await enqueue(op);
+      return;
+    }
     const outcome = await sendOp(op);
     if (outcome === 'applied') {
       // A successful RPC means the bridge is up — good moment to drain anything
@@ -335,6 +341,8 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
       return;
     }
     if (outcome === 'rejected') return;
+    // The Mac did not answer: a field write it merges goes into the journal it drains.
+    if (outcome === 'retry' && (await journalOp(op))) return;
     await enqueue(op);
     if (outcome === 'needs_upgrade') await writeLegacyOutboxFallback(op);
   } catch (err) {
@@ -347,6 +355,34 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
     // Applied, refused, or queued (a queued op holds the task from its file).
     if (heldId) releaseLive(heldId);
     liveOps--;
+  }
+}
+
+/**
+ * Stage 3a (docs/plan/walnut-companion-unified-replica.md): an update whose fields the
+ * Mac merges, made while it does not answer, is kept in the companion's journal
+ * (companion-journal.ts) rather than this queue; the Mac drains it. False when the
+ * queue keeps it: not such an update, a Mac that does not drain the kind yet, or a
+ * journal that refused it. The op id is the record's, so a live send that did land
+ * (a timeout, not a dead link) is applied once (the task's applied_ops key).
+ */
+async function journalOp(op: TaskOp): Promise<boolean> {
+  if (op.type !== 'update' || op.append || !op.fields || Object.keys(op.fields).length === 0) return false;
+  try {
+    const { journalTaskFields } = await import('./companion-journal.js');
+    return journalTaskFields({ opId: op.opId, taskId: op.task.id, fields: op.fields })?.ok === true;
+  } catch (err) {
+    log.task.warn('task-queue: the journal did not take a task write, queueing it', { opId: op.opId, err: String(err) });
+    return false;
+  }
+}
+
+/** Tasks with records the Mac has not taken from the journal yet (their ops wait behind them). */
+async function journaledTaskIds(): Promise<Set<string>> {
+  try {
+    return (await import('./companion-journal.js')).companionJournalTaskIds();
+  } catch {
+    return new Set();
   }
 }
 
@@ -392,6 +428,7 @@ export async function flushTaskQueue(): Promise<number> {
     } catch {
       return 0; // no queue dir yet — nothing has ever failed
     }
+    const journaled = names.length ? await journaledTaskIds() : new Set<string>();
     for (const name of names.slice(0, FLUSH_BATCH_MAX)) {
       const file = path.join(TASK_QUEUE_DIR, name);
       let op: TaskOp;
@@ -404,6 +441,9 @@ export async function flushTaskQueue(): Promise<number> {
         await fsp.rm(file, { force: true }).catch(() => {});
         continue;
       }
+      // Its task's journal records are older: the Mac takes those first (the ack flushes again).
+      const opTask = taskIdOf(op);
+      if (opTask && journaled.has(opTask)) continue;
       const outcome = await sendOp(op, flush);
       if (outcome !== 'applied' && outcome !== 'rejected') stopped = true;
       if (outcome === 'retry') break; // bridge down — the rest would fail too

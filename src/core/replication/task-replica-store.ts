@@ -105,9 +105,10 @@ function saveSoon(): void {
 
 /**
  * Rows this box wrote itself and the primary may not have yet. The companion's
- * own writes: a queued op, a live op still on its way (task-queue.ts
- * taskOpInFlight), a delete tombstone, a write here in the last 30 s. A host
- * replica's: its journal (replica/journal-overlay.ts; none until WP10).
+ * own writes: a queued op, a journal record (companion-journal.ts), a live op
+ * still on its way (task-queue.ts taskOpInFlight), a delete tombstone, a write
+ * here in the last 30 s. A host replica's: its journal (replica/journal-overlay.ts;
+ * none until WP10).
  */
 async function heldIds(): Promise<HeldSource> {
   if (followerKind() !== 'companion') return (await import('../../replica/journal-overlay.js')).journalHeld('tasks')
@@ -117,9 +118,11 @@ async function heldIds(): Promise<HeldSource> {
     if (op.type === 'delete') queued.add(op.id)
     else if (op.type === 'create' || op.type === 'update') queued.add(op.task.id)
   }
+  // Records in the companion's journal (stage 3) hold their rows the same way.
+  const journaled = (await import('../companion-journal.js')).companionJournalTaskIds()
   const now = Date.now()
   return {
-    has: (id) => queued.has(id) || tq.taskOpInFlight(id) || tq.hasDeleteTombstone(id) || now - (localWrites.get(id) ?? 0) < LOCAL_WRITE_HOLD_MS,
+    has: (id) => queued.has(id) || journaled.has(id) || tq.taskOpInFlight(id) || tq.hasDeleteTombstone(id) || now - (localWrites.get(id) ?? 0) < LOCAL_WRITE_HOLD_MS,
     orderWriteRecent: () => tq.hasRecentOrderOp(),
   }
 }

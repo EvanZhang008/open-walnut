@@ -88,7 +88,8 @@ export function buildConflictLetter(file: ConflictLogFile): ConflictLetter | nul
   if (file.entries.length === 0) return null;
   const n = file.entries.length;
   const subject = `${n} change${n === 1 ? '' : 's'} made while your Mac was away did not merge cleanly`;
-  const head = `While your Mac was away, host ${file.hostKey} saved changes. When they were applied, these needed a choice. Each item says what was kept; the other side is kept in full in the linked entry.\n\n`;
+  const who = file.hostKey === 'companion' ? 'your cloud companion' : `host ${file.hostKey}`;
+  const head = `While your Mac was away, ${who} saved changes. When they were applied, these needed a choice. Each item says what was kept; the other side is kept in full in the linked entry.\n\n`;
   const links: string[] = [];
   const taskRefs: string[] = [];
   let body = head;

@@ -670,6 +670,7 @@ let sendQueueFlushHandle: { stop: () => void } | null = null
 let cloudChatOutboxFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: replays letter read/pin/archive changes (core/human-inbox/replica-state.ts). */
 let humanInboxQueueFlushHandle: { stop: () => void } | null = null
+let companionJournalDueHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
@@ -1453,6 +1454,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The primary keeps this box's copy of its task store (same door as ingest).
     const { createBridgeReplicaRouter, BRIDGE_REPLICA_PATH } = await import('./routes/bridge-replica.js')
     app.use(BRIDGE_REPLICA_PATH, createBridgeReplicaRouter())
+    // The writes it took while the Mac was away, drained by the Mac (stage 3, core/companion-journal.ts).
+    const { createBridgeJournalRouter, BRIDGE_JOURNAL_PATH } = await import('./routes/bridge-journal.js')
+    app.use(BRIDGE_JOURNAL_PATH, createBridgeJournalRouter())
     // The primary keeps this box on its own build (same door; raw chunk bodies).
     const { createBridgeBuildRouter } = await import('./routes/bridge-build.js')
     const { BRIDGE_BUILD_PATH } = await import('../core/companion-build/wire.js')
@@ -3205,6 +3209,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // replay on the same triggers (core/human-inbox/replica-state.ts).
       const { startHumanInboxQueueFlush } = await import('../core/human-inbox/replica-state.js')
       humanInboxQueueFlushHandle = startHumanInboxQueueFlush()
+      // Writes kept in the companion's journal (stage 3): the Mac drains them when asked,
+      // on the same triggers (core/companion-journal.ts).
+      const { startCompanionJournalDue } = await import('../core/companion-journal.js')
+      companionJournalDueHandle = startCompanionJournalDue()
       // Seed the local replica from the synced projection shortly after boot.
       setTimeout(() => { void importProjectionOnCloud() }, 5_000)
     }
@@ -6406,6 +6414,10 @@ export async function stopServer(): Promise<void> {
   if (humanInboxQueueFlushHandle) {
     humanInboxQueueFlushHandle.stop()
     humanInboxQueueFlushHandle = null
+  }
+  if (companionJournalDueHandle) {
+    companionJournalDueHandle.stop()
+    companionJournalDueHandle = null
   }
   stopMobileEventsFeed()
   if (pinRetirementHandle) {
