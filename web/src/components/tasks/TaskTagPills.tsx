@@ -16,7 +16,7 @@ import { TagChip } from './TagChip';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { shownTags, tagValue, type CompiledTagDisplay } from '../../../../src/core/tag-display-rules';
-import { isLinkTag, linkTagLabel } from '../../../../src/core/link-tags';
+import { isLinkTag, linkTagKey, linkTagLabel } from '../../../../src/core/link-tags';
 import { effectiveTags } from '../../../../src/core/tag-model';
 
 type TaggedTask = { tags?: readonly string[]; created_at?: string; updated_at?: string };
@@ -34,7 +34,7 @@ const WHOLE_TAG_MAX = 8;
 /** The text a tag's pill reads under the rules. A link always reads `key:label`. */
 export function pillText(tag: string, compiled: CompiledTagDisplay): string {
   const label = linkTagLabel(tag);
-  if (label) return `${tag.slice(0, tag.indexOf(':'))}:${label}`;
+  if (label) return `${linkTagKey(tag)}:${label}`;
   return compiled.valueOnly(tag) ? tagValue(tag) : tag;
 }
 

@@ -18,6 +18,10 @@ import {
   linkTagLabel,
   canonicalLinkPath,
   newLinkTags,
+  linkKind,
+  linkTagKey,
+  pathKind,
+  relabelLinkTags,
 } from '../../src/core/link-tags.js'
 import { isNormalTag, normalizeTag, tagInputProblem } from '../../src/core/tag-model.js'
 import { compileTagDisplay } from '../../src/core/tag-display-rules.js'
@@ -107,12 +111,13 @@ describe('linkLabel', () => {
 })
 
 describe('linkTagsFromField (self-report LINKS)', () => {
-  it('takes the kind the session wrote, a pattern\'s key over it, and link for a bad kind', () => {
+  it('takes the kind the session wrote (two words at most), a pattern\'s key over it, and link for a bad kind', () => {
     const field = [
       '- pr: https://github.com/acme/app/pull/9',
       '- ticket: https://github.com/acme/app/issues/3',
       '- doc: https://docs.example.com/design/sync-v2.',
       '* Design Notes: https://notes.example.com/n/1',
+    '* the long design notes: https://notes.example.com/n/2',
       '- https://example.com/x',
       '- pr: https://github.com/acme/app/pull/9',
     ].join('\n')
@@ -120,7 +125,8 @@ describe('linkTagsFromField (self-report LINKS)', () => {
       'pr:https://github.com/acme/app/pull/9',
       'issue:https://github.com/acme/app/issues/3',
       'doc:https://docs.example.com/design/sync-v2',
-      'link:https://notes.example.com/n/1',
+      'design-notes:https://notes.example.com/n/1',
+      'link:https://notes.example.com/n/2',
       'link:https://example.com/x',
     ])
   })
@@ -134,7 +140,7 @@ describe('linkTagsFromField (self-report LINKS)', () => {
       '- **design_doc**: https://docs.example.com/d/other',
     ].join('\n'), DEFAULT_LINK_PATTERNS)
     expect(fromField.slice(0, 2)).toEqual(fromText)
-    expect(fromField.slice(2)).toEqual(['link:https://docs.example.com/d/sync', 'design_doc:https://docs.example.com/d/other'])
+    expect(fromField.slice(2)).toEqual(['design-doc:https://docs.example.com/d/sync', 'design-doc:https://docs.example.com/d/other'])
   })
 
   it('reads the field out of a whole report without swallowing RECAP', () => {
@@ -204,14 +210,21 @@ describe('file-path link tags', () => {
     const tags = linkTagsFromField([
       '- html: /tmp/run/result.html',
       '- **file**: `/Users/me/out/summary-of-the-whole-run.md`',
+      '- design doc: /Users/me/docs/sync.md',
       '- notes: see the folder',
       '- pr: https://github.com/acme/app/pull/3',
     ].join('\n'), DEFAULT_LINK_PATTERNS)
-    expect(tags).toEqual(['html:/tmp/run/result.html', 'file:/Users/me/out/summary-of-the-whole-run.md', 'pr:https://github.com/acme/app/pull/3'])
-    expect(linkPathOfTag('html:/tmp/run/result.html')).toBe('/tmp/run/result.html')
-    expect(linkTagLabel('html:/tmp/run/result.html')).toBe('result.html')
-    expect(linkTagLabel('file:/Users/me/out/summary-of-the-whole-run.md')).toHaveLength(16)
-    expect(linkUrlOfTag('html:/tmp/run/result.html')).toBeUndefined()
+    // A file type or the word "file" is no kind: the file's name gives a better one.
+    expect(tags).toEqual([
+      'report:/tmp/run/result.html',
+      'report:/Users/me/out/summary-of-the-whole-run.md',
+      'design-doc:/Users/me/docs/sync.md',
+      'pr:https://github.com/acme/app/pull/3',
+    ])
+    expect(linkPathOfTag('report:/tmp/run/result.html')).toBe('/tmp/run/result.html')
+    expect(linkTagLabel('report:/tmp/run/result.html')).toBe('result.html')
+    expect(linkTagLabel('report:/Users/me/out/summary-of-the-whole-run.md')).toHaveLength(16)
+    expect(linkUrlOfTag('report:/tmp/run/result.html')).toBeUndefined()
   })
 
   it('dedupes a path like a URL, under any key', () => {
@@ -219,3 +232,45 @@ describe('file-path link tags', () => {
       .toEqual(['html:/tmp/run/other.html'])
   })
 })
+
+describe('link kinds', () => {
+  it('reads a kind as one or two words, else nothing', () => {
+    expect(linkKind('Design Doc')).toBe('design-doc')
+    expect(linkKind('design_doc')).toBe('design-doc')
+    expect(linkKind('ticket')).toBe('ticket')
+    expect(linkKind('the design doc')).toBeUndefined()
+    expect(linkKind('')).toBeUndefined()
+  })
+
+  it('names a file by what it is', () => {
+    expect(pathKind('/a/sync-design.md')).toBe('design-doc')
+    expect(pathKind('/a/rollout-plan.md')).toBe('plan')
+    expect(pathKind('/tmp/x/result.html')).toBe('report')
+    expect(pathKind('/n/CLAUDE.md')).toBe('notes')
+    expect(pathKind('/t/check.py')).toBe('script')
+    expect(pathKind('/t/settings.yaml')).toBe('config')
+    expect(pathKind('/t/shot.png')).toBe('image')
+    expect(pathKind('/t/README')).toBe('file')
+  })
+
+  it('a pill shows a file\'s kind for a generic key and keeps every other key', () => {
+    expect(linkTagKey('file:/t/check.py')).toBe('script')
+    expect(linkTagKey('html:/tmp/x/result.html')).toBe('report')
+    expect(linkTagKey('plan:/t/check.py')).toBe('plan')
+    expect(linkTagKey('ticket:https://acme.atlassian.net/browse/ENG-1')).toBe('ticket')
+    expect(linkTagKey('link:https://example.com/x')).toBe('link')
+    expect(linkTagKey('sev:2')).toBeUndefined()
+  })
+
+  it('renames a generic kind Walnut gave, never a key the user gave or a generic candidate', () => {
+    const task = {
+      tags: ['file:/t/a.md', 'file:/t/b.md', 'link:https://x.example.com/1'],
+      auto_links: ['/t/a.md', 'https://x.example.com/1'],
+    }
+    expect(relabelLinkTags(task, ['plan:/t/a.md', 'plan:/t/b.md', 'doc:https://x.example.com/1', 'html:/t/a.md'])).toEqual([
+      { from: 'file:/t/a.md', to: 'plan:/t/a.md' },
+      { from: 'link:https://x.example.com/1', to: 'doc:https://x.example.com/1' },
+    ])
+  })
+})
+

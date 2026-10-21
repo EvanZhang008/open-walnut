@@ -10,7 +10,7 @@
 
 import { bus, eventData, EventNames } from './event-bus.js'
 import { log } from '../logging/index.js'
-import { effectiveLinkPatterns, linkTagsFromField, linkTagsInText, newLinkTags, type LinkPattern } from './link-tags.js'
+import { effectiveLinkPatterns, linkTagsFromField, linkTagsInText, newLinkTags, relabelLinkTags, type LinkPattern } from './link-tags.js'
 
 /** Send sources a person typed (phase.ts REOPENING_SEND_SOURCES minus the peer and letter paths). */
 const HUMAN_SEND_SOURCES: ReadonlySet<string> = new Set(['ui', 'mobile', 'cli', 'web-api', 'api-v1', 'chat'])
@@ -35,7 +35,7 @@ export async function addLinkTags(taskId: string, candidates: readonly string[],
     const { getTask, updateTask } = await import('./task-manager.js')
     // Checked before the write so a mention of a known link costs no task write.
     const current = await getTask(taskId)
-    if (newLinkTags(current, candidates).length === 0) return []
+    if (newLinkTags(current, candidates).length === 0 && relabelLinkTags(current, candidates).length === 0) return []
     const before = new Set(current.tags ?? [])
     const { task } = await updateTask(taskId, { add_link_tags: [...candidates] }, { source: 'link-tags' })
     const added = (task.tags ?? []).filter((tag) => !before.has(tag))

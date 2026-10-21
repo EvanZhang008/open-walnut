@@ -41,7 +41,7 @@ import { folderProjectFor, trimDir } from './sessions/folder-project.js';
 import { isAwaitingTurnEnd } from './sessions/self-complete-stop.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
-import { linkTargetOfTag, newLinkTags, MAX_AUTO_LINKS } from './link-tags.js';
+import { linkTargetOfTag, newLinkTags, relabelLinkTags, MAX_AUTO_LINKS } from './link-tags.js';
 import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import type { TaskMergedInto } from './event-types.js';
@@ -4425,6 +4425,10 @@ export async function updateTask(
   }
   if (updates.add_link_tags?.length) {
     // Not normalized first: normalizing clips a long tag, and a clipped URL opens the wrong page.
+    // A generic kind Walnut gave earlier (`file:`) gives way to the better one named now.
+    for (const { from, to } of relabelLinkTags(task, updates.add_link_tags)) {
+      task.tags = (task.tags ?? []).map((tag) => (tag === from ? to : tag));
+    }
     const added = newLinkTags(task, updates.add_link_tags);
     if (added.length) {
       task.tags = [...(task.tags ?? []), ...added];

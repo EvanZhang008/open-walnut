@@ -117,6 +117,51 @@ export function linkTagsInText(text: string, patterns: readonly LinkPattern[]): 
   return out
 }
 
+/** Keys that say a link exists but not what it is: a file type or the word for a link. A link
+ *  tag under one of them is renamed when a better kind for the same target arrives. */
+const GENERIC_LINK_KEYS: ReadonlySet<string> = new Set(['file', 'link', 'path', 'url', 'html', 'htm', 'md', 'txt', 'pdf', 'json'])
+
+export function isGenericLinkKey(key: string): boolean {
+  return GENERIC_LINK_KEYS.has(key)
+}
+
+/** The kind a session named, as a tag key of one or two words (`design doc` becomes
+ *  `design-doc`), or undefined when it is longer or not a key. */
+export function linkKind(named: string): string | undefined {
+  const words = named.trim().toLowerCase().split(/[\s_-]+/).filter(Boolean)
+  if (words.length === 0 || words.length > 2) return undefined
+  const key = words.join('-')
+  return key.length <= 24 && isTagKey(key) ? key : undefined
+}
+
+/** What a file most likely is, from its name, for a file nobody named well: one or two words,
+ *  never `file` unless the name says nothing at all. */
+export function pathKind(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  if (/design/.test(name)) return 'design-doc'
+  if (/plan|roadmap/.test(name)) return 'plan'
+  if (/report|result|summary|explainer|review/.test(name)) return 'report'
+  if (/^(?:claude|agents|readme)\.md$|note/.test(name)) return 'notes'
+  if (/\.html?$/.test(name)) return 'report'
+  if (/\.(?:png|jpe?g|gif|webp|svg)$/.test(name)) return 'image'
+  if (/\.(?:mp4|mov|webm)$/.test(name)) return 'video'
+  if (/\.(?:py|sh|ts|js|mjs|rb|go)$/.test(name)) return 'script'
+  if (/\.(?:ya?ml|json|toml|ini|plist)$/.test(name)) return 'config'
+  if (/\.log$/.test(name)) return 'log'
+  if (/\.(?:csv|tsv|xlsx?)$/.test(name)) return 'data'
+  if (/\.(?:md|txt|pdf|docx?)$/.test(name)) return 'doc'
+  return 'file'
+}
+
+/** The key a link pill shows: the tag's own, except a file under a generic key, which reads as
+ *  what the file is (`file:/…/plan.md` shows `plan`). */
+export function linkTagKey(tag: string): string | undefined {
+  if (!isLinkTag(tag)) return undefined
+  const key = tag.slice(0, tag.indexOf(':'))
+  const path = linkPathOfTag(tag)
+  return path && isGenericLinkKey(key) ? pathKind(path) : key
+}
+
 /** The links a self-report's LINKS field names (`- <kind>: <url or absolute path>` per line), as tags. A
  *  pattern's key and URL win over the kind and the exact URL the session wrote, so a link reads
  *  the same however it reached the task. */
@@ -128,12 +173,12 @@ export function linkTagsFromField(field: string, patterns: readonly LinkPattern[
     const urlAt = line.search(/https?:\/\//i)
     if (urlAt < 0) {
       // A file to open (`- html: /tmp/run/result.html`): its kind before the colon, the path after.
-      const m = /^([^:\s]{1,64})\s*[:=]\s*(\S+)/.exec(line.replace(/[*`[\]()<>]/g, ''))
+      const m = /^([^:]{1,40}?)\s*[:=]\s*(\S+)/.exec(line.replace(/[*`[\]()<>]/g, ''))
       const path = m ? canonicalLinkPath(m[2]!) : undefined
       if (!m || !path || seen.has(path)) continue
-      const named = m[1]!.trim().toLowerCase()
       seen.add(path)
-      out.push(`${isTagKey(named) ? named : 'file'}:${path}`)
+      const kind = linkKind(m[1]!)
+      out.push(`${kind && !isGenericLinkKey(kind) ? kind : pathKind(path)}:${path}`)
       continue
     }
     const candidate = urlCandidates(line.slice(urlAt))[0]
@@ -141,9 +186,9 @@ export function linkTagsFromField(field: string, patterns: readonly LinkPattern[
     const hit = patternTag(candidate, patterns)
     const url = hit?.url ?? canonicalLinkUrl(candidate.replace(/[)\]]+.*$/, ''))
     if (!url || seen.has(url)) continue
-    const named = line.slice(0, urlAt).replace(/[*`[\]()<>]/g, '').replace(/[:=\-\s]+$/, '').trim().toLowerCase()
+    const named = line.slice(0, urlAt).replace(/[*`[\]()<>]/g, '').replace(/[:=\-\s]+$/, '')
     seen.add(url)
-    out.push(hit?.tag ?? `${isTagKey(named) ? named : LINK_FALLBACK_KEY}:${url}`)
+    out.push(hit?.tag ?? `${linkKind(named) ?? LINK_FALLBACK_KEY}:${url}`)
   }
   return out
 }
@@ -257,4 +302,32 @@ export function newLinkTags(
     out.push(tag)
   }
   return out
+}
+
+/** Link tags Walnut added under a generic key (`file:/…/plan.md`) that a candidate now names
+ *  better (`plan:/…/plan.md`): each as the tag to drop and the one to put in its place. A key the
+ *  user gave (a target Walnut never tagged) is never renamed. */
+export function relabelLinkTags(
+  task: { tags?: readonly string[]; auto_links?: readonly string[] },
+  candidates: readonly string[],
+): { from: string; to: string }[] {
+  const byTarget = new Map(genericLinkTags(task).map((tag) => [linkTargetOfTag(tag)!, tag]))
+  const out: { from: string; to: string }[] = []
+  for (const tag of candidates) {
+    const target = linkTargetOfTag(tag)
+    const from = target ? byTarget.get(target) : undefined
+    if (!from || tag.length > MAX_TAG_LENGTH || isGenericLinkKey(tag.slice(0, tag.indexOf(':')))) continue
+    byTarget.delete(target!)
+    out.push({ from, to: tag })
+  }
+  return out
+}
+
+/** The task's link tags Walnut added under a generic key, for the self-report to name better. */
+export function genericLinkTags(task: { tags?: readonly string[]; auto_links?: readonly string[] }): string[] {
+  const auto = new Set(task.auto_links ?? [])
+  return (task.tags ?? []).filter((tag) => {
+    const target = linkTargetOfTag(tag)
+    return !!target && auto.has(target) && isGenericLinkKey(tag.slice(0, tag.indexOf(':')))
+  })
 }
