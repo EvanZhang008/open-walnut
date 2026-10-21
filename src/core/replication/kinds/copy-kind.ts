@@ -367,6 +367,16 @@ export function copyChoiceChanged(): void {
   copySoon()
 }
 
+/**
+ * A follower now runs another build (the companion after an update): a round of
+ * every kind within the debounce. The caller ends its rests first
+ * (replica-status.ts forgetTarget), so a kind an older build refused goes now,
+ * not after the 10-minute rest.
+ */
+export function copyTargetChanged(): void {
+  copySoon()
+}
+
 /** A drain took away writes: every copy kind's manifest goes again (task-replica.ts resendTaskReplicaSoon). */
 export function resendCopyKindsSoon(): void {
   forgetKindManifests([...COPY_KIND_NAMES])

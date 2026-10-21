@@ -223,9 +223,24 @@ function boardFile(taskId: string): string {
   return path.join(boardsDir(), `${taskId}.json`);
 }
 
+/**
+ * Where a READ of boards looks: on the companion, its copy of the Mac's boards
+ * once it holds one (docs/plan/walnut-companion-unified-replica.md, stage 2b);
+ * elsewhere this server's own dir. Writes always name boardFile: nothing on the
+ * companion writes a board (its board writes answer 501, no board job runs there).
+ */
+async function readBoardsDir(): Promise<string> {
+  const { copyReadPath } = await import('../replication/kinds/gate.js');
+  return copyReadPath('boards', boardsDir());
+}
+
+async function readBoardFile(taskId: string): Promise<string> {
+  return path.join(await readBoardsDir(), path.basename(boardFile(taskId)));
+}
+
 /** The names of every board on disk (the reminder clock's boot scan). */
 export async function listBoardTaskIds(): Promise<string[]> {
-  const names = await fsp.readdir(boardsDir()).catch(() => [] as string[]);
+  const names = await fsp.readdir(await readBoardsDir()).catch(() => [] as string[]);
   return names
     .filter((n) => n.endsWith('.json'))
     .map((n) => n.slice(0, -'.json'.length))
@@ -234,7 +249,8 @@ export async function listBoardTaskIds(): Promise<string[]> {
 
 /** True when the task has a board file (no parse: the team-owner walk asks this per ancestor). */
 export async function hasBoard(taskId: string): Promise<boolean> {
-  return fsp.stat(boardFile(taskId)).then((s) => s.isFile(), () => false);
+  const file = await readBoardFile(taskId);
+  return fsp.stat(file).then((s) => s.isFile(), () => false);
 }
 
 export type BoardItemKind = 'thread' | 'mark' | 'project' | 'check' | 'choice' | 'target' | 'section';
@@ -330,7 +346,7 @@ export function requireBoard(current: BoardFile | null): BoardFile {
 }
 
 export async function getBoard(taskId: string): Promise<BoardFile | null> {
-  return normalize(await readJsonFile<BoardFile | null>(boardFile(taskId), null), taskId);
+  return normalize(await readJsonFile<BoardFile | null>(await readBoardFile(taskId), null), taskId);
 }
 
 /** Replace the whole document (creates the board when it has none). */

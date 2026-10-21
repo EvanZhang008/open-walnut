@@ -124,15 +124,15 @@ describe('kinds (docs/plan/walnut-replica-servers-impl.md, section 4, WP3)', () 
     expect(tasks.ok).toBe(true)
   })
 
-  // The ones it keeps (requests, routines, prefs, personas: stage 2a of
-  // docs/plan/walnut-companion-unified-replica.md) are pinned by companion-copies-cloud.test.ts.
+  // The ones it keeps (requests, routines, prefs, personas, boards, config: stages 2a and 2b
+  // of docs/plan/walnut-companion-unified-replica.md) are pinned by companion-copies-cloud.test.ts.
   it('the copy kinds the companion does not keep (yet) are 404 unknown_kind here, any op, any schema', async () => {
-    for (const kind of ['sessions', 'boards', 'inbox', 'inbox-bodies', 'conversations', 'config']) {
+    for (const kind of ['sessions', 'inbox', 'inbox-bodies', 'conversations']) {
       for (const body of [{ op: 'status', digest: '0.0' }, { op: 'sync', entries: [{ k: 'k1', h: 'aaaaaaaaaaaa' }], asOf: 1, schemaVersion: 99 }, { op: 'put', rows: [{ key: 'ui', value: {} }], last: true, schemaVersion: 1 }, { op: 'purge' }]) {
         expect([kind, body.op, await post(T.local, { ...body, kind })]).toEqual([kind, body.op, { status: 404, body: { ok: false, error: 'unknown_kind' } }])
       }
     }
-    expect(await fs.readdir(path.join(WALNUT_HOME, 'cache', 'replica')).catch(() => [])).not.toContain('config.json')
+    expect(await fs.readdir(path.join(WALNUT_HOME, 'cache', 'replica')).catch(() => [])).not.toContain('inbox.json')
   })
 
   it('a step built with a newer schema than this build is 409 schema_newer, and changes nothing', async () => {

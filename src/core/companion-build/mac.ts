@@ -112,12 +112,29 @@ function setView(gen: number, next: Partial<CompanionBuildView> & { state: Compa
   if (gen !== generation) return
   const before = view
   view = { mine: before.mine, theirs: before.theirs, autoUpdate: before.autoUpdate, ...next, at: Date.now() }
+  if (view.theirs && view.theirs !== before.theirs) companionBuildChanged(before.theirs ?? null, view.theirs)
   if (before.state !== view.state || before.step !== view.step) {
     log.session.info('companion build: state', {
       state: view.state, was: before.state, mine: view.mine, theirs: view.theirs,
       ...(view.step ? { step: view.step } : {}), ...(view.message ? { why: view.message } : {}),
     })
   }
+}
+
+/**
+ * The companion runs another build than this server last saw: the copy kinds go
+ * to it again now, and a kind its older build refused (`404 unknown_kind`, a
+ * 10-minute rest) is asked at once. The first sighting after this server
+ * started counts too: a rest from before it is gone with the process anyway.
+ */
+function companionBuildChanged(was: string | null, now: string): void {
+  void Promise.all([import('../replication/replica-status.js'), import('../replication/kinds/copy-kind.js')])
+    .then(([status, copies]) => {
+      status.forgetTarget('companion')
+      copies.copyTargetChanged()
+      if (was) log.session.info('companion build: the companion changed build, its copies go again', { was, now })
+    })
+    .catch(() => { /* the next sweep asks again */ })
 }
 
 // --- the gates ----------------------------------------------------------------

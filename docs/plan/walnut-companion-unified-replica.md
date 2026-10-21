@@ -205,14 +205,29 @@ rule's confirm works for it as for a host, and the Settings row shows its kinds.
 
 Routine writes while the Mac is away still answer that they need the Mac.
 
-### 2b: config, boards, inbox, conversations
+### 2b: boards, config
 
-Each needs a reader that does not exist yet on the companion (config: the phone's
-settings while away, as an overlay on the box's own file, never a replacement), or
-a git-synced file whose reader moves to the copy (boards, the inbox index and
-bodies, the conversation index). Git sync keeps writing those files until stage 4;
-the readers stop reading them once the copy is held, so each file has one writer
-that is read.
+| Kind | The box read that switches to the copy | Today, Mac away |
+|---|---|---|
+| `boards` | every board read (`board-store.ts` `getBoard`, `hasBoard`, `listBoardTaskIds`: the team walk too) once the copy is held | the file git sync wrote |
+| `config` | the phone's settings view (`GET /api/v1/config`): the copy laid over the box's own config, top-level key by key | the box's own config |
+
+Nothing on the companion writes a board (its board writes answer 501, and no board
+job runs there), so the copy is the one source its readers see; git sync keeps
+writing the old files until stage 4, unread. The config copy never replaces the
+box's file: `getConfig` on the box stays its own (cloud exec, push, its lane's
+providers).
+
+When the companion changes build (an update, or one the Mac sees for the first
+time), the Mac ends the rests of its copy kinds and sends a round at once
+(`companion-build/mac.ts` `companionBuildChanged`), so a kind an older build
+refused does not wait out its 10 minutes.
+
+The inbox and the conversation index are not copied to the companion yet: the box
+writes both itself (inbox flags while away, the conversation list always), so a
+copy would hide its own writes until they came back through the Mac. They move
+with stage 3, whose `inbox-state` and `chat-turn` records hand those writes to the
+Mac, and the readers switch then.
 
 ### 2c: sessions
 
@@ -225,30 +240,70 @@ specified when this part starts.
 
 ## Stage 3: writes while the Mac is away go to journal v2
 
-The companion keeps the same records a host journals (`task-fields`,
-`task-create`, `task-move`, `board`, `note`, `session`, `device-revoke`), in the
-same journal core (`offline-journal-core.ts`), run inside the companion server:
-the companion is the process that takes these writes, and keeping the journal
-there needs no change to the session daemons. The Mac drains it with the same
-handover (`runOfflineHandover`) over a `HandoverConnection` whose `send` calls
-`POST /bridge/journal` (`offline.drain`, `offline.ack`, `offline.blob`).
+The companion keeps the same records a host journals, in the same journal core
+(`offline-journal-core.ts`), run inside the companion server: the companion is
+the process that takes these writes, and keeping the journal there needs no
+change to the session daemons. The Mac drains it with the same handover
+(`runOfflineHandover`) over a `HandoverConnection` whose `send` calls
+`POST /bridge/journal` (`offline.drain`, `offline.ack`, `offline.blob`), host key
+`companion`.
 
-- The front writes through the same write port a host uses (`write-port.ts`), so
-  the merge rules, op ids, ledger, conflict log and the one letter per drain are
-  the same code. `x-walnut-op-id` is carried end to end.
-- New record kinds for what only the companion takes: `session-meta` (title,
-  archived, note, output mode, thread fields), `inbox-state` (read, pin, archive)
-  and `chat-turn` (a turn the companion answered itself, keyed by its turn id).
-- At the first boot of this stage, the files left in `task-queue`, `control-queue`,
-  the inbox queue and the chat outbox become journal records (deterministic op ids,
-  the v1 migration pattern), and new writes wait until that is done. A write with
-  no journal kind (a delete, a list reorder) keeps the old drain until its queue is
-  empty, then that queue is gone.
+### The parts
+
+```
+ phone write, Mac away                           the Mac
+   |                                                ^
+   v                                                | runOfflineHandover('companion')
+ companion route -> local store write               |   drain -> apply (ledger, merge,
+   |                -> companion journal ---------- |   conflict log) -> ack
+   |                   cache/journal/               |
+   +-- primary bridge back: `server.journal.due` ---+  (and the queues' 60 s sweep)
+```
+
+- **The journal.** One `createOfflineJournal` in the companion server, dir
+  `cache/journal/`, one fixed home (the companion has one Mac; the door answers the
+  Mac's `home` with it), `keepOpen`, no owner check (one process). An append is one
+  O_DSYNC write on the loop; the companion takes a few writes a minute at most.
+- **The writer.** What `handleFollower` checks on a host, for the kinds the
+  companion writes: an op id (`x-walnut-op-id` when the client sent one, else
+  minted), a retry answered from `byOpId`, a field set checked like a host's
+  (`taskFieldsRecord`), the per-actor budget, and only kinds the Mac said it drains
+  (the `kinds` of its last `offline.drain`, kept on disk; none known yet: the old
+  queue).
+- **The door.** `/bridge/journal`, mounted beside `/bridge/replica` with the same
+  `authenticate` (the Mac's machine credential only), answers the daemon's reply
+  shapes. `offline.blob` errors carry `code` (the Mac's blob reader reads it).
+- **The trigger.** When the primary bridge connects, and on the queues' 60 s sweep
+  while records wait, the companion relays `server.journal.due`; the Mac runs the
+  handover for `companion` (joined, if one runs). Nothing new on the bridge
+  allowlist: the relay is the queues' `session.control` path.
+- **The local write stays.** Unlike a host replica (which never writes its copy
+  and reads copy plus overlay), the companion writes its own task store and holds
+  those rows against copy rounds until the Mac has them. A row with a pending
+  journal record is held the same way (`task-replica-store.ts` companion branch).
+- **Actors.** A record carries no device actor yet, as the queues' ops did: the
+  companion's pairing ids are not always the Mac's (C6), and a record from a device
+  the Mac does not know is dropped with a letter.
+
+### Slices
+
+| Slice | Moves to the journal | Stays |
+|---|---|---|
+| 3a | the door, the trigger, the drain; a task update whose fields the Mac merges (`task-fields`, the op the queue already sends with `fields`) | everything else in `task-queue` |
+| 3b | session metadata (`session-meta`: title, archived, note, output mode, thread fields; a refusal becomes a letter instead of a silent drop) | the live mode change (a relay) |
+| 3c | inbox flags (`inbox-state`, folded per letter and flag) with the inbox copy reader; chat turns (`chat-turn`, texts as blobs) with the conversation copy reader | |
+| 3d | task creates (`task-create`) and single moves (`task-move`) | deletes and whole-list reorders keep the task queue: no journal kind takes them (a host refuses both while the Mac is away) |
+
+An op for a task that still has an op in `task-queue` joins that queue, so one
+task's writes reach the Mac in the order they were made. At the start of each
+slice, the files its kind replaces are left to drain the old way (they are
+minutes of writes at most), and new writes take the journal.
+
 - **send-queue stays.** A queued send waits on the session's host, not on the Mac,
   and carries delivery fates and held images; the journal adds nothing there.
 - This reverses C3 of `walnut-replica-servers-impl.md`: retiring the queues now has
-  user value (one merge path, one conflict letter, op ids end to end) and the
-  migration above bounds the risk.
+  user value (one merge path, the ledger instead of a 500-entry memory, one
+  conflict letter per drain, op ids end to end).
 
 ## Stage 4: notes, memory and skills from a copy
 

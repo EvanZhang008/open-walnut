@@ -23,7 +23,7 @@ import type { BoardFile } from '../../boards/board-store.js'
 import { sha12 } from '../kind.js'
 import { createRowSetFollower, serialChain, writeCopyFile, type RowSetFollower, type RowSetState } from '../kind-follower.js'
 import type { CopyKind } from './copy-kind.js'
-import { copyRefusal, markCopyOff } from './gate.js'
+import { copyPath, copyRefusal, markCopyOff } from './gate.js'
 
 export const BOARDS_SCHEMA_VERSION = 1
 export const BOARDS_REMOVAL_FLOOR = 20
@@ -32,6 +32,8 @@ export const BOARD_COPY_MAX_BYTES = 2 * 1024 * 1024
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 const boardsDir = (): string => path.join(WALNUT_HOME, 'boards')
+/** Where the follower keeps the copy: the live dir on a host replica, the copy store on the companion. */
+const copyDir = (): string => copyPath(boardsDir())
 
 interface Cached { size: number; mtimeMs: number; row: BoardFile; hash: string }
 const cache = new Map<string, Cached>()
@@ -137,7 +139,7 @@ async function save(): Promise<void> {
 }
 
 async function localIds(): Promise<string[]> {
-  const names = await fsp.readdir(boardsDir()).catch(() => [] as string[])
+  const names = await fsp.readdir(copyDir()).catch(() => [] as string[])
   return names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -'.json'.length)).filter((id) => TASK_ID_RE.test(id))
 }
 
@@ -168,12 +170,12 @@ export function boardsFollower(): RowSetFollower {
     apply: async ({ rows, removeIds }) => {
       const skipped: string[] = []
       for (const id of removeIds ?? []) {
-        if (TASK_ID_RE.test(id)) await fsp.rm(path.join(boardsDir(), `${id}.json`), { force: true })
+        if (TASK_ID_RE.test(id)) await fsp.rm(path.join(copyDir(), `${id}.json`), { force: true })
       }
       for (const b of rows ?? []) {
         // Same cap as the leader's: a board this large is never stored here.
         if (Buffer.byteLength(JSON.stringify(b)) > BOARD_COPY_MAX_BYTES) { skipped.push(b.task_id); continue }
-        await writeCopyFile(path.join(boardsDir(), `${b.task_id}.json`), b)
+        await writeCopyFile(path.join(copyDir(), `${b.task_id}.json`), b)
       }
       return { skipped }
     },
@@ -181,7 +183,7 @@ export function boardsFollower(): RowSetFollower {
     changed,
     purge: async () => {
       const ids = await localIds()
-      for (const id of ids) await fsp.rm(path.join(boardsDir(), `${id}.json`), { force: true })
+      for (const id of ids) await fsp.rm(path.join(copyDir(), `${id}.json`), { force: true })
       await markCopyOff('boards')
       state = null
       return { removed: ids.length }

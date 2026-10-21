@@ -268,6 +268,28 @@ describe('tickCompanionBuild', () => {
     expect(companionBuildView()).toMatchObject({ state: 'current', mine: h.mine, theirs: h.mine })
   })
 
+  it('after the update, the copy kinds the older build refused go again now, not after their rest', async () => {
+    const status = await import('../../src/core/replication/replica-status.js')
+    const companion = { id: 'companion', kind: 'companion' as const, label: 'Cloud companion' }
+    const rest = () => Object.assign(status.kindState(companion, 'routines'), { restUntil: Date.now() + 600_000, restWhy: 'unknown_kind', manifest: { hash: 'x' } })
+    rest()
+    await tickCompanionBuild('probe')
+    // This tick updated it from OLD: the rest it had then ended (async, after the tick).
+    await vi.waitFor(() => expect(status.peekKindState('companion', 'routines')?.restUntil).toBe(0))
+    // The older companion answered unknown_kind: a 10-minute rest, kept while it runs the same build.
+    rest()
+    await tickCompanionBuild('probe')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(status.peekKindState('companion', 'routines')?.restUntil).toBeGreaterThan(Date.now())
+    // It changes build (here it went back to the base, and this tick updates it again):
+    // the rest ends and the manifest goes again.
+    box.running = { id: OLD, version: '0.6.13', commit: '1111111', base: true, trial: false }
+    box.current = null
+    await tickCompanionBuild('probe')
+    expect(companionBuildView()).toMatchObject({ state: 'current', theirs: h.mine })
+    await vi.waitFor(() => expect(status.peekKindState('companion', 'routines')).toMatchObject({ restUntil: 0, manifest: null }))
+  })
+
   it('resumes an upload from what the box already has', async () => {
     box.upload = { id: h.mine, size: h.tgz.length, sha: '', data: [h.tgz.subarray(0, 4096)], received: 4096, complete: false }
     await tickCompanionBuild('probe')
