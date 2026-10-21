@@ -10,7 +10,8 @@
  *                             only by compaction (tmp + rename)
  *   journal-<key>.state.json  {v:2, journalId, nextSeq, frozen, rows, settledCopies, ...}
  *   journal-<key>.lock        the per-home writer lock (O_EXCL, pid plus start time)
- *   blobs/<sha256>            content-addressed note bodies
+ *   blobs/<sha256>            content-addressed bodies: a note's (`baseBlob`, `oursBlob`), and
+ *                             any other record's texts (named in its `blobs`, appendBlobs)
  *
  * Rules this file owns:
  *   - a record is `{v:2, seq, opId, rev, at, actor?, kind, supersedes?, ...}`; readers fold by
@@ -852,7 +853,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
         }
         // A body only the folded record named is freed under the blob lock once the home's
         // lock is released (the first base stays with the new line).
-        if (replaced) releaseBodies([replaced.baseBlob, replaced.oursBlob])
+        if (replaced) releaseBodies(namedBlobs(replaced))
         // A fold leaves the old line dead: saves that coalesce (exempt from the write budget)
         // must not grow the file while the Mac is away, so they compact as acks do.
         if (c.kind === 'fold') compactQuietly(j)
@@ -973,7 +974,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
           }
           compactQuietly(j)
           const shas: unknown[] = []
-          for (const r of acked) shas.push(r.baseBlob, r.oursBlob)
+          for (const r of acked) shas.push(...namedBlobs(r))
           releaseBodies(shas)
         }
         return { remaining: j.pending.size, acked, ignored }
@@ -1045,10 +1046,15 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     return n
   }
 
+  /** The bodies a record names: a note's two, and the `blobs` of any other (appendBlobs). */
+  function namedBlobs(r: Record<string, unknown>): unknown[] {
+    return [r.baseBlob, r.oursBlob, ...(Array.isArray(r.blobs) ? r.blobs : [])]
+  }
+
   function blobsOf(j: HomeJournal): Set<string> {
     const out = new Set<string>()
     for (const r of j.pending.values()) {
-      for (const sha of [r.baseBlob, r.oursBlob]) if (typeof sha === 'string' && SHA_RE.test(sha)) out.add(sha)
+      for (const sha of namedBlobs(r)) if (typeof sha === 'string' && SHA_RE.test(sha)) out.add(sha)
     }
     return out
   }
@@ -1242,6 +1248,35 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     }
   }
 
+  /**
+   * A record whose texts ride as bodies (the companion's chat turns): each text becomes a
+   * blob, its sha goes in the field it is named by and in the record's `blobs` (so the
+   * bodies stay while the record waits and go at its ack), then the record, all under the
+   * blob lock as a note save is. Never coalesced.
+   */
+  function appendBlobs(home: string, body: Record<string, unknown>, texts: Record<string, Uint8Array>, opts: AppendOpts = {}): AppendResult {
+    if (!body || typeof body.kind !== 'string' || !body.kind) return refuse('bad_request', 'a record needs a kind')
+    const notOwner = ownerRefusal() ?? migratingRefusal(home, opts)
+    if (notOwner) return notOwner
+    try {
+      return withBlobLock(() => {
+        const written: string[] = []
+        const done = (res: AppendResult): AppendResult => { releaseBodies(written); freeReleased(); return res }
+        const named: Record<string, string> = {}
+        for (const field of Object.keys(texts)) {
+          const b = putBlob(home, texts[field])
+          if (!b.ok) return done(b)
+          named[field] = b.sha
+          written.push(b.sha)
+        }
+        return done(append(home, { ...body, ...named, blobs: [...new Set(written)] }, { ...opts, coalesce: false }))
+      })
+    } catch (err) {
+      if (isRefusal(err)) return err
+      return unwritable(err)
+    }
+  }
+
   // ── reads for the offline host and the follower ──
 
   function records(home: string): JournalRecord[] {
@@ -1261,7 +1296,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     const all = records(home)
     const recs = all.filter((r) => r.seq > sinceSeq)
     const blobs = new Set<string>()
-    for (const r of recs) for (const sha of [r.baseBlob, r.oursBlob]) if (typeof sha === 'string') blobs.add(sha)
+    for (const r of recs) for (const sha of namedBlobs(r)) if (typeof sha === 'string') blobs.add(sha)
     return {
       records: recs.map((r) => JSON.parse(JSON.stringify(r)) as JournalRecord), blobs: [...blobs], nextSeq: j.maxSeq + 1,
       journalId: j.journalId, liveSeqs: all.map((r) => r.seq),
@@ -1748,7 +1783,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
   }
 
   return {
-    append: on(append), appendNote: on(appendNote), drain: on(drain), ack: on(ack), records: on(records), pending: on(pending),
+    append: on(append), appendNote: on(appendNote), appendBlobs: on(appendBlobs), drain: on(drain), ack: on(ack), records: on(records), pending: on(pending),
     drainableCount: on(drainableCount), drainableRecords: on(drainableRecords), stats: on(stats), state: on(state), persist: on(persist),
     markDirty: on(markDirty), readBlob, migrateV1: on(migrateV1), migrateSlices: on(migrateSlices),
     /** A whole note body by its sha256 (the offline host's read overlay, WP11), or null. */

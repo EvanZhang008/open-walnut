@@ -17,7 +17,8 @@
  * `session-meta` (a session's title, archive flag, note, output mode, thread
  * fields), 3c `inbox-state` (a letter's read, pinned or archived flag), 3d
  * `task-create` (a task born here), 4c `note` (a note saved here, its bodies as
- * blobs: companion-notes.ts); the other queues are unchanged until their slice. A record carries no device actor
+ * blobs: companion-notes.ts), 3e `chat-turn` (a chat turn this box answered itself, its
+ * texts as blobs: companion-chat-turns.ts); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -232,6 +233,34 @@ export function journalInboxState(input: { letterId: string; field: 'read' | 'pi
   return r
 }
 
+/**
+ * Save one chat turn this box answered itself while the Mac did not answer (slice 3e):
+ * `chat-turn`, the user's words and the answer as blobs (`userBlob`, `answerBlob`), op id
+ * `chat-<turnId>` (a retry is answered with the first record). The Mac adopts it as it
+ * adopted an outbox turn (offline-merge/apply-chat-turn.ts). Null when the Mac does not
+ * drain the kind: the caller keeps the turn in the outbox (cloud-chat-outbox.ts).
+ */
+export function journalChatTurn(input: {
+  turnId: string; agentId: string; conversationId: string; userText: string; userAt: string; engine: string
+  answerText?: string; answeredAt?: string; error?: string
+}): AppendResult | null {
+  if (!macDrains('chat-turn')) return null
+  const texts: Record<string, Uint8Array> = { userBlob: Buffer.from(input.userText, 'utf8') }
+  if (input.answerText) texts.answerBlob = Buffer.from(input.answerText, 'utf8')
+  const r = journalOf().appendBlobs(COMPANION_JOURNAL_HOME, {
+    kind: 'chat-turn', turnId: input.turnId, agentId: input.agentId, conversationId: input.conversationId,
+    userAt: input.userAt, engine: input.engine,
+    ...(input.answerText ? { answeredAt: input.answeredAt ?? input.userAt } : { error: input.error ?? '' }),
+  }, texts, { opId: `chat-${input.turnId}`, limit: true })
+  if (r.ok) {
+    log.agent.info('companion journal: saved a chat turn for the Mac', { turnId: input.turnId, conversationId: input.conversationId, answered: !!input.answerText, opId: r.opId, seq: r.seq, ...(r.duplicate ? { duplicate: true } : {}) })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+  } else {
+    log.agent.error('companion journal: a chat turn was refused', { turnId: input.turnId, conversationId: input.conversationId, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
 /** Sessions a record still names (their queued patches wait behind them). */
 export function companionJournalSessionIds(): Set<string> {
   const out = new Set<string>()
@@ -335,6 +364,10 @@ export async function ackCompanionJournal(seqs: unknown, macNow?: unknown): Prom
   // A note the Mac took stays over the copy until a copy round from after the ack (4c).
   const notes = acked.filter((x) => x.kind === 'note')
   if (notes.length) (await import('./companion-notes.js')).companionNotesAcked(notes, at)
+  // A chat turn the Mac took stays in the box's reads until its copy names it (3e); its
+  // texts are read here, before the ack frees them.
+  const turns = acked.filter((x) => x.kind === 'chat-turn')
+  if (turns.length) (await import('./companion-chat-turns.js')).companionChatTurnsAcked(turns)
   const r = journalOf().ack(COMPANION_JOURNAL_HOME, { seqs })
   if (r.error) return { ok: false, remaining: r.remaining, error: r.error }
   if (r.acked.length) {

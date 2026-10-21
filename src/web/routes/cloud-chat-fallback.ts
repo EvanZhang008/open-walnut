@@ -25,12 +25,14 @@
  *    the SAME lane turn runner (runLaneTurn) as the primary's REST turns.
  *  - Streams the same SSE frames a relayed turn produces, plus the additive
  *    `answeredBy: 'cloud'` on `message-start` and the terminal frame.
- *  - Persists ONLY into the non-git outbox (core/cloud-chat-outbox.ts). Never the
- *    conversation file: that has one writer, the primary.
+ *  - Persists ONLY into the non-git outbox (core/cloud-chat-outbox.ts) while it runs,
+ *    and when it ends into the companion's journal as a `chat-turn` record once the
+ *    Mac drains that kind (core/companion-chat-turns.ts; an older Mac keeps the
+ *    outbox). Never the conversation file: that has one writer, the primary.
  *
  * The phone sees the turn at once through GET /messages (the route merges banked
  * turns, see cloudTurnRows and the merge helpers below), and the primary adopts
- * it when the bridge is back.
+ * it when the bridge is back (the outbox's `server.chat.adopt`, or the journal's drain).
  */
 
 import { log } from '../../logging/index.js'
@@ -204,12 +206,13 @@ export async function runCloudFallbackTurn(input: {
   await enqueueAgentTurn(agentId, 'api-v1-cloud-fallback', async () => {
     // Every module first: nothing may throw between `message-start` and the
     // try below, or the phone would hold a turn that never ends.
-    const [outbox, { runLaneTurn }, { subscribeLaneTurnFrames }, lane, { cloudEngineLabel }] = await Promise.all([
+    const [outbox, { runLaneTurn }, { subscribeLaneTurnFrames }, lane, { cloudEngineLabel }, { finishCompanionTurn }] = await Promise.all([
       import('../../core/cloud-chat-outbox.js'),
       import('../../core/sessions/lane-turn.js'),
       import('./lane-turn-sse.js'),
       import('../../core/sessions/cloud-chat-lane.js'),
       import('../../core/chat-history.js'),
+      import('../../core/companion-chat-turns.js'),
     ])
     // Banked BEFORE the turn starts: the user's words survive a crash, and a
     // GET /messages during the turn still shows them.
@@ -238,14 +241,14 @@ export async function runCloudFallbackTurn(input: {
       })
       relay.settle()
       if (resultText === null || !resultText.trim()) {
-        await outbox.finishCloudTurn(entry, { error: NO_ANSWER_MESSAGE, engine: engine() })
+        await finishCompanionTurn(entry, { error: NO_ANSWER_MESSAGE, engine: engine() })
         log.web.error('cloud fallback turn got no answer', { conversationId, turnId, agentId, sessionId: laneSessionId })
         emit('error', { message: NO_ANSWER_MESSAGE, answeredBy: 'cloud' })
         return
       }
       // Recorded BEFORE the terminal frame: the phone refetches GET /messages on
       // `message-end`, and that read merges this entry.
-      await outbox.finishCloudTurn(entry, { answerText: resultText, engine: engine() })
+      await finishCompanionTurn(entry, { answerText: resultText, engine: engine() })
       // Entity refs stripped so the frame matches GET /messages byte-wise (the
       // same rule the primary's lane turn follows).
       emit('message-end', {
@@ -257,7 +260,7 @@ export async function runCloudFallbackTurn(input: {
     } catch (err) {
       relay.settle()
       const message = err instanceof Error ? err.message : String(err)
-      await outbox.finishCloudTurn(entry, { error: message, engine: engine() })
+      await finishCompanionTurn(entry, { error: message, engine: engine() })
       log.web.error('cloud fallback turn failed', { conversationId, turnId, agentId, error: message })
       emit('error', { message, answeredBy: 'cloud' })
     } finally {
