@@ -1457,6 +1457,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The writes it took while the Mac was away, drained by the Mac (stage 3, core/companion-journal.ts).
     const { createBridgeJournalRouter, BRIDGE_JOURNAL_PATH } = await import('./routes/bridge-journal.js')
     app.use(BRIDGE_JOURNAL_PATH, createBridgeJournalRouter())
+    // The Mac keeps this box's copy of its notes, memory and skills (stage 4, core/companion-host-replica.ts).
+    const { createBridgeHostReplicaRouter, BRIDGE_HOST_REPLICA_PATH } = await import('./routes/bridge-host-replica.js')
+    app.use(BRIDGE_HOST_REPLICA_PATH, createBridgeHostReplicaRouter())
     // The primary keeps this box on its own build (same door; raw chunk bodies).
     const { createBridgeBuildRouter } = await import('./routes/bridge-build.js')
     const { BRIDGE_BUILD_PATH } = await import('../core/companion-build/wire.js')

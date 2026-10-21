@@ -345,6 +345,27 @@ the companion server. Notes written on the companion while the Mac is away are
 N-way context). Git sync then stops writing the box's data dir; the hub stays as a
 backup the Mac pushes to, and nothing on the box reads from it.
 
+The copy is the host replica a daemon keeps (`providers/host-replica-core.ts`), not
+a copy kind: it already carries each note's title, id and time, stores bodies under
+a hash of their key, answers the reads a host answers (`note_read`, `note_search`,
+`memory_read`, `skill_read`, list, read, read many) and takes a journal view for
+pending away writes. The companion server runs one (`core/companion-host-replica.ts`,
+`cache/replica/host/`, one home: `mac`), behind `POST /bridge/host-replica` with a
+daemon's command names and replies. The Mac's round for it is a host's round
+(`syncHostReplica`, host key `companion`, keep settings `hosts.companion.keep`) over
+`postToCloudHostReplica`, run with the daemons' rounds (a note, memory or settings
+change, the 5-minute sweep, once 20 s after boot) and when the companion changes
+build. A daemon's memo of the last manifest ends with its link; the companion has
+none, so its memo ends when the box says a kind never arrived whole, every 30
+minutes, and at a build change.
+
+| Slice | Change |
+|---|---|
+| 4a | the copy and its round (no reader yet) |
+| 4b | the box's note, memory and skill reads take the copy once it is held |
+| 4c | a note written on the box is a `note` record in its journal (the copy's journal view shows it until the Mac's copy does); the box stops committing notes, memory and skills |
+| 4d | git sync stops writing the box's data dir (after 3e and the attachments) |
+
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 
 `bootPolicy` gets one `replica` column. What only a companion does becomes a

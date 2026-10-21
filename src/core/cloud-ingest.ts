@@ -287,6 +287,62 @@ export async function postToCloudJournal(cmd: string, params: Record<string, unk
   }
 }
 
+let hostReplicaUnsupportedUntil = 0
+
+/** The companion takes the notes, memory and skills copy: set up, not resting, and not an older build. */
+export async function cloudHostReplicaAvailable(): Promise<boolean> {
+  if (Date.now() < hostReplicaUnsupportedUntil || cloudIngestResting()) return false
+  return (await resolveEndpoint()) !== null
+}
+
+/**
+ * One command of the Mac's notes, memory and skills round for the companion
+ * (`POST /bridge/host-replica`, web/routes/bridge-host-replica.ts; stage 4 of
+ * docs/plan/walnut-companion-unified-replica.md), answered with a daemon's reply
+ * shape: `{ok:true, ...}` or `{ok:false, error, errorKind?}`. Never rejects: no
+ * answer is `{ok:false}`. An older companion without the door (a 404, or its app
+ * shell for an unknown path) rests this lane for 10 minutes. Each command is
+ * idempotent, so a connection that broke before any answer is tried again (sendStep).
+ */
+export async function postToCloudHostReplica(cmd: string, params: Record<string, unknown> = {}, opts: { timeoutMs?: number } = {}): Promise<Record<string, unknown>> {
+  if (Date.now() < hostReplicaUnsupportedUntil || cloudIngestResting()) return { ok: false, error: 'the companion does not take this copy now', errorKind: 'unsupported' }
+  const ep = await resolveEndpoint()
+  if (!ep) return { ok: false, error: 'no cloud companion is set up', errorKind: 'unsupported' }
+  const url = ep.url.replace(/\/ingest$/, '/host-replica')
+  await acquireSlot()
+  try {
+    const body = await gzip(Buffer.from(JSON.stringify({ cmd, params }), 'utf8'))
+    const send = (): Promise<globalThis.Response> => fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
+      body,
+      signal: AbortSignal.timeout(opts.timeoutMs ?? timeoutMs),
+    })
+    const res = await sendStep(send)
+    const json = await res.json().catch(() => null) as Record<string, unknown> | null
+    if (res.status === 401 || res.status === 403) {
+      unsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
+      endpoint = null
+      return { ok: false, error: `the companion refused this Mac's credential (${res.status})`, errorKind: 'unsupported' }
+    }
+    if (res.status === 404 || res.status === 405 || !json || typeof json.ok !== 'boolean') {
+      hostReplicaUnsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
+      log.session.info('cloud replica: the companion keeps no notes copy yet (older build), asking again in 10 minutes', { status: res.status })
+      return { ok: false, error: `the companion answered ${res.status} without a copy answer (an older build)`, errorKind: 'unsupported' }
+    }
+    return json
+  } catch (err) {
+    return { ok: false, error: stepError(err) }
+  } finally {
+    releaseSlot()
+  }
+}
+
+/** A companion build changed: an older one's rest of the notes copy ends. */
+export function forgetCloudHostReplicaRest(): void {
+  hostReplicaUnsupportedUntil = 0
+}
+
 export interface CloudSessionSend {
   host: string
   sessionId: string
@@ -431,6 +487,7 @@ export function _resetCloudIngestForTesting(opts: { timeoutMs?: number; stepRetr
   stepRetryMs = opts.stepRetryMs ?? STEP_RETRY_MS
   unsupportedUntil = 0
   replicaUnsupportedUntil = 0
+  hostReplicaUnsupportedUntil = 0
   endpoint = null
   endpointLookup = null
   sendCredentialRecovery = null
