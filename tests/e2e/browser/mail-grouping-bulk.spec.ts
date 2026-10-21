@@ -150,10 +150,8 @@ test.describe('the ordinary fixture', () => {
     await group.getByTestId('mail-group-foot-mark').click()
     await expect(statusLine(page, /^Marked \d+ read in /)).toBeVisible({ timeout: 60_000 })
     expect(await unreadIds(target.id, MARINA_INBOX)).toEqual([])
-    // Open, so it stays on screen at 0 until closed.
-    await expect(groupLine(page, target.id).getByTestId('mail-group-unread')).toHaveText('0')
-    await groupLine(page, target.id).getByTestId('mail-group-name').click()
-    await expect(groupLine(page, target.id)).toHaveCount(0)
+    // A group marked read as a whole leaves at once, though it is open and the pointer is on it.
+    await expect(groupLine(page, target.id)).toHaveCount(0, { timeout: 20_000 })
   })
 
   test('a press with a stale rules revision is refused and changes nothing', async ({ page }) => {

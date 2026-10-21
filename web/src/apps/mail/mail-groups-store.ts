@@ -4,11 +4,14 @@
  * What it holds, and why here rather than in `mail-store.ts`:
  * - the last `/groups` answer of each view, which is also what every inbox badge reads while the
  *   switch is on, so the badge, the header and the IMPORTANT head are ONE value;
- * - which groups are open, and the row order held while the pointer is over the list (a group whose
- *   mail just arrived must not jump under the pointer; it moves up once the pointer leaves);
- * - an open group stays on screen after its last unread is read (its row says 0) while the pointer is
- *   still over the list, so the mail you just opened does not vanish from under you; it goes once
- *   the pointer leaves or the view is entered again (`releaseSpentGroups`);
+ * - which groups the person closed (every group is OPEN by default, its mail listed in full: 2026-10-20,
+ *   the user: "default expand", "show all instead of load more"), and the row order held while the
+ *   pointer is over the list (a group whose mail just arrived must not jump under the pointer; it
+ *   moves up once the pointer leaves);
+ * - a group the person worked in (read a mail in it, opened it) stays on screen after its last unread
+ *   is read (its row says 0) while the pointer is still over the list, so the mail you just opened
+ *   does not vanish from under you; it goes once the pointer leaves or the view is entered again
+ *   (`releaseSpentGroups`), and at once after its whole-group ✓ (`letGroupGo`);
  * - the message pages (`mail-groups-pages.ts`), keyed apart from the All mail list;
  * - an unread OVERLAY: the optimistic read flag (`mail-read-flag.ts`) moves the numbers here the
  *   moment a mail is opened, and puts them back in the same frame when the provider refuses. An
@@ -40,14 +43,19 @@ export interface GroupsViewState {
   loading: boolean;
   /** The server's sentence for a failed `/groups`; the list falls back to All mail. */
   error: string | null;
-  /** Open groups (their mail listed under the row). */
-  expanded: Record<string, boolean>;
-  /** Open groups showing every loaded mail, not only the first three. */
-  showAll: Record<string, boolean>;
-  /** The last row seen for every open group, so it stays drawn at 0 unread until it is closed. */
+  /** Groups the person closed. Every other group is open, its mail listed under the row. */
+  collapsed: Record<string, boolean>;
+  /** The last row of each group on screen while the pointer is over the list, so a group read to 0 stays drawn. */
   held: Record<string, MailGroupItem>;
   /** The row order frozen while the pointer is over the list; null = the server's order. */
   heldOrder: string[] | null;
+  /** Groups the person marked read as a whole: never held at zero, drawn again once they hold unread. */
+  letGo: Record<string, true>;
+  /**
+   * Groups the person worked in while the pointer is over the list (read a mail in it, opened it): the
+   * only ones held at zero. A group whose mail a rule or a move took away is not one, and leaves.
+   */
+  worked: Record<string, true>;
 }
 
 interface OverlayEntry {
@@ -71,10 +79,17 @@ const listeners = new Set<() => void>();
 let railSummary: number | null = null;
 let railListener: ((value: number | null) => void) | null = null;
 
-function emit(): void {
+/**
+ * `pagesOnly`: only a page's own state moved (a page read started, landed or failed). The view's
+ * subscribers (the whole grouped list) skip it, and each group's line sees its own page by identity, so
+ * a page landing in one group draws that group alone.
+ */
+function emit(pagesOnly = false): void {
+  if (!pagesOnly) viewVersion += 1;
   for (const one of [...listeners]) one();
   railListener?.(railValue());
 }
+let viewVersion = 0;
 
 export function subscribeGroups(fn: () => void): () => void {
   listeners.add(fn);
@@ -84,7 +99,7 @@ export function subscribeGroups(fn: () => void): () => void {
 function freshView(scope: MailGroupsScope): GroupsViewState {
   return {
     viewKey: groupsViewKey(scope), scope, groups: null, loading: false, error: null,
-    expanded: {}, showAll: {}, held: {}, heldOrder: null,
+    collapsed: {}, held: {}, heldOrder: null, letGo: {}, worked: {},
   };
 }
 
@@ -120,6 +135,31 @@ function coalesce(key: string, work: () => Promise<void>, force: boolean): Promi
   return promise;
 }
 
+/**
+ * The open groups whose mail this answer says moved (unread count or newest mail), read again. Only
+ * those: every group is open, and reading every group's page on each new mail was one request per
+ * group per arrival (87 on the dense fixture), queued ahead of Important's own.
+ */
+function reloadChangedGroups(scope: MailGroupsScope, before: GroupsViewState, answer: MailGroupsResponse): void {
+  const was = new Map((before.groups?.groups ?? []).map((one) => [one.id, one]));
+  for (const group of answer.groups) {
+    const old = was.get(group.id);
+    if (old && old.unread === group.unread && old.newestAt === group.newestAt) continue;
+    if (!isGroupOpen(before, group.id) || !pages.has(pageKey(before.viewKey, group.id, ''))) continue;
+    // Under the pointer the new rows wait (they would push every line below them); the numbers do not.
+    if (before.heldOrder !== null) {
+      const waiting = deferredReloads.get(before.viewKey) ?? new Set<string>();
+      waiting.add(group.id);
+      deferredReloads.set(before.viewKey, waiting);
+      continue;
+    }
+    void loadGroupPage(scope, group.id, '', 'first', true, true);
+  }
+}
+
+/** Open groups whose new rows waited for the pointer to leave the list, by view. */
+const deferredReloads = new Map<string, Set<string>>();
+
 /** GET /groups for one view. A failure keeps the last answer and records the server's sentence. */
 export function loadGroups(scope: MailGroupsScope, force = false): Promise<void> {
   const key = groupsViewKey(scope);
@@ -131,15 +171,22 @@ export function loadGroups(scope: MailGroupsScope, force = false): Promise<void>
       groupsStartedAt.set(key, startedAt);
       retireOverlay(key, startedAt);
       const view = viewState(scope);
-      // An open group keeps its last row, so it stays drawn once its unread reaches zero.
+      // While the pointer is over the list, a group on screen keeps its last row, so it stays drawn
+      // once its unread reaches zero; away from the list a group with no unread is not drawn (a
+      // group the server no longer has, after a rule moved its mail, must not linger at 0).
+      const pointerOver = view.heldOrder !== null;
       const held: Record<string, MailGroupItem> = {};
-      for (const [id, open] of Object.entries(view.expanded)) {
-        if (!open) continue;
-        const fresh = answer.groups.find((one) => one.id === id);
-        const last = fresh ?? view.held[id];
-        if (last) held[id] = fresh ?? { ...last, unread: 0, markableUnread: 0 };
+      const letGo = { ...view.letGo };
+      for (const { group } of drawnGroups(view)) {
+        const fresh = answer.groups.find((one) => one.id === group.id);
+        const live = !!fresh && fresh.unread > 0;
+        if (!live && (!pointerOver || group.id in letGo || !(group.id in view.worked))) continue;
+        held[group.id] = fresh ?? { ...group, unread: 0, markableUnread: 0 };
       }
-      patchView(scope, { groups: answer, loading: false, error: null, held });
+      // A group marked read that holds unread again (new mail, Undo) is an ordinary group once more.
+      for (const id of Object.keys(letGo)) if ((answer.groups.find((one) => one.id === id)?.unread ?? 0) > 0) delete letGo[id];
+      patchView(scope, { groups: answer, loading: false, error: null, held, letGo });
+      reloadChangedGroups(scope, view, answer);
       if (key === 'smart:inbox') railSummary = answer.important.unread;
     } catch (error) {
       const failure = mailFailure(error);
@@ -149,21 +196,30 @@ export function loadGroups(scope: MailGroupsScope, force = false): Promise<void>
   }, force);
 }
 
+/** Is this group open? Every group is, until the person closes it. */
+export function isGroupOpen(view: GroupsViewState, groupId: string): boolean {
+  return !view.collapsed[groupId];
+}
+
 /** Open or close one group. Closing a group at zero unread lets it go. */
 export function setGroupOpen(scope: MailGroupsScope, groupId: string, open: boolean): void {
   const view = viewState(scope);
-  const expanded = { ...view.expanded, [groupId]: open };
+  const collapsed = { ...view.collapsed };
   const held = { ...view.held };
-  const showAll = { ...view.showAll };
+  let worked = view.worked;
   if (open) {
+    delete collapsed[groupId];
     const row = view.groups?.groups.find((one) => one.id === groupId) ?? view.held[groupId];
     if (row) held[groupId] = row;
+    worked = { ...worked, [groupId]: true };
+    // Its mail may have moved while it was closed (a closed group's pages are not refreshed).
+    if (pages.has(pageKey(view.viewKey, groupId, ''))) void loadGroupPage(scope, groupId, '', 'first', true, true);
   } else {
-    delete expanded[groupId];
-    delete held[groupId];
-    delete showAll[groupId];
+    collapsed[groupId] = true;
+    const row = view.groups?.groups.find((one) => one.id === groupId) ?? view.held[groupId];
+    if (!row || row.unread + overlayDelta(view.viewKey, groupId) <= 0) delete held[groupId];
   }
-  patchView(scope, { expanded, held, showAll });
+  patchView(scope, { collapsed, held, worked });
 }
 
 /**
@@ -175,24 +231,28 @@ export function setGroupOpen(scope: MailGroupsScope, groupId: string, open: bool
 export function releaseSpentGroups(scope: MailGroupsScope): void {
   const view = viewState(scope);
   const answer = new Map((view.groups?.groups ?? []).map((one) => [one.id, one] as const));
-  const expanded = { ...view.expanded };
   const held = { ...view.held };
-  const showAll = { ...view.showAll };
   let changed = false;
-  for (const id of Object.keys(view.expanded)) {
+  for (const id of Object.keys(view.held)) {
     const row = answer.get(id) ?? view.held[id];
     if (row && row.unread + overlayDelta(view.viewKey, id) > 0) continue;
-    delete expanded[id];
     delete held[id];
-    delete showAll[id];
     changed = true;
   }
-  if (changed) patchView(scope, { expanded, held, showAll });
+  // The pointer left: what the person worked in is no longer under it.
+  if (changed || Object.keys(view.worked).length > 0) patchView(scope, { held, worked: {} });
 }
 
-export function setGroupShowAll(scope: MailGroupsScope, groupId: string, all: boolean): void {
+/**
+ * A group the person just marked read as a whole (its ✓): it leaves as soon as its count reaches zero,
+ * pointer or not. Under the pointer a group read to zero is held; the press is the person saying
+ * they are done with it, which a single mail read from inside it is not.
+ */
+export function letGroupGo(scope: MailGroupsScope, groupId: string): void {
   const view = viewState(scope);
-  patchView(scope, { showAll: { ...view.showAll, [groupId]: all } });
+  const held = { ...view.held };
+  delete held[groupId];
+  patchView(scope, { held, letGo: { ...view.letGo, [groupId]: true } });
 }
 
 /** Hold the row order while the pointer is over the list (`null` lets it follow the server again). */
@@ -200,6 +260,11 @@ export function holdGroupOrder(scope: MailGroupsScope, order: string[] | null): 
   const view = viewState(scope);
   if (order === null && view.heldOrder === null) return;
   patchView(scope, { heldOrder: order });
+  if (order !== null) return;
+  // The pointer left: the rows that waited for it land now.
+  const waiting = deferredReloads.get(view.viewKey);
+  deferredReloads.delete(view.viewKey);
+  for (const id of waiting ?? []) void loadGroupPage(scope, id, '', 'first', true, true);
 }
 
 /**
@@ -219,7 +284,7 @@ export function drawnGroups(view: GroupsViewState): Array<{ group: MailGroupItem
   for (const id of order) {
     const group = byId.get(id)!;
     const unread = Math.max(0, group.unread + overlayDelta(view.viewKey, id));
-    if (unread > 0 || view.expanded[id]) out.push({ group, unread });
+    if (unread > 0 || id in view.held) out.push({ group, unread });
   }
   return out;
 }
@@ -340,6 +405,13 @@ export function applySeenToGroupedRows(message: { accountId: string; mailboxId: 
   }
   if (wasSeen === seen) { if (touched) emit(); return; }
   const groupId = row.sort?.group ?? IMPORTANT_ID;
+  // A mail read in a group is the person working in it: held at zero while the pointer stays.
+  if (seen) {
+    for (const view of views.values()) {
+      if (groupId in view.worked || !pages.has(pageKey(view.viewKey, groupId, ''))) continue;
+      views.set(view.viewKey, { ...view, worked: { ...view.worked, [groupId]: true } });
+    }
+  }
   adjustUnread(groupId, row.senderKey ?? '', seen ? -1 : 1, { ...message, mailboxId: row.mailboxId });
 }
 
@@ -395,7 +467,7 @@ export function pageState(key: string): GroupPageState {
 
 function setPage(key: string, next: Partial<GroupPageState>): void {
   pages.set(key, { ...pageState(key), ...next });
-  emit();
+  emit(true);
 }
 
 /**
@@ -466,18 +538,23 @@ export function resetPage(scope: MailGroupsScope, group: string, sender = ''): v
 
 // ── hooks and reset ──
 
-let version = 0;
-subscribeGroups(() => { version += 1; });
 
 /** A view's state for a component; re-renders on every write to the grouped store. */
 export function useGroupsView(scope: MailGroupsScope): GroupsViewState {
-  useSyncExternalStore(subscribeGroups, () => version, () => version);
+  useSyncExternalStore(subscribeGroups, () => viewVersion, () => viewVersion);
   return viewState(scope);
 }
 
 export function useGroupPage(scope: MailGroupsScope, group: string, sender = ''): GroupPageState {
-  useSyncExternalStore(subscribeGroups, () => version, () => version);
-  return pageState(pageKey(groupsViewKey(scope), group, sender));
+  const key = pageKey(groupsViewKey(scope), group, sender);
+  // By identity: `setPage` and the row edits always write a new object, so an unchanged page skips.
+  return useSyncExternalStore(subscribeGroups, () => pageState(key), () => pageState(key));
+}
+
+/** One message's row in the grouped pages, by identity (null while no page holds it). */
+export function useGroupedRow(accountId: string, messageId: string): MailMessageDto | null {
+  const read = () => groupedRowOf({ accountId, messageId });
+  return useSyncExternalStore(subscribeGroups, read, read);
 }
 
 /** Every view key that has state (the live layer refreshes the ones an event touches). */
@@ -487,7 +564,7 @@ export function knownViews(): GroupsViewState[] {
 
 export function resetMailGroupsStore(): void {
   views.clear(); pages.clear(); overlay.clear(); groupsStartedAt.clear();
-  inflight.clear(); again.clear(); railSummary = null;
+  inflight.clear(); again.clear(); deferredReloads.clear(); railSummary = null;
   emit();
 }
 

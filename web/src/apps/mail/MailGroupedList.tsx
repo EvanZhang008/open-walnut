@@ -1,7 +1,8 @@
 /**
- * The grouped inbox: a one-line header, the status strip, one line per group that holds UNREAD mail
- * (newest first), then Important (unbounded, newest first, paged, read mail included: it is the
- * reading list).
+ * The grouped inbox: a one-line header, the status strip, then TWO sections (2026-10-20, the user: "too
+ * many category, 2 main category"): Not important, whose groups are its subcategories (one line per
+ * group that holds UNREAD mail, newest first, each open with all of its mail unless the person closed
+ * it), and Important (unbounded, newest first, paged, read mail included: it is the reading list).
  *
  * The groups are the model's (sort-ai.ts on the server): nothing here knows a group's name in advance.
  * A group with no unread mail is not drawn, except while it is open and the pointer is still over the
@@ -17,18 +18,20 @@ import { useNavigate } from 'react-router-dom';
 import { mailFailure } from '@/api/mail';
 import { getMailUnsubscribePlan, type MailGroupItem, type MailGroupsScope, type MailUnsubscribePlan } from '@/api/mail-groups';
 import { MailGroupLine, type GroupNumbers } from './MailGroupLine';
+import { groupBusy, startBulkRead } from './mail-bulk-read';
+import { formatCount } from './mail-format';
 import { MailGroupedHeader } from './MailGroupedHeader';
 import { MailListStatus } from './MailListStatus';
 import { isOpenRow, MailRow } from './MailMessageRow';
 import { MailUnsubscribePlanDialog } from './MailUnsubscribePlanDialog';
 import {
-  ALL_CAUGHT_UP, ALL_CAUGHT_UP_DETAIL, ALL_CAUGHT_UP_EMPTY, IMPORTANT_EMPTY, IMPORTANT_EMPTY_UNREAD, STALE_COUNTS,
+  ALL_CAUGHT_UP, ALL_CAUGHT_UP_DETAIL, ALL_CAUGHT_UP_EMPTY, GROUPS_UPDATING_TITLE, IMPORTANT_EMPTY, IMPORTANT_EMPTY_UNREAD, STALE_COUNTS,
   groupsErrorText, rulesErrorText, sortProgressText, unreadWord,
 } from './mail-groups-copy';
 import { groupedNumbers, groupedScopeOf, wireGroupsBus } from './mail-groups-live';
 import {
-  IMPORTANT_ID, drawnGroups, holdGroupOrder, loadGroupPage, loadGroups, releaseSpentGroups, resetPage, useGroupPage,
-  useGroupsView, viewState, type GroupsViewState,
+  IMPORTANT_ID, drawnGroups, holdGroupOrder, isGroupOpen, loadGroupPage, loadGroups, releaseSpentGroups, resetPage,
+  useGroupPage, useGroupsView, viewState, type GroupsViewState,
 } from './mail-groups-store';
 import { useGroupedPref } from './mail-grouped-pref';
 import { SMART_ACCOUNT, SMART_INBOX, type MailSnapshot } from './mail-store';
@@ -138,6 +141,8 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
   const important = useGroupPage(scope, IMPORTANT_ID);
   const navigateTo = useNavigate();
   const [plan, setPlan] = useState<PlanState | null>(null);
+  /** The open groups whose mail this visit already asked for. */
+  const requested = useRef<Set<string>>(new Set());
 
   useEffect(() => { wireGroupsBus(); }, []);
   // Stale-while-revalidate: whatever this view last held draws at once, and both reads refresh it.
@@ -146,9 +151,7 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
     releaseSpentGroups(scope);
     void loadGroups(scope, true);
     void loadGroupPage(scope, IMPORTANT_ID, '', 'first', readUnreadOnly(selection.accountId, selection.mailboxId));
-    for (const [id, open] of Object.entries(viewState(scope).expanded)) {
-      if (open) void loadGroupPage(scope, id, '', 'first', true, true);
-    }
+    requested.current = new Set();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewKey]);
   // Leaving the view lets the order follow the server again.
@@ -183,6 +186,18 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
 
   const numbers = groupedNumbers(view);
   const groups = view.groups;
+  // Every open group's mail is read once per visit to the view, as the groups arrive (all are open by
+  // default); the live refresh (`refreshGroupedView`) keeps them current after that.
+  const openIds = drawnGroups(view).filter(({ group }) => isGroupOpen(view, group.id)).map(({ group }) => group.id);
+  const openKey = openIds.join('\n');
+  useEffect(() => {
+    for (const id of openIds) {
+      if (requested.current.has(id)) continue;
+      requested.current.add(id);
+      void loadGroupPage(scope, id, '', 'first', true, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openKey, viewKey]);
   const rulesRev = groups?.rulesRev ?? '';
   const recomputing = !!groups?.recomputing;
   const drawn = drawnGroups(view);
@@ -190,6 +205,19 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
   const planGroup = plan ? drawn.find((one) => one.group.id === plan.groupId)?.group ?? null : null;
   const unreadTotal = (numbers?.importantUnread ?? 0) + (numbers?.groupedUnread ?? 0);
   const caughtUp = !!groups && drawn.length === 0 && (numbers?.importantUnread ?? 0) === 0;
+  // One press for the whole section: each group's own press, with the watermark it was drawn with,
+  // so only the mail on screen is marked (a group already running is left to finish).
+  const markTargets = drawn
+    .map(({ group, unread }) => ({ group, markable: numbersOf(group, unread, rulesRev, recomputing).markable }))
+    .filter((one) => one.markable > 0 && !groupBusy(viewKey, one.group.id));
+  const markAll = {
+    total: markTargets.reduce((sum, one) => sum + one.markable, 0),
+    run: () => {
+      for (const { group, markable } of markTargets) {
+        void startBulkRead({ scope, groupId: group.id, groupLabel: group.label }, { watermark: group.watermark, rulesRev, total: markable });
+      }
+    },
+  };
 
   // Hold the order while the pointer is over the list; let it go when it leaves. Read from the
   // document, not React's enter/leave: a menu's full-page backdrop is a React child of the list, and
@@ -245,13 +273,33 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
         ) : (
           <>
             {drawn.length > 0 && (
+              <p className="mail-list-section mail-not-important-head" data-testid="mail-not-important-head">
+                <span className="mail-list-section-name">Not important</span>
+                {(numbers?.groupedUnread ?? 0) > 0 && (
+                  <span className="mail-important-unread" data-testid="mail-not-important-unread">{unreadWord(numbers!.groupedUnread)}</span>
+                )}
+                {markAll.total > 0 && (
+                  <button
+                    type="button"
+                    className="mail-text-btn mail-mark-all"
+                    data-testid="mail-not-important-mark-all"
+                    disabled={recomputing}
+                    title={recomputing ? GROUPS_UPDATING_TITLE : `Mark the ${formatCount(markAll.total)} unread in every group read`}
+                    onClick={() => { if (!recomputing) markAll.run(); }}
+                  >
+                    Mark all read
+                  </button>
+                )}
+              </p>
+            )}
+            {drawn.length > 0 && (
               <div className="mail-group-list" data-testid="mail-group-rows">
                 {drawn.map(({ group, unread }) => (
                   <MailGroupLine
                     key={group.id}
                     group={group}
                     numbers={numbersOf(group, unread, rulesRev, recomputing)}
-                    open={!!view.expanded[group.id]}
+                    open={isGroupOpen(view, group.id)}
                     scope={scope}
                     snapshot={snapshot}
                     menu={menu}
