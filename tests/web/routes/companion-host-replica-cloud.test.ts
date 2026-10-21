@@ -16,7 +16,15 @@
  *     an unchanged round sends nothing;
  *   - the memo ends when the box says a kind never arrived whole (a new box);
  *   - an older companion without the door rests the lane for 10 minutes, and a
- *     changed build ends that rest.
+ *     changed build ends that rest;
+ *   - 4b: before the copy is held the box's notes reads are its disk's; once held,
+ *     the v2 and v1 reads (tree, content) take the copy, with `x-walnut-copy-as-of`,
+ *     and a search stays the box's own;
+ *   - 4c: once the Mac drains `note`, a v2 save, a v1 create and a v1 delete are
+ *     `note` records in the journal (the disk untouched), shown at once over the
+ *     copy; a stale lock hash is a 409 with the text the box shows; after the ack
+ *     the box keeps showing its text until a copy round from after the ack, then
+ *     the Mac's.
  *
  * Both sides share one data dir: the "Mac's" notes are the files under NOTES_DIR,
  * which on the box are also what git sync wrote; the copy lives apart from them.
@@ -44,6 +52,9 @@ import { _resetHostReplicaForTesting, syncCompanionHostReplica, forgetCompanionH
 import {
   COMPANION_REPLICA_HOME, _resetCompanionHostReplicaForTesting, companionCopyHolds, companionHostReplica, companionHostReplicaDir,
 } from '../../../src/core/companion-host-replica.js'
+import { postToCloudJournal } from '../../../src/core/cloud-ingest.js'
+import { companionJournalRecords } from '../../../src/core/companion-journal.js'
+import { APPLIED_V2_KINDS } from '../../../src/core/offline-merge/apply-v2.js'
 
 let server: HttpServer
 let port = 0
@@ -61,11 +72,23 @@ async function door(body: unknown, token = T.local): Promise<{ status: number; b
   return { status: r.status, body: await r.json().catch(() => ({})) as Record<string, any> }
 }
 
+/** A note's text with its id already stamped: the disk routes stamp a missing one, which would change the Mac's notes under the test. */
+const withId = (rel: string, text: string): string => `---\nid: n_${crypto.createHash('sha1').update(rel).digest('hex').slice(0, 11)}\n---\n${text}`
 async function writeNote(rel: string, text: string): Promise<void> {
+  text = withId(rel, text)
   const file = path.join(NOTES_DIR, rel)
   await fs.mkdir(path.dirname(file), { recursive: true })
   await fs.writeFile(file, text)
 }
+async function api(p: string, init: RequestInit = {}): Promise<{ status: number; body: Record<string, any>; asOf: string | null }> {
+  const r = await fetch(`http://127.0.0.1:${port}${p}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${T.phone}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
+  })
+  return { status: r.status, body: await r.json().catch(() => ({})) as Record<string, any>, asOf: r.headers.get('x-walnut-copy-as-of') }
+}
+const noteRecords = () => companionJournalRecords().filter((r) => r.kind === 'note')
+const sha12 = (t: string) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 12)
 const sentOf = (results: Array<{ kind: string; sent?: number; action: string }>, kind: string) => results.find((r) => r.kind === kind)
 
 beforeAll(async () => {
@@ -106,6 +129,13 @@ describe('the door', () => {
 })
 
 describe('the Mac\'s rounds', () => {
+  it('before the copy is held, the box\'s notes reads are its disk\'s', async () => {
+    const r = await api('/api/notes-v2/content/Acme/launch-plan.md')
+    expect(r.status).toBe(200)
+    expect(r.body.content).toContain('Ship the beta')
+    expect(r.asOf).toBeNull()
+  })
+
   it('a first round brings every note with its title, the memory docs and the skills', async () => {
     expect(companionCopyHolds('notes')).toBe(false)
     const before = await fs.readFile(path.join(NOTES_DIR, 'Acme/vendors.md'), 'utf8')
@@ -157,6 +187,80 @@ describe('the Mac\'s rounds', () => {
   it('the copy is read back from disk by a new process', async () => {
     _resetCompanionHostReplicaForTesting()
     expect(companionHostReplica()!.read(HOME, 'notes', 'Acme/launch-plan.md')?.body).toContain('Ship the beta')
+  })
+})
+
+describe('the box\'s notes reads and saves (4b, 4c)', () => {
+  it('the reads take the copy once it is held; a search stays the box\'s own', async () => {
+    // The disk moves on without a round: the reads still show the copy.
+    await writeNote('Acme/launch-plan.md', '# Acme launch plan\n\nDisk only: never sent.\n')
+    const tree = await api('/api/notes-v2/')
+    expect(JSON.stringify(tree.body)).toContain('launch-plan')
+    expect(tree.asOf).toBeTruthy()
+    const v2 = await api('/api/notes-v2/content/Acme/launch-plan.md')
+    expect(v2.status).toBe(200)
+    expect(v2.body.content).toContain('Ship the beta')
+    expect(v2.asOf).toBeTruthy()
+    const v1 = await api('/api/v1/notes/content/Acme/launch-plan.md')
+    expect(v1.status).toBe(200)
+    expect(v1.body.content).toContain('Ship the beta')
+    const search = await api('/api/notes-v2/search?q=printer')
+    expect(search.body.degraded).not.toBe('offline-keyword')
+    await writeNote('Acme/launch-plan.md', '# Acme launch plan\n\nShip the beta on Friday.\n')
+  })
+
+  it('before the Mac drains notes, a save takes the old path (the disk)', async () => {
+    const put = await api('/api/notes-v2/content/Acme/scratch.md', { method: 'PUT', body: JSON.stringify({ content: '# Scratch\n\nOld path.\n' }) })
+    expect(put.status).toBe(200)
+    expect(await fs.readFile(path.join(NOTES_DIR, 'Acme/scratch.md'), 'utf8')).toContain('Old path.')
+    expect(noteRecords()).toEqual([])
+    await fs.rm(path.join(NOTES_DIR, 'Acme/scratch.md'))
+  })
+
+  it('once the Mac drains notes, saves are journal records shown over the copy; the disk is untouched', async () => {
+    await postToCloudJournal('offline.drain', { home: '/Users/someone/.open-walnut', kinds: [...APPLIED_V2_KINDS] })
+    const disk = await fs.readFile(path.join(NOTES_DIR, 'Acme/vendors.md'), 'utf8')
+    const before = await api('/api/notes-v2/content/Acme/vendors.md')
+    const text = withId('Acme/vendors.md', '# Acme vendors\n\nCall the printer, then the caterer, then the florist.\n')
+    const put = await api('/api/notes-v2/content/Acme/vendors.md', { method: 'PUT', body: JSON.stringify({ content: text, expectedHash: before.body.contentHash }) })
+    expect(put).toMatchObject({ status: 200, body: { ok: true, contentHash: sha12(text) } })
+    expect(noteRecords().map((r) => `${r.path}:${r.mode}`)).toEqual(['Acme/vendors.md:put'])
+    expect(await fs.readFile(path.join(NOTES_DIR, 'Acme/vendors.md'), 'utf8')).toBe(disk)
+    expect((await api('/api/notes-v2/content/Acme/vendors.md')).body.content).toBe(text)
+    expect((await api('/api/v1/notes/content/Acme/vendors.md')).body.content).toBe(text)
+    // A stale lock: 409 with what this box shows, so the editor merges.
+    const stale = await api('/api/notes-v2/content/Acme/vendors.md', { method: 'PUT', body: JSON.stringify({ content: 'x', expectedHash: before.body.contentHash }) })
+    expect(stale.status).toBe(409)
+    expect(stale.body).toMatchObject({ currentHash: sha12(text), serverContent: text })
+    // A v1 create, then its delete.
+    const created = await api('/api/v1/notes', { method: 'POST', body: JSON.stringify({ path: 'Acme/new-idea', content: '# New idea\n\nA kiosk.\n' }) })
+    expect(created).toMatchObject({ status: 201, body: { path: 'Acme/new-idea.md' } })
+    expect((await api('/api/v1/notes/content/Acme/new-idea.md')).body.content).toContain('A kiosk.')
+    expect((await api('/api/v1/notes', { method: 'POST', body: JSON.stringify({ path: 'Acme/new-idea', content: 'again' }) })).status).toBe(409)
+    expect((await api('/api/v1/notes/Acme/new-idea.md', { method: 'DELETE' })).status).toBe(200)
+    expect((await api('/api/v1/notes/content/Acme/new-idea.md')).status).toBe(404)
+    await expect(fs.stat(path.join(NOTES_DIR, 'Acme/new-idea.md'))).rejects.toThrow()
+    // A round meanwhile (the Mac has not taken them) replaces nothing the box holds.
+    await syncCompanionHostReplica()
+    expect((await api('/api/notes-v2/content/Acme/vendors.md')).body.content).toBe(text)
+  })
+
+  it('after the ack the box shows its text until a copy round from after the ack, then the Mac\'s', async () => {
+    const drained = await postToCloudJournal('offline.drain', { home: '/x', kinds: [...APPLIED_V2_KINDS] })
+    const seqs = (drained.records as Array<{ seq: number; kind: string }>).filter((r) => r.kind === 'note').map((r) => r.seq)
+    expect(seqs.length).toBeGreaterThan(0)
+    const macNow = Date.now()
+    expect(await postToCloudJournal('offline.ack', { home: '/x', seqs, now: macNow })).toMatchObject({ ok: true })
+    expect(noteRecords()).toEqual([])
+    const text = withId('Acme/vendors.md', '# Acme vendors\n\nCall the printer, then the caterer, then the florist.\n')
+    expect((await api('/api/notes-v2/content/Acme/vendors.md')).body.content).toBe(text)
+    // The Mac merged it with an edit of its own; its next round brings that.
+    await new Promise((r) => setTimeout(r, 5))
+    const merged = `${text}\nAdded on the Mac.\n`
+    await fs.writeFile(path.join(NOTES_DIR, 'Acme/vendors.md'), merged)
+    forgetCompanionHostReplica()
+    await syncCompanionHostReplica()
+    expect((await api('/api/notes-v2/content/Acme/vendors.md')).body.content).toBe(merged)
   })
 })
 

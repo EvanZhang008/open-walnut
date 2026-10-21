@@ -17,7 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
-import { createHostReplica, type HostReplica, type ReplicaKind } from '../providers/host-replica-core.js'
+import { createHostReplica, type HostReplica, type ReplicaJournalView, type ReplicaKind } from '../providers/host-replica-core.js'
 import { followerKind } from './server-role.js'
 
 /** The one home this copy keeps (its files are named by it). */
@@ -26,6 +26,8 @@ export const COMPANION_REPLICA_HOME = 'mac'
 export const companionHostReplicaDir = (): string => path.join(WALNUT_HOME, 'cache', 'replica', 'host')
 
 let replica: HostReplica | null = null
+/** The journal's view of the notes (companion-notes.ts), kept for every copy object made. */
+let journalView: ReplicaJournalView | null = null
 
 /** The copy, or null on anything but a cloud companion. */
 export function companionHostReplica(): HostReplica | null {
@@ -39,8 +41,15 @@ export function companionHostReplica(): HostReplica | null {
       hash: (body) => crypto.createHash('sha256').update(body).digest('hex').slice(0, 12),
       log: (level, msg, data) => log.session[level](`companion copy: ${msg}`, data),
     })
+    if (journalView) replica.setJournalView(journalView)
   }
   return replica
+}
+
+/** The pending note saves every copy read shows, and the keys a round must not replace. */
+export function setCompanionCopyJournalView(view: ReplicaJournalView | null): void {
+  journalView = view
+  replica?.setJournalView(view)
 }
 
 /** True when a whole manifest of `kind` arrived at least once (a read can take the copy). */

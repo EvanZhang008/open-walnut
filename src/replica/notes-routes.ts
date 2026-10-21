@@ -1,9 +1,10 @@
 /**
- * The notes reads of a host replica (WP6), answered from the daemon's copy
- * (notes-source.ts). Mounted first on the notes routers (notes-v2.ts for
- * `/api/notes-v2`, api-v1.ts for `/api/v1/notes`); it passes every request on
- * when no copy source is installed, which is always the case on the Mac and the
- * companion, so their notes routes run exactly as before.
+ * The notes reads of a replica (WP6), answered from its copy (notes-source.ts): a
+ * host replica's daemon copy, or the companion's own once it is held (stage 4b of
+ * docs/plan/walnut-companion-unified-replica.md; the companion's searches stay its
+ * own). Mounted first on the notes routers (notes-v2.ts for `/api/notes-v2`,
+ * api-v1.ts for `/api/v1/notes`); it passes every request on when no copy source
+ * answers, which is always the case on the Mac, so its notes routes run as before.
  *
  * The shapes are the disk routes' own: the tree is the same JSON, content has
  * the same fields (`id` on v2 only, as there), links, backlinks, tags and the
@@ -12,7 +13,7 @@
  * Writes never reach here: a note write away answers needs_leader until WP11.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { replicaNotesSource, type NotesSource } from './notes-source.js'
+import { replicaNotesSource, replicaNotesSourceSearches, type NotesSource } from './notes-source.js'
 import { log } from '../logging/index.js'
 
 type Flavor = 'v2' | 'v1'
@@ -67,6 +68,7 @@ async function answer(src: NotesSource, flavor: Flavor, req: Request, res: Respo
     return true
   }
   if (p === '/search') {
+    if (!replicaNotesSourceSearches()) return false
     const q = typeof req.query.q === 'string' ? req.query.q : ''
     const r = await src.search(q, Number(req.query.limit) || 30)
     asOf()

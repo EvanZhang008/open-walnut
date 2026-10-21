@@ -22,6 +22,9 @@
  *     its project, once (created_by_op); a create the queue already landed (a live send
  *     that timed out after it landed) is skipped, never re-minted and never merged again
  *     over a later Mac edit; a later edit of it lands after it;
+ *   - stage 4c: a note saved on the companion lands on the Mac with its body fetched
+ *     through the door (`offline.blob`); an edit the Mac made meanwhile to another
+ *     part of the note is merged with it, never lost;
  *   - a drain with nothing waiting is quiet.
  *
  * CLOUD_MODE is read at import, so the companion and the Mac are two module graphs
@@ -298,6 +301,33 @@ describe('the Mac drains the companion\'s journal', () => {
     mac.outbox._resetAppliedOpIdsForTesting() // the in-memory op set forgot it: the row decides
     expect(await mac.outbox.applyTaskOp({ opId: op, type: 'create', at: now, task: row } as never)).toMatchObject({ applied: false, reason: 'unchanged' })
     expect((await mac.tm.getTask(id)).phase).toBe('NEED_ACTION')
+  })
+
+  it('a note saved on the companion lands on the Mac; an edit the Mac made meanwhile is merged with it', async () => {
+    const notesDir = constantsBase.NOTES_DIR as string
+    const sha12 = (t: string) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 12)
+    const save = (rel: string, base: string, ours: string) => companion.journal.journalNote({
+      path: rel, mode: 'put', baseHash: sha12(base), base: Buffer.from(base), ours: Buffer.from(ours), oursHash: sha12(ours),
+    })
+    await fsp.mkdir(path.join(notesDir, 'Acme'), { recursive: true })
+    // A plain save over the note as the Mac has it.
+    const base = '---\nid: n_acmeplan001\n---\n# Acme plan\n\nShip on Friday.\n'
+    await fsp.writeFile(path.join(notesDir, 'Acme/plan.md'), base)
+    const ours = `${base}\nBook the venue.\n`
+    expect(save('Acme/plan.md', base, ours)).toMatchObject({ ok: true })
+    await mac.drain.drainCompanionJournalNow()
+    expect(await fsp.readFile(path.join(notesDir, 'Acme/plan.md'), 'utf8')).toBe(ours)
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    // The Mac changes the title line, the companion the last line: both stay.
+    const base2 = '---\nid: n_acmetodo001\n---\n# Acme todo\n\nfirst line\n\nsecond line\n\nthird line\n'
+    await fsp.writeFile(path.join(notesDir, 'Acme/todo.md'), base2)
+    expect(save('Acme/todo.md', base2, base2.replace('third line', 'third line, from the phone'))).toMatchObject({ ok: true })
+    await fsp.writeFile(path.join(notesDir, 'Acme/todo.md'), base2.replace('first line', 'first line, from the Mac'))
+    await mac.drain.drainCompanionJournalNow()
+    const merged = await fsp.readFile(path.join(notesDir, 'Acme/todo.md'), 'utf8')
+    expect(merged).toContain('first line, from the Mac')
+    expect(merged).toContain('third line, from the phone')
+    expect(companion.journal.companionJournalRecords()).toEqual([])
   })
 
   it('a drain with nothing waiting is quiet', async () => {

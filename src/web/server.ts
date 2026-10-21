@@ -3216,6 +3216,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // on the same triggers (core/companion-journal.ts).
       const { startCompanionJournalDue } = await import('../core/companion-journal.js')
       companionJournalDueHandle = startCompanionJournalDue()
+      // Its notes reads take the Mac's copy once held, and its note saves go into that
+      // journal (stage 4, core/companion-notes.ts).
+      void import('../core/companion-notes.js').then((m) => m.installCompanionNotes()).catch((err) => {
+        log.web.warn('companion notes: could not install the copy reads', { error: err instanceof Error ? err.message : String(err) })
+      })
       // Seed the local replica from the synced projection shortly after boot.
       setTimeout(() => { void importProjectionOnCloud() }, 5_000)
     }
@@ -6421,6 +6426,7 @@ export async function stopServer(): Promise<void> {
   if (companionJournalDueHandle) {
     companionJournalDueHandle.stop()
     companionJournalDueHandle = null
+    ;(await import('../core/companion-notes.js')).uninstallCompanionNotes()
   }
   stopMobileEventsFeed()
   if (pinRetirementHandle) {
