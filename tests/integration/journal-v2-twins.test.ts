@@ -465,38 +465,47 @@ for (const twin of ['source', 'standalone'] as const) {
     }, 120_000)
 
     it('OVERLAP: two daemons on one journal dir append interleaved with unique seqs and no loss; the non-owner of daemon.pid refuses', async () => {
-      const jdir = path.join(base, `${twin}-j3`)
-      const da = await spawnDaemon(path.join(base, `${twin}-d3a`), twin, jdir)
-      const db = await spawnDaemon(path.join(base, `${twin}-d3b`), twin, jdir)
-      // An older Mac (no drains): v1 op records, which never coalesce.
-      for (const d of [da, db]) {
-        const m = await macConnects(d, null)
-        await startSession(d, m)
-        m.close()
-      }
-      await sleep(300)
-      const sent: string[] = []
-      await Promise.all([da, db].map(async (d, k) => {
-        for (let i = 0; i < 25; i++) {
-          const title = `${k ? 'b' : 'a'}${i}`
-          const r = await gateway(d.sock, A, 'task_update', { id: TASK_A, title })
-          expect(r.ok, JSON.stringify(r)).toBe(true)
-          sent.push(title)
+      // Fresh dirs per attempt, and both daemons stopped however it ends: a failed attempt
+      // left its daemons holding d3a/d3b, so every retry timed out spawning into them
+      // (CI run 39591505260).
+      const n = ++attempts
+      const jdir = path.join(base, `${twin}-j3-${n}`)
+      const spawned: Daemon[] = []
+      try {
+        const da = await spawnDaemon(path.join(base, `${twin}-d3a-${n}`), twin, jdir)
+        spawned.push(da)
+        const db = await spawnDaemon(path.join(base, `${twin}-d3b-${n}`), twin, jdir)
+        spawned.push(db)
+        // An older Mac (no drains): v1 op records, which never coalesce.
+        for (const d of [da, db]) {
+          const m = await macConnects(d, null)
+          await startSession(d, m)
+          m.close()
         }
-      }))
-      // daemon.pid of A now names another live process: A is a zombie and refuses writes.
-      const pidFile = path.join(da.dir, 'daemon.pid')
-      fs.writeFileSync(pidFile, String(process.pid))
-      const refused = await gateway(da.sock, A, 'task_update', { id: TASK_A, title: 'zombie' })
-      expect(refused).toMatchObject({ ok: false, error: { code: 'journal_unwritable' } })
-      fs.writeFileSync(pidFile, String(da.pid))
-      const mac = await macConnects(db, null)
-      const drained = await macDrains(mac, null)
-      expect(drained.map((r) => r.args.title).sort()).toEqual([...sent].sort())
-      expect(new Set(drained.map((r) => r.seq)).size).toBe(50)
-      mac.close()
-      await stopDaemon(da)
-      await stopDaemon(db)
+        await sleep(300)
+        const sent: string[] = []
+        await Promise.all([da, db].map(async (d, k) => {
+          for (let i = 0; i < 25; i++) {
+            const title = `${k ? 'b' : 'a'}${i}`
+            const r = await gateway(d.sock, A, 'task_update', { id: TASK_A, title })
+            expect(r.ok, JSON.stringify(r)).toBe(true)
+            sent.push(title)
+          }
+        }))
+        // daemon.pid of A now names another live process: A is a zombie and refuses writes.
+        const pidFile = path.join(da.dir, 'daemon.pid')
+        fs.writeFileSync(pidFile, String(process.pid))
+        const refused = await gateway(da.sock, A, 'task_update', { id: TASK_A, title: 'zombie' })
+        expect(refused).toMatchObject({ ok: false, error: { code: 'journal_unwritable' } })
+        fs.writeFileSync(pidFile, String(da.pid))
+        const mac = await macConnects(db, null)
+        const drained = await macDrains(mac, null)
+        expect(drained.map((r) => r.args.title).sort()).toEqual([...sent].sort())
+        expect(new Set(drained.map((r) => r.seq)).size).toBe(50)
+        mac.close()
+      } finally {
+        for (const d of spawned) await stopDaemon(d)
+      }
     }, 120_000)
 
     it('DOWNGRADE then upgrade (R30, R13c): new, 1fe1fd194, new daemon on the same dirs keeps every record', async () => {
