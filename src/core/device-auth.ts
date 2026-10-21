@@ -30,7 +30,7 @@ import { resetClaimForTesting } from './device-claim.js'
 import {
   cleanSelfInfo, freshRecord, isPhoneRecord, ownByProof, platformFromInfo, readRegistry, readRegistryAndRevoked, recordForToken, resetInstanceIdForTesting,
   sha256Hex, tombstone, updateAuth, validateDeviceName,
-  type DeviceRecord, type DeviceRegistry, type DeviceSelfInfo, type LockedAuth,
+  type DevicePlatform, type DeviceRecord, type DeviceRegistry, type DeviceSelfInfo, type LockedAuth,
 } from './device-store.js'
 import {
   dropRevokeIntent, finishRevoke, pairingsOf, stampRevokeTime, trackRevokeWork, writeRevokeIntent,
@@ -382,6 +382,32 @@ export async function setCompanionOwner(name: string): Promise<{ removedCredenti
   notifyRevoked(out.gone)
   log.web.info('device-auth: companion owner named', { name, removedCredentials: out.gone })
   return { removedCredentials: out.gone, changed: true }
+}
+
+/**
+ * The operator says what a paired device is (`walnut device kind <name>
+ * phone|computer`). A device's first report fixes its platform for good
+ * (setDeviceInfo: no later report changes it), so this is the one way to correct
+ * a pairing a phone once reported with: 2026-10-21, the Mac's own pairing had been
+ * recorded as a phone, and the companion refused every machine credential it asked
+ * for (`phone_cannot_mint`) with no way back. A phone is never the owner: naming
+ * the owner a phone drops it as owner. `changed: false` when it already was what
+ * the operator says (nothing written).
+ */
+export async function setDeviceKind(name: string, kind: 'phone' | 'computer'): Promise<{ changed: boolean; ownerDropped: boolean }> {
+  const platform: DevicePlatform = kind === 'phone' ? 'ios' : 'other'
+  const out = await updateAuth((auth) => {
+    const target = auth.devices.find((d) => d.name === name)
+    if (!target) throw new Error(`Device "${name}" not found.`)
+    if (target.kind === 'machine') throw new Error(`${name} is a computer's connection, not a paired device.`)
+    if (target.platform === platform) return { persist: false, result: { changed: false, ownerDropped: false } }
+    target.platform = platform
+    const ownerDropped = platform === 'ios' && auth.owner?.id === target.id
+    if (ownerDropped) auth.owner = null
+    return { persist: true, result: { changed: true, ownerDropped } }
+  })
+  if (out.changed) log.web.info('device-auth: the operator set what a device is', { name, kind, ownerDropped: out.ownerDropped })
+  return out
 }
 
 /**

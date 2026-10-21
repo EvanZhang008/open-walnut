@@ -4,6 +4,7 @@
  *   walnut device add <name> [--owner]  create a device, print its token ONCE
  *   walnut device revoke <name>         revoke a device
  *   walnut device owner <name>          name the Mac a cloud companion belongs to
+ *   walnut device kind <name> <phone|computer>  say what a paired device is
  *   walnut device list                  list devices (no secrets)
  *
  * These edit auth.json directly: they are this machine's operator, the one
@@ -11,7 +12,7 @@
  */
 
 import chalk from 'chalk';
-import { createDevice, revokePairing, listDevices, readDeviceRegistry, setCompanionOwner, type DeviceRegistry } from '../core/device-auth.js';
+import { createDevice, revokePairing, listDevices, readDeviceRegistry, setCompanionOwner, setDeviceKind, type DeviceRegistry } from '../core/device-auth.js';
 import { companionOwnerRecord } from '../core/device-actor.js';
 import { detectLanAddress, detectTailnetAddress } from '../core/pairing-targets.js';
 import { outputJson } from '../utils/json-output.js';
@@ -127,11 +128,43 @@ export async function runDeviceOwner(name: string, globals: GlobalOptions): Prom
   }
 }
 
+export async function runDeviceKind(name: string, kind: string, globals: GlobalOptions): Promise<void> {
+  if (kind !== 'phone' && kind !== 'computer') {
+    console.error(chalk.red(`Unknown kind "${kind}": use phone or computer.`));
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const { changed, ownerDropped } = await setDeviceKind(name, kind);
+    if (globals.json) {
+      outputJson({ name, kind, changed, ...(ownerDropped ? { ownerDropped: true } : {}) });
+      return;
+    }
+    if (!changed) {
+      console.log(chalk.green(`"${name}" is already recorded as a ${kind}. Nothing changed.`));
+      return;
+    }
+    console.log(chalk.green(`"${name}" is now recorded as a ${kind}.`));
+    if (ownerDropped) console.log(chalk.dim('  It was the Mac this cloud companion belongs to; a phone owns nothing. Name the owner with: walnut device owner <name>'));
+  } catch (err) {
+    console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+    process.exitCode = 1;
+  }
+}
+
+/** What the registry records a paired device as, in the operator's words (none before its first report). */
+function recordedKind(reg: DeviceRegistry, name: string): 'phone' | 'computer' | undefined {
+  const d = reg.devices.find((r) => r.name === name);
+  if (!d || d.kind === 'machine' || !d.platform) return undefined;
+  return d.platform === 'ios' ? 'phone' : 'computer';
+}
+
 export async function runDeviceList(globals: GlobalOptions): Promise<void> {
   const devices = await listDevices();
-  const owner = shownOwner(await readDeviceRegistry());
+  const reg = await readDeviceRegistry();
+  const owner = shownOwner(reg);
   if (globals.json) {
-    outputJson({ devices, owner: owner ?? null });
+    outputJson({ devices: devices.map((d) => { const k = recordedKind(reg, d.name); return k ? { ...d, recordedAs: k } : d; }), owner: owner ?? null });
     return;
   }
   if (devices.length === 0) {
@@ -141,6 +174,7 @@ export async function runDeviceList(globals: GlobalOptions): Promise<void> {
   console.log(chalk.bold(`${devices.length} device(s):`));
   for (const d of devices) {
     const lastUsed = d.lastUsedAt ? `last used ${d.lastUsedAt}` : 'never used';
-    console.log(`  ${chalk.cyan(d.name)}${d.name === owner ? chalk.bold('  (owner)') : ''}  ${chalk.dim(`created ${d.createdAt} · ${lastUsed}`)}`);
+    const k = recordedKind(reg, d.name);
+    console.log(`  ${chalk.cyan(d.name)}${d.name === owner ? chalk.bold('  (owner)') : ''}${k ? chalk.dim(`  ${k}`) : ''}  ${chalk.dim(`created ${d.createdAt} · ${lastUsed}`)}`);
   }
 }

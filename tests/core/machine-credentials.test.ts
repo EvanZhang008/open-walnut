@@ -21,7 +21,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-machine-cred
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import {
-  _resetDeviceAuthForTesting, createDevice, listDeviceRecords, readDeviceRegistry, revokeDeviceAs, rotateDevice, setDeviceInfo, verifyDeviceToken,
+  _resetDeviceAuthForTesting, createDevice, listDeviceRecords, readDeviceRegistry, revokeDeviceAs, rotateDevice, setDeviceInfo, setDeviceKind, verifyDeviceToken,
   type DeviceRecord, type DeviceRegistry,
 } from '../../src/core/device-auth.js'
 import {
@@ -370,5 +370,77 @@ describe('a companion from before owners were recorded', () => {
     expect(await revokeMachineCredential('bridge-local', { by: { token: T.mac }, proof: T.local })).toBe(true)
     expect((await readDeviceRegistry()).owner?.via).toBe('proof')
     expect((await mintMachineCredential('bridge-local', { by: { token: T.mac } })).name).toBe('bridge-local')
+  })
+})
+
+describe('a Mac\'s pairing recorded as a phone (a phone once reported with its token)', () => {
+  // 2026-10-21 on a real companion: the Mac's pairing (the token in its data repo's
+  // remote) carried `platform: 'ios'` beside a report that says Mac, so every machine
+  // credential it asked for was refused, proof or not, and no owner was ever recorded.
+  const T = { mac: 'wrong-mac-token', local: 'wrong-local-token', phone: 'wrong-phone-token' }
+  async function writeWrong(): Promise<void> {
+    await fs.mkdir(WALNUT_HOME, { recursive: true })
+    await fs.writeFile(path.join(WALNUT_HOME, 'auth.json'), JSON.stringify({ devices: [
+      { name: 'my-mac', id: 'id-my-mac', platform: 'ios', tokenHash: sha(T.mac), createdAt: now, info: { model: 'Mac', os: 'macOS', appVersion: '0.6.14', reportedAt: now } },
+      { name: 'bridge-local', id: 'id-bridge-local', kind: 'machine', tokenHash: sha(T.local), createdAt: now },
+      { name: 'my-phone', id: 'id-my-phone', platform: 'ios', tokenHash: sha(T.phone), createdAt: now, info: { model: 'iPhone17,1', os: 'iOS 26.1', reportedAt: now } },
+    ] }), { mode: 0o600 })
+    _resetDeviceAuthForTesting()
+  }
+  const authBytes = () => fs.readFile(path.join(WALNUT_HOME, 'auth.json'), 'utf-8')
+
+  it('refused as a phone, with its proof, until the operator says it is a computer; then its proof records it as the owner', async () => {
+    await writeWrong()
+    expect(await refusal(mintMachineCredential('bridge-__cloudbox__', { by: { token: T.mac }, proof: T.local }))).toMatchObject({ status: 403, code: 'phone_cannot_mint' })
+    expect(await setDeviceKind('my-mac', 'computer')).toEqual({ changed: true, ownerDropped: false })
+    // Said twice: nothing written the second time.
+    const before = await authBytes()
+    expect(await setDeviceKind('my-mac', 'computer')).toEqual({ changed: false, ownerDropped: false })
+    expect(await authBytes()).toBe(before)
+    expect((await mintMachineCredential('bridge-__cloudbox__', { by: { token: T.mac }, proof: T.local })).name).toBe('bridge-__cloudbox__')
+    const reg = await readDeviceRegistry()
+    expect(reg.owner).toEqual({ id: 'id-my-mac', via: 'proof' })
+    expect(reg.devices.find((d) => d.name === 'bridge-local')?.ownerId).toBe('id-my-mac')
+    // A phone reporting with that token again does not make it a phone again.
+    await setDeviceInfo({ token: T.mac }, { model: 'iPhone17,1', os: 'iOS 26.1' })
+    expect((await record('my-mac'))?.platform).toBe('other')
+    expect((await mintMachineCredential('bridge-next', { by: { token: T.mac } })).name).toBe('bridge-next')
+  })
+
+  it('naming the owner a phone drops it as owner; a machine credential or an unknown name is refused', async () => {
+    await writeWrong()
+    await setDeviceKind('my-mac', 'computer')
+    await mintMachineCredential('bridge-x', { by: { token: T.mac }, proof: T.local })
+    expect(await setDeviceKind('my-mac', 'phone')).toEqual({ changed: true, ownerDropped: true })
+    expect((await readDeviceRegistry()).owner).toBeNull()
+    expect(await refusal(mintMachineCredential('bridge-y', { by: { token: T.mac } }))).toMatchObject({ status: 403, code: 'phone_cannot_mint' })
+    await expect(setDeviceKind('bridge-local', 'computer')).rejects.toThrow(/computer's connection/)
+    await expect(setDeviceKind('nobody', 'computer')).rejects.toThrow(/not found/)
+  })
+
+  it('the CLI: `walnut device kind` says what changed, refuses an unknown kind, and `device list` shows what each is', async () => {
+    await writeWrong()
+    const { runDeviceKind, runDeviceList } = await import('../../src/commands/device.js')
+    const out: string[] = []
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
+    const exitBefore = process.exitCode
+    try {
+      await runDeviceKind('my-mac', 'tablet', {} as never)
+      expect(process.exitCode).toBe(1)
+      process.exitCode = exitBefore
+      expect((await record('my-mac'))?.platform).toBe('ios')
+      await runDeviceKind('my-mac', 'computer', {} as never)
+      await runDeviceList({} as never)
+      const text = out.join('\n')
+      expect(text).toContain('Unknown kind "tablet"')
+      expect(text).toContain('"my-mac" is now recorded as a computer.')
+      expect(text).toMatch(/my-mac.*computer/)
+      expect(text).toMatch(/my-phone.*phone/)
+    } finally {
+      logSpy.mockRestore()
+      errSpy.mockRestore()
+      process.exitCode = exitBefore
+    }
   })
 })
