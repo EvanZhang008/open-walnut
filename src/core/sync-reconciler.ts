@@ -935,7 +935,7 @@ export class SyncReconciler {
         updatesList.push({ id: local.id, patch: updates });
       }
       try {
-        const { changed } = await updateTasksBulk(updatesList);
+        const { changed } = await updateTasksBulk(updatesList, { pulledTags: true });
         for (const task of changed) {
           bus.emit(EventNames.TASK_UPDATED, { task }, [], { source });
         }

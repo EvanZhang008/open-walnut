@@ -20,11 +20,13 @@ import {
   getTask,
   queryTasks,
   updateTask,
+  updateTaskRaw,
   updateTasksBulk,
 } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { localDay } from '../../src/core/tag-model.js';
+import { registry } from '../../src/core/integration-registry.js';
 
 async function freshHome(): Promise<void> {
   if (!WALNUT_HOME.includes('walnut-task-tags-kv')) throw new Error(`refusing to run against ${WALNUT_HOME}`);
@@ -74,6 +76,33 @@ describe('tag writes', () => {
     expect((await getTask(task.id)).tags).toEqual(['label:oncall', 'ticket:P1']);
     await fileTasksIntoProject('Team', [{ id: task.id, remove_tags: ['oncall'] }]);
     expect((await getTask(task.id)).tags).toEqual(['ticket:P1']);
+  });
+
+  it('merges pulled tags against the stored row after concurrent local edits', async () => {
+    const oldLink = 'pr:https://github.com/acme/app/pull/1';
+    const newLink = 'pr:https://github.com/acme/app/pull/2';
+    const { task } = await addTask({ title: 'Tag merge', project: 'Local', tags: [oldLink] });
+    const plugin = registry.get('local')!;
+    plugin.sync.mergePulledTags = vi.fn((current, incoming) => [
+      ...incoming, ...(current.tags ?? []).filter(tag => tag.startsWith('pr:')),
+    ]);
+    try {
+      const stale = await getTask(task.id);
+      await updateTask(task.id, { set_tags: [newLink] });
+      expect(stale.tags).toEqual([oldLink]);
+      await updateTasksBulk([{ id: task.id, patch: { tags: ['urgent'] } }], { pulledTags: true });
+      expect((await getTask(task.id)).tags).toEqual(['label:urgent', newLink]);
+      await updateTask(task.id, { set_tags: [] });
+      await updateTaskRaw(task.id, { tags: ['reviewed'] }, { pulledTags: true });
+      expect((await getTask(task.id)).tags).toEqual(['label:reviewed']);
+      expect(plugin.sync.mergePulledTags).toHaveBeenCalledTimes(2);
+      await updateTask(task.id, { set_tags: [newLink] });
+      await updateTaskRaw(task.id, { tags: ['replayed'] });
+      expect((await getTask(task.id)).tags).toEqual(['label:replayed']);
+      expect(plugin.sync.mergePulledTags).toHaveBeenCalledTimes(2);
+    } finally {
+      delete plugin.sync.mergePulledTags;
+    }
   });
 
   it('stores a bulk write\'s tags in stored form too', async () => {

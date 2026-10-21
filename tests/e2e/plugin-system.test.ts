@@ -111,6 +111,48 @@ describe('F4: task creation triggers plugin', () => {
   });
 });
 
+describe('pulled tags retain current local-only links', () => {
+  it('preserves additions and deletions made while a remote pull was in flight', async () => {
+    const oldLink = 'pr:https://github.com/acme/app/pull/1';
+    const newLink = 'pr:https://github.com/acme/app/pull/2';
+    const create = await fetch(apiUrl('/api/tasks'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Local link race', project: 'LocalLinks', tags: [oldLink] }),
+    });
+    expect(create.status).toBe(201);
+    const { task } = await create.json() as { task: { id: string } };
+    const { updateTasksBulk } = await import('../../src/core/task-manager.js');
+    const plugin = registry.get('local')!;
+    plugin.sync.mergePulledTags = (current, incoming) => [
+      ...incoming, ...(current.tags ?? []).filter(tag => tag.startsWith('pr:')),
+    ];
+    try {
+      const edit = await fetch(apiUrl(`/api/tasks/${task.id}`), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ set_tags: [newLink] }),
+      });
+      expect(edit.status).toBe(200);
+      await updateTasksBulk([{ id: task.id, patch: { title: 'Remote edit', tags: ['urgent'] } }], { pulledTags: true });
+      const read = await fetch(apiUrl(`/api/tasks/${task.id}`));
+      expect(read.status).toBe(200);
+      const saved = await read.json() as { task: { title: string; tags: string[] } };
+      expect(saved.task.title).toBe('Remote edit');
+      expect(saved.task.tags).toEqual(['label:urgent', newLink]);
+      const remove = await fetch(apiUrl(`/api/tasks/${task.id}`), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ set_tags: [] }),
+      });
+      expect(remove.status).toBe(200);
+      await updateTasksBulk([{ id: task.id, patch: { tags: [] } }], { pulledTags: true });
+      const after = await fetch(apiUrl(`/api/tasks/${task.id}`));
+      expect(after.status).toBe(200);
+      expect(((await after.json()) as { task: { tags?: string[] } }).task.tags ?? []).toEqual([]);
+    } finally {
+      delete plugin.sync.mergePulledTags;
+    }
+  });
+});
+
 // F5: PATCH /api/tasks/:id with phase change
 describe('F5: phase change via PATCH', () => {
   it('updates phase successfully', async () => {
