@@ -16,8 +16,8 @@
  *            empty folder made here would never show, and a folder delete also removes
  *            pictures and files the box does not hold
  *
- * A picture or file (attachments) is not a note: its move takes the old path in this
- * slice. Cloud companion only.
+ * A picture or file is not a note: its move needs the Mac (companion-note-attachments.ts).
+ * Cloud companion only.
  */
 
 import { log } from '../logging/index.js'

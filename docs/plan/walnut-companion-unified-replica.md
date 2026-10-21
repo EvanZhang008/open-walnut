@@ -456,7 +456,7 @@ minutes, and at a build change.
 | 4a | the copy and its round (no reader yet) |
 | 4b | the box's notes reads (`/api/notes-v2` always, `/api/v1/notes` when the Mac does not answer: the tree, a note, links, backlinks, tags, the flat list) take the copy once a whole manifest arrived, through the source a host replica reads (`replica/notes-source.ts`); searches stay the box's own (its copy of the Mac's index) |
 | 4c | a note saved, created or deleted on the box (the v2 save and delete, the v1 save, create and delete) is a `note` record in its journal once the copy is held and the Mac drains `note`, checked as a host checks one (the lock hash against what the box shows, the size, the id from the Mac's copy); the Mac drains it with the notes merge |
-| 4d | the box's memory reads and saves (`memory` records), its skill reads, and v1's note resolve take the copy; a note move or rename on the box is a `note-move` record, a tag rename is `note` saves, a folder change needs the Mac; attachments; then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
+| 4d | the box's memory reads and saves (`memory` records), its skill reads, and v1's note resolve take the copy; a note move or rename on the box is a `note-move` record, a tag rename is `note` saves, a folder change needs the Mac; a pasted picture is a `note-attachment` record too, a picture move or delete needs the Mac; then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
 
 Every copy read shows the pending saves over the copy (the copy's journal view,
 `core/companion-notes.ts`), and a save the Mac took until a copy round from after its
@@ -509,7 +509,25 @@ those may carry the tag too, so the rename answers needs-the-Mac
 (`folder_changes_need_mac`): the copy holds notes only, so an empty folder made on the
 box would never show, and a folder delete also removes pictures and files the box does
 not hold. There is no folder rename route (the tree renames notes and never drags a
-folder). A picture or file moved on the box still takes the old path in this slice.
+folder).
+
+**4d, pictures and files.** The copy holds note text only, so the box reads pictures and
+files from its own disk, as before. A picture pasted into a note on the box (`POST
+/api/notes-v2/attachment`, `POST /api/v1/notes/attachment`, which stays on the box
+whoever answers) is written to the box's disk as before, so the editor shows it at once,
+and is also a `note-attachment` record with its bytes as a blob, once the Mac drains that
+kind (`core/companion-note-attachments.ts`). When the journal refuses the record, the
+file is removed again and the paste answers the refusal, so the box never keeps a file
+the Mac would not get. The Mac writes the bytes at the same path
+(`offline-merge/apply-note-attachment.ts`) and never overwrites: while git sync still
+runs it may bring the same file there first, and the same bytes at the path need nothing;
+other bytes there stay, and the companion's go beside them under a name with their own
+hash, lettered. A file is linked into place only where no file is, from a finished temp
+file, so one that appears meanwhile is never replaced and a crash never leaves half a
+picture. Moving or deleting a picture or file on the box answers needs-the-Mac
+(`attachment_changes_need_mac`): the box holds no copy of the Mac's files to check a
+move or delete against. Once git sync stops writing the box's data dir (after 3e), the
+box's picture reads need a source of their own.
 
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 
