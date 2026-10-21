@@ -1183,6 +1183,26 @@ itself). The `board_*` ops default to the caller's team board.
   choice?, reminder?, section?, version }` with `taskId` at the top level
   (`task` = the card's task; `kanban: true` on a kanban seen write).
 
+### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/main`, `/org/contact`
+
+The org is derived from tasks: Main (the user's main agent) → projects → teams (a
+project's top-level open tasks) → workers (`parent_task_id`). The one stored fact
+is `org_role: "main" | "lead"` on a task; both kinds are hidden from the board.
+A project with two or more teams gets a lead on first contact; a project with one
+team is talked to through that task; the Inbox never gets a lead.
+
+- `GET /api/v1/org` → `200 { tree: { main?, projects: [{ project, lead?,
+  needsLead, contactId?, teams, counts }], counts } }`, `counts` = `{ open,
+  running, needsYou, waiting }`.
+- `GET /api/v1/org/reports?of=<taskId>` → who reports to `of` (default: the
+  caller's task from `x-walnut-caller-sid`): Main or none → one row per project;
+  a lead → its teams; any other task → its workers.
+- `POST /api/v1/org/main` → `200 { task }`: Main's task, made once (local, filed
+  under `Ask Walnut`).
+- `POST /api/v1/org/contact { "to": project name | task id }` → `200 { task,
+  kind: "lead" | "team" | "task", project, started }`; `400 no_lead_for_inbox`,
+  `404 unknown_contact`. Both POSTs answer `501` on a replica.
+
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
 
 All Class A: same task-manager core as the web console; on a cloud REPLICA
@@ -1301,6 +1321,34 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   shows completed rows (iOS `show done`) still orders the open rows without
   them, draws each completed row in its pin place inside its own group, and
   puts a group that only completed rows have after the others.
+
+### Task transfer and host profiles (additive, 2026-10): `/tasks/:id/transfer`, `/transfers/:id`, `/hosts/:host/profile`, `/host-notes`
+
+A task keeps ONE session for its whole life (a second session for a task is
+`409 task_has_session`). Moving the work to another engine or host therefore
+makes a NEW task beside the source, which completes unless `keep_source`.
+
+- `GET /api/v1/tasks/:id/transfer-options` → `200 { taskId, source: { sessionId,
+  engine, host, cwd } | null, engines: [{ id, displayName }], hosts: [{ alias,
+  kind, probedAt }], options: [{ engine, host, blockedReason? }] }`. Engines other
+  than Claude run on `__local__` only; those pairs carry `blockedReason`.
+- `POST /api/v1/tasks/:id/transfer { engine?, host?, cwd? | "auto", mode?:
+  "carry" | "brief", model?, message?, keep_source?, wait_ms? }` runs as a job and
+  waits up to `wait_ms` (default 20000, at most 25000): `200 { transferId, state:
+  "done", taskId, title, sessionId?, sourceTaskId, sourceCompleted, history:
+  "native-copy" | "replay" | "brief", target: { engine, host, cwd }, workspace?,
+  transcriptPath? }`, or `202 { transferId, state: "running" }`, or the refusal's
+  status with `{ error, code }` (`no_conversation`, `nothing_to_transfer`,
+  `unknown_host`, `engine_host_unsupported`, `bad_cwd`, `unknown_home`). A second
+  POST for a task whose transfer is running joins that job.
+- `GET /api/v1/transfers/:id?wait_ms=` → the same three answers; `404
+  transfer_not_found` after an hour or a server restart (check the task instead).
+- `GET /api/v1/hosts/:host/profile` → `200 { profile, summary }`: what Walnut
+  learned about the host (kind, probe, repository paths, reach results, notes).
+- `PATCH /api/v1/hosts/:host/profile { kind?: kind | null, user_note?, refresh?:
+  true }` → `200 { profile }`; `kind: null` returns to the automatic kind.
+- `POST /api/v1/host-notes { key, fact, evidence?, host? }` → `200 { host, notes }`;
+  `host` defaults to the calling session's host.
 
 ### Sessions (read-only)
 

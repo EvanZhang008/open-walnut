@@ -44,6 +44,8 @@ export async function taskDepth(taskId: string): Promise<number> {
   while (id && !seen.has(id) && depth <= MAX_SUBTASK_DEPTH + 1) {
     seen.add(id);
     const task: Task | undefined = (await listTasksByIds([id]))[0];
+    // An org node (the main agent, a project lead) is not a level of work: what it files is top-level work.
+    if (task?.org_role && id !== taskId) return depth - 1;
     id = task?.parent_task_id || undefined;
     if (id) depth++;
   }

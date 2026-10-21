@@ -1,13 +1,18 @@
 /**
- * The first screen of a brand-new install: an empty board.
+ * An empty board with the chat closed.
  *
  * Reported on a fresh install: the task panel's ONLY visible control was a big
  * dashed "New Project" button, next to a right-hand "Ask Walnut" chat with
  * suggestion chips that looked like a generic chatbot, and users could not tell
- * whether they had to make a project (or talk to the chat) first. The first screen
- * is now: the chat hidden until asked for, ONE "New task" draft column already
- * open, and a task panel that says "No tasks yet" and what to do. Projects are
- * made from the Projects heading's menu instead of a permanent button.
+ * whether they had to make a project (or talk to the chat) first. An empty board
+ * with the chat closed is now: ONE "New task" draft column already open, and a
+ * task panel that says "No tasks yet" and what to do. Projects are made from the
+ * Projects heading's menu instead of a permanent button.
+ *
+ * The premise is a user who CLOSED the chat: since 2026-10-21 a new install opens
+ * with the chat open on Main (web/src/pages/home-panel-flags.ts), and that first
+ * screen is covered elsewhere. `isolateUiPrefs(page)` serves the stored 'false'
+ * a closed chat leaves behind, so the board below is what such a user sees.
  *
  * The board is empty by construction, not by deleting the shared fixture's tasks:
  * the list, folder, pin and tier reads answer empty for THIS page only, the
@@ -162,20 +167,20 @@ async function expectChatHidden(page: Page): Promise<void> {
   await expect.poll(async () => (await page.locator('.main-page-chat').boundingBox())?.width ?? 0).toBeLessThanOrEqual(1)
 }
 
-test('a new install opens on an empty board with one New task draft and no chat', async ({ page, baseURL }) => {
+test('with the chat closed, an empty board opens with one New task draft', async ({ page, baseURL }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await emptyBoardFor(page)
   await openFirstScreen(page, baseURL!)
 
-  // Nothing was chosen yet, so nothing is stored: the hidden chat is the default,
-  // and so is its toggle: no second "Ask Walnut" entry beside New task, in the
-  // sidebar or the Focus Dock, until the spot has been opened once.
-  expect(await page.evaluate((key) => localStorage.getItem(key), CHAT_VISIBLE_KEY)).toBeNull()
+  // The closed chat is the stored choice (adopted from the mirrored prefs), and it
+  // is honoured: the spot is unmounted. Its sidebar toggle is always there, reading
+  // closed, so the chat is one click away.
+  expect(await page.evaluate((key) => localStorage.getItem(key), CHAT_VISIBLE_KEY)).toBe('false')
   await expectChatHidden(page)
   await expect(page.locator('.sidebar-home-panels')).toBeVisible()
-  await expect(sidebarAskWalnut(page)).toHaveCount(0)
-  await expect(page.locator('.dock-chat-item')).toHaveCount(0)
+  await expect(sidebarAskWalnut(page)).toBeVisible()
+  await expect(sidebarAskWalnut(page)).not.toHaveClass(/active/)
 
   // ONE draft column, titled for what it makes, with the caret already in it.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
@@ -302,7 +307,7 @@ test('a user who opened the chat keeps it, and the empty board then opens no dra
   await expect(sidebarAskWalnut(page)).toBeVisible()
   await expect(sidebarAskWalnut(page)).not.toHaveClass(/active/)
   // (The Focus Dock's cell follows the same rule; home-panel-visibility-relaunch covers it.)
-  // Hidden again means a new-install screen again: the draft opens.
+  // Closed again means the closed-chat empty board again: the draft opens.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
 
   // And an explicit open survives a reload.

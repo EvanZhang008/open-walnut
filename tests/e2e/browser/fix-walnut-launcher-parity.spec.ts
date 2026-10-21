@@ -36,7 +36,7 @@ test('fix walnut inherits the launcher tier instead of carrying its own', async 
   // launcher's default says. The model half of the parity (folder launch memory,
   // not a forced Auto) is covered by the draft launch-memory specs.
   // The repair entry ("Customize Walnut") lives in the Ask Walnut drawer; the
-  // slot starts hidden until opened.
+  // shared fixture boots with the chat closed (it remembers a closed chat).
   await openChatOnLoad(page)
   await page.goto('/')
 

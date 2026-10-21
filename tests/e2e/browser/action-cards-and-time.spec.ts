@@ -20,7 +20,7 @@
  * that spec's own fixture server, since the shared :3457 fixture installs no plugins.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { openChatOnLoad } from './draft-helpers'
+import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import fs from 'node:fs/promises'
 
 const SHOT_DIR = '/tmp/action-cards-time'
@@ -87,12 +87,15 @@ test.describe('suggest action cards', () => {
     // The op has not run yet — otherwise "it worked" would prove nothing.
     expect(await pinnedIds(request)).not.toContain(taskId)
 
-    // The card renders in the Ask Walnut slot, which starts hidden until opened.
+    // The card renders in the Ask Walnut slot, and the shared fixture boots with the
+    // chat closed (it remembers a closed chat).
     await openChatOnLoad(page)
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
-    const composer = page.locator('.main-page-chat .chat-input-textarea')
+    // The slot opens on Main; this card rides an ordinary ask, from New chat.
+    await (await openAskWalnutDrawer(page)).getByTestId('ask-walnut-new').click()
+    const composer = page.locator('.main-page-chat [data-testid="ask-walnut-draft"] .chat-input-textarea')
     await expect(composer).toBeVisible({ timeout: 20_000 })
     await composer.click()
     await composer.fill(`SUGGEST_CARD_FIXTURE ${taskId}`)

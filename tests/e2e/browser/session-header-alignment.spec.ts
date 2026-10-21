@@ -18,7 +18,7 @@ import fs from 'node:fs/promises'
 import sharp from 'sharp'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { REAL_PANEL, draftComposer, openChatOnLoad, openDraftOnCwd } from './draft-helpers'
+import { REAL_PANEL, draftComposer, openAskWalnutDrawer, openChatOnLoad, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-header-alignment'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -221,9 +221,12 @@ test('the Ask Walnut slot header: the dot after the menu button keeps the same l
   test.setTimeout(150_000)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
-  // The chat spot starts hidden on a fresh browser; this test is about it.
+  // The shared fixture boots with the chat closed (it remembers a closed chat);
+  // this test is about the chat, so it opens it.
   await openChatOnLoad(page)
   await openHome(page)
+  // The slot opens on Main; an ordinary ask starts from the drawer's New chat.
+  await (await openAskWalnutDrawer(page)).getByTestId('ask-walnut-new').click()
   const draft = page.locator('[data-testid="ask-walnut-draft"] .chat-input-textarea')
   await expect(draft).toBeVisible({ timeout: 30_000 })
   const { taskId } = await quickStart(page, draft, 'snapshot-clean-turn:Ask alignment answered')

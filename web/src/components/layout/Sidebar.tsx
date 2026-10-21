@@ -172,6 +172,11 @@ export function Sidebar({
   const handleToggleTodo = homeToggle('sidebar:toggle-todo', todoVisible);
   const handleToggleCalendarPanel = homeToggle('sidebar:toggle-calendar', calendarPanelVisible);
   const handleToggleScratchpad = homeToggle('sidebar:toggle-scratchpad', scratchpadVisible);
+  // The org chart is an overlay of the home page: come home, then open it.
+  const handleOpenOrg = () => {
+    if (location.pathname !== '/') navigate('/', isPhoneLayout() ? { replace: true } : undefined);
+    window.dispatchEvent(new CustomEvent('org:open'));
+  };
   // A phone mounts neither the agenda nor the scratchpad panel (spec 5.1), so
   // their toggles would be controls that do nothing there (N3).
   const phone = usePhoneLayout();
@@ -198,6 +203,16 @@ export function Sidebar({
           <span className="sidebar-label">Ask Walnut</span>
         </button>
       )}
+      <button
+        className="sidebar-link sidebar-panel-toggle"
+        onClick={handleOpenOrg}
+        aria-label="Org chart"
+        title={collapsed ? 'Org chart' : 'Who works on what: Main, each project and its tasks'}
+        data-testid="sidebar-org-chart"
+      >
+        <OrgChartIcon />
+        <span className="sidebar-label">Org chart</span>
+      </button>
       {!phone && (<>
       <button
         className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
@@ -481,6 +496,17 @@ function ChatBubbleIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function OrgChartIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="5" rx="1" />
+      <rect x="3" y="16" width="6" height="5" rx="1" />
+      <rect x="15" y="16" width="6" height="5" rx="1" />
+      <path d="M12 8v4M6 16v-4h12v4" />
     </svg>
   );
 }

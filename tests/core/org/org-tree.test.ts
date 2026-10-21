@@ -1,0 +1,216 @@
+/**
+ * The org above the work is DERIVED from the board (src/core/org/org-tree.ts):
+ * who reports to whom, who the main agent talks to per project, and the short
+ * update note. Pinned here because the server (GET /api/v1/org, the main
+ * agent's note) and the browser (the org chart) read the same function, and
+ * each rule has a quiet failure: a conversation counted as work, a lead made
+ * for the Inbox, a note that lists every project on every message.
+ */
+import { describe, it, expect } from 'vitest'
+import {
+  buildOrgTree, findProjectNode, formatDigestLine, isOrgMember, orgDigest, pickLead, pickMain,
+  type OrgTaskLike,
+} from '../../../src/core/org/org-tree.js'
+import * as viaAlias from '@open-walnut/org-tree'
+import { isAskTask } from '../../../src/core/sessions/caller-placement.js'
+
+let n = 0
+function t(over: Partial<OrgTaskLike> & { title?: string }): OrgTaskLike {
+  n++
+  return {
+    id: over.id ?? `t${n}`,
+    title: over.title ?? `task ${n}`,
+    phase: over.phase ?? 'TODO',
+    created_at: over.created_at ?? `2026-10-01T00:00:${String(n % 60).padStart(2, '0')}Z`,
+    updated_at: over.updated_at ?? `2026-10-01T00:00:${String(n % 60).padStart(2, '0')}Z`,
+    ...over,
+  }
+}
+
+describe('org-tree', () => {
+  it('is the same module through the web alias', () => {
+    expect(viaAlias.buildOrgTree).toBe(buildOrgTree)
+  })
+
+  it('counts open work only: no conversations, no org nodes, no sentinels, nothing complete', () => {
+    const cases: [OrgTaskLike, boolean][] = [
+      [t({ project: 'Walnut' }), true],
+      [t({ project: 'Walnut', phase: 'COMPLETE' }), false],
+      [t({ project: 'Ask Walnut' }), false],
+      [t({ project: 'Walnut', walnut_agent: true }), false],
+      [t({ project: 'ask mentor' }), false],
+      [t({ project: 'Walnut', org_role: 'lead' }), false],
+      [t({ project: 'Ask Walnut', org_role: 'main', walnut_agent: true }), false],
+      [t({ project: 'Walnut', title: '.metadata walnut' }), false],
+    ]
+    for (const [task, member] of cases) {
+      expect(isOrgMember(task), JSON.stringify(task)).toBe(member)
+      // The conversation rule is caller-placement's own.
+      if (!task.org_role && task.phase !== 'COMPLETE' && !task.title.startsWith('.')) {
+        expect(isOrgMember(task)).toBe(!isAskTask(task))
+      }
+    }
+  })
+
+  it('a project with one team: Main talks to that team, no lead needed', () => {
+    const only = t({ project: 'Fertility', phase: 'IN_PROGRESS' })
+    const tree = buildOrgTree([only])
+    expect(tree.projects).toHaveLength(1)
+    const p = tree.projects[0]!
+    expect(p).toMatchObject({ project: 'Fertility', needsLead: false, contactId: only.id })
+    expect(p.lead).toBeUndefined()
+  })
+
+  it('a project with two or more teams needs a lead; once one exists it is the contact', () => {
+    const a = t({ project: 'Walnut' })
+    const b = t({ project: 'Walnut' })
+    const before = buildOrgTree([a, b]).projects[0]!
+    expect(before.needsLead).toBe(true)
+    expect(before.contactId).toBeUndefined()
+    const lead = t({ project: 'walnut', org_role: 'lead', title: 'Walnut lead' })
+    const after = buildOrgTree([a, b, lead]).projects[0]!
+    expect(after.lead?.id).toBe(lead.id)
+    expect(after.contactId).toBe(lead.id)
+    // The lead itself is never one of the teams.
+    expect(after.teams.map((x) => x.id).sort()).toEqual([a.id, b.id].sort())
+  })
+
+  it('a lead stays the contact when its project drops back to one team', () => {
+    const a = t({ project: 'Walnut' })
+    const lead = t({ project: 'Walnut', org_role: 'lead' })
+    expect(buildOrgTree([a, lead]).projects[0]!.contactId).toBe(lead.id)
+  })
+
+  it('the Inbox never gets a lead: Main talks to its tasks one by one', () => {
+    const tree = buildOrgTree([t({ project: '' }), t({})])
+    const inbox = findProjectNode(tree, 'Inbox')!
+    expect(inbox.project).toBe('')
+    expect(inbox.needsLead).toBe(false)
+    expect(inbox.contactId).toBeUndefined()
+  })
+
+  it('nests workers by parent link, across projects too, and counts the whole subtree', () => {
+    const leader = t({ project: 'Tickets', title: 'Ticket investigation' })
+    const w1 = t({ project: 'Tickets', parent_task_id: leader.id, phase: 'NEED_ACTION' })
+    const w2 = t({ project: 'Other', parent_task_id: leader.id, phase: 'IN_PROGRESS' })
+    const deep = t({ project: 'Tickets', parent_task_id: w1.id, phase: 'WAITING' })
+    const tree = buildOrgTree([leader, w1, w2, deep])
+    expect(tree.projects.map((p) => p.project)).toEqual(['Tickets'])
+    const team = tree.projects[0]!.teams[0]!
+    expect(team.id).toBe(leader.id)
+    expect(team.workers.map((w) => w.id)).toEqual([w1.id, w2.id]) // NEED_ACTION before IN_PROGRESS
+    expect(team.workers[0]!.workers[0]!.id).toBe(deep.id)
+    expect(team.counts).toEqual({ open: 4, running: 1, needsYou: 1, waiting: 1 })
+    expect(tree.counts.open).toBe(4)
+  })
+
+  it('work filed by Main, an ask or a lead is top-level work of its project', () => {
+    const main = t({ project: 'Ask Walnut', org_role: 'main', walnut_agent: true })
+    const ask = t({ project: 'Ask Walnut', walnut_agent: true })
+    const lead = t({ project: 'Walnut', org_role: 'lead' })
+    const byMain = t({ project: 'Walnut', parent_task_id: main.id })
+    const byAsk = t({ project: 'Walnut', parent_task_id: ask.id })
+    const byLead = t({ project: 'Walnut', parent_task_id: lead.id })
+    const tree = buildOrgTree([main, ask, lead, byMain, byAsk, byLead])
+    expect(tree.main?.id).toBe(main.id)
+    expect(tree.projects).toHaveLength(1)
+    expect(tree.projects[0]!.teams.map((x) => x.id).sort()).toEqual([byMain.id, byAsk.id, byLead.id].sort())
+  })
+
+  it('a child of a COMPLETE parent is a team, and a corrupted parent loop still shows every task once', () => {
+    const done = t({ project: 'P', phase: 'COMPLETE' })
+    const orphan = t({ project: 'P', parent_task_id: done.id })
+    const x = t({ id: 'loop-x', project: 'P', parent_task_id: 'loop-y' })
+    const y = t({ id: 'loop-y', project: 'P', parent_task_id: 'loop-x' })
+    const tree = buildOrgTree([done, orphan, x, y])
+    const ids: string[] = []
+    const walk = (nodes: { id: string; workers: unknown[] }[]) => {
+      for (const node of nodes) { ids.push(node.id); walk(node.workers as never) }
+    }
+    walk(tree.projects[0]!.teams)
+    expect(ids.sort()).toEqual([orphan.id, 'loop-x', 'loop-y'].sort())
+  })
+
+  it('orders projects by what waits on the user, the Inbox last', () => {
+    const tree = buildOrgTree([
+      t({ project: '' , phase: 'NEED_ACTION' }),
+      t({ project: 'Quiet' }),
+      t({ project: 'Busy', phase: 'IN_PROGRESS' }),
+      t({ project: 'Urgent', phase: 'NEED_ACTION' }),
+    ])
+    expect(tree.projects.map((p) => p.project)).toEqual(['Urgent', 'Busy', 'Quiet', ''])
+  })
+
+  it('picks one main (open first, then newest) and one lead per project (open first, then oldest)', () => {
+    const oldMain = t({ org_role: 'main', created_at: '2026-01-01T00:00:00Z' })
+    const newMain = t({ org_role: 'main', created_at: '2026-02-01T00:00:00Z' })
+    const doneMain = t({ org_role: 'main', created_at: '2026-03-01T00:00:00Z', phase: 'COMPLETE' })
+    expect(pickMain([oldMain, doneMain, newMain])?.id).toBe(newMain.id)
+    expect(pickMain([doneMain])?.id).toBe(doneMain.id)
+    const l1 = t({ org_role: 'lead', project: 'W', created_at: '2026-01-01T00:00:00Z', phase: 'COMPLETE' })
+    const l2 = t({ org_role: 'lead', project: 'w', created_at: '2026-02-01T00:00:00Z' })
+    const l3 = t({ org_role: 'lead', project: 'W', created_at: '2026-03-01T00:00:00Z' })
+    expect(pickLead([l3, l1, l2], 'W')?.id).toBe(l2.id)
+    expect(pickLead([l1], 'Other')).toBeUndefined()
+  })
+
+  it('a closed lead leads no one; an open lead leads a project with no open work', () => {
+    const closed = t({ org_role: 'lead', project: 'W', phase: 'COMPLETE' })
+    const tree = buildOrgTree([closed, t({ project: 'W' }), t({ project: 'W' })])
+    expect(findProjectNode(tree, 'W')).toMatchObject({ needsLead: true })
+    expect(findProjectNode(tree, 'W')?.lead).toBeUndefined()
+    expect(findProjectNode(tree, 'W')?.contactId).toBeUndefined()
+
+    const idle = t({ org_role: 'lead', project: 'Quiet' })
+    const quiet = findProjectNode(buildOrgTree([idle, t({ project: 'Quiet', phase: 'COMPLETE' })]), 'quiet')
+    expect(quiet).toMatchObject({ project: 'Quiet', teams: [], contactId: idle.id, lead: { id: idle.id } })
+  })
+
+  it('handles a real-size board (5,000 tasks) quickly', () => {
+    const tasks: OrgTaskLike[] = []
+    for (let i = 0; i < 5000; i++) {
+      tasks.push(t({ project: `P${i % 12}`, phase: i % 5 === 0 ? 'COMPLETE' : 'TODO', ...(i % 7 === 3 && i > 10 ? { parent_task_id: `t${n - 3}` } : {}) }))
+    }
+    const started = performance.now()
+    const tree = buildOrgTree(tasks)
+    // Generous for a loaded machine; a quadratic walk would take seconds here.
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(tree.projects).toHaveLength(12)
+  })
+})
+
+describe('org digest (the main agent\'s update note)', () => {
+  const at = '2026-10-21T10:00:00Z'
+  const later = '2026-10-21T12:00:00Z'
+
+  it('says nothing the first time, and records where things stand', () => {
+    const { lines, next } = orgDigest([t({ project: 'W', phase: 'NEED_ACTION' })], undefined, at)
+    expect(lines).toEqual([])
+    expect(next).toEqual({ at, needsYou: { w: 1 } })
+  })
+
+  it('lists only projects that moved: done, new, or a change in what waits on the user', () => {
+    const prev = { at, needsYou: { w: 1, quiet: 0 } }
+    const tasks = [
+      t({ project: 'W', phase: 'COMPLETE', completed_at: '2026-10-21T11:00:00Z' }),
+      t({ project: 'W', phase: 'COMPLETE', completed_at: '2026-10-21T09:00:00Z' }), // before the last note
+      t({ project: 'W', phase: 'NEED_ACTION', created_at: '2026-10-01T00:00:00Z' }),
+      t({ project: 'Quiet', phase: 'TODO', created_at: '2026-10-01T00:00:00Z' }),
+      t({ project: 'New', phase: 'TODO', created_at: '2026-10-21T11:30:00Z' }),
+      t({ project: 'Ask Walnut', walnut_agent: true, created_at: '2026-10-21T11:30:00Z' }), // a conversation
+    ]
+    const { lines } = orgDigest(tasks, prev, later)
+    expect(lines.map(formatDigestLine)).toEqual([
+      'W: 1 done, 1 waiting on the user',
+      'New: 1 new',
+    ])
+  })
+
+  it('a project whose waits on the user drop to zero is said once, then quiet', () => {
+    const prev = { at, needsYou: { w: 2 } }
+    const tasks = [t({ project: 'W', phase: 'TODO', created_at: '2026-10-01T00:00:00Z' })]
+    const first = orgDigest(tasks, prev, later)
+    expect(first.lines.map(formatDigestLine)).toEqual(['W: nothing waiting on the user now'])
+    expect(orgDigest(tasks, first.next, '2026-10-21T13:00:00Z').lines).toEqual([])
+  })
+})

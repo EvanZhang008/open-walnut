@@ -103,7 +103,8 @@ test.setTimeout(120_000)
 
 // ── Open and close ───────────────────────────────────────────────────────────
 
-// The inspector is reached from the Ask Walnut slot, which starts hidden until opened.
+// The inspector is reached from the Ask Walnut slot, and the shared fixture boots
+// with the chat closed (it remembers a closed chat).
 test.beforeEach(async ({ page }) => { await openChatOnLoad(page) })
 
 test('the Context row is in the Ask Walnut drawer', async ({ page }) => {

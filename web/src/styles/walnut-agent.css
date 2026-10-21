@@ -488,6 +488,13 @@
   color: var(--walnut-accent);
   font-weight: 600;
 }
+/* Main: the main agent's row, pinned above the other chats. */
+.ask-walnut-drawer-main .ask-walnut-drawer-item-title { font-weight: 600; }
+.ask-walnut-drawer-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+}
 .ask-walnut-drawer-item-title {
   flex: 1;
   min-width: 0;
@@ -536,7 +543,7 @@
 .ask-walnut-drawer-links {
   display: flex;
   justify-content: center;
-  gap: 14px;
+  gap: 10px;
 }
 .ask-walnut-drawer-link {
   display: inline-flex;
@@ -548,6 +555,7 @@
   background: none;
   font-family: inherit;
   font-size: 11px;
+  white-space: nowrap;
   color: var(--fg-muted);
   cursor: pointer;
 }

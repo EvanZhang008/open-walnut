@@ -14,8 +14,10 @@
  * `page.reload()` would keep sessionStorage and could not tell the two apart.
  *
  * ui-prefs is isolated per context (`isolateUiPrefs`): these keys are mirrored to
- * the SHARED fixture server, and a hidden chat left there would break every later
- * spec that waits for the slot. The mirror's own round trip is covered elsewhere;
+ * the SHARED fixture server, and a value left there would decide every later
+ * spec's first screen. By default the isolated mirror answers the closed chat the
+ * shared fixture remembers; the new-install scenario passes `newInstall` (to every
+ * relaunch too) so its mirror is empty. The mirror's own round trip is covered elsewhere;
  * the relaunch path under test is the localStorage read, which the mirror only
  * supplements when the browser has nothing of its own.
  *
@@ -25,7 +27,7 @@
 import fs from 'node:fs/promises'
 import { expect, seedShortcutBars, test } from './shortcut-test-fixture'
 import { type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { DRAFT_PANEL, openChatOnLoad, openDraft } from './draft-helpers'
+import { DRAFT_PANEL, openAskWalnutDrawer, openChatOnLoad, openDraft } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = process.env.HOME_PANEL_SHOT_DIR ?? '/tmp/home-panel-visibility'
@@ -56,10 +58,10 @@ test.afterEach(async () => {
 // ── Locators ─────────────────────────────────────────────────────────────────
 
 const slot = (page: Page) => page.locator('[data-testid="ask-walnut-slot"]')
-/** The slot body that carries a × on load: the session panel when the fixture has
- *  Ask Walnut tasks, the New composer when it has none (its × hides the slot too
- *  when there is no conversation to go back to; see AskWalnutSlot's closeDraft). */
-const slotPanel = (page: Page) => page.locator('[data-testid="ask-walnut-session"], [data-testid="ask-walnut-draft"]').first()
+/** The slot body that carries a × on load: Main's composer before Main has a
+ *  conversation, its session after (or an ask's session, or the New composer, for a
+ *  window that picked one). Every one of them hides the slot with its ×. */
+const slotPanel = (page: Page) => page.locator('[data-testid="ask-walnut-session"], [data-testid="ask-walnut-draft"], [data-testid="ask-walnut-main-draft"]').first()
 const sidebarChat = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Ask Walnut' })
 const sidebarTodo = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Task panel' })
 const sidebarAgenda = (page: Page) => page.locator('[data-testid="sidebar-toggle-calendar"]')
@@ -78,17 +80,28 @@ async function expectChatHidden(page: Page): Promise<void> {
   await expect.poll(() => chatSpotWidth(page), { timeout: 15_000, message: 'chat spot still open' }).toBeLessThanOrEqual(1)
   // Hidden means UNMOUNTED, not a zero-width live panel.
   await expect(slot(page)).toHaveCount(0)
-  // The toggles exist only once the spot was opened once (home-panel-flags.ts);
-  // when they do, they read closed.
-  if (await sidebarChat(page).count()) await expect(sidebarChat(page)).not.toHaveClass(/active/)
-  if (await dockChat(page).count()) await expect(dockChat(page)).not.toHaveClass(/dock-chat-active/)
+  // The toggles are always there (home-panel-flags.ts), reading closed: they are
+  // how a closed chat comes back.
+  await expect(sidebarChat(page)).toBeVisible()
+  await expect(sidebarChat(page)).not.toHaveClass(/active/)
+  await expect(dockChat(page)).toBeVisible()
+  await expect(dockChat(page)).not.toHaveClass(/dock-chat-active/)
 }
 
-/** A browser that never opened the chat spot has no toggle for it anywhere. */
-async function expectNoChatToggle(page: Page): Promise<void> {
-  await expect(page.locator('.sidebar-home-panels')).toBeVisible({ timeout: 30_000 })
-  await expect(sidebarChat(page)).toHaveCount(0)
-  await expect(dockChat(page)).toHaveCount(0)
+/**
+ * The slot is on Main, the default pick: Main's composer before it has a
+ * conversation, its session once it has one (the shared fixture may hold a Main
+ * another spec launched). The drawer's Main row reads current either way.
+ */
+async function expectSlotOnMain(page: Page): Promise<void> {
+  await expect(slotPanel(page)).toBeVisible({ timeout: 60_000 })
+  if (await page.locator('[data-testid="ask-walnut-main-draft"]').count()) {
+    await expect(page.locator('[data-testid="ask-walnut-main-draft"] .chat-input-textarea')).toHaveAttribute('placeholder', /Ask Main anything/)
+  }
+  const drawer = await openAskWalnutDrawer(page)
+  await expect(drawer.locator('[data-testid="ask-walnut-drawer-main"]')).toHaveAttribute('aria-current', 'true')
+  await page.keyboard.press('Escape')
+  await expect(drawer).toHaveCount(0)
 }
 
 async function expectChatOpen(page: Page): Promise<void> {
@@ -113,7 +126,7 @@ async function boot(page: Page): Promise<void> {
  * Relaunch: snapshot the context's storage state (localStorage, no sessionStorage),
  * close it, and boot the app in a brand-new context seeded with that snapshot.
  */
-async function relaunch(browser: Browser, page: Page): Promise<Page> {
+async function relaunch(browser: Browser, page: Page, opts: { newInstall?: boolean } = {}): Promise<Page> {
   const storageState = await page.context().storageState()
   await page.context().close()
   const { baseURL, viewport } = test.info().project.use
@@ -125,7 +138,9 @@ async function relaunch(browser: Browser, page: Page): Promise<Page> {
   // which leaves the keys this spec actually toggles untouched.
   await seedShortcutBars(context)
   const next = await context.newPage()
-  await isolateUiPrefs(next)
+  // The same mirror the first page saw: a new install's mirror holds nothing, so
+  // what comes back is what this browser stored itself.
+  await isolateUiPrefs(next, opts)
   await boot(next)
   // The construction guarantee this spec rests on: nothing per-tab came along.
   expect(await next.evaluate(() => sessionStorage.getItem('open-walnut-home-chat-visible'))).toBeNull()
@@ -134,45 +149,34 @@ async function relaunch(browser: Browser, page: Page): Promise<Page> {
 
 // ── Scenarios ────────────────────────────────────────────────────────────────
 
-test('the chat starts hidden; opened it survives a relaunch, and closed with its × it stays closed', async ({ browser, page }) => {
-  // A new install: hidden, nothing stored for it, and no toggle for it either
-  // (home-panel-flags.ts): the spot first opens from an ask on the board.
+test('a new install opens with the chat on Main; closed with its × it stays closed across relaunches', async ({ browser, page }) => {
+  // A new install: nothing stored and nothing in the mirror (the later route wins
+  // over beforeEach's closed-chat one). The chat is open on Main, the main agent,
+  // and both toggles are there to close it with (home-panel-flags.ts).
+  const newInstall = { newInstall: true }
+  await isolateUiPrefs(page, newInstall)
   await boot(page)
-  await expectChatHidden(page)
-  await expectNoChatToggle(page)
+  await expectChatOpen(page)
+  await expectSlotOnMain(page)
   expect(await stored(page, CHAT_KEY)).toBeNull()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/0-new-install-chat-on-main.png` })
 
-  // Relaunch #1 without a choice: still the default, still no toggle.
-  let next = await relaunch(browser, page)
-  await expectChatHidden(next)
-  await expectNoChatToggle(next)
+  // Relaunch #1 without a choice: still the default, still open, still nothing stored.
+  let next = await relaunch(browser, page, newInstall)
+  await expectChatOpen(next)
   expect(await stored(next, CHAT_KEY)).toBeNull()
-
-  // A browser where the spot was once opened and then closed (the stored 'false'
-  // an ask's Locate and a × leave behind) has the toggle, reading closed.
-  await next.evaluate((key) => localStorage.setItem(key, 'false'), CHAT_KEY)
-  next = await relaunch(browser, next)
-  await expectChatHidden(next)
-  await expect(sidebarChat(next)).toBeVisible()
-  await expect(dockChat(next)).toBeVisible()
-
-  // Open it from the sidebar, then relaunch #2: the explicit open is kept.
-  await sidebarChat(next).click()
-  await expectChatOpen(next)
-  await expect.poll(() => stored(next, CHAT_KEY)).toBe('true')
-  next = await relaunch(browser, next)
-  await expectChatOpen(next)
   await next.screenshot({ path: `${SCREENSHOT_DIR}/1-chat-open-after-relaunch.png` })
 
-  // Close it the way a user does: the × on the slot's panel (session or New state).
+  // Close it the way a user does: the × on the slot's panel (Main's composer, or
+  // Main's session when the shared fixture already holds one).
   await expect(slotPanel(next)).toBeVisible({ timeout: 60_000 })
   await slotPanel(next).locator('.session-panel-close').click()
   await expectChatHidden(next)
   await expect.poll(() => stored(next, CHAT_KEY)).toBe('false')
   await next.screenshot({ path: `${SCREENSHOT_DIR}/2-chat-closed.png` })
 
-  // Relaunch #3: still closed.
-  next = await relaunch(browser, next)
+  // Relaunch #2: still closed.
+  next = await relaunch(browser, next, newInstall)
   await expectChatHidden(next)
   expect(await stored(next, CHAT_KEY)).toBe('false')
   await next.screenshot({ path: `${SCREENSHOT_DIR}/3-chat-closed-after-relaunch.png` })
@@ -180,16 +184,22 @@ test('the chat starts hidden; opened it survives a relaunch, and closed with its
   // Repeat: toggles in a row, the LAST state is what a relaunch restores.
   await dockChat(next).click()
   await expectChatOpen(next)
+  await expect.poll(() => stored(next, CHAT_KEY)).toBe('true')
   await dockChat(next).click()
   await expectChatHidden(next)
   await dockChat(next).click()
   await expectChatOpen(next)
-  next = await relaunch(browser, next)
+  next = await relaunch(browser, next, newInstall)
   await expectChatOpen(next)
   await dockChat(next).click()
   await expectChatHidden(next)
-  next = await relaunch(browser, next)
+  next = await relaunch(browser, next, newInstall)
   await expectChatHidden(next)
+  // And the sidebar toggle brings it back too, kept across a relaunch.
+  await sidebarChat(next).click()
+  await expectChatOpen(next)
+  next = await relaunch(browser, next, newInstall)
+  await expectChatOpen(next)
   await next.context().close()
 })
 

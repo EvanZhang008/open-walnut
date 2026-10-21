@@ -2,9 +2,8 @@
  * Home first-screen rules: the chat spot's default and the first-open draft.
  *
  * Load-bearing because three components (MainPage, the Sidebar toggle, the Focus
- * Dock) read the chat flag at mount. A reader that drifted back to "open unless
- * 'false'" would bring the generic-looking chat back on every new install while
- * the other two said hidden, and a first-draft rule that fired on a board with
+ * Dock) read the chat flag at mount, and must agree that a new install opens on
+ * the main agent, and a first-draft rule that fired on a board with
  * history (or twice) would grow columns the user never asked for.
  */
 import { describe, it, expect } from 'vitest';
@@ -28,9 +27,9 @@ describe('readHomeChatVisible', () => {
     expect(LS_HOME_CHAT_VISIBLE_KEY).toBe('open-walnut-home-chat-visible');
   });
 
-  it('starts hidden when the browser never chose', () => {
-    expect(HOME_CHAT_VISIBLE_DEFAULT).toBe(false);
-    expect(readHomeChatVisible(storageWith(null))).toBe(false);
+  it('starts OPEN when the browser never chose: a new user lands on the main agent', () => {
+    expect(HOME_CHAT_VISIBLE_DEFAULT).toBe(true);
+    expect(readHomeChatVisible(storageWith(null))).toBe(true);
   });
 
   it("honours an explicit open ('true') and an explicit close ('false')", () => {
@@ -39,14 +38,14 @@ describe('readHomeChatVisible', () => {
   });
 
   it('reads an unknown value as no choice', () => {
-    expect(readHomeChatVisible(storageWith(''))).toBe(false);
-    expect(readHomeChatVisible(storageWith('1'))).toBe(false);
+    expect(readHomeChatVisible(storageWith(''))).toBe(true);
+    expect(readHomeChatVisible(storageWith('1'))).toBe(true);
   });
 
   it('falls back to the default when storage is missing or throws', () => {
-    expect(readHomeChatVisible(null)).toBe(false);
-    expect(readHomeChatVisible(undefined)).toBe(false);
-    expect(readHomeChatVisible({ getItem: () => { throw new Error('storage disabled'); } })).toBe(false);
+    expect(readHomeChatVisible(null)).toBe(true);
+    expect(readHomeChatVisible(undefined)).toBe(true);
+    expect(readHomeChatVisible({ getItem: () => { throw new Error('storage disabled'); } })).toBe(true);
   });
 });
 
@@ -64,25 +63,19 @@ const emptyBoard: FirstDraftInput = {
 };
 
 describe('showHomeChatToggle', () => {
-  it('hides the Ask Walnut toggle on a browser that never opened the chat spot', () => {
+  it('always shows the Ask Walnut toggle: a closed chat must have a way back, a new user included', () => {
     expect(hasHomeChatChoice(storageWith(null))).toBe(false);
-    expect(showHomeChatToggle(storageWith(null), false)).toBe(false);
+    for (const storage of [storageWith(null), storageWith('true'), storageWith('false'), storageWith('maybe'), null]) {
+      expect(showHomeChatToggle(storage, false)).toBe(true);
+      expect(showHomeChatToggle(storage, true)).toBe(true);
+    }
+    expect(showHomeChatToggle({ getItem: () => { throw new Error('denied'); } }, false)).toBe(true);
   });
 
-  it('shows it while the spot is open, before anything is stored', () => {
-    expect(showHomeChatToggle(storageWith(null), true)).toBe(true);
-  });
-
-  it('keeps it once the spot was opened or closed on purpose', () => {
+  it('still tells a stored choice from none', () => {
     expect(hasHomeChatChoice(storageWith('true'))).toBe(true);
     expect(hasHomeChatChoice(storageWith('false'))).toBe(true);
-    expect(showHomeChatToggle(storageWith('false'), false)).toBe(true);
-  });
-
-  it('treats an unknown value, missing storage or a throwing storage as no choice', () => {
-    expect(showHomeChatToggle(storageWith('maybe'), false)).toBe(false);
-    expect(showHomeChatToggle(null, false)).toBe(false);
-    expect(showHomeChatToggle({ getItem: () => { throw new Error('denied'); } }, false)).toBe(false);
+    expect(hasHomeChatChoice(storageWith('maybe'))).toBe(false);
   });
 });
 

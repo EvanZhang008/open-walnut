@@ -53,7 +53,8 @@ import { fetchTask, recordSuggestFeedback, updateTask, SUGGEST_RULES_VERSION } f
 import { isBuiltinTier } from '@/api/focus';
 import { fetchConfig, fetchSelfRepair, invalidateSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
-import { AskWalnutSlot, showAskInSlot } from '@/components/chat/AskWalnutSlot';
+import { AskWalnutSlot, MAIN_PICK, showAskInSlot } from '@/components/chat/AskWalnutSlot';
+import { OrgChartSheet } from '@/components/org/OrgChartSheet';
 import { agentOfTask, slotAgents } from '@/components/chat/ask-walnut-slot-model';
 import { getAgentsSnapshot } from '@/stores/agents-store';
 import { log } from '@/utils/log';
@@ -1563,6 +1564,35 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       });
     }
   }, [showOperationError, notify, navigateRef, setPanelMode]);
+
+  // ── The org chart (components/org/OrgChartSheet.tsx) ──
+  const [orgOpen, setOrgOpen] = useState(false);
+  const openOrg = useCallback(() => setOrgOpen(true), []);
+  const closeOrg = useCallback(() => setOrgOpen(false), []);
+  useEffect(() => {
+    const open = () => setOrgOpen(true);
+    window.addEventListener('org:open', open);
+    return () => window.removeEventListener('org:open', open);
+  }, []);
+  /** Talk to an org node: Main in the chat slot; any other task in its session, or a composer bound to it. */
+  const chatWithOrgNode = useCallback(async (taskId: string) => {
+    if (taskId === 'main') {
+      showAskInSlot(MAIN_PICK);
+      setChatVisible(true);
+      return;
+    }
+    // A lead made a moment ago is not in the store yet.
+    let task: Task | undefined = taskMapRef.current.get(taskId);
+    if (!task) task = await fetchTask(taskId).catch(() => undefined) as Task | undefined;
+    if (!task) { showOperationError('That task is gone.'); return; }
+    const sessionId = resolveTaskSessionId(task);
+    if (sessionId) { openSessionOrToast(sessionId); return; }
+    openDraftColumnRef.current({
+      project: task.project || undefined,
+      taskId: task.id, boundTaskTitle: task.title,
+      ...(task.cwd ? { cwd: task.cwd, host: null, cwdPinned: true } : {}),
+    });
+  }, [openSessionOrToast, showOperationError]);
 
   const handleToggleSession = openSessionOrToast;
 
@@ -3122,6 +3152,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onToggleInspector={inspector.toggle}
           {...(walnutRepairTarget ? { onFixWalnut: handleFixWalnut } : {})}
           onCloseChat={() => setChatVisible(false)}
+          onOpenOrg={openOrg}
           // The inspector describes the session actually on screen.
           onSelectionChange={setAskSlotSelection}
           onTaskClick={handleFocusTaskById}
@@ -3331,6 +3362,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onFocusChild={handleFocusTask}
         />
       )}
+
+      {/* The org chart: Main, each project, its tasks. A page-level overlay. */}
+      {orgOpen && <OrgChartSheet onClose={closeOrg} onChat={chatWithOrgNode} />}
 
       {/* Session finder — page-level overlay so ⌘⇧O works even with the chat
           column collapsed. Opens the picked session as a home column. */}

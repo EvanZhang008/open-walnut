@@ -1,0 +1,141 @@
+/* The org chart sheet (components/org/OrgChartSheet.tsx). */
+
+.org-sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  backdrop-filter: blur(2px);
+}
+.org-sheet {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  margin: 24px;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  min-height: 0;
+}
+.org-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.org-sheet-title { margin: 0; font-size: 17px; font-weight: 650; }
+.org-sheet-hint { margin: 2px 0 0; font-size: 12.5px; color: var(--fg-muted); }
+.org-sheet-close { font-size: 20px; line-height: 1; }
+
+.org-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  align-self: center;
+  margin: 14px 0 12px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--walnut-accent, var(--accent)) 45%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--walnut-accent, var(--accent)) 7%, var(--bg));
+}
+.org-main-card { display: flex; flex-direction: column; }
+.org-main-name { font-weight: 650; font-size: 14px; }
+.org-main-sub { font-size: 12px; color: var(--fg-muted); }
+
+.org-columns {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+}
+.org-column {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 280px;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+.org-column.is-drop { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.org-column-head {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.org-column-name { font-weight: 650; font-size: 13.5px; }
+.org-column-counts { margin-top: 1px; font-size: 11.5px; color: var(--fg-muted); }
+.org-column-contact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.org-column-contact > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-column-chat { flex-shrink: 0; }
+
+.org-teams, .org-workers { list-style: none; margin: 0; padding: 0; }
+.org-teams { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+.org-workers { margin-left: 14px; padding-left: 8px; border-left: 1px solid var(--border); }
+.org-card-item { margin: 0 0 4px; }
+.org-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.org-card:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.org-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.org-card.is-drop { outline: 2px solid var(--accent); outline-offset: 1px; background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.org-card.is-dragging { opacity: 0.45; }
+.org-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+.org-card-meta {
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.org-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--fg-muted); }
+.org-dot-need_action { background: var(--warning); border-color: var(--warning); }
+.org-dot-in_progress { background: var(--accent); border-color: var(--accent); animation: org-dot-pulse 1.6s ease-in-out infinite; }
+.org-dot-waiting { background: var(--fg-muted); border-color: var(--fg-muted); opacity: 0.6; }
+@keyframes org-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+.org-empty { margin: 32px auto; color: var(--fg-muted); font-size: 13px; }
+
+@media (max-width: 720px) {
+  .org-sheet { margin: 0; border-radius: 0; padding: 12px; }
+  .org-columns { flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+  .org-column { flex: 0 0 auto; }
+  .org-teams { overflow: visible; }
+}
+.org-sheet:focus { outline: none; }

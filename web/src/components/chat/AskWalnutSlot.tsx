@@ -51,6 +51,8 @@ import { resolveTaskSessionId } from '@/utils/session-status';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
 import { askTitle } from '@open-walnut/ask-list';
+import { pickMain } from '@open-walnut/org-tree';
+import { ensureMainTask } from '@/api/org';
 import {
   GENERAL_AGENT_ID, GENERAL_ASK_AGENT, agentOfTask, resolveSelection, selectAgentTasks, slotAgents,
   type AskAgent,
@@ -64,6 +66,14 @@ const SS_SELECTED_KEY = 'walnut:ask-slot:selected';
  *  its own only while the agent has no asks (a reload must not drop the user
  *  from Mentor's empty composer back to Walnut). */
 const SS_AGENT_KEY = 'walnut:ask-slot:agent';
+
+/**
+ * The selection that means Main, the main agent: one conversation that sees all
+ * the user's work (src/core/org/). It is a pick of its own, not a task id,
+ * because Main may not exist yet (its task is made on its first message), and
+ * it is what a fresh window shows.
+ */
+export const MAIN_PICK = 'org:main';
 
 /** The window event that asks a mounted slot to show one ask (see `showAskInSlot`). */
 const SHOW_ASK_EVENT = 'ask-slot:show';
@@ -96,6 +106,8 @@ const LAUNCHED_GRACE_MS = 60_000;
 interface PendingLaunch {
   /** The exact quick-start body, kept so Retry replays the SAME launch. */
   payload: Parameters<typeof quickStartSession>[0];
+  /** Main's first message: its task is made (or found) first, then the launch runs on it. */
+  main?: boolean;
   /** Echoed under the spinner so the user sees what is being sent. */
   message: string;
   error?: string;
@@ -119,6 +131,8 @@ export interface AskWalnutSlotProps {
   onFixWalnut?: () => void;
   /** Collapse the slot — the panel's own × (the Focus Dock brings it back). */
   onCloseChat: () => void;
+  /** The drawer's "Org chart" link. Absent hides it. */
+  onOpenOrg?: () => void;
   /** Phone layout: the slot is open over the home screen, so it is the 'chat'
    *  layer (back closes it) and its asks drawer is the 'asks' layer. */
   phoneOpen?: boolean;
@@ -138,6 +152,13 @@ export interface AskWalnutSlotProps {
   }) => void;
 }
 
+/** What Main's composer says before its first message. */
+const MAIN_INTRO = (
+  <p className="draft-agent-desc" data-testid="ask-walnut-main-intro">
+    Main sees all your work. Ask how things are going, or hand it something to do.
+  </p>
+);
+
 /** Same precedence the panel mounts with (resolveTaskSessionId). */
 const hasSession = (task: Task): boolean => resolveTaskSessionId(task) !== null;
 
@@ -149,7 +170,7 @@ function initialDraftMeta(): QuickStartTaskMeta {
 
 export function AskWalnutSlot({
   tasks, tasksLoading, banner, inspectorPanel,
-  inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onSelectionChange, phoneOpen,
+  inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onOpenOrg, onSelectionChange, phoneOpen,
   onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
   // The console agents, from the shared agent store (the /agents page writes to
@@ -176,7 +197,14 @@ export function AskWalnutSlot({
     try { sessionStorage.setItem(SS_AGENT_KEY, agentId); } catch { /* per-render only */ }
   }, [agentId]);
 
+  const isGeneral = agent.id === GENERAL_AGENT_ID;
+  // Main lives in Walnut's list as its own pinned row, never among the other chats.
+  const mainTask = useMemo<Task | null>(() => pickMain(tasks) ?? null, [tasks]);
   const askTasks = useMemo(() => selectAgentTasks(tasks, agent), [tasks, agent]);
+  const chatTasks = useMemo(
+    () => (isGeneral ? askTasks.filter((t) => t.org_role !== 'main') : askTasks),
+    [askTasks, isGeneral],
+  );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => {
     try { return sessionStorage.getItem(SS_SELECTED_KEY); } catch { return null; }
   });
@@ -188,7 +216,7 @@ export function AskWalnutSlot({
   /** What the last slot launch returned. Held because the task/session stores
    *  only refresh over WS a beat later: without it the panel could not mount, and
    *  the selection would bounce back to the previous task in the meantime. */
-  const [launched, setLaunched] = useState<{ taskId: string; sessionId?: string; title: string } | null>(null);
+  const [launched, setLaunched] = useState<{ taskId: string; sessionId?: string; title: string; main?: boolean } | null>(null);
   /** The ≡ drawer. Closed on every pick; not persisted (it is a gesture, not a view). */
   const [drawerOpen, setDrawerOpen] = useState(false);
   /** The ≡ button, wherever the current body renders it — where the drawer
@@ -208,6 +236,7 @@ export function AskWalnutSlot({
   selectedTaskIdRef.current = selectedTaskId;
   const askTasksRef = useRef(askTasks);
   askTasksRef.current = askTasks;
+  const mainSelected = isGeneral && (selectedTaskId === MAIN_PICK || (!!mainTask && selectedTaskId === mainTask.id));
 
   // ONE reconciler for the pair (agent, selection), with a fixed precedence,
   // run whenever either input moves:
@@ -229,9 +258,14 @@ export function AskWalnutSlot({
   // there would yank the user off the ask they just sent, for the second the
   // WS echo takes to land. selectAgent never trips step 1: it re-points the
   // selection at the new agent's ask (or nothing) in the same act.
+  //   3. Walnut's default is Main, not the newest chat: a fresh window, a
+  //      deleted chat, a pick nobody can resolve all land on the main agent.
+  //      Main's own task id is stored as MAIN_PICK, so the drawer marks one row.
   useEffect(() => {
     if (!agentsLoaded) return;
-    if (selectedTaskId) {
+    // Main is Walnut's: a pick of Main made while another agent was showing (the org chart's Chat) moves the drawer back.
+    if (selectedTaskId === MAIN_PICK && !isGeneral) { setAgentId(GENERAL_AGENT_ID); return; }
+    if (selectedTaskId && selectedTaskId !== MAIN_PICK) {
       const task = tasks.find((t) => t.id === selectedTaskId);
       const owner = task ? agentOfTask(task, agents) : null;
       if (owner && owner.id !== agent.id) {
@@ -241,9 +275,18 @@ export function AskWalnutSlot({
     }
     if (launched && selectedTaskId === launched.taskId
       && !askTasks.some((t) => t.id === selectedTaskId)) return;
+    if (isGeneral) {
+      if (selectedTaskId === MAIN_PICK) return;
+      if (mainTask && selectedTaskId === mainTask.id) { setSelectedTaskId(MAIN_PICK); return; }
+      const keep = !!selectedTaskId && (chatTasks.some((t) => t.id === selectedTaskId)
+        // First paint: the store is still empty, so a stored pick is not evidence of anything yet.
+        || tasksLoading === true || tasks.length === 0);
+      if (!keep) setSelectedTaskId(MAIN_PICK);
+      return;
+    }
     const next = resolveSelection(selectedTaskId, askTasks, hasSession);
     if (next !== selectedTaskId) setSelectedTaskId(next);
-  }, [agentsLoaded, tasks, agents, agent, askTasks, selectedTaskId, launched]);
+  }, [agentsLoaded, tasks, tasksLoading, agents, agent, askTasks, chatTasks, isGeneral, mainTask, selectedTaskId, launched]);
 
   // Once the store carries the launched task WITH its session slot, the launch
   // response has nothing left to cover — drop it, so a later delete of that ask
@@ -279,17 +322,21 @@ export function AskWalnutSlot({
   // carries it. Titles come from the shared rule too, so the phone's list reads
   // the same words.
   const rows = useMemo<DrawerRow[]>(() => {
-    const list = askTasks.map((t) => ({ id: t.id, title: askTitle(t, agent), task: t }));
-    if (launched && !askTasks.some((t) => t.id === launched.taskId)) {
+    const list = chatTasks.map((t) => ({ id: t.id, title: askTitle(t, agent), task: t }));
+    if (launched && !launched.main && !askTasks.some((t) => t.id === launched.taskId)) {
       return [{ id: launched.taskId, title: launched.title }, ...list];
     }
     return list;
-  }, [askTasks, launched, agent]);
+  }, [chatTasks, askTasks, launched, agent]);
 
   const selectedTask = useMemo(
-    () => askTasks.find((t) => t.id === selectedTaskId) ?? null,
-    [askTasks, selectedTaskId],
+    () => (mainSelected ? mainTask : askTasks.find((t) => t.id === selectedTaskId) ?? null),
+    [askTasks, selectedTaskId, mainSelected, mainTask],
   );
+  /** The task on show: Main's (once it exists, or once its launch answered), else the pick. */
+  const shownTaskId = mainSelected
+    ? (mainTask?.id ?? (launched?.main ? launched.taskId : null))
+    : selectedTaskId;
 
   /**
    * Sessions the panel replaced ITSELF with, old id → new id.
@@ -322,30 +369,33 @@ export function AskWalnutSlot({
   // launch response covers the window before that slot is persisted; the
   // replacement chain covers a panel that re-minted its own session.
   const sessionId = useMemo(() => {
-    if (!selectedTaskId) return null;
+    if (!shownTaskId) return null;
     const own = selectedTask ? resolveTaskSessionId(selectedTask) : null;
-    const base = own ?? (launched?.taskId === selectedTaskId ? launched.sessionId ?? null : null);
+    const base = own ?? (launched?.taskId === shownTaskId ? launched.sessionId ?? null : null);
     if (!base) return null;
     // ONE hop: the map is compressed on record (see handleSessionReplaced).
     const next = replacedBy[base];
     return next && next !== base ? next : base;
-  }, [selectedTaskId, selectedTask, launched, replacedBy]);
+  }, [shownTaskId, selectedTask, launched, replacedBy]);
 
   // 'loading' is the FIRST-PAINT state only: the task store starts empty, and
   // reading that as "no asks" flashed the composer (and stole focus) on every
   // page load. The agent list is part of first paint too: until it answers the
   // list on screen would be Walnut's whatever agent the window was on.
-  const view: 'new' | 'pending' | 'session' | 'loading' = pending
+  // 'main' is Main's own composer, before its first message.
+  const view: 'new' | 'pending' | 'session' | 'loading' | 'main' = pending
     ? 'pending'
     : newMode ? 'new'
-      : rows.length > 0 && agentsLoaded ? 'session'
-        : (tasksLoading || !agentsLoaded) ? 'loading' : 'new';
+      : !agentsLoaded ? 'loading'
+        : mainSelected ? (sessionId ? 'session' : tasksLoading ? 'loading' : 'main')
+          : rows.length > 0 ? 'session'
+            : tasksLoading ? 'loading' : 'new';
 
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
   useEffect(() => {
-    onSelectionChangeRef.current?.({ taskId: selectedTaskId, sessionId });
-  }, [selectedTaskId, sessionId]);
+    onSelectionChangeRef.current?.({ taskId: shownTaskId, sessionId });
+  }, [shownTaskId, sessionId]);
 
   // Ask Walnut's own launch memory (the model last picked FOR an Ask Walnut
   // session, at a launch or in a running session's picker) seeds the pill each
@@ -358,7 +408,7 @@ export function AskWalnutSlot({
   // the Auto row leaves 'default'), hence the generation guard.
   const draftOpenGen = useRef(0);
   useEffect(() => {
-    if (view !== 'new') return;
+    if (view !== 'new' && view !== 'main') return;
     const gen = ++draftOpenGen.current;
     fetchAskWalnutLaunch().then((mem) => {
       if (!mem.model || gen !== draftOpenGen.current) return;
@@ -382,7 +432,7 @@ export function AskWalnutSlot({
    *  selection points elsewhere the placeholder is a phantom row, so drop it —
    *  the task itself is real and arrives with the next store refresh. */
   const dropLaunchedUnless = useCallback((taskId: string | null) => {
-    setLaunched((prev) => (prev && prev.taskId !== taskId ? null : prev));
+    setLaunched((prev) => (prev && prev.taskId !== taskId && !(prev.main && taskId === MAIN_PICK) ? null : prev));
   }, []);
 
   const startNew = useCallback(() => {
@@ -398,6 +448,8 @@ export function AskWalnutSlot({
     dropLaunchedUnless(taskId);
     setPending(null);
     setNewMode(false);
+    // Main is Walnut's: showing it from another agent's list moves the drawer back to Walnut.
+    if (taskId === MAIN_PICK) setAgentId(GENERAL_AGENT_ID);
     setSelectedTaskId(taskId);
   }, [dropLaunchedUnless]);
 
@@ -431,7 +483,9 @@ export function AskWalnutSlot({
     // one's draft are not this agent's.
     setDraftMeta(initialDraftMeta());
     setAgentId(next.id);
-    setSelectedTaskId(resolveSelection(null, selectAgentTasks(tasksRef.current, next), hasSession));
+    setSelectedTaskId(next.id === GENERAL_AGENT_ID
+      ? MAIN_PICK
+      : resolveSelection(null, selectAgentTasks(tasksRef.current, next), hasSession));
   }, []);
 
   const toggleDrawer = useCallback(() => setDrawerOpen((v) => !v), []);
@@ -456,9 +510,14 @@ export function AskWalnutSlot({
 
   const runLaunch = useCallback(async (launch: PendingLaunch): Promise<boolean> => {
     const gen = ++launchGenRef.current;
-    setPending({ payload: launch.payload, message: launch.message });
+    setPending({ payload: launch.payload, message: launch.message, ...(launch.main ? { main: true } : {}) });
     try {
-      const result = await quickStartSession(launch.payload);
+      // Main's task is made (or found: never two) by the server, then the launch runs on it.
+      // Where Main cannot be made (a replica), the send still goes out as an ordinary ask.
+      const main = launch.main ? await ensureMainTask() : null;
+      const asMain = !!main;
+      const payload = main ? { ...launch.payload, taskId: main.id } : launch.payload;
+      const result = await quickStartSession(payload);
       log.info('ask-walnut-slot', 'Ask Walnut launched from the home slot', {
         taskId: result.taskId, sessionId: result.sessionId ?? null,
       });
@@ -480,9 +539,10 @@ export function AskWalnutSlot({
       setLaunched({
         taskId: result.taskId,
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),
-        title: launch.message.split('\n')[0]?.trim() || launch.payload.project || 'Ask Walnut',
+        title: asMain ? 'Main' : launch.message.split('\n')[0]?.trim() || launch.payload.project || 'Ask Walnut',
+        ...(asMain ? { main: true } : {}),
       });
-      setSelectedTaskId(result.taskId);
+      setSelectedTaskId(asMain ? MAIN_PICK : result.taskId);
       setNewMode(false);
       setPending(null);
       return true;
@@ -533,6 +593,36 @@ export function AskWalnutSlot({
     };
     return runLaunch({ payload, message });
   }, [draftMeta, runLaunch, agent]);
+
+  /** Main's composer: the same Ask Walnut launch, on Main's task. Never pinned: Main lives here, not on the board. */
+  const handleStartMain = useCallback(async (
+    _draftId: string, text: string, images?: ImageAttachment[],
+  ): Promise<boolean> => {
+    const message = text.trim();
+    return runLaunch({
+      main: true,
+      message,
+      payload: {
+        cwd: '',
+        message,
+        ...(images?.length ? { images } : {}),
+        project: GENERAL_ASK_AGENT.project,
+        walnutAgent: true,
+        taskMeta: { pinTier: null },
+        ...(draftMeta.mode ? { mode: draftMeta.mode } : {}),
+      },
+    });
+  }, [draftMeta, runLaunch]);
+
+  const mainDraft = useMemo<DraftColumn>(() => ({
+    id: `${SLOT_DRAFT_ID}:main`,
+    cwd: '',
+    host: null,
+    walnut: true,
+    project: GENERAL_ASK_AGENT.project,
+    projectSource: 'seed',
+    meta: draftMeta,
+  }), [draftMeta]);
 
   const draft = useMemo<DraftColumn>(() => ({
     // Per agent: the composer's persisted text rides the draft id, and a
@@ -625,20 +715,38 @@ export function AskWalnutSlot({
               isKnownProject={alwaysKnownProject}
             />
           </div>
+        ) : view === 'main' ? (
+          <div className="ask-walnut-draft" data-testid="ask-walnut-main-draft">
+            <DraftSessionPanel
+              draft={mainDraft}
+              headerLeading={inlineMenuButton}
+              walnutLabel="Main"
+              intro={MAIN_INTRO}
+              autoFocus={false}
+              onStart={handleStartMain}
+              onSaveAsTask={noopDraftEdit}
+              onClose={hideSlot}
+              onPathChange={noopDraftEdit}
+              onProjectChange={noopDraftEdit}
+              onMetaChange={handleMetaChange}
+              onModeChange={handleModeChange}
+              isKnownProject={alwaysKnownProject}
+            />
+          </div>
         ) : view === 'pending' && pending ? (
           <div className="ask-walnut-pending" data-testid="ask-walnut-pending">
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             {pending.error ? (
               <>
-                <p className="ask-walnut-pending-error">{agent.project} couldn&apos;t start: {pending.error}</p>
+                <p className="ask-walnut-pending-error">{pending.main ? 'Main' : agent.project} couldn&apos;t start: {pending.error}</p>
                 <div className="ask-walnut-pending-actions">
                   <button
                     className="btn btn-sm btn-primary"
-                    onClick={() => { void runLaunch({ payload: pending.payload, message: pending.message }); }}
+                    onClick={() => { void runLaunch({ payload: pending.payload, message: pending.message, ...(pending.main ? { main: true } : {}) }); }}
                   >
                     Retry
                   </button>
-                  <button className="btn btn-sm" onClick={() => { setPending(null); setNewMode(true); }}>
+                  <button className="btn btn-sm" onClick={() => { const wasMain = pending.main; setPending(null); if (!wasMain) setNewMode(true); }}>
                     Back
                   </button>
                 </div>
@@ -646,7 +754,7 @@ export function AskWalnutSlot({
             ) : (
               <p className="ask-walnut-pending-status">
                 <span className="spinner ask-walnut-pending-spinner" />
-                Starting {agent.project}…
+                Starting {pending.main ? 'Main' : agent.project}…
               </p>
             )}
             {pending.message && <p className="ask-walnut-pending-echo">{pending.message}</p>}
@@ -687,8 +795,16 @@ export function AskWalnutSlot({
         onPickAgent={selectAgent}
         rows={rows}
         loading={tasksLoading === true || !agentsLoaded}
-        selectedTaskId={view === 'session' ? selectedTaskId : null}
+        selectedTaskId={view === 'session' && !mainSelected ? selectedTaskId : null}
         onPick={selectAsk}
+        {...(isGeneral ? {
+          main: {
+            selected: mainSelected && !newMode && !pending,
+            ...(mainTask ? { task: mainTask } : {}),
+            onPick: () => selectAsk(MAIN_PICK),
+          },
+        } : {})}
+        {...(onOpenOrg ? { onOpenOrg } : {})}
         onNew={startNew}
         {...(onFixWalnut ? { onFixWalnut } : {})}
         inspectorOpen={inspectorOpen}

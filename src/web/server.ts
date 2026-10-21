@@ -125,6 +125,7 @@ import { sessionLifecycleV1Router } from './routes/session-lifecycle-v1.js'
 import { taskV1Router } from './routes/task-v1.js'
 import { messagesV1Router } from './routes/messages-v1.js'
 import { boardV1Router, BOARD_BODY_PATH, boardJsonParser, boardPayloadTooLargeHandler } from './routes/board-v1.js'
+import { orgV1Router } from './routes/org-v1.js'
 import { boardKanbanV1Router } from './routes/board-kanban-v1.js'
 import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
@@ -2137,6 +2138,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', boardV1Router)
   // Kanban lanes, cards and the seen baseline of a board (same prefix and rules).
   app.use('/api/v1', boardKanbanV1Router)
+  // The org above the work: main agent, project leads, the org chart (reads anywhere, writes primary-only).
+  app.use('/api/v1', orgV1Router)
   // Personal AI conversation management (additive, Wave 1): rename/delete/stop/
   // answer — A-class (the replica runs its own Personal AI).
   app.use('/api/v1', personalAiV1Router)
