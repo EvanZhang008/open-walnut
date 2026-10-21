@@ -49,7 +49,8 @@ export interface HostProfile {
   updatedAt: string;
 }
 
-const SAFE_ALIAS = /^[A-Za-z0-9._@-]{1,128}$/;
+// Underscores too: this Mac is `__local__` and the cloud box `__cloudbox__`.
+const SAFE_ALIAS = /^[A-Za-z0-9_.@-]{1,128}$/;
 
 function profilePath(host: string): string {
   if (!SAFE_ALIAS.test(host)) throw Object.assign(new Error(`Invalid host alias: ${host}`), { status: 400, code: 'bad_host' });

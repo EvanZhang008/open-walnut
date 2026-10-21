@@ -19,6 +19,7 @@ import { engineCaps } from '../agents/engine-registry.js';
 import { encodeProjectPath } from '../session-file-reader.js';
 import { LOCAL_HOST, planTransfer, TransferError, type HistoryMethod, type TransferPlan, type TransferRequest } from './planner.js';
 import { renderTranscriptMarkdownChunked, renderTranscriptSeed } from './transcript.js';
+import { hostDisplayName } from '../hosts/host-display-name.js';
 import { chooseTargetCwd, moveWorkspace, pruneLocalTransfers, transfersDir, workspaceInstructions, type MovedWorkspace } from './workspace.js';
 import {
   hostProfileSummary, probeIsStale, readHostProfile, recordProbedFacts, recordRepoPath, repoKey, type HostProfile,
@@ -41,7 +42,7 @@ export interface TransferResult {
 }
 
 function hostLabel(host: string): string {
-  return host === LOCAL_HOST ? 'this Mac' : host;
+  return host === LOCAL_HOST ? 'this Mac' : hostDisplayName(host);
 }
 
 /** The target's profile, probed first when the last probe is old or missing. Never fails the transfer. */

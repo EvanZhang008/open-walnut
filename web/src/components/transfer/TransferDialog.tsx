@@ -110,7 +110,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
                 checked={form.host === h.alias}
                 disabled={!!reason}
                 onPick={() => onChange({ host: h.alias })}
-                name={hostLabel(h.alias)}
+                name={hostLabel(h.alias, options.hosts)}
                 now={source.host === h.alias}
                 tag={h.kind && h.kind !== 'unknown' ? hostKindLabel(h.kind) : undefined}
                 sub={reason ?? undefined}

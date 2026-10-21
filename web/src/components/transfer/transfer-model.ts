@@ -32,8 +32,10 @@ export function hostKindLabel(kind: string | undefined | null): string {
   return KIND_LABELS[kind ?? 'unknown'] ?? 'Unknown';
 }
 
-export function hostLabel(host: string): string {
-  return host === LOCAL_HOST ? 'This Mac' : host;
+/** The host's name: the label the server sent (the cloud box is "Cloud"), else its alias. */
+export function hostLabel(host: string, hosts?: readonly { alias: string; label?: string }[]): string {
+  if (host === LOCAL_HOST) return 'This Mac';
+  return hosts?.find((h) => h.alias === host)?.label ?? host;
 }
 
 export function initialForm(source: TransferSource): TransferForm {
@@ -88,5 +90,5 @@ export function buildTransferBody(source: TransferSource, form: TransferForm): T
 export function sourceLine(opts: TransferOptions): string {
   const s = opts.source;
   if (!s) return '';
-  return `Now: ${engineName(opts, s.engine)} on ${hostLabel(s.host)}`;
+  return `Now: ${engineName(opts, s.engine)} on ${hostLabel(s.host, opts.hosts)}`;
 }

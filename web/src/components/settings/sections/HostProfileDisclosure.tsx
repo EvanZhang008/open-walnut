@@ -48,7 +48,16 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
   const [picker, setPicker] = useState<CursorPoint | null>(null);
   const kindBtn = useRef<HTMLSpanElement>(null);
 
-  const apply = useCallback((p: HostProfile) => { setProfile(p); setNote(p.userNote ?? ''); setError(null); }, []);
+  // The note field follows the saved note only while the user has not typed in
+  // it: a save of another field (the kind) must not wipe a note being written.
+  const syncedNote = useRef('');
+  const apply = useCallback((p: HostProfile) => {
+    setProfile(p);
+    const saved = p.userNote ?? '';
+    setNote((cur) => (cur === syncedNote.current ? saved : cur));
+    syncedNote.current = saved;
+    setError(null);
+  }, []);
 
   useEffect(() => {
     if (!open || profile) return;
@@ -68,6 +77,7 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', onKey); };
   }, [picker]);
 
+  const noteInFlight = useRef<string | null>(null);
   const patch = useCallback(async (kind: 'probe' | 'kind' | 'note', body: Parameters<typeof updateHostProfile>[1]) => {
     setBusy(kind);
     try {
@@ -87,7 +97,13 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
   const repos = Object.entries(profile?.observed?.repoPaths ?? {});
   const notes = [...(profile?.notes ?? [])].sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''));
   const currentPick = profile?.kindSetByUser ? profile.kind : AUTO;
-  const commitNote = () => { if (profile && note.trim() !== (profile.userNote ?? '')) void patch('note', { user_note: note }); };
+  // Enter saves, and the save disables the field, which blurs it (WebKit fires the
+  // blur): the note already on its way is not sent a second time.
+  const commitNote = () => {
+    if (!profile || note.trim() === (profile.userNote ?? '') || noteInFlight.current === note) return;
+    noteInFlight.current = note;
+    void patch('note', { user_note: note }).finally(() => { noteInFlight.current = null; });
+  };
 
   return (
     <>

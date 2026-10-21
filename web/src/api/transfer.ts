@@ -21,7 +21,7 @@ export interface TransferOptions {
   taskId: string;
   source: TransferSource | null;
   engines: { id: string; displayName: string }[];
-  hosts: { alias: string; kind: HostKind | string; probedAt: string | null }[];
+  hosts: { alias: string; label?: string; kind: HostKind | string; probedAt: string | null }[];
   options: { engine: string; host: string; blockedReason?: string }[];
 }
 
