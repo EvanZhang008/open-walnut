@@ -8,8 +8,9 @@
  *     upload bytes damaged in transit, and the bridge must not carry them);
  *   - the body is gzip'd `{kind, data}`, with the bearer machine token;
  *   - latest-wins serialization per key;
- *   - the replica lane's one retry when a socket is reset before any answer
- *     (the companion closing a pooled keep-alive socket under the next step);
+ *   - the replica lane's retries when a connection breaks before any answer
+ *     (a pooled keep-alive socket closed under the next step, a big body lost
+ *     on the way): at most two more, never after a deadline;
  *   - the documented limits: 2 requests in flight, a request deadline, a
  *     10-minute rest after a refusal that ENDS (the lane is tried again), one
  *     endpoint lookup shared by concurrent cold pushes, and no queued request
@@ -333,7 +334,8 @@ describe('postToCloudReplica (the companion\'s task copy, beside ingest)', () =>
     expect(cloudIngestResting()).toBe(true)
   })
 
-  it('a socket reset before any answer is tried once more on a fresh connection; a second reset is a failure', async () => {
+  it('a connection that breaks before any answer is tried again on a fresh one, at most twice more', async () => {
+    _resetCloudIngestForTesting({ stepRetryMs: [20, 40] })
     point()
     resets = 1
     expect(await postToCloudReplica({ op: 'sync', kind: 'tasks', entries: [] })).toEqual({ ok: true, reply: { ok: true, need: ['t1'] } })
@@ -341,9 +343,28 @@ describe('postToCloudReplica (the companion\'s task copy, beside ingest)', () =>
     expect(seen[1]?.body).toEqual(seen[0]?.body)
     seen.length = 0
     resets = 2
-    expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: false, outcome: 'failed' })
-    expect(seen).toHaveLength(2) // never a third
+    expect(await postToCloudReplica({ op: 'sync', kind: 'tasks', entries: [] })).toEqual({ ok: true, reply: { ok: true, need: ['t1'] } })
+    expect(seen).toHaveLength(3)
+    seen.length = 0
+    resets = 3
+    const r = await postToCloudReplica({ op: 'sync' })
+    expect(r).toMatchObject({ ok: false, outcome: 'failed' })
+    // The cause rides along: fetch alone says only "fetch failed".
+    expect(r.ok ? '' : r.error).toMatch(/\(.+\)/)
+    expect(seen).toHaveLength(3) // never a fourth
     expect(await cloudReplicaAvailable()).toBe(true) // a failure rests nothing
+  })
+
+  it('the waits: none before the first retry after a socket reset, the second wait before the next', async () => {
+    _resetCloudIngestForTesting({ stepRetryMs: [5_000, 400] })
+    point()
+    resets = 2
+    const t0 = Date.now()
+    expect(await postToCloudReplica({ op: 'sync' })).toMatchObject({ ok: true })
+    const took = Date.now() - t0
+    expect(seen).toHaveLength(3)
+    expect(took).toBeGreaterThanOrEqual(380)
+    expect(took).toBeLessThan(3_000) // never the 5 s first wait: the reset went again at once
   })
 
   it('a deadline is not retried', async () => {
