@@ -2792,6 +2792,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
   }
 
+  if (bootPolicy('link-tags')) {
+    const { startLinkTagWatcher } = await import('../core/link-tags-apply.js')
+    startLinkTagWatcher()
+  }
+
   if (bootPolicy('session-auto-recover') && !isEphemeral) {
     const { getConfig } = await import('../core/config-manager.js')
     const { startSessionAutoRecover } = await import('../core/session-auto-recover.js')

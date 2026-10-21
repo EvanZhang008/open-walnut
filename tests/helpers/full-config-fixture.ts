@@ -77,6 +77,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     ui: { session_panels: 'auto', show_priority: true },
     tag_display: { 'ticket-id:*': 'value' },
     tag_links: { 'ticket:*': 'https://tickets.example.com/{value}' },
+    link_tags: { cr: String.raw`https://reviews\.example\.com/r/\d+` },
     audio: { retention_days: 7 },
     stt: { engine: 'openai', language: 'en', openai_api_key: sttKey, openai_model: 'acme-stt' },
     jev: { api_key: jevKey },

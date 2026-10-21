@@ -85,7 +85,7 @@ export function maskPushTokens<T>(config: T): T {
  * it is judged as usual.
  */
 const NAME_KEYED_MAPS = new Set([
-  'plugins', 'providers', 'engines', 'hosts', 'session_limits', 'tag_display', 'tag_links',
+  'plugins', 'providers', 'engines', 'hosts', 'session_limits', 'tag_display', 'tag_links', 'link_tags',
   'hooks.overrides', 'external_session_import.excluded_cwds',
 ])
 

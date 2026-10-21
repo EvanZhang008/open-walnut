@@ -709,6 +709,9 @@ export interface Task {
   phase_changed_at?: string;
   sprint?: string;
   tags?: string[];
+  /** Links Walnut tagged on its own (link-tags-apply.ts), canonical URLs: a URL here is never
+   *  tagged again, so a link tag the user removed or relabelled stays as they left it. */
+  auto_links?: string[];
   source: TaskSource;
   external_url?: string;
   created_at: string;
@@ -1507,6 +1510,11 @@ export interface Config {
   /** What a tag's pill opens (core/tag-display-rules.ts): a tag or a key (`ticket:*`) to an
    *  http(s) URL with `{value}` where the tag's value goes; `''` takes a plugin's link away. */
   tag_links?: Record<string, string>;
+  /** Link patterns (core/link-tags.ts): a tag key to a regex whose whole match is a link's URL
+   *  (`cr: 'https://reviews\.example\.com/r/\d+'` in config.yaml). A URL a person sends into a session that a
+   *  pattern matches becomes a `<key>:<url>` tag on its task. Adds to Walnut's own patterns
+   *  (GitHub, GitLab, Jira, Linear); an entry replaces Walnut's for the same key, `''` turns it off. */
+  link_tags?: Record<string, string>;
   /** Audio capture configuration (system audio recording) */
   audio?: {
     /** Bundle IDs of apps to exclude from recording (e.g. 'com.spotify.client') */

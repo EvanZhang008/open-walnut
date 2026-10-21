@@ -84,6 +84,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'board-reminders': leaderOnly,
   'wait-until': leaderOnly,
   'title-reconciler': leaderOnly,
+  'link-tags': leaderOnly, // new: link tags are written on the Mac
   'notes-indexer': always,
   'stt-auto-setup': always, // new: installs the voice model on the Mac and on the companion
 }

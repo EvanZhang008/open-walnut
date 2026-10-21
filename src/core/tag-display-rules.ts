@@ -1,6 +1,7 @@
 /**
  * How a task's tags show, as one rule set the server and the web share (browser-safe: it
- * imports only its browser-safe sibling tag-model.ts, so the web imports this file as is).
+ * imports only its browser-safe siblings tag-model.ts and link-tags.ts, so the web imports this
+ * file as is).
  *
  * Every tag is a key:value pair (tag-model.ts) and an ordinary tag: it is searched, filtered and
  * edited like any other. Showing is a separate, display-only rule, set per tag (`label:urgent`)
@@ -23,10 +24,12 @@
  *
  * A tag may also be a link (TagLinkRule): a URL with `{value}` where the tag's value goes, set
  * per tag or per key by a plugin (a ticket plugin links `ticket:*` to its tracker) or by the
- * user, whose rule wins; the user's empty link takes a plugin's away. The pill opens it.
+ * user, whose rule wins; the user's empty link takes a plugin's away. The pill opens it. A tag
+ * whose value is itself a URL (a link tag, link-tags.ts) always opens that URL; link rules are for ids.
  */
 
 import { LABEL_KEY, isTagKey, normalizeTag } from './tag-model.js'
+import { linkUrlOfTag } from './link-tags.js'
 
 export type TagDisplay = 'shown' | 'value' | 'hidden'
 
@@ -228,6 +231,11 @@ export function compileTagDisplay(rules: readonly TagDisplayRule[], links: reado
     valueOnly: (tag) => display(tag) === 'value',
     ruleFor,
     linkFor: (tag) => {
+      if (tagNamespace(tag) === MACHINE_TAG_NAMESPACE) return undefined
+      // A link tag (`ticket:https://…`) opens its own value: a `ticket:*` template made for ids
+      // would wrap the whole URL into a broken one.
+      const own = linkUrlOfTag(tag)
+      if (own) return own
       const rule = linkRuleFor(tag)
       return rule ? tagHref(rule.link, tag) : undefined
     },

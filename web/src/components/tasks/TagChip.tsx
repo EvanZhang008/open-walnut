@@ -1,4 +1,5 @@
 import React from 'react';
+import { linkLabel, linkUrlOfTag } from '../../../../src/core/link-tags';
 
 interface TagChipProps {
   tag: string;
@@ -34,7 +35,9 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
   const colonIdx = tag.indexOf(':');
   const hasPrefix = colonIdx > 0 && colonIdx < tag.length - 1;
   const prefix = hasPrefix && !valueOnly ? tag.slice(0, colonIdx) : null;
-  const value = hasPrefix ? tag.slice(colonIdx + 1) : tag;
+  // A link tag (`pr:https://…`) reads as its short label (`app#12`); the tooltip has the URL.
+  const ownUrl = linkUrlOfTag(tag);
+  const value = ownUrl ? linkLabel(ownUrl) : hasPrefix ? tag.slice(colonIdx + 1) : tag;
 
   const className = [
     'tag-chip',
