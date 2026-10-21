@@ -19,8 +19,12 @@ export const LABEL_KEY = 'label'
 export const DERIVED_TAG_KEYS = ['created', 'updated'] as const
 export type DerivedTagKey = typeof DERIVED_TAG_KEYS[number]
 
+/** The key a bare URL is stored under. */
+export const LINK_KEY = 'link'
+const BARE_URL_RE = /^https?:\/\/\S/i
+
 const KEY_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
-const MAX_TAG_LENGTH = 200
+export const MAX_TAG_LENGTH = 200
 
 export interface TagParts {
   key: string
@@ -62,6 +66,8 @@ export function normalizeTag(raw: unknown, options: NormalizeTagOptions = {}): s
   if (typeof raw !== 'string') return undefined
   const text = raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
   if (!text) return undefined
+  // A bare URL is a link, never a tag keyed `https` (link-tags.ts).
+  if (BARE_URL_RE.test(text)) return clip(`${LINK_KEY}:${text}`)
   const colon = text.indexOf(':')
   if (colon > 0) {
     const key = text.slice(0, colon).trim().toLowerCase()
@@ -84,7 +90,7 @@ const FAST_NORMAL_RE = /^(?!.* {2})[a-z0-9][a-z0-9._-]{0,63}:[\x21-\x7e](?:[\x20
 /** True for a tag already in stored form. */
 export function isNormalTag(tag: unknown): boolean {
   if (typeof tag !== 'string') return false
-  if (tag.length <= MAX_TAG_LENGTH && FAST_NORMAL_RE.test(tag)) return !isDerivedTagKey(tag.slice(0, tag.indexOf(':')))
+  if (tag.length <= MAX_TAG_LENGTH && FAST_NORMAL_RE.test(tag) && !BARE_URL_RE.test(tag)) return !isDerivedTagKey(tag.slice(0, tag.indexOf(':')))
   return normalizeTag(tag) === tag
 }
 

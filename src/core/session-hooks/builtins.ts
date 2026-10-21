@@ -321,6 +321,7 @@ NEVER delete facts: when something is superseded, update it in place and keep an
 Then these status fields (same plain-label format):
 ${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change, and when it must, PREFER \`topic:\` over \`rewrite:\`: the original name is usually good, so keep it and add to it. Three exceptions: (a) the work CHANGED DIRECTION or gained a focus the title doesn't cover → answer \`topic: <1-3 words>\` (English Title Case, one word if it's enough). It lands at the END as "<original title> · New Topic"; a title carries at most ONE such topic, so a newer one REPLACES the previous one, and the original head is NEVER dropped — it is the keyword people find the task by — so brevity is everything; (b) the title is VAGUE and you now know the real subject — it names only an activity or a source ("Handle Slack thread request", "Investigate the issue") because the first message was just a pointer, and this turn revealed what it's actually about → answer \`rewrite: <new title>\` naming the specific subject ("CoreDNS OOM Slack thread"), 2-6 words, no filler verbs like Handle/Process/Address. Do this the FIRST turn you know — a vague title is a bug, not something to preserve; (c) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt (except case b), \`unchanged\`.
 ` : ''}OVERVIEW: 1-2 short sentences — what this WHOLE session is about and where it stands overall, for a user re-opening it after a while ("Reworking the composer layout so the scrollbar ends at the last row; fix landed, waiting on review"). Always answer this; never "unchanged".
+LINKS: The external links this task is ABOUT or PRODUCED (the issue or ticket driving it, a pull request or code review it opened, its design doc), one per line: "- <kind>: <url>", kind a short lowercase word (issue, pr, cr, ticket, doc, incident, thread). Only links new since your last report; not every page you read along the way. \`unchanged\` when none are new.
 RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".${tipLanguage}
 PHASE_SIGNAL: one of — plan-written | implement-done | reconfirmed | verify-pass | verify-fail | review-done | committed(<hash>) | conversational(user-asked-question).
 STATUS: <succeeded|failed|blocked|waiting> — one sentence on what works / what doesn't.
@@ -342,7 +343,7 @@ VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.`;
  *  missing this list makes the new label bleed into the previous field. */
 const SELF_REPORT_LABELS = [
   'EXEC_SUMMARY', 'USER_REQUEST', 'GOAL', 'CONTEXT', 'PROGRESS', 'REFERENCES', 'WORK_LOG',
-  'TITLE', 'OVERVIEW', 'RECAP',
+  'TITLE', 'OVERVIEW', 'LINKS', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
 ] as const;
@@ -944,6 +945,12 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     const titleDirective = extractField(selfReport, 'TITLE');
     if (titleDirective && promptedTitle) {
       void applyTitleDirective(taskId, titleDirective, promptedTitle);
+    }
+
+    // (a1) Link tags: the links the session names, tagged on its task (link-tags-apply.ts).
+    const linksField = extractField(selfReport, 'LINKS');
+    if (linksField) {
+      void import('../link-tags-apply.js').then(({ tagLinksFromReportField }) => tagLinksFromReportField(taskId, linksField));
     }
 
     // (a2) Session recap tip — OVERVIEW (the whole session, where it stands) and

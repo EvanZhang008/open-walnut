@@ -664,6 +664,7 @@ describe('every free-form map in the Config type is accounted for', () => {
     overrides: 'hooks.overrides: enabled, priority, timeoutMs',
     tag_display: 'shown | value | hidden',
     tag_links: 'tag name to a link template',
+    link_tags: 'tag key to a link pattern (a regex over URLs)',
     proxy_log_dirs: 'usage.proxy_log_dirs: a log directory path per host',
     prices: 'usage.prices: per-model rates in USD per million tokens',
   }

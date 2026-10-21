@@ -1,0 +1,212 @@
+/**
+ * Link tags: a task's external links (an issue, a pull request, a code review, a ticket) kept as
+ * ordinary key:value tags whose value is the URL (`pr:https://github.com/acme/app/pull/12`).
+ * Browser-safe (imports only tag-model.ts): the web draws the short label and opens the URL.
+ *
+ * Two ways a link becomes a tag (link-tags-apply.ts): a URL a person sends into the session that
+ * a link pattern recognises, and the LINKS field of the session's turn-end self-report, which
+ * names the kind of every link no pattern knows. A link pattern is a regex over the text whose
+ * whole match is the link's canonical URL, under a tag key. Walnut ships patterns for public
+ * forges and trackers; the user's config (`link_tags`, key to regex) adds its own, and a user
+ * entry replaces Walnut's for the same key (`''` turns that key off).
+ */
+
+import { LINK_KEY, MAX_TAG_LENGTH, isTagKey, parseTag } from './tag-model.js'
+
+export interface LinkPattern {
+  key: string
+  /** A regex source; its whole match is the link's URL. */
+  match: string
+}
+
+export const DEFAULT_LINK_PATTERNS: readonly LinkPattern[] = [
+  { key: 'pr', match: String.raw`https?://github\.com/[\w.-]+/[\w.-]+/pull/\d+` },
+  { key: 'issue', match: String.raw`https?://github\.com/[\w.-]+/[\w.-]+/issues/\d+` },
+  { key: 'mr', match: String.raw`https?://gitlab\.com/[\w.-]+(?:/[\w.-]+)+/-/merge_requests/\d+` },
+  { key: 'issue', match: String.raw`https?://gitlab\.com/[\w.-]+(?:/[\w.-]+)+/-/issues/\d+` },
+  { key: 'ticket', match: String.raw`https?://[\w-]+\.atlassian\.net/browse/[A-Z][A-Z0-9]+-\d+` },
+  { key: 'ticket', match: String.raw`https?://linear\.app/[\w-]+/issue/[A-Z][A-Z0-9]+-\d+` },
+  { key: 'thread', match: String.raw`https?://[\w-]+(?:\.enterprise)?\.slack\.com/archives/[A-Z0-9]+/p\d+` },
+]
+
+/** The key a link gets when nothing names its kind. */
+export const LINK_FALLBACK_KEY = LINK_KEY
+const MAX_LINK_URL = 190
+const URL_RE = /^https?:\/\/[^\s]+$/i
+const TRAILING_NOISE_RE = /[.,;:!?'"`*_)\]}>]+$/
+
+/** The patterns in force: Walnut's, with a user entry replacing Walnut's for its key. */
+export function effectiveLinkPatterns(user: Record<string, string> | undefined): LinkPattern[] {
+  const overridden = new Set<string>()
+  const own: LinkPattern[] = []
+  for (const [rawKey, rawMatch] of Object.entries(user ?? {})) {
+    const key = rawKey.trim().toLowerCase()
+    if (!isTagKey(key)) continue
+    overridden.add(key)
+    if (typeof rawMatch === 'string' && rawMatch.trim()) own.push({ key, match: rawMatch.trim() })
+  }
+  return [...own, ...DEFAULT_LINK_PATTERNS.filter((p) => !overridden.has(p.key))]
+}
+
+/** A URL in the form two mentions of one link share: no fragment, no trailing slash or
+ *  sentence punctuation, lowercase scheme and host. Undefined for text that is not an
+ *  http(s) URL short enough to be a tag. */
+export function canonicalLinkUrl(raw: string): string | undefined {
+  let text = raw.trim().replace(/^<|>$/g, '')
+  for (let prev = ''; prev !== text;) { prev = text; text = text.replace(TRAILING_NOISE_RE, '') }
+  if (!URL_RE.test(text)) return undefined
+  let url: URL
+  try { url = new URL(text) } catch { return undefined }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+  url.hash = ''
+  const out = url.toString().replace(/\/+$/, '').replace(/\/(?=\?)/, '')
+  return out.length <= MAX_LINK_URL ? out : undefined
+}
+
+interface CompiledPattern { key: string; re: RegExp }
+
+const compileCache = new Map<string, CompiledPattern | null>()
+
+/** A pattern anchored at the start of one URL candidate (never run over the whole text). */
+function compile(pattern: LinkPattern): CompiledPattern | null {
+  const id = `${pattern.key}\u0000${pattern.match}`
+  let hit = compileCache.get(id)
+  if (hit === undefined) {
+    try { hit = { key: pattern.key, re: new RegExp(`^(?:${pattern.match})`, 'i') } } catch { hit = null }
+    if (compileCache.size > 200) compileCache.clear()
+    compileCache.set(id, hit)
+  }
+  return hit
+}
+
+/** Text scanned per call: a pasted log is cut, never a stall. */
+const MAX_SCAN = 100_000
+/** A URL candidate: everything from the scheme up to whitespace or a quote, at most this long.
+ *  Patterns only ever see one short candidate, so a slow user regex stays bounded. */
+const CANDIDATE_RE = /https?:\/\/[^\s<>"'`]+/gi
+const MAX_CANDIDATE = 400
+
+/** The URL candidates in the text, in order. */
+function urlCandidates(text: string): string[] {
+  const body = text.length > MAX_SCAN ? text.slice(0, MAX_SCAN) : text
+  return [...body.matchAll(CANDIDATE_RE)].map((m) => m[0].slice(0, MAX_CANDIDATE))
+}
+
+/** The link tag a pattern makes of one URL candidate, or undefined when none recognises it.
+ *  The pattern's match, not the whole candidate, is the URL, so `…/pull/7/files` and
+ *  `…/pull/7?x=1` are the same link as `…/pull/7` wherever they were mentioned. */
+function patternTag(candidate: string, patterns: readonly LinkPattern[]): { tag: string; url: string } | undefined {
+  for (const pattern of patterns) {
+    const m = compile(pattern)?.re.exec(candidate)
+    const url = m && m[0] ? canonicalLinkUrl(m[0]) : undefined
+    if (url) return { tag: `${pattern.key}:${url}`, url }
+  }
+  return undefined
+}
+
+/** Every link the patterns recognise in the text, as tags, first mention first, each URL once. */
+export function linkTagsInText(text: string, patterns: readonly LinkPattern[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const candidate of urlCandidates(text)) {
+    const hit = patternTag(candidate, patterns)
+    if (!hit || seen.has(hit.url)) continue
+    seen.add(hit.url)
+    out.push(hit.tag)
+  }
+  return out
+}
+
+/** The links a self-report's LINKS field names (`- <kind>: <url>` per line), as tags. A
+ *  pattern's key and URL win over the kind and the exact URL the session wrote, so a link reads
+ *  the same however it reached the task. */
+export function linkTagsFromField(field: string, patterns: readonly LinkPattern[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const rawLine of field.split('\n')) {
+    const line = rawLine.replace(/^[\s>*+-]*(?:\d+[.)]\s*)?/, '').trim()
+    const urlAt = line.search(/https?:\/\//i)
+    if (urlAt < 0) continue
+    const candidate = urlCandidates(line.slice(urlAt))[0]
+    if (!candidate) continue
+    const hit = patternTag(candidate, patterns)
+    const url = hit?.url ?? canonicalLinkUrl(candidate.replace(/[)\]]+.*$/, ''))
+    if (!url || seen.has(url)) continue
+    const named = line.slice(0, urlAt).replace(/[*`[\]()<>]/g, '').replace(/[:=\-\s]+$/, '').trim().toLowerCase()
+    seen.add(url)
+    out.push(hit?.tag ?? `${isTagKey(named) ? named : LINK_FALLBACK_KEY}:${url}`)
+  }
+  return out
+}
+
+/** The URL a tag holds as its value, or undefined when its value is not a link. */
+export function linkUrlOfTag(tag: string): string | undefined {
+  const parts = parseTag(tag)
+  if (!parts || !/^https?:\/\//i.test(parts.value)) return undefined
+  return canonicalLinkUrl(parts.value) ?? parts.value
+}
+
+const TRACKER_ID_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/
+/** Path tails that name a view of a page, not the page (`…/d/<id>/edit`). */
+const GENERIC_SEGMENT_RE = /^(?:edit|view|preview|index\.html?|files|comments)$/i
+const MAX_LABEL = 24
+
+function decode(segment: string): string {
+  try { return decodeURIComponent(segment) } catch { return segment }
+}
+
+/** The few characters a link's pill reads: `app#12` for a forge issue or pull request,
+ *  `ABC-123` for a tracker id, else the last meaningful path segment, else the host. */
+export function linkLabel(rawUrl: string): string {
+  let url: URL
+  try { url = new URL(rawUrl) } catch { return rawUrl.slice(0, MAX_LABEL) }
+  const segments = url.pathname.split('/').filter(Boolean).map(decode)
+  const forge = /^(?:pull|pulls|issues|merge_requests)$/
+  for (let i = segments.length - 2; i >= 1; i--) {
+    if (forge.test(segments[i]!) && /^\d+$/.test(segments[i + 1]!)) {
+      const repo = segments[i - 1] === '-' ? segments[i - 2] : segments[i - 1]
+      return clipLabel(`${repo ?? url.host}#${segments[i + 1]}`)
+    }
+  }
+  // A chat permalink's ids (`archives/C0123/p1726…`) mean nothing to read: name the workspace.
+  if (/(?:^|\.)slack\.com$/.test(url.host) && segments[0] === 'archives') return clipLabel(url.host.split('.')[0]!)
+  const tracker = [...segments].reverse().find((s) => TRACKER_ID_RE.test(s))
+  if (tracker) return clipLabel(tracker)
+  const withDigit = [...segments].reverse().find((s) => /\d/.test(s) && s.length <= MAX_LABEL)
+  if (withDigit) return withDigit
+  const last = segments.filter((seg) => !GENERIC_SEGMENT_RE.test(seg)).at(-1)
+  return clipLabel(last ?? url.host.replace(/^www\./, ''))
+}
+
+function clipLabel(text: string): string {
+  return text.length <= MAX_LABEL ? text : `${text.slice(0, MAX_LABEL - 1)}…`
+}
+
+/** URLs a task remembers having been tagged by Walnut (Task.auto_links), newest kept. */
+export const MAX_AUTO_LINKS = 200
+/** Link tags a task holds before Walnut stops adding more on its own. */
+export const MAX_LINK_TAGS = 12
+
+/** The candidates worth adding to a task: a URL the task already holds under any key, or one
+ *  Walnut tagged before (the user may have removed or relabelled it), is skipped. */
+export function newLinkTags(
+  task: { tags?: readonly string[]; auto_links?: readonly string[] },
+  candidates: readonly string[],
+): string[] {
+  const held = new Set<string>(task.auto_links ?? [])
+  let count = 0
+  for (const tag of task.tags ?? []) {
+    const url = linkUrlOfTag(tag)
+    if (url) { held.add(url); count++ }
+  }
+  const out: string[] = []
+  for (const tag of candidates) {
+    const url = linkUrlOfTag(tag)
+    // A tag past the stored length would be clipped, and a clipped URL opens the wrong page.
+    if (!url || tag.length > MAX_TAG_LENGTH || held.has(url) || count >= MAX_LINK_TAGS) continue
+    held.add(url)
+    count++
+    out.push(tag)
+  }
+  return out
+}

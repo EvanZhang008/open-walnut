@@ -57,6 +57,7 @@ const ALLOW: Record<string, AllowSpec> = {
   external_session_import: { excluded_cwds: { '*': true }, auto_complete_after_days: true },
   tag_display: { '*': true },
   tag_links: { '*': true },
+  link_tags: { '*': true },
   ui: { session_panels: true, show_priority: true },
   time: {
     outside: { enabled: true },
@@ -142,7 +143,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
 })
 
 /** Maps keyed by a name someone chose (a host alias, a tag, a path): the name is not judged, what is inside it is. */
-const NAME_KEYED = new Set(['hosts', 'session_limits', 'tag_display', 'tag_links', 'external_session_import.excluded_cwds'])
+const NAME_KEYED = new Set(['hosts', 'session_limits', 'tag_display', 'tag_links', 'link_tags', 'external_session_import.excluded_cwds'])
 
 /** Field names that hold a credential and that the shape rule does not name. */
 const EXTRA_SECRET_KEYS = new Set(['credential_process', 'credentials', 'authorization', 'cookie', 'cookies'])
