@@ -30,7 +30,7 @@ function makeRepo(dir: string): string {
   git(dir, 'init', '-q', '-b', 'trunk');
   git(dir, 'add', 'package.json');
   git(dir, 'commit', '-q', '-m', 'init');
-  return git(dir, 'rev-parse', '--short', 'HEAD');
+  return git(dir, 'rev-parse', '--short=9', 'HEAD');
 }
 
 beforeEach(() => {
@@ -55,6 +55,9 @@ describe('collectBuildInfo', () => {
     fs.writeFileSync(path.join(repo, 'scratch.txt'), 'untracked');
     const info = collectBuildInfo(repo);
     expect(info.commit).toBe(sha);
+    // Nine characters even in a tiny repo (git's own default there is 7): the
+    // companion compares build ids made on another clone of the same commit.
+    expect(info.commit).toHaveLength(9);
     expect(info.branch).toBe('trunk');
     expect(info.dirty).toBe(false);
   });

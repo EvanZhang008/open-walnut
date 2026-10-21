@@ -78,8 +78,9 @@ interface Box {
   activateFails: string | null
   /** Answer every PUT with an offset_mismatch naming this offset. */
   alwaysMismatchAt: number | null
-  /** Destroy the socket of the PUT with this index (0-based), once. */
+  /** Destroy the socket of the PUT with this index (0-based), and of the `dropRun - 1` PUTs after it. */
   dropPut: number | null
+  dropRun: number
   gets: number
   puts: Array<{ offset: number; bytes: number }>
   installs: Array<Record<string, unknown>>
@@ -96,7 +97,7 @@ function freshBox(): Box {
     running: { id: OLD, version: '0.6.13', commit: '1111111', base: true, trial: false },
     current: null, failed: [], upload: null, hideUpload: false, install: null, activate: null,
     installPolls: 2, installFails: null, ready: new Set(), activatePolls: 2, activateFails: null,
-    alwaysMismatchAt: null, dropPut: null,
+    alwaysMismatchAt: null, dropPut: null, dropRun: 1,
     gets: 0, puts: [], installs: [], activates: 0,
   }
 }
@@ -164,7 +165,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const id = String(url.searchParams.get('id'))
     const sha = String(url.searchParams.get('sha256'))
     box.puts.push({ offset, bytes: body.length })
-    if (box.dropPut === index) { box.dropPut = null; req.socket.destroy(); return }
+    if (box.dropPut !== null && index >= box.dropPut && index < box.dropPut + box.dropRun) { req.socket.destroy(); return }
     if (box.alwaysMismatchAt !== null) return json(res, 409, { ok: false, error: 'offset_mismatch', received: box.alwaysMismatchAt, size, complete: false })
     if (!box.upload || box.upload.id !== id || box.upload.size !== size) box.upload = { id, size, sha, data: [], received: 0, complete: false }
     const u = box.upload
@@ -218,6 +219,7 @@ beforeEach(async () => {
   process.env.WALNUT_COMPANION_BUILD_BOOT_DELAY_MS = '0'
   process.env.WALNUT_COMPANION_BUILD_POLL_MS = '5'
   process.env.WALNUT_COMPANION_BUILD_CHUNK_BYTES = '4096'
+  process.env.WALNUT_COMPANION_BUILD_RETRY_SCALE = '0.001'
   box = freshBox()
   h.endpoint = { url: `http://127.0.0.1:${port}/bridge`, token: TOKEN }
   h.autoUpdate = undefined
@@ -231,7 +233,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
-  for (const k of ['WALNUT_COMPANION_AUTO_TICKS', 'WALNUT_COMPANION_BUILD_BOOT_DELAY_MS', 'WALNUT_COMPANION_BUILD_POLL_MS', 'WALNUT_COMPANION_BUILD_CHUNK_BYTES']) delete process.env[k]
+  for (const k of ['WALNUT_COMPANION_AUTO_TICKS', 'WALNUT_COMPANION_BUILD_BOOT_DELAY_MS', 'WALNUT_COMPANION_BUILD_POLL_MS', 'WALNUT_COMPANION_BUILD_CHUNK_BYTES', 'WALNUT_COMPANION_BUILD_RETRY_SCALE']) delete process.env[k]
 })
 
 describe('tickCompanionBuild', () => {
@@ -291,12 +293,23 @@ describe('tickCompanionBuild', () => {
     expect(gaveUp()).toEqual({})
   })
 
-  it('a dropped connection leaves it updating, and the next tick resumes from the box', async () => {
+  it('a chunk whose connection drops is sent again at once', async () => {
     box.dropPut = 1
     await tickCompanionBuild('probe')
-    expect(companionBuildView()).toMatchObject({ state: 'updating', step: 'uploading' })
-    await tickCompanionBuild('probe')
     expect(box.puts.map((p) => p.offset)).toEqual([0, 4096, 4096, 8192])
+    expect(companionBuildView().state).toBe('current')
+  })
+
+  it('a chunk that keeps failing pauses the upload, and the next tick resumes from the box', async () => {
+    // The first send and its three retries all drop.
+    box.dropPut = 1
+    box.dropRun = 4
+    await tickCompanionBuild('probe')
+    expect(companionBuildView()).toMatchObject({ state: 'updating', step: 'uploading' })
+    expect(box.puts.map((p) => p.offset)).toEqual([0, 4096, 4096, 4096, 4096])
+    box.dropPut = null
+    await tickCompanionBuild('probe')
+    expect(box.puts.map((p) => p.offset)).toEqual([0, 4096, 4096, 4096, 4096, 4096, 8192])
     expect(companionBuildView().state).toBe('current')
   })
 
@@ -476,5 +489,15 @@ describe('/api/cloud/companion-build', () => {
     expect(ok.status).toBe(200)
     await tickCompanionBuild('retry')
     expect(companionBuildView().state).toBe('current')
+  })
+})
+
+describe('requestError', () => {
+  it('names the cause fetch hides behind "fetch failed"', async () => {
+    const { requestError } = await import('../../src/core/companion-build/mac-door.js')
+    const err = new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) })
+    expect(requestError(err)).toBe('fetch failed (UND_ERR_SOCKET)')
+    expect(requestError(new Error('plain'))).toBe('plain')
+    expect(requestError('text')).toBe('text')
   })
 })

@@ -13,6 +13,14 @@ export type Endpoint = { url: string; token: string }
 export interface Reply { status: number; json: Record<string, unknown> | null }
 
 /** One request to `<origin>/bridge/build<sub>`. Throws on a network error or the timeout. */
+/** A request's error with its cause: fetch says only "fetch failed", the cause says why. */
+export function requestError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err)
+  const cause = (err as Error & { cause?: { code?: unknown; message?: unknown } }).cause
+  const detail = cause ? (typeof cause.code === 'string' ? cause.code : typeof cause.message === 'string' ? cause.message : '') : ''
+  return detail && !err.message.includes(detail) ? `${err.message} (${detail})` : err.message
+}
+
 export async function call(ep: Endpoint, method: 'GET' | 'PUT' | 'POST', sub: string, body: Buffer | string | undefined, timeoutMs: number): Promise<Reply> {
   const headers: Record<string, string> = { Authorization: `Bearer ${ep.token}` }
   if (typeof body === 'string') headers['Content-Type'] = 'application/json'
@@ -58,7 +66,7 @@ export async function look(ep: Endpoint, timeoutMs: number): Promise<Look> {
   try {
     r = await call(ep, 'GET', '', undefined, timeoutMs)
   } catch (err) {
-    return { kind: 'error', message: err instanceof Error ? err.message : String(err) }
+    return { kind: 'error', message: requestError(err) }
   }
   const refusal = doorRefusal(r)
   if (refusal) return { kind: refusal, httpStatus: r.status }

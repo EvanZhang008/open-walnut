@@ -16,8 +16,13 @@ import crypto from 'node:crypto'
 
 export const BRIDGE_BUILD_PATH = '/bridge/build'
 export const BUILD_SCHEMA = 1
-/** The Mac uploads in chunks of this size; the box takes at most MAX_CHUNK_BYTES. */
-export const CHUNK_BYTES = 4 * 1024 * 1024
+/**
+ * The Mac uploads in chunks of this size; the box takes at most MAX_CHUNK_BYTES.
+ * 1 MB, as the daemon's chunked deploy: a long upload from the Mac now and then
+ * loses its connection (2026-10-21: one 4 MB chunk in five), and a small chunk
+ * costs little to send again.
+ */
+export const CHUNK_BYTES = 1024 * 1024
 export const MAX_CHUNK_BYTES = 8 * 1024 * 1024
 /** A box with less free disk than this refuses an upload or an install. */
 export const MIN_FREE_BYTES = 3 * 1024 * 1024 * 1024

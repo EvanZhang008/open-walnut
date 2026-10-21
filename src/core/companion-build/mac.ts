@@ -27,7 +27,7 @@ import {
   CHUNK_BYTES, MAX_CHUNK_BYTES,
   type BoxBuildStatus, type InstallRequest, type StepReply, type UploadReply,
 } from './wire.js'
-import { call, createGaveUpRecord, doorRefusal, look, sha256InSlices, type Endpoint, type Reply } from './mac-door.js'
+import { call, createGaveUpRecord, doorRefusal, look, requestError, sha256InSlices, type Endpoint, type Reply } from './mac-door.js'
 
 export type CompanionBuildState =
   | 'off' | 'no_companion' | 'checking' | 'current' | 'updating' | 'failed'
@@ -60,6 +60,8 @@ const ACTIVATE_DEADLINE_MS = 15 * 60_000
 const UNMANAGED_REST_MS = 10 * 60_000
 const REFUSED_REST_MS = 10 * 60_000
 const MAX_OFFSET_MISMATCHES = 3
+/** Waits before a failed chunk goes again; then the upload pauses until the next look. */
+const CHUNK_RETRY_WAITS = [2_000, 5_000, 10_000]
 
 function envMs(name: string, fallback: number): number {
   const raw = process.env[name]?.trim()
@@ -68,6 +70,8 @@ function envMs(name: string, fallback: number): number {
 }
 const bootDelayMs = () => envMs('WALNUT_COMPANION_BUILD_BOOT_DELAY_MS', 60_000)
 const pollMs = () => envMs('WALNUT_COMPANION_BUILD_POLL_MS', 10_000)
+/** Tests shrink the chunk retry waits (a factor, 1 by default). */
+const retryScale = () => envMs('WALNUT_COMPANION_BUILD_RETRY_SCALE', 1)
 const chunkBytes = () => Math.min(MAX_CHUNK_BYTES, Math.max(1, envMs('WALNUT_COMPANION_BUILD_CHUNK_BYTES', CHUNK_BYTES)))
 
 /**
@@ -111,7 +115,7 @@ function setView(gen: number, next: Partial<CompanionBuildView> & { state: Compa
   if (before.state !== view.state || before.step !== view.step) {
     log.session.info('companion build: state', {
       state: view.state, was: before.state, mine: view.mine, theirs: view.theirs,
-      ...(view.step ? { step: view.step } : {}), ...(view.message ? { message: view.message } : {}),
+      ...(view.step ? { step: view.step } : {}), ...(view.message ? { why: view.message } : {}),
     })
   }
 }
@@ -174,7 +178,7 @@ function failed(ctx: Ctx, why: string, remember: boolean, logTail?: string): End
 
 /** Stopped for now; the next tick reads the status again and goes on. */
 function paused(ctx: Ctx, step: 'uploading' | 'installing' | 'starting', message: string, progress?: number): End {
-  log.session.info('companion build: paused', { id: ctx.mine, step, message })
+  log.session.info('companion build: paused', { id: ctx.mine, step, why: message })
   setView(ctx.gen, { state: 'updating', mine: ctx.mine, theirs: ctx.theirs, step, message, ...(progress !== undefined ? { progress } : {}) })
   return 'end'
 }
@@ -313,10 +317,19 @@ async function upload(ctx: Ctx, pkg: CompanionAppPackage, status: BoxBuildStatus
     const end = Math.min(offset + chunkBytes(), size)
     const query = `?id=${encodeURIComponent(ctx.mine)}&offset=${offset}&size=${size}&sha256=${sha}`
     let r: Reply
-    try {
-      r = await call(ctx.ep, 'PUT', `/package${query}`, pkg.tgz.subarray(offset, end), CHUNK_TIMEOUT_MS)
-    } catch (err) {
-      return paused(ctx, 'uploading', err instanceof Error ? err.message : String(err), progress)
+    // A long upload from the Mac now and then loses its connection mid-chunk.
+    // The same chunk again is safe: a box that kept it answers offset_mismatch
+    // with where it stands.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        r = await call(ctx.ep, 'PUT', `/package${query}`, pkg.tgz.subarray(offset, end), CHUNK_TIMEOUT_MS)
+        break
+      } catch (err) {
+        const why = requestError(err)
+        if (attempt >= CHUNK_RETRY_WAITS.length || !live(ctx)) return paused(ctx, 'uploading', why, progress)
+        log.session.info('companion build: chunk failed, sending it again', { id: ctx.mine, offset, attempt: attempt + 1, why })
+        await sleep(CHUNK_RETRY_WAITS[attempt]! * retryScale())
+      }
     }
     const refusal = doorRefusal(r)
     if (refusal) return refused(ctx, refusal, r.status)
@@ -345,7 +358,7 @@ async function postStep(ctx: Ctx, step: 'installing' | 'starting', sub: string, 
   try {
     r = await call(ctx.ep, 'POST', sub, JSON.stringify(body), STEP_TIMEOUT_MS)
   } catch (err) {
-    return paused(ctx, step, err instanceof Error ? err.message : String(err))
+    return paused(ctx, step, requestError(err))
   }
   const refusal = doorRefusal(r)
   if (refusal) return refused(ctx, refusal, r.status)

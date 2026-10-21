@@ -84,7 +84,9 @@ export function collectBuildInfo(root, now = new Date(), env = process.env) {
   let dirty = false
   const top = git(root, ['rev-parse', '--show-toplevel'])
   if (top && samePath(top, root)) {
-    commit = git(root, ['rev-parse', '--short', 'HEAD']) || null
+    // At least 9 characters on every box: git's own default grows with the size
+    // of the clone, and the cloud companion compares build ids with the Mac's.
+    commit = git(root, ['rev-parse', '--short=9', 'HEAD']) || null
     const ref = git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])
     branch = ref && ref !== 'HEAD' ? ref : null
     const stamped = env.WALNUT_VERSION_STAMPED === '1' ? [':!package.json', ':!package-lock.json'] : []
