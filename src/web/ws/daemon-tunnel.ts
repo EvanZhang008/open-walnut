@@ -141,11 +141,11 @@ async function defaultStillValid(request: IncomingMessage, name: string): Promis
 }
 
 async function defaultExecEnabled(): Promise<boolean> {
-  const [{ getConfig }, { cloudExecStatus }, { CLOUD_MODE }] = await Promise.all([
-    import('../../core/config-manager.js'), import('../../core/cloud-exec.js'), import('../../constants.js'),
+  const [{ getConfig }, { cloudExecStatus }, { hasCapability }] = await Promise.all([
+    import('../../core/config-manager.js'), import('../../core/cloud-exec.js'), import('../../core/capabilities.js'),
   ])
   try {
-    return cloudExecStatus(await getConfig(), CLOUD_MODE).enabled
+    return cloudExecStatus(await getConfig(), hasCapability('cloud-exec')).enabled
   } catch {
     return false // unreadable config: stay a relay, as the server's startup does
   }

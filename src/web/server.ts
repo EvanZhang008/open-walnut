@@ -71,8 +71,9 @@ import { createSlashCommandsRouter } from './routes/slash-commands.js'
 import { timelineRouter } from './routes/timeline.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
-import { CLOUD_MODE, CRON_FILE, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
-import { isFollower, isHostReplica, placement, role } from '../core/server-role.js'
+import { CRON_FILE, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
+import { isCompanion, isFollower, isHostReplica, placement, role } from '../core/server-role.js'
+import { capabilityFacts, capabilityList } from '../core/capabilities.js'
 import { bootPolicy } from '../core/boot-policy.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
@@ -1045,7 +1046,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     tightenReplicaModes(dirs)
     if (unclaimed.length) log.web.warn('host replica: modes left as they are in dirs it did not make', { dirs: unclaimed })
   }
-  log.web.info('server role', { role: role(), placement: placement() })
+  // capabilityList() parses WALNUT_CAPABILITIES here, so a name that is not a
+  // capability stops the companion's boot before any job or door starts.
+  log.web.info('server role', { role: role(), placement: placement(), capabilities: capabilityList() })
   // A host replica's leader door (replica/leader-door.ts: the second listener the
   // Mac's streams come in by) and its front (replica/front.ts: the follower link,
   // presence, the report loop, the dispatcher), started BEFORE the heavy init,
@@ -1343,8 +1346,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })()
     : null
   if (!bootPolicy('local-daemon')) {
-    log.web.info('host replica: no local session daemon (it never starts or reaches one)')
-  } else if (CLOUD_MODE && !cloudExec?.enabled) {
+    log.web.info(isHostReplica()
+      ? 'host replica: no local session daemon (it never starts or reaches one)'
+      : 'cloud mode: no cloud-exec capability, no local session daemon')
+  } else if (bootPolicy('cloud-exec') && !cloudExec?.enabled) {
     log.web.info('cloud mode: skipping local session daemon startup')
   } else try {
     const { localDaemon } = await import('../providers/local-daemon.js')
@@ -1488,7 +1493,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // off error.code). Must sit at app level right here: the parser above
   // raises before any router runs, and Express skips routers in error mode.
   app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], sttPayloadTooLargeHandler)
-  app.use('/api/plugins/:pluginId', createPluginBodyParser(registry, CLOUD_MODE))
+  app.use('/api/plugins/:pluginId', createPluginBodyParser(registry, isCompanion()))
   // Letters carry inline media (a digest's base64 audio/video), so their write
   // routes get their own parser above the 15mb default — same shape as the STT
   // route right above. This bounds the INLINE lane only: a document bigger than
@@ -2057,12 +2062,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Live dispatcher: each request resolves the current owner from the registry, so
   // disable/reload removes old handlers without mutating Express's private stack.
   const pluginRouteDispatcher = createPluginRouteDispatcher(registry, {
-    ...(CLOUD_MODE ? { relay: relayPrimaryPluginHttpRequest } : {}),
+    ...(isCompanion() ? { relay: relayPrimaryPluginHttpRequest } : {}),
   })
   // Legacy path for the calendar, which is a plugin now. Shares the dispatcher instance
   // above so relay behaviour cannot drift between the two spellings; delete both the mount
   // and routes/calendar-alias.ts once web/src calls /api/plugins/calendar/*.
-  app.use('/api/calendar', createCalendarAliasRouter(registry, CLOUD_MODE, pluginRouteDispatcher))
+  app.use('/api/calendar', createCalendarAliasRouter(registry, isCompanion(), pluginRouteDispatcher))
   app.use('/api/plugins', pluginRouteDispatcher)
 
   // Plugin apps: the catalogue (under /api, so it inherits auth) and the static
@@ -2089,7 +2094,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Test-only remote-host fixture: mounted solely by the Playwright fixture
   // server (the flag, AND ephemeral, AND not cloud: hostFixtureRouteAllowed).
   const { hostFixtureRouteAllowed } = await import('../core/hosts/host-fixture.js')
-  if (hostFixtureRouteAllowed({ env: process.env, ephemeral: IS_EPHEMERAL, cloudMode: CLOUD_MODE })) {
+  if (hostFixtureRouteAllowed({ env: process.env, ephemeral: IS_EPHEMERAL, cloudMode: isCompanion() })) {
     const fixture = await import('./routes/test-host-fixture.js')
     app.use('/api/test/host-fixture', fixture.testHostFixtureRouter)
     void fixture.preloadHostFixture()
@@ -3395,7 +3400,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           pushDaemonHooksToAllHosts()
         }).catch(() => {})
       }, { global: true, interest: ['config:changed'] })
-      log.web.info('hook dispatcher initialized', { cloudMode: CLOUD_MODE })
+      log.web.info('hook dispatcher initialized', { cloudMode: isCompanion() })
     }
   } catch (err) {
     log.web.error('hook dispatcher init failed — session triage and lifecycle hooks will NOT fire', {
@@ -3839,7 +3844,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     unsubscribeHostPhase = () => { offPhase(); offReadiness(); offCloudBox() }
 
     const warmupGate = hostWarmupGateReason({
-      cloudMode: CLOUD_MODE, ephemeral: isEphemeral, env: process.env, config: await getConfig(),
+      cloudMode: isCompanion(), ephemeral: isEphemeral, env: process.env, config: await getConfig(),
     })
     if (warmupGate) {
       log.web.info('host warmup disabled', { reason: warmupGate })
@@ -5312,8 +5317,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   {
     const { bootPolicyDecisions } = await import('../core/boot-policy.js')
     const cpu = process.cpuUsage()
+    const { ignored } = capabilityFacts()
+    if (ignored) log.web.warn('WALNUT_CAPABILITIES is ignored here: only the companion reads it', { value: ignored, placement: placement() })
     log.web.info('boot policy', {
-      role: role(), placement: placement(), ...bootPolicyDecisions(),
+      role: role(), placement: placement(), capabilities: capabilityList(), ...bootPolicyDecisions(),
       bootMs: Date.now() - bootStartedAt, rssMb: Math.round(process.memoryUsage().rss / 1048576),
       cpuMs: Math.round((cpu.user + cpu.system) / 1000),
     })

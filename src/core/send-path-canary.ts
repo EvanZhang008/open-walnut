@@ -28,7 +28,7 @@
  * "would a phone send work right now, and if not, why?" with one call.
  */
 
-import { CLOUD_MODE } from '../constants.js';
+import { hasCapability } from './capabilities.js';
 import { log } from '../logging/index.js';
 
 export interface CanaryAlert {
@@ -164,14 +164,15 @@ async function collectInputs(): Promise<CanaryInputs> {
 }
 
 /**
- * CLOUD box only (the send routes live there; a primary box send is local).
+ * A box with the cloud-exec capability only (core/capabilities.ts: the companion;
+ * the send routes live there, a primary box send is local).
  * Cheap: one statfs read (cached by the watermark), one Map scan, one readdir.
  */
 export function startSendPathCanary(opts: {
   notify?: CanaryNotify;
   intervalMs?: number;
 } = {}): SendPathCanaryHandle | null {
-  if (!CLOUD_MODE) return null;
+  if (!hasCapability('cloud-exec')) return null;
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;

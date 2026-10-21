@@ -18,7 +18,7 @@
  * the name was minted on ANOTHER box — names are unique only within one box.
  */
 
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../server-role.js'
 import {
   PushRegistryError,
   pushRegistrationStatus,
@@ -56,7 +56,7 @@ export async function handlePushRelayAction(
   // than a consequence of the daemon happening to route these actions to the
   // primary. A cloud box reaching this code means something forwarded a push
   // action to the WRONG box, and writing its own config there is the original bug.
-  if (CLOUD_MODE) {
+  if (isCompanion()) {
     throw new PushRegistryError(
       'push registrations are owned by the primary box; a replica must relay them, never apply them',
       'wrong_box', 500,

@@ -20,7 +20,7 @@
  * its push rows and its copy on the other box go too (devices/revoke-parts.ts).
  */
 
-import { CLOUD_MODE } from '../constants.js'
+import { isCompanion } from './server-role.js'
 import { log } from '../logging/index.js'
 import {
   DeviceChangeRefused, apiKeyDecision, deviceChangeDecision, liveOwnerOf, machineTargetRefusal, notADeviceRefusal, ownerRecord,
@@ -69,7 +69,7 @@ const lastUsedWriteAt = new Map<string, number>()
 /** The proof a caller presented makes it the owner (device-actor.ts proofClaim): record that first. */
 function applyProof(auth: LockedAuth, by: DeviceActor, proof: string | undefined): void {
   // An owner is a companion's notion: on the Mac the rules stay those of the builds before.
-  if (!CLOUD_MODE || !proof || !('token' in by)) return
+  if (!isCompanion() || !proof || !('token' in by)) return
   const claim = proofClaim(auth, recordForToken(auth.devices, by.token), proof)
   if (claim) ownByProof(auth, claim)
 }
@@ -158,9 +158,9 @@ export async function createDeviceAs(
       throw new Error(`Device "${name}" already exists`)
     }
     if (opts.kind === 'machine' && !('local' in opts.by)) {
-      throw new DeviceChangeRefused(403, 'device_change_refused', machineTargetRefusal(name, CLOUD_MODE))
+      throw new DeviceChangeRefused(403, 'device_change_refused', machineTargetRefusal(name, isCompanion()))
     }
-    const decision = deviceChangeDecision(auth, opts.by, 'create', name, CLOUD_MODE)
+    const decision = deviceChangeDecision(auth, opts.by, 'create', name, isCompanion())
     if (!decision.ok) throw decision.refusal
     const { record, token } = freshRecord(name, opts.kind)
     auth.devices.push(record)
@@ -189,7 +189,7 @@ export async function rotateDevice(
   const out = await updateAuth(async (auth) => {
     applyProof(auth, opts.by, opts.proof)
     const target = auth.devices.find((d) => d.name === name)
-    const decision = deviceChangeDecision(auth, opts.by, target ? 'rotate' : 'create', name, CLOUD_MODE)
+    const decision = deviceChangeDecision(auth, opts.by, target ? 'rotate' : 'create', name, isCompanion())
     if (!decision.ok) throw decision.refusal
     if (target?.kind === 'machine') throw new DeviceChangeRefused(400, 'not_a_device', notADeviceRefusal(name))
     const fresh = freshRecord(name)
@@ -348,7 +348,7 @@ export async function revokeDevice(name: string, opts: RevokeOptions = {}): Prom
 export async function revokePairingAs(name: string, opts: { by: DeviceActor; proof?: string }): Promise<DeviceRevokeOutcome> {
   return revokeWith(name, {}, (auth) => {
     applyProof(auth, opts.by, opts.proof)
-    const decision = deviceChangeDecision(auth, opts.by, 'revoke', name, CLOUD_MODE)
+    const decision = deviceChangeDecision(auth, opts.by, 'revoke', name, isCompanion())
     if (!decision.ok) throw decision.refusal
   })
 }
@@ -417,7 +417,7 @@ export async function setDeviceKind(name: string, kind: 'phone' | 'computer'): P
  */
 export async function apiKeyMaker(by: DeviceActor): Promise<{ deviceId?: string }> {
   return updateAuth((auth) => {
-    const decision = apiKeyDecision(auth, by, CLOUD_MODE)
+    const decision = apiKeyDecision(auth, by, isCompanion())
     if (!decision.ok) throw decision.refusal
     return { persist: false, result: decision.deviceId ? { deviceId: decision.deviceId } : {} }
   })

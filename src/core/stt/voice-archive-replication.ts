@@ -1,4 +1,4 @@
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../server-role.js'
 import { log } from '../../logging/index.js'
 import { voiceArchive, voiceRecordingId, type VoiceArchiveStore } from './voice-archive.js'
 
@@ -88,7 +88,7 @@ export function replicateVoiceRecording(raw: string, store: VoiceArchiveStore = 
 }
 
 export function deferVoiceReplication(id?: string): void {
-  if (!CLOUD_MODE) return
+  if (!isCompanion()) return
   setImmediate(() => {
     const work = id ? replicateVoiceRecording(id).then(() => {}) : retryVoiceArchives()
     void work.catch(() => { log.web.warn('voice archive retry could not read storage') })
@@ -106,7 +106,7 @@ function retryVoiceArchives(): Promise<void> {
   return retrying
 }
 export function startVoiceArchiveReplication(): Promise<void> {
-  if (!CLOUD_MODE) return Promise.resolve()
+  if (!isCompanion()) return Promise.resolve()
   starting ??= (async () => {
     const { addPrimaryBridgeConnectedHandler, addPrimaryBridgeActivityHandler } = await import('../../web/ws/bridge-registry.js')
     const connected = addPrimaryBridgeConnectedHandler(() => deferVoiceReplication())

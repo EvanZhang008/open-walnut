@@ -1,8 +1,10 @@
 /**
  * Every raw `CLOUD_MODE` read in src/ is either replaced by role(),
- * placement() or bootPolicy() (src/core/server-role.ts, src/core/boot-policy.ts)
- * or listed here with what a host replica does at it
- * (docs/plan/walnut-replica-servers-impl.md, section 2 and C9).
+ * placement(), isCompanion() or bootPolicy() (src/core/server-role.ts,
+ * src/core/boot-policy.ts), or by a capability check (hasCapability,
+ * src/core/capabilities.ts), or listed here with what a host replica does at it
+ * (docs/plan/walnut-replica-servers-impl.md, section 2 and C9; stage 5 of
+ * docs/plan/walnut-companion-unified-replica.md).
  *
  * A host replica (`walnut web --replica`) is not CLOUD_MODE, so every raw read
  * takes the leader's branch there. Each row says why that branch is right, or
@@ -14,7 +16,8 @@
  * env key alike (`process.env.WALNUT_CLOUD_MODE`, `env['WALNUT_CLOUD_MODE']`),
  * never a comment, other string text or an import. At the plan's tree
  * (8b0fb0e08) that was 408 reads in 147 files (401 of the constant, 7 of the
- * env key).
+ * env key); before the capability rows (stage 5a) 348 in 133 files, after them
+ * 313 in 116.
  */
 import { describe, expect, it } from 'vitest'
 import path from 'node:path'
@@ -23,8 +26,8 @@ import { countCloudModeReads, scanCloudModeReads } from '../helpers/cloud-mode-s
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
 const START_TOTAL = 408
 
-/** The definition and the two modules that answer the question for everyone. */
-const READERS = new Set(['src/constants.ts', 'src/core/server-role.ts', 'src/core/boot-policy.ts'])
+/** The definition, the two modules that answer the question for everyone, and the capability defaults. */
+const READERS = new Set(['src/constants.ts', 'src/core/server-role.ts', 'src/core/boot-policy.ts', 'src/core/capabilities.ts'])
 
 const ROUTE = 'route: the WP2 front forwards it to the Mac while the Mac answers; away, the route table runs it on copies or answers needs_leader'
 const COMPANION = 'companion-only: a host replica is not CLOUD_MODE and skips it, which is right'
@@ -54,16 +57,10 @@ const OTHERS: Array<[string, number, string]> = [
   ['src/core/attachment-text.ts', 1, off('notes-indexer')],
   ['src/core/calendar/sources/eventkit.ts', 2, off('plugins')],
   ['src/core/cloud-chat-outbox.ts', 3, COMPANION],
-  ['src/core/cloud-owned-session.ts', 1, COMPANION],
   ['src/core/cloud-setup/job.ts', 1, ROUTE],
   ['src/core/config-broadcast.ts', 1, leader('the Mac mask over the replica config, itself an allowlisted copy (WP5)')],
   ['src/core/config-manager.ts', 1, leader('the cloud box row is only a host entry; host wiring is off')],
   ['src/core/control-queue.ts', 2, COMPANION],
-  ['src/core/cron/jobs.ts', 1, off('cron')],
-  ['src/core/device-adoption.ts', 2, ROUTE],
-  ['src/core/device-auth.ts', 6, leader('auth.json is never read for auth on a host replica (replica/auth.ts); device changes are routes')],
-  ['src/core/devices/relay.ts', 1, COMPANION],
-  ['src/core/devices/revoke-queue.ts', 1, off('revoke-queue')],
   ['src/core/diagnostics/host-probes.ts', 4, ROUTE],
   ['src/core/diagnostics/local-probes.ts', 1, leader('a diagnostics line: a host replica searches its search copy, so "search on" is true there')],
   ['src/core/diagnostics/probes.ts', 1, ROUTE],
@@ -75,7 +72,6 @@ const OTHERS: Array<[string, number, string]> = [
   ['src/core/hosts/cloud-box-probe.ts', 2, off('cloud-box-probe')],
   ['src/core/hosts/host-connect-action.ts', 2, off('host-wiring')],
   ['src/core/human-inbox/replica-state.ts', 1, COMPANION],
-  ['src/core/leader/backup-leader.ts', 2, off('backup-leader')],
   ['src/core/leader/primary-leader.ts', 5, off('leader-heartbeat')],
   ['src/core/mcp-servers/registry.ts', 1, ROUTE],
   ['src/core/notifications/origin.ts', 1, leader('its own notifications file in its own data dir')],
@@ -86,24 +82,17 @@ const OTHERS: Array<[string, number, string]> = [
   ['src/core/plugins/server-api.ts', 3, off('plugins')],
   ['src/core/projection-cache.ts', 1, off('primary-store-jobs')],
   ['src/core/protected-reader.ts', 2, leader('darwin native helpers only')],
-  ['src/core/push-notification.ts', 1, leader('no push credential is copied, so nothing is sent (stated limit, section 2)')],
-  ['src/core/push/device-revoke.ts', 2, off('revoke-queue')],
-  ['src/core/push/relay.ts', 1, leader('no relay credential is copied')],
   ['src/core/replication/device-replica.ts', 1, off('replica-pushes')],
   ['src/core/self-repair/walnut-source.ts', 1, ROUTE],
   ['src/core/self-update/install-kind.ts', 1, off('update-check')],
   ['src/core/send-outcomes.ts', 6, ROUTE],
   ['src/core/send-path-announce.ts', 1, leader('it announces on a daemon host connect; a host replica has no daemon connection')],
-  ['src/core/send-path-canary.ts', 1, off('send-path-canary')],
   ['src/core/send-queue-drain.ts', 2, COMPANION],
   ['src/core/send-queue.ts', 4, COMPANION],
   ['src/core/sessions/caller-placement.ts', 1, ROUTE],
   ['src/core/sessions/host-start-gate.ts', 1, ROUTE],
   ['src/core/sessions/lane-ask-link.ts', 6, off('lane-ask-sync')],
   ['src/core/sessions/open-items.ts', 2, ROUTE],
-  ['src/core/stt/voice-archive-replication.ts', 2, COMPANION],
-  ['src/core/stt/voice-archive-transcribe.ts', 1, ROUTE],
-  ['src/core/stt/voice-archive.ts', 1, ROUTE],
   ['src/core/task-manager.ts', 1, ROUTE + '; the task copy is read only there'],
   ['src/core/task-outbox.ts', 4, COMPANION],
   ['src/core/task-pin-retirement.ts', 1, off('pin-retirement')],
@@ -120,9 +109,6 @@ const OTHERS: Array<[string, number, string]> = [
   ['src/providers/session-host.ts', 2, ROUTE],
   ['src/web/middleware/auth.ts', 1, leader('a host replica branches to replica/auth.ts before it')],
   ['src/web/middleware/health-access.ts', 2, leader('no loopback trust on a host replica, so a token is asked')],
-  ['src/web/server.ts', 7, leader('plugin parser and relay args (plugins off), the test host fixture, a log field, the warmup gate (host wiring off), the cloud.exec condition')],
-  ['src/web/ws/daemon-tunnel.ts', 2, COMPANION],
-  ['src/web/ws/handler.ts', 3, COMPANION + '; its /ws token check is the device copy (auth.ts)'],
 ]
 
 const LISTED = new Map<string, { reads: number; decision: string }>([

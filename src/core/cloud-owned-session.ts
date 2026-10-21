@@ -32,7 +32,7 @@
  * There is no id ambiguity to worry about: ids are UUIDs.
  */
 
-import { CLOUD_MODE } from '../constants.js';
+import { hasCapability } from './capabilities.js';
 import { readCloudExecConfig, CLOUD_HOST_ALIAS } from './cloud-exec.js';
 import { log } from '../logging/index.js';
 
@@ -52,7 +52,7 @@ export interface CloudOwnedSession {
 let execEnabled: boolean | null = null;
 
 export async function cloudExecActive(): Promise<boolean> {
-  if (!CLOUD_MODE) return false;
+  if (!hasCapability('cloud-exec')) return false;
   if (execEnabled !== null) return execEnabled;
   try {
     const { getConfig } = await import('./config-manager.js');

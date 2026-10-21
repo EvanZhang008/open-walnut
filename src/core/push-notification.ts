@@ -26,7 +26,7 @@
  */
 
 import { bus, eventData, EventNames } from './event-bus.js'
-import { CLOUD_MODE } from '../constants.js'
+import { isCompanion } from './server-role.js'
 import { getConfig } from './config-manager.js'
 import { clientCount } from '../web/ws/handler.js'
 import { log } from '../logging/index.js'
@@ -41,7 +41,7 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
   // and the APNs key, and a replica relays `/api/push/*` to it (core/push/relay.ts).
   // A cloud box's own `push_tokens` rows are therefore not its to send from —
   // any it still carries are orphans from before that relay existed.
-  if (CLOUD_MODE) return
+  if (isCompanion()) return
   // Quiet mode (do not disturb): none of these pushes is a permission ask, so a
   // live hold silences all of them. Logged once per hold, not per event.
   const quiet = await getQuiet()

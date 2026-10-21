@@ -22,7 +22,7 @@
  * records the hash as revoked in the same write, so neither ever takes it back.
  */
 
-import { CLOUD_MODE } from '../constants.js'
+import { isCompanion } from './server-role.js'
 import { log } from '../logging/index.js'
 import {
   mutateDeviceRecords, notifyPaired, readDeviceRegistry, revokePairing, validateDeviceName,
@@ -133,7 +133,7 @@ export async function adoptDeviceRecord(
 
   const out = await mutateDeviceRecords((devices, reg, revoked) => {
     if (opts.by) {
-      const decision = deviceChangeDecision(reg, opts.by, 'create', name, CLOUD_MODE)
+      const decision = deviceChangeDecision(reg, opts.by, 'create', name, isCompanion())
       if (!decision.ok) throw decision.refusal
     }
     // Revoked here for good: the other box may still hold its copy (its removal
@@ -198,7 +198,7 @@ export async function revokeAdopted(tokenHash: unknown): Promise<RevokeByHashOut
   const reg = await readDeviceRegistry()
   const record = reg.devices.find((d) => d.tokenHash === tokenHash)
   if (!record) return { name: null, refused: false, push: null }
-  if (record.kind === 'machine' || hasOwnerRights(reg, record, CLOUD_MODE)) {
+  if (record.kind === 'machine' || hasOwnerRights(reg, record, isCompanion())) {
     log.web.warn('device-adoption: a revoke by hash was refused: that pairing is not a twin this box may remove', {
       name: record.name, machine: record.kind === 'machine',
     })
