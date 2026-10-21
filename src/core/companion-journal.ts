@@ -20,7 +20,8 @@
  * blobs: companion-notes.ts), 3e `chat-turn` (a chat turn this box answered itself, its
  * texts as blobs: companion-chat-turns.ts), 4d `memory` (MEMORY.md or USER.md saved here:
  * companion-memory.ts), 4d `note-move` (a note moved or renamed here:
- * companion-note-paths.ts); the other queues are unchanged until their slice. A record carries no device actor
+ * companion-note-paths.ts), 4d `note-attachment` (a picture pasted into a note here,
+ * its bytes as a blob: companion-note-attachments.ts); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -230,6 +231,30 @@ export function journalNoteMove(input: { from: string; to: string; noteId?: stri
     for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
   } else {
     log.session.error('companion journal: a note move was refused', { from: input.from, to: input.to, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
+/**
+ * Save one picture pasted into a note here for the Mac (stage 4d): a `note-attachment`
+ * record naming its vault path, its bytes as a blob. The Mac writes it there unless a
+ * file is already at that path (offline-merge/apply-note-attachment.ts). Null when the
+ * Mac does not drain the kind: the caller keeps the old path.
+ */
+export function journalNoteAttachment(input: { path: string; body: Buffer; notePath?: string }): AppendResult | null {
+  if (!macDrains('note-attachment')) return null
+  const j = journalOf()
+  const blob = j.putBlob(COMPANION_JOURNAL_HOME, input.body)
+  if (!blob.ok) return blob
+  const r = j.append(COMPANION_JOURNAL_HOME, {
+    kind: 'note-attachment', path: input.path, oursBlob: blob.sha, size: input.body.length,
+    ...(input.notePath ? { notePath: input.notePath } : {}),
+  }, { limit: true, coalesce: false })
+  if (r.ok) {
+    log.session.info('companion journal: saved a picture for the Mac', { path: input.path, bytes: input.body.length, opId: r.opId, seq: r.seq })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+  } else {
+    log.session.error('companion journal: a picture was refused', { path: input.path, code: r.code, why: r.why, error: r.message })
   }
   return r
 }

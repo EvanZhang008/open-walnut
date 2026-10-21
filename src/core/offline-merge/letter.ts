@@ -76,6 +76,7 @@ function noteLine(e: ConflictEntry): string {
     case 'delete-kept': return 'the note was deleted while away but edited since; it was kept.';
     case 'restored': return 'the note was deleted while away and also edited; the edit won and the note is back.';
     case 'move-kept': case 'move-taken': return `a move or rename made while away was not made: ${e.reason ?? 'the note stays where it is'}.`;
+    case 'attachment-kept': return `a different picture or file is at this path on the Mac, so it stays; the one saved while away is${e.copyPath ? ` [${e.copyPath}](${noteLink(e.copyPath)})` : ' beside it'}.`;
     default: return `${preview(e.reason)}.${copy}`;
   }
 }

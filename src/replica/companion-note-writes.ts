@@ -8,7 +8,9 @@
  * Stage 4d: a note move or rename, a tag rename and a folder change are answered here
  * too (core/companion-note-paths.ts): a move is a `note-move` record once the Mac drains
  * that kind, a tag rename is a `note` save of each carrying note, and a folder change
- * needs the Mac. A picture or file move takes the old path.
+ * needs the Mac. A pasted picture is written to the box's disk and is a
+ * `note-attachment` record too, once the Mac drains that kind
+ * (core/companion-note-attachments.ts); moving or deleting a picture or file needs the Mac.
  *
  * Mounted on the notes routers after the copy reads (notes-v2.ts, api-v1.ts), so a
  * v1 save the companion forwards to the Mac while it answers never reaches here.
@@ -22,7 +24,7 @@ import { log } from '../logging/index.js'
 import { applied, noteRouteOf, refusedAnswer } from './away-notes.js'
 import { needsLeaderAnswer, refusalAnswer, type PortAnswer } from './write-port.js'
 
-type PathRoute = 'move' | 'tags' | 'folder'
+type PathRoute = 'move' | 'tags' | 'folder' | 'paste' | 'attachment'
 
 /** A note path route (4d), by the router's own path: v2 at /api/notes-v2, v1 at /api/v1. */
 function pathRouteOf(flavor: 'v1' | 'v2', method: string, p: string): PathRoute | null {
@@ -31,10 +33,12 @@ function pathRouteOf(flavor: 'v1' | 'v2', method: string, p: string): PathRoute 
   if (method === 'POST' && rest === '/move') return 'move'
   if (method === 'POST' && rest === '/tags/rename') return 'tags'
   if ((method === 'POST' && rest === '/folder') || (method === 'DELETE' && rest.startsWith('/folder/'))) return 'folder'
+  if (method === 'POST' && rest === '/attachment') return 'paste'
+  if (method === 'DELETE' && rest.startsWith('/attachment/')) return 'attachment'
   return null
 }
 
-const V1_CODE: Record<number, string> = { 400: 'bad_request', 404: 'not_found', 409: 'conflict' }
+const V1_CODE: Record<number, string> = { 400: 'bad_request', 404: 'not_found', 409: 'conflict', 413: 'too_large' }
 const STATUS: Record<string, number> = { bad_request: 400, not_found: 404, conflict: 409 }
 
 /** A refusal in the route's shape: its own errors as the disk route answers them, the rest as the port's. */
@@ -50,9 +54,22 @@ async function answerNotePath(flavor: 'v1' | 'v2', route: PathRoute, req: Reques
   const paths = await import('../core/companion-note-paths.js')
   const b = bodyOf(req)
   if (route === 'folder') return pathRefusal(flavor, paths.companionFolderChange())
+  if (route === 'paste' || route === 'attachment' || (route === 'move' && paths.isAttachmentMove(b.from))) {
+    const pics = await import('../core/companion-note-attachments.js')
+    if (route !== 'paste') return pathRefusal(flavor, pics.companionAttachmentChange())
+    // A Mac that does not drain pastes: the old path (the box's disk, git sync).
+    if (!pics.companionJournalsPastes()) return null
+    const r = await pics.companionAttachmentPaste({ notePath: b.notePath, data: b.data, mediaType: b.mediaType })
+    if (r.ok) {
+      log.web.info('companion: pasted picture kept for the Mac', { path: r.path })
+      return { answered: false, status: 200, body: { ok: true, path: r.path, name: r.name } }
+    }
+    if ('status' in r) return { answered: false, status: r.status, body: flavor === 'v2' ? { error: r.message } : { error: { code: V1_CODE[r.status] ?? 'bad_request', message: r.message } } }
+    return pathRefusal(flavor, r)
+  }
   if (route === 'move') {
-    // A picture or file is not a note (its move keeps the old path); nor is a Mac that does not drain moves.
-    if (paths.isAttachmentMove(b.from) || !paths.companionMovesNotes()) return null
+    // A Mac that does not drain moves: the old path.
+    if (!paths.companionMovesNotes()) return null
     const r = paths.companionNoteMove({ from: b.from, to: b.to })
     if (!r.ok) return pathRefusal(flavor, r)
     log.web.info('companion: note move kept for the Mac', { from: b.from, to: b.to, seq: r.seq })

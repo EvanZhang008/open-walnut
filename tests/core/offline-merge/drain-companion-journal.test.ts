@@ -34,7 +34,10 @@
  *     moved on the companion is moved on the Mac where the note is now, found by its id
  *     (apply-note-move.ts); one moved on the Mac meanwhile, or onto a taken path, stays
  *     and is lettered; one deleted on the Mac is quiet; a note made, moved and saved on
- *     the companion lands at its new path with its text, in that order;
+ *     the companion lands at its new path with its text, in that order; a picture pasted
+ *     on the companion is written on the Mac (apply-note-attachment.ts), the same bytes
+ *     already there (git sync came first) need nothing, other bytes there keep both and
+ *     letter it, a path that is not a picture is refused;
  *   - a drain with nothing waiting is quiet.
  *
  * CLOUD_MODE is read at import, so the companion and the Mac are two module graphs
@@ -498,6 +501,42 @@ describe('the Mac drains the companion\'s journal', () => {
     ])
     const log = logs.map((n) => mac.conflicts.readConflictLog(n.slice(0, -5))).find((l) => l?.entries.some((e) => e.recordKind === 'note-move'))
     expect(mac.letter.buildConflictLetter(log!)?.markdown).toContain('a move or rename made while away was not made: it was moved to Acme/renamed-away.md while away, and to Acme/renamed-on-mac.md on the Mac')
+  })
+
+  it('a picture pasted on the companion is written on the Mac; the same bytes there need nothing; other bytes keep both', async () => {
+    const notesDir = constantsBase.NOTES_DIR as string
+    const pic = (s: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(s)])
+    const at = (rel: string) => fsp.readFile(path.join(notesDir, rel)).catch(() => null)
+    const logsBefore = new Set(fs.existsSync(mac.conflicts.conflictDir()) ? fs.readdirSync(mac.conflicts.conflictDir()) : [])
+    await fsp.mkdir(path.join(notesDir, 'Acme/_attachment'), { recursive: true })
+    const paste = (rel: string, body: Buffer) => expect(companion.journal.journalNoteAttachment({ path: rel, body, notePath: 'Acme/plan.md' })).toMatchObject({ ok: true })
+    // Nothing at the path on the Mac: written there.
+    paste('Acme/_attachment/one.png', pic('one'))
+    // Git sync brought the same bytes first: nothing to do.
+    await fsp.writeFile(path.join(notesDir, 'Acme/_attachment/two.png'), pic('two'))
+    paste('Acme/_attachment/two.png', pic('two'))
+    // Other bytes at the path: the Mac's stays, the companion's goes beside it.
+    await fsp.writeFile(path.join(notesDir, 'Acme/_attachment/three.png'), pic('three, on the Mac'))
+    paste('Acme/_attachment/three.png', pic('three, from the phone'))
+    // Not a picture or file: refused, never written.
+    paste('Acme/sneaky.md', pic('not a note'))
+    await mac.drain.drainCompanionJournalNow()
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    expect(await at('Acme/_attachment/one.png')).toEqual(pic('one'))
+    expect(await at('Acme/_attachment/two.png')).toEqual(pic('two'))
+    expect(await at('Acme/_attachment/three.png')).toEqual(pic('three, on the Mac'))
+    const tag = crypto.createHash('sha256').update(pic('three, from the phone')).digest('hex').slice(0, 8)
+    expect(await at(`Acme/_attachment/three-${tag}.png`)).toEqual(pic('three, from the phone'))
+    expect(await at('Acme/sneaky.md')).toBeNull()
+    expect((await fsp.readdir(path.join(notesDir, 'Acme/_attachment'))).filter((n) => n.endsWith('.tmp'))).toEqual([])
+    const logs = fs.readdirSync(mac.conflicts.conflictDir()).filter((n) => n.endsWith('.json') && !logsBefore.has(n))
+    const entries = logs.flatMap((n) => mac.conflicts.readConflictLog(n.slice(0, -5))?.entries ?? [])
+    expect(entries.map((e) => `${e.kind}:${e.recordKind}:${e.why ?? ''}:${e.notePath ?? ''}:${e.copyPath ?? ''}`).sort()).toEqual([
+      `note:note-attachment:attachment-kept:Acme/_attachment/three.png:Acme/_attachment/three-${tag}.png`,
+      'refused:note-attachment:::',
+    ])
+    const log = logs.map((n) => mac.conflicts.readConflictLog(n.slice(0, -5))).find((l) => l?.entries.some((e) => e.why === 'attachment-kept'))
+    expect(mac.letter.buildConflictLetter(log!)?.markdown).toContain('a different picture or file is at this path on the Mac, so it stays; the one saved while away is [Acme/_attachment/three-')
   })
 
   it('a drain with nothing waiting is quiet', async () => {
