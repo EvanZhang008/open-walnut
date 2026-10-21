@@ -28,6 +28,8 @@ export function defaultWaitUntil(nowMs: number = Date.now()): string {
   return new Date(nowMs + DEFAULT_WAIT_DAYS * 86_400_000).toISOString();
 }
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none';
+/** A task's place in the org above the work (Task.org_role). */
+export type OrgRole = 'main' | 'lead';
 /** Canonical list of valid priority values — use for runtime validation. */
 export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'important', 'backlog', 'none'] as const;
 
@@ -785,6 +787,12 @@ export interface Task {
    *  the persona drift repair (which persona to rebuild). Same storage rules as
    *  walnut_agent: payload blob, local-only. */
   agent_id?: string;
+  /** The task is a node of the org above the work (src/core/org/org-tree.ts):
+   *  'main' is the user's one main agent (an Ask Walnut task), 'lead' a project's
+   *  lead, made by Walnut when a project has more than one team. Both are hidden
+   *  from the task lists; the org chart and the chat slot show them. Payload blob,
+   *  local-only, never pushed to sync backends. */
+  org_role?: OrgRole;
   /** WAITING only: when the wait ends by itself (ISO datetime). At that time the
    *  task's session is woken like a trigger fire (src/core/task-wait-until.ts);
    *  with no session the task comes back as NEED_ACTION. A task entering WAITING

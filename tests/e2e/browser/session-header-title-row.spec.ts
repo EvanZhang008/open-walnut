@@ -36,7 +36,8 @@ async function openHomepageSession(page: Page) {
 
 async function openHome(page: Page) {
   // Every header here is measured in the layout these specs were written for: the
-  // Ask Walnut slot beside the columns (it starts hidden until opened), and one test
+  // Ask Walnut slot beside the columns (the shared fixture boots with the chat
+  // closed, so it is opened here), and one test
   // reads the slot's own panel.
   await openChatOnLoad(page)
   await presetPanelView(page)

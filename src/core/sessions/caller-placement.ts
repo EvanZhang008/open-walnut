@@ -70,6 +70,8 @@ export interface CallerTask {
   pinned?: boolean;
   /** The pinned tier; absent on a pinned task = Satellite. */
   focus_tier?: string;
+  /** A project lead (org/org-tree.ts): its work lands in its project as top-level work, never in a folder. */
+  orgLead?: boolean;
 }
 
 /** The caller's session, as launch inheritance needs it. '' host = this box. */
@@ -130,6 +132,7 @@ export async function resolveCallerPlacement(callerSid: string | undefined): Pro
     ...(label ? { group_label: label } : {}),
     pinned: Boolean(task.pinned),
     ...(task.pinned && task.focus_tier ? { focus_tier: task.focus_tier } : {}),
+    ...(task.org_role === 'lead' ? { orgLead: true } : {}),
   };
   return { kind: isAskTask(task) ? 'ask' : 'worker', task: callerTask, session };
 }
@@ -180,6 +183,14 @@ export function decidePlacement(req: PlacementRequest, caller: CallerPlacement):
   const project = req.project !== undefined ? req.project : caller.task.project;
   const own = sameProject(project, caller.task.project);
   const parent = { parentTaskId: caller.task.id };
+  // A lead's work is one of its project's teams: in the project, at the top, never in a folder made for the lead.
+  if (caller.task.orgLead) {
+    return {
+      project, group_id: explicitGroup, placeBesideCaller: false,
+      ...(req.project === undefined ? { inheritedFrom: caller.task.id } : {}),
+      ...parent,
+    };
+  }
   // A folder is inherited only inside the caller's own project.
   if (req.group_id !== undefined || !own) {
     return {

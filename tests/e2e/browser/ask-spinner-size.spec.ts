@@ -80,7 +80,7 @@ async function record(page: Page, name: string, status: Locator, container: Loca
 }
 
 test.describe('the Ask slot and drawer', () => {
-  // The slot starts hidden until opened.
+  // The shared fixture boots with the chat closed (it remembers a closed chat).
   test.beforeEach(async ({ page }) => { await openChatOnLoad(page) })
 
   test('the slot while the board loads, and the drawer opened then', async ({ page }) => {

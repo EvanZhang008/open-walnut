@@ -73,6 +73,32 @@ export interface SessionContext {
 }
 
 /**
+ * 2d. The org above the work (src/core/org/): the main agent talks to one
+ * contact per project (its lead, or its one team), never to every task, so its
+ * chat stays short; a lead answers it in a few lines. Said at spawn because the
+ * role is the task's for good.
+ */
+export function orgRoleLine(task: { org_role?: string; project?: string }): string {
+  if (task.org_role === 'main') {
+    return 'You are the user\'s main agent, the head of their org: every project reports to you through one contact, '
+      + 'its lead (Walnut makes one once a project has more than one team) or its one team. Keep the user\'s view short. '
+      + 'For "how is it going" read org_get (one line per project); for detail, or to hand work over, talk to that '
+      + 'project\'s contact with org_send (it makes the lead on first contact and starts or messages it), and pass '
+      + 'its answer on in a few lines. Do not read every task yourself. Walnut puts a folded org update before a '
+      + 'message when work moved: background, mention it only when it matters to what the user says.\n\n'
+  }
+  if (task.org_role === 'lead') {
+    const project = (task.project ?? '').trim()
+    return `Your task is the lead of project "${project}": its open top-level tasks (its teams) report to you, and `
+      + 'you report to the user\'s main agent, whose messages are the user\'s direction. org_get lists your teams '
+      + 'and their state; read one with task_get or task_history, and talk to it with task_send. Answer the main '
+      + 'agent in a few lines: what changed, what waits on the user. Hand new work to the team that owns its area; '
+      + 'create a task only when none does. A lead stays: never complete your own task.\n\n'
+  }
+  return ''
+}
+
+/**
  * Returns the system-prompt context to append for a session.
  *
  * Task lookup is best-effort: a missing/unknown task just drops line 2 —
@@ -130,6 +156,8 @@ export async function buildSessionContext(
           + 'keep it current with the walnut-board skill '
           + '(walnut tools call skill_read \'{"dirName":"walnut-board"}\').\n\n'
       }
+      // An org node (see 2d): the main agent, or a project's lead.
+      taskLine += orgRoleLine(task)
       const { isAskTask } = await import('./caller-placement.js')
       ask = isAskTask(task)
     } catch { /* unknown task — identity + tooling lines still apply */ }

@@ -293,7 +293,8 @@ test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and 
   // Parse ON (page-local) so "the tab never parses" is a real claim, not the default.
   await patchClientConfig(page, { quickParse: true })
   const parse = await mockQuickParse(page, { pinTier: 'satellite', due_date: isoDay(3) })
-  // The chat slot's draft is under test too, and the slot starts hidden until opened.
+  // The chat slot's draft is under test too, and the shared fixture boots with the
+  // chat closed (it remembers a closed chat).
   await openChatOnLoad(page)
   await loadHome(page)
 

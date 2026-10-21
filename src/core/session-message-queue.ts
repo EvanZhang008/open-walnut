@@ -188,8 +188,12 @@ export async function sendMessageToSession(
   // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
   const { pendingPlaceNotice } = await import('./sessions/place-notice.js');
   const place = await pendingPlaceNotice(sessionId);
+  // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
+  const { pendingOrgDigest } = await import('./org/org-store.js');
+  const digest = await pendingOrgDigest(sessionId);
   const body = opts?.enqueueMessage ?? message;
-  const enqueueText = place ? `${place.text}\n\n${body}` : body;
+  const notes = [place?.text, digest?.text].filter(Boolean).join('\n\n');
+  const enqueueText = notes ? `${notes}\n\n${body}` : body;
   const msg = await enqueueMessage(sessionId, enqueueText, {
     id: opts?.messageId,
     ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
@@ -200,6 +204,7 @@ export async function sendMessageToSession(
   const source = opts?.source ?? 'unknown';
   // A repeat collapsed onto the row already queued: only the row that holds the note counts.
   if (place && msg.message.startsWith(place.text)) await place.markTold();
+  if (digest && msg.message.includes(digest.text)) await digest.markTold();
 
   // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because
   // the record profile is consumed exactly when this send triggers a cold

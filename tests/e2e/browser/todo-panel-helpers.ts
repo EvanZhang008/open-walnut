@@ -201,11 +201,15 @@ export async function presetPanelView(
  * round trip stays covered by tests/web/routes/ui-prefs.test.ts; `/api/ui-prefs`
  * has exactly one caller in the app, so nothing else is mocked away here.
  */
-export async function isolateUiPrefs(page: Page): Promise<void> {
+export async function isolateUiPrefs(page: Page, opts: { newInstall?: boolean } = {}): Promise<void> {
+  // A new install opens on the chat slot; the specs that predate that assume it
+  // closed, as the shared fixture's prefs do (test-server.ts). `newInstall` is the
+  // real first screen, with nothing stored at all.
+  const prefs = opts.newInstall ? {} : { 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } }
   await page.route('**/api/ui-prefs', async (route) => {
-    // GET → the first-boot shape, so the merge has nothing to adopt.
+    // GET → the boot shape, so the merge adopts nothing another spec left.
     // PUT → accepted and dropped (the real route answers `{ ok: true }`).
-    const body = route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}'
+    const body = route.request().method() === 'GET' ? JSON.stringify({ prefs }) : '{"ok":true}'
     await route.fulfill({ status: 200, contentType: 'application/json', body })
   })
 }

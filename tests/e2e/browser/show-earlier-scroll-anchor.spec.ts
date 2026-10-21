@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { openChatOnLoad } from './draft-helpers';
+import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers';
 
 const SESSION_ID = 'pw-vscode-session';
 const TASK_ID = 'pw-task-vscode';
@@ -375,11 +375,14 @@ test('embedded Ask conversation keeps the same bottom clearance in both themes',
     }
     await route.fulfill({ response, json: body });
   });
-  // The embedded Ask conversation is the Ask Walnut slot's, which starts hidden until opened.
+  // The embedded Ask conversation is the Ask Walnut slot's, and the shared fixture
+  // boots with the chat closed (it remembers a closed chat), so open it.
   await openChatOnLoad(page);
   const column = await openSession(page, baseURL!);
+  // The slot opens on Main: pick this ask from its drawer.
+  await (await openAskWalnutDrawer(page)).locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${TASK_ID}"]`).click();
   const panel = page.locator(`.ask-walnut-session .session-panel[data-session-id="${SESSION_ID}"]`);
-  await expect(panel).toBeVisible();
+  await expect(panel).toBeVisible({ timeout: 20_000 });
   await column.getByRole('button', { name: 'Close session panel', exact: true }).click();
   for (const theme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: theme as 'light' | 'dark' });

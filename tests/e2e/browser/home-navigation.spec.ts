@@ -1119,7 +1119,7 @@ test('Locate never moves or opens a session column, in an unlocked column or the
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({ json: { pinned_tasks: ['pw-task-store-sync'], focus_tasks: ['pw-task-store-sync'], satellite_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
   });
-  // The Ask Walnut slot is one of the two surfaces under test, and it starts hidden until opened.
+  // The Ask Walnut slot is one of the two surfaces under test, and the shared fixture boots with the chat closed.
   await openChatOnLoad(page);
   await boot(page, baseURL!);
   const card = navigation(page).locator('.todo-pinned-section [data-task-id="pw-task-store-sync"]');
@@ -1160,7 +1160,10 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
     await closeViewMenu(page);
 
     const toggle = page.getByTestId('sidebar-toggle-scratchpad');
-    await expect(page.locator('.sidebar-home-panels .sidebar-link')).toHaveCount(4);
+    // The Home panels, Scratchpad last. The Ask Walnut toggle is always there now
+    // (home-panel-flags.ts), and the org chart sits beside it.
+    await expect(page.locator('.sidebar-home-panels .sidebar-link .sidebar-label'))
+      .toHaveText(['Task panel', 'Ask Walnut', 'Org chart', 'Agenda', 'Scratchpad']);
     await expect(page.locator('.sidebar-home-panels .sidebar-link').last()).toHaveAttribute('data-testid', 'sidebar-toggle-scratchpad');
     await expect(toggle).not.toHaveClass(/\bactive\b/);
     await toggle.click();

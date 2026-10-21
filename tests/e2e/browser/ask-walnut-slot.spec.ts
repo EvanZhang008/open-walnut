@@ -19,6 +19,13 @@
  * launchers (the draft column is the one task-creation surface), no separate
  * session finder (the search box IS the search), no "hide" row (the panel's ×).
  *
+ * Walnut's DEFAULT pick is Main, the main agent (MAIN_PICK in AskWalnutSlot.tsx):
+ * a fresh window opens on Main's composer (or its session once it has one), and
+ * the drawer pins a Main row above the asks. An ordinary ask is reached through a
+ * drawer row or "New chat", so every test below picks one explicitly instead of
+ * leaning on "the newest ask opens". This file never sends from Main's composer,
+ * so it never makes the Main task on the shared fixture.
+ *
  * Real UI only: one `page.goto('/')` per test to load the SPA (plus one
  * deliberate `page.reload()`, which is the persistence scenario), everything
  * else is clicks and typing. The mock CLI answers `I processed your message:
@@ -78,8 +85,8 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-// The chat spot starts hidden on a browser that never chose, and every test here
-// is about the slot, so each boots as a user who opened it once (`openChatOnLoad`).
+// The shared fixture boots with the chat closed (it remembers a closed chat), and
+// every test here is about the slot, so each boots with it open (`openChatOnLoad`).
 // The key is ui-prefs-mirrored, which is why that helper also isolates the mirror:
 // two tests below hide the slot and bring it back, and a failure in between must
 // not leave `open-walnut-home-chat-visible = false` on the SHARED fixture server.
@@ -94,10 +101,17 @@ const drawer = (page: Page): Locator => page.locator('[data-testid="ask-walnut-d
 const drawerRows = (page: Page): Locator => page.locator('[data-testid="ask-walnut-drawer-item"]')
 const drawerRow = (page: Page, taskId: string): Locator =>
   page.locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${taskId}"]`)
+/** Main's pinned row: class `ask-walnut-drawer-item`, but not that testid, so
+ *  `drawerRows` counts the asks alone. */
+const drawerMain = (page: Page): Locator => page.locator('[data-testid="ask-walnut-drawer-main"]')
+/** Every row that reads as current, Main's included. */
+const currentRows = (page: Page): Locator => page.locator('.ask-walnut-drawer-item[aria-current="true"]')
 const drawerNew = (page: Page): Locator => page.locator('[data-testid="ask-walnut-new"]')
 const drawerFix = (page: Page): Locator => page.locator('[data-testid="ask-walnut-fix"]')
 const drawerSearch = (page: Page): Locator => page.locator('[data-testid="ask-walnut-search"]')
 const slotDraft = (page: Page): Locator => page.locator('[data-testid="ask-walnut-draft"]')
+/** Main's composer, before Main has a conversation. */
+const slotMainDraft = (page: Page): Locator => page.locator('[data-testid="ask-walnut-main-draft"]')
 const slotPending = (page: Page): Locator => page.locator('[data-testid="ask-walnut-pending"]')
 const slotSession = (page: Page): Locator => page.locator('[data-testid="ask-walnut-session"]')
 /** The Ask Walnut composer INSIDE the slot (never the session panel's own one). */
@@ -267,11 +281,12 @@ async function notePending(pendingSeen: Promise<boolean>, label: string): Promis
 
 // ── Empty state ───────────────────────────────────────────────────────────
 
-test('with no Ask Walnut tasks the slot is the composer, and the drawer lists nothing', async ({ page }) => {
+test('with no Ask Walnut tasks the slot is Main\'s composer, and the drawer lists only Main', async ({ page }) => {
   // The socket is dead-ended for this test ONLY: `task:created` is a global
   // broadcast, so a parallel spec's Ask Walnut launch would be inserted straight
   // into this page's store and grow a row that the HTTP filter never saw. Same
-  // reasoning as tests/e2e/browser/notification-bell-badge.spec.ts.
+  // reasoning as tests/e2e/browser/notification-bell-badge.spec.ts. The same
+  // filter hides a Main task another spec made, so Main has no conversation here.
   await page.routeWebSocket('**/ws*', () => {})
   await hideForeignWalnutTasks(page)
 
@@ -282,20 +297,28 @@ test('with no Ask Walnut tasks the slot is the composer, and the drawer lists no
   await expect(page.locator('.main-page-chat [data-testid="ask-walnut-slot"]')).toHaveCount(1)
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 
-  await expect(slotDraft(page)).toBeVisible({ timeout: 30_000 })
-  await expect(slotDraftComposer(page)).toHaveAttribute('placeholder', /Ask Walnut anything/)
+  // A fresh window opens on Main, the main agent: its own composer, named Main,
+  // with the line that says what it is. Not the ordinary Ask Walnut composer.
+  await expect(slotMainDraft(page)).toBeVisible({ timeout: 30_000 })
+  await expect(slotMainDraft(page).locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask Main anything/)
+  await expect(slotMainDraft(page).locator('.session-panel-title')).toHaveText('Main')
+  await expect(page.locator('[data-testid="ask-walnut-main-intro"]')).toBeVisible()
   // The composer is the REGULAR draft panel with the ≡ leading its title row —
   // the one thing the slot adds. No session view yet.
-  await expect(slotDraft(page).locator('.session-panel-header-top [data-testid="ask-walnut-menu"]')).toBeVisible()
+  await expect(slotMainDraft(page).locator('.session-panel-header-top [data-testid="ask-walnut-menu"]')).toBeVisible()
+  await expect(slotDraft(page)).toHaveCount(0)
   await expect(slotSession(page)).toHaveCount(0)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/1-empty-state.png` })
 
-  // Nothing to switch between: the drawer opens, says so, and offers New chat.
+  // No asks to switch between: the drawer opens on Main's row alone (current),
+  // and offers New chat. With Main there, it does not say "no sessions yet".
   await openAskWalnutDrawer(page)
   await expect(slotMenu(page)).toHaveAttribute('aria-expanded', 'true')
   await expect(drawerRows(page)).toHaveCount(0)
-  await expect(drawer(page).getByText('No Ask Walnut sessions yet.')).toBeVisible()
+  await expect(drawerMain(page)).toBeVisible()
+  await expect(drawerMain(page)).toHaveAttribute('aria-current', 'true')
+  await expect(drawer(page).getByText('No Ask Walnut sessions yet.')).toHaveCount(0)
   await expect(drawerNew(page)).toBeVisible()
   // The search box takes the keyboard on open, and none of the removed launchers
   // is there (a regression would bring one back as a titled button).
@@ -316,6 +339,8 @@ test('a launch from the slot streams its reply in the slot, and files an amber t
   await loadHome(page)
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 
+  // The slot opens on Main; an ordinary ask starts from New chat.
+  await clickNew(page)
   const launch = await launchFromSlot(page, FIRST_PROMPT)
   firstTaskId = launch.taskId
   firstSessionId = launch.sessionId
@@ -340,9 +365,10 @@ test('a launch from the slot streams its reply in the slot, and files an amber t
   await openAskWalnutDrawer(page)
   await expect(drawerRows(page)).toHaveCount(1)
   await expect(drawerRow(page, firstTaskId)).toHaveAttribute('aria-current', 'true')
-  // Exactly ONE row is ever current — the claim that makes the switch test below
-  // meaningful (two current rows would let both assertions there pass).
-  await expect(page.locator('[data-testid="ask-walnut-drawer-item"][aria-current="true"]')).toHaveCount(1)
+  // Exactly ONE row is ever current, Main's counted — the claim that makes the
+  // switch test below meaningful (two current rows would let both assertions there pass).
+  await expect(currentRows(page)).toHaveCount(1)
+  await expect(drawerMain(page)).not.toHaveAttribute('aria-current', 'true')
   await settleMotion(page)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/2b-drawer-one-row.png` })
   // Clicking the scrim (the part of the slot the drawer does not cover) closes it.
@@ -374,17 +400,22 @@ test('New chat reopens the composer and a second launch adds a second, current r
   await hideForeignWalnutTasks(page)
   await loadHome(page)
 
-  // A fresh browser context has no stored selection, so the slot opens on the
-  // newest Ask Walnut task — the one test 2 created.
+  // A fresh browser context has no stored selection, so the slot opens on Main,
+  // not on the ask test 2 created: that one is a pick away.
+  await openAskWalnutDrawer(page)
+  await expect(drawerMain(page)).toHaveAttribute('aria-current', 'true')
+  await drawerRow(page, firstTaskId).click()
+  await expect(drawer(page)).toHaveCount(0)
   await expect(slotSession(page)).toHaveAttribute('data-session-id', firstSessionId, { timeout: 60_000 })
 
   await clickNew(page)
   await expect(slotDraft(page)).toBeVisible({ timeout: 20_000 })
   // New composes; it does not throw the existing conversation away — and while
-  // composing, no row is current (the composer is not a conversation).
+  // composing, no row is current (the composer is not a conversation), Main's neither.
   await openAskWalnutDrawer(page)
   await expect(drawerRow(page, firstTaskId)).toBeVisible()
   await expect(drawerRow(page, firstTaskId)).not.toHaveAttribute('aria-current', 'true')
+  await expect(currentRows(page)).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(drawer(page)).toHaveCount(0)
 
@@ -415,12 +446,13 @@ test('New chat reopens the composer and a second launch adds a second, current r
 test('picking an ask in the drawer switches the slot to that task\'s session and history', async ({ page }) => {
   await hideForeignWalnutTasks(page)
   await loadHome(page)
-  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+  // The page opens on Main; every ask below is an explicit pick.
+  await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 
-  // Both directions, and no assumption about which ask the page opened on: which
-  // Ask Walnut task is "newest" can flip on any late task write (a session going
-  // idle bumps updated_at), so a spec that only picks row 1 could be asserting a
-  // switch that never happened.
+  // Both directions, so each pick is a real switch: which Ask Walnut task is
+  // "newest" can flip on any late task write (a session going idle bumps
+  // updated_at), so a spec that only picks row 1 could be asserting a switch
+  // that never happened.
   await pickAsk(page, secondTaskId)
   await expect(slotSession(page)).toHaveAttribute('data-session-id', secondSessionId, { timeout: 30_000 })
   // The REPLY, not the bare prompt, is the presence needle: it is an assistant
@@ -452,12 +484,11 @@ test('picking an ask in the drawer switches the slot to that task\'s session and
 test('the selected ask survives a reload', async ({ page }) => {
   await hideForeignWalnutTasks(page)
   await loadHome(page)
-  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+  await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 
-  // Select the FIRST conversation and then reload: with two asks and the newest
-  // as the fallback, only a persisted selection can bring this one back. (The
-  // second launch is normally the newest, but a late task write can reorder them,
-  // so the test picks explicitly instead of relying on that.)
+  // Select the FIRST conversation and then reload: a fresh window's fallback is
+  // Main, so only a persisted selection can bring this ask back. (Picked after
+  // the second one, so the pick is a real switch and the stored value moved.)
   await pickAsk(page, secondTaskId)
   await expect(slotSession(page)).toHaveAttribute('data-session-id', secondSessionId, { timeout: 30_000 })
   await pickAsk(page, firstTaskId)
@@ -622,7 +653,8 @@ test('the panel\'s × hides the slot, exactly as a column\'s × closes the colum
   })
   await hideForeignWalnutTasks(page)
   await loadHome(page)
-  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+  await pickAsk(page, firstTaskId)
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', firstSessionId, { timeout: 60_000 })
 
   await slotSession(page).locator('.session-panel-close').click()
   await expectChatSpotYielded(page)
@@ -631,7 +663,7 @@ test('the panel\'s × hides the slot, exactly as a column\'s × closes the colum
   // And the dock brings it back, on the same ask.
   await dockChat.click()
   await expectChatSpotOpen(page)
-  await expect(slotSession(page)).toBeVisible({ timeout: 30_000 })
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', firstSessionId, { timeout: 30_000 })
 
   // The composer's × in New mode goes back to the conversation, not away.
   await clickNew(page)
@@ -644,7 +676,8 @@ test('the panel\'s × hides the slot, exactly as a column\'s × closes the colum
 test('expand-to-fullscreen takes the whole page, not the slot', async ({ page }) => {
   await hideForeignWalnutTasks(page)
   await loadHome(page)
-  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+  await pickAsk(page, firstTaskId)
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', firstSessionId, { timeout: 60_000 })
 
   const slotBox = (await slot(page).boundingBox())!
   const viewport = page.viewportSize()!
@@ -676,7 +709,7 @@ test('expand-to-fullscreen takes the whole page, not the slot', async ({ page })
 test('the drawer\'s search filters the asks by title', async ({ page }) => {
   await hideForeignWalnutTasks(page)
   await loadHome(page)
-  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+  await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 
   // Both asks carry the placeholder title, so give one a name to search for.
   const needle = `renamed ask ${STAMP}`
@@ -721,7 +754,7 @@ const agentItem = (page: Page, id: string): Locator =>
 test('the drawer\'s title switches agents: Mentor has its own list, its own composer, and its launch is stamped', async ({ page }) => {
   await hideForeignWalnutTasks(page)
   await loadHome(page)
-  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+  await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 
   // The title names the agent on show and opens the others (the built-in
   // console agents: Walnut, Mentor, Note Assistant; the background screenshot
@@ -778,18 +811,21 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
   await expect(slotSession(page)).toHaveAttribute('data-session-id', payload.sessionId!, { timeout: 60_000 })
   await expect(slotSession(page).getByText(replyTo(MENTOR_PROMPT)).first()).toBeVisible({ timeout: 60_000 })
 
-  // Mentor's list has it; Walnut's does not — and going back to Walnut brings
-  // Walnut's newest conversation back into the slot.
+  // Mentor's list has it (and no Main row: Main is Walnut's); Walnut's does not —
+  // and going back to Walnut brings Walnut's default, Main, back into the slot.
   await openAskWalnutDrawer(page)
   await expect(drawerRow(page, mentorTaskId)).toHaveAttribute('aria-current', 'true', { timeout: 20_000 })
   await expect(drawerRows(page)).toHaveCount(1)
+  await expect(drawerMain(page)).toHaveCount(0)
   await agentSwitch(page).click()
   await agentItem(page, 'general').click()
   await expect(agentSwitch(page)).toHaveText(/Ask Walnut/)
   await expect(drawerRow(page, mentorTaskId)).toHaveCount(0)
   await expect(drawerRows(page)).toHaveCount(2)
+  await expect(drawerMain(page)).toHaveAttribute('aria-current', 'true')
   await page.keyboard.press('Escape')
-  await expect(slotSession(page)).toHaveAttribute('data-session-id', secondSessionId, { timeout: 30_000 })
+  await expect(page.locator(`[data-testid="ask-walnut-session"][data-session-id="${payload.sessionId}"]`)).toHaveCount(0)
+  await expect(slotMainDraft(page).or(slotSession(page))).toBeVisible({ timeout: 30_000 })
 
   // Reload on Mentor: the drawer reopens on Mentor, the slot on its ask — with
   // the agent list answering LAST. Before the list resolves every agent but

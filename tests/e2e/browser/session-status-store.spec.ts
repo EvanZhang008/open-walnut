@@ -41,7 +41,7 @@ test.beforeAll(async () => {
  */
 async function openCodexQuickStart(page: Page): Promise<Locator> {
   // expectTaskMenuStatus dismisses the task menu with a click on the chat spot, so
-  // the Ask Walnut slot is open here (it starts hidden until opened).
+  // the Ask Walnut slot is open here (the shared fixture boots with the chat closed).
   await openChatOnLoad(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')

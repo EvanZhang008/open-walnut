@@ -404,7 +404,9 @@ test('N10: Ask Walnut has one bar, a model name (not an id), and finger-sized ch
   const errors = await bootHome(page)
   await openAskWalnut(page)
   const slot = page.getByTestId('ask-walnut-slot')
-  const draft = slot.getByTestId('ask-walnut-draft')
+  // The slot opens on Main, so its composer is Main's until Main has a conversation;
+  // an ordinary ask's composer reads the same.
+  const draft = slot.locator('[data-testid="ask-walnut-draft"], [data-testid="ask-walnut-main-draft"]')
   if (await draft.count()) {
     await expect(draft.locator('.session-panel-header')).toBeHidden()
     await expect(draft.getByText('Draft', { exact: true })).toBeHidden()

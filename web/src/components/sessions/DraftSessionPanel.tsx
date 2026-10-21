@@ -334,13 +334,15 @@ interface Props {
   /** Where a repair draft runs (Walnut's source, or the clone a first Start
    *  makes): the repair hint names it. */
   repairTarget?: WalnutRepairTarget | null;
+  /** A walnut draft's name in the header and placeholder ("Main" for the main agent); default "Ask Walnut". */
+  walnutLabel?: string;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer,
+  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
@@ -398,7 +400,7 @@ export function DraftSessionPanel({
   // launch shape, its own name in the header/placeholder, and the Walnut seeds
   // (tasks, schedule) give way to the agent's own description.
   const askAgent = isWalnut && draft.agent && draft.agent.id !== GENERAL_AGENT_ID ? draft.agent : null;
-  const askLabel = askAgent ? `Ask ${askAgent.name}` : 'Ask Walnut';
+  const askLabel = askAgent ? `Ask ${askAgent.name}` : walnutLabel || 'Ask Walnut';
   // "Customize Walnut": pre-armed on Walnut's own checkout with the repair intent. No
   // mode fork: an Ask Walnut launch has no cwd and would drop the repair.
   const isRepair = draft.intent === 'fix-walnut';
@@ -862,7 +864,7 @@ export function DraftSessionPanel({
           draftKey={draftComposerKey(draft.id)}
           placeholder={isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER
-              : askAgent ? `${askLabel} anything…` : isWalnut ? WALNUT_PLACEHOLDER : PLACEHOLDER}
+              : askAgent ? `${askLabel} anything…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER) : PLACEHOLDER}
           prefillText={prefill.text}
           prefillNonce={prefill.nonce}
           showCommands={false}

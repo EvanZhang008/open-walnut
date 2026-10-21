@@ -145,6 +145,17 @@ await fs.writeFile(
   }, null, 2),
 )
 
+// A new install opens on the chat slot (web/src/pages/home-panel-flags.ts). The
+// specs written while it started hidden assume a closed slot, so the shared
+// fixture remembers "closed" the way a user who closed it would; a fresh browser
+// adopts it at boot. A spec about the real first screen isolates ui-prefs
+// (isolateUiPrefs) and sees the product default.
+await fs.mkdir(path.join(tmpBase, 'config', 'share'), { recursive: true })
+await fs.writeFile(
+  path.join(tmpBase, 'config', 'share', 'ui-prefs.json'),
+  JSON.stringify({ 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } }, null, 2),
+)
+
 // Seed test data
 await fs.writeFile(
   path.join(tasksDir, 'tasks.json'),

@@ -10,7 +10,8 @@ test.use({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 })
 const shots = `/tmp/walnut-setup-banner-${Date.now()}`
 test.beforeAll(async () => { await fs.mkdir(shots, { recursive: true }) })
 test.beforeEach(async ({ page }) => {
-  // Every scenario reads the Ask Walnut slot, which starts hidden until opened.
+  // Every scenario reads the Ask Walnut slot, and the shared fixture boots with the
+  // chat closed (it remembers a closed chat).
   await openChatOnLoad(page)
   await page.routeWebSocket('**/ws*', ws => {
     const server = ws.connectToServer()

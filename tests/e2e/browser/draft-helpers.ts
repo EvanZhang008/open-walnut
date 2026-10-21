@@ -32,20 +32,19 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 
-/** The chat spot's layout key. Absent = hidden (web/src/pages/home-panel-flags.ts). */
+/** The chat spot's layout key. Absent = open, on Main (web/src/pages/home-panel-flags.ts). */
 export const CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible'
 
 /**
  * Boot with the Ask Walnut slot OPEN, the way a user who opened it once sees the
  * page. Call BEFORE the first navigation.
  *
- * The chat spot starts hidden on a browser that never chose, so a spec about the
- * slot (or one that types into it) states that premise up front instead of leaning
- * on a default. Both halves are load bearing:
+ * The shared fixture boots with the chat closed (test-server.ts seeds a stored
+ * 'false'), so a spec about the slot (or one that types into it) states that
+ * premise up front instead of leaning on a default. Both halves are load bearing:
  * - `isolateUiPrefs`: the key is mirrored to the SHARED fixture server, so a
  *   'true' pushed up from here would open the chat for every later spec that
- *   expects the new-install default, and a 'false' another spec left there would
- *   close it here.
+ *   expects it closed, and a 'false' another spec left there would close it here.
  * - absent-only: the init script runs again on every reload, and a spec that
  *   closes the chat and reloads must see its own 'false', not a fresh 'true'.
  */

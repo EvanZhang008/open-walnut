@@ -51,7 +51,8 @@ test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
-// The drawer lives in the Ask Walnut slot, which starts hidden until opened.
+// The drawer lives in the Ask Walnut slot, and the shared fixture boots with the
+// chat closed (it remembers a closed chat), so each test opens it.
 test.beforeEach(async ({ page }) => { await openChatOnLoad(page) })
 
 const drawer = (page: Page): Locator => page.locator('[data-testid="ask-walnut-drawer"]')
@@ -400,6 +401,12 @@ test('an ask whose session is gone leaves no request open', async ({ page }) => 
   page.on('requestfinished', (r) => { open.delete(r) })
   page.on('requestfailed', (r) => { open.delete(r) })
   await openHome(page)
+  // A fresh window opens on Main, so open one of those asks the way a user does:
+  // its row in the drawer (row 0 has a session this server never had).
+  await openAskWalnutDrawer(page)
+  await rows(page).and(page.locator(`[data-task-id="ad-${STAMP}-00"]`)).click()
+  await expect(drawer(page)).toHaveCount(0)
+  await expect(page.locator(`[data-testid="ask-walnut-session"][data-session-id="pw-sess-${STAMP}-0"]`)).toHaveCount(1, { timeout: 30_000 })
   await expect.poll(() => seen.length, { timeout: 30_000 }).toBeGreaterThan(0)
   await expect.poll(() => [...open].map((r) => r.url()), { timeout: 15_000 }).toEqual([])
   await page.waitForLoadState('networkidle', { timeout: 20_000 })

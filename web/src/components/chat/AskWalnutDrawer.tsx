@@ -114,11 +114,15 @@ interface DrawerProps {
   onFixWalnut?: () => void;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
+  /** Walnut's list only: Main, the main agent, pinned above the other chats (it may not exist yet). */
+  main?: { selected: boolean; task?: Task; onPick: () => void };
+  /** The "Org chart" link. Absent hides it. */
+  onOpenOrg?: () => void;
 }
 
 export function AskWalnutDrawer({
   open, onClose, returnFocusRef, agents, agent, onPickAgent, rows, loading = false, selectedTaskId, onPick, onNew,
-  onFixWalnut, inspectorOpen, onToggleInspector,
+  onFixWalnut, inspectorOpen, onToggleInspector, main, onOpenOrg,
 }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -315,7 +319,22 @@ export function AskWalnutDrawer({
         </div>
 
         <div className="ask-walnut-drawer-list" role="group" aria-label="Your asks" data-testid="ask-walnut-drawer-list">
-          {rows.length === 0 && !loading && (
+          {main && (!query.trim() || matchesAskQuery('Main', query)) && (
+            <button
+              type="button"
+              className={`ask-walnut-drawer-item ask-walnut-drawer-main${main.selected ? ' is-selected' : ''}`}
+              data-testid="ask-walnut-drawer-main"
+              aria-current={main.selected ? 'true' : undefined}
+              onClick={() => { onClose(); main.onPick(); }}
+              title="Main: your main agent, who sees all your work"
+            >
+              {main.task ? <TaskDot task={main.task} /> : <span className="ask-walnut-drawer-dot task-circle-todo" aria-hidden="true" />}
+              <span className="ask-walnut-drawer-item-title">Main</span>
+              <span className="ask-walnut-drawer-item-time">all your work</span>
+            </button>
+          )}
+          {main && rows.length > 0 && <div className="ask-walnut-drawer-sep" role="separator" aria-hidden="true" />}
+          {rows.length === 0 && !loading && !main && (
             <p className="ask-walnut-drawer-empty">No {agent.project} sessions yet.</p>
           )}
           {/* role=status: a screen reader typing in the search box hears when the
@@ -355,6 +374,17 @@ export function AskWalnutDrawer({
           {/* Two links about THIS surface, not launchers: what Walnut sends the
               session (Context) and a shortcut into Walnut's own checkout (Fix). */}
           <div className="ask-walnut-drawer-links">
+            {onOpenOrg && (
+              <button
+                type="button"
+                className="ask-walnut-drawer-link"
+                data-testid="ask-walnut-org"
+                onClick={act(onOpenOrg)}
+                title="Who works on what: Main, each project and its tasks. Drag a task to move it."
+              >
+                <span aria-hidden="true">{'⌗'}</span> Org chart
+              </button>
+            )}
             <button
               type="button"
               className={`ask-walnut-drawer-link${inspectorOpen ? ' is-active' : ''}`}
