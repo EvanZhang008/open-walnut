@@ -64,6 +64,13 @@ let REBUILD_MARKER = "rebuilding native module"
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var webView: WKWebView!
+    var popoutWindows: [ObjectIdentifier: NSWindow] = [:]
+    var popoutTitles: [ObjectIdentifier: NSKeyValueObservation] = [:]
+    var popoutURLs: [ObjectIdentifier: URL] = [:]
+    var popoutWatchdogs: [ObjectIdentifier: WebContentWatchdog] = [:]
+    var pendingWindowCloses: Set<ObjectIdentifier> = []
+    var approvedWindowCloses: Set<ObjectIdentifier> = []
+    var activeWebView: WKWebView? { (NSApp.keyWindow?.contentView as? WKWebView) ?? webView }
     var serverProcess: Process?
     var serverPort: Int?
     // Last captured stdout/stderr from a server child that died before confirming
@@ -144,6 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
+        window.isReleasedWhenClosed = false
         window.title = "Walnut"
         applyWindowChrome()
         window.center()
@@ -268,7 +276,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// title, make the bar transparent, drop the hairline, and let the window
     /// background (kept in step with the web app's `--bg`) run edge to edge so the
     /// buttons float over the app's own header.
-    func applyWindowChrome() {
+    func applyWindowChrome(to target: NSWindow? = nil) {
+        guard let window = target ?? window else { return }
         window.titleVisibility = .hidden          // title still shows in the Window menu
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
@@ -279,9 +288,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Applies a CSS colour reported by the web app (`--bg`) to the window
     /// background, which is all that's visible in the transparent titlebar.
-    func setChromeBackground(css: String) {
+    func setChromeBackground(css: String, in target: NSWindow?) {
         guard let color = NSColor(cssHex: css) else { return }
-        window?.backgroundColor = color
+        target?.backgroundColor = color
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -1482,7 +1491,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// View → Restart Page Process: the manual path for the same swap the
     /// watchdog does on its own, for when the app feels slow right now.
     @objc func recycleWebContentManually() {
-        recycleWebContent(reason: "manual")
+        if let active = activeWebView, active !== webView { recyclePopout(active) }
+        else { recycleWebContent(reason: "manual") }
     }
 
     /// View → Reduce Transparency: flips the glass off (or back on) and rebuilds
@@ -2017,7 +2027,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func reloadPage() {
-        webView?.reload()
+        activeWebView?.reload()
     }
 
     // MARK: - Page zoom (⌘+ / ⌘- / ⌘0), persisted across launches
@@ -2026,12 +2036,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     static let zoomLevels: [Double] = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
     func applyZoom(_ zoom: Double) {
-        webView?.pageZoom = zoom
+        activeWebView?.pageZoom = zoom
         UserDefaults.standard.set(zoom, forKey: Self.zoomDefaultsKey)
     }
 
     func stepZoom(by step: Int) {
-        guard let webView = webView else { return }
+        guard let webView = activeWebView else { return }
         let current = webView.pageZoom
         // Nearest level, then step — keeps repeated ⌘+/⌘- on the ladder even
         // if the stored value drifts.
@@ -2090,7 +2100,7 @@ extension AppDelegate: WKScriptMessageHandler {
             NSPasteboard.general.setString(text, forType: .string)
         case "walnutChrome":
             guard let bg = message.body as? String else { return }
-            setChromeBackground(css: bg)
+            setChromeBackground(css: bg, in: message.webView?.window)
         default:
             return
         }
@@ -2103,7 +2113,7 @@ extension AppDelegate: WKUIDelegate {
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        decisionHandler(origin.host == "localhost" && type == .microphone ? .grant : .deny)
+        decisionHandler(linkPolicy.isLoopback(origin.host) && origin.port == (serverPort ?? 3456) && type == .microphone ? .grant : .deny)
     }
 }
 
@@ -2117,6 +2127,10 @@ extension AppDelegate: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if webView !== self.webView {
+            popoutWatchdogs[ObjectIdentifier(webView)]?.pageDidFinishLoading()
+            return
+        }
         webContentWatchdog?.pageDidFinishLoading()
         if let state = appUpdater?.state { pushAppUpdateState(state) }
         consolePageLoaded = true
@@ -2131,7 +2145,9 @@ extension AppDelegate: WKNavigationDelegate {
     /// ⌘R fixes; with it the watchdog logs the death (footprint, age, how many
     /// in the last ten minutes) and reloads with backoff.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        if let watchdog = webContentWatchdog {
+        if webView === self.webView, let watchdog = webContentWatchdog {
+            watchdog.pageProcessDidTerminate()
+        } else if let watchdog = popoutWatchdogs[ObjectIdentifier(webView)] {
             watchdog.pageProcessDidTerminate()
         } else {
             DesktopLogger.shared.log("webcontent_terminated")
@@ -2153,7 +2169,7 @@ extension AppDelegate: WKNavigationDelegate {
             targetsNewWindow: navigationAction.targetFrame == nil,
             isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true)
         switch linkPolicy.verdict(for: request) {
-        case .inPage:
+        case .inPage, .openInAppWindow:
             decisionHandler(.allow)
         case .openExternally:
             NSWorkspace.shared.open(url)
@@ -2167,19 +2183,159 @@ extension AppDelegate: WKNavigationDelegate {
         LinkPolicy(appPort: serverPort ?? 3456)
     }
 
-    /// `window.open(...)` never reaches decidePolicyFor: WebKit asks the UI
-    /// delegate for a web view to load it in, and with no implementation the call
-    /// was a silent dead click. The shell has one window, so the answer is the
-    /// default browser, and nil (no child web view).
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url {
-            let request = LinkRequest(url: url, isLinkClick: false, targetsNewWindow: true, isMainFrame: true)
-            if linkPolicy.verdict(for: request) == .openExternally {
-                NSWorkspace.shared.open(url)
+        guard let url = navigationAction.request.url else { return nil }
+        let request = LinkRequest(url: url, isLinkClick: false, targetsNewWindow: true, isMainFrame: true)
+        switch linkPolicy.verdict(for: request) {
+        case .openInAppWindow:
+            if let target = popoutWindows.first(where: { key, target in
+                let child = target.contentView as? WKWebView
+                guard let current = child?.url ?? popoutURLs[key] else { return false }
+                return linkPolicy.isSameWindowTarget(current, url)
+            })?.value {
+                presentPopout(target)
+                return nil
             }
+            // A separately loaded view is not tied to the opener's page process.
+            let childConfig = WKWebViewConfiguration()
+            childConfig.websiteDataStore = configuration.websiteDataStore
+            childConfig.preferences = configuration.preferences
+            let controller = childConfig.userContentController
+            for script in configuration.userContentController.userScripts { controller.addUserScript(script) }
+            controller.add(self, name: "walnutClipboard")
+            controller.add(self, name: "walnutChrome")
+            controller.addScriptMessageHandler(self, contentWorld: .page, name: "walnutUpdate")
+            let child = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 760), configuration: childConfig)
+            child.navigationDelegate = self
+            child.uiDelegate = self
+            child.autoresizingMask = [.width, .height]
+            child.pageZoom = webView.pageZoom
+            let target = NSWindow(contentRect: child.frame,
+                styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            target.isReleasedWhenClosed = false
+            target.delegate = self
+            target.title = "Walnut"
+            applyWindowChrome(to: target)
+            target.contentView = child
+            let key = ObjectIdentifier(child)
+            popoutWindows[key] = target
+            popoutURLs[key] = url
+            let watchdog = WebContentWatchdog(
+                policyProvider: { WebContentPolicy.fromDefaults(UserDefaults.standard) },
+                portProvider: { [weak self] in self?.serverPort },
+                recycle: { [weak self, weak target] _, _ in
+                    guard let child = target?.contentView as? WKWebView else { return }
+                    self?.recyclePopout(child)
+                })
+            popoutWatchdogs[key] = watchdog
+            watchdog.attach(webView: child, window: target)
+            popoutTitles[key] = child.observe(\.title, options: [.new]) { [weak target] view, _ in
+                target?.title = view.title ?? "Walnut"
+            }
+            target.center()
+            if let source = webView.window { target.cascadeTopLeft(from: NSPoint(x: source.frame.minX, y: source.frame.maxY)) }
+            presentPopout(target)
+            child.load(navigationAction.request)
+            return nil
+        case .openExternally:
+            NSWorkspace.shared.open(url)
+        case .inPage, .ignore:
+            break
         }
         return nil
+    }
+
+    func presentPopout(_ target: NSWindow) {
+        #if WALNUT_DESKTOP_TEST
+        target.orderOut(nil)
+        return
+        #else
+        if NSApp.isActive { target.makeKeyAndOrderFront(nil) }
+        else { target.orderBack(nil) }
+        #endif
+    }
+
+    func recyclePopout(_ old: WKWebView) {
+        let key = ObjectIdentifier(old)
+        guard let target = popoutWindows[key], let url = old.url ?? popoutURLs[key] else { return }
+        if target.attachedSheet != nil || pendingWindowCloses.contains(key) {
+            popoutWatchdogs[key]?.attach(webView: old, window: target)
+            return
+        }
+        let child = WKWebView(frame: old.frame, configuration: old.configuration)
+        child.navigationDelegate = self
+        child.uiDelegate = self
+        child.autoresizingMask = [.width, .height]
+        child.pageZoom = old.pageZoom
+        let next = ObjectIdentifier(child)
+        popoutWindows[next] = target
+        popoutURLs[next] = popoutURLs.removeValue(forKey: key)
+        let watchdog = popoutWatchdogs.removeValue(forKey: key)
+        popoutWatchdogs[next] = watchdog
+        popoutTitles.removeValue(forKey: key)
+        popoutTitles[next] = child.observe(\.title, options: [.new]) { [weak target] view, _ in
+            target?.title = view.title ?? "Walnut"
+        }
+        old.stopLoading()
+        old.navigationDelegate = nil
+        old.uiDelegate = nil
+        popoutWindows.removeValue(forKey: key)
+        target.contentView = child
+        watchdog?.attach(webView: child, window: target)
+        child.load(URLRequest(url: url))
+    }
+
+    func webViewDidClose(_ webView: WKWebView) {
+        popoutWindows[ObjectIdentifier(webView)]?.performClose(nil)
+    }
+}
+
+extension AppDelegate: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender.attachedSheet == nil else { return false }
+        guard let child = sender.contentView as? WKWebView else { return true }
+        let key = ObjectIdentifier(child)
+        if approvedWindowCloses.remove(key) != nil { return true }
+        guard !pendingWindowCloses.contains(key), let watchdog = popoutWatchdogs[key] else { return false }
+        pendingWindowCloses.insert(key)
+        watchdog.checkUnsavedWork { [weak self, weak sender, weak child] unsaved in
+            guard let self, let sender, let child,
+                  self.popoutWindows[key] === sender, sender.contentView === child else { return }
+            self.pendingWindowCloses.remove(key)
+            if !unsaved {
+                self.approvedWindowCloses.insert(key)
+                sender.performClose(nil)
+                return
+            }
+            let alert = NSAlert()
+            alert.messageText = "Close this window and discard unsaved work?"
+            alert.addButton(withTitle: "Keep Open")
+            alert.addButton(withTitle: "Discard and Close")
+            alert.beginSheetModal(for: sender) { response in
+                if response == .alertSecondButtonReturn {
+                    self.approvedWindowCloses.insert(key)
+                    sender.performClose(nil)
+                }
+            }
+        }
+        return false
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let target = notification.object as? NSWindow,
+              let child = target.contentView as? WKWebView else { return }
+        let key = ObjectIdentifier(child)
+        popoutTitles.removeValue(forKey: key)
+        popoutURLs.removeValue(forKey: key)
+        popoutWatchdogs.removeValue(forKey: key)
+        pendingWindowCloses.remove(key)
+        approvedWindowCloses.remove(key)
+        popoutWindows.removeValue(forKey: key)
+        child.stopLoading()
+        child.navigationDelegate = nil
+        child.uiDelegate = nil
+        child.configuration.userContentController.removeAllScriptMessageHandlers()
     }
 }
 
