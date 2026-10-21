@@ -158,7 +158,7 @@ export function workspaceInstructions(moved: MovedWorkspace, target: { repoRoot:
       lines.push(`Set it up at ${target.repoRoot}${remote ? `: clone ${remote.url} into it (it exists and is empty: \`git clone ${remote.url} .\`), then check out ${m.branch ?? m.head}` : ' (`git init` there first)'}.`);
     }
     if (has('repo.bundle')) lines.push(`The commits that are not on the remote are in repo.bundle${m.bundle?.base ? ` (based on ${m.bundle.base})` : ' (a full bundle)'}: \`git fetch <bundle> ${m.branch ?? 'HEAD'}\` and move the branch to it.`);
-    if (has('changes.patch')) lines.push('Then apply the uncommitted changes: `git apply --index changes.patch` (use --3way if it does not apply cleanly).');
+    if (has('changes.patch')) lines.push('Then apply the uncommitted changes, leaving them uncommitted and unstaged as they were: `git apply changes.patch` (use --3way if it does not apply cleanly).');
     if (has('untracked.tgz')) lines.push('Unpack untracked.tgz at the repository root for the files git does not track.');
     if (!target.known && m.relCwd) lines.push(`The work was in ${m.relCwd} inside the repository: continue there once it is set up.`);
     if (m.untracked?.skipped?.length) lines.push(`Left out (too large to move): ${m.untracked.skipped.slice(0, 20).join(', ')}${m.untracked.skipped.length > 20 ? ', …' : ''}.`);

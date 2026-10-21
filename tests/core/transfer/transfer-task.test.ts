@@ -83,7 +83,7 @@ import { closeDb as closeTaskDb } from '../../../src/core/task-db.js';
 import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
 import { createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { transferTask } from '../../../src/core/transfer/transfer.js';
-import { recordProbedFacts } from '../../../src/core/hosts/host-profile.js';
+import { recordProbedFacts, recordRepoPath, repoKey } from '../../../src/core/hosts/host-profile.js';
 
 beforeEach(async () => {
   closeTaskDb(); closeSessionDb(); _resetForTesting(); _resetSessionTrackerForTesting();
@@ -241,5 +241,16 @@ describe('transferTask', () => {
     expect(edges.copies).toEqual([]);
     expect(edges.forks[0].input).toMatchObject({ task_id: res.taskId, model: 'claude-opus-5-5' });
     expect(res.title).toBe('Fix the parser · claude-opus-5-5');
+  });
+
+  it('a directory the user names wins over where the host already keeps the repository', async () => {
+    edges.hosts = { devbox: { hostname: 'devbox.example.org' } };
+    await recordRepoPath('devbox', repoKey('https://github.com/acme/marina.git', 'repo'), '/srv/marina');
+    const src = await taskWithConversation();
+    const res = await transferTask({ taskId: src, host: 'devbox', cwd: '/srv/fresh-copy', mode: 'brief' });
+    expect(res.target.cwd).toBe('/srv/fresh-copy');
+    const message = String(edges.starts[0].message);
+    expect(message).toContain('Set it up at /srv/fresh-copy');
+    expect(message).not.toContain('already has it at /srv/marina');
   });
 });
