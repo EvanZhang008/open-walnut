@@ -158,6 +158,38 @@ function staleSocketReset(err: unknown): boolean {
   return code === 'ECONNRESET' || code === 'EPIPE' || code === 'UND_ERR_SOCKET'
 }
 
+/** The waits before a replica or journal step goes once more after its connection broke. */
+const STEP_RETRY_MS = [2_000, 5_000]
+let stepRetryMs = STEP_RETRY_MS
+
+/**
+ * Send an idempotent step, again on a fresh connection when one broke before an
+ * answer, at most twice more: the first retry at once after a reused socket was
+ * reset, else after 2 s; the second after 5 s (a 4 MB letter body sent across the
+ * internet lost its connection on the first inbox copy round, 2026-10-21, as the
+ * build upload's chunks did). A deadline is never sent again: the companion may
+ * still be working on it.
+ */
+async function sendStep(send: () => Promise<globalThis.Response>): Promise<globalThis.Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await send()
+    } catch (err) {
+      if (!(err instanceof Error) || err.name === 'TimeoutError' || err.name === 'AbortError' || attempt >= stepRetryMs.length) throw err
+      const wait = attempt === 0 && staleSocketReset(err) ? 0 : stepRetryMs[attempt]
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+    }
+  }
+}
+
+/** A request's error with its cause: fetch says only "fetch failed", the cause says why. */
+function stepError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err)
+  const cause = (err as Error & { cause?: { code?: unknown; message?: unknown } }).cause
+  const detail = cause ? (typeof cause.code === 'string' ? cause.code : typeof cause.message === 'string' ? cause.message : '') : ''
+  return detail && !err.message.includes(detail) ? `${err.message} (${detail})` : err.message
+}
+
 /** A companion is set up and the replica lane is not resting: worth building a manifest for. */
 export async function cloudReplicaAvailable(): Promise<boolean> {
   if (Date.now() < replicaUnsupportedUntil || cloudIngestResting()) return false
@@ -172,8 +204,8 @@ export async function cloudReplicaAvailable(): Promise<boolean> {
  * still takes projections. A refused credential rests both.
  *
  * Both steps are idempotent (a manifest, or rows written as they are), so a
- * request whose reused socket was reset before any answer goes out once more on
- * a fresh connection instead of failing the whole round.
+ * request whose connection broke before any answer goes out again on a fresh one
+ * (sendStep) instead of failing the whole round.
  */
 export async function postToCloudReplica(payload: Record<string, unknown>, opts: { timeoutMs?: number } = {}): Promise<CloudReplicaReply> {
   if (Date.now() < replicaUnsupportedUntil || cloudIngestResting()) return { ok: false, outcome: 'unsupported' }
@@ -190,10 +222,7 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
       body,
       signal: AbortSignal.timeout(opts.timeoutMs ?? timeoutMs),
     })
-    const res = await send().catch((err: unknown) => {
-      if (!staleSocketReset(err)) throw err
-      return send()
-    })
+    const res = await sendStep(send)
     status = res.status
     const json = await res.json().catch(() => null) as Record<string, unknown> | null
     if (res.ok && json) return { ok: true, reply: json }
@@ -214,7 +243,7 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
     // The answer's own fields (a refusal names how many rows it would remove) go with it.
     return { ok: false, outcome: 'failed', status, error: typeof json?.error === 'string' ? json.error : undefined, ...(json ? { body: json } : {}) }
   } catch (err) {
-    return { ok: false, outcome: 'failed', status, error: err instanceof Error ? err.message : String(err) }
+    return { ok: false, outcome: 'failed', status, error: stepError(err) }
   } finally {
     releaseSlot()
   }
@@ -227,7 +256,8 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
  * or `offline.blob`, answered with a daemon's reply shape. Throws when it got no
  * answer (the handover keeps the records for its next run); a refusal is the
  * answer `{ok:false, error}`. Each command is idempotent (a redrain hands out the
- * same frozen records), so a reused socket reset before any answer goes once more.
+ * same frozen records), so a connection that broke before any answer is tried
+ * again (sendStep).
  */
 export async function postToCloudJournal(cmd: string, params: Record<string, unknown> = {}, opts: { timeoutMs?: number } = {}): Promise<Record<string, unknown>> {
   if (cloudIngestResting()) throw new Error('the companion refused this Mac\'s credential')
@@ -243,10 +273,7 @@ export async function postToCloudJournal(cmd: string, params: Record<string, unk
       body,
       signal: AbortSignal.timeout(opts.timeoutMs ?? timeoutMs),
     })
-    const res = await send().catch((err: unknown) => {
-      if (!staleSocketReset(err)) throw err
-      return send()
-    })
+    const res = await sendStep(send)
     const json = await res.json().catch(() => null) as Record<string, unknown> | null
     if (res.status === 401 || res.status === 403) {
       unsupportedUntil = Date.now() + UNSUPPORTED_BACKOFF_MS
@@ -400,7 +427,8 @@ function drive<T>(key: string, lane: Lane, run: () => Promise<T>): Promise<T> {
 }
 
 /** Tests only. `timeoutMs` shortens the request deadline (default 30s). */
-export function _resetCloudIngestForTesting(opts: { timeoutMs?: number } = {}): void {
+export function _resetCloudIngestForTesting(opts: { timeoutMs?: number; stepRetryMs?: number[] } = {}): void {
+  stepRetryMs = opts.stepRetryMs ?? STEP_RETRY_MS
   unsupportedUntil = 0
   replicaUnsupportedUntil = 0
   endpoint = null
