@@ -36,11 +36,12 @@ type ResolveArgs = [string, boolean, string | undefined, Record<string, unknown>
 /** Register a fake live session whose resolvePermissionRequest records its args. */
 function registerFakeSession() {
   const resolvePermissionRequest = vi.fn(
-    (..._args: ResolveArgs) => true,
+    async (..._args: ResolveArgs) => true,
   );
   const fake = {
     sessionId: SID,
     resolvePermissionRequest,
+    getPendingPermissionRequests: () => Array.from({ length: 8 }, (_, i) => ({ requestId: `req-${i + 1}` })),
     detach: () => {},
     kill: () => {},
     get active() { return false; },
@@ -125,6 +126,40 @@ describe('POST /api/sessions/:sid/permission with answers', () => {
     expect(args[1]).toBe(false);
     expect(args[2]).toBe('User dismissed the questions');
     expect(args[3]).toBeUndefined();
+  });
+
+  it('does not return HTTP success until the actual permission delivery is confirmed', async () => {
+    const fake = registerFakeSession();
+    let finish!: (ok: boolean) => void;
+    fake.resolvePermissionRequest.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    let answered = false;
+    const pending = post({ requestId: 'req-1', allow: true }).then((res) => { answered = true; return res; });
+    await vi.waitFor(() => expect(fake.resolvePermissionRequest).toHaveBeenCalledOnce());
+    expect(answered).toBe(false);
+    finish(true);
+    expect((await pending).status).toBe(200);
+  });
+
+  it('returns retryable 503 on an unconfirmed transport write, never a fake resolved answer', async () => {
+    const fake = registerFakeSession();
+    fake.resolvePermissionRequest.mockResolvedValueOnce(false);
+    const res = await post({ requestId: 'req-1', allow: true });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: expect.stringContaining('retry the same request') });
+    expect((await post({ requestId: 'req-1', allow: true })).status).toBe(200);
+  });
+
+  it('returns retryable 503 when the transport delivery throws', async () => {
+    const fake = registerFakeSession();
+    fake.resolvePermissionRequest.mockRejectedValueOnce(new Error('transport lost'));
+    expect((await post({ requestId: 'req-1', allow: true })).status).toBe(503);
+  });
+
+  it('keeps 404 for a genuinely missing or already resolved request', async () => {
+    const fake = registerFakeSession();
+    const res = await post({ requestId: 'req-gone', allow: true });
+    expect(res.status).toBe(404);
+    expect(fake.resolvePermissionRequest).not.toHaveBeenCalled();
   });
 
   // `answers` is forwarded verbatim into the CLI's tool input, so a malformed

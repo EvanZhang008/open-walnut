@@ -22,12 +22,14 @@ struct SessionConversationView: View {
     /// Showing this page counts as opening the session (`RecentOpens`). Off where the
     /// host records the opens itself (`TasksTabView`).
     @Environment(\.recordsSessionOpen) private var recordsOpen
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Optional on purpose: WalnutTests host this page without the app
     /// environment; task affordances just hide there (fixture has no taskId).
     @Environment(TasksStore.self) private var tasksStore: TasksStore?
 
     @State private var store: SessionConversationStore
+    @State private var pageOperations: SessionPageOperations
     /// Wave-1 lifecycle control plane (permissions / restart / terminate /
     /// rename / archive) — separate from the conversation store on purpose:
     /// zero writes into the timeline rendering path.
@@ -65,7 +67,9 @@ struct SessionConversationView: View {
     init(session: WalnutSession, voiceModeOnOpen: VoiceModeOnOpen = .off) {
         self.session = session
         self.voiceModeOnOpen = voiceModeOnOpen
-        _store = State(initialValue: SessionConversationStore(session: session))
+        let store = SessionConversationStore(session: session)
+        _store = State(initialValue: store)
+        _pageOperations = State(initialValue: SessionPageOperations(store: store))
         _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
     }
 
@@ -76,6 +80,7 @@ struct SessionConversationView: View {
         self.session = session
         self.voiceModeOnOpen = .off
         _store = State(initialValue: store)
+        _pageOperations = State(initialValue: SessionPageOperations(store: store))
         _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
     }
 
@@ -277,8 +282,17 @@ struct SessionConversationView: View {
         // every route that opens a conversation is remembered. `onAppear`, not the
         // `.task` below: a task re-arms whenever its subtree is re-evaluated, and each
         // arm would be another write.
-        .onAppear { if recordsOpen { tasksStore?.recents.recordSession(session) } }
+        .onAppear {
+            pageOperations.setActive(scenePhase != .background)
+            pageOperations.appear()
+            if recordsOpen { tasksStore?.recents.recordSession(session) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Like WalnutApp, transient system interruptions never suspend work.
+            pageOperations.setActive(phase != .background)
+        }
         .task {
+            guard !Task.isCancelled else { return }
             // Route image fetches (/api/v1/media) to this session's exec host.
             MediaContext.currentSessionID = session.id
             // Opening the conversation reads the task (the board's unread dot clears),
@@ -292,9 +306,10 @@ struct SessionConversationView: View {
                 voiceModeOnOpenDone = true
                 startVoiceMode(awaitingAnswer: true)
             }
-            await store.open()
+            await pageOperations.refresh()
         }
         .onDisappear {
+            pageOperations.disappear()
             // And leaving it does too: output that landed while the page was on screen
             // was seen, so it must not greet the user as unread on the board.
             if let taskId = session.taskId { tasksStore?.markRead(taskId: taskId) }
@@ -304,7 +319,6 @@ struct SessionConversationView: View {
             programmaticFreezeTask?.cancel()
             programmaticGeometryFrozen = false
             lifecycle.stop()
-            store.close()
             stopVoiceMode()
         }
     }
@@ -412,21 +426,14 @@ struct SessionConversationView: View {
             }
             Divider()
             Button {
-                Task {
-                    if await lifecycle.restart() {
-                        // Fresh CLI: reattach the stream + reload the transcript.
-                        await store.open()
-                    }
-                }
+                pageOperations.start { await lifecycle.restart() }
             } label: {
                 Label("Restart", systemImage: "arrow.clockwise")
             }
             .accessibilityIdentifier("session.restart")
             if SessionStatus(store.processStatus) == .error || SessionStatus(store.processStatus) == .stopped {
                 Button {
-                    Task {
-                        if await lifecycle.retry() { await store.open() }
-                    }
+                    pageOperations.start { await lifecycle.retry() }
                 } label: {
                     Label("Retry", systemImage: "arrow.uturn.forward")
                 }
@@ -550,7 +557,7 @@ struct SessionConversationView: View {
             previewSessionID: session.id,
             repinSignal: repinSignal,
             keyboardGeometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen },
-            onRefresh: { await store.open() }
+            onRefresh: { await pageOperations.refresh() }
         )
         .modifier(KeyboardBottomRepin(
             keyboardGeometryFrozen: $keyboardGeometryFrozen,
@@ -571,6 +578,121 @@ struct SessionConversationView: View {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             programmaticGeometryFrozen = false
+        }
+    }
+}
+
+/// A page owns its asynchronous reopen work until it leaves. Cancellation alone
+/// is not enough: a request can finish after cancellation and after the SAME page
+/// returns, so every completion must also belong to its current appearance.
+@MainActor
+final class SessionPageOperations {
+    private let store: SessionConversationStore
+    private var visible = false
+    private var active = true
+    private var openedThisAppearance = false
+    private var generation: UInt64 = 0
+    private var operationTask: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
+    private var readGeneration: UInt64 = 0
+
+    init(store: SessionConversationStore) { self.store = store }
+
+    func appear() {
+        guard !visible else { return }
+        invalidate()
+        visible = true
+    }
+
+    func disappear() {
+        visible = false
+        openedThisAppearance = false
+        invalidate()
+        store.close()
+    }
+
+    func setActive(_ active: Bool) {
+        guard self.active != active else { return }
+        self.active = active
+        invalidate()
+        guard visible else { return }
+        if active {
+            if openedThisAppearance {
+                // LifecycleHub may already have resumed it; resume() is idempotent.
+                store.resume()
+            } else {
+                // Complete the initial window if backgrounding interrupted its open.
+                start { true }
+            }
+        } else {
+            store.suspend()
+        }
+    }
+
+    private func invalidate() {
+        generation &+= 1
+        operationTask?.cancel()
+        operationTask = nil
+        cancelRead()
+    }
+
+    private func cancelRead() {
+        readGeneration &+= 1
+        refreshTask?.cancel()
+        refreshTask = nil
+    }
+
+    @discardableResult
+    func start(_ operation: @escaping @MainActor () async -> Bool) -> Task<Void, Never>? {
+        guard visible, active, !Task.isCancelled else { return nil }
+        // Keep the first user action; a repeated tap must not cancel its POST.
+        guard operationTask == nil else { return operationTask }
+        let startedGeneration = generation
+        let task = Task { @MainActor [weak self] in
+            guard let self, self.visible, self.active, self.generation == startedGeneration,
+                  !Task.isCancelled else { return }
+            defer {
+                if self.generation == startedGeneration { self.operationTask = nil }
+            }
+            guard await operation(), self.visible, self.active, self.generation == startedGeneration,
+                  !Task.isCancelled else { return }
+            // A successful control operation supersedes only old READ work.
+            // Keep its POST alive while all opens share this one read owner.
+            self.cancelRead()
+            await self.refresh()
+        }
+        operationTask = task
+        return task
+    }
+
+    func refresh() async {
+        guard visible, active, !Task.isCancelled else { return }
+        // Refresh owns only read work; cancelling it must not cancel a restart POST.
+        let task: Task<Void, Never>
+        if let refreshTask {
+            task = refreshTask
+        } else {
+            let startedGeneration = generation
+            let startedRead = readGeneration
+            task = Task { @MainActor [weak self] in
+                guard let self, self.visible, self.active, self.generation == startedGeneration,
+                      self.readGeneration == startedRead, !Task.isCancelled else { return }
+                defer {
+                    if self.generation == startedGeneration, self.readGeneration == startedRead {
+                        self.refreshTask = nil
+                    }
+                }
+                guard await self.store.open() else { return }
+                guard self.visible, self.active, self.generation == startedGeneration,
+                      self.readGeneration == startedRead, !Task.isCancelled else { return }
+                self.openedThisAppearance = true
+            }
+            refreshTask = task
+        }
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 }

@@ -237,6 +237,7 @@ final class SessionLifecycleController {
         do {
             return try await operation()
         } catch {
+            if Task.isCancelled || SessionConversationStore.isCancellation(error) { return false }
             errorMessage = Self.friendlyError(error)
             return false
         }

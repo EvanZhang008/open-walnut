@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import { createServer, type Server } from 'node:http'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-send-stop-unanswered', { CLOUD_MODE: true }))
@@ -64,9 +65,10 @@ const app = () => {
   const a = express(); a.use(express.json())
   a.use('/api/v1', sessionStreamV1Router); a.use('/api/v1', sessionLifecycleV1Router); return a
 }
-const post = (body: Record<string, unknown>) => request(app()).post(`/api/v1/sessions/${SID}/messages`).send(body)
-const stop = () => request(app()).post(`/api/v1/sessions/${SID}/terminate`).send({})
-const statusOf = (mid: string) => request(app()).get(`/api/v1/sessions/${SID}/messages/${mid}`)
+let server: Server
+const post = (body: Record<string, unknown>) => request(server).post(`/api/v1/sessions/${SID}/messages`).send(body)
+const stop = () => request(server).post(`/api/v1/sessions/${SID}/terminate`).send({})
+const statusOf = (mid: string) => request(server).get(`/api/v1/sessions/${SID}/messages/${mid}`)
 
 let mac: {
   onCompanion: boolean; reachesHost: boolean; latestStop: string | null
@@ -125,8 +127,14 @@ beforeEach(async () => {
   cli = []
   macQueue = []
   wire()
+  server = createServer(app())
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
 })
 afterEach(async () => {
+  if (server?.listening) await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()))
   bridgeRequestMock.mockReset()
   bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('devbox'))
   await flushSendQueue()
@@ -140,7 +148,7 @@ describe('a send after a stop nobody answered', () => {
     expect((await stop()).status).toBe(503)
     const mid = 'qm-mobile-sulost000000001'
     const res = await post({ text: 'after an unanswered stop', messageId: mid })
-    expect(res.status).toBe(202)
+    expect(res.status, JSON.stringify({ body: res.body, headers: res.headers, calls: bridgeRequestMock.mock.calls })).toBe(202)
     expect(res.body.queued).toBe(true)
     expect(cli).toEqual([])
     await flushSendQueue()

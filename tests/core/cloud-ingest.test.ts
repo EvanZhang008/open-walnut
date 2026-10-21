@@ -28,7 +28,17 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-cloud-ingest
 let bridgeCfg: { enabled: boolean; url?: string; token?: string } = { enabled: false }
 let cfgCalls = 0
 let cfgDelayMs = 0
+let recoveredToken: string | null = null
+let recoverCalls = 0
+vi.mock('../../src/integrations/git-sync.js', () => ({
+  getCloudRemoteCredentialsAsync: async () => ({ domain: 'companion.example', token: 'owner-token', secure: true }),
+}))
 vi.mock('../../src/integrations/cloud-bridge-config.js', () => ({
+  recoverMachineToken: async (_host: string, deadToken: string) => {
+    recoverCalls++
+    if (recoveredToken && bridgeCfg.token === deadToken) bridgeCfg.token = recoveredToken
+    return recoveredToken ? 'reminted' : 'failed'
+  },
   getBridgeConfigForHost: async () => {
     cfgCalls++
     if (cfgDelayMs) await new Promise((r) => setTimeout(r, cfgDelayMs))
@@ -42,10 +52,11 @@ void warmMock
 
 import {
   ingestUrlFromBridgeUrl, postToCloudIngest, runLatestPerKey, cloudIngestResting, _resetCloudIngestForTesting,
-  postToCloudReplica, cloudReplicaAvailable,
+  postToCloudReplica, cloudReplicaAvailable, postToCloudSessionSend, postToCloudSessionPermission,
 } from '../../src/core/cloud-ingest.js'
 
 let status = 200
+let responseBody: string | null = null
 /** Answer with an HTML page (an app shell) instead of JSON. */
 let htmlBody = false
 /** 'hold': keep the answer until the test releases it; 'hang': never answer. */
@@ -69,8 +80,8 @@ const replica = http.createServer((req, res) => {
     const code = status
     const answer = (): void => {
       if (htmlBody) { res.writeHead(code, { 'Content-Type': 'text/html' }); res.end('<!doctype html><title>app</title>'); return }
-      res.writeHead(code, { 'Content-Type': 'application/json' })
-      res.end(code < 300 ? '{"ok":true,"need":["t1"]}' : '{"error":"x"}')
+      res.writeHead(code, { 'Content-Type': 'application/json', Connection: 'close' })
+      res.end(responseBody ?? (code < 300 ? '{"ok":true,"need":["t1"]}' : '{"error":"x"}'))
     }
     if (resets > 0) { resets--; req.socket.resetAndDestroy(); return }
     if (answerMode === 'hang') return
@@ -93,7 +104,7 @@ afterEach(() => {
   replica.closeAllConnections() // a hung or held request must not leak into the next case
   _resetCloudIngestForTesting()
   seen.length = 0; held.length = 0; status = 200; answerMode = 'now'; open = 0; maxOpen = 0; htmlBody = false; resets = 0
-  bridgeCfg = { enabled: false }; cfgCalls = 0; cfgDelayMs = 0
+  bridgeCfg = { enabled: false }; cfgCalls = 0; cfgDelayMs = 0; responseBody = null; recoveredToken = null; recoverCalls = 0
 })
 const tail = (sid: string): string => JSON.stringify({ sid, data: { version: 1, sessionId: sid, exportedAt: 'z', truncated: false, messages: [] } })
 const until = async (cond: () => boolean): Promise<void> => {
@@ -101,6 +112,49 @@ const until = async (cond: () => boolean): Promise<void> => {
 }
 
 const point = (): void => { bridgeCfg = { enabled: true, url: `ws://127.0.0.1:${port}/bridge`, token: 'machine-token-local' } }
+
+describe('postToCloudSessionSend', () => {
+  const line = { host: 'devbox', sessionId: 'session-a', message: 'notice', uuid: 'aaaaaaaa-1111-4111-8111-111111111111', markers: [{ message: 'notice', messageId: 'sn-child-stopped' }], stopFence: null }
+
+  it('uses the companion send endpoint and preserves the host reply', async () => {
+    point()
+    responseBody = '{"ok":true,"duplicate":true,"fate":"ran"}'
+    expect(await postToCloudSessionSend(line)).toEqual({ ok: true, duplicate: true, fate: 'ran' })
+    expect(seen[0]).toMatchObject({ url: '/bridge/send', auth: 'Bearer machine-token-local', body: line })
+  })
+
+  it('forgets a refused machine token, so the next send resolves its current credential', async () => {
+    point()
+    status = 401
+    recoveredToken = 'replacement-machine-token'
+    expect(await postToCloudSessionSend(line)).toBeNull()
+    await until(() => recoverCalls === 1)
+    expect(recoverCalls).toBe(1)
+    expect(seen).toHaveLength(1)
+    status = 200
+    expect(await postToCloudSessionSend(line)).toMatchObject({ ok: true })
+    expect(seen[1].auth).toBe('Bearer replacement-machine-token')
+  })
+
+  it('uses only the narrow companion permission endpoint for a tool answer', async () => {
+    point()
+    const answer = { host: 'devbox', sessionId: 'session-a', requestId: 'permission-a', allow: false, message: 'Not now' }
+    expect(await postToCloudSessionPermission(answer)).toMatchObject({ ok: true })
+    expect(seen[0]).toMatchObject({ url: '/bridge/send/permission', body: answer })
+  })
+
+  it('a no-send answer is held while an unanswered request remains unconfirmed', async () => {
+    point()
+    status = 503
+    responseBody = '{"error":"host_unavailable","sent":false}'
+    expect(await postToCloudSessionSend(line)).toBeNull()
+    responseBody = '{"error":"delivery_unconfirmed","sent":true}'
+    await expect(postToCloudSessionSend(line)).rejects.toMatchObject({ name: 'SendOutcomeUnknownError' })
+    resets = 1
+    await expect(postToCloudSessionSend(line)).rejects.toMatchObject({ name: 'SendOutcomeUnknownError' })
+    expect(seen).toHaveLength(3)
+  })
+})
 
 describe('ingestUrlFromBridgeUrl', () => {
   it.each([

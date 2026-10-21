@@ -187,6 +187,14 @@
 //   GET  /__stub/session-state       → ring size, newest id, bridge, banked and
 //                               delivered sends, and every stream attach with the
 //                               Last-Event-ID it sent.
+//   POST /__stub/session-lifecycle?mode=hold|release[&id=N] → hold successful
+//                               restart/retry responses until explicit release.
+//                               Accepted successes stay pending even if the client
+//                               cancels its URLSession request. Release records the
+//                               attempt and only writes to a still-open response.
+//   GET  /__stub/session-lifecycle   → hold flag, pending ids and accepted requests
+//                               (action, success body, clientClosed, released,
+//                               responseWritten). Reset destroys pending responses.
 
 import http from 'node:http'
 import fs from 'node:fs'
@@ -353,6 +361,7 @@ function notFound(res, message) {
 
 const WORK_TASK_ID = 'task-stub-work'
 let workSession = false
+let workProcessStatus = 'idle'
 let workTaskMode = 'live'
 let workTaskEdits = {}
 
@@ -375,7 +384,7 @@ function workSessionRow() {
   const now = new Date().toISOString()
   return {
     id: LANE_SESSION_ID, title: 'Stub work session', task_id: WORK_TASK_ID, task_title: 'Stub work task',
-    project: 'Stub', host: '', process_status: 'idle', model: laneModel ?? FULL_CATALOG.current,
+    project: 'Stub', host: '', process_status: workProcessStatus, model: laneModel ?? FULL_CATALOG.current,
     mode: null, started_at: now, last_active_at: now, message_count: 0, cwd: '/tmp', pinned: false,
   }
 }
@@ -409,7 +418,7 @@ function answerWorkSession(p, req, res, raw) {
     const row = workSessionRow()
     return json(res, 200, {
       session: {
-        claudeSessionId: LANE_SESSION_ID, process_status: 'idle', title: row.title, taskId: WORK_TASK_ID,
+        claudeSessionId: LANE_SESSION_ID, process_status: workProcessStatus, title: row.title, taskId: WORK_TASK_ID,
         project: 'Stub', host: '', cwd: '/tmp', startedAt: now, lastActiveAt: now, messageCount: 0,
         model: row.model,
       },
@@ -526,6 +535,7 @@ function resetAll() {
   laneMode = 'bypass'
   laneWriteDelayMs = 0
   workSession = false
+  workProcessStatus = 'idle'
   workTaskMode = 'live'
   workTaskEdits = {}
   statusMode = 'live'
@@ -537,6 +547,7 @@ function resetAll() {
   inboxAdded = 0
   appOffline = false
   resetSessionReplica()
+  resetSessionLifecycle()
   resetLetterReply()
   generation += 1
   try {
@@ -718,6 +729,13 @@ function answerSessionReplicaControl(p, req, res, url) {
   }
   if (!replicaOn()) return json(res, 409, { ok: false, message: 'session replica mode is off' })
   const r = sessionReplica
+  if (p === '/__stub/session-status' && req.method === 'POST') {
+    const status = url.searchParams.get('status')
+    if (!['idle', 'running', 'stopped', 'error'].includes(status)) return json(res, 400, { ok: false })
+    workProcessStatus = status
+    replicaEmit('status', { processStatus: status })
+    return json(res, 200, { ok: true, status })
+  }
   if (p === '/__stub/session-honor' && req.method === 'POST') {
     r.honor = url.searchParams.get('on') !== '0'
     return json(res, 200, { ok: true, honor: r.honor })
@@ -768,6 +786,92 @@ function answerSessionReplicaControl(p, req, res, url) {
     })
   }
   return notFound(res, `unknown session replica control ${p}`)
+}
+
+// ── Session lifecycle response ownership (SessionStreamStormUITests) ───────
+
+let holdSessionLifecycle = false
+let sessionLifecycleSeq = 0
+let sessionLifecycleRequests = []
+const pendingSessionLifecycle = new Map()
+
+function resetSessionLifecycle() {
+  for (const { res } of pendingSessionLifecycle.values()) res.destroy()
+  pendingSessionLifecycle.clear()
+  holdSessionLifecycle = false
+  sessionLifecycleSeq = 0
+  sessionLifecycleRequests = []
+}
+
+function sessionLifecycleState() {
+  return {
+    holding: holdSessionLifecycle,
+    pending: [...pendingSessionLifecycle.keys()],
+    requests: sessionLifecycleRequests,
+  }
+}
+
+function releaseSessionLifecycle(id) {
+  const pending = pendingSessionLifecycle.get(id)
+  if (!pending) return false
+  pendingSessionLifecycle.delete(id)
+  const { res, entry } = pending
+  entry.released = true
+  entry.releasedAt = nowISO()
+  if (!res.destroyed && !res.writableEnded) {
+    // This is the accepted HTTP success, not a client-side test callback.
+    json(res, 202, entry.result)
+    entry.responseWritten = true
+  }
+  console.log(`[stub] session lifecycle release ${id} clientClosed=${entry.clientClosed} written=${entry.responseWritten}`)
+  return true
+}
+
+function answerSessionLifecycleControl(req, res, url) {
+  if (req.method === 'GET') return json(res, 200, sessionLifecycleState())
+  if (req.method !== 'POST') return notFound(res, 'session lifecycle control requires GET or POST')
+  const mode = url.searchParams.get('mode')
+  if (mode === 'hold') {
+    holdSessionLifecycle = true
+    return json(res, 200, sessionLifecycleState())
+  }
+  if (mode === 'release') {
+    const rawId = url.searchParams.get('id')
+    const ids = rawId === null ? [...pendingSessionLifecycle.keys()] : [Number(rawId)]
+    if (ids.some((id) => !pendingSessionLifecycle.has(id))) {
+      return json(res, 404, { ok: false, message: 'no such pending lifecycle response' })
+    }
+    const released = ids.filter(releaseSessionLifecycle)
+    holdSessionLifecycle = false
+    return json(res, 200, { ...sessionLifecycleState(), released })
+  }
+  return json(res, 400, { ok: false, message: 'mode must be hold or release' })
+}
+
+function answerSessionLifecycle(p, req, res) {
+  if (!workSession || req.method !== 'POST') return false
+  const base = `/api/v1/sessions/${LANE_SESSION_ID}`
+  const action = p === `${base}/restart` ? 'restart' : p === `${base}/retry` ? 'retry' : null
+  if (action === null) return false
+  // Exact SessionRestarted / SessionRetried fields from ModelsWave1.swift.
+  const result = action === 'restart'
+    ? { status: 'restarted', sessionId: LANE_SESSION_ID, pendingMessages: 0 }
+    : { status: 'reconnected', sessionId: LANE_SESSION_ID, taskId: WORK_TASK_ID,
+        oldSessionId: null, restoredMessages: 0 }
+  const entry = {
+    id: ++sessionLifecycleSeq, action, acceptedAt: nowISO(), result,
+    clientClosed: false, released: false, responseWritten: false,
+  }
+  sessionLifecycleRequests.push(entry)
+  pendingSessionLifecycle.set(entry.id, { res, entry })
+  res.on('close', () => {
+    if (!entry.responseWritten) entry.clientClosed = true
+    // Keep the accepted success until release, including when cancellation
+    // closed the socket. The test must observe what happened, not lose the race.
+  })
+  console.log(`[stub] session lifecycle accepted ${entry.id} ${action} held=${holdSessionLifecycle}`)
+  if (!holdSessionLifecycle) releaseSessionLifecycle(entry.id)
+  return true
 }
 
 // ── Human inbox (seeded from the parity fixture) ────────────────────────────
@@ -1491,6 +1595,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, on: workSession })
     }
     if (p === '/__stub/board' || p === '/__stub/board-expected') return answerPinnedBoardControl(p, req, res, url)
+    if (p === '/__stub/session-lifecycle') return answerSessionLifecycleControl(req, res, url)
     if (p.startsWith('/__stub/session-')) return answerSessionReplicaControl(p, req, res, url)
     if (p === '/__stub/drop-streams' && req.method === 'POST') {
       let dropped = 0
@@ -1673,6 +1778,7 @@ const server = http.createServer(async (req, res) => {
   // Answered with the smallest valid body rather than 404 only where a 404
   // costs something (a retry loop, a visible banner). The probe run is what
   // decided this list; see the header.
+  if (answerSessionLifecycle(p, req, res)) return
   if (answerSessionReplica(p, req, res, raw)) return
   if (answerWorkSession(p, req, res, raw)) return
   if (answerPinnedBoard(p, req, res)) return
@@ -1766,6 +1872,7 @@ server.listen(FORCED_PORT, '127.0.0.1', () => {
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {
     if (heldTurn) clearInterval(heldTurn.keepalive)
+    resetSessionLifecycle()
     for (const list of streams.values()) for (const res of list) res.end()
     server.close(() => process.exit(0))
     // A held SSE response keeps the server from closing on its own.

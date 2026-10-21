@@ -2531,12 +2531,12 @@ describe('ClaudeCodeSession AskUserQuestion answers injection', () => {
     expect(session.hasPendingPermission).toBe(false);
   });
 
-  it('merges answers into updatedInput, preserving every original input key', () => {
+  it('merges answers into updatedInput, preserving every original input key', async () => {
     const { session, writes } = makeAskSession('default');
     const answers = { 'Which database?': 'Postgres' };
 
     /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-    const ok = (session as any).resolvePermissionRequest('req-askq-1', true, undefined, { answers });
+    const ok = await (session as any).resolvePermissionRequest('req-askq-1', true, undefined, { answers });
     expect(ok).toBe(true);
 
     const resp = writes.map((w) => JSON.parse(w)).find((w) => w.type === 'control_response');
@@ -2548,17 +2548,17 @@ describe('ClaudeCodeSession AskUserQuestion answers injection', () => {
     expect(resp.response.response.updatedInput).toEqual({ ...ASK_INPUT, answers });
   });
 
-  it('without a patch the allow response still sends the input verbatim', () => {
+  it('without a patch the allow response still sends the input verbatim', async () => {
     const { session, writes } = makeAskSession('default');
-    session.resolvePermissionRequest('req-askq-1', true);
+    await session.resolvePermissionRequest('req-askq-1', true);
     const resp = writes.map((w) => JSON.parse(w)).find((w) => w.type === 'control_response');
     expect(resp.response.response.updatedInput).toEqual(ASK_INPUT);
     expect(resp.response.response.updatedInput).not.toHaveProperty('answers');
   });
 
-  it('a deny (Dismiss) carries the message and no updatedInput', () => {
+  it('a deny (Dismiss) carries the message and no updatedInput', async () => {
     const { session, writes } = makeAskSession('default');
-    session.resolvePermissionRequest('req-askq-1', false, 'User dismissed the questions');
+    await session.resolvePermissionRequest('req-askq-1', false, 'User dismissed the questions');
     const resp = writes.map((w) => JSON.parse(w)).find((w) => w.type === 'control_response');
     expect(resp.response.response.behavior).toBe('deny');
     expect(resp.response.response.message).toBe('User dismissed the questions');

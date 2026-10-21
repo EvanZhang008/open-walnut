@@ -3031,6 +3031,8 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   // walnut-server shape as session.launch — the daemon executes NOTHING
   // itself, the primary re-validates everything.
   'session.control',
+  // A pending can_use_tool answer only ('session-permission-v1'), never raw stdin.
+  'session.permission',
   // Narrow message relay: forwarded UP to the connected walnut server, which
   // enqueues into the DURABLE session message queue (same store + reconnect
   // redelivery as web sends). The asymmetry fix for the 2026-08-13 phone-send
@@ -3065,7 +3067,7 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
 // daemon-standalone.ts BRIDGE_CAPABILITIES (WALNUT_BRIDGE_HIDE_CAPS, tests: an older daemon;
 // refused for the prod daemon dir).
 var BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR ? [] : (process.env.WALNUT_BRIDGE_HIDE_CAPS || '').split(',').map(function (x) { return x.trim(); });
-var BRIDGE_CAPABILITIES = ['bridge-stream-v1'].filter(function (c) {
+var BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1'].filter(function (c) {
   return BRIDGE_HIDDEN_CAPS.indexOf(c) === -1;
 });
 
@@ -3331,6 +3333,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'session.launch': return cmdLaunchRelay(ws, id, cmd);
     case 'launch-result': return cmdLaunchResult(ws, id, cmd);
     case 'session.control': return cmdControlRelay(ws, id, cmd);
+    case 'session.permission': return daemonCommands.run(function () { return cmdSessionPermission(ws, id, cmd); });
     case 'control-result': return cmdControlResult(ws, id, cmd);
     case 'session.message': return cmdMessageRelay(ws, id, cmd);
     // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
@@ -4641,6 +4644,15 @@ async function cmdLeaderControl(ws, id, cmd) {
     return cmdStop(ws, id, stop);
   }
   return sendError(ws, id, 'leader.control: unknown action', { errorKind: 'bad_request' });
+}
+
+// Bridge fallback for a pending prompt only. Twin of daemon-standalone.ts cmdSessionPermission.
+async function cmdSessionPermission(ws, id, cmd) {
+  if (ws.origin !== 'bridge') return sendError(ws, id, 'session.permission: the cloud bridge only', { errorKind: 'refused' });
+  if (!isJournalSid(cmd.sid)) return sendError(ws, id, 'session.permission: invalid sid', { errorKind: 'bad_request' });
+  var r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers }, 'session.permission');
+  if (!r.ok) return sendError(ws, id, 'session.permission: ' + r.error, { errorKind: r.errorKind });
+  return sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId, allow: r.allow });
 }
 
 // Twin of daemon-standalone.ts answerPermission (rationale there).

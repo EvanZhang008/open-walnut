@@ -22,7 +22,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { showAllSections } from './todo-panel-helpers'
+import { showAllSections, openListProject, showMoreUntil } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-question-recovery-session'
 const TASK_TITLE = 'Question recovery fixture'
@@ -39,6 +39,7 @@ const SCREENSHOT_DIR = '/tmp/perm-store-sync'
 const BASH_COMMAND = 'tar -czf /tmp/perm-store-demo.tgz ./src && echo packaged'
 
 test.describe.configure({ mode: 'serial' })
+test.use({ viewport: { width: 1280, height: 800 } })
 
 /** Dispatch a server event frame on the page's real socket. */
 async function injectEvent(page: Page, name: string, data: unknown): Promise<void> {
@@ -93,7 +94,9 @@ function permissionRecord(requestId: string) {
 
 async function openSessionColumn(page: Page): Promise<Locator> {
   await showAllSections(page)
+  await openListProject(page, 'Walnut')
   const task = page.locator('.todo-panel-item', { hasText: TASK_TITLE })
+  await showMoreUntil(page.locator('.todo-panel'), task)
   await expect(task).toBeVisible({ timeout: 20_000 })
   await task.getByRole('button', { name: 'More actions' }).click()
   await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
@@ -125,7 +128,7 @@ const railCard = (panel: Locator, requestId: string): Locator =>
 const timelineCardFor = (panel: Locator, requestId: string): Locator =>
   panel.locator('.permission-request-card').filter({ hasText: MARKER(requestId) })
 
-test('a permission answered on one surface settles the others before the server answers', async ({ page }) => {
+test('a permission answered on one surface settles the others before the server answers', async ({ page, baseURL }) => {
   test.setTimeout(120_000)
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
@@ -188,7 +191,8 @@ test('a permission answered on one surface settles the others before the server 
     await route.fulfill({ json: { status: 'resolved', requestId: body.requestId, allow: body.allow } })
   })
 
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 
   const panel = await openSessionColumn(page)
@@ -276,7 +280,57 @@ test('a permission answered on one surface settles the others before the server 
  * dying) must read "Already answered", never "Denied" — the timeline card used to
  * claim the user had denied something they may well have approved.
  */
-test('a request that settled elsewhere reads "Already answered", not "Denied"', async ({ page }) => {
+test('an unconfirmed permission answer becomes retryable and settles only after recovery', async ({ page, baseURL }) => {
+  test.setTimeout(120_000)
+  const requestId = 'req-perm-store-held'
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.addInitScript(() => {
+    const Original = window.WebSocket
+    window.WebSocket = class extends Original {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols)
+        if (new URL(String(url), window.location.href).pathname === '/ws') {
+          ;(window as unknown as { __capturedPermWs: WebSocket }).__capturedPermWs = this
+        }
+      }
+    }
+  })
+  await page.route(`**/api/sessions/${SESSION_ID}`, (route) => route.fulfill({ json: {
+    session: { claudeSessionId: SESSION_ID, taskId: 'pw-task-question-recovery', project: 'Walnut',
+      process_status: 'running', mode: 'default', startedAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(), messageCount: 1, title: TASK_TITLE },
+    pendingPermissions: [],
+  } }))
+  await page.route(`**/api/sessions/${SESSION_ID}/history**`, (route) => route.fulfill({ json: { messages: [], cursor: 0, delta: false } }))
+  let attempts = 0
+  await page.route(`**/api/sessions/${SESSION_ID}/permission`, async (route) => {
+    attempts++
+    const body = route.request().postDataJSON()
+    if (attempts === 1) await route.fulfill({ status: 503, json: { error: { message: 'Permission delivery unconfirmed' } } })
+    else await route.fulfill({ json: { status: 'resolved', requestId: body.requestId, allow: body.allow } })
+  })
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
+  const panel = await openSessionColumn(page)
+  await injectEvent(page, 'session:permission-request', permissionRequest(requestId))
+  const card = timelineCardFor(panel, requestId)
+  await expect(card.getByRole('button', { name: 'Allow' })).toBeVisible()
+  await card.getByRole('button', { name: 'Allow' }).click()
+  await expect(card.getByRole('button', { name: 'Allow' })).toBeVisible()
+  await expect(card).not.toContainText('Allowed')
+  await injectEvent(page, 'session:permission-request', permissionRequest(requestId))
+  await expect(card.getByRole('button', { name: 'Allow' })).toBeVisible()
+  await page.screenshot({ path: '/tmp/offline-connect/permission-retry.png' })
+  await card.getByRole('button', { name: 'Allow' }).click()
+  await expect.poll(() => attempts).toBe(2)
+  await expect(card).toContainText('Allowed')
+  await expect(card.getByRole('button', { name: 'Allow' })).toHaveCount(0)
+  await page.screenshot({ path: '/tmp/offline-connect/permission-confirmed.png' })
+  expect(errors).toEqual([])
+})
+
+test('a request that settled elsewhere reads "Already answered", not "Denied"', async ({ page, baseURL }) => {
   test.setTimeout(120_000)
   const REQUEST = 'req-perm-store-stale'
 
@@ -330,7 +384,8 @@ test('a request that settled elsewhere reads "Already answered", not "Denied"', 
     })
   })
 
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
   const panel = await openSessionColumn(page)
   await injectEvent(page, 'session:permission-request', permissionRequest(REQUEST))

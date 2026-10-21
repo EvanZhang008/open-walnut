@@ -1181,8 +1181,10 @@ export async function respondSessionPermission(
   }
   const session = sessionRunner.findByClaudeId(sessionId);
   if (!session) throw new SessionControlError('Live session not found', 404);
-  const resolved = session.resolvePermissionRequest(requestId, allow, denyMessage as string | undefined, answerPatch);
-  if (!resolved) throw new SessionControlError('Permission request not found or already resolved', 404);
+  const pending = session.getPendingPermissionRequests().some((request) => request.requestId === requestId);
+  if (!pending) throw new SessionControlError('Permission request not found or already resolved', 404);
+  const resolved = await session.resolvePermissionRequest(requestId, allow, denyMessage as string | undefined, answerPatch).catch(() => false);
+  if (!resolved) throw new SessionControlError('Permission answer was not confirmed by the session host; retry the same request', 503);
   return { status: 'resolved', requestId, allow };
 }
 

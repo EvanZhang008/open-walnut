@@ -85,6 +85,13 @@ beforeEach(async () => {
 })
 
 describe('the Mac proves it owns its companion', () => {
+  it('a failed token mint leaves the daemon configuration unchanged until a retry succeeds', async () => {
+    box.answer = () => ({ status: 503, body: { error: 'Temporarily unavailable' } })
+    await expect(getBridgeConfigForHost('devbox')).rejects.toThrow('Bridge credential unavailable')
+    box.answer = () => null
+    expect(await getBridgeConfigForHost('devbox')).toMatchObject({ enabled: true })
+  })
+
   it('a new host\'s mint carries the bridge-local proof; a cache hit offers adoption once per start', async () => {
     await writeCache({ 'bridge-local': 'the-local-token' })
     expect(await machineProofHeaders()).toEqual({ [MACHINE_PROOF_HEADER]: 'the-local-token' })
@@ -120,7 +127,7 @@ describe('the Mac proves it owns its companion', () => {
     ]) {
       box.seen = []
       box.answer = () => refusal
-      expect(await getBridgeConfigForHost('devbox')).toEqual({ enabled: false })
+      await expect(getBridgeConfigForHost('devbox')).rejects.toThrow('Bridge credential unavailable')
       expect(box.seen.map((s) => s.method)).toEqual(['POST'])
       expect(machineTokenRefusal('devbox')).toEqual({ status: refusal.status, code: refusal.body.code, error: refusal.body.error })
     }
@@ -134,7 +141,7 @@ describe('the Mac proves it owns its companion', () => {
     box.answer = (s) => (s.method === 'POST'
       ? { status: 400, body: { error: 'Device "bridge-local" already exists' } }
       : { status: 409, body: { code: 'not_companion_owner', error: 'Only the Mac this cloud companion belongs to can connect computers to it.' } })
-    expect(await getBridgeConfigForHost('__local__')).toEqual({ enabled: false })
+    await expect(getBridgeConfigForHost('__local__')).rejects.toThrow('Bridge credential unavailable')
     expect(box.seen.map((s) => s.method)).toEqual(['POST', 'DELETE'])
     expect(machineTokenRefusal('__local__')).toMatchObject({ status: 409, code: 'not_companion_owner' })
   })

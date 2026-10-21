@@ -18,6 +18,7 @@ import { DAEMON_TUNNEL_PATH } from '../../core/hosts/cloud-box-host.js'
 import { configChangedForClients } from '../../core/config-broadcast.js'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 import { upgradeCredential } from './upgrade-credential.js'
+import { BRIDGE_SESSION_STREAM_PATH, closeAllBridgeSessionStreams, handleBridgeSessionStreamUpgrade } from './bridge-session-stream.js'
 
 export type RpcHandler = (payload: unknown, client: WebSocket) => unknown | Promise<unknown>
 
@@ -478,10 +479,14 @@ export function attachWss(server: HttpServer): WebSocketServer {
 
     // /daemon-tunnel (cloud mode only): the paired Mac driving its own daemon
     // on this box. Only the primary's machine token opens it (daemon-tunnel.ts).
-    if (CLOUD_MODE && url.pathname === DAEMON_TUNNEL_PATH) {
-      import('./daemon-tunnel.js')
-        .then(({ handleDaemonTunnelUpgrade }) => handleDaemonTunnelUpgrade(request, socket, head, { verify: () => verifyCloudUpgrade(url, request) }))
-        .catch(() => socket.destroy())
+    if (CLOUD_MODE && (url.pathname === DAEMON_TUNNEL_PATH || url.pathname === BRIDGE_SESSION_STREAM_PATH)) {
+      if (url.pathname === BRIDGE_SESSION_STREAM_PATH) {
+        void handleBridgeSessionStreamUpgrade(request, socket, head, { verify: () => verifyCloudUpgrade(url, request) })
+      } else {
+        import('./daemon-tunnel.js')
+          .then(({ handleDaemonTunnelUpgrade }) => handleDaemonTunnelUpgrade(request, socket, head, { verify: () => verifyCloudUpgrade(url, request) }))
+          .catch(() => socket.destroy())
+      }
       return
     }
 
@@ -585,6 +590,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
  * Close all connections and stop the WebSocket server.
  */
 export function closeWss(): void {
+  closeAllBridgeSessionStreams()
   if (pingTimer) {
     clearInterval(pingTimer)
     pingTimer = null

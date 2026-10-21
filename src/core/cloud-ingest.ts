@@ -220,6 +220,82 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
   }
 }
 
+export interface CloudSessionSend {
+  host: string
+  sessionId: string
+  message: string
+  uuid: string
+  markers: Array<{ message: string; messageId: string }>
+  stopFence: string | null
+  lostPid?: number
+}
+
+let sendCredentialRecovery: Promise<void> | null = null
+
+export function recoverCloudSessionCredential(deadToken: string): Promise<void> {
+  endpoint = null
+  sendCredentialRecovery ??= (async () => {
+    const { getCloudRemoteCredentialsAsync } = await import('../integrations/git-sync.js')
+    const cloud = await getCloudRemoteCredentialsAsync({ strict: true })
+    if (cloud) {
+      const { recoverMachineToken } = await import('../integrations/cloud-bridge-config.js')
+      await recoverMachineToken('__local__', deadToken, cloud)
+    }
+  })().catch(() => {}).finally(() => { endpoint = null; sendCredentialRecovery = null })
+  return sendCredentialRecovery
+}
+
+export async function cloudSessionEndpoint(): Promise<{ url: string; token: string } | null> {
+  if (sendCredentialRecovery) await sendCredentialRecovery
+  const ep = await resolveEndpoint()
+  return ep ? { url: ep.url.replace(/\/ingest$/, ''), token: ep.token } : null
+}
+
+export function postToCloudSessionSend(payload: CloudSessionSend): Promise<Record<string, unknown> | null> {
+  return postCloudSession('/send', payload)
+}
+
+export interface CloudSessionPermission {
+  host: string
+  sessionId: string
+  requestId: string
+  allow: boolean
+  message?: string
+  answers?: Record<string, string>
+}
+
+export function postToCloudSessionPermission(payload: CloudSessionPermission): Promise<Record<string, unknown> | null> {
+  return postCloudSession('/send/permission', payload)
+}
+
+async function postCloudSession(path: string, payload: CloudSessionSend | CloudSessionPermission): Promise<Record<string, unknown> | null> {
+  const ep = await cloudSessionEndpoint()
+  if (!ep) return null
+  const { SendOutcomeUnknownError } = await import('../providers/delivery-failure.js')
+  let body: string
+  try { body = await (await import('../lib/cloud-session-payload.js')).encodeCloudSessionPayload(payload) }
+  catch { return null }
+  try {
+    const res = await fetch(`${ep.url}${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(25_000),
+    })
+    const reply = await res.json().catch(() => null) as Record<string, unknown> | null
+    if (res.ok && reply && typeof reply.ok === 'boolean') return reply
+    if (res.status === 401 || res.status === 403) {
+      endpoint = null
+      if (res.status === 401) void recoverCloudSessionCredential(ep.token)
+    }
+    if ([401, 403, 404, 405, 413].includes(res.status) || reply?.sent === false) return null
+    throw new SendOutcomeUnknownError('The companion did not confirm the session send')
+  } catch (err) {
+    if (err instanceof SendOutcomeUnknownError) throw err
+    throw new SendOutcomeUnknownError('The connection to the companion failed during the session send')
+  }
+}
+
 /** At most MAX_IN_FLIGHT requests at once: a burst of transcript exports must
  *  not open a TLS connection per session. */
 const MAX_IN_FLIGHT = 2
@@ -289,6 +365,7 @@ export function _resetCloudIngestForTesting(opts: { timeoutMs?: number } = {}): 
   replicaUnsupportedUntil = 0
   endpoint = null
   endpointLookup = null
+  sendCredentialRecovery = null
   lookupGen++
   lanes.clear()
   inFlight = 0

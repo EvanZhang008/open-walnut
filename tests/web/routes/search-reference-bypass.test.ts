@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
 import express from 'express';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -67,7 +68,13 @@ function createApp() {
   return app;
 }
 
+let server: Server;
 beforeEach(async () => {
+  server = createServer(createApp());
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
   _resetForTesting();
   searchLaneMock.mockReset().mockResolvedValue([]);
   listSessionsMock.mockReset();
@@ -79,6 +86,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (server?.listening) await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
@@ -93,7 +101,7 @@ describe('GET /api/search structured references', () => {
     });
     await addSessionToHistory(task.id, SESSION_ID);
 
-    const res = await request(createApp())
+    const res = await request(server)
       .get('/api/search')
       .query({ q: SESSION_ID, types: 'task' });
 
@@ -134,7 +142,7 @@ describe('GET /api/search structured references', () => {
       'https://example.test/tasks/structured-reference',
     ];
     for (const query of queries) {
-      const res = await request(createApp())
+      const res = await request(server)
         .get('/api/search')
         .query({ q: query, types: 'task' });
 
@@ -148,7 +156,7 @@ describe('GET /api/search structured references', () => {
   });
 
   it('returns a standalone session ID without invoking the index', async () => {
-    const res = await request(createApp())
+    const res = await request(server)
       .get('/api/search')
       .query({
         q: 'standalone-session-reference',
@@ -185,7 +193,7 @@ describe('GET /api/search structured references', () => {
       score: 99,
     })]);
 
-    const res = await request(createApp())
+    const res = await request(server)
       .get('/api/search')
       .query({ q: SESSION_ID, types: 'task,memory' });
 
@@ -227,7 +235,7 @@ describe('GET /api/search structured references', () => {
       score: 1,
     })]);
 
-    const res = await request(createApp())
+    const res = await request(server)
       .get('/api/search')
       .query({ q: SESSION_ID.slice(0, 8), types: 'task' });
 
@@ -255,7 +263,7 @@ describe('GET /api/search structured references', () => {
       score: 0.82,
     })]);
 
-    const res = await request(createApp())
+    const res = await request(server)
       .get('/api/search')
       .query({ q: 'career accomplishments', types: 'task' });
 
@@ -284,7 +292,7 @@ describe('GET /api/search structured references', () => {
     }]);
     searchLaneMock.mockRejectedValue(new Error('index unavailable'));
 
-    const res = await request(createApp())
+    const res = await request(server)
       .get('/api/search')
       .query({ q: 'refresh token', types: 'session' });
 
@@ -307,7 +315,7 @@ describe('GET /api/search structured references', () => {
       score: 0.76,
     })]);
 
-    const res = await request(createApp())
+    const res = await request(server)
       .get('/api/search')
       .query({ q: 'implementation discussion', types: 'session' });
 
@@ -327,7 +335,7 @@ describe('GET /api/search structured references', () => {
   it('surfaces a total index failure instead of returning an authoritative empty set', async () => {
     searchLaneMock.mockRejectedValue(new Error('index unavailable'));
 
-    const res = await request(createApp())
+    const res = await request(server)
       .get('/api/search')
       .query({ q: 'semantic-only phrase', types: 'task' });
 
@@ -345,7 +353,7 @@ describe('GET /api/search structured references', () => {
         _skipPluginOps: true,
       });
 
-      const res = await request(createApp())
+      const res = await request(server)
         .get('/api/search')
         .query({ q: 'lexical fallback', types: 'task' });
 

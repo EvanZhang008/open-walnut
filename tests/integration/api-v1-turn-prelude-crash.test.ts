@@ -34,7 +34,7 @@ const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
 
 const BOOT = `
 import { startServer } from ${JSON.stringify(path.join(REPO_ROOT, 'src/web/server.ts'))}
-const server = await startServer({ port: 0, dev: true })
+const server = await startServer({ port: 0, dev: true, bindAddress: '127.0.0.1' })
 const addr = server.address()
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
 `
@@ -85,7 +85,12 @@ beforeAll(async () => {
   origin = `http://127.0.0.1:${port}`
 }, 120_000)
 
-afterAll(() => { proc?.kill('SIGTERM') })
+afterAll(async () => {
+  if (!proc?.pid || proc.exitCode !== null || proc.signalCode !== null) return
+  const exited = new Promise<void>((resolve) => proc.once('exit', () => resolve()))
+  proc.kill('SIGTERM')
+  await exited
+})
 
 /** Wait until the server log contains `needle` (or give up). */
 async function waitForLog(needle: string, ms = 30_000): Promise<boolean> {

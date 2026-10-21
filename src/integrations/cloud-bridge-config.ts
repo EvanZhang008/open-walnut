@@ -360,19 +360,16 @@ export async function getPrimaryMachineToken(
  */
 export async function getBridgeConfigForHost(hostAlias: string): Promise<BridgeConfigPayload> {
   if (CLOUD_MODE) return { enabled: false }
-  let cfg: Awaited<ReturnType<typeof getConfig>> | undefined
-  try { cfg = await getConfig() } catch { /* default-on */ }
-  if (cfg?.cloud_bridge?.enabled === false) return { enabled: false }
+  const cfg = await getConfig()
+  if (cfg.cloud_bridge?.enabled === false) return { enabled: false }
 
-  // Async: this runs on every daemon (re)connect, on the server's event loop.
-  // The sync twin spawns `git remote get-url` twice, 50 to 120ms of blocked loop.
-  const cloud = await getCloudRemoteCredentialsAsync()
+  const cloud = await getCloudRemoteCredentialsAsync({ strict: true })
   if (!cloud) return { enabled: false }
 
   const url = cfg?.cloud_bridge?.url
     ?? `${cloud.secure ? 'wss' : 'ws'}://${cloud.domain}/bridge`
   const token = await ensureMachineToken(hostAlias, cloud)
-  if (!token) return { enabled: false }
+  if (!token) throw new Error('Bridge credential unavailable; existing daemon configuration was not changed')
 
   return { enabled: true, url, token, hostAlias }
 }

@@ -64,6 +64,8 @@ interface BridgeConn {
   pending: Map<number, PendingRequest>
   /** Sessions this conn has sent an `attach` for (idempotence guard). */
   attachSent: Set<string>
+  /** Phone-only cursor: a raw attach's catch-up must not replay into phone SSE. */
+  phoneOffsets: Map<string, number>
   lastInbound: number
   /** Per-socket counters for the close log (bridge-wire.ts). */
   stats: BridgeWireStats
@@ -112,6 +114,43 @@ const SILENCE_MS = 75_000
 const SILENCE_SWEEP_MS = 30_000
 
 const bridges = new Map<string, BridgeConn>()
+
+export type BridgeSessionEventHandler = (event: Record<string, unknown>, rawFrame?: string, frameBytes?: number) => void
+const sessionEventHandlers = new Map<string, Map<string, Set<BridgeSessionEventHandler>>>()
+const RAW_SESSION_EVENTS = new Set(['jsonl', 'exit', 'session_state', 'snapshot', 'stderr_tail'])
+
+/** Session-scoped native events, independent of phone SSE interest. No attach or detach side effects. */
+export function addBridgeSessionEventHandler(host: string, sid: string, handler: BridgeSessionEventHandler): () => void {
+  let sessions = sessionEventHandlers.get(host)
+  if (!sessions) { sessions = new Map(); sessionEventHandlers.set(host, sessions) }
+  let handlers = sessions.get(sid)
+  if (!handlers) { handlers = new Set(); sessions.set(sid, handlers) }
+  const bucket = handlers
+  const hostBucket = sessions
+  bucket.add(handler)
+  return () => {
+    bucket.delete(handler)
+    if (bucket.size === 0 && hostBucket.get(sid) === bucket) hostBucket.delete(sid)
+    if (hostBucket.size === 0 && sessionEventHandlers.get(host) === hostBucket) sessionEventHandlers.delete(host)
+  }
+}
+
+function deliverSessionEvent(host: string, sid: string, event: Record<string, unknown>, rawFrame?: string): void {
+  const handlers = sessionEventHandlers.get(host)?.get(sid)
+  if (!handlers) return
+  // Native bytes already exist, including reassembled frames. Count once, not
+  // once per reader, and never serialize the same large event for fan-out.
+  const frameBytes = rawFrame === undefined ? undefined : Buffer.byteLength(rawFrame)
+  for (const handler of [...handlers]) {
+    try { handler(event, rawFrame, frameBytes) } catch { log.ws.warn('bridge: session event handler failed', { hostAlias: host, sessionId: sid }) }
+  }
+}
+
+function sessionsBridgeOffline(host: string): void {
+  const sessions = sessionEventHandlers.get(host)
+  if (!sessions) return
+  for (const sid of [...sessions.keys()]) deliverSessionEvent(host, sid, { ev: 'bridge-offline', sid })
+}
 /** Sockets that connected but haven't sent their hello yet. */
 interface PendingHello {
   deviceName: string
@@ -339,6 +378,11 @@ function handleFrame(conn: BridgeConn, raw: string): void {
   const ev = msg.ev as string | undefined
   if (!ev) return
 
+  // Reassembled native records only. A raw reader never enrolls a phone SSE channel.
+  if (typeof msg.sid === 'string' && RAW_SESSION_EVENTS.has(ev) && bridges.get(conn.hostAlias) === conn) {
+    deliverSessionEvent(conn.hostAlias, msg.sid, msg, raw)
+  }
+
   if (ev.startsWith('stream-')) {
     conn.streams.handle(msg)
     return
@@ -363,7 +407,16 @@ function handleFrame(conn: BridgeConn, raw: string): void {
   if (ev === 'jsonl') {
     const sid = msg.sid as string | undefined
     const line = msg.line as string | undefined
-    if (sid && line && conn.attachSent.has(sid)) forwardJsonlLine(sid, line)
+    if (sid && line && conn.attachSent.has(sid)) {
+      // Raw catch-up rides the same daemon socket. Versioned lines already seen
+      // by the phone stay out of its replay buffer; new live lines still arrive.
+      const v = msg.v
+      if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) {
+        if (v <= (conn.phoneOffsets.get(sid) ?? -1)) return
+        conn.phoneOffsets.set(sid, v)
+      }
+      forwardJsonlLine(sid, line)
+    }
     return
   }
 
@@ -393,6 +446,8 @@ function handleFrame(conn: BridgeConn, raw: string): void {
             log.ws.warn('bridge: re-attach on respawn refused', {
               hostAlias: conn.hostAlias, sessionId: sid, error: String(res.error ?? 'unknown'),
             })
+          } else if (bridges.get(conn.hostAlias) === conn && conn.attachSent.has(sid)) {
+            notePhoneOffset(conn, sid, res)
           }
         }).catch((err: unknown) => {
           log.ws.warn('bridge: re-attach on respawn failed', {
@@ -684,6 +739,7 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     cmdCounter: 0,
     pending: new Map(),
     attachSent: new Set(),
+    phoneOffsets: new Map(),
     lastInbound: Date.now(),
     stats,
     chunks: createChunkAssembler(),
@@ -780,6 +836,9 @@ function dropBridge(conn: BridgeConn, reason: string): void {
     // cleared by the registration that replaced it a moment later, so a redial
     // never reads as an outage.
     bridgeLossAt.set(conn.hostAlias, Date.now())
+    // Raw readers reconnect and attach from their own cursor, even on replacement.
+    // A late close from the old socket must not disconnect readers of the new one.
+    sessionsBridgeOffline(conn.hostAlias)
   }
   for (const [, req] of conn.pending) {
     clearTimeout(req.timer)
@@ -931,11 +990,36 @@ export function bridgeRequest(
     if (Object.keys(params).some((key) => !allowed.includes(key))) return Promise.reject(new Error('Status-only bridge refuses these parameters'))
   }
   const id = ++conn.cmdCounter
-  const frame = JSON.stringify({ id, cmd, ...params })
+  return dispatchBridgeRequest(conn, id, cmd, JSON.stringify({ id, cmd, ...params }), timeoutMs)
+}
+
+/**
+ * Internal, worker-prepared send parameters (lib/cloud-session-payload.ts).
+ * The worker constructs a field allowlist, never caller-supplied id/cmd keys.
+ * No JSON parse or large stringify is allowed on this dispatch path.
+ */
+export function bridgeRequestPrepared(
+  hostAlias: string,
+  cmd: 'send',
+  encodedParams: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Record<string, unknown>> {
+  const conn = bridges.get(hostAlias)
+  if (!conn || conn.ws.readyState !== undefined && conn.ws.readyState !== 1) return Promise.reject(new BridgeOfflineError(hostAlias))
+  if (conn.scope === 'status-only') return Promise.reject(new Error('Status-only bridge refuses this command'))
+  if (cmd !== 'send' || !encodedParams.startsWith('{') || !encodedParams.endsWith('}')) {
+    return Promise.reject(new Error('Invalid prepared bridge parameters'))
+  }
+  const id = ++conn.cmdCounter
+  const frame = `{"id":${id},"cmd":"send",${encodedParams.slice(1)}`
+  return dispatchBridgeRequest(conn, id, cmd, frame, timeoutMs)
+}
+
+function dispatchBridgeRequest(conn: BridgeConn, id: number, cmd: string, frame: string, timeoutMs: number): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       conn.pending.delete(id)
-      reject(new Error(`bridge request timed out: ${cmd} → ${hostAlias}`))
+      reject(new Error(`bridge request timed out: ${cmd} → ${conn.hostAlias}`))
     }, timeoutMs)
     conn.pending.set(id, { resolve, reject, timer })
     try {
@@ -971,7 +1055,16 @@ export async function bridgeAttachSession(hostAlias: string, sessionId: string):
   if (res.ok !== true) {
     throw new BridgeAttachRefusedError(hostAlias, sessionId, String(res.error ?? 'unknown'))
   }
+  if (bridges.get(hostAlias) !== conn) throw new BridgeOfflineError(hostAlias)
+  notePhoneOffset(conn, sessionId, res)
   conn.attachSent.add(sessionId)
+}
+
+function notePhoneOffset(conn: BridgeConn, sid: string, res: Record<string, unknown>): void {
+  const offset = res.currentOffset ?? res.offset
+  if (typeof offset === 'number' && Number.isSafeInteger(offset) && offset >= 0) {
+    conn.phoneOffsets.set(sid, Math.max(conn.phoneOffsets.get(sid) ?? 0, offset))
+  }
 }
 
 /** Interest bookkeeping: the last phone SSE consumer for a session left. */
@@ -980,6 +1073,7 @@ export function bridgeDetachSession(hostAlias: string, sessionId: string): void 
   // stops the SSE forwarding, and the daemon-side subscription dies with the
   // socket. Cheap and correct for a single-digit session count.
   bridges.get(hostAlias)?.attachSent.delete(sessionId)
+  bridges.get(hostAlias)?.phoneOffsets.delete(sessionId)
   hostInterest.get(hostAlias)?.delete(sessionId)
   forgetPresence(hostAlias, sessionId)
 }

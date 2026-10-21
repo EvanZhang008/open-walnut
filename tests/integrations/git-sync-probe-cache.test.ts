@@ -39,6 +39,8 @@ const h = vi.hoisted(() => ({
   gitAvailable: true,
   isRepo: true,
   hasRemote: true,
+  remoteUrl: '',
+  failRemoteRead: false,
   /** When set, matching commands are parked in `pending` instead of finishing. */
   holdNeedle: null as string | null,
   pending: [] as Array<{ cmd: string; finish: (stdout: string, code?: number) => void }>,
@@ -55,6 +57,9 @@ vi.mock('node:child_process', async (importOriginal) => {
     }
     if (cmd.includes('rev-parse --is-inside-work-tree')) {
       return h.isRepo ? { code: 0, stdout: 'true\n' } : { code: 128, stdout: '' };
+    }
+    if (cmd.includes('remote get-url')) {
+      return h.failRemoteRead ? { code: 128, stdout: '' } : { code: 0, stdout: h.remoteUrl };
     }
     if (/\bgit remote$/.test(cmd.trim())) {
       if (!h.isRepo) return { code: 128, stdout: '' };
@@ -135,6 +140,7 @@ import {
   isRepoAsync,
   isGitAvailableAsync,
   getLastSyncAtAsync,
+  getCloudRemoteCredentialsAsync,
   initSync,
   setRemote,
   invalidateSyncProbeCache,
@@ -160,6 +166,8 @@ beforeEach(() => {
   h.gitAvailable = true;
   h.isRepo = true;
   h.hasRemote = true;
+  h.remoteUrl = '';
+  h.failRemoteRead = false;
   resetSyncProbeCacheForTest();
   resetLastSyncCacheForTest();
   // initSync writes .gitignore into WALNUT_HOME; the mock constants point at a
@@ -169,6 +177,32 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('cloud pairing reads', () => {
+  it('a failed lookup rejects in strict mode instead of reporting an unpair', async () => {
+    h.failRemoteRead = true;
+    await expect(getCloudRemoteCredentialsAsync({ strict: true })).rejects.toThrow('git exited');
+    expect(await getCloudRemoteCredentialsAsync()).toBeNull();
+    h.failRemoteRead = false;
+    h.remoteUrl = 'https://device:fixture-credential@cloud.example.invalid/git/data';
+    expect(await getCloudRemoteCredentialsAsync({ strict: true })).toEqual({
+      domain: 'cloud.example.invalid', token: 'fixture-credential', secure: true,
+    });
+  });
+
+  it('an absent remote is a confirmed unpair, while a failed remote list is unknown', async () => {
+    h.hasRemote = false;
+    expect(await getCloudRemoteCredentialsAsync({ strict: true })).toBeNull();
+    expect(count('remote get-url')).toBe(0);
+    h.isRepo = false;
+    await expect(getCloudRemoteCredentialsAsync({ strict: true })).rejects.toThrow('git exited');
+  });
+
+  it('a non-companion remote is not a pairing', async () => {
+    h.remoteUrl = 'https://example.invalid/project.git';
+    expect(await getCloudRemoteCredentialsAsync({ strict: true })).toBeNull();
+  });
 });
 
 describe('precondition probes: single-flight', () => {

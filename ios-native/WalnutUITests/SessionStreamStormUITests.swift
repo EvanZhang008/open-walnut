@@ -92,9 +92,7 @@ final class SessionStreamStormUITests: XCTestCase {
                        "the foreground stream must resume, not ask for the whole ring")
 
         // 4. Pop and re-open the page: the new page resumes from the stored id.
-        let back = app.navigationBars.buttons.element(boundBy: 0)
-        XCTAssertTrue(back.waitForExistence(timeout: 10), "no back button on the session page")
-        back.tap()
+        try closeSessionPage(app)
         try await Task.sleep(for: .seconds(2))
         let beforeReopen = try await stub.sessionState()
         let reopenAt = Date()
@@ -187,9 +185,7 @@ final class SessionStreamStormUITests: XCTestCase {
         // after the page's stream attaches (not after this call), so the page
         // sees exactly the field redial however slowly XCUI reaches the row; the
         // watch starts at the tap, before the attach, so nothing can slip by.
-        let back = app.navigationBars.buttons.element(boundBy: 0)
-        XCTAssertTrue(back.waitForExistence(timeout: 10))
-        back.tap()
+        try closeSessionPage(app)
         try await Task.sleep(for: .seconds(2))
         let beforeBlipOpen = try await stub.sessionState()
         try await stub.call("POST", "__stub/session-blip?ms=1300&from=attach")
@@ -229,6 +225,141 @@ final class SessionStreamStormUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 8) { !banner.exists && !chip.exists })
     }
 
+    // MARK: - Page-owned lifecycle responses
+
+    @MainActor
+    func testAHeldRestartReleasedAfterLeavingKeepsTheSessionClosed() async throws {
+        let (stub, app) = try await lifecyclePage()
+        defer { app.terminate() }
+        let first = try await stub.waitForOpenStreams(1)
+        let accepted = try await holdRestart(app, stub: stub)
+        try closeSessionPage(app)
+        _ = try await stub.waitForOpenStreams(0)
+        let cancelled = try await stub.waitForLifecycleClosed(accepted.id)
+        XCTAssertEqual(cancelled.result.status, "restarted")
+        XCTAssertEqual(cancelled.result.pendingMessages, 0)
+        try await stub.releaseLifecycle(accepted.id)
+        try await stub.assertSubscriptionStays(openStreams: 0, attaches: first.attaches.count)
+        try await stub.screenshot(app, "lifecycle-01-closed")
+
+        try openSessionPage(app)
+        let reopened = try await stub.waitForOpenStreams(1, attaches: first.attaches.count + 1)
+        try await stub.assertSubscriptionStays(openStreams: 1, attaches: reopened.attaches.count)
+        // A normal restart still decodes the real HTTP success and reattaches once.
+        tapRestart(app)
+        _ = try await stub.waitForOpenStreams(1, attaches: reopened.attaches.count + 1)
+        XCTAssertTrue(app.staticTexts["Session restarted."].waitForExistence(timeout: 15))
+        try await stub.screenshot(app, "lifecycle-02-reopened")
+    }
+
+    @MainActor
+    func testAnOldRestartReleasedAfterReopeningCannotReplaceTheNewStream() async throws {
+        let (stub, app) = try await lifecyclePage()
+        defer { app.terminate() }
+        let first = try await stub.waitForOpenStreams(1)
+        let accepted = try await holdRestart(app, stub: stub)
+        try closeSessionPage(app)
+        _ = try await stub.waitForOpenStreams(0)
+        _ = try await stub.waitForLifecycleClosed(accepted.id)
+        try openSessionPage(app)
+        let reopened = try await stub.waitForOpenStreams(1, attaches: first.attaches.count + 1)
+        try await stub.releaseLifecycle(accepted.id)
+        try await stub.assertSubscriptionStays(openStreams: 1, attaches: reopened.attaches.count)
+        XCTAssertTrue(element(app, "chat.composer").exists)
+        XCTAssertFalse(app.staticTexts["Request cancelled"].exists, "leaving the page is not a lifecycle error")
+        try await stub.screenshot(app, "lifecycle-03-current-page")
+    }
+
+    @MainActor
+    func testAHeldRestartReleasedInTheBackgroundCannotReopenTheStream() async throws {
+        let (stub, app) = try await lifecyclePage()
+        defer { app.terminate() }
+        let first = try await stub.waitForOpenStreams(1)
+        let accepted = try await holdRestart(app, stub: stub)
+        XCUIDevice.shared.press(.home)
+        _ = try await stub.waitForOpenStreams(0)
+        _ = try await stub.waitForLifecycleClosed(accepted.id)
+        try await stub.releaseLifecycle(accepted.id)
+        try await stub.assertSubscriptionStays(openStreams: 0, attaches: first.attaches.count)
+        app.activate()
+        XCTAssertTrue(element(app, "chat.composer").waitForExistence(timeout: 30))
+        let foreground = try await stub.waitForOpenStreams(1, attaches: first.attaches.count + 1)
+        try await stub.assertSubscriptionStays(openStreams: 1, attaches: foreground.attaches.count)
+        XCTAssertFalse(app.staticTexts["Request cancelled"].exists, "background cancellation is not a lifecycle error")
+        try await stub.screenshot(app, "lifecycle-04-foreground")
+    }
+
+    @MainActor
+    func testAHeldRetryCannotReopenAnAbandonedPage() async throws {
+        for background in [false, true] {
+            let (stub, app) = try await lifecyclePage()
+            let first = try await stub.waitForOpenStreams(1)
+            try await stub.call("POST", "__stub/session-status?status=stopped")
+            try await stub.call("POST", "__stub/session-lifecycle?mode=hold")
+            let before = try await stub.lifecycleState().requests.count
+            app.buttons["session.menu"].tap()
+            let retry = app.buttons["session.retry"]
+            XCTAssertTrue(retry.waitForExistence(timeout: 15), "the stopped session has no Retry action")
+            retry.tap()
+            let accepted = try await stub.waitForHeldLifecycle(beyond: before, action: "retry")
+            if background { XCUIDevice.shared.press(.home) }
+            else { try closeSessionPage(app) }
+            _ = try await stub.waitForOpenStreams(0)
+            _ = try await stub.waitForLifecycleClosed(accepted.id)
+            try await stub.releaseLifecycle(accepted.id)
+            try await stub.assertSubscriptionStays(openStreams: 0, attaches: first.attaches.count)
+            if background { app.activate() }
+            else { try openSessionPage(app) }
+            let reopened = try await stub.waitForOpenStreams(1, attaches: first.attaches.count + 1)
+            try await stub.assertSubscriptionStays(openStreams: 1, attaches: reopened.attaches.count)
+            XCTAssertFalse(app.staticTexts["Request cancelled"].exists)
+            try await stub.screenshot(app, background ? "retry-foreground" : "retry-reopened")
+            app.terminate()
+        }
+    }
+
+    @MainActor
+    private func lifecyclePage() async throws -> (StormStub, XCUIApplication) {
+        let stub = try await stubUnderTest()
+        try await stub.reset()
+        try await stub.call("POST", "__stub/work-session?on=1")
+        try await stub.call("POST", "__stub/session-replica?on=1&rows=300")
+        let app = try launchPaired()
+        try openSessionPage(app)
+        _ = try await stub.waitForOpenStreams(1)
+        return (stub, app)
+    }
+
+    @MainActor
+    private func holdRestart(_ app: XCUIApplication, stub: StormStub) async throws -> StormStub.LifecycleRequest {
+        let before = try await stub.lifecycleState().requests.count
+        try await stub.call("POST", "__stub/session-lifecycle?mode=hold")
+        tapRestart(app)
+        return try await stub.waitForHeldLifecycle(beyond: before)
+    }
+
+    @MainActor
+    private func tapRestart(_ app: XCUIApplication) {
+        let menu = app.buttons["session.menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 15), "the session menu is missing")
+        menu.tap()
+        let restart = app.buttons["session.restart"]
+        XCTAssertTrue(restart.waitForExistence(timeout: 10), "Restart is missing from the menu")
+        restart.tap()
+    }
+
+    @MainActor
+    private func closeSessionPage(_ app: XCUIApplication) throws {
+        if app.keyboards.firstMatch.exists {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+            XCTAssertTrue(waitUntil(timeout: 10) { !app.keyboards.firstMatch.exists }, "the transcript tap did not dismiss the keyboard")
+        }
+        let notes = app.buttons["Notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10), "the tab bar is missing")
+        notes.tap()
+        XCTAssertTrue(waitUntil(timeout: 15) { !app.buttons["session.menu"].exists }, "leaving Tasks kept the session visible")
+    }
+
     // MARK: - Driving the app
 
     /// Tasks tab → the work task's row → its session page, waiting for the composer.
@@ -237,29 +368,21 @@ final class SessionStreamStormUITests: XCTestCase {
         let tasksTab = app.buttons["Tasks"]
         XCTAssertTrue(tasksTab.waitForExistence(timeout: 60), "the tab bar never appeared")
         tasksTab.tap()
-        let row = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'board.row.'")).firstMatch
+        let scrim = element(app, "tasks.drawer.scrim")
+        if !scrim.waitForExistence(timeout: 3) {
+            let menu = app.buttons["tasks.menu"]
+            XCTAssertTrue(menu.waitForExistence(timeout: 10))
+            menu.tap()
+        }
+        XCTAssertTrue(scrim.waitForExistence(timeout: 10), "the board drawer did not open")
+        let row = element(app, "board.row.task-stub-work")
         XCTAssertTrue(row.waitForExistence(timeout: 45), "the board never showed the work task")
-        // At the largest text size the row is taller than the space left above
-        // the tab bar, so a tap at its middle lands on the tab bar. Scroll it up
-        // a little when too little of it shows, then tap its visible part.
-        let bottomLimit = { () -> CGFloat in
-            let bar = app.tabBars.firstMatch
-            if bar.exists, bar.frame.height > 0 { return bar.frame.minY }
-            return tasksTab.frame.minY
-        }
-        if min(row.frame.maxY, bottomLimit()) - row.frame.minY < 60 {
-            let window = app.windows.firstMatch
-            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
-                .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)))
-            usleep(600_000)
-        }
-        let frame = row.frame
-        let visibleBottom = min(frame.maxY, bottomLimit())
-        let tapY = (max(frame.minY, 0) + visibleBottom) / 2
-        let dy = frame.height > 0 ? (tapY - frame.minY) / frame.height : 0.5
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: dy)).tap()
+        let ready = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: row)
+        XCTAssertEqual(XCTWaiter().wait(for: [ready], timeout: 10), .completed, "the task row never became hittable")
+        row.tap()
         guard waitForComposer else { return }
+        XCTAssertTrue(app.buttons["session.menu"].waitForExistence(timeout: 30), "the task did not open its session")
+        XCTAssertTrue(app.buttons["session.title"].label.contains("Stub work task"), "a restored session replaced the work session")
         XCTAssertTrue(element(app, "chat.composer").waitForExistence(timeout: 30), "no composer on the session page")
     }
 
@@ -316,7 +439,7 @@ final class SessionStreamStormUITests: XCTestCase {
     private func launchPaired() throws -> XCUIApplication {
         let (server, token) = try pairing()
         return UITestLaunch.launch([
-            "-walnut.serverUrl", server, "-walnut.deviceToken", token,
+            "-walnut.serverUrl", UITestLaunch.pairedServer(server), "-walnut.deviceToken", token,
             "-walnut.sessionStreamResumeIDs", "",
         ])
     }
@@ -384,6 +507,31 @@ struct StormStub: Sendable {
         let banked: [Banked]
         let delivered: [String]
         let transcriptTexts: [String]
+        let openStreams: Int
+    }
+
+    struct LifecycleResult: Decodable {
+        let status: String
+        let sessionId: String?
+        let pendingMessages: Int?
+        let taskId: String?
+        let oldSessionId: String?
+        let restoredMessages: Int?
+    }
+
+    struct LifecycleRequest: Decodable {
+        let id: Int
+        let action: String
+        let result: LifecycleResult
+        let clientClosed: Bool
+        let released: Bool
+        let responseWritten: Bool
+    }
+
+    struct LifecycleState: Decodable {
+        let holding: Bool
+        let pending: [Int]
+        let requests: [LifecycleRequest]
     }
 
     @discardableResult
@@ -412,6 +560,72 @@ struct StormStub: Sendable {
 
     func sessionState() async throws -> SessionState {
         try JSONDecoder().decode(SessionState.self, from: try await call("GET", "__stub/session-state"))
+    }
+
+    func lifecycleState() async throws -> LifecycleState {
+        try JSONDecoder().decode(LifecycleState.self, from: try await call("GET", "__stub/session-lifecycle"))
+    }
+
+    func releaseLifecycle(_ id: Int) async throws {
+        try await call("POST", "__stub/session-lifecycle?mode=release&id=\(id)")
+        let state = try await lifecycleState()
+        let request = try XCTUnwrap(state.requests.first { $0.id == id })
+        XCTAssertTrue(request.released, "the fixture never released its accepted success")
+        XCTAssertFalse(state.pending.contains(id))
+        XCTAssertTrue(request.clientClosed, "the real URLSession request was not cancelled before release")
+        XCTAssertFalse(request.responseWritten, "a cancelled client still received a success response")
+    }
+
+    func waitForHeldLifecycle(beyond count: Int, action: String = "restart", timeout: TimeInterval = 15) async throws -> LifecycleRequest {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let state = try await lifecycleState()
+            if let request = state.requests.dropFirst(count).first,
+               state.pending.contains(request.id) {
+                XCTAssertEqual(request.action, action)
+                XCTAssertFalse(request.released)
+                return request
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw NSError(domain: "stub", code: -1, userInfo: [NSLocalizedDescriptionKey: "Restart never reached the fixture's hold"])
+    }
+
+    func waitForLifecycleClosed(_ id: Int, timeout: TimeInterval = 15) async throws -> LifecycleRequest {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let state = try await lifecycleState()
+            if let request = state.requests.first(where: { $0.id == id }), request.clientClosed {
+                XCTAssertTrue(state.pending.contains(id), "client cancellation discarded the accepted success")
+                return request
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw NSError(domain: "stub", code: -1, userInfo: [NSLocalizedDescriptionKey: "Leaving the page never cancelled the real Restart request"])
+    }
+
+    func waitForOpenStreams(_ count: Int, attaches: Int? = nil, timeout: TimeInterval = 20) async throws -> SessionState {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let state = try await sessionState()
+            if state.openStreams == count && (attaches == nil || state.attaches.count == attaches) { return state }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let state = try await sessionState()
+        XCTFail("expected \(count) open streams and \(attaches.map(String.init) ?? "any") attaches; got \(state.openStreams) and \(state.attaches.count)")
+        return state
+    }
+
+    /// Observe a bounded post-release window, not a single snapshot before a
+    /// stale asynchronous completion has had a chance to reattach its SSE.
+    func assertSubscriptionStays(openStreams: Int, attaches: Int, seconds: TimeInterval = 2) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            let state = try await sessionState()
+            XCTAssertEqual(state.openStreams, openStreams, "a stale operation changed live subscription ownership")
+            XCTAssertEqual(state.attaches.count, attaches, "a stale operation opened another stream")
+            try await Task.sleep(for: .milliseconds(100))
+        } while Date() < deadline
     }
 
     /// Wait until the page's stream has attached more than `count` times.

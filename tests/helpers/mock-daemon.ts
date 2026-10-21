@@ -605,6 +605,15 @@ export class MockDaemon {
       }
       this.sendOk(ws, id, { ok: true })
     } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'ENXIO') {
+        const exitCode = reapExitCode(session)
+        session.exitCode = exitCode
+        this._deadSessions.set(sid, exitCode)
+        this.broadcastSessionState(sid, 'dead', { exitCode, reason: 'send-enxio' })
+        return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode })
+      }
+      if (code === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
       this.sendError(ws, id, `write failed: ${(err as Error).message}`)
     }
   }

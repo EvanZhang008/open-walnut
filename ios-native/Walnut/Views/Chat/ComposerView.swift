@@ -2118,6 +2118,7 @@ struct OfflineBanner: View {
     var body: some View {
         Label(text, systemImage: "wifi.slash")
             .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
             // Wrapped at a large text size the line otherwise ran about 4pt
             // from the screen edge.
             .padding(.horizontal, 12)

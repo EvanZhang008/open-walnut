@@ -860,7 +860,12 @@ export class ClaudeCodeSession {
     }, ['main-ai'], { source: 'session-runner' })
   }
 
+  private permissionWriteAttempts = new Map<string, { promise: Promise<boolean>; resolve: (ok: boolean) => void }>()
+
   private cancelPendingPermission(requestId: string): void {
+    const attempt = this.permissionWriteAttempts.get(requestId)
+    this.permissionWriteAttempts.delete(requestId)
+    attempt?.resolve(false)
     this._resolvedPermissionRequestIds.add(requestId)
     const pending = this._pendingPermissionRequests.get(requestId)
     this._pendingPermissionRequests.delete(requestId)
@@ -3402,7 +3407,7 @@ export class ClaudeCodeSession {
             requestId: pending.request_id,
             toolName: pending.request.tool_name,
           })
-          session.resolvePermissionRequest(pending.request_id, true)
+          void session.resolvePermissionRequest(pending.request_id, true).catch(() => false)
         } else {
           log.session.info('re-emitting recovered control_request to UI', {
             sessionId: record.claudeSessionId,
@@ -3429,6 +3434,8 @@ export class ClaudeCodeSession {
    * Stops tailing and liveness monitoring. The process continues running.
    */
   detach(): void {
+    for (const attempt of this.permissionWriteAttempts.values()) attempt.resolve(false)
+    this.permissionWriteAttempts.clear()
     log.session.info('session detached', {
       // DUP-DEBUG: pair with the matching `session spawned` / `attaching to
       // existing session` (same ccsId). If a sid has two spawns/attaches but
@@ -3647,7 +3654,7 @@ export class ClaudeCodeSession {
     let ok: boolean
     try {
       ok = await transport.writeMessage(message, {
-        ...wireOpts, ...(uuid ? { uuid } : {}), ...(lostPid != null ? { lostPid } : {}), stopFence, onDispatch,
+        ...wireOpts, ...(uuid ? { uuid } : {}), ...(lostPid != null ? { lostPid, lostGeneration: lost!.rewrites } : {}), stopFence, onDispatch,
         onFate: (f) => { known = f }, onCut: () => { ownCut = true; cut.onCut() },
         onHeld: () => { waited = true; opts?.onHeld?.() },
       })
@@ -7049,7 +7056,7 @@ export class ClaudeCodeSession {
         // an OLDER binary that predates the skip — and (2) any race where a control
         // line slips through. Both layers are intentional; do NOT delete this as
         // "redundant" with the daemon-side skip.
-        if (this._resolvedPermissionRequestIds.has(request_id)) {
+        if (this._resolvedPermissionRequestIds.has(request_id) || this.permissionWriteAttempts.has(request_id)) {
           log.session.info('control_request ignored — already resolved (stale replay)', {
             sessionId: this.claudeSessionId, taskId: this.taskId, requestId: request_id, toolName: request.tool_name,
           })
@@ -7500,6 +7507,7 @@ export class ClaudeCodeSession {
     allow: boolean,
     denyMessage?: string,
     updatedInputPatch?: Record<string, unknown>,
+    restorePending?: { request_id: string; request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string } },
   ): boolean {
     const result = allow
       ? {
@@ -7536,29 +7544,58 @@ export class ClaudeCodeSession {
       })
       return false
     }
-    // Response is being delivered (sync handoff to writeRaw succeeded). Mark resolved
-    // so a daemon replay of this same request_id on reconnect is ignored.
-    this._resolvedPermissionRequestIds.add(requestId)
-    Promise.resolve(this._transport.writeRaw(response)).then((ok) => {
+    const transport = this._transport
+    const sid = this.claudeSessionId
+    const stopEpoch = this._stopEpoch
+    const attempt = restorePending ? this.permissionWriteAttempts.get(requestId) : undefined
+    const sameOwner = () => this._active && this.claudeSessionId === sid && this._transport === transport
+      && this._stopEpoch === stopEpoch
+    const current = () => sameOwner() && (!restorePending || (this.permissionWriteAttempts.get(requestId) === attempt
+      && this._pendingPermissionRequests.get(requestId) === restorePending))
+    const finish = (ok: boolean): void => {
+      if (attempt && this.permissionWriteAttempts.get(requestId) === attempt) this.permissionWriteAttempts.delete(requestId)
+      attempt?.resolve(ok)
+    }
+    const settle = async (ok: boolean): Promise<void> => {
+      if (!current()) { finish(false); return }
       if (!ok) {
-        log.session.warn('control_response write failed (broken pipe) — session may hang until idle timeout kills it', {
-          sessionId: this.claudeSessionId, taskId: this.taskId, requestId,
-        })
+        // Nothing resolved: the original pending card and persisted request stay
+        // exactly as they were. The user can retry the same decision.
+        finish(false)
+        return
       }
-    }).catch((err) => {
-      log.session.warn('control_response write error — session may hang until idle timeout kills it', {
-        sessionId: this.claudeSessionId, taskId: this.taskId, requestId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    })
-    // Notify UI
-    if (this.claudeSessionId) {
-      bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
-        sessionId: this.claudeSessionId,
-        taskId: this.taskId,
-        variant: 'info' as const,
+      this._resolvedPermissionRequestIds.add(requestId)
+      if (restorePending) {
+        this._pendingPermissionRequests.delete(requestId)
+        this._clearPermissionReEmitTimer(requestId)
+        if (sid) {
+          bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
+            sessionId: sid, taskId: this.taskId, requestId,
+            toolName: restorePending.request.tool_name, allowed: allow, turnGen: this._turnGen,
+          }, ['*'], { source: 'session-runner' })
+          const { updateSessionRecordConditionally } = await import('../core/session-tracker.js')
+          await updateSessionRecordConditionally(sid, { pendingPermission: undefined }, (record) =>
+            sameOwner() && !this._pendingPermissionRequests.has(requestId)
+            && record.pendingPermission?.requestId === requestId).catch(() => undefined)
+        }
+      }
+      if (sid && sameOwner()) bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+        sessionId: sid, taskId: this.taskId, variant: 'info' as const,
         message: `Permission ${allow ? 'granted' : 'denied'}: ${request.tool_name}`,
       }, ['main-ai'], { source: 'session-runner' })
+      finish(ok && sameOwner())
+    }
+    const failed = async (err: unknown): Promise<void> => {
+      log.session.warn('control_response write error; the unanswered permission stays pending', {
+        sessionId: sid, taskId: this.taskId, requestId, error: err instanceof Error ? err.message : String(err),
+      })
+      await settle(false).catch(() => {})
+    }
+    try {
+      const outcome = transport.writeRaw(response)
+      void Promise.resolve(outcome).then(settle).catch(failed)
+    } catch (err) {
+      void failed(err)
     }
     return true
   }
@@ -8499,43 +8536,22 @@ export class ClaudeCodeSession {
     allow: boolean,
     denyMessage?: string,
     updatedInputPatch?: Record<string, unknown>,
-  ): boolean {
+  ): Promise<boolean> {
+    const inFlight = this.permissionWriteAttempts.get(requestId)
+    if (inFlight) return inFlight.promise
     const pending = this._pendingPermissionRequests.get(requestId)
-    if (!pending) return false
-    this._pendingPermissionRequests.delete(requestId)
-    this._clearPermissionReEmitTimer(requestId)
-    const written = this.respondToControlRequest(requestId, pending.request, allow, denyMessage, updatedInputPatch)
-
+    if (!pending) return Promise.resolve(false)
+    // The API and duplicate clicks await the one actual transport result.
+    let resolve!: (ok: boolean) => void
+    const promise = new Promise<boolean>((done) => { resolve = done })
+    const attempt = { promise, resolve }
+    this.permissionWriteAttempts.set(requestId, attempt)
+    const written = this.respondToControlRequest(requestId, pending.request, allow, denyMessage, updatedInputPatch, pending)
     if (!written) {
-      // Transport gone — re-add so recovery / re-attach can retry the response.
-      // Don't emit resolved to UI; the permission stays visually pending.
-      this._pendingPermissionRequests.set(requestId, pending)
-      this._startPermissionReEmitTimer(requestId, pending.request)
-      log.session.warn('resolvePermissionRequest: transport unavailable, re-queued for recovery', {
-        sessionId: this.claudeSessionId, requestId,
-      })
-      return false
+      if (this.permissionWriteAttempts.get(requestId) === attempt) this.permissionWriteAttempts.delete(requestId)
+      resolve(false)
     }
-
-    // Notify UI so stream buffer + frontend blocks update their status
-    if (this.claudeSessionId) {
-      bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
-        sessionId: this.claudeSessionId,
-        taskId: this.taskId,
-        requestId,
-        toolName: pending.request.tool_name,
-        allowed: allow,
-        turnGen: this._turnGen,
-      }, ['*'], { source: 'session-runner' })
-    }
-
-    // Clear persisted pendingPermission from session record (best-effort)
-    if (this.claudeSessionId) {
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-        updateSessionRecord(this.claudeSessionId!, { pendingPermission: undefined }),
-      ).catch(() => {})
-    }
-    return true
+    return promise
   }
 
   /**
@@ -8546,6 +8562,8 @@ export class ClaudeCodeSession {
    * persisted record are always cleaned up so the 60s re-ask loop stops.
    */
   forceSettlePermissionRequests(reason: string): void {
+    for (const attempt of this.permissionWriteAttempts.values()) attempt.resolve(false)
+    this.permissionWriteAttempts.clear()
     for (const [requestId, pending] of [...this._pendingPermissionRequests]) {
       this._pendingPermissionRequests.delete(requestId)
       this._clearPermissionReEmitTimer(requestId)
@@ -8769,6 +8787,11 @@ export class ClaudeCodeSession {
 
 // ── SessionRunner ──
 
+type HeldSendRetry = {
+  timer?: ReturnType<typeof setTimeout>; delay: number; target: ClaudeCodeSession;
+  stopEpoch: number; fence: string | null; ids: Set<string>;
+}
+
 export class SessionRunner {
   private sessions = new Map<string, ClaudeCodeSession>()
   /** ACP-backed sessions (any ACP engine), keyed by trackingId (providerSessionId or runtimeId). */
@@ -8792,6 +8815,8 @@ export class SessionRunner {
   private batchMessageIds = new Map<string, string[]>()
   /** Safety timers that auto-clear stuck activeProcessing entries */
   private activeProcessingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** One bounded retry per held session, tied to the same live process and stop fence. */
+  private heldSendRetries = new Map<string, HeldSendRetry>()
   /** Unregisters this runner from reclaimed-line announcements (line-consumption.ts). */
   private stopReclaimListener?: () => void
   /** Explicit ACP interrupt barrier. A cancelled turn may emit its terminal
@@ -9391,6 +9416,7 @@ export class SessionRunner {
     this.acpDestroyed = true
     this.stopReclaimListener?.()
     this.stopReclaimListener = undefined
+    for (const sid of this.heldSendRetries.keys()) this.cancelHeldSendRetry(sid)
     for (const [, session] of this.sessions) {
       session.detach()
     }
@@ -9435,6 +9461,7 @@ export class SessionRunner {
     this.acpDestroyed = true
     this.stopReclaimListener?.()
     this.stopReclaimListener = undefined
+    for (const sid of this.heldSendRetries.keys()) this.cancelHeldSendRetry(sid)
     for (const [, session] of this.sessions) {
       session.kill()
     }
@@ -11204,6 +11231,7 @@ export class SessionRunner {
   }
 
   private interruptNativeSession(sessionId: string): Promise<void> {
+    this.cancelHeldSendRetry(sessionId)
     const existing = this.nativeInterrupts.get(sessionId)
     if (existing) return existing
     const session = this.findSessionByClaudeId(sessionId)
@@ -11405,7 +11433,7 @@ export class SessionRunner {
         permissions: pendingPerms.map(p => p.toolName),
       })
       for (const p of pendingPerms) {
-        targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied')
+        await targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied').catch(() => false)
       }
       await new Promise(r => setTimeout(r, 200))
     }
@@ -11448,6 +11476,7 @@ export class SessionRunner {
       this.settleResumeFailure(sessionId, newMsgs, error instanceof Error ? error : new Error(String(error)))
       return
     }
+    if (delivered) this.cancelHeldSendRetry(sessionId)
     // The daemon or the CLI already knew this line's end (a Stop cancelled it, or the
     // CLI dropped it): writeMessage settled the rows and told the user.
     if (delivered && known && known.fate !== 'ran' && known.fate !== 'waiting') {
@@ -11893,6 +11922,7 @@ export class SessionRunner {
    * pending/processing messages survive (they re-deliver on the next processNext).
    */
   settleInFlightTurn(sessionId: string): void {
+    this.cancelHeldSendRetry(sessionId)
     if (!this.activeProcessing.has(sessionId)) return
     const oldBatchCount = this.batchCounts.get(sessionId) ?? 1
     const oldBatchIds = this.batchMessageIds.get(sessionId)
@@ -12146,11 +12176,67 @@ export class SessionRunner {
    */
   private deliverRest(sessionId: string): void {
     void getQueue(sessionId).then((rows) => {
-      if (!rows.some((m) => m.status === 'pending')) return
+      if (!rows.some((m) => m.status === 'pending')) { this.cancelHeldSendRetry(sessionId); return }
       return this.activeProcessing.has(sessionId) ? this.injectMidTurn(sessionId) : this.processNext(sessionId)
     }).catch((err) => log.session.warn('delivering the rest of the queue failed', {
       sessionId, error: err instanceof Error ? err.message : String(err),
     }))
+  }
+
+  private cancelHeldSendRetry(sessionId: string): void {
+    const held = this.heldSendRetries.get(sessionId)
+    if (held?.timer) clearTimeout(held.timer)
+    this.heldSendRetries.delete(sessionId)
+  }
+
+  private armHeldSendRetry(sessionId: string, msgs: QueuedMessage[]): void {
+    const target = this.findSessionByClaudeId(sessionId)
+    if (this.acpDestroyed || !target?.active || !target.hasPipe || msgs.length === 0) return
+    const fence = msgs[0].stopFence ?? null
+    let held = this.heldSendRetries.get(sessionId)
+    if (held && (held.target !== target || held.stopEpoch !== target.stopEpoch || held.fence !== fence)) {
+      this.cancelHeldSendRetry(sessionId)
+      held = undefined
+    }
+    if (!held) {
+      held = { delay: 5_000, target, stopEpoch: target.stopEpoch, fence, ids: new Set() }
+      this.heldSendRetries.set(sessionId, held)
+    }
+    for (const msg of msgs) held.ids.add(msg.id)
+    if (held.timer) return
+    const current = held
+    current.timer = setTimeout(() => {
+      current.timer = undefined
+      current.delay = Math.min(30_000, current.delay * 2)
+      void this.retryHeldSend(sessionId, current).catch((err) => {
+        log.session.warn('held send retry check failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+        if (this.heldSendRetries.get(sessionId) === current) this.armHeldSendRetry(sessionId, msgs)
+      })
+    }, current.delay)
+    current.timer.unref?.()
+  }
+
+  private async retryHeldSend(sessionId: string, held: HeldSendRetry): Promise<void> {
+    const same = () => !this.acpDestroyed && this.heldSendRetries.get(sessionId) === held
+      && this.findSessionByClaudeId(sessionId) === held.target && held.target.active
+      && held.target.hasPipe && held.target.stopEpoch === held.stopEpoch
+    if (this.heldSendRetries.get(sessionId) !== held) return
+    if (!same()) { this.cancelHeldSendRetry(sessionId); return }
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const record = await getSessionByClaudeId(sessionId)
+    const rows = await getQueue(sessionId)
+    if (!same()) return
+    const first = rows.find((row) => row.status === 'pending')
+    if (!record || record.archived || record.stopRequest?.state === 'pending'
+      || (record.stopRequest?.id ?? null) !== held.fence || !first
+      || !held.ids.has(first.id) || (first.stopFence ?? null) !== held.fence) {
+      this.cancelHeldSendRetry(sessionId)
+      return
+    }
+    // Reuse the queue's oldest line and its uuid; never create a message or a
+    // process for a retry. A stopped/replaced target cannot take this timer.
+    this.recoveryDeliveries.add(sessionId)
+    this.deliverRest(sessionId)
   }
 
   /** Lines queued behind one whose answer is being asked for: the user sees why they wait. */
@@ -12175,15 +12261,17 @@ export class SessionRunner {
   private async settleUnansweredLine(sessionId: string, msgs: QueuedMessage[], err: Error, stopped: boolean): Promise<void> {
     revokeEchoClaims(sessionId, msgs.map((m) => m.id))
     if (stopped) {
+      this.cancelHeldSendRetry(sessionId)
       const parked = await parkIfQueued(msgs, 'Session stopped by user; retry explicitly to send').catch(() => [])
       if (parked.length > 0) reportBatchFailed(sessionId, parked.map((m) => m.id), 'Stopped before delivery was confirmed; retry to send')
       return
     }
     await revertIfQueued(msgs).catch(() => {})
     const ids = new Set(msgs.map((m) => m.id))
-    const left = (await getQueue(sessionId)).filter((m) => ids.has(m.id)).map((m) => m.id)
-    if (left.length === 0) return
-    reportBatchFailed(sessionId, left, err.message)
+    const left = (await getQueue(sessionId)).filter((m) => ids.has(m.id) && m.status === 'pending')
+    if (left.length === 0) { this.cancelHeldSendRetry(sessionId); return }
+    reportBatchFailed(sessionId, left.map((m) => m.id), err.message)
+    this.armHeldSendRetry(sessionId, left)
   }
 
   private async processNextNow(sessionId: string, mode?: string): Promise<void> {
@@ -12371,7 +12459,7 @@ export class SessionRunner {
             permissions: pendingPerms.map(p => p.toolName),
           })
           for (const p of pendingPerms) {
-            targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied')
+            await targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied').catch(() => false)
           }
           // Small delay for Claude Code to process the denial before we write the new message
           await new Promise(r => setTimeout(r, 200))
@@ -12404,6 +12492,7 @@ export class SessionRunner {
           await this.settleUnansweredLine(sessionId, msgs, error, target.stopEpoch !== stops)
           return
         }
+        if (written) this.cancelHeldSendRetry(sessionId)
         if (written && known && known.fate !== 'waiting') {
           // Nothing was written: the CLI already ran the line (a resend after a
           // restart), a Stop cancelled it, or the CLI dropped it. writeMessage

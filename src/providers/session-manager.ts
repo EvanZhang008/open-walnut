@@ -171,6 +171,8 @@ export interface LineWriteOptions {
    * the line again after a lone newline. Sent only to a daemon with the capability.
    */
   lostPid?: number
+  /** Existing read-past proof count for this pid/uuid; transport-local, never sent to the daemon. */
+  lostGeneration?: number
   /** The daemon answered without writing, with what became of the line (send-dedupe-v1). */
   onFate?: (fate: { fate: string; state?: string }) => void
   /** This line waits behind one whose answer is still being asked for. */

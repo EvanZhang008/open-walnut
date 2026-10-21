@@ -764,6 +764,8 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // walnut-server shape as session.launch — the daemon executes NOTHING
   // itself, the primary re-validates everything.
   'session.control',
+  // A pending can_use_tool answer only ('session-permission-v1'), never raw stdin.
+  'session.permission',
   // Narrow message relay: forwarded UP to the connected walnut server, which
   // enqueues into the DURABLE session message queue (same store + reconnect
   // redelivery as web sends). The asymmetry fix for the 2026-08-13 phone-send
@@ -808,7 +810,7 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
  * prod daemon dir, as every test knob that changes what a daemon does (section 10).
  */
 const BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR ? [] : (process.env.WALNUT_BRIDGE_HIDE_CAPS ?? '').split(',').map((x) => x.trim())
-const BRIDGE_CAPABILITIES = ['bridge-stream-v1'].filter((c) => !BRIDGE_HIDDEN_CAPS.includes(c))
+const BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1'].filter((c) => !BRIDGE_HIDDEN_CAPS.includes(c))
 
 /**
  * What a follower socket (the host server) may ask ('follower-v1'): who leads,
@@ -2130,6 +2132,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'session.launch': return cmdLaunchRelay(ws, id as number, cmd)
     case 'launch-result': return cmdLaunchResult(ws, id as number, cmd)
     case 'session.control': return cmdControlRelay(ws, id as number, cmd)
+    case 'session.permission': return daemonCommands.run(() => cmdSessionPermission(ws, id as number, cmd))
     case 'control-result': return cmdControlResult(ws, id as number, cmd)
     case 'session.message': return cmdMessageRelay(ws, id as number, cmd)
     // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
@@ -3636,6 +3639,15 @@ async function cmdLeaderControl(ws: ServerWebSocket<WsData>, id: number, cmd: Re
     return cmdStop(ws, id, stop)
   }
   return sendError(ws, id, 'leader.control: unknown action', { errorKind: 'bad_request' })
+}
+
+/** The bridge fallback answers only a pending prompt, using the daemon's own tool input. */
+async function cmdSessionPermission(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'session.permission: the cloud bridge only', { errorKind: 'refused' })
+  if (!isJournalSid(cmd.sid)) return sendError(ws, id, 'session.permission: invalid sid', { errorKind: 'bad_request' })
+  const r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers }, 'session.permission')
+  if (!r.ok) return sendError(ws, id, 'session.permission: ' + r.error, { errorKind: r.errorKind })
+  return sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId as string, allow: r.allow })
 }
 
 /**

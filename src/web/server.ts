@@ -538,6 +538,7 @@ function corsOriginAllowed(
 export interface ServerOptions {
   port?: number
   dev?: boolean
+  bindAddress?: string
 }
 
 let httpServer: HttpServer | null = null
@@ -1444,6 +1445,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // parser applies. See src/web/routes/bridge-ingest.ts.
     const { createBridgeIngestRouter, BRIDGE_INGEST_PATH } = await import('./routes/bridge-ingest.js')
     app.use(BRIDGE_INGEST_PATH, createBridgeIngestRouter())
+    const { createBridgeSendRouter, BRIDGE_SEND_PATH } = await import('./routes/bridge-send.js')
+    app.use(BRIDGE_SEND_PATH, createBridgeSendRouter())
     // The primary keeps this box's copy of its task store (same door as ingest).
     const { createBridgeReplicaRouter, BRIDGE_REPLICA_PATH } = await import('./routes/bridge-replica.js')
     app.use(BRIDGE_REPLICA_PATH, createBridgeReplicaRouter())
@@ -2469,7 +2472,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     await new Promise<void>((resolve, reject) => {
       httpServer!.once('error', reject)
       // A host replica listens on loopback only: its tunnel is the one way in.
-      if (isHostReplica()) httpServer!.listen(port, '127.0.0.1', () => resolve())
+      const bindAddress = isHostReplica() ? '127.0.0.1' : options.bindAddress
+      if (bindAddress) httpServer!.listen(port, bindAddress, () => resolve())
       else httpServer!.listen(port, () => resolve())
     })
   } catch (err) {

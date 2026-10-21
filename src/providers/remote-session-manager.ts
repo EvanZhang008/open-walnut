@@ -17,7 +17,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
+import { IS_EPHEMERAL, REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
 import {
   writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored,
   fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply, startMirrorDownload,
@@ -25,6 +25,8 @@ import {
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { BudgetPausedError, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
+import { linkFailureKind } from './link-failure.js'
+import { CloudSessionLink } from './cloud-session-link.js'
 import { isSessionStopSuperseded, SessionStopSupersededError } from '../core/sessions/session-stop.js'
 import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance } from '../core/sessions/stop-provenance.js'
 import {
@@ -127,6 +129,84 @@ export class RemoteSessionManager implements SessionManager {
   readonly processName = 'daemon'
 
   private _directWsUrl: string | undefined
+  private cloudLink: CloudSessionLink | null = null
+  private cloudGeneration = 0
+  private cloudPendingRequest: { id: string; toolName: string } | null = null
+  /** A rewrite whose cloud acknowledgement may be lost is confirmed without rewriting again. */
+  private cloudRewriteAttempts = new Map<string, { pid: number; generation: number }>()
+  private knownPermissionRequests = new Map<string, string>()
+
+  private rememberPermission(requestId: string, toolName: string): void {
+    this.knownPermissionRequests.delete(requestId)
+    this.knownPermissionRequests.set(requestId, toolName)
+    if (this.knownPermissionRequests.size > 64) this.knownPermissionRequests.delete(this.knownPermissionRequests.keys().next().value!)
+  }
+
+  private rewriteAlreadyAttempted(sid: string, opts: LineWriteOptions | undefined): boolean {
+    const held = this.cloudRewriteAttempts.get(`${sid}\n${opts?.uuid}`)
+    return held?.pid === opts?.lostPid && held?.generation === (opts?.lostGeneration ?? 0)
+  }
+  private cloudAlive: boolean | null = null
+  private cloudEventAt = 0
+
+  private closeCloudLink(): void {
+    this.cloudGeneration++
+    this.cloudLink?.close()
+    this.cloudLink = null
+    this.cloudPendingRequest = null
+    this.cloudAlive = null
+    this.cloudEventAt = 0
+  }
+
+  private noteCloudAttachment(reply: Record<string, unknown>): void {
+    if (reply.ok !== true || typeof reply.alive !== 'boolean') return
+    this.cloudAlive = reply.alive
+    this.cloudEventAt = Date.now()
+    if (reply.alive) {
+      if (typeof reply.pid === 'number') this._pid = reply.pid
+      this._hasPipe = true
+      // Catch-up can run before the attach reply: never rewind its cursor.
+      if (typeof reply.currentOffset === 'number' && reply.currentOffset > this._fileSize) this.adoptCursor(reply.currentOffset)
+    }
+    // A cloud attachment that found no live process does not authorize a
+    // native stop or cold resume. The queued line waits for native recovery.
+    const pending = reply.pendingCtrl as { reqId?: unknown; toolName?: unknown; request?: unknown } | null
+    if (reply.alive && typeof pending?.reqId === 'string' && pending.request && typeof pending.request === 'object'
+      && this.cloudPendingRequest?.id !== pending.reqId) {
+      this.cloudPendingRequest = { id: pending.reqId, toolName: String(pending.toolName ?? '') }
+      this.rememberPermission(pending.reqId, String(pending.toolName ?? ''))
+      this._onOutput?.({ line: JSON.stringify({ type: 'control_request', request_id: pending.reqId, request: pending.request }) })
+    }
+  }
+
+  private async ensureCloudLink(sid: string): Promise<void> {
+    let link = this.cloudLink
+    if (!link) {
+      const generation = this.cloudGeneration
+      link = new CloudSessionLink(this.hostKey, sid, () => this.attachFromOffset(), (event) => {
+        if (generation !== this.cloudGeneration || this._sid !== sid || this.cloudLink !== link) return
+        if (this.conn?.connected) { this.closeCloudLink(); return }
+        this.cloudEventAt = Date.now()
+        if (event.ev === 'attached') this.noteCloudAttachment(event)
+        else {
+          if (event.ev === 'exit' || (event.ev === 'session_state' && event.state === 'dead')) this.cloudAlive = false
+          else if (event.ev === 'jsonl' || (event.ev === 'session_state' && event.state === 'running')) this.cloudAlive = true
+          this.handleDaemonEvent(event)
+        }
+      })
+      this.cloudLink = link
+    }
+    const generation = this.cloudGeneration
+    const reply = await link.connect()
+    if (generation !== this.cloudGeneration || this.cloudLink !== link || this._sid !== sid) {
+      throw new SendHeldError('Not sent yet: the cloud session connection was cancelled')
+    }
+    if (reply.ok !== true || reply.alive !== true) {
+      throw new SendHeldError('Not sent yet: the cloud session host did not confirm a live process')
+    }
+    // The attached event applied this reply once. A cached connect result must
+    // never restore an already answered permission or rewind newer events.
+  }
 
   constructor(
     private tmpId: string,
@@ -393,6 +473,8 @@ export class RemoteSessionManager implements SessionManager {
   // ── Attach ──
 
   async attach(opts: TransportAttachOptions): Promise<TransportAttachResult> {
+    this.closeCloudLink()
+    if (this._sid !== opts.sessionId) this.knownPermissionRequests.clear()
     await this.ensureConnected()
 
     this._onOutput = opts.onOutput
@@ -476,6 +558,7 @@ export class RemoteSessionManager implements SessionManager {
     })
 
     const pendingCtrl = result.pendingCtrl as { reqId: string; toolName: string; request: Record<string, unknown>; receivedAt: number } | null | undefined
+    if (pendingCtrl) this.rememberPermission(pendingCtrl.reqId, pendingCtrl.toolName)
 
     return {
       pid: this._pid ?? 0,
@@ -576,7 +659,7 @@ export class RemoteSessionManager implements SessionManager {
 
   private _writeChain: Promise<void> = Promise.resolve()
   private _writeSeq = 0
-  /** Writes up to this sequence number were queued behind a line whose outcome stayed unknown. */
+  /** Writes up to this sequence number were queued behind a held or unconfirmed line. */
   private _heldThrough = 0
   /** A line's answer is being asked for; lines queued behind it are told. */
   private _confirming = false
@@ -584,26 +667,54 @@ export class RemoteSessionManager implements SessionManager {
 
   private async writeMessageNow(message: string, opts: LineWriteOptions | undefined, seq: number): Promise<boolean> {
     if (seq <= this._heldThrough) throw new SendHeldError()
-    // Strict ack: we await the daemon's `cmdSend` reply and return false on any
-    // REFUSAL (FIFO write ENXIO/EAGAIN, session not found, request never sent).
-    // Caller (SessionRunner.processNext) takes the false and falls through to
-    // gracefulStop + --resume respawn, so the current message is not drained
-    // from the queue until delivery is truly confirmed. A reply that never came
-    // is not a refusal: see confirmSend.
-    if (!this.conn?.connected || !this._sid) return false
+    if (this.conn?.connected && this.cloudLink) this.closeCloudLink()
+    // A daemon refusal lets processNext stop and resume the old process. Losing
+    // the link proves nothing about that process: try the same line through the
+    // cloud send route, or keep it queued. An unanswered native request takes
+    // confirmSend instead; it must not switch paths without knowing its fate.
+    if (!this._sid) return false
 
     // Capture conn/sid synchronously — they may change during the async image upload
     // (e.g. renameForSession(), detach(), or a concurrent start() call).
     const conn = this.conn
     const sid = this._sid
+    let orderedMarkers = conn?.connected ? conn.hasCapability('send-markers-v1') : false
+    let cloudTried = false
+    const viaCloud = async (prepared: string): Promise<Record<string, unknown> | null> => {
+      if (cloudTried || IS_EPHEMERAL || !this.isRemote || this.hostKey === '__cloudbox__'
+        || !opts?.uuid || !opts.markers?.length || findLocalImagePaths(message).length > 0) return null
+      cloudTried = true
+      await this.ensureCloudLink(sid)
+      const { postToCloudSessionSend } = await import('../core/cloud-ingest.js')
+      const rewriteKey = Number.isInteger(opts.lostPid) && opts.lostPid! > 1 ? `${sid}\n${opts.uuid}` : null
+      const rewrite = rewriteKey !== null && !this.rewriteAlreadyAttempted(sid, opts)
+      const result = await this.dispatch(sid, opts.stopFence, () => {
+        opts.onDispatch?.()
+        if (rewrite) {
+          this.cloudRewriteAttempts.delete(rewriteKey!)
+          this.cloudRewriteAttempts.set(rewriteKey!, { pid: opts.lostPid!, generation: opts.lostGeneration ?? 0 })
+          if (this.cloudRewriteAttempts.size > 64) this.cloudRewriteAttempts.delete(this.cloudRewriteAttempts.keys().next().value!)
+        }
+        return postToCloudSessionSend({
+          host: this.hostKey, sessionId: sid, message: prepared, uuid: opts.uuid!, markers: opts.markers!,
+          stopFence: opts.stopFence ?? null,
+          ...(rewrite ? { lostPid: opts.lostPid } : {}),
+        })
+      })
+      // Null is a proven not-sent result. Unknown retains the attempt, so
+      // retrying this line asks for its fate instead of forcing another copy.
+      if (result === null && rewrite) this.cloudRewriteAttempts.delete(rewriteKey!)
+      // The cloud route accepts only a daemon that writes ordered markers.
+      if (result) orderedMarkers = true
+      return result
+    }
 
     try {
-      const prepared = await this.prepareOutbound(message)
+      const prepared = conn?.connected ? await this.prepareOutbound(message) : message
       this._lastPreparedOutbound = prepared
       // `uuid` is spread, never passed as an explicit undefined: an old daemon
       // sees exactly the payload it always saw when no uuid was assigned.
-      const orderedMarkers = conn.hasCapability('send-markers-v1')
-      const confirmable = orderedMarkers && !!opts?.markers?.length && conn.hasCapability(SEND_DEDUPE_CAPABILITY)
+      const confirmable = orderedMarkers && !!opts?.markers?.length && (conn?.hasCapability(SEND_DEDUPE_CAPABILITY) ?? false)
       // `rewrite`: the first send of a line the CLI read past carries lostPid. The
       // confirmSend resend never does: its question is whether THAT write landed,
       // and the record it just made answers it (a lostPid would write a third copy).
@@ -612,22 +723,66 @@ export class RemoteSessionManager implements SessionManager {
         ...(c.hasCapability('cron-supervision-v1') ? { stopFence: opts?.stopFence ?? null } : {}),
         ...(c.hasCapability('send-markers-v1') && opts?.markers?.length ? { markers: opts.markers } : {}),
         ...(dedupe ? { dedupe: true } : {}),
-        ...(rewrite && dedupe && opts?.lostPid != null && c.hasCapability(SEND_LOST_LINE_CAPABILITY) ? { lostPid: opts.lostPid } : {}),
+        ...(rewrite && dedupe && opts?.lostPid != null && c.hasCapability(SEND_LOST_LINE_CAPABILITY)
+          && !this.rewriteAlreadyAttempted(sid, opts) ? { lostPid: opts.lostPid } : {}),
       })
-      let result: Record<string, unknown>
-      try {
-        result = await this.dispatch(sid, opts?.stopFence, () => {
+      const sendNative = async (): Promise<Record<string, unknown>> => {
+        let reply = await this.dispatch(sid, opts?.stopFence, () => {
           opts?.onDispatch?.()
-          return conn.send('send', payload(conn, confirmable && opts?.dedupe === true))
+          return conn!.send('send', payload(conn!, confirmable && opts?.dedupe === true))
         })
-      } catch (err) {
-        if (isSessionStopSuperseded(err) || !sendMayHaveLanded(err)) throw err
+        const reason = String(reply.reason || reply.error || '')
+        if (reply.ok || (reason !== 'not_found' && reason !== 'not found')) return reply
+        // Missing registry is not process death. Attach rediscovers the daemon's
+        // stream and pgid, without changing mode or replacing a live process.
+        let found: Record<string, unknown>
+        try { found = await conn!.send('attach', { sid, fromOffset: this.attachFromOffset() }) }
+        catch { throw new SendHeldError('Not sent yet: the session host could not rediscover the process') }
+        if (this.conn !== conn || this._sid !== sid || !found.ok || typeof found.alive !== 'boolean') {
+          throw new SendHeldError('Not sent yet: the session host could not confirm the process identity')
+        }
+        if (!found.alive && found.state !== 'dead') throw new SendHeldError('Not sent yet: the session host could not confirm the process')
+        if (found.alive) {
+          this._pid = typeof found.pid === 'number' ? found.pid : this._pid
+          this._hasPipe = true
+          if (typeof found.currentOffset === 'number' && found.currentOffset > this._fileSize) this.adoptCursor(found.currentOffset)
+        }
+        // Attach's disk rediscovery alone is not a death verdict. Ask send
+        // again: only its explicit session_dead/ENXIO result allows recovery.
+        if (found.alive && !confirmable) throw new SendHeldError('Not sent yet: the rediscovered host cannot dedupe the user line')
+        reply = await this.dispatch(sid, opts?.stopFence, () => {
+          opts?.onDispatch?.()
+          return conn!.send('send', payload(conn!, true))
+        })
+        return reply
+      }
+      let result: Record<string, unknown>
+      if (!conn?.connected) {
+        const cloud = await viaCloud(prepared)
+        if (!cloud) throw new SendHeldError('Not sent yet: waiting for the connection to the session host')
+        result = cloud
+      } else {
         try {
-          if (!confirmable) throw new SendOutcomeUnknownError(err instanceof Error ? err.message : String(err))
-          result = await this.confirmSend(sid, (c) => payload(c, true, false), opts, err)
-        } catch (unknown) {
-          if (unknown instanceof SendOutcomeUnknownError) this._heldThrough = this._writeSeq
-          throw unknown
+          result = await sendNative()
+        } catch (err) {
+          if (isSessionStopSuperseded(err)) throw err
+          const kind = linkFailureKind(err)
+          const notSent = kind === 'no-link'
+            || (kind === null && err instanceof Error && /^DaemonConnection not connected to\b/.test(err.message))
+          if (notSent) {
+            const cloud = await viaCloud(prepared)
+            if (!cloud) throw new SendHeldError('Not sent yet: waiting for the connection to the session host')
+            result = cloud
+          } else {
+            if (!sendMayHaveLanded(err)) throw err
+            try {
+              if (!confirmable) throw new SendOutcomeUnknownError(err instanceof Error ? err.message : String(err))
+              result = await this.confirmSend(sid, (c) => payload(c, true, false), opts, err)
+            } catch (unknown) {
+              if (unknown instanceof SendOutcomeUnknownError) this._heldThrough = this._writeSeq
+              throw unknown
+            }
+          }
         }
       }
       if (result.ok && result.duplicate === true) {
@@ -658,17 +813,11 @@ export class RemoteSessionManager implements SessionManager {
       const reason = String(result.reason || result.error || '')
       if (reason === 'budget_paused') throw new BudgetPausedError()
       if (reason === 'session_stopped') throw new SessionStopSupersededError('Session delivery was superseded by a stop request')
-      // `session_dead` means daemon reaped the remote CLI — this is terminal
-      // for the current process and the next send will need to spawn a new
-      // one. Trigger the same _onExit flow used for ENXIO/not-found so the
-      // client's _hasPipe state doesn't get stuck "true" after the remote died.
-      // `partial_write` / `partial write` is also terminal: the FIFO now holds
-      // a half-written JSON line, which will corrupt the CLI stdin parser on
-      // the very next send. Treat as dead so we don't wait for the orphan poll
-      // (~40min worst case) before surfacing the failure.
-      const remoteDied = reason.includes('not found')
-        || reason === 'ENXIO'
-        || reason === 'EAGAIN'
+      // Only the daemon's death verdict permits stop/resume. EAGAIN is an
+      // intact, full pipe; not_found and identity refusals do not prove death.
+      // Legacy partial-write verdicts are terminal because the CLI's stdin is
+      // corrupted (current daemons reap and return session_dead instead).
+      const remoteDied = reason === 'ENXIO'
         || reason === 'session_dead'
         || reason === 'partial_write'
         || reason === 'partial write'
@@ -679,6 +828,9 @@ export class RemoteSessionManager implements SessionManager {
         willFireExit: remoteDied && this._hasPipe,
       })
       if (remoteDied) {
+        if (cloudTried && !this.conn?.connected) {
+          throw new SendHeldError('Not sent yet: the session process needs native recovery')
+        }
         if (this._hasPipe) {
           this._hasPipe = false
           // Pass the daemon's REAL exit code, not a hardcoded 1. When the CLI
@@ -688,23 +840,30 @@ export class RemoteSessionManager implements SessionManager {
           // session:error is emitted. The send still returns false so the
           // caller falls back to --resume and recovers the session. Hardcoding
           // 1 here turned every clean turn-end-at-send-time into a fake crash.
-          // Note: only session_dead/ENXIO deaths carry a normalized exitCode
-          // (incl. 0 for clean turn-end); EAGAIN/partial_write deaths have no
-          // exitCode, so they still fall back to 1.
+          // Legacy partial_write deaths have no normalized exitCode.
           this._onExit?.((result.exitCode as number | undefined) ?? 1)
         }
+        return false
       }
-      return false
+      throw new SendHeldError(`Not sent yet: the session host refused delivery (${reason || 'unknown reason'})`)
     } catch (err) {
       if (isSessionStopSuperseded(err) || err instanceof BudgetPausedError) throw err
       if (err instanceof SendOutcomeUnknownError || err instanceof SendHeldError) {
+        this._heldThrough = this._writeSeq
         log.session.warn('RemoteSessionManager: send outcome unknown', { host: this.hostKey, sid, error: err.message })
         throw err
+      }
+      const linkFailure = linkFailureKind(err)
+      // Preparation can race a disconnect before send reaches the socket. An
+      // older connection emits the same refusal without its no-link tag.
+      this._heldThrough = this._writeSeq
+      if (linkFailure === 'no-link' || (linkFailure === null && err instanceof Error && /^DaemonConnection not connected to\b/.test(err.message))) {
+        throw new SendHeldError('Not sent yet: waiting for the connection to the session host')
       }
       log.session.warn('RemoteSessionManager: send error', {
         host: this.hostKey, error: err instanceof Error ? err.message : String(err),
       })
-      return false
+      throw new SendHeldError(`Not sent yet: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -777,8 +936,8 @@ export class RemoteSessionManager implements SessionManager {
 
   canRewriteLostLine(): boolean {
     const conn = this.conn
-    return !!conn?.connected && conn.hasCapability('send-markers-v1')
-      && conn.hasCapability(SEND_DEDUPE_CAPABILITY) && conn.hasCapability(SEND_LOST_LINE_CAPABILITY)
+    return this.cloudLink?.connected === true || (!!conn?.connected && conn.hasCapability('send-markers-v1')
+      && conn.hasCapability(SEND_DEDUPE_CAPABILITY) && conn.hasCapability(SEND_LOST_LINE_CAPABILITY))
   }
 
   async writeRaw(json: string): Promise<boolean> {
@@ -786,7 +945,37 @@ export class RemoteSessionManager implements SessionManager {
     // daemon's `sendRaw` command (daemon-core.handleSendRawCommand), which
     // writes the line to the session FIFO without the `{type:"user",...}`
     // wrapping that cmdSend applies.
-    if (!this.conn?.connected || !this._sid) return false
+    if (!this._sid) return false
+    if (!this.conn?.connected) {
+      if (IS_EPHEMERAL || !this.isRemote || this.hostKey === '__cloudbox__') return false
+      let raw: Record<string, unknown>
+      try { raw = JSON.parse(json) as Record<string, unknown> } catch { return false }
+      const response = raw?.response as Record<string, unknown> | undefined
+      const answer = response?.response as Record<string, unknown> | undefined
+      const requestId = response?.request_id
+      if (raw?.type !== 'control_response' || response?.subtype !== 'success' || typeof requestId !== 'string'
+        || (answer?.behavior !== 'allow' && answer?.behavior !== 'deny')
+        || !this.knownPermissionRequests.has(requestId)) return false
+      const updated = answer.updatedInput as { answers?: unknown } | undefined
+      const answers = this.knownPermissionRequests.get(requestId) === 'AskUserQuestion' ? updated?.answers : undefined
+      if (answers !== undefined && (!answers || typeof answers !== 'object' || Array.isArray(answers)
+        || Object.values(answers).some((value) => typeof value !== 'string'))) return false
+      const sid = this._sid
+      try {
+        await this.ensureCloudLink(sid)
+        const generation = this.cloudGeneration
+        const { postToCloudSessionPermission } = await import('../core/cloud-ingest.js')
+        const result = await postToCloudSessionPermission({
+          host: this.hostKey, sessionId: sid, requestId, allow: answer.behavior === 'allow',
+          ...(typeof answer.message === 'string' ? { message: answer.message } : {}),
+          ...(answers !== undefined ? { answers: answers as Record<string, string> } : {}),
+        })
+        if (generation !== this.cloudGeneration || sid !== this._sid || !result?.ok) return false
+        if (this.cloudPendingRequest?.id === requestId) this.cloudPendingRequest = null
+        return true
+      } catch { return false }
+    }
+    if (this.cloudLink) this.closeCloudLink()
     const conn = this.conn
     const sid = this._sid
     try {
@@ -794,9 +983,7 @@ export class RemoteSessionManager implements SessionManager {
       if (result.ok) return true
       const reason = String(result.reason || result.error || '')
       // See note in send() for why partial_write must be treated as terminal.
-      const remoteDied = reason.includes('not found')
-        || reason === 'ENXIO'
-        || reason === 'EAGAIN'
+      const remoteDied = reason === 'ENXIO'
         || reason === 'session_dead'
         || reason === 'partial_write'
         || reason === 'partial write'
@@ -942,6 +1129,14 @@ export class RemoteSessionManager implements SessionManager {
 
   async isAlive(): Promise<boolean> {
     if (!this._sid) return false
+    if (this.conn?.connected && this.cloudLink) this.closeCloudLink()
+    if (this.cloudLink?.connected) {
+      if (this.cloudAlive === false) return false
+      if (this.cloudAlive === true && Date.now() - this.cloudEventAt < 5 * 60_000) return true
+      // A connected scoped stream without recent evidence is unknown, not
+      // proof the process died on the disconnected native transport.
+      return this._hasPipe
+    }
 
     // Disconnected ≠ dead. Short disconnects (< 5min) → assume alive, wait for reconnect.
     // Long disconnects (> 5min) → let health monitor mark error.
@@ -981,6 +1176,8 @@ export class RemoteSessionManager implements SessionManager {
 
   renameForSession(sessionId: string): void {
     if (!this._sid || this._sid === sessionId) return
+    this.closeCloudLink()
+    this.knownPermissionRequests.clear()
 
     const oldSid = this._sid
     this._prevSid = oldSid  // Keep old sid for event matching during async rename
@@ -1018,6 +1215,7 @@ export class RemoteSessionManager implements SessionManager {
   }
 
   detach(): void {
+    this.closeCloudLink()
     // DUP-DEBUG: pair this with "attached to session" by rsmId. If a session
     // duplication-bug repro shows two `attached to session` for the same sid
     // without a `detach` for the older rsmId, we have an RSM leak.
@@ -1044,6 +1242,8 @@ export class RemoteSessionManager implements SessionManager {
     // dedup state mid-reconnect. cleanup() = real teardown, safe to clear.
     this._imageCache.clear()
     this._seenUuids.clear()
+    this.cloudRewriteAttempts.clear()
+    this.knownPermissionRequests.clear()
   }
 
   deletePipe(): void {
@@ -1222,6 +1422,19 @@ export class RemoteSessionManager implements SessionManager {
 
   private handleDaemonEvent(event: DaemonEvent): void {
     if (!this._sid) return
+    if (this.conn?.connected && this.cloudLink) this.closeCloudLink()
+    if (event.ev === 'jsonl' && event.sid === this._sid && event.line) {
+      try {
+        const raw = JSON.parse(event.line) as { type?: string; request_id?: string; request?: { tool_name?: string }; response?: { request_id?: string } }
+        if (raw.type === 'control_request' && typeof raw.request_id === 'string') {
+          this.cloudPendingRequest = { id: raw.request_id, toolName: raw.request?.tool_name ?? '' }
+          this.rememberPermission(raw.request_id, raw.request?.tool_name ?? '')
+        } else if ((raw.type === 'control_response' && raw.response?.request_id === this.cloudPendingRequest?.id)
+          || (raw.type === 'control_cancel_request' && raw.request_id === this.cloudPendingRequest?.id)) {
+          this.cloudPendingRequest = null
+        }
+      } catch { /* the existing output parser handles malformed lines */ }
+    }
 
     switch (event.ev) {
       case 'jsonl':

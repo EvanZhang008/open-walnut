@@ -2869,9 +2869,13 @@ export function parseCloudRemoteUrl(url: string | null | undefined): { domain: s
  * loop (the cloud box host probe runs at boot and every few minutes; the sync
  * version would block every route for the length of two git spawns).
  */
-export async function getCloudRemoteCredentialsAsync(): Promise<{ domain: string; token: string; secure: boolean } | null> {
+export async function getCloudRemoteCredentialsAsync(options?: { strict?: boolean }): Promise<{ domain: string; token: string; secure: boolean } | null> {
+  const read = options?.strict ? gitAsync : gitSafeAsync;
+  const names = await read('remote');
+  const remotes = new Set(names?.split('\n'));
   for (const remote of ['cloud', 'origin']) {
-    const parsed = parseCloudRemoteUrl(await gitSafeAsync(`remote get-url ${remote}`));
+    if (!remotes.has(remote)) continue;
+    const parsed = parseCloudRemoteUrl(await read(`remote get-url ${remote}`));
     if (parsed) return parsed;
   }
   return null;

@@ -12,7 +12,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import { sessionStops } from '../../src/core/sessions/session-stop.js'
-import { SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js'
+import { SendHeldError, SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js'
 
 type Sent = { cmd: string; params: Record<string, unknown>; args: number }
 
@@ -53,6 +53,42 @@ const marked = (text: string, id: string) => ({ markers: [{ message: text, messa
 
 describe('RemoteSessionManager: a later line waits for a settling one', () => {
   afterEach(() => { vi.restoreAllMocks() })
+
+  it('concurrent writes while disconnected both wait, then retry in order under their original uuids', async () => {
+    const f = fakeConn({ caps: ['send-markers-v1', 'send-dedupe-v1'] })
+    let connected = false
+    Object.defineProperty(f.conn, 'connected', { get: () => connected })
+    const m = manager(f.conn)
+    const onExit = vi.fn()
+    const onDispatch = vi.fn()
+    Object.assign(m, { _onExit: onExit, _pid: 77 })
+    const firstOpts = { uuid: 'u-1', markers: [{ message: 'first', messageId: 'qm-1' }], onDispatch }
+    const secondOpts = { uuid: 'u-2', markers: [{ message: 'second', messageId: 'qm-2' }], onDispatch }
+    const outcomes = await Promise.allSettled([
+      m.writeMessage('first', firstOpts),
+      m.writeMessage('second', secondOpts),
+    ])
+    for (const outcome of outcomes) {
+      expect(outcome.status).toBe('rejected')
+      if (outcome.status === 'rejected') expect(outcome.reason).toBeInstanceOf(SendHeldError)
+    }
+    expect(f.sent).toEqual([])
+    expect(onDispatch).not.toHaveBeenCalled()
+    expect(onExit).not.toHaveBeenCalled()
+    expect(m.pid).toBe(77)
+    expect(m.hasPipe).toBe(true)
+    connected = true
+    await expect(Promise.all([
+      m.writeMessage('first', firstOpts),
+      m.writeMessage('second', secondOpts),
+    ])).resolves.toEqual([true, true])
+    expect(f.sent.map((s) => ({ cmd: s.cmd, message: s.params.message, uuid: s.params.uuid }))).toEqual([
+      { cmd: 'send', message: 'first', uuid: 'u-1' },
+      { cmd: 'send', message: 'second', uuid: 'u-2' },
+    ])
+    expect(onDispatch).toHaveBeenCalledTimes(2)
+    expect(onExit).not.toHaveBeenCalled()
+  })
 
   it('a line written while the first one settles goes after it, and is not answered "not delivered"', async () => {
     vi.spyOn(sessionStops, 'fence').mockResolvedValue(null)

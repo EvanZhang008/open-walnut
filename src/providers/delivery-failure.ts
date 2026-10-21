@@ -119,8 +119,8 @@ export class BudgetPausedError extends Error {
 
 export class SendHeldError extends Error {
   readonly code = 'SEND_HELD';
-  constructor() {
-    super('Not sent yet: waiting to confirm the previous message');
+  constructor(reason = 'Not sent yet: waiting to confirm the previous message') {
+    super(reason);
     this.name = 'SendHeldError';
   }
 }

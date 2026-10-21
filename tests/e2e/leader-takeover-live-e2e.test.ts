@@ -85,6 +85,9 @@ process.stdin.on('data', (chunk) => {
     // "ASK:" in a message: the CLI asks to run a tool, as Claude Code does in default mode.
     if (JSON.stringify(msg.message && msg.message.content).includes('ASK:')) {
       out({ type: 'control_request', request_id: 'perm-' + (++asked), request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls docs/' } } })
+    } else {
+      out({ type: 'assistant', message: { content: [{ type: 'text', text: 'The message reached the CLI.' }] } })
+      out({ type: 'result', subtype: 'success', is_error: false, result: 'The message reached the CLI.', session_id: sid })
     }
   }
 })
@@ -123,7 +126,7 @@ let base = ''
 const tokens = { mac: '', local: '', devbox: '', oldbox: '' }
 interface Server { proc: ChildProcess | null; port: number; log: string; data: string; home: string; daemonDir: string }
 const companion: Server = { proc: null, port: 0, log: '', data: '', home: '', daemonDir: '' }
-const primary: Server & { ids: { lead: string; worker: string; far: string }; serverPid: number } = { proc: null, port: 0, log: '', data: '', home: '', daemonDir: '', ids: { lead: '', worker: '', far: '' }, serverPid: 0 }
+const primary: Server & { ids: { lead: string; worker: string; far: string }; serverPid: number; sendPort: number } = { proc: null, port: 0, log: '', data: '', home: '', daemonDir: '', ids: { lead: '', worker: '', far: '' }, serverPid: 0, sendPort: 0 }
 interface Daemon { name: string; twin: 'source' | 'standalone'; proc: ChildProcess; dir: string; port: number; sock: string; pid: number }
 const daemons: Daemon[] = []
 
@@ -291,8 +294,52 @@ const dc = await import(${src('src/providers/daemon-connection.ts')})
 if (localDaemon.wsUrl) await dc.getDirectDaemonConnection('__local__', localDaemon.wsUrl)
 await dc.getDirectDaemonConnection('devbox', 'ws://127.0.0.1:${dev.port}')
 await dc.getDirectDaemonConnection('oldbox', 'ws://127.0.0.1:${old.port}')
+const { createServer } = await import('node:http')
+const { RemoteSessionManager } = await import(${src('src/providers/remote-session-manager.ts')})
+const sendProbe = createServer(async (req, res) => {
+  if (req.headers.authorization !== ${JSON.stringify(`Bearer ${tokens.local}`)}) { res.writeHead(401).end(); return }
+  const chunks = []
+  for await (const chunk of req) chunks.push(chunk)
+  const { host, sid, message, uuid, markerId, permission } = JSON.parse(Buffer.concat(chunks).toString())
+  const ports = { devbox: ${dev.port}, oldbox: ${old.port} }
+  if (!(host in ports)) { res.writeHead(400).end(); return }
+  const manager = new RemoteSessionManager('probe-' + host, host, null, 'ws://127.0.0.1:' + ports[host])
+  let exits = 0
+  const events = []
+  try {
+    await manager.attach({ sessionId: sid, onOutput: (event) => { events.push(JSON.parse(event.line)) }, onExit: () => { exits++ } })
+    const conn = manager.conn
+    // Drop only this probe's private native link; the outbound bridge stays up.
+    conn.disconnect()
+    const outcomes = []
+    for (let n = 0; n < 3; n++) {
+      outcomes.push(await manager.writeMessage(message, { uuid, markers: [{ message, messageId: markerId }], stopFence: null }))
+    }
+    const until = Date.now() + 10_000
+    while (Date.now() < until && !events.some((event) => permission ? event.type === 'control_request' : event.type === 'result')) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    let answered = null
+    if (permission) {
+      const prompt = events.find((event) => event.type === 'control_request')
+      if (!prompt) throw new Error('No permission prompt returned through the cloud stream')
+      answered = await manager.writeRaw(JSON.stringify({ type: 'control_response', response: {
+        subtype: 'success', request_id: prompt.request_id, response: { behavior: 'deny', message: 'Declined by the test' },
+      } }))
+    }
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ outcomes, exits, pipe: manager.hasPipe, answered,
+      gotResult: events.some((event) => event.type === 'result'),
+      gotPermission: events.some((event) => event.type === 'control_request'),
+    }))
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: String(err) }))
+  } finally { await manager.cleanup() }
+})
+await new Promise((r) => sendProbe.listen(0, '127.0.0.1', r))
 const addr = server.address()
-process.stdout.write(JSON.stringify({ ids: { lead: lead.id, worker: worker.id, far: far.id }, pid: process.pid }) + '\\n')
+process.stdout.write(JSON.stringify({ ids: { lead: lead.id, worker: worker.id, far: far.id }, pid: process.pid, sendPort: sendProbe.address().port }) + '\\n')
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
 let closing = false
 const close = async () => { if (closing) return; closing = true; try { await stopServer() } catch {} process.exit(0) }
@@ -300,7 +347,7 @@ process.on('SIGTERM', close)
 process.on('SIGINT', close)
 armGracefulSignalExit()
 `, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500' }), (line) => {
-    try { const j = JSON.parse(line); if (j.ids) { primary.ids = j.ids; primary.serverPid = j.pid } } catch { /* partial */ }
+    try { const j = JSON.parse(line); if (j.ids) { primary.ids = j.ids; primary.serverPid = j.pid; primary.sendPort = j.sendPort } } catch { /* partial */ }
   })
 }
 
@@ -516,6 +563,64 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     }
   }, 300_000)
 
+  it('the primary can send the same queued line through its companion on both daemon twins without SSH', async () => {
+    for (const [d, sid] of [[devbox, A], [oldbox, B]] as const) {
+      const before = await daemonStatus(d, sid)
+      const text = `Queued notification for ${d.name}: ${'long-text '.repeat(4000)}${String.fromCodePoint(0x4e2d)}`
+      const uuid = crypto.randomUUID()
+      const payload = { host: d.name, sessionId: sid, message: text, uuid, markers: [{ message: text, messageId: `qm-fallback-${d.name}` }], stopFence: null }
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const res = await fetch(`http://127.0.0.1:${companion.port}/bridge/send`, {
+          method: 'POST', headers: { Authorization: `Bearer ${tokens.local}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        expect(res.status).toBe(200)
+        expect(await res.json()).toMatchObject({ ok: true })
+      }
+      await waitFor(() => inboxOf(d, sid).filter((m) => m === text).length === 1, 15_000, 'one copy of the queued line at the CLI')
+      expect((await daemonStatus(d, sid)).pid).toBe(before.pid)
+      const stream = fs.readFileSync(path.join(d.dir, 'streams', `${sid}.jsonl`), 'utf8')
+      const markers = stream.split('\n').filter((l) => l.includes(`"walnutMessageId":"qm-fallback-${d.name}"`))
+      expect(markers).toHaveLength(1)
+    }
+  }, 90_000)
+
+  it('a primary manager with no native link sends through the companion to both daemon twins without restarting', async () => {
+    for (const [d, sid] of [[devbox, A], [oldbox, B]] as const) {
+      const before = await daemonStatus(d, sid)
+      const message = `Primary fallback ${d.name}: ${'dense message '.repeat(3000)}`
+      const markerId = `sn-fallback-${d.name}-stopped`
+      const res = await fetch(`http://127.0.0.1:${primary.sendPort}`, {
+        method: 'POST', headers: { Authorization: `Bearer ${tokens.local}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: d.name, sid, message, uuid: crypto.randomUUID(), markerId }),
+        signal: AbortSignal.timeout(80_000),
+      })
+      expect(res.status).toBe(200)
+      expect(await res.json()).toMatchObject({ outcomes: [true, true, true], exits: 0, pipe: true, gotResult: true })
+      await waitFor(() => inboxOf(d, sid).filter((m) => m === message).length === 1, 15_000, 'one fallback copy from the primary manager')
+      expect((await daemonStatus(d, sid)).pid).toBe(before.pid)
+      const stream = fs.readFileSync(path.join(d.dir, 'streams', `${sid}.jsonl`), 'utf8')
+      expect(stream.split('\n').filter((l) => l.includes(`"walnutMessageId":"${markerId}"`))).toHaveLength(1)
+    }
+  }, 180_000)
+
+  it('the primary sees and answers a tool prompt without its native host link on both twins', async () => {
+    for (const [d, sid] of [[devbox, A], [oldbox, B]] as const) {
+      const before = await daemonStatus(d, sid)
+      const repliesBefore = respOf(d, sid).length
+      const res = await fetch(`http://127.0.0.1:${primary.sendPort}`, {
+        method: 'POST', headers: { Authorization: `Bearer ${tokens.local}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: d.name, sid, message: 'ASK: inspect the project', uuid: crypto.randomUUID(), markerId: `qm-permission-${d.name}`, permission: true }),
+        signal: AbortSignal.timeout(80_000),
+      })
+      expect(res.status).toBe(200)
+      expect(await res.json()).toMatchObject({ gotPermission: true, answered: true, exits: 0, pipe: true })
+      await waitFor(() => respOf(d, sid).length === repliesBefore + 1, 15_000, 'one permission answer in the live CLI')
+      expect(respOf(d, sid).at(-1)?.response.response).toMatchObject({ behavior: 'deny', message: 'Declined by the test' })
+      expect((await daemonStatus(d, sid)).pid).toBe(before.pid)
+    }
+  }, 180_000)
+
   it('the Mac sleeps (server and local daemon frozen): the companion leads both hosts', async () => {
     for (const pid of macPids()) process.kill(pid, 'SIGSTOP')
     const leads = await waitFor(async () => {
@@ -602,6 +707,7 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
 
   it('while the Mac sleeps, the phone answers B\'s permission prompt, changes A\'s mode and stops C, each on its host', async () => {
     // B asks to run a tool: the phone's message reaches it through the companion.
+    const repliesBefore = respOf(oldbox, B).length
     const sent = await api(companion, `/api/v1/sessions/${B}/messages`, { method: 'POST', body: JSON.stringify({ text: 'ASK: list the docs' }) })
     expect(sent.status, JSON.stringify(sent.json)).toBe(202)
     // The detail shows the prompt the host keeps, at once (no wait on the sleeping Mac).
@@ -616,8 +722,8 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     const answered = await api(companion, `/api/v1/sessions/${B}/permission`, { method: 'POST', body: JSON.stringify({ requestId, allow: true }) })
     expect(answered.status, JSON.stringify(answered.json)).toBe(200)
     expect(answered.json).toEqual({ status: 'resolved', requestId, allow: true, viaCompanion: true })
-    await waitFor(() => respOf(oldbox, B).length === 1, 15_000, 'B\'s CLI to get the answer')
-    expect(respOf(oldbox, B)[0].response).toMatchObject({ request_id: requestId, response: { behavior: 'allow', updatedInput: { command: 'ls docs/' } } })
+    await waitFor(() => respOf(oldbox, B).length === repliesBefore + 1, 15_000, 'B\'s CLI to get the answer')
+    expect(respOf(oldbox, B).at(-1)?.response).toMatchObject({ request_id: requestId, response: { behavior: 'allow', updatedInput: { command: 'ls docs/' } } })
     expect((await api(companion, `/api/v1/sessions/${B}`)).json.pendingPermissions).toEqual([])
 
     // A's mode: the phone's picker shows it, a change reaches A's CLI.

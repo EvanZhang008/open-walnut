@@ -17,12 +17,16 @@ import { log } from '../../src/logging/index.js'
 // RPC + recording path under test.
 const bridgeConfigMock = vi.hoisted(() => ({
   payload: { enabled: false } as Record<string, unknown>,
+  failure: false,
   /** What revalidateBridgeToken answers, call by call (then false). */
   reminted: [] as boolean[],
   revalidated: [] as string[],
 }))
 vi.mock('../../src/integrations/cloud-bridge-config.js', () => ({
-  getBridgeConfigForHost: vi.fn(async () => bridgeConfigMock.payload),
+  getBridgeConfigForHost: vi.fn(async () => {
+    if (bridgeConfigMock.failure) throw new Error('Cloud pairing read failed')
+    return bridgeConfigMock.payload
+  }),
   revalidateBridgeToken: vi.fn(async (host: string) => {
     bridgeConfigMock.revalidated.push(host)
     return bridgeConfigMock.reminted.shift() ?? false
@@ -44,6 +48,7 @@ describe('DaemonConnection bridge visibility', () => {
   let conn: DaemonConnection | null = null
 
   beforeEach(async () => {
+    bridgeConfigMock.failure = false
     daemon = new MockDaemon()
     await daemon.start()
   })
@@ -53,6 +58,32 @@ describe('DaemonConnection bridge visibility', () => {
     conn = null
     await daemon.stop()
     vi.restoreAllMocks()
+  })
+
+  it('failed configuration reads never disable a live bridge, and a later explicit disable still applies', async () => {
+    bridgeConfigMock.payload = { enabled: true, url: 'wss://cloud.example.invalid/bridge', token: 'fixture', hostAlias: 'h-live' }
+    daemon.setBridgeConnected(true)
+    const warn = vi.spyOn(log.session, 'warn')
+    conn = new DaemonConnection('bridge-vis-preserved', TARGET)
+    await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+    await waitFor(() => conn!.lastBridgeConnected === true)
+    const checkedAt = conn.lastBridgeCheckedAt
+    const commands = () => daemon.getCommandHistory().filter((c) => c.cmd === 'bridge.configure')
+    const repush = () => (conn as unknown as { pushBridgeConfig(): void }).pushBridgeConfig()
+    for (let i = 0; i < 3; i++) {
+      bridgeConfigMock.failure = true
+      const n = warn.mock.calls.length
+      repush()
+      await waitFor(() => warn.mock.calls.length > n)
+      expect(commands()).toHaveLength(1)
+      expect(conn.lastBridgeConnected).toBe(true)
+      expect(conn.lastBridgeCheckedAt).toBe(checkedAt)
+    }
+    bridgeConfigMock.failure = false
+    bridgeConfigMock.payload = { enabled: false }
+    repush()
+    await waitFor(() => conn!.lastBridgeConnected === null)
+    expect(commands()).toHaveLength(2)
   })
 
   it('records lastBridgeConnected=false and WARNs when bridge is enabled but daemon reports not connected', async () => {

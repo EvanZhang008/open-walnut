@@ -78,9 +78,9 @@ final class SessionConversationStore {
     /// Bubbles that were spoken in voice mode: their sends carry `voice: true`.
     @ObservationIgnored private var voiceBubbleIDs: Set<String> = []
     private var isActive = true
-    /// Set by close() (view gone), cleared by open(). Blocks LifecycleHub
-    /// resumeAll from reviving a store whose screen was dismissed.
-    private var viewClosed = false
+    /// Only open() claims a screen. A speculative SwiftUI initializer must not
+    /// become a foreground stream owner before its page has ever appeared.
+    private var viewClosed = true
 
     /// Bumps once per successful stream connection (first connect and every
     /// reconnect). Read only by the composer's model pill, which re-asks the
@@ -211,6 +211,8 @@ final class SessionConversationStore {
     /// runs after it, debounced. See requestTranscriptRefresh / runFreshLoad.
     @ObservationIgnored private var refreshInFlight = false
     @ObservationIgnored private var refreshDirty = false
+    /// Preserve a full-window request that arrives behind an incremental read.
+    @ObservationIgnored private var refreshVisible: Int?
     @ObservationIgnored private var refreshDebounce: Task<Void, Never>?
     /// Bumped by suspend(): a read cancelled there must not, on its late
     /// completion, clear a NEWER read's in-flight flag.
@@ -276,7 +278,6 @@ final class SessionConversationStore {
         self.resumeIDs = resumeIDs ?? .shared
         self.hostLabel = session.isLocal ? "Mac" : session.host
         self.processStatus = session.processStatus
-        LifecycleHub.shared.register(self)
     }
 
     /// Paint a brand-new session's first message + Starting-session row.
@@ -330,12 +331,20 @@ final class SessionConversationStore {
     /// whale JSONL, SSH, or the bridge) — so render the cached tail first,
     /// attach the stream immediately, and reconcile with fresh in the
     /// background. Called from `.task`.
-    func open() async {
+    @discardableResult
+    func open() async -> Bool {
+        guard !Task.isCancelled else { return false }
+        // A foreground page can register before the app's hub has resumed.
+        // Keep its initial window demand through the hub's synchronous suspend.
+        refreshVisible = max(refreshVisible ?? 0, Self.openVisibleRows)
         // Re-opening is an explicit user action: reactivate a store that a
         // pop-away onDisappear (close → isActive=false) left closed, or the
         // page comes back permanently dead (guards block every reconnect).
         viewClosed = false
         isActive = true
+        LifecycleHub.shared.register(self)
+        guard isActive, !Task.isCancelled else { return false }
+        let openGeneration = refreshGen
         // Open-sequence timeline on the tape: all three "enter a session page,
         // freeze 5-20s later" field kills die INSIDE this window, so each step
         // gets a crumb — the next report shows exactly how far open() got and
@@ -348,9 +357,13 @@ final class SessionConversationStore {
         // page opened again resumes them, as resume() would.
         rearmPendingRetries()
         await loadTranscript(fresh: false, rich: false)
+        guard !Task.isCancelled, isActive, !viewClosed, refreshGen == openGeneration else { return false }
         FreezeContext.shared.note("sc-open-cached", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
-        await runFreshLoad(rich: true, visible: Self.openVisibleRows)
+        let loaded = await runFreshLoad(rich: true, visible: Self.openVisibleRows)
+        guard loaded, !Task.isCancelled, isActive, !viewClosed,
+              refreshGen == openGeneration else { return false }
         FreezeContext.shared.note("sc-open-fresh", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
+        return true
     }
 
     /// View-close is TERMINAL until the next open(): unlike a background
@@ -359,6 +372,7 @@ final class SessionConversationStore {
     /// stream off-screen (the leak this batch exists to kill).
     func close() {
         viewClosed = true
+        refreshVisible = nil
         suspend()
     }
 
@@ -377,6 +391,8 @@ final class SessionConversationStore {
         refreshDebounce = nil
         refreshInFlight = false
         refreshDirty = false
+        // A background pause does not satisfy the page's pending full window.
+        // close() clears it when the page really leaves.
         refreshGen += 1
         // Held replay candidates die with their connection; the next one
         // replays or delivers them again.
@@ -415,7 +431,7 @@ final class SessionConversationStore {
         connectStream()
         rearmPendingRetries()
         scheduleBridgeGrace()
-        trackTask { [weak self] in await self?.runFreshLoad(rich: true) }
+        trackTask { [weak self] in _ = await self?.runFreshLoad(rich: true) }
     }
 
     /// Route switch (RouteCoordinator): the same Walnut at another origin, so the
@@ -439,8 +455,9 @@ final class SessionConversationStore {
     /// the first open, so a busy turn's folded tool calls are not all there is,
     /// and otherwise `since` = the newest row held, so the answer overlaps what
     /// is on screen and stitching the two cannot leave a hole (see reconcile).
-    private func loadTranscript(fresh: Bool, rich: Bool, visible: Int? = nil) async {
-        guard isActive else { return }
+    @discardableResult
+    private func loadTranscript(fresh: Bool, rich: Bool, visible: Int? = nil) async -> Bool {
+        guard isActive else { return false }
         do {
             let next: SessionTranscript
             if fresh && rich {
@@ -451,7 +468,7 @@ final class SessionConversationStore {
             } else {
                 next = try await api.sessionTranscript(id: sessionId, fresh: fresh, rich: rich)
             }
-            guard isActive, !Task.isCancelled else { return }
+            guard isActive, !Task.isCancelled else { return false }
             reconcile(next)
             // Only a rich answer can say it pages; a slim poll's silence is not a
             // no, and neither is a replica's fallback (`rich: false`, the Mac was
@@ -465,10 +482,11 @@ final class SessionConversationStore {
             // when SSE was abandoned (404 fallback, sse == nil): those own
             // their lifecycle.
             if !bridgeDown && sse != nil { stopPolling() }
+            return true
         } catch let error as APIError where error.isCancelled {
-            return
+            return false
         } catch {
-            guard isActive, !Task.isCancelled else { return }
+            guard isActive, !Task.isCancelled else { return false }
             if !loadedOnce { transcriptMissing = true }
             // Self-heal: nothing retried a failed transcript load unless the
             // page happened to be in a polling fallback already — a transient
@@ -477,6 +495,7 @@ final class SessionConversationStore {
             // report: healthy transcript on both boxes, phone stuck empty).
             // Poll until a load succeeds; the success path above stops it.
             startPolling(keepStream: true)
+            return false
         }
     }
 
@@ -1852,25 +1871,34 @@ final class SessionConversationStore {
     /// every trigger that arrived before it, so a rich read also satisfies a
     /// pending debounced one (open() racing the attach frame costs one read, not
     /// two). A non-rich poll does not: the turn-end read must carry the fields.
-    private func runFreshLoad(rich: Bool, visible: Int? = nil) async {
-        guard isActive else { return }
+    @discardableResult
+    private func runFreshLoad(rich: Bool, visible: Int? = nil) async -> Bool {
+        guard isActive, !Task.isCancelled else { return false }
+        if let visible {
+            refreshVisible = max(refreshVisible ?? 0, visible)
+        }
         if refreshInFlight {
             refreshDirty = true
-            return
+            return false
         }
-        if rich {
+        // A queued initial window is a rich read even if a slim poll gets here first.
+        let readRich = rich || refreshVisible != nil
+        let readVisible = refreshVisible
+        refreshVisible = nil
+        if readRich {
             refreshDebounce?.cancel()
             refreshDebounce = nil
         }
         refreshInFlight = true
         let gen = refreshGen
-        await loadTranscript(fresh: true, rich: rich, visible: visible)
-        guard gen == refreshGen else { return }
+        let loaded = await loadTranscript(fresh: true, rich: readRich, visible: readVisible)
+        guard gen == refreshGen else { return false }
         refreshInFlight = false
         if refreshDirty {
             refreshDirty = false
             requestTranscriptRefresh()
         }
+        return loaded && !Task.isCancelled && isActive
     }
 
     /// True while a fresh read runs or waits on its debounce. Internal for

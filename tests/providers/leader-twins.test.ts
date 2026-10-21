@@ -309,8 +309,7 @@ describe('leader protocol: both twins', () => {
     })
   }
 
-  // WP13: the companion's forward on a stream. The bridge set is today's set plus
-  // exactly `stream.open`: nothing else a compromised companion could reach.
+  // Keep the companion's command surface exact, including the narrow permission answer.
   const BRIDGE_SET_BEFORE_WP13 = [
     'appendUserMarker', 'attach', 'bridge.peer', 'bridgeResume', 'fs.readBounded', 'fs.readImage', 'gateway-result', 'image.save',
     'leader.claim', 'leader.control', 'leader.deliver', 'leader.settings', 'leader.witness', 'markers.find', 'ping', 'read-history',
@@ -318,13 +317,13 @@ describe('leader protocol: both twins', () => {
     'stream.data', 'stream.end', 'stt',
   ]
   for (const [name, src] of Object.entries(twins)) {
-    it(`${name}: the bridge set gains exactly stream.open (bridge-stream-v1) and nothing else`, () => {
+    it(`${name}: the bridge adds only stream.open and the narrow session.permission command`, () => {
       const set = [...new Set(allowlist(src).match(/'[\w.-]+'/g)!.map((x) => x.slice(1, -1)))].sort()
-      expect(set).toEqual([...BRIDGE_SET_BEFORE_WP13, 'stream.open'].sort())
+      expect(set).toEqual([...BRIDGE_SET_BEFORE_WP13, 'stream.open', 'session.permission'].sort())
     })
 
     it(`${name}: the bridge hello says what the daemon does for the companion, and a test can hide it`, () => {
-      expect(src).toMatch(/BRIDGE_CAPABILITIES = \['bridge-stream-v1'\]\.filter\(/)
+      expect(src).toMatch(/BRIDGE_CAPABILITIES = \['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1'\]\.filter\(/)
       expect(src).toMatch(/WALNUT_BRIDGE_HIDE_CAPS/)
       // The knob is refused for the prod daemon dir (section 10): it is read only off it.
       expect(src).toMatch(/BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR \? \[\] : \(process\.env\.WALNUT_BRIDGE_HIDE_CAPS/)
