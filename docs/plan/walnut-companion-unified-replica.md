@@ -227,7 +227,7 @@ The inbox and the conversation index are not copied to the companion in stage 2:
 the box writes both itself (inbox flags while away, the conversation list always),
 so a copy would hide its own writes until they came back through the Mac. They move
 with stage 3, whose `inbox-state` and `chat-turn` records hand those writes to the
-Mac, and the readers switch then (the inbox in 3c, below).
+Mac, and the readers switch then (the inbox in 3c, the conversations in 3e, below).
 
 ### 2c: sessions
 
@@ -315,7 +315,7 @@ change to the session daemons. The Mac drains it with the same handover
 | 3b | session metadata (`session-meta`: title, archived, note, output mode, thread fields), applied with the online patch's own call; a refusal becomes a letter naming the session by its title, instead of a silent drop | the live mode change (a relay) |
 | 3c | inbox flags (`inbox-state`) with the inbox copy reader | |
 | 3d | task creates (`task-create`) | deletes and whole-list reorders keep the task queue: no journal kind takes them (a host refuses both while the Mac is away); the companion makes no single moves (`task-move`), its board order ops are whole lists |
-| 3e | chat turns (`chat-turn`, texts as blobs) with the conversation copy reader, after stage 4 brings the conversation bodies as a copy (the copy kind is index only today, and the box's list reads git's) | `cloud-chat-outbox` until then |
+| 3e | the conversation copy (`conversations` and `conversation-bodies`) with the box's chat readers; chat turns (`chat-turn`, texts as blobs) | `cloud-chat-outbox` for an older Mac and the files already queued; the box's list edits reach the Mac through git sync |
 
 One task's writes reach the Mac in the order they were made: an op for a task
 that still has an op in `task-queue` joins that queue; an op for a task that still
@@ -352,6 +352,30 @@ later edits join the journal behind it; a delete waits in the queue until the ac
 - This reverses C3 of `walnut-replica-servers-impl.md`: retiring the queues now has
   user value (one merge path, the ledger instead of a 500-entry memory, one
   conflict letter per drain, op ids end to end).
+
+**3e, conversations.** The companion keeps `conversations` (each agent's list, in
+`cache/replica/home/conversations/`) and `conversation-bodies` (on for it by default,
+off for hosts: `conversation_bodies`), one file per conversation holding the Mac's v1
+rows (`kinds/conversation-bodies.ts`): per agent its main conversation and the newest
+with a message in the last 30 days, at most 50; each the newest rows that fit 2 MB,
+with `total` keeping the Mac's positional ids (`m<n>`); every text through the redactor
+on both sides; and the turn ids the Mac adopted from the companion. The Mac reads a
+conversation again only when its list row moved, or every 2 minutes while it is
+active, at most 20 in a round and 3 s (the rest ride in `keep`, and the next round
+goes at once).
+
+- **The list** (`listConversations` on the companion, `companion-conversations.ts`) is
+  the copy once held, with the box's own changes on top: a chat made, renamed, pinned
+  or deleted here (`cache/companion-conversation-edits.json`) shows until the copy
+  carries it, and goes when the copy does, when the box's own list no longer has it,
+  or after 7 days. The box's list writers take the copy's row into its own list first
+  when git has not brought it.
+- **One conversation** while the Mac does not answer
+  (`GET /api/v1/conversations/:id/messages`): the copy's rows and ids with
+  `x-walnut-copy-as-of`, the turns the box answered itself on the tail until the copy
+  names their turn id, an older page the copy holds whole, and `503
+  primary_unreachable` past what it holds. Before the copy, git's chat history, as
+  before; while the Mac answers, its answer.
 
 ## Stage 4: notes, memory and skills from a copy
 

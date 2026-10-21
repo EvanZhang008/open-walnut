@@ -2,9 +2,14 @@
  * The host side of the `conversations` copy kind (conversations.ts): one row per
  * conversation, stored as each agent's conversations/<agent>/_index.json in the
  * Mac's layout, at 0600 in 0700 dirs. Only the index: no conversation body is
- * written here. The half rule counts conversations (the follower's local keys
- * are `<agent>/<id>`), and an agent the Mac could not read keeps all of its
- * rows here (`keptBy`).
+ * written here (the companion keeps those as a kind of their own,
+ * conversation-bodies.ts). The half rule counts conversations (the follower's
+ * local keys are `<agent>/<id>`), and an agent the Mac could not read keeps all
+ * of its rows here (`keptBy`).
+ *
+ * On a host replica the file is the live one; on the cloud companion it is in the
+ * copy store (`cache/replica/home/conversations/...`, gate.ts copyPath), apart from
+ * the list the box writes itself (stage 3e, companion-conversations.ts reads both).
  */
 
 import fsp from 'node:fs/promises'
@@ -17,14 +22,15 @@ import {
   CONVERSATIONS_REMOVAL_FLOOR, CONVERSATIONS_SCHEMA_VERSION, agentOfRowKey, agentSegmentOk, conversationIdOk, conversationRowKey,
   indexOk, metaOk, withholdMetaSecrets, type ConversationRow,
 } from './conversations.js'
-import { copyRefusal, markCopyOff } from './gate.js'
+import { copyPath, copyRefusal, markCopyOff } from './gate.js'
 import { copyStateIo } from './state-io.js'
 
-const indexFile = (agent: string) => path.join(CONVERSATIONS_DIR, agent, '_index.json')
+const copyDir = (): string => copyPath(CONVERSATIONS_DIR)
+const indexFile = (agent: string) => path.join(copyDir(), agent, '_index.json')
 
 async function localAgents(): Promise<string[]> {
   let dirs: string[]
-  try { dirs = (await fsp.readdir(CONVERSATIONS_DIR, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name) } catch { return [] }
+  try { dirs = (await fsp.readdir(copyDir(), { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name) } catch { return [] }
   const out: string[] = []
   for (const d of dirs) if (agentSegmentOk(d) && await fsp.stat(indexFile(d)).then((s) => s.isFile(), () => false)) out.push(d)
   return out.sort()

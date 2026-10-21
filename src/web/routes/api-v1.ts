@@ -332,7 +332,7 @@ async function conversationExists(agentId: string, conversationId: string): Prom
 // place, core/tool-summary.ts, because THREE surfaces build these rows and the
 // documented caps have to be the same number in all of them.
 
-interface ApiV1Message {
+export interface ApiV1Message {
   id: string
   role: 'user' | 'assistant'
   text: string
@@ -639,11 +639,13 @@ function pageApiV1Messages(
   limit: number,
   before: string | undefined,
   conversationId: string,
+  /** The id number of `all[0]` (the companion's copy holds the newest rows only). */
+  offset = 0,
 ): ApiV1Message[] {
   let windowed = stampInFlight(all, conversationId)
   if (before) {
     const idx = Number(before.replace(/^m/, ''))
-    if (Number.isFinite(idx)) windowed = windowed.slice(0, Math.max(0, idx))
+    if (Number.isFinite(idx)) windowed = windowed.slice(0, Math.max(0, idx - offset))
   }
   return windowed.slice(-limit)
 }
@@ -880,6 +882,9 @@ async function laneMessagesForConversation(
   conversationId: string,
   /** Filled with the chat-history entries this very assembly was built from. */
   snapshot?: { entries?: ChatEntry[] },
+  /** `failed` is set when the lane exists but could not be read (an error, the budget):
+   *  a null that is not "no lane" (the companion's copy keeps what it holds then). */
+  out?: { failed?: boolean },
 ): Promise<ApiV1Message[] | null> {
   // A REPLICA has no registry of the primary's lane sessions (session records are
   // machine-local) and no way to reach the JSONL, so it must never try to answer
@@ -901,6 +906,7 @@ async function laneMessagesForConversation(
       bail.promise,
     ])
     if (outcome === 'timeout') {
+      if (out) out.failed = true
       warnOncePerConversation('lane-timeout', agentId, conversationId, () => {
         log.web.warn('api-v1 messages: lane assembly timed out — serving chat history', {
           agentId, conversationId, lanes: records.length, budgetMs: LANE_TRANSCRIPT_DEADLINE_MS,
@@ -910,6 +916,7 @@ async function laneMessagesForConversation(
     }
     return outcome
   } catch (err) {
+    if (out) out.failed = true
     warnOncePerConversation('lane-unavailable', agentId, conversationId, () => {
       log.web.warn('api-v1 messages: lane transcript unavailable — serving chat history', {
         agentId, conversationId, error: err instanceof Error ? err.message : String(err),
@@ -1400,6 +1407,29 @@ export async function handlePrimaryChatMessagesRelay(
   }
 }
 
+/**
+ * PRIMARY: one conversation's whole message list as the phone reads it (the list
+ * `server.chat.messages` pages, ids m0 and up), for the cloud companion's copy of it
+ * (core/replication/kinds/conversation-bodies.ts), with the turn ids of the cloud
+ * turns this box adopted into it (the companion shows a turn it answered until its
+ * copy names it). Null when this box cannot say now (the lane exists but its read
+ * failed or ran out of time): the copy keeps what it holds.
+ */
+export async function conversationMessagesForCopy(
+  agentId: string,
+  conversationId: string,
+): Promise<{ messages: ApiV1Message[]; adoptedTurnIds: string[] } | null> {
+  const adoptedIn = (entries: ChatEntry[] | undefined): string[] => [...new Set((entries ?? [])
+    .filter((e) => chatHistory.isAdoptedCloudEntry(e) && !!e.turnId).map((e) => e.turnId as string))]
+  const snapshot: { entries?: ChatEntry[] } = {}
+  const lane: { failed?: boolean } = {}
+  const laneMessages = await laneMessagesForConversation(agentId, conversationId, snapshot, lane)
+  if (lane.failed) return null
+  if (laneMessages) return { messages: laneMessages, adoptedTurnIds: adoptedIn(snapshot.entries) }
+  const { messages: entries } = await chatHistory.getDisplayEntries(1, Number.MAX_SAFE_INTEGER, agentId, conversationId)
+  return { messages: normalizeEntries(entries), adoptedTurnIds: adoptedIn(entries) }
+}
+
 // GET /api/v1/conversations/:id/messages?limit=50&before=<cursor>&agentId=
 apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -1439,6 +1469,24 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
         return
       }
       relayFailed = true
+      // The Mac's copy of this conversation, once held (stage 3e, companion-conversations.ts):
+      // its own rows and ids, the lane's turns included, which git's chat history lacks.
+      const copied = await (await import('../../core/companion-conversations.js')).copiedConversation(agentId, conversationId)
+      const beforeIdx = before ? Number(before.replace(/^m/, '')) : NaN
+      // An older page the copy holds whole (a short one would tell the phone there is no more).
+      if (copied && (!before || !Number.isFinite(beforeIdx) || copied.start === 0 || beforeIdx - limit >= copied.start)) {
+        const { COPY_AS_OF_HEADER } = await import('../../core/replication/kinds/gate.js')
+        res.setHeader(COPY_AS_OF_HEADER, String(copied.asOf))
+        const page = pageApiV1Messages(copied.messages as unknown as ApiV1Message[], limit, before, conversationId, copied.start)
+        const unadopted = banked.filter((e) => !copied.adoptedTurnIds.has(e.turnId))
+        res.json(before || unadopted.length === 0 ? page : mergeCloudRowsIntoRelayedPage(page, cloudTurnRows(unadopted)))
+        return
+      }
+      if (copied) {
+        // Older than the copy holds: only the Mac has those rows, and git's ids are not its.
+        sendError(res, 503, 'primary_unreachable', 'Your primary box is unreachable, so the older part of this conversation could not be loaded yet', { retry: true })
+        return
+      }
       // else: fall through to this box's chat history (git-synced mirror).
     } else {
       // A lane-bound conversation's transcript belongs to its CLI sessions, so its
