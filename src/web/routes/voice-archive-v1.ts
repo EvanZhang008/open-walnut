@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
-import { voiceArchive, VoiceArchiveError, type VoiceChunkBody, type VoiceCommitBody } from '../../core/stt/voice-archive.js'
+import { voiceArchive, VoiceArchiveError, voiceRecordingId, decodeVoiceAudio, VOICE_MAX_CHUNK_BYTES, type VoiceChunkBody, type VoiceCommitBody } from '../../core/stt/voice-archive.js'
 import { deferVoiceReplication, startVoiceArchiveReplication } from '../../core/stt/voice-archive-replication.js'
 import { transcribeVoiceRecording } from '../../core/stt/voice-archive-transcribe.js'
 
@@ -64,6 +64,45 @@ voiceArchiveV1Router.get('/stt/recordings/:id/audio', async (req, res, next) => 
     const types: Record<string, string> = { caf: 'audio/x-caf', wav: 'audio/wav', m4a: 'audio/mp4', mp4: 'audio/mp4', mp3: 'audio/mpeg', webm: 'audio/webm', ogg: 'audio/ogg', flac: 'audio/flac' }
     res.set({ 'Content-Type': types[record.format] ?? 'application/octet-stream', 'Content-Length': String(record.audioSizeBytes), 'Cache-Control': 'no-store' })
     await pipeline(createReadStream(path), res)
+  } catch (err) { archiveError(err, res, next) }
+})
+/**
+ * POST /stt/recordings/:id/live { from, audio, language? }: a piece of the file
+ * while the take is still being recorded (core/stt/live-transcript.ts). Only a
+ * server that transcribes takes itself takes them; any other answers
+ * `accepted: false` and the phone stops sending. Every answer names
+ * `receivedBytes`, the offset the phone sends from next (after a gap, a resend). Never part of the durable copy: chunks + commit still are.
+ */
+voiceArchiveV1Router.post('/stt/recordings/:id/live', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = voiceRecordingId(req.params.id)
+    const { from, audio, language } = (req.body ?? {}) as { from?: unknown; audio?: unknown; language?: unknown }
+    if (!Number.isSafeInteger(from) || (from as number) < 0) throw new VoiceArchiveError(400, 'bad_request', 'from must be a nonnegative integer')
+    if (language !== undefined && (typeof language !== 'string' || language.length > 100)) throw new VoiceArchiveError(400, 'bad_request', 'language must be a short string')
+    if (typeof audio === 'string' && audio.length > Math.ceil(VOICE_MAX_CHUNK_BYTES / 3) * 4) throw new VoiceArchiveError(413, 'too_large', 'A live piece exceeds 512KiB')
+    const bytes = decodeVoiceAudio(audio)
+    const { transcribesLocally, localTranscribe } = await import('../../core/stt/voice-archive-transcribe.js')
+    if (!(await transcribesLocally())) {
+      res.json({ accepted: false, receivedBytes: 0, segments: 0, reason: 'not-transcribed-here' })
+      return
+    }
+    const { appendLive } = await import('../../core/stt/live-transcript.js')
+    const ack = appendLive(id, from as number, bytes, localTranscribe, language as string | undefined)
+    if ('gap' in ack) {
+      res.json({ accepted: true, receivedBytes: ack.receivedBytes, segments: 0, gap: true })
+      return
+    }
+    res.json(ack)
+  } catch (err) { archiveError(err, res, next) }
+})
+
+/** DELETE /stt/recordings/:id/live: the take was cancelled; its live pieces stop. */
+voiceArchiveV1Router.delete('/stt/recordings/:id/live', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = voiceRecordingId(req.params.id)
+    const { dropLive } = await import('../../core/stt/live-transcript.js')
+    dropLive(id)
+    res.json({ ok: true })
   } catch (err) { archiveError(err, res, next) }
 })
 for (const [suffix, operation] of [['chunks', 'chunk'], ['commit', 'commit'], ['text', 'text'], ['transcribe', 'transcribe']]) {

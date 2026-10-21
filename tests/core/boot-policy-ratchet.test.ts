@@ -102,7 +102,7 @@ const OTHERS: Array<[string, number, string]> = [
   ['src/core/sessions/lane-ask-link.ts', 6, off('lane-ask-sync')],
   ['src/core/sessions/open-items.ts', 2, ROUTE],
   ['src/core/stt/voice-archive-replication.ts', 2, COMPANION],
-  ['src/core/stt/voice-archive-transcribe.ts', 2, ROUTE],
+  ['src/core/stt/voice-archive-transcribe.ts', 1, ROUTE],
   ['src/core/stt/voice-archive.ts', 1, ROUTE],
   ['src/core/task-manager.ts', 1, ROUTE + '; the task copy is read only there'],
   ['src/core/task-outbox.ts', 4, COMPANION],

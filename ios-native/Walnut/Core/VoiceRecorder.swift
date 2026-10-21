@@ -118,6 +118,9 @@ final class VoiceRecorder: NSObject {
     /// diagnostics can see it. Never cancelled by lifecycle anymore — a dying
     /// upload's catch path preserves the audio instead.
     @ObservationIgnored private var transcriptionTask: Task<VoiceTranscriptionResult, Error>?
+    /// Sends the take while it is recorded, so the server can transcribe as it
+    /// goes (`VoiceLiveUploader`). Never touches the take itself.
+    @ObservationIgnored private lazy var live = VoiceLiveUploader()
     /// Lazy (audit OBS-5): this recorder is a `@State` default value in
     /// ComposerBar, whose initial-value expression runs on EVERY struct init
     /// — SwiftUI keeps only the first instance, but each throwaway used to
@@ -237,6 +240,7 @@ final class VoiceRecorder: NSObject {
             elapsed = 0
             state = .recording
             startTicker()
+            startLiveUpload(url: url, id: id)
             return true
         } catch {
             errorMessage = Self.diagnosticMessage(prefix: "Recording failed", error)
@@ -393,6 +397,7 @@ final class VoiceRecorder: NSObject {
     /// explicit ✕. The ONLY path that deletes un-transcribed audio on request.
     func cancel() {
         guard state == .recording else { return }
+        if let id = recordingID { dropLiveUpload(id: id) }
         stopCapture()
         if let id = recordingID { store.discard(id: id) }
         fileURL = nil
@@ -855,6 +860,7 @@ final class VoiceRecorder: NSObject {
     private func stopCapture() {
         tickTask?.cancel()
         tickTask = nil
+        live.stop()
         let duration = capture?.currentTime ?? elapsed
         capture?.stop()
         capture = nil
@@ -869,6 +875,27 @@ final class VoiceRecorder: NSObject {
             }
         }
         deactivateSessionOffMain()
+    }
+
+    /// Same origin the finished take goes to first (`archiveVoice`), so the
+    /// live pieces and the file meet on one server.
+    private func startLiveUpload(url: URL, id: String) {
+        guard uploadOverride == nil else { return }
+        let origin = liveOrigin
+        let apiRef = api
+        live.start(fileURL: url) { from, data in
+            try await apiRef.sendLiveVoice(id: id, from: from, audio: data, origin: origin)
+        }
+    }
+
+    private func dropLiveUpload(id: String) {
+        let origin = liveOrigin
+        let apiRef = api
+        live.cancel { try await apiRef.dropLiveVoice(id: id, origin: origin) }
+    }
+
+    private var liveOrigin: String? {
+        AppConfig.routes.first(where: { $0.kind == .cloud })?.origin ?? AppConfig.serverURL?.absoluteString
     }
 
     /// `setActive(false)` blocks until the audio server answers. On the main

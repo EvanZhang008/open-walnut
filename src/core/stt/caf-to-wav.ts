@@ -103,3 +103,33 @@ export function cafToWav(buf: Buffer): Buffer | null {
   }
   return Buffer.concat([wavHeader(pcm.length), pcm])
 }
+
+/**
+ * Where the samples start in a CAF that is still being written, and whether they
+ * are already 16 kHz mono 16-bit little-endian. Reads only the header: the data
+ * chunk's size is not trusted (a recorder writes it when it finishes). Null
+ * until the header up to the data chunk has arrived, or for a format that is not
+ * plain PCM.
+ */
+export function cafDataLayout(head: Buffer): { dataStart: number; native: boolean } | null {
+  if (head.length < 8 || head.toString('ascii', 0, 4) !== 'caff') return null
+  let desc: Desc | null = null
+  let at = 8
+  while (at + 12 <= head.length) {
+    const type = head.toString('ascii', at, at + 4)
+    const size = head.readBigInt64BE(at + 4)
+    const body = at + 12
+    if (type === 'data') {
+      if (!desc || body + 4 > head.length) return null
+      return { dataStart: body + 4, native: !desc.float && desc.bits === 16 && desc.little && desc.channels === 1 && desc.rate === TARGET_RATE }
+    }
+    if (size < 0n) return null
+    if (type === 'desc') {
+      if (body + 32 > head.length) return null
+      desc = readDesc(head, body)
+      if (!desc) return null
+    }
+    at = body + Number(size)
+  }
+  return null
+}

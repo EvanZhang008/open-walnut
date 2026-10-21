@@ -44,7 +44,7 @@ export function voiceRecordingId(id: unknown): string {
   if (typeof id !== 'string' || !UUID.test(id)) return bad('A UUID recording id is required')
   return id.toLowerCase()
 }
-function decode(audio: unknown): Buffer {
+export function decodeVoiceAudio(audio: unknown): Buffer {
   if (typeof audio !== 'string' || !audio || audio.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(audio)) return bad('audio must be canonical base64')
   const bytes = Buffer.from(audio, 'base64')
   if (bytes.toString('base64') !== audio) return bad('audio must be canonical base64')
@@ -116,7 +116,7 @@ export class VoiceArchiveStore {
     if (body.surface !== undefined && (typeof body.surface !== 'string' || body.surface.length > 100)) return bad('surface must be at most 100 characters')
     if (body.durationSeconds !== undefined && (typeof body.durationSeconds !== 'number' || !Number.isFinite(body.durationSeconds) || body.durationSeconds < 0)) return bad('durationSeconds must be nonnegative')
     if (typeof body.audio === 'string' && body.audio.length > Math.ceil(VOICE_MAX_CHUNK_BYTES / 3) * 4) throw new VoiceArchiveError(413, 'too_large', 'Chunk exceeds 512KiB')
-    const bytes = decode(body.audio)
+    const bytes = decodeVoiceAudio(body.audio)
     if (bytes.length > VOICE_MAX_CHUNK_BYTES) throw new VoiceArchiveError(413, 'too_large', 'Chunk exceeds 512KiB')
     return this.locked(raw, async (id) => {
       const existing = await this.stored(id)
@@ -276,7 +276,7 @@ export class VoiceArchiveStore {
     return { recordings, ...(records.length > limit && last ? { nextBefore: `${last.createdAt}|${last.id}` } : {}) }
   }
   async ingestAudio(input: { id?: string; audio: Buffer | string; format: string; createdAt?: string; surface?: string; durationSeconds?: number }): Promise<VoiceRecord> {
-    const audio = Buffer.isBuffer(input.audio) ? input.audio : decode(input.audio)
+    const audio = Buffer.isBuffer(input.audio) ? input.audio : decodeVoiceAudio(input.audio)
     if (!audio.length) return bad('audio must not be empty')
     if (audio.length > VOICE_MAX_AUDIO_BYTES) throw new VoiceArchiveError(413, 'too_large', 'Recording size exceeds the supported integer range')
     const id = voiceRecordingId(input.id ?? randomUUID())
