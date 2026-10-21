@@ -34,6 +34,7 @@ import { VALID_PHASES } from '../../core/phase.js'
 import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
+import { followerKind } from '../../core/server-role.js'
 import { enqueueAgentTurn, getQueueStatus } from '../agent-turn-queue.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
@@ -283,7 +284,10 @@ apiV1Router.get('/conversations', async (req: Request, res: Response, next: Next
       return
     }
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
-    const list = await listConversations(agentId)
+    // On the companion a chat it answered while the Mac was away moves up (stage 3e).
+    const list = followerKind() === 'companion'
+      ? await (await import('../../core/companion-chat-turns.js')).withCompanionTurnTimes(agentId, await listConversations(agentId))
+      : await listConversations(agentId)
     const sorted = [...list].sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
     // Legacy stored titles can be a machine banner ("[Current: Sun, Jun 7…]")
     // derived before the title heuristic learned to skip them — treat those
@@ -1446,11 +1450,12 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
     const before = typeof req.query.before === 'string' ? req.query.before : undefined
     let relayFailed = false
-    // Turns this companion answered itself and has not handed to the primary yet
-    // (cloud-chat-outbox.ts). They exist nowhere else until adopted, so every
+    // Turns this companion answered itself that the primary may not hold yet (its
+    // outbox, its journal's `chat-turn` records, the ones acked but not in the copy
+    // yet: companion-chat-turns.ts). They exist nowhere else until adopted, so every
     // read on this box merges them, once each.
     const banked = CLOUD_MODE
-      ? await (await import('../../core/cloud-chat-outbox.js')).listCloudTurns({ agentId, conversationId })
+      ? await (await import('../../core/companion-chat-turns.js')).companionBankedTurns({ agentId, conversationId })
       : []
     if (CLOUD_MODE) {
       // The reply is ALREADY a page — do not re-page it here; the cursor space

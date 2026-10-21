@@ -25,6 +25,11 @@
  *   - stage 4c: a note saved on the companion lands on the Mac with its body fetched
  *     through the door (`offline.blob`); an edit the Mac made meanwhile to another
  *     part of the note is merged with it, never lost;
+ *   - slice 3e: a chat turn the companion answered itself lands in its conversation once
+ *     (adopted by turn id, the row ensured), its texts fetched through the door and never
+ *     inline; one the outbox already handed over is skipped; one whose answer the
+ *     companion lost lands as a failed turn, its words kept; one whose words are lost is
+ *     refused into the letter;
  *   - a drain with nothing waiting is quiet.
  *
  * CLOUD_MODE is read at import, so the companion and the Mac are two module graphs
@@ -76,6 +81,7 @@ async function loadMac() {
     sessions: await import('../../../src/core/session-tracker.js'),
     inbox: await import('../../../src/core/human-inbox/store.js'),
     outbox: await import('../../../src/core/task-outbox.js'),
+    chatOutbox: await import('../../../src/core/cloud-chat-outbox.js'),
   }
 }
 
@@ -327,6 +333,62 @@ describe('the Mac drains the companion\'s journal', () => {
     const merged = await fsp.readFile(path.join(notesDir, 'Acme/todo.md'), 'utf8')
     expect(merged).toContain('first line, from the Mac')
     expect(merged).toContain('third line, from the phone')
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+  })
+
+  it('a chat turn the companion answered lands in its conversation once, its texts read through the door', async () => {
+    const conv = 'conv-acme-away-0001'
+    const readStore = async () => JSON.parse(await fsp.readFile(constantsBase.conversationFile('general', conv) as string, 'utf8')) as { entries: Array<Record<string, any>> }
+    const turn = (turnId: string, extra: Record<string, unknown> = {}) => ({
+      turnId, agentId: 'general', conversationId: conv, userText: 'what is left for acme?', userAt: '2026-10-21T08:00:00.000Z',
+      engine: 'cloud:s-lane-0001', answerText: 'Two steps are left: the venue and the vendor.', answeredAt: '2026-10-21T08:00:05.000Z', ...extra,
+    })
+    const t1 = crypto.randomUUID()
+    expect(companion.journal.journalChatTurn(turn(t1))).toMatchObject({ ok: true })
+    const rec = companion.journal.companionJournalRecords().find((x) => x.kind === 'chat-turn')!
+    expect(rec).toMatchObject({ turnId: t1, opId: `chat-${t1}`, blobs: [rec.userBlob, rec.answerBlob] })
+    // The texts ride as bodies, never in the record a drain hands out.
+    expect(JSON.stringify(rec)).not.toContain('venue')
+    const r = await mac.drain.drainCompanionJournalNow()
+    expect(r).toMatchObject({ replayed: 1 })
+    const adopted = (await readStore()).entries.filter((e) => e.turnId === t1)
+    expect(adopted.map((e) => [e.role, typeof e.content === 'string' ? e.content : e.content[0].text, e.adoptedFrom])).toEqual([
+      ['user', 'what is left for acme?', 'cloud:s-lane-0001'], ['assistant', 'Two steps are left: the venue and the vendor.', 'cloud:s-lane-0001'],
+    ])
+    // The conversation the phone made on the companion is in the Mac's list now.
+    const index = JSON.parse(await fsp.readFile(constantsBase.conversationIndexFile('general') as string, 'utf8'))
+    expect(index.conversations.find((c: { id: string }) => c.id === conv)).toMatchObject({ title: 'what is left for acme?' })
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    await expect(fsp.stat(path.join(HOME, 'cache', 'journal', 'blobs', String(rec.answerBlob)))).rejects.toThrow()
+
+    // The same turn handed over by the outbox first, then its record: once.
+    const t2 = crypto.randomUUID()
+    const { answerText, answeredAt, ...base } = turn(t2)
+    expect(await mac.chatOutbox.handlePrimaryChatAdopt({ v: 1, ...base, answerText, answeredAt })).toMatchObject({ adopted: true })
+    expect(companion.journal.journalChatTurn(turn(t2))).toMatchObject({ ok: true })
+    expect(await mac.drain.drainCompanionJournalNow()).toMatchObject({ replayed: 0, skipped: 1 })
+    expect((await readStore()).entries.filter((e) => e.turnId === t2)).toHaveLength(2)
+
+    // An answer the companion lost: the words land, with the turn as failed.
+    const t3 = crypto.randomUUID()
+    expect(companion.journal.journalChatTurn(turn(t3, { userText: 'and the budget?', answerText: 'The budget is fine.' }))).toMatchObject({ ok: true })
+    const lost = companion.journal.companionJournalRecords().find((x) => x.turnId === t3)!
+    await fsp.rm(path.join(HOME, 'cache', 'journal', 'blobs', String(lost.answerBlob)))
+    expect(await mac.drain.drainCompanionJournalNow()).toMatchObject({ replayed: 1 })
+    const failed = (await readStore()).entries.filter((e) => e.turnId === t3)
+    expect(failed.map((e) => [e.role, e.source ?? null])).toEqual([['user', null], ['assistant', 'agent-error']])
+    expect(failed[1].content[0].text).toContain('its answer was lost')
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+
+    // Words the companion lost: nothing lands, the turn is in the letter.
+    const t4 = crypto.randomUUID()
+    expect(companion.journal.journalChatTurn(turn(t4, { userText: 'and the venue deposit?', answerText: 'Paid.' }))).toMatchObject({ ok: true })
+    const wordless = companion.journal.companionJournalRecords().find((x) => x.turnId === t4)!
+    await fsp.rm(path.join(HOME, 'cache', 'journal', 'blobs', String(wordless.userBlob)))
+    await mac.drain.drainCompanionJournalNow()
+    expect((await readStore()).entries.filter((e) => e.turnId === t4)).toEqual([])
+    const logs = fs.readdirSync(mac.conflicts.conflictDir()).filter((n) => n.endsWith('.json')).map((n) => mac.conflicts.readConflictLog(n.slice(0, -5))).filter(Boolean)
+    expect(logs.flatMap((l) => l!.entries).find((e) => e.opId === wordless.opId)).toMatchObject({ kind: 'refused', recordKind: 'chat-turn' })
     expect(companion.journal.companionJournalRecords()).toEqual([])
   })
 

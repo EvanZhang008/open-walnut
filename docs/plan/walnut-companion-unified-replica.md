@@ -376,6 +376,32 @@ goes at once).
   names their turn id, an older page the copy holds whole, and `503
   primary_unreachable` past what it holds. Before the copy, git's chat history, as
   before; while the Mac answers, its answer.
+- **A chat turn** the box answers itself while the Mac does not answer
+  (`routes/cloud-chat-fallback.ts`) still starts in the outbox, so the user's words
+  survive a crash and a read during the turn shows them. When it ends and the Mac
+  drains `chat-turn`, it becomes a `chat-turn` record (`companion-chat-turns.ts`): the
+  turn id (op id `chat-<turnId>`), agent, conversation, times and engine, with the
+  user's words and the answer as blobs (named in the record's `blobs`, freed at the
+  ack), and its outbox file goes. The Mac adopts it with the outbox's own adopt
+  (`apply-chat-turn.ts` over `handlePrimaryChatAdopt`: once by turn id, so a turn the
+  outbox already handed over is skipped), its times moved onto the Mac's clock; an
+  answer the box lost lands as a failed turn with the words, and lost words are
+  refused into the letter. The box's reads show the record until the ack, then (in
+  memory, at most 10 minutes) until the copy names the turn id; the v1 list moves the
+  conversation up while a turn shows. An older Mac, whose drain names no `chat-turn`,
+  keeps the outbox and its `server.chat.adopt` hand-over, as do the outbox files
+  already there.
+
+What 3e leaves:
+
+- The box's list edits (a chat made, renamed, pinned or deleted there) reach the Mac
+  only through git sync, as before. Before git sync stops writing the box's data dir
+  (4d), they need a journal kind of their own or a forwarded write.
+- The box's chat lane still seeds and catches up from git's chat history, not from
+  the bodies copy.
+- The list answer carries no `x-walnut-copy-as-of`, and the overlay of acked turns is
+  in memory: a box restarted in the minutes between the ack and the next copy round
+  shows such a turn only once the copy has it.
 
 ## Stage 4: notes, memory and skills from a copy
 
