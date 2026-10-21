@@ -1,5 +1,5 @@
 import React from 'react';
-import { linkPathOfTag, linkTagLabel, linkUrlOfTag } from '../../../../src/core/link-tags';
+import { linkPathOfTag, linkTagKey, linkTagLabel, linkUrlOfTag } from '../../../../src/core/link-tags';
 
 interface TagChipProps {
   tag: string;
@@ -42,7 +42,7 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
   const ownUrl = linkUrlOfTag(tag);
   const ownPath = ownUrl ? undefined : linkPathOfTag(tag);
   const isLink = !!(ownUrl || ownPath);
-  const prefix = hasPrefix && (!valueOnly || isLink) ? tag.slice(0, colonIdx) : null;
+  const prefix = isLink ? linkTagKey(tag)! : hasPrefix && !valueOnly ? tag.slice(0, colonIdx) : null;
   const value = isLink ? linkTagLabel(tag)! : hasPrefix ? tag.slice(colonIdx + 1) : tag;
   const openPath = ownPath && onOpenPath && !onClick ? () => onOpenPath(ownPath) : undefined;
 
