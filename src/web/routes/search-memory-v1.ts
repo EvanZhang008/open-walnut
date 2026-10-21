@@ -372,6 +372,19 @@ searchMemoryV1Router.post('/notifications/dismiss', async (req: Request, res: Re
 // GET /api/v1/favorites → { projects, notes }
 searchMemoryV1Router.get('/favorites', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // A server that holds the prefs copy answers from it: the companion, which answers
+    // this read only when the Mac did not (away, or the forward went unanswered), with
+    // the Mac's favorites instead of its own config's. The Mac holds no copy.
+    const [{ readFavoritesCopy }, { copyKindAsOf, COPY_AS_OF_HEADER }] = await Promise.all([
+      import('../../core/replication/kinds/prefs.js'), import('../../core/replication/kinds/gate.js'),
+    ])
+    const asOf = await copyKindAsOf('prefs')
+    const fav = asOf === null ? null : await readFavoritesCopy()
+    if (fav) {
+      res.setHeader(COPY_AS_OF_HEADER, String(asOf))
+      res.json({ projects: fav.projects ?? [], notes: fav.notes ?? [] })
+      return
+    }
     // The web route's read: on a host replica, the prefs copy (routes/favorites.ts).
     const { readFavorites } = await import('./favorites.js')
     res.json(await readFavorites())

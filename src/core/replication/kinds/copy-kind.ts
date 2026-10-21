@@ -11,11 +11,13 @@
  *     or the first round after a restart of this server) a `status` step
  *     compares digests and an equal one ends the round. Anything else runs
  *     the full manifest round;
- *   - the targets: HOST replicas only, and only a host whose program is the
- *     replica (the default since D13; the plain host server and the daemon's
- *     fallback keep no copies). The companion keeps its own session projection
- *     and has no copy of the others yet (WP13 moves it to this path), so it is
- *     never sent these kinds;
+ *   - the targets: a host whose program is the replica (the default since
+ *     D13; the plain host server and the daemon's fallback keep no copies)
+ *     takes every kind; the companion takes the kinds it keeps (gate.ts
+ *     COMPANION_COPY_KINDS, docs/plan/walnut-companion-unified-replica.md
+ *     stage 2), and an older companion answers them `404 unknown_kind`, which
+ *     rests the kind for it. A kind the companion does not keep is skipped
+ *     for it, never purged;
  *   - the per-host choice of copied kinds (hosts.<key>.server.copies, the
  *     host's Settings row; core/host-server/manager.ts passes it on the target).
  *     A kind turned off gets one `purge` step: the host drops that kind's store
@@ -32,6 +34,7 @@ import { buildKindManifest, confirmKindRemoval, putRow, runKindRound, StepFailed
 import { DigestMap } from '../search-digest.js'
 import { confirmWaiting, forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
 import type { ReplicaTarget } from '../replica-targets.js'
+import { COMPANION_COPY_KINDS } from './gate.js'
 
 export const COPY_DEBOUNCE_MS = 3_000
 export const COPY_SWEEP_MS = 5 * 60_000
@@ -96,9 +99,14 @@ export async function buildCopyManifest<Row>(kind: CopyKind<Row>): Promise<KindM
 
 export type CopyTarget = Pick<ReplicaTarget, 'id' | 'kind' | 'label' | 'post' | 'available' | 'copies' | 'program'>
 
-/** A target that keeps the copies: a host running the replica program (not the host server, not its fallback). */
-export function keepsCopiesTarget(t: CopyTarget): boolean {
-  return t.kind === 'host' && t.program?.() === 'replica'
+/**
+ * A target that keeps copies (no kind), or the copy of `kind`: a host running
+ * the replica program (not the host server, not its fallback) keeps every
+ * kind, the companion its own (COMPANION_COPY_KINDS).
+ */
+export function keepsCopiesTarget(t: CopyTarget, kind?: string): boolean {
+  if (t.kind === 'host') return t.program?.() === 'replica'
+  return t.kind === 'companion' && (kind === undefined || COMPANION_COPY_KINDS.has(kind))
 }
 
 /** The digest of a manifest, worked out once per manifest object. */
@@ -234,7 +242,7 @@ export async function runCopyRound<Row>(
 export interface CopyRoundResult extends KindRoundResult { target: string }
 
 export interface CopyKindsDeps {
-  /** Every follower (replica-targets.ts); only the host ones take these kinds. */
+  /** Every follower (replica-targets.ts); each takes the kinds it keeps (keepsCopiesTarget). */
   targets?: () => CopyTarget[]
   now?: () => number
 }
@@ -248,14 +256,15 @@ async function choiceOf(target: CopyTarget): Promise<CopyChoice> {
 }
 
 /**
- * One round of `kinds` over every host target, one target after another.
+ * One round of `kinds` over every target that keeps copies, one after another.
  * Builds a kind's manifest once for all targets, and only when a target that
  * takes the kind is up. Never throws: a kind that failed on a target is
  * noted and the next one goes on (the kinds do not depend on each other).
  */
 export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyKindsDeps = {}): Promise<CopyRoundResult[]> {
   const now = deps.now ?? Date.now
-  const all = (deps.targets ?? await defaultTargets())().filter(keepsCopiesTarget)
+  // Only a target that keeps one of this round's kinds is asked whether it is up.
+  const all = (deps.targets ?? await defaultTargets())().filter((t) => kinds.some((k) => keepsCopiesTarget(t, k.kind)))
   const ready: Array<{ target: CopyTarget; choice: CopyChoice }> = []
   for (const target of all) if (await target.available()) ready.push({ target, choice: await choiceOf(target) })
   const results: CopyRoundResult[] = []
@@ -263,7 +272,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
   const asOf = now()
   const manifests = new Map<string, KindManifest<unknown>>()
   for (const kind of kinds) {
-    if (!ready.some((r) => r.choice[kind.choice])) continue
+    if (!ready.some((r) => r.choice[kind.choice] && keepsCopiesTarget(r.target, kind.kind))) continue
     try {
       manifests.set(kind.kind, await buildCopyManifest(kind))
     } catch (err) {
@@ -273,6 +282,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
   }
   for (const { target, choice } of ready) {
     for (const kind of kinds) {
+      if (!keepsCopiesTarget(target, kind.kind)) continue
       const manifest = manifests.get(kind.kind)
       const st = kindState(target, kind.kind)
       if (!choice[kind.choice]) {
@@ -341,7 +351,7 @@ export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbo
 export async function confirmCopyKindRemoval(targetId: string, kind: string, opts: { entries?: number; keys?: string } = {}): Promise<boolean> {
   const { replicaTargets } = await import('../replica-targets.js')
   const target = replicaTargets().find((t) => t.id === targetId)
-  if (!target || target.kind !== 'host' || !peekKindState(targetId, kind)) return false
+  if (!target || !keepsCopiesTarget(target, kind) || !peekKindState(targetId, kind)) return false
   if (!confirmKindRemoval(target, kind, opts)) return false
   log.session.warn('copies: the user confirmed a removal of most rows', { target: targetId, kind, entries: peekKindState(targetId, kind)?.confirmFor?.entries })
   copySoon(kind)

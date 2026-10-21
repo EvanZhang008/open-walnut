@@ -64,6 +64,10 @@ import { CATCH_UP_BANNER_OPEN } from '../../../src/core/chat-history.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import type { SessionStartEvent, SessionSendEvent } from '../../../src/core/event-types.js'
 import { markProcessing, removeProcessed } from '../../../src/core/session-message-queue.js'
+import { startCopyHarness } from '../../helpers/copy-kind-harness.js'
+import { runCopyRound } from '../../../src/core/replication/kinds/copy-kind.js'
+import { buildKindManifest } from '../../../src/core/replication/kind-leader.js'
+import { PERSONAS_KIND, _resetPersonasCopyForTesting, type PersonaRow } from '../../../src/core/replication/kinds/personas.js'
 
 const EXEC_ROOT = `${WALNUT_HOME}-exec-root`
 const CHAT_CWD = path.join(EXEC_ROOT, 'chat')
@@ -389,6 +393,61 @@ describe('provable non-delivery: the companion answers on its own lane', () => {
       await sse.waitFor((e) => e.event === 'message-end')
       expect(starts[0].profile?.systemPrompt).toContain('remember the codeword heron')
       expect(starts[0].profile?.systemPrompt).toContain('Noted: heron.')
+    } finally {
+      sse.close()
+    }
+  }, 60_000)
+
+  it('with the personas copy held, the lane speaks with the persona as the Mac renders it, at its effort, the seed after it', async () => {
+    // A real round from the leader's side into this box's real follower
+    // (docs/plan/walnut-companion-unified-replica.md, stage 2a).
+    const h = await startCopyHarness({ id: 'companion' })
+    try {
+      const row: PersonaRow = {
+        key: 'general', agentId: 'general', name: 'Walnut',
+        systemPrompt: 'You are Walnut as the Mac renders it, with its memory. Codeword osprey.', systemPromptMode: 'append', effort: 'low',
+      }
+      const kind = { ...PERSONAS_KIND, rows: async () => [row], watch: () => () => {} }
+      expect((await runCopyRound(kind, await buildKindManifest(kind, [row]), h.target, { asOf: Date.now() })).action).toBe('synced')
+      const conv = await createConversation('general')
+      const t0 = new Date(Date.now() - 60_000).toISOString()
+      await fs.writeFile(conversationFile('general', conv.id), JSON.stringify({
+        version: 2, lastUpdated: t0, compactionCount: 0, compactionSummary: null,
+        entries: [
+          { tag: 'ai', role: 'user', content: 'remember the codeword heron', timestamp: t0 },
+          { tag: 'ai', role: 'assistant', content: [{ type: 'text', text: 'Noted: heron.' }], timestamp: t0, engine: 'lane:mac-1' },
+        ],
+      }))
+      const sse = await connectSse(conv.id)
+      try {
+        await postMessage(conv.id, 'what was the codeword?')
+        await sse.waitFor((e) => e.event === 'message-end')
+        const prompt = starts[0].profile?.systemPrompt ?? ''
+        expect(prompt).toContain('Codeword osprey.')
+        // Not this box's own rendering (its config names the user Ada).
+        expect(prompt).not.toContain("Ada's Personal AI")
+        expect(prompt).toContain('## Answering from the cloud companion')
+        expect(prompt.indexOf('Codeword osprey.')).toBeLessThan(prompt.indexOf('remember the codeword heron'))
+        expect(starts[0].effort).toBe('low')
+        expect(starts[0].profile?.mcpServers?.walnut).toBeUndefined()
+        expect(starts[0].profile?.tools).toEqual(CLOUD_CHAT_TOOLS)
+      } finally {
+        sse.close()
+      }
+    } finally {
+      await h.close()
+      _resetPersonasCopyForTesting()
+      await fs.rm(path.join(WALNUT_HOME, 'cache', 'replica', 'personas.json'), { force: true })
+    }
+  }, 60_000)
+
+  it('without the copy, the lane renders the persona from this box, as before', async () => {
+    const conv = await createConversation('general')
+    const sse = await connectSse(conv.id)
+    try {
+      await postMessage(conv.id, 'hello')
+      await sse.waitFor((e) => e.event === 'message-end')
+      expect(starts[0].profile?.systemPrompt).toContain("Ada's Personal AI")
     } finally {
       sse.close()
     }

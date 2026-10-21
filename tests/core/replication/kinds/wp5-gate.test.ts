@@ -1,7 +1,7 @@
 /**
  * The WP5 copy kinds (routines, conversations, prefs, config) live only on a host
  * running the replica program (docs/plan/walnut-replica-servers-impl.md, WP4 "as
- * built", kinds/index.ts hostReplicaOnly). The leader (the Mac) and the plain host
+ * built", kinds/index.ts copyKeepersOnly). The leader (the Mac) and the plain host
  * server answer every step of them `404 unknown_kind`, any op, any schema, exactly
  * as for a kind nobody registered, and write nothing; on the leader getConfig(),
  * the routines list and the conversation list read the Mac's own files. The

@@ -31,7 +31,9 @@ import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
 // One source of truth for the seed's header: the store renders the block, this
 // module splices it into the spawn prompt and has to find it again on a repair.
 import { CONVERSATION_SEED_HEADER, clipRenderedSeed } from '../chat-history.js';
-import { personalAiProfile, consoleAgentProfile } from './profiles.js';
+import { personalAiProfile, consoleAgentProfile, mergeProfiles, walnutMcpProfile } from './profiles.js';
+
+const LANE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import type { SessionEngine } from '../types.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
@@ -401,7 +403,16 @@ const LANE_SEED_MIN_BYTES = 2048;
 export async function buildLaneProfile(
   config: Awaited<ReturnType<typeof getConfig>>,
   agentId: string,
-  opts?: { conversationId?: string },
+  opts?: {
+    conversationId?: string;
+    /**
+     * The persona as the Mac rendered it (the `personas` copy, kinds/personas.ts):
+     * its prompt already holds the Mac's memory and skills index, so neither is
+     * built here, and its effort wins over this box's config. The companion's
+     * chat lane passes it (cloud-chat-lane.ts).
+     */
+    persona?: { systemPrompt: string; systemPromptMode: 'append' | 'replace'; effort?: string };
+  },
 ): Promise<{
   profile: import('../types.js').SessionProfile;
   effort: import('../types.js').SessionEffort;
@@ -412,10 +423,11 @@ export async function buildLaneProfile(
   // engine ever discovers these, so the lane prompt carries the index itself.
   // ~/.claude/skills is excluded (Claude Code loads it natively). Failure is
   // non-fatal: a lane without the index still answers.
-  const skillsIndex = await buildSessionSkillsPrompt().catch(() => '');
+  const persona = opts?.persona;
+  const skillsIndex = persona ? '' : await buildSessionSkillsPrompt().catch(() => '');
   // Standing memory — Walnut-owned injection, engine-neutral (see
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
-  const memoryContext = await buildLaneMemoryContext().catch(() => '');
+  const memoryContext = persona ? '' : await buildLaneMemoryContext().catch(() => '');
   // general = the Personal AI persona; any other agent gets ITS persona plus the
   // same two work modes — one engine, one consistent chat feel, per-agent
   // identity. Any REGISTRY agent, not only a console one: the console flag
@@ -423,7 +435,9 @@ export async function buildLaneProfile(
   // persona can be built — a dispatcher-launched run (subagent-runner) names a
   // background agent by design and its persona builds exactly the same way.
   let profile;
-  if (agentId === 'general') {
+  if (persona) {
+    profile = mergeProfiles({ systemPrompt: persona.systemPrompt, systemPromptMode: persona.systemPromptMode }, walnutMcpProfile())!;
+  } else if (agentId === 'general') {
     profile = personalAiProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
   } else {
     const { getAgent } = await import('../agent-registry.js');
@@ -437,7 +451,8 @@ export async function buildLaneProfile(
   // effort the CLI inherits the user's global settings.json effortLevel (often
   // xhigh, tuned for coding sessions) — measured 100s+ for "what tasks do I have
   // today". Config `agent.session_effort` still wins when the user set one.
-  const effort = config.agent?.session_effort ?? 'medium';
+  const personaEffort = persona?.effort && LANE_EFFORTS.has(persona.effort) ? persona.effort as import('../types.js').SessionEffort : undefined;
+  const effort = personaEffort ?? config.agent?.session_effort ?? 'medium';
   if (!opts?.conversationId) return { profile, effort };
 
   // ── Conversation seed (mint only) ──

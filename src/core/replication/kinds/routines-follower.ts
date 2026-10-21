@@ -4,7 +4,9 @@
  * order; cron-state.json, each routine's status), read only. Nothing on a host
  * replica runs or writes them but this follower (boot policy `cron` is off, and
  * routines-core.ts reads the copy through readRoutinesCopy instead of the engine,
- * whose list recomputes and persists).
+ * whose list recomputes and persists). On the companion the copy sits in its
+ * copy store, beside the box's own engine and its jobs, and the v1 routine
+ * reads answer from it while the Mac is away (companionRoutinesCopy).
  */
 
 import fsp from 'node:fs/promises'
@@ -13,12 +15,13 @@ import { CRON_FILE } from '../../../constants.js'
 import { log } from '../../../logging/index.js'
 import type { CronJob, CronJobState } from '../../cron/types.js'
 import { createRowSetFollower, serialChain, writeCopyFile, type RowSetFollower } from '../kind-follower.js'
-import { copyRefusal, markCopyOff } from './gate.js'
+import { copyKindHeld, copyPath, copyRefusal, markCopyOff } from './gate.js'
 import { copyStateIo } from './state-io.js'
 import { ROUTINES_REMOVAL_FLOOR, ROUTINES_SCHEMA_VERSION, projectStatus, routineRowSecrets, type CopiedJob, type RoutineRow } from './routines.js'
 
-const jobsFile = () => CRON_FILE
-const statesFile = () => path.join(path.dirname(CRON_FILE), 'cron-state.json')
+// The companion keeps the copy apart from its own engine's files (gate.ts copyPath).
+const jobsFile = () => copyPath(CRON_FILE)
+const statesFile = () => copyPath(path.join(path.dirname(CRON_FILE), 'cron-state.json'))
 
 async function readJobs(): Promise<CopiedJob[]> {
   try {
@@ -112,6 +115,12 @@ export async function readRoutinesCopy(opts: { includeDisabled?: boolean } = {})
   const all = jobs.map((j) => ({ ...j, updatedAtMs: j.updatedAtMs ?? j.createdAtMs, state: { ...(states[j.id] ?? {}) } }) as CronJob)
   const shown = opts.includeDisabled ? all : all.filter((j) => j.enabled)
   return shown.sort((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0))
+}
+
+/** The copied routines when this server holds the copy (a copy of none counts), else null. */
+export async function companionRoutinesCopy(opts: { includeDisabled?: boolean } = {}): Promise<CronJob[] | null> {
+  if (!(await copyKindHeld('routines'))) return null
+  return (await readRoutinesCopy(opts)) ?? []
 }
 
 /** Tests only. */

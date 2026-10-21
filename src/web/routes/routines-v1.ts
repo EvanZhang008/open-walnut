@@ -45,6 +45,26 @@ export const routinesV1Router = Router()
 /** Placeholder sessionId for the box-level `server.*` relay actions. */
 const SERVER_RELAY_SID = '__server__'
 
+/**
+ * The companion answers a routine read the Mac did not (the Mac is away, or the
+ * forward went unanswered) from its copy of the Mac's routines
+ * (docs/plan/walnut-companion-unified-replica.md, stage 2a), read only, with the
+ * copy's age in `x-walnut-copy-as-of`. Without a copy it relays, as before.
+ * `answer` returns the body, or null for a routine the copy does not hold.
+ */
+async function answeredFromCopy(res: Response, includeDisabled: boolean, answer: (jobs: unknown[]) => unknown | null): Promise<boolean> {
+  const [{ companionRoutinesCopy }, { copyKindAsOf, COPY_AS_OF_HEADER }] = await Promise.all([
+    import('../../core/replication/kinds/routines-follower.js'), import('../../core/replication/kinds/gate.js'),
+  ])
+  const jobs = await companionRoutinesCopy({ includeDisabled })
+  if (!jobs) return false
+  res.setHeader(COPY_AS_OF_HEADER, String(await copyKindAsOf('routines') ?? 0))
+  const body = answer(jobs)
+  if (body === null) sendError(res, 404, 'not_found', 'No such routine in the copy of your Mac\'s routines')
+  else res.json(body)
+  return true
+}
+
 /** Routine ids ride relay params and URLs — restrict to the safe id alphabet. */
 const RID_RE = /^[A-Za-z0-9_-]+$/
 
@@ -87,6 +107,7 @@ routinesV1Router.get('/routines', async (req: Request, res: Response, next: Next
   try {
     const includeDisabled = req.query.includeDisabled === 'true'
     if (CLOUD_MODE) {
+      if (await answeredFromCopy(res, includeDisabled, (jobs) => ({ jobs }))) return
       await relayControlAction(res, 'server.routines', SERVER_RELAY_SID, { includeDisabled }, 200)
       return
     }
@@ -115,6 +136,8 @@ routinesV1Router.get('/routines/actions', async (_req: Request, res: Response, n
 routinesV1Router.get('/routines/status', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     if (CLOUD_MODE) {
+      // As a host replica reports it (routines-core.ts getRoutinesStatus): the engine does not run here.
+      if (await answeredFromCopy(res, true, (jobs) => ({ enabled: false, storePath: '', jobs: jobs.length, nextWakeAtMs: null }))) return
       await relayControlAction(res, 'server.routines.status', SERVER_RELAY_SID, undefined, 200)
       return
     }
@@ -212,6 +235,10 @@ routinesV1Router.get('/routines/:id', async (req: Request, res: Response, next: 
     const id = validRid(req, res)
     if (!id) return
     if (CLOUD_MODE) {
+      if (await answeredFromCopy(res, true, (jobs) => {
+        const job = jobs.find((j) => (j as { id?: unknown }).id === id)
+        return job ? { job } : null
+      })) return
       await relayControlAction(res, 'server.routines.get', SERVER_RELAY_SID, { id }, 200)
       return
     }

@@ -161,27 +161,67 @@ after which it follows the Mac.
 
 The companion becomes a copy target for every kind, gated by the kind answer
 itself (an old companion answers `404 unknown_kind`, and the Mac rests that kind
-for it). Rules:
+for it).
 
-- **A copy never removes or overwrites what this box owns.** The companion owns
-  the sessions it started itself, its own pairings (C6), the writes it holds for
-  the Mac, and the files of its capabilities. Ownership is recorded where the row
-  is written, never inferred from an empty field (today `cloudOwnedSession` treats
-  any host-less row as the box's own, which is wrong once the copy holds the Mac's
-  host-less rows).
-- **One writer per file.** A kind that lands in a file git sync also writes
-  (boards, inbox, routines, conversations) moves off git sync for that file in the
-  same change: the copy is the only writer, and the file joins the box's
-  never-stage list.
-- **Readers stop switching on the program.** `isHostReplicaProgram()` reads become
-  "this server holds the copy of kind X" (`copyHeld(kind)`), so the companion and a
-  host take the same branch.
-- The projection push and the transcript tails stay as long as a companion has not
-  taken the sessions kind; then the Mac stops pushing them to it.
+### What the companion is not
 
-Sessions, the largest kind, also need the companion's session reads (list, detail,
-history) to come from the copy and from the session's host, as on a host replica.
-That part is specified when the stage starts.
+A host replica is a fresh data dir that holds nothing but copies, so its
+followers write the same files the Mac keeps, and every read of a kind it holds
+takes the replica branch (`isHostReplicaProgram()`). The companion is not that:
+
+- it keeps data of its own in the live files: the sessions it runs itself
+  (cloud exec, its chat lane) in `sessions.sqlite`, its own `config.yaml`
+  (`cloud.exec`, push tokens, API keys, the providers its lane uses), its own
+  cron engine (git sync and backup jobs) in `cron-jobs.json` and `cron-state.json`;
+- git sync writes boards, the inbox, `cron-jobs.json`, the conversation index and
+  ui prefs into its data dir, and `restoreNeverStagePaths` reverts a dirty
+  tracked file there;
+- its console routes (`/api/*` outside `/api/v1`) and several v1 routes
+  (`/conversations`, the inbox body) are answered by the box itself whether or not
+  the Mac is there, so a "writes need the Mac" refusal would fire with the Mac
+  connected.
+
+So the companion takes the copies the other way round: **a copy on the companion
+lives in its own store under `cache/replica/`, and never in a live file.** The
+followers name their files through `copyPath(live)` (`kinds/gate.ts`): the live
+path on a host replica, `cache/replica/home/<same relative path>` on the companion.
+The box's own rows, files and engine are never touched by a round, and a manifest
+removes only what the copy holds. Readers on the companion read a copy only where
+the box answers a read the Mac did not (the Mac is away, or a forwarded read went
+unanswered), through `copyHeld(kind)` (`gate.ts copyKindHeld`), never by program.
+The answer carries `x-walnut-copy-as-of`.
+
+The Mac side: the companion target takes a kind once the box answers it, the half
+rule's confirm works for it as for a host, and the Settings row shows its kinds.
+
+### 2a: requests, routines, favorites, personas
+
+| Kind | The box read that switches to the copy | Today, Mac away |
+|---|---|---|
+| `requests` | `GET /api/v1/requests/:id`: the box's own file, then the copy | 404 |
+| `routines` | `GET /api/v1/routines`, `/routines/:id`, `/routines/status` | 503 from the control relay |
+| `prefs` | `GET /api/v1/favorites`: the copy's favorites | the box's own favorites, never the Mac's |
+| `personas` | the cloud chat lane's persona for a new lane (`cloud-chat-lane.ts`, `buildLaneProfile` `persona`) | the box renders it from its own config and its git copy of memory; an agent defined only in the Mac's config is not found |
+
+Routine writes while the Mac is away still answer that they need the Mac.
+
+### 2b: config, boards, inbox, conversations
+
+Each needs a reader that does not exist yet on the companion (config: the phone's
+settings while away, as an overlay on the box's own file, never a replacement), or
+a git-synced file whose reader moves to the copy (boards, the inbox index and
+bodies, the conversation index). Git sync keeps writing those files until stage 4;
+the readers stop reading them once the copy is held, so each file has one writer
+that is read.
+
+### 2c: sessions
+
+The sessions copy, in its own `cache/replica/home/sessions.sqlite`, replaces the
+projection push and the transcript tails for a companion that took it; the box's
+own sessions stay in its live registry. `cloudOwnedSession` then reads ownership
+from the row (`owner: 'cloud'`, written where the box starts a session) instead of
+inferring it from an empty host. The session reads (list, detail, history) are
+specified when this part starts.
 
 ## Stage 3: writes while the Mac is away go to journal v2
 
@@ -248,6 +288,9 @@ capability defaults.
   never written by the service user.
 - The bridge allowlist does not change: no stage gives the companion a new command
   on a daemon, a new stream target, or a way to make the Mac run code.
+- Stage 2 sends the companion no kind a host replica does not get, and each lands
+  in the box's copy store at 0600 in a 0700 dir. The config copy (stage 2b) is the
+  allowlisted one, checked again for secret shapes on the box.
 
 ## Corrections to earlier plans
 
