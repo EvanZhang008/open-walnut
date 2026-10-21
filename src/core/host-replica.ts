@@ -14,6 +14,9 @@
  * sends those bodies in batches. An unchanged manifest is not sent again on the
  * same connection. Every read here is async: a first round reads ~13 MB of notes
  * (the measured vault), later rounds only stat, and hash what changed.
+ *
+ * The cloud companion gets the same rounds over HTTPS (syncCompanionHostReplica,
+ * host key `companion`; its side is core/companion-host-replica.ts).
  */
 
 import fsp from 'node:fs/promises'
@@ -250,6 +253,7 @@ export function _resetHostReplicaForTesting(): void {
   for (const t of heldReruns.values()) clearTimeout(t)
   heldReruns.clear()
   lastManifest.clear()
+  companionMemoAt = 0
 }
 
 /** The Settings row's target for a host's copy (replica-status.ts), the half rule's refusals. */
@@ -341,6 +345,46 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
 }
 
 const inFlight = new Map<string, { rerun: boolean }>()
+
+// ── The cloud companion as a host (stage 4 of docs/plan/walnut-companion-unified-replica.md) ──
+
+/** The companion's host key: its copy's Settings row (`host:companion`), its keep settings. */
+export const COMPANION_REPLICA_HOST = 'companion'
+/** How long an unchanged manifest is trusted for the companion before it goes again. */
+const COMPANION_MEMO_MS = 30 * 60_000
+let companionMemoAt = 0
+
+const companionTarget: ReplicaTarget = {
+  hostKey: COMPANION_REPLICA_HOST,
+  send: async (cmd, params, timeoutMs) => (await import('./cloud-ingest.js')).postToCloudHostReplica(cmd, params, timeoutMs ? { timeoutMs } : {}),
+}
+
+/**
+ * One round of the companion's notes, memory and skills copy over HTTPS
+ * (`/bridge/host-replica`), the round a daemon gets. A daemon's memo ends with its
+ * connection; the companion has no connection to end, so its memo ends when the box
+ * says a kind never arrived whole (a new box), every 30 minutes, and when its build
+ * changes (forgetCompanionHostReplica). Never throws.
+ */
+export async function syncCompanionHostReplica(): Promise<ReplicaRoundResult[]> {
+  const ingest = await import('./cloud-ingest.js')
+  if (!(await ingest.cloudHostReplicaAvailable())) return []
+  // One small step first: an older build (no door) or a box that is down costs no round.
+  const st = await ingest.postToCloudHostReplica('replica.status', {})
+  if (st.ok !== true) return []
+  const kinds = (st.kinds ?? {}) as Record<string, { asOf?: unknown }>
+  if (Date.now() - companionMemoAt > COMPANION_MEMO_MS || REPLICA_KINDS.some((k) => kinds[k]?.asOf == null)) {
+    forgetHostReplica(COMPANION_REPLICA_HOST)
+    companionMemoAt = Date.now()
+  }
+  return syncHostReplica(companionTarget)
+}
+
+/** The companion changed build: its copy rounds go again at once. */
+export function forgetCompanionHostReplica(): void {
+  companionMemoAt = 0
+  forgetHostReplica(COMPANION_REPLICA_HOST)
+}
 
 /**
  * Bring `target`'s copy up to date, every kind. One round per host at a time;
