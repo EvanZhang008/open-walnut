@@ -1,9 +1,9 @@
 /**
- * Stages 2a and 2b of docs/plan/walnut-companion-unified-replica.md on a real
+ * Stages 2a, 2b and 3c of docs/plan/walnut-companion-unified-replica.md on a real
  * CLOUD_MODE server: the Mac's copy scheduler (kinds/copy-kind.ts syncCopyKinds)
  * sends the companion the kinds it keeps (requests, routines, prefs, personas,
- * boards, config) over the real client (cloud-ingest.ts postToCloudReplica,
- * machine token, gzip), and only those.
+ * boards, config, inbox, inbox-bodies) over the real client (cloud-ingest.ts
+ * postToCloudReplica, machine token, gzip), and only those.
  *
  * Pinned:
  *   - the kinds the companion does not keep are never read on the Mac, never sent,
@@ -15,8 +15,10 @@
  *   - with the Mac away, the v1 reads the box answers itself take the copy: a
  *     request (its own first), the routines list, one routine, the scheduler
  *     status, the favorites, a board, the settings view, each with
- *     `x-walnut-copy-as-of` where it reads a copy; before any round, the old
- *     answers (503 from the relay, the box's own favorites, settings and board).
+ *     `x-walnut-copy-as-of` where it reads a copy, and the inbox list and a letter
+ *     with its body (`mirrorUpdatedAt` the copy's clock); before any round, the old
+ *     answers (503 from the relay, the box's own favorites, settings and board, the
+ *     inbox git sync wrote).
  *
  * auth.json is written fresh (tokens known to the test); nothing is copied.
  */
@@ -51,6 +53,8 @@ import type { Task } from '../../../src/core/types.js'
 import type { PersonaRow } from '../../../src/core/replication/kinds/personas.js'
 import type { PrefsRow } from '../../../src/core/replication/kinds/prefs.js'
 import type { SessionRequest } from '../../../src/core/session-requests.js'
+import { humanInboxPaths, sendLetter } from '../../../src/core/human-inbox/store.js'
+import type { LetterRecord } from '../../../src/core/human-inbox/types.js'
 
 let server: HttpServer
 let port = 0
@@ -69,6 +73,10 @@ function board(html: string, version: number): BoardFile {
 }
 let macBoards: BoardFile[] = [board('<p>Acme plan, from the Mac</p>', 3)]
 const macConfig = { user: { name: 'Ada on the Mac' }, hosts: { devbox: { label: 'Dev box', enabled: true } } }
+// The inbox: git sync wrote the box's own two letters; the Mac's copy says otherwise.
+let boxLetters: LetterRecord[] = []
+let macLetters: LetterRecord[] = []
+let macBodies: Array<{ name: string; body: string }> = []
 const persona: PersonaRow = { key: 'general', agentId: 'general', name: 'Walnut', systemPrompt: 'You are Walnut, as the Mac renders it.', systemPromptMode: 'append' }
 
 function request(id: string, status: SessionRequest['status']): SessionRequest {
@@ -99,6 +107,8 @@ function macKinds(): CopyKind<any>[] {
     personas: async () => [persona],
     boards: async () => macBoards,
     config: async () => configCopyRows(macConfig).rows,
+    inbox: async () => macLetters,
+    'inbox-bodies': async () => macBodies,
   }
   return copyKinds().map((k) => ({
     ...k,
@@ -148,6 +158,14 @@ beforeAll(async () => {
   await fs.writeFile(CRON_FILE, BOX_JOBS)
   await fs.mkdir(path.join(WALNUT_HOME, 'boards'), { recursive: true })
   await fs.writeFile(path.join(WALNUT_HOME, 'boards', `${BOARD_TASK}.json`), GIT_BOARD)
+  const sender = { sessionId: 'sess-box', host: 'workstation' }
+  boxLetters = [
+    await sendLetter({ subject: 'Box digest', type: 'review', markdown: '# Box digest', sender }),
+    await sendLetter({ subject: 'Box deploy', type: 'completion', markdown: 'Box deploy body', sender }),
+  ]
+  const macOnly = boxLetters[1].id.replace(/.$/, (c) => (c === 'a' ? 'b' : 'a'))
+  macLetters = [{ ...boxLetters[0], subject: 'Acme digest, from the Mac', read: true }, { ...boxLetters[1], id: macOnly, subject: 'Acme launch notes, from the Mac' }]
+  macBodies = [{ name: `${boxLetters[0].id}.md`, body: '# Acme digest from the Mac' }, { name: `${macOnly}.md`, body: 'Acme launch notes body, from the Mac' }]
   _resetDeviceAuthForTesting()
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
@@ -167,8 +185,8 @@ afterAll(async () => {
 })
 
 describe('who keeps which kind', () => {
-  it('the companion keeps the stage 2a kinds; a host replica keeps every kind; the plain host server none', () => {
-    expect([...COMPANION_COPY_KINDS].sort()).toEqual(['boards', 'config', 'personas', 'prefs', 'requests', 'routines'])
+  it('the companion keeps the stage 2 and 3c kinds; a host replica keeps every kind; the plain host server none', () => {
+    expect([...COMPANION_COPY_KINDS].sort()).toEqual(['boards', 'config', 'inbox', 'inbox-bodies', 'personas', 'prefs', 'requests', 'routines'])
     const host = (program: string): CopyTarget => ({ ...companion, id: 'host:devbox', kind: 'host', program: () => program })
     for (const k of ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas']) {
       expect([k, keepsCopiesTarget(companion, k)]).toEqual([k, COMPANION_COPY_KINDS.has(k)])
@@ -196,20 +214,23 @@ describe('the Mac away, before any round: the old answers', () => {
     const cfg = await get('/api/v1/config')
     expect((cfg.body.config as { user: unknown }).user).toEqual({ name: 'Ada' })
     expect(cfg.asOf).toBeNull()
+    const inbox = await get('/api/v1/human-inbox')
+    expect([inbox.status, inbox.body.servedFrom]).toEqual([200, 'mirror'])
+    expect((inbox.body.letters as LetterRecord[]).map((l) => l.subject).sort()).toEqual(['Box deploy', 'Box digest'])
   })
 })
 
 describe('a round of every kind from the Mac', () => {
-  it('sends the six kinds the companion keeps and nothing else, and leaves the box\'s own files as they were', async () => {
+  it('sends the eight kinds the companion keeps and nothing else, and leaves the box\'s own files as they were', async () => {
     macRequests = [request('rq-acac01', 'pending'), request('rq-acac02', 'replied')]
     await writeMacRoutines([job('rt-acme-digest', 'Acme digest'), job('rt-acme-watch', 'Acme watch')])
     const before = await ownFiles()
     const results = await syncCopyKinds(macKinds(), { targets: () => [companion] })
     expect(results.map((r) => `${r.target}:${r.kind}:${r.action}`).sort()).toEqual([
-      'companion:boards:synced', 'companion:config:synced', 'companion:personas:synced', 'companion:prefs:synced',
-      'companion:requests:synced', 'companion:routines:synced',
+      'companion:boards:synced', 'companion:config:synced', 'companion:inbox-bodies:synced', 'companion:inbox:synced',
+      'companion:personas:synced', 'companion:prefs:synced', 'companion:requests:synced', 'companion:routines:synced',
     ])
-    expect([...new Set(read)].sort()).toEqual(['boards', 'config', 'personas', 'prefs', 'requests', 'routines'])
+    expect([...new Set(read)].sort()).toEqual(['boards', 'config', 'inbox', 'inbox-bodies', 'personas', 'prefs', 'requests', 'routines'])
     expect(await ownFiles()).toEqual(before)
     // (The box's own engine rewrote its file at boot, in its own layout: still its one job.)
     expect(before[0]).toEqual(BOX_REQUESTS)
@@ -222,12 +243,15 @@ describe('a round of every kind from the Mac', () => {
     expect(JSON.parse(await fs.readFile(path.join(home, 'boards', `${BOARD_TASK}.json`), 'utf8')).html).toBe('<p>Acme plan, from the Mac</p>')
     expect(JSON.parse(await fs.readFile(path.join(home, path.relative(WALNUT_HOME, CRON_FILE)), 'utf8')).jobs.map((j: { id: string }) => j.id)).toEqual(['rt-acme-digest', 'rt-acme-watch'])
     const replica = await fs.readdir(path.join(WALNUT_HOME, 'cache', 'replica'))
-    for (const f of ['requests.json', 'routines.json', 'prefs.json', 'personas.json', 'boards.json', 'config.json']) expect(replica).toContain(f)
-    for (const f of ['inbox.json', 'conversations.json', 'sessions.json']) expect(replica).not.toContain(f)
+    for (const f of ['requests.json', 'routines.json', 'prefs.json', 'personas.json', 'boards.json', 'config.json', 'inbox.json', 'inbox-bodies.json']) expect(replica).toContain(f)
+    for (const f of ['conversations.json', 'sessions.json']) expect(replica).not.toContain(f)
+    // The inbox copy beside the box's own (git sync's) inbox, which stays as it was.
+    expect(JSON.parse(await fs.readFile(path.join(home, 'human-inbox', 'index.json'), 'utf8')).letters.map((l: LetterRecord) => l.subject)).toEqual(['Acme digest, from the Mac', 'Acme launch notes, from the Mac'])
+    expect(JSON.parse(await fs.readFile(humanInboxPaths.indexFile, 'utf8')).letters.map((l: LetterRecord) => l.subject).sort()).toEqual(['Box deploy', 'Box digest'])
   })
 
   it('a kind the companion does not keep, sent anyway, is 404 unknown_kind', async () => {
-    for (const kind of ['sessions', 'inbox', 'inbox-bodies', 'conversations']) {
+    for (const kind of ['sessions', 'conversations']) {
       expect([kind, await postToCloudReplica({ op: 'sync', kind, entries: [], asOf: Date.now(), schemaVersion: 1 })])
         .toEqual([kind, { ok: false, outcome: 'unsupported', status: 404, error: 'unknown_kind' }])
     }
@@ -278,6 +302,19 @@ describe('the Mac away, with the copies held: the box answers from them', () => 
     expect(Number(cfg.asOf)).toBeGreaterThan(0)
   })
 
+  it('the inbox: the Mac\'s list and letters, bodies included, with the copy\'s clock', async () => {
+    const inbox = await get('/api/v1/human-inbox')
+    expect([inbox.status, inbox.body.servedFrom]).toEqual([200, 'mirror'])
+    expect((inbox.body.letters as LetterRecord[]).map((l) => l.subject).sort()).toEqual(['Acme digest, from the Mac', 'Acme launch notes, from the Mac'])
+    expect(inbox.body.unreadCount).toBe(1)
+    expect(Date.parse(String(inbox.body.mirrorUpdatedAt))).toBeGreaterThan(0)
+    const letter = await get(`/api/v1/human-inbox/${macLetters[1].id}`)
+    expect([letter.status, letter.body.servedFrom]).toEqual([200, 'mirror'])
+    expect(letter.body.letter).toMatchObject({ subject: 'Acme launch notes, from the Mac', body: 'Acme launch notes body, from the Mac' })
+    const own = await get(`/api/v1/human-inbox/${boxLetters[0].id}`)
+    expect((own.body.letter as { body: string }).body).toBe('# Acme digest from the Mac')
+  })
+
   it('favorites: the Mac\'s, not the box\'s config', async () => {
     const fav = await get('/api/v1/favorites')
     expect(fav.body).toEqual({ projects: ['Acme'], notes: ['notes/acme-plan.md'] })
@@ -289,9 +326,11 @@ describe('the Mac away, with the copies held: the box answers from them', () => 
     await writeMacRoutines([job('rt-acme-digest', 'Acme digest')])
     macFavorites = { projects: [], notes: [] }
     macBoards = []
+    macLetters = [macLetters[0]]
+    macBodies = [macBodies[0]]
     const before = await ownFiles()
     const results = await syncCopyKinds(macKinds(), { targets: () => [companion] })
-    expect(results.filter((r) => r.action === 'synced').map((r) => r.kind).sort()).toEqual(['boards', 'prefs', 'requests', 'routines'])
+    expect(results.filter((r) => r.action === 'synced').map((r) => r.kind).sort()).toEqual(['boards', 'inbox', 'inbox-bodies', 'prefs', 'requests', 'routines'])
     expect(await ownFiles()).toEqual(before)
     expect((await get('/api/v1/requests/rq-acac02')).status).toBe(404)
     expect((await get('/api/v1/requests/rq-b0b0b0')).status).toBe(200)
@@ -300,5 +339,7 @@ describe('the Mac away, with the copies held: the box answers from them', () => 
     expect((await get('/api/v1/favorites')).body).toEqual({ projects: [], notes: [] })
     // The Mac removed the board: none in the copy, and the git file is not read instead.
     expect((await get(`/api/v1/tasks/${BOARD_TASK}/board`)).body.board).toBeNull()
+    // The Mac's inbox lost a letter: the copy's list says so; git sync's two stay unread.
+    expect(((await get('/api/v1/human-inbox')).body.letters as LetterRecord[]).map((l) => l.subject)).toEqual(['Acme digest, from the Mac'])
   })
 })

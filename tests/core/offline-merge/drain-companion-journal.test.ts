@@ -15,6 +15,9 @@
  *   - slice 3b: a session metadata patch lands through the online patch's own call; one
  *     that call refuses (an archive of a running session) is lettered with the session's
  *     title, never its id; a field the record may not carry is refused whole;
+ *   - slice 3c: an inbox flag lands with the human's moment as `since`, so a newer change
+ *     made on the Mac wins; a flag of a letter the Mac no longer has is skipped quietly
+ *     (no letter about a read mark);
  *   - a drain with nothing waiting is quiet.
  *
  * CLOUD_MODE is read at import, so the companion and the Mac are two module graphs
@@ -64,6 +67,7 @@ async function loadMac() {
     letter: await import('../../../src/core/offline-merge/letter.js'),
     ingest: await import('../../../src/core/cloud-ingest.js'),
     sessions: await import('../../../src/core/session-tracker.js'),
+    inbox: await import('../../../src/core/human-inbox/store.js'),
   }
 }
 
@@ -212,6 +216,29 @@ describe('the Mac drains the companion\'s journal', () => {
     } as never)
     expect(acked).toEqual([1])
     expect((await mac.sessions.getSessionByClaudeId(sid))?.title).toBe('Acme zeta run')
+  })
+
+  it('an inbox flag lands; one older than a change made on the Mac does not; a letter gone is skipped quietly', async () => {
+    const sender = { sessionId: 'sess-mac', host: 'workstation' }
+    const a = (await mac.inbox.sendLetter({ subject: 'Acme digest', type: 'review', markdown: '# Digest', sender })).id
+    const b = (await mac.inbox.sendLetter({ subject: 'Acme deploy', type: 'completion', markdown: 'Done', sender })).id
+    const awayAt = Date.now() - 60_000
+    // b: the Mac changed the flag after the phone did (read here, then unread again).
+    await mac.inbox.setLetterState(b, 'read', true)
+    await mac.inbox.setLetterState(b, 'read', false)
+    const conflictsBefore = fs.existsSync(mac.conflicts.conflictDir()) ? fs.readdirSync(mac.conflicts.conflictDir()).length : 0
+    expect(companion.journal.journalInboxState({ letterId: a, field: 'read', value: true, madeAt: awayAt })).toMatchObject({ ok: true })
+    expect(companion.journal.journalInboxState({ letterId: a, field: 'pinned', value: true, madeAt: awayAt })).toMatchObject({ ok: true })
+    expect(companion.journal.journalInboxState({ letterId: b, field: 'read', value: true, madeAt: awayAt })).toMatchObject({ ok: true })
+    expect(companion.journal.journalInboxState({ letterId: 'lt-gone0000-000000', field: 'archived', value: true, madeAt: awayAt })).toMatchObject({ ok: true })
+    const result = await mac.drain.drainCompanionJournalNow()
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    const letters = (await mac.inbox.listLetters({ archived: false })).letters
+    expect(letters.find((l) => l.id === a)).toMatchObject({ read: true, pinned: true })
+    expect(letters.find((l) => l.id === b)?.read).toBe(false)
+    expect(result).toMatchObject({ replayed: 2, skipped: 2, failed: 0 })
+    const conflictsAfter = fs.existsSync(mac.conflicts.conflictDir()) ? fs.readdirSync(mac.conflicts.conflictDir()).length : 0
+    expect(conflictsAfter).toBe(conflictsBefore)
   })
 
   it('a drain with nothing waiting is quiet', async () => {

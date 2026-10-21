@@ -252,7 +252,10 @@ async function defaultTargets(): Promise<() => CopyTarget[]> {
 }
 
 async function choiceOf(target: CopyTarget): Promise<CopyChoice> {
-  try { return target.copies ? copyChoiceFrom(await target.copies()) : { ...DEFAULT_COPY_CHOICE } } catch { return { ...DEFAULT_COPY_CHOICE } }
+  // The companion takes the letter bodies too: git sync already brings them to the box,
+  // and its away reads open a letter from the copy (human-inbox/replica-state.ts).
+  const base = target.kind === 'companion' ? { ...DEFAULT_COPY_CHOICE, inbox_bodies: true } : { ...DEFAULT_COPY_CHOICE }
+  try { return target.copies ? copyChoiceFrom(await target.copies()) : base } catch { return base }
 }
 
 /**

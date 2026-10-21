@@ -13,6 +13,11 @@
  *                 replica fetches a body from the Mac while it answers, and
  *                 answers `needs_leader {why:'kind_not_copied'}` while away).
  *                 A body over INBOX_BODY_COPY_MAX_BYTES is never copied.
+ *
+ * The cloud companion keeps both (stage 3c of docs/plan/walnut-companion-unified-replica.md),
+ * bodies on by default (git sync already brings them to the box), in its copy store
+ * (`cache/replica/home/human-inbox/...`, gate.ts copyPath): the box's away inbox reads
+ * take it once it is held (human-inbox/replica-state.ts).
  */
 
 import fsp from 'node:fs/promises'
@@ -25,15 +30,18 @@ import type { LetterRecord } from '../../human-inbox/types.js'
 import { sha12 } from '../kind.js'
 import { createRowSetFollower, serialChain, writeCopyFile, writeCopyText, type RowSetFollower, type RowSetState } from '../kind-follower.js'
 import type { CopyKind } from './copy-kind.js'
-import { copyRefusal, markCopyOff } from './gate.js'
+import { copyPath, copyRefusal, markCopyOff } from './gate.js'
 
 export const INBOX_SCHEMA_VERSION = 1
 export const INBOX_REMOVAL_FLOOR = 50
 export const INBOX_BODY_COPY_MAX_BYTES = 4 * 1024 * 1024
 
 const inboxDir = (): string => path.join(WALNUT_HOME, 'human-inbox')
-const indexFile = (): string => path.join(inboxDir(), 'index.json')
 const bodiesDir = (): string => path.join(inboxDir(), 'bodies')
+// The follower's files: the live layout on a host replica, the copy store on the companion (gate.ts).
+const copyInboxDir = (): string => copyPath(inboxDir())
+const indexFile = (): string => path.join(copyInboxDir(), 'index.json')
+const copyBodiesDir = (): string => path.join(copyInboxDir(), 'bodies')
 
 /** A body file as a row: its name and its text. */
 export interface LetterBodyRow { name: string; body: string }
@@ -230,22 +238,22 @@ export function inboxBodiesFollower(): RowSetFollower {
     removalFloor: INBOX_REMOVAL_FLOOR, ordered: false,
     serial: (fn) => serial(fn), refuse, load: () => bodiesIo.load(), save: () => bodiesIo.save(), isRow: isBody, key: (b) => b.name,
     hash: (b) => sha12(b.body),
-    localKeys: async () => (await fsp.readdir(bodiesDir()).catch(() => [] as string[])).filter((n) => BODY_FILE_RE.test(n)),
+    localKeys: async () => (await fsp.readdir(copyBodiesDir()).catch(() => [] as string[])).filter((n) => BODY_FILE_RE.test(n)),
     apply: async ({ rows, removeIds }) => {
-      for (const name of removeIds ?? []) if (BODY_FILE_RE.test(name)) await fsp.rm(path.join(bodiesDir(), name), { force: true })
+      for (const name of removeIds ?? []) if (BODY_FILE_RE.test(name)) await fsp.rm(path.join(copyBodiesDir(), name), { force: true })
       const skipped: string[] = []
       for (const b of rows ?? []) {
         if (Buffer.byteLength(b.body) > INBOX_BODY_COPY_MAX_BYTES) { skipped.push(b.name); continue }
         // Temp file and rename: a reader never sees half a body, and the file is 0600 whatever it was.
-        await writeCopyText(path.join(bodiesDir(), b.name), b.body)
+        await writeCopyText(path.join(copyBodiesDir(), b.name), b.body)
       }
       return { skipped }
     },
     held: async () => (await import('../../../replica/journal-overlay.js')).journalHeld('inbox-bodies'),
     changed: () => {},
     purge: async () => {
-      const names = (await fsp.readdir(bodiesDir()).catch(() => [] as string[])).filter((n) => BODY_FILE_RE.test(n))
-      for (const name of names) await fsp.rm(path.join(bodiesDir(), name), { force: true })
+      const names = (await fsp.readdir(copyBodiesDir()).catch(() => [] as string[])).filter((n) => BODY_FILE_RE.test(n))
+      for (const name of names) await fsp.rm(path.join(copyBodiesDir(), name), { force: true })
       await markCopyOff('inbox-bodies')
       bodiesIo.reset()
       return { removed: names.length }
