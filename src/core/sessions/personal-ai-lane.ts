@@ -273,7 +273,22 @@ export async function promoteLaneConversationToTask(
     title = meta?.title?.trim() || 'Chat conversation';
   }
 
-  const { addTask, linkSession } = await import('../task-manager.js');
+  // One session per task (one-session-per-task.ts): a chat already filed as an
+  // ask IS its task, so promoting it moves that task onto the board as asked
+  // instead of linking the same session to a second task.
+  const { addTask, getTask, linkSession, togglePin, updateTask } = await import('../task-manager.js');
+  const ask = record.taskId ? await getTask(record.taskId).catch(() => undefined) : undefined;
+  if (ask) {
+    if (!ask.pinned) await togglePin(ask.id);
+    const { task: moved } = await updateTask(ask.id, {
+      title,
+      ...(input.project !== undefined ? { project: input.project } : {}),
+    }, { source: 'lane-promote' });
+    log.session.info('Personal AI lane: ask promoted in place', {
+      lane, sessionId: record.claudeSessionId, taskId: moved.id, project: moved.project || '',
+    });
+    return { task: moved, sessionId: record.claudeSessionId };
+  }
   const { task } = await addTask({
     title,
     ...(input.project !== undefined ? { project: input.project } : {}),

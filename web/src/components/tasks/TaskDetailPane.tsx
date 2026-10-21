@@ -37,6 +37,8 @@ import { PluginFieldPills } from './PluginFieldPicker';
 import { TagEditor } from './TagEditor';
 import { TaskStatusBadge, formatWaitUntil } from './TaskStatusControl';
 import { Fact, Section, SessionRow, TaskRow } from './TaskDetailRows';
+import { EarlierSessions, taskSessionLayout } from './TaskSessionHistory';
+import { hasTransferLinks, TransferLinks } from '../transfer/TransferLinks';
 import { dateTags } from '../../../../src/core/tag-model';
 import '@/styles/task-detail-pane.css';
 
@@ -63,7 +65,8 @@ interface TaskDetailPaneProps {
 export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, style }: TaskDetailPaneProps) {
   const navigate = useNavigate();
   const integrations = useIntegrations();
-  const statusEpoch = useSessionStatusEpoch();
+  // Re-render on live status changes (the session row reads the status store).
+  useSessionStatusEpoch();
   const showPriority = useShowPriority();
   // The home list ships slim rows: has_* says a field exists when its text was stripped.
   const hasDescription = !!task.description || !!task.has_description;
@@ -111,18 +114,17 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   );
   const openTask = (t: Task) => (onFocusChild ? onFocusChild(t) : navigate(`/tasks/${t.id}`));
 
-  // Every session the task names, from session_ids and the slot fields, so the list
-  // does not vanish while session_ids is stale.
-  const allSessionIds = useMemo(() => {
-    const ids = new Set<string>(task.session_ids ?? []);
-    for (const sid of [task.session_id, task.plan_session_id, task.exec_session_id]) if (sid) ids.add(sid);
-    return Array.from(ids);
-  }, [task.session_ids, task.session_id, task.plan_session_id, task.exec_session_id]);
-
+  // One session per task: the task's own session, then the ones it held before
+  // that rule ("Earlier sessions", history only). The server's records for the
+  // task (one after the split) count too, so nothing hides behind a stale field.
   const [sessionRecords, setSessionRecords] = useState<Map<string, SessionRecord>>(new Map());
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const { primary: primarySessionId, earlier: earlierSessionIds } = useMemo(
+    () => taskSessionLayout(task, sessionRecords.keys()),
+    [task.session_id, task.session_ids, task.plan_session_id, task.exec_session_id, task.legacy_session_ids, sessionRecords],
+  );
   useEffect(() => {
-    if (!allSessionIds.length) { setSessionRecords(new Map()); setSessionsLoading(false); return; }
+    if (!primarySessionId) { setSessionRecords(new Map()); setSessionsLoading(false); return; }
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setSessionsLoading(true);
@@ -132,7 +134,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
       setSessionsLoading(false);
     };
     fetchSessionsForTask(task.id).then(apply).catch(() => {
-      // Retry once: a transient error must not hide the sessions.
+      // Retry once: a transient error must not hide the session.
       if (cancelled) return;
       retryTimer = setTimeout(() => {
         if (cancelled) return;
@@ -140,23 +142,10 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
       }, 1000);
     });
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
-  }, [task.id, allSessionIds.join(',')]);
+  }, [task.id, primarySessionId]);
 
-  // Before the records load, every id is a placeholder row; after, archived ones drop
-  // and sessions the API knows (embedded runs filtered server-side) join.
+  const primaryRecord = primarySessionId ? sessionRecords.get(primarySessionId) : undefined;
   const loadingRows = sessionsLoading && sessionRecords.size === 0;
-  const visibleSessionIds = useMemo(() => {
-    if (sessionRecords.size === 0) return allSessionIds;
-    const visible: string[] = [];
-    for (const sid of allSessionIds) {
-      const base = sessionRecords.get(sid);
-      if (base && !resolveSessionRecordStatus(base).archived) visible.push(sid);
-    }
-    for (const [sid, base] of sessionRecords) {
-      if (!allSessionIds.includes(sid) && !resolveSessionRecordStatus(base).archived) visible.push(sid);
-    }
-    return visible;
-  }, [allSessionIds, sessionRecords, statusEpoch]);
   const openSession = (sid: string) => (onOpenSession ? onOpenSession(sid) : navigate(`/sessions?id=${sid}`));
 
   const [triageTotal, setTriageTotal] = useState(0);
@@ -167,8 +156,10 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   }, [task.id]);
 
   const source = getIntegrationMeta(integrations, task.source);
-  const sessionRows = loadingRows ? allSessionIds : visibleSessionIds.filter((sid) => sessionRecords.has(sid));
-  const hasMain = sessionRows.length > 0 || !!parentTask || childTasks.length > 0 || hasNote || hasDescription
+  // A session the server no longer has is not a row (it would read "Loading…" forever).
+  const showPrimary = !!primarySessionId && (loadingRows || !!primaryRecord);
+  const hasSessions = showPrimary || earlierSessionIds.length > 0;
+  const hasMain = hasSessions || hasTransferLinks(task) || !!parentTask || childTasks.length > 0 || hasNote || hasDescription
     || (triageTotal > 0 && !!onOpenTriageForTask);
 
   return (
@@ -199,22 +190,24 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
       <div className="tdp-body">
         <div className="tdp-main">
-          {sessionRows.length > 0 && (
-            <Section label="Sessions" count={sessionRows.length}>
-              {sessionRows.map((sid) => {
-                const record = loadingRows ? undefined : resolveSessionRecordStatus(sessionRecords.get(sid)!);
-                const live = loadingRows ? (sessionStatusStore.getStatus(sid) ?? task.session_status) : record;
+          <TransferLinks task={task} onOpenTask={(id) => { const t = allTasks?.find((x) => x.id === id); if (t) openTask(t); else navigate(`/tasks/${id}`); }} className="tdp-transfer" />
+
+          {hasSessions && (
+            <Section label="Session">
+              {showPrimary && primarySessionId && (() => {
+                const record = primaryRecord ? resolveSessionRecordStatus(primaryRecord) : undefined;
+                const live = record ?? sessionStatusStore.getStatus(primarySessionId) ?? task.session_status;
                 return (
                   <SessionRow
-                    key={sid}
-                    sessionId={sid}
+                    sessionId={primarySessionId}
                     record={record}
                     processStatus={live?.process_status || 'stopped'}
                     isPlan={live?.mode === 'plan' || !!live?.planCompleted}
                     onOpen={openSession}
                   />
                 );
-              })}
+              })()}
+              <EarlierSessions ids={earlierSessionIds} onOpen={openSession} />
             </Section>
           )}
 

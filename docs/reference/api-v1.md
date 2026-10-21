@@ -1339,8 +1339,10 @@ makes a NEW task beside the source, which completes unless `keep_source`.
   "native-copy" | "replay" | "brief", target: { engine, host, cwd }, workspace?,
   transcriptPath? }`, or `202 { transferId, state: "running" }`, or the refusal's
   status with `{ error, code }` (`no_conversation`, `nothing_to_transfer`,
-  `unknown_host`, `engine_host_unsupported`, `bad_cwd`, `unknown_home`). A second
-  POST for a task whose transfer is running joins that job.
+  `unknown_host`, `engine_host_unsupported`, `bad_cwd`, `unknown_home`, and
+  `409 source_busy` while the source session is mid-turn). A second POST for a
+  task whose transfer is running joins that job. The writes here answer `501
+  not_supported_cloud` on the companion.
 - `GET /api/v1/transfers/:id?wait_ms=` → the same three answers; `404
   transfer_not_found` after an hour or a server restart (check the task instead).
 - `GET /api/v1/hosts/:host/profile` → `200 { profile, summary }`: what Walnut

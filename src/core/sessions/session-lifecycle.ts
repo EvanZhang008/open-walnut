@@ -916,10 +916,9 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
   }
   if (!task) throw new SessionControlError('Associated task not found', 404);
 
-  await updateSessionRecord(sessionId, {
-    archived: true,
-    archive_reason: conversationLost ? 'conversation_never_persisted' : 'retry',
-  });
+  // One session per task (one-session-per-task.ts): a session that never held a
+  // conversation is replaced by the new start; it is detached (kept as the
+  // task's history) once its pending queue is read below.
   try {
     const { clearSession, clearSessionSlot } = await import('../task-manager.js');
     await clearSession(task.id, sessionId);
@@ -941,6 +940,15 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
       if (firstUser?.text) retryMessage = firstUser.text;
     }
   } catch { /* history may be unavailable */ }
+
+  // Archived and detached, not deleted: the row stays as the task's history
+  // (legacy_session_ids).
+  await updateSessionRecord(sessionId, {
+    archived: true,
+    archive_reason: conversationLost ? 'conversation_never_persisted' : 'retry',
+  });
+  const { detachTaskSession } = await import('./task-session-claim.js');
+  await detachTaskSession(task.id, sessionId, conversationLost ? 'retry: conversation never persisted' : 'retry: failed before init');
 
   bus.emit(EventNames.SESSION_START, {
     taskId: task.id,

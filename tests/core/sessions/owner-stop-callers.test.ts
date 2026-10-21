@@ -86,10 +86,11 @@ afterEach(async () => {
 
 describe('completeTaskSessions', () => {
   it('asks each CLI\'s own daemon (by host) to stop it, marks the teardown first, and signals nothing', async () => {
+    // One session per task: each session belongs to its own completed task.
     await createSessionRecord('done-local', 'task-1', 'proj', undefined, { pid: BASE + 1 })
-    await createSessionRecord('done-remote', 'task-1', 'proj', undefined, { pid: BASE + 2, host: 'devbox' })
-    await createSessionRecord('done-embedded', 'task-1', 'proj', undefined, { pid: BASE + 3, provider: 'embedded' })
-    await createSessionRecord('already-clean', 'task-1', 'proj')
+    await createSessionRecord('done-remote', 'task-2', 'proj', undefined, { pid: BASE + 2, host: 'devbox' })
+    await createSessionRecord('done-embedded', 'task-3', 'proj', undefined, { pid: BASE + 3, provider: 'embedded' })
+    await createSessionRecord('already-clean', 'task-4', 'proj')
     await updateSessionRecord('already-clean', { process_status: 'stopped' })
 
     const updated = await completeTaskSessions(['done-local', 'done-remote', 'done-embedded', 'already-clean'])

@@ -2,7 +2,7 @@
  * Integration tests for error session auto-archive functionality.
  *
  * Covers:
- * 1. Quick-start retry auto-archives error/stopped sessions
+ * 1. Quick-start retry continues the task's one session (a task has exactly one)
  * 2. Session retry auto-archives sessions without claudeSessionId
  * 3. Session restart auto-archives sessions
  * 4. Archived error sessions are hidden from GET /api/sessions
@@ -68,12 +68,16 @@ vi.mock('../../../src/providers/claude-code-session.js', () => ({
   },
 }));
 
-// Mock session-message-queue (used by retry/restart to inspect & resend the queue)
+// Mock session-message-queue (used by retry/restart to inspect & resend the queue,
+// and by quick-start retry to continue the task's session)
+const { sendMessageToSessionMock } = vi.hoisted(() => ({
+  sendMessageToSessionMock: vi.fn(async (_sid: string, _text: string, _opts?: unknown) => ({ id: 'qm-test' })),
+}));
 vi.mock('../../../src/core/session-message-queue.js', () => ({
   parkMessages: async () => 0,
   parkStalePending: async () => [],
   unparkMessage: async () => false,
-  sendMessageToSession: async () => {},
+  sendMessageToSession: (sid: string, text: string, opts?: unknown) => sendMessageToSessionMock(sid, text, opts),
   // retry & restart both read the queue; empty queue is the right default for
   // these tests (no pending user messages to re-send).
   getQueue: async () => [],
@@ -84,7 +88,7 @@ import express from 'express';
 import request from 'supertest';
 import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js';
+import { createSessionRecord, updateSessionRecord, getSessionByClaudeId, getSessionsForTask } from '../../../src/core/session-tracker.js';
 import { addTask, getTask, _resetForTesting as resetTaskManager } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
@@ -98,6 +102,7 @@ function createApp() {
 
 beforeEach(async () => {
   stopRpc.mockReset().mockResolvedValue({ ok: true, stopped: true });
+  sendMessageToSessionMock.mockClear();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   resetTaskManager();
 });
@@ -124,10 +129,21 @@ async function createTestTask(title = 'Test Task') {
   return task;
 }
 
-// ── Test 1: Quick-start retry auto-archives error sessions ──
+// ── Test 1: Quick-start retry continues the task's one session ──
+//
+// A task has exactly one session for its whole life, so starting a task that
+// already holds a conversation sends the message into that conversation: it is
+// neither archived nor replaced by a second session.
+
+async function expectContinued(taskId: string, sessionId: string, text: string) {
+  const after = await getSessionByClaudeId(sessionId);
+  expect(after!.archived).toBeFalsy();
+  expect((await getSessionsForTask(taskId)).map((s) => s.claudeSessionId)).toEqual([sessionId]);
+  expect(sendMessageToSessionMock).toHaveBeenCalledWith(sessionId, expect.stringContaining(text), expect.anything());
+}
 
 describe('POST /api/sessions/quick-start (retry mode)', () => {
-  it('archives error sessions under the existing task', async () => {
+  it('continues an error session under the existing task', async () => {
     // Create a task and an error session linked to it
     const task = await createTestTask('Quick Start Task');
     await createSessionRecord('err-sess-qs', task.id, 'proj', '/tmp');
@@ -154,13 +170,11 @@ describe('POST /api/sessions/quick-start (retry mode)', () => {
     expect(res.status).toBe(200);
     expect(res.body.taskId).toBe(task.id);
 
-    // Verify the error session was archived
-    const after = await getSessionByClaudeId('err-sess-qs');
-    expect(after!.archived).toBe(true);
-    expect(after!.archive_reason).toBe('retry');
+    // The error session is the task's one conversation: continued, not archived.
+    await expectContinued(task.id, 'err-sess-qs', 'Retry the task');
   });
 
-  it('archives stopped sessions under the existing task', async () => {
+  it('continues a stopped session under the existing task', async () => {
     const task = await createTestTask('Quick Start Stopped');
     await createSessionRecord('stopped-sess-qs', task.id, 'proj', '/tmp');
     await updateSessionRecord('stopped-sess-qs', { process_status: 'stopped' });
@@ -175,10 +189,7 @@ describe('POST /api/sessions/quick-start (retry mode)', () => {
       });
 
     expect(res.status).toBe(200);
-
-    const after = await getSessionByClaudeId('stopped-sess-qs');
-    expect(after!.archived).toBe(true);
-    expect(after!.archive_reason).toBe('retry');
+    await expectContinued(task.id, 'stopped-sess-qs', 'Retry stopped session');
   });
 
   it('does NOT archive running sessions under the existing task', async () => {
@@ -195,9 +206,7 @@ describe('POST /api/sessions/quick-start (retry mode)', () => {
       });
 
     expect(res.status).toBe(200);
-
-    const after = await getSessionByClaudeId('running-sess-qs');
-    expect(after!.archived).toBeFalsy();
+    await expectContinued(task.id, 'running-sess-qs', 'Retry with running session');
   });
 });
 
@@ -343,8 +352,7 @@ describe('POST /api/sessions/:sessionId/retry', () => {
 // `claude -p --resume` with NO message so the process re-emits its init event +
 // re-runs the SessionStart hook (reloading CLAUDE.md/.claude/skills/MCP/model), then
 // idles. It suppresses the old process's exit (no phantom "-1" error) and marks the
-// record 'running'. Restart still does NOT archive — auto-archive of terminal
-// sessions lives only in retry / quick-start (Tests 1 & 2).
+// record 'running'. Restart still does NOT archive.
 
 describe('POST /api/sessions/:sessionId/restart', () => {
   beforeEach(() => { reinitializeMock.mockClear(); });
@@ -561,11 +569,14 @@ describe('POST /api/sessions/:sessionId/terminate', () => {
 });
 
 // ── Test 4: Archived error sessions are hidden from GET /api/sessions ──
+//
+// Each session below hangs on a task of its own: a task has exactly one
+// session, and the session store keeps its rows across these tests.
 
 describe('GET /api/sessions — archived filtering', () => {
   it('excludes archived error sessions from the list', async () => {
     // Create an archived error session
-    await createSessionRecord('archived-err', 'task-1', 'proj');
+    await createSessionRecord('archived-err', 'task-archived-err', 'proj');
     await updateSessionRecord('archived-err', {
       process_status: 'error',
       archived: true,
@@ -573,7 +584,7 @@ describe('GET /api/sessions — archived filtering', () => {
     });
 
     // Create a normal session
-    await createSessionRecord('normal-sess', 'task-2', 'proj');
+    await createSessionRecord('normal-sess', 'task-normal-sess', 'proj');
 
     const app = createApp();
     const res = await request(app).get('/api/sessions');
@@ -585,13 +596,13 @@ describe('GET /api/sessions — archived filtering', () => {
   });
 
   it('excludes archived sessions from recent list', async () => {
-    await createSessionRecord('archived-recent', 'task-1', 'proj');
+    await createSessionRecord('archived-recent', 'task-archived-recent', 'proj');
     await updateSessionRecord('archived-recent', {
       archived: true,
       archive_reason: 'restart',
     });
 
-    await createSessionRecord('visible-recent', 'task-2', 'proj');
+    await createSessionRecord('visible-recent', 'task-visible-recent', 'proj');
 
     const app = createApp();
     const res = await request(app).get('/api/sessions/recent');
@@ -608,7 +619,7 @@ describe('GET /api/sessions — archived filtering', () => {
 
 describe('GET /api/sessions — error sessions visible until archived', () => {
   it('shows non-archived error sessions in the list', async () => {
-    await createSessionRecord('visible-err', 'task-1', 'proj');
+    await createSessionRecord('visible-err', 'task-visible-err', 'proj');
     await updateSessionRecord('visible-err', {
       process_status: 'error',
       errorMessage: 'Process exited without result',
@@ -628,7 +639,7 @@ describe('GET /api/sessions — error sessions visible until archived', () => {
   });
 
   it('shows error sessions in recent list until archived', async () => {
-    await createSessionRecord('recent-err', 'task-1', 'proj');
+    await createSessionRecord('recent-err', 'task-recent-err', 'proj');
     await updateSessionRecord('recent-err', {
       process_status: 'error',
       errorMessage: 'Something failed',
@@ -642,7 +653,7 @@ describe('GET /api/sessions — error sessions visible until archived', () => {
     expect(ids).toContain('recent-err');
   });
 
-  it('error session becomes hidden only after archival via retry', async () => {
+  it('error session becomes hidden only after it is archived', async () => {
     const task = await createTestTask('Error Lifecycle Task');
     await createSessionRecord('lifecycle-err', task.id, 'proj', '/tmp');
     await updateSessionRecord('lifecycle-err', {
@@ -657,16 +668,21 @@ describe('GET /api/sessions — error sessions visible until archived', () => {
     const idsBefore = before.body.sessions.map((s: any) => s.claudeSessionId);
     expect(idsBefore).toContain('lifecycle-err');
 
-    // Step 2: Quick-start retry archives it
-    await request(app)
+    // Step 2: Quick-start retry continues it (the task's one session), so it stays visible
+    const retry = await request(app)
       .post('/api/sessions/quick-start')
       .send({
         cwd: '/tmp/test',
         message: 'Retry the task',
         taskId: task.id,
       });
+    expect(retry.status).toBe(200);
+    const idsRetried = (await request(app).get('/api/sessions')).body.sessions.map((s: any) => s.claudeSessionId);
+    expect(idsRetried).toContain('lifecycle-err');
 
-    // Step 3: Error session is now hidden
+    // Step 3: Archiving it hides it
+    const archive = await request(app).patch('/api/sessions/lifecycle-err').send({ archived: true });
+    expect(archive.status).toBe(200);
     const after = await request(app).get('/api/sessions');
     const idsAfter = after.body.sessions.map((s: any) => s.claudeSessionId);
     expect(idsAfter).not.toContain('lifecycle-err');
@@ -675,6 +691,5 @@ describe('GET /api/sessions — error sessions visible until archived', () => {
     const record = await getSessionByClaudeId('lifecycle-err');
     expect(record).not.toBeNull();
     expect(record!.archived).toBe(true);
-    expect(record!.archive_reason).toBe('retry');
   });
 });

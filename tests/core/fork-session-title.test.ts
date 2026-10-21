@@ -180,20 +180,23 @@ describe('fork session title follows the fork TASK title', () => {
 
 describe('adoptForkTaskTitle', () => {
   it('renames only a session wearing a title it was told it may replace', async () => {
+    // One session per task: two forks, each with its own session.
     const { task } = await addTask({ title: 'Fork of Cluster rearchitecture', project: 'Marina' });
     await createSessionRecord('aaaa1111-0000-4000-8000-000000000001', task.id, 'Marina', '/repo/marina', {
       title: 'Fork of Cluster rearchitecture',
     });
-    await createSessionRecord('bbbb2222-0000-4000-8000-000000000002', task.id, 'Marina', '/repo/marina', {
+    const { task: renamedByHuman } = await addTask({ title: 'Fork of Cluster rearchitecture', project: 'Marina' });
+    await createSessionRecord('bbbb2222-0000-4000-8000-000000000002', renamedByHuman.id, 'Marina', '/repo/marina', {
       title: 'A name the human typed',
     });
 
     const { updateTask } = await import('../../src/core/task-manager.js');
     await updateTask(task.id, { title: 'Retry Backoff - fork of Cluster rearchitecture' });
+    await updateTask(renamedByHuman.id, { title: 'Retry Backoff - fork of Cluster rearchitecture' });
 
-    const renamed = await adoptForkTaskTitle(task.id, ['Fork of Cluster rearchitecture']);
+    expect(await adoptForkTaskTitle(task.id, ['Fork of Cluster rearchitecture'])).toBe(1);
+    expect(await adoptForkTaskTitle(renamedByHuman.id, ['Fork of Cluster rearchitecture'])).toBe(0);
 
-    expect(renamed).toBe(1);
     expect(await sessionTitle('aaaa1111-0000-4000-8000-000000000001'))
       .toBe('Retry Backoff - fork of Cluster rearchitecture');
     expect(await sessionTitle('bbbb2222-0000-4000-8000-000000000002')).toBe('A name the human typed');

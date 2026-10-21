@@ -322,9 +322,11 @@ describe('ACP task linking and fork routing', () => {
     });
     vi.spyOn(AcpSession.prototype, 'establish').mockResolvedValue(sessionId);
     const stop = vi.spyOn(AcpSession.prototype, 'kill').mockResolvedValue();
-    const originalLinkSession = taskManager.linkSession;
-    vi.spyOn(taskManager, 'linkSession').mockImplementationOnce(async (...args) => {
-      const linked = await originalLinkSession(...args);
+    // linkSessionSlot publishes every task link at once (one session per task:
+    // the slot write also points session_id and session_ids at the session).
+    const originalLinkSessionSlot = taskManager.linkSessionSlot;
+    vi.spyOn(taskManager, 'linkSessionSlot').mockImplementationOnce(async (...args) => {
+      const linked = await originalLinkSessionSlot(...args);
       await updateSessionRecord(sessionId, {
         archived: true,
         archive_reason: 'user_archived',

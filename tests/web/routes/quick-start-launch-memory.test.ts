@@ -127,6 +127,10 @@ describe('quick-start launch memory', () => {
     expect(first.status).toBe(200);
     expect(await pollLastLaunch(CWD, null)).toEqual({ model: 'haiku' });
 
+    // A retry follows a start that failed before any turn (one session per task:
+    // a task whose session holds a conversation would continue it instead).
+    const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
+    await updateSessionRecord(first.body.sessionId, { process_status: 'error', status_reason: 'api_error' } as never);
     const retry = await quickStart({ cwd: CWD, message: 'go', taskId: first.body.taskId });
     expect(retry.status).toBe(200);
     // still haiku — retry didn't clear it

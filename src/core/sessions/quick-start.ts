@@ -195,6 +195,16 @@ export function matchPlaceholderTitle(
  * Throws QuickStartError with an HTTP-ish statusCode on invalid input so the
  * route wrapper can map it 1:1.
  */
+const continuedSessions = new WeakMap<Task, string>();
+
+/**
+ * The session a quickStartSession() call continued instead of starting one
+ * (one session per task): callers answer with THIS id, not the one they minted.
+ */
+export function continuedSessionOf(task: Task): string | undefined {
+  return continuedSessions.get(task);
+}
+
 export async function quickStartSession(params: QuickStartParams): Promise<Task> {
   const {
     message, messagePrefix, cwd, host, model, mode, existingTaskId, taskMeta,
@@ -367,17 +377,18 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     if (walnutAgent && !updatedTask.walnut_agent && askAgent?.id === GENERAL_AGENT_ID) {
       updatedTask = (await updateTask(updatedTask.id, { walnut_agent: true }, { source })).task;
     }
-    // Archive all error/stopped sessions under this task to free the slot
-    const existingSessions = await getSessionsForTask(updatedTask.id);
-    for (const s of existingSessions) {
-      if (!s.archived && (s.process_status === 'error' || s.process_status === 'stopped')) {
-        await updateSessionRecord(s.claudeSessionId, { archived: true, archive_reason: 'retry' });
-        try {
-          const { clearSession, clearSessionSlot } = await import('../task-manager.js');
-          await clearSession(updatedTask.id, s.claudeSessionId);
-          await clearSessionSlot(updatedTask.id, s.claudeSessionId);
-        } catch { /* task may not exist */ }
-      }
+    // One session per task (one-session-per-task.ts): a task that already
+    // holds a conversation continues it; one whose start never got a turn is
+    // retired here and replaced by the session below.
+    const { continueTaskConversation, taskConversation } = await import('./task-session-claim.js');
+    const conversation = await taskConversation(updatedTask.id, { retire: true });
+    if (conversation) {
+      const { refuseDifferentPlace } = await import('./task-start.js');
+      refuseDifferentPlace(updatedTask, conversation, { ...(host !== undefined ? { host } : {}), ...(params.engine ? { engine: params.engine } : {}) });
+      await continueTaskConversation(conversation, { text: sessionMessage });
+      const continuedTask = await getTask(updatedTask.id);
+      continuedSessions.set(continuedTask, conversation.claudeSessionId);
+      return continuedTask;
     }
   } else {
     // Normal mode: create new task. Ask Walnut gets its own placeholder — the

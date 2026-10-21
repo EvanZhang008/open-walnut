@@ -102,12 +102,11 @@ import {
   addTask,
   updateTask,
   updateTaskRaw,
-  addSessionToHistory,
   getStoreProjects,
   listGroups,
   _resetForTesting as _resetTaskManager,
 } from '../../src/core/task-manager.js';
-import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
+import { closeDb as closeSessionDb, getDb as getSessionDb } from '../../src/core/session-db.js';
 import { closeDb as closeTaskDb } from '../../src/core/task-db.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { log } from '../../src/logging/index.js';
@@ -529,14 +528,18 @@ describe('importExternalSessions — v1 bucket migration', () => {
       tags: ['walnut:external-sessions', hostTag],
       _skipPluginOps: true,
     });
+    // v1 data predates one session per task, which the store now refuses to
+    // write: import each row unlinked, then link it the way the old store did.
     for (const sid of sessionIds) {
       await importSessionRecord({
-        claudeSessionId: sid, taskId: task.id, project: 'Imported Sessions',
+        claudeSessionId: sid, taskId: '', project: 'Imported Sessions',
         title: `old ${sid}`, startedAt: '2026-08-01T00:00:00.000Z',
         lastActiveAt: '2026-08-01T01:00:00.000Z', messageCount: 3,
       });
-      await addSessionToHistory(task.id, sid);
+      getSessionDb()!.prepare('UPDATE sessions SET task_id = ? WHERE claude_session_id = ?').run(task.id, sid);
     }
+    _resetSessionTrackerForTesting();
+    await updateTaskRaw(task.id, { session_ids: [...sessionIds] }, { source: 'test' });
     return task;
   }
 

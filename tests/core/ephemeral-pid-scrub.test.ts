@@ -77,7 +77,7 @@ describe('scrubInheritedSessionPids', () => {
   })
 
   it('is a no-op on a store with no pids, and idempotent', async () => {
-    await createSessionRecord('clean', 'task-1', 'proj')
+    await createSessionRecord('clean', 'task-clean', 'proj')
     expect(await scrubInheritedSessionPids(() => true)).toEqual({ scrubbed: 0, alive: 0 })
     await seed()
     expect((await scrubInheritedSessionPids(() => false)).scrubbed).toBe(3)

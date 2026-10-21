@@ -36,6 +36,7 @@ import {
 // live in a prose match.
 import { classifyStatusReasonKind } from './session-error-kind.js';
 import { stopWhenTurnEnds } from './sessions/self-complete-stop.js';
+import { assertTaskSessionFree, otherTaskSessionId } from './sessions/one-session-per-task.js';
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 
@@ -1537,6 +1538,8 @@ export async function createSessionRecord(
         return existing;
       }
 
+      // One session per task, for the task's whole life (sessions/one-session-per-task.ts).
+      if (taskId) assertTaskSessionFree(handle, taskId, claudeSessionId);
       const record: SessionRecord = {
         claudeSessionId,
         taskId,
@@ -1757,6 +1760,7 @@ export async function importSessionRecord(opts: {
           `Use session_send to interact with it.`,
         );
       }
+      if (opts.taskId) assertTaskSessionFree(handle, opts.taskId, opts.claudeSessionId);
       writeSessionRowSqlite(handle, record);
 
       log.session.info('imported external session', {
@@ -2121,6 +2125,9 @@ export async function updateSessionRecord(
         throw new Error(`Session not found: ${claudeSessionId}`);
       }
       const session = rowToSession(row);
+      if (updates.taskId && updates.taskId !== session.taskId) {
+        assertTaskSessionFree(handle, updates.taskId, claudeSessionId);
+      }
       const searchContentBefore = searchContentProjection(session);
       const permissionBefore = canonicalStatusProjection(session).pendingPermissionTool;
 
@@ -2607,8 +2614,17 @@ async function retaskSessionRows(
             if (!row || !from.has(row.task_id)) continue;
             const session = rowToSession(row);
             const before = canonicalStatusProjection(session);
+            // A survivor that already has its session takes no second one: the
+            // merge refuses that case up front, so a row met here lost a race and
+            // is left with no task rather than break one-session-per-task.
+            const taken = target ? otherTaskSessionId(handle, target, id) : null;
+            if (taken) {
+              log.session.warn('retask: target task already has its session; leaving this one unlinked', {
+                sessionId: id, toTaskId: target, existingSessionId: taken,
+              });
+            }
             // No task is a NULL column, as rows with no link have always been stored.
-            if (target) session.taskId = target;
+            if (target && !taken) session.taskId = target;
             else delete (session as Partial<SessionRecord>).taskId;
             commitStatusVersion(session, before, now);
             write.run(session.taskId ?? null, session.statusRevision, session.statusUpdatedAt, session.claudeSessionId);
@@ -2619,8 +2635,10 @@ async function retaskSessionRows(
         });
       });
       announceRetaskedSessions(sessions);
-      if (target) pointed += sessions.length;
-      else cleared += sessions.length;
+      for (const session of sessions) {
+        if (target && session.taskId === target) pointed++;
+        else cleared++;
+      }
       // Size the next slice to the budget by this one's cost per row, announcements
       // included (at most four times as many).
       const spent = Math.max(retaskClock() - began, 0.1);

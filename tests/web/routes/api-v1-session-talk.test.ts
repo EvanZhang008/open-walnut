@@ -421,7 +421,7 @@ describe('GET /api/v1/sessions/:id/stream', () => {
 
   it.each(['daemon-reconnect', 'session-tracker'])('%s running does NOT produce a turn-start', async (source) => {
     const sid2 = `talk-test-session-${source}`
-    await createSessionRecord(sid2, 'task-talk-2', 'test-project', '/tmp', { title: 'talk test 2' })
+    await createSessionRecord(sid2, `task-talk-2-${source}`, 'test-project', '/tmp', { title: 'talk test 2' })
     const sse = await connectSse(apiUrl(`/api/v1/sessions/${sid2}/stream`))
     try {
       await sse.waitFor((e) => e.event === 'snapshot')

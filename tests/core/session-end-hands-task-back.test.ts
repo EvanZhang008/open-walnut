@@ -78,49 +78,57 @@ describe('handBackTaskOnSessionEnd', () => {
     expect(await handBackTaskOnSessionEnd(taskId, 'sid-red', 'test')).toBe(false)
   })
 
-  it('leaves the task alone while a SIBLING session is still running', async () => {
-    const taskId = await seedTask('two sessions, one still working')
+  it('a task has no second session to keep it busy; another task\'s running session does not count', async () => {
+    // One session per task: the old "sibling still running" shape cannot be built.
+    const taskId = await seedTask('one session, now stopped')
     await createSessionRecord('sid-dead', taskId, 'proj')
     await updateSessionRecord('sid-dead', { process_status: 'stopped' })
-    await createSessionRecord('sid-live', taskId, 'proj')
+    await expect(createSessionRecord('sid-live', taskId, 'proj')).rejects.toMatchObject({ code: 'task_has_session' })
+    const otherTaskId = await seedTask('someone else, still working')
+    await createSessionRecord('sid-live', otherTaskId, 'proj')
     await updateSessionRecord('sid-live', { process_status: 'running' })
 
-    expect(await handBackTaskOnSessionEnd(taskId, 'sid-dead', 'test')).toBe(false)
-    expect((await getTask(taskId)).phase).toBe('TODO')
+    expect(await handBackTaskOnSessionEnd(taskId, 'sid-dead', 'test')).toBe(true)
+    expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
+    expect((await getTask(otherTaskId)).phase).toBe('TODO')
   })
 
-  it('an IDLE sibling does not count as working (idle IS the handed-back state)', async () => {
-    const taskId = await seedTask('sibling is idle between turns')
+  it('a live process that is IDLE does not count as working (idle IS the handed-back state)', async () => {
+    const taskId = await seedTask('process idle between turns')
     await createSessionRecord('sid-dead2', taskId, 'proj')
     await updateSessionRecord('sid-dead2', { process_status: 'stopped' })
-    await createSessionRecord('sid-idle', taskId, 'proj')
-    await updateSessionRecord('sid-idle', { process_status: 'idle' })
+    vi.spyOn(sessionRunner, 'findSessionByClaudeId')
+      .mockImplementation((id) => id === 'sid-dead2' ? { processStatus: 'idle' } as never : undefined)
 
     expect(await handBackTaskOnSessionEnd(taskId, 'sid-dead2', 'test')).toBe(true)
     expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
   })
 
-  it('ignores an archived sibling that is recorded as running', async () => {
-    const taskId = await seedTask('archived sibling must not block')
+  it('ignores an archived ACP redirect row that is recorded as running', async () => {
+    // The one second row a task may hold: the archived pointer an ACP identity
+    // migration leaves behind for a moment (one-session-per-task.ts).
+    const taskId = await seedTask('archived redirect must not block')
+    await createSessionRecord('sid-arch', taskId, 'proj')
+    await updateSessionRecord('sid-arch', {
+      process_status: 'running', archived: true, archive_reason: 'acp_identity_replaced:sid-dead3',
+    } as never)
     await createSessionRecord('sid-dead3', taskId, 'proj')
     await updateSessionRecord('sid-dead3', { process_status: 'stopped' })
-    await createSessionRecord('sid-arch', taskId, 'proj')
-    await updateSessionRecord('sid-arch', { process_status: 'running', archived: true } as never)
 
     expect(await handBackTaskOnSessionEnd(taskId, 'sid-dead3', 'test')).toBe(true)
   })
 
-  it.each(['source-record', 'sibling-record', 'source-live', 'sibling-live'])('rejects a resume before the task write: %s', async (kind) => {
+  it.each(['source-record', 'source-live'])('rejects a resume before the task write: %s', async (kind) => {
+    // One session per task: the resume that can race the hand-back is the ending
+    // session's own (a sibling session no longer exists to resume).
     const taskId = await seedTask('resume while handing back')
     await updateTask(taskId, { phase: 'IN_PROGRESS' })
     await createSessionRecord('sid-resume', taskId, 'proj')
     await updateSessionRecord('sid-resume', { process_status: 'stopped' })
-    await createSessionRecord('sid-peer', taskId, 'proj')
-    await updateSessionRecord('sid-peer', { process_status: 'idle' })
     const lookup = vi.spyOn(sessionRunner, 'findSessionByClaudeId').mockReturnValue(undefined)
     const write = taskManager.updateTaskRaw
     const spy = vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
-      const sid = kind.startsWith('source') ? 'sid-resume' : 'sid-peer'
+      const sid = 'sid-resume'
       if (kind.endsWith('record')) await updateSessionRecord(sid, { process_status: 'running' })
       else lookup.mockImplementation((id) => id === sid ? { processStatus: 'running' } as never : undefined)
       return write(...args)

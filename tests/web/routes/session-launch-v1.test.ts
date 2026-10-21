@@ -325,9 +325,12 @@ describe('POST /api/v1/sessions', () => {
     expect(starts.length).toBe(0);
   });
 
-  it('retry mode archives the task\'s error/stopped sessions to free the slot', async () => {
+  // One session per task (src/core/sessions/one-session-per-task.ts): a retry
+  // continues the task's conversation, and only a start that never ran a turn
+  // is replaced.
+  it('retry mode continues the task\'s errored conversation instead of making a second session', async () => {
     const { task } = await addTask({ title: 'Retry me', project: 'Quick Start' });
-    const { createSessionRecord, getSessionByClaudeId: readRecord, updateSessionRecord } =
+    const { createSessionRecord, getSessionByClaudeId: readRecord, updateSessionRecord, getSessionsForTask } =
       await import('../../../src/core/session-tracker.js');
     await createSessionRecord('dead-session-0001', task.id, 'Quick Start', '/tmp/y', { title: 'Retry me' });
     await updateSessionRecord('dead-session-0001', { process_status: 'error' });
@@ -336,9 +339,30 @@ describe('POST /api/v1/sessions', () => {
       .post('/api/v1/sessions')
       .send({ cwd: '/tmp/y', taskId: task.id, message: 'again' });
     expect(res.status).toBe(201);
-    const archived = await readRecord('dead-session-0001');
-    expect(archived?.archived).toBe(true);
-    expect(archived?.archive_reason).toBe('retry');
+    expect(res.body.taskId).toBe(task.id);
+    expect(starts.length).toBe(0);
+    const kept = await readRecord('dead-session-0001');
+    expect(kept?.archived).toBeFalsy();
+    expect(kept?.taskId).toBe(task.id);
+    expect((await getSessionsForTask(task.id)).map((s) => s.claudeSessionId)).toEqual(['dead-session-0001']);
+  });
+
+  it('retry mode replaces a session whose start failed before any turn', async () => {
+    const { task } = await addTask({ title: 'Retry me', project: 'Quick Start' });
+    const { createSessionRecord, getSessionByClaudeId: readRecord, updateSessionRecord } =
+      await import('../../../src/core/session-tracker.js');
+    await createSessionRecord('dead-session-0002', task.id, 'Quick Start', '/tmp/y', { title: 'Retry me' });
+    await updateSessionRecord('dead-session-0002', { process_status: 'error', status_reason: 'api_error' });
+
+    const res = await request(createApp())
+      .post('/api/v1/sessions')
+      .send({ cwd: '/tmp/y', taskId: task.id, message: 'again' });
+    expect(res.status).toBe(201);
+    expect(res.body.taskId).toBe(task.id);
+    expect(starts.length).toBe(1);
+    expect((starts[0].data as Record<string, unknown>).taskId).toBe(task.id);
+    // Detached, not deleted: the dead start stays as history, no longer the task's.
+    expect(await readRecord('dead-session-0002')).toMatchObject({ taskId: '', legacyTaskId: task.id });
   });
 
   it('400 bad_request for a bad mode; valid mode rides SESSION_START', async () => {

@@ -13,7 +13,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-start-caller'))
 const mocks = vi.hoisted(() => ({
   getTask: vi.fn(), getProjectMetadata: vi.fn(), linkSession: vi.fn(), updateTaskRaw: vi.fn(),
-  getSessionsForTask: vi.fn(), createSessionRecord: vi.fn(), updateSessionRecord: vi.fn(),
+  getSessionsForTask: vi.fn(), createSessionRecord: vi.fn(), updateSessionRecord: vi.fn(), deleteSessionRecords: vi.fn(),
   resolveCaller: vi.fn(), startSession: vi.fn(), getConfig: vi.fn(),
 }))
 vi.mock('../../src/core/task-manager.js', () => ({
@@ -24,6 +24,7 @@ vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionsForTask: mocks.getSessionsForTask,
   createSessionRecord: mocks.createSessionRecord,
   updateSessionRecord: mocks.updateSessionRecord,
+  deleteSessionRecords: mocks.deleteSessionRecords,
 }))
 vi.mock('../../src/core/sessions/session-send-core.js', () => ({ resolveCaller: mocks.resolveCaller }))
 vi.mock('../../src/core/config-manager.js', () => ({ getConfig: mocks.getConfig }))

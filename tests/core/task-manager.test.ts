@@ -458,12 +458,12 @@ describe('deleteTask', () => {
     await expect(deleteTask('')).rejects.toThrow(/Ambiguous ID prefix/);
   });
 
-  it('throws ActiveSessionError when task has active session slots', async () => {
+  it('throws ActiveSessionError when task has an active session slot', async () => {
+    // One session per task: the slot link also makes it the task's session, and
+    // a live one blocks the delete, reported once.
     const { task } = await addTask({ title: 'Has sessions' });
     await seedSession('session-abc', task.id, 'running');
-    await seedSession('session-def', task.id, 'idle');
     await linkSessionSlot(task.id, 'session-abc', 'plan');
-    await linkSessionSlot(task.id, 'session-def', 'exec');
 
     await expect(deleteTask(task.id)).rejects.toThrow(ActiveSessionError);
 
@@ -471,7 +471,7 @@ describe('deleteTask', () => {
       await deleteTask(task.id);
     } catch (err) {
       expect(err).toBeInstanceOf(ActiveSessionError);
-      expect((err as ActiveSessionError).activeSessionIds).toEqual(['session-abc', 'session-def']);
+      expect((err as ActiveSessionError).activeSessionIds).toEqual(['session-abc']);
     }
 
     // Task should NOT be deleted
@@ -480,7 +480,15 @@ describe('deleteTask', () => {
     expect(tasks[0].id).toBe(task.id);
   });
 
-  it('allows deletion after clearing session slots', async () => {
+  it('a task\'s second session is refused, so it can never hide behind the first', async () => {
+    const { task } = await addTask({ title: 'One session only' });
+    await seedSession('session-first', task.id, 'idle');
+    await expect(seedSession('session-second', task.id, 'running'))
+      .rejects.toMatchObject({ code: 'task_has_session', existingSessionId: 'session-first' });
+    expect(await sessionTracker.getSessionByClaudeId('session-second')).toBeNull();
+  });
+
+  it('allows deletion once the task\'s session stops, not when only its slot is cleared', async () => {
     const { task } = await addTask({ title: 'Clear then delete' });
     await seedSession('session-xyz', task.id, 'running');
     await linkSessionSlot(task.id, 'session-xyz', 'exec');
@@ -488,10 +496,14 @@ describe('deleteTask', () => {
     // Should fail with active session
     await expect(deleteTask(task.id)).rejects.toThrow(ActiveSessionError);
 
-    // Clear the session slot
+    // Clearing the exec slot leaves the task's one session linked as its primary,
+    // and it is still running: the delete still waits for it.
     await clearSessionSlot(task.id, 'session-xyz');
+    expect((await getTask(task.id)).session_id).toBe('session-xyz');
+    await expect(deleteTask(task.id)).rejects.toThrow(ActiveSessionError);
 
-    // Now deletion should succeed
+    // Once it stops, nothing blocks.
+    await sessionTracker.updateSessionRecord('session-xyz', { process_status: 'stopped' });
     const { task: deleted } = await deleteTask(task.id);
     expect(deleted.id).toBe(task.id);
 
@@ -503,17 +515,22 @@ describe('deleteTask', () => {
   // the session store: a session that cannot be running must not block a plain
   // (non-force) delete, or every task whose CLI died stays undeletable.
   it('does not block on a stopped, errored, archived or unknown session', async () => {
-    const { task } = await addTask({ title: 'Dead sessions' });
-    await seedSession('sess-dead-primary', task.id, 'stopped');
-    await seedSession('sess-dead-exec', task.id, 'error');
-    await seedSession('sess-dead-plan', task.id, 'idle');
+    // One task per kind: a task has exactly one session.
+    const { task: stopped } = await addTask({ title: 'Stopped session' });
+    await seedSession('sess-dead-primary', stopped.id, 'stopped');
+    await linkSession(stopped.id, 'sess-dead-primary');
+    const { task: errored } = await addTask({ title: 'Errored session' });
+    await seedSession('sess-dead-exec', errored.id, 'error');
+    await linkSessionSlot(errored.id, 'sess-dead-exec', 'exec');
+    const { task: archived } = await addTask({ title: 'Archived session' });
+    await seedSession('sess-dead-plan', archived.id, 'idle');
     await sessionTracker.updateSessionRecord('sess-dead-plan', { archived: true });
-    await linkSessionSlot(task.id, 'sess-dead-plan', 'plan');
-    await linkSessionSlot(task.id, 'sess-dead-exec', 'exec');
-    await linkSession(task.id, 'sess-dead-primary');
+    await linkSessionSlot(archived.id, 'sess-dead-plan', 'plan');
 
-    const { task: deleted } = await deleteTask(task.id);
-    expect(deleted.id).toBe(task.id);
+    for (const task of [stopped, errored, archived]) {
+      const { task: deleted } = await deleteTask(task.id);
+      expect(deleted.id).toBe(task.id);
+    }
 
     const { task: orphan } = await addTask({ title: 'Unknown session' });
     await linkSession(orphan.id, 'sess-no-record');
@@ -523,11 +540,12 @@ describe('deleteTask', () => {
   });
 
   it('a live session still blocks, and only live ids are reported', async () => {
+    // Legacy task-side links written before one-session-per-task: a slot can still
+    // name an older session the boot split detached (no task on its row).
     const { task } = await addTask({ title: 'One live, one dead' });
-    await seedSession('sess-old', task.id, 'stopped');
+    await seedSession('sess-old', '', 'stopped');
     await seedSession('sess-live', task.id, 'running');
-    await linkSession(task.id, 'sess-old');
-    await linkSessionSlot(task.id, 'sess-live', 'exec');
+    await updateTaskRaw(task.id, { session_id: 'sess-old', exec_session_id: 'sess-live' });
 
     const err = await deleteTask(task.id).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ActiveSessionError);

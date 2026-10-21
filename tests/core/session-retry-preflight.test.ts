@@ -8,8 +8,9 @@
  * retrySession must now probe for the conversation file before choosing the
  * --resume path:
  *   - file exists  → resume (unchanged behavior)
- *   - file missing → archive (conversation_never_persisted) + fresh session
- *     reusing the pending queue text as the new first message.
+ *   - file missing → delete the record (one session per task: a session that
+ *     never held a conversation is replaced, not kept beside its successor) +
+ *     fresh session reusing the pending queue text as the new first message.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -33,6 +34,7 @@ vi.mock('../../src/core/task-manager.js', () => ({
   getTask: vi.fn(async (id: string) => ({ id, project: 'proj' })),
   clearSession: vi.fn(async () => {}),
   clearSessionSlot: vi.fn(async () => {}),
+  updateTaskRaw: vi.fn(async () => ({ task: null })),
 }))
 
 import { WALNUT_HOME } from '../../src/constants.js'
@@ -53,7 +55,7 @@ afterEach(async () => {
 })
 
 describe('retrySession conversation pre-flight', () => {
-  it('conversation missing → archives the record and starts a FRESH session (no --resume loop)', async () => {
+  it('conversation missing → detaches the record and starts a FRESH session (no --resume loop)', async () => {
     const sid = 'retry-pf-missing'
     await createSessionRecord(sid, 'task-pf1', 'proj', '/tmp', { initialProcessStatus: 'error' })
     // The message the user tried to send (what Retry should carry over).
@@ -67,14 +69,13 @@ describe('retrySession conversation pre-flight', () => {
       const res = await retrySession(sid)
       expect(res.status).toBe('pending')
 
-      // Old record archived with the dedicated reason (not generic 'retry').
-      const rec = await getSessionByClaudeId(sid)
-      expect(rec?.archived).toBe(true)
-      expect(rec?.archive_reason).toBe('conversation_never_persisted')
+      // Old record detached (kept as history): the task's one session is the fresh one about to start.
+      expect(await getSessionByClaudeId(sid)).toMatchObject({ taskId: '', legacyTaskId: 'task-pf1', archived: true })
 
       // A fresh session was requested with the original message text.
       expect(started).toHaveLength(1)
       expect((started[0] as { message: string }).message).toBe('original user prompt')
+      expect((started[0] as { taskId: string }).taskId).toBe('task-pf1')
     } finally {
       bus.unsubscribe('session-runner')
     }

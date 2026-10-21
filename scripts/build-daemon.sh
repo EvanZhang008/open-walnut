@@ -142,6 +142,9 @@ SOURCES=(
   src/providers/line-fate-core.ts
   src/providers/marker-find-core.ts
   src/providers/replica-logs-core.ts
+  src/providers/transfer-core.ts
+  src/providers/transfer-pack-core.ts
+  src/providers/host-facts-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

@@ -22,6 +22,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import http from 'node:http'
+import https from 'node:https'
 import { spawn, execSync, execFile, execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import type { ServerWebSocket } from 'bun'
@@ -103,6 +105,9 @@ import { resolveAgentCommand } from './agent-command-map.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
+import { createTransferCore, type TransferCoreDeps } from './transfer-core.js'
+import { createTransferPack, type TransferPackDeps } from './transfer-pack-core.js'
+import { createHostFacts, type HostFactsDeps } from './host-facts-core.js'
 import { createWorkspaceCore, type WorkspaceCoreDeps } from './workspace-core.js'
 import {
   computeHostLocalChanges,
@@ -2085,6 +2090,18 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'git.commitPlan': return cmdGitCommitPlan(ws, id as number, cmd)
     case 'git.commitStart': return cmdGitCommitStart(ws, id as number, cmd)
     case 'git.commitJob': return sendOk(ws, id as number, { job: gitCommit.job(cmd.jobId) })
+    // 'fs-write-part-v1' / 'transfer-v1' / 'host-facts-v1' (transfer-core.ts,
+    // transfer-pack-core.ts, host-facts-core.ts): moving a workspace to another
+    // host. NOT in BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they
+    // write host files, run ssh/scp, or (host.facts) read what this host is,
+    // which only the trusted walnut socket asks, like host.preflight.
+    // Keep in sync with daemon-source.ts.
+    case 'fs.writePart': return replyTransfer(ws, id as number, 'fs.writePart', () => transferCore.writePart(cmd), false)
+    case 'transfer.pack': return replyTransfer(ws, id as number, 'transfer.pack', () => transferPack.pack(cmd), true)
+    case 'transfer.reach': return replyTransfer(ws, id as number, 'transfer.reach', () => transferCore.reach(cmd), false)
+    case 'transfer.fetch': return replyTransfer(ws, id as number, 'transfer.fetch', () => transferCore.fetch(cmd), true)
+    case 'transfer.realpath': return replyTransfer(ws, id as number, 'transfer.realpath', () => transferCore.realpath(cmd), false)
+    case 'host.facts': return replyTransfer(ws, id as number, 'host.facts', () => hostFacts.facts(cmd), false)
     case 'usage.scan': return cmdUsageScan(ws, id as number, cmd)
     case 'usage.costState': return cmdUsageCostState(ws, id as number, cmd)
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id as number, cmd)
@@ -9017,6 +9034,42 @@ function cmdGitCommitStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     })
   } catch (err) {
     sendError(ws, id, 'git.commitStart failed: ' + (err as Error).message, { code: (err as { code?: string }).code ?? 'failed' })
+  }
+}
+
+// ── Workspace transfer + host facts (host-local: 'fs-write-part-v1', 'transfer-v1',
+// 'host-facts-v1') ──
+// PARITY: keep in sync with daemon-source.ts. The logic is transfer-core.ts,
+// transfer-pack-core.ts and host-facts-core.ts (shared with the source twin).
+const transferCore = createTransferCore({
+  fs, path, crypto, spawn: spawn as unknown as TransferCoreDeps['spawn'], env: process.env, home: HOME_DIR,
+  randomId: () => crypto.randomBytes(6).toString('hex'),
+})
+const transferPack = createTransferPack({
+  fs, path, crypto, spawn: spawn as unknown as TransferPackDeps['spawn'], env: process.env, home: HOME_DIR,
+})
+const hostFacts = createHostFacts({
+  fs, os, execFile: execFile as unknown as HostFactsDeps['execFile'], http, https,
+  env: process.env, home: HOME_DIR, platform: process.platform, arch: process.arch,
+})
+
+/**
+ * Answer one transfer-family command: its result, or `{error, code, ...data}`.
+ * `tracked` work (a pack, a fetch) rides the command drain, so a shutdown waits
+ * for it instead of cutting a bundle or a download in half.
+ */
+function replyTransfer(ws: ServerWebSocket<WsData>, id: number, name: string, work: () => Promise<unknown>, tracked: boolean) {
+  const answer = () => work().then(
+    (r) => sendOk(ws, id, r as Record<string, unknown>),
+    (err) => {
+      const e = err as Error & { code?: unknown; data?: Record<string, unknown> }
+      sendError(ws, id, name + ' failed: ' + e.message, { ...(e.data ?? {}), code: typeof e.code === 'string' ? e.code : 'failed' })
+    },
+  )
+  try {
+    return tracked ? daemonCommands.run(answer) : answer()
+  } catch (err) {
+    sendError(ws, id, name + ' failed: ' + (err as Error).message, { code: 'shutting_down' })
   }
 }
 

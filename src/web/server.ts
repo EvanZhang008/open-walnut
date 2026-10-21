@@ -140,6 +140,7 @@ import { routinesV1Router } from './routes/routines-v1.js'
 import { triggerTemplatesV1Router } from './routes/trigger-templates-v1.js'
 import { projectsV1Router } from './routes/projects-v1.js'
 import { taskExtrasV1Router } from './routes/task-extras-v1.js'
+import { transferV1Router } from './routes/transfer-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
 import { filesV1Router } from './routes/files-v1.js'
 import { consoleV1Router } from './routes/console-v1.js'
@@ -2220,6 +2221,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Task extras (additive, Wave 2): tags/groups/quick-parse/focus tiers —
   // groups + tier CRUD 501 on a REPLICA (outbox whitelist lacks them).
   app.use('/api/v1', taskExtrasV1Router)
+  app.use('/api/v1', transferV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/
   // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
   // B-class relay on a REPLICA.
@@ -2838,6 +2840,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startupPhase('completed-task session migration done')
   } catch (err) {
     log.session.warn('completed-task session migration failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  // -- One session per task (core/sessions/one-session-per-task.ts) --
+  // Detaches the extra sessions legacy tasks collected, then creates the guard
+  // triggers. Idempotent; the in-code guard holds the rule even while it fails.
+  if (bootPolicy('one-session-per-task')) try {
+    const { splitMultiSessionTasks } = await import('../core/sessions/split-multi-session-tasks.js')
+    const split = await splitMultiSessionTasks()
+    startupPhase(`one-session-per-task done (${split.tasks} split, guard ${split.guardReady ? 'ready' : 'pending'})`)
+  } catch (err) {
+    log.session.error('one-session-per-task migration failed', {
       error: err instanceof Error ? err.message : String(err),
     })
   }

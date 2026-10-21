@@ -89,7 +89,8 @@ async function seedBoard(): Promise<Board> {
   await linkSessionSlot(b.blockedByOpen, 'sess-slot', 'exec');
   // Linked only through the session record: the enrichment must still find it.
   await createSessionRecord('sess-orphan', b.plain, 'Main', undefined, { initialProcessStatus: 'idle' });
-  await createSessionRecord('sess-archived', b.plain, 'Main', undefined, { initialProcessStatus: 'stopped' });
+  // A task has exactly one session, so the archived one belongs to a task of its own.
+  await createSessionRecord('sess-archived', b.done, 'Main', undefined, { initialProcessStatus: 'stopped' });
   await updateSessionRecord('sess-archived', { archived: true });
   // Sessions of unrelated tasks and stopped history rows the list never shows.
   for (let i = 0; i < 12; i++) {
@@ -130,9 +131,16 @@ describe('GET /api/tasks blocked flags and session status', () => {
 
       const plain = rows.get(b.plain)!;
       expect(plain.session_ids).toEqual(['sess-orphan']);
-      expect(plain.session_history_count).toBe(2);
+      expect(plain.session_history_count).toBe(1);
       expect(plain.session_id).toBe('sess-orphan');
       expect(plain.session_status?.process_status).toBe('idle');
+
+      // An archived session is counted in the history but never shown as the task's session.
+      const done = rows.get(b.done)!;
+      expect(done.session_ids).toEqual([]);
+      expect(done.session_history_count).toBe(1);
+      expect(done.session_id).toBeUndefined();
+      expect(done.session_status).toBeUndefined();
     });
   }
 
@@ -150,9 +158,9 @@ describe('GET /api/tasks blocked flags and session status', () => {
     const b = await seedBoard();
     const app = createApp();
     const before = _sessionStoreStatsForTesting();
-    const res = await request(app).get(`/api/tasks?fields=list&ids=${b.blockedByOpen},${b.plain}`);
+    const res = await request(app).get(`/api/tasks?fields=list&ids=${b.blockedByOpen},${b.plain},${b.done}`);
     expect(res.status).toBe(200);
-    expect(res.body.tasks).toHaveLength(2);
+    expect(res.body.tasks).toHaveLength(3);
     const after = _sessionStoreStatsForTesting();
     expect(after.cloneReads - before.cloneReads).toBe(0);
     // sess-slot, sess-orphan and sess-archived: none of the 12 unrelated rows.

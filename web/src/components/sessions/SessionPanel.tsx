@@ -85,6 +85,7 @@ import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
+import { TransferLinks } from '../transfer/TransferLinks';
 import { usePhoneBarSlot, usePhoneLayerWithBar, scrollToLatestTurnStart } from './phone-session-layer';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useHomeTaskTitleForSession } from '@/components/tasks/phone-row-behavior';
@@ -2692,6 +2693,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             })()}
             {peekBarAlone && <PeekTabBar peek={peek} />}
         <div className="session-panel-body" ref={bodyRef}>
+          {/* A transferred task names the other end in one quiet line (the header row is precious). */}
+          <TransferLinks task={sessionTask} onOpenTask={chatTaskClick} className="xfer-links-panel" testId="session-transfer-links" />
           {/* A phone says one plain sentence for a session that is gone (N29). */}
           {!(phoneLayer && !loading && !session) && (
             <SessionSupervisionBar sid={sessionId} snapshot={supervisionSnapshot} onRetryStop={handleTerminate} archived={session?.archived} />

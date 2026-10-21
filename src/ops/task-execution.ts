@@ -62,7 +62,9 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
   const state = started.started === true ? 'running' : 'starting'
   return withOutcome(
     { ...started, execution: { state } },
-    state === 'running' ? `Task ${started.taskId} started.`
+    started.continued === true
+      ? `Task ${started.taskId} already had its conversation; the message continued it (a task keeps one session).`
+      : state === 'running' ? `Task ${started.taskId} started.`
       : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`,
     typeof started.requestId === 'string'
       ? `Reply request: ${started.requestId}. ${REPLY_ARRIVES_HINT} ${SUBTASK_WATCH_HINT}`

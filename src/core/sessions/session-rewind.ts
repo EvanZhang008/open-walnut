@@ -547,9 +547,19 @@ export async function rewindSessionToMessage(
   const rewoundId = randomUUID();
   const baseTitle = (record.title ?? sessionId.slice(0, 16)).replace(/\s*\(rewound\)$/i, '');
   const title = `${baseTitle} (rewound)`.slice(0, 200);
+  // One session per task (one-session-per-task.ts): the rewound branch is a new
+  // conversation, so it lives in a new task beside the source's.
+  let rewoundTaskId = '';
+  if (record.taskId) {
+    const { createForkSiblingTask } = await import('./session-controls.js');
+    const { task: sibling } = await createForkSiblingTask(record.taskId, {
+      childTitle: title, source: 'rewind',
+    });
+    rewoundTaskId = sibling.id;
+  }
   const { createSessionRecord } = await import('../session-tracker.js');
   try {
-    await createSessionRecord(rewoundId, record.taskId ?? '', record.project ?? '', record.cwd, {
+    await createSessionRecord(rewoundId, rewoundTaskId, record.project ?? '', record.cwd, {
       title,
       ...(record.mode && record.mode !== 'default' ? { mode: record.mode } : {}),
       ...(record.host ? { host: record.host } : {}),
@@ -576,7 +586,7 @@ export async function rewindSessionToMessage(
 
   bus.emit(EventNames.SESSION_START, {
     preassignedSessionId: rewoundId,
-    taskId: record.taskId ?? '',
+    taskId: rewoundTaskId,
     message: input.message?.trim() ?? '',
     cwd: record.cwd,
     project: record.project ?? '',
@@ -602,6 +612,22 @@ export async function rewindSessionToMessage(
         archive_reason: `rewound to an earlier message (continues as ${rewoundId})`,
       });
       sourceArchived = true;
+      // Not a copy: the work moved to the rewound task, so the source task is done.
+      if (record.taskId && rewoundTaskId) {
+        const { updateTask, updateTaskRaw } = await import('../task-manager.js');
+        await updateTaskRaw(rewoundTaskId, { transferred_from: record.taskId }, { source: 'rewind' });
+        await updateTaskRaw(record.taskId, { transferred_to: rewoundTaskId }, { source: 'rewind' });
+        await updateTask(record.taskId, { phase: 'COMPLETE' }, { source: 'rewind' });
+        // A chat's session: the chat now continues in the rewound branch, so its
+        // ask is the rewound task (else its next turn files yet another ask).
+        const { parseLaneKey } = await import('./personal-ai-lane.js');
+        const lane = parseLaneKey(record.lane);
+        if (lane) {
+          const { clearConversationAskTask, setConversationAskTask } = await import('../conversations.js');
+          await clearConversationAskTask(lane.agentId, lane.conversationId, record.taskId);
+          await setConversationAskTask(lane.agentId, lane.conversationId, rewoundTaskId);
+        }
+      }
     } catch (err) {
       log.session.warn('rewind: archiving the source session failed (it stays on the board)', {
         sessionId, error: err instanceof Error ? err.message : String(err),
@@ -621,7 +647,7 @@ export async function rewindSessionToMessage(
     mode: 'fork',
     sourceSessionId: sessionId,
     sessionId: rewoundId,
-    ...(record.taskId ? { taskId: record.taskId } : {}),
+    ...(rewoundTaskId ? { taskId: rewoundTaskId } : {}),
     title,
     ...(record.host ? { host: record.host } : {}),
     ...(files ? { files } : {}),

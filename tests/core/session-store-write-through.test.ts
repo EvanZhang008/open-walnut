@@ -62,7 +62,7 @@ describe('session store write-through', () => {
     await listSessions();
     const before = scans();
 
-    await createSessionRecord('s-b', 'task-1', 'proj', '/tmp');
+    await createSessionRecord('s-b', 'task-2', 'proj', '/tmp');
     expect((await listSessions()).map((s) => s.claudeSessionId).sort()).toEqual(['s-a', 's-b']);
 
     await updateSessionRecord('s-a', { title: 'renamed title' });
@@ -81,7 +81,7 @@ describe('session store write-through', () => {
   });
 
   it('a batch update patches every written row and no other', async () => {
-    for (const id of ['b-1', 'b-2', 'b-3']) await createSessionRecord(id, 'task-b', 'proj', '/tmp');
+    for (const id of ['b-1', 'b-2', 'b-3']) await createSessionRecord(id, `task-${id}`, 'proj', '/tmp');
     await listSessions();
     const before = scans();
     const written = await batchUpdateSessionRecords(['b-1', 'b-3'], { title: 'batched' });
@@ -95,9 +95,9 @@ describe('session store write-through', () => {
 
   it('a set-based update the section never enumerated drops the snapshot instead of patching', async () => {
     // The pid scrub is one UPDATE over every row holding a pid (pids far above any real one).
-    await createSessionRecord('p-1', 'task-p', 'proj', '/tmp', { pid: 2 ** 22 + 1 });
-    await createSessionRecord('p-2', 'task-p', 'proj', '/tmp', { pid: 2 ** 22 + 2 });
-    await createSessionRecord('p-3', 'task-p', 'proj', '/tmp');
+    await createSessionRecord('p-1', 'task-p-1', 'proj', '/tmp', { pid: 2 ** 22 + 1 });
+    await createSessionRecord('p-2', 'task-p-2', 'proj', '/tmp', { pid: 2 ** 22 + 2 });
+    await createSessionRecord('p-3', 'task-p-3', 'proj', '/tmp');
     await listSessions();
     const before = scans();
     expect((await scrubInheritedSessionPids(() => false)).scrubbed).toBe(2);
@@ -106,12 +106,12 @@ describe('session store write-through', () => {
   });
 
   it('a task unlink writes each row it changed, so the snapshot is patched, not rescanned', async () => {
-    await createSessionRecord('u-1', 'task-u', 'proj', '/tmp');
-    await createSessionRecord('u-2', 'task-u', 'proj', '/tmp');
+    await createSessionRecord('u-1', 'task-u-1', 'proj', '/tmp');
+    await createSessionRecord('u-2', 'task-u-2', 'proj', '/tmp');
     await createSessionRecord('u-3', 'task-other', 'proj', '/tmp');
     await listSessions();
     const before = scans();
-    expect(await unlinkSessionsFromTasks(['task-u'])).toBe(2);
+    expect(await unlinkSessionsFromTasks(['task-u-1', 'task-u-2'])).toBe(2);
     const byId = Object.fromEntries((await listSessions()).map((s) => [s.claudeSessionId, s]));
     expect(byId['u-1']?.taskId).toBeUndefined();
     expect(byId['u-2']?.taskId).toBeUndefined();
@@ -138,8 +138,8 @@ describe('session store write-through', () => {
   });
 
   it('a refused rename (target id taken) changes nothing in the snapshot or on disk', async () => {
-    await createSessionRecord('t-1', 'task-t', 'proj', '/tmp');
-    await createSessionRecord('t-2', 'task-t', 'proj', '/tmp');
+    await createSessionRecord('t-1', 'task-t-1', 'proj', '/tmp');
+    await createSessionRecord('t-2', 'task-t-2', 'proj', '/tmp');
     await listSessions();
     expect(await renameSessionId('t-1', 't-2')).toBeNull();
     const cached = (await listSessions()).map((s) => s.claudeSessionId).sort();

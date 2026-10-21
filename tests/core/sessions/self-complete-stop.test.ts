@@ -123,21 +123,22 @@ afterEach(async () => {
 })
 
 describe('a session completing its own task', () => {
-  it('keeps running until its turn ends, then stops through its daemon; the task\'s other sessions stop at once', async () => {
-    const task = await taskWithSessions([
-      { sid: 'self', status: 'running', host: 'devbox' },
-      { sid: 'older', status: 'idle' },
-    ])
+  it('keeps running until its turn ends, then stops through its daemon; the task has no other session to stop', async () => {
+    const task = await taskWithSessions([{ sid: 'self', status: 'running', host: 'devbox' }])
+    // One session per task: the old "other sessions stop at once" shape cannot be built.
+    await expect(createSessionRecord('older', task.id, 'proj', undefined, { pid: BASE + 2 }))
+      .rejects.toMatchObject({ code: 'task_has_session' })
 
     await completeTask(task.id, { actorSid: 'self' })
 
-    await vi.waitFor(() => expect(stoppedSids()).toEqual(['older']))
+    await vi.waitFor(() => expect(_pendingSelfCompleteStopsForTest()).toEqual(['self']))
+    await settle()
+    expect(ownerStops).toEqual([])
     expect(await getSessionByClaudeId('self')).toMatchObject({ process_status: 'running', pid: BASE + 1 })
-    expect(_pendingSelfCompleteStopsForTest()).toEqual(['self'])
 
     await turnEnds('self')
 
-    await vi.waitFor(() => expect(stoppedSids()).toEqual(['older', 'self']))
+    await vi.waitFor(() => expect(stoppedSids()).toEqual(['self']))
     expect(ownerStops.find((s) => s.sid === 'self')).toEqual({ sid: 'self', host: 'devbox', reason: 'maintenance', why: 'task_completed' })
     expect(marks.find((m) => m.sid === 'self')).toEqual({ sid: 'self', reason: 'task_completed' })
     const rec = await getSessionByClaudeId('self')

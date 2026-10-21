@@ -150,12 +150,13 @@ describe('buildHostSlice', () => {
   })
 
   it('marks the sessions the server would never wake for a trigger, so the host does not resume them either', async () => {
-    const t = await newTask('Watch a review')
     const sid = (n: number) => `eeeeeee${n}-5555-4555-8555-55555555555${n}`
-    await createSessionRecord(sid(1), t, 'Acme', '/work', { host: 'resumebox', title: 'stopped' })
-    await createSessionRecord(sid(2), t, 'Acme', '/work', { host: 'resumebox', title: 'broke itself' })
-    await createSessionRecord(sid(3), t, 'Acme', '/work', { host: 'resumebox', title: 'host went down' })
-    await createSessionRecord(sid(4), t, 'Acme', '/work', { host: 'resumebox', title: 'another agent' })
+    // One session per task: each case on a task of its own.
+    const t = async (n: number) => newTask(`Watch a review ${n}`)
+    await createSessionRecord(sid(1), await t(1), 'Acme', '/work', { host: 'resumebox', title: 'stopped' })
+    await createSessionRecord(sid(2), await t(2), 'Acme', '/work', { host: 'resumebox', title: 'broke itself' })
+    await createSessionRecord(sid(3), await t(3), 'Acme', '/work', { host: 'resumebox', title: 'host went down' })
+    await createSessionRecord(sid(4), await t(4), 'Acme', '/work', { host: 'resumebox', title: 'another agent' })
     await updateSessionRecord(sid(1), { process_status: 'stopped' })
     await updateSessionRecord(sid(2), { process_status: 'error', errorKind: 'terminal' })
     await updateSessionRecord(sid(3), { process_status: 'error', errorKind: 'infra' })

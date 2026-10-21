@@ -323,7 +323,12 @@ describe('tasks (read-only projection)', () => {
     await st.createSessionRecord('sess-proj-live', task.id, 'General', '/tmp/proj', {
       title: 'Live remote session', host: 'devbox', description: 'working on the thing',
     })
-    await st.createSessionRecord('sess-proj-old', task.id, 'General', '/tmp/proj', {
+    // A task has exactly one session: the aged-out one hangs on its own task.
+    const { task: oldTask } = await tm.addTask({
+      title: 'Old session host task', project: 'General',
+      priority: 'important', description: '', status: 'todo',
+    } as Parameters<typeof tm.addTask>[0])
+    await st.createSessionRecord('sess-proj-old', oldTask.id, 'General', '/tmp/proj', {
       title: 'Ancient stopped session',
     })
     // Age the second one out: stopped long before the retention window.
@@ -425,7 +430,7 @@ describe('tasks (read-only projection)', () => {
     // A record that died BEFORE spawn (stopped, still pid-less) must NOT hit
     // the short-circuit: the route's process_status==='idle' gate exists so a
     // dead session serves the normal read path (404 here — no transcript).
-    await createSessionRecord('sess-awaiting-dead', 'task-await', 'Quick Start', '/tmp/x', {
+    await createSessionRecord('sess-awaiting-dead', 'task-await-dead', 'Quick Start', '/tmp/x', {
       initialProcessStatus: 'idle',
       initialStatusReason: 'awaiting_spawn',
     })

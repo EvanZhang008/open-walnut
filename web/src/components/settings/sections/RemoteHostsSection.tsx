@@ -14,6 +14,7 @@ import { flashHostsOf, hostRowId, useHostSettingsFocus } from '@/utils/host-sett
 import { landOnRow } from '@/utils/scroll-land';
 import { AddLimitRow } from './RemoteHostLimits';
 import { HostServersGroup } from './HostServersGroup';
+import { HostProfileDisclosure } from './HostProfileDisclosure';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { CopyHostDiagnosticsButton, DiagnosticsFallback, useCopyDiagnostics } from '../CopyDiagnostics';
 import { hasStatusHosts } from '../diagnostics-copy';
@@ -402,6 +403,8 @@ export function RemoteHostsSection({ config, onSave }: Props) {
                   </>
                 }
               />
+              {/* What Walnut has learned about the host: collapsed, loads on open. */}
+              {host.alias && host.hostname && !open && <HostProfileDisclosure alias={host.alias} name={hostName(host, idx)} />}
               {open && (
                 <>
                   {text(idx, 'alias', 'Alias', 'devbox', 'short', true)}

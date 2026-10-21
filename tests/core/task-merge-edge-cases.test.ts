@@ -3,7 +3,11 @@
  *
  * The contract under test: NO merge shape may lose a session link, and the
  * victim's remote identity must become un-importable without ever touching an
- * id the survivor still owns. Base coverage lives in task-remote-links.test.ts;
+ * id the survivor still owns. A task has exactly one session
+ * (src/core/sessions/one-session-per-task.ts): the survivor keeps its own, an
+ * empty survivor takes the victim's, and every other victim session is detached
+ * (its row names the survivor as `legacyTaskId`) and listed in the survivor's
+ * `legacy_session_ids`. Base coverage lives in task-remote-links.test.ts;
  * this file enumerates the corners: occupied slots, chained merges, self/
  * missing args, group membership, created_at inheritance, cross-source merges.
  */
@@ -45,78 +49,121 @@ afterEach(() => {
   fs.rmSync(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
+/** A session store of the test's own: the handle may still point at an earlier test's home. */
+async function sessionStore() {
+  const tracker = await import('../../src/core/session-tracker.js');
+  const { closeDb: closeSessionDb } = await import('../../src/core/session-db.js');
+  closeSessionDb();
+  tracker._resetSessionTrackerForTesting();
+  const done = () => {
+    closeSessionDb();
+    tracker._resetSessionTrackerForTesting();
+  };
+  return { tracker, done };
+}
+
 describe('mergeTaskInto — session link preservation corners', () => {
-  it('M1: victim slot id spills into session_ids when the survivor slot is OCCUPIED', async () => {
-    // The failure this pins: both copies ran sessions, so both session_id
-    // slots are full. The victim's slot id can't take the survivor's slot —
-    // it MUST land in session_ids or the link is destroyed (the UI joins on
-    // session_ids; a slot id is not guaranteed to be mirrored there).
+  it('M1: an OCCUPIED survivor keeps its session; the victim\'s is detached and listed, not lost', async () => {
+    // The failure this pins: both copies ran sessions. A task has one session, so
+    // the victim's cannot become the survivor's second: it must stay findable from
+    // the survivor (legacy_session_ids, and legacyTaskId on its row) or it is lost.
     const { task: survivor } = await addTask({ title: 'A', project: 'P' });
     const { task: victim } = await addTask({ title: 'B', project: 'P' });
-    await updateTaskRaw(survivor.id, { session_id: 'surv-slot' });
-    await updateTaskRaw(victim.id, { session_id: 'vict-slot', plan_session_id: 'vict-plan' });
+    const { tracker, done } = await sessionStore();
+    try {
+      await tracker.createSessionRecord('surv-slot', survivor.id, 'P', '/tmp');
+      await tracker.createSessionRecord('vict-slot', victim.id, 'P', '/tmp');
+      await updateTaskRaw(survivor.id, { session_id: 'surv-slot', session_ids: ['surv-slot'] });
+      await updateTaskRaw(victim.id, { session_id: 'vict-slot', plan_session_id: 'vict-slot', session_ids: ['vict-slot'] });
 
-    const { survivor: merged } = await mergeTaskInto(survivor.id, victim.id);
+      const { survivor: merged, sessionsRelinked } = await mergeTaskInto(survivor.id, victim.id);
 
-    expect(merged.session_id).toBe('surv-slot');            // survivor keeps its slot
-    expect(merged.session_ids).toContain('vict-slot');      // victim's spilled, not lost
-    expect(merged.plan_session_id).toBe('vict-plan');       // empty slot filled normally
-  });
-
-  it('M2: all three victim slots spill when all three survivor slots are occupied', async () => {
-    const { task: survivor } = await addTask({ title: 'A', project: 'P' });
-    const { task: victim } = await addTask({ title: 'B', project: 'P' });
-    await updateTaskRaw(survivor.id, { session_id: 's1', plan_session_id: 's2', exec_session_id: 's3' });
-    await updateTaskRaw(victim.id, { session_id: 'v1', plan_session_id: 'v2', exec_session_id: 'v3' });
-
-    const { survivor: merged } = await mergeTaskInto(survivor.id, victim.id);
-
-    expect(merged.session_id).toBe('s1');
-    expect(merged.plan_session_id).toBe('s2');
-    expect(merged.exec_session_id).toBe('s3');
-    for (const spilled of ['v1', 'v2', 'v3']) {
-      expect(merged.session_ids).toContain(spilled);
+      expect(merged.session_id).toBe('surv-slot');            // survivor keeps its session
+      expect(merged.session_ids).toEqual(['surv-slot']);      // and only it
+      expect(merged.plan_session_id).toBeUndefined();         // no slot names the victim's
+      expect(merged.legacy_session_ids).toEqual(['vict-slot']); // listed, not lost
+      expect(sessionsRelinked).toBe(0);
+      const detached = await tracker.getSessionByClaudeId('vict-slot');
+      expect(detached?.taskId).toBeFalsy();
+      expect(detached?.legacyTaskId).toBe(survivor.id);
+      expect((await tracker.getSessionByClaudeId('surv-slot'))?.taskId).toBe(survivor.id);
+    } finally {
+      done();
     }
   });
 
-  it('M3: no duplicate entries when a spilled slot id already lives in session_ids', async () => {
+  it('M2: an EMPTY survivor takes the victim\'s session, every slot naming it', async () => {
     const { task: survivor } = await addTask({ title: 'A', project: 'P' });
     const { task: victim } = await addTask({ title: 'B', project: 'P' });
-    await updateTaskRaw(survivor.id, { session_id: 'occupied', session_ids: ['shared'] });
+    const { tracker, done } = await sessionStore();
+    try {
+      await tracker.createSessionRecord('v1', victim.id, 'P', '/tmp');
+      await updateTaskRaw(victim.id, { session_id: 'v1', exec_session_id: 'v1', session_ids: ['v1'] });
+
+      const { survivor: merged, sessionsRelinked } = await mergeTaskInto(survivor.id, victim.id);
+
+      expect(merged.session_id).toBe('v1');
+      expect(merged.session_ids).toEqual(['v1']);
+      expect(merged.legacy_session_ids).toBeUndefined();
+      expect(sessionsRelinked).toBe(1);
+      expect((await tracker.getSessionByClaudeId('v1'))?.taskId).toBe(survivor.id);
+    } finally {
+      done();
+    }
+  });
+
+  it('M3: no duplicate history entries when the victim lists its session in its slot and session_ids', async () => {
+    const { task: survivor } = await addTask({ title: 'A', project: 'P' });
+    const { task: victim } = await addTask({ title: 'B', project: 'P' });
+    await updateTaskRaw(survivor.id, { session_id: 'occupied', session_ids: ['occupied'], legacy_session_ids: ['shared'] });
     await updateTaskRaw(victim.id, { session_id: 'shared', session_ids: ['shared'] });
 
     const { survivor: merged } = await mergeTaskInto(survivor.id, victim.id);
 
-    expect(merged.session_ids.filter((s) => s === 'shared')).toHaveLength(1);
+    expect(merged.session_ids).toEqual(['occupied']);
+    expect(merged.legacy_session_ids).toEqual(['shared']);
   });
 
-  it('M4: chained merges (C→B→A) accumulate every link into the final survivor', async () => {
+  it('M4: chained merges (C→B→A) carry every link into the final survivor', async () => {
     // The dedup script merges N victims one at a time. Verify transitivity:
-    // links picked up from C via B must survive B's own merge into A.
+    // history picked up from C via B must survive B's own merge into A.
     const { task: a } = await addTask({ title: 'A', project: 'P' });
     const { task: b } = await addTask({ title: 'B', project: 'P' });
     const { task: c } = await addTask({ title: 'C', project: 'P' });
-    await updateTaskRaw(a.id, { session_ids: ['sa'] });
-    await updateTaskRaw(b.id, { session_ids: ['sb'] });
-    await updateTaskRaw(c.id, { session_ids: ['sc'], session_id: 'sc-slot' });
+    const { tracker, done } = await sessionStore();
+    try {
+      for (const [sid, t] of [['sa', a], ['sb', b], ['sc', c]] as const) {
+        await tracker.createSessionRecord(sid, t.id, 'P', '/tmp');
+        await updateTaskRaw(t.id, { session_id: sid, session_ids: [sid] });
+      }
 
-    await mergeTaskInto(b.id, c.id);
-    const { survivor: final } = await mergeTaskInto(a.id, b.id);
+      await mergeTaskInto(b.id, c.id);
+      const { survivor: final } = await mergeTaskInto(a.id, b.id);
 
-    for (const sid of ['sa', 'sb', 'sc']) expect(final.session_ids).toContain(sid);
-    expect(final.session_id).toBe('sc-slot'); // slot travelled B→A via the fill rule
-    expect(await listTasks()).toHaveLength(1);
+      expect(final.session_id).toBe('sa');
+      expect(final.session_ids).toEqual(['sa']);
+      expect([...(final.legacy_session_ids ?? [])].sort()).toEqual(['sb', 'sc']);
+      expect((await tracker.getSessionByClaudeId('sa'))?.taskId).toBe(a.id);
+      const sb = await tracker.getSessionByClaudeId('sb');
+      expect(sb?.taskId).toBeFalsy();
+      expect(sb?.legacyTaskId).toBe(a.id);
+      expect((await tracker.getSessionByClaudeId('sc'))?.taskId).toBeFalsy();
+      expect(await listTasks()).toHaveLength(1);
+    } finally {
+      done();
+    }
   });
 
   it('M5: merging a victim with NO links leaves the survivor links untouched', async () => {
     const { task: survivor } = await addTask({ title: 'A', project: 'P' });
     const { task: victim } = await addTask({ title: 'B', project: 'P' });
-    await updateTaskRaw(survivor.id, { session_ids: ['keep'], session_id: 'keep-slot' });
+    await updateTaskRaw(survivor.id, { session_ids: ['keep'], session_id: 'keep' });
 
     const { survivor: merged, sessionsRelinked } = await mergeTaskInto(survivor.id, victim.id);
 
     expect(merged.session_ids).toEqual(['keep']);
-    expect(merged.session_id).toBe('keep-slot');
+    expect(merged.session_id).toBe('keep');
+    expect(merged.legacy_session_ids).toBeUndefined();
     expect(sessionsRelinked).toBe(0);
   });
 });
@@ -195,30 +242,40 @@ describe('mergeTaskInto — structure and identity corners', () => {
   it('M12: victim with NO ext merges cleanly (nothing to tombstone)', async () => {
     const { task: survivor } = await addTask({ title: 'A', project: 'P' });
     const { task: victim } = await addTask({ title: 'B', project: 'P' });
-    await updateTaskRaw(victim.id, { session_ids: ['sv'] });
+    const { tracker, done } = await sessionStore();
+    try {
+      await tracker.createSessionRecord('sv', victim.id, 'P', '/tmp');
+      await updateTaskRaw(victim.id, { session_id: 'sv', session_ids: ['sv'] });
 
-    const { survivor: merged } = await mergeTaskInto(survivor.id, victim.id);
+      const { survivor: merged } = await mergeTaskInto(survivor.id, victim.id);
 
-    expect(merged.session_ids).toContain('sv');
-    expect(await listTasks()).toHaveLength(1);
+      expect(merged.session_ids).toEqual(['sv']);
+      expect(await listTasks()).toHaveLength(1);
+    } finally {
+      done();
+    }
   });
 
-  it('M13: sessionsRelinked counts only rows that actually pointed at the victim', async () => {
+  it('M13: sessionsRelinked counts only rows that actually moved to the survivor', async () => {
     const { task: survivor } = await addTask({ title: 'A', project: 'P' });
     const { task: victim } = await addTask({ title: 'B', project: 'P' });
-    const { createSessionRecord } = await import('../../src/core/session-tracker.js');
-    await createSessionRecord('sess-victim-1', victim.id, 'P', '/tmp');
-    await createSessionRecord('sess-victim-2', victim.id, 'P', '/tmp');
+    const { task: emptySurvivor } = await addTask({ title: 'C', project: 'P' });
+    const { task: victim2 } = await addTask({ title: 'D', project: 'P' });
+    const { createSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    await createSessionRecord('sess-victim', victim.id, 'P', '/tmp');
     await createSessionRecord('sess-survivor', survivor.id, 'P', '/tmp');
+    await createSessionRecord('sess-victim2', victim2.id, 'P', '/tmp');
     await createSessionRecord('sess-unrelated', 'someone-else', 'P', '/tmp');
 
-    const { sessionsRelinked } = await mergeTaskInto(survivor.id, victim.id);
+    // A survivor with its own session takes none: the victim's is detached, not moved.
+    expect((await mergeTaskInto(survivor.id, victim.id)).sessionsRelinked).toBe(0);
+    // An empty survivor takes the victim's one session.
+    expect((await mergeTaskInto(emptySurvivor.id, victim2.id)).sessionsRelinked).toBe(1);
 
-    expect(sessionsRelinked).toBe(2);
-    const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
-    expect((await getSessionByClaudeId('sess-victim-1'))?.taskId).toBe(survivor.id);
-    expect((await getSessionByClaudeId('sess-victim-2'))?.taskId).toBe(survivor.id);
+    expect((await getSessionByClaudeId('sess-victim'))?.taskId).toBeFalsy();
+    expect((await getSessionByClaudeId('sess-victim'))?.legacyTaskId).toBe(survivor.id);
     expect((await getSessionByClaudeId('sess-survivor'))?.taskId).toBe(survivor.id);
+    expect((await getSessionByClaudeId('sess-victim2'))?.taskId).toBe(emptySurvivor.id);
     expect((await getSessionByClaudeId('sess-unrelated'))?.taskId).toBe('someone-else');
   });
 
@@ -240,18 +297,18 @@ describe('mergeTaskInto — structure and identity corners', () => {
   }
 
   it('M14: the survivor deleted while the merge re-points sessions leaves none on a deleted task', async () => {
-    // The merge moves the victim's sessions in slices; a delete of the survivor that starts between
-    // them must not leave the rest pointing at it (r4 gate, L-23: 59 of 60 did), and the merge must
-    // not announce the survivor after its delete (every open board would show it again).
+    // A delete of the survivor that lands after the merge's task commit but before its session
+    // moves must not leave the session pointing at it (r4 gate, L-23), and the merge must not
+    // announce the survivor after its delete (every open board would show it again). A task has
+    // one session, so the merge moves at most one: holding the session write lock stops the merge
+    // right after its task commit, exactly where the delete has to land.
     const { task: survivor } = await addTask({ title: 'A', project: 'P' });
     const { task: victim } = await addTask({ title: 'B', project: 'P' });
     const { tracker, bus, EventNames, done } = await slicedSessions();
     const survivorRow = () => getTaskDb()!.prepare('SELECT 1 FROM tasks WHERE id = ?').pluck().get(survivor.id) !== undefined;
-    // Many sessions, one per slice: the delete's few file-lock steps land while the merge still runs.
-    const victims = Array.from({ length: 300 }, (_, i) => `m14-victim-${i}`);
-    for (const id of victims) await tracker.createSessionRecord(id, victim.id, 'P', '/tmp');
-    await tracker.createSessionRecord('m14-survivor', survivor.id, 'P', '/tmp');
-    let deleting: Promise<unknown> | null = null;
+    const victimRow = () => getTaskDb()!.prepare('SELECT 1 FROM tasks WHERE id = ?').pluck().get(victim.id) !== undefined;
+    // Stopped: the moved session becomes the survivor's, and a running one would block its delete.
+    await tracker.createSessionRecord('m14-victim', victim.id, 'P', '/tmp', { initialProcessStatus: 'stopped' });
     const updatesOfTheDeleted: string[] = [];
     const mergeDeletes: unknown[] = [];
     bus.subscribe('m14-delete-survivor', (event) => {
@@ -259,28 +316,31 @@ describe('mergeTaskInto — structure and identity corners', () => {
       if (event.name === EventNames.TASK_UPDATED && (event.data as { task: Task }).task.id === survivor.id && !survivorRow()) {
         updatesOfTheDeleted.push(event.source ?? '?');
       }
-      if (event.name !== EventNames.SESSION_STATUS_CHANGED || deleting) return;
-      // The merge's first session is announced: now the survivor is deleted.
-      deleting = deleteTask(survivor.id);
     }, { global: true }); // TASK_UPDATED is addressed to the web UI only
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const lockDone = tracker._withSessionWriteLockForTesting(() => held);
     let relinked = -1;
     let survivorDeleted = false;
     try {
-      ({ sessionsRelinked: relinked, survivorDeleted } = await mergeTaskInto(survivor.id, victim.id));
+      const merging = mergeTaskInto(survivor.id, victim.id);
+      // The merge committed its tasks and now waits to move the session: the survivor is deleted.
+      await vi.waitFor(() => { expect(victimRow()).toBe(false); }, { timeout: 10_000, interval: 10 });
+      const deleting = deleteTask(survivor.id);
+      await vi.waitFor(() => { expect(survivorRow()).toBe(false); }, { timeout: 10_000, interval: 10 });
+      release();
+      ({ sessionsRelinked: relinked, survivorDeleted } = await merging);
       await deleting;
     } finally {
+      release();
+      await lockDone;
       bus.unsubscribe('m14-delete-survivor');
     }
-    expect(deleting).not.toBeNull();
     // The merge says so, and the route answers what happened from it (r5 gate, L-28).
     expect(survivorDeleted).toBe(true);
-    // The delete landed while the merge ran: it re-pointed only the sessions before it.
-    expect(relinked).toBeGreaterThan(0);
-    expect(relinked).toBeLessThan(victims.length);
+    expect(relinked).toBe(0);
     expect(await listTasks()).toHaveLength(0);
-    for (const id of [...victims, 'm14-survivor']) {
-      expect((await tracker.getSessionByClaudeId(id))?.taskId, id).toBeUndefined();
-    }
+    expect((await tracker.getSessionByClaudeId('m14-victim'))?.taskId).toBeUndefined();
     expect(updatesOfTheDeleted).toEqual([]);
     // The victim's delete names no task it went into: the survivor is gone too (r6 gate, MED-1).
     expect(mergeDeletes).toHaveLength(1);
@@ -313,23 +373,23 @@ describe('mergeTaskInto — structure and identity corners', () => {
     expect(seen.find((e) => e.name === EventNames.TASK_UPDATED)?.data).toMatchObject({ task: { id: survivor.id } });
   });
 
-  it('M15: two merges at once, A into B and B into C: every session follows to C', async () => {
+  it('M15: two merges at once, A into B and B into C: every session ends up on C or in its history', async () => {
     // Merges run one at a time. Overlapping, the first found B gone partway and cleared the links of
-    // A's remaining sessions, which must follow B to C.
+    // A's remaining sessions, which must follow B to C. One session per task: B keeps its own and
+    // A's is detached into B's history, then B's session follows to the empty C with that history.
     const { task: c } = await addTask({ title: 'C', project: 'P' });
     const { task: b } = await addTask({ title: 'B', project: 'P' });
     const { task: a } = await addTask({ title: 'A', project: 'P' });
     const { tracker, done } = await slicedSessions();
-    const ofA = Array.from({ length: 200 }, (_, i) => `m15-a-${i}`);
-    const ofB = Array.from({ length: 5 }, (_, i) => `m15-b-${i}`);
-    for (const id of ofA) await tracker.createSessionRecord(id, a.id, 'P', '/tmp');
-    for (const id of ofB) await tracker.createSessionRecord(id, b.id, 'P', '/tmp');
+    await tracker.createSessionRecord('m15-a', a.id, 'P', '/tmp');
+    await tracker.createSessionRecord('m15-b', b.id, 'P', '/tmp');
     const [first, second] = await Promise.all([mergeTaskInto(b.id, a.id), mergeTaskInto(c.id, b.id)]);
-    expect(first.sessionsRelinked).toBe(200);
-    expect(second.sessionsRelinked).toBe(205);
-    for (const id of [...ofA, ...ofB]) {
-      expect((await tracker.getSessionByClaudeId(id))?.taskId, id).toBe(c.id);
-    }
+    expect(first.sessionsRelinked).toBe(0);
+    expect(second.sessionsRelinked).toBe(1);
+    expect(second.survivor.session_id).toBe('m15-b');
+    expect(second.survivor.legacy_session_ids).toEqual(['m15-a']);
+    expect((await tracker.getSessionByClaudeId('m15-b'))?.taskId).toBe(c.id);
+    expect((await tracker.getSessionByClaudeId('m15-a'))?.taskId).toBeFalsy();
     expect((await listTasks()).map((t) => t.id)).toEqual([c.id]);
     done();
   });

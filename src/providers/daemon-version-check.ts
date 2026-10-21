@@ -202,6 +202,10 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/marker-find-core.ts',
   // logs.tail (replica-logs-v1, WP14): same import-or-inline rule.
   'src/providers/replica-logs-core.ts',
+  // Workspace transfer (fs.writePart, transfer.*) and host.facts: same import-or-inline rule.
+  'src/providers/transfer-core.ts',
+  'src/providers/transfer-pack-core.ts',
+  'src/providers/host-facts-core.ts',
 ] as const
 
 /**

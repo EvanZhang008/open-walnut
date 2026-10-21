@@ -148,14 +148,16 @@ describe('framework ledger writers', () => {
 });
 
 describe('mergeTaskInto', () => {
-  it('unions session_ids, fills empty slots, re-homes children, deletes the victim', async () => {
+  it('hands the victim\'s session to an empty survivor, keeps old ids as history, re-homes children, deletes the victim', async () => {
     const { task: survivor } = await addTask({ title: 'Survivor', project: 'P' });
     const { task: victim } = await addTask({ title: 'Victim copy', project: 'P' });
     const { task: child } = await addTask({ title: 'Victim child', project: 'P', parent_task_id: victim.id });
     const { updateTaskRaw } = await import('../../src/core/task-manager.js');
-    await updateTaskRaw(survivor.id, { session_ids: ['s1'] });
+    const { createSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    await createSessionRecord('slot-a', victim.id, 'P', '/tmp');
     await updateTaskRaw(victim.id, {
-      session_ids: ['s2', 's1'],
+      // 's2' is an older id still listed on the victim (no row of its own).
+      session_ids: ['s2', 'slot-a'],
       session_id: 'slot-a',
       ext: { 'some-provider': { id: 'remote-victim' } },
       source: 'some-provider' as any,
@@ -163,8 +165,11 @@ describe('mergeTaskInto', () => {
 
     const { survivor: merged } = await mergeTaskInto(survivor.id, victim.id);
 
-    expect(merged.session_ids.sort()).toEqual(['s1', 's2']);
+    // One session per task: the survivor had none, so the victim's becomes its one session.
     expect(merged.session_id).toBe('slot-a');
+    expect(merged.session_ids).toEqual(['slot-a']);
+    expect(merged.legacy_session_ids).toEqual(['s2']);
+    expect((await getSessionByClaudeId('slot-a'))?.taskId).toBe(survivor.id);
     await expect(getTask(victim.id)).rejects.toThrow(/No task found/);
     expect((await getTask(child.id))?.parent_task_id).toBe(survivor.id);
     // Victim's remote id is tombstoned so its twin can't come back as copy #3.
