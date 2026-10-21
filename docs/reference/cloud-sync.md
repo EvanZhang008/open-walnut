@@ -447,7 +447,12 @@ Mac server ──wss /daemon-tunnel (machine token)──▶ Caddy ──▶ rep
   A device is a phone when its first self-report (the iOS app sends one on its
   first launch after pairing) said an iPhone, iPad or iOS; later reports never
   change that. It decides wording and that the device pairs nothing, never who
-  the owner is.
+  the owner is. Only the box operator corrects it: `walnut device kind <name>
+  computer` (or `phone`) on the companion, for a pairing a phone once reported
+  with. A Mac whose own pairing was recorded as a phone that way is refused
+  every machine credential (`403 phone_cannot_mint`, its proof or not) until
+  then; `walnut device list` shows what each pairing is recorded as. Naming the
+  owner a phone leaves the companion with no owner.
 - **Companions from before owners were recorded.** An older build recorded no
   owner, and none is guessed: such a companion keeps that build's rules until
   something above records one. The Mac proves itself on first contact: every

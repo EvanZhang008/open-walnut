@@ -226,6 +226,14 @@ export function registerCommands(program: Command): void {
     });
 
   deviceCmd
+    .command('kind <name> <kind>')
+    .description('Say what a paired device is: phone or computer (corrects a pairing recorded as the wrong one)')
+    .action(async (name: string, kind: string, _options: Record<string, unknown>, cmd: Command) => {
+      const { runDeviceKind } = await import('./device.js');
+      await runDeviceKind(name, kind, cmd.optsWithGlobals());
+    });
+
+  deviceCmd
     .command('revoke <name>')
     .description('Revoke a paired device')
     .action(async (name: string, _options: Record<string, unknown>, cmd: Command) => {
