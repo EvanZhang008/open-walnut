@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -112,6 +113,58 @@ describe('the install script', () => {
 
   it('refuses a build env name that is not one', () => {
     expect(() => installScript(plan('b1', { buildEnv: { 'CC; rm -rf /': 'x' } }))).toThrow(/not an environment variable name/)
+  })
+
+  it('a host plan (no keep, no optional dependencies) is byte for byte the script it was before both existed', () => {
+    const hostPlan = {
+      id: 'b1', depsHash: 'deps01', dependencies: { ws: '^8.19.0' },
+      appPackageJson: JSON.stringify({ name: 'open-walnut', version: '0.0.1', private: true, type: 'module' }),
+      node: '/opt/node/bin/node', buildEnv: {}, root: '/srv/walnut-host',
+    }
+    const text = installScript(hostPlan)
+    // sha256 of the text before `keep` and `optionalDependencies` were added (5408d5875).
+    expect(crypto.createHash('sha256').update(text).digest('hex')).toBe('b4b9e4632209b5736f518ba10edb22c0d0c89ed66bb092551e24026dfcbc006c')
+    expect(installScript({ ...hostPlan, keep: [] })).toBe(text)
+    expect(text).toContain('--omit=optional --omit=dev')
+    expect(text).not.toContain('optionalDependencies')
+  })
+
+  it('with optional dependencies, npm installs them (no --omit=optional) and the deps package names them', () => {
+    makeBuild('b1')
+    fs.writeFileSync(path.join(home, 'b1.sh'), installScript(plan('b1', { optionalDependencies: { fsevents: '^2.3.3' } })))
+    expect(sh(`sh "$HOME/b1.sh"`).out).toContain('installed')
+    const deps = path.join(home, '.open-walnut-host', 'deps', 'deps01')
+    const pkg = JSON.parse(fs.readFileSync(path.join(deps, 'package.json'), 'utf8'))
+    expect(pkg.dependencies).toEqual({ ws: '^8.19.0' })
+    expect(pkg.optionalDependencies).toEqual({ fsevents: '^2.3.3' })
+    const args = fs.readFileSync(path.join(deps, 'node_modules', 'ws', 'args.txt'), 'utf8')
+    expect(args).toContain('install --no-audit --no-fund --omit=dev')
+    expect(args).not.toContain('--omit=optional')
+  })
+
+  it('a kept build survives the prune; the newest other one is kept as before', () => {
+    for (const id of ['b1', 'b2', 'b3']) {
+      makeBuild(id)
+      fs.writeFileSync(path.join(home, `${id}.sh`), installScript(plan(id)))
+      expect(sh(`sh "$HOME/${id}.sh"`).out).toContain('installed')
+    }
+    const root = path.join(home, '.open-walnut-host')
+    expect(fs.readdirSync(path.join(root, 'app')).sort()).toEqual(['b2', 'b3'])
+    makeBuild('b4')
+    fs.writeFileSync(path.join(home, 'b4.sh'), installScript(plan('b4', { keep: ['b2', 'b4'] })))
+    expect(sh(`sh "$HOME/b4.sh"`).out).toContain('installed')
+    // b2 is kept, b3 is the newest other one; nothing else was there to remove.
+    expect(fs.readdirSync(path.join(root, 'app')).sort()).toEqual(['b2', 'b3', 'b4'])
+    makeBuild('b5')
+    fs.writeFileSync(path.join(home, 'b5.sh'), installScript(plan('b5', { keep: ['b2'] })))
+    expect(sh(`sh "$HOME/b5.sh"`).out).toContain('installed')
+    // b4 is now the newest other one, b3 goes, b2 stays.
+    expect(fs.readdirSync(path.join(root, 'app')).sort()).toEqual(['b2', 'b4', 'b5'])
+  })
+
+  it('refuses a kept id that is not a build id', () => {
+    expect(() => installScript(plan('b1', { keep: ['ok-1', 'x; rm -rf /'] }))).toThrow(/keep has a bad build id/)
+    expect(() => installScript(plan('b1', { keep: ['../up'] }))).toThrow(/keep has a bad build id/)
   })
 
   it('an unknown build is absent', () => {

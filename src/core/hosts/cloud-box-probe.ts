@@ -140,8 +140,12 @@ export async function reportSelfAsMac(p: Pairing): Promise<boolean> {
 
 async function probeAndApply(pairing: Pairing): Promise<void> {
   let capability = await probeCapability(pairing)
-  // The companion answered: say what this pairing is (in the background, never in the way).
-  if (capability) void reportSelfAsMac(pairing)
+  // The companion answered: say what this pairing is, and keep it on this Mac's
+  // build (companion-build/mac.ts), both in the background, never in the way.
+  if (capability) {
+    void reportSelfAsMac(pairing)
+    void import('../companion-build/mac.js').then((m) => m.tickCompanionBuild('probe')).catch(() => {})
+  }
   const current = getCloudBoxState()
   if (!capability || !current || current.domain !== pairing.domain) return
   // "Another Mac is connected" comes from a mint, never from the status: a
@@ -179,6 +183,8 @@ export async function startCloudBoxHost(): Promise<void> {
   if (pairing) void probeAndApply(pairing).catch(() => { /* logged inside */ })
   timer = setInterval(() => { void refreshCloudBoxHost() }, PROBE_INTERVAL_MS)
   timer.unref?.()
+  // One look at the companion's build once this process is a minute old (the tick waits for that).
+  void import('../companion-build/mac.js').then((m) => m.tickCompanionBuild('boot')).catch(() => {})
 }
 
 export function stopCloudBoxHost(): void {

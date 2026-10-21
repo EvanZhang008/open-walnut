@@ -16,7 +16,10 @@
 #   4. A systemd drop-in giving walnut.service SHELL=/bin/bash. The session
 #      daemon spawns the CLI through $SHELL, and systemd sets SHELL from passwd
 #      for a unit with User=, which for this service user is a nologin shell:
-#      every spawn would die on it.
+#      every spawn would die on it. A second drop-in, launcher.conf, starts the
+#      server through scripts/cloud/companion-launch.mjs, which runs the build
+#      the Mac installed (or this tree), and says whether the box takes builds
+#      from the Mac (WALNUT_COMPANION_MAC_BUILDS).
 #   5. config.yaml keys that turn cloud exec on (src/core/cloud-exec.ts) plus
 #      defaults.engine, each seeded ONLY when absent. Cloud exec is seeded only
 #      once Claude Code is installed AND has a credential (the instance role,
@@ -29,7 +32,7 @@
 # check below.
 #
 # Usage (as root):
-#   bash scripts/cloud/ensure-harness.sh [--engine <id>] [--bedrock-region <region>] [--dry-run]
+#   bash scripts/cloud/ensure-harness.sh [--engine <id>] [--bedrock-region <region>] [--no-mac-builds | --mac-builds] [--dry-run]
 #   bash scripts/cloud/ensure-harness.sh --validate-args [--engine <id>] [--bedrock-region <region>]
 #
 #   --engine          default: the box's own defaults.engine, then claude
@@ -37,6 +40,11 @@
 #   --bedrock-region  region Claude Code calls Bedrock in (default us-west-2, or
 #                     WALNUT_BEDROCK_REGION). NOT the box's region: model
 #                     availability is best there.
+#   --no-mac-builds   the box never takes a build from the Mac: it runs this tree,
+#                     and the Mac only reads which build that is. --mac-builds
+#                     turns it back on. Without either, the box keeps what its
+#                     launcher.conf says (on for a box that has none yet), so a
+#                     deploy that runs this script with no flags changes nothing.
 #   --dry-run         print the plan and change nothing. Needs no root, but run it
 #                     as root on a real box: as another user, the probes of the
 #                     service user's files can come back empty.
@@ -65,7 +73,7 @@ IMDS_URL=http://169.254.169.254
 REGION_RE='^[a-z]{2}(-[a-z]+)+-[0-9]{1,2}$'
 
 usage() {
-  echo "usage: ensure-harness.sh [--engine <id>] [--bedrock-region <region>] [--dry-run | --validate-args]"
+  echo "usage: ensure-harness.sh [--engine <id>] [--bedrock-region <region>] [--no-mac-builds | --mac-builds] [--dry-run | --validate-args]"
   echo "       engines: $ENGINE_IDS"
 }
 die_usage() { echo "ensure-harness: $*" >&2; usage >&2; exit 2; }
@@ -75,6 +83,8 @@ BEDROCK_REGION="${WALNUT_BEDROCK_REGION:-$DEFAULT_BEDROCK_REGION}"
 # Asked for, not defaulted: only then is a kept settings.json in another region news.
 REGION_ASKED=0
 if [ -n "${WALNUT_BEDROCK_REGION:-}" ]; then REGION_ASKED=1; fi
+# 0 or 1 when a flag asked; empty keeps the box's own choice (see the step below).
+MAC_BUILDS_ASKED=""
 DRY_RUN=0
 VALIDATE_ONLY=0
 while [ $# -gt 0 ]; do
@@ -83,6 +93,8 @@ while [ $# -gt 0 ]; do
     --engine=*) ENGINE="${1#--engine=}"; shift ;;
     --bedrock-region) [ $# -ge 2 ] || die_usage "--bedrock-region needs a value"; BEDROCK_REGION="$2"; REGION_ASKED=1; shift 2 ;;
     --bedrock-region=*) BEDROCK_REGION="${1#--bedrock-region=}"; REGION_ASKED=1; shift ;;
+    --no-mac-builds) MAC_BUILDS_ASKED=0; shift ;;
+    --mac-builds) MAC_BUILDS_ASKED=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --validate-args) VALIDATE_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -116,6 +128,9 @@ WORK_DIR="$WALNUT_HOME_DIR/work"
 SETTINGS_FILE="$WALNUT_HOME_DIR/.claude/settings.json"
 CREDENTIALS_FILE="$WALNUT_HOME_DIR/.claude/.credentials.json"
 DROPIN_FILE="$ROOT/etc/systemd/system/walnut.service.d/harness.conf"
+LAUNCHER_DROPIN="$ROOT/etc/systemd/system/walnut.service.d/launcher.conf"
+# The base unit setup.sh writes; the drop-ins override parts of it.
+UNIT_FILE="$ROOT/etc/systemd/system/walnut.service"
 LINK_DIR="$ROOT/usr/local/bin"
 SYSTEM_BIN_DIR="$ROOT/usr/bin"
 SEED_SCRIPT="$SCRIPT_DIR/seed-harness-config.mjs"
@@ -664,8 +679,32 @@ else
   record engine-auth skipped "out of scope: sign $ENGINE in on the box yourself (sudo -u $WALNUT_USER -H ${ENGINE_CLI:-$ENGINE})"
 fi
 
-# ── 4. systemd drop-in: a real shell for the session daemon, and sessions that
-#       outlive a restart ─────────────────────────────────────────────────────
+# Writes drop-in <file> as <content> unless it holds exactly that, and records
+# it as summary row <item> with <detail>: tmp + rename, then daemon-reload.
+ensure_dropin() {
+  local file="$1" content="$2" item="$3" detail="$4" tmp
+  if [ -f "$file" ] && [ "$(cat "$file")" = "$content" ]; then
+    record "$item" present "$detail"
+  elif [ "$DRY_RUN" = 1 ]; then
+    record "$item" planned "$detail, then systemctl daemon-reload"
+  else
+    mkdir -p "$(dirname "$file")"
+    tmp="$file.tmp-harness-$$"
+    printf '%s\n' "$content" > "$tmp"
+    chmod 644 "$tmp"
+    mv -f "$tmp" "$file"
+    RESTART_NEEDED=1
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload
+      record "$item" written "$detail (daemon-reload done)"
+    else
+      record "$item" warned "written, but systemctl is missing; reload systemd yourself"
+    fi
+  fi
+}
+
+# ── 4. systemd drop-ins: a real shell for the session daemon, sessions that
+#       outlive a restart, and the launcher ──────────────────────────────────
 # KillMode=process: a stop or restart signals the server alone. The default
 # (control-group) also kills every session daemon the server started and their
 # agent CLIs, on every restart and so on every deploy. With it, the next server
@@ -680,23 +719,66 @@ DROPIN_CONTENT="# Written by scripts/cloud/ensure-harness.sh. The session daemon
 [Service]
 Environment=SHELL=/bin/bash
 KillMode=process"
-if [ -f "$DROPIN_FILE" ] && [ "$(cat "$DROPIN_FILE")" = "$DROPIN_CONTENT" ]; then
-  record "systemd drop-in" present "SHELL=/bin/bash, KillMode=process"
-elif [ "$DRY_RUN" = 1 ]; then
-  record "systemd drop-in" planned "SHELL=/bin/bash, KillMode=process, then systemctl daemon-reload"
+ensure_dropin "$DROPIN_FILE" "$DROPIN_CONTENT" "systemd drop-in" "SHELL=/bin/bash, KillMode=process"
+
+# The launcher drop-in. The server starts through companion-launch.mjs, which
+# picks the build the Mac installed in the service home, or this tree.
+step "launcher drop-in ($LAUNCHER_DROPIN)"
+# True for an absolute path of plain characters: it goes into a unit line, where
+# a space or a % would mean something else.
+plain_abs_path() {
+  case "$1" in /*) ;; *) return 1 ;; esac
+  case "$1" in *[!A-Za-z0-9/._+-]*) return 1 ;; esac
+  return 0
+}
+# First word of the base unit's <key>= line, or nothing.
+unit_word() {
+  local v
+  v="$(sed -n "s/^$1=\(..*\)\$/\1/p" "$UNIT_FILE" 2>/dev/null | head -n 1 || true)"
+  printf '%s\n' "${v%% *}"
+}
+# The node the unit already runs, so the launcher and the server use the same one.
+LAUNCH_NODE="$(unit_word ExecStart)"
+case "$LAUNCH_NODE" in /*) ;; *) LAUNCH_NODE="$(command -v node 2>/dev/null || true)" ;; esac
+# The tree the unit serves from, not REPO_DIR: a deploy may run this script from
+# a sibling tree it renames into place afterwards, and the drop-in has to name
+# the place the tree ends up in. REPO_DIR only when the unit names none.
+LAUNCH_TREE="$(unit_word WorkingDirectory)"
+LAUNCH_TREE="${LAUNCH_TREE:-$REPO_DIR}"
+# Asked for by a flag, else what the box already has, else on.
+MAC_BUILDS="$MAC_BUILDS_ASKED"
+if [ -z "$MAC_BUILDS" ]; then
+  MAC_BUILDS="$(sed -n 's/^Environment=WALNUT_COMPANION_MAC_BUILDS=\([01]\)$/\1/p' "$LAUNCHER_DROPIN" 2>/dev/null | head -n 1 || true)"
+fi
+MAC_BUILDS="${MAC_BUILDS:-1}"
+mac_builds_note="Mac builds on"
+if [ "$MAC_BUILDS" = 0 ]; then mac_builds_note="Mac builds off"; fi
+if [ -z "$LAUNCH_NODE" ]; then
+  record "launcher drop-in" warned "no node found (walnut.service ExecStart or PATH); the unit keeps its own ExecStart"
+elif ! plain_abs_path "$LAUNCH_NODE"; then
+  record "launcher drop-in" warned "node $LAUNCH_NODE is not a plain absolute path; the unit keeps its own ExecStart"
+elif ! plain_abs_path "$LAUNCH_TREE"; then
+  record "launcher drop-in" warned "the code tree $LAUNCH_TREE is not a plain absolute path; the unit keeps its own ExecStart"
 else
-  mkdir -p "$(dirname "$DROPIN_FILE")"
-  tmp="$DROPIN_FILE.tmp-harness-$$"
-  printf '%s\n' "$DROPIN_CONTENT" > "$tmp"
-  chmod 644 "$tmp"
-  mv -f "$tmp" "$DROPIN_FILE"
-  RESTART_NEEDED=1
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload
-    record "systemd drop-in" written "SHELL=/bin/bash, KillMode=process (daemon-reload done)"
-  else
-    record "systemd drop-in" warned "written, but systemctl is missing; reload systemd yourself"
-  fi
+  # The unit outlives the tree it names: a rollback to a commit without the
+  # launcher must still start the server, so the command checks for it and
+  # otherwise runs the tree's own dist/cli.js, as the base unit does. Both
+  # branches exec, so the main pid is node either way (KillMode=process and the
+  # launcher's signal forwarding rely on that). No $ or % in it: systemd expands
+  # both, and the paths were checked to be plain characters above.
+  # SuccessExitStatus: the launcher exits 128+N when the server died of signal N
+  # (143 after the SIGTERM of a stop), and systemd counts only exit 0 or a death
+  # by the signal itself as clean, so every stop would leave the unit failed.
+  LAUNCH_SCRIPT="$LAUNCH_TREE/scripts/cloud/companion-launch.mjs"
+  LAUNCH_CMD="/bin/sh -c 'if [ -f $LAUNCH_SCRIPT ]; then exec $LAUNCH_NODE $LAUNCH_SCRIPT web --port 3456; else exec $LAUNCH_NODE $LAUNCH_TREE/dist/cli.js web --port 3456; fi'"
+  LAUNCHER_CONTENT="# Written by scripts/cloud/ensure-harness.sh: the server runs through the launcher, which starts the build this Mac installed (docs/plan/walnut-companion-unified-replica.md).
+# A code tree without the launcher (an older commit) runs its own dist/cli.js.
+[Service]
+ExecStart=
+ExecStart=$LAUNCH_CMD
+SuccessExitStatus=129 130 143
+Environment=WALNUT_COMPANION_MAC_BUILDS=$MAC_BUILDS"
+  ensure_dropin "$LAUNCHER_DROPIN" "$LAUNCHER_CONTENT" "launcher drop-in" "$LAUNCH_SCRIPT with $LAUNCH_NODE, $mac_builds_note"
 fi
 
 # ── 5. config.yaml: cloud exec on, default engine ────────────────────────────

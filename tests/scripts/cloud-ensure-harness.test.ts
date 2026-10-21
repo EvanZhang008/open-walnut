@@ -230,6 +230,27 @@ const lexists = (p: string): boolean => {
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const readConfig = (sb: Sandbox): any => yaml.load(fs.readFileSync(sb.config, 'utf-8'))
+const launcherDropin = (sb: Sandbox): string => path.join(path.dirname(sb.dropin), 'launcher.conf')
+/** The base unit setup.sh writes, reduced to the lines the launcher step reads. */
+function writeUnit(sb: Sandbox, lines: string[]): void {
+  const unit = path.join(sb.root, 'etc', 'systemd', 'system', 'walnut.service')
+  fs.mkdirSync(path.dirname(unit), { recursive: true })
+  fs.writeFileSync(unit, ['[Unit]', 'Description=test unit', '', '[Service]', 'User=walnut', ...lines, 'Restart=always', ''].join('\n'))
+}
+/** What the launcher drop-in should hold for this node, tree and Mac builds value. */
+const launcherConf = (node: string, tree: string, macBuilds: 0 | 1): string => [
+  '# Written by scripts/cloud/ensure-harness.sh: the server runs through the launcher, which starts the build this Mac installed (docs/plan/walnut-companion-unified-replica.md).',
+  '# A code tree without the launcher (an older commit) runs its own dist/cli.js.',
+  '[Service]',
+  'ExecStart=',
+  // A rollback to a tree without the launcher still starts the server; both branches exec.
+  `ExecStart=/bin/sh -c 'if [ -f ${tree}/scripts/cloud/companion-launch.mjs ]; then exec ${node} ${tree}/scripts/cloud/companion-launch.mjs web --port 3456; ` +
+    `else exec ${node} ${tree}/dist/cli.js web --port 3456; fi'`,
+  // The launcher exits 128+N for a server that died of signal N (143 on a stop).
+  'SuccessExitStatus=129 130 143',
+  `Environment=WALNUT_COMPANION_MAC_BUILDS=${macBuilds}`,
+  '',
+].join('\n')
 
 /** One summary row: `  <item>:   <status>   <detail>`. */
 function row(stdout: string, item: string): { status: string; detail: string } | null {
@@ -259,6 +280,13 @@ describe('argument validation', () => {
     for (const engine of SESSION_ENGINE_IDS) {
       const res = await run(null, ['--validate-args', '--engine', engine, '--bedrock-region', 'eu-central-1'])
       expect(res.status, `${engine}: ${res.stderr}`).toBe(0)
+    }
+  })
+
+  it('accepts --no-mac-builds and --mac-builds, which take no value', async () => {
+    for (const flag of ['--no-mac-builds', '--mac-builds']) {
+      const res = await run(null, ['--validate-args', flag, '--engine', 'claude'])
+      expect(res.status, `${flag}: ${res.stderr}`).toBe(0)
     }
   })
 
@@ -301,7 +329,7 @@ describe('--dry-run', () => {
     const before = snapshot(sb.root)
     const res = await run(sb, ['--dry-run', '--engine', 'codex'])
     expect(res.status, res.stderr).toBe(0)
-    for (const item of ['claude-code', 'engine:codex', 'settings.json', 'systemd drop-in', 'work dir',
+    for (const item of ['claude-code', 'engine:codex', 'settings.json', 'systemd drop-in', 'launcher drop-in', 'work dir',
       'cloud.exec.enabled', 'cloud.exec.cwd_roots', 'defaults.engine']) {
       expect(row(res.stdout, item)?.status, item).toBe('planned')
     }
@@ -349,10 +377,11 @@ describe('a fresh box', () => {
     expect(row(res.stdout, 'settings.json')?.detail).toContain('instance role WalnutTestRole')
 
     // The unit gets a real shell, and a restart signals the server alone (the
-    // session daemons and their CLIs outlive it); systemd reloaded, the service
-    // NOT restarted.
+    // session daemons and their CLIs outlive it); the server starts through the
+    // launcher; systemd reloaded once per drop-in, the service NOT restarted.
     expect(fs.readFileSync(sb.dropin, 'utf-8').endsWith('[Service]\nEnvironment=SHELL=/bin/bash\nKillMode=process\n')).toBe(true)
-    expect(log.filter((c) => c.startsWith('systemctl'))).toEqual(['systemctl daemon-reload'])
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toContain('\nEnvironment=WALNUT_COMPANION_MAC_BUILDS=1\n')
+    expect(log.filter((c) => c.startsWith('systemctl'))).toEqual(['systemctl daemon-reload', 'systemctl daemon-reload'])
 
     // Cloud exec on, sandboxed to the work dir, default engine recorded.
     const workDir = path.join(sb.home, 'work')
@@ -378,7 +407,7 @@ describe('a fresh box', () => {
     expect(snapshot(sb.root)).toEqual(before)
     const newCalls = calls(sb).slice(callsBefore)
     expect(newCalls.filter((c) => !c.startsWith('npm prefix') && !c.startsWith('imds '))).toEqual([])
-    for (const item of ['claude-code', 'settings.json', 'systemd drop-in', 'work dir',
+    for (const item of ['claude-code', 'settings.json', 'systemd drop-in', 'launcher drop-in', 'work dir',
       'cloud.exec.enabled', 'cloud.exec.cwd_roots', 'defaults.engine']) {
       expect(row(res.stdout, item)?.status, item).toBe('present')
     }
@@ -398,6 +427,167 @@ describe('a fresh box', () => {
     expect(row(res.stdout, 'systemd drop-in')?.status).toBe('written')
     expect(calls(sb).slice(callsBefore)).toContain('systemctl daemon-reload')
     expect(res.stdout).toMatch(/restart:\s+needed/)
+  })
+})
+
+describe('the launcher drop-in', () => {
+  it('starts the server through the launcher, with the node and the tree of the base unit', async () => {
+    const sb = makeSandbox()
+    writeUnit(sb, [
+      'WorkingDirectory=/opt/walnut-tree',
+      'Environment=WALNUT_CLOUD_MODE=1',
+      'ExecStart=/opt/node-test/bin/node /opt/walnut-tree/dist/cli.js web --port 3456',
+    ])
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf('/opt/node-test/bin/node', '/opt/walnut-tree', 1))
+    expect(fs.statSync(launcherDropin(sb)).mode & 0o777).toBe(0o644)
+    expect(row(res.stdout, 'launcher drop-in')).toEqual({
+      status: 'written',
+      detail: '/opt/walnut-tree/scripts/cloud/companion-launch.mjs with /opt/node-test/bin/node, Mac builds on (daemon-reload done)',
+    })
+    expect(res.stdout).toMatch(/restart:\s+needed/)
+    // No temp file left beside the drop-ins.
+    expect(fs.readdirSync(path.dirname(sb.dropin)).sort()).toEqual(['harness.conf', 'launcher.conf'])
+  })
+
+  it('without a base unit: node from PATH and this checkout, whose launcher exists', async () => {
+    const sb = makeSandbox()
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(path.join(sb.stubs, 'node'), REPO_ROOT, 1))
+    expect(fs.existsSync(path.join(REPO_ROOT, 'scripts', 'cloud', 'companion-launch.mjs'))).toBe(true)
+  })
+
+  it('takes node from PATH when the unit ExecStart does not start with an absolute path', async () => {
+    const sb = makeSandbox()
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(path.join(sb.stubs, 'node'), '/opt/walnut-tree', 1))
+  })
+
+  it('is idempotent: a second run leaves it alone and reloads nothing', async () => {
+    const sb = makeSandbox()
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/node-test/bin/node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    expect((await run(sb, [])).status).toBe(0)
+    const before = snapshot(sb.root)
+    const callsBefore = calls(sb).length
+    const res = await run(sb, [])
+    expect(res.status, res.stderr).toBe(0)
+    expect(snapshot(sb.root)).toEqual(before)
+    expect(calls(sb).slice(callsBefore).filter((c) => c.startsWith('systemctl'))).toEqual([])
+    expect(row(res.stdout, 'launcher drop-in')?.status).toBe('present')
+    expect(res.stdout).toMatch(/restart:\s+no/)
+  })
+
+  it('--no-mac-builds writes 0, a later run without a flag keeps it, and --mac-builds turns it back on', async () => {
+    const sb = makeSandbox()
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/node-test/bin/node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    const off = await run(sb, ['--no-mac-builds'])
+    expect(off.status, off.stdout + off.stderr).toBe(0)
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf('/opt/node-test/bin/node', '/opt/walnut-tree', 0))
+    expect(row(off.stdout, 'launcher drop-in')?.detail).toContain('Mac builds off')
+
+    // A deploy runs the script with no flags: the box keeps its choice.
+    const kept = await run(sb, [])
+    expect(kept.status, kept.stderr).toBe(0)
+    expect(row(kept.stdout, 'launcher drop-in')?.status).toBe('present')
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toContain('\nEnvironment=WALNUT_COMPANION_MAC_BUILDS=0\n')
+
+    const on = await run(sb, ['--mac-builds'])
+    expect(on.status, on.stderr).toBe(0)
+    expect(row(on.stdout, 'launcher drop-in')?.status).toBe('written')
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf('/opt/node-test/bin/node', '/opt/walnut-tree', 1))
+    expect(on.stdout).toMatch(/restart:\s+needed/)
+  })
+
+  it('rewrites a drop-in that names another node or tree, keeping its Mac builds value', async () => {
+    const sb = makeSandbox()
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/node-new/bin/node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    fs.mkdirSync(path.dirname(launcherDropin(sb)), { recursive: true })
+    fs.writeFileSync(launcherDropin(sb), launcherConf('/opt/node-old/bin/node', '/opt/walnut-old', 0))
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf('/opt/node-new/bin/node', '/opt/walnut-tree', 0))
+    expect(row(res.stdout, 'launcher drop-in')?.status).toBe('written')
+  })
+
+  it('has an ExecStart systemd passes on untouched: no $, no %, no backslash, one quoted sh script', async () => {
+    const sb = makeSandbox()
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/node-test/bin/node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    expect((await run(sb, [])).status).toBe(0)
+    const lines = fs.readFileSync(launcherDropin(sb), 'utf-8').split('\n').filter((l) => l.startsWith('ExecStart='))
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toBe('ExecStart=')
+    expect(lines[1]).not.toMatch(/[$%\\"]/)
+    expect(lines[1]).toMatch(/^ExecStart=\/bin\/sh -c '[^']+'$/)
+  })
+
+  /** Runs the drop-in's ExecStart script the way systemd would hand it to /bin/sh. */
+  function runExecStart(sb: Sandbox): Promise<{ status: number | null; pid: number | undefined; stdout: string; stderr: string }> {
+    const line = fs.readFileSync(launcherDropin(sb), 'utf-8').split('\n').find((l) => l.startsWith('ExecStart=/bin/sh'))!
+    const script = /^ExecStart=\/bin\/sh -c '([^']+)'$/.exec(line)![1]
+    return new Promise((resolve, reject) => {
+      const child = spawn('/bin/sh', ['-c', script], { env: sb.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.setEncoding('utf-8').on('data', (chunk: string) => { stdout += chunk })
+      child.stderr.setEncoding('utf-8').on('data', (chunk: string) => { stderr += chunk })
+      const timer = setTimeout(() => child.kill('SIGKILL'), 30_000)
+      child.on('error', (err) => { clearTimeout(timer); reject(err) })
+      child.on('close', (status) => { clearTimeout(timer); resolve({ status, pid: child.pid, stdout, stderr }) })
+    })
+  }
+
+  it.each([
+    ['has the launcher', true, 'launcher'],
+    ['lacks it (a rollback to an older commit)', false, 'cli'],
+  ])('its command line runs in a tree that %s, and exec keeps node as the pid systemd started', async (_label, hasLauncher, which) => {
+    const sb = makeSandbox()
+    const tree = path.join(sb.dir, 'tree')
+    const report = (name: string) => `console.log(JSON.stringify({ which: ${JSON.stringify(name)}, argv: process.argv.slice(2), pid: process.pid }))\n`
+    fs.mkdirSync(path.join(tree, 'dist'), { recursive: true })
+    fs.writeFileSync(path.join(tree, 'dist', 'cli.js'), report('cli'))
+    if (hasLauncher) {
+      fs.mkdirSync(path.join(tree, 'scripts', 'cloud'), { recursive: true })
+      fs.writeFileSync(path.join(tree, 'scripts', 'cloud', 'companion-launch.mjs'), report('launcher'))
+    }
+    // The stub node (a sh wrapper that execs the real node) stands in for the unit's node.
+    writeUnit(sb, [`WorkingDirectory=${tree}`, `ExecStart=${path.join(sb.stubs, 'node')} ${tree}/dist/cli.js web --port 3456`])
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(row(res.stdout, 'launcher drop-in')?.status).toBe('written')
+
+    const out = await runExecStart(sb)
+    expect(out.status, out.stderr).toBe(0)
+    expect(JSON.parse(out.stdout)).toEqual({ which, argv: ['web', '--port', '3456'], pid: out.pid })
+  })
+
+  it.each([
+    ['a % in the tree', ['WorkingDirectory=/opt/walnut%itree', 'ExecStart=/opt/node-test/bin/node /x/dist/cli.js web'], 'the code tree /opt/walnut%itree is not a plain absolute path'],
+    ['a $ in the node', ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/no$de/bin/node /x/dist/cli.js web'], 'node /opt/no$de/bin/node is not a plain absolute path'],
+    ['a quote in the tree', ["WorkingDirectory=/opt/walnut'tree", 'ExecStart=/opt/node-test/bin/node /x/dist/cli.js web'], 'is not a plain absolute path'],
+    ['a relative tree', ['WorkingDirectory=-/opt/walnut-tree', 'ExecStart=/opt/node-test/bin/node /x/dist/cli.js web'], 'the code tree -/opt/walnut-tree is not a plain absolute path'],
+  ])('refuses to write it for %s, and the unit keeps its own ExecStart', async (_label, unitLines, message) => {
+    const sb = makeSandbox()
+    writeUnit(sb, unitLines)
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(row(res.stdout, 'launcher drop-in')?.status).toBe('warned')
+    expect(row(res.stdout, 'launcher drop-in')?.detail).toContain(message)
+    expect(lexists(launcherDropin(sb))).toBe(false)
+  })
+
+  it('a dry run plans it and writes nothing', async () => {
+    const sb = makeSandbox()
+    const res = await run(sb, ['--dry-run', '--no-mac-builds'])
+    expect(res.status, res.stderr).toBe(0)
+    expect(row(res.stdout, 'launcher drop-in')).toEqual({
+      status: 'planned',
+      detail: `${REPO_ROOT}/scripts/cloud/companion-launch.mjs with ${path.join(sb.stubs, 'node')}, Mac builds off, then systemctl daemon-reload`,
+    })
+    expect(lexists(launcherDropin(sb))).toBe(false)
   })
 })
 
@@ -933,6 +1123,13 @@ describe('setup.sh wiring', () => {
     const res = parseSetupArgs(['--engine', 'codex', '--bedrock-region=eu-west-1'])
     expect(res.status, res.stderr).toBe(0)
     expect(res.forwarded).toEqual(['--engine', 'codex', '--bedrock-region', 'eu-west-1'])
+    expect(res.stderr).toBe('')
+  })
+
+  it('forwards --no-mac-builds and --mac-builds as they are, in order', async () => {
+    const res = parseSetupArgs(['--no-mac-builds', '--engine', 'codex', '--mac-builds'])
+    expect(res.status, res.stderr).toBe(0)
+    expect(res.forwarded).toEqual(['--no-mac-builds', '--engine', 'codex', '--mac-builds'])
     expect(res.stderr).toBe('')
   })
 

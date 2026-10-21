@@ -93,6 +93,7 @@ export const SLOW_TEST_FILES = [
   // ── Real HTTP server + session plumbing ────────────────────────────────────
   'tests/scripts/devprod-render-check.test.ts', // ~25s — launches a headless Chromium per verdict
   'tests/scripts/cloud-ensure-harness.test.ts', // ~75s: 67 tests, mostly real runs of the harness script and setup.sh blocks (bash + node) in a sandbox
+  'tests/scripts/companion-launch.test.ts', // ~13s: the companion launcher as a real process, with trial deadlines and signal waits
   'tests/scripts/release-promote-steps.test.ts', // ~10-40s: the release job's steps against a bare origin, real git pushes
   'tests/scripts/test-baseline-shard-cut.test.ts', // ~5-15s: three real nested vitest runs, checking the gate's --shard cut
   'tests/lib/hybrid-search-embed-worker-process.test.ts', // ~5-15s: real node hosts and workers through tsx
@@ -141,6 +142,10 @@ export const SLOW_TEST_FILES = [
   'tests/core/sessions/replica-process-guard.test.ts',
   // WP14: logs.tail and the running log cap on both daemon twins as processes (~30s).
   'tests/integration/replica-logs-twins.test.ts',
+  // The companion's build door on a real tree: the host install script with real npm, real smoke boots.
+  'tests/core/companion-build-box.test.ts',
+  'tests/web/routes/bridge-build.test.ts', // ~3s: one real install through the route
+  'tests/web/routes/bridge-build-cloud.test.ts', // ~3s: the real CLOUD_MODE startServer
 ] as const
 
 /**

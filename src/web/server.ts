@@ -1450,6 +1450,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The primary keeps this box's copy of its task store (same door as ingest).
     const { createBridgeReplicaRouter, BRIDGE_REPLICA_PATH } = await import('./routes/bridge-replica.js')
     app.use(BRIDGE_REPLICA_PATH, createBridgeReplicaRouter())
+    // The primary keeps this box on its own build (same door; raw chunk bodies).
+    const { createBridgeBuildRouter } = await import('./routes/bridge-build.js')
+    const { BRIDGE_BUILD_PATH } = await import('../core/companion-build/wire.js')
+    app.use(BRIDGE_BUILD_PATH, createBridgeBuildRouter())
   }
 
   // gzip JSON/text responses. The list payloads (/api/tasks, /api/sessions,
@@ -2082,6 +2086,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
   // One-click cloud-companion provisioning (Mac-side job engine).
   app.use('/api/cloud-setup', cloudSetupRouter)
+  // Whether the companion runs this Mac's build (the Mac drives it: core/companion-build/mac.ts).
+  if (bootPolicy('cloud-box-probe')) {
+    app.use('/api/cloud/companion-build', (await import('./routes/companion-build.js')).companionBuildRouter)
+  }
   // Claude subscription limit readings per host (live: host:subscription-limits).
   app.use('/api/subscription-limits', subscriptionLimitsRouter)
   // /api/search-index (canonical) + /api/qmd (legacy alias, one release).
@@ -5250,6 +5258,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // happens in-conversation via skill_manage triggers.
 
   startupPhase('ALL DONE — server fully initialized')
+  // A companion trial build confirms itself once it has served a while (a no-op
+  // unless its launcher started it as a trial; core/companion-build/box.ts).
+  if (bootPolicy('companion-ingest-routes')) {
+    void import('../core/companion-build/box.js').then((m) => m.startTrialConfirm()).catch((err) => {
+      log.web.warn('companion trial confirm did not start', { error: err instanceof Error ? err.message : String(err) })
+    })
+  }
   // One line with every job's decision for this role and placement (core/boot-policy.ts),
   // and what the boot cost: the host replica's budget is checked against it.
   {

@@ -1639,6 +1639,11 @@ export interface Config {
      *  again. Default on; false keeps every host to what it can do alone.
      *  See docs/plan/walnut-control-plane.md. */
     backup_leader?: boolean;
+    /** Keep the cloud companion on this Mac's build: the Mac installs its
+     *  own build there whenever the companion runs another one. Default on;
+     *  false leaves the companion on the build it has.
+     *  See docs/plan/walnut-companion-unified-replica.md, stage 1. */
+    auto_update?: boolean;
   };
   /** Open this server from a browser anywhere through a tunnel it runs
    *  (docs/plan/walnut-servers-everywhere.md). Off unless enabled. */

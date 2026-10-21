@@ -15,6 +15,7 @@
  */
 
 import { shq } from '../../providers/remote-sh.js'
+import { validBuildId } from '../companion-build/wire.js'
 
 export const HOST_ROOT = '$HOME/.open-walnut-host'
 
@@ -43,6 +44,13 @@ export interface InstallPlan {
   buildEnv: Record<string, string>
   /** The root on the host (default HOST_ROOT). */
   root?: string
+  /** Builds the prune never removes, besides this one (the companion's current and trial). */
+  keep?: string[]
+  /**
+   * Optional dependencies (the companion): npm then installs optional packages and
+   * skips the ones this platform cannot take, instead of failing. A host passes none.
+   */
+  optionalDependencies?: Record<string, string>
 }
 
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -55,7 +63,14 @@ function heredoc(file: string, body: string): string {
 /** The script the host runs (detached) to install one build. */
 export function installScript(plan: InstallPlan): string {
   for (const k of Object.keys(plan.buildEnv)) if (!ENV_KEY.test(k)) throw new Error(`build_env.${k} is not an environment variable name`)
-  const depsJson = JSON.stringify({ name: 'open-walnut-host-deps', private: true, dependencies: plan.dependencies }, null, 2)
+  const keep = [...new Set(plan.keep ?? [])].filter((k) => k !== plan.id)
+  for (const k of keep) if (!validBuildId(k)) throw new Error(`keep has a bad build id: ${JSON.stringify(k)}`)
+  const optional = plan.optionalDependencies
+  const depsJson = JSON.stringify({
+    name: 'open-walnut-host-deps', private: true, dependencies: plan.dependencies,
+    ...(optional ? { optionalDependencies: optional } : {}),
+  }, null, 2)
+  const omit = optional ? '--omit=dev' : '--omit=optional --omit=dev'
   return [
     'set -u',
     `ROOT="${checkHostRoot(plan.root ?? HOST_ROOT)}"`,
@@ -79,7 +94,7 @@ export function installScript(plan: InstallPlan): string {
     'if [ ! -f "$DEPDIR/.ready" ]; then',
     '  rm -rf "$DEPDIR.partial" && mkdir -p "$DEPDIR.partial" || fail "cannot create $DEPDIR"',
     `  ${heredoc('"$DEPDIR.partial/package.json"', depsJson)}`,
-    '  (cd "$DEPDIR.partial" && "$NPM" install --no-audit --no-fund --omit=optional --omit=dev --loglevel=error) || fail "npm install of its dependencies failed: see $IN/$ID.install.log on the host"',
+    `  (cd "$DEPDIR.partial" && "$NPM" install --no-audit --no-fund ${omit} --loglevel=error) || fail "npm install of its dependencies failed: see $IN/$ID.install.log on the host"`,
     '  rm -rf "$DEPDIR" && mv "$DEPDIR.partial" "$DEPDIR" && touch "$DEPDIR/.ready" || fail "cannot move the dependencies in place"',
     'fi',
     'rm -rf "$APP.partial" && mkdir -p "$APP.partial" || fail "cannot create $APP"',
@@ -90,8 +105,10 @@ export function installScript(plan: InstallPlan): string {
     'OPEN_WALNUT_HOME="$ROOT/data" "$NODE" "$APP.partial/dist/cli.js" --version > "$IN/$ID.version" 2>&1 || fail "the build does not start with $NODE: $(tail -n 3 "$IN/$ID.version" | tr "\\n" " ")"',
     'rm -rf "$APP" && mv "$APP.partial" "$APP" && touch "$APP/.ready" || fail "cannot move the build in place"',
     'rm -f "$IN/$ID.tgz"',
-    // Keep this build and the newest other one; then the dependency sets no build links to.
-    'for d in $(ls -1t "$ROOT/app" 2>/dev/null | grep -v "^$ID$" | grep -v "\\.partial$" | tail -n +2); do rm -rf "$ROOT/app/$d"; done',
+    // Keep this build and the newest other one (and the kept ones); then the dependency sets no build links to.
+    keep.length
+      ? `KEEP=${shq(` ${keep.join(' ')} `)}; for d in $(ls -1t "$ROOT/app" 2>/dev/null | grep -v "^$ID$" | grep -v "\\.partial$" | tail -n +2); do case "$KEEP" in *" $d "*) ;; *) rm -rf "$ROOT/app/$d";; esac; done`
+      : 'for d in $(ls -1t "$ROOT/app" 2>/dev/null | grep -v "^$ID$" | grep -v "\\.partial$" | tail -n +2); do rm -rf "$ROOT/app/$d"; done',
     'for h in $(ls -1 "$ROOT/deps" 2>/dev/null | grep -v "\\.partial$"); do',
     '  used=no; for l in "$ROOT"/app/*/node_modules; do case "$(readlink "$l" 2>/dev/null)" in *"/deps/$h/"*) used=yes;; esac; done',
     '  [ "$used" = yes ] || rm -rf "$ROOT/deps/$h"',

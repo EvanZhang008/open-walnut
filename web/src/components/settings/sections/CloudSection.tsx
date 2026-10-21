@@ -39,6 +39,7 @@ import { log } from '@/utils/log';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsGroup, SettingsRow, SettingsTag, SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
+import { CompanionUpdatesRow } from './cloud/CompanionUpdatesRow';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { CloudConfigureForm, type ConfigureValues } from './cloud/CloudConfigureForm';
 import { CloudManualPaste } from './cloud/CloudManualPaste';
@@ -441,6 +442,7 @@ export function CloudSection() {
                   : 'Data sync is wired and the first push succeeded.'}
                 control={connectedTag}
               />
+              <CompanionUpdatesRow />
             </SettingsGroup>
             {refusedNotice}
             <PairPhoneCard domain={job.domain} />
@@ -465,6 +467,7 @@ export function CloudSection() {
               control={connectedTag}
             />
             {refusedNotice}
+            <CompanionUpdatesRow />
             <SettingsRow
               label="Phones"
               help={<>Pair phones under Paired phones; they point at this companion and work off <span className="settings-nowrap">Wi-Fi</span>.</>}

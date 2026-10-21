@@ -9,7 +9,7 @@
 #
 # Invoked by the VM's user-data (see src/core/cloud-setup/user-data.ts and
 # infra/lib/walnut-cloud-stack.ts):
-#   bash /opt/walnut/scripts/cloud/setup.sh <domain> [--engine <id>] [--bedrock-region <region>]
+#   bash /opt/walnut/scripts/cloud/setup.sh <domain> [--engine <id>] [--bedrock-region <region>] [--no-mac-builds]
 #
 # Run as root. Idempotent — safe to re-run (e.g. via SSM after a repo update):
 #   sudo bash /opt/walnut/scripts/cloud/setup.sh wn.example.com
@@ -18,6 +18,9 @@
 # which installs Claude Code plus that engine's CLI and switches cloud exec on.
 # Both are optional: without --engine the box keeps its own defaults.engine
 # (claude on a fresh box); the Bedrock region defaults to us-west-2.
+# --no-mac-builds (or --mac-builds to undo it) goes there too: such a box always
+# runs this tree and never takes a build from the Mac. Without either flag the
+# box keeps its earlier choice; a new box takes the Mac's builds.
 #
 # What it sets up:
 #   Caddy (443/80, auto Let's Encrypt) → Walnut server (localhost:3456)
@@ -32,7 +35,7 @@ set -euo pipefail
 # cloud-init runs user-data with no HOME; npm/git need one.
 export HOME="${HOME:-/root}"
 
-DOMAIN="${1:?usage: setup.sh <domain> [--engine <id>] [--bedrock-region <region>]}"
+DOMAIN="${1:?usage: setup.sh <domain> [--engine <id>] [--bedrock-region <region>] [--no-mac-builds]}"
 shift
 
 REPO_DIR=/opt/walnut
@@ -118,11 +121,13 @@ HARNESS_SCRIPT="$REPO_DIR/scripts/cloud/ensure-harness.sh"
 HARNESS_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    # No value, so nothing this checkout could fail to know: passed on as is.
+    --no-mac-builds|--mac-builds) HARNESS_ARGS+=("$1"); shift; continue ;;
     --engine=*|--bedrock-region=*) flag="${1%%=*}"; value="${1#*=}"; shift ;;
     --engine|--bedrock-region)
       if [ $# -lt 2 ]; then echo "WARNING: $1 has no value; ignored" >&2; shift; continue; fi
       flag="$1"; value="$2"; shift 2 ;;
-    *) echo "WARNING: unknown argument '$1' ignored (usage: setup.sh <domain> [--engine <id>] [--bedrock-region <region>])" >&2; shift; continue ;;
+    *) echo "WARNING: unknown argument '$1' ignored (usage: setup.sh <domain> [--engine <id>] [--bedrock-region <region>] [--no-mac-builds])" >&2; shift; continue ;;
   esac
   if bash "$HARNESS_SCRIPT" --validate-args "$flag" "$value" >/dev/null 2>&1; then
     HARNESS_ARGS+=("$flag" "$value")
