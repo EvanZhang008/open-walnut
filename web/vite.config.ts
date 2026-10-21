@@ -2,9 +2,10 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { restateOwnOrigin } from './dev-proxy-origin';
+import { pdfAssets } from './pdf-assets';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), pdfAssets()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
@@ -66,7 +67,7 @@ export default defineConfig({
     // when it finds them mid-session — which drops the preview that just
     // mounted, and made the browser tests flake on whichever office spec ran
     // first in a cold run.
-    include: ['xlsx', 'docx-preview', 'pptx-preview'],
+    include: ['xlsx', 'docx-preview', 'pptx-preview', 'pdfjs-dist'],
   },
   build: {
     outDir: '../dist/web/static',
