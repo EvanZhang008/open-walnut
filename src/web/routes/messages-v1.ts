@@ -75,7 +75,17 @@ messagesV1Router.get('/requests/:id', async (req: Request, res: Response, next: 
       return
     }
     const { getSessionRequest } = await import('../../core/session-requests.js')
-    const request = await getSessionRequest(id)
+    let request = await getSessionRequest(id)
+    // A request this server does not hold itself may be in its copy of the Mac's: the
+    // companion answers here only a read the Mac did not (away, or the forward went
+    // unanswered). No copy held (the Mac itself): nothing more to look at.
+    if (!request) {
+      const [{ readRequestCopy }, { copyKindAsOf, COPY_AS_OF_HEADER }] = await Promise.all([
+        import('../../core/replication/kinds/requests.js'), import('../../core/replication/kinds/gate.js'),
+      ])
+      request = (await readRequestCopy(id)) ?? undefined
+      if (request) res.setHeader(COPY_AS_OF_HEADER, String(await copyKindAsOf('requests') ?? 0))
+    }
     if (!request) {
       sendError(res, 404, 'not_found', `No such request: ${id}`)
       return

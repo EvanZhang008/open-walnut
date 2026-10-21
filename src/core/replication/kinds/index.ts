@@ -30,28 +30,30 @@ export function copyKinds(): CopyKind<any>[] {
 }
 
 /**
- * Only the replica program on a host keeps these copies (gate.ts keepsCopies).
- * Anywhere else (the leader, the companion, the plain host server that never
- * opted in) a step of these kinds answers exactly what an unregistered kind did
- * before WP4, whatever its op or schema version: `404 unknown_kind`.
+ * Only a server that keeps the kind's copy takes its steps (gate.ts keepsCopies:
+ * the replica program on a host, every kind; the companion, its kinds).
+ * Anywhere else (the leader, the plain host server that never opted in, the
+ * companion for a kind it does not keep) a step answers exactly what an
+ * unregistered kind did before WP4, whatever its op or schema version:
+ * `404 unknown_kind`, which rests that kind for this target on the Mac.
  */
-export function hostReplicaOnly(h: FollowerKindHandler): FollowerKindHandler {
+export function copyKeepersOnly(h: FollowerKindHandler): FollowerKindHandler {
   return {
     kind: h.kind,
-    // followerStep checks the version before the step: never `schema_newer` off a host replica.
-    get schemaVersion() { return keepsCopies() ? h.schemaVersion : Number.MAX_SAFE_INTEGER },
-    step: (op, body) => (keepsCopies() ? h.step(op, body) : { ok: false, status: 404, error: 'unknown_kind' }),
+    // followerStep checks the version before the step: never `schema_newer` where the kind is not kept.
+    get schemaVersion() { return keepsCopies(h.kind) ? h.schemaVersion : Number.MAX_SAFE_INTEGER },
+    step: (op, body) => (keepsCopies(h.kind) ? h.step(op, body) : { ok: false, status: 404, error: 'unknown_kind' }),
   }
 }
 
 /** The follower side of every copy kind, for POST /bridge/replica. Returns the unregister. */
 export function registerCopyFollowerKinds(): () => void {
   const off = [sessionsFollower(), requestsFollower(), boardsFollower(), inboxFollower(), inboxBodiesFollower(),
-    routinesFollower(), conversationsFollower(), prefsFollower(), configFollower(), personasFollower()].map((h) => registerFollowerKind(hostReplicaOnly(h)))
+    routinesFollower(), conversationsFollower(), prefsFollower(), configFollower(), personasFollower()].map((h) => registerFollowerKind(copyKeepersOnly(h)))
   return () => { for (const u of off) u() }
 }
 
-/** Leader only (a follower starts nothing): the copy kinds' rounds to every host replica. */
+/** Leader only (a follower starts nothing): the copy kinds' rounds to every target that keeps them. */
 export function startCopyKinds(deps?: CopyKindsDeps): { stop: () => void } {
   return startCopyKindsSync(copyKinds(), deps)
 }

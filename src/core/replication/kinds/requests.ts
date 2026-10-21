@@ -1,7 +1,8 @@
 /**
  * The `requests` copy kind (docs/plan/walnut-replica-servers-impl.md, section 4
  * and WP4): the Mac's session-requests.json (pending and recently settled reply
- * requests between sessions) on each host replica, in the same file there.
+ * requests between sessions) on each host replica, in the same file there, and
+ * on the companion in its copy store (readRequestCopy).
  *
  * A request's status only moves forward on apply (section 7): once the copy
  * holds a final status (replied, notified, expired), a leader row that says
@@ -21,7 +22,7 @@ import type { SessionRequest, SessionRequestStatus } from '../../session-request
 import { sha12 } from '../kind.js'
 import { createRowSetFollower, serialChain, writeCopyFile, type RowSetFollower, type RowSetState } from '../kind-follower.js'
 import type { CopyKind } from './copy-kind.js'
-import { copyRefusal, markCopyOff } from './gate.js'
+import { copyKindHeld, copyPath, copyRefusal, markCopyOff } from './gate.js'
 
 export const REQUESTS_SCHEMA_VERSION = 1
 export const REQUESTS_REMOVAL_FLOOR = 50
@@ -72,8 +73,12 @@ export const REQUESTS_KIND: CopyKind<SessionRequest> = {
 // --- Follower ---
 
 const STATE_FILE = () => path.join(WALNUT_HOME, 'cache', 'replica', 'requests.json')
-/** The same file the Mac keeps (session-requests.ts REQUESTS_FILE). */
-const STORE_FILE = () => path.join(WALNUT_HOME, 'session-requests.json')
+/**
+ * The same file the Mac keeps (session-requests.ts REQUESTS_FILE) on a host
+ * replica; on the companion its own copy store (gate.ts copyPath), never the
+ * box's own requests.
+ */
+const STORE_FILE = () => copyPath(path.join(WALNUT_HOME, 'session-requests.json'))
 let state: RowSetState | null = null
 let serial = serialChain()
 
@@ -144,6 +149,15 @@ export function requestsFollower(): RowSetFollower {
     },
   })
   return follower
+}
+
+/**
+ * A request from the copy (the companion's read of one the box does not hold,
+ * while the Mac is away), or null: no such row, or no copy held.
+ */
+export async function readRequestCopy(id: string): Promise<SessionRequest | null> {
+  if (!(await copyKindHeld('requests'))) return null
+  return (await readStore()).find((r) => r.id === id) ?? null
 }
 
 /** Tests only. */

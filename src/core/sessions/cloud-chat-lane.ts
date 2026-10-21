@@ -259,7 +259,12 @@ async function resolveCloudChatLane(
   } = await import('../chat-history.js');
   // The seed is read from THIS box's synced copy of the conversation: read-only,
   // and the only history the companion has while the primary is unreachable.
-  const { profile: base, effort, seed } = await buildLaneProfile(config, agentId, { conversationId });
+  // The persona as the Mac renders it, when this box holds the copy (stage 2a of
+  // docs/plan/walnut-companion-unified-replica.md): an agent the Mac's config
+  // defines, and the Mac's memory in the prompt. Without one, this box renders it.
+  const { readPersonaCopy } = await import('../replication/kinds/personas.js');
+  const persona = await readPersonaCopy(agentId).catch(() => null);
+  const { profile: base, effort, seed } = await buildLaneProfile(config, agentId, { conversationId, ...(persona ? { persona } : {}) });
   const profile = toCloudChatProfile(base, CONVERSATION_SEED_HEADER);
   const sessionId = crypto.randomUUID();
 
