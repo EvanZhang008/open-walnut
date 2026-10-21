@@ -280,16 +280,20 @@ describe('the optimistic read flag', () => {
     expect(calls.some((call) => call.url.includes('/read'))).toBe(true);
   });
 
-  it('stays silent when the list DID land and this account has no provider in it', async () => {
-    // A list that answered is the truth: nothing can move this flag, and asking would only make the
-    // row flash read and back. This is the case the unknown-list path must not be confused with.
+  it('reads a landed list again when it lacks the provider an account uses, and still asks the server', async () => {
+    // A server that is still starting answers `{"providers":[]}` before the mail plugins register
+    // (2026-10-20: a window that read it then marked nothing read all day, with no request and no
+    // error). An account names its provider, so that list is stale: it is read again, and while it
+    // still lacks the provider the call goes out and the SERVER decides.
     const held = PROVIDERS.providers.splice(0, 1);
     try {
       await openMailConsole();
       expect(getMailSnapshot().providersKnown).toBe(true);
+      const before = calls.filter((call) => call.url.includes('/providers')).length;
       await openMailMessage(ACCOUNT, 'm-unread');
-      expect(calls.some((call) => call.url.includes('/read'))).toBe(false);
-      expect(getMailSnapshot().mailboxes[ACCOUNT]!.find((one) => one.mailboxId === 'INBOX')!.unread).toBe(2);
+      expect(calls.filter((call) => call.url.includes('/providers')).length).toBeGreaterThan(before);
+      expect(calls.filter((call) => call.method === 'POST' && call.url.includes('/read'))).toHaveLength(1);
+      expect(getMailSnapshot().mailboxes[ACCOUNT]!.find((one) => one.mailboxId === 'INBOX')!.unread).toBe(1);
     } finally {
       PROVIDERS.providers.push(...held);
     }

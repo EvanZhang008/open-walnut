@@ -47,10 +47,14 @@ test('one back control; the reader returns to the list with the group still open
   // Opening a group is not a new place: the back is still Mailboxes, and there is no other back.
   await expect(back).toHaveAttribute('aria-label', 'Mailboxes')
   const scroller = page.locator('.mail-rows.mail-grouped')
-  await scroller.evaluate((el) => { el.scrollTop = 60 })
+  // Every group is open, so the row may sit far down: bring it into view first (the click would), then
+  // nudge the list so the kept scroll is not simply a row's own position.
+  const row = group.locator('[data-testid="mail-row"]').first()
+  await row.scrollIntoViewIfNeeded()
+  await scroller.evaluate((el) => { el.scrollTop = Math.max(0, el.scrollTop - 40) })
   await page.waitForTimeout(200)
   const scrolled = await scroller.evaluate((el) => el.scrollTop)
-  await group.locator('[data-testid="mail-row"]').first().click()
+  await row.click()
   await expect(page.getByTestId('mail-reader-back')).toBeVisible()
   await expect(page.getByTestId('mail-reader-sort')).toContainText(`In ${big.label}`)
   await shoot(page, SHOTS, 'narrow-reader')

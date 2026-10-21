@@ -22,7 +22,7 @@ import { groupsViewKey, pushMailListStatus, updateMailListStatus } from './mail-
 import {
   NO_UNREAD_NOW, RESTARTED, STALE_GROUP, UNDO_EXPIRED, bulkResultText, retryLabel,
 } from './mail-groups-copy';
-import { loadGroupPage, loadGroups, restyleRows, peekView } from './mail-groups-store';
+import { isGroupOpen, letGroupGo, loadGroupPage, loadGroups, restyleRows, peekView } from './mail-groups-store';
 import { onMailStoreReset } from './mail-store';
 
 export const RESULT_MS = 12_000;
@@ -154,7 +154,7 @@ function refreshAfter(target: BulkTarget): void {
 /** More changed rows than the event could name: read that open group's list again. */
 function reloadLoaded(target: BulkTarget): void {
   const view = peekView(groupsViewKey(target.scope));
-  if (view?.expanded[target.groupId]) void loadGroupPage(target.scope, target.groupId, '', 'first', true, true);
+  if (view && isGroupOpen(view, target.groupId)) void loadGroupPage(target.scope, target.groupId, '', 'first', true, true);
 }
 
 // ── starting and following a job ──
@@ -275,6 +275,8 @@ export function finish(jobId: string, done: BulkDone, firstReason?: string): voi
   stopPolling(slot.key);
   if (done.changedIds) restyleRows(done.changedIds, slot.kind === 'read');
   else if (done.changedCount > 0) reloadLoaded(slot.target);
+  // A whole group marked read leaves once its count is zero, even under the pointer.
+  if (slot.kind === 'read' && done.failedCount === 0 && !done.stopped) letGroupGo(slot.target.scope, slot.target.groupId);
   refreshAfter(slot.target);
   if (done.failedCount > 0 && firstReason === undefined) {
     // The event names no reason: the job record does.

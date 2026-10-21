@@ -71,7 +71,8 @@ test('lines, hover tools, the more (...) menu, an open group and the reader line
   // Open a group, read a mail: the row stays, the pill counts down, the reader says why.
   const big = [...groups.groups].sort((a: { unread: number }, b: { unread: number }) => b.unread - a.unread)[0]
   const group = await openGroupLine(page, big.id)
-  await expect(group.locator('[data-testid="mail-row"]')).toHaveCount(Math.min(3, big.unread))
+  // Open by default, with every unread mail of the group (no `N more`).
+  await expect(group.locator('[data-testid="mail-row"]')).toHaveCount(big.unread, { timeout: 20_000 })
   expect(await noOverflow(page)).toEqual([])
   const kid = group.locator('[data-testid="mail-row"]').first()
   const messageId = (await kid.getAttribute('data-message-id'))!

@@ -14,12 +14,19 @@
  * So the answer has three states, and the third one asks rather than assumes: `providerFor` re-reads
  * the list once when it does not know, and tells the caller whether the answer can be trusted.
  *
+ * A list that LOADED can be wrong too. A server that is still starting answers `{"providers":[]}`
+ * (16 bytes, logged twice on 2026-10-20 during deploys) before the mail plugins register, and a window
+ * that read it then marked nothing read for the rest of the day: about 22 opens, not one request. An
+ * account the console holds names its provider, so a list without that provider is stale, not an
+ * answer: it is read again (at most every 15 s), and while it still lacks the provider it counts as
+ * unknown, so the call goes out and the server decides.
+ *
  * It lives in its own file because both the action layer and the read-flag layer need it, and
  * `mail-read-flag.ts` importing `mail-actions.ts` (which imports it back) would be a cycle.
  */
 import { listMailProviders, mailFailure, providerIdOf, type MailProviderSummary } from '@/api/mail';
 import { log } from '@/utils/log';
-import { patch, run, store } from './mail-store';
+import { onMailStoreReset, patch, run, store } from './mail-store';
 
 export interface ProviderAnswer {
   provider?: MailProviderSummary;
@@ -51,8 +58,19 @@ export function loadProviders(force = false): Promise<void> {
 export function mayOfferMarkRead(providers: MailProviderSummary[], accountId: string): boolean {
   const provider = providers.find((one) => one.id === providerIdOf(accountId));
   if (provider) return provider.capabilities.markRead === true;
-  return !store.state.providersKnown;
+  return !store.state.providersKnown || accountUsesProvider(accountId);
 }
+
+/** An account the console holds names this provider: a list without it is stale. */
+function accountUsesProvider(accountId: string): boolean {
+  const id = providerIdOf(accountId);
+  return store.state.accounts.some((one) => providerIdOf(one.accountId) === id);
+}
+
+/** When the list was last re-read because it lacked a provider an account names. */
+let staleReadAt = 0;
+const STALE_REREAD_MS = 15_000;
+onMailStoreReset(() => { staleReadAt = 0; });
 
 /**
  * Should a meeting invite get its card (time, answer, Accept / Tentative / Decline)? Only for a
@@ -68,8 +86,19 @@ export async function providerFor(accountId: string): Promise<ProviderAnswer> {
   const find = () => store.state.providers.find((one) => one.id === providerIdOf(accountId));
   const held = find();
   if (held) return { provider: held, known: true };
-  // The list DID land and this provider is not in it: it really is gone, and no re-read will find it.
-  if (store.state.providersKnown) return { known: true };
+  if (store.state.providersKnown) {
+    // The list DID land and this provider is not in it, and no account uses it: it really is gone.
+    if (!accountUsesProvider(accountId)) return { known: true };
+    // An account uses it: the list was read while the server was starting. Read it again, and until it
+    // names the provider the answer is unknown (the server decides), never "it cannot".
+    if (Date.now() - staleReadAt >= STALE_REREAD_MS) {
+      staleReadAt = Date.now();
+      log.info('mail', 'provider list lacks a provider an account uses, reading it again', { accountId });
+      await loadProviders(true);
+    }
+    const again = find();
+    return again ? { provider: again, known: true } : { known: false };
+  }
   await loadProviders(true);
   const after = find();
   return { ...(after ? { provider: after } : {}), known: store.state.providersKnown };

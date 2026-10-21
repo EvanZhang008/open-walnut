@@ -35,7 +35,7 @@ import { closeMailComposer, onMailDraftEvent } from './compose/compose-actions';
 import { loadMailDrafts } from './compose/compose-drafts';
 import { loadProviders } from './mail-providers';
 import { bodyQuoteText } from './mail-quote-text';
-import { mailFlipsInFlight, markReadIfAllowed } from './mail-read-flag';
+import { asShownByConsole, mailFlipsInFlight, markReadIfAllowed } from './mail-read-flag';
 import { flipCountedBy, forgetFlipCounted, mailCountsClock } from './mail-seen-clock';
 import { noteRecentFolder, readSelectedPref, writeSelectedPref } from './mail-sidebar-prefs';
 import { arrivalsAfterOpen, folderLabel, smartPairs, smartRowVisible, type SmartRole } from './mail-smart';
@@ -989,6 +989,8 @@ export function openMailMessage(
   noteMailIdentity(accountId);
   const known = [...store.state.messages, ...store.state.search.messages, ...groupedRows()]
     .find((one) => one.messageId === messageId && one.accountId === accountId) ?? null;
+  // Read at the click, not after the body (2026-10-20): the row the person clicked is what turns read.
+  if (known && !retry) void markReadIfAllowed(known);
   patch({
     // The Ask drawer sits in this pane too, so opening a message closes it. The person asked for the
     // message; leaving the drawer up would make the click look like it did nothing.
@@ -996,7 +998,7 @@ export function openMailMessage(
     open: {
       accountId,
       messageId,
-      message: known,
+      message: known ? asShownByConsole(known) : null,
       body: null,
       bodyError: null,
       loading: true,
@@ -1010,11 +1012,13 @@ export function openMailMessage(
     try {
       const answer = await readMailMessage(accountId, messageId, { retry });
       if (seq !== store.openSeq) return;
+      // An answer read before the flag landed says unread; the console already shows it read.
+      const shown = asShownByConsole(answer.message);
       patch({
         open: {
           accountId,
           messageId,
-          message: answer.message,
+          message: shown,
           body: answer.body ?? null,
           bodyError: answer.bodyError ?? null,
           loading: false,

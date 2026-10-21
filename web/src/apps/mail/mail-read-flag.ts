@@ -8,7 +8,7 @@
  * provider refuses. It is split into its own file because it is the part that is worth reading in
  * one sitting.
  */
-import { mailFailure, markMailMessageRead, type MailMessageDto } from '@/api/mail';
+import { mailFailure, markMailMessageRead, providerIdOf, type MailMessageDto } from '@/api/mail';
 import { log } from '@/utils/log';
 import { providerFor } from './mail-providers';
 import { applySeenToGroupedRows, groupedRowOf, replaceGroupedRow } from './mail-groups-store';
@@ -51,36 +51,110 @@ function handle(one: { accountId: string; messageId: string }): string {
  * decides: its refusal is the same 409 both callers below already roll back.
  */
 async function mayMarkRead(accountId: string): Promise<boolean> {
+  const quick = mayMarkReadNow(accountId);
+  if (quick !== null) return quick;
   const { provider, known } = await providerFor(accountId);
   if (provider) return provider.capabilities.markRead === true;
   return !known;
 }
 
-/** Mark the opened message read, unless the provider is known not to be able to (`mayMarkRead`). */
+/** The answer when the provider is already held (no await, so the click and the flip share a frame). */
+function mayMarkReadNow(accountId: string): boolean | null {
+  const provider = store.state.providers.find((one) => one.id === providerIdOf(accountId));
+  return provider ? provider.capabilities.markRead === true : null;
+}
+
+/**
+ * Mark the opened message read, unless the provider is known not to be able to (`mayMarkRead`).
+ *
+ * The row turns read at the CLICK, before the body or the server answers (2026-10-20, the user: "UI
+ * should work first, the backend can be async"), and the request behind it keeps trying: a network
+ * failure, a timeout or a 5xx is the server not reachable yet, not a refusal, so the row stays read
+ * and the call goes out again (2 s, 5 s, 15 s, 30 s, then every minute) for as long as the console
+ * still shows it read. Only a real refusal (409 the provider cannot, 503 primary_only, any other 4xx)
+ * puts the row back, as before.
+ */
 export async function markReadIfAllowed(message: MailMessageDto): Promise<void> {
   if (message.flags.includes(SEEN)) return;
-  if (!await mayMarkRead(message.accountId)) return;
-  // Re-read the row AFTER the await, not the captured copy: while a provider answer was in flight
-  // the row may already have been marked read (two opens of the same message, a live event), and
-  // applying the badge arithmetic twice would leave the count short.
+  const pair = handle(message);
+  // A second caller (the open, once the body is in) waits for the same first try, never a second flip.
+  const running = openReads.get(pair);
+  if (running) return running;
+  if (heldSeen(message)) return;
+  const quick = mayMarkReadNow(message.accountId);
+  if (quick === false) return;
+  if (quick === null && !await mayMarkRead(message.accountId)) return;
+  const raced = openReads.get(pair);
+  if (raced) return raced;
+  // Re-read the row AFTER the await: it may have been marked read meanwhile, and applying the badge
+  // arithmetic twice would leave the count short.
   if (heldSeen(message)) return;
 
+  // Settles at the FIRST answer (read, refused, or not reached); the retries run on behind it.
+  let firstSettled: () => void = () => undefined;
+  const first = new Promise<void>((resolve) => { firstSettled = resolve; });
+  openReads.set(pair, first);
+  const generation = resetGeneration;
   applySeen(message, true);
-  return markMailMessageRead(message.accountId, message.messageId, true)
-    .then((answer) => {
-      // The server's own row wins: it carries the provider's flags, not our guess.
-      replaceMessage(answer.message);
-    })
-    .catch((error) => {
-      const failure = mailFailure(error);
-      applySeen(message, false);
-      log.warn('mail', 'read flag refused, rolling the badge back', {
-        accountId: message.accountId,
-        messageId: message.messageId,
-        code: failure.code,
-        error: failure.message,
-      });
-    });
+  void (async () => {
+    try {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const answer = await markMailMessageRead(message.accountId, message.messageId, true);
+          replaceMessage(answer.message);
+          return;
+        } catch (error) {
+          const failure = mailFailure(error);
+          firstSettled();
+          if (!transientFailure(failure)) {
+            applySeen(message, false);
+            log.warn('mail', 'read flag refused, rolling the badge back', {
+              accountId: message.accountId,
+              messageId: message.messageId,
+              code: failure.code,
+              error: failure.message,
+            });
+            return;
+          }
+          const waitMs = READ_RETRY_MS[Math.min(attempt, READ_RETRY_MS.length - 1)]!;
+          log.info('mail', 'read flag not confirmed yet, trying again', {
+            accountId: message.accountId, messageId: message.messageId, attempt: attempt + 1, waitMs, error: failure.message,
+          });
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          // Marked unread meanwhile, or the store was reset (another account set, a sign-out): stop.
+          if (generation !== resetGeneration || !heldSeen(message)) return;
+        }
+      }
+    } finally {
+      firstSettled();
+      if (openReads.get(pair) === first) openReads.delete(pair);
+    }
+  })();
+  return first;
+}
+
+/** The waits between tries of a read flag the server has not confirmed; the last one repeats. */
+export const READ_RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
+
+/** The server was not reached or could not answer now: try again. A refusal is an answer. */
+export function transientFailure(failure: { status: number; code: string }): boolean {
+  if (failure.status === 0 || failure.status === 408 || failure.status === 429) return true;
+  if (failure.status === 503 && failure.code === 'primary_only') return false;
+  return failure.status >= 500;
+}
+
+/** Messages whose read flag an open asked for and the server has not confirmed yet: their first try. */
+const openReads = new Map<string, Promise<void>>();
+let resetGeneration = 0;
+onMailStoreReset(() => { openReads.clear(); resetGeneration += 1; });
+
+/**
+ * A server answer as the console shows it: read when the console already shows it read (a row, the
+ * reader, a grouped list). An answer read before the flag landed says unread; the open uses this so
+ * that answer does not undo the click.
+ */
+export function asShownByConsole(message: MailMessageDto): MailMessageDto {
+  return heldSeen(message) && !message.flags.includes(SEEN) ? withSeen(message, true) : message;
 }
 
 /**

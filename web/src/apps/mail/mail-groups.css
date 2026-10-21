@@ -347,6 +347,13 @@
 /* ── IMPORTANT ── */
 
 .mail-important-head { margin-top: 4px; }
+/* The section's one press, after its unread word (which already took the free space). */
+.mail-not-important-head .mail-mark-all {
+  flex: 0 0 auto;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
 .mail-important-unread {
   margin-left: auto;
   font-size: 12px;

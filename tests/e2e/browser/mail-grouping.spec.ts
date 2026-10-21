@@ -58,8 +58,19 @@ test.describe('the model answering', () => {
       await expect(line).toHaveAttribute('data-unread', String(group.unread))
       await expect(line.getByTestId('mail-group-name')).toHaveText(group.label)
       await expect(line.getByTestId('mail-group-unread')).toHaveText(group.unread.toLocaleString())
-      await expect(line.getByTestId('mail-group-senders')).toHaveText(group.topSenders.map((one: { label: string }) => one.label).join(', '))
+      // Open by default: the rows under the line name the senders, so the line's own list is empty.
+      await expect(line).toHaveAttribute('aria-expanded', 'true')
+      await expect(line.getByTestId('mail-group-senders')).toHaveText('')
+      await expect(line.getByTestId('mail-group-senders')).toHaveAttribute('title', group.topSenders.map((one: { label: string }) => one.label).join(', '))
     }
+    // Two sections: Not important (the groups are its subcategories), then Important.
+    const heads = await page.locator('[data-testid="mail-not-important-head"], [data-testid="mail-important-head"]').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-testid')))
+    expect(heads).toEqual(['mail-not-important-head', 'mail-important-head'])
+    const groupedUnread = groups.groups.reduce((sum: number, one: { unread: number }) => sum + one.unread, 0)
+    await expect(page.getByTestId('mail-not-important-unread')).toHaveText(`${groupedUnread.toLocaleString()} unread`)
+    const headBox = (await page.getByTestId('mail-not-important-head').boundingBox())!
+    const firstLine = (await page.getByTestId('mail-group-row').first().boundingBox())!
+    expect(headBox.y).toBeLessThan(firstLine.y)
     // A title row and one summary line each, and the tools only on hover.
     const heights = await page.getByTestId('mail-group-row').evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height))
     for (const height of heights) expect(height).toBeLessThanOrEqual(56)
@@ -89,7 +100,7 @@ test.describe('the model answering', () => {
     await shoot(page, SHOTS, 'overview')
   })
 
-  test('opening a group: three rows, N more, Show fewer, and the keyboard', async ({ page }) => {
+  test('every group is open with all of its mail, no N more, and the keyboard closes and opens one', async ({ page }) => {
     await openGrouped(page, fixture)
     const groups = await getGroups(fixture, ALL_INBOXES)
     const big = [...groups.groups].sort((a: { unread: number }, b: { unread: number }) => b.unread - a.unread)[0]
@@ -98,16 +109,20 @@ test.describe('the model answering', () => {
     const line = groupLine(page, big.id)
     await expect(line.getByTestId('mail-group-senders')).toHaveText('')
     const kids = group.locator('[data-testid="mail-row"]')
-    await expect(kids).toHaveCount(3)
+    const every = await allGroupMessages(fixture, big.id, ALL_INBOXES, { unread: true })
+    await expect(kids).toHaveCount(every.length, { timeout: 20_000 })
     for (const one of await kids.all()) await expect(one).toHaveAttribute('data-unread', 'true')
-    await expect(group.getByTestId('mail-group-more-rows')).toHaveText(`${big.unread - 3} more`)
+    // Every other group is open and complete too, with nothing to press for more.
+    for (const other of groups.groups) {
+      await expect(groupLine(page, other.id)).toHaveAttribute('aria-expanded', 'true')
+      const rows = page.locator(`[data-testid="mail-group"][data-group-id="${other.id}"] [data-testid="mail-row"]`)
+      await expect(rows).toHaveCount(other.unread, { timeout: 20_000 })
+    }
+    await expect(page.getByTestId('mail-group-more-rows')).toHaveCount(0)
+    await expect(page.getByTestId('mail-group-fewer')).toHaveCount(0)
+    await expect(page.getByTestId('mail-group-load-older')).toHaveCount(0)
     await expect(group.getByTestId('mail-group-foot-mark')).toHaveText(`Mark ${big.markableUnread} read`)
     await shoot(page, SHOTS, 'group-open')
-    await group.getByTestId('mail-group-more-rows').click()
-    const every = await allGroupMessages(fixture, big.id, ALL_INBOXES, { unread: true })
-    await expect(kids).toHaveCount(every.length)
-    await group.getByTestId('mail-group-fewer').click()
-    await expect(kids).toHaveCount(3)
     // Keyboard: arrows walk lines and rows in order; Left closes, Right opens, Enter toggles.
     await line.focus()
     await page.keyboard.press('ArrowDown')
@@ -279,12 +294,16 @@ test.describe('the model answering', () => {
     expect(body.messages.every((one: Record<string, unknown>) => !('sort' in one))).toBe(true)
   })
 
-  test('opening an unread Important mail moves the badge and the head in one frame, and a refusal puts both back', async ({ page }) => {
+  test('opening an unread Important mail turns it read at the click; a failed flag keeps it read and lands on the retry', async ({ page }) => {
     await openGrouped(page, fixture)
     const head = page.getByTestId('mail-important-unread')
     const badge = smartRow(page, 'inbox').getByTestId('mail-smart-unread')
-    await expect(page.locator('.mail-important [data-testid="mail-row"][data-unread="true"]').first()).toBeVisible()
+    const target = page.locator('.mail-important [data-testid="mail-row"][data-unread="true"]').first()
+    await expect(target).toBeVisible()
+    const accountId = (await target.getAttribute('data-account-id'))!
+    const messageId = (await target.getAttribute('data-message-id'))!
     const start = Number((await head.textContent())!.split(' ')[0])
+    // The next read flag the provider is asked for fails (a 500 from the server): not a refusal.
     await failMarkRead(fixture, 1, 1)
     const seen = await page.evaluate(() => new Promise<Array<[string, string]>>((resolve) => {
       const out: Array<[string, string]> = []
@@ -297,14 +316,51 @@ test.describe('the model answering', () => {
       ;(document.querySelector('.mail-important [data-testid="mail-row"][data-unread="true"]') as HTMLElement).click()
       setTimeout(() => { observer.disconnect(); resolve(out) }, 4_000)
     }))
+    // The head and the badge move together in every frame, drop once, and never back up.
+    let dropped = false
     for (const [headText, badgeText] of seen) {
       const n = Number(headText.split(' ')[0])
       expect(n === 0 ? '0' : String(n)).toBe(badgeText === '' ? '0' : badgeText)
+      if (dropped) expect(n).toBe(start - 1)
+      else { expect([start, start - 1]).toContain(n); dropped = n === start - 1 }
     }
-    expect(seen.some(([headText]) => Number(headText.split(' ')[0]) === start - 1)).toBe(true)
+    expect(dropped).toBe(true)
+    const row = page.locator(`.mail-important [data-testid="mail-row"][data-account-id="${accountId}"][data-message-id="${messageId}"]`)
+    await expect(row).toHaveAttribute('data-unread', 'false')
+    // The first try failed, the retry (2 s later) landed, and the provider holds it read.
+    await expect.poll(async () => (await markReadLog(fixture)).log.filter((one) => one.messageId === messageId).map((one) => one.ok), { timeout: 20_000 })
+      .toEqual([false, true])
+    expect((await flags(fixture, accountId, messageId)).seen).toBe(true)
+    await expect(row).toHaveAttribute('data-unread', 'false')
+    await expect(head).toHaveText(`${start - 1} unread`)
+    await expect(badge).toHaveText(String(start - 1))
+  })
+
+  test('a real refusal (409, the account cannot change the flag) puts the row, the head and the badge back', async ({ page }) => {
+    await openGrouped(page, fixture)
+    const head = page.getByTestId('mail-important-unread')
+    const target = page.locator('.mail-important [data-testid="mail-row"][data-unread="true"]').first()
+    await expect(target).toBeVisible()
+    const messageId = (await target.getAttribute('data-message-id'))!
+    const start = Number((await head.textContent())!.split(' ')[0])
+    let posts = 0
+    await page.route('**/api/plugins/mail/messages/**/read', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue()
+      posts += 1
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported', message: 'This account cannot change read flags.' }) })
+    })
+    await target.click()
+    const row = page.locator(`.mail-important [data-testid="mail-row"][data-message-id="${messageId}"]`)
+    // Read at once, while the server has not answered yet.
+    await expect(row).toHaveAttribute('data-unread', 'false', { timeout: 300 })
+    await expect(head).toHaveText(`${start - 1} unread`)
+    // The refusal is an answer: back to unread, and no retry.
+    await expect(row).toHaveAttribute('data-unread', 'true', { timeout: 10_000 })
     await expect(head).toHaveText(`${start} unread`)
-    await expect(badge).toHaveText(String(start))
-    expect((await markReadLog(fixture)).log.some((one) => !one.ok)).toBe(true)
+    await page.waitForTimeout(3_000)
+    expect(posts).toBe(1)
+    await page.unroute('**/api/plugins/mail/messages/**/read')
   })
 
   test('a failed /groups falls back to all mail in words, and Try again brings the groups back', async ({ page }) => {

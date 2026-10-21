@@ -10,14 +10,16 @@
  * that same place; its RESULT goes to the list's status strip, because a group whose unread all got
  * read leaves the list and would take a result drawn in it (and its Undo) along.
  *
- * Open: up to three compact rows (one line each: sender, subject, time), then `N more`, then a footer
- * with the same two actions as words. A mail opened from here is marked read and its row stays put
- * until the group is closed, so nothing jumps out from under the pointer.
+ * Open (the default): every mail in the group as a compact row (one line each: sender, subject, time),
+ * the older pages read on their own rather than behind a `N more` (2026-10-20, the user: "show all
+ * instead of load more"), then a footer with the same two actions as words. A mail opened from here
+ * is marked read and its row stays put until the group is closed, so nothing jumps out from under
+ * the pointer.
  *
  * The line is a `div role="button"` (Enter / Space toggle it, arrows move between lines); every button
  * inside stops propagation so a press on one never also toggles the group.
  */
-import { useId, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import type { MailAccountDto, MailMessageDto } from '@/api/mail';
 import type { MailGroupItem, MailGroupsScope } from '@/api/mail-groups';
@@ -27,17 +29,14 @@ import { groupBusy, slotKey, startBulkRead, stopBulk, useBulkSlot, type BulkTarg
 import { formatCount, formatMailTime, isUnread, senderLabel } from './mail-format';
 import { groupsViewKey, requestGroupCard } from './mail-groups-bus';
 import {
-  CANT_MARK_HERE, FILTER_MENU, GROUPS_UPDATING_TITLE, GROUP_ACTIONS_ARIA, IMPORTANT_MENU, RENAME_MENU, SHOW_FEWER,
-  UNSUBSCRIBE_ELLIPSIS, groupRowAria, markLabel, moreLabel, progressLabel, readOnlyTitle,
+  CANT_MARK_HERE, FILTER_MENU, GROUPS_UPDATING_TITLE, GROUP_ACTIONS_ARIA, IMPORTANT_MENU, RENAME_MENU,
+  UNSUBSCRIBE_ELLIPSIS, groupRowAria, markLabel, progressLabel, readOnlyTitle,
 } from './mail-groups-copy';
-import { loadGroupPage, setGroupOpen, setGroupShowAll, useGroupPage, useGroupsView } from './mail-groups-store';
+import { loadGroupPage, setGroupOpen, useGroupPage } from './mail-groups-store';
 import { CheckIcon, MoreIcon, TwistIcon } from './mail-icons';
 import { isOpenRow } from './MailMessageRow';
 import { pairKey, type MailSnapshot } from './mail-store';
 import type { MailRowMenuHandle } from './MailRowContextMenu';
-
-/** Rows an open group shows before `N more`. */
-export const FIRST_ROWS = 3;
 
 /** Every line the arrow keys walk: group lines, their open rows, then Important's rows. */
 const NAV_SELECTOR = '.mail-grouped .mail-group-row, .mail-grouped .mail-row';
@@ -64,14 +63,22 @@ export interface GroupNumbers {
 }
 
 /** One open-group row: dot, sender, subject, time, on one line. Same identity attributes as a list row. */
-function MailKidRow({ message, selected, menu, accounts }: {
+/**
+ * One mail under an open group. Memoised: every group is open with all of its mail, so a list can hold
+ * a few thousand of these, and a page landing in ONE group re-renders every line; only the rows whose
+ * message, selection or menu mark changed draw again (measured 2026-10-20 on 1,866 unread in 87 groups:
+ * 20 s of main-thread CPU to settle without it).
+ */
+const MailKidRow = memo(function MailKidRow({ message, selected, openMenu, menuOpen, accounts }: {
   message: MailMessageDto;
   selected: boolean;
-  menu: MailRowMenuHandle;
+  /** `menu.open`: a stable callback. */
+  openMenu: MailRowMenuHandle['open'];
+  /** This row's menu is the one open (`data-ctx-open`). */
+  menuOpen: boolean;
   accounts: MailAccountDto[] | null;
 }) {
   const unread = isUnread(message.flags);
-  const pair = pairKey(message.accountId, message.messageId);
   const account = accounts?.find((one) => one.accountId === message.accountId);
   const open = () => { void openMailMessage(message.accountId, message.messageId); };
   return (
@@ -85,9 +92,9 @@ function MailKidRow({ message, selected, menu, accounts }: {
       data-account-id={message.accountId}
       data-unread={unread}
       title={account ? `${message.subject || '(no subject)'}\n${account.displayName || account.address}` : message.subject || undefined}
-      {...(menu.openPair === pair ? { 'data-ctx-open': 'true' } : {})}
+      {...(menuOpen ? { 'data-ctx-open': 'true' } : {})}
       /* The row menu's handle, the same `useContextMenu` every mail row opens (MailRowContextMenu.tsx). */
-      onContextMenu={(event) => { menu.open(event, { accountId: message.accountId, messageId: message.messageId }); }}
+      onContextMenu={(event) => { openMenu(event, { accountId: message.accountId, messageId: message.messageId }); }}
       onClick={open}
       onKeyDown={(event) => {
         if (moveInGroupedList(event)) return;
@@ -102,7 +109,7 @@ function MailKidRow({ message, selected, menu, accounts }: {
       <span className="mail-row-time">{formatMailTime(message.sentAt)}</span>
     </div>
   );
-}
+});
 
 export function MailGroupLine({
   group, numbers, open, scope, snapshot, menu, accounts, onUnsubscribe, unsubBusy,
@@ -314,56 +321,41 @@ function GroupRows({
   onUnsubscribe: (anchor: HTMLElement) => void;
   unsubBusy: boolean;
 }) {
-  const all = !!useGroupsView(scope).showAll[group.id];
-  const shown = all ? rows : rows.slice(0, FIRST_ROWS);
-  // The rows past the first three: what is loaded, or the group's own count when more pages wait.
-  const hidden = all ? 0 : Math.max(rows.length, page.nextBefore ? group.unread : 0) - shown.length;
+  // Every page of an open group, read one after another: the list is short (unread mail only) and the
+  // person asked to see all of it. A failed page stops the chain; its error and Retry say so.
+  const more = !!page.nextBefore && page.loaded && !page.olderLoading && !page.error;
+  useEffect(() => {
+    if (more) void loadGroupPage(scope, group.id, '', 'older', true);
+  }, [more, rows.length, scope, group.id]);
   return (
     <div className="mail-group-kids" data-testid="mail-group-kids">
       {!page.loaded && page.loading && <p className="mail-group-kids-note">Loading…</p>}
-      {page.error && <p className="mail-inline-error">{page.error}</p>}
-      {shown.map((message) => (
+      {page.error && (
+        <p className="mail-inline-error">
+          {page.error}{' '}
+          <button
+            type="button"
+            className="mail-text-btn"
+            data-testid="mail-group-retry"
+            onClick={() => { void loadGroupPage(scope, group.id, '', page.loaded ? 'older' : 'first', true, true); }}
+          >
+            Retry
+          </button>
+        </p>
+      )}
+      {rows.map((message) => (
         <MailKidRow
           key={`${message.accountId} ${message.messageId}`}
           message={message}
           selected={isOpenRow(snapshot, message)}
-          menu={menu}
+          openMenu={menu.open}
+          menuOpen={menu.openPair === pairKey(message.accountId, message.messageId)}
           accounts={accounts}
         />
       ))}
-      {hidden > 0 && (
-        <button
-          type="button"
-          className="mail-group-more-rows"
-          data-testid="mail-group-more-rows"
-          onClick={() => setGroupShowAll(scope, group.id, true)}
-        >
-          {moreLabel(hidden)}
-        </button>
-      )}
-      {all && page.nextBefore && (
-        <button
-          type="button"
-          className="mail-group-more-rows"
-          data-testid="mail-group-load-older"
-          disabled={page.olderLoading}
-          onClick={() => { void loadGroupPage(scope, group.id, '', 'older', true); }}
-        >
-          {page.olderLoading ? 'Loading…' : 'Load older'}
-        </button>
-      )}
-      {all && rows.length > FIRST_ROWS && (
-        <button
-          type="button"
-          className="mail-group-more-rows"
-          data-testid="mail-group-fewer"
-          onClick={() => setGroupShowAll(scope, group.id, false)}
-        >
-          {SHOW_FEWER}
-        </button>
-      )}
+      {page.olderLoading && <p className="mail-group-kids-note" data-testid="mail-group-loading-more">Loading…</p>}
       <p className="mail-group-foot">
-        {/* An open group whose mail was all read stays drawn until it closes; it has nothing to mark. */}
+        {/* A group whose mail was all read stays drawn while the pointer is on the list; nothing to mark. */}
         {unread > 0 && (
           <button
             type="button"

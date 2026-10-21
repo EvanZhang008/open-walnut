@@ -52,10 +52,7 @@ function unreadFilterOf(scope: MailGroupsScope): boolean {
 export function refreshGroupedView(scope: MailGroupsScope): void {
   scheduleGroups(scope);
   void loadGroupPage(scope, IMPORTANT_ID, '', 'first', unreadFilterOf(scope));
-  const view = peekView(groupsViewKey(scope));
-  for (const [id, open] of Object.entries(view?.expanded ?? {})) {
-    if (open) void loadGroupPage(scope, id, '', 'first', true, true);
-  }
+  // The open groups' own pages follow the /groups answer: only the ones it says changed are read again.
 }
 
 /**

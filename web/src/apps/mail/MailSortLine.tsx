@@ -10,7 +10,7 @@ import { useRef } from 'react';
 import { groupsViewKey, requestMailCorrect } from './mail-groups-bus';
 import { NOT_RIGHT, readerWhyText } from './mail-groups-copy';
 import { groupedOnScreen } from './mail-groups-live';
-import { groupedRowOf, useGroupsView } from './mail-groups-store';
+import { useGroupedRow, useGroupsView } from './mail-groups-store';
 import { useGroupedPref } from './mail-grouped-pref';
 import type { MailOpenMessage } from './mail-store';
 import './mail-groups.css';
@@ -19,10 +19,10 @@ export function MailSortLine({ open }: { open: MailOpenMessage }) {
   const on = useGroupedPref();
   const line = useRef<HTMLParagraphElement | null>(null);
   const shown = groupedOnScreen();
-  // Re-renders on every grouped store write, so the line follows a correction or a relabel.
+  // Follows the view (a correction, a relabel) and the open message's own grouped row as pages land.
   useGroupsView(shown ?? { role: 'inbox' });
+  const row = useGroupedRow(open.accountId, open.messageId);
   if (!on) return null;
-  const row = groupedRowOf({ accountId: open.accountId, messageId: open.messageId });
   const sort = row?.sort;
   if (!row || !sort) return null;
   const label = sort.label ?? (sort.group === 'important' ? 'Important' : sort.group.replace(/^[us]:/, ''));
