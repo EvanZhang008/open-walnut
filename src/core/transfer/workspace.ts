@@ -17,12 +17,17 @@ import { LOCAL_HOST } from './planner.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { readHostProfile, recordReach, repoKey, type HostProfile } from '../hosts/host-profile.js';
 
-/** Where a host keeps transfer files: this server's own data dir here (an
- *  isolated server never writes into another's), the usual place elsewhere.
- *  Under tmp/ on purpose: git-sync ignores it, so packed code never rides the
- *  data repo to the companion. */
+/**
+ * Where a host keeps transfer files: beside this server's own data dir here (an
+ * isolated server never writes into another's), `~/.open-walnut-transfers`
+ * elsewhere. Outside the data dir on purpose: git-sync never carries packed code
+ * to the companion, and the daemon refuses file writes under its own runtime
+ * root (`~/.open-walnut/tmp`, where the session streams live), so a transfer
+ * file there could never be copied (2026-10-21: clouddev to Mac failed with
+ * "fs.copy refused: path outside the mutation floor").
+ */
 export function transfersDir(host: string): string {
-  return host === LOCAL_HOST ? path.join(WALNUT_HOME, 'tmp', 'transfers') : '~/.open-walnut/tmp/transfers';
+  return host === LOCAL_HOST ? `${WALNUT_HOME.replace(/\/+$/, '')}-transfers` : '~/.open-walnut-transfers';
 }
 
 const KEEP_TRANSFER_FILES_MS = 7 * 24 * 3600_000;
