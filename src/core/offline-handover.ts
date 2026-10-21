@@ -263,6 +263,11 @@ async function drainRounds(
         (await import('./host-replica.js')).noteRecordsAcked(conn.hostKey);
         batch.notesAcked = true;
       }
+      // Stage 4d: the companion holds an acked memory save the same way.
+      if (records.some((r) => (r.kind as string) === 'memory' && acked.includes(r.seq))) {
+        (await import('./host-replica.js')).noteRecordsAcked(conn.hostKey, 'memory');
+        batch.notesAcked = true;
+      }
     } else {
       // An old daemon acks by watermark: only the prefix before the first record that waits.
       let upTo = 0;
@@ -290,7 +295,7 @@ interface Batch {
   offset: number;
   /** A record waits for its backoff: drain again after this many ms. */
   retryIn: number | null;
-  /** Note records were acked (WP11): the host's notes copy goes again after the drain. */
+  /** Note or memory records were acked (WP11, stage 4d): the host's copy goes again after the drain. */
   notesAcked?: boolean;
 }
 
@@ -432,7 +437,7 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
   const early = key ? lookupJournaled(key) : null;
   if (early) return ledgerHit(batch, record, early, { retryKey, taskId, callerSid, opName, letter });
   if (giveUpKeys(record, taskId).some((k) => batch.givenUp.has(k))) {
-    const what = isNoteRecord(record) ? 'note' : 'task';
+    const what = (record.kind as string) === 'memory' ? 'memory document' : isNoteRecord(record) ? 'note' : 'task';
     if (!(await letter('given-up', `an earlier change to this ${what} could not be applied, so this later one was not applied either`))) return 'stop';
     if (key) recordApplied(key, { outcome: 'given-up', detail: 'earlier record of the task given up', source: 'drain' });
     batch.result.failed++;
@@ -534,8 +539,12 @@ interface TakeState {
 /** A note record's texts for its letter entry: the base it was made on and the save itself. */
 type NoteBodies = { notePath?: string; base?: string; replica?: string; bodiesLost?: true };
 
+/**
+ * A record whose texts live only on the host until its ack (a note, a memory doc saved on
+ * the companion): a letter about it carries them in full.
+ */
 function isNoteRecord(record: OfflineRecord): boolean {
-  return (record.kind as string) === 'note';
+  return (record.kind as string) === 'note' || (record.kind as string) === 'memory';
 }
 
 /**
@@ -545,7 +554,8 @@ function isNoteRecord(record: OfflineRecord): boolean {
  */
 function giveUpKeys(record: OfflineRecord, taskId: string | undefined): string[] {
   if (!isNoteRecord(record)) return taskId ? [taskId] : [];
-  const r = record as { path?: unknown; noteId?: unknown };
+  const r = record as { path?: unknown; noteId?: unknown; doc?: unknown };
+  if ((record.kind as string) === 'memory') return typeof r.doc === 'string' ? [`memory:${r.doc}`] : [];
   return [
     ...(typeof r.path === 'string' && r.path ? [`note:${r.path}`] : []),
     ...(typeof r.noteId === 'string' && r.noteId ? [`note-id:${r.noteId}`] : []),

@@ -456,7 +456,7 @@ minutes, and at a build change.
 | 4a | the copy and its round (no reader yet) |
 | 4b | the box's notes reads (`/api/notes-v2` always, `/api/v1/notes` when the Mac does not answer: the tree, a note, links, backlinks, tags, the flat list) take the copy once a whole manifest arrived, through the source a host replica reads (`replica/notes-source.ts`); searches stay the box's own (its copy of the Mac's index) |
 | 4c | a note saved, created or deleted on the box (the v2 save and delete, the v1 save, create and delete) is a `note` record in its journal once the copy is held and the Mac drains `note`, checked as a host checks one (the lock hash against what the box shows, the size, the id from the Mac's copy); the Mac drains it with the notes merge |
-| 4d | the box's other note paths (moves, folders, tags, attachments), its memory and skill reads, and the chat lane's note tools; then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
+| 4d | the box's memory reads and saves (`memory` records), its skill reads, and v1's note resolve take the copy; the box's other note paths (moves, folders, tags, attachments); then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
 
 Every copy read shows the pending saves over the copy (the copy's journal view,
 `core/companion-notes.ts`), and a save the Mac took until a copy round from after its
@@ -464,6 +464,29 @@ ack stores the Mac's own text (or 10 minutes), so the box never shows a note goi
 back; the round after a drain that took notes goes at once. Until 4d the box's other
 note writes still go to its disk and git sync, as before, and the copy shows their
 result once the Mac has it.
+
+**4d, memory and skills.** The box's memory reads (`/api/memory/{global,user}`, and
+`/api/v1/memory/{global,user}` when the Mac does not answer, which memory_read calls)
+answer the copy's doc objects, and a memory save there is a `memory` record in its
+journal (the doc, the text it was made on and the new text, as blobs), shown over the
+copy as a note save is (`core/companion-memory.ts`). Both start together, once the copy
+is held and the Mac drains `memory`: a copy read beside a save that still went to the
+box's disk would show the save reverted until git sync brought it round, and the next
+save would answer 409. The Mac applies a record through the editor's own write
+(`writeMemoryDoc`, locked to the text it read), three-way against the doc as it is
+(`offline-merge/apply-memory.ts`): a clean merge letters nothing; the same lines on both
+sides keep the newer side and letter the other in full. Records are not coalesced (the
+journal core folds notes and task fields only), so each save is one record made on the
+one before it. The skill reads (`/api/skills`, `/api/v1/skills`, one skill or the list,
+which skill_read calls) answer the copy once it is held; a skill write there answers
+needs-the-Mac (`skill_changes_need_mac`): a skill is a folder (its references, its
+enabled flag) the copy holds as one document, so a write could only go to the box's disk
+and would show reverted. A skill's references stay the box's own files. v1's note resolve
+(note_read by id or title) answers from the copy's ids and titles. The companion's chat
+lane has no note, memory or skill tools (its profile drops the Walnut MCP and keeps read
+and web tools only), so nothing changes there; the ops that do reach the box (the backup
+gateway's note_read, note_search, memory_read and skill_read while the companion leads)
+go through the routes above.
 
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 

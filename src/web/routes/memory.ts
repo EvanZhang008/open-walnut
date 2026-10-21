@@ -24,8 +24,11 @@ import { MEMORY_FILE, USER_FILE, DAILY_DIR, MEMORY_DIR, REPOS_MEMORY_DIR } from 
 import { computeContentHash } from '../../utils/file-ops.js'
 import { bus } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
+import { companionMemoryRoutes } from '../../replica/companion-copy-routes.js'
 
 export const memoryRouter = Router()
+// The companion's memory reads and saves take the Mac's copy and its journal (stage 4d); a pass-through elsewhere.
+memoryRouter.use(companionMemoryRoutes('web'))
 
 /**
  * A memory file was written. The /memory page and any Files-panel view of the

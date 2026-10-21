@@ -8,7 +8,8 @@
  *
  * The shapes are the disk routes' own: the tree is the same JSON, content has
  * the same fields (`id` on v2 only, as there), links, backlinks, tags and the
- * flat list are the same rows. Search is a keyword search of the copy, marked
+ * flat list are the same rows, and v1's resolve (note_read by id or title) answers
+ * from the copy's ids and titles. Search is a keyword search of the copy, marked
  * `degraded: 'offline-keyword'` (the leader's semantic index stays on the leader).
  * Writes never reach here: a note write away answers needs_leader until WP11.
  */
@@ -63,6 +64,17 @@ async function answer(src: NotesSource, flavor: Flavor, req: Request, res: Respo
     try { tag = decodeURIComponent(tag) } catch { /* as sent */ }
     if (!tag.trim()) { badRequest(res, flavor, 'tag required'); return true }
     const r = await src.notesForTag(tag)
+    asOf()
+    res.json(r)
+    return true
+  }
+  if (p === '/resolve' && flavor === 'v1') {
+    const q = req.query.ref ?? req.query.id ?? req.query.path
+    const r = await src.resolve(typeof q === 'string' ? q : '')
+    if ('status' in r) {
+      res.status(r.status).json({ error: { code: r.status === 404 ? 'not_found' : r.status === 409 ? 'conflict' : 'bad_request', message: r.message } })
+      return true
+    }
     asOf()
     res.json(r)
     return true

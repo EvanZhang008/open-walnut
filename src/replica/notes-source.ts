@@ -144,6 +144,12 @@ export interface NotesSource {
   tags(): Promise<{ tags: Array<{ tag: string; count: number }> }>
   notesForTag(tag: string): Promise<{ notes: Array<{ id: string; title: string; path: string; snippet: string; modified: string | undefined }> }>
   search(q: string, limit: number): Promise<{ results: Array<{ id: string; path: string; title: string; snippet: string; matchType: 'exact'; score: number }>; degraded: 'offline-keyword' }>
+  /**
+   * One note reference (a frontmatter id, a vault path, a title) to its path, by the
+   * disk route's rules (notes-v2.ts resolveNoteRef): `status` 404 for no match, 409 for a
+   * title several notes share, 400 for an empty or unsafe one.
+   */
+  resolve(ref: string): Promise<{ id: string | null; path: string; title: string | null; matchedBy: 'id' | 'path' | 'name' } | { status: 400 | 404 | 409; message: string }>
   /** The copy's age (the manifest's asOf), for x-walnut-offline. */
   asOf(): string | null
 }
@@ -348,6 +354,29 @@ export function createCopyNotesSource(reader: NotesCopyReader, opts: { now?: () 
           return { id: idFor(h.e), path: h.e.k, title: titleOf(h.e), snippet, matchType: 'exact' as const, score: h.score }
         }),
       }
+    },
+
+    async resolve(raw) {
+      const ref = raw.trim()
+      if (!ref) return { status: 400, message: 'ref (note id, path, or title) is required' }
+      const m = await getManifest()
+      // 1. A frontmatter id: the only form that cannot also be a path.
+      const byId = m.entries.find((e) => idOf(e) === ref)
+      if (byId) return { id: ref, path: byId.k, title: null, matchedBy: 'id' }
+      // 2. A note at that path.
+      const k = noteKey(ref)
+      if (!k) return { status: 400, message: 'invalid path' }
+      const at = m.byKey.get(k)
+      if (at) return { id: idOf(at) || null, path: at.k, title: null, matchedBy: 'path' }
+      // 3. A title or file name, as [[wikilinks]] resolve (any case, any folder).
+      const base = ref.replace(/\.md$/i, '').toLowerCase()
+      const named = m.entries.filter((e) => titleOf(e).toLowerCase() === base || e.k.toLowerCase() === `${base}.md` || path.posix.basename(e.k, '.md').toLowerCase() === base)
+      if (named.length === 1) return { id: idOf(named[0]!) || null, path: named[0]!.k, title: ref, matchedBy: 'name' }
+      if (named.length > 1) {
+        return { status: 409, message: `"${ref}" matches ${named.length} notes: ${named.slice(0, 5).map((e) => e.k).join(', ')}. Pass one exact path or id.` }
+      }
+      if (ref.startsWith('n_')) return { status: 404, message: `No note with id ${ref} in this copy of the notes` }
+      return { status: 404, message: `Note not found: ${ref}` }
     },
 
     asOf: () => manifest?.asOf ?? null,

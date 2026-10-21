@@ -61,6 +61,7 @@ function itemLine(e: ConflictEntry): string {
     case 'create-collision': return `a task created while away got a new id (${preview(e.reason)}).`;
     case 'board': return `a Board edit conflicted; the Mac's page was kept: ${preview(e.reason)}.`;
     case 'note': return noteLine(e);
+    case 'memory': return `${e.why === 'conflict' ? 'both sides changed the same lines; the newer change is in the document' : 'it could not be merged line by line; the newer version is the document'}, the other version is in the full entry.`;
   }
 }
 
@@ -76,6 +77,14 @@ function noteLine(e: ConflictEntry): string {
     case 'restored': return 'the note was deleted while away and also edited; the edit won and the note is back.';
     default: return `${preview(e.reason)}.${copy}`;
   }
+}
+
+/** MEMORY.md or USER.md, for an entry about a memory record (its conflict, or its refusal). */
+function memoryDocName(e: ConflictEntry): string | undefined {
+  if (e.kind === 'memory' && e.field) return e.field;
+  if (e.recordKind !== 'memory') return undefined;
+  const doc = (e.record as { doc?: unknown } | undefined)?.doc;
+  return doc === 'user' ? 'USER.md' : 'MEMORY.md';
 }
 
 /** A note in the console (the Notes page opens it by its vault path, `/notes?path=`). */
@@ -98,7 +107,7 @@ export function buildConflictLetter(file: ConflictLogFile): ConflictLetter | nul
     const e = file.entries[i];
     const entryLink = conflictEntryLink(file.drainId, i);
     const target = e.taskId ? `[task ${e.taskId}](${taskLink(e.taskId)})` : e.boardTaskId ? `[Board of ${e.boardTaskId}](${taskLink(e.boardTaskId)})`
-      : e.notePath ? `[note ${e.notePath}](${noteLink(e.notePath)})` : 'a change';
+      : e.notePath ? `[note ${e.notePath}](${noteLink(e.notePath)})` : memoryDocName(e) ?? 'a change';
     const line = `- ${target}: ${itemLine(e)} [Full entry](${entryLink})\n`;
     if (Buffer.byteLength(body) + Buffer.byteLength(line) > LETTER_BODY_MAX - 200) break;
     body += line;
