@@ -152,6 +152,8 @@ export interface NotesSource {
   resolve(ref: string): Promise<{ id: string | null; path: string; title: string | null; matchedBy: 'id' | 'path' | 'name' } | { status: 400 | 404 | 409; message: string }>
   /** The copy's age (the manifest's asOf), for x-walnut-offline. */
   asOf(): string | null
+  /** Drop the listed manifest: a write the box keeps over its copy shows in the next read (the companion). */
+  forget?(): void
 }
 
 export function createCopyNotesSource(reader: NotesCopyReader, opts: { now?: () => number; listTtlMs?: number } = {}): NotesSource {
@@ -160,6 +162,8 @@ export function createCopyNotesSource(reader: NotesCopyReader, opts: { now?: () 
   type Manifest = { entries: CopyEntry[]; byKey: Map<string, CopyEntry>; asOf: string | null; hash: string; at: number }
   let manifest: Manifest | null = null
   let manifestInFlight: Promise<Manifest> | null = null
+  /** Bumped by forget(): a list started before it never becomes the manifest. */
+  let gen = 0
   let treeMemo: { hash: string; json: string; notes: number } | null = null
   const parsed = new Map<string, Parsed>()
   let indexHash = ''
@@ -168,12 +172,15 @@ export function createCopyNotesSource(reader: NotesCopyReader, opts: { now?: () 
   function getManifest(): Promise<Manifest> {
     if (manifest && now() - manifest.at < ttl) return Promise.resolve(manifest)
     if (manifestInFlight) return manifestInFlight
-    manifestInFlight = reader.list().then((r) => {
+    const started = gen
+    const p: Promise<Manifest> = reader.list().then((r) => {
       const byKey = new Map(r.entries.map((e) => [e.k, e]))
-      manifest = { entries: r.entries, byKey, asOf: r.asOf, hash: r.manifestHash, at: now() }
-      return manifest
-    }).finally(() => { manifestInFlight = null })
-    return manifestInFlight
+      const m = { entries: r.entries, byKey, asOf: r.asOf, hash: r.manifestHash, at: now() }
+      if (started === gen) manifest = m
+      return m
+    }).finally(() => { if (manifestInFlight === p) manifestInFlight = null })
+    manifestInFlight = p
+    return p
   }
 
   /** Parse every entry whose body hash moved since the last index (4 MB per readMany). */
@@ -380,6 +387,13 @@ export function createCopyNotesSource(reader: NotesCopyReader, opts: { now?: () 
     },
 
     asOf: () => manifest?.asOf ?? null,
+
+    forget() {
+      // Kept for its asOf, never served again: the next read lists anew.
+      gen++
+      if (manifest) manifest = { ...manifest, at: -Infinity }
+      manifestInFlight = null
+    },
   }
 }
 

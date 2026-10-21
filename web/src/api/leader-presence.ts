@@ -308,6 +308,9 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   // The cloud companion's memory and skills (stage 4d: companion-memory.ts, companion-copy-routes.ts).
   memory_too_large: 'A memory document over 1 MB can only be changed on your Mac.',
   skill_changes_need_mac: 'Skills here are a copy of the ones on your Mac, so a skill is changed on your Mac.',
+  // The cloud companion's other note paths (stage 4d: companion-note-paths.ts).
+  folder_changes_need_mac: 'This box holds a copy of your notes, so a folder is made or deleted on your Mac.',
+  tag_rename_needs_mac: 'Some of your notes are only on your Mac, so a tag is renamed there.',
 }
 
 const GENERIC_REASON = 'Your Mac is not answering right now.'
