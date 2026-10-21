@@ -49,9 +49,10 @@ type Step = Reply | (() => Promise<Reply>)
 
 /**
  * One daemon process: answers from a script per command and pushes events. After
- * `exit()` every send is answered as the real daemon answers a dead session.
+ * `exit()` every send is answered as the real daemon answers a dead session, once
+ * `deadSendGate` (when given) lets it.
  */
-function scriptedDaemon(replies: Record<string, Step[]>) {
+function scriptedDaemon(replies: Record<string, Step[]>, deadSendGate?: Promise<void>) {
   const sent: Array<{ cmd: string; payload: Record<string, unknown> }> = []
   const listeners = new Set<(event: Record<string, unknown>) => void>()
   const fallback: Record<string, Reply> = { stop: { ok: true, stopped: true }, status: { ok: true, exists: false } }
@@ -62,7 +63,11 @@ function scriptedDaemon(replies: Record<string, Step[]>) {
     onEvent: (fn: (event: Record<string, unknown>) => void) => { listeners.add(fn); return () => { listeners.delete(fn) } },
     send: vi.fn(async (cmd: string, payload: Record<string, unknown>) => {
       sent.push({ cmd, payload })
-      const step = dead && cmd === 'send' ? { ok: false, reason: 'session_dead', exitCode: 1 } : replies[cmd]?.shift() ?? fallback[cmd] ?? { ok: true }
+      if (dead && cmd === 'send') {
+        await deadSendGate
+        return { ok: false, reason: 'session_dead', exitCode: 1 }
+      }
+      const step = replies[cmd]?.shift() ?? fallback[cmd] ?? { ok: true }
       const next = typeof step === 'function' ? await step() : step
       if (next instanceof Error) throw next
       return next
@@ -104,15 +109,24 @@ afterEach(async () => {
 })
 
 describe('a process holding a cut copy exits while the next line\'s write is unanswered (r7 gate N2, g770)', () => {
-  it('that line is handed back at its answer, written again to the next process after the first, and told delivered once', async () => {
+  // `racing`: a delivery starts while the redelivery of the first line is still being
+  // written into the dead process (2026-10-20, CI run 39475140913, about 1 run in 3
+  // under load). It took the queue's head, the SECOND line, and resumed the new
+  // process with it; the first line, reverted by the dead write, then went in after.
+  it.each([
+    { racing: false, name: 'that line is handed back at its answer, written again to the next process after the first, and told delivered once' },
+    { racing: true, name: 'a delivery started while the first line is still being written into the dead process waits for that write, so the lines keep their order' },
+  ])('$name', async ({ racing }) => {
     let answerB!: (r: Reply) => void
+    let openDeadSends!: () => void
+    const deadSendGate = racing ? new Promise<void>((resolve) => { openDeadSends = resolve }) : undefined
     let startNext!: () => void
     const first = scriptedDaemon({
       start: [{ ok: true, pid: 4646, outputFile: '/nonexistent/exit-before-answer.jsonl', offset: 0 }],
       // The deferred first line dies with the daemon; the confirm goes in behind the piece (cut).
       // The next line's write: its answer comes only after the exit.
       send: [new Error('connection closed'), { ok: true, cut: true }, () => new Promise<Reply>((resolve) => { answerB = resolve })],
-    })
+    }, deadSendGate)
     const next = scriptedDaemon({
       start: [() => new Promise<Reply>((resolve) => {
         startNext = () => resolve({ ok: true, pid: 4747, outputFile: '/nonexistent/exit-before-answer.jsonl', offset: 0 })
@@ -153,14 +167,31 @@ describe('a process holding a cut copy exits while the next line\'s write is una
     answerB({ ok: true })
     await second
     await settle()
+    // The first line's redelivery is being written into the dead process (mid-turn,
+    // as the hand-back's own deliverRest starts it) when a delivery starts. That
+    // redelivery hands its rows to a processNext that waits for the new process, so
+    // it settles only after startNext().
+    let redelivery: Promise<void> | undefined
+    if (racing) {
+      redelivery = internals.injectMidTurn(SID)
+      await vi.waitFor(() => expect(first.lines().length).toBeGreaterThanOrEqual(4), { timeout: 10_000 })
+      expect(first.lines()[3].message).toBe('first message')
+      const delivery = internals.processNext(SID)
+      await settle()
+      openDeadSends()
+      await delivery
+    }
     // The hand-back asks the runner to deliver again; a delivery already under way makes
     // that a no-op. Either way the next delivery finds the process dead and resumes.
-    if (!next.sent.some((s) => s.cmd === 'start')) await internals.processNext(SID)
+    // Queued behind a delivery that resumes, this one waits for the new process: it is
+    // awaited only after startNext().
+    const kick = !racing && !next.sent.some((s) => s.cmd === 'start') ? internals.processNext(SID) : undefined
     await vi.waitFor(() => expect(next.sent.some((s) => s.cmd === 'start')).toBe(true), { timeout: 10_000 })
     await settle()
 
     // Handed back, not removed, and not told delivered: the process it went into is gone.
-    expect(await rows()).toContain('second message:pending')
+    // Pending, or already taken by the delivery that waits for this spawn to write it.
+    expect((await rows()).filter((r) => /^second message:(pending|processing)$/.test(r))).toHaveLength(1)
     expect(delivered.flat()).not.toContain(ids.get('second message'))
 
     // The next process gets both, in order, each asked first (dedupe), each told once.
@@ -171,6 +202,7 @@ describe('a process holding a cut copy exits while the next line\'s write is una
     expect(next.lines().map((l) => [l.message, l.dedupe])).toEqual([['first message', true], ['second message', true]])
     expect(next.lines()[1].uuid).toBe(uuidB)
     expect(delivered).toEqual([[ids.get('first message')], [ids.get('second message')]])
+    await Promise.all([redelivery, kick])
     runner.destroyAndKill()
   }, 30_000)
 })

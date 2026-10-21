@@ -11444,101 +11444,134 @@ export class SessionRunner {
     // One line per batch, under the uuid its rows were given the first time they
     // went out: rows that may already be in the CLI go alone, and the daemon is
     // asked before anything is written for them (lineTries > 1).
-    const newMsgs = await markProcessing(sessionId, stopFence, { midTurn: true, tracked: targetSession.reportsLineLifecycle })
-    if (newMsgs.length === 0) return
-    releaseHeld(sessionId, newMsgs.map((m) => m.id))
-
-    const combined = newMsgs.map((m) => m.message).join('\n\n')
-    const uuid = newMsgs[0].lineUuid
-    const stops = targetSession.stopEpoch
-    let known: { fate: string } | undefined
-    let behindCut = false
-
-    let delivered: boolean
+    // From taking rows to the write's outcome: a delivery that marks rows meanwhile
+    // waits (midTurnWrites). The delegation below runs after the hold, since it
+    // queues a processNext that waits for it.
+    let delegate = false
+    const { ready, release } = this.holdMidTurnWrite(sessionId)
     try {
-      delivered = await targetSession.writeMessage(combined, {
-        uuid, stopFence, markers: newMsgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
-        rows: newMsgs, dedupe: (newMsgs[0].lineTries ?? 1) > 1,
-        onFate: (f) => { known = f },
-        onHeld: () => this.announceHeld(sessionId, newMsgs),
-        isStopped: () => targetSession!.stopEpoch !== stops,
-        onCut: () => { behindCut = true },
-      })
-    } catch (error) {
-      if (error instanceof SendOutcomeUnknownError || error instanceof SendHeldError) {
-        // The line may be queued in the running CLI: the turn goes on, and the rows
-        // wait under their uuid for the CLI to name the line or for the next delivery,
-        // which asks the daemon before writing anything.
-        log.session.warn('injectMidTurn: send outcome unknown; rows wait under their uuid', { sessionId, count: newMsgs.length, error: error.message })
-        await this.settleUnansweredLine(sessionId, newMsgs, error, targetSession.stopEpoch !== stops)
+      await ready
+      const newMsgs = await markProcessing(sessionId, stopFence, { midTurn: true, tracked: targetSession.reportsLineLifecycle })
+      if (newMsgs.length === 0) return
+      releaseHeld(sessionId, newMsgs.map((m) => m.id))
+
+      const combined = newMsgs.map((m) => m.message).join('\n\n')
+      const uuid = newMsgs[0].lineUuid
+      const stops = targetSession.stopEpoch
+      let known: { fate: string } | undefined
+      let behindCut = false
+
+      let delivered: boolean
+      try {
+        delivered = await targetSession.writeMessage(combined, {
+          uuid, stopFence, markers: newMsgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
+          rows: newMsgs, dedupe: (newMsgs[0].lineTries ?? 1) > 1,
+          onFate: (f) => { known = f },
+          onHeld: () => this.announceHeld(sessionId, newMsgs),
+          isStopped: () => targetSession!.stopEpoch !== stops,
+          onCut: () => { behindCut = true },
+        })
+      } catch (error) {
+        if (error instanceof SendOutcomeUnknownError || error instanceof SendHeldError) {
+          // The line may be queued in the running CLI: the turn goes on, and the rows
+          // wait under their uuid for the CLI to name the line or for the next delivery,
+          // which asks the daemon before writing anything.
+          log.session.warn('injectMidTurn: send outcome unknown; rows wait under their uuid', { sessionId, count: newMsgs.length, error: error.message })
+          await this.settleUnansweredLine(sessionId, newMsgs, error, targetSession.stopEpoch !== stops)
+          return
+        }
+        this.settleResumeFailure(sessionId, newMsgs, error instanceof Error ? error : new Error(String(error)))
         return
       }
-      this.settleResumeFailure(sessionId, newMsgs, error instanceof Error ? error : new Error(String(error)))
-      return
-    }
-    if (delivered) this.cancelHeldSendRetry(sessionId)
-    // The daemon or the CLI already knew this line's end (a Stop cancelled it, or the
-    // CLI dropped it): writeMessage settled the rows and told the user.
-    if (delivered && known && known.fate !== 'ran' && known.fate !== 'waiting') {
-      this.deliverRest(sessionId)
-      return
-    }
-    if (delivered) {
-      // Injection succeeded — increment batch count so SESSION_BATCH_COMPLETED
-      // includes these messages when the turn eventually completes
-      this.batchCounts.set(sessionId, (this.batchCounts.get(sessionId) ?? 0) + newMsgs.length)
-      this.batchMessageIds.set(sessionId, [...(this.batchMessageIds.get(sessionId) ?? []), ...newMsgs.map((m) => m.id)])
-      // The running turn now answers these plain rows too, so its result no longer
-      // provably belongs to one question: the thread titler must not read it as
-      // that question's answer (batch-uuid.ts turnUserUuid; better none than wrong).
-      noteTurnUserUuid(sessionId, undefined)
-      // Echo-claim: the CLI re-logs this send as a canonical user line; bind its
-      // uuid to these qm ids at the next history parse (exact-id dedup upstream).
-      // Use the transport's PREPARED text — remote sessions rewrite local image
-      // paths to remote ones inside writeMessage, and the echo carries the
-      // rewritten form (inc-1787704938224: pre-rewrite text never bound).
-      registerEchoClaims(sessionId, newMsgs.map((m) => m.id), targetSession.lastPreparedOutbound ?? combined)
-      log.session.info('handleSend: message injected mid-turn via stdin', { sessionId, count: newMsgs.length, ...(behindCut ? { behindCut } : {}) })
-
-      // For a CLI that reports its queue the rows stay queued until it takes the
-      // line: a line queued behind the turn dies with the process if it crashes
-      // first, and must then reach the next one (line-consumption.ts).
-
-      // Behind a cut copy (r5 gate N6): not delivered yet; told when the CLI names
-      // the line, or by the write that takes it to the next process.
-      if (behindCut) {
+      if (delivered) this.cancelHeldSendRetry(sessionId)
+      // The daemon or the CLI already knew this line's end (a Stop cancelled it, or the
+      // CLI dropped it): writeMessage settled the rows and told the user.
+      if (delivered && known && known.fate !== 'ran' && known.fate !== 'waiting') {
         this.deliverRest(sessionId)
         return
       }
-      this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession)
+      if (delivered) {
+        // Injection succeeded — increment batch count so SESSION_BATCH_COMPLETED
+        // includes these messages when the turn eventually completes
+        this.batchCounts.set(sessionId, (this.batchCounts.get(sessionId) ?? 0) + newMsgs.length)
+        this.batchMessageIds.set(sessionId, [...(this.batchMessageIds.get(sessionId) ?? []), ...newMsgs.map((m) => m.id)])
+        // The running turn now answers these plain rows too, so its result no longer
+        // provably belongs to one question: the thread titler must not read it as
+        // that question's answer (batch-uuid.ts turnUserUuid; better none than wrong).
+        noteTurnUserUuid(sessionId, undefined)
+        // Echo-claim: the CLI re-logs this send as a canonical user line; bind its
+        // uuid to these qm ids at the next history parse (exact-id dedup upstream).
+        // Use the transport's PREPARED text — remote sessions rewrite local image
+        // paths to remote ones inside writeMessage, and the echo carries the
+        // rewritten form (inc-1787704938224: pre-rewrite text never bound).
+        registerEchoClaims(sessionId, newMsgs.map((m) => m.id), targetSession.lastPreparedOutbound ?? combined)
+        log.session.info('handleSend: message injected mid-turn via stdin', { sessionId, count: newMsgs.length, ...(behindCut ? { behindCut } : {}) })
 
-      // Tell frontend these messages have been delivered to the CLI. A mid-turn
-      // send JOINS the running turn (no gen bump): the turn that answers it is this
-      // one. Lane-turn result correlation keys on it.
-      reportDelivered(sessionId, newMsgs.map((m) => m.id), targetSession.turnGen)
-      // Rows a line held apart (an earlier line's) leave the rest for the next line.
-      this.deliverRest(sessionId)
-    } else {
-      // stdin write failed — the daemon's FIFO probe says the CLI isn't reading
-      // (turn-between gap, process died, etc.). Revert to pending, then delegate to
-      // processNext NOW rather than stranding the message until some later event.
-      // processNext owns the authoritative recovery path (rehydrate / attach /
-      // --resume), so the message is delivered promptly instead of waiting out the
-      // whole turn (the old behavior logged a warn and left it queued = 30–50s stall).
-      // NOTE: deliberately does NOT emit SESSION_ERROR errorKind:'delivery_failed'
-      // here. This is a delegation/retry, not a surrender: processNext owns the
-      // authoritative recovery path and is the one that emits the terminal
-      // delivery_failed (via settleResumeFailure) if the --resume also fails.
-      // Emitting here too would double-report the same failure.
-      // A Stop during the write: the line is not delivered after it.
-      if (targetSession.stopEpoch !== stops) {
-        await this.settleUnansweredLine(sessionId, newMsgs, new Error('stopped'), true)
-        return
+        // For a CLI that reports its queue the rows stay queued until it takes the
+        // line: a line queued behind the turn dies with the process if it crashes
+        // first, and must then reach the next one (line-consumption.ts).
+
+        // Behind a cut copy (r5 gate N6): not delivered yet; told when the CLI names
+        // the line, or by the write that takes it to the next process.
+        if (behindCut) {
+          this.deliverRest(sessionId)
+          return
+        }
+        this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession)
+
+        // Tell frontend these messages have been delivered to the CLI. A mid-turn
+        // send JOINS the running turn (no gen bump): the turn that answers it is this
+        // one. Lane-turn result correlation keys on it.
+        reportDelivered(sessionId, newMsgs.map((m) => m.id), targetSession.turnGen)
+        // Rows a line held apart (an earlier line's) leave the rest for the next line.
+        this.deliverRest(sessionId)
+      } else {
+        // stdin write failed — the daemon's FIFO probe says the CLI isn't reading
+        // (turn-between gap, process died, etc.). Revert to pending, then delegate to
+        // processNext NOW rather than stranding the message until some later event.
+        // processNext owns the authoritative recovery path (rehydrate / attach /
+        // --resume), so the message is delivered promptly instead of waiting out the
+        // whole turn (the old behavior logged a warn and left it queued = 30–50s stall).
+        // NOTE: deliberately does NOT emit SESSION_ERROR errorKind:'delivery_failed'
+        // here. This is a delegation/retry, not a surrender: processNext owns the
+        // authoritative recovery path and is the one that emits the terminal
+        // delivery_failed (via settleResumeFailure) if the --resume also fails.
+        // Emitting here too would double-report the same failure.
+        // A Stop during the write: the line is not delivered after it.
+        if (targetSession.stopEpoch !== stops) {
+          await this.settleUnansweredLine(sessionId, newMsgs, new Error('stopped'), true)
+          return
+        }
+        await revertIfQueued(newMsgs)
+        log.session.info('injectMidTurn: stdin write failed — delegating to processNext', { sessionId, count: newMsgs.length })
+        delegate = true
       }
-      await revertIfQueued(newMsgs)
-      log.session.info('injectMidTurn: stdin write failed — delegating to processNext', { sessionId, count: newMsgs.length })
-      return this.processNext(sessionId)
+    } finally {
+      release()
     }
+    if (delegate) return this.processNext(sessionId)
+  }
+
+  /**
+   * Mid-turn writes in flight, per session: each covers one injectMidTurn from
+   * taking its rows to the write's outcome (delivered, reverted or settled). 2026-10-20
+   * (CI run 39475140913): after a process died holding the cut copy of a line, a
+   * redelivery wrote that line into the dead process while a processNext took the
+   * queue's head, the NEXT line, and resumed the new process with it; the dead
+   * write then reverted the earlier line, which reached the new CLI second.
+   * processNextNow waits for these before it marks rows, and each new write waits
+   * for the one before it.
+   */
+  private midTurnWrites = new Map<string, Promise<void>>()
+
+  private holdMidTurnWrite(sessionId: string): { ready: Promise<void>; release: () => void } {
+    let release!: () => void
+    const mine = new Promise<void>((resolve) => { release = resolve })
+    const ready = this.midTurnWrites.get(sessionId) ?? Promise.resolve()
+    const tail = ready.then(() => mine)
+    this.midTurnWrites.set(sessionId, tail)
+    void tail.then(() => { if (this.midTurnWrites.get(sessionId) === tail) this.midTurnWrites.delete(sessionId) })
+    return { ready, release }
   }
 
   /**
@@ -12317,6 +12350,9 @@ export class SessionRunner {
     let tracked = false
     let inTurn = false
     for (const [, s] of this.sessions) if (s.sessionId === sessionId) { tracked = s.reportsLineLifecycle; inTurn = s.inTurn; break }
+    // A mid-turn write still out holds an earlier line as 'processing': taking the
+    // queue's head now would send a later line first (see midTurnWrites).
+    await this.midTurnWrites.get(sessionId)
     const msgs = await markProcessing(sessionId, stopFence, { tracked, midTurn: inTurn })
     if (msgs.length === 0) return
     releaseHeld(sessionId, msgs.map((m) => m.id))
