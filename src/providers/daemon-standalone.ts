@@ -2174,7 +2174,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'follower.sessions': return cmdFollowerSessions(ws, id as number)
     case 'follower.send': return daemonCommands.run(() => cmdFollowerSend(ws, id as number, cmd))
     case 'follower.permission': return daemonCommands.run(() => cmdFollowerPermission(ws, id as number, cmd))
-    case 'follower.op': return cmdFollowerOp(ws, id as number, cmd)
+    case 'follower.op': return daemonCommands.run(() => cmdFollowerOp(ws, id as number, cmd))
     case 'follower.pending': return cmdFollowerPending(ws, id as number, cmd)
     // A new ask while the Mac is away ('replica-start-v1', WP12). Keep in sync with daemon-source.ts.
     case 'follower.start': return daemonCommands.run(() => cmdFollowerStart(ws, id as number, cmd))
@@ -3798,14 +3798,15 @@ async function cmdFollowerPermission(ws: ServerWebSocket<WsData>, id: number, cm
  * quiet window unless the Mac is still taking the journal, and the daemon dir's owner.
  * Keep in sync with daemon-source.ts.
  */
-function cmdFollowerOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+async function cmdFollowerOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const home = followerHomeOf(ws)
   if (!home) return sendError(ws, id, 'follower.op: send follower.hello first')
   if (!followerMayWrite(home)) return sendError(ws, id, 'follower.op: your Mac answers again; write through it', { errorKind: 'leader_answers' })
   if (!ownsDaemonDir()) {
     return sendError(ws, id, 'follower.op: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } })
   }
-  const r = offlineHost.handleFollower(home, { op: cmd.op, args: cmd.args, actor: cmd.actor, opId: cmd.opId, base: cmd.base })
+  // Waits out another process's journal lock (about 1.3 s) before it answers.
+  const r = await offlineHost.handleFollowerWaiting(home, { op: cmd.op, args: cmd.args, actor: cmd.actor, opId: cmd.opId, base: cmd.base })
   if (r.ok) return sendOk(ws, id, r.result)
   sendError(ws, id, 'follower.op: ' + r.error.message, { errorKind: r.error.code, ...(r.error.detail !== undefined ? { detail: r.error.detail } : {}), ...(r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}) })
 }
@@ -3954,7 +3955,7 @@ async function startHostAsk(home: string, p: HostStartPlan, cmd: Record<string, 
       throw err
     }
     if (DIE_AFTER_ASK_SPAWN) process.kill(process.pid, 'SIGKILL')
-    const saved = offlineHost.noteSession(home, p.record, opId, cmd.actor)
+    const saved = await offlineHost.noteSessionWaiting(home, p.record, opId, cmd.actor)
     hostStart.releasePending(home, p.sid)
     if (!saved.ok) {
       // Nothing would tell the Mac about this CLI: it must not run unseen. Not stamped as an

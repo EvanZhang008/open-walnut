@@ -508,6 +508,54 @@ for (const twin of ['source', 'standalone'] as const) {
       }
     }, 120_000)
 
+    it('LOCKED: a write waits out another process holding the journal lock (600 ms lands), and one held 3 s is still refused as locked', async () => {
+      // CI run 39591505260: a write was refused after the lock's 250 ms spin while the
+      // other daemon held the lock on a loaded runner. The host now runs a queued write
+      // again after 100, 300 and 900 ms (whenUnlocked); a locked refusal writes nothing.
+      const n = ++attempts
+      const jdir = path.join(base, `${twin}-j6-${n}`)
+      const spawned: Daemon[] = []
+      try {
+        const d = await spawnDaemon(path.join(base, `${twin}-d6-${n}`), twin, jdir)
+        spawned.push(d)
+        const m = await macConnects(d, null)
+        await startSession(d, m)
+        m.close()
+        await sleep(300)
+        expect((await gateway(d.sock, A, 'task_update', { id: TASK_A, title: 'before' })).ok).toBe(true)
+        const hostDir = path.join(jdir, 'offline-host')
+        const journalFile = fs.readdirSync(hostDir).find((f) => /^journal-.+\.ndjson$/.test(f))!
+        expect(journalFile).toBeTruthy()
+        const lockFile = path.join(hostDir, journalFile.replace(/\.ndjson$/, '.lock'))
+        // Another live process's hold (this test's pid, no start time: never judged stale).
+        const hold = (ms: number) => {
+          fs.writeFileSync(lockFile, `${process.pid} - testhold${ms}`, { flag: 'wx' })
+          return new Promise<void>((resolve) => setTimeout(() => { fs.unlinkSync(lockFile); resolve() }, ms))
+        }
+
+        const short = hold(600)
+        const t0 = Date.now()
+        const landed = await gateway(d.sock, A, 'task_update', { id: TASK_A, title: 'after-600' })
+        expect(landed.ok, JSON.stringify(landed)).toBe(true)
+        expect(Date.now() - t0).toBeGreaterThanOrEqual(550)
+        await short
+
+        const long = hold(3_000)
+        const refused = await gateway(d.sock, A, 'task_update', { id: TASK_A, title: 'never' })
+        expect(refused).toMatchObject({ ok: false, error: { code: 'journal_unwritable', detail: { why: 'locked' } } })
+        await long
+        expect((await gateway(d.sock, A, 'task_update', { id: TASK_A, title: 'after-release' })).ok).toBe(true)
+
+        // Each landed write once: the retries made no second record, the refused one none.
+        const mac = await macConnects(d, null)
+        const drained = await macDrains(mac, null)
+        expect(drained.map((r) => r.args.title)).toEqual(['before', 'after-600', 'after-release'])
+        mac.close()
+      } finally {
+        for (const d of spawned) await stopDaemon(d)
+      }
+    }, 120_000)
+
     it('DOWNGRADE then upgrade (R30, R13c): new, 1fe1fd194, new daemon on the same dirs keeps every record', async () => {
       const jdir = path.join(base, `${twin}-j4`)
       const dir = path.join(base, `${twin}-d4`)

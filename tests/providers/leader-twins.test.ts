@@ -185,7 +185,7 @@ describe('leader protocol: both twins', () => {
       // follower.op (journal v2): its own gate, in this order, then the core.
       for (const c of ['follower.op', 'follower.pending']) expect(list).toContain(`'${c}'`)
       const fop = fnBody(src, 'cmdFollowerOp')
-      const order = ['followerHomeOf(ws)', 'followerMayWrite(home)', 'ownsDaemonDir()', 'offlineHost.handleFollower(home,'].map((x) => fop.indexOf(x))
+      const order = ['followerHomeOf(ws)', 'followerMayWrite(home)', 'ownsDaemonDir()', 'offlineHost.handleFollowerWaiting(home,'].map((x) => fop.indexOf(x))
       expect(order.every((x, i) => x > -1 && (i === 0 || x > order[i - 1]))).toBe(true)
       expect(fop).toMatch(/why: 'not_owner'/)
       expect(fnBody(src, 'cmdFollowerPending')).toMatch(/followerHomeOf\(ws\)[\s\S]*offlineHost\.pendingFor\(home, cmd\.sinceSeq\)/)
