@@ -1,14 +1,16 @@
 /**
  * What Walnut has learned about each execution host, so work moved there
  * starts with the right expectations: what kind of machine it is, what is
- * installed, where repositories live, which other hosts it can reach, and the
- * notes sessions left after setting things up.
+ * installed, where repositories live, which other hosts it can reach, and what
+ * the work done there says it is for.
  *
  * Three layers, each with its own writer:
  *   probed   — the host's daemon measured it (host.facts); refreshed on use.
  *   observed — Walnut saw it happen (a repo cloned at a path, a direct copy
  *              that worked or failed).
- *   notes    — a session wrote it down (host_note_add), newest per key wins.
+ *   learned  — Walnut's own short description of the host, regenerated in the
+ *              background from the sessions that ran there (host-learning.ts),
+ *              the way each project's summary is. No session is asked to write it.
  * Nothing here is required: a host with no profile can still take a transfer,
  * and that transfer is what fills the profile in.
  *
@@ -20,7 +22,6 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 
 export const HOST_PROFILES_DIR = path.join(WALNUT_HOME, 'hosts');
-const MAX_NOTES = 50;
 const MAX_REPO_PATHS = 100;
 export const PROBE_MAX_AGE_MS = 7 * 24 * 3600_000;
 
@@ -28,8 +29,6 @@ export type HostKind = 'laptop' | 'public-cloud-vm' | 'private-cloud-vm' | 'dev-
 
 /** The daemon's host.facts reply (providers/host-facts-core.ts), as stored. */
 export type HostFacts = import('../../providers/host-facts-core.js').HostFacts;
-
-export interface HostNote { key: string; fact: string; evidence?: string; at: string; taskId?: string }
 
 export interface HostProfile {
   host: string;
@@ -45,7 +44,8 @@ export interface HostProfile {
     /** other host alias → can this host copy files from it directly. */
     reaches: Record<string, { ok: boolean; at: string; error?: string }>;
   };
-  notes: HostNote[];
+  /** Walnut's description of the host and how many sessions it was written from. */
+  learned?: { summary: string; sessionCount: number; at: string };
   updatedAt: string;
 }
 
@@ -58,17 +58,17 @@ function profilePath(host: string): string {
 }
 
 function emptyProfile(host: string): HostProfile {
-  return { host, kind: 'unknown', kindReasons: [], observed: { repoPaths: {}, reaches: {} }, notes: [], updatedAt: new Date().toISOString() };
+  return { host, kind: 'unknown', kindReasons: [], observed: { repoPaths: {}, reaches: {} }, updatedAt: new Date().toISOString() };
 }
 
 export async function readHostProfile(host: string): Promise<HostProfile> {
   try {
-    const raw = JSON.parse(await fs.readFile(profilePath(host), 'utf8')) as Partial<HostProfile>;
+    // `notes` is what sessions used to write (host_note_add, removed): dropped on read.
+    const { notes: _dropped, ...raw } = JSON.parse(await fs.readFile(profilePath(host), 'utf8')) as Partial<HostProfile> & { notes?: unknown };
     const base = emptyProfile(host);
     return {
       ...base, ...raw, host,
       observed: { repoPaths: { ...(raw.observed?.repoPaths ?? {}) }, reaches: { ...(raw.observed?.reaches ?? {}) } },
-      notes: Array.isArray(raw.notes) ? raw.notes : [],
       kindReasons: Array.isArray(raw.kindReasons) ? raw.kindReasons : [],
     };
   } catch (err) {
@@ -168,20 +168,9 @@ export async function recordReach(host: string, fromHost: string, ok: boolean, e
   });
 }
 
-export async function addHostNote(host: string, note: Omit<HostNote, 'at'>): Promise<HostProfile> {
-  const key = note.key.trim().toLowerCase().slice(0, 80);
-  const fact = note.fact.trim().slice(0, 600);
-  if (!key || !fact) throw new Error('A host note needs a key and a fact');
-  return updateHostProfile(host, (p) => {
-    p.notes = p.notes.filter((n) => n.key !== key);
-    p.notes.push({ key, fact, ...(note.evidence ? { evidence: note.evidence.trim().slice(0, 600) } : {}), at: new Date().toISOString(), ...(note.taskId ? { taskId: note.taskId } : {}) });
-    if (p.notes.length > MAX_NOTES) p.notes = p.notes.slice(p.notes.length - MAX_NOTES);
-  });
-}
-
 const GIB = 1024 ** 3;
 
-/** A few lines for a session's first message: what it is about to work on. */
+/** A few lines describing the host, for Walnut's own readers (host_profile_get, the profile route). */
 export function hostProfileSummary(profile: HostProfile, label: string): string {
   const lines: string[] = [];
   const f = profile.probed;
@@ -194,6 +183,7 @@ export function hostProfileSummary(profile: HostProfile, label: string): string 
   };
   lines.push(`Host "${label}" is ${kindText[profile.kind]}${profile.kindReasons.length ? ` (${profile.kindReasons.join('; ')})` : ''}.`);
   if (profile.userNote) lines.push(`The user says: ${profile.userNote}`);
+  if (profile.learned?.summary) lines.push(`What it is used for: ${profile.learned.summary}`);
   if (f) {
     const os = f.os?.prettyName || [f.os?.platform, f.os?.release].filter(Boolean).join(' ');
     const size = [f.cpus ? `${f.cpus} CPUs` : '', f.memBytes ? `${Math.round(f.memBytes / GIB)} GB RAM` : '',
@@ -208,11 +198,9 @@ export function hostProfileSummary(profile: HostProfile, label: string): string 
     if (f.internet?.github === false) lines.push('github.com did not answer directly from this host.');
     if (f.uptimeSec && f.uptimeSec > 3 * 86400) lines.push(`It has been up for ${Math.floor(f.uptimeSec / 86400)} days (likely always on).`);
   } else {
-    lines.push('No probe of this host yet: check what is installed before relying on it.');
+    lines.push('Not probed yet.');
   }
   const repos = Object.entries(profile.observed.repoPaths).slice(-8).map(([k, v]) => `${k.replace(/^dir:/, '')} at ${v.path}`);
   if (repos.length) lines.push(`Known repositories: ${repos.join('; ')}.`);
-  const notes = profile.notes.slice(-12).map((n) => `- ${n.key}: ${n.fact}`);
-  if (notes.length) lines.push('Notes from earlier sessions on this host:', ...notes);
   return lines.join('\n');
 }

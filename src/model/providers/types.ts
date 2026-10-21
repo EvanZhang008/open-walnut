@@ -34,6 +34,10 @@ export interface ModelCompat {
    *  (e.g. Opus 5 — 1M is the default AND the only size). Suppresses the
    *  context-1m beta push that context_window >= 1M would otherwise trigger. */
   native_1m?: boolean;
+  /** True for models that think on their own when a request sets no thinking
+   *  (Haiku 5.5): only an explicit `{type:'disabled'}` turns it off. Set it only
+   *  on a model verified to accept `disabled` (Opus 5.5 and Sonnet 5.5 reject it). */
+  thinks_by_default?: boolean;
   max_tokens_field?: 'max_tokens' | 'max_completion_tokens';
   supports_cache?: boolean;
   supports_vision?: boolean;

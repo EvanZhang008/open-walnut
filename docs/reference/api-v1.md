@@ -1322,7 +1322,7 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   them, draws each completed row in its pin place inside its own group, and
   puts a group that only completed rows have after the others.
 
-### Task transfer and host profiles (additive, 2026-10): `/tasks/:id/transfer`, `/transfers/:id`, `/hosts/:host/profile`, `/host-notes`
+### Task transfer and host profiles (additive, 2026-10): `/tasks/:id/transfer`, `/transfers/:id`, `/hosts/:host/profile`
 
 A task keeps ONE session for its whole life (a second session for a task is
 `409 task_has_session`). Moving the work to another engine or host therefore
@@ -1346,11 +1346,11 @@ makes a NEW task beside the source, which completes unless `keep_source`.
 - `GET /api/v1/transfers/:id?wait_ms=` → the same three answers; `404
   transfer_not_found` after an hour or a server restart (check the task instead).
 - `GET /api/v1/hosts/:host/profile` → `200 { profile, summary }`: what Walnut
-  learned about the host (kind, probe, repository paths, reach results, notes).
+  learned about the host (kind, probe, repository paths, reach results, and
+  `learned`: a short description Walnut regenerates in the background from the
+  sessions that ran there).
 - `PATCH /api/v1/hosts/:host/profile { kind?: kind | null, user_note?, refresh?:
   true }` → `200 { profile }`; `kind: null` returns to the automatic kind.
-- `POST /api/v1/host-notes { key, fact, evidence?, host? }` → `200 { host, notes }`;
-  `host` defaults to the calling session's host.
 
 ### Sessions (read-only)
 

@@ -3,9 +3,10 @@
  *
  * One collapsed row that expands into the host's learned profile (server:
  * core/hosts/host-profile.ts): its kind and why, the system, the tools it has,
- * the repositories sessions used there, and the notes sessions left about it,
- * newest first. The person can probe it again, name its kind (or hand that back
- * to Walnut) and leave a one-line note. The profile loads on the first open.
+ * the repositories sessions used there, and what Walnut learned it is used for
+ * (core/hosts/host-learning.ts, from the sessions that ran there). The person can
+ * probe it again, name its kind (or hand that back to Walnut) and leave a
+ * one-line note. The profile loads on the first open.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchHostProfile, updateHostProfile, type HostKind, type HostProfile } from '@/api/transfer';
@@ -95,7 +96,6 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
   const found = tools.filter(([, v]) => v).map(([k, v]) => `${k} ${v}`);
   const missing = tools.filter(([, v]) => !v).map(([k]) => k);
   const repos = Object.entries(profile?.observed?.repoPaths ?? {});
-  const notes = [...(profile?.notes ?? [])].sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''));
   const currentPick = profile?.kindSetByUser ? profile.kind : AUTO;
   // Enter saves, and the save disables the field, which blurs it (WebKit fires the
   // blur): the note already on its way is not sent a second time.
@@ -171,18 +171,19 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
                   <p key={key} className="settings-row-help settings-addons-mono" title={`${key}, seen ${timeAgo(r.at)}`}>{r.path}</p>
                 ))}
               </SettingsRow>
-              <SettingsRow indent label="Notes" help={notes.length ? undefined : 'Sessions have not left notes about this host.'}>
-                {notes.map((n) => (
-                  <p key={`${n.key}:${n.at}`} className="settings-row-help" title={n.evidence ?? n.key}>
-                    {n.fact} <span className="settings-addons-muted">{timeAgo(n.at)}</span>
-                  </p>
-                ))}
+              <SettingsRow indent label="Used for" help={profile.learned ? undefined : 'Walnut has not learned this yet: it writes this once sessions have run here.'}>
+                {profile.learned && (
+                  <>
+                    <p className="settings-row-help" data-testid="host-profile-learned">{profile.learned.summary}</p>
+                    <p className="settings-row-help settings-addons-muted">From {profile.learned.sessionCount} session{profile.learned.sessionCount === 1 ? '' : 's'}, {timeAgo(profile.learned.at)}</p>
+                  </>
+                )}
               </SettingsRow>
               <SettingsRow
                 indent
                 label="Your note"
                 htmlFor={`host-note-${alias}`}
-                help="Sessions on this host read it."
+                help="Walnut uses it to describe this host."
                 control={
                   <input
                     id={`host-note-${alias}`}

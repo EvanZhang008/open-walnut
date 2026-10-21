@@ -6,9 +6,8 @@
  *   POST  /tasks/:id/transfer           do it: a new task beside this one takes the work (waits up
  *                                       to wait_ms, default 20s, then 202 with the transfer id)
  *   GET   /transfers/:id                that transfer: 200 result, its error, or 202 still running
- *   GET   /hosts/:host/profile          what Walnut knows about a host (+ the summary a session gets)
+ *   GET   /hosts/:host/profile          what Walnut knows about a host (+ a few-line summary)
  *   PATCH /hosts/:host/profile          the user names the host's kind or leaves a note
- *   POST  /host-notes                   a session records a fact about the host it runs on
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
@@ -94,9 +93,9 @@ function sendJob(res: Response, job: TransferJob): void {
  * write to the Mac by its route table's default, and answers needs_leader while
  * the Mac is away.)
  */
-transferV1Router.use(['/tasks/:id/transfer', '/hosts/:host/profile', '/host-notes'], (req: Request, res: Response, next: NextFunction) => {
+transferV1Router.use(['/tasks/:id/transfer', '/hosts/:host/profile'], (req: Request, res: Response, next: NextFunction) => {
   if (req.method === 'GET' || placement() !== 'cloud') { next(); return }
-  res.status(501).json({ error: 'Transfers and host notes run on your Mac only', code: 'not_supported_cloud' })
+  res.status(501).json({ error: 'Transfers and host profile changes run on your Mac only', code: 'not_supported_cloud' })
 })
 
 function waitMs(raw: unknown, fallback: number): number {
@@ -174,33 +173,5 @@ transferV1Router.patch('/hosts/:host/profile', async (req: Request, res: Respons
       if (typeof body.user_note === 'string') p.userNote = body.user_note.trim().slice(0, 600) || undefined
     })
     res.json({ profile })
-  } catch (err) { sendError(res, err, next) }
-})
-
-transferV1Router.post('/host-notes', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const body = (req.body ?? {}) as { host?: unknown; key?: unknown; fact?: unknown; evidence?: unknown }
-    if (typeof body.key !== 'string' || typeof body.fact !== 'string') {
-      res.status(400).json({ error: 'key and fact are required strings' }); return
-    }
-    let host = typeof body.host === 'string' && body.host.trim() ? normalizeHost(body.host.trim()) : undefined
-    let taskId: string | undefined
-    const sid = callerSid(req)
-    if (sid) {
-      const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
-      const caller = await getSessionByClaudeId(sid).catch(() => null)
-      if (caller) {
-        host ??= normalizeHost(caller.host)
-        taskId = caller.taskId || undefined
-      }
-    }
-    if (!host) { res.status(400).json({ error: 'host is required when the caller is not a session' }); return }
-    const { addHostNote } = await import('../../core/hosts/host-profile.js')
-    const profile = await addHostNote(host, {
-      key: body.key, fact: body.fact,
-      ...(typeof body.evidence === 'string' ? { evidence: body.evidence } : {}),
-      ...(taskId ? { taskId } : {}),
-    })
-    res.json({ host, notes: profile.notes.length })
   } catch (err) { sendError(res, err, next) }
 })

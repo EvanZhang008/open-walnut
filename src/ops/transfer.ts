@@ -72,28 +72,12 @@ defineOp({
   title: 'What Walnut knows about a host',
   description:
     'Read the profile Walnut keeps for an execution host: the kind of machine (laptop, public or private cloud VM, managed dev box), ' +
-    'the system and installed tools from its last probe, known repository paths, which hosts it can copy from directly, and notes earlier sessions left. ' +
-    'The `summary` is the short text a transferred session receives.',
+    'the system and installed tools from its last probe, known repository paths, which hosts it can copy from directly, ' +
+    'and what Walnut has learned the host is used for (regenerated in the background from the sessions that ran there). ' +
+    '`summary` is the same in a few lines.',
   input: {
     host: z.string().min(1).describe('Host alias ("__local__" = the primary machine)'),
   },
   bind: { method: 'GET', path: '/hosts/:host/profile' },
   tags: { readonly: true, remote: 'allow' },
-});
-
-defineOp({
-  name: 'host_note_add',
-  title: 'Record a fact about a host',
-  description:
-    'Write down one fact about the host a session runs on, for the next work that comes there: a tool you installed and how, ' +
-    'where a repository lives, a proxy, registry or credential setup that differs, a command that behaves differently. ' +
-    'One line per fact; the same key replaces the older fact. Never record secrets.',
-  input: {
-    key: z.string().min(1).max(80).describe('Short key, e.g. "node", "repo:walnut", "npm-registry"'),
-    fact: z.string().min(1).max(600).describe('What is true on this host, in one sentence'),
-    evidence: z.string().max(600).optional().describe('How you know (the command and what it printed)'),
-    host: z.string().min(1).optional().describe('Host alias; omit for the host your session runs on'),
-  },
-  bind: { method: 'POST', path: '/host-notes' },
-  tags: { readonly: false, remote: 'allow' },
 });

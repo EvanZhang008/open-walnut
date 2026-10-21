@@ -3702,6 +3702,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startProjectSummaryMaintainer()
   }
 
+  // -- Start host learning (sessions' self-reports → a fast-model description of each host) --
+  if (bootPolicy('host-learning')) {
+    const { startHostLearning } = await import('../core/hosts/host-learning.js')
+    startHostLearning()
+  }
+
   // -- Wire bus subscriber to push events to WS clients --
   // Deliberately NON-global and with NO `interest` filter: it is gated purely by
   // each emit's `destinations`. So any event emitted to 'web-ui' reaches the

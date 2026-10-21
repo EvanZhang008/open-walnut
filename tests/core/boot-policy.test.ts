@@ -71,6 +71,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'session-health-monitor': leaderOnly,
   'overview-maintainer': always,
   'project-summary': always,
+  'host-learning': leaderOnly, // new: host profiles are written on the Mac
   'routine-wake': always,
   // The server.ts gate was `always`, but startWorkspaceWatch returned at once on its own
   // `process.env.WALNUT_CLOUD_MODE` read, so the job never ran on the companion.
