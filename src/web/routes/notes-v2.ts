@@ -1741,9 +1741,7 @@ export async function renameNoteTag(rawFrom: unknown, rawTo: unknown): Promise<{
   // Targeted by the tag index — NOT a vault scan.
   const paths = notePathsForTag(from)
   let updated = 0
-  // Negative lookahead on the FULL tag charset (see INLINE_TAG_RE): `\b`
-  // treats `-`/`/` as boundaries, so renaming #work also hit #work-log.
-  const inlineRe = new RegExp(`(^|[\\s(])#${escapeRegExp(from)}(?![A-Za-z0-9/_-])`, 'g')
+  const { renameTagInContent } = await import('../../core/note-tag-rename.js')
 
   for (const relPath of paths) {
     const abs = resolveSafePath(relPath)
@@ -1754,41 +1752,8 @@ export async function renameNoteTag(rawFrom: unknown, rawTo: unknown): Promise<{
       content = await fsp.readFile(filePath, 'utf-8')
     } catch { continue }
 
-    const { data, body, raw } = parseFrontmatter(content)
-    let changed = false
-
-    // 1) frontmatter tags[]
-    let newRaw = raw
-    if (raw && Array.isArray(data.tags)) {
-      const replaced = (data.tags as unknown[]).map((t) =>
-        typeof t === 'string' && normalizeTag(t) === from ? to : t,
-      )
-      if (JSON.stringify(replaced) !== JSON.stringify(data.tags)) {
-        // Rewrite only the tag tokens, and ONLY on lines that belong to the
-        // `tags:` key (inline array or block list) — an unscoped rewrite also
-        // hit bare words in other fields (`title: my work notes`).
-        const tokenRe = new RegExp(`(^|[\\s,\\[])#?${escapeRegExp(from)}(?=$|[\\s,\\]])`, 'g')
-        let inTagsBlock = false
-        newRaw = raw
-          .split('\n')
-          .map((line) => {
-            const key = line.match(/^([A-Za-z_][\w-]*):/)
-            if (key) inTagsBlock = key[1] === 'tags'
-            else if (!/^\s*(-\s|#)/.test(line) && line.trim() !== '') inTagsBlock = false
-            const isTagsLine = inTagsBlock || /^tags:/.test(line)
-            return isTagsLine ? line.replace(tokenRe, (_m, pre) => `${pre}${to}`) : line
-          })
-          .join('\n')
-        changed = changed || newRaw !== raw
-      }
-    }
-
-    // 2) inline #from → #to in body
-    const newBody = body.replace(inlineRe, (_m, pre) => `${pre}#${to}`)
-    if (newBody !== body) changed = true
-
-    if (changed) {
-      const next = (newRaw || raw) + newBody
+    const next = renameTagInContent(content, from, to, normalizeTag)
+    if (next !== null) {
       await fsp.writeFile(filePath, next, 'utf-8')
       updated++
       scheduleNotesIndexUpdate(relPath)
@@ -1891,10 +1856,6 @@ notesV2Router.post('/index/merge-ids', async (_req: Request, res: Response, next
 })
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
 
 /** Fallback file walk for /list before the index has built (cold start only). */
 async function getAllMdFilesFallback(dir: string): Promise<string[]> {

@@ -34,7 +34,7 @@ export { RefusedWrite };
  * `session-meta`, `inbox-state`, `chat-turn` and `memory` only the cloud companion writes (apply-session-meta.ts,
  * apply-inbox-state.ts, apply-chat-turn.ts, apply-memory.ts).
  */
-export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory'] as const;
+export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move'] as const;
 /** What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks. */
 export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor'];
 
@@ -369,6 +369,8 @@ export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
     case 'chat-turn': return (await import('./apply-chat-turn.js')).applyChatTurn(ctx, record);
     // MEMORY.md or USER.md saved on the cloud companion while away (stage 4d).
     case 'memory': return (await import('./apply-memory.js')).applyMemory(ctx, record);
+    // Stage 4d: a note moved or renamed on the companion.
+    case 'note-move': return (await import('./apply-note-move.js')).applyNoteMove(ctx, record);
     default: throw new Error(`unknown journal kind ${record.kind}`);
   }
 }

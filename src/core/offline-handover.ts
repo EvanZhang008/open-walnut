@@ -259,7 +259,7 @@ async function drainRounds(
       // manifest built after this ack from one built before it (replica/overlay.ts).
       if (acked.length) await conn.send('offline.ack', { home: WALNUT_HOME, seqs: acked, now: Date.now() }, RPC_TIMEOUT_MS);
       // WP11: the host holds an acked note until a copy round from after the ack: send its notes again.
-      if (records.some((r) => (r.kind as string) === 'note' && acked.includes(r.seq))) {
+      if (records.some((r) => ((r.kind as string) === 'note' || (r.kind as string) === 'note-move') && acked.includes(r.seq))) {
         (await import('./host-replica.js')).noteRecordsAcked(conn.hostKey);
         batch.notesAcked = true;
       }
@@ -437,7 +437,7 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
   const early = key ? lookupJournaled(key) : null;
   if (early) return ledgerHit(batch, record, early, { retryKey, taskId, callerSid, opName, letter });
   if (giveUpKeys(record, taskId).some((k) => batch.givenUp.has(k))) {
-    const what = (record.kind as string) === 'memory' ? 'memory document' : isNoteRecord(record) ? 'note' : 'task';
+    const what = (record.kind as string) === 'memory' ? 'memory document' : isNoteRecord(record) || (record.kind as string) === 'note-move' ? 'note' : 'task';
     if (!(await letter('given-up', `an earlier change to this ${what} could not be applied, so this later one was not applied either`))) return 'stop';
     if (key) recordApplied(key, { outcome: 'given-up', detail: 'earlier record of the task given up', source: 'drain' });
     batch.result.failed++;
@@ -553,8 +553,15 @@ function isNoteRecord(record: OfflineRecord): boolean {
  * letter (a note record names no task).
  */
 function giveUpKeys(record: OfflineRecord, taskId: string | undefined): string[] {
+  const r = record as { path?: unknown; noteId?: unknown; doc?: unknown; from?: unknown; to?: unknown };
+  // A note move (4d) names both of its paths: a save at either waits behind it.
+  if ((record.kind as string) === 'note-move') {
+    return [
+      ...[r.from, r.to].filter((p): p is string => typeof p === 'string' && !!p).map((p) => `note:${p}`),
+      ...(typeof r.noteId === 'string' && r.noteId ? [`note-id:${r.noteId}`] : []),
+    ];
+  }
   if (!isNoteRecord(record)) return taskId ? [taskId] : [];
-  const r = record as { path?: unknown; noteId?: unknown; doc?: unknown };
   if ((record.kind as string) === 'memory') return typeof r.doc === 'string' ? [`memory:${r.doc}`] : [];
   return [
     ...(typeof r.path === 'string' && r.path ? [`note:${r.path}`] : []),

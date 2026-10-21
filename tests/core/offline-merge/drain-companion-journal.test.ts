@@ -30,6 +30,11 @@
  *     inline; one the outbox already handed over is skipped; one whose answer the
  *     companion lost lands as a failed turn, its words kept; one whose words are lost is
  *     refused into the letter;
+ *   - stage 4d: a memory save lands and merges like a note (apply-memory.ts); a note
+ *     moved on the companion is moved on the Mac where the note is now, found by its id
+ *     (apply-note-move.ts); one moved on the Mac meanwhile, or onto a taken path, stays
+ *     and is lettered; one deleted on the Mac is quiet; a note made, moved and saved on
+ *     the companion lands at its new path with its text, in that order;
  *   - a drain with nothing waiting is quiet.
  *
  * CLOUD_MODE is read at import, so the companion and the Mac are two module graphs
@@ -82,6 +87,9 @@ async function loadMac() {
     inbox: await import('../../../src/core/human-inbox/store.js'),
     outbox: await import('../../../src/core/task-outbox.js'),
     chatOutbox: await import('../../../src/core/cloud-chat-outbox.js'),
+    notesIndex: await import('../../../src/core/notes-index.js'),
+    indexer: await import('../../../src/core/notes-indexer.js'),
+    notesRoute: await import('../../../src/web/routes/notes-v2.js'),
   }
 }
 
@@ -117,6 +125,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   mac?.handover._setHandoverBackoffForTesting(null)
+  await mac?.indexer.settleNotesIndexer().catch(() => {})
   mac?.taskDb.closeDb()
   companion?.journal._resetCompanionJournalForTesting()
   await new Promise<void>((r) => server?.close(() => r()))
@@ -430,6 +439,65 @@ describe('the Mac drains the companion\'s journal', () => {
     expect(log?.entries.find((e) => e.kind === 'memory')).toMatchObject({ field: 'MEMORY.md', kept: 'replica', mac: macText, replica: ours })
     expect(mac.letter.buildConflictLetter(log!)?.markdown).toContain('- MEMORY.md: both sides changed the same lines')
     expect(companion.journal.companionJournalRecords()).toEqual([])
+  })
+
+  it('a note moved on the companion is moved where the note is now; a Mac move or a taken path stays and is lettered', async () => {
+    const notesDir = constantsBase.NOTES_DIR as string
+    const sha12 = (t: string) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 12)
+    const at = (rel: string) => fsp.readFile(path.join(notesDir, rel), 'utf8').catch(() => null)
+    const note = async (rel: string, id: string, title: string) => {
+      const text = `---\nid: ${id}\n---\n# ${title}\n\nSome text.\n`
+      await fsp.mkdir(path.dirname(path.join(notesDir, rel)), { recursive: true })
+      await fsp.writeFile(path.join(notesDir, rel), text)
+      await mac.indexer.reconcileNoteNow(rel)
+      return text
+    }
+    mac.notesIndex.getNotesIndexDb()
+    const logsBefore = new Set(fs.existsSync(mac.conflicts.conflictDir()) ? fs.readdirSync(mac.conflicts.conflictDir()) : [])
+    // A plain move: by its id, to a new folder; its id stays with it.
+    const moving = await note('Acme/move-me.md', 'n_movemove001', 'Move me')
+    expect(companion.journal.journalNoteMove({ from: 'Acme/move-me.md', to: 'Acme/Moved/me.md', noteId: 'n_movemove001' })).toMatchObject({ ok: true })
+    await mac.drain.drainCompanionJournalNow()
+    expect(await at('Acme/Moved/me.md')).toBe(moving)
+    expect(await at('Acme/move-me.md')).toBeNull()
+    expect(mac.notesIndex.getNotePathById('n_movemove001')).toBe('Acme/Moved/me.md')
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    // The same move again (a redrain after a crash): nothing.
+    expect(companion.journal.journalNoteMove({ from: 'Acme/move-me.md', to: 'Acme/Moved/me.md', noteId: 'n_movemove001' })).toMatchObject({ ok: true })
+    // The Mac renamed one meanwhile: found by its id, the Mac's place stays.
+    await note('Acme/renamed-here.md', 'n_movemove002', 'Renamed')
+    await mac.notesRoute.moveNote('Acme/renamed-here.md', 'Acme/renamed-on-mac.md')
+    expect(companion.journal.journalNoteMove({ from: 'Acme/renamed-here.md', to: 'Acme/renamed-away.md', noteId: 'n_movemove002' })).toMatchObject({ ok: true })
+    // A move onto a path another note has on the Mac.
+    await note('Acme/taken-from.md', 'n_movemove003', 'Taken from')
+    await note('Acme/taken-to.md', 'n_movemove004', 'Taken to')
+    expect(companion.journal.journalNoteMove({ from: 'Acme/taken-from.md', to: 'Acme/taken-to.md', noteId: 'n_movemove003' })).toMatchObject({ ok: true })
+    // A move of a note the Mac deleted: quiet.
+    expect(companion.journal.journalNoteMove({ from: 'Acme/deleted-on-mac.md', to: 'Acme/gone.md', noteId: 'n_movemove005' })).toMatchObject({ ok: true })
+    // Made on the companion, moved there, then saved at its new path: in that order.
+    const made = '# Kiosk\n\nA kiosk at the fair.\n'
+    expect(companion.journal.journalNote({ path: 'Acme/kiosk.md', mode: 'create', baseHash: null, base: null, ours: Buffer.from(made), oursHash: sha12(made) })).toMatchObject({ ok: true })
+    expect(companion.journal.journalNoteMove({ from: 'Acme/kiosk.md', to: 'Acme/Fair/kiosk.md' })).toMatchObject({ ok: true })
+    const saved = `${made}\nTwo of them.\n`
+    expect(companion.journal.journalNote({ path: 'Acme/Fair/kiosk.md', mode: 'put', baseHash: sha12(made), base: Buffer.from(made), ours: Buffer.from(saved), oursHash: sha12(saved) }, { coalesce: false })).toMatchObject({ ok: true })
+    await mac.drain.drainCompanionJournalNow()
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    expect(await at('Acme/Moved/me.md')).toBe(moving)
+    expect(await at('Acme/renamed-on-mac.md')).toContain('# Renamed')
+    expect(await at('Acme/renamed-away.md')).toBeNull()
+    expect(await at('Acme/taken-from.md')).toContain('# Taken from')
+    expect(await at('Acme/taken-to.md')).toContain('# Taken to')
+    expect(await at('Acme/gone.md')).toBeNull()
+    expect(await at('Acme/kiosk.md')).toBeNull()
+    expect(await at('Acme/Fair/kiosk.md')).toContain('Two of them.')
+    // Lettered: the two moves that were not made, nothing else.
+    const logs = fs.readdirSync(mac.conflicts.conflictDir()).filter((n) => n.endsWith('.json') && !logsBefore.has(n))
+    const entries = logs.flatMap((n) => mac.conflicts.readConflictLog(n.slice(0, -5))?.entries ?? [])
+    expect(entries.map((e) => `${e.recordKind}:${e.why}:${e.notePath}`).sort()).toEqual([
+      'note-move:move-kept:Acme/renamed-on-mac.md', 'note-move:move-taken:Acme/taken-from.md',
+    ])
+    const log = logs.map((n) => mac.conflicts.readConflictLog(n.slice(0, -5))).find((l) => l?.entries.some((e) => e.recordKind === 'note-move'))
+    expect(mac.letter.buildConflictLetter(log!)?.markdown).toContain('a move or rename made while away was not made: it was moved to Acme/renamed-away.md while away, and to Acme/renamed-on-mac.md on the Mac')
   })
 
   it('a drain with nothing waiting is quiet', async () => {

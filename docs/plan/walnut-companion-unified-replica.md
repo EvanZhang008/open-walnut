@@ -456,7 +456,7 @@ minutes, and at a build change.
 | 4a | the copy and its round (no reader yet) |
 | 4b | the box's notes reads (`/api/notes-v2` always, `/api/v1/notes` when the Mac does not answer: the tree, a note, links, backlinks, tags, the flat list) take the copy once a whole manifest arrived, through the source a host replica reads (`replica/notes-source.ts`); searches stay the box's own (its copy of the Mac's index) |
 | 4c | a note saved, created or deleted on the box (the v2 save and delete, the v1 save, create and delete) is a `note` record in its journal once the copy is held and the Mac drains `note`, checked as a host checks one (the lock hash against what the box shows, the size, the id from the Mac's copy); the Mac drains it with the notes merge |
-| 4d | the box's memory reads and saves (`memory` records), its skill reads, and v1's note resolve take the copy; the box's other note paths (moves, folders, tags, attachments); then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
+| 4d | the box's memory reads and saves (`memory` records), its skill reads, and v1's note resolve take the copy; a note move or rename on the box is a `note-move` record, a tag rename is `note` saves, a folder change needs the Mac; attachments; then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
 
 Every copy read shows the pending saves over the copy (the copy's journal view,
 `core/companion-notes.ts`), and a save the Mac took until a copy round from after its
@@ -487,6 +487,29 @@ lane has no note, memory or skill tools (its profile drops the Walnut MCP and ke
 and web tools only), so nothing changes there; the ops that do reach the box (the backup
 gateway's note_read, note_search, memory_read and skill_read while the companion leads)
 go through the routes above.
+
+**4d, note moves, tags and folders.** A note moved or renamed on the box (`POST
+/api/notes-v2/move`, and `POST /api/v1/notes/move` when the Mac does not answer) is one
+`note-move` record naming both paths and the note's id, once the Mac drains that kind; a
+Mac that does not keeps the old path (the box's disk). The box checks it as the Mac's
+route does, against what it shows: the note is there, and the new path is free in any
+case (the Mac's disk does not tell case apart). Every copy read shows the move at once,
+in order with the saves around it, so a save at the new path and a new note at the old
+one are their own records after it: a save never folds into a record made before a move
+that names its path, or it would land before the move. The Mac applies the record where
+the note is now (`offline-merge/apply-note-move.ts`): found by its id, else at the old
+path, and moved through the route's own move (the index keeps the id, a bookmark follows
+it). A note already at the new path, or deleted on the Mac, needs nothing; one the Mac
+moved elsewhere meanwhile, or onto a path another note holds there, stays where it is
+and is lettered. A tag renamed on the box is a `note` save of every note that carries it,
+as the box shows them, with the disk route's own rewrite (`core/note-tag-rename.ts`).
+When the copy leaves notes out (a folder the Mac keeps back, a note over 1 MB), one of
+those may carry the tag too, so the rename answers needs-the-Mac
+(`tag_rename_needs_mac`). Making or deleting a folder answers needs-the-Mac
+(`folder_changes_need_mac`): the copy holds notes only, so an empty folder made on the
+box would never show, and a folder delete also removes pictures and files the box does
+not hold. There is no folder rename route (the tree renames notes and never drags a
+folder). A picture or file moved on the box still takes the old path in this slice.
 
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 
