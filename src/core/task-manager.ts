@@ -1097,6 +1097,12 @@ export interface AddTaskInput {
   explicitId?: string;
   /** The op id that created the task (stored as `created_by_op`): a replay with the same op is a no-op. */
   createdByOp?: string;
+  /**
+   * A drained create's own moment (ISO, on this server's clock): its `created_at`, so a
+   * task made on a phone while the Mac was away keeps the time it was made. Never later
+   * than now; `updated_at` stays now.
+   */
+  createdAt?: string;
 }
 
 /** addTask with an explicitId that another task already has. */
@@ -2788,7 +2794,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       description: input.description ?? '',
       summary: '',
       note: '',
-      created_at: now,
+      created_at: input.createdAt && Date.parse(input.createdAt) < Date.parse(now) ? new Date(Date.parse(input.createdAt)).toISOString() : now,
       updated_at: now,
       due_date: input.due_date,
       ...(input.start_date ? { start_date: input.start_date } : {}),

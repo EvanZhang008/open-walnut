@@ -367,12 +367,56 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
  * (a timeout, not a dead link) is applied once (the task's applied_ops key).
  */
 async function journalOp(op: TaskOp): Promise<boolean> {
+  if (op.type === 'create') return journalCreate(op);
   if (op.type !== 'update' || op.append || !op.fields || Object.keys(op.fields).length === 0) return false;
   try {
     const { journalTaskFields } = await import('./companion-journal.js');
     return journalTaskFields({ opId: op.opId, taskId: op.task.id, fields: op.fields })?.ok === true;
   } catch (err) {
     log.task.warn('task-queue: the journal did not take a task write, queueing it', { opId: op.opId, err: String(err) });
+    return false;
+  }
+}
+
+/** Where a create places its task (offline-host-core.ts task-create `placement`); the rest are its fields. */
+const CREATE_PLACEMENT = new Set(['project', 'group_id', 'parent_task_id', 'focus_tier']);
+/** Never sent with a create: the phase decides the status, the Mac keeps its own order and unread mark. */
+const CREATE_SKIPPED = new Set(['status', 'pin_order', 'unread']);
+
+/**
+ * A task born here, as a host's `task-create` names it: the fields set on the row (a
+ * born default, an empty value, the born TODO phase are left to the Mac's create), and
+ * where it goes. Exported for the tests.
+ */
+export function createRecordOf(task: Task): { fields: Record<string, unknown>; placement: { parentTaskId?: string; project?: string; groupId?: string; tier?: string } } {
+  const row = task as unknown as Record<string, unknown>;
+  const fields: Record<string, unknown> = { title: task.title };
+  for (const f of MERGEABLE) {
+    if (f === 'title' || CREATE_PLACEMENT.has(f) || CREATE_SKIPPED.has(f)) continue;
+    const v = row[f];
+    if (v === undefined || v === null || v === '' || v === false || (Array.isArray(v) && v.length === 0)) continue;
+    if (f === 'phase' && v === 'TODO') continue;
+    fields[f] = v;
+  }
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+  return {
+    fields,
+    placement: {
+      project: typeof task.project === 'string' ? task.project : '',
+      ...(str(task.group_id) ? { groupId: task.group_id } : {}),
+      ...(str(task.parent_task_id) ? { parentTaskId: task.parent_task_id } : {}),
+      ...(str(task.focus_tier) ? { tier: task.focus_tier } : {}),
+    },
+  };
+}
+
+/** Slice 3d: a task born here while the Mac does not answer goes into the journal as `task-create`. */
+async function journalCreate(op: Extract<TaskOp, { type: 'create' }>): Promise<boolean> {
+  try {
+    const { journalTaskCreate } = await import('./companion-journal.js');
+    return journalTaskCreate({ opId: op.opId, taskId: op.task.id, ...createRecordOf(op.task) })?.ok === true;
+  } catch (err) {
+    log.task.warn('task-queue: the journal did not take a new task, queueing it', { opId: op.opId, err: String(err) });
     return false;
   }
 }

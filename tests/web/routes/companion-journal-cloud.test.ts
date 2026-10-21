@@ -19,6 +19,9 @@
  *   - slice 3c: an inbox flag the Mac did not take is an `inbox-state` record (a queued
  *     change of the same flag goes); after the ack it stays on the box's inbox until
  *     the copy passes the Mac's clock;
+ *   - slice 3d: a task born here while the Mac is away is a `task-create` record (the id
+ *     this box minted, its fields, its project), and an edit of it joins the journal
+ *     behind it; before the Mac drained, both are queued as before;
  *   - slice 3b: a session metadata patch the Mac did not answer is a `session-meta`
  *     record by the same rules (its session's queued patches first; a patch queued
  *     behind its records waits for the ack);
@@ -114,6 +117,13 @@ async function waitFor<V>(fn: () => Promise<V | null | undefined | false> | V | 
 }
 const queuedFor = async (id: string) => (await listQueuedOps()).filter((o) => (o.type === 'update' || o.type === 'create') && o.task.id === id)
 const recordsFor = (id: string) => companionJournalRecords().filter((r) => r.taskId === id)
+const createTask = async (body: Record<string, unknown>): Promise<Task> => {
+  const r = await call('/api/tasks', { method: 'POST', body: JSON.stringify(body) })
+  expect(r.status).toBe(201)
+  return r.body.task as Task
+}
+let X = ''
+let C = ''
 const patch = (id: string, body: Record<string, unknown>) => call(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 // Slice 3b: session metadata.
 const S1 = 'sess-acme-one'
@@ -193,6 +203,13 @@ describe('the Mac away, before it ever drained the journal', () => {
     expect(r.status).toBe(200)
     const [op] = await waitFor(async () => { const q = await queuedFor(A); return q.length ? q : null }, 'the edit of A to be queued')
     expect(op).toMatchObject({ type: 'update', fields: { title: { base: 'Acme alpha', value: 'Acme alpha, edited away' } } })
+    expect(companionJournalRecords()).toEqual([])
+  })
+
+  it('a new task is queued as before, not journaled', async () => {
+    X = (await createTask({ title: 'Acme kickoff, from the phone', project: 'Acme' })).id
+    const [op] = await waitFor(async () => { const q = await queuedFor(X); return q.length ? q : null }, 'the create of X to be queued')
+    expect(op).toMatchObject({ type: 'create', task: { id: X, title: 'Acme kickoff, from the phone' } })
     expect(companionJournalRecords()).toEqual([])
   })
 
@@ -288,6 +305,25 @@ describe('the Mac drained once: away writes go into the journal', () => {
     expect(b.body.task).toMatchObject({ title: 'Acme beta, edited away', priority: 'important' })
     expect([...companionJournalTaskIds()]).toEqual([B])
   })
+
+  it('a task born here (slice 3d) is a task-create record; its edit joins the journal behind it', async () => {
+    const t = await createTask({ title: 'Acme launch plan', project: 'Acme', priority: 'important', description: 'Draft from the phone' })
+    C = t.id
+    const [rec] = await waitFor(() => { const x = recordsFor(C); return x.length ? x : null }, 'the create of C in the journal')
+    expect(rec).toMatchObject({ kind: 'task-create', taskId: C, placement: { project: 'Acme' }, fields: { title: 'Acme launch plan', priority: 'important', description: 'Draft from the phone' } })
+    // Never a born default: the Mac's create makes those.
+    expect(rec.fields).not.toHaveProperty('status')
+    expect(rec.fields).not.toHaveProperty('phase')
+    expect(await queuedFor(C)).toEqual([])
+    expect((await patch(C, { title: 'Acme launch plan, v2' })).status).toBe(200)
+    const recs = await waitFor(() => { const x = recordsFor(C); return x.length === 2 ? x : null }, 'the edit of C behind its create')
+    expect(recs.map((r) => r.kind)).toEqual(['task-create', 'task-fields'])
+    expect(recs[1].fields).toMatchObject({ title: { base: 'Acme launch plan', value: 'Acme launch plan, v2' } })
+    expect(await queuedFor(C)).toEqual([])
+    // A copy round from the Mac (it has no C yet) keeps the row.
+    await round()
+    expect((await call(`/api/tasks/${C}`)).body.task).toMatchObject({ title: 'Acme launch plan, v2' })
+  })
 })
 
 describe('the trigger', () => {
@@ -315,8 +351,9 @@ describe('the Mac comes back', () => {
     }) as Relay
     try {
       await flushTaskQueue()
-      expect(applied.map((a) => a.split(':')[0])).toEqual([A, A])
+      expect(applied.map((a) => a.split(':')[0])).toEqual([A, X, A])
       expect(await queuedFor(A)).toEqual([])
+      expect(await queuedFor(X)).toEqual([])
       expect(await queuedFor(B)).toHaveLength(1)
 
       // The session queue: S1's patches go, in order; a patch of S2 left behind its records waits.
@@ -338,7 +375,7 @@ describe('the Mac comes back', () => {
       // The Mac drains the journal (the handover's two calls).
       const drained = await postToCloudJournal('offline.drain', { home: '/Users/someone/.open-walnut', kinds: [...APPLIED_V2_KINDS] })
       const kinds = drained.records.map((r: { kind: string; taskId?: string; sid?: string }) => `${r.kind}:${r.taskId ?? r.sid}`)
-      expect(kinds).toEqual([`task-fields:${B}`, `session-meta:${S2}`, `session-meta:${S2}`, 'inbox-state:undefined', 'inbox-state:undefined'])
+      expect(kinds).toEqual([`task-fields:${B}`, `session-meta:${S2}`, `session-meta:${S2}`, 'inbox-state:undefined', 'inbox-state:undefined', `task-create:${C}`, `task-fields:${C}`])
       // A redrain before the ack hands the same records (frozen, as on a host).
       const seqs = drained.records.map((r: { seq: number }) => r.seq)
       const again = await postToCloudJournal('offline.drain', { home: '/x', kinds: [...APPLIED_V2_KINDS] })

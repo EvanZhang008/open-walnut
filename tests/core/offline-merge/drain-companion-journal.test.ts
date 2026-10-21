@@ -18,6 +18,10 @@
  *   - slice 3c: an inbox flag lands with the human's moment as `since`, so a newer change
  *     made on the Mac wins; a flag of a letter the Mac no longer has is skipped quietly
  *     (no letter about a read mark);
+ *   - slice 3d: a task born on the companion lands with the id it minted, its fields and
+ *     its project, once (created_by_op); a create the queue already landed (a live send
+ *     that timed out after it landed) is skipped, never re-minted and never merged again
+ *     over a later Mac edit; a later edit of it lands after it;
  *   - a drain with nothing waiting is quiet.
  *
  * CLOUD_MODE is read at import, so the companion and the Mac are two module graphs
@@ -68,6 +72,7 @@ async function loadMac() {
     ingest: await import('../../../src/core/cloud-ingest.js'),
     sessions: await import('../../../src/core/session-tracker.js'),
     inbox: await import('../../../src/core/human-inbox/store.js'),
+    outbox: await import('../../../src/core/task-outbox.js'),
   }
 }
 
@@ -239,6 +244,60 @@ describe('the Mac drains the companion\'s journal', () => {
     expect(result).toMatchObject({ replayed: 2, skipped: 2, failed: 0 })
     const conflictsAfter = fs.existsSync(mac.conflicts.conflictDir()) ? fs.readdirSync(mac.conflicts.conflictDir()).length : 0
     expect(conflictsAfter).toBe(conflictsBefore)
+  })
+
+  it('a task born on the companion lands with its id, fields and project, once; an edit of it lands after it', async () => {
+    const id = `mcj${Date.now().toString(36)}aa01`
+    const op = opId()
+    companion.journal.journalTaskCreate({
+      opId: op, taskId: id,
+      fields: { title: 'Acme launch checklist', priority: 'important', description: 'From the phone', phase: 'IN_PROGRESS', note: 'Ask the vendor' },
+      placement: { project: 'Acme' },
+    })
+    const madeAt = Date.now()
+    // Its edit, made after it on the box: a record of its own, behind it.
+    companion.journal.journalTaskFields({ opId: opId(), taskId: id, fields: { title: { base: 'Acme launch checklist', value: 'Acme launch checklist, v2', at: Date.now() } } })
+    await new Promise((r) => setTimeout(r, 400))
+    const drainedAt = Date.now()
+    await mac.drain.drainCompanionJournalNow()
+    const t = await mac.tm.getTask(id)
+    // The task keeps the moment it was made on the box, not the drain's.
+    expect(Date.parse(t.created_at)).toBeGreaterThanOrEqual(madeAt - 1_000)
+    expect(Date.parse(t.created_at)).toBeLessThan(drainedAt - 200)
+    expect(t).toMatchObject({ id, title: 'Acme launch checklist, v2', project: 'Acme', priority: 'important', description: 'From the phone', phase: 'IN_PROGRESS', created_by_op: op })
+    expect(t.note).toContain('Ask the vendor')
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    // Drained again (a Mac that crashed before its ack): still one task, unchanged.
+    const before = JSON.stringify(await mac.tm.getTask(id))
+    companion.journal.journalTaskCreate({ opId: op, taskId: id, fields: { title: 'Acme launch checklist' }, placement: { project: 'Acme' } })
+    await mac.drain.drainCompanionJournalNow()
+    expect(JSON.stringify(await mac.tm.getTask(id))).toBe(before)
+    expect((await mac.tm.listTasks()).filter((x) => x.title.startsWith('Acme launch checklist'))).toHaveLength(1)
+  })
+
+  it('a create the queue already landed, then its journal record: skipped, never re-minted or merged again', async () => {
+    const id = `mcj${Date.now().toString(36)}bb02`
+    const op = opId()
+    const now = new Date().toISOString()
+    const row = { id, title: 'Acme budget', status: 'todo', phase: 'IN_PROGRESS', priority: 'none', project: 'Acme', source: 'local', session_ids: [], description: '', summary: '', note: '', created_at: now, updated_at: now }
+    expect(await mac.outbox.applyTaskOp({ opId: op, type: 'create', at: now, task: row } as never)).toMatchObject({ applied: true, reason: 'created' })
+    expect(await mac.tm.getTask(id)).toMatchObject({ created_by_op: op })
+    // The Mac moves it on, then the journal's copy of the same create arrives.
+    await mac.tm.updateTask(id, { phase: 'NEED_ACTION' } as never)
+    expect((await mac.tm.getTask(id)).phase).toBe('NEED_ACTION')
+    const conflictsBefore = fs.existsSync(mac.conflicts.conflictDir()) ? fs.readdirSync(mac.conflicts.conflictDir()).length : 0
+    companion.journal.journalTaskCreate({ opId: op, taskId: id, fields: { title: 'Acme budget', phase: 'IN_PROGRESS', summary: 'Draft from the phone' }, placement: { project: 'Acme' } })
+    const result = await mac.drain.drainCompanionJournalNow()
+    expect(result).toMatchObject({ failed: 0 })
+    expect((await mac.tm.listTasks()).filter((x) => x.title === 'Acme budget')).toHaveLength(1)
+    expect((await mac.tm.getTask(id)).phase).toBe('NEED_ACTION')
+    const conflictsAfter = fs.existsSync(mac.conflicts.conflictDir()) ? fs.readdirSync(mac.conflicts.conflictDir()).length : 0
+    expect(conflictsAfter).toBe(conflictsBefore)
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    // And the queue's op again (a retry after the box lost the answer): nothing changes.
+    mac.outbox._resetAppliedOpIdsForTesting() // the in-memory op set forgot it: the row decides
+    expect(await mac.outbox.applyTaskOp({ opId: op, type: 'create', at: now, task: row } as never)).toMatchObject({ applied: false, reason: 'unchanged' })
+    expect((await mac.tm.getTask(id)).phase).toBe('NEED_ACTION')
   })
 
   it('a drain with nothing waiting is quiet', async () => {
