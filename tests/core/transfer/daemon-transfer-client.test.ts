@@ -13,7 +13,7 @@ import * as path from 'node:path'
 import { createTransferCore, type TransferCoreDeps, type TransferError } from '../../../src/providers/transfer-core.js'
 import { DaemonNeedsUpgradeError } from '../../../src/core/daemon-file-reader.js'
 import {
-  __setTransferConnectionResolverForTesting, relayFile, packWorkspace, probeHostFacts, writePart,
+  __setTransferConnectionResolverForTesting, fetchFromHost, relayFile, packWorkspace, probeHostFacts, writePart,
   TransferCommandError, TransferHostOfflineError, type TransferConn,
 } from '../../../src/core/transfer/daemon-transfer-client.js'
 
@@ -229,5 +229,19 @@ describe('the other helpers', () => {
     expect(await writePart('b', { path: target, offset: 0, data: Buffer.from('abc') })).toEqual({ staged: 3 })
     expect(b.sent[0].params.data).toBe(Buffer.from('abc').toString('base64'))
     await expect(writePart('b', { path: target, offset: 9, data: 'eHl6' })).rejects.toMatchObject({ code: 'gap', data: { have: 3 } })
+  })
+})
+
+describe('fetchFromHost', () => {
+  const files = [{ remotePath: '~/x/a', localPath: '/tmp/a' }]
+  it('a fetch whose files all arrived is a success, though the RPC envelope carries the ok', async () => {
+    useHosts({ b: fakeHost({ reply: { results: [{ localPath: '/tmp/a', ok: true, size: 3 }] } }) })
+    await expect(fetchFromHost('b', { host: 'a.example', files })).resolves.toMatchObject({ ok: true })
+  })
+  it('one missing file makes it a failure, and no results is never a success', async () => {
+    useHosts({ b: fakeHost({ reply: { results: [{ localPath: '/tmp/a', ok: false, error: 'No such file' }] } }) })
+    await expect(fetchFromHost('b', { host: 'a.example', files })).resolves.toMatchObject({ ok: false })
+    useHosts({ b: fakeHost({ reply: {} }) })
+    await expect(fetchFromHost('b', { host: 'a.example', files })).resolves.toMatchObject({ ok: false, results: [] })
   })
 })
