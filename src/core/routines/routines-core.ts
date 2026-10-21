@@ -18,7 +18,8 @@ import { MIN_EVERY_MS } from '../../providers/trigger-check-core.js';
 import type { CronService } from '../cron/index.js';
 import type { CronJob, TriggerCheck } from '../cron/types.js';
 import { requireTriggerDaemon } from './trigger-daemon.js';
-import { assertCheckHostAllowed, checkCommandChanged } from './check-host-policy.js';
+import { assertCheckHostAllowed, checkCallerOrigin, checkCommandChanged } from './check-host-policy.js';
+import { exemptTemplateRun } from './trigger-templates.js';
 import { REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js';
 import { isHostReplicaProgram } from '../server-role.js';
 import { NeedsLeaderError } from '../replication/needs-leader.js';
@@ -149,7 +150,13 @@ async function validateCheckForSave(
     throw new SessionControlError('check.run is required: a trigger needs a command to run', 400);
   }
   const host = check.host || '__local__';
-  if (checkCommandChanged(check, existing?.check)) assertCheckHostAllowed(host, origin);
+  if (checkCommandChanged(check, existing?.check)) {
+    // A plugin template's command is exempt from the host policy, stored as
+    // rebuilt from its cleaned params (trigger-templates.ts exemptTemplateRun).
+    const templateRun = exemptTemplateRun(check, checkCallerOrigin(origin));
+    if (templateRun) check.run = templateRun;
+    else assertCheckHostAllowed(host, origin);
+  }
   await requireTriggerDaemon(host);
   return host;
 }

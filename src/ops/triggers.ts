@@ -73,6 +73,8 @@ defineOp({
   description:
     'Arm a check script the daemon on a host runs on an interval, delivering a prompt into a session '
     + 'when it fires. Use it for "tell me when X happens", "watch this and act", "keep an eye on Y". '
+    + 'Look at trigger_templates FIRST: when a plugin offers the watch (a Slack channel, new mail), pass '
+    + '`template` + `params` instead of writing a script. '
     + `${CHECK_CONTRACT} `
     + 'Write the script to a file first (~/.open-walnut/triggers/<slug>/check.sh) and run trigger_test '
     + 'until it parses — a trigger armed on an unparseable script only reports errors. `every` accepts '
@@ -94,16 +96,22 @@ defineOp({
     + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
     + '(a review, a merge, a deploy, a build, someone\'s reply): do not ask the user to watch it.',
   input: {
-    run: z.string().min(1).describe('Shell command that decides whether to fire (e.g. "bash ~/.open-walnut/triggers/pr-comments/check.sh")'),
-    every: z.union([z.number().int().positive(), z.string().min(1)])
-      .describe('Poll interval: "30s" | "5m" | "1h", or milliseconds. Minimum 10s'),
-    prompt: z.string().min(1).describe('What the session should DO when it fires — the message it receives. '
+    run: z.string().min(1).optional().describe('Shell command that decides whether to fire (e.g. "bash ~/.open-walnut/triggers/pr-comments/check.sh"). '
+      + 'Required unless `template` is given'),
+    template: z.string().optional().describe('A plugin trigger template id from trigger_templates (e.g. "slack:channel-message"). '
+      + 'With it, Walnut builds the check itself: no script, no trigger_test; run/host/cwd are not used, and every/prompt/description '
+      + 'default to the template\'s'),
+    params: z.record(z.string(), z.string()).optional().describe('The template\'s params, e.g. {"channel":"#eng-oncall"}'),
+    every: z.union([z.number().int().positive(), z.string().min(1)]).optional()
+      .describe('Poll interval: "30s" | "5m" | "1h", or milliseconds. Minimum 10s. Required unless `template` is given'),
+    prompt: z.string().min(1).optional().describe('What the session should DO when it fires — the message it receives. '
       + 'When the user asked to be told ("tell me when X"), say so here: "send the user a letter saying X happened"; '
-      + 'without that ask a fire sends no letter'),
-    description: z.string().min(1)
+      + 'without that ask a fire sends no letter. Required unless `template` is given (then it replaces the template\'s default)'),
+    description: z.string().min(1).optional()
       .describe('One or two plain sentences for the user: what this watches, when it fires, and what the session '
         + 'does then (e.g. "Checks PR 123 for new review comments every 5 minutes; when one arrives, the session '
-        + 'addresses it and replies on the PR."). Shown on the task\'s trigger card, so name the real source'),
+        + 'addresses it and replies on the PR."). Shown on the task\'s trigger card, so name the real source. '
+        + 'Required unless `template` is given'),
     name: z.string().optional().describe('Routine name shown on the Routines page (defaults to the prompt\'s opening words)'),
     session: z.string().optional().describe('"this" (default) = the calling session\'s task; or an explicit task id'),
     cwd: z.string().optional().describe('Working directory for the check (defaults to the calling session\'s cwd)'),
@@ -161,6 +169,66 @@ defineOp({
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
+defineOp({
+  name: 'trigger_templates',
+  title: 'List ready-made trigger templates',
+  description:
+    'The ready-made triggers the user\'s plugins offer (e.g. "New message in a Slack channel", "New mail"): id, '
+    + 'title, the params each needs, and the default interval. Check this BEFORE writing a check script: a '
+    + 'template works without a script and is armed with trigger_create {template, params, prompt?}. '
+    + 'Pass `template` + `param` (+ `query`) to list the choices for one param (the channels matching "oncall"). '
+    + 'When nothing fits, write a check script as the walnut-trigger skill describes.',
+  input: {
+    template: z.string().optional().describe('With `param`: the template whose choices to list'),
+    param: z.string().optional().describe('The param key to list choices for (e.g. "channel")'),
+    query: z.string().optional().describe('Filter the choices by this text'),
+  },
+  handler: async (args, call) => {
+    const template = typeof args.template === 'string' ? args.template.trim() : ''
+    const param = typeof args.param === 'string' ? args.param.trim() : ''
+    if (template && param) {
+      const q = typeof args.query === 'string' ? args.query : ''
+      const body = await call('GET', `/trigger-templates/${encodeURIComponent(template)}/options?param=${encodeURIComponent(param)}&q=${encodeURIComponent(q)}`) as { options?: unknown[] } | undefined
+      const options = Array.isArray(body?.options) ? body.options : []
+      return withOutcome(
+        { template, param, count: options.length, options },
+        options.length ? `${options.length} choice(s) for ${param}.` : `No choices for ${param}${q ? ` matching "${q}"` : ''}.`,
+        `Pass the chosen value as params.${param} to trigger_create {template:"${template}"}.`,
+      )
+    }
+    const body = await call('GET', '/trigger-templates') as { templates?: unknown[] } | undefined
+    const templates = Array.isArray(body?.templates) ? body.templates : []
+    return withOutcome(
+      { count: templates.length, templates },
+      templates.length
+        ? `${templates.length} template(s) from the user's plugins.`
+        : 'No plugin offers a trigger template here.',
+      templates.length
+        ? 'If one fits, arm it with trigger_create {template, params, prompt?}; otherwise write a check script (walnut-trigger skill).'
+        : 'Write a check script as the walnut-trigger skill describes (an MCP server, a CLI, or a Walnut route can be the source).',
+    )
+  },
+  tags: { readonly: true, remote: 'allow' },
+})
+
+defineOp({
+  name: 'trigger_template_check',
+  title: 'Run a trigger template check once',
+  description:
+    'What the stored command of a template trigger (`walnut trigger-check <template> <params>`) runs on each '
+    + 'check: the plugin answers in the trigger check contract ({fire, items, state}). You never need to call it; '
+    + 'trigger_create {template, params} arms a template trigger.',
+  input: {
+    template: z.string().min(1).describe('Template id, e.g. "mail:new-mail"'),
+    params: z.record(z.string(), z.string()).optional().describe('The params stored with the trigger'),
+    input: z.record(z.string(), z.unknown()).optional().describe('The trigger input: {state, lastFireAt, now}'),
+  },
+  handler: async (args, call) => call('POST', `/trigger-templates/${encodeURIComponent(String(args.template))}/check`, {
+    params: args.params ?? {}, input: args.input ?? {},
+  }),
+  tags: { readonly: true, remote: 'allow' },
 })
 
 defineOp({

@@ -17,6 +17,7 @@ import { PluginStorage, PluginSecretStore } from './plugin-storage.js'
 import { createPluginHttpRoute, type PluginRouteHandler } from './plugin-route-adapter.js'
 import { namespacePluginId, pluginOpName } from './ids.js'
 import { registerOwnedCommand, type PluginCommandDefinition } from './command-registry.js'
+import { registerTriggerTemplate, type TriggerTemplateDefinition } from '../routines/trigger-templates.js'
 import { registerOwnedSkillDir, type PluginSkillDefinition } from './skill-registry.js'
 import {
   assertServiceAvailable,
@@ -1253,6 +1254,10 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       command(definition: PluginCommandDefinition) {
         assertLive(`registry.command("${definition.id}")`)
         return own(registerOwnedCommand(pluginId, definition))
+      },
+      triggerTemplate(definition: TriggerTemplateDefinition) {
+        assertLive(`registry.triggerTemplate("${definition?.id}")`)
+        return own(registerTriggerTemplate(pluginId, options.pluginName, definition))
       },
       skill(definition: PluginSkillDefinition) {
         assertLive(`registry.skill("${definition.id}")`)

@@ -60,6 +60,8 @@ export type TriggerCheck = {
   host: string;
   timeoutSeconds?: number;
   maxFiresPerDay?: number;
+  /** Set when a plugin's trigger template built `run` (src/core/routines/trigger-templates.ts). */
+  template?: { id: string; params: Record<string, string>; label?: string };
 };
 
 /** Where a fire ended up. `retrying` = still owned by the daemon, not a failure. */

@@ -29,7 +29,7 @@ import { formatBuildVersion, getBuildInfo } from './lib/build-info.js';
 /** Data subcommands served by this entry. Mirrored in bin/open-walnut.js. */
 export const LITE_COMMANDS = new Set([
   'tools', 'add', 'tasks', 'done', 'recall', 'projects', 'sessions', 'start',
-  'guide', 'peers',
+  'guide', 'peers', 'trigger-check',
 ]);
 
 const argv = process.argv.slice(2);
@@ -133,6 +133,13 @@ switch (sub) {
     if (!query) usageError("missing required argument 'query'");
     const { runRecall } = await import('./commands/recall.js');
     await runRecall(query, globals);
+    break;
+  }
+  case 'trigger-check': {
+    const [template, params] = args;
+    if (!template) usageError("missing required argument 'template'");
+    const { runTriggerCheck } = await import('./commands/trigger-check.js');
+    await runTriggerCheck(template, params);
     break;
   }
   case 'projects': {

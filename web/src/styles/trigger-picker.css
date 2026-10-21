@@ -1,0 +1,336 @@
+/* "Add a trigger…" popover (composer "+" menu). Portalled, position:fixed,
+   placed by useMenuPlacement. The ROOT scrolls, not an inner body: the hook
+   sizes the popover from the root's scrollHeight, which an inner scroller pins
+   to whatever the first (loading) frame measured. The header stays on top. */
+
+.trigger-picker {
+  position: fixed;
+  z-index: 10020;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(440px, 100vw - 24px);
+  max-height: min(600px, var(--menu-max-height, 600px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-lg, 10px);
+  background: var(--bg-elevated, var(--bg));
+  color: var(--fg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.12);
+  font-size: 12px;
+  line-height: 1.45;
+  outline: none;
+}
+
+:root[data-theme="dark"] .trigger-picker {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.trigger-picker:focus-visible {
+  outline: none;
+}
+
+.trigger-picker-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 6px 14px;
+  flex: 0 0 auto;
+  background: var(--bg-elevated, var(--bg));
+}
+
+.trigger-picker-title {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trigger-picker-back,
+.trigger-picker-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.trigger-picker-back:hover,
+.trigger-picker-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.trigger-picker-body {
+  flex: 0 0 auto;
+  padding: 0 8px 10px;
+}
+
+.trigger-picker-section + .trigger-picker-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.trigger-picker-section-title {
+  margin: 4px 6px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+.trigger-picker-note {
+  margin: 4px 6px;
+  color: var(--fg-muted);
+}
+
+.trigger-picker-note.is-error {
+  color: var(--error, #d14343);
+}
+
+.trigger-picker-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-text, var(--accent));
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.trigger-picker-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: var(--radius-md, 6px);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.trigger-picker-row:hover,
+.trigger-picker-row:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.trigger-picker-row-plugin {
+  flex: 0 0 auto;
+  min-width: 34px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.trigger-picker-row-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.trigger-picker-row-title {
+  font-weight: 600;
+}
+
+.trigger-picker-row-desc {
+  color: var(--fg-muted);
+}
+
+.trigger-picker-ideas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px 2px;
+}
+
+.trigger-picker-idea,
+.trigger-picker-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.trigger-picker-idea:hover,
+.trigger-picker-chip:hover {
+  background: var(--bg-hover);
+}
+
+.trigger-picker-chip.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft, var(--bg-hover));
+  color: var(--accent-text, var(--fg));
+  font-weight: 600;
+}
+
+.trigger-picker-form {
+  display: grid;
+  gap: 10px;
+  padding: 2px 6px;
+}
+
+.trigger-picker-field {
+  display: grid;
+  gap: 4px;
+}
+
+.trigger-picker-combo {
+  position: relative;
+}
+
+.trigger-picker-label {
+  font-weight: 600;
+}
+
+.trigger-picker-optional {
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+
+.trigger-picker-hint {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.trigger-picker-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  resize: vertical;
+}
+
+.trigger-picker-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Over the fields below it, not between them: a list that pushed them down would
+   move the Create button out from under a click whose pointerdown closed the list. */
+.trigger-picker-options {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 2;
+  max-height: 168px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-md, 6px);
+  padding: 3px;
+  background: var(--bg-elevated, var(--bg));
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.16);
+}
+
+.trigger-picker-option {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.trigger-picker-option:hover,
+.trigger-picker-option[aria-selected="true"] {
+  background: var(--bg-hover);
+}
+
+.trigger-picker-option-hint {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trigger-picker-every {
+  display: flex;
+  gap: 6px;
+}
+
+.trigger-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.trigger-picker-primary,
+.trigger-picker-secondary {
+  padding: 5px 12px;
+  border-radius: var(--radius-md, 6px);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.trigger-picker-primary {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+}
+
+.trigger-picker-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.trigger-picker-secondary {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+}
+
+.trigger-picker-secondary:hover {
+  background: var(--bg-hover);
+}
+
+.trigger-picker-done {
+  display: grid;
+  gap: 8px;
+  padding: 4px 6px;
+  justify-items: start;
+}
+
+.trigger-picker-done-title {
+  margin: 0;
+  font-weight: 600;
+}

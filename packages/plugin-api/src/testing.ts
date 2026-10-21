@@ -818,6 +818,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       hook: () => disposable(),
       agentContext: () => disposable(),
       command: () => disposable(),
+      triggerTemplate: () => disposable(),
       skill: () => disposable(),
     },
     // Throws by default: a plugin test must never reach a real model, so one that needs an

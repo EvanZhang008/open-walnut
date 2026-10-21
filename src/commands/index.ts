@@ -60,6 +60,14 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('trigger-check <template> [params]')
+    .description('Run a plugin trigger template once (the check command a template trigger stores; reads the trigger input on stdin)')
+    .action(async (template: string, params: string | undefined) => {
+      const { runTriggerCheck } = await import('./trigger-check.js');
+      await runTriggerCheck(template, params);
+    });
+
+  program
     .command('wait <ids...>')
     .description('Block until tasks settle (NEED_ACTION/COMPLETE) or reply requests (rq-…) resolve; several ids wait for all')
     .option('--any', 'With several ids, return when the first one settles')

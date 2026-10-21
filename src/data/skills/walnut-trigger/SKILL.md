@@ -10,7 +10,8 @@ description: >-
   "come back to this when". Use it on your own, without being asked, whenever
   the rest of the work waits on something outside the session (a review, a
   merge, a deploy, a build, a reply): creating the trigger parks the task as
-  Waiting, and the fire brings it back.
+  Waiting, and the fire brings it back. Check trigger_templates first: a plugin
+  (Slack channel, new mail) may already offer the watch with no script.
 ---
 
 # Trigger
@@ -20,6 +21,85 @@ runs the script; when it says something happened, Walnut delivers the prompt int
 a session (the same conversation, resumed if it has gone quiet; a new session on
 the same task only if none can be resumed). You write the script, test it, arm it.
 Nothing polls inside your session.
+
+## Ready-made triggers first
+
+A plugin can offer a trigger that needs no script ("New message in a Slack
+channel", "New mail"). Always look before you write one:
+
+```bash
+walnut tools call trigger_templates '{}'
+# the choices for one param (channels matching "oncall"):
+walnut tools call trigger_templates '{"template":"slack:channel-message","param":"channel","query":"oncall"}'
+walnut tools call trigger_create '{"template":"slack:channel-message","params":{"channel":"#eng-oncall"},"prompt":"...","wait_until":"1d"}'
+```
+
+- The template builds the check, the interval, the description and a default
+  prompt; pass your own `prompt` when the user said what should happen. It runs
+  on this machine's daemon, so `host`/`cwd`/`run` are not used and there is
+  nothing to `trigger_test`.
+- A refused param comes back as a 400 with the plugin's own sentence ("No channel
+  #foo"): look the value up with the options call and try again.
+- The user can also pick one from the composer's **+ › Add a trigger…**. When they
+  hand it to you instead, the message names the template id ("template
+  slack:channel-message"): arm exactly that one.
+- Nothing fits? Write a check script (below). Say in one line what you will
+  watch and with what, before you arm it.
+
+## No template: where the data comes from
+
+Pick the source the user is already signed in to, in this order:
+
+1. **A CLI with JSON output**: `gh`, `glab`, `aws`, `kubectl`, `jq` over a file.
+   It handles the login itself.
+2. **Walnut, on this Mac.** A plugin's own routes and ops answer over loopback
+   with no token; use `$WALNUT_SERVER_URL` so a test server talks to itself:
+   `curl -s "${WALNUT_SERVER_URL:-http://127.0.0.1:3456}/api/plugins/<id>/..."`,
+   or one plugin op:
+   `curl -s -X POST "${WALNUT_SERVER_URL:-http://127.0.0.1:3456}/api/plugin-runtime/<plugin>/ops/<op>" -H 'content-type: application/json' -d '{...}'`.
+   Core data (tasks, notes) is `walnut tools call <op>`. A check on another host
+   cannot reach this loopback; arm it with `host: "__local__"` from a session here.
+3. **An MCP server the user has** (`claude mcp list`, `~/.claude.json`, the
+   project's `.mcp.json`): start it from the script and speak JSON-RPC over its
+   stdio, one call per run (template below). Use the same command and env the
+   config names, and keep the whole run under the timeout.
+4. **A web API or page**: `curl` with a token read inside the script (a file only
+   this host has, the keychain); for a page, hash the part that matters.
+
+Whatever the source, the first run (`state: null`) only records a cursor and
+answers `fire: false`, so arming never replays history; give every item the
+source's own id; and run `trigger_test` against the real source until it parses.
+
+```python
+#!/usr/bin/env python3
+# MCP over stdio: call one tool, fire on results not seen before
+import json, signal, subprocess, sys
+signal.alarm(25)                       # stay inside the 30s check timeout
+inp = json.load(sys.stdin)
+proc = subprocess.Popen(["npx", "-y", "<server-package>"], stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+def send(msg): proc.stdin.write(json.dumps(msg) + "\n"); proc.stdin.flush()
+def call(id, method, params):
+    send({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+    for line in proc.stdout:           # skip notifications until our answer
+        msg = json.loads(line)
+        if msg.get("id") == id:
+            if "error" in msg: raise SystemExit(f"{method}: {msg['error']}")
+            return msg["result"]
+    raise SystemExit("server closed before answering")
+call(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "walnut-trigger", "version": "1"}})
+send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+res = call(2, "tools/call", {"name": "<tool>", "arguments": {"query": "..."}})
+proc.terminate()
+rows = json.loads(res["content"][0]["text"])          # the tool's own shape
+cursor = (inp.get("state") or {}).get("cursor")
+if cursor is None:                                     # first run: record, stay quiet
+    print(json.dumps({"fire": False, "state": {"cursor": max((r["ts"] for r in rows), default="")}})); sys.exit()
+new = [r for r in rows if r["ts"] > cursor]
+print(json.dumps({"fire": bool(new), "items": [{"id": r["id"], "title": r["text"][:80]} for r in new],
+                  "state": {"cursor": max([cursor] + [r["ts"] for r in new])}}))
+```
 
 ## The contract
 

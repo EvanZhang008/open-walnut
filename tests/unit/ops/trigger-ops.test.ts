@@ -16,8 +16,11 @@ const args = { run: 'bash ~/.open-walnut/triggers/pr/check.sh', every: '5m', pro
 describe('trigger_create input', () => {
   const schema = () => z.object(getOp('trigger_create')!.input).strict()
 
-  it('requires a non-empty description', () => {
-    expect(schema().safeParse(args).success).toBe(false)
+  it('refuses an empty description; one left out is for the server to refuse unless a template brings it', () => {
+    // A plugin template writes its own description, so the schema cannot require
+    // one; the server refuses a scripted trigger without it (tests/e2e/trigger-routines.test.ts).
+    expect(schema().safeParse(args).success).toBe(true)
+    expect(schema().safeParse({ template: 'mail:new-mail', params: { from: 'a@' } }).success).toBe(true)
     expect(schema().safeParse({ ...args, description: '' }).success).toBe(false)
     expect(schema().safeParse({ ...args, description: 'Checks PR 123 for new comments.' }).success).toBe(true)
   })

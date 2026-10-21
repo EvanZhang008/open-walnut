@@ -225,7 +225,27 @@ function coerceCheck(raw: UnknownRecord): UnknownRecord | null {
     const n = typeof cap === 'number' ? cap : Number(cap);
     if (Number.isFinite(n)) next.maxFiresPerDay = Math.max(0, Math.floor(n));
   }
+  const template = coerceCheckTemplate(raw.template);
+  if (template) next.template = template;
   return next;
+}
+
+/** `{id, params, label?}` with string params only; anything else is dropped. */
+function coerceCheckTemplate(raw: unknown): UnknownRecord | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as UnknownRecord;
+  if (typeof r.id !== 'string' || !r.id.trim()) return null;
+  const params: Record<string, string> = {};
+  if (r.params && typeof r.params === 'object' && !Array.isArray(r.params)) {
+    for (const [key, value] of Object.entries(r.params as UnknownRecord)) {
+      if (typeof value === 'string') params[key] = value;
+    }
+  }
+  return {
+    id: r.id.trim(),
+    params,
+    ...(typeof r.label === 'string' && r.label.trim() ? { label: r.label.trim() } : {}),
+  };
 }
 
 // ── Wake coercion (the counter half of a trigger) ──

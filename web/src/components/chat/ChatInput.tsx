@@ -1592,7 +1592,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       <span>Skills</span>
                     </button>
                   )}
-                  {isSessionMode && (
+                  {isSessionMode && !plusMenuActions?.some((a) => a.id === 'trigger') && (
                     <button
                       className="chat-plus-menu-item"
                       onClick={() => insertSchedulePrompt()}

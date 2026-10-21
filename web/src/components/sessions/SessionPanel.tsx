@@ -121,6 +121,7 @@ import { COMPOSER_INSERT_EVENT, leadStoredDraft, sessionDraftKey, type ComposerI
 import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
 import { WaitingComposerLine, WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
+import { useTriggerPickerEntry } from './useTriggerPickerEntry';
 import { MacAwayComposer } from '@/components/layout/AwayLine';
 import { useMacSessionAway } from '@/hooks/useLeaderPresence';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
@@ -1192,8 +1193,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // session's AI sets the trigger up (utils/wait-until.ts). Not on a question page, whose composer
   // posts into the question rather than to the session's task.
   const onQuestionPage = !!threads.composerPlaceholder;
+  // "Add a trigger…": a plugin's ready-made trigger armed here, or words for this session's AI.
+  const prefillLead = useCallback((text: string) => {
+    setPrefillText(text);
+    setPrefillMode('keep-draft');
+    setPrefillNonce((n) => n + 1);
+  }, []);
+  const triggerPicker = useTriggerPickerEntry({
+    sessionId, taskId: session?.taskId, acp: engineIsAcp, enabled: !onQuestionPage, onPrefill: prefillLead,
+  });
   const composerPlusActions = useMemo<PlusMenuAction[] | undefined>(() => {
-    const rest = engineSettingsEntry.plusMenuActions ?? [];
+    const rest = [...(triggerPicker.action ? [triggerPicker.action] : []), ...(engineSettingsEntry.plusMenuActions ?? [])];
     if (!session?.taskId || onQuestionPage) return engineSettingsEntry.plusMenuActions;
     const waitUntil: PlusMenuAction = {
       id: 'wait-until',
@@ -1211,7 +1221,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       },
     };
     return [waitUntil, ...rest];
-  }, [engineSettingsEntry.plusMenuActions, session?.taskId, onQuestionPage, engineIsAcp]);
+  }, [engineSettingsEntry.plusMenuActions, triggerPicker.action, session?.taskId, onQuestionPage, engineIsAcp]);
 
   // Open the Inbox tab (optionally on one letter) — the arrival half of the
   // `/sessions?id=…&tab=inbox&letter=…` deep link.
@@ -2830,6 +2840,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}
         {engineSettingsEntry.popover}
+        {triggerPicker.popover}
         {/* The questions drawer: an overlay inside this panel (never widens or
             pads the transcript), for a session with questions. */}
         {threads.hasQuestions && threadsApi.actions && (
