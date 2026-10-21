@@ -13,8 +13,9 @@
  *             kept per manifest hash; a new manifest reads only the entries
  *             whose body hash moved
  *
- * The leader (the Mac) and the companion never construct this: their notes
- * routes read the disk vault exactly as before (notes-v2.ts checks the role).
+ * The leader (the Mac) never constructs this: its notes routes read the disk vault.
+ * The companion builds one over its own copy (core/companion-notes.ts, stage 4b of
+ * docs/plan/walnut-companion-unified-replica.md), active once the copy is held.
  */
 import path from 'node:path'
 import { isAttachmentFile, type TreeNode } from '../core/notes-tree.js'
@@ -376,14 +377,33 @@ export function notesCopyReaderOver(request: (cmd: string, params: Record<string
   }
 }
 
-let replicaSource: NotesSource | null = null
-
-/** A host replica's boot: its notes read from the daemon's copy. */
-export function installReplicaNotesSource(source: NotesSource | null): void {
-  replicaSource = source
+export interface ReplicaNotesSourceOptions {
+  /** The source answers only while this holds (the companion: once its copy arrived whole). */
+  active?: () => boolean
+  /** False: searches go on to the server's own search (the companion keeps a copy of the Mac's index). */
+  search?: boolean
 }
 
-/** The copy source on a host replica, null elsewhere (the Mac and the companion read the disk vault). */
+let replicaSource: NotesSource | null = null
+let sourceOpts: ReplicaNotesSourceOptions = {}
+
+/**
+ * A replica's boot: its notes read from a copy. A host replica's is the daemon's copy;
+ * the companion's is its own (core/companion-notes.ts), active once it is held.
+ */
+export function installReplicaNotesSource(source: NotesSource | null, opts: ReplicaNotesSourceOptions = {}): void {
+  replicaSource = source
+  sourceOpts = source ? opts : {}
+}
+
+/** The copy source a replica's notes reads take now, else null (the Mac reads its disk vault). */
 export function replicaNotesSource(): NotesSource | null {
+  if (!replicaSource) return null
+  if (sourceOpts.active && !sourceOpts.active()) return null
   return replicaSource
+}
+
+/** Whether the source answers searches (a host replica's does; the companion's leaves them to its own search). */
+export function replicaNotesSourceSearches(): boolean {
+  return sourceOpts.search !== false
 }

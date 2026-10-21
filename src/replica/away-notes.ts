@@ -25,7 +25,7 @@ export interface AwayNotesDeps {
 }
 
 type Flavor = 'v2' | 'v1'
-type NoteRoute = { flavor: Flavor; op: 'put' | 'delete' | 'create'; path: string }
+export type NoteRoute = { flavor: Flavor; op: 'put' | 'delete' | 'create'; path: string }
 
 /** The note routes this handler answers, by the path under /api (the route table's WP11 rows). */
 export function noteRouteOf(method: string, apiPath: string): NoteRoute | null {
@@ -55,8 +55,8 @@ function withMd(p: string): string {
   return /\.md$/i.test(p) ? p : `${p}.md`
 }
 
-/** The daemon's answer in the shape of the Mac's own route. */
-function applied(route: NoteRoute, reply: Record<string, unknown>, sentPath: string): PortAnswer {
+/** The daemon's answer in the shape of the Mac's own route (the companion's note saves use it too). */
+export function applied(route: NoteRoute, reply: Record<string, unknown>, sentPath: string): PortAnswer {
   const contentHash = typeof reply.contentHash === 'string' ? reply.contentHash : undefined
   const updatedAt = typeof reply.updatedAt === 'string' ? reply.updatedAt : new Date().toISOString()
   if (route.op === 'delete') return { answered: false, status: 200, body: { ok: true } }
@@ -65,7 +65,7 @@ function applied(route: NoteRoute, reply: Record<string, unknown>, sentPath: str
   return { answered: false, status: 200, body: { ok: true, updatedAt, contentHash, ...(typeof reply.noteId === 'string' ? { id: reply.noteId } : {}) } }
 }
 
-function refusedAnswer(route: NoteRoute, code: string, message: string, detail: unknown, retryAfterMs?: number): PortAnswer {
+export function refusedAnswer(route: NoteRoute, code: string, message: string, detail: unknown, retryAfterMs?: number): PortAnswer {
   const d = (detail && typeof detail === 'object' ? detail : {}) as { why?: unknown; serverHash?: unknown; serverContent?: unknown }
   if (code === 'conflict') {
     const extra = { serverHash: d.serverHash ?? null, serverContent: d.serverContent ?? null }

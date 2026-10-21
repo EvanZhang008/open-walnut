@@ -16,7 +16,8 @@
  * Slice 3a writes `task-fields` (a task update whose fields the Mac merges), 3b
  * `session-meta` (a session's title, archive flag, note, output mode, thread
  * fields), 3c `inbox-state` (a letter's read, pinned or archived flag), 3d
- * `task-create` (a task born here); the other queues are unchanged until their slice. A record carries no device actor
+ * `task-create` (a task born here), 4c `note` (a note saved here, its bodies as
+ * blobs: companion-notes.ts); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -163,6 +164,30 @@ export function journalTaskCreate(input: {
 }
 
 /**
+ * Save one note change for the Mac (slice 4c): a `note` record with its bodies as blobs
+ * (offline-journal-core.ts appendNote, coalesced by path), merged on the Mac with the
+ * notes merge. Null when the Mac does not drain the kind: the caller keeps the old path.
+ * The checks (the lock hash, the size, the note's id) are the caller's (companion-notes.ts).
+ */
+export function journalNote(note: Parameters<OfflineJournal['appendNote']>[1]): AppendResult | null {
+  if (!macDrains('note')) return null
+  const r = journalOf().appendNote(COMPANION_JOURNAL_HOME, note, { limit: true })
+  if (r.ok) {
+    log.session.info('companion journal: saved a note change for the Mac', { path: note.path, mode: note.mode, opId: r.opId, seq: r.seq, ...(r.coalesced ? { coalesced: true } : {}), ...(r.dropped ? { dropped: true } : {}) })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+  } else {
+    log.session.error('companion journal: a note change was refused', { path: note.path, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
+/** A note body the journal keeps, by its sha256 (a pending save's text), or null. */
+export function companionJournalBlobBody(sha: unknown): Buffer | null {
+  if (!onCompanion() || (!journal && !fs.existsSync(companionJournalDir()))) return null
+  try { return journalOf().blobBody(sha) } catch { return null }
+}
+
+/**
  * The fields a session metadata record carries: the v1 PATCH's metadata (never `mode`,
  * which acts on the live CLI and only the session's host can accept).
  */
@@ -300,11 +325,16 @@ export async function ackCompanionJournal(seqs: unknown, macNow?: unknown): Prom
   // (replica-state.ts): written before the record goes, so a read between the two
   // never shows the flag as it was.
   const named = new Set(Array.isArray(seqs) ? seqs : [])
-  const flags = companionJournalRecords().filter((x) => x.kind === 'inbox-state' && named.has(x.seq))
+  const acked = companionJournalRecords().filter((x) => named.has(x.seq))
+  const flags = acked.filter((x) => x.kind === 'inbox-state')
+  const at = typeof macNow === 'number' ? macNow : Date.now()
   if (flags.length) {
     const { noteJournalStateAcked } = await import('./human-inbox/replica-state.js')
-    await noteJournalStateAcked(flags, typeof macNow === 'number' ? macNow : Date.now())
+    await noteJournalStateAcked(flags, at)
   }
+  // A note the Mac took stays over the copy until a copy round from after the ack (4c).
+  const notes = acked.filter((x) => x.kind === 'note')
+  if (notes.length) (await import('./companion-notes.js')).companionNotesAcked(notes, at)
   const r = journalOf().ack(COMPANION_JOURNAL_HOME, { seqs })
   if (r.error) return { ok: false, remaining: r.remaining, error: r.error }
   if (r.acked.length) {

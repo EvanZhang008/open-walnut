@@ -362,9 +362,16 @@ minutes, and at a build change.
 | Slice | Change |
 |---|---|
 | 4a | the copy and its round (no reader yet) |
-| 4b | the box's note, memory and skill reads take the copy once it is held |
-| 4c | a note written on the box is a `note` record in its journal (the copy's journal view shows it until the Mac's copy does); the box stops committing notes, memory and skills |
-| 4d | git sync stops writing the box's data dir (after 3e and the attachments) |
+| 4b | the box's notes reads (`/api/notes-v2` always, `/api/v1/notes` when the Mac does not answer: the tree, a note, links, backlinks, tags, the flat list) take the copy once a whole manifest arrived, through the source a host replica reads (`replica/notes-source.ts`); searches stay the box's own (its copy of the Mac's index) |
+| 4c | a note saved, created or deleted on the box (the v2 save and delete, the v1 save, create and delete) is a `note` record in its journal once the copy is held and the Mac drains `note`, checked as a host checks one (the lock hash against what the box shows, the size, the id from the Mac's copy); the Mac drains it with the notes merge |
+| 4d | the box's other note paths (moves, folders, tags, attachments), its memory and skill reads, and the chat lane's note tools; then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
+
+Every copy read shows the pending saves over the copy (the copy's journal view,
+`core/companion-notes.ts`), and a save the Mac took until a copy round from after its
+ack stores the Mac's own text (or 10 minutes), so the box never shows a note going
+back; the round after a drain that took notes goes at once. Until 4d the box's other
+note writes still go to its disk and git sync, as before, and the copy shows their
+result once the Mac has it.
 
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 

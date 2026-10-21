@@ -217,7 +217,12 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
     void (async () => {
       (await import('./replication/task-replica.js')).resendTaskReplicaSoon();
       (await import('./replication/kinds/copy-kind.js')).resendCopyKindsSoon();
-      if (batch.notesAcked) (await import('../providers/daemon-connection.js')).getConnectedDaemonConnection(conn.hostKey)?.pushHostReplica();
+      if (batch.notesAcked) {
+        // The companion's copy goes over HTTPS (stage 4), a host's over its daemon link.
+        const notes = await import('./host-replica.js');
+        if (conn.hostKey === notes.COMPANION_REPLICA_HOST) void notes.syncCompanionHostReplica();
+        else (await import('../providers/daemon-connection.js')).getConnectedDaemonConnection(conn.hostKey)?.pushHostReplica();
+      }
     })().catch((err) => log.session.warn('offline handover: could not send the copies again', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) }));
   }
   return result;
