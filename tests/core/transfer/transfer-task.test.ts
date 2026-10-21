@@ -121,14 +121,14 @@ describe('transferTask', () => {
     const message = String(start.message);
     expect(message).toContain('# Work transferred to you');
     expect(message).toContain('the magic word is PELICAN');
-    expect(message).toContain(`transfers/`);
+    expect(message).toContain(`-transfers/`);
     expect(message).toContain('host_note_add');
     expect(message.trimEnd().endsWith('Run the tests first.')).toBe(true);
 
     const [transcript] = edges.writes;
     expect(transcript.host).toBe('__local__');
-    expect(transcript.path.startsWith(`${WALNUT_HOME}/tmp/transfers/xf-`)).toBe(true);
-    expect(transcript.path).toMatch(/\/transfers\/xf-[0-9a-f-]{12}\/transcript\.md$/);
+    expect(transcript.path.startsWith(`${WALNUT_HOME}-transfers/xf-`)).toBe(true);
+    expect(transcript.path).toMatch(/-transfers\/xf-[0-9a-f-]{12}\/transcript\.md$/);
     expect(transcript.content).toContain('Make the parser accept trailing commas');
 
     const source = await getTask(src);
