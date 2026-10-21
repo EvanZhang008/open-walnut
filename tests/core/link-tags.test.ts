@@ -14,6 +14,9 @@ import {
   linkTagsFromField,
   linkTagsInText,
   linkUrlOfTag,
+  linkPathOfTag,
+  linkTagLabel,
+  canonicalLinkPath,
   newLinkTags,
 } from '../../src/core/link-tags.js'
 import { isNormalTag, normalizeTag, tagInputProblem } from '../../src/core/tag-model.js'
@@ -95,9 +98,11 @@ describe('linkLabel', () => {
     expect(linkLabel('https://reviews.example.com/r/RV-4242')).toBe('RV-4242')
     expect(linkLabel('https://tickets.example.com/V1234567890')).toBe('V1234567890')
     expect(linkLabel('https://docs.example.com/')).toBe('docs.example.com')
+    // An opaque id reads as its head, never a 24-character run of hex.
+    expect(linkLabel('https://hr.example.com/cases/detail/WorkAuth/e6f56131-414d-4245-b374-e7f0d4e94919')).toBe('e6f56131')
     expect(linkLabel('https://docs.example.com/document/d/Design/edit')).toBe('Design')
     expect(linkLabel('https://acme.slack.com/archives/C0123ABC/p1726000000123456')).toBe('acme')
-    expect(linkLabel('https://www.example.com/a-very-long-document-name-that-goes-on')).toHaveLength(24)
+    expect(linkLabel('https://www.example.com/a-very-long-document-name-that-goes-on')).toHaveLength(16)
   })
 })
 
@@ -137,7 +142,7 @@ describe('linkTagsFromField (self-report LINKS)', () => {
     const field = extractField(report, 'LINKS')
     expect(field).toBe('- cr: https://reviews.example.com/r/RV-1')
     expect(extractField(report, 'RECAP')).toBe('Did it.')
-    expect(buildSelfReportPrompt('', 'T')).toMatch(/\nLINKS: .*"- <kind>: <url>"/)
+    expect(buildSelfReportPrompt('', 'T')).toMatch(/\nLINKS: .*"- <kind>: <url or \/absolute\/path>"/)
   })
 })
 
@@ -182,5 +187,35 @@ describe('tag model and display rules for link tags', () => {
     expect(compiled.linkFor('sev:2')).toBeUndefined()
     expect(compiled.linkFor('walnut:https://example.com')).toBeUndefined()
     expect(linkUrlOfTag('sev:2')).toBeUndefined()
+  })
+})
+
+describe('file-path link tags', () => {
+  it('stores an absolute path as it is, refuses relative paths, whitespace and ..', () => {
+    expect(canonicalLinkPath('/tmp/run/result.html')).toBe('/tmp/run/result.html')
+    expect(canonicalLinkPath('`~/notes/report.md`.')).toBe('~/notes/report.md')
+    expect(canonicalLinkPath('src/a.ts')).toBeUndefined()
+    expect(canonicalLinkPath('/tmp/a b.html')).toBeUndefined()
+    expect(canonicalLinkPath('/tmp/../etc/passwd')).toBeUndefined()
+    expect(canonicalLinkPath('/')).toBeUndefined()
+  })
+
+  it('reads a file line out of LINKS beside URL lines, and labels it by file name', () => {
+    const tags = linkTagsFromField([
+      '- html: /tmp/run/result.html',
+      '- **file**: `/Users/me/out/summary-of-the-whole-run.md`',
+      '- notes: see the folder',
+      '- pr: https://github.com/acme/app/pull/3',
+    ].join('\n'), DEFAULT_LINK_PATTERNS)
+    expect(tags).toEqual(['html:/tmp/run/result.html', 'file:/Users/me/out/summary-of-the-whole-run.md', 'pr:https://github.com/acme/app/pull/3'])
+    expect(linkPathOfTag('html:/tmp/run/result.html')).toBe('/tmp/run/result.html')
+    expect(linkTagLabel('html:/tmp/run/result.html')).toBe('result.html')
+    expect(linkTagLabel('file:/Users/me/out/summary-of-the-whole-run.md')).toHaveLength(16)
+    expect(linkUrlOfTag('html:/tmp/run/result.html')).toBeUndefined()
+  })
+
+  it('dedupes a path like a URL, under any key', () => {
+    expect(newLinkTags({ tags: ['report:/tmp/run/result.html'] }, ['html:/tmp/run/result.html', 'html:/tmp/run/other.html']))
+      .toEqual(['html:/tmp/run/other.html'])
   })
 })

@@ -10,10 +10,13 @@
  * together); the rest fold into "+N", whose tooltip names them. The detail pane
  * passes a larger max.
  */
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { TagChip } from './TagChip';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { shownTags, tagValue, type CompiledTagDisplay } from '../../../../src/core/tag-display-rules';
-import { linkLabel, linkUrlOfTag } from '../../../../src/core/link-tags';
+import { isLinkTag, linkTagLabel } from '../../../../src/core/link-tags';
 import { effectiveTags } from '../../../../src/core/tag-model';
 
 type TaggedTask = { tags?: readonly string[]; created_at?: string; updated_at?: string };
@@ -28,34 +31,101 @@ export function useShownTags(tags: readonly string[] | undefined, task?: TaggedT
 /** Tags this short keep their whole text when the pills are squeezed; longer ones give way. */
 const WHOLE_TAG_MAX = 8;
 
-/** The text a tag's pill reads under the rules. */
+/** The text a tag's pill reads under the rules. A link always reads `key:label`. */
 export function pillText(tag: string, compiled: CompiledTagDisplay): string {
-  const url = linkUrlOfTag(tag);
-  if (url) return compiled.valueOnly(tag) ? linkLabel(url) : `${tag.slice(0, tag.indexOf(':'))}:${linkLabel(url)}`;
+  const label = linkTagLabel(tag);
+  if (label) return `${tag.slice(0, tag.indexOf(':'))}:${label}`;
   return compiled.valueOnly(tag) ? tagValue(tag) : tag;
 }
 
-export function TaskTagPills({ tags, task, max = 2, className, linksFirst }: {
+function Pill({ tag, compiled, onOpenPath, full }: { tag: string; compiled: CompiledTagDisplay; onOpenPath?: (path: string) => void; full?: boolean }) {
+  const text = pillText(tag, compiled);
+  return (
+    <TagChip tag={tag} inline={!full} valueOnly={compiled.valueOnly(tag)} whole={isLinkTag(tag) || text.length <= WHOLE_TAG_MAX}
+      href={compiled.linkFor(tag)} onOpenPath={onOpenPath} />
+  );
+}
+
+/** "+N" that opens the rest as a list: each row its own pill, a link opens where it points. */
+function OverflowMenu({ rest, compiled, onOpenPath }: { rest: string[]; compiled: CompiledTagDisplay; onOpenPath?: (path: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const placement = useMenuPlacement(open, btnRef, menuRef, { minHeight: 60, onAnchorLost: () => setOpen(false) });
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: globalThis.MouseEvent) => {
+      if (menuRef.current?.contains(e.target as Node) || btnRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
+  }, [open]);
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={`tag-chip tag-chip-overflow tag-chip-overflow-btn${open ? ' open' : ''}`}
+        title={rest.map((tag) => pillText(tag, compiled)).join(', ')}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="tag-pills-more"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        +{rest.length}
+      </button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="tag-pills-menu"
+          role="menu"
+          data-testid="tag-pills-menu"
+          style={menuPlacementStyle(placement)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          // A click on a link in the list opens it, and the list has done its job. Seen in the
+          // capture phase (the pill stops its own click from bubbling, so it never opens the row
+          // under it) and closed after it: closing at once unmounts the pill before its handler runs.
+          onClickCapture={(e) => { if ((e.target as HTMLElement).closest('.tag-chip-linked')) setTimeout(() => setOpen(false), 0); }}
+        >
+          {rest.map((tag) => (
+            <div key={tag} className="tag-pills-menu-row" role="menuitem">
+              <Pill tag={tag} compiled={compiled} onOpenPath={onOpenPath} full />
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+export function TaskTagPills({ tags, task, max = 2, className, linksFirst, menu, onOpenPath }: {
   tags?: readonly string[]; task?: TaggedTask; max?: number; className?: string;
   /** Links before the other tags (the session header, where a link is what one opens). */
   linksFirst?: boolean;
+  /** "+N" opens the rest as a list instead of naming them in a tooltip. */
+  menu?: boolean;
+  /** Opens a file-path link tag (the session header passes its Files view). */
+  onOpenPath?: (path: string) => void;
 }) {
   const { compiled } = useTagDisplay();
   const ordered = shownTags(task ? effectiveTags(task) : tags, compiled);
   const shown = linksFirst
-    ? [...ordered.filter((tag) => linkUrlOfTag(tag)), ...ordered.filter((tag) => !linkUrlOfTag(tag))]
+    ? [...ordered.filter((tag) => isLinkTag(tag)), ...ordered.filter((tag) => !isLinkTag(tag))]
     : ordered;
   if (shown.length === 0) return null;
   const rest = shown.slice(max);
   return (
     <span className={className ? `task-tag-pills ${className}` : 'task-tag-pills'} data-testid="task-tag-pills">
-      {shown.slice(0, max).map((tag) => {
-        const text = pillText(tag, compiled);
-        return <TagChip key={tag} tag={tag} inline valueOnly={compiled.valueOnly(tag)} whole={text.length <= WHOLE_TAG_MAX} href={compiled.linkFor(tag)} />;
-      })}
-      {rest.length > 0 && (
-        <span className="tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled)).join(', ')}>+{rest.length}</span>
-      )}
+      {shown.slice(0, max).map((tag) => <Pill key={tag} tag={tag} compiled={compiled} onOpenPath={onOpenPath} />)}
+      {rest.length > 0 && (menu
+        ? <OverflowMenu rest={rest} compiled={compiled} onOpenPath={onOpenPath} />
+        : <span className="tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled)).join(', ')}>+{rest.length}</span>)}
     </span>
   );
 }
