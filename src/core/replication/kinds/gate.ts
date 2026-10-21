@@ -29,10 +29,13 @@ import { followerKind, isHostReplicaProgram } from '../../server-role.js'
 import { writeCopyFile, type Refusal } from '../kind-follower.js'
 
 /**
- * The kinds the companion keeps (stage 2a, 2b, 2c, 3c). Each has a box read that answers
+ * The kinds the companion keeps (stage 2a, 2b, 2c, 3c, 3e). Each has a box read that answers
  * from the copy while the Mac is away; a kind joins when its reader does.
  */
-export const COMPANION_COPY_KINDS: ReadonlySet<string> = new Set(['requests', 'routines', 'prefs', 'personas', 'boards', 'config', 'inbox', 'inbox-bodies', 'sessions'])
+export const COMPANION_COPY_KINDS: ReadonlySet<string> = new Set([
+  'requests', 'routines', 'prefs', 'personas', 'boards', 'config', 'inbox', 'inbox-bodies', 'sessions',
+  'conversations', 'conversation-bodies',
+])
 
 /** This server keeps copies (no kind), or the copy of `kind`. */
 export function keepsCopies(kind?: string): boolean {

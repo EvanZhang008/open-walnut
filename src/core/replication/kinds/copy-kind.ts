@@ -52,10 +52,17 @@ export interface CopyChoice {
   routines: boolean; conversations: boolean; prefs: boolean; config: boolean
   /** WP12: the Ask personas, so a new ask starts on the host while the Mac is away. */
   personas: boolean
+  /**
+   * Stage 3e of the companion plan: each recent conversation's messages as the phone
+   * reads them (kinds/conversation-bodies.ts). Off for a host (no host read takes them),
+   * on for the companion.
+   */
+  conversation_bodies: boolean
 }
 export const DEFAULT_COPY_CHOICE: Readonly<CopyChoice> = Object.freeze({
   sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false,
   routines: true, conversations: true, prefs: true, config: true, personas: true,
+  conversation_bodies: false,
 })
 
 /** The choice from config, defaults filled in (anything but a boolean keeps the default). */
@@ -65,6 +72,7 @@ export function copyChoiceFrom(raw: unknown): CopyChoice {
   for (const k of Object.keys(out) as Array<keyof CopyChoice>) if (typeof r[k] === 'boolean') out[k] = r[k] as boolean
   // Bodies ride with the index: a host that keeps no inbox keeps no letter bodies either.
   if (!out.inbox) out.inbox_bodies = false
+  if (!out.conversations) out.conversation_bodies = false
   return out
 }
 
@@ -253,8 +261,9 @@ async function defaultTargets(): Promise<() => CopyTarget[]> {
 
 async function choiceOf(target: CopyTarget): Promise<CopyChoice> {
   // The companion takes the letter bodies too: git sync already brings them to the box,
-  // and its away reads open a letter from the copy (human-inbox/replica-state.ts).
-  const base = target.kind === 'companion' ? { ...DEFAULT_COPY_CHOICE, inbox_bodies: true } : { ...DEFAULT_COPY_CHOICE }
+  // and its away reads open a letter from the copy (human-inbox/replica-state.ts). The
+  // same for its conversations' messages (stage 3e, companion-conversations.ts).
+  const base = target.kind === 'companion' ? { ...DEFAULT_COPY_CHOICE, inbox_bodies: true, conversation_bodies: true } : { ...DEFAULT_COPY_CHOICE }
   try { return target.copies ? copyChoiceFrom(await target.copies()) : base } catch { return base }
 }
 
@@ -343,7 +352,7 @@ const copySoons = new Set<(kind?: string) => void>()
 const copySoon = (kind?: string): void => { for (const soon of copySoons) soon(kind) }
 
 /** Every copy kind's name (web/routes/replicas-status.ts accepts a confirm for these). */
-export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas'] as const
+export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies'] as const
 
 /**
  * The user confirmed a removal the half rule refused three rounds in a row (the

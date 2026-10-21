@@ -19,6 +19,8 @@ describe('the copied kinds choice', () => {
       sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false,
       // WP5: routines, the Ask lists, prefs and favorites, the allowlisted config.
       routines: true, conversations: true, prefs: true, config: true, personas: true,
+      // 3e: a conversation's messages, kept by the companion only.
+      conversation_bodies: false,
     })
     expect(copyChoiceFrom(undefined)).toEqual(DEFAULT_COPY_CHOICE)
     expect(copyChoiceFrom({ inbox_bodies: true, boards: false, sessions: 'no', other: true })).toEqual({ ...DEFAULT_COPY_CHOICE, inbox_bodies: true, boards: false })
@@ -28,6 +30,11 @@ describe('the copied kinds choice', () => {
     expect(copyChoiceFrom({ inbox: false, inbox_bodies: true })).toEqual({ ...DEFAULT_COPY_CHOICE, inbox: false, inbox_bodies: false })
   })
 
+  it('keeps no conversation bodies on a host that keeps no conversation lists', () => {
+    expect(copyChoiceFrom({ conversation_bodies: true })).toEqual({ ...DEFAULT_COPY_CHOICE, conversation_bodies: true })
+    expect(copyChoiceFrom({ conversations: false, conversation_bodies: true })).toEqual({ ...DEFAULT_COPY_CHOICE, conversations: false, conversation_bodies: false })
+  })
+
   it('is read from hosts.<key>.server.copies, booleans only', () => {
     expect(hostServerSettingsFrom({ enabled: true }).copies).toBeUndefined()
     expect(hostServerSettingsFrom({ enabled: true, copies: { inbox: false, boards: 'x' } }).copies).toEqual({ inbox: false })
@@ -35,6 +42,6 @@ describe('the copied kinds choice', () => {
 
   it('names a choice for every copy kind', () => {
     for (const k of copyKinds()) expect(Object.keys(DEFAULT_COPY_CHOICE)).toContain(k.choice)
-    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas'])
+    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies'])
   })
 })

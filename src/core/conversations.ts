@@ -31,7 +31,7 @@ import {
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
 import { noteStoreWrite } from './replication/store-writes.js';
 import { log } from '../logging/index.js';
-import { isHostReplicaProgram } from './server-role.js';
+import { followerKind, isHostReplicaProgram } from './server-role.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 
 const MAX_TITLE_LEN = 60;
@@ -391,6 +391,12 @@ export function dedupeConversations(agentId: string, list: ConversationMeta[]): 
 /** List conversations for an agent (pinned first, then lastMessageAt desc). */
 export async function listConversations(agentId: string): Promise<ConversationMeta[]> {
   if (isHostReplicaProgram()) return sortConversations(dedupeConversations(agentId, (await copiedIndex(agentId)).conversations));
+  if (followerKind() === 'companion') {
+    // The Mac's copy with this box's own list changes on top, once it is held (stage 3e).
+    const { companionConversationList } = await import('./companion-conversations.js');
+    const merged = await companionConversationList(agentId, () => readIndex(agentId));
+    if (merged) return sortConversations(dedupeConversations(agentId, merged));
+  }
   await migrateIfNeeded(agentId);
   await adoptOrphanedConversationFiles(agentId);
   const index = await readIndex(agentId);
@@ -620,6 +626,7 @@ export async function setActiveConversationId(agentId: string, conversationId: s
   await migrateIfNeeded(agentId);
   await withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
+    await withCopiedRow(agentId, index, conversationId);
     if (!index.conversations.some((c) => c.id === conversationId)) {
       throw new Error(`Conversation not found: ${conversationId}`);
     }
@@ -654,8 +661,32 @@ export async function createConversation(agentId: string, title?: string): Promi
     index.activeConversationId = newId;
     await writeIndex(agentId, index);
     log.agent.info('conversation created', { agentId, conversationId: newId });
+    await noteBoxEdit(agentId, newId, { created: true });
     return meta;
   });
+}
+
+/**
+ * On the cloud companion, a chat the box lists from the Mac's copy (stage 3e) that its own
+ * list lacks yet (git sync has not brought it): taken into its own list first, so a change
+ * made to it here has a row to land on, and reaches the Mac as the box's other list
+ * changes do. A no-op anywhere else.
+ */
+async function withCopiedRow(agentId: string, index: ConversationIndex, conversationId: string): Promise<void> {
+  if (followerKind() !== 'companion' || index.conversations.some((c) => c.id === conversationId)) return;
+  const { readConversationIndexCopy } = await import('./replication/kinds/conversations-follower.js');
+  const row = (await readConversationIndexCopy(agentId))?.conversations.find((c) => c.id === conversationId);
+  if (row) index.conversations.push({ ...row });
+}
+
+/**
+ * On the cloud companion, a change to the box's own list is shown over the Mac's copy
+ * until the copy carries it (companion-conversations.ts). A no-op anywhere else.
+ */
+async function noteBoxEdit(agentId: string, id: string, change: { created?: true; deleted?: true; title?: string; pinned?: boolean }): Promise<void> {
+  if (followerKind() !== 'companion') return;
+  const { noteBoxConversationEdit } = await import('./companion-conversations.js');
+  await noteBoxConversationEdit(agentId, id, change);
 }
 
 /**
@@ -672,6 +703,7 @@ export async function deleteConversation(agentId: string, conversationId: string
   await migrateIfNeeded(agentId);
   await withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
+    await withCopiedRow(agentId, index, conversationId);
     // Winner row for the isMain guard: reading a twin could answer "not main" for
     // a conversation whose real row IS main (or the reverse).
     const target = pickConversationRow(index.conversations, conversationId);
@@ -732,6 +764,7 @@ export async function deleteConversation(agentId: string, conversationId: string
 
     await writeIndex(agentId, index);
     log.agent.info('conversation deleted', { agentId, conversationId, activeConversationId: index.activeConversationId });
+    await noteBoxEdit(agentId, conversationId, { deleted: true });
     if (target?.askTaskId) askLink((m) => m.conversationDeleted(agentId, conversationId, target.askTaskId!));
   });
 }
@@ -848,6 +881,7 @@ export async function renameConversation(
   let lostRace = false;
   const renamed = await withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
+    await withCopiedRow(agentId, index, conversationId);
     // The WINNER row (and drop its twins) — a rename that landed on the loser was
     // invisible, and the next lane send re-bumped the other row's title back.
     const meta = collapseTwinsForWrite(index, conversationId);
@@ -866,6 +900,7 @@ export async function renameConversation(
     return meta;
   });
   if (lostRace) return renamed;
+  await noteBoxEdit(agentId, conversationId, { title: renamed.title });
   if (!opts?.fromAsk) noteTitleChange(renamed, before, opts?.auto ? 'auto' : 'user', beforeFromAsk);
   return renamed;
 }
@@ -941,10 +976,12 @@ export async function setPinned(agentId: string, conversationId: string, pinned:
   await migrateIfNeeded(agentId);
   return withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
+    await withCopiedRow(agentId, index, conversationId);
     const meta = collapseTwinsForWrite(index, conversationId);
     if (!meta) throw new Error(`Conversation not found: ${conversationId}`);
     meta.pinned = pinned;
     await writeIndex(agentId, index);
+    await noteBoxEdit(agentId, conversationId, { pinned });
     return meta;
   });
 }

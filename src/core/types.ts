@@ -1214,6 +1214,8 @@ export interface Config {
         config?: boolean;
         /** The Ask personas, so a new ask starts on the host while the Mac is away (WP12). */
         personas?: boolean;
+        /** Each recent conversation's messages (default off for a host; the companion takes them). */
+        conversation_bodies?: boolean;
       };
       /** A new ask on this host while the Mac is away may start in bypassPermissions
        *  (docs/plan/walnut-replica-servers-impl.md section 8). Off: the host default is

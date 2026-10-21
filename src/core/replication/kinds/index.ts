@@ -1,7 +1,8 @@
 /**
  * The WP4 copy kinds (docs/plan/walnut-replica-servers-impl.md, section 4):
- * sessions, requests, boards, inbox (index and bodies), and the WP5 ones:
- * routines, conversations, prefs, config. One list for the
+ * sessions, requests, boards, inbox (index and bodies), the WP5 ones:
+ * routines, conversations, prefs, config, and the conversations' messages
+ * (stage 3e of the companion plan). One list for the
  * leader's scheduler (copy-kind.ts) and one registration for the follower
  * route (web/routes/bridge-replica.ts builtinKinds).
  */
@@ -22,11 +23,14 @@ import { PREFS_KIND, prefsFollower } from './prefs.js'
 import { CONFIG_KIND, configFollower } from './config.js'
 // WP12: the Ask personas, so a new ask starts on the host while the Mac is away.
 import { PERSONAS_KIND, personasFollower } from './personas.js'
+// Stage 3e of the companion plan: each recent conversation's messages, for the companion.
+import { CONVERSATION_BODIES_KIND } from './conversation-bodies.js'
+import { conversationBodiesFollower } from './conversation-bodies-follower.js'
 
 /** The leader's copy kinds, in the order a round serves them. */
 export function copyKinds(): CopyKind<any>[] {
   return [SESSIONS_KIND, REQUESTS_KIND, BOARDS_KIND, INBOX_KIND, INBOX_BODIES_KIND,
-    ROUTINES_KIND, CONVERSATIONS_KIND, PREFS_KIND, CONFIG_KIND, PERSONAS_KIND]
+    ROUTINES_KIND, CONVERSATIONS_KIND, PREFS_KIND, CONFIG_KIND, PERSONAS_KIND, CONVERSATION_BODIES_KIND]
 }
 
 /**
@@ -49,7 +53,8 @@ export function copyKeepersOnly(h: FollowerKindHandler): FollowerKindHandler {
 /** The follower side of every copy kind, for POST /bridge/replica. Returns the unregister. */
 export function registerCopyFollowerKinds(): () => void {
   const off = [sessionsFollower(), requestsFollower(), boardsFollower(), inboxFollower(), inboxBodiesFollower(),
-    routinesFollower(), conversationsFollower(), prefsFollower(), configFollower(), personasFollower()].map((h) => registerFollowerKind(copyKeepersOnly(h)))
+    routinesFollower(), conversationsFollower(), prefsFollower(), configFollower(), personasFollower(),
+    conversationBodiesFollower()].map((h) => registerFollowerKind(copyKeepersOnly(h)))
   return () => { for (const u of off) u() }
 }
 
