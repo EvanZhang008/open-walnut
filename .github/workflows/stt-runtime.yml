@@ -1,0 +1,72 @@
+name: Speech runtime
+
+# llama-server for the Qwen3-ASR engine on Linux (src/core/stt/llama-runtime.ts),
+# built against glibc 2.28 by scripts/stt-runtime/build-llama.sh and attached to
+# the prerelease `stt-runtime-<tag>`. A server downloads the archive for its
+# platform and checks the SHA-256 pinned in llama-runtime.ts, so changing the
+# pinned tag means running this, then pinning the new checksums.
+
+on:
+  workflow_dispatch:
+    inputs:
+      llama_tag:
+        description: 'llama.cpp release tag (bNNNNN)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stt-runtime-${{ inputs.llama_tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: llama-server ${{ inputs.llama_tag }} (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, os: ubuntu-24.04, image: quay.io/pypa/manylinux_2_28_x86_64 }
+          - { target: linux-arm64, os: ubuntu-24.04-arm, image: quay.io/pypa/manylinux_2_28_aarch64 }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build in a glibc 2.28 container
+        run: |
+          docker run --rm -v "$PWD:/w" ${{ matrix.image }} \
+            bash /w/scripts/stt-runtime/build-llama.sh "${{ inputs.llama_tag }}" /w/out ${{ matrix.target }}
+      - name: It starts on the oldest and the newest supported system
+        run: |
+          # Unpack on the runner: minimal images (amazonlinux:2023) ship no tar,
+          # and the test is whether the binary starts there, not the unpacking.
+          mkdir unpacked && tar -xzf out/*.tar.gz -C unpacked
+          for img in debian:11 ubuntu:24.04 amazonlinux:2023; do
+            docker run --rm -v "$PWD/unpacked:/r:ro" "$img" /r/llama-server/llama-server --version || exit 1
+          done
+      - uses: actions/upload-artifact@v5
+        with:
+          name: stt-runtime-${{ matrix.target }}
+          path: out/
+  release:
+    name: Attach to stt-runtime-${{ inputs.llama_tag }}
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: stt-runtime-${{ inputs.llama_tag }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: out
+          merge-multiple: true
+      - name: Upload the archives and their checksums
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --target "$GITHUB_SHA" --title "Speech runtime: llama-server ${{ inputs.llama_tag }}" \
+              --notes "llama-server for the Qwen3-ASR engine on Linux, built against glibc 2.28. Downloaded by Walnut servers, which check the SHA-256 pinned in src/core/stt/llama-runtime.ts."
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" out/*.tar.gz out/*.sha256 --clobber
+          cat out/*.sha256
