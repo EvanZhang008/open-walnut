@@ -4196,11 +4196,15 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
   }
 })
 
-// DELETE /api/v1/notes/*path — delete note
+// DELETE /api/v1/notes/*path — delete note. The attachment and folder deletes
+// (`/notes/attachment/*`, `/notes/folder/*`, notes-extras-v1.ts, mounted after this
+// router) pass on: this route caught them before, answered 404, and deleted a note
+// at `folder/<x>.md` when one existed.
 apiV1Router.delete('/notes/*path', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    ensureIndexBootstrap()
     const notePath = getWildcardPath(req)
+    if (notePath && /^(attachment|folder)\//.test(notePath)) { next(); return }
+    ensureIndexBootstrap()
     if (!notePath) { sendError(res, 400, 'bad_request', 'path required'); return }
     const fullPath = resolveSafePath(notePath)
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
