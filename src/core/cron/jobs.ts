@@ -3,7 +3,7 @@
  */
 
 import { generateId } from '../../utils/format.js';
-import { CLOUD_MODE } from '../../constants.js';
+import { isCompanion } from '../server-role.js';
 import type {
   CronJob,
   CronJobCreate,
@@ -33,7 +33,7 @@ const CLOUD_ALLOWED_JOB_RE = /git[-_ ]?sync|backup/i;
  * (a terminal result here would e.g. disable one-shot jobs the primary box
  * still needs to run). `cloudMode` is a parameter for direct unit testing.
  */
-export function cloudModeSkipsJob(job: CronJob, cloudMode: boolean = CLOUD_MODE): boolean {
+export function cloudModeSkipsJob(job: CronJob, cloudMode: boolean = isCompanion()): boolean {
   if (!cloudMode) return false;
   const tag = (job as { tag?: string }).tag ?? '';
   return !(

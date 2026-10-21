@@ -14,6 +14,7 @@
  */
 
 import { CLOUD_MODE } from '../constants.js'
+import { hasCapability } from './capabilities.js'
 
 export type FollowerKind = 'companion' | 'host'
 
@@ -22,6 +23,15 @@ export function followerKind(): FollowerKind | null {
   // WALNUT_ROLE is trimmed as resolveServerRole() trims it, so both answers agree.
   if (process.env.WALNUT_HOST_SERVER === '1' || (process.env.WALNUT_ROLE ?? '').trim() === 'replica') return 'host'
   return null
+}
+
+/**
+ * This server is the companion, the follower whose leader is reached over the
+ * bridge: where a read means that (relay to the Mac, the twin pairing rules), not
+ * a door or job a capability turns on (core/capabilities.ts). Live, as followerKind().
+ */
+export function isCompanion(): boolean {
+  return followerKind() === 'companion'
 }
 
 /**
@@ -85,8 +95,8 @@ export function isHostReplicaProgram(): boolean {
 export function hasLocalDaemon(): boolean { return current().placement !== 'host' }
 /** Sessions run where this server is: the Mac, or (WP12) the host. */
 export function runsSessions(): boolean { return current().placement !== 'cloud' }
-/** The companion may stand in for the Mac when the user allowed it (backupAllowed). */
-export function canStandIn(allowed: boolean): boolean { return current().placement === 'cloud' && allowed }
+/** A box with the backup-leader capability may stand in for the Mac when the user allowed it (backupAllowed). */
+export function canStandIn(allowed: boolean): boolean { return hasCapability('backup-leader') && allowed }
 
 export function _resetServerRoleForTesting(): void {
   facts = null

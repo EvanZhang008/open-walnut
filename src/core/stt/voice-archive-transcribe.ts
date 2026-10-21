@@ -1,4 +1,4 @@
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../server-role.js'
 import { voiceArchive, VoiceArchiveError, type VoiceRecord } from './voice-archive.js'
 import { deferVoiceReplication, replicateVoiceRecording, voicePrimaryAction, VOICE_TRANSCRIBE_TIMEOUT_MS } from './voice-archive-replication.js'
 import { finishLive, hasLiveTake, type LiveTranscribe } from './live-transcript.js'
@@ -10,7 +10,7 @@ export interface VoiceTranscript { text: string; via?: string; recordingId: stri
 const reply = (record: VoiceRecord): VoiceTranscript => ({ text: record.text ?? '', via: record.via, recordingId: record.id, primarySaved: record.primarySaved, storage: record.storage })
 const pending = new Map<string, Promise<VoiceTranscript>>()
 /** The companion: the Mac transcribes while it answers, this box's engine when it does not. */
-const FOLLOWER = CLOUD_MODE
+const FOLLOWER = isCompanion()
 async function macConnected(): Promise<boolean> {
   return FOLLOWER && (await import('../../web/ws/bridge-registry.js')).bridgeForHost('__local__').connected
 }

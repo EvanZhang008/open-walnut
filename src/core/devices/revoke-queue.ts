@@ -49,7 +49,8 @@
 import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
+import { isCompanion } from '../server-role.js'
 import { log } from '../../logging/index.js'
 import { writeJsonFile } from '../../utils/fs.js'
 
@@ -318,7 +319,7 @@ export function startRevokeQueue(): { stop: () => void } {
   timer.unref?.()
   let unhook: (() => void) | null = null
   let stopped = false
-  if (CLOUD_MODE) {
+  if (isCompanion()) {
     void (async () => {
       try {
         const { addPrimaryBridgeConnectedHandler } = await import('../../web/ws/bridge-registry.js')

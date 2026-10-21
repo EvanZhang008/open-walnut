@@ -9,8 +9,8 @@ import { WebSocketServer, WebSocket } from 'ws'
 import type { IncomingMessage } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import type { WsFrame } from './protocol.js'
-import { CLOUD_MODE } from '../../constants.js'
-import { isHostReplica } from '../../core/server-role.js'
+import { isCompanion, isHostReplica } from '../../core/server-role.js'
+import { hasCapability } from '../../core/capabilities.js'
 import { toDisposable, type Disposable } from '../../core/plugins/disposable.js'
 import { OwnedRegistry } from '../../core/plugins/owned-registry.js'
 import { log } from '../../logging/index.js'
@@ -454,10 +454,10 @@ export function attachWss(server: HttpServer): WebSocketServer {
       return
     }
 
-    // /bridge (cloud mode only): a remote daemon dialing in. Requires a
-    // machine token; the connection goes to the bridge registry, NOT the
-    // browser client set (no RPC surface, no broadcasts).
-    if (CLOUD_MODE && url.pathname === '/bridge') {
+    // /bridge (the bridge-door capability, core/capabilities.ts): a remote daemon
+    // dialing in. Requires a machine token; the connection goes to the bridge
+    // registry, NOT the browser client set (no RPC surface, no broadcasts).
+    if (hasCapability('bridge-door') && url.pathname === '/bridge') {
       // Import BEFORE handleUpgrade: the daemon sends its hello immediately on
       // open, and message listeners must be attached synchronously in the
       // upgrade callback or the first frame is lost (first-connection race).
@@ -477,9 +477,9 @@ export function attachWss(server: HttpServer): WebSocketServer {
       return
     }
 
-    // /daemon-tunnel (cloud mode only): the paired Mac driving its own daemon
-    // on this box. Only the primary's machine token opens it (daemon-tunnel.ts).
-    if (CLOUD_MODE && (url.pathname === DAEMON_TUNNEL_PATH || url.pathname === BRIDGE_SESSION_STREAM_PATH)) {
+    // /daemon-tunnel (the bridge-door capability): the paired Mac driving its own
+    // daemon on this box. Only the primary's machine token opens it (daemon-tunnel.ts).
+    if (hasCapability('bridge-door') && (url.pathname === DAEMON_TUNNEL_PATH || url.pathname === BRIDGE_SESSION_STREAM_PATH)) {
       if (url.pathname === BRIDGE_SESSION_STREAM_PATH) {
         void handleBridgeSessionStreamUpgrade(request, socket, head, { verify: () => verifyCloudUpgrade(url, request) })
       } else {
@@ -502,7 +502,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
     // every proxy and tunnel in front of this server would log it
     // (upgrade-credential.ts; `?token=` stays accepted for older clients).
     // Primary mode: the same rule as the HTTP middleware, see verifyPrimaryUpgrade.
-    if (CLOUD_MODE) {
+    if (isCompanion()) {
       verifyCloudUpgrade(url, request).then((cred) => {
         // Machine tokens are bridge-only — a daemon credential must not open
         // the browser RPC surface.

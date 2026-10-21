@@ -406,6 +406,74 @@ rows of it, and `v1-forward` and the stream forward are deleted. The boot policy
 ratchet then counts the remaining `CLOUD_MODE` reads down to the env parse and the
 capability defaults.
 
+### Where the capabilities come from
+
+`core/capabilities.ts`. The box sets `WALNUT_CAPABILITIES` for itself (names
+separated by commas or spaces, `none` for no capability), in its own unit, as root
+sets `WALNUT_COMPANION_MAC_BUILDS`; no copy from the Mac carries it. A companion
+that sets nothing has all four, which is what it ran before; nothing in
+`scripts/cloud/` sets the variable.
+
+| Server | Capabilities |
+|---|---|
+| the Mac (leader) | none: its `leader` column decides every row; a value is ignored with a warning |
+| a host replica | none: a value is ignored with a warning |
+| the companion | all four when unset or blank; when set, exactly the names given; a name that is not a capability stops the boot |
+
+The `server role` and `boot policy` lines at boot name them. A row is on for a
+replica when its `replica` column is, or when the box has the row's capability.
+The defaults read `CLOUD_MODE` live (tests flip the constant between cases), so
+the ratchet keeps that module with `constants.ts`, `server-role.ts` and `boot-policy.ts`.
+
+### Slices
+
+| Slice | Moves | Stays |
+|---|---|---|
+| 5a | `capabilities.ts`; the `replica` column; the capability rows below; the boot wiring in `server.ts`, the `/bridge` and `/daemon-tunnel` doors (`ws/handler.ts`), and the job modules of capability rows read a capability or `isCompanion()` instead of `CLOUD_MODE` | the routes' reads, the forward, the `companionUntil` rows |
+| 5b | the front: the host replica's route table with the companion's kept routes as rows; `v1-forward` and the stream forward deleted; the routes' reads; each `companionUntil: '5b'` row decided | |
+
+The capability rows as built in 5a:
+
+| Capability | Rows | Also gates |
+|---|---|---|
+| `public-door` | `setup-token-banner`, `revoke-queue`, `stt-auto-setup`, `expose-runtime` | |
+| `bridge-door` | `companion-ingest-routes` (`/bridge/*`, `/git/data`, the trial build's confirm) | the `/bridge`, `/daemon-tunnel` and bridge session stream upgrades |
+| `cloud-exec` | `cloud-exec`, `local-daemon`, `stream-file-cleanup`, `send-path-canary` | `cloudExecActive`, the tunnel daemon's exec check, the canary's own start |
+| `backup-leader` | `backup-leader`, `cron`, `routine-wake`, `overview-maintainer`, `project-summary` | `getBackupLeader`, `canStandIn` |
+
+`expose-runtime` is a public door too (the tunnel in front of the box), so it joined
+`public-door`. The pairing, claim, push and voice routes are mounted on every server
+already, so `public-door` gates no mount yet. Inside the core modules those routes
+call (device auth and adoption, the push relay and revokes, the voice archive), and
+in the cron allowlist, the plugin relay and the `/ws` token check, a read that means
+"this box is the companion, its leader is over the bridge" became `isCompanion()`:
+that is the follower kind, not a door. `cron`, `routine-wake`, `overview-maintainer`
+and `project-summary` still start at boot whenever the box has `backup-leader`;
+running them only while it leads is later work.
+
+Rows the companion still runs with no capability (`companionUntil`), each with the
+stage that moves it onto the replica core, makes it a capability row or turns it off:
+
+| Stage | Rows |
+|---|---|
+| 2c | `completed-task-session-migration` |
+| 4d | `git-pull`, `git-auto-commit`, `git-maintenance`, `notes-watcher`, `notes-indexer`; 4d also decides whether the hub's gc stays (a `bridge-door` row then) |
+| 5b | `v1-forward`, `companion-stream-forward`, `companion-queues` (deletes and whole-list reorders, 3d), `plugins`, `companion-plugin-cards`, `update-check` (a no-op on the companion already: its install kind is `replica`) |
+
+After 5a the ratchet lists 313 raw reads in 116 files (348 in 133 before): 213 in
+61 route files (`api-v1.ts` 28 of them), 84 in 46 files of `src/core`, 8 in
+`src/integrations`, 5 in `src/providers`, 3 in the web middleware. 5b still has to:
+
+- build the front from the host replica's route table, the companion's kept routes
+  as rows, and delete `v1-forward` and the stream forward with their rows;
+- convert the routes' reads: a read that relays to the Mac goes with the forward, a
+  read that means "this box is the companion" becomes `isCompanion()`, and the
+  pairing, claim, push and voice mounts take `public-door`;
+- decide each `companionUntil: '5b'` row above;
+- convert or justify the reads left in `src/core`, `src/integrations`,
+  `src/providers` and the middleware, until the ratchet keeps only `constants.ts`
+  and the capability defaults.
+
 ## Security
 
 - Only the Mac's own machine credential reaches `/bridge/build` and `/bridge/journal`

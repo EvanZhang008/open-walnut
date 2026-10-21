@@ -2,12 +2,16 @@
  * The boot policy table (src/core/boot-policy.ts): for the leader and the
  * companion every row equals today's CLOUD_MODE truth at its gate, recomputed
  * here from the expression the gate had before (docs/plan/walnut-replica-servers-impl.md,
- * section 2); the host replica column is the plan's OFF list.
+ * section 2); the host replica column is the plan's OFF list. The companion's
+ * truth comes from the one replica column plus its capabilities
+ * (src/core/capabilities.ts), all four when it sets none; taking one away turns
+ * off exactly the rows that name it (stage 5 of docs/plan/walnut-companion-unified-replica.md).
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { BOOT_POLICY, bootPolicy, bootPolicyDecisions, type BootJob } from '../../src/core/boot-policy.js'
+import { BOOT_POLICY, bootPolicy, bootPolicyDecisions, jobsOfCapability, type BootJob, type BootRow } from '../../src/core/boot-policy.js'
+import { CAPABILITIES, defaultCapabilities, type Capability } from '../../src/core/capabilities.js'
 import { listTsFiles } from '../helpers/cloud-mode-scan.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
@@ -117,13 +121,13 @@ describe('boot policy', () => {
 
   it.each(BOOT_POLICY.map((r) => [r.job, r] as const))('%s: leader and companion equal the old CLOUD_MODE truth', (job, row) => {
     expect(row.leader).toBe(OLD_TRUTH[job](false))
-    expect(row.replicaCloud).toBe(OLD_TRUTH[job](true))
     expect(bootPolicy(job, 'mac')).toBe(OLD_TRUTH[job](false))
     expect(bootPolicy(job, 'cloud')).toBe(OLD_TRUTH[job](true))
+    expect(bootPolicy(job, 'cloud', defaultCapabilities('cloud'))).toBe(OLD_TRUTH[job](true))
   })
 
   it.each(BOOT_POLICY.map((r) => [r.job, r] as const))('%s: the host replica column is the plan\'s', (job, row) => {
-    expect(row.replicaHost).toBe(HOST_ON.has(job))
+    expect(row.replica).toBe(HOST_ON.has(job))
     expect(bootPolicy(job, 'host')).toBe(HOST_ON.has(job))
     expect(row.why.length).toBeGreaterThan(10)
   })
@@ -157,5 +161,69 @@ describe('boot policy', () => {
     const text = listTsFiles(ROOT, 'src').map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n')
     const unread = BOOT_POLICY.map((r) => r.job).filter((job) => !text.includes(`bootPolicy('${job}')`))
     expect(unread).toEqual([])
+  })
+})
+
+/** The rows each capability turns on: the design's table, plus expose (a door to the public too). */
+const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
+  'public-door': ['setup-token-banner', 'revoke-queue', 'expose-runtime', 'stt-auto-setup'],
+  'bridge-door': ['companion-ingest-routes'],
+  'cloud-exec': ['cloud-exec', 'local-daemon', 'stream-file-cleanup', 'send-path-canary'],
+  'backup-leader': ['backup-leader', 'overview-maintainer', 'project-summary', 'routine-wake', 'cron'],
+}
+
+/** What the companion still runs on its own pipeline, and the stage that decides each. */
+const COMPANION_UNTIL: Partial<Record<BootJob, string>> = {
+  'v1-forward': '5b', 'companion-stream-forward': '5b', 'companion-queues': '5b',
+  'plugins': '5b', 'companion-plugin-cards': '5b', 'update-check': '5b',
+  'git-pull': '4d', 'git-auto-commit': '4d', 'git-maintenance': '4d', 'notes-watcher': '4d', 'notes-indexer': '4d',
+  'completed-task-session-migration': '2c',
+}
+
+const rows = BOOT_POLICY as readonly BootRow[]
+const without = (cap: Capability): ReadonlySet<Capability> => new Set(CAPABILITIES.filter((c) => c !== cap))
+
+describe('boot policy: one replica column plus capability rows', () => {
+  it('each capability turns on the rows the plan names, and only those', () => {
+    for (const cap of CAPABILITIES) expect(jobsOfCapability(cap), cap).toEqual(CAPABILITY_JOBS[cap])
+    const named = rows.filter((r) => r.capability !== undefined).map((r) => r.job).sort()
+    expect(named).toEqual(Object.values(CAPABILITY_JOBS).flat().sort())
+  })
+
+  it('the rows still kept for the companion name the stage that decides them', () => {
+    const marked = Object.fromEntries(rows.filter((r) => r.companionUntil !== undefined).map((r) => [r.job, r.companionUntil]))
+    expect(marked).toEqual(COMPANION_UNTIL)
+    const doc = fs.readFileSync(path.join(ROOT, 'docs/plan/walnut-companion-unified-replica.md'), 'utf8')
+    for (const stage of new Set(Object.values(COMPANION_UNTIL))) expect(doc, stage).toMatch(new RegExp(`(\\|\\s*${stage}\\s*\\||###\\s*${stage}:)`))
+  })
+
+  it('a row is a capability row, a companion row or neither, and both are off in the replica column', () => {
+    for (const r of rows) {
+      expect(r.capability !== undefined && r.companionUntil !== undefined, r.job).toBe(false)
+      if (r.capability !== undefined || r.companionUntil !== undefined) expect(r.replica, r.job).toBe(false)
+    }
+  })
+
+  it.each(CAPABILITIES.map((c) => [c] as const))('a companion without %s turns off exactly its rows', (cap) => {
+    for (const r of rows) {
+      const job = r.job as BootJob
+      const want = r.capability === cap ? false : OLD_TRUTH[job](true)
+      expect(bootPolicy(job, 'cloud', without(cap)), `${cap}: ${job}`).toBe(want)
+    }
+  })
+
+  it('a companion with no capability keeps only the replica column and its own pipeline rows', () => {
+    const { on } = bootPolicyDecisions('cloud', new Set())
+    expect(on.sort()).toEqual([...HOST_ON, ...Object.keys(COMPANION_UNTIL)].sort())
+  })
+
+  it('capabilities never reach the Mac\'s column, and a host replica takes the table\'s rows only through its set', () => {
+    const all = new Set(CAPABILITIES)
+    for (const r of rows) expect(bootPolicy(r.job as BootJob, 'mac', all), r.job).toBe(r.leader)
+    // The host's set is empty by construction (capabilities.ts ignores the env there).
+    expect(defaultCapabilities('host').size).toBe(0)
+    expect(bootPolicyDecisions('host').on.sort()).toEqual([...HOST_ON].sort())
+    // The companion's own pipeline rows are the companion's alone, whatever a host's set says.
+    for (const job of Object.keys(COMPANION_UNTIL) as BootJob[]) expect(bootPolicy(job, 'host', all), job).toBe(false)
   })
 })

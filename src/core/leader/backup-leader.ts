@@ -206,10 +206,10 @@ export function takeoverMsFromEnv(): number {
   return Number.isFinite(n) && n >= 500 ? Math.floor(n) : 60_000
 }
 
-/** The instance, created on first use (cloud box only; null elsewhere). */
+/** The instance, created on first use (a box with the backup-leader capability only; null elsewhere). */
 export async function getBackupLeader(): Promise<BackupLeader | null> {
-  const { CLOUD_MODE, LEADER_STATE_DIR } = await import('../../constants.js')
-  if (!CLOUD_MODE) return null
+  const [{ LEADER_STATE_DIR }, { hasCapability }] = await Promise.all([import('../../constants.js'), import('../capabilities.js')])
+  if (!hasCapability('backup-leader')) return null
   if (!instance) {
     const registry = await import('../../web/ws/bridge-registry.js')
     instance = createBackupLeader({

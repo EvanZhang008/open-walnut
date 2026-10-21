@@ -13,7 +13,7 @@
  * caller's own record, so the adoption runs as this box itself.
  */
 
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../server-role.js'
 import { getInstanceId } from '../device-auth.js'
 import { AdoptionError, adoptDeviceRecord, revokeAdopted } from '../device-adoption.js'
 import { directRoutes, listeningPort } from './routes.js'
@@ -32,7 +32,7 @@ export async function handleDevicesRelayAction(
 ): Promise<Record<string, unknown>> {
   // Same structural guard as push/relay.ts: a replica answering this would
   // adopt into its own registry, which is the box the request came from.
-  if (CLOUD_MODE) {
+  if (isCompanion()) {
     throw new DevicesRelayError(
       'device adoption over the bridge is answered by the primary box; a replica must relay it, never apply it',
       'wrong_box', 500,
