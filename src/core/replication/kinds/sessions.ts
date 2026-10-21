@@ -26,7 +26,8 @@ import type { SessionRecord } from '../../types.js'
 import { HASH_SLICE, sha12 } from '../kind.js'
 import { createRowSetFollower, serialChain, writeCopyFile, type RowSetFollower, type RowSetState } from '../kind-follower.js'
 import type { CopyKind } from './copy-kind.js'
-import { copyRefusal, markCopyOff } from './gate.js'
+import { copyPath, copyRefusal, markCopyOff } from './gate.js'
+import { followerKind } from '../../server-role.js'
 
 export const SESSIONS_SCHEMA_VERSION = 1
 export const SESSIONS_REMOVAL_FLOOR = 200
@@ -166,6 +167,16 @@ function changed(): void {}
 
 let follower: RowSetFollower | null = null
 
+const onCompanion = (): boolean => followerKind() === 'companion'
+/** The companion's copy: `cache/replica/home/sessions.sqlite` (gate.ts copyPath), never the live registry. */
+export const companionCopyFile = (): string => copyPath(path.join(WALNUT_HOME, 'sessions.sqlite'))
+
+/** The Mac's sessions a list can show, as the companion's copy holds them (stage 2c); [] anywhere else. */
+export async function readCompanionSessions(): Promise<SessionRecord[]> {
+  if (!onCompanion()) return []
+  return (await import('../../session-db.js')).readCompanionSessionCopy(companionCopyFile())
+}
+
 /** The follower's side: the replica's own sessions.sqlite through session-db's apply connection. */
 export function sessionsFollower(): RowSetFollower {
   follower ??= createRowSetFollower<SessionRecord>({
@@ -177,26 +188,35 @@ export function sessionsFollower(): RowSetFollower {
     ordered: false,
     digest: true,
     serial: (fn) => serial(fn),
-    // Only the replica program on a host keeps it (gate.ts): the companion keeps its own projection (WP13 moves it).
+    // The replica program on a host keeps it in its live store; the cloud companion in
+    // its copy store (stage 2c), apart from the sessions it runs itself (gate.ts).
     refuse: copyRefusal,
     load,
     save,
     isRow,
     key: (r) => r.claudeSessionId,
     hash: sessionCopyHash,
-    localKeys: async () => (await import('../../session-db.js')).sessionIdsInStore(),
+    localKeys: async () => {
+      const db = await import('../../session-db.js')
+      return onCompanion() ? db.companionSessionCopyIds(companionCopyFile()) : db.sessionIdsInStore()
+    },
     apply: async ({ rows, removeIds }) => {
       const db = await import('../../session-db.js')
       // Projected again here: whatever a leader sends, no stored row names a process.
-      db.applySessionCopy({ rows: (rows ?? []).map(projectSession), removeIds })
+      const change = { rows: (rows ?? []).map(projectSession), removeIds }
+      if (onCompanion()) db.applyCompanionSessionCopy(companionCopyFile(), change)
+      else db.applySessionCopy(change)
       return { skipped: [] }
     },
     held: async () => (await import('../../../replica/journal-overlay.js')).journalHeld('sessions'),
     changed,
     purge: async () => {
       const db = await import('../../session-db.js')
-      const ids = db.sessionIdsInStore()
-      if (ids.length > 0) db.applySessionCopy({ removeIds: ids })
+      const ids = onCompanion() ? db.companionSessionCopyIds(companionCopyFile()) : db.sessionIdsInStore()
+      if (ids.length > 0) {
+        if (onCompanion()) db.applyCompanionSessionCopy(companionCopyFile(), { removeIds: ids })
+        else db.applySessionCopy({ removeIds: ids })
+      }
       await markCopyOff('sessions')
       state = null
       return { removed: ids.length }

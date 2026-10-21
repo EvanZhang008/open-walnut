@@ -253,11 +253,132 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
   })();
 }
 
+// ── The cloud companion's copy of the Mac's sessions (stage 2c of
+// docs/plan/walnut-companion-unified-replica.md): its own file under the copy store,
+// never the box's live registry, which holds the sessions the box runs itself. ──
+
+let companionCopy: { path: string; handle: DatabaseType } | null = null;
+
+function companionCopyHandle(dbPath: string): DatabaseType {
+  if (companionCopy && companionCopy.path === dbPath) return companionCopy.handle;
+  if (companionCopy) { try { companionCopy.handle.close(); } catch { /* reopened below */ } }
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
+  const handle = new Database(dbPath);
+  handle.pragma('journal_mode = WAL');
+  handle.pragma('busy_timeout = 5000');
+  handle.pragma('synchronous = NORMAL');
+  handle.exec(SCHEMA_SQL);
+  // The Mac's rows as they came: missing columns only, no data fixes.
+  ensureSessionStatusColumns(handle, undefined, { backfill: false });
+  companionCopy = { path: dbPath, handle };
+  return handle;
+}
+
+/** The ids the companion's sessions copy at `dbPath` holds. */
+export function companionSessionCopyIds(dbPath: string): string[] {
+  return companionCopyHandle(dbPath).prepare('SELECT claude_session_id FROM sessions').pluck().all() as string[];
+}
+
+/**
+ * The rows a list can show, kept parsed in memory (the copy is the Mac's whole store,
+ * 5,000 rows and 18 MB of JSON measured, so a list never parses it per request): not
+ * archived, and live or active in the last 30 days (the list's own window is 14).
+ */
+const COPY_LIST_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+let copyRows: { path: string; rows: Map<string, SessionRecord> } | null = null;
+let copyRowsLoad: Promise<Map<string, SessionRecord>> | null = null;
+/** Bumped when the copy is closed: a parse begun before that installs nothing. */
+let copyGen = 0;
+/** Writes that landed while the rows were being parsed: applied to them once parsed. */
+let copyRowsPending: Array<{ rows?: readonly SessionRecord[]; removeIds?: readonly string[] }> = [];
+
+function listableCopyRow(r: SessionRecord, now: number): boolean {
+  if (r.archived) return false;
+  if (r.process_status !== 'stopped' && r.process_status !== 'error') return true;
+  const at = Date.parse(r.lastActiveAt ?? r.startedAt);
+  return Number.isFinite(at) && at >= now - COPY_LIST_WINDOW_MS;
+}
+
+function applyToCopyRows(rows: Map<string, SessionRecord>, change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[] }): void {
+  const now = Date.now();
+  for (const id of change.removeIds ?? []) rows.delete(id);
+  for (const r of change.rows ?? []) {
+    if (listableCopyRow(r, now)) rows.set(r.claudeSessionId, r);
+    else rows.delete(r.claudeSessionId);
+  }
+}
+
+async function loadCopyRows(dbPath: string): Promise<Map<string, SessionRecord>> {
+  const gen = copyGen;
+  const cutoff = new Date(Date.now() - COPY_LIST_WINDOW_MS).toISOString();
+  // This read holds every write before it: only the ones from here on are pending.
+  copyRowsPending = [];
+  // One read of the raw rows (strings), then the JSON parsed in slices between turns of the loop.
+  const raw = companionCopyHandle(dbPath)
+    .prepare("SELECT * FROM sessions WHERE coalesce(archived, 0) = 0 AND (coalesce(process_status, '') NOT IN ('stopped', 'error') OR coalesce(nullif(last_active_at, ''), started_at) >= ?)")
+    .all(cutoff) as Array<Record<string, unknown>>;
+  const rows = new Map<string, SessionRecord>();
+  for (let i = 0; i < raw.length; i++) {
+    const r = rowToSession(raw[i]!);
+    rows.set(r.claudeSessionId, r);
+    if (i % 50 === 49) await new Promise((done) => setImmediate(done));
+  }
+  if (gen !== copyGen) return rows;
+  for (const change of copyRowsPending) applyToCopyRows(rows, change);
+  copyRowsPending = [];
+  copyRows = { path: dbPath, rows };
+  return rows;
+}
+
+/** The companion's sessions copy's one write: rows in as they came, removed ids out, one transaction. */
+export function applyCompanionSessionCopy(dbPath: string, change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[] }): void {
+  const handle = companionCopyHandle(dbPath);
+  const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload'];
+  const ins = handle.prepare(`INSERT OR REPLACE INTO sessions (${cols.join(', ')}) VALUES (${cols.map((c) => '@' + c).join(', ')})`);
+  const del = handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?');
+  handle.transaction(() => {
+    for (const id of change.removeIds ?? []) del.run(id);
+    for (const r of change.rows ?? []) {
+      const row = sessionToRow(r);
+      const bound: Record<string, unknown> = {};
+      for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
+      ins.run(bound);
+    }
+  })();
+  // The parsed rows follow the file only once it is written.
+  if (copyRows && copyRows.path === dbPath) applyToCopyRows(copyRows.rows, change);
+  else if (copyRowsLoad) copyRowsPending.push(change);
+}
+
+/** The sessions of the companion's copy at `dbPath` a list can show (see COPY_LIST_WINDOW_MS). */
+export async function readCompanionSessionCopy(dbPath: string): Promise<SessionRecord[]> {
+  if (copyRows && copyRows.path === dbPath) return [...copyRows.rows.values()];
+  if (!fs.existsSync(dbPath)) return [];
+  if (!copyRowsLoad) {
+    const load = loadCopyRows(dbPath).finally(() => { if (copyRowsLoad === load) copyRowsLoad = null; });
+    copyRowsLoad = load;
+  }
+  return [...(await copyRowsLoad).values()];
+}
+
+/** Close the companion's sessions copy and forget its parsed rows (the next read opens and parses it again). */
+export function closeCompanionSessionCopy(): void {
+  copyGen++;
+  if (companionCopy) {
+    try { companionCopy.handle.close(); } catch { /* closing anyway */ }
+    companionCopy = null;
+  }
+  copyRows = null;
+  copyRowsLoad = null;
+  copyRowsPending = [];
+}
+
 /**
  * Close the handle. Safe to call when already closed or never opened.
  * Intended for test teardown and graceful shutdown.
  */
 export function closeDb(): void {
+  closeCompanionSessionCopy();
   if (applyHandle) {
     try { applyHandle.close(); } catch (err) { log.session.warn('session-db apply connection close error', { err: String(err) }); }
     applyHandle = null;

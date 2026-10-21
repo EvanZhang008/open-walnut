@@ -3402,7 +3402,16 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
     if (!CLOUD_MODE) {
       await exportSessionProjection().catch(() => { /* serve last good file below */ })
     }
-    const projection = await readSessionProjection()
+    // The companion builds the list from its copy of the Mac's sessions once it is
+    // held (stage 2c, core/companion-sessions.ts; null anywhere else); else the pushed projection.
+    let fromCopy: Awaited<ReturnType<typeof import('../../core/companion-sessions.js')['companionSessionList']>> = null
+    try {
+      fromCopy = await (await import('../../core/companion-sessions.js')).companionSessionList()
+    } catch (err) {
+      log.web.warn('companion: the sessions copy could not be read, serving the pushed list', { error: err instanceof Error ? err.message : String(err) })
+    }
+    const projection = fromCopy?.projection ?? await readSessionProjection()
+    if (fromCopy) res.setHeader('x-walnut-copy-as-of', String(fromCopy.asOf))
     // Sessions THIS cloud box owns (cloud.exec) never enter the Mac-authored
     // projection — the exporter is primary-only and that file must keep exactly
     // ONE writer (no content clock: two writers would let git-sync's commit-time

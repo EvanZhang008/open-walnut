@@ -295,7 +295,12 @@ export async function configuredHostLabels(): Promise<Map<string, string>> {
  * common answer — "everything fits" — takes one row count check and ONE
  * whole-array measurement, not a per-row serialize plus two extra sorts.
  */
-export async function buildSessionProjection(): Promise<SessionProjection> {
+export async function buildSessionProjection(from: {
+  /** The sessions to project instead of this server's registry (the companion's copy of the Mac's, stage 2c). */
+  sessions?: SessionRecord[]
+  /** The host labels instead of this server's config (the companion: its copy of the Mac's). */
+  hostLabels?: Map<string, string>
+} = {}): Promise<SessionProjection> {
   // Lazy imports keep cloud boxes (which never export) from touching the
   // session registry / task store at module load.
   const { listSessions, isListableSession } = await import('./session-tracker.js')
@@ -305,7 +310,7 @@ export async function buildSessionProjection(): Promise<SessionProjection> {
   // runs inline on routes the phone polls and a second whole-store read to learn
   // a handful of folder names would be the most expensive field on the row.
   const [allSessions, allTasks, folderLabels, hostLabels] = await Promise.all([
-    listSessions(), listTasks(), listFolderLabels(), configuredHostLabels(),
+    from.sessions ?? listSessions(), listTasks(), listFolderLabels(), from.hostLabels ?? configuredHostLabels(),
   ])
   const taskById = new Map(allTasks.map((t) => [t.id, t]))
   const cutoff = Date.now() - STOPPED_RETENTION_DAYS * 24 * 60 * 60 * 1000
