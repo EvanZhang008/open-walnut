@@ -14,8 +14,7 @@
  *     WHOLE APP to /notes — jarring mid-session, with no way back. It must now
  *     open in place like any other file, with an explicit "Open in Notes" button
  *     as the opt-in jump.
- *  2. PDFs (and images) must be viewable, using the BROWSER's own viewer — no
- *     bundled PDF renderer.
+ *  2. PDFs and images must be viewable without a download.
  *  3. Right-clicking in the file tree must show WALNUT's menu (Reveal in Finder,
  *     Open in Notes, Copy path…), not the browser's "Back / Reload / View Source".
  */
@@ -86,27 +85,17 @@ test.beforeEach(async ({ page }) => {
   await page.waitForLoadState('networkidle')
 })
 
-test('PDF renders in the browser’s own viewer, not a download dead-end', async ({ page }) => {
+test('PDF renders with document zoom controls, not a download dead-end', async ({ page }) => {
   const explorer = await openFilesPanel(page)
   await selectFile(explorer, 'contract.pdf')
-
-  // An <iframe> pointed at the raw-bytes endpoint — that URL is what makes the
-  // browser use PDF.js. The old code fell through to "Binary file — cannot display".
-  const frame = explorer.locator('.fv-doc-preview')
-  await expect(frame).toBeVisible({ timeout: 10_000 })
-  const src = await frame.getAttribute('src')
-  expect(src).toContain('/api/file-content')
-  expect(src).toContain('raw=1')
-  expect(src).toContain('contract.pdf')
-  await expect(explorer.locator('.file-viewer-error')).toHaveCount(0)
-
-  // And the server really labels it application/pdf (the whole reason the
-  // browser viewer engages instead of showing mojibake text).
+  await expect(explorer.locator('.fv-pdf-text')).toContainText('WALNUT PDF', { timeout: 20_000 })
+  await expect(explorer.getByRole('button', { name: 'Zoom in', exact: true })).toBeEnabled()
+  await expect(explorer.locator('.file-viewer-error, .fv-pdf-error')).toHaveCount(0)
+  const src = await explorer.locator('a.fv-download-btn').getAttribute('href')
   const res = await page.request.get(src!)
   expect(res.ok()).toBe(true)
   expect(res.headers()['content-type']).toBe('application/pdf')
-
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/pdf-preview.png`, fullPage: false })
+  await page.screenshot({ path: '/tmp/pdf-viewer-fix/pdf-preview.png', fullPage: false })
 })
 
 test('PNG renders as an inline image with Download available', async ({ page }) => {

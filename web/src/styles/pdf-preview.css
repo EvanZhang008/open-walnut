@@ -1,0 +1,112 @@
+.file-content-view:has(> .fv-pdf-preview) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.file-content-view:has(> .fv-pdf-preview) > .fv-html-toolbar {
+  flex: 0 0 auto;
+}
+.fv-pdf-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.fv-pdf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.fv-pdf-toolbar output {
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.fv-pdf-page-count { margin-left: auto; }
+.fv-pdf-toolbar { flex-wrap: wrap; }
+.fv-pdf-find { display: flex; align-items: center; gap: 4px; flex-basis: 100%; min-width: 0; }
+.fv-pdf-find input { min-width: 0; flex: 1; width: 100px; }
+.fv-pdf-find [role="status"] { font-size: 11px; }
+.fv-pdf-link { position: absolute; z-index: 1; }
+.fv-pdf-link:hover, .fv-pdf-link:focus-visible { background: #4080ff33; }
+.fv-pdf-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  background: var(--bg-secondary, #e9e9ec);
+}
+.fv-pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: max-content;
+  min-width: 100%;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.fv-pdf-page {
+  position: relative;
+  flex: none;
+  background: white;
+  box-shadow: 0 1px 6px #0003;
+}
+.fv-pdf-page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.fv-pdf-page > .fv-pdf-error { position: absolute; inset: 0; }
+.fv-pdf-text {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  -webkit-text-size-adjust: none;
+  transform-origin: 0 0;
+  caret-color: black;
+  --rotate: 0deg;
+  --scale-x: 1;
+  --font-height: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.fv-pdf-text :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+.fv-pdf-text > :not(.markedContent),
+.fv-pdf-text .markedContent span:not(.markedContent) {
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.fv-pdf-text[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.fv-pdf-text[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.fv-pdf-text[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
+.fv-pdf-text .markedContent { display: contents; }
+.fv-pdf-password { padding: 20px; font-size: 13px; }
+.fv-pdf-password label { display: flex; flex-direction: column; gap: 8px; }
+.fv-pdf-password input { max-width: 240px; }
+.fv-pdf-password button { margin-top: 8px; }
+.fv-pdf-text ::selection { background: #4080ff55; }
+.fv-pdf-error, .fv-pdf-status {
+  padding: 20px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}

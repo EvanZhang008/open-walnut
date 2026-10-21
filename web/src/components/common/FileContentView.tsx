@@ -51,6 +51,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { useLiveEdit, type LiveEdit } from '@/hooks/useLiveEdit';
 import { useEmbeddedImageFreshness, type EmbeddedImageFreshness } from '@/hooks/useEmbeddedImageFreshness';
 import { FileHistoryPanel } from '@/components/common/FileHistoryPanel';
+import { PdfPreview } from '@/components/common/PdfPreview';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
 import { FileMarkdownEditor } from '@/components/common/FileMarkdownEditor';
@@ -2119,8 +2120,6 @@ export function FileContentView({
           </div>
         </>
       )}
-      {/* PDF: the BROWSER's own viewer (PDF.js in Chrome/Firefox) renders the raw
-          bytes — zoom, search, print, page nav for free. We ship no PDF renderer. */}
       {!loading && raw === 'doc' && (
         <>
           <div className="fv-html-toolbar">
@@ -2134,11 +2133,7 @@ export function FileContentView({
             </button>
             {popoutBtn}
           </div>
-          <iframe
-            className="fv-doc-preview"
-            src={rawFileContentUrl(filePath, host, reloadToken)}
-            title={filePath}
-          />
+          <PdfPreview key={`${host ?? ''}:${filePath}`} path={filePath} host={host} reloadToken={reloadToken} />
         </>
       )}
       {!loading && raw === 'image' && (

@@ -12,9 +12,7 @@
 
 const VIDEO_EXTS = new Set(['mp4', 'm4v', 'webm', 'mov']);
 const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'ogg']);
-// PDFs and rasters are rendered by the BROWSER's own viewer (PDF.js / image
-// decoder) from the raw-bytes URL — we deliberately don't bundle a PDF renderer
-// or build a zoom/rotate UI. Chrome and Firefox already have a better one.
+// PDFs use a client-side renderer; rasters use the browser's image decoder.
 const DOC_EXTS = new Set(['pdf']);
 // svg is NOT here: it's text, so the source/preview toggle is more useful (and
 // the markdown/HTML path already renders it when embedded).
@@ -35,7 +33,7 @@ export type RawKind = 'video' | 'audio' | 'doc' | 'image' | 'word' | 'sheet' | '
  * whole-file text read would corrupt them (and a remote 100MB video would kill
  * the tunnel).
  *   video/audio → <video>/<audio> (+ our speed/skip toolbar)
- *   doc         → <iframe> → the browser's built-in PDF viewer
+ *   doc         → PDF.js with document-local zoom
  *   image       → <img>
  *   word/sheet/slides → lazy-loaded office preview
  */
