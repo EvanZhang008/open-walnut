@@ -298,7 +298,7 @@ change to the session daemons. The Mac drains it with the same handover
 | 3a | the door, the trigger, the drain; a task update whose fields the Mac merges (`task-fields`, the op the queue already sends with `fields`) | everything else in `task-queue` |
 | 3b | session metadata (`session-meta`: title, archived, note, output mode, thread fields), applied with the online patch's own call; a refusal becomes a letter naming the session by its title, instead of a silent drop | the live mode change (a relay) |
 | 3c | inbox flags (`inbox-state`) with the inbox copy reader | |
-| 3d | task creates (`task-create`) and single moves (`task-move`) | deletes and whole-list reorders keep the task queue: no journal kind takes them (a host refuses both while the Mac is away) |
+| 3d | task creates (`task-create`) | deletes and whole-list reorders keep the task queue: no journal kind takes them (a host refuses both while the Mac is away); the companion makes no single moves (`task-move`), its board order ops are whole lists |
 | 3e | chat turns (`chat-turn`, texts as blobs) with the conversation copy reader, after stage 4 brings the conversation bodies as a copy (the copy kind is index only today, and the box's list reads git's) | `cloud-chat-outbox` until then |
 
 One task's writes reach the Mac in the order they were made: an op for a task
@@ -320,6 +320,16 @@ the same flag goes, being older. The Mac applies it as the relayed replay was
 the Mac wins; a letter gone is skipped quietly. Until the ack the record is shown on
 top of the copy; at the ack it becomes an applied entry stamped with the Mac's ack
 clock, shown until the copy passes that clock (the copy rounds the drain sends again).
+
+**3d, task creates.** A task born on the companion while the Mac does not answer is a
+`task-create` record in a host's shape: the id the box minted, the fields set on the row
+(never a born default: the TODO phase, the status, the order, the unread mark), and its
+placement (project, folder, parent, tier). The Mac applies it with a host's create
+(`applyTaskCreate`: its create rules, the id kept unless another task holds it). A create
+the queue landed (a live send that timed out after it landed, then journaled) stamps the
+row with the op id as `created_by_op` and as its op key, so the drain skips the record,
+neither re-minting the task nor merging its fields again over a later Mac edit. The task's
+later edits join the journal behind it; a delete waits in the queue until the ack.
 
 - **send-queue stays.** A queued send waits on the session's host, not on the Mac,
   and carries delivery fates and held images; the journal adds nothing there.

@@ -238,6 +238,8 @@ async function createTask(
     ...(str(fields.sprint) ? { sprint: String(fields.sprint) } : {}),
     explicitId: id,
     ...(record.opId ? { createdByOp: record.opId } : {}),
+    // The moment it was made where it was made (a phone's task keeps its time).
+    ...(Number.isFinite(ctx.at) && ctx.at > 0 ? { createdAt: new Date(ctx.at).toISOString() } : {}),
   };
   let created: Awaited<ReturnType<typeof addTask>>['task'];
   try {

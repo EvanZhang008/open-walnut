@@ -347,6 +347,13 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
     }
   }
 
+  // The same create already landed (the companion's journal, slice 3d, carries this op id
+  // too and stamps it on the row): nothing to do.
+  if (op.type === 'create' && existing && existing.created_by_op === op.opId) {
+    rememberOpId(op.opId);
+    return { applied: false, reason: 'unchanged' };
+  }
+
   if (!existing) {
     // Born on the cloud box. Insert with the SAME id (prevents dup when
     // the projection round-trips), then recompute source on the primary:
@@ -378,8 +385,11 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
       }
     }
     const { id, ...rest } = snapshot;
+    // created_by_op and the op key: the companion's journal record of the same create
+    // (slice 3d, a live send that landed after its deadline) is then skipped by the
+    // drain, neither re-minted nor merged again over the row (apply-fields.ts opKeyOf).
     const [created] = await tm.addTasksBulk([
-      { ...rest, id, project: snapshotProject, source: primarySource },
+      { ...rest, id, project: snapshotProject, source: primarySource, created_by_op: op.opId, applied_ops: [`companion|${op.opId}|1`] },
     ]);
     rememberOpId(op.opId);
     if (created) {

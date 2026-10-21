@@ -15,8 +15,8 @@
  *
  * Slice 3a writes `task-fields` (a task update whose fields the Mac merges), 3b
  * `session-meta` (a session's title, archive flag, note, output mode, thread
- * fields), 3c `inbox-state` (a letter's read, pinned or archived flag); the other
- * queues are unchanged until their slice. A record carries no device actor
+ * fields), 3c `inbox-state` (a letter's read, pinned or archived flag), 3d
+ * `task-create` (a task born here); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -131,6 +131,33 @@ export function journalTaskFields(input: {
     for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
   } else {
     log.task.error('companion journal: a task write was refused', { taskId: input.taskId, opId: input.opId, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
+/**
+ * Save one task born here for the Mac: `task-create` (slice 3d), with the id this box
+ * minted and the fields and placement of a host's create (offline-host-core.ts), so the
+ * Mac's create rules place it (offline-merge/apply-v2.ts applyTaskCreate). `opId` is the
+ * queue's: a live send that did land leaves the task with that `created_by_op`, and the
+ * Mac then skips this record. Null when the Mac does not drain the kind: the caller
+ * queues as before.
+ */
+export function journalTaskCreate(input: {
+  opId: string
+  taskId: string
+  fields: Record<string, unknown>
+  placement: { parentTaskId?: string; project?: string; groupId?: string; tier?: string }
+}): AppendResult | null {
+  if (!macDrains('task-create')) return null
+  const r = journalOf().append(COMPANION_JOURNAL_HOME, {
+    kind: 'task-create', taskId: input.taskId, fields: input.fields, placement: input.placement,
+  }, { opId: input.opId, limit: true })
+  if (r.ok) {
+    log.task.info('companion journal: saved a new task for the Mac', { taskId: input.taskId, opId: r.opId, seq: r.seq, ...(r.duplicate ? { duplicate: true } : {}) })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+  } else {
+    log.task.error('companion journal: a new task was refused', { taskId: input.taskId, opId: input.opId, code: r.code, why: r.why, error: r.message })
   }
   return r
 }
