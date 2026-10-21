@@ -349,6 +349,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   const MAX_ARGS_BYTES = 256 * 1024
   const WRITE_BUDGET = 30
   const WRITE_WINDOW_MS = 60_000
+  /** Waits before running a write again that another process's journal lock refused (whenUnlocked). */
+  const LOCK_RETRY_MS = [100, 300, 900]
   const DEFAULT_REPLY_SECS = 3_600
   const IMPLICIT_REPLY_SECS = 6 * 3_600
   const DRAIN_BATCH = 200
@@ -501,7 +503,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       ...(opts.admit ? { admit: opts.admit as () => { ok: false; error: { code: string; message: string; retryAfterMs?: number } } | null } : {}),
     })
     if (!r.ok) {
-      if (r.code === 'journal_unwritable') deps.log('error', 'offline host: journal write refused', { home, kind, code: r.code, why: r.why, error: r.message })
+      // A lock another process holds is logged per try by whenUnlocked and by the journal.
+      if (r.code === 'journal_unwritable' && r.why !== 'locked') deps.log('error', 'offline host: journal write refused', { home, kind, code: r.code, why: r.why, error: r.message })
       return r
     }
     if (!r.duplicate) { try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ } }
@@ -511,6 +514,31 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   function refusal(r: import('./offline-journal-core.js').AppendResult): GatewayResult | null {
     if (r.ok) return null
     return fail(r.code, r.message, { ...(r.retryAfterMs !== undefined ? { retryAfterMs: r.retryAfterMs } : {}), ...(r.why ? { detail: { why: r.why } } : {}) })
+  }
+
+  const lockRefused = (r: GatewayResult): boolean =>
+    !r.ok && r.error.code === 'journal_unwritable' && (r.error.detail as { why?: unknown } | undefined)?.why === 'locked'
+
+  /**
+   * One queued write, run again off the loop while another process holds the journal lock
+   * (LOCK_RETRY_MS, about 1.3 s in all): the lock's sync spin keeps its 250 ms bound, since
+   * it holds this daemon's loop, and the caller's answer waits instead. CI run 39591505260:
+   * two daemons on one journal on a loaded runner, and one write was refused. A locked
+   * refusal is thrown before anything is written (and before the write budget is charged),
+   * so running the write again never makes a second record. Only `why: 'locked'`: a full
+   * disk or a lost dir answers at once.
+   */
+  async function whenUnlocked(home: string, op: string, run: () => GatewayResult): Promise<GatewayResult> {
+    const t0 = Date.now()
+    let r = run()
+    for (const ms of LOCK_RETRY_MS) {
+      if (!lockRefused(r)) return r
+      deps.log('warn', 'offline host: the journal is locked by another process; trying the write again', { home, op, waitedMs: Date.now() - t0, retryInMs: ms })
+      await new Promise((resolve) => setTimeout(resolve, ms))
+      r = run()
+    }
+    if (lockRefused(r)) deps.log('error', 'offline host: the journal stayed locked; write refused', { home, op, waitedMs: Date.now() - t0 })
+    return r
   }
 
   function configure(slice: HostSlice): { changed: boolean } {
@@ -1354,10 +1382,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (no) return no
       deps.log('info', 'offline host: write queued', { home, op: name, taskId: task.id, callerSid, kind: 'task-fields', seq: saved.ok ? saved.seq : undefined })
     } else {
-      const denied = admitWrite(callerSid) ?? roomFor(home)
-      if (denied) return denied
+      // The budget is charged under the lock (as above), so a locked refusal costs none.
       const base = slices.get(home)?.tasks.find((t) => t.id === task.id)?.updated_at
-      const no = refusal(append(home, { kind: 'op', op: name, args: { ...args, id: task.id }, callerSid, ...(base ? { base } : {}) }))
+      const no = refusal(append(home, { kind: 'op', op: name, args: { ...args, id: task.id }, callerSid, ...(base ? { base } : {}) }, false, { admit: () => admitWrite(callerSid) ?? roomFor(home) }))
       if (no) return no
       deps.log('info', 'offline host: write queued', { home, op: name, taskId: task.id, callerSid })
     }
@@ -1804,7 +1831,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           const fromCopy = deps.replica ? deps.replica.answer(home, name, args, offlineNote(home)) : null
           if (fromCopy) return fromCopy
           if (deps.boards && deps.boards.BOARD_OPS.indexOf(name) !== -1) return opBoard(home, callerSid, name, args)
-          if (QUEUED_OPS.includes(name)) return opQueued(home, callerSid, name, args)
+          if (QUEUED_OPS.includes(name)) return whenUnlocked(home, name, () => opQueued(home, callerSid, name, args))
           return needsServer(name ? `"${name}"` : 'That call')
         }
       }
@@ -2353,6 +2380,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     /** The slices on disk again (the boot migration copied some here). */
     reloadSlices: load,
     configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower,
+    /** handleFollower, waiting out another process's journal lock (whenUnlocked): the twins' follower.op. */
+    handleFollowerWaiting: (home: string, req: Parameters<typeof handleFollower>[1]) => whenUnlocked(home, String(req.op ?? ''), () => handleFollower(home, req)),
+    /** noteSession, waiting out another process's journal lock (whenUnlocked): the twins' host ask. */
+    noteSessionWaiting: (home: string, rec: Parameters<typeof noteSession>[1], opId?: string, by?: unknown) => whenUnlocked(home, 'session', () => noteSession(home, rec, opId, by)),
     pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession,
     triggerHolds, homes: () => [...slices.keys()], journal, QUEUEABLE, RETIRED_TASK_INPUTS,
   }

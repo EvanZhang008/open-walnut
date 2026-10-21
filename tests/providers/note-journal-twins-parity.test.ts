@@ -49,8 +49,8 @@ describe('note-journal-v1: both twins', () => {
       expect(made).toBeLessThan(src.indexOf('replica: hostReplica,'))
     })
 
-    it(`${name}: follower.op reaches the offline host's handleFollower (note_put, note_delete there)`, () => {
-      expect(fnBody(src, 'cmdFollowerOp')).toMatch(/offlineHost\.handleFollower\(home, \{ op: cmd\.op, args: cmd\.args, actor: cmd\.actor, opId: cmd\.opId/)
+    it(`${name}: follower.op reaches the offline host's handleFollower (note_put, note_delete there), waiting out a journal lock`, () => {
+      expect(fnBody(src, 'cmdFollowerOp')).toMatch(/await offlineHost\.handleFollowerWaiting\(home, \{ op: cmd\.op, args: cmd\.args, actor: cmd\.actor, opId: cmd\.opId/)
     })
   }
 
