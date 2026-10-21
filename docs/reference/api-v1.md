@@ -245,7 +245,7 @@ path on the companion".
 | GET | `/api/v1/notes/tags` | All note tags, frequency-ranked |
 | GET | `/api/v1/notes/tags/:tag/notes` | Notes carrying a tag |
 | DELETE | `/api/v1/notes/attachment/*path` | Delete a binary attachment |
-| DELETE | `/api/v1/notes/folder/*path` | Recursive folder delete (client must confirm) |
+| DELETE | `/api/v1/notes/folder/*path` | Recursive folder delete (client must confirm). These two prefixes belong to these routes: `DELETE /api/v1/notes/*path` never deletes a note under a top-level folder named `attachment` or `folder` (use `/api/notes-v2/content/*`) |
 | PUT | `/api/v1/conversations/active` | Switch the Personal AI's active conversation pointer |
 | GET | `/api/v1/chat/stats` | Conversation size stats (messages + token estimate) |
 | GET | `/api/v1/chat/engine` | The lane session id answering a conversation (read-only; never mints) |

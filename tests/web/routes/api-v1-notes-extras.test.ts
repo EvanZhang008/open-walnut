@@ -16,6 +16,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-not
 import express from 'express'
 import request from 'supertest'
 import { notesExtrasV1Router } from '../../../src/web/routes/notes-extras-v1.js'
+import { apiV1Router } from '../../../src/web/routes/api-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME, NOTES_DIR, GLOBAL_NOTES_FILE } from '../../../src/constants.js'
 
@@ -189,6 +190,32 @@ describe('destructive deletes', () => {
     expect(res.status).toBe(200)
     expect(res.body.deletedNotes).toBe(2)
     await expect(fs.access(path.join(NOTES_DIR, 'doomed'))).rejects.toThrow()
+  })
+
+  it('mounted as the server mounts them (the v1 router first), the attachment and folder deletes reach their routes; a note delete still works', async () => {
+    // web/server.ts mounts apiV1Router, whose DELETE /notes/*path used to catch both and
+    // delete a note at folder/<x>.md instead of the folder.
+    const app = express()
+    app.use(express.json({ limit: '10mb' }))
+    app.use('/api/v1', apiV1Router)
+    app.use('/api/v1', notesExtrasV1Router)
+    app.use(errorHandler)
+    await fs.mkdir(path.join(NOTES_DIR, 'doomed'), { recursive: true })
+    await fs.writeFile(path.join(NOTES_DIR, 'doomed', 'a.md'), 'a')
+    await fs.mkdir(path.join(NOTES_DIR, 'folder'), { recursive: true })
+    await fs.writeFile(path.join(NOTES_DIR, 'folder', 'doomed.md'), 'a note in a folder named folder')
+    await fs.mkdir(path.join(NOTES_DIR, '_attachment'), { recursive: true })
+    await fs.writeFile(path.join(NOTES_DIR, '_attachment', 'img.png'), Buffer.from([0x89, 0x50]))
+    await fs.writeFile(path.join(NOTES_DIR, 'plain.md'), 'plain')
+
+    const folder = await request(app).delete('/api/v1/notes/folder/doomed')
+    expect([folder.status, folder.body.deletedNotes]).toEqual([200, 1])
+    await expect(fs.access(path.join(NOTES_DIR, 'doomed'))).rejects.toThrow()
+    expect(await fs.readFile(path.join(NOTES_DIR, 'folder', 'doomed.md'), 'utf8')).toBe('a note in a folder named folder')
+    expect((await request(app).delete('/api/v1/notes/attachment/_attachment/img.png')).status).toBe(200)
+    await expect(fs.access(path.join(NOTES_DIR, '_attachment', 'img.png'))).rejects.toThrow()
+    expect((await request(app).delete('/api/v1/notes/plain.md')).status).toBe(200)
+    await expect(fs.access(path.join(NOTES_DIR, 'plain.md'))).rejects.toThrow()
   })
 
   it('SANDBOX: folder delete refuses traversal and the vault root', async () => {
