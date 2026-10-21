@@ -40,9 +40,14 @@ const SERVER_RELAY_SID = '__server__'
  * ever leave the box, so a future config key holding a credential can never
  * leak by default. No write twin exists by design (config write is Class D).
  */
-async function buildConfigProjection(): Promise<Record<string, unknown>> {
+async function buildConfigProjection(res?: Response): Promise<Record<string, unknown>> {
   const { getConfig } = await import('../../core/config-manager.js')
-  const config = await getConfig()
+  const own = await getConfig()
+  // The companion answers this read only when the Mac did not (away, or the forward
+  // went unanswered): its copy of the Mac's settings lies over its own file, key by
+  // top-level key, so the phone sees the Mac's (stage 2b of
+  // docs/plan/walnut-companion-unified-replica.md). The box's own file is untouched.
+  const config = await overlayConfigCopy(own, res)
   const hosts: Record<string, unknown> = {}
   for (const [alias, h] of Object.entries(config.hosts ?? {})) {
     hosts[alias] = {
@@ -77,11 +82,24 @@ async function buildConfigProjection(): Promise<Record<string, unknown>> {
   return projection
 }
 
+/** `config` with the companion's held config copy laid over it (top-level keys), else `config` as it is. */
+async function overlayConfigCopy<C extends object>(config: C, res?: Response): Promise<C> {
+  // The Mac holds no copy; on a host replica getConfig already is the copy.
+  const [{ readConfigCopy }, { copyKindAsOf, COPY_AS_OF_HEADER }] = await Promise.all([
+    import('../../core/replication/kinds/config.js'), import('../../core/replication/kinds/gate.js'),
+  ])
+  const asOf = await copyKindAsOf('config')
+  const copied = asOf === null ? null : await readConfigCopy()
+  if (!copied) return config
+  res?.setHeader(COPY_AS_OF_HEADER, String(asOf))
+  return { ...config, ...copied } as C
+}
+
 // GET /api/v1/config — read-only projection + box diagnostics. Works on BOTH
 // boxes (the replica projects its own git-synced config).
 consoleV1Router.get('/config', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const config = await buildConfigProjection()
+    const config = await buildConfigProjection(res)
     // Diagnostics the mobile bug-report flow needs (same rationale as the
     // internal route: visible without shell access).
     let processNice = 0

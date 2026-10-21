@@ -29,10 +29,10 @@ import { followerKind, isHostReplicaProgram } from '../../server-role.js'
 import { writeCopyFile, type Refusal } from '../kind-follower.js'
 
 /**
- * The kinds the companion keeps (stage 2a). Each has a box read that answers
+ * The kinds the companion keeps (stage 2a, 2b). Each has a box read that answers
  * from the copy while the Mac is away; a kind joins when its reader does.
  */
-export const COMPANION_COPY_KINDS: ReadonlySet<string> = new Set(['requests', 'routines', 'prefs', 'personas'])
+export const COMPANION_COPY_KINDS: ReadonlySet<string> = new Set(['requests', 'routines', 'prefs', 'personas', 'boards', 'config'])
 
 /** This server keeps copies (no kind), or the copy of `kind`. */
 export function keepsCopies(kind?: string): boolean {
@@ -47,6 +47,16 @@ export function copyPath(live: string): string {
   const rel = path.relative(WALNUT_HOME, live)
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`copyPath: ${live} is not under the data dir`)
   return path.join(WALNUT_HOME, 'cache', 'replica', 'home', rel)
+}
+
+/**
+ * Where a read of `live` looks on this server: on the companion, its copy of
+ * `kind` once it holds one; anywhere else, and before the first round, `live`
+ * (on a host replica the copy IS the live file).
+ */
+export async function copyReadPath(kind: string, live: string): Promise<string> {
+  if (followerKind() !== 'companion' || !COMPANION_COPY_KINDS.has(kind)) return live
+  return (await copyKindHeld(kind)) ? copyPath(live) : live
 }
 
 /** Every copy kind's refusal: where no copy is kept `404 unknown_kind`, else the leader's own refusal. */

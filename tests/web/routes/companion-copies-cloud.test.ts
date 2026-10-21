@@ -1,19 +1,22 @@
 /**
- * Stage 2a of docs/plan/walnut-companion-unified-replica.md on a real CLOUD_MODE
- * server: the Mac's copy scheduler (kinds/copy-kind.ts syncCopyKinds) sends the
- * companion the kinds it keeps (requests, routines, prefs, personas) over the real
- * client (cloud-ingest.ts postToCloudReplica, machine token, gzip), and only those.
+ * Stages 2a and 2b of docs/plan/walnut-companion-unified-replica.md on a real
+ * CLOUD_MODE server: the Mac's copy scheduler (kinds/copy-kind.ts syncCopyKinds)
+ * sends the companion the kinds it keeps (requests, routines, prefs, personas,
+ * boards, config) over the real client (cloud-ingest.ts postToCloudReplica,
+ * machine token, gzip), and only those.
  *
  * Pinned:
  *   - the kinds the companion does not keep are never read on the Mac, never sent,
  *     never purged; one sent anyway is `404 unknown_kind` (the lane does not rest);
  *   - each copy lands in the box's copy store (`cache/replica/...`), and the box's
- *     own files (its requests, its cron engine's jobs, its config favorites) are
- *     byte for byte what they were, through a round that removes rows too;
+ *     own files (its requests, its cron engine's jobs, its config, the boards git
+ *     sync wrote) are byte for byte what they were, through a round that removes
+ *     rows too;
  *   - with the Mac away, the v1 reads the box answers itself take the copy: a
  *     request (its own first), the routines list, one routine, the scheduler
- *     status, the favorites, each with `x-walnut-copy-as-of`; before any round,
- *     the old answers (503 from the relay, the box's own favorites).
+ *     status, the favorites, a board, the settings view, each with
+ *     `x-walnut-copy-as-of` where it reads a copy; before any round, the old
+ *     answers (503 from the relay, the box's own favorites, settings and board).
  *
  * auth.json is written fresh (tokens known to the test); nothing is copied.
  */
@@ -41,6 +44,10 @@ import { copyKinds } from '../../../src/core/replication/kinds/index.js'
 import { keepsCopiesTarget, syncCopyKinds, type CopyKind, type CopyTarget } from '../../../src/core/replication/kinds/copy-kind.js'
 import { COMPANION_COPY_KINDS, COPY_AS_OF_HEADER, copyPath } from '../../../src/core/replication/kinds/gate.js'
 import { readRoutineRows } from '../../../src/core/replication/kinds/routines.js'
+import { configCopyRows } from '../../../src/core/replication/config-allowlist.js'
+import { syncTaskReplica } from '../../../src/core/replication/task-replica.js'
+import type { BoardFile } from '../../../src/core/boards/board-store.js'
+import type { Task } from '../../../src/core/types.js'
 import type { PersonaRow } from '../../../src/core/replication/kinds/personas.js'
 import type { PrefsRow } from '../../../src/core/replication/kinds/prefs.js'
 import type { SessionRequest } from '../../../src/core/session-requests.js'
@@ -56,6 +63,12 @@ const NOW = '2026-10-21T08:00:00.000Z'
 let macDir = ''
 let macRequests: SessionRequest[] = []
 let macFavorites = { projects: ['Acme'], notes: ['notes/acme-plan.md'] }
+const BOARD_TASK = 'mbrd01-aaaa'
+function board(html: string, version: number): BoardFile {
+  return { task_id: BOARD_TASK, html, version, updated_at: NOW, updated_by: 'human', threads: {}, marks: {}, projects: {}, checks: {}, choices: {}, reminders: {}, section_seen: {}, lanes: null, cards: {}, kanban_seen: null } as BoardFile
+}
+let macBoards: BoardFile[] = [board('<p>Acme plan, from the Mac</p>', 3)]
+const macConfig = { user: { name: 'Ada on the Mac' }, hosts: { devbox: { label: 'Dev box', enabled: true } } }
 const persona: PersonaRow = { key: 'general', agentId: 'general', name: 'Walnut', systemPrompt: 'You are Walnut, as the Mac renders it.', systemPromptMode: 'append' }
 
 function request(id: string, status: SessionRequest['status']): SessionRequest {
@@ -84,6 +97,8 @@ function macKinds(): CopyKind<any>[] {
     routines: () => readRoutineRows(path.join(macDir, 'cron-jobs.json'), path.join(macDir, 'cron-state.json')),
     prefs: async () => [{ key: 'favorites', favorites: macFavorites } satisfies PrefsRow],
     personas: async () => [persona],
+    boards: async () => macBoards,
+    config: async () => configCopyRows(macConfig).rows,
   }
   return copyKinds().map((k) => ({
     ...k,
@@ -111,10 +126,12 @@ async function get(p: string): Promise<{ status: number; body: Record<string, un
 // The box's own state: what a round must never touch.
 const BOX_REQUESTS = JSON.stringify({ requests: [request('rq-b0b0b0', 'pending')] })
 const BOX_JOBS = JSON.stringify({ version: 2, jobs: [job('rt-box-git-sync', 'Box git sync')] })
+const GIT_BOARD = JSON.stringify(board('<p>Acme plan, from git sync</p>', 1))
 const ownFiles = () => Promise.all([
   fs.readFile(path.join(WALNUT_HOME, 'session-requests.json'), 'utf8'),
   fs.readFile(CRON_FILE, 'utf8'),
   fs.readFile(CONFIG_FILE, 'utf8'),
+  fs.readFile(path.join(WALNUT_HOME, 'boards', `${BOARD_TASK}.json`), 'utf8'),
 ])
 
 beforeAll(async () => {
@@ -129,6 +146,8 @@ beforeAll(async () => {
   await fs.writeFile(path.join(WALNUT_HOME, 'session-requests.json'), BOX_REQUESTS)
   await fs.mkdir(path.dirname(CRON_FILE), { recursive: true })
   await fs.writeFile(CRON_FILE, BOX_JOBS)
+  await fs.mkdir(path.join(WALNUT_HOME, 'boards'), { recursive: true })
+  await fs.writeFile(path.join(WALNUT_HOME, 'boards', `${BOARD_TASK}.json`), GIT_BOARD)
   _resetDeviceAuthForTesting()
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
@@ -136,6 +155,9 @@ beforeAll(async () => {
   port = addr.port
   bridgeCfg = { enabled: true, url: `ws://127.0.0.1:${port}/bridge`, token: T.local }
   _resetCloudIngestForTesting()
+  // The board's task, in this box's task copy (as the Mac sends it).
+  const task = { id: BOARD_TASK, title: 'Acme launch', status: 'todo', phase: 'TODO', priority: 'none', project: 'Acme', source: 'local', session_ids: [], description: '', summary: '', note: '', created_at: NOW, updated_at: NOW } as Task
+  await syncTaskReplica({ view: async () => ({ tasks: [task], registry: { projects: { Acme: { source: 'local' as const, order_index: 0 } }, task_groups: {}, custom_tiers: [] } }), post: postToCloudReplica })
 }, 60_000)
 
 afterAll(async () => {
@@ -146,7 +168,7 @@ afterAll(async () => {
 
 describe('who keeps which kind', () => {
   it('the companion keeps the stage 2a kinds; a host replica keeps every kind; the plain host server none', () => {
-    expect([...COMPANION_COPY_KINDS].sort()).toEqual(['personas', 'prefs', 'requests', 'routines'])
+    expect([...COMPANION_COPY_KINDS].sort()).toEqual(['boards', 'config', 'personas', 'prefs', 'requests', 'routines'])
     const host = (program: string): CopyTarget => ({ ...companion, id: 'host:devbox', kind: 'host', program: () => program })
     for (const k of ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas']) {
       expect([k, keepsCopiesTarget(companion, k)]).toEqual([k, COMPANION_COPY_KINDS.has(k)])
@@ -169,35 +191,43 @@ describe('the Mac away, before any round: the old answers', () => {
     expect(routines.asOf).toBeNull()
     expect((await get('/api/v1/favorites')).body).toEqual({ projects: ['BoxOnly'], notes: [] })
     expect((await get('/api/v1/requests/rq-acac01')).status).toBe(404)
+    const b = await get(`/api/v1/tasks/${BOARD_TASK}/board`)
+    expect([b.status, (b.body.board as { html: string }).html, b.body.board_version]).toEqual([200, '<p>Acme plan, from git sync</p>', 1])
+    const cfg = await get('/api/v1/config')
+    expect((cfg.body.config as { user: unknown }).user).toEqual({ name: 'Ada' })
+    expect(cfg.asOf).toBeNull()
   })
 })
 
 describe('a round of every kind from the Mac', () => {
-  it('sends the four kinds the companion keeps and nothing else, and leaves the box\'s own files as they were', async () => {
+  it('sends the six kinds the companion keeps and nothing else, and leaves the box\'s own files as they were', async () => {
     macRequests = [request('rq-acac01', 'pending'), request('rq-acac02', 'replied')]
     await writeMacRoutines([job('rt-acme-digest', 'Acme digest'), job('rt-acme-watch', 'Acme watch')])
     const before = await ownFiles()
     const results = await syncCopyKinds(macKinds(), { targets: () => [companion] })
     expect(results.map((r) => `${r.target}:${r.kind}:${r.action}`).sort()).toEqual([
-      'companion:personas:synced', 'companion:prefs:synced', 'companion:requests:synced', 'companion:routines:synced',
+      'companion:boards:synced', 'companion:config:synced', 'companion:personas:synced', 'companion:prefs:synced',
+      'companion:requests:synced', 'companion:routines:synced',
     ])
-    expect([...new Set(read)].sort()).toEqual(['personas', 'prefs', 'requests', 'routines'])
+    expect([...new Set(read)].sort()).toEqual(['boards', 'config', 'personas', 'prefs', 'requests', 'routines'])
     expect(await ownFiles()).toEqual(before)
     // (The box's own engine rewrote its file at boot, in its own layout: still its one job.)
     expect(before[0]).toEqual(BOX_REQUESTS)
     expect(JSON.parse(before[1]).jobs.map((j: { id: string }) => j.id)).toEqual(['rt-box-git-sync'])
-    expect(yaml.load(before[2])).toMatchObject({ favorites: { projects: ['BoxOnly'] } })
+    expect(yaml.load(before[2])).toMatchObject({ favorites: { projects: ['BoxOnly'] }, user: { name: 'Ada' } })
+    expect(before[3]).toEqual(GIT_BOARD)
     // The copies, in the box's copy store.
     const home = path.join(WALNUT_HOME, 'cache', 'replica', 'home')
     expect(JSON.parse(await fs.readFile(path.join(home, 'session-requests.json'), 'utf8')).requests.map((r: SessionRequest) => r.id).sort()).toEqual(['rq-acac01', 'rq-acac02'])
+    expect(JSON.parse(await fs.readFile(path.join(home, 'boards', `${BOARD_TASK}.json`), 'utf8')).html).toBe('<p>Acme plan, from the Mac</p>')
     expect(JSON.parse(await fs.readFile(path.join(home, path.relative(WALNUT_HOME, CRON_FILE)), 'utf8')).jobs.map((j: { id: string }) => j.id)).toEqual(['rt-acme-digest', 'rt-acme-watch'])
     const replica = await fs.readdir(path.join(WALNUT_HOME, 'cache', 'replica'))
-    for (const f of ['requests.json', 'routines.json', 'prefs.json', 'personas.json']) expect(replica).toContain(f)
-    for (const f of ['config.json', 'boards.json', 'inbox.json', 'conversations.json']) expect(replica).not.toContain(f)
+    for (const f of ['requests.json', 'routines.json', 'prefs.json', 'personas.json', 'boards.json', 'config.json']) expect(replica).toContain(f)
+    for (const f of ['inbox.json', 'conversations.json', 'sessions.json']) expect(replica).not.toContain(f)
   })
 
   it('a kind the companion does not keep, sent anyway, is 404 unknown_kind', async () => {
-    for (const kind of ['sessions', 'boards', 'inbox', 'inbox-bodies', 'conversations', 'config']) {
+    for (const kind of ['sessions', 'inbox', 'inbox-bodies', 'conversations']) {
       expect([kind, await postToCloudReplica({ op: 'sync', kind, entries: [], asOf: Date.now(), schemaVersion: 1 })])
         .toEqual([kind, { ok: false, outcome: 'unsupported', status: 404, error: 'unknown_kind' }])
     }
@@ -234,6 +264,20 @@ describe('the Mac away, with the copies held: the box answers from them', () => 
     expect((await get('/api/v1/routines/status')).body).toEqual({ enabled: false, storePath: '', jobs: 2, nextWakeAtMs: null })
   })
 
+  it('a board: the Mac\'s copy, not the file git sync wrote', async () => {
+    const b = await get(`/api/v1/tasks/${BOARD_TASK}/board`)
+    expect([b.status, (b.body.board as { html: string }).html, b.body.board_version]).toEqual([200, '<p>Acme plan, from the Mac</p>', 3])
+    expect((await get(`/api/v1/tasks/${BOARD_TASK}/board/owner`)).body).toMatchObject({ task_id: BOARD_TASK, has_board: true })
+  })
+
+  it('the settings view: the Mac\'s settings over the box\'s own, with the copy\'s age', async () => {
+    const cfg = await get('/api/v1/config')
+    expect(cfg.status).toBe(200)
+    expect(cfg.body.config).toMatchObject({ user: { name: 'Ada on the Mac' }, hosts: { devbox: { label: 'Dev box', enabled: true } } })
+    expect(cfg.body.cloud).toBe(true)
+    expect(Number(cfg.asOf)).toBeGreaterThan(0)
+  })
+
   it('favorites: the Mac\'s, not the box\'s config', async () => {
     const fav = await get('/api/v1/favorites')
     expect(fav.body).toEqual({ projects: ['Acme'], notes: ['notes/acme-plan.md'] })
@@ -244,14 +288,17 @@ describe('the Mac away, with the copies held: the box answers from them', () => 
     macRequests = [request('rq-acac01', 'replied')]
     await writeMacRoutines([job('rt-acme-digest', 'Acme digest')])
     macFavorites = { projects: [], notes: [] }
+    macBoards = []
     const before = await ownFiles()
     const results = await syncCopyKinds(macKinds(), { targets: () => [companion] })
-    expect(results.filter((r) => r.action === 'synced').map((r) => r.kind).sort()).toEqual(['prefs', 'requests', 'routines'])
+    expect(results.filter((r) => r.action === 'synced').map((r) => r.kind).sort()).toEqual(['boards', 'prefs', 'requests', 'routines'])
     expect(await ownFiles()).toEqual(before)
     expect((await get('/api/v1/requests/rq-acac02')).status).toBe(404)
     expect((await get('/api/v1/requests/rq-b0b0b0')).status).toBe(200)
     expect(((await get('/api/v1/routines')).body.jobs as Array<{ id: string }>).map((j) => j.id)).toEqual(['rt-acme-digest'])
     // An emptied favorites list is the Mac's answer, not "no copy".
     expect((await get('/api/v1/favorites')).body).toEqual({ projects: [], notes: [] })
+    // The Mac removed the board: none in the copy, and the git file is not read instead.
+    expect((await get(`/api/v1/tasks/${BOARD_TASK}/board`)).body.board).toBeNull()
   })
 })
