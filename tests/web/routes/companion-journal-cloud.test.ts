@@ -16,6 +16,9 @@
  *     record keeps to the journal, and an op the journal cannot take (an appended
  *     note) waits in the queue until the Mac acked the record, then flushes;
  *   - a copy round from the Mac does not undo a journaled write (the row is held);
+ *   - slice 3b: a session metadata patch the Mac did not answer is a `session-meta`
+ *     record by the same rules (its session's queued patches first; a patch queued
+ *     behind its records waits for the ack);
  *   - the trigger asks the Mac (`server.journal.due`) only while records wait,
  *     unless asked to always;
  *   - the journal and the kinds the Mac drains survive a restart of the module.
@@ -63,6 +66,8 @@ import {
   _resetCompanionJournalForTesting, companionJournalRecords, companionJournalTaskIds, macDrains, tellMacJournalDue,
 } from '../../../src/core/companion-journal.js'
 import { flushTaskQueue, listQueuedOps } from '../../../src/core/task-queue.js'
+import { enqueueSessionPatch, flushControlQueue } from '../../../src/core/control-queue.js'
+import { CONTROL_QUEUE_DIR } from '../../../src/constants.js'
 import type { Task } from '../../../src/core/types.js'
 
 let server: HttpServer
@@ -106,6 +111,21 @@ async function waitFor<V>(fn: () => Promise<V | null | undefined | false> | V | 
 const queuedFor = async (id: string) => (await listQueuedOps()).filter((o) => (o.type === 'update' || o.type === 'create') && o.task.id === id)
 const recordsFor = (id: string) => companionJournalRecords().filter((r) => r.taskId === id)
 const patch = (id: string, body: Record<string, unknown>) => call(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+// Slice 3b: session metadata.
+const S1 = 'sess-acme-one'
+const S2 = 'sess-acme-two'
+const patchSession = (sid: string, body: Record<string, unknown>) => call(`/api/v1/sessions/${sid}`, { method: 'PATCH', body: JSON.stringify(body) })
+async function queuedPatches(sid: string): Promise<Array<{ opId: string; patch: Record<string, unknown> }>> {
+  let names: string[] = []
+  try { names = (await fs.readdir(CONTROL_QUEUE_DIR)).filter((n) => n.endsWith('.json')).sort() } catch { return [] }
+  const out = []
+  for (const n of names) {
+    const op = JSON.parse(await fs.readFile(path.join(CONTROL_QUEUE_DIR, n), 'utf8'))
+    if (op.sessionId === sid) out.push(op)
+  }
+  return out
+}
+const sessionRecords = (sid: string) => companionJournalRecords().filter((r) => r.kind === 'session-meta' && r.sid === sid)
 
 beforeAll(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true })
@@ -160,6 +180,14 @@ describe('the Mac away, before it ever drained the journal', () => {
     expect(op).toMatchObject({ type: 'update', fields: { title: { base: 'Acme alpha', value: 'Acme alpha, edited away' } } })
     expect(companionJournalRecords()).toEqual([])
   })
+
+  it('a session change is queued as before, not journaled', async () => {
+    const r = await patchSession(S1, { title: 'Acme one, renamed away' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ queued: true, session: { title: 'Acme one, renamed away' } })
+    expect((await queuedPatches(S1)).map((o) => o.patch)).toEqual([{ title: 'Acme one, renamed away' }])
+    expect(sessionRecords(S1)).toEqual([])
+  })
 })
 
 describe('the Mac drained once: away writes go into the journal', () => {
@@ -204,6 +232,19 @@ describe('the Mac drained once: away writes go into the journal', () => {
     expect(recordsFor(B)).toHaveLength(1)
   })
 
+  it('a session change (slice 3b) is a session-meta record; a session with a queued patch keeps to the queue', async () => {
+    const r = await patchSession(S2, { title: 'Acme two, renamed away', human_note: 'Ask about the invoice' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ queued: true, session: { title: 'Acme two, renamed away' } })
+    expect(sessionRecords(S2).map((x) => x.patch)).toEqual([{ title: 'Acme two, renamed away', human_note: 'Ask about the invoice' }])
+    expect(await queuedPatches(S2)).toEqual([])
+    expect((await patchSession(S1, { human_note: 'Second note' })).status).toBe(200)
+    expect((await queuedPatches(S1)).map((o) => o.patch)).toEqual([{ title: 'Acme one, renamed away' }, { human_note: 'Second note' }])
+    expect(sessionRecords(S1)).toEqual([])
+    // A second change of a journaled session joins the journal.
+    expect((await patchSession(S2, { output_mode: 'compact' })).status).toBeLessThan(500)
+  })
+
   it('a copy round from the Mac does not undo the journaled write', async () => {
     await round()
     const b = await call(`/api/tasks/${B}`)
@@ -217,7 +258,8 @@ describe('the trigger', () => {
     relayCalls.length = 0
     expect(await tellMacJournalDue('test')).toBe(false)
     expect(relayCalls.map((c) => c.action)).toEqual(['server.journal.due'])
-    expect(relayCalls[0].params).toEqual({ records: 1 })
+    expect(relayCalls[0].params).toEqual({ records: companionJournalRecords().length })
+    expect(companionJournalRecords().length).toBeGreaterThan(1)
   })
 })
 
@@ -238,15 +280,34 @@ describe('the Mac comes back', () => {
       expect(await queuedFor(A)).toEqual([])
       expect(await queuedFor(B)).toHaveLength(1)
 
+      // The session queue: S1's patches go, in order; a patch of S2 left behind its records waits.
+      const sentPatches: Array<{ sid: string; patch: unknown }> = []
+      const inner = relayOverride!
+      relayOverride = (async (action, sid, params, t) => {
+        if (action === 'patch') { sentPatches.push({ sid, patch: params }); return { ok: true, result: { session: {} } } }
+        return inner(action, sid, params, t)
+      }) as Relay
+      await enqueueSessionPatch(S2, { title: 'Acme two, queued behind' })
+      await flushControlQueue()
+      expect(sentPatches).toEqual([
+        { sid: S1, patch: { title: 'Acme one, renamed away' } },
+        { sid: S1, patch: { human_note: 'Second note' } },
+      ])
+      expect(await queuedPatches(S1)).toEqual([])
+      expect(await queuedPatches(S2)).toHaveLength(1)
+
       // The Mac drains the journal (the handover's two calls).
       const drained = await postToCloudJournal('offline.drain', { home: '/Users/someone/.open-walnut', kinds: [...APPLIED_V2_KINDS] })
-      expect(drained.records).toHaveLength(1)
-      expect(drained.records[0]).toMatchObject({ kind: 'task-fields', taskId: B })
-      // A redrain before the ack hands the same record (frozen, as on a host).
+      const kinds = drained.records.map((r: { kind: string; taskId?: string; sid?: string }) => `${r.kind}:${r.taskId ?? r.sid}`)
+      expect(kinds).toEqual([`task-fields:${B}`, `session-meta:${S2}`, `session-meta:${S2}`])
+      // A redrain before the ack hands the same records (frozen, as on a host).
+      const seqs = drained.records.map((r: { seq: number }) => r.seq)
       const again = await postToCloudJournal('offline.drain', { home: '/x', kinds: [...APPLIED_V2_KINDS] })
-      expect(again.records.map((r: { seq: number }) => r.seq)).toEqual([drained.records[0].seq])
-      expect(await postToCloudJournal('offline.ack', { home: '/x', seqs: [drained.records[0].seq], now: Date.now() })).toMatchObject({ ok: true, remaining: 0 })
+      expect(again.records.map((r: { seq: number }) => r.seq)).toEqual(seqs)
+      expect(await postToCloudJournal('offline.ack', { home: '/x', seqs, now: Date.now() })).toMatchObject({ ok: true, remaining: 0 })
       expect(companionJournalRecords()).toEqual([])
+      await waitFor(async () => (await queuedPatches(S2)).length === 0, 'the patch of S2 to leave the queue')
+      expect(sentPatches.at(-1)).toEqual({ sid: S2, patch: { title: 'Acme two, queued behind' } })
 
       // The note held behind it goes now.
       await waitFor(async () => (await queuedFor(B)).length === 0, 'the note of B to leave the queue')

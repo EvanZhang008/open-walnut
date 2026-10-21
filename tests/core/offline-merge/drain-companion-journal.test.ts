@@ -12,6 +12,9 @@
  *     (a live send that timed out after it landed, then journaled; or the reverse) is
  *     applied once, whichever arrives first;
  *   - a field the Mac changed meanwhile is a conflict, lettered as the companion's;
+ *   - slice 3b: a session metadata patch lands through the online patch's own call; one
+ *     that call refuses (an archive of a running session) is lettered with the session's
+ *     title, never its id; a field the record may not carry is refused whole;
  *   - a drain with nothing waiting is quiet.
  *
  * CLOUD_MODE is read at import, so the companion and the Mac are two module graphs
@@ -60,6 +63,7 @@ async function loadMac() {
     conflicts: await import('../../../src/core/offline-merge/conflict-log.js'),
     letter: await import('../../../src/core/offline-merge/letter.js'),
     ingest: await import('../../../src/core/cloud-ingest.js'),
+    sessions: await import('../../../src/core/session-tracker.js'),
   }
 }
 
@@ -166,6 +170,48 @@ describe('the Mac drains the companion\'s journal', () => {
     const letter = mac.letter.buildConflictLetter(mine!)
     expect(letter?.markdown ?? '').toContain('your cloud companion')
     expect(letter?.markdown ?? '').not.toContain('host companion')
+  })
+
+  it('a session change lands through the online patch; one it refuses is lettered by the session\'s title', async () => {
+    const id = (await mac.tm.addTask({ title: 'Acme epsilon', project: 'Acme' } as never)).task.id
+    const sid = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+    await mac.sessions.createSessionRecord(sid, id, 'Acme', '/tmp', { title: 'Acme epsilon run' })
+    await mac.sessions.updateSessionRecord(sid, { process_status: 'running' } as never)
+    expect(companion.journal.journalSessionMeta({ sessionId: sid, patch: { title: 'Acme epsilon, renamed away', human_note: 'Check the vendor reply' } })).toMatchObject({ ok: true })
+    const refusedOp = companion.journal.journalSessionMeta({ sessionId: sid, patch: { archived: true } })
+    expect(refusedOp).toMatchObject({ ok: true })
+    // `mode` acts on the live CLI: never journaled (the caller relays or queues it).
+    expect(companion.journal.journalSessionMeta({ sessionId: sid, patch: { mode: 'plan' } })).toBeNull()
+    await mac.drain.drainCompanionJournalNow()
+    expect(companion.journal.companionJournalRecords()).toEqual([])
+    const rec = await mac.sessions.getSessionByClaudeId(sid)
+    expect(rec).toMatchObject({ title: 'Acme epsilon, renamed away', human_note: 'Check the vendor reply' })
+    expect(rec?.archived).not.toBe(true)
+    const logs = fs.readdirSync(mac.conflicts.conflictDir()).filter((n) => n.endsWith('.json')).map((n) => mac.conflicts.readConflictLog(n.slice(0, -5))).filter(Boolean)
+    const mine = logs.flatMap((l) => l!.entries.map((e) => ({ l: l!, e }))).find(({ e }) => e.opId === (refusedOp as { opId: string }).opId)
+    expect(mine?.e).toMatchObject({ kind: 'refused', recordKind: 'session-meta' })
+    const letter = mac.letter.buildConflictLetter(mine!.l)!.markdown
+    expect(letter).toContain('the session "Acme epsilon, renamed away" (archived): Stop session before archiving')
+    expect(letter).not.toContain(sid)
+  })
+
+  it('a session record naming a field it may not carry is refused whole', async () => {
+    const id = (await mac.tm.addTask({ title: 'Acme zeta', project: 'Acme' } as never)).task.id
+    const sid = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
+    await mac.sessions.createSessionRecord(sid, id, 'Acme', '/tmp', { title: 'Acme zeta run', mode: 'default' })
+    const handed: Array<Record<string, unknown>> = [{ v: 2, seq: 1, at: Date.now(), kind: 'session-meta', opId: opId(), rev: 1, sid, patch: { title: 'Acme zeta, renamed', mode: 'plan' } }]
+    const acked: number[] = []
+    mac.handover._resetOfflineHandoverForTesting()
+    await mac.handover.runOfflineHandover({
+      hostKey: 'companion', journalV2: true,
+      send: async (cmd: string, p?: Record<string, unknown>) => {
+        if (cmd === 'offline.drain') return { ok: true, records: handed.filter((r) => !acked.includes(r.seq as number)), now: Date.now() }
+        if (cmd === 'offline.ack') acked.push(...((p?.seqs as number[]) ?? []))
+        return { ok: true }
+      },
+    } as never)
+    expect(acked).toEqual([1])
+    expect((await mac.sessions.getSessionByClaudeId(sid))?.title).toBe('Acme zeta run')
   })
 
   it('a drain with nothing waiting is quiet', async () => {

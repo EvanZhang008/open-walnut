@@ -274,8 +274,8 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
           res.status(200).json({ session: modeOnlyRow(lead.target.row, applied.mode), viaCompanion: true })
           return
         }
-        const { enqueueSessionPatch } = await import('../../core/control-queue.js')
-        const opId = await enqueueSessionPatch(sessionId, rest)
+        const { keepSessionPatch } = await import('../../core/control-queue.js')
+        const opId = await keepSessionPatch(sessionId, rest)
         res.status(200).json({ session: { ...modeOnlyRow(lead.target.row, applied.mode), ...rest }, viaCompanion: true, ...(opId ? { queued: true } : {}) })
         return
       }
@@ -286,8 +286,8 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
         return
       }
       if (reply.failure.kind === 'bridge_offline' || reply.failure.kind === 'needs_upgrade') {
-        const { enqueueSessionPatch } = await import('../../core/control-queue.js')
-        const opId = await enqueueSessionPatch(sessionId, patch)
+        const { keepSessionPatch } = await import('../../core/control-queue.js')
+        const opId = await keepSessionPatch(sessionId, patch)
         if (opId) {
           // Optimistic response in the frozen { session } shape, built from the
           // synced projection row when available (additive `queued` marker).

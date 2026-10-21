@@ -13,8 +13,9 @@
  *            any drain, or for a kind it did not name, the caller keeps its old
  *            queue (an older Mac never sees a record it cannot take)
  *
- * Slice 3a writes `task-fields` (a task update whose fields the Mac merges); the
- * other queues are unchanged until their slice. A record carries no device actor
+ * Slice 3a writes `task-fields` (a task update whose fields the Mac merges), 3b
+ * `session-meta` (a session's title, archive flag, note, output mode, thread
+ * fields); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -133,6 +134,38 @@ export function journalTaskFields(input: {
   return r
 }
 
+/**
+ * The fields a session metadata record carries: the v1 PATCH's metadata (never `mode`,
+ * which acts on the live CLI and only the session's host can accept).
+ */
+export const SESSION_META_FIELDS: ReadonlySet<string> = new Set(['title', 'archived', 'human_note', 'output_mode', 'thread_anchors', 'thread_meta'])
+
+/**
+ * Save one session metadata patch for the Mac: `session-meta` (slice 3b). Null when the
+ * Mac does not drain the kind, or the patch names a field it does not carry: the caller
+ * queues as before (control-queue.ts).
+ */
+export function journalSessionMeta(input: { sessionId: string; patch: Record<string, unknown> }): AppendResult | null {
+  if (!macDrains('session-meta')) return null
+  const keys = Object.keys(input.patch)
+  if (keys.length === 0 || keys.some((k) => !SESSION_META_FIELDS.has(k))) return null
+  const r = journalOf().append(COMPANION_JOURNAL_HOME, { kind: 'session-meta', sid: input.sessionId, patch: input.patch }, { limit: true })
+  if (r.ok) {
+    log.session.info('companion journal: saved a session change for the Mac', { sessionId: input.sessionId, opId: r.opId, seq: r.seq, fields: keys })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+  } else {
+    log.session.error('companion journal: a session change was refused', { sessionId: input.sessionId, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
+/** Sessions a record still names (their queued patches wait behind them). */
+export function companionJournalSessionIds(): Set<string> {
+  const out = new Set<string>()
+  for (const r of companionJournalRecords()) if (r.kind === 'session-meta' && typeof r.sid === 'string') out.add(r.sid)
+  return out
+}
+
 // --- the trigger ---
 
 /** The queues' sweep: records that still wait are announced again this often. */
@@ -218,8 +251,9 @@ export function ackCompanionJournal(seqs: unknown): { ok: boolean; remaining: nu
   if (r.error) return { ok: false, remaining: r.remaining, error: r.error }
   if (r.acked.length) {
     log.session.info('companion journal: the Mac took records', { acked: r.acked.length, remaining: r.remaining })
-    // Queued ops held behind those records (task-queue.ts flushTaskQueue) go now.
+    // Queued ops held behind those records (task-queue.ts, control-queue.ts) go now.
     void import('./task-queue.js').then((m) => m.flushTaskQueue()).catch(() => {})
+    void import('./control-queue.js').then((m) => m.flushControlQueue()).catch(() => {})
   }
   return { ok: true, remaining: r.remaining, ...(r.ignored.length ? { ignored: r.ignored } : {}) }
 }

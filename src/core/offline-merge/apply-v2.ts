@@ -29,8 +29,11 @@ import { applyFields, entryBase, exactTask, opKeyOf, pairValidator, resolveTaskI
 
 export { RefusedWrite };
 
-/** The v2 kinds this Mac applies (`offline.drain {kinds}`); `note` since WP11 (offline-merge/notes.ts). */
-export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session'] as const;
+/**
+ * The v2 kinds this Mac applies (`offline.drain {kinds}`); `note` since WP11 (offline-merge/notes.ts);
+ * `session-meta` only the cloud companion writes (apply-session-meta.ts).
+ */
+export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta'] as const;
 /** What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks. */
 export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor'];
 
@@ -355,6 +358,8 @@ export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
     case 'note': return applyNote(ctx, record);
     // A new ask the host started while this Mac was away (WP12).
     case 'session': return (await import('./apply-session.js')).applySession(ctx, record);
+    // A session metadata patch the cloud companion took while away (stage 3b).
+    case 'session-meta': return (await import('./apply-session-meta.js')).applySessionMeta(ctx, record);
     default: throw new Error(`unknown journal kind ${record.kind}`);
   }
 }

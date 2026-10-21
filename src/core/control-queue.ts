@@ -11,6 +11,10 @@
  * would fabricate a success the runner may refuse (e.g. a mode change on a
  * dead session, a permission answer for a prompt that already resolved).
  *
+ * Since slice 3b of docs/plan/walnut-companion-unified-replica.md, a patch the Mac
+ * did not answer goes into the companion's journal instead (keepSessionPatch below)
+ * once the Mac drains `session-meta`; this queue keeps the rest, and its old files.
+ *
  * Files: cache/control-queue/<opId>.json (NON-git on both boxes).
  * Contract with the caller (session-lifecycle-v1):
  *   - the phone already got its optimistic 200 — nothing here throws;
@@ -70,6 +74,53 @@ export async function enqueueSessionPatch(sessionId: string, patch: Record<strin
   }
 }
 
+/**
+ * CLOUD box: keep one session metadata patch the Mac did not answer. Slice 3b of
+ * docs/plan/walnut-companion-unified-replica.md: the companion's journal
+ * (companion-journal.ts `session-meta`) when the Mac drains that kind and this queue
+ * holds nothing for the session (a session's patches reach the Mac in the order they
+ * were made); else this queue, as before. Returns the record's or the queued op's id,
+ * or null when neither took it.
+ */
+export async function keepSessionPatch(sessionId: string, patch: Record<string, unknown>): Promise<string | null> {
+  if (!(await queuedForSession(sessionId))) {
+    try {
+      const { journalSessionMeta } = await import('./companion-journal.js');
+      const r = journalSessionMeta({ sessionId, patch });
+      if (r?.ok) return r.opId;
+    } catch (err) {
+      log.session.warn('control-queue: the journal did not take a session patch, queueing it', { sessionId, err: String(err) });
+    }
+  }
+  return enqueueSessionPatch(sessionId, patch);
+}
+
+/** True when a patch of this session is queued (the common empty queue costs one readdir). */
+async function queuedForSession(sessionId: string): Promise<boolean> {
+  let names: string[];
+  try {
+    names = (await fsp.readdir(CONTROL_QUEUE_DIR)).filter((n) => n.endsWith('.json'));
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    try {
+      const op = JSON.parse(await fsp.readFile(path.join(CONTROL_QUEUE_DIR, name), 'utf-8')) as QueuedSessionPatch;
+      if (op?.sessionId === sessionId) return true;
+    } catch { /* unreadable: the flush removes it */ }
+  }
+  return false;
+}
+
+/** Sessions with records the Mac has not taken from the journal yet (their patches wait behind them). */
+async function journaledSessionIds(): Promise<Set<string>> {
+  try {
+    return (await import('./companion-journal.js')).companionJournalSessionIds();
+  } catch {
+    return new Set();
+  }
+}
+
 /** Pending queued patches (diagnostics/tests). */
 export async function queuedSessionPatchCount(): Promise<number> {
   try {
@@ -99,6 +150,7 @@ export async function flushControlQueue(): Promise<number> {
       return 0;
     }
     const { callPrimaryControl } = await import('../web/routes/v1-control-relay.js');
+    const journaled = names.length ? await journaledSessionIds() : new Set<string>();
     for (const name of names.slice(0, FLUSH_BATCH_MAX)) {
       const file = path.join(CONTROL_QUEUE_DIR, name);
       let op: QueuedSessionPatch;
@@ -110,6 +162,8 @@ export async function flushControlQueue(): Promise<number> {
         await fsp.rm(file, { force: true }).catch(() => {});
         continue;
       }
+      // The session's journal records are older: the Mac takes those first (the ack flushes again).
+      if (journaled.has(op.sessionId)) continue;
       const reply = await callPrimaryControl('patch', op.sessionId, op.patch, PATCH_RPC_TIMEOUT_MS);
       if (!reply.ok && (reply.failure.kind === 'bridge_offline' || reply.failure.kind === 'needs_upgrade')) {
         break; // transport-level — the rest would fail the same way

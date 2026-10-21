@@ -296,7 +296,7 @@ change to the session daemons. The Mac drains it with the same handover
 | Slice | Moves to the journal | Stays |
 |---|---|---|
 | 3a | the door, the trigger, the drain; a task update whose fields the Mac merges (`task-fields`, the op the queue already sends with `fields`) | everything else in `task-queue` |
-| 3b | session metadata (`session-meta`: title, archived, note, output mode, thread fields; a refusal becomes a letter instead of a silent drop) | the live mode change (a relay) |
+| 3b | session metadata (`session-meta`: title, archived, note, output mode, thread fields), applied with the online patch's own call; a refusal becomes a letter naming the session by its title, instead of a silent drop | the live mode change (a relay) |
 | 3c | inbox flags (`inbox-state`, folded per letter and flag) with the inbox copy reader; chat turns (`chat-turn`, texts as blobs) with the conversation copy reader | |
 | 3d | task creates (`task-create`) and single moves (`task-move`) | deletes and whole-list reorders keep the task queue: no journal kind takes them (a host refuses both while the Mac is away) |
 
