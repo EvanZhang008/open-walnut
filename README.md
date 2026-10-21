@@ -71,6 +71,13 @@ brew install evanzhang008/tap/open-walnut
 walnut web
 ```
 
+On a Mac, the app: download it for
+[Apple silicon](https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-arm64.dmg)
+or [Intel](https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-x64.dmg),
+or install it with `brew install --cask evanzhang008/tap/walnut`. It carries Walnut inside, so
+its first launch sets Walnut up in `~/.local/share/open-walnut` with no download, and it keeps
+itself up to date: a new release downloads in the background and installs on "Restart to update".
+
 With Node 22 or newer, the npm package (nothing to build either):
 
 ```bash
