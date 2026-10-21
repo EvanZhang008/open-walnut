@@ -125,6 +125,9 @@ afterAll(async () => {
 })
 
 const closeOf = (frames: Array<Record<string, any>>, sid: string) => frames.find((f) => f.ev === 'stream-close' && f.sid === sid)
+// What both twins tell the companion in the bridge hello (BRIDGE_CAPABILITIES; the send
+// and permission relays joined bridge-stream-v1 in 5408d5875).
+const BRIDGE_CAPS = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1']
 
 for (const twin of ['source', 'standalone'] as const) {
   describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: the companion's forward stream through the bridge`, () => {
@@ -138,7 +141,7 @@ for (const twin of ['source', 'standalone'] as const) {
       expect(configured.ok, JSON.stringify(configured)).toBe(true)
       await waitFor(() => bridges.has(alias), 20_000, 'the bridge hello')
       const b = bridges.get(alias)!
-      expect(b.frames.find((f) => f.ev === 'hello')).toMatchObject({ hostAlias: alias, capabilities: ['bridge-stream-v1'] })
+      expect(b.frames.find((f) => f.ev === 'hello')).toMatchObject({ hostAlias: alias, capabilities: BRIDGE_CAPS })
       // The Mac names its Walnut on its session link (as host.slice and leader.configure do);
       // its second socket (the bulk channel) names none and drops stream frames: never a target.
       expect((await cmd(mac, { cmd: 'leader.configure', home: '/fixture/acme-home', walnutId: 'wacmetest01' })).ok).toBe(true)
@@ -190,7 +193,7 @@ for (const twin of ['source', 'standalone'] as const) {
       try {
         expect((await cmd(mac, { cmd: 'bridge.configure', enabled: true, url: `ws://127.0.0.1:${cport}/bridge`, token: 't', hostAlias: alias })).ok).toBe(true)
         await waitFor(() => bridges.has(alias), 20_000, 'the bridge hello')
-        expect(bridges.get(alias)!.frames.find((f) => f.ev === 'hello')!.capabilities).toEqual([])
+        expect(bridges.get(alias)!.frames.find((f) => f.ev === 'hello')!.capabilities).toEqual(BRIDGE_CAPS.filter((c) => c !== 'bridge-stream-v1'))
         // The trusted hello still advertises it to the Mac (it is the daemon's own feature).
         const hello = await cmd(mac, { cmd: 'hello' })
         expect(hello.capabilities ?? hello.result?.capabilities).toContain('bridge-stream-v1')

@@ -20,6 +20,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
+import { SendHeldError } from '../../src/providers/delivery-failure.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 
 // Fake SSH target (not used since we bypass SSH)
@@ -308,7 +309,7 @@ describe('RemoteSessionManager event tracking', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('RemoteSessionManager disconnect handling', () => {
-  it('WS disconnect during session → writeMessage returns false, isAlive stays true (grace period)', async () => {
+  it('WS disconnect during session → writeMessage holds the line (SendHeldError), isAlive stays true (grace period)', async () => {
     // Use a separate daemon instance for this test (we'll kill it)
     const isolatedDaemon = await createMockDaemon()
 
@@ -328,8 +329,8 @@ describe('RemoteSessionManager disconnect handling', () => {
     // Inject disconnect fault — next message will trigger WS close
     isolatedDaemon.injectFault('disconnect')
 
-    // Send a command to trigger the disconnect — writeMessage resolves (not rejects)
-    // on transport error under the strict-ack contract, so no await/catch needed.
+    // Send a command to trigger the disconnect; the write is held (it rejects with
+    // SendHeldError), which this step does not judge.
     await transport.writeMessage('trigger disconnect').catch(() => {})
 
     // Wait for the disconnect to propagate
@@ -337,12 +338,15 @@ describe('RemoteSessionManager disconnect handling', () => {
 
     // After WS disconnect:
     // - isAlive() returns true during the 5-minute grace period (disconnect ≠ process death)
-    // - writeMessage() returns false (connection is down, can't deliver messages)
+    // - writeMessage() holds the line (5408d5875): a lost link proves nothing about
+    //   the process, so it is never answered false (which would stop and resume it)
     const alive = await transport.isAlive()
     expect(alive).toBe(true) // grace period — process may still be alive on remote
 
-    const sent = await transport.writeMessage('should fail')
-    expect(sent).toBe(false) // connection is down — can't send
+    const write = transport.writeMessage('should be held')
+    await expect(write).rejects.toBeInstanceOf(SendHeldError)
+    await expect(write).rejects.toThrow('waiting for the connection to the session host')
+    expect(exitCode).toBeNull()
 
     await transport.cleanup()
     await isolatedDaemon.stop()

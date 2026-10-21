@@ -21,6 +21,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
+import { SendHeldError } from '../../src/providers/delivery-failure.js'
 import type { SessionManager } from '../../src/providers/session-manager.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 
@@ -241,14 +242,17 @@ describe('B2b: writeMessage asks daemon as source of truth (strict ack, no stale
     expect(mockConn.send).toHaveBeenCalledWith('send', { sid: 'session-abc', message: 'hello' })
   })
 
-  it('resolves false when WS is disconnected (conn.connected=false)', async () => {
+  // A lost link proves nothing about the process (5408d5875): the line is held, never
+  // answered false, which would let processNext stop and resume a live CLI.
+  it('holds the line when WS is disconnected (conn.connected=false) and no cloud route is open', async () => {
     const transport = new RemoteSessionManager('daemon-b2b-002', 'testhost', testSshTarget)
     const mockConn = { connected: false, send: vi.fn(async () => ({ ok: true })), hasCapability: () => false }
     injectState(transport, mockConn, 'session-def', true)
 
-    const result = await transport.writeMessage('hello')
+    const write = transport.writeMessage('hello')
 
-    expect(result).toBe(false)
+    await expect(write).rejects.toBeInstanceOf(SendHeldError)
+    await expect(write).rejects.toThrow('waiting for the connection to the session host')
     expect(mockConn.send).not.toHaveBeenCalled()
   })
 
@@ -284,24 +288,28 @@ describe('B2b: writeMessage asks daemon as source of truth (strict ack, no stale
     expect(exitCode).toBe(1)
   })
 
-  it('resolves false on EAGAIN (FIFO buffer full) — caller can retry via respawn path', async () => {
+  // EAGAIN is an intact, full pipe, not a death: held, so the process is never respawned over it.
+  it('holds the line on EAGAIN (FIFO buffer full): the process stays', async () => {
     const transport = new RemoteSessionManager('daemon-b2b-005', 'testhost', testSshTarget)
     const mockConn = makeMockConn(async () => ({ ok: false, reason: 'EAGAIN' }))
     injectState(transport, mockConn, 'session-eagain', true)
 
-    const result = await transport.writeMessage('hello')
-    expect(result).toBe(false)
+    const write = transport.writeMessage('hello')
+    await expect(write).rejects.toBeInstanceOf(SendHeldError)
+    await expect(write).rejects.toThrow('the session host refused delivery (EAGAIN)')
+    expect(transport.hasPipe).toBe(true)
   })
 
-  it('resolves false when daemon.send throws (transport error)', async () => {
+  it('holds the line when daemon.send throws (transport error)', async () => {
     const transport = new RemoteSessionManager('daemon-b2b-006', 'testhost', testSshTarget)
     const mockConn = makeMockConn(async () => {
       throw new Error('ws closed mid-send')
     })
     injectState(transport, mockConn, 'session-throw', true)
 
-    const result = await transport.writeMessage('hello')
-    expect(result).toBe(false)
+    const write = transport.writeMessage('hello')
+    await expect(write).rejects.toBeInstanceOf(SendHeldError)
+    await expect(write).rejects.toThrow('ws closed mid-send')
   })
 })
 

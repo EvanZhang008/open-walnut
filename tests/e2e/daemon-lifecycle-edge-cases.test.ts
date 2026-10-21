@@ -17,6 +17,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
+import { SendHeldError } from '../../src/providers/delivery-failure.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const fakeSshTarget = { hostname: 'localhost' }
@@ -121,7 +122,7 @@ describe('L3.3 Daemon lifecycle edge cases', () => {
   })
 
   // E4 — EAGAIN does NOT reap; session is still alive afterwards
-  it('E4: EAGAIN fault returns writeMessage=false but session stays alive', async () => {
+  it('E4: EAGAIN fault holds the line (SendHeldError) and the session stays alive', async () => {
     const tmpId = `e4-${Date.now()}`
     const mgr = new RemoteSessionManager(tmpId, 'host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
     const onExit = vi.fn()
@@ -135,14 +136,16 @@ describe('L3.3 Daemon lifecycle edge cases', () => {
     await new Promise((r) => setTimeout(r, 150))
 
     daemon.injectSendFault(tmpId, 'EAGAIN')
-    const ok = await mgr.writeMessage('hi')
-    expect(ok).toBe(false)
+    const write = mgr.writeMessage('hi')
+    await expect(write).rejects.toBeInstanceOf(SendHeldError)
+    await expect(write).rejects.toThrow('the session host refused delivery (EAGAIN)')
 
-    // EAGAIN is a send-failure signal on the CLIENT side: the client
-    // conservatively flags the transport as dead (FIFO write failed) and
-    // lets the caller respawn. Server-side the session is NOT reaped —
-    // that's verified at the daemon-core unit level (see daemon-cmd-send-strict-ack).
-    expect(mgr.hasPipe).toBe(false)
+    // EAGAIN is an intact, full pipe, not a death verdict (5408d5875): the client
+    // keeps the transport and never fires onExit, so nothing stops and resumes a
+    // live CLI over it. Server-side the session is NOT reaped either (verified at
+    // the daemon-core unit level, see daemon-cmd-send-strict-ack).
+    expect(mgr.hasPipe).toBe(true)
+    expect(onExit).not.toHaveBeenCalled()
 
     await mgr.cleanup()
   })
