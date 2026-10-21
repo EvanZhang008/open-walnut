@@ -73,7 +73,8 @@ export interface HostProfile {
     repoPaths?: Record<string, { path: string; at: string }>;
     reaches?: Record<string, { ok: boolean; at: string; error?: string }>;
   };
-  notes?: { key: string; fact: string; evidence?: string; at: string; taskId?: string }[];
+  /** Walnut's own description of the host, from the sessions that ran there. */
+  learned?: { summary: string; sessionCount: number; at: string };
   updatedAt?: string;
 }
 

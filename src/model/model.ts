@@ -22,6 +22,9 @@ import {
 import { MODEL_CATALOG } from './providers/model-catalog.js';
 import type { UsageStats, ModelResult, ThinkingConfig, ModelEntry, CallPurpose } from './providers/types.js';
 
+/** The smallest thinking budget the Anthropic API accepts: a call with no more output room than this cannot think. */
+const MIN_THINKING_BUDGET = 1024;
+
 // Re-export types for backward compatibility — all callers import from here
 export type { MessageParam, ContentBlock, Tool, TextBlockParam };
 export type { UsageStats, ModelResult, ThinkingConfig };
@@ -133,9 +136,18 @@ async function resolveForCall(config?: ModelConfig) {
   // `400 invalid beta flag`, so we deliberately do NOT add it. The ttl marker flows
   // through cache_control verbatim. (See EXTENDED_CACHE_TTL_BETA in defaults.ts.)
 
-  // Thinking config — from catalog compat
+  // max_tokens: caller override > catalog > default
+  const maxTokens = config?.maxTokens ?? catalogEntry?.max_tokens ?? DEFAULT_MAX_TOKENS;
+
+  // Thinking config — from catalog compat.
   let thinking: ThinkingConfig | undefined;
-  if (catalogEntry?.compat?.thinking_format === 'anthropic') {
+  if (catalogEntry?.compat?.thinks_by_default && maxTokens <= MIN_THINKING_BUDGET) {
+    // A short call has no room to think, and this model thinks unless told not
+    // to: it spent a background summary's whole budget thinking and returned no
+    // text (2026-10-21, project summaries failed 2 of 3 times on Haiku 5.5).
+    // Only for models known to accept `disabled`: Opus 5.5 and Sonnet 5.5 answer 400.
+    thinking = { type: 'disabled' };
+  } else if (catalogEntry?.compat?.thinking_format === 'anthropic') {
     if (catalogEntry.compat.supports_adaptive) {
       // display:'summarized' — Opus 4.7/4.8+ default to 'omitted' (empty thinking
       // text, signature only). Requesting summarized restores visible thinking;
@@ -147,9 +159,6 @@ async function resolveForCall(config?: ModelConfig) {
     }
     betas.push(INTERLEAVED_THINKING_BETA);
   }
-
-  // max_tokens: caller override > catalog > default
-  const maxTokens = config?.maxTokens ?? catalogEntry?.max_tokens ?? DEFAULT_MAX_TOKENS;
 
   // Resolve API model ID: catalog model_id (for variants like -1m) or the user-facing ID
   const apiModel = catalogEntry?.model_id ?? model;

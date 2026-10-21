@@ -214,10 +214,7 @@ test('Settings > Remote Hosts: "What Walnut knows" shows the profile and edits k
       tools: { git: '2.43.0', node: '22.3.0', docker: null }, probedAt: new Date(Date.now() - 3_600_000).toISOString(),
     },
     observed: { repoPaths: { walnut: { path: '/home/dev/walnut', at: new Date().toISOString() } }, reaches: {} },
-    notes: [
-      { key: 'old', fact: 'Older note about the proxy', at: '2026-10-01T00:00:00.000Z' },
-      { key: 'new', fact: 'Newest note: builds need the cache dir', at: '2026-10-20T00:00:00.000Z' },
-    ],
+    learned: { summary: 'Runs the walnut repository builds and its test suites.', sessionCount: 4, at: new Date(Date.now() - 7_200_000).toISOString() },
     updatedAt: new Date().toISOString(),
   }
   const patches: unknown[] = []
@@ -244,8 +241,8 @@ test('Settings > Remote Hosts: "What Walnut knows" shows the profile and edits k
   await expect(box).toContainText('git 2.43.0, node 22.3.0')
   await expect(box).toContainText('Not found: docker')
   await expect(box).toContainText('/home/dev/walnut')
-  const noteTexts = await box.locator('p', { hasText: /note/ }).allInnerTexts()
-  expect(noteTexts[0]).toContain('Newest note')
+  await expect(box.getByTestId('host-profile-learned')).toHaveText('Runs the walnut repository builds and its test suites.')
+  await expect(box).toContainText('From 4 sessions')
   // The content box is `display: contents` (a run of rows in the group): shoot the group.
   await page.locator('.settings-group', { has: toggle }).first().screenshot({ path: `${SHOTS}/5-host-profile.png` })
 

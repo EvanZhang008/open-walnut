@@ -61,8 +61,9 @@ export class AnthropicAdapter implements ProtocolAdapter {
           system: opts.system,
           messages: opts.messages,
           tools: opts.tools,
-          // Note: temperature must not be set when thinking is enabled (API defaults to 1.0)
-          ...(opts.thinking && opts.thinking.type !== 'disabled' && { thinking: opts.thinking }),
+          // Note: temperature must not be set when thinking is enabled (API defaults to 1.0).
+          // `disabled` is sent too: a model that thinks by default needs it said.
+          ...(opts.thinking && { thinking: opts.thinking }),
         };
         const requestOpts = opts.signal ? { signal: opts.signal } : undefined;
         // Use beta endpoint when betas are specified (e.g., 1M context window).
@@ -110,8 +111,9 @@ export class AnthropicAdapter implements ProtocolAdapter {
           system: opts.system,
           messages: opts.messages,
           tools: opts.tools,
-          // Note: temperature must not be set when thinking is enabled (API defaults to 1.0)
-          ...(opts.thinking && opts.thinking.type !== 'disabled' && { thinking: opts.thinking }),
+          // Note: temperature must not be set when thinking is enabled (API defaults to 1.0).
+          // `disabled` is sent too: a model that thinks by default needs it said.
+          ...(opts.thinking && { thinking: opts.thinking }),
         };
         // Use beta endpoint when betas are specified (e.g., 1M context window).
         // BetaMessageStream and MessageStream are structurally compatible (same on/abort/finalMessage).

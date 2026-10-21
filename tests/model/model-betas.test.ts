@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 import type { AdapterCallOptions, ProtocolAdapter } from '../../src/model/providers/types.js';
-import { EXTENDED_CACHE_TTL_BETA, BETA_CONTEXT_1M } from '../../src/model/providers/defaults.js';
+import { EXTENDED_CACHE_TTL_BETA, BETA_CONTEXT_1M, INTERLEAVED_THINKING_BETA } from '../../src/model/providers/defaults.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
@@ -99,5 +99,32 @@ describe('beta header assembly (Thing 1: Bedrock 1h extended cache TTL)', () => 
       config: { provider: 'openrouter', model: 'some/model' },
     });
     expect(lastOpts?.betas ?? []).not.toContain(EXTENDED_CACHE_TTL_BETA);
+  });
+});
+
+describe('a short call on a model that thinks by default', () => {
+  it('turns thinking off explicitly (Haiku 5.5, under the smallest thinking budget)', async () => {
+    await sendMessage({
+      system: 'sys', messages: [{ role: 'user', content: 'hi' }],
+      config: { provider: 'bedrock', model: 'global.anthropic.claude-haiku-5-5', maxTokens: 256 },
+    });
+    expect(lastOpts?.thinking).toEqual({ type: 'disabled' });
+    expect(lastOpts?.betas ?? []).not.toContain(INTERLEAVED_THINKING_BETA);
+  });
+
+  it('leaves a longer call to the model', async () => {
+    await sendMessage({
+      system: 'sys', messages: [{ role: 'user', content: 'hi' }],
+      config: { provider: 'anthropic', model: 'claude-haiku-5-5', maxTokens: 4096 },
+    });
+    expect(lastOpts?.thinking).toBeUndefined();
+  });
+
+  it('never sends disabled to a model that rejects it (Opus 5.5 keeps adaptive)', async () => {
+    await sendMessage({
+      system: 'sys', messages: [{ role: 'user', content: 'hi' }],
+      config: { provider: 'bedrock', model: 'global.anthropic.claude-opus-5-5', maxTokens: 256 },
+    });
+    expect(lastOpts?.thinking).toMatchObject({ type: 'adaptive' });
   });
 });

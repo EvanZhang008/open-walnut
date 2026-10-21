@@ -92,6 +92,7 @@ export const BOOT_POLICY = [
   { job: 'session-health-monitor', leader: true, replica: false, why: OFF_HOST_DAEMON },
   { job: 'overview-maintainer', leader: true, replica: false, capability: 'backup-leader', why: OFF_HOST_DATA },
   { job: 'project-summary', leader: true, replica: false, capability: 'backup-leader', why: OFF_HOST_DATA },
+  { job: 'host-learning', leader: true, replica: false, why: 'host profiles have one writer, the Mac' },
   { job: 'routine-wake', leader: true, replica: false, capability: 'backup-leader', why: 'routines never run on a host replica' },
   // replicaCloud false: startWorkspaceWatch returned at once on the companion (its own env read at 8b0fb0e08).
   { job: 'workspace-watch', leader: true, replica: false, why: OFF_HOST_DATA },

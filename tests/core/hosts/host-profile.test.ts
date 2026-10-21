@@ -6,7 +6,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('host-profile'));
 
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
-  addHostNote, classifyHost, hostProfileSummary, probeIsStale, readHostProfile, recordProbedFacts,
+  HOST_PROFILES_DIR, classifyHost, hostProfileSummary, probeIsStale, readHostProfile, recordProbedFacts,
   recordReach, recordRepoPath, repoKey, updateHostProfile, type HostFacts,
 } from '../../../src/core/hosts/host-profile.js';
 import { chooseTargetCwd } from '../../../src/core/transfer/workspace.js';
@@ -48,30 +48,28 @@ describe('naming the kind of machine', () => {
 });
 
 describe('learning a host over time', () => {
-  it('starts empty, then fills from a probe, observations and notes', async () => {
+  it('starts empty, then fills from a probe, observations and what Walnut learned', async () => {
     const empty = await readHostProfile('devbox');
-    expect(empty).toMatchObject({ kind: 'unknown', notes: [] });
+    expect(empty).toMatchObject({ kind: 'unknown' });
+    expect(empty.learned).toBeUndefined();
     expect(probeIsStale(empty)).toBe(true);
-    expect(hostProfileSummary(empty, 'devbox')).toContain('No probe of this host yet');
+    expect(hostProfileSummary(empty, 'devbox')).toContain('Not probed yet');
 
     await recordProbedFacts('devbox', facts({ fqdn: 'box.lab.example.org' }));
     await recordRepoPath('devbox', 'https://github.com/acme/marina', '/home/dev/src/marina');
     await recordReach('devbox', 'cloud', false, 'Permission denied (publickey)');
-    await addHostNote('devbox', { key: 'Node', fact: 'node comes from nvm; run `nvm use 22` first' });
-    await addHostNote('devbox', { key: 'node', fact: 'node 22 is the system default now' });
+    await updateHostProfile('devbox', (p) => { p.learned = { summary: 'Builds the marina service.', sessionCount: 2, at: new Date().toISOString() }; });
 
     const p = await readHostProfile('devbox');
     expect(p.kind).toBe('dev-box');
     expect(probeIsStale(p)).toBe(false);
-    expect(p.notes).toHaveLength(1);
-    expect(p.notes[0]).toMatchObject({ key: 'node', fact: 'node 22 is the system default now' });
     expect(p.observed.reaches.cloud).toMatchObject({ ok: false });
     const summary = hostProfileSummary(p, 'devbox');
     expect(summary).toContain('a managed development machine');
     expect(summary).toContain('Installed: git 2.43.0, node 22.3.0');
     expect(summary).toContain('Not found on PATH: docker');
     expect(summary).toContain('https://github.com/acme/marina at /home/dev/src/marina');
-    expect(summary).toContain('- node: node 22 is the system default now');
+    expect(summary).toContain('What it is used for: Builds the marina service.');
   });
 
   it('a kind the user set survives the next probe', async () => {
@@ -80,9 +78,17 @@ describe('learning a host over time', () => {
     expect((await readHostProfile('pc')).kind).toBe('laptop');
   });
 
-  it('concurrent notes are all kept', async () => {
-    await Promise.all(Array.from({ length: 10 }, (_, i) => addHostNote('busy', { key: `k${i}`, fact: `f${i}` })));
-    expect((await readHostProfile('busy')).notes).toHaveLength(10);
+  it('concurrent updates are all kept', async () => {
+    await Promise.all(Array.from({ length: 10 }, (_, i) => recordRepoPath('busy', `k${i}`, `/src/f${i}`)));
+    expect(Object.keys((await readHostProfile('busy')).observed.repoPaths)).toHaveLength(10);
+  });
+
+  it('notes an older Walnut stored are dropped on read', async () => {
+    await recordRepoPath('old', 'k', '/src/k');
+    const file = `${HOST_PROFILES_DIR}/old.json`;
+    const raw = JSON.parse(await fsp.readFile(file, 'utf8'));
+    await fsp.writeFile(file, JSON.stringify({ ...raw, notes: [{ key: 'a', fact: 'b', at: 'x' }] }));
+    expect('notes' in (await readHostProfile('old'))).toBe(false);
   });
 
   it('refuses an alias that is not a plain host name', async () => {

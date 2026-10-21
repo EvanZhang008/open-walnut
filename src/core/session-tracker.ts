@@ -656,6 +656,42 @@ export async function listRecentSessionRecords(limit: number): Promise<SessionRe
   return rows.map(rowToSession);
 }
 
+/** A session that said what it did, as host learning reads it. */
+export interface HostSessionLine { claudeSessionId: string; cwd: string; title: string; overview: string; lastActiveAt: string }
+
+/**
+ * The sessions on one host that reported an overview: how many there are and
+ * the newest `limit` of them, a few columns each (host-learning.ts). Index-backed
+ * on host; this Mac's rows carry no host.
+ */
+export async function hostSessionsWithOverview(host: string, limit: number): Promise<{ count: number; sessions: HostSessionLine[] }> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return { count: 0, sessions: [] };
+  const where = host === '__local__' ? "(host IS NULL OR host IN ('', '__local__'))" : 'host = @host';
+  // json_valid first: one malformed payload must not fail the whole read.
+  const overview = "coalesce(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.overview') END, '')";
+  const params = host === '__local__' ? {} : { host };
+  const { n } = db.prepare(`SELECT count(*) AS n FROM sessions WHERE ${where} AND ${overview} <> ''`).get(params) as { n: number };
+  const rows = db.prepare(
+    `SELECT claude_session_id AS claudeSessionId, coalesce(cwd, '') AS cwd, coalesce(title, '') AS title,
+            ${overview} AS overview, coalesce(last_active_at, '') AS lastActiveAt
+       FROM sessions WHERE ${where} AND ${overview} <> '' ORDER BY last_active_at DESC LIMIT @limit`,
+  ).all({ ...params, limit: Math.max(1, Math.min(Math.floor(limit), 200)) }) as HostSessionLine[];
+  return { count: n, sessions: rows };
+}
+
+/** Every host that has a session with an overview (`__local__` for this Mac). */
+export async function hostsWithSessionOverviews(): Promise<string[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return [];
+  const rows = db.prepare(
+    "SELECT DISTINCT coalesce(nullif(host, ''), '__local__') AS host FROM sessions WHERE coalesce(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.overview') END, '') <> ''",
+  ).all() as { host: string }[];
+  return rows.map((r) => r.host);
+}
+
 export interface SessionQueryOptions {
   query?: string;
   limit?: number;

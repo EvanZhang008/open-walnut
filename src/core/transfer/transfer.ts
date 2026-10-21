@@ -22,7 +22,7 @@ import { renderTranscriptMarkdownChunked, renderTranscriptSeed } from './transcr
 import { hostDisplayName } from '../hosts/host-display-name.js';
 import { chooseTargetCwd, moveWorkspace, pruneLocalTransfers, transfersDir, workspaceInstructions, type MovedWorkspace } from './workspace.js';
 import {
-  hostProfileSummary, probeIsStale, readHostProfile, recordProbedFacts, recordRepoPath, repoKey, type HostProfile,
+  probeIsStale, readHostProfile, recordProbedFacts, recordRepoPath, repoKey, type HostProfile,
 } from '../hosts/host-profile.js';
 
 const SEED_CHARS = 40_000;
@@ -154,7 +154,7 @@ function transferTitle(task: Task, plan: TransferPlan): string {
 
 function composeMessage(p: {
   task: Task; plan: TransferPlan; cwd: string; history: string; transcriptPath?: string;
-  workspace?: string; host?: string; first?: string;
+  workspace?: string; first?: string;
 }): string {
   const { task, plan } = p;
   const from = `${engineCaps(plan.source.engine).displayName} on ${hostLabel(plan.source.host)} in ${plan.source.cwd || 'an unknown directory'}`;
@@ -168,9 +168,6 @@ function composeMessage(p: {
   if (p.history) parts.push(p.history);
   if (p.transcriptPath) parts.push(`The full earlier conversation is at ${p.transcriptPath} on this host; read it when you need a detail the summary above leaves out.`);
   if (p.workspace) parts.push(`## Workspace\n\n${p.workspace}`);
-  if (p.host) parts.push(`## This host\n\n${p.host}`);
-  parts.push('## Learn this host\n\nWhen you find something worth knowing the next time work comes here (a tool you installed and how, where a repository lives, a proxy, registry or credential setup that differs, a command that behaves differently), record it in one line: '
-    + '`walnut tools call host_note_add \'{"key":"<short key>","fact":"<what is true here>"}\'`.');
   parts.push(`## First\n\n${p.first?.trim() || (plan.moveWorkspace
     ? 'Set the workspace up as described, install what is missing, check that it builds, then continue the work where it stood.'
     : 'Continue the work where it stood.')}`);
@@ -257,9 +254,6 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   const message = composeMessage({
     task, plan, cwd, history: historyText, transcriptPath,
     workspace: moved && place ? workspaceInstructions(moved, { repoRoot, known: repoKnown }) : undefined,
-    // A summary that knows nothing says nothing a session on the same machine needs.
-    host: profile && (plan.changesHost || profile.probed || profile.notes.length > 0)
-      ? hostProfileSummary(profile, hostLabel(plan.target.host)) : undefined,
     first: req.message,
   });
 

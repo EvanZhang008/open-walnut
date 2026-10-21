@@ -122,7 +122,9 @@ describe('transferTask', () => {
     expect(message).toContain('# Work transferred to you');
     expect(message).toContain('the magic word is PELICAN');
     expect(message).toContain(`-transfers/`);
-    expect(message).toContain('host_note_add');
+    // The carry-over stays simple: no host summary, nothing asked about the host.
+    expect(message).not.toContain('host_note_add');
+    expect(message).not.toContain('## This host');
     expect(message.trimEnd().endsWith('Run the tests first.')).toBe(true);
 
     const [transcript] = edges.writes;
@@ -205,8 +207,9 @@ describe('transferTask', () => {
     expect(message).toContain('## Handoff brief\n\nGoal: trailing commas.');
     expect(message).toContain('## Workspace');
     expect(edges.writes[0]).toMatchObject({ host: 'devbox' });
-    expect(message).toContain('## This host');
-    expect(message).toContain('t4g.large');
+    // The probe is Walnut's own (cwd expansion, the profile); the session is not handed it.
+    expect(message).not.toContain('## This host');
+    expect(message).not.toContain('t4g.large');
   });
 
   it('refuses while the source is mid-turn, and creates nothing', async () => {
