@@ -4,10 +4,12 @@
  *
  *   read   while the Mac answers, its feed over `server.notifications`, with the
  *          box's own cards that have not reached it yet on top (companion-cards.ts).
- *          While it does not, what the box has, marked `offline`: the Mac's feed as
- *          git sync last brought it (the data dir's notifications.json, read only)
- *          and the box's own cards (its store): one of those the Mac's file does not
- *          name shows while it still waits for the Mac or is newer than that file.
+ *          While it does not, what the box has, marked `offline`: the Mac's feed from
+ *          its copy (the `notifications` kind, replication/kinds/notifications.ts;
+ *          before the first round, an older Mac, the data dir's notifications.json as
+ *          git sync last brought it, read only) and the box's own cards (its store): one
+ *          of those the Mac's feed does not name shows while it still waits for the Mac
+ *          or is newer than that feed.
  *   write  mark-read and dismiss go to the Mac (`server.notifications.mark`, with the
  *          console route's exact rules, and `server.notifications.dismiss`). While it
  *          does not answer they need it (`503 needs_leader`, why
@@ -79,6 +81,18 @@ export function awayFeed(
   return [...byKey.values()].sort((a, b) => occurrence(a) - occurrence(b))
 }
 
+/** The Mac's feed on this box: its copy once held, else the file git sync last wrote. */
+async function macFeedHere(): Promise<{ feed: NotificationRecord[]; at: number; copyAsOf?: number }> {
+  try {
+    const { readNotificationsCopy } = await import('../replication/kinds/notifications.js')
+    const copied = await readNotificationsCopy()
+    if (copied) return { feed: copied.feed, at: copied.asOf, copyAsOf: copied.asOf }
+  } catch (err) {
+    log.notif.warn('companion feed: the notifications copy could not be read', { error: err instanceof Error ? err.message : String(err) })
+  }
+  return macFileFeed()
+}
+
 async function macFileFeed(): Promise<{ feed: NotificationRecord[]; at: number }> {
   const file = path.join(WALNUT_HOME, 'notifications.json')
   try {
@@ -97,14 +111,29 @@ async function relay(action: 'server.notifications' | 'server.notifications.mark
 
 /** The console's feed on the companion. Never throws for a Mac that does not answer. */
 export async function companionFeed(): Promise<{ feed: NotificationRecord[]; unreadCount: number; offline?: true }> {
+  return (await companionFeedAnswer()).answer
+}
+
+/** companionFeed, and when the Mac's part was the Mac's when it came from the copy (null: the Mac answered, or no copy). */
+export async function companionFeedAnswer(): Promise<{ answer: { feed: NotificationRecord[]; unreadCount: number; offline?: true }; copyAsOf: number | null }> {
   const { cards, removed } = pendingCompanionCards()
   const r = await relay('server.notifications', undefined, READ_TIMEOUT_MS)
   if (r.ok && Array.isArray(r.result.feed)) {
-    return counted(overlayWaiting(r.result.feed.filter(isRecord), cards, removed), false)
+    return { answer: counted(overlayWaiting(r.result.feed.filter(isRecord), cards, removed), false), copyAsOf: null }
   }
   if (!r.ok) log.notif.debug('companion feed: the Mac did not answer, answering from the box', { kind: r.failure.kind })
-  const [mac, own] = await Promise.all([macFileFeed(), listNotifications()])
-  return counted(awayFeed(mac.feed, mac.at, own.feed, new Set(cards.map((c) => c.dedupKey)), removed), true)
+  return companionAwayFeed()
+}
+
+/**
+ * The feed the box has while the Mac is away (see the header), and when the Mac's part of
+ * it was the Mac's when that came from the copy. The phone's away feed reads it too.
+ */
+export async function companionAwayFeed(): Promise<{ answer: { feed: NotificationRecord[]; unreadCount: number; offline?: true }; copyAsOf: number | null }> {
+  const { cards, removed } = pendingCompanionCards()
+  const [mac, own] = await Promise.all([macFeedHere(), listNotifications()])
+  const answer = counted(awayFeed(mac.feed, mac.at, own.feed, new Set(cards.map((c) => c.dedupKey)), removed), true)
+  return { answer, copyAsOf: mac.copyAsOf ?? null }
 }
 
 type Ids = { ids?: string[]; dedupKeys?: string[] }

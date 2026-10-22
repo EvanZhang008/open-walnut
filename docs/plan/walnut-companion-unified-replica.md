@@ -777,21 +777,38 @@ as their one writer, without git:
 
 What this leaves:
 
-- The feed's away answer reads the Mac's `notifications.json` as git sync brought it.
-  Once git sync stops writing the box's data dir it only ages, so it needs a
-  `notifications` copy kind (or the away answer shows only the box's cards). The v1
-  feed (`/api/v1/notifications`) still relays and answers 503 while the Mac is away.
+- (Done with the git stop below: the `notifications` copy kind, and the v1 feed's away
+  answer.)
 - A launch pick made on the box (`rememberAskWalnutLaunch`) still writes the box's own
   file, which reaches the Mac only through git; it needs a relay or a journal kind.
 - Task ops the journal cannot take (a delete, a reorder) that met needs-upgrade wait in
   the box's queue for the Mac's update; legacy outbox files already written are left to
   git.
-- The box's cron engine still persists its own infra jobs in `cron-jobs.json`, a file
-  git tracks; when git sync stops, those jobs need a box-local store.
+- The box's cron engine still persists its own infra jobs in `cron-jobs.json`. With git
+  sync stopped (below) that file is the box's own: nothing pulls the Mac's over it and
+  nothing commits it. (On the real box no job matches the infra allowlist.)
 
-**4d, what is left.** The box still commits and pulls through git sync (`git-pull`,
-`git-auto-commit`, `git-maintenance` stay `companionUntil: '4d'` rows) until the
-conversations and the box's own files have their owners (3e). The attachments half rule
+**4d, git sync stops writing the box's data dir.** With every reader above on a copy
+and every write the box makes for the Mac in its journal, the companion no longer pulls
+or commits its data dir: `git-pull` and `git-auto-commit` are leader-only rows, and the
+two pulls a session's result and a session's error used to run go by the `git-pull` row
+too. The data dir keeps the last files git wrote, which nothing on the box reads for the
+Mac any more; its own files there (the cron engine's, the spawn journal, its cards'
+store in `cache/`) are its own. The bare hub the Mac backs up to (`/git/data`) stays:
+`git-maintenance` is a `bridge-door` row, and on the companion it maintains the hub and
+the deploy bundles only, never the frozen worktree. A box on an older build keeps
+pulling and committing as before.
+
+The last reader of a git-written file was the notification feed while the Mac is away.
+It reads the `notifications` copy kind now (`replication/kinds/notifications.ts`: the
+Mac's cards keyed by id in `cache/replica/notifications.json`, on the `inbox` choice, its
+round following every write of the Mac's store, and a removal floor above the feed's cap
+so a feed the human cleared is one ordinary round). The console's away feed and the
+phone's (`GET /api/v1/notifications`, a 503 before) are the copy's cards with the box's
+own on top, marked `offline`, the phone's with `x-walnut-copy-as-of`; before the first
+round (an older Mac) they read the file git last wrote.
+
+**4d, what is left.** The attachments half rule
 only logs its refusal; it has no Settings confirm as the notes copy does. The OCR leg of a
 notes search (text found in pictures) is empty on the box. The companion's chat lane
 still builds its skills prompt from the box's disk. Memory file writes and compactions on
@@ -808,7 +825,7 @@ capability row, read from configuration the box sets for itself:
 | Capability | Jobs it turns on |
 |---|---|
 | `public-door` | setup token banner, pairing and claim routes, push, voice, revoke queue |
-| `bridge-door` | `/bridge` for daemons, `/daemon-tunnel`, the `/bridge/*` HTTPS routes |
+| `bridge-door` | `/bridge` for daemons, `/daemon-tunnel`, the `/bridge/*` HTTPS routes, the hub's upkeep (`git-maintenance`, since 4d) |
 | `cloud-exec` | the box's own session daemons, stream file cleanup, send path canary |
 | `backup-leader` | takeover, and while it leads: cron, routines, overview, project summary |
 
@@ -848,7 +865,7 @@ The capability rows as built in 5a:
 | Capability | Rows | Also gates |
 |---|---|---|
 | `public-door` | `setup-token-banner`, `revoke-queue`, `stt-auto-setup`, `expose-runtime` | |
-| `bridge-door` | `companion-ingest-routes` (`/bridge/*`, `/git/data`, the trial build's confirm) | the `/bridge`, `/daemon-tunnel` and bridge session stream upgrades |
+| `bridge-door` | `companion-ingest-routes` (`/bridge/*`, `/git/data`, the trial build's confirm), `git-maintenance` (the hub, since 4d) | the `/bridge`, `/daemon-tunnel` and bridge session stream upgrades |
 | `cloud-exec` | `cloud-exec`, `local-daemon`, `stream-file-cleanup`, `send-path-canary` | `cloudExecActive`, the tunnel daemon's exec check, the canary's own start |
 | `backup-leader` | `backup-leader`, `cron`, `routine-wake`, `project-summary` | `getBackupLeader`, `canStandIn` |
 
@@ -861,7 +878,8 @@ in the cron allowlist, the plugin relay and the `/ws` token check, a read that m
 that is the follower kind, not a door. `cron`, `routine-wake` and `project-summary`
 still start at boot whenever the box has `backup-leader`; running them only while it
 leads is later work. `overview-maintainer` was a `backup-leader` row until 4d, which made
-it leader-only.
+it leader-only. 4d also made `git-pull` and `git-auto-commit` leader-only and
+`git-maintenance` a `bridge-door` row (the hub's upkeep).
 
 Rows the companion still runs with no capability (`companionUntil`), each with the
 stage that moves it onto the replica core, makes it a capability row or turns it off:
@@ -869,7 +887,6 @@ stage that moves it onto the replica core, makes it a capability row or turns it
 | Stage | Rows |
 |---|---|
 | 2c | `completed-task-session-migration` |
-| 4d | `git-pull`, `git-auto-commit`, `git-maintenance` (`notes-watcher` and `notes-indexer` became leader-only in 4d); 4d also decides whether the hub's gc stays (a `bridge-door` row then) |
 | 5b | `v1-forward`, `companion-stream-forward`, `companion-queues` (deletes and whole-list reorders, 3d), `plugins`, `companion-plugin-cards`, `update-check` (a no-op on the companion already: its install kind is `replica`) |
 
 After 5a the ratchet lists 313 raw reads in 116 files (348 in 133 before): 213 in

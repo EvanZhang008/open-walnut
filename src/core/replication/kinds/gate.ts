@@ -34,7 +34,7 @@ import { writeCopyFile, type Refusal } from '../kind-follower.js'
  */
 export const COMPANION_COPY_KINDS: ReadonlySet<string> = new Set([
   'requests', 'routines', 'prefs', 'personas', 'boards', 'config', 'inbox', 'inbox-bodies', 'sessions',
-  'conversations', 'conversation-bodies', 'model-catalogs', 'stt-vocab'])
+  'conversations', 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications'])
 
 /** This server keeps copies (no kind), or the copy of `kind`. */
 export function keepsCopies(kind?: string): boolean {

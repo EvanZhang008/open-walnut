@@ -36,6 +36,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WALNUT_HOME, CLOUD_MODE } from '../constants.js';
+import { bootPolicy } from '../core/boot-policy.js';
 import {
   execGitGroup,
   setCompactionInProgress,
@@ -580,7 +581,7 @@ export async function settleRepoSize(verdict: RepoSizeVerdict): Promise<RepoSize
 
 /**
  * Start the daily scheduler. Covers, in order:
- *   1. the data worktree (WALNUT_HOME) — every box, sync paused during gc;
+ *   1. the data worktree (WALNUT_HOME), where git sync writes it (the Mac); sync paused during gc;
  *   2. the bare hub repo — cloud box only;
  *   3. stale deploy bundles in the temp dir — cloud box only.
  *
@@ -604,7 +605,9 @@ export function startGitMaintenance(
     const results: MaintenanceResult[] = [];
     const afterRewrite = rewritePending;
     rewritePending = false;
-    try {
+    // The data worktree only where git sync still writes it (the Mac): the companion
+    // keeps its copies elsewhere and no longer pulls or commits there (stage 4d).
+    if (bootPolicy('git-auto-commit')) try {
       const worktree = await maintainRepo(WALNUT_HOME, { pauseSync: true, force, afterRewrite });
       results.push(worktree);
       // Stood down (compaction or an operator pause), failed, or in backoff: the

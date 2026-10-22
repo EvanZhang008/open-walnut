@@ -25,7 +25,7 @@ import { placement, type Placement } from './server-role.js'
 import { capabilitiesAt, type Capability } from './capabilities.js'
 
 /** The stage of docs/plan/walnut-companion-unified-replica.md that decides a `companionUntil` row. */
-export type CompanionStage = '2c' | '4d' | '5b'
+export type CompanionStage = '2c' | '5b'
 
 export interface BootRow {
   job: string
@@ -63,9 +63,9 @@ export const BOOT_POLICY = [
   { job: 'terminal-sweep', leader: true, replica: false, why: 'the terminal stays with the Mac' },
   { job: 'letter-push', leader: true, replica: false, why: 'no relay credential is copied' },
   { job: 'audio', leader: true, replica: false, why: 'no capture or transcriber on a host' },
-  { job: 'git-pull', leader: true, replica: false, companionUntil: '4d', why: 'a host replica has no git data hub' },
-  { job: 'git-auto-commit', leader: true, replica: false, companionUntil: '4d', why: 'copies are not committed' },
-  { job: 'git-maintenance', leader: true, replica: false, companionUntil: '4d', why: 'no data repo on a host replica' },
+  { job: 'git-pull', leader: true, replica: false, why: 'a replica reads copies; git sync is the Mac\'s backup and writes no replica\'s data dir (4d)' },
+  { job: 'git-auto-commit', leader: true, replica: false, why: 'copies are not committed; what a box writes for the Mac goes through its journal (4d)' },
+  { job: 'git-maintenance', leader: true, replica: false, capability: 'bridge-door', why: 'the bare hub the Mac backs up to lives behind /git/data, on the bridge door' },
   { job: 'git-compaction', leader: true, replica: false, why: 'the Mac is the sole compactor' },
   { job: 'session-auto-recover', leader: true, replica: false, why: OFF_HOST_DAEMON },
   { job: 'session-reconcile', leader: true, replica: false, why: OFF_HOST_DAEMON },

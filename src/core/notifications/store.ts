@@ -320,6 +320,14 @@ function capNotifications(records: NotificationRecord[]): NotificationRecord[] {
   return trimmed.length > MAX_NOTIFICATIONS ? trimmed.slice(-MAX_NOTIFICATIONS) : trimmed;
 }
 
+const storeWritten = new Set<() => void>();
+
+/** Called after every write of this server's store (the Mac's `notifications` copy kind watches it). */
+export function onNotificationStoreWritten(fn: () => void): () => void {
+  storeWritten.add(fn);
+  return () => { storeWritten.delete(fn); };
+}
+
 /**
  * Locked read-modify-write: mutate a FRESH store under the cross-process lock,
  * apply the cap + backup safety nets, persist, and return the callback's value.
@@ -355,6 +363,9 @@ async function withStore<R>(fn: (store: NotificationsStore) => R): Promise<R> {
     log.notif.warn('notifications: corrupt store — resetting', { error: errMsg(err) });
     try { fs.renameSync(NOTIFICATIONS_FILE, `${NOTIFICATIONS_FILE}.corrupt`); } catch { /* already gone */ }
     await updateJsonFile<unknown>(NOTIFICATIONS_FILE, null, apply);
+  }
+  for (const fn of storeWritten) {
+    try { fn(); } catch { /* a listener never fails the write */ }
   }
   return out;
 }

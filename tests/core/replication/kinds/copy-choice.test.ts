@@ -42,6 +42,6 @@ describe('the copied kinds choice', () => {
 
   it('names a choice for every copy kind', () => {
     for (const k of copyKinds()) expect(Object.keys(DEFAULT_COPY_CHOICE)).toContain(k.choice)
-    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs', 'stt-vocab'])
+    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications'])
   })
 })

@@ -4617,8 +4617,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // would re-trigger triage dispatch, creating an infinite loop.
       if (event.source === 'subagent-runner') return
 
-      // Git pull: fetch data pushed by remote hooks (best-effort)
-      if (!isEphemeral) {
+      // Git pull: fetch data pushed by remote hooks (best-effort). Only where git
+      // sync writes the data dir (the Mac): a replica reads copies (boot-policy git-pull).
+      if (!isEphemeral && bootPolicy('git-pull')) {
         try {
           await gitPullWalnut()
           log.web.info('git pull completed for session result')
@@ -4857,7 +4858,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       // Git pull: fetch data pushed by remote hooks (best-effort).
       // Skip for delivery failures — nothing remote ran, and the host may be down.
-      if (!isEphemeral && !isDeliveryFailure) {
+      if (!isEphemeral && !isDeliveryFailure && bootPolicy('git-pull')) {
         try {
           await gitPullWalnut()
           log.web.info('git pull completed for session error')
