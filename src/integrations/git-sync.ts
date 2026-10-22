@@ -927,26 +927,40 @@ const EXTRA_IGNORE_PATTERNS = [
  * older index.json over the primary's, flipping a letter the human had read back
  * to unread and taking a thread turn with it.
  *
- * NOT extended to notifications.json even though it looks like the same hazard:
- * the replica genuinely AUTHORS that file (routes/notifications.ts writes the
- * local store with no relay, and session-tracker / hooks / plugins all record
- * into it on the box they run on), so refusing to commit it would silently
- * discard the phone's own mark-read and dismiss actions instead of syncing them.
+ * notifications.json joined in stage 4d (docs/plan/walnut-companion-unified-replica.md),
+ * as a FILE of its own (CLOUD_NEVER_STAGE_FILES below): the Mac owns the feed. The
+ * companion's console reads it from the Mac and sends mark-read and dismiss there
+ * (core/notifications/companion-feed.ts), and the cards the box writes about itself
+ * live in its own store under cache/ and reach the Mac over the relay
+ * (core/notifications/companion-cards.ts). The data dir's file on the box is the
+ * Mac's, brought by git, which the box only reads while the Mac is away.
  */
 export const CLOUD_NEVER_STAGE_DIRS = ['human-inbox'];
 
 /**
+ * Files the replica never stages either, restored from HEAD when they diverge.
+ * Unlike the dirs above, nothing on the box writes these any more, so a divergence
+ * is a leftover of an older build (the box's last cards before 4d), restored with
+ * an info line rather than an error.
+ */
+export const CLOUD_NEVER_STAGE_FILES = ['notifications.json'];
+
+/** Every path the replica never stages: the dirs, then the files. */
+const NEVER_STAGE_PATHS = [...CLOUD_NEVER_STAGE_DIRS, ...CLOUD_NEVER_STAGE_FILES];
+
+/**
  * The `git add` for an auto-commit. On the primary this is the plain `add -A` it
- * has always been; on a replica the never-author dirs are excluded by pathspec.
+ * has always been; on a replica the never-author paths are excluded by pathspec.
  * Pure, so a test can read the exact argument line for both shapes.
  */
 export function stageAllArgs(cloudMode: boolean): string {
-  if (!cloudMode || CLOUD_NEVER_STAGE_DIRS.length === 0) return 'add -A';
-  // Both forms on purpose: the bare name excludes the directory, the /** form is
-  // there so a future entry that names a FILE pattern keeps working.
-  const excludes = CLOUD_NEVER_STAGE_DIRS
-    .map(dir => `':(exclude)${dir}' ':(exclude)${dir}/**'`)
-    .join(' ');
+  if (!cloudMode || NEVER_STAGE_PATHS.length === 0) return 'add -A';
+  // The bare name excludes a directory or a file; the /** form keeps a directory's
+  // contents out too.
+  const excludes = [
+    ...CLOUD_NEVER_STAGE_DIRS.map(dir => `':(exclude)${dir}' ':(exclude)${dir}/**'`),
+    ...CLOUD_NEVER_STAGE_FILES.map(file => `':(exclude)${file}'`),
+  ].join(' ');
   return `add -A -- . ${excludes}`;
 }
 
@@ -976,10 +990,10 @@ export async function stageAllForCommit(
   if (cloudMode) await restoreNeverStagePaths(gitOpts);
   await gitAsync(stageAllArgs(cloudMode), gitOpts);
   if (!cloudMode) return;
-  for (const dir of CLOUD_NEVER_STAGE_DIRS) {
+  for (const p of NEVER_STAGE_PATHS) {
     // Best-effort: a repo with no HEAD yet (initSync's first commit) has nothing
     // to reset to, and there is nothing staged there to drop either.
-    await gitSafeAsync(`reset -q -- "${dir}"`, gitOpts);
+    await gitSafeAsync(`reset -q -- "${p}"`, gitOpts);
   }
 }
 
@@ -996,7 +1010,7 @@ export async function stageAllForCommit(
  * is left on disk for a human to look at.
  */
 async function restoreNeverStagePaths(gitOpts: { cwd?: string } | undefined): Promise<void> {
-  const scope = CLOUD_NEVER_STAGE_DIRS.map(dir => `"${dir}"`).join(' ');
+  const scope = NEVER_STAGE_PATHS.map(p => `"${p}"`).join(' ');
   const status = await gitSafeAsync(`status --porcelain -- ${scope}`, gitOpts);
   if (!status) return;
   const diverged = status
@@ -1006,14 +1020,22 @@ async function restoreNeverStagePaths(gitOpts: { cwd?: string } | undefined): Pr
     // Strip the XY status, whatever whitespace survived the trim.
     .map(line => line.replace(/^\S{1,2}\s+/, ''));
   if (diverged.length === 0) return;
-  log.git.error(
-    'git-sync: replica-local changes under a primary-authoritative path — restoring them from HEAD. '
-    + 'This box relays every write for these paths, so a local difference is a stale mirror, and '
-    + 'committing it would revert the primary (2026-08-30 incident).',
-    { files: diverged.slice(0, 20), count: diverged.length, dirs: CLOUD_NEVER_STAGE_DIRS },
-  );
-  for (const dir of CLOUD_NEVER_STAGE_DIRS) {
-    await gitSafeAsync(`checkout -q HEAD -- "${dir}"`, gitOpts);
+  const inDirs = diverged.filter(f => !CLOUD_NEVER_STAGE_FILES.includes(f));
+  if (inDirs.length > 0) {
+    log.git.error(
+      'git-sync: replica-local changes under a primary-authoritative path, restoring them from HEAD. '
+      + 'This box relays every write for these paths, so a local difference is a stale mirror, and '
+      + 'committing it would revert the primary (2026-08-30 incident).',
+      { files: inDirs.slice(0, 20), count: inDirs.length, dirs: CLOUD_NEVER_STAGE_DIRS },
+    );
+  }
+  const files = diverged.filter(f => CLOUD_NEVER_STAGE_FILES.includes(f));
+  if (files.length > 0) {
+    log.git.info('git-sync: restoring the Mac\'s copy of a file this box no longer writes', { files });
+  }
+  for (const p of NEVER_STAGE_PATHS) {
+    // A path HEAD does not have yet fails here, harmlessly (nothing tracked to restore).
+    await gitSafeAsync(`checkout -q HEAD -- "${p}"`, gitOpts);
   }
 }
 

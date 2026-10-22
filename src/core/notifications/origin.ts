@@ -1,8 +1,8 @@
 /**
  * Which Walnut is writing the error card, and how the card says so.
  *
- * notifications.json rides the data sync, so a card the cloud companion writes
- * is read on the Mac (and the other way round). Two things follow, both keyed
+ * A card the cloud companion writes is read on the Mac (its cards reach the Mac
+ * over the relay since stage 4d: mirror.ts). Two things follow, both keyed
  * off the one constant here: the store stamps `origin` on the record and scopes
  * recovery to it (store.ts), and both publish paths append ORIGIN_NOTE to the
  * card's sentence so a reader on the Mac is not told a Mac plugin is broken when

@@ -1,32 +1,34 @@
 /**
  * The notification store on the CLOUD COMPANION (CLOUD_MODE true).
  *
- * notifications.json rides the data sync, so what the companion writes is read
- * on the Mac. 2026-10-03: the companion ran a build older than the Slack plugin
- * the sync handed it, failed to load it, and its two cards appeared on the Mac
- * as "Plugin activation failed" with nothing saying where. Three rules pinned:
+ * What the companion writes reaches the Mac (since stage 4d over the
+ * `server.notifications.cards` relay, companion-cards.test.ts; before it, the
+ * data sync carried notifications.json). 2026-10-03: the companion ran a build
+ * older than the Slack plugin the sync handed it, failed to load it, and its two
+ * cards appeared on the Mac as "Plugin activation failed" with nothing saying
+ * where. Three rules pinned:
  * the companion stamps `origin: 'replica'` on its error cards, its success
  * signals retire only its own cards, and its card sentences say where it happened.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
-import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('notif-replica', { CLOUD_MODE: true }));
 
-import { WALNUT_HOME } from '../../../src/constants.js';
 import {
   addNotification,
   upsertNotification,
   listNotifications,
   recoverNotifications,
   writtenHere,
+  NOTIFICATIONS_STORE_FILE,
 } from '../../../src/core/notifications/store.js';
 import { ORIGIN_NOTE, WRITER_ORIGIN, withOriginNote } from '../../../src/core/notifications/origin.js';
 import { unresolvedErrorRecoveryKeys } from '../../../src/core/notifications/permission-expiry.js';
 
-const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
+// The box's own store (cache/companion-notifications.json since stage 4d).
+const NOTIFICATIONS_FILE = NOTIFICATIONS_STORE_FILE;
 
 beforeEach(() => {
   try { fs.rmSync(NOTIFICATIONS_FILE, { force: true }); } catch { /* noop */ }
@@ -48,7 +50,7 @@ describe('on the cloud companion', () => {
       kind: 'permission', severity: 'warning', title: 'Bash', dedupKey: 'perm:r1', sessionId: 's1',
     });
     expect(perm.origin).toBeUndefined();
-    // Persisted, not just returned: the Mac reads the file.
+    // Persisted, not just returned: the box's store is what it sends the Mac.
     const raw = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE, 'utf-8'));
     expect(raw.notifications.map((n: { origin?: string }) => n.origin)).toEqual(['replica', 'replica', undefined]);
   });
@@ -58,7 +60,7 @@ describe('on the cloud companion', () => {
       kind: 'operation-error', severity: 'error', title: 'Plugin activation failed',
       dedupKey: 'logerr:plugin-loader:here', recoveryKey: 'plugin:chat',
     });
-    // Written by the Mac (no origin) and synced over.
+    // A card with no origin (one the Mac wrote, kept from before stage 4d).
     fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify({
       version: 1,
       notifications: [

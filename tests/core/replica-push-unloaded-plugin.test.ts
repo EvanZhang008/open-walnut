@@ -22,7 +22,7 @@ import { addTask, autoPushIfConfigured, getTask, updateTaskRaw, _resetForTesting
 import { WALNUT_HOME } from '../../src/constants.js';
 import { registry } from '../../src/core/integration-registry.js';
 import { log } from '../../src/logging/index.js';
-import { expireOwnCardsOfUnloadedPlugins, listNotifications } from '../../src/core/notifications/store.js';
+import { expireOwnCardsOfUnloadedPlugins, listNotifications, NOTIFICATIONS_STORE_FILE } from '../../src/core/notifications/store.js';
 import { createNoopSync, createMockPlugin } from './plugin-test-utils.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -83,8 +83,9 @@ describe('expireOwnCardsOfUnloadedPlugins', () => {
 
   beforeEach(async () => {
     await fs.rm(WALNUT_HOME, { recursive: true, force: true });
-    await fs.mkdir(WALNUT_HOME, { recursive: true });
-    await fs.writeFile(path.join(WALNUT_HOME, 'notifications.json'), JSON.stringify({
+    // The box's own store (cache/companion-notifications.json since stage 4d).
+    await fs.mkdir(path.dirname(NOTIFICATIONS_STORE_FILE), { recursive: true });
+    await fs.writeFile(NOTIFICATIONS_STORE_FILE, JSON.stringify({
       version: 1,
       notifications: [
         card('own-unloaded', `plugin:${NOT_HERE}`, boot - 60_000, 'replica'),

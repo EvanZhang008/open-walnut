@@ -22,10 +22,16 @@
  *
  * Every entry point is best-effort: a broken file reads as empty, a failed
  * write is logged and never fails the launch or the switch that triggered it.
+ *
+ * The cloud companion reads the Mac's pick from its personas copy (stage 4d,
+ * replication/kinds/personas.ts `launchModel`/`launchEffort`) once it holds it,
+ * unless its own file is newer than the copy (a pick made on the box itself).
+ * The Mac's write starts a personas round (onAskWalnutLaunchWritten).
  */
 import { ASK_WALNUT_LAUNCH_FILE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js';
+import { isCompanion } from '../server-role.js';
 import {
   VALID_SESSION_EFFORT_IDS,
   modelSupportsEffort,
@@ -58,26 +64,67 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   return prev.then(fn).finally(() => release!());
 }
 
-async function readStore(): Promise<AskWalnutLaunchPrefs> {
+/** A pick as stored, read back through the same rules as the file. */
+function prefsOf(model: unknown, effort: unknown): AskWalnutLaunchPrefs {
+  return {
+    ...(typeof model === 'string' && model ? { model } : {}),
+    ...(typeof effort === 'string' && VALID_SESSION_EFFORT_IDS.has(effort) ? { effort: effort as SessionEffort } : {}),
+  };
+}
+
+async function readStoreWithTime(): Promise<{ prefs: AskWalnutLaunchPrefs; updatedAt: number }> {
   try {
     const parsed = await readJsonFile<Partial<AskWalnutLaunchStore> | null>(ASK_WALNUT_LAUNCH_FILE, null);
-    if (!parsed || parsed.version !== 1) return {};
-    return {
-      ...(typeof parsed.model === 'string' && parsed.model ? { model: parsed.model } : {}),
-      ...(typeof parsed.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(parsed.effort)
-        ? { effort: parsed.effort as SessionEffort } : {}),
-    };
+    if (!parsed || parsed.version !== 1) return { prefs: {}, updatedAt: 0 };
+    return { prefs: prefsOf(parsed.model, parsed.effort), updatedAt: Date.parse(parsed.updatedAt ?? '') || 0 };
   } catch (err) {
     log.session.debug('ask-walnut-launch: failed to read store', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return {};
+    return { prefs: {}, updatedAt: 0 };
+  }
+}
+
+async function readStore(): Promise<AskWalnutLaunchPrefs> {
+  return (await readStoreWithTime()).prefs;
+}
+
+/**
+ * The companion's answer: the Mac's pick from the personas copy (any agent's row
+ * carries it; the general agent's first), unless the box's own file was written
+ * after the copy's rows were read. Null without a copy (the caller reads the file).
+ */
+async function companionLaunchPrefs(): Promise<AskWalnutLaunchPrefs | null> {
+  try {
+    const [{ copyKindAsOf }, { readPersonaCopy }] = await Promise.all([
+      import('../replication/kinds/gate.js'), import('../replication/kinds/personas.js'),
+    ]);
+    const asOf = await copyKindAsOf('personas');
+    if (asOf === null) return null;
+    const row = await readPersonaCopy('general');
+    if (!row) return null;
+    const own = await readStoreWithTime();
+    if (own.updatedAt > asOf) return own.prefs;
+    return prefsOf(row.launchModel, row.launchEffort);
+  } catch {
+    return null;
   }
 }
 
 /** What the next Ask Walnut should start on. Empty object = first-run defaults. */
-export function getAskWalnutLaunchPrefs(): Promise<AskWalnutLaunchPrefs> {
+export async function getAskWalnutLaunchPrefs(): Promise<AskWalnutLaunchPrefs> {
+  if (isCompanion()) {
+    const fromCopy = await companionLaunchPrefs();
+    if (fromCopy) return fromCopy;
+  }
   return readStore();
+}
+
+/** Called after every write of the launch memory (the personas copy kind starts a round). */
+const writeListeners = new Set<() => void>();
+export function onAskWalnutLaunchWritten(cb: () => void): () => void {
+  writeListeners.add(cb);
+  return () => { writeListeners.delete(cb); };
 }
 
 /**
@@ -109,6 +156,7 @@ export async function rememberAskWalnutLaunch(pick: {
       if (next.model === prev.model && next.effort === prev.effort) return;
       const store: AskWalnutLaunchStore = { version: 1, updatedAt: new Date().toISOString(), ...next };
       await writeJsonFile(ASK_WALNUT_LAUNCH_FILE, store);
+      for (const cb of writeListeners) { try { cb(); } catch { /* never fails the pick */ } }
     } catch (err) {
       log.session.warn('ask-walnut-launch: failed to record pick', {
         pick, error: err instanceof Error ? err.message : String(err),

@@ -672,6 +672,7 @@ let cloudChatOutboxFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: replays letter read/pin/archive changes (core/human-inbox/replica-state.ts). */
 let humanInboxQueueFlushHandle: { stop: () => void } | null = null
 let companionJournalDueHandle: { stop: () => void } | null = null
+let companionCardsHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
@@ -3224,6 +3225,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // on the same triggers (core/companion-journal.ts).
       const { startCompanionJournalDue } = await import('../core/companion-journal.js')
       companionJournalDueHandle = startCompanionJournalDue()
+      // The cards this box writes about itself go to the Mac over the relay, not git
+      // (stage 4d, core/notifications/companion-cards.ts).
+      const { startCompanionCards } = await import('../core/notifications/companion-cards.js')
+      companionCardsHandle = startCompanionCards()
       // Its notes reads take the Mac's copy once held, and its note saves go into that
       // journal (stage 4, core/companion-notes.ts).
       void import('../core/companion-notes.js').then((m) => m.installCompanionNotes()).catch((err) => {
@@ -6436,6 +6441,10 @@ export async function stopServer(): Promise<void> {
     companionJournalDueHandle.stop()
     companionJournalDueHandle = null
     ;(await import('../core/companion-notes.js')).uninstallCompanionNotes()
+  }
+  if (companionCardsHandle) {
+    companionCardsHandle.stop()
+    companionCardsHandle = null
   }
   stopMobileEventsFeed()
   if (pinRetirementHandle) {

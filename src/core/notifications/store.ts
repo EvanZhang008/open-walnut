@@ -19,11 +19,30 @@ import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import { conditionKeysOf } from './route-condition.js';
 import { WRITER_ORIGIN, type NotificationOrigin } from './origin.js';
+import { reportOwnCards as reportToMirror, type OwnCardChange } from './mirror.js';
+import { isCompanion } from '../server-role.js';
 
 export type { NotificationOrigin } from './origin.js';
 
-/** notifications.json lives next to incidents.json / sessions.json under WALNUT_HOME. */
-const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
+/**
+ * notifications.json lives next to incidents.json / sessions.json under WALNUT_HOME.
+ * The cloud companion keeps its own cards in cache/ instead (never git; stage 4d
+ * of docs/plan/walnut-companion-unified-replica.md): the data dir's file there is
+ * the Mac's, brought by git sync and never staged by the box, and the box's cards
+ * reach the Mac through the relay (mirror.ts, companion-cards.ts).
+ */
+const ON_COMPANION = isCompanion();
+const SHARED_NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
+const NOTIFICATIONS_FILE = ON_COMPANION
+  ? path.join(WALNUT_HOME, 'cache', 'companion-notifications.json')
+  : SHARED_NOTIFICATIONS_FILE;
+/** The file this server's store reads and writes (the companion's own, on the companion). */
+export const NOTIFICATIONS_STORE_FILE = NOTIFICATIONS_FILE;
+
+/** The companion's writes go to the Mac (mirror.ts); the Mac's own stay here. */
+function reportOwnCards(changes: OwnCardChange[]): void {
+  if (ON_COMPANION) reportToMirror(changes);
+}
 /** Keep the feed bounded — most-recent N. Older notifications drop off the tail. */
 const MAX_NOTIFICATIONS = 200;
 
@@ -89,8 +108,8 @@ export interface NotificationRecord {
   causeKey?: string;
 
   /** operation-error only — the Walnut that observed this failure, when it was
-   *  not the primary. The feed file rides the data sync, so a card the cloud
-   *  companion writes shows up on the Mac (2026-10-03: a Slack plugin the
+   *  not the primary. A card the cloud companion writes shows up on the Mac (its
+   *  cards ride the relay since stage 4d, mirror.ts; 2026-10-03: a Slack plugin the
    *  companion's older build could not load read as a Mac failure, while Slack
    *  on the Mac was fine). A recovery signal is scoped to the instance that saw
    *  it: a plugin loading cleanly on the Mac says nothing about the companion,
@@ -227,8 +246,33 @@ function normalizeStore(raw: unknown): NotificationsStore {
   return parsed;
 }
 
+/**
+ * The companion's first use of its own file: its error cards in the data dir's
+ * file (written there before 4d, the box's `origin: 'replica'` cards) come along,
+ * so their lifecycle (a recovery, an expiry) still runs here and reaches the Mac.
+ * Nothing else: the rest of that file is the Mac's. Once per process, never throws.
+ */
+let seeded = !ON_COMPANION;
+async function seedCompanionStore(): Promise<void> {
+  if (seeded) return;
+  seeded = true;
+  try {
+    if (fs.existsSync(NOTIFICATIONS_FILE)) return;
+    const shared = normalizeStore(await readJsonFile<unknown>(SHARED_NOTIFICATIONS_FILE, null));
+    const own = shared.notifications.filter(n => n.origin === WRITER_ORIGIN && n.kind === 'operation-error');
+    await updateJsonFile<unknown>(NOTIFICATIONS_FILE, null, (raw) => {
+      const store = normalizeStore(raw);
+      if (store.notifications.length === 0) store.notifications = own;
+      return store;
+    });
+  } catch (err) {
+    log.notif.warn('notifications: could not seed the companion store', { error: errMsg(err) });
+  }
+}
+
 /** Read-only snapshot. Unparseable file → empty (matches previous behavior). */
 async function readStore(): Promise<NotificationsStore> {
+  await seedCompanionStore();
   try {
     return normalizeStore(await readJsonFile<unknown>(NOTIFICATIONS_FILE, null));
   } catch (err) {
@@ -246,6 +290,7 @@ async function readStore(): Promise<NotificationsStore> {
  * the whole fan-out would be stranded unresolved forever.
  */
 async function readStoreOrNull(): Promise<NotificationsStore | null> {
+  await seedCompanionStore();
   try {
     return normalizeStore(await readJsonFile<unknown>(NOTIFICATIONS_FILE, null));
   } catch {
@@ -280,6 +325,7 @@ function capNotifications(records: NotificationRecord[]): NotificationRecord[] {
  * apply the cap + backup safety nets, persist, and return the callback's value.
  */
 async function withStore<R>(fn: (store: NotificationsStore) => R): Promise<R> {
+  await seedCompanionStore();
   let out!: R;
   const apply = (raw: unknown): NotificationsStore => {
     const store = normalizeStore(raw);
@@ -333,9 +379,11 @@ function generateId(): string {
  * Returns the stored record (existing or new).
  */
 export async function addNotification(input: NewNotification): Promise<NotificationRecord> {
-  return withWriteLock(() => withStore((store) => {
+  let inserted = false;
+  const out = await withWriteLock(() => withStore((store) => {
     const existing = store.notifications.find(n => n.dedupKey === input.dedupKey);
     if (existing) return existing;
+    inserted = true;
 
     // Spread input FIRST, then apply defaults — so a caller passing an explicit
     // `id: undefined` / `timestamp: undefined` can't clobber the computed default
@@ -350,6 +398,8 @@ export async function addNotification(input: NewNotification): Promise<Notificat
     store.notifications.push(record);
     return record;
   }));
+  if (inserted) reportOwnCards([{ mode: 'add', key: out.dedupKey, record: { ...out } }]);
+  return out;
 }
 
 /** The `origin` fields an error card written by THIS process carries. */
@@ -366,7 +416,7 @@ export function writtenHere(rec: Pick<NotificationRecord, 'origin'>): boolean {
  *  Additive BY DESIGN: a refresh can SET a field but never clear one — an
  *  `undefined` in the input means "the caller didn't look it up this time"
  *  (enrichment is best-effort), not "the value is gone". */
-const REFRESHABLE_DETAIL_KEYS = [
+export const REFRESHABLE_DETAIL_KEYS = [
   'body', 'sessionId', 'taskId',
   'requestId', 'toolName', 'input', 'reason', 'acpOptions',
   'host', 'sessionTitle', 'project',
@@ -407,7 +457,7 @@ export async function upsertNotification(
       + 'recurrence (it would inflate count). Use addNotification (first-write-wins).',
     );
   }
-  return withWriteLock(() => withStore((store) => {
+  const out = await withWriteLock(() => withStore((store) => {
     const idx = store.notifications.findIndex(n => n.dedupKey === input.dedupKey);
     if (idx === -1) {
       const record: NotificationRecord = {
@@ -463,6 +513,8 @@ export async function upsertNotification(
     // payload under them (count/body changing between read and send).
     return { record: { ...existing }, outcome: 'refreshed' as const };
   }));
+  reportOwnCards([{ mode: 'upsert', key: out.record.dedupKey, record: { ...out.record } }]);
+  return out;
 }
 
 /** The feed (newest-last insertion order) + count of unread entries. */
@@ -574,14 +626,17 @@ export async function updateLetterNotification(
 export async function dismissNotifications(
   filter?: { ids?: string[]; dedupKeys?: string[] },
 ): Promise<{ unreadCount: number; removed: number }> {
-  return withWriteLock(() => withStore((store) => {
+  let gone: NotificationRecord[] = [];
+  const out = await withWriteLock(() => withStore((store) => {
     const before = store.notifications.length;
     const idSet = filter?.ids?.length ? new Set(filter.ids) : null;
     const keySet = filter?.dedupKeys?.length ? new Set(filter.dedupKeys) : null;
     const clearAll = !filter || (filter.ids === undefined && filter.dedupKeys === undefined);
     if (idSet || keySet) {
+      gone = store.notifications.filter(n => idSet?.has(n.id) || keySet?.has(n.dedupKey));
       store.notifications = store.notifications.filter(n => !(idSet?.has(n.id) || keySet?.has(n.dedupKey)));
     } else if (clearAll) {
+      gone = store.notifications;
       store.notifications = [];
     }
     return {
@@ -589,6 +644,8 @@ export async function dismissNotifications(
       removed: before - store.notifications.length,
     };
   }));
+  reportOwnCards(gone.map(n => ({ mode: 'remove' as const, key: n.dedupKey, record: { ...n } })));
+  return out;
 }
 
 /**
@@ -601,7 +658,7 @@ export async function dismissNotifications(
 export async function replaceNotification(
   input: NewNotification,
 ): Promise<{ record: NotificationRecord; replaced: NotificationRecord | null }> {
-  return withWriteLock(() => withStore((store) => {
+  const out = await withWriteLock(() => withStore((store) => {
     const idx = store.notifications.findIndex(n => n.dedupKey === input.dedupKey);
     const replaced = idx === -1 ? null : store.notifications.splice(idx, 1)[0];
     const record: NotificationRecord = {
@@ -613,6 +670,8 @@ export async function replaceNotification(
     store.notifications.push(record);
     return { record: { ...record }, replaced };
   }));
+  reportOwnCards([{ mode: 'replace', key: out.record.dedupKey, record: { ...out.record } }]);
+  return out;
 }
 
 /** Remove ONE record by dedupKey and return it (null when absent), so the caller
@@ -624,10 +683,12 @@ export async function removeNotification(dedupKey: string): Promise<Notification
   // through to the locked path, which repairs it.
   const snapshot = await readStoreOrNull();
   if (snapshot && !snapshot.notifications.some(n => n.dedupKey === dedupKey)) return null;
-  return withWriteLock(() => withStore((store) => {
+  const out = await withWriteLock(() => withStore((store) => {
     const idx = store.notifications.findIndex(n => n.dedupKey === dedupKey);
     return idx === -1 ? null : store.notifications.splice(idx, 1)[0];
   }));
+  if (out) reportOwnCards([{ mode: 'remove', key: out.dedupKey, record: { ...out } }]);
+  return out;
 }
 
 /**
@@ -696,7 +757,7 @@ export async function recoverNotifications(
   )) {
     return { recovered: [] };
   }
-  return withWriteLock(() => withStore((store) => {
+  const out = await withWriteLock(() => withStore((store) => {
     const recovered: NotificationRecord[] = [];
     for (const rec of store.notifications) {
       if (rec.kind !== 'operation-error' || rec.resolved) continue;
@@ -711,6 +772,13 @@ export async function recoverNotifications(
     }
     return { recovered };
   }));
+  reportOwnCards(settled(out.recovered));
+  return out;
+}
+
+/** The settled stamps a sweep made, as changes for the mirror (mirror.ts). */
+function settled(records: NotificationRecord[]): OwnCardChange[] {
+  return records.map(record => ({ mode: 'state' as const, key: record.dedupKey, record: { ...record } }));
 }
 
 /**
@@ -745,7 +813,7 @@ export async function expireErrorNotifications(
   if (snapshot && !snapshot.notifications.some(
     n => n.kind === 'operation-error' && !n.resolved && !!n.recoveryKey && keys.has(n.recoveryKey),
   )) return { expired: [] };
-  return withWriteLock(() => withStore((store) => {
+  const out = await withWriteLock(() => withStore((store) => {
     const expired: NotificationRecord[] = [];
     for (const rec of store.notifications) {
       if (rec.kind !== 'operation-error' || rec.resolved) continue;
@@ -757,6 +825,8 @@ export async function expireErrorNotifications(
     }
     return { expired };
   }));
+  reportOwnCards(settled(out.expired));
+  return out;
 }
 
 /**
@@ -781,7 +851,7 @@ export async function expireOwnCardsOfUnloadedPlugins(
   };
   const snapshot = await readStoreOrNull();
   if (snapshot && !snapshot.notifications.some(stale)) return { expired: [] };
-  return withWriteLock(() => withStore((store) => {
+  const out = await withWriteLock(() => withStore((store) => {
     const expired: NotificationRecord[] = [];
     for (const rec of store.notifications) {
       if (!stale(rec)) continue;
@@ -792,6 +862,8 @@ export async function expireOwnCardsOfUnloadedPlugins(
     }
     return { expired };
   }));
+  reportOwnCards(settled(out.expired));
+  return out;
 }
 
 /**
@@ -908,14 +980,25 @@ export async function resolvePermissionNotification(
   requestId: string,
   resolved: 'allowed' | 'denied' | 'expired',
 ): Promise<void> {
-  return withWriteLock(() => withStore((store) => {
+  const changed = await withWriteLock(() => withStore((store): NotificationRecord | null => {
     const rec = store.notifications.find(n => n.dedupKey === `perm:${requestId}`);
-    if (!rec || rec.resolved === resolved) return;
+    if (!rec || rec.resolved === resolved) return null;
     rec.resolved = resolved;
     // denied/expired → 'info' (not warning/error): a deny is a neutral user
     // decision and an expiry is a neutral fact about a dead session — nothing
     // needs fixing in either. NotificationProvider mirrors this mapping for the
     // optimistic client-side stamp — keep the two in sync.
     rec.severity = resolved === 'allowed' ? 'success' : 'info';
+    return { ...rec };
   }));
+  if (changed) reportOwnCards(settled([changed]));
+}
+
+/**
+ * One locked read-modify-write for a caller outside this file: the Mac applying
+ * the cards the cloud companion sends (apply-companion-cards.ts). The cap and
+ * the empty-feed backup apply as for every write here.
+ */
+export function mutateNotificationStore<R>(fn: (store: { notifications: NotificationRecord[] }) => R): Promise<R> {
+  return withWriteLock(() => withStore(fn));
 }

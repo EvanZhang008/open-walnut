@@ -15,6 +15,11 @@
  * replaces an entry when its ts is >= the stored one, so a page-unload flush
  * racing the next page load's GET can't resurrect stale values. `v: null` is a
  * delete tombstone.
+ *
+ * The cloud companion (stage 4d): GET answers the Mac's prefs copy once it holds
+ * one (its own file before), and PUT is merged on the Mac (`server.ui-prefs.put`),
+ * or needs the Mac while it does not answer, so the box never writes the file git
+ * sync carries.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -25,9 +30,9 @@ import { WALNUT_HOME, UI_PREFS_FILE } from '../../constants.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { log } from '../../logging/index.js'
 import { MAX_KEY_LEN, machineLocalKey, syncableKey } from '../../core/ui-prefs-keys.js'
-import { isHostReplicaProgram } from '../../core/server-role.js'
+import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
-import { KIND_NOT_COPIED } from '../../core/replication/kinds/gate.js'
+import { KIND_NOT_COPIED, COPY_AS_OF_HEADER, copyKindAsOf } from '../../core/replication/kinds/gate.js'
 
 export const uiPrefsRouter = Router()
 
@@ -136,6 +141,16 @@ async function loadPrefs(): Promise<Record<string, PrefEntry>> {
 // GET /api/ui-prefs → { prefs: Record<string, { v: string|null, ts: number }> }
 uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // The companion answers the Mac's prefs once it holds the copy (before: its own file).
+    if (isCompanion()) {
+      const asOf = await copyKindAsOf('prefs')
+      const prefs = asOf === null ? null : await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
+      if (prefs) {
+        res.setHeader(COPY_AS_OF_HEADER, String(asOf))
+        res.json({ prefs })
+        return
+      }
+    }
     // A host replica holds the Mac's prefs as a copy (core/replication/kinds/prefs.ts).
     if (isHostReplicaProgram()) {
       const prefs = await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
@@ -160,26 +175,59 @@ uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) =
       res.status(400).json({ error: 'prefs object is required' })
       return
     }
-    const prefs = await loadPrefs()
-    for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
-      if (!syncableKey(key) || key.length > MAX_KEY_LEN) continue
-      if (!value || typeof value !== 'object') continue
-      const { v, ts } = value as PrefEntry
-      if (typeof ts !== 'number' || !Number.isFinite(ts)) continue
-      if (v !== null && (typeof v !== 'string' || v.length > MAX_VALUE_LEN)) continue
-      const existing = prefs[key]
-      if (existing && existing.ts > ts) continue // stale write loses
-      prefs[key] = { v, ts }
+    if (isCompanion()) {
+      res.json(await putOnMac(patch as Record<string, unknown>))
+      return
     }
-    // Size backstop — a runaway writer can't grow the file without bound.
-    const keys = Object.keys(prefs)
-    if (keys.length > MAX_KEYS) {
-      for (const k of keys.slice(0, keys.length - MAX_KEYS)) delete prefs[k]
-    }
-    await writeJsonFile(PREFS_FILE(), prefs)
-    for (const cb of writeListeners) { try { cb() } catch { /* never fails the write */ } }
-    res.json({ ok: true })
+    res.json(await mergeUiPrefs(patch))
   } catch (err) {
+    if (err instanceof UiPrefsInputError) {
+      res.status(400).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
+
+/** A merge input this route refuses (the relay answers it as a 400). */
+export class UiPrefsInputError extends Error {}
+
+/**
+ * The PUT's LWW merge into this box's ui-prefs.json, shared by the route and the
+ * companion's relay (`server.ui-prefs.put`, session-controls.ts).
+ */
+export async function mergeUiPrefs(patch: unknown): Promise<{ ok: true }> {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new UiPrefsInputError('prefs object is required')
+  const prefs = await loadPrefs()
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (!syncableKey(key) || key.length > MAX_KEY_LEN) continue
+    if (!value || typeof value !== 'object') continue
+    const { v, ts } = value as PrefEntry
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) continue
+    if (v !== null && (typeof v !== 'string' || v.length > MAX_VALUE_LEN)) continue
+    const existing = prefs[key]
+    if (existing && existing.ts > ts) continue // stale write loses
+    prefs[key] = { v, ts }
+  }
+  // Size backstop: a runaway writer can't grow the file without bound.
+  const keys = Object.keys(prefs)
+  if (keys.length > MAX_KEYS) {
+    for (const k of keys.slice(0, keys.length - MAX_KEYS)) delete prefs[k]
+  }
+  await writeJsonFile(PREFS_FILE(), prefs)
+  for (const cb of writeListeners) { try { cb() } catch { /* never fails the write */ } }
+  return { ok: true }
+}
+
+/** One bridge frame is shared by every relay: a PUT larger than this is refused, never sent. */
+const MAX_RELAYED_PREFS_BYTES = 256 * 1024
+
+/** The companion's PUT: merged on the Mac; a Mac that does not answer is needs_leader. */
+async function putOnMac(patch: Record<string, unknown>): Promise<{ ok: true }> {
+  if (Buffer.byteLength(JSON.stringify(patch), 'utf8') > MAX_RELAYED_PREFS_BYTES) throw new UiPrefsInputError('prefs too large to send to the Mac at once')
+  const { callPrimaryControl } = await import('./v1-control-relay.js')
+  const r = await callPrimaryControl('server.ui-prefs.put', '__server__', { prefs: patch }, 15_000)
+  if (r.ok) return { ok: true }
+  if (r.failure.kind === 'error' && r.failure.status < 500) throw new UiPrefsInputError(r.failure.message)
+  throw new NeedsLeaderError('prefs_writes_need_mac')
+}
