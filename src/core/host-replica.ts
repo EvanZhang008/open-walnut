@@ -25,6 +25,8 @@ import crypto from 'node:crypto'
 import { NOTES_DIR, WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import type { Config } from './types.js'
+import { forgetCompanionAttachments, syncCompanionAttachments } from './attachment-replica.js'
+import { companionReplicaExtras, type Extras } from './host-replica-extras.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 export const REPLICA_KINDS: readonly ReplicaKind[] = ['notes', 'memory', 'skills']
@@ -255,6 +257,7 @@ export function _resetHostReplicaForTesting(): void {
   heldReruns.clear()
   lastManifest.clear()
   companionMemoAt = 0
+  forgetCompanionAttachments()
 }
 
 /** The Settings row's target for a host's copy (replica-status.ts), the half rule's refusals. */
@@ -294,11 +297,18 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   }
   let entries: ReplicaEntry[]
   let bodies: Map<string, string> | null = null
+  let extras: Extras | null = null
   if (kind === 'notes') {
     entries = await noteEntries(keep.notesExclude)
   } else {
     bodies = await jsonBodies(kind)
     entries = [...bodies].map(([k, body]) => ({ k, h: sha12(body), n: Buffer.byteLength(body) }))
+    // The companion's copy also carries the rest of the memory dir and the skills' references (4d).
+    if (target.hostKey === COMPANION_REPLICA_HOST) {
+      const skills = kind === 'skills' ? await (await import('./skill-store.js')).listAllSkills() : []
+      extras = await companionReplicaExtras(kind, skills)
+      entries.push(...extras.entries)
+    }
   }
   const opts = kind === 'notes'
     ? { searchExclude: await searchExclude(config), keepExclude: keep.notesExclude, tooBig: notesTooBig() }
@@ -328,7 +338,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     batchBytes = 0
   }
   for (const k of need) {
-    const body = bodies ? bodies.get(k) ?? null : await noteBody(k)
+    const body = bodies ? bodies.get(k) ?? (extras ? await extras.body(k) : null) : await noteBody(k)
     // Changed since the manifest: the next round sends the new one.
     if (body === null || sha12(body) !== wanted.get(k)) { skipped++; continue }
     const bytes = Buffer.byteLength(body)
@@ -378,13 +388,26 @@ export async function syncCompanionHostReplica(): Promise<ReplicaRoundResult[]> 
     forgetHostReplica(COMPANION_REPLICA_HOST)
     companionMemoAt = Date.now()
   }
-  return syncHostReplica(companionTarget)
+  const results = await syncHostReplica(companionTarget)
+  // Then the pictures and files of the notes, which only the companion keeps (core/attachment-replica.ts).
+  try {
+    const { getConfig } = await import('./config-manager.js')
+    const config = await getConfig()
+    const keep = hostKeepFor(config, COMPANION_REPLICA_HOST)
+    const on = keep.notes && config.hosts?.[COMPANION_REPLICA_HOST]?.keep?.attachments !== false
+    const r = await syncCompanionAttachments(companionTarget.send, { on, exclude: keep.notesExclude })
+    if (r.action !== 'unchanged' && r.action !== 'skipped') log.session.info('host replica: companion attachments round', { ...r })
+  } catch (err) {
+    log.session.warn('host replica: companion attachments round failed', { error: err instanceof Error ? err.message : String(err) })
+  }
+  return results
 }
 
 /** The companion changed build: its copy rounds go again at once. */
 export function forgetCompanionHostReplica(): void {
   companionMemoAt = 0
   forgetHostReplica(COMPANION_REPLICA_HOST)
+  forgetCompanionAttachments()
 }
 
 /**

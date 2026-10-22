@@ -53,7 +53,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'one-session-per-task': leaderOnly, // new 2026-10-21: the companion's session copy is the apply connection's
   'stream-file-cleanup': always,
   'session-integrity-check': leaderOnly,
-  'notes-watcher': always,
+  'notes-watcher': leaderOnly, // 4d: the companion reads its copy of the Mac's notes, no vault of its own
   'notes-semantic': leaderOnly,
   'search-wiring': leaderOnly,
   'thread-ai': leaderOnly,
@@ -69,7 +69,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'lane-ask-sync': leaderOnly,
   'pin-retirement': leaderOnly,
   'session-health-monitor': leaderOnly,
-  'overview-maintainer': always,
+  'overview-maintainer': leaderOnly, // 4d: its project skill writes would land on the box's copy
   'project-summary': always,
   'host-learning': leaderOnly, // new: host profiles are written on the Mac
   'routine-wake': always,
@@ -91,7 +91,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'wait-until': leaderOnly,
   'title-reconciler': leaderOnly,
   'link-tags': leaderOnly, // new: link tags are written on the Mac
-  'notes-indexer': always,
+  'notes-indexer': leaderOnly, // 4d: the companion searches its copy of the Mac's notes
   'stt-auto-setup': always, // new: installs the voice model on the Mac and on the companion
 }
 
@@ -170,14 +170,14 @@ const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
   'public-door': ['setup-token-banner', 'revoke-queue', 'expose-runtime', 'stt-auto-setup'],
   'bridge-door': ['companion-ingest-routes'],
   'cloud-exec': ['cloud-exec', 'local-daemon', 'stream-file-cleanup', 'send-path-canary'],
-  'backup-leader': ['backup-leader', 'overview-maintainer', 'project-summary', 'routine-wake', 'cron'],
+  'backup-leader': ['backup-leader', 'project-summary', 'routine-wake', 'cron'],
 }
 
 /** What the companion still runs on its own pipeline, and the stage that decides each. */
 const COMPANION_UNTIL: Partial<Record<BootJob, string>> = {
   'v1-forward': '5b', 'companion-stream-forward': '5b', 'companion-queues': '5b',
   'plugins': '5b', 'companion-plugin-cards': '5b', 'update-check': '5b',
-  'git-pull': '4d', 'git-auto-commit': '4d', 'git-maintenance': '4d', 'notes-watcher': '4d', 'notes-indexer': '4d',
+  'git-pull': '4d', 'git-auto-commit': '4d', 'git-maintenance': '4d',
   'completed-task-session-migration': '2c',
 }
 

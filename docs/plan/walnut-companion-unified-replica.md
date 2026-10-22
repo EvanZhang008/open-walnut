@@ -462,17 +462,18 @@ Every copy read shows the pending saves over the copy (the copy's journal view,
 `core/companion-notes.ts`), and a save the Mac took until a copy round from after its
 ack stores the Mac's own text (or 10 minutes), so the box never shows a note going
 back; the round after a drain that took notes goes at once. Until 4d the box's other
-note writes still go to its disk and git sync, as before, and the copy shows their
-result once the Mac has it.
+note writes went to its disk and git sync, and the copy showed their result once the Mac
+had it. Since 4d no note, memory or skill write on the box reaches its disk (below).
 
 **4d, memory and skills.** The box's memory reads (`/api/memory/{global,user}`, and
 `/api/v1/memory/{global,user}` when the Mac does not answer, which memory_read calls)
 answer the copy's doc objects, and a memory save there is a `memory` record in its
 journal (the doc, the text it was made on and the new text, as blobs), shown over the
-copy as a note save is (`core/companion-memory.ts`). Both start together, once the copy
-is held and the Mac drains `memory`: a copy read beside a save that still went to the
-box's disk would show the save reverted until git sync brought it round, and the next
-save would answer 409. The Mac applies a record through the editor's own write
+copy as a note save is (`core/companion-memory.ts`). The reads take the copy once it is
+held; a save is a record once the Mac drains `memory` too, and needs the Mac before that
+(`kind_not_copied` without a copy, `mac_too_old` with a Mac that does not drain the
+kind), never the box's disk: a copy read beside a save that went to the disk would show
+the save reverted, and the next save would answer 409. The Mac applies a record through the editor's own write
 (`writeMemoryDoc`, locked to the text it read), three-way against the doc as it is
 (`offline-merge/apply-memory.ts`): a clean merge letters nothing; the same lines on both
 sides keep the newer side and letter the other in full. Records are not coalesced (the
@@ -481,7 +482,7 @@ one before it. The skill reads (`/api/skills`, `/api/v1/skills`, one skill or th
 which skill_read calls) answer the copy once it is held; a skill write there answers
 needs-the-Mac (`skill_changes_need_mac`): a skill is a folder (its references, its
 enabled flag) the copy holds as one document, so a write could only go to the box's disk
-and would show reverted. A skill's references stay the box's own files. v1's note resolve
+and would show reverted. A skill's references come from the copy too (below). v1's note resolve
 (note_read by id or title) answers from the copy's ids and titles. The companion's chat
 lane has no note, memory or skill tools (its profile drops the Walnut MCP and keeps read
 and web tools only), so nothing changes there; the ops that do reach the box (the backup
@@ -511,23 +512,97 @@ box would never show, and a folder delete also removes pictures and files the bo
 not hold. There is no folder rename route (the tree renames notes and never drags a
 folder).
 
-**4d, pictures and files.** The copy holds note text only, so the box reads pictures and
-files from its own disk, as before. A picture pasted into a note on the box (`POST
-/api/notes-v2/attachment`, `POST /api/v1/notes/attachment`, which stays on the box
-whoever answers) is written to the box's disk as before, so the editor shows it at once,
-and is also a `note-attachment` record with its bytes as a blob, once the Mac drains that
-kind (`core/companion-note-attachments.ts`). When the journal refuses the record, the
-file is removed again and the paste answers the refusal, so the box never keeps a file
-the Mac would not get. The Mac writes the bytes at the same path
-(`offline-merge/apply-note-attachment.ts`) and never overwrites: while git sync still
-runs it may bring the same file there first, and the same bytes at the path need nothing;
-other bytes there stay, and the companion's go beside them under a name with their own
-hash, lettered. A file is linked into place only where no file is, from a finished temp
-file, so one that appears meanwhile is never replaced and a crash never leaves half a
-picture. Moving or deleting a picture or file on the box answers needs-the-Mac
-(`attachment_changes_need_mac`): the box holds no copy of the Mac's files to check a
-move or delete against. Once git sync stops writing the box's data dir (after 3e), the
-box's picture reads need a source of their own.
+**4d, pictures and files.** The box keeps a copy of the Mac's pictures and files too,
+beside the notes copy (`core/companion-attachment-copy.ts`, `cache/replica/attachments/`),
+filled by the Mac (`core/attachment-replica.ts`) over the same door with four more
+commands (`attachments.sync`, `attachments.put`, `attachments.drop`,
+`attachments.status`). A relay to the Mac was the other choice, and it loses on both
+counts. On cost: one note fires 20 to 40 picture reads at once, each would be a round trip
+to the Mac, and file bytes do not ride the bridge (`docs/reference/cloud-sync.md`, "Why
+bulk uploads leave the bridge"). On correctness: a relay shows nothing while the Mac is
+away, which is when the box answers at all. The copy costs the box the files' size once
+(1.5 GB for the measured vault of 1,395 files) and one upload, after which only changed
+files go again.
+
+A round runs after the notes, memory and skills rounds whenever the companion keeps notes
+(`hosts.companion.keep.attachments: false` turns it off; the notes' kept-back folders are
+left out here too). The Mac walks the vault for the files the attachment route serves (by
+extension, at most 50 MB each, the newest 20,000 within 8 GB), hashes a file only when its
+size or time changed (a stat cache; reads in slices, so a large file never holds the loop)
+and sends the manifest (path, sha256, size). The box answers the files it lacks, with how
+much of a broken upload it holds; the Mac sends each in 2 MB chunks, every chunk its own
+short HTTPS request, resuming where the box says it stopped, at most 128 MB a round (a
+round that stops there runs again 15 s later). The box keeps one blob per hash, so the
+same bytes at two paths go once, checks each finished file against the manifest's hash
+(`hash_mismatch`), takes only files the manifest names (`not_wanted`), keeps the old bytes
+of a changed file until the new ones arrive, and refuses a manifest that removes most of a
+copy of 200 files or more (`manifest_removes_most_rows`, as the notes copy does). An
+unchanged manifest is not sent again while the box says it holds one (that memo ends every
+30 minutes and at a build change). Hosts get no such copy: a session there reads note
+text, and the attachment route is the companion's.
+
+Once a whole manifest has arrived the box's picture reads (`GET
+/api/notes-v2/attachment`, `GET /api/v1/notes/attachment`) answer the copy with the disk
+resolver's own rules (exact path, the legacy root, the longest suffix, the copy nearest
+the note: `resolveAttachmentInIndex` in `web/routes/notes-attachment.ts`), and a file the
+copy lacks is a 404, whatever the box's disk holds. Before that the box's disk answers, so
+an upgrade shows no gap. A picture pasted on the box (`POST /api/notes-v2/attachment`,
+`POST /api/v1/notes/attachment`) is never written to its disk: it is a `note-attachment`
+record with its bytes as a blob (`core/companion-note-attachments.ts`), and the read
+answers that blob first, so the editor shows it at once. When the Mac acks the record the
+box keeps the bytes as its own row, held until a copy round from after the ack (or 10
+minutes), as a note save is held. A paste the journal refuses answers the refusal, and one
+the Mac cannot drain answers `mac_too_old`; nothing is left behind either way. The Mac
+writes the bytes at the same path (`offline-merge/apply-note-attachment.ts`) and never
+overwrites: the same bytes at the path need nothing; other bytes there stay, and the
+companion's go beside them under a name with their own hash, lettered. A file is linked
+into place only where no file is, from a finished temp file, so one that appears meanwhile
+is never replaced and a crash never leaves half a picture. Moving or deleting a picture or
+file on the box answers needs-the-Mac (`attachment_changes_need_mac`).
+
+**4d, notes search, global notes and the diary.** The box keeps no notes index of its
+own: `notes-watcher` and `notes-indexer` are leader-only boot rows now, and the indexer's
+reconcile and the id stamping (`stampAllIds`) are no-ops wherever the indexer row is off,
+so nothing writes an `id:` into a note on the box's disk; the index routes (`POST
+/api/notes-v2/index/{rebuild,stamp-ids,merge-ids}`) answer needs-the-Mac
+(`notes_index_is_the_macs`). A notes search there (`/api/notes-v2/search`, and
+`/api/v1/notes/search` when the Mac does not answer) takes its string leg from the copy
+with the box's pending saves over it (`companionNotesSearch` in `core/companion-notes.ts`):
+the whole query in a title ranks first, then every word in a title, then the body hits by
+score, and the folder rows are the copy's folders whose name holds the query, counted in
+the copy. A semantic hit from the box's search copy joins the copy's row by path. The
+global notes (`/api/notes/global`, `/api/v1/notes/global`) read the copy's
+`global-notes.md`, and a save there is a `note` save of that path, shown at once, a stale
+lock a 409 with the hash the box shows. The diary context source (`journal_recent` in
+`core/context-sources.ts`) reads the newest dated entries of the copy's `journal/Dairy`;
+without a copy it says the diary is on the Mac.
+
+**4d, the rest of the memory dir.** The Mac's memory round to the companion carries the
+whole memory dir, not only MEMORY.md and USER.md (`core/host-replica-extras.ts`, for the
+companion's host key only, so a daemon's copy is unchanged): every `.md` under `memory/`
+as `f/<path>` with its times, every repo memory as `r/<name>`, a file over 1 MB left out,
+and a marker entry (`files.v1`) that tells the box the round was a whole-dir one. The box
+answers the browse tree, the lists, one file and the session summaries from it with the
+disk readers' shapes (`core/companion-memory-files.ts`); without the marker (no copy yet,
+or a Mac too old to send the dir) they answer `kind_not_copied`. A write to any memory file
+but the two docs, a compaction, and the telemetry view answer needs-the-Mac
+(`memory_file_changes_need_mac`, `memory_telemetry_needs_mac`): their records are later
+work, and the box's disk is not the Mac's memory.
+
+**4d, skills and the project overviews.** The skills round to the companion carries each
+skill's `references/` files too (at most 200 a skill, each under 1 MB), and the box lists
+and reads them from the copy. Every skill write on the box needs the Mac
+(`skill_changes_need_mac`). `overview-maintainer`, which writes a project's `SKILL.md`, is
+a leader-only row now (it left `backup-leader`): on the box it would write a copy of the
+Mac's skills that nothing brings round, and a later overview written on the Mac would
+not meet it.
+
+**4d, without a copy.** Before the copy is held, every notes, memory and skills reader on
+the box answers needs-the-Mac (`kind_not_copied`) instead of the box's disk: the tree, a
+note, links, backlinks, tags, the flat list, v1's resolve, a search, the global notes, the
+memory docs and files, the skills. So does every write, and a note write the Mac cannot
+drain answers `mac_too_old`. Only the picture reads keep the disk until their own copy
+arrives (above).
 
 **4d, the other reads of what git sync wrote.** Each takes a copy or needs the Mac, so
 git sync can stop writing the box's data dir without one of them going stale:
@@ -648,6 +723,17 @@ What this leaves:
 - The box's cron engine still persists its own infra jobs in `cron-jobs.json`, a file
   git tracks; when git sync stops, those jobs need a box-local store.
 
+**4d, what is left.** The box still commits and pulls through git sync (`git-pull`,
+`git-auto-commit`, `git-maintenance` stay `companionUntil: '4d'` rows) until the
+conversations and the box's own files have their owners (3e). The attachments half rule
+only logs its refusal; it has no Settings confirm as the notes copy does. The OCR leg of a
+notes search (text found in pictures) is empty on the box. The companion's chat lane
+still builds its skills prompt from the box's disk. Memory file writes and compactions on
+the box need a journal kind of their own. A task created or completed on the box gets a
+line in its project overview only if the Mac's apply of its record raises the task event
+the maintainer listens for (`TASK_CREATED`, `TASK_COMPLETED`); that path is not checked
+yet. The per-round byte budget of the attachments
+round has no test yet.
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 
 `bootPolicy` gets one `replica` column. What only a companion does becomes a
@@ -698,7 +784,7 @@ The capability rows as built in 5a:
 | `public-door` | `setup-token-banner`, `revoke-queue`, `stt-auto-setup`, `expose-runtime` | |
 | `bridge-door` | `companion-ingest-routes` (`/bridge/*`, `/git/data`, the trial build's confirm) | the `/bridge`, `/daemon-tunnel` and bridge session stream upgrades |
 | `cloud-exec` | `cloud-exec`, `local-daemon`, `stream-file-cleanup`, `send-path-canary` | `cloudExecActive`, the tunnel daemon's exec check, the canary's own start |
-| `backup-leader` | `backup-leader`, `cron`, `routine-wake`, `overview-maintainer`, `project-summary` | `getBackupLeader`, `canStandIn` |
+| `backup-leader` | `backup-leader`, `cron`, `routine-wake`, `project-summary` | `getBackupLeader`, `canStandIn` |
 
 `expose-runtime` is a public door too (the tunnel in front of the box), so it joined
 `public-door`. The pairing, claim, push and voice routes are mounted on every server
@@ -706,9 +792,10 @@ already, so `public-door` gates no mount yet. Inside the core modules those rout
 call (device auth and adoption, the push relay and revokes, the voice archive), and
 in the cron allowlist, the plugin relay and the `/ws` token check, a read that means
 "this box is the companion, its leader is over the bridge" became `isCompanion()`:
-that is the follower kind, not a door. `cron`, `routine-wake`, `overview-maintainer`
-and `project-summary` still start at boot whenever the box has `backup-leader`;
-running them only while it leads is later work.
+that is the follower kind, not a door. `cron`, `routine-wake` and `project-summary`
+still start at boot whenever the box has `backup-leader`; running them only while it
+leads is later work. `overview-maintainer` was a `backup-leader` row until 4d, which made
+it leader-only.
 
 Rows the companion still runs with no capability (`companionUntil`), each with the
 stage that moves it onto the replica core, makes it a capability row or turns it off:
@@ -716,7 +803,7 @@ stage that moves it onto the replica core, makes it a capability row or turns it
 | Stage | Rows |
 |---|---|
 | 2c | `completed-task-session-migration` |
-| 4d | `git-pull`, `git-auto-commit`, `git-maintenance`, `notes-watcher`, `notes-indexer`; 4d also decides whether the hub's gc stays (a `bridge-door` row then) |
+| 4d | `git-pull`, `git-auto-commit`, `git-maintenance` (`notes-watcher` and `notes-indexer` became leader-only in 4d); 4d also decides whether the hub's gc stays (a `bridge-door` row then) |
 | 5b | `v1-forward`, `companion-stream-forward`, `companion-queues` (deletes and whole-list reorders, 3d), `plugins`, `companion-plugin-cards`, `update-check` (a no-op on the companion already: its install kind is `replica`) |
 
 After 5a the ratchet lists 313 raw reads in 116 files (348 in 133 before): 213 in

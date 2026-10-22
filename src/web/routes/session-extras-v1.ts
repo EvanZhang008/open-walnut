@@ -140,8 +140,8 @@ sessionExtrasV1Router.get('/sessions/recent', async (req: Request, res: Response
 })
 
 // GET /api/v1/sessions/summaries?limit=10 (Wave 3) — parsed session summary
-// markdown files. Class A: the summaries dir (memory/sessions) rides git-sync,
-// so both boxes serve their local copy.
+// markdown files (memory/sessions). The companion reads them from its copy of the
+// Mac's memory dir (stage 4d, core/companion-memory-files.ts), never its own disk.
 sessionExtrasV1Router.get('/sessions/summaries', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const limit = Math.min(Math.max(parseInt(String(req.query.limit), 10) || 10, 1), 100)

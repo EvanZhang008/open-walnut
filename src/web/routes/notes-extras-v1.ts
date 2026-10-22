@@ -17,9 +17,10 @@
  *   DELETE /notes/attachment/*path        → { ok }
  *   DELETE /notes/folder/*path            → { ok, deletedNotes }
  *
- * Cloud companion (REPLICA): all Class A — the vault + global notes ride the
- * git-synced data dir, and the structural index rebuilds locally on each box.
- * No bridge.
+ * Cloud companion (REPLICA): reads answer its copy of the Mac's notes (stage 4b
+ * and 4d of docs/plan/walnut-companion-unified-replica.md; the global notes too,
+ * notes.ts), and writes are journal records for the Mac or need the Mac
+ * (replica/companion-note-writes.ts). It keeps no notes index of its own.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */

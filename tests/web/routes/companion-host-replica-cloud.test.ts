@@ -17,10 +17,11 @@
  *   - the memo ends when the box says a kind never arrived whole (a new box);
  *   - an older companion without the door rests the lane for 10 minutes, and a
  *     changed build ends that rest;
- *   - 4b: before the copy is held the box's notes reads are its disk's; once held,
+ *   - 4b: before the copy is held the box's notes reads need the Mac (4d); once held,
  *     the v2 and v1 reads (tree, content) take the copy, with `x-walnut-copy-as-of`,
  *     and a search stays the box's own;
- *   - 4c: once the Mac drains `note`, a v2 save, a v1 create and a v1 delete are
+ *   - 4c: before the Mac drains `note` a save needs the Mac (4d, never the box's disk);
+ *     once it does, a v2 save, a v1 create and a v1 delete are
  *     `note` records in the journal (the disk untouched), shown at once over the
  *     copy; a stale lock hash is a 409 with the text the box shows; after the ack
  *     the box keeps showing its text until a copy round from after the ack, then
@@ -129,10 +130,9 @@ describe('the door', () => {
 })
 
 describe('the Mac\'s rounds', () => {
-  it('before the copy is held, the box\'s notes reads are its disk\'s', async () => {
+  it('before the copy is held, the box\'s notes reads need the Mac (never its disk)', async () => {
     const r = await api('/api/notes-v2/content/Acme/launch-plan.md')
-    expect(r.status).toBe(200)
-    expect(r.body.content).toContain('Ship the beta')
+    expect(r).toMatchObject({ status: 503, body: { error: { code: 'needs_leader', why: 'kind_not_copied' } } })
     expect(r.asOf).toBeNull()
   })
 
@@ -141,7 +141,8 @@ describe('the Mac\'s rounds', () => {
     const before = await fs.readFile(path.join(NOTES_DIR, 'Acme/vendors.md'), 'utf8')
     const results = await syncCompanionHostReplica()
     expect(sentOf(results, 'notes')).toMatchObject({ action: 'synced', entries: 3, sent: 3 })
-    expect(sentOf(results, 'memory')).toMatchObject({ action: 'synced', sent: 1 }) // MEMORY.md (no USER.md here)
+    // MEMORY.md (no USER.md here) and the mark that the companion's copy carries the whole memory dir (4d).
+    expect(sentOf(results, 'memory')).toMatchObject({ action: 'synced', sent: 2 })
     expect(sentOf(results, 'skills')?.action).toBe('synced')
     expect(companionCopyHolds('notes')).toBe(true)
     const r = companionHostReplica()!
@@ -209,12 +210,11 @@ describe('the box\'s notes reads and saves (4b, 4c)', () => {
     await writeNote('Acme/launch-plan.md', '# Acme launch plan\n\nShip the beta on Friday.\n')
   })
 
-  it('before the Mac drains notes, a save takes the old path (the disk)', async () => {
+  it('before the Mac drains notes, a save needs the Mac; the disk is untouched', async () => {
     const put = await api('/api/notes-v2/content/Acme/scratch.md', { method: 'PUT', body: JSON.stringify({ content: '# Scratch\n\nOld path.\n' }) })
-    expect(put.status).toBe(200)
-    expect(await fs.readFile(path.join(NOTES_DIR, 'Acme/scratch.md'), 'utf8')).toContain('Old path.')
+    expect(put).toMatchObject({ status: 503, body: { error: { code: 'needs_leader', why: 'mac_too_old' } } })
+    await expect(fs.stat(path.join(NOTES_DIR, 'Acme/scratch.md'))).rejects.toThrow()
     expect(noteRecords()).toEqual([])
-    await fs.rm(path.join(NOTES_DIR, 'Acme/scratch.md'))
   })
 
   it('once the Mac drains notes, saves are journal records shown over the copy; the disk is untouched', async () => {

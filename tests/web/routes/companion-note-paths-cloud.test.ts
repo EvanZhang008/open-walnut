@@ -4,7 +4,8 @@
  * notes (core/companion-note-paths.ts, replica/companion-note-writes.ts).
  *
  * Pinned:
- *   - before the Mac drains `note-move`, a move takes the old path (the box's disk);
+ *   - before the Mac drains `note-move`, a move needs the Mac (`mac_too_old`), the box's
+ *     disk untouched;
  *   - once it does, a v2 or v1 move is one `note-move` record with the note's id (the
  *     disk untouched), shown at once at its new path (content, tree, resolve) and gone
  *     from the old one; the route's own errors (no source 404, a taken path 409, a
@@ -17,9 +18,9 @@
  *     note out (too large) answers needs_leader `tag_rename_needs_mac`;
  *   - making or deleting a folder (web and v1) is needs_leader `folder_changes_need_mac`;
  *   - moving or deleting a picture (web and v1) is needs_leader `attachment_changes_need_mac`;
- *     a paste is written to the box's disk as before and, once the Mac drains
- *     `note-attachment`, is a record with its bytes too (web and v1, the route's own
- *     errors); when the journal refuses it the file is removed and the paste fails.
+ *     before the Mac drains `note-attachment` a paste needs the Mac; once it does, a paste
+ *     is a record with its bytes, never written to the box's disk, shown at once (web and
+ *     v1, the route's own errors); when the journal refuses it the paste fails, nothing kept.
  *
  * Both sides share one data dir: the "Mac's" notes are the files under NOTES_DIR.
  */
@@ -106,12 +107,12 @@ afterAll(async () => {
 })
 
 describe('a note move on the box', () => {
-  it('before the Mac drains note-move, a move takes the old path (the disk)', async () => {
+  it('before the Mac drains note-move, a move needs the Mac; the disk is untouched', async () => {
     await postToCloudJournal('offline.drain', { home: '/x', kinds: APPLIED_V2_KINDS.filter((k) => k !== 'note-move') })
-    expect(await post('/api/notes-v2/move', { from: 'Acme/vendors.md', to: 'Acme/vendors-old.md' })).toMatchObject({ status: 200, body: { ok: true } })
-    expect(await disk('Acme/vendors-old.md')).toContain('Call the printer.')
+    expect(await post('/api/notes-v2/move', { from: 'Acme/vendors.md', to: 'Acme/vendors-old.md' })).toMatchObject({ status: 503, body: { error: { code: 'needs_leader', why: 'mac_too_old' } } })
+    expect(await disk('Acme/vendors-old.md')).toBeNull()
+    expect(await disk('Acme/vendors.md')).toContain('Call the printer.')
     expect(records()).toEqual([])
-    await fs.rename(path.join(NOTES_DIR, 'Acme/vendors-old.md'), path.join(NOTES_DIR, 'Acme/vendors.md'))
   })
 
   it('once it does, a move is one record shown at once at its new path; the disk is untouched', async () => {
@@ -262,27 +263,27 @@ describe('a pasted picture on the box', () => {
   const pictures = () => companionJournalRecords().filter((r) => r.kind === 'note-attachment')
   const onDisk = async (rel: string) => fs.readFile(path.join(NOTES_DIR, rel)).catch(() => null)
 
-  it('before the Mac drains note-attachment, a paste is the box\'s disk only', async () => {
+  it('before the Mac drains note-attachment, a paste needs the Mac; nothing is written', async () => {
     await postToCloudJournal('offline.drain', { home: '/x', kinds: APPLIED_V2_KINDS.filter((k) => k !== 'note-attachment') })
     const r = await paste('/api/notes-v2/attachment', 1)
-    expect(r).toMatchObject({ status: 200, body: { ok: true } })
-    expect(r.body.path).toMatch(/^Beta\/_attachment\/pasted-image-.*\.png$/)
-    expect(await onDisk(r.body.path)).toEqual(png(1))
+    expect(r).toMatchObject({ status: 503, body: { error: { code: 'needs_leader', why: 'mac_too_old' } } })
+    await expect(fs.stat(path.join(NOTES_DIR, 'Beta/_attachment'))).rejects.toThrow()
     expect(pictures()).toEqual([])
   })
 
-  it('once it does, a paste is written and journaled with its bytes (web and v1)', async () => {
+  it('once it does, a paste is a record with its bytes, never written to the box\'s disk (web and v1)', async () => {
     await postToCloudJournal('offline.drain', { home: '/x', kinds: [...APPLIED_V2_KINDS] })
     const web = await paste('/api/notes-v2/attachment', 2)
     expect(web).toMatchObject({ status: 200, body: { ok: true } })
-    expect(await onDisk(web.body.path)).toEqual(png(2))
+    expect(web.body.path).toMatch(/^Beta\/_attachment\/pasted-image-.*\.png$/)
+    expect(await onDisk(web.body.path)).toBeNull()
     const v1 = await paste('/api/v1/notes/attachment', 3)
     expect(v1).toMatchObject({ status: 200, body: { ok: true } })
     expect(pictures().map((r) => ({ path: r.path, oursBlob: r.oursBlob, size: r.size, notePath: r.notePath }))).toEqual([
       { path: web.body.path, oursBlob: crypto.createHash('sha256').update(png(2)).digest('hex'), size: png(2).length, notePath: 'Beta/budget.md' },
       { path: v1.body.path, oursBlob: crypto.createHash('sha256').update(png(3)).digest('hex'), size: png(3).length, notePath: 'Beta/budget.md' },
     ])
-    // The box shows it from its own disk at once.
+    // The box shows it at once, from its record.
     const shown = await fetch(`http://127.0.0.1:${port}/api/notes-v2/attachment?path=${encodeURIComponent(web.body.path)}`, { headers: { Authorization: `Bearer ${T.phone}` } })
     expect(Buffer.from(await shown.arrayBuffer())).toEqual(png(2))
     // The route's own errors, in each route's shape.
@@ -291,9 +292,8 @@ describe('a pasted picture on the box', () => {
     expect(pictures()).toHaveLength(2)
   })
 
-  it('when the journal refuses a paste, the file is removed and the paste fails', async () => {
+  it('when the journal refuses a paste, the paste fails and nothing is kept', async () => {
     const blobs = path.join(companionJournalDir(), 'blobs')
-    const before = new Set(await fs.readdir(path.join(NOTES_DIR, 'Beta/_attachment')))
     await fs.chmod(blobs, 0o500)
     try {
       const r = await paste('/api/notes-v2/attachment', 5)
@@ -301,7 +301,7 @@ describe('a pasted picture on the box', () => {
     } finally {
       await fs.chmod(blobs, 0o700)
     }
-    expect(new Set(await fs.readdir(path.join(NOTES_DIR, 'Beta/_attachment')))).toEqual(before)
+    await expect(fs.stat(path.join(NOTES_DIR, 'Beta/_attachment'))).rejects.toThrow()
     expect(pictures()).toHaveLength(2)
   })
 })

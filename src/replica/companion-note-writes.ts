@@ -2,15 +2,22 @@
  * The note saves the cloud companion answers itself (stage 4c of
  * docs/plan/walnut-companion-unified-replica.md): a note PUT, a v1 create and a
  * delete become `note` records in its journal (core/companion-notes.ts
- * companionNoteSave) once its copy of the notes is held and the Mac drains notes;
- * until then, and for every other notes write, the route runs as before.
+ * companionNoteSave) once its copy of the notes is held and the Mac drains notes.
  *
  * Stage 4d: a note move or rename, a tag rename and a folder change are answered here
  * too (core/companion-note-paths.ts): a move is a `note-move` record once the Mac drains
  * that kind, a tag rename is a `note` save of each carrying note, and a folder change
- * needs the Mac. A pasted picture is written to the box's disk and is a
- * `note-attachment` record too, once the Mac drains that kind
- * (core/companion-note-attachments.ts); moving or deleting a picture or file needs the Mac.
+ * needs the Mac. A pasted picture is a `note-attachment` record with its bytes, once the
+ * Mac drains that kind (core/companion-note-attachments.ts); moving or deleting a picture
+ * or file needs the Mac.
+ *
+ * The box never writes its own disk for a note any more, which git sync stops keeping
+ * as the Mac's vault: a change it cannot journal (no copy yet, a Mac too old to drain the
+ * kind) needs the Mac, and so do the notes index writes (rebuild, id stamping), the Mac's
+ * index's own. A notes read the copy cannot answer yet (no whole manifest) needs the Mac
+ * too, rather than reading the box's disk; pictures (their own copy), searches (the copy
+ * or the Mac, notes-v2.ts performNotesSearch) and the global notes (notes.ts) decide for
+ * themselves.
  *
  * Mounted on the notes routers after the copy reads (notes-v2.ts, api-v1.ts), so a
  * v1 save the companion forwards to the Mac while it answers never reaches here.
@@ -19,7 +26,9 @@
  */
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
-import { companionNoteSave, companionNotesWritable } from '../core/companion-notes.js'
+import { companionNoteSave, companionNotesBlocked } from '../core/companion-notes.js'
+import { companionCopyHolds } from '../core/companion-host-replica.js'
+import { isCompanion } from '../core/server-role.js'
 import { log } from '../logging/index.js'
 import { applied, noteRouteOf, refusedAnswer } from './away-notes.js'
 import { needsLeaderAnswer, refusalAnswer, type PortAnswer } from './write-port.js'
@@ -57,8 +66,8 @@ async function answerNotePath(flavor: 'v1' | 'v2', route: PathRoute, req: Reques
   if (route === 'paste' || route === 'attachment' || (route === 'move' && paths.isAttachmentMove(b.from))) {
     const pics = await import('../core/companion-note-attachments.js')
     if (route !== 'paste') return pathRefusal(flavor, pics.companionAttachmentChange())
-    // A Mac that does not drain pastes: the old path (the box's disk, git sync).
-    if (!pics.companionJournalsPastes()) return null
+    // A Mac that does not drain pastes: the box cannot keep it for the Mac.
+    if (!pics.companionJournalsPastes()) return pathRefusal(flavor, { code: 'needs_leader', message: 'Your Mac runs an older Walnut that cannot take a picture later; it needs your Mac.', detail: { why: 'mac_too_old' } })
     const r = await pics.companionAttachmentPaste({ notePath: b.notePath, data: b.data, mediaType: b.mediaType })
     if (r.ok) {
       log.web.info('companion: pasted picture kept for the Mac', { path: r.path })
@@ -68,8 +77,7 @@ async function answerNotePath(flavor: 'v1' | 'v2', route: PathRoute, req: Reques
     return pathRefusal(flavor, r)
   }
   if (route === 'move') {
-    // A Mac that does not drain moves: the old path.
-    if (!paths.companionMovesNotes()) return null
+    // A Mac that does not drain moves answers needs the Mac (companionNoteMove says so).
     const r = paths.companionNoteMove({ from: b.from, to: b.to })
     if (!r.ok) return pathRefusal(flavor, r)
     log.web.info('companion: note move kept for the Mac', { from: b.from, to: b.to, seq: r.seq })
@@ -94,34 +102,66 @@ function send(res: Response, a: PortAnswer): void {
   res.status(a.status).json(a.body)
 }
 
+/** A notes read the copy answers once it is held (replica/notes-routes.ts), by the router's own path. */
+function isCopyRead(flavor: 'v1' | 'v2', p: string): boolean {
+  const rest = flavor === 'v2' ? p : p === '/notes' ? '/' : p.startsWith('/notes/') ? p.slice('/notes'.length) : null
+  if (rest === null) return false
+  if (rest === '/' || rest === '' || rest === '/list' || rest === '/tags') return true
+  if (rest === '/resolve') return flavor === 'v1'
+  return /^\/(content|backlinks|links)\//.test(rest) || /^\/tags\/[^/]+\/notes$/.test(rest)
+}
+
+/** The notes index writes (v2): the Mac's index, never rebuilt or id-stamped on the box. */
+function isIndexWrite(flavor: 'v1' | 'v2', method: string, p: string): boolean {
+  return flavor === 'v2' && method === 'POST' && /^\/index\/(rebuild|stamp-ids|merge-ids)$/.test(p)
+}
+
 export function companionNoteWrites(flavor: 'v1' | 'v2'): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
+    if (!isCompanion()) { next(); return }
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      if (isCopyRead(flavor, req.path) && !companionCopyHolds('notes')) {
+        send(res, needsLeaderAnswer('kind_not_copied', 'This box keeps no copy of the notes yet; your Mac answers this.'))
+        return
+      }
+      next()
+      return
+    }
     if (req.method !== 'PUT' && req.method !== 'POST' && req.method !== 'DELETE') { next(); return }
+    if (isIndexWrite(flavor, req.method, req.path)) {
+      send(res, needsLeaderAnswer('notes_index_is_the_macs', 'The notes index is kept on your Mac, so it is rebuilt there.'))
+      return
+    }
     const pathRoute = pathRouteOf(flavor, req.method, req.path)
+    const route = pathRoute ? null : noteRouteOf(req.method, flavor === 'v2' ? `/notes-v2${req.path}` : `/v1${req.path}`)
+    if (!pathRoute && !route) { next(); return }
+    const blocked = companionNotesBlocked()
+    if (blocked) {
+      log.web.info('companion: a note change needs the Mac', { method: req.method, path: req.originalUrl, why: blocked.why })
+      send(res, needsLeaderAnswer(blocked.why, blocked.message))
+      return
+    }
     if (pathRoute) {
-      if (!companionNotesWritable()) { next(); return }
       answerNotePath(flavor, pathRoute, req).then((a) => { if (a) send(res, a); else next() }, next)
       return
     }
-    // The router's own paths: v2 at /api/notes-v2, v1 at /api/v1.
-    const route = noteRouteOf(req.method, flavor === 'v2' ? `/notes-v2${req.path}` : `/v1${req.path}`)
-    if (!route || !companionNotesWritable()) { next(); return }
     const b = bodyOf(req)
-    const notePath = route.op === 'create' ? (typeof b.path === 'string' ? b.path : '') : route.path
+    const noteRoute = route!
+    const notePath = noteRoute.op === 'create' ? (typeof b.path === 'string' ? b.path : '') : noteRoute.path
     if (!notePath) {
       send(res, refusalAnswer('bad_request', 'path (string) is required'))
       return
     }
-    const r = companionNoteSave(route.op === 'delete'
+    const r = companionNoteSave(noteRoute.op === 'delete'
       ? { path: notePath, mode: 'delete' }
-      : { path: notePath, content: route.op === 'create' && typeof b.content !== 'string' ? '' : b.content, expectedHash: b.expectedHash, createOnly: route.op === 'create' })
+      : { path: notePath, content: noteRoute.op === 'create' && typeof b.content !== 'string' ? '' : b.content, expectedHash: b.expectedHash, createOnly: noteRoute.op === 'create' })
     if (r.ok) {
-      log.web.info('companion: note change kept for the Mac', { path: notePath, op: route.op, seq: r.seq, ...(r.coalesced ? { coalesced: true } : {}) })
-      send(res, applied(route, { contentHash: r.contentHash, updatedAt: r.updatedAt, ...(r.noteId ? { noteId: r.noteId } : {}) }, notePath))
+      log.web.info('companion: note change kept for the Mac', { path: notePath, op: noteRoute.op, seq: r.seq, ...(r.coalesced ? { coalesced: true } : {}) })
+      send(res, applied(noteRoute, { contentHash: r.contentHash, updatedAt: r.updatedAt, ...(r.noteId ? { noteId: r.noteId } : {}) }, notePath))
       return
     }
-    log.web.info('companion: note change refused', { path: notePath, op: route.op, code: r.code })
+    log.web.info('companion: note change refused', { path: notePath, op: noteRoute.op, code: r.code })
     const retry = typeof r.detail?.retryAfterMs === 'number' ? r.detail.retryAfterMs : undefined
-    send(res, refusedAnswer(route, r.code, r.message, r.detail, retry))
+    send(res, refusedAnswer(noteRoute, r.code, r.message, r.detail, retry))
   }
 }

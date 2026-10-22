@@ -167,25 +167,29 @@ async function loadJournalRecent(budget: number): Promise<string> {
 
   // "Dairy" is the actual folder name in the user's Obsidian vault (not a typo for "Diary").
   // Vault went topic-first 2026-08 (PARA retired): journal/ is now top-level.
-  const diaryDir = path.join(NOTES_DIR, 'journal', 'Dairy');
-  let files: string[];
-  try {
-    files = fs.readdirSync(diaryDir)
-      .filter((f: string) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
-      .sort()
-      .reverse()
-      .slice(0, 7);
-  } catch {
-    return '(no diary entries found)';
-  }
-  if (files.length === 0) return '(no diary entries found)';
-
+  const DIARY = 'journal/Dairy';
+  const isEntry = (f: string) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f);
+  // The cloud companion reads the Mac's copy of the notes (stage 4d), never its disk.
+  const { companionDiaryEntries } = await import('./companion-notes.js');
+  const copied = companionDiaryEntries(DIARY, isEntry, 7);
+  if (copied === 'needs-mac') return '(the diary is on your Mac, and this box keeps no copy of the notes yet)';
   const entries: string[] = [];
-  for (const file of files) {
+  if (copied) {
+    for (const e of copied) entries.push(`--- ${e.name.replace('.md', '')} ---\n${e.body.trim()}`);
+  } else {
+    const diaryDir = path.join(NOTES_DIR, DIARY);
+    let files: string[];
     try {
-      const content = fs.readFileSync(path.join(diaryDir, file), 'utf-8');
-      entries.push(`--- ${file.replace('.md', '')} ---\n${content.trim()}`);
-    } catch { /* skip unreadable */ }
+      files = fs.readdirSync(diaryDir).filter(isEntry).sort().reverse().slice(0, 7);
+    } catch {
+      return '(no diary entries found)';
+    }
+    for (const file of files) {
+      try {
+        const content = fs.readFileSync(path.join(diaryDir, file), 'utf-8');
+        entries.push(`--- ${file.replace('.md', '')} ---\n${content.trim()}`);
+      } catch { /* skip unreadable */ }
+    }
   }
   if (entries.length === 0) return '(no diary entries found)';
   return truncateToTokenBudgetTail(entries.join('\n\n'), budget);

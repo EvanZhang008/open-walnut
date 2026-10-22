@@ -451,6 +451,9 @@ export async function ackCompanionJournal(seqs: unknown, macNow?: unknown): Prom
   // A memory doc the same way (4d).
   const memory = acked.filter((x) => x.kind === 'memory')
   if (memory.length) (await import('./companion-memory.js')).companionMemoryAcked(memory, at)
+  // A pasted picture the same way (4d): its bytes stay in the box's attachments copy, read before the ack frees them.
+  const pictures = acked.filter((x) => x.kind === 'note-attachment')
+  if (pictures.length) await (await import('./companion-attachment-copy.js')).companionAttachmentsAcked(pictures, at)
   const r = journalOf().ack(COMPANION_JOURNAL_HOME, { seqs })
   if (r.error) return { ok: false, remaining: r.remaining, error: r.error }
   if (r.acked.length) {

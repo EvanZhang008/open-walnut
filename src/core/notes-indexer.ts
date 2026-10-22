@@ -215,6 +215,10 @@ async function reconcileNoteInternal(
   relPath: string,
   options?: ReconcileNoteOptions,
 ): Promise<string | null> {
+  // A replica keeps no notes index (the companion since 4d), and must never stamp an id
+  // into a note on its own disk: that disk is not the Mac's vault (a git pull's reconcile
+  // event, or a route's reconcileNoteNow, reaches here on the companion too).
+  if (!bootPolicy('notes-indexer')) return null
   if (!isIndexableRelPath(relPath)) return null
   const abs = path.join(NOTES_DIR, relPath)
 

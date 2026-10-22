@@ -255,6 +255,98 @@ export function companionNotesWritable(): boolean {
 }
 
 /**
+ * Why the box takes no note change now, or null (it does, or this is not the companion).
+ * A change the box cannot journal needs the Mac: it is never written to the box's disk,
+ * which is no longer the Mac's vault once git sync stops writing it.
+ */
+export function companionNotesBlocked(): { why: 'kind_not_copied' | 'mac_too_old'; message: string } | null {
+  if (followerKind() !== 'companion') return null
+  if (!companionCopyHolds('notes')) return { why: 'kind_not_copied', message: 'This box keeps no copy of the notes yet; that needs your Mac.' }
+  if (!macDrains('note')) return { why: 'mac_too_old', message: 'Your Mac runs an older Walnut that cannot take a note change later; it needs your Mac.' }
+  return null
+}
+
+/**
+ * The vault-root global notes (`global-notes.md`) as the box shows them (the pending save,
+ * else the copy; none yet reads as empty, as on the Mac), `{needs}` when the box cannot
+ * tell (no copy yet, or the Mac keeps the file to itself), null on anything but the companion.
+ */
+export function companionGlobalNotes(): { content: string } | { needs: 'kind_not_copied' | 'note_not_kept' } | null {
+  if (followerKind() !== 'companion') return null
+  if (!companionCopyHolds('notes')) return { needs: 'kind_not_copied' }
+  if (!companionNoteKept(GLOBAL_NOTES_KEY)) return { needs: 'note_not_kept' }
+  return { content: companionNoteAt(GLOBAL_NOTES_KEY)?.body ?? '' }
+}
+
+/** The global notes file's key in the copy (constants.ts GLOBAL_NOTES_FILE, vault-relative). */
+export const GLOBAL_NOTES_KEY = 'global-notes.md'
+
+/**
+ * The string leg of the box's notes search (notes-v2.ts performNotesSearch): a keyword
+ * search of the Mac's copy as the box shows it, in the string bands the disk index uses
+ * (a title with the whole query, a title with every word, then the body by its score), and
+ * the folders whose name holds the query with their notes counted in the copy. The box's
+ * own notes index is off (the indexer reads a disk the Mac no longer writes). Its semantic
+ * leg stays its copy of the Mac's search index. Null on anything but the companion; throws
+ * needs-the-Mac while the box keeps no copy of the notes.
+ */
+export async function companionNotesSearch(q: string, limit: number): Promise<{
+  rows: Array<{ id: string; path: string; title: string; snippet: string; stringScore: number }>
+  folders: Array<{ path: string; noteCount: number }>
+} | null> {
+  if (followerKind() !== 'companion') return null
+  const { replicaNotesSource } = await import('../replica/notes-source.js')
+  const src = companionCopyHolds('notes') ? replicaNotesSource() : null
+  const list = src ? companionHostReplica()?.list(COMPANION_REPLICA_HOME, 'notes') : null
+  if (!src || !list) {
+    const { NeedsLeaderError } = await import('./replication/needs-leader.js')
+    throw new NeedsLeaderError('kind_not_copied')
+  }
+  const phrase = q.trim().toLowerCase()
+  const tokens = phrase.split(/\s+/).filter(Boolean)
+  const found = await src.search(q, limit)
+  const top = found.results.reduce((n, r) => Math.max(n, r.score), 0) || 1
+  const rows = found.results.map((r) => {
+    const title = r.title.toLowerCase()
+    const stringScore = title.includes(phrase) ? 0.92 : tokens.every((t) => title.includes(t)) ? 0.9 : 0.5 + 0.3 * Math.min(1, r.score / top)
+    return { id: r.id, path: r.path, title: r.title, snippet: r.snippet, stringScore }
+  })
+  // Folders whose own name holds the query, each with every note under it (the disk index counts so too).
+  const counts = new Map<string, number>()
+  for (const e of list.entries) {
+    const parts = e.k.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      if (!parts[i - 1]!.toLowerCase().includes(phrase)) continue
+      const dir = parts.slice(0, i).join('/')
+      counts.set(dir, (counts.get(dir) ?? 0) + 1)
+    }
+  }
+  const folders = [...counts].map(([p, noteCount]) => ({ path: p, noteCount }))
+  folders.sort((a, b) => b.noteCount - a.noteCount || a.path.localeCompare(b.path))
+  return { rows, folders: phrase ? folders.slice(0, 5) : [] }
+}
+
+/**
+ * The newest `limit` notes directly in `folder` whose file name passes `want`, as the box
+ * shows them (newest name first), for the diary context (context-sources.ts). `needs-mac`
+ * while the box keeps no copy; null on anything but the companion.
+ */
+export function companionDiaryEntries(folder: string, want: (name: string) => boolean, limit: number): Array<{ name: string; body: string }> | 'needs-mac' | null {
+  if (followerKind() !== 'companion') return null
+  const list = companionCopyHolds('notes') ? companionHostReplica()?.list(COMPANION_REPLICA_HOME, 'notes') : null
+  if (!list) return 'needs-mac'
+  const prefix = `${folder}/`
+  const names = list.entries.map((e) => e.k).filter((k) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/') && want(k.slice(prefix.length)))
+  names.sort().reverse()
+  const out: Array<{ name: string; body: string }> = []
+  for (const k of names.slice(0, limit)) {
+    const note = companionNoteAt(k)
+    if (note) out.push({ name: k.slice(prefix.length), body: note.body })
+  }
+  return out
+}
+
+/**
  * One note save, create or delete on the box, checked against what the box shows (the
  * pending save, else the copy) and journaled as a `note` record. `expectedHash` (the
  * notes contentHash) is the lock: a mismatch answers `conflict` with

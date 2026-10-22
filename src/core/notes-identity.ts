@@ -45,6 +45,7 @@ import {
 } from './notes-index.js'
 import { reconcileNote, collectIndexableNotePaths } from './notes-indexer.js'
 import { log } from '../logging/index.js'
+import { bootPolicy } from './boot-policy.js'
 
 export interface StampAllResult {
   /** Total indexable notes scanned. */
@@ -68,6 +69,8 @@ export interface StampAllResult {
  * migration. Callers should run it off the event loop (it walks the vault).
  */
 export async function stampAllIds(): Promise<StampAllResult> {
+  // A replica's disk is not the Mac's vault: no id is ever stamped there (the companion since 4d).
+  if (!bootPolicy('notes-indexer')) return { scanned: 0, stamped: 0, skipped: 0 }
   const relPaths = await collectIndexableNotePaths()
   let stamped = 0
   let skipped = 0

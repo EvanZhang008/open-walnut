@@ -39,6 +39,7 @@ import { stopWhenTurnEnds } from './sessions/self-complete-stop.js';
 import { assertTaskSessionFree, otherTaskSessionId } from './sessions/one-session-per-task.js';
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
+import { NeedsLeaderError } from './replication/needs-leader.js';
 
 let sessionInitialized = false;
 
@@ -2952,6 +2953,15 @@ export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecifi
  * Get session summaries from markdown files in the sessions directory.
  */
 export async function getSessionSummaries(limit = 10): Promise<SessionSummary[]> {
+  // The cloud companion reads its copy of the Mac's memory dir (stage 4d), never its own disk.
+  const companion = await import('./companion-memory-files.js');
+  const state = companion.companionMemoryFiles();
+  if (state === 'needs-mac') throw new NeedsLeaderError('kind_not_copied');
+  if (state === 'copy') {
+    return companion.copySessionSummaryFiles(limit)
+      .map((f) => parseSessionMarkdown(f.content, f.file))
+      .filter((s): s is SessionSummary => s !== null);
+  }
   await ensureDir(SESSIONS_DIR);
 
   let files: string[];
