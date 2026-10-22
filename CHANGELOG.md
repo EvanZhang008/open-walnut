@@ -6,6 +6,24 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-10-22
+
+### Added
+
+- The Mac keeps its cloud companion on the Mac's own build
+- Transcribe a voice take while it is still being recorded
+- Every server runs Qwen3-ASR locally and installs it by itself
+- Show what a session cost, priced per request
+
+### Fixed
+
+- A delivery waits for a mid-turn write still out, so lines keep their order
+- Send a dropped upload chunk again at once, in 1 MB chunks
+- Scroll a tall permission card instead of cutting it off
+- Look at an older companion again after ten minutes, not an hour
+- Keep remote delivery working when the primary is offline
+- Hash the session cost core into the daemon build and explain the new config maps
+
 ## [0.6.15] - 2026-10-21
 
 ### Added
