@@ -86,6 +86,8 @@ import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHand
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { TransferLinks } from '../transfer/TransferLinks';
+import { transferPlusAction } from '../transfer/transfer-plus-action';
+import { canOpenTransfer } from '../transfer/transfer-events';
 import { usePhoneBarSlot, usePhoneLayerWithBar, scrollToLatestTurnStart } from './phone-session-layer';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useHomeTaskTitleForSession } from '@/components/tasks/phone-row-behavior';
@@ -1203,8 +1205,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const triggerPicker = useTriggerPickerEntry({
     sessionId, taskId: session?.taskId, acp: engineIsAcp, enabled: !onQuestionPage, onPrefill: prefillLead,
   });
+  // Read every render: the dialog host registers in an effect that may run after this panel's first render.
+  const transferAvailable = canOpenTransfer();
   const composerPlusActions = useMemo<PlusMenuAction[] | undefined>(() => {
-    const rest = [...(triggerPicker.action ? [triggerPicker.action] : []), ...(engineSettingsEntry.plusMenuActions ?? [])];
+    // "Transfer…" sits under "Engine settings": both are about where this work runs.
+    const transfer = transferAvailable ? transferPlusAction(session?.taskId) : null;
+    const rest = [
+      ...(triggerPicker.action ? [triggerPicker.action] : []),
+      ...(engineSettingsEntry.plusMenuActions ?? []),
+      ...(transfer ? [transfer] : []),
+    ];
     if (!session?.taskId || onQuestionPage) return engineSettingsEntry.plusMenuActions;
     const waitUntil: PlusMenuAction = {
       id: 'wait-until',
@@ -1222,7 +1232,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       },
     };
     return [waitUntil, ...rest];
-  }, [engineSettingsEntry.plusMenuActions, triggerPicker.action, session?.taskId, onQuestionPage, engineIsAcp]);
+  }, [engineSettingsEntry.plusMenuActions, triggerPicker.action, session?.taskId, onQuestionPage, engineIsAcp, transferAvailable]);
 
   // Open the Inbox tab (optionally on one letter) — the arrival half of the
   // `/sessions?id=…&tab=inbox&letter=…` deep link.
