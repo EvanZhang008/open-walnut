@@ -206,6 +206,7 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/transfer-core.ts',
   'src/providers/transfer-pack-core.ts',
   'src/providers/host-facts-core.ts',
+  'src/providers/desktop-update-core.ts',
 ] as const
 
 /**

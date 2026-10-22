@@ -270,6 +270,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  */
 export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
+  'desktop-update-v1',
   'snapshot-v1',
   'snapshot-memory-v1',
   'usage-scan-v1',

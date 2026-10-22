@@ -151,7 +151,7 @@ export function readUnsavedSnapshot(doc: Document = document, active: Element | 
     // An inline title being edited counts; a document editor's body does not.
     if (!active.closest?.(DOCUMENT_EDITOR_SELECTOR)) focusedText = active.textContent ?? '';
   }
-  return { dirtyEditor: doc.querySelector('.fv-dirty-dot') != null, drafts, focusedText };
+  return { dirtyEditor: doc.querySelector('.fv-dirty-dot, .notes-save-status.saving, .notes-save-status.error, .global-notes-saving, .global-notes-error') != null, drafts, focusedText };
 }
 
 /** Would reloading right now throw away something the user typed? */

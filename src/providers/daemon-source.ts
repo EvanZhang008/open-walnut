@@ -69,6 +69,7 @@ import { createGitCommitCore } from './git-commit-core.js'
 import { createTransferCore } from './transfer-core.js'
 import { createTransferPack } from './transfer-pack-core.js'
 import { createHostFacts } from './host-facts-core.js'
+import { createDesktopUpdate } from './desktop-update-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
@@ -272,6 +273,7 @@ export function getDaemonSource(): string {
     ['__CREATE_TRANSFER_CORE__', createTransferCore.toString()],
     ['__CREATE_TRANSFER_PACK__', createTransferPack.toString()],
     ['__CREATE_HOST_FACTS__', createHostFacts.toString()],
+    ['__CREATE_DESKTOP_UPDATE__', createDesktopUpdate.toString()],
     ['__CREATE_TURN_SNAPSHOTS__', createTurnSnapshots.toString()],
     ['__CREATE_TURN_GUARD__', createTurnGuard.toString()],
     ['__CREATE_CLAUDE_CHECK__', createClaudeCheck.toString()],
@@ -3322,6 +3324,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'transfer.fetch': return replyTransfer(ws, id, 'transfer.fetch', function () { return transferCore.fetch(cmd); }, true);
     case 'transfer.realpath': return replyTransfer(ws, id, 'transfer.realpath', function () { return transferCore.realpath(cmd); }, false);
     case 'host.facts': return replyTransfer(ws, id, 'host.facts', function () { return hostFacts.facts(cmd); }, false);
+    case 'desktop.updateStatus': return replyTransfer(ws, id, 'desktop.updateStatus', function () { return desktopUpdate.status(); }, false);
+    case 'desktop.restart': return replyTransfer(ws, id, 'desktop.restart', function () { return desktopUpdate.restart(cmd.token); }, true);
     case 'usage.scan': return cmdUsageScan(ws, id, cmd);
     case 'usage.costState': return cmdUsageCostState(ws, id, cmd);
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id, cmd);
@@ -11182,6 +11186,7 @@ const transferCore = (__CREATE_TRANSFER_CORE__)({
 const transferPack = (__CREATE_TRANSFER_PACK__)({
   fs: fs, path: path, crypto: crypto, spawn: spawn, env: process.env, home: HOME_DIR,
 });
+const desktopUpdate = (__CREATE_DESKTOP_UPDATE__)({ fs: fs, execFile: execFile, spawn: spawn, platform: process.platform, home: HOME_DIR, env: process.env, isolated: !IS_PROD_DAEMON_DIR });
 const hostFacts = (__CREATE_HOST_FACTS__)({
   fs: fs, os: os, execFile: execFile, http: http, https: require('https'),
   env: process.env, home: HOME_DIR, platform: process.platform, arch: process.arch,
