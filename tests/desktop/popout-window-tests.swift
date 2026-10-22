@@ -1,6 +1,11 @@
 import Cocoa
 import WebKit
 
+private final class BackgroundApplication: NSApplication {
+    var testKeyWindow: NSWindow?
+    override var keyWindow: NSWindow? { testKeyWindow ?? super.keyWindow }
+}
+
 private final class BackgroundAppDelegate: AppDelegate {
     override func applicationDidFinishLaunching(_ notification: Notification) {}
     override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -11,7 +16,7 @@ struct PopoutWindowTests {
     @MainActor
     static func main() {
         setbuf(stdout, nil)
-        let app = NSApplication.shared
+        let app = BackgroundApplication.shared
         app.setActivationPolicy(.prohibited)
         Task { @MainActor in
             do {
@@ -32,6 +37,13 @@ struct PopoutWindowTests {
         app.setActivationPolicy(.prohibited)
         let delegate = BackgroundAppDelegate()
         app.delegate = delegate
+        delegate.setupMainMenu()
+        let fileMenu = app.mainMenu?.items.compactMap { $0.submenu }.first { $0.title == "File" }
+        let closeItem = fileMenu?.item(withTitle: "Close Window")
+        precondition(closeItem?.keyEquivalent == "w")
+        precondition(closeItem?.keyEquivalentModifierMask == .command)
+        precondition(closeItem?.action == #selector(NSWindow.performClose(_:)))
+        precondition(closeItem?.target == nil)
         delegate.webContentWatchdog = WebContentWatchdog(
             policyProvider: { WebContentPolicy.fromDefaults(UserDefaults.standard) },
             portProvider: { delegate.serverPort },
@@ -91,8 +103,10 @@ struct PopoutWindowTests {
         let third = thirdWindow.contentView as! WKWebView
         try await wait { third.url?.absoluteString == secondURL && !third.isLoading }
         _ = try await js(third, "document.querySelectorAll('textarea').forEach(t=>t.value=''); true")
-        thirdWindow.performClose(nil)
+        try pressCloseKey(thirdWindow)
         try await wait { delegate.popoutWindows.count == 2 }
+        precondition(delegate.popoutWindows.values.contains { $0 === firstWindow })
+        print("Command-W closed only the key window")
         parent.configuration.userContentController.removeAllScriptMessageHandlers()
         let clipboardBridge = try await js(first, "!!window.webkit.messageHandlers.walnutClipboard")
         precondition(clipboardBridge as? Bool == true)
@@ -109,27 +123,33 @@ struct PopoutWindowTests {
         precondition(WebContentWatchdog.webContentPid(recycled) != childPid)
         print("Recycled WebContent PID: \(WebContentWatchdog.webContentPid(recycled) ?? 0)")
         _ = try await js(recycled, "const t=document.createElement('textarea');t.id='child-draft';t.value='unsent child draft';document.body.append(t);true")
-        precondition(!delegate.windowShouldClose(firstWindow))
+        try pressCloseKey(firstWindow)
+        try pressCloseKey(firstWindow)
         try await wait { firstWindow.attachedSheet != nil }
         print("Unsaved close guard displayed without activation")
         let sheet = firstWindow.attachedSheet!
         firstWindow.endSheet(sheet, returnCode: .alertFirstButtonReturn)
         sheet.orderOut(nil)
         try await wait { firstWindow.attachedSheet == nil }
+        print("Command-W cancellation dismissed the sheet")
         precondition(delegate.popoutWindows.count == 2)
         let childDraft = try await js(recycled, "document.querySelector('#child-draft').value")
         precondition(childDraft as? String == "unsent child draft")
         _ = try await js(recycled, "document.querySelector('#child-draft').remove(); document.querySelectorAll('textarea').forEach(t=>t.value=''); true")
-        firstWindow.performClose(nil)
+        let clean = try await js(recycled, "!window.__walnutUnsavedSnapshot?.().dirtyEditor && Array.from(document.querySelectorAll('textarea')).every(e=>!e.value)")
+        print("Command-W clean view: \(String(describing: clean))")
+        try pressCloseKey(firstWindow)
         try await wait { delegate.popoutWindows.count == 1 }
+        print("Command-W closed clean session after cancellation")
         _ = try await js(parent, "document.querySelector('.main-page-session-column [data-session-id=\"\(sid)\"] .session-panel-popout').click(); true")
         try await wait { delegate.popoutWindows.count == 2 }
         let reopened = delegate.popoutWindows.values.first { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true }
         try await wait { delegate.popoutWindows.values.contains { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true } }
         let final = reopened ?? delegate.popoutWindows.values.first { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true }!
         try await wait { (try? await js(final.contentView as! WKWebView, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
-        delegate.window.close()
+        try pressCloseKey(delegate.window)
         precondition(delegate.popoutWindows.count == 2)
+        print("Command-W closed parent without closing children")
         precondition(!final.isVisible)
         let finalView = final.contentView as! WKWebView
         try await wait { (try? await js(finalView, "!document.querySelector('.session-panel-header').textContent.includes('Loading...')")) as? Bool == true }
@@ -145,9 +165,36 @@ struct PopoutWindowTests {
             let rep = NSBitmapImageRep(data: image.tiffRepresentation!)!
             try rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
+        _ = try await js(finalView, "const t=document.createElement('textarea');t.value='discard test draft';document.body.append(t);true")
+        try pressCloseKey(final)
+        try await wait { final.attachedSheet != nil }
+        print("Command-W discard sheet displayed")
+        let discardSheet = final.attachedSheet!
+        final.endSheet(discardSheet, returnCode: .alertSecondButtonReturn)
+        discardSheet.orderOut(nil)
+        try await wait { final.attachedSheet == nil }
+        print("Command-W discard sheet dismissed; remaining windows: \(delegate.popoutWindows.count)")
+        try await wait { delegate.popoutWindows.count == 1 }
+        print("Command-W discard confirmation closed the selected window")
         precondition(NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier)
         print("Background verification: never activated; initial foreground PID \(frontmost ?? 0)")
         print("PopoutWindowTests: native open, reuse, independent bridges, draft preservation, recycle, close/cancel/reopen and parent close passed")
+    }
+
+    @MainActor
+    static func pressCloseKey(_ window: NSWindow) throws {
+        let app = NSApp as! BackgroundApplication
+        app.testKeyWindow = window
+        defer { app.testKeyWindow = nil }
+        precondition(NSApp.keyWindow === window)
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: "w", charactersIgnoringModifiers: "w", isARepeat: false, keyCode: 13)!
+        NSApp.mainMenu!.update()
+        let target = NSApp.target(forAction: #selector(NSWindow.performClose(_:)))
+        print("Command-W target matches: \((target as? NSWindow) === window), sheet: \(window.attachedSheet != nil)")
+        precondition(NSApp.mainMenu!.performKeyEquivalent(with: event))
+        precondition(!window.isVisible)
     }
 
     @MainActor
@@ -161,10 +208,10 @@ struct PopoutWindowTests {
     }
 
     @MainActor
-    static func wait(_ check: () async throws -> Bool) async throws {
+    static func wait(file: String = #fileID, line: Int = #line, _ check: () async throws -> Bool) async throws {
         let deadline = Date().addingTimeInterval(60)
         while try await !check() {
-            if Date() > deadline { throw NSError(domain: "PopoutWindowTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for native window state"]) }
+            if Date() > deadline { throw NSError(domain: "PopoutWindowTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for native window state at \(file):\(line)"]) }
             try await Task.sleep(nanoseconds: 100_000_000)
         }
     }

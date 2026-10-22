@@ -1984,6 +1984,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
+        let fileMenuItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(NSMenuItem(title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        fileMenuItem.submenu = fileMenu
+        mainMenu.addItem(fileMenuItem)
+
         let editMenuItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
@@ -2312,8 +2318,12 @@ extension AppDelegate: NSWindowDelegate {
             alert.messageText = "Close this window and discard unsaved work?"
             alert.addButton(withTitle: "Keep Open")
             alert.addButton(withTitle: "Discard and Close")
-            alert.beginSheetModal(for: sender) { response in
-                if response == .alertSecondButtonReturn {
+            alert.beginSheetModal(for: sender) { [weak self, weak sender, weak child] response in
+                guard response == .alertSecondButtonReturn else { return }
+                // AppKit detaches the sheet only after this completion returns.
+                DispatchQueue.main.async {
+                    guard let self, let sender, let child,
+                          self.popoutWindows[key] === sender, sender.contentView === child else { return }
                     self.approvedWindowCloses.insert(key)
                     sender.performClose(nil)
                 }
