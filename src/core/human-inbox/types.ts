@@ -145,6 +145,12 @@ export interface LetterRecord {
   thread: ThreadEntry[];
   /** Task ids the letter cites; the reader renders them as task pills. */
   taskRefs?: string[];
+  /**
+   * The journal op that sent it: a letter a session wrote on a host while the
+   * server was away, sent when the Mac drained that host (offline-merge/apply-letter.ts).
+   * A redrain finds it here and sends nothing again. Absent on every other letter.
+   */
+  createdByOp?: string;
 }
 
 /** What a caller supplies to sendLetter. id/createdAt/state are stamped here. */

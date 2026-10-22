@@ -11,6 +11,7 @@ import { createOfflineJournal, JOURNAL_V2_DRAINS, type OfflineJournalDeps } from
 import { createOfflineHost, type HostSlice, type OfflineHostDeps } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
 import { createBoardOffline } from '../../src/providers/offline-board-core.js'
+import { createLetterCheck } from '../../src/core/human-inbox/letter-check.js'
 
 export const JHOME = '/fixture/marina-home'
 export const SID_A = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -73,7 +74,7 @@ export function jslice(overrides: Partial<HostSlice> = {}): HostSlice {
 }
 
 /** An offline host over a real journal store; `drains.kinds` is what the leading Mac drains. */
-export function journalHost(dir: string, clock: Clock, opts: { drains?: string[] | null; journal?: Partial<OfflineJournalDeps>; boards?: boolean; deliver?: OfflineHostDeps['deliver'] } = {}) {
+export function journalHost(dir: string, clock: Clock, opts: { drains?: string[] | null; journal?: Partial<OfflineJournalDeps>; boards?: boolean; letters?: boolean; deliver?: OfflineHostDeps['deliver'] } = {}) {
   const drains = { kinds: opts.drains === undefined ? JOURNAL_V2_DRAINS.slice() : opts.drains }
   const journal = journalStore(dir, clock, opts.journal)
   const deps: OfflineHostDeps = {
@@ -85,6 +86,7 @@ export function journalHost(dir: string, clock: Clock, opts: { drains?: string[]
     journal,
     drainsOf: () => drains.kinds,
     ...(opts.boards ? { boards: createBoardOffline() } : {}),
+    ...(opts.letters ? { letters: createLetterCheck() } : {}),
   }
   const host = createOfflineHost(deps)
   return { host, journal, drains, deps }

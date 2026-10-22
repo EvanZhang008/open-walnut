@@ -61,6 +61,7 @@ import { createHostResume } from './host-resume-core.js'
 import { createHostStart } from './host-start-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
+import { createLetterCheck } from '../core/human-inbox/letter-check.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
@@ -259,6 +260,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
+    ['__CREATE_LETTER_CHECK__', createLetterCheck.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
@@ -432,6 +434,16 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       if (fmt.format({ task, subtasks: [], moreSubtasks: 0, waitingOn: [], askedOfYou: [] }, 0) !== ''
         || !fmt.format({ task, subtasks: [{ id: 'msub', title: 's', phase: 'TODO' }], moreSubtasks: 0, waitingOn: [], askedOfYou: [] }, 0).includes('- msub [TODO] s')) {
         throw new Error('open items text did not build')
+      }
+    }
+    // Letter check smoke: a reconstructed check must take a plain letter and refuse a
+    // decision letter with no options.
+    const createLetters = reconstructed['__CREATE_LETTER_CHECK__'] as typeof createLetterCheck | undefined
+    if (createLetters) {
+      const letters = createLetters()
+      if (!letters.shape({ subject: 's', type: 'info', markdown: 'm' }).ok || letters.shape({ subject: 's', type: 'action_required', markdown: 'm' }).ok
+        || letters.opArgs({ subject: 's', type: 'info', markdown: 'm' }) !== null) {
+        throw new Error('letter check did not build')
       }
     }
     // Host server smoke: a reconstructed supervisor must refuse a spec with a
@@ -4184,6 +4196,8 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   openItems: (__CREATE_OPEN_ITEMS_TEXT__)(),
   replica: hostReplica,
   search: (__CREATE_OFFLINE_SEARCH__)(),
+  // A session's letter to the user is saved here while its Walnut is away (a Mac that drains letters).
+  letters: (__CREATE_LETTER_CHECK__)(),
   // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
   triggers: {
     armed: function () {

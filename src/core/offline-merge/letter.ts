@@ -110,7 +110,7 @@ export function buildConflictLetter(file: ConflictLogFile): ConflictLetter | nul
     const e = file.entries[i];
     const entryLink = conflictEntryLink(file.drainId, i);
     const target = e.taskId ? `[task ${e.taskId}](${taskLink(e.taskId)})` : e.boardTaskId ? `[Board of ${e.boardTaskId}](${taskLink(e.boardTaskId)})`
-      : e.notePath ? `[note ${e.notePath}](${noteLink(e.notePath)})` : memoryDocName(e) ?? (e.recordKind === 'conversation-edit' ? 'a chat' : 'a change');
+      : e.notePath ? `[note ${e.notePath}](${noteLink(e.notePath)})` : memoryDocName(e) ?? (e.recordKind === 'conversation-edit' ? 'a chat' : e.recordKind === 'letter' ? 'a letter to you' : 'a change');
     const line = `- ${target}: ${itemLine(e)} [Full entry](${entryLink})\n`;
     if (Buffer.byteLength(body) + Buffer.byteLength(line) > LETTER_BODY_MAX - 200) break;
     body += line;

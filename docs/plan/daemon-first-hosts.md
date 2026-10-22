@@ -114,6 +114,7 @@ server", so on a shared host a test server could answer the real Walnut's calls.
 | `open_items` (and the compact hook) | from the copy: the caller's unfinished subtasks, the requests it waits on and owes (with what this host settled or opened since), its Board; worded by the server's own formatter (`open-items-text.ts`) |
 | `trigger_list`, `trigger_test` | the checks run on this host, so it answers itself (`offline-triggers-v1`): the triggers it checks for this Walnut with their last check and next run; a test runs here, in the caller's folder when the call names none. A check on another host needs the server |
 | `trigger_pause`, `trigger_resume`, `trigger_delete` | take effect here at once (the check stops or starts), journaled with the trigger's def and replayed through the same op on reconnect. Until the server has taken the record, a set it pushes does not undo the change, and a daemon restart keeps it. A resume here works only for a trigger paused here; one paused before the server went away is not in this host's set |
+| `human_inbox_send` | when the leading Mac drains `letter`: checked with the server's own rules (`src/core/human-inbox/letter-check.ts`) and journaled as a `letter` record, its body a blob; the answer says `queued` with the letter id the Mac sends it under, at the time it was written, through the online send path (`src/core/offline-merge/apply-letter.ts`), once. A letter over 1 MB (its arguments ride in a file), or one while an older Mac leads, needs the server |
 | `walnut_status` | that the server is not answering this host, how old the copy is, how many records wait for the server, and what this host answers meanwhile |
 | anything else | `hub_unreachable`, with a message listing what works offline |
 
@@ -127,7 +128,7 @@ restarts.
 What deliberately stays on the server: starting sessions (the launch recipe:
 model, prompt, environment), creating tasks (placement rules), creating a
 trigger (a routine: its id, the task it parks), cross-host messages, writing
-notes and memory, the human inbox.
+notes and memory, the human inbox (except a session's new letter, saved as above).
 
 ### Handover
 

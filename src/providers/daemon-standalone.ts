@@ -90,6 +90,7 @@ import { createHostResume } from './host-resume-core.js'
 import { createHostStart, type HostStartAnswer, type HostStartPlan } from './host-start-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
+import { createLetterCheck } from '../core/human-inbox/letter-check.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import {
   foldLine,
@@ -3131,6 +3132,8 @@ const offlineHost = createOfflineHostCore({
   replica: hostReplica,
   openItems: createOpenItemsText(),
   search: createOfflineSearch(),
+  // A session's letter to the user is saved here while its Walnut is away (a Mac that drains `letter`).
+  letters: createLetterCheck(),
   // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
   triggers: {
     armed: () => [...armedTriggers.values()].map((e) => ({

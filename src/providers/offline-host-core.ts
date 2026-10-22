@@ -36,6 +36,7 @@ import type { BoardOffline, OfflineSliceBoard } from './offline-board-core.js'
 import type { HostReplica } from './host-replica-core.js'
 import type { OfflineSearch } from './offline-search-core.js'
 import type { OpenAsk, OpenItemsInput, OpenItemsText, OpenWait } from '../core/sessions/open-items-text.js'
+import type { LetterCheck } from '../core/human-inbox/letter-check.js'
 
 /**
  * `aside`: an environment or lane session, which the server never picks as a message's address by name.
@@ -193,6 +194,11 @@ export type OfflineRecordV2 =
   | { kind: 'device-revoke'; deviceId: string; name?: string }
   /** A new ask started on this host while the Mac was away (WP12, host-start-core.ts): the Mac adopts it on drain. */
   | { kind: 'session'; sid: string; taskId: string; host: string; cwd: string; agentId: string; model?: string; effort?: string; mode: string; title: string; startedAt: number; firstMessage?: string }
+  /**
+   * A session's letter to the user (human_inbox_send) while the Mac was away: the op's
+   * arguments but the body, which is the blob `bodyBlob`; the Mac sends it with this id.
+   */
+  | { kind: 'letter'; letterId: string; format: 'markdown' | 'html'; args: Record<string, unknown>; bodyBlob: string }
 
 /** Every record a drain may hand out: the v1 shapes plus the v2 bookkeeping and kinds. */
 export type OfflineJournalRecord = (OfflineRecord | (OfflineRecordV2 & { seq: number; at: number; online?: true })) & {
@@ -301,6 +307,8 @@ export interface OfflineHostDeps {
   search?: OfflineSearch
   /** The triggers this daemon runs; absent: the trigger ops need the server. */
   triggers?: OfflineTriggerTable
+  /** The letter store's rules (letter-check.ts); absent: a letter to the user needs the server. */
+  letters?: LetterCheck
   /**
    * The journal store (offline-journal-core.ts, journal v2). The twins build it (it also
    * migrates v1 journals and answers offline.blob); createOfflineHost builds one in `dir`
@@ -406,6 +414,16 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   const OFFLINE_NAMES = OFFLINE_OPS.map((o) => o.name).join(', ')
   /** Reads this host answers from its slice: safe to answer here when the server does not (nothing to apply twice). */
   const READ_OPS = OFFLINE_OPS.filter((o) => o.readonly).map((o) => o.name)
+  /** A letter to the user, saved here: only for a Mac that drains `letter` (an older one never would send it). */
+  const LETTER_OP = {
+    name: 'human_inbox_send', title: 'Send the human a letter (saved here, sent later)',
+    description: 'Checked as online and saved on this host; it reaches the user\'s inbox, with its id, when the Walnut server is back. A payload over 1 MB (one that rides in a file) needs the server.',
+    readonly: false, signature: 'subject type markdown|html [text] [actions] [task_refs] [pin]',
+  }
+  /** The ops this host answers for `home` (tools.list, walnut_status): a letter only when the leading Mac drains it. */
+  function awayOps(home: string): typeof OFFLINE_OPS {
+    return deps.letters && drainsKind(home, 'letter') ? OFFLINE_OPS.concat([LETTER_OP]) : OFFLINE_OPS
+  }
 
   /** How long a drained-but-unacked row is left to the server before this host acts on it again. */
   const HANDOVER_GRACE_MS = 60_000
@@ -1651,6 +1669,43 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     })
   }
 
+  // ── a letter to the user while the server is away (human_inbox_send) ──
+
+  /**
+   * Checked as the op and the store check it online (letter-check.ts), its body saved as a
+   * blob, and journaled as a `letter` record; the Mac sends it through its own letter path
+   * when it drains it (offline-merge/apply-letter.ts), with the id minted here, so the
+   * session can name the letter now and reply in its thread once the server is back.
+   */
+  function opLetter(home: string, callerSid: string, args: Record<string, unknown>): GatewayResult {
+    const letters = deps.letters!
+    const badArgs = letters.opArgs(args)
+    if (badArgs) return fail('bad_request', badArgs)
+    const checked = letters.shape(args)
+    if (!checked.ok) return fail('bad_request', checked.message)
+    const format = checked.shape.format
+    const body = String(args[format])
+    const over = letters.oversize({ [format]: body, text: args.text })
+    if (over) return fail('bad_request', `${over.name} is ${over.bytes} bytes, over the ${over.max}-byte letter cap: link a file instead of inlining a big artifact`)
+    const rest: Record<string, unknown> = {}
+    for (const k of Object.keys(args)) if (k !== 'markdown' && k !== 'html') rest[k] = args[k]
+    if (JSON.stringify(rest).length > MAX_ARGS_BYTES) return fail('bad_request', `the letter's fields are too large to save on this host (limit ${MAX_ARGS_BYTES} bytes besides the body)`)
+    const letterId = `lt-${deps.now().toString(36)}-${deps.randomHex(3)}`
+    const saved = journal.appendBlobs(home, { kind: 'letter', letterId, format, args: rest }, { bodyBlob: Buffer.from(body, 'utf8') }, {
+      actor: { kind: 'session', sid: callerSid }, limit: true,
+      admit: (() => admitWrite(callerSid) ?? roomFor(home)) as unknown as () => { ok: false; error: { code: string; message: string; retryAfterMs?: number } } | null,
+    })
+    const no = refusal(saved)
+    if (no || !saved.ok) return no ?? fail('internal', 'not saved')
+    try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ }
+    deps.log('info', 'offline host: letter queued', { home, letterId, callerSid, type: args.type, format, bytes: Buffer.byteLength(body), seq: saved.seq, opId: saved.opId })
+    return ok({
+      letterId, queued: true, offline: true, kind: 'letter', seq: saved.seq,
+      outcome: `Saved on this host, not in the user's inbox yet: Walnut sends letter ${letterId} when the server is back, at the time you sent it. ${offlineNote(home)}`,
+      next: 'Do not send it again. If the user answers, the answer arrives as a message in this session; reply in the thread with human_inbox_reply and this letterId once the server is back.',
+    })
+  }
+
   // ── triggers: the checks this host runs (walnut-trigger) ──
 
   /** The last pause, resume or delete made here per trigger id, until the server takes it. */
@@ -1787,10 +1842,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   }
 
   function opWalnutStatus(home: string): GatewayResult {
+    const names = awayOps(home).map((o) => o.name)
     return ok({
       mode: 'HOST_OFFLINE', server: 'not answering this host', host: slices.get(home)?.host ?? '', copyAsOf: asOf(home),
-      queuedForServer: recordsOf(home).length, answersHere: OFFLINE_OPS.map((o) => o.name),
-      outcome: `${offlineNote(home)} This host answers ${OFFLINE_NAMES} meanwhile, and keeps every write for the server.`,
+      queuedForServer: recordsOf(home).length, answersHere: names,
+      outcome: `${offlineNote(home)} This host answers ${names.join(', ')} meanwhile, and keeps every write for the server.`,
       next: 'Use those calls; the rest waits for the server.',
     })
   }
@@ -1800,13 +1856,17 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     try {
       if (capability === 'tools.list') {
         const wanted = typeof payload.name === 'string' ? payload.name : ''
-        const ops = OFFLINE_OPS.concat(deps.replica ? deps.replica.ops(home) : []).filter((o) => !wanted || o.name === wanted)
+        const ops = awayOps(home).concat(deps.replica ? deps.replica.ops(home) : []).filter((o) => !wanted || o.name === wanted)
         return ok({ ops: ops.map((o) => ({ ...o, remote: 'allow' })), offline: true, hint: offlineNote(home) })
       }
       if (capability !== 'tools.call') return needsServer(`"${capability}"`)
       const name = typeof payload.name === 'string' ? payload.name : ''
       const args = (payload.args && typeof payload.args === 'object' && !Array.isArray(payload.args) ? payload.args : {}) as Record<string, unknown>
-      if (typeof payload.argsFile === 'string') return needsServer('A call whose arguments ride in a file')
+      if (typeof payload.argsFile === 'string') {
+        // The file lane is for payloads over 1 MB; this host does not read them back.
+        const letterHere = name === 'human_inbox_send' && !!deps.letters && drainsKind(home, 'letter')
+        return needsServer(letterHere ? 'A letter over 1 MB (its arguments ride in a file; a smaller letter is saved on this host)' : 'A call whose arguments ride in a file')
+      }
       switch (name) {
         case 'task_get': return opTaskGet(home, args)
         case 'task_list': return opTaskList(home, args)
@@ -1827,6 +1887,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
             return name === 'note_write' ? opNoteWrite(home, callerSid, args) : opNoteEdit(home, callerSid, args)
           }
           return needsServer(`"${name}"`)
+        // A letter to the user, when the leading Mac drains letters; an older one: as before.
+        case 'human_inbox_send':
+          if (deps.letters && drainsKind(home, 'letter')) return whenUnlocked(home, name, () => opLetter(home, callerSid, args))
+          return needsServer('"human_inbox_send"')
         default: {
           const fromCopy = deps.replica ? deps.replica.answer(home, name, args, offlineNote(home)) : null
           if (fromCopy) return fromCopy

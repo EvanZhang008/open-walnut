@@ -20,12 +20,14 @@ import { log } from '../../logging/index.js';
 import { bus } from '../event-bus.js';
 import {
   answerLetter,
+  findLetterByOp,
   getLetter,
   humanReplyTurn,
   recordTurnDelivery,
-  sendLetter,
+  sendLetterOnce,
   withdrawLetter,
   LetterError,
+  type SendLetterOptions,
 } from './store.js';
 import type {
   LetterDetail, LetterRecord, LetterSender, NewLetter, ThreadEntryDelivery,
@@ -143,19 +145,38 @@ export async function resolveLetterSender(callerSid: string | undefined): Promis
 export async function sendLetterAsCaller(
   input: Omit<NewLetter, 'sender'>,
   callerSid: string | undefined,
+  opts: SendLetterOptions = {},
 ): Promise<LetterRecord> {
+  return (await sendLetterAsCallerOnce(input, callerSid, opts)).letter;
+}
+
+/**
+ * sendLetterAsCaller, also saying whether the letter was already sent: `opts.opKey`
+ * (a host's journal record, offline-merge/apply-letter.ts) names one in the store, so
+ * nothing is written, charged against a budget or announced again.
+ */
+export async function sendLetterAsCallerOnce(
+  input: Omit<NewLetter, 'sender'>,
+  callerSid: string | undefined,
+  opts: SendLetterOptions = {},
+): Promise<{ letter: LetterRecord; duplicate: boolean }> {
+  if (opts.opKey) {
+    const first = await findLetterByOp(opts.opKey);
+    if (first) return { letter: first, duplicate: true };
+  }
   const sender = await resolveLetterSender(callerSid);
   const { guardTriageLetter } = await import('./triage-quota.js');
   const charge = await guardTriageLetter(input, sender);
-  let letter: LetterRecord;
+  let out: { letter: LetterRecord; duplicate: boolean };
   try {
-    letter = await sendLetter({ ...input, sender });
+    out = await sendLetterOnce({ ...input, sender }, opts);
   } catch (err) {
     charge?.release();
     throw err;
   }
-  charge?.commit(letter.id);
-  return letter;
+  if (out.duplicate) charge?.release();
+  else charge?.commit(out.letter.id);
+  return out;
 }
 
 /** Agent-authored spans in the wrapper (subject, button label): one short line. */

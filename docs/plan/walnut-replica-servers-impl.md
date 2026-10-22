@@ -362,7 +362,7 @@ file   <state>/offline-host/journal-<key>.ndjson   append-only, one JSON record 
        <state>/offline-host/journal-<key>.state.json  {v:2, journalId, nextSeq, frozen:[seq], rows, settledCopies}
        <state>/offline-host/slice-<key>.json          the slice, moved WITH the journal (one dir)
        <state>/offline-host/journal-<key>.lock        per-home writer lock (above)
-       <state>/offline-host/blobs/<sha256>            content-addressed note bodies (WP11)
+       <state>/offline-host/blobs/<sha256>            content-addressed note and letter bodies (WP11)
 record {v:2, seq, opId, rev, at, actor, kind, supersedes?, ...}
 actor  {kind:'session', sid} | {kind:'device', deviceId, name} | {kind:'trigger', id}
 opId   'op-' + 16 random hex, minted by the WRITER (the client's x-walnut-op-id when present), unique
@@ -376,6 +376,8 @@ kinds  row | settle | delivery | settings | stop | resume | op       (v1 kinds, 
        note        {path, noteId?, mode:'put'|'create'|'delete', baseHash|null, baseBlob|null, oursBlob|null}
        session     {sid, taskId, host, cwd, agentId, model, effort, mode, title, startedAt}   (WP12)
        device-revoke {deviceId}                                                          (WP10)
+       letter      {letterId, format:'markdown'|'html', args, bodyBlob}   a session's human_inbox_send; the
+                   Mac sends it under letterId at `at`, once (the letter keeps the opId: createdByOp)
 ```
 
 v2 kinds get NEW names on purpose: a kinds filter by name cannot tell a v1 `op` `{args, callerSid,
