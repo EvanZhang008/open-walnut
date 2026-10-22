@@ -1,5 +1,6 @@
 /**
- * Transfer a task to another engine or host, from the session panel's ⋮ menu.
+ * Transfer a task to another engine or host, from the session panel's ⋮ menu
+ * or the composer's "+" menu.
  *
  * The dialog's choices come from GET /api/v1/tasks/:id/transfer-options. A real
  * transfer needs real engines and hosts, so the POST is answered here and the
@@ -80,6 +81,25 @@ async function openTransferFromPanel(page: Page) {
   await expect(dialog).toBeVisible()
   return dialog
 }
+
+test('the composer "+" menu opens the same Transfer dialog, right under Engine settings', async ({ page }) => {
+  await cannedOptions(page)
+  const panel = await openSourcePanel(page)
+  await panel.locator('.chat-plus-btn').click()
+  const menu = panel.locator('.chat-plus-menu[role=menu]')
+  await expect(menu).toBeVisible()
+  const labels = (await menu.locator('button.chat-plus-menu-item').allInnerTexts()).map((t) => t.trim())
+  const at = labels.findIndex((t) => t.startsWith('Transfer…'))
+  expect(at, labels.join(' | ')).toBeGreaterThan(0)
+  expect(labels[at - 1]).toContain('Engine settings')
+  await menu.locator('button.chat-plus-menu-item', { hasText: 'Transfer…' }).click()
+  await expect(menu).toBeHidden()
+  const dialog = page.getByTestId('transfer-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('Now: Claude Code on This Mac')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+})
 
 test('transfer from the session menu: blocked pair, nothing-changes guard, submit and open the new task', async ({ page }) => {
   await cannedOptions(page)
