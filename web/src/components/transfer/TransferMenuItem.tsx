@@ -1,10 +1,10 @@
 /**
- * "Transfer…" in a task's kebab and in the session panel's ⋮ menu: one row,
+ * "Transfer harness/host…" in a task's kebab and in the session panel's ⋮ menu: one row,
  * defined once. A task with no session has nothing to move, so it has no row.
  */
 import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { canOpenTransfer, openTransferDialog } from './transfer-events';
+import { canOpenTransfer, openTransferDialog, TRANSFER_LABEL } from './transfer-events';
 
 export function TransferMenuItem({ task, afterAction }: { task: Task; afterAction: () => void }) {
   if (!resolveTaskSessionId(task) || !canOpenTransfer()) return null;
@@ -13,7 +13,7 @@ export function TransferMenuItem({ task, afterAction }: { task: Task; afterActio
       type="button"
       className="task-kebab-item"
       data-testid="task-kebab-transfer"
-      title="Move this task's work to another engine or host"
+      title="Move this task's work to another harness (engine) or host"
       onClick={(e) => {
         e.stopPropagation();
         afterAction();
@@ -25,7 +25,7 @@ export function TransferMenuItem({ task, afterAction }: { task: Task; afterActio
           <path d="M4 8h13l-3-3M20 16H7l3 3" />
         </svg>
       </span>
-      <span>Transfer…</span>
+      <span>{TRANSFER_LABEL}</span>
     </button>
   );
 }
