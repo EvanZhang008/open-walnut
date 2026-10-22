@@ -286,6 +286,28 @@ describe('POST /api/notifications/fix', () => {
     expect(started).toHaveLength(0);
   });
 
+  it.each(['cron', 'skill', 'hook'] as const)('repairs a failed %s notification', async kind => {
+    const dedupKey = `failed:${kind}`;
+    await addNotification({ kind, severity: 'error', title: 'Automation failed', body: 'The scheduled action failed', dedupKey });
+    const res = await request(createApp()).post('/api/notifications/fix').send({ dedupKey });
+    expect(res.status).toBe(200);
+    expect(started).toHaveLength(1);
+    expect(started[0].message).toContain('The scheduled action failed');
+    expect((await findNotification(dedupKey))!.fix!.sessionId).toBe(res.body.sessionId);
+    const second = await request(createApp()).post('/api/notifications/fix').send({ dedupKey });
+    expect(second.body).toMatchObject({ reused: true, sessionId: res.body.sessionId });
+    expect(started).toHaveLength(1);
+  });
+
+  it.each(['permission', 'letter', 'reminder'] as const)('refuses %s even when its severity is error', async kind => {
+    const dedupKey = `not-repairable:${kind}`;
+    await addNotification({ kind, severity: 'error', title: 'Not a repair error', dedupKey });
+    const res = await request(createApp()).post('/api/notifications/fix').send({ dedupKey });
+    expect(res.status).toBe(400);
+    expect(started).toHaveLength(0);
+    expect((await findNotification(dedupKey))!.fix).toBeUndefined();
+  });
+
   it('refuses a notification that is not an error', async () => {
     const app = createApp();
     await addNotification({

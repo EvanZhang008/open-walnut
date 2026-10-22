@@ -15,7 +15,7 @@
 import fs from 'node:fs'
 import { test, expect } from '@playwright/test'
 import {
-  DISMISS_KEY, banner, connected, failed, isolatePrefs, loadHome, resetServerHostFixture, row, signedOut, storedKeys,
+  DISMISS_KEY, banner, connected, expandSystemAttention, failed, isolatePrefs, loadHome, resetServerHostFixture, row, signedOut, storedKeys,
 } from './host-problems-helpers'
 import { bell, hostRow, loadApp, loadFixture, openBell, openRemoteHosts, panelBanner, tasksBanner } from './host-problems-fixture-helpers'
 import {
@@ -34,6 +34,7 @@ test.beforeAll(async ({ request }) => {
 test.describe('one dismiss store behind the card and the panel\'s problems; System ignores it', () => {
   test('BP-C9: a Home card row x is stored and survives a reload; the host leaves All\'s problems and the Errors count, before and after the reload, while System keeps listing it as its row, with no x', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     const others = FIXTURE_ORDER.filter((h) => h !== 'netbox')
     await row(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
@@ -54,6 +55,7 @@ test.describe('one dismiss store behind the card and the panel\'s problems; Syst
     await page.evaluate(() => sessionStorage.setItem('hp-keep', '1'))
     await page.reload()
     await loadHome(page)
+    await expandSystemAttention(page)
     await expect(row(page, 'keybox')).toBeVisible({ timeout: 20_000 })
     await expect(row(page, 'netbox')).toHaveCount(0)
     await openProblems(page)
@@ -63,6 +65,7 @@ test.describe('one dismiss store behind the card and the panel\'s problems; Syst
 
   test('BP-C10: a row x in the task panel takes that host out of All\'s problems and the Errors count (the others stay, in the card\'s order); System still gives every problem host its row', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await row(page, 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
     await expect(row(page, 'certbox')).toHaveCount(0)
@@ -79,6 +82,7 @@ test.describe('one dismiss store behind the card and the panel\'s problems; Syst
 
   test('BP-C11: the panel has no x and no Dismiss all; Dismiss all on the Home card hides its host rows and keeps the local section, and All then leads with the Claude Code card alone (Errors counts 1), while System still lists every problem host', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in' })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await openProblems(page)
     const panel = page.locator('.notification-panel')
@@ -110,6 +114,7 @@ test.describe('one dismiss store behind the card and the panel\'s problems; Syst
 
   test('BP-C12: Dismiss Claude Code notice in All\'s Claude Code card on /notes: the bell dot goes in the next frame, the card leaves the panel and the Errors count; Home shows no local section', async ({ page }) => {
     await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 20_000 })
     await goRail(page, 'notes')
     await expect(bellDot(page)).toHaveCount(1)
@@ -133,6 +138,7 @@ test.describe('expiry, undo and the way back', () => {
   test('BP-C47: a dismissed connect row stays out of All on /notes, expires there with no card mounted, and the next failure lights the bell and leads All again', async ({ page }) => {
     test.setTimeout(150_000) // the pruner's 60s interval is the slow path
     const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')] })
+    await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 20_000 })
     await row(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
     expect(await storedKeys(page)).toContain('netbox|connect')
@@ -161,6 +167,7 @@ test.describe('expiry, undo and the way back', () => {
 
   test('BP-C54: a row x leaves a same-height undo row; Undo inside 400ms does nothing, later it restores the row; untouched it folds', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box'), failed('keybox', 'Key box', 'auth')] })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['netbox', 'keybox', 'signbox'])
     const before = (await row(page, 'netbox').boundingBox())!
     // The pointer rests on the row (the undo line keeps the row's height only
@@ -200,6 +207,7 @@ test.describe('expiry, undo and the way back', () => {
     await page.addInitScript((k) => localStorage.removeItem(k), DISMISS_KEY)
     await loadFixture(request, 'host-problems')
     await loadApp(page)
+    await expandSystemAttention(page)
     await expect(cardRow(tasksBanner(page), 'certbox')).toBeVisible({ timeout: 20_000 })
     await cardRow(tasksBanner(page), 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
     await expect(cardRow(tasksBanner(page), 'certbox')).toHaveCount(0)
@@ -211,6 +219,7 @@ test.describe('expiry, undo and the way back', () => {
     await hostRow(page, 'certbox').getByRole('button', { name: 'Show again' }).click()
     await expect(hostRow(page, 'certbox')).not.toContainText('Hidden from the banner.')
     await goRail(page, 'home')
+    await expandSystemAttention(page)
     await expect(cardRow(tasksBanner(page), 'certbox')).toBeVisible({ timeout: 20_000 })
     await resetServerHostFixture(request)
   })

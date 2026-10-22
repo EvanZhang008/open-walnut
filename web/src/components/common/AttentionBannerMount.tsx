@@ -12,7 +12,7 @@ import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { useHostBannerOwner, type BannerMount, type HostBannerOwner } from '@/utils/host-banner-placement';
 import { AttentionBanner } from './AttentionBanner';
 import {
-  useBannerHealth, useClickGuard, useFinalWidthDuringOpen, useGrowPhase, useHoldLayout, useInstantAppear, useMeasuredHeight,
+  useBannerHealth, useClickGuard, useHoldLayout,
 } from './banner-mount-hooks';
 import '@/styles/attention-banner-mount.css';
 
@@ -54,45 +54,18 @@ function Card({ where, health, healthLoading, onNavigateSettings, onStartSession
   );
 }
 
-/**
- * The task panel: an always-present wrapper (a zero-height focus target when
- * empty), a 0fr-to-1fr grow on enter, the hold while the pointer is over what
- * would move, and the click guard after a height change.
- */
+/** The bottom task-panel disclosure retains the card while its body is hidden. */
 function TasksMount(props: AttentionBannerMountProps & { owner: HostBannerOwner }): ReactNode {
-  const { owner } = props;
   const [el, setEl] = useState<HTMLDivElement | null>(null);
-  const [content, setContent] = useState<HTMLDivElement | null>(null);
-  const showCard = owner === 'tasks';
-  const h = useMeasuredHeight(content);
-  // Only changed place (back to Home, the task panel shown again) or the page is loading: no grow.
-  const instant = useInstantAppear(showCard, h > 0);
-  const phase = useGrowPhase(h > 0, instant);
-  const finalWidth = useFinalWidthDuringOpen(el, showCard);
   const hold = useHoldLayout('tasks', el);
   useClickGuard(el, '.todo-panel');
   const focusOnLeave = useCallback((): void => {
     (document.querySelector<HTMLElement>(TASKS_FOCUS) ?? el)?.focus({ preventScroll: true });
   }, [el]);
-  const empty = !showCard || h === 0;
   return (
-    <div
-      ref={setEl}
-      className="ab-mount"
-      data-mount="tasks"
-      data-empty={empty ? 'true' : 'false'}
-      tabIndex={-1}
-      role="group"
-      aria-label="Task panel"
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <div className="ab-mount-anim" data-phase={phase}>
-        <div className="ab-mount-anim-inner">
-          <div ref={setContent} className="ab-mount-content" {...(finalWidth !== null ? { style: { width: finalWidth } } : {})}>
-            {showCard && <Card {...props} holdLayout={hold} focusOnLeave={focusOnLeave} />}
-          </div>
-        </div>
-      </div>
+    <div ref={setEl} className="ab-mount" data-mount="tasks" tabIndex={-1}
+      onPointerDown={(e) => e.stopPropagation()}>
+      {props.owner === 'tasks' && <Card {...props} holdLayout={hold} focusOnLeave={focusOnLeave} />}
     </div>
   );
 }

@@ -85,9 +85,10 @@ export interface NotificationHostRowProps {
   /** Switched off in Settings: always the plain 'Disabled' line. */
   disabled: boolean;
   onOpenSettings: (alias?: string) => void;
+  onNavigate?: (to: string) => void;
 }
 
-export function NotificationHostRow({ daemon, disabled, onOpenSettings }: NotificationHostRowProps): ReactNode {
+export function NotificationHostRow({ daemon, disabled, onOpenSettings, onNavigate }: NotificationHostRowProps): ReactNode {
   const status = useHostStatus(daemon.host);
   const replica = useIsCloudReplica();
   const userRetrying = useUserRetryingHosts();
@@ -96,5 +97,5 @@ export function NotificationHostRow({ daemon, disabled, onOpenSettings }: Notifi
   const row = !disabled && status ? hostRowFor(status, { now: serverNow(), replica, userRetrying }, prev.current) : null;
   prev.current = row;
   if (!row) return <HostStatusLine daemon={daemon} disabled={disabled} />;
-  return <SingleHostRow row={row} defaultExpanded={false} dense statusList onOpenSettings={onOpenSettings} />;
+  return <SingleHostRow row={row} defaultExpanded={false} dense statusList onOpenSettings={onOpenSettings} onNavigate={onNavigate} />;
 }

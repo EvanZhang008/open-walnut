@@ -38,7 +38,7 @@ let ws: WebSocket | null = null
 /** Process groups of shim CLIs a test started (spawned detached, so the daemon's death does not end them). */
 const cliGroups: number[] = []
 
-async function spawnDaemon(home: string): Promise<void> {
+async function spawnDaemon(home: string, cwd?: string): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     HOME: home,
@@ -49,7 +49,7 @@ async function spawnDaemon(home: string): Promise<void> {
   }
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME']) delete env[k]
   const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(cmd, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -185,6 +185,25 @@ describe.each(TWINS)('daemon spawn gate: $name', (t) => {
     expect(() => process.kill(pid, 0)).not.toThrow()
     const status = await rpc({ id: 3, cmd: 'status', sid: 'gate-live-1' })
     expect(status).toMatchObject({ exists: true, alive: true, pid })
+  }, 60_000)
+
+  it('preflight still runs after the server build directory is retired', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-spawn-gate-')))
+    const home = fakeHome()
+    const build = fs.mkdtempSync(path.join(root, 'build-'))
+    const shim = path.join(home, '.local/bin/claude')
+    const seenCwd = path.join(home, 'probe-cwd')
+    fs.mkdirSync(path.dirname(shim), { recursive: true })
+    fs.writeFileSync(shim, `#!/bin/sh\nif [ "$1" = "--version" ]; then pwd > "${seenCwd}"; printf '2.1.283 (Claude Code)\\n'; fi\n`, { mode: 0o755 })
+    await spawnDaemon(home, build)
+    expect((await rpc({ id: 31, cmd: 'host.preflight' })).claude).toMatchObject({ version: '2.1.283' })
+    fs.rmdirSync(build)
+    for (const id of [32, 33]) {
+      const answer = await rpc({ id, cmd: 'host.preflight' })
+      expect(answer.claude).toMatchObject({ found: true, version: '2.1.283' })
+      expect(answer.claude).not.toHaveProperty('error')
+      expect(fs.readFileSync(seenCwd, 'utf8').trim()).toBe(path.join(root, 'daemon'))
+    }
   }, 60_000)
 
   it('hello advertises preflight-v1', async () => {

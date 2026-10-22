@@ -11,10 +11,10 @@
  */
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { banner, failed, resetServerHostFixture, row, signedOut } from './host-problems-helpers'
+import { banner, expandSystemAttention, failed, resetServerHostFixture, row, signedOut } from './host-problems-helpers'
 import { panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, boxGap, bpSetup, openProblems, panelLocalCard, pickRail, problemHosts, problemRow, railButton, systemHostRow,
+  BP_SHOTS, boxGap, bpSetup, expectFocusAfterSystemAttention, openProblems, panelLocalCard, pickRail, problemHosts, problemRow, railButton, systemHostRow,
   systemHosts, toolbarHide,
 } from './banner-placement-helpers'
 
@@ -41,31 +41,40 @@ const activeName = (page: Page) => page.evaluate(() => {
 const FORBIDDEN = '.todo-group-action-btn-plus, [class*="filter-chip"], [data-testid="agent-search-panel"] button'
 
 test.describe('Tab order around the task panel card', () => {
-  test('BP-C24: from Hide task panel Tab enters the card; Dismiss all is its last stop; Tab then leaves forward into the task panel', async ({ page }) => {
-    await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth'), signedOut('signbox', 'Sign box')], local: 'sign-in' })
-    await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const s = await stops(banner(page))
-    expect(s.last).toBe('Dismiss all')
-    await toolbarHide(page).focus()
-    await page.keyboard.press('Tab')
-    expect(await activeIn(page, '[data-testid="attention-banner"][data-mount="tasks"]')).toBe(true)
-    expect(await activeName(page)).toBe(s.first)
-    await banner(page).getByRole('button', { name: 'Dismiss all' }).focus()
-    await page.keyboard.press('Tab')
-    const where = await page.evaluate(() => {
-      const a = document.activeElement
-      return {
-        body: a === document.body, inCard: !!a?.closest('[data-testid="attention-banner"]'),
-        inToolbar: !!a?.closest('.todo-panel-toolbar'), inPanel: !!a?.closest('.todo-panel'),
-      }
+  for (const key of ['Enter', 'Space']) {
+    test(`BP-C24: ${key} on the bottom disclosure opens the card; Tab enters its first control and leaves Dismiss all for the footer or next control`, async ({ page, browserName }) => {
+      const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
+      await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth'), signedOut('signbox', 'Sign box')], local: 'sign-in' })
+      const disclosure = page.locator('.todo-panel .system-attention-toggle')
+      const body = page.locator('.todo-panel .system-attention-body')
+      await expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+      await expect(body).toHaveAttribute('hidden', '')
+      await expect(body).toHaveAttribute('inert', '')
+      await disclosure.focus()
+      await page.keyboard.press(TAB)
+      await expectFocusAfterSystemAttention(page)
+      await disclosure.focus()
+      await page.keyboard.press(key)
+      await expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+      await expect(body).not.toHaveAttribute('hidden')
+      await expect(body).not.toHaveAttribute('inert')
+      await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
+      const s = await stops(banner(page))
+      expect(s.last).toBe('Dismiss all')
+      await page.keyboard.press(TAB)
+      expect(await activeIn(page, '[data-testid="attention-banner"][data-mount="tasks"]')).toBe(true)
+      expect(await activeName(page)).toBe(s.first)
+      await banner(page).getByRole('button', { name: 'Dismiss all' }).focus()
+      await page.keyboard.press(TAB)
+      await expectFocusAfterSystemAttention(page)
     })
-    expect(where).toEqual({ body: false, inCard: false, inToolbar: false, inPanel: true })
-  })
+  }
 
   test('BP-C25: in the panel Tab goes Close, then the rail from Needs Action to All, then All\'s Claude Code card, then the first problem row\'s control', async ({ page, browserName }) => {
     // WebKit on macOS moves Tab through every button only with Option held (the Safari default).
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')], local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     // The landing (no ask waits): All, led by the problems.
     await openProblems(page)
@@ -110,8 +119,10 @@ test.describe('where focus goes when the card folds away', () => {
       hosts: [signedOut('signbox', 'Sign box')], allTasks: true,
       before: async (p) => { await p.addInitScript(() => localStorage.setItem('walnut-todo-quick-views-visible', 'true')) },
     })
+    await expandSystemAttention(page)
     await expect(row(page, 'signbox')).toBeVisible({ timeout: 20_000 })
     await expect(page.locator('.todo-section-tabs-list')).toBeVisible()
+    await expect(page.locator('.todo-panel .todo-panel-item').first()).toBeVisible()
     const before = await tasksState(page)
     await dismissLastByKeyboard(page)
     await expect.poll(() => page.evaluate(() => document.activeElement?.matches('.todo-section-tabs-list [role="tab"][aria-selected="true"]') ?? false), { timeout: 3_000 }).toBe(true)
@@ -121,11 +132,12 @@ test.describe('where focus goes when the card folds away', () => {
     expect(await tasksState(page)).toEqual(before)
   })
 
-  test('BP-C65: tab bar closed: focus lands on the mount itself, then Tab reaches the tier heading or the list; never the tier +, a chip or the AI lane', async ({ page }) => {
+  test('BP-C65: tab bar closed: focus lands on the bottom mount itself, then Tab reaches the footer or next control; never the tier +, a chip or the AI lane', async ({ page, browserName }) => {
     await bpSetup(page, {
       hosts: [signedOut('signbox', 'Sign box')], allTasks: true,
       before: async (p) => { await p.addInitScript(() => localStorage.setItem('walnut-todo-quick-views-visible', 'false')) },
     })
+    await expandSystemAttention(page)
     await expect(row(page, 'signbox')).toBeVisible({ timeout: 20_000 })
     await expect(page.locator('.todo-section-tabs-list')).toHaveCount(0)
     await dismissLastByKeyboard(page)
@@ -136,19 +148,13 @@ test.describe('where focus goes when the card folds away', () => {
     await expect.poll(() => page.evaluate(() => document.activeElement?.matches('.todo-panel .ab-mount') ?? false), { timeout: 3_000, message: 'focus on .ab-mount' }).toBe(true)
       .catch(async (e) => { throw new Error(`${String(e)}; focused: ${await focusDesc()}`) })
     expect(await page.evaluate((sel) => !!document.activeElement?.closest(sel), FORBIDDEN)).toBe(false)
-    await page.keyboard.press('Tab')
-    const next = await page.evaluate((sel) => {
-      const a = document.activeElement
-      const desc = a ? `${a.tagName.toLowerCase()}.${(a.className || '').toString().split(' ').join('.')} ${(a.getAttribute('aria-label') ?? a.textContent ?? '').trim().slice(0, 40)}` : 'none'
-      // The next stop after the card is the tier heading or the first list control (spec 5.2 Tab order).
-      const inList = !!a?.closest('.todo-panel-list') || (!!a?.closest('.todo-panel') && !!a?.matches('[class*="navigation-heading"]'))
-      return { inList, forbidden: !!a?.closest(sel), body: a === document.body, desc }
-    }, FORBIDDEN)
-    expect({ inList: next.inList, forbidden: next.forbidden, body: next.body }, `focused: ${next.desc}`).toEqual({ inList: true, forbidden: false, body: false })
+    await page.keyboard.press(browserName === 'webkit' ? 'Alt+Tab' : 'Tab')
+    await expectFocusAfterSystemAttention(page)
   })
 
   test('BP-C27: clicks on a problem row\'s headline, the Remote hosts labels and the Claude Code card (All), and on a System row keep the panel open; Escape with focus in a row closes it', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openProblems(page)
     await problemRow(page, 'netbox').locator('.hft-headline').click()
@@ -172,6 +178,7 @@ test.describe('dismiss controls stay apart', () => {
         failed('lanbox', 'Lan box', 'unreachable'), signedOut('signbox', 'Sign box')],
       local: 'sign-in',
     })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const check = async (card: Locator, neighbour: Locator, where: string) => {
       const xs = card.locator('.hpb-x:visible, .hpb-dismiss:visible, .ab-local-x:visible, .ab-dismiss-all:visible')

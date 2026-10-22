@@ -279,7 +279,7 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
     return !!guard && !!p && p.slice(0, p.lastIndexOf('/')) === guard
   }
 
-  function run(file: string, args: string[], timeoutMs: number, prefixDir?: string | null): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
+  function run(file: string, args: string[], timeoutMs: number, prefixDir?: string | null): Promise<{ code: number | string; stdout: string; stderr: string; timedOut: boolean }> {
     return new Promise(function (resolve) {
       if (!deps.execFile) return resolve({ code: -1, stdout: '', stderr: 'exec unavailable', timedOut: false })
       var env: Record<string, string | undefined> = Object.assign({}, deps.env)
@@ -288,11 +288,14 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
         deps.execFile(file, args, {
           timeout: Math.max(1, timeoutMs), env: env, encoding: 'utf-8', maxBuffer: 1024 * 1024, killSignal: 'SIGKILL',
         }, function (err, stdout, stderr) {
-          var code = err ? (typeof err.code === 'number' ? err.code : -1) : 0
-          resolve({ code: code, stdout: String(stdout || ''), stderr: String(stderr || ''), timedOut: !!(err && (err.killed || err.signal === 'SIGKILL')) })
+          var code = err ? (typeof err.code === 'number' || typeof err.code === 'string' ? err.code : -1) : 0
+          var detail = stderr || (err && typeof code === 'string' ? err.message : '')
+          resolve({ code: code, stdout: String(stdout || ''), stderr: String(detail || ''), timedOut: !!(err && (err.killed || err.signal === 'SIGKILL')) })
         })
       } catch (e) {
-        resolve({ code: -1, stdout: '', stderr: String((e as Error).message || e), timedOut: false })
+        var err = e as Error & { code?: unknown }
+        var code = typeof err.code === 'number' || typeof err.code === 'string' ? err.code : -1
+        resolve({ code: code, stdout: '', stderr: String(err.message || e), timedOut: false })
       }
     })
   }
@@ -420,7 +423,7 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
       var lines = (r.stderr + '\n' + r.stdout).split('\n').map(function (l) { return l.trim() }).filter(Boolean)
       var named = lines.filter(function (l) { return /error/i.test(l) })[0]
       var why = (named || lines[lines.length - 1] || '').slice(0, 200)
-      claude.error = 'claude --version exited with code ' + r.code + (why ? ': ' + why : '')
+      claude.error = (typeof r.code === 'string' ? 'claude --version failed (' + r.code + ')' : 'claude --version exited with code ' + r.code) + (why ? ': ' + why : '')
     }
   }
 

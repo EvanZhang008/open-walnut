@@ -60,7 +60,39 @@ function run(frames: BannerInput[], start: BannerState = EMPTY_BANNER_STATE) {
   return { view, state }
 }
 
+describe('live issue count before holds and the visible cap', () => {
+  it('counts every credential member and hidden host, but not healthy or discovered hosts', () => {
+    const statuses = [failed('alpha', 'Alpha', 'cert_expired'), failed('beta', 'Beta', 'cert_expired'),
+      ...Array.from({ length: 10 }, (_, i) => failed(`box${i}`, `Box ${i}`, 'unreachable')),
+      connected('healthy', 'Healthy'), connecting('connecting', 'Connecting'), outdated('old', 'Old'),
+      failed('unused', 'Unused', 'auth', { discovered: true })];
+    const { view } = nextBanner(input(statuses));
+    expect(view.issueCount).toBe(12);
+    expect(view.rows).toHaveLength(3);
+    expect(view.more).toBe(8);
+  });
+  it('updates on partial credential recovery and removal while the old layout is held', () => {
+    const first = nextBanner(input([failed('alpha', 'Alpha', 'cert_expired'), failed('beta', 'Beta', 'cert_expired'), failed('net', 'Net', 'unreachable')]));
+    const healed = nextBanner(input([connected('alpha', 'Alpha'), failed('beta', 'Beta', 'cert_expired')], { pointerInside: true }), first.state);
+    expect(healed.view.issueCount).toBe(1);
+    expect(healed.state.order.some((r) => r.hosts.includes('net'))).toBe(true);
+    const dismissed = nextBanner(input([failed('beta', 'Beta', 'cert_expired')], { dismissed: new Set(['beta|connect']), pointerInside: true }), healed.state);
+    expect(dismissed.view.issueCount).toBe(0);
+  });
+});
+
 describe('attention banner model: which hosts take a row', () => {
+  it('counts current independent hosts before the cap and pointer-held removals', () => {
+    const statuses = Array.from({ length: 12 }, (_, i) => failed(`box-${i}`, `Box ${i}`, 'unreachable'));
+    const first = nextBanner(input(statuses));
+    expect(first.view.issueCount).toBe(12);
+    expect(first.view.rows).toHaveLength(3);
+    const next = nextBanner(input(statuses.slice(1), { pointerInside: true }), first.state);
+    expect(next.view.issueCount).toBe(11);
+    expect(next.state.order.some((r) => r.hosts.includes('box-0'))).toBe(true);
+    const healthy = nextBanner(input(statuses.map((s) => connected(s.host, s.label)), { pointerInside: false }), next.state);
+    expect(healthy.view.issueCount).toBe(0);
+  });
   it('healthy and connecting hosts take no row (C15)', () => {
     const { view } = run([input([connected('devbox', 'Dev box'), connecting('netbox', 'Net box')])])
     expect(view.rows).toHaveLength(0)
@@ -312,15 +344,14 @@ describe("attention banner model: 'and N more' names its hosts (output only)", (
 })
 
 describe('attention banner model: replica parity (C45)', () => {
-  // The rules did not change with this slice: the same input gives the same rows on a replica,
-  // and the only new field is the moreHosts output.
-  it.each([false, true])('replica=%s: the same rows, order, actions and keys as before; moreHosts is the one addition', (replica) => {
+  it.each([false, true])('replica=%s: the same rows, order, actions, keys and current issue count', (replica) => {
     const statuses = [
       failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box'), outdated('buildbox', 'Build box'),
       connected('devbox', 'Dev box'), failed('keybox', 'Key box', 'auth'),
     ]
     const { view } = run([input(statuses, { replica })])
-    expect(Object.keys(view).sort()).toEqual(['allKeys', 'more', 'moreHosts', 'rows', 'subhead', 'title', 'wakeAt'])
+    expect(Object.keys(view).sort()).toEqual(['allKeys', 'issueCount', 'more', 'moreHosts', 'rows', 'subhead', 'title', 'wakeAt'])
+    expect(view.issueCount).toBe(3)
     // Connect failures first, readiness second, Settings order inside (unchanged).
     expect(view.rows.map((r) => r.id)).toEqual(['host:netbox', 'host:keybox', 'host:signbox'])
     for (const r of view.rows) {

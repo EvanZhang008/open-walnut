@@ -300,6 +300,20 @@ describe('preflight', () => {
     expect(String(versionCall.env.PATH).split(':')[0]).toBe(`${HOME}/.nvm/versions/node/v16.20.2/bin`)
   })
 
+  it.each(['callback', 'throw'])('keeps the original spawn error from a %s failure', async (mode) => {
+    const { deps } = fakeHost({ [`${HOME}/.local/bin/claude`]: { content: ELF, exec: true } },
+      () => ({ code: 0 }), { HOME })
+    deps.env.PATH = path.join(HOME, '.local', 'bin')
+    deps.execFile = (_file, _args, _opts, cb) => {
+      const error = Object.assign(new Error('ENOENT: no such file or directory, posix_spawn'), { code: 'ENOENT' })
+      if (mode === 'throw') throw error
+      cb(error, '', '')
+    }
+    expect((await createHostRuntime(deps).preflight()).claude.error).toBe(
+      'claude --version failed (ENOENT): ENOENT: no such file or directory, posix_spawn',
+    )
+  })
+
   it('with claudeCheck: sign-in and the floor ride on the claude block, the floor comes from the RPC args', async () => {
     const files = { [`${HOME}/.local/bin/claude`]: { content: ELF, exec: true }, '/usr/bin/gcc': { content: ELF, exec: true } }
     const { deps } = fakeHost(files, (file, args) => args[0] === '--version' ? { code: 0, stdout: '2.1.258 (Claude Code)\n' } : { code: 1 },

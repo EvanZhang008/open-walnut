@@ -14,8 +14,10 @@ import type { SystemHealth } from '../../web/src/hooks/useSystemHealth'
 import type { LocalClaudeStatus } from '../../web/src/api/local-claude'
 import { claudeBannerView, localNoticeShows, splitInlineCode } from '../../web/src/utils/local-claude-banner'
 
+const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
+
 const render = (health: SystemHealth, loading = false) => renderToStaticMarkup(
-  createElement(SetupBanner, { health, loading, onNavigateSettings: () => {} }),
+  createElement(MemoryRouter, null, createElement(SetupBanner, { health, loading, onNavigateSettings: () => {} })),
 )
 
 describe('setup banner only asks for missing setup', () => {
@@ -185,7 +187,7 @@ describe('the local section mounted', () => {
   let root: { render: (n: unknown) => void; unmount: () => void } | null = null
   const signIn = { ...ready, localClaude: local({ claude: { ...local({}).claude, version: '2.1.281', auth: 'not-logged-in' }, problems: [SIGN_IN] }) }
   const mount = async (health: SystemHealth, onDismissed?: (key: string) => void) => {
-    await act(async () => { root!.render(createElement(SetupBanner, { health, onNavigateSettings: () => {}, onDismissed })) })
+    await act(async () => { root!.render(createElement(MemoryRouter, null, createElement(SetupBanner, { health, onNavigateSettings: () => {}, onDismissed }))) })
   }
 
   beforeAll(() => {

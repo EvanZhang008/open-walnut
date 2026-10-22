@@ -268,8 +268,13 @@ export async function isolatePrefs(page: Page): Promise<void> {
 }
 
 export async function loadHome(page: Page): Promise<void> {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+  const url = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/`
+  if (page.url() !== url) {
+    await Promise.all([
+      page.waitForURL(url, { waitUntil: 'domcontentloaded' }),
+      page.evaluate((target) => window.location.assign(target), url),
+    ])
+  }
   await waitForHome(page)
   await page.waitForFunction(() => {
     const ws = (window as unknown as { __hpWs?: WebSocket }).__hpWs
@@ -297,6 +302,12 @@ export async function setup(page: Page, hosts: HS[], local?: LocalState, opts: {
 
 /** THE card on Home: the task panel mount (the default layout shows the task panel). */
 export const banner = (page: Page): Locator => page.locator('[data-testid="attention-banner"][data-mount="tasks"]')
+/** Existing body/action scenarios explicitly open the new default-collapsed section. */
+export async function expandSystemAttention(page: Page): Promise<void> {
+  const disclosure = page.locator('.todo-panel .system-attention-toggle');
+  await expect(disclosure).toBeVisible();
+  if (await disclosure.getAttribute('aria-expanded') === 'false') await disclosure.click();
+}
 /** Every attention banner on the page, wherever it is mounted. */
 export const anyBanner = (page: Page): Locator => page.locator('[data-testid="attention-banner"]')
 /** Host rows only (an undo row in a dismissed row's place carries no data-host). */

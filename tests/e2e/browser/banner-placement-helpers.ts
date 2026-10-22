@@ -201,11 +201,36 @@ export async function healthyGitSync(page: Page): Promise<void> {
 export async function bpSetup(page: Page, opts: BpOptions = {}): Promise<Hosts> {
   await healthyGitSync(page)
   if (opts.probe) await installMaxCardsProbe(page)
-  if (opts.feed) await seedFeed(page, opts.feed)
+  await seedFeed(page, opts.feed ?? [])
   if (opts.allTasks) await presetPanelView(page)
   if (opts.before) await opts.before(page)
   const h = await setup(page, opts.hosts ?? fixtureHosts(), opts.local, { listHosts: opts.listHosts ?? true })
   return h
+}
+
+/** After the bottom card's final stop, focus continues to the footer or the next visible control. */
+export async function expectFocusAfterSystemAttention(page: Page): Promise<void> {
+  const state = await page.locator('.todo-panel > .ab-mount').evaluate((mount) => {
+    const active = document.activeElement as HTMLElement | null
+    const footer = mount.nextElementSibling
+    const footerButton = footer?.matches('.todo-filter-footer')
+      ? footer.querySelector<HTMLElement>('button:not([disabled])') : null
+    const stops = Array.from(document.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input, select, textarea, [tabindex]'))
+      .filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[hidden], [inert]')
+        && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility !== 'hidden')
+    // Without a footer, Tab may continue to another panel or wrap to the first page control.
+    const next = footerButton ?? stops.find((el) => !mount.contains(el)
+      && !!(mount.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) ?? stops[0]
+    return {
+      body: active === document.body,
+      inCard: !!active?.closest('[data-testid="attention-banner"]'),
+      hidden: !!active?.closest('[hidden], [inert]'),
+      forbidden: !!active?.closest('.todo-group-action-btn-plus, [class*="filter-chip"], [data-testid="agent-search-panel"] button'),
+      visible: !!active && active.getBoundingClientRect().width > 0 && active.getBoundingClientRect().height > 0,
+      expected: !!next && active === next,
+    }
+  })
+  expect(state).toEqual({ body: false, inCard: false, hidden: false, forbidden: false, visible: true, expected: true })
 }
 
 /** The card is in the task panel, the only one on the page, with the fixture's rows. */

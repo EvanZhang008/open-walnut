@@ -23,6 +23,25 @@ export interface NotificationFixResult {
   cloned?: boolean;
 }
 
+export async function startSystemFix(system: 'backup' | 'search'): Promise<NotificationFixResult> {
+  const result = await apiPost<NotificationFixResult>(
+    '/api/notifications/fix', { system },
+    { timeoutMs: FIX_TIMEOUT_MS, quietStatuses: [400, 404, 409, 503] },
+  );
+  if (result.cloned) invalidateSelfRepair();
+  return result;
+}
+
+export async function startHostFix(host: string | string[]): Promise<NotificationFixResult> {
+  const result = await apiPost<NotificationFixResult>(
+    '/api/notifications/fix',
+    Array.isArray(host) ? { hosts: host } : { host },
+    { timeoutMs: FIX_TIMEOUT_MS, quietStatuses: [400, 404, 409, 503] },
+  );
+  if (result.cloned) invalidateSelfRepair();
+  return result;
+}
+
 export async function startNotificationFix(
   dedupKey: string,
   opts?: { restart?: boolean },

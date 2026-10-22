@@ -88,6 +88,8 @@ export interface BannerState {
 }
 
 export interface BannerView {
+  /** Independent problem hosts before layout holds or the visible-row cap. */
+  issueCount: number;
   /** Card title for the host-only case; null when nothing asks for attention. */
   title: string | null;
   /** 'Remote hosts' above the host rows when the local section is present. */
@@ -427,6 +429,7 @@ export function nextBanner(input: BannerInput, prev: BannerState = EMPTY_BANNER_
     title = hosts.size === 1 ? `${attention[0].labels[0]} needs attention` : HOST_TITLE;
   }
   const view: BannerView = {
+    issueCount: new Set(cands.filter((c) => c.row.type !== 'ready').flatMap((c) => c.row.hosts)).size,
     title,
     subhead: input.localPresent && order.length > 0 ? HOST_SUBHEAD : null,
     rows: capped.rows,

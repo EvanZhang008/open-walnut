@@ -18,6 +18,7 @@ vi.mock('@/api/hosts', () => ({ fetchHostStatus: vi.fn(async () => []), connectH
 vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
 vi.mock('@/api/ws', () => ({ wsClient: { state: 'connected', onEvent() {}, offEvent() {} } }))
 
+const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
 const { scrollMaxPx, undoLinePx } = await import('../../web/src/components/common/banner-scroll')
 const { SingleHostRow, GroupRow } = await import('../../web/src/components/common/HostProblemRows')
 const hostsApi = await import('@/api/hosts') as unknown as { connectHost: ReturnType<typeof vi.fn> }
@@ -120,7 +121,7 @@ describe('dense rows (N1)', () => {
     summary: 'Permission denied (publickey).', dismissKeys: ['keybox|connect'], actions: ['retry', 'openSettings'],
   } as unknown as BannerRow
   const render = async (props: Record<string, unknown>) => {
-    await act(async () => { root!.render(createElement(SingleHostRow, { row: keybox, onDismiss: () => {}, onOpenSettings: () => {}, ...props } as never)) })
+    await act(async () => { root!.render(createElement(MemoryRouter, null, createElement(SingleHostRow, { row: keybox, onDismiss: () => {}, onOpenSettings: () => {}, ...props } as never))) })
     return host.querySelector('li.hpb-row')!
   }
   const texts = (li: Element) => Array.from(li.querySelectorAll('button')).map((b) => (b.textContent ?? '').trim())
@@ -129,7 +130,7 @@ describe('dense rows (N1)', () => {
     const li = await render({ dense: true, defaultExpanded: false })
     expect(li.classList.contains('hpb-dense')).toBe(true)
     expect(li.classList.contains('hpb-open')).toBe(false)
-    expect(texts(li)).toEqual(['Retry', 'Show details', '×'])
+    expect(texts(li)).toEqual(['Retry', 'Fix with agent', 'Show details', '×'])
     expect(li.querySelector('.hft-hint')).toBeNull()
   })
   it('opened by the user, a dense row shows every action and the details', async () => {
@@ -162,11 +163,11 @@ describe('a credential row shares the one attempt store (C48)', () => {
     doc.body.appendChild(two)
     const root2 = createRoot(two)
     const props = { row: cred, defaultExpanded: false, onDismiss: () => {}, onOpenSettings: () => {} }
-    await act(async () => { root!.render(createElement(GroupRow, props as never)) })
+    await act(async () => { root!.render(createElement(MemoryRouter, null, createElement(GroupRow, props as never))) })
     const retry = () => host.querySelector<HTMLButtonElement>('[data-testid="hpb-retry"]')!
     await act(async () => { retry().dispatchEvent(new (doc.defaultView as unknown as typeof globalThis).Event('click', { bubbles: true }) as Event) })
     // The other panel mounts the same row while the request is in flight.
-    await act(async () => { root2.render(createElement(GroupRow, props as never)) })
+    await act(async () => { root2.render(createElement(MemoryRouter, null, createElement(GroupRow, props as never))) })
     const other = two.querySelector<HTMLButtonElement>('[data-testid="hpb-retry"]')!
     expect(other.textContent).toBe('Retrying...')
     expect(other.disabled).toBe(true)

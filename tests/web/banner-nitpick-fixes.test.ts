@@ -16,6 +16,7 @@ vi.mock('@/api/hosts', () => ({ fetchHostStatus: vi.fn(async () => []), connectH
 vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
 vi.mock('@/api/ws', () => ({ wsClient: { state: 'connected', onEvent() {}, offEvent() {} } }))
 
+const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
 const { rowsBelow, keepRowInView, firstRowMinPx } = await import('../../web/src/components/common/banner-scroll')
 const { appearsInstantly, finalWidthOf, OWNER_SWITCH_MS, PAGE_LOAD_MS } = await import('../../web/src/components/common/banner-mount-hooks')
 const { bellPresentation } = await import('../../web/src/utils/host-banner-placement')
@@ -52,6 +53,12 @@ describe('scroll cue and focus keeping (N3, N4)', () => {
     // Row taller than the list: the control alone decides.
     m = make(-200, { top: 120, bottom: 148 })
     expect(keepRowInView(m.sc as never, m.target as never)).toBe(0)
+  })
+
+  it('firstRowMinPx includes the repair button beneath the primary action', () => {
+    const li = { ...box({ top: 100, bottom: 250 }), querySelector: (selector: string) => selector === '.hpb-actions'
+      ? box({ top: 130, bottom: 162.4 }) : selector === '.host-agent-fix-button' ? box({ top: 170, bottom: 194 }) : null }
+    expect(firstRowMinPx({ querySelector: () => li } as never)).toBe(96)
   })
 
   it('firstRowMinPx is the first row down to its buttons', () => {
@@ -146,7 +153,7 @@ describe('mounted', () => {
       problem: { kind: 'claude_not_logged_in', message: 'Claude Code on Sign box is not signed in. Run the command once, then Check again.', commands: ['ssh -t alice@sign.example.com claude'] },
       dismissKeys: ['signbox|claude_not_logged_in|'], actions: ['checkAgain', 'openSettings'],
     } as unknown as BannerRow
-    await act(async () => { root!.render(createElement(SingleHostRow, { row, defaultExpanded: true, onDismiss: () => {}, onOpenSettings: () => {} })) })
+    await act(async () => { root!.render(createElement(MemoryRouter, null, createElement(SingleHostRow, { row, defaultExpanded: true, onDismiss: () => {}, onOpenSettings: () => {} }))) })
     const li = host.querySelector('li.hpb-row')!
     const head = li.querySelector('.hpb-headline')!
     expect(head.textContent).toBe('Claude Code on Sign box is not signed in.')
@@ -155,6 +162,30 @@ describe('mounted', () => {
     expect(order[1]).toMatch(/^setup-step-btn:Check again/)
     expect(order.findIndex((o) => o.startsWith('hpb-rest'))).toBeGreaterThan(1)
     expect(order[order.length - 1]).toMatch(/^setup-banner-dismiss/)
+  })
+
+  it('an expired undo after a missed timer uses the same removal and focus callback', async () => {
+    let add: ((entry: never) => void) | undefined
+    let count = 0
+    const gone = vi.fn()
+    const Probe = () => {
+      const undo = useBannerUndo({ pointerInside: true, reducedMotion: () => false, onGone: gone, root: null })
+      add = undo.add as never
+      count = undo.entries.length
+      return null
+    }
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      clock.mockReturnValue(1_000)
+      await act(async () => { root!.render(createElement(Probe)) })
+      await act(async () => { add!({ id: 'row:host:expired', kind: 'row', index: 0, height: 40, restore: () => {} } as never) })
+      expect(count).toBe(1)
+      clock.mockReturnValue(11_151)
+      await act(async () => { root!.render(createElement(Probe)) })
+      expect(count).toBe(0)
+      expect(gone).toHaveBeenCalledTimes(1)
+      expect(gone).toHaveBeenCalledWith(expect.objectContaining({ id: 'row:host:expired' }), false)
+    } finally { clock.mockRestore() }
   })
 
   it('an undo line outlives the card: the next mount (the other panel) shows it (N8)', async () => {

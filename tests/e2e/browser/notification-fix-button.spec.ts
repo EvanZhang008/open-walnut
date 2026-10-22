@@ -1,5 +1,5 @@
 /**
- * "Ask AI to fix" on an error notification card — the affordance that hands a
+ * "Fix with agent" on an error notification card — the affordance that hands a
  * failure to a coding session in Walnut's own source.
  *
  * The feed is served through a route stub for the same reason the redesign spec
@@ -83,7 +83,10 @@ async function stubNotifications(page: Page, feed: FeedRecord[]): Promise<void> 
 }
 
 async function loadHome(page: Page): Promise<void> {
-  await page.goto('/')
+  await Promise.all([
+    page.waitForURL(`http://localhost:${process.env.PW_TEST_PORT ?? 3457}/`, { waitUntil: 'domcontentloaded' }),
+    page.evaluate((url) => window.location.assign(url), `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/`),
+  ])
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -124,13 +127,8 @@ async function selfRepairAvailable(page: Page): Promise<{ available: boolean; re
 
 // ── 1. The button is on the card, and the card body still just expands ──
 
-test('an error card offers Ask AI to fix, and the card body still expands instead of navigating', async ({ page }) => {
+test('an error card offers Fix with agent, and the card body still expands instead of navigating', async ({ page }) => {
   const repair = await selfRepairAvailable(page)
-  test.skip(
-    !repair.available,
-    `this checkout cannot start a repair session (selfRepair.reason=${repair.reason ?? 'none'}), so the button is correctly absent`,
-  )
-
   await stubNotifications(page, [errorRecord(Date.now())])
   await loadHome(page)
 
@@ -141,7 +139,11 @@ test('an error card offers Ask AI to fix, and the card body still expands instea
   await expect(card).toHaveCount(1)
   const startBtn = card.locator('[data-testid=nfc-fix-start]')
   await expect(startBtn).toBeVisible()
-  await expect(startBtn).toContainText('Ask AI to fix')
+  await expect(startBtn).toContainText('Fix with agent')
+  if (!repair.available) {
+    await expect(startBtn).toBeDisabled()
+    await expect(startBtn).toHaveAttribute('title', 'Agent repair is unavailable on this server')
+  } else await expect(startBtn).toBeEnabled()
   // A record with no repair yet shows no "open" affordance.
   await expect(card.locator('[data-testid=nfc-fix-open]')).toHaveCount(0)
 
@@ -159,7 +161,7 @@ test('an error card offers Ask AI to fix, and the card body still expands instea
 
 // ── 2. Clicking it starts the session and opens it on the home page ──
 
-test('clicking Ask AI to fix posts the dedupKey and opens the repair session', async ({ page }) => {
+test('clicking Fix with agent posts the dedupKey and opens the repair session', async ({ page }) => {
   const repair = await selfRepairAvailable(page)
   test.skip(!repair.available, `no repair source here (reason=${repair.reason ?? 'none'})`)
 
@@ -249,7 +251,7 @@ test('a failed start shows the server reason inline and leaves the button usable
   // again, so the user can retry once they have fixed the cause.
   await expect(panel).toBeVisible()
   await expect(startBtn).toBeEnabled()
-  await expect(startBtn).toContainText('Ask AI to fix')
+  await expect(startBtn).toContainText('Fix with agent')
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/card-fix-error.png` })
 })
 

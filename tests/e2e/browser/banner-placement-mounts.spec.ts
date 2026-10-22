@@ -17,7 +17,7 @@
 import fs from 'node:fs'
 import { test, expect } from '@playwright/test'
 import {
-  anyBanner, banner, chatShownLayout, connected, hideTaskPanel, outdated, resetServerHostFixture, row, showTaskPanel,
+  anyBanner, banner, chatShownLayout, connected, expandSystemAttention, hideTaskPanel, outdated, resetServerHostFixture, row, showTaskPanel,
 } from './host-problems-helpers'
 import { openBell, panelBanner, slotBanner, tasksBanner } from './host-problems-fixture-helpers'
 import { openDraft } from './draft-helpers'
@@ -36,9 +36,10 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.describe('the task panel is the Home mount', () => {
-  test('BP-C1: default Home: exactly one card, in the task panel after the toolbar and before the list; none in the slot', async ({ page }) => {
+  test('BP-C1: default Home: exactly one card, in the bottom section after the list and tabs, next to the footer; none in the slot', async ({ page }) => {
     // The slot is shown, so "none in the slot" is a claim about a mounted slot.
     await bpSetup(page, { before: chatShownLayout })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await expect(page.locator('.main-page-chat [data-testid="attention-banner"]')).toHaveCount(0)
     const order = await banner(page).evaluate((card) => {
@@ -46,27 +47,49 @@ test.describe('the task panel is the Home mount', () => {
       const toolbar = panel.querySelector('.todo-panel-toolbar')!
       const list = panel.querySelector('.todo-panel-list')
       const tabs = panel.querySelector('.todo-section-tabs-list')
-      const after = (a: Element, b: Element | null) => !b || !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
-      return { afterToolbar: after(toolbar, card), beforeList: after(card, list), beforeTabs: after(card, tabs), hasList: !!list }
+      const section = card.closest('.system-attention')!
+      const mount = section.closest('.ab-mount')!
+      const footer = panel.querySelector('.todo-filter-footer')
+      const after = (a: Element | null, b: Element) => !a || !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+      return {
+        afterToolbar: after(toolbar, section), afterList: after(list, section), afterTabs: after(tabs, section), hasList: !!list,
+        bottom: footer ? mount.nextElementSibling === footer : mount === panel.lastElementChild,
+      }
     })
-    expect(order).toEqual({ afterToolbar: true, beforeList: true, beforeTabs: true, hasList: true })
+    expect(order).toEqual({ afterToolbar: true, afterList: true, afterTabs: true, hasList: true, bottom: true })
+    const sectionBox = (await page.locator('.todo-panel .system-attention').boundingBox())!
+    const footer = page.getByTestId('todo-filter-footer')
+    if (await footer.count()) {
+      const footerBox = (await footer.boundingBox())!
+      expect(Math.abs(footerBox.y - sectionBox.y - sectionBox.height)).toBeLessThanOrEqual(1)
+    }
     await banner(page).screenshot({ path: `${BP_SHOTS}/c1-tasks-card.png` })
   })
 
-  test('BP-C2: WebKit 980x800, chat hidden, no session column: the card is on the first screen of the task panel', async ({ page, browserName }) => {
+  test('BP-C2: WebKit 980x800, chat hidden, no session column: the expanded card remains visible at the task panel bottom, after the list', async ({ page, browserName }) => {
     test.skip(browserName !== 'webkit', 'WebKit only: the Mac app engine')
     await page.setViewportSize({ width: 980, height: 800 })
     await bpSetup(page, { before: async (p) => { await p.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false')) } })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await expect(page.locator('.main-page-session-column')).toHaveCount(0)
-    const box = (await banner(page).boundingBox())!
-    expect(box.y).toBeLessThan(200)
+    await expect.poll(async () => {
+      const list = (await page.locator('.home-navigation-scroll').boundingBox())!
+      const section = (await page.locator('.todo-panel .system-attention').boundingBox())!
+      return section.y - list.y - list.height;
+    }).toBeGreaterThanOrEqual(-1)
+    const section = (await page.locator('.todo-panel .system-attention').boundingBox())!
+    const panel = (await page.locator('.todo-panel').boundingBox())!
+    const footer = page.getByTestId('todo-filter-footer')
+    const nextY = await footer.count() ? (await footer.boundingBox())!.y : panel.y + panel.height
+    expect(Math.abs(section.y + section.height - nextY)).toBeLessThanOrEqual(2)
     await expect(banner(page)).toBeInViewport()
     await page.screenshot({ path: `${BP_SHOTS}/c2-webkit-980x800.png` })
   })
 
   test('BP-C3: a healthy host and a claude_outdated host take no row in the task panel; in System they are plain status lines', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     for (const host of ['devbox', 'buildbox']) await expect(banner(page).locator(`li.hpb-row[data-host="${host}"]`)).toHaveCount(0)
     await openSystemHosts(page)
@@ -81,6 +104,7 @@ test.describe('the task panel is the Home mount', () => {
 
   test('BP-C4: the task panel rows are in the model order; System gives each of those hosts the same row (type and kind), in Settings order', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     const inTasks = await triples(banner(page))
     expect(inTasks.map((t) => t.split('|')[0])).toEqual(FIXTURE_ORDER)
@@ -96,6 +120,7 @@ test.describe('the task panel is the Home mount', () => {
 test.describe('the notification panel never takes the card', () => {
   test('BP-C5: the bell on Home, then System: no card or mount in the panel; System\'s first block is Remote hosts, each host once; the Home card stays, same node, same place', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     const place = await markHomeCard(page)
     const hosts = await openSystemHosts(page)
@@ -115,6 +140,7 @@ test.describe('the notification panel never takes the card', () => {
 
   test('BP-C6: Escape, the backdrop, Close and the bell again each close the panel; the Home card never left: same node, same rows', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     const inTasks = await triples(banner(page))
     const place = await markHomeCard(page)
@@ -129,12 +155,14 @@ test.describe('the notification panel never takes the card', () => {
   test('BP-C7: task panel toggles, panel opens and a trip to /notes never put two cards on the page', async ({ page }) => {
     // With the slot shown, each Hide moves the card into it: the move under test.
     await bpSetup(page, { probe: true, before: chatShownLayout })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
-    for (let i = 0; i < 3; i++) { await hideTaskPanel(page); await showTaskPanel(page) }
+    for (let i = 0; i < 3; i++) { await hideTaskPanel(page); await showTaskPanel(page); await expandSystemAttention(page) }
     await expect(banner(page)).toHaveCount(1)
     for (let i = 0; i < 3; i++) { await openSystemHosts(page); await closePanel(page, 'escape') }
     await goRail(page, 'notes')
     await goRail(page, 'home')
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     // Exactly one: the probe saw the card, and never a second one.
     expect(await maxCards(page)).toBe(1)
@@ -142,6 +170,7 @@ test.describe('the notification panel never takes the card', () => {
 
   test('BP-C8: on /notes no card on the page, the rail Settings dot and the bell dot lit; the bell opens on All, led by each problem host as the card\'s row, in the card\'s order', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     const inTasks = await triples(banner(page))
     await goRail(page, 'notes')
@@ -159,12 +188,14 @@ test.describe('the notification panel never takes the card', () => {
 test.describe('fallback mounts while the task panel is hidden', () => {
   test('BP-C13: the toolbar Hide task panel moves the card to the slot; the rail toggle brings it back', async ({ page }) => {
     await bpSetup(page, { before: chatShownLayout })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await toolbarHide(page).click()
     await expect(slotBanner(page)).toHaveCount(1)
     await expect(slotBanner(page)).toHaveAttribute('data-mount', 'slot')
     await expect(anyBanner(page)).toHaveCount(1)
     await showTaskPanel(page)
+    await expandSystemAttention(page)
     await expect(tasksBanner(page)).toHaveCount(1)
     await expect(slotBanner(page)).toHaveCount(0)
     await expect(anyBanner(page)).toHaveCount(1)
@@ -172,6 +203,7 @@ test.describe('fallback mounts while the task panel is hidden', () => {
 
   test('BP-C14: task panel and chat hidden with a draft open: the compact card in the draft column, no title, no local section', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in', before: async (p) => { await p.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false')) } })
+    await expandSystemAttention(page)
     const draft = await openDraft(page)
     await hideTaskPanel(page)
     const compact = draft.locator('[data-testid="attention-banner"][data-mount="draft"]')
@@ -212,9 +244,11 @@ test.describe('empty, and the first frame after a move', () => {
   test('BP-C44: in the first frame after Hide task panel no card is left inside the task panel', async ({ page }) => {
     // The slot is shown, so the card has somewhere to move in that frame.
     await bpSetup(page, { before: chatShownLayout })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     expect(await countInFirstFrameAfterClick(page, toolbarHide(page), '.todo-panel [data-testid="attention-banner"]')).toBe(0)
     await showTaskPanel(page)
+    await expandSystemAttention(page)
     await expect(tasksBanner(page)).toHaveCount(1)
     // The rail toggle too.
     expect(await countInFirstFrameAfterClick(page, page.locator('.sidebar-home-panels .app-task-panel-toggle'), '.todo-panel [data-testid="attention-banner"]')).toBe(0)
@@ -222,6 +256,7 @@ test.describe('empty, and the first frame after a move', () => {
 
   test('BP-C56: the first frame after the bell, System, All, System and Close: the task card every time, never a panel card', async ({ page }) => {
     await bpSetup(page, { probe: true })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     const TASKS = '.todo-panel [data-testid="attention-banner"][data-mount="tasks"]'
     const PANEL = '.notification-panel [data-testid="attention-banner"]'
@@ -243,11 +278,13 @@ test.describe('empty, and the first frame after a move', () => {
       const page = await ctx.newPage()
       try {
         await bpSetup(page, { probe: true, before: chatShownLayout })
+        await expandSystemAttention(page)
         await expectTasksCard(page)
-        for (let i = 0; i < 3; i++) { await hideTaskPanel(page); await showTaskPanel(page) }
+        for (let i = 0; i < 3; i++) { await hideTaskPanel(page); await showTaskPanel(page); await expandSystemAttention(page) }
         for (let i = 0; i < 3; i++) { await openSystemHosts(page); await closePanel(page, 'escape') }
         await goRail(page, 'notes')
         await goRail(page, 'home')
+        await expandSystemAttention(page)
         await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
         expect(await maxCards(page), `run ${run + 1}`).toBe(1)
       } finally {
@@ -260,6 +297,7 @@ test.describe('empty, and the first frame after a move', () => {
 test.describe('the System section lists the hosts; the card stays on Home', () => {
   test('BP-C69: Home with the task card: the bell opens on All, led by the problem rows, with no card or mount in the panel; the task card stays', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     const before = (await banner(page).boundingBox())!
     await openBell(page)
@@ -282,6 +320,7 @@ test.describe('the System section lists the hosts; the card stays on Home', () =
 
   test('BP-C70: System, All, System, All: exactly one card at every step, always the Home card (same node, same place); System lists the problem hosts each time', async ({ page }) => {
     await bpSetup(page, { probe: true })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     const place = await markHomeCard(page)
     await openBell(page)
@@ -302,6 +341,7 @@ test.describe('the System section lists the hosts; the card stays on Home', () =
   test('BP-C71: on /notes the bell opens on All with each problem host\'s row and the Errors badge counts them (System\'s counts none); a host dismissed on the Home card leaves All and the count, and stays in System', async ({ page }) => {
     // bpSetup routes git sync healthy and this machine ready, so the Errors badge counts hosts only.
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await goRail(page, 'notes')
     await openProblems(page)
@@ -314,6 +354,7 @@ test.describe('the System section lists the hosts; the card stays on Home', () =
     // The badge follows what the problems list, and they follow the Home card's dismissals.
     await closePanel(page, 'escape')
     await goRail(page, 'home')
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await row(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
     await expect(row(page, 'netbox')).toHaveCount(0)

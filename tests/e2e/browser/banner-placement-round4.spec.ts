@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { banner, chatShownLayout, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut } from './host-problems-helpers'
+import { banner, chatShownLayout, connected, expandSystemAttention, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
   BP_SHOTS, bellDot, bpSetup, expectHomeCardStill, markHomeCard, openRow, openSystemHosts, pickRail, problemHosts, railButton,
@@ -29,6 +29,7 @@ const dismissed = (page: Page): Promise<string[]> => page.evaluate(() => {
 test.describe('undo lines (N3-1, N3-12, N3-13)', () => {
   test('BP-R4-N3-1: a Home card row hidden before a panel open keeps its height through it (System lists the host all along); the pointer coming back moves nothing; Dismiss all dismisses', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const rowH = (await box(row(page, 'certbox'))).height
     await banner(page).getByRole('button', { name: 'Dismiss Cert box' }).click()
@@ -60,6 +61,7 @@ test.describe('undo lines (N3-1, N3-12, N3-13)', () => {
 
   test('BP-R4-N3-12/13: Dismiss all holds the card height until the line collapses; the title stops saying "need attention"; the line counts the hosts', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const h0 = (await box(banner(page))).height
     await banner(page).getByRole('button', { name: 'Dismiss all' }).click()
@@ -83,6 +85,7 @@ test.describe('landing and the cap (N3-2, N3-3, N3-18, N3-21)', () => {
     await isolatePrefs(page)
     await loadFixture(request, 'host-problems')
     await loadApp(page)
+    await expandSystemAttention(page)
     await expect(row(page, 'certbox')).toBeVisible({ timeout: 20_000 })
     await openRow(row(page, 'certbox'))
     await row(page, 'certbox').getByRole('button', { name: 'Open Settings' }).click()
@@ -116,6 +119,7 @@ test.describe('landing and the cap (N3-2, N3-3, N3-18, N3-21)', () => {
     page.on('pageerror', (e) => errors.push(String(e)))
     await page.setViewportSize({ width: 980, height: 600 })
     await bpSetup(page, { local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('li.hpb-row').first()).toBeVisible({ timeout: 20_000 })
     await page.waitForTimeout(800)
     const panelH = (await box(page.locator('.todo-panel'))).height
@@ -133,6 +137,7 @@ test.describe('landing and the cap (N3-2, N3-3, N3-18, N3-21)', () => {
 
   test('BP-R4-N3-18: 1280x800, local sign-in and hosts: the visible list ends on a whole row', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('li.hpb-row').first()).toBeVisible({ timeout: 20_000 })
     await page.waitForTimeout(800)
     const cut = await banner(page).locator('.hpb-scroll').evaluate((sc) => {
@@ -149,6 +154,7 @@ test.describe('landing and the cap (N3-2, N3-3, N3-18, N3-21)', () => {
 test.describe('C22 in System with the pointer resting in it', () => {
   test('BP-R4-C22: after a Retry that works the System entry reads Connected at once and never shows the old failure again; the Home card shows the success line', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     h.connectDelayMs = 1500
     h.connectAnswer = (host) => connected(host, 'Net box')
@@ -180,6 +186,7 @@ test.describe('row polish (N3-5, N3-6, N3-7, N3-16, N3-17, N3-19)', () => {
     await routeHealth(page, 'sign-in')
     await loadFixture(request, 'host-problems')
     await loadApp(page)
+    await expandSystemAttention(page)
     await expect(banner(page).locator('li.hpb-row').first()).toBeVisible({ timeout: 20_000 })
     const clipped = await banner(page).locator('li.hpb-row .hft-headline').evaluateAll((hs) => hs
       .filter((h) => h.getBoundingClientRect().height > 0)
@@ -205,6 +212,7 @@ test.describe('row polish (N3-5, N3-6, N3-7, N3-16, N3-17, N3-19)', () => {
     // Seven minutes after its retryAt, with frames still arriving (f2): a stale promise.
     await page.setViewportSize({ width: 1280, height: 800 })
     await bpSetup(page, { hosts: [failed('keybox', 'Key box', 'auth'), failed('certbox', 'Cert box', 'cert_expired', { retryAt: Date.now() - 7 * 60_000 })] })
+    await expandSystemAttention(page)
     await expect(row(page, 'certbox')).toBeVisible({ timeout: 20_000 })
     const closedH = (await box(row(page, 'keybox').getByTestId('hpb-retry'))).height
     await openRow(row(page, 'certbox'))
@@ -219,6 +227,7 @@ test.describe('narrow, phone, scrolled (N3-8, N3-9, N3-10, N3-11)', () => {
   test('BP-R4-N3-8/9: 980x600: after N more below, N more above; the scrollbar stays 8px clear of the x', async ({ page }) => {
     await page.setViewportSize({ width: 980, height: 600 })
     await bpSetup(page, { before: async (p) => { await p.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false')) } })
+    await expandSystemAttention(page)
     await expect(banner(page).getByTestId('hpb-below')).toBeVisible({ timeout: 20_000 })
     const sc = await box(banner(page).locator('.hpb-scroll'))
     const x = await box(banner(page).locator('li.hpb-row .hpb-x').first())
@@ -233,6 +242,7 @@ test.describe('narrow, phone, scrolled (N3-8, N3-9, N3-10, N3-11)', () => {
   test('BP-R4-N3-10: a task panel dragged to 10% of 980px: nothing wider than the card, one-line rows, within the cap', async ({ page }) => {
     await page.setViewportSize({ width: 980, height: 800 })
     await bpSetup(page, { before: async (p) => { await p.addInitScript(() => localStorage.setItem('open-walnut-todo-width', '10')) } })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('li.hpb-row').first()).toBeVisible({ timeout: 20_000 })
     await page.waitForTimeout(600)
     const c = await banner(page).evaluate((el) => {
@@ -249,6 +259,7 @@ test.describe('narrow, phone, scrolled (N3-8, N3-9, N3-10, N3-11)', () => {
   test('BP-R4-N3-11: phone 390x844: a one-line row puts its headline on its own line, the action under it', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expect(banner(page).locator('li.hpb-row').first()).toBeVisible({ timeout: 20_000 })
     const r = banner(page).locator('li.hpb-row').first()
     const head = await box(r.locator('.hft-headline'))
@@ -260,6 +271,7 @@ test.describe('narrow, phone, scrolled (N3-8, N3-9, N3-10, N3-11)', () => {
 test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
   test('BP-R4-N3-14: on /notes the bell dot and the Settings rail dot wear the same colour', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await page.getByTestId('sidebar-core-app-notes').click()
     await expect(settingsDot(page)).toBeVisible({ timeout: 10_000 })
@@ -275,6 +287,7 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
     await isolatePrefs(page)
     await loadFixture(request, 'host-problems')
     await loadApp(page)
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     await railButton(page, 'System').click()
@@ -293,6 +306,7 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
 
   test('BP-R4-N3-22: with the task panel hidden, the slot card keeps its rows near their words (at most 720px)', async ({ page }) => {
     await bpSetup(page, { before: chatShownLayout })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await toolbarHide(page).click()
     const slot = page.locator('[data-testid="attention-banner"][data-mount="slot"]')
@@ -302,6 +316,7 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
 
   test('BP-R4-C42: the panel is a dialog on every section, with host rows (All\'s problems, System) or without them (Needs Action), never a card; Tab walks every rail button, WebKit included', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     const panel = page.locator('.notification-panel')

@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Locator } from '@playwright/test'
 import {
-  anyBanner, banner, chatShownLayout, connected, failed, hideTaskPanel, isolatePrefs, now, resetServerHostFixture, routeHealth, row,
+  anyBanner, banner, chatShownLayout, connected, expandSystemAttention, failed, hideTaskPanel, isolatePrefs, now, resetServerHostFixture, routeHealth, row,
   showTaskPanel, signedOut, slotLayout, Hosts,
 } from './host-problems-helpers'
 import { openBell, panelBanner, slotBanner } from './host-problems-fixture-helpers'
@@ -43,6 +43,7 @@ test.describe('the 40% cap', () => {
   test('BP-C28: 1280x900, six problems and a local sign-in: card and host section within the task panel cap; the section scrolls; rows 2+ folded', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await bpSetup(page, { hosts: six(), local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const panelH = await height(page.locator('.todo-panel'))
     const cap = Math.max(panelH * 0.4, 132) + 1
@@ -60,6 +61,7 @@ test.describe('the 40% cap', () => {
   test('BP-C29: the same six problems and local sign-in, where the bell lands (All): no card; the Claude Code card leads, the host problems start inside the top 60% of the panel and name each host once; System lists them too; the rail keeps the whole panel height', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await bpSetup(page, { hosts: six(), local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const hosts = await openProblems(page)
     const panel = (await page.locator('.notification-panel').boundingBox())!
@@ -88,6 +90,7 @@ test.describe('the 40% cap', () => {
   test('BP-C61: 1280x600, a local sign-in and three hosts: the whole card within the cap, the local section whole, the host section scrolls', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 600 })
     await bpSetup(page, { hosts: three(), local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const panelH = await height(page.locator('.todo-panel'))
     expect(await height(page.locator('.todo-panel .attention-banner'))).toBeLessThanOrEqual(Math.max(panelH * 0.4, 132) + 1)
@@ -102,6 +105,7 @@ test.describe('narrow, phone, themes, loading', () => {
   test('BP-C30: a 980px window with a 300px task panel: no sideways scroll, actions under the body, 2 lines at most, the x clear of the text', async ({ page }) => {
     await page.setViewportSize({ width: 980, height: 800 })
     await bpSetup(page, { hosts: [failed('certbox', 'Cert box', 'cert_expired', { retryAt: now() + 192_000 }), signedOut('signbox', 'Sign box')] })
+    await expandSystemAttention(page)
     await page.addStyleTag({ content: '.main-page-todo { flex: 0 0 300px !important; width: 300px !important; min-width: 0 !important; max-width: 300px !important; }' })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const card = page.locator('.todo-panel .attention-banner')
@@ -121,6 +125,7 @@ test.describe('narrow, phone, themes, loading', () => {
   test('BP-C31: a 390x844 phone: the first headline and one button show in the task panel band; the System host list spans the sheet, its rows whole across', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await page.screenshot({ path: `${BP_SHOTS}/c31-phone-before.png` })
     // Whole inside the viewport and inside the host section's visible (scroll-clipped) box.
@@ -152,6 +157,7 @@ test.describe('narrow, phone, themes, loading', () => {
   test('BP-C32: dark theme: the task panel card shares the slot card\'s background; System rows draw none of their own; the card CSS has no literal colours', async ({ page, browser }) => {
     const dark = async (p: import('@playwright/test').Page) => { await p.addInitScript(() => { document.addEventListener('DOMContentLoaded', () => { document.documentElement.dataset.theme = 'dark' }) }) }
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], before: dark })
+    await expandSystemAttention(page)
     await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const bg = (l: Locator) => l.evaluate((el) => getComputedStyle(el).backgroundColor)
@@ -184,7 +190,7 @@ test.describe('narrow, phone, themes, loading', () => {
     h.hydrateDelayMs = 6000 // past the first paint, so the wait is observable
     await h.install([failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
     await routeHealth(page)
-    await page.goto('/')
+    await page.evaluate((url) => window.location.assign(url), `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/`)
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     const t0 = Date.now()
     while (Date.now() - t0 < 2000) {
@@ -192,18 +198,20 @@ test.describe('narrow, phone, themes, loading', () => {
       expect(await page.locator('.todo-panel').innerText()).not.toMatch(/\bunknown\b/i)
       await page.waitForTimeout(250)
     }
+    await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 10_000 })
     await expect(row(page, 'signbox')).toBeVisible()
   })
 })
 
 test.describe('the card holds still around it', () => {
-  test('BP-C35: while searching the card stays under the toolbar and the AI lane under the card; scrolling the results moves neither', async ({ page }) => {
+  test('BP-C35: while searching the AI lane stays under the toolbar and before the bottom card; scrolling the results moves neither', async ({ page }) => {
     await page.route('**/api/search/agent**', (route) => route.fulfill({ json: { summary: '', results: [], model: 'stub', tookMs: 1, cached: false } }))
     await bpSetup(page, {
       hosts: [failed('netbox', 'Net box', 'unreachable')], allTasks: true,
       before: async (p) => { await p.addInitScript(() => localStorage.setItem('open-walnut-agent-search', '1')) },
     })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await page.locator('.todo-search-input').fill('which task adds docx support')
     const lane = page.locator('.todo-panel [data-testid="agent-search-panel"]')
@@ -212,9 +220,9 @@ test.describe('the card holds still around it', () => {
       const tb = document.querySelector('.todo-panel-toolbar')!
       const lane = document.querySelector('.todo-panel [data-testid="agent-search-panel"]')!
       const f = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
-      return { cardAfterToolbar: f(tb, card), laneAfterCard: f(card, lane) }
+      return { laneAfterToolbar: f(tb, lane), cardAfterLane: f(lane, card) }
     })
-    expect(order).toEqual({ cardAfterToolbar: true, laneAfterCard: true })
+    expect(order).toEqual({ laneAfterToolbar: true, cardAfterLane: true })
     const cardTop = (await banner(page).boundingBox())!.y
     const laneTop = (await lane.boundingBox())!.y
     await page.locator('.todo-panel-list').evaluate((el) => {
@@ -228,6 +236,7 @@ test.describe('the card holds still around it', () => {
 
   test('BP-C36: switching in and out of System moves no task row: the Home card never moves or remounts on any section', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], allTasks: true })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const first = page.locator('.todo-panel .todo-panel-item').first()
     await expect(first).toBeVisible({ timeout: 20_000 }).catch(() => {})
@@ -249,6 +258,7 @@ test.describe('the card holds still around it', () => {
     // A short window, so the fixture's task list is longer than the list viewport by 400px.
     await page.setViewportSize({ width: 1280, height: 420 })
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], allTasks: true })
+    await expandSystemAttention(page)
     await expect(page.locator('.todo-panel .todo-panel-item').first()).toBeVisible({ timeout: 20_000 }).catch(() => {})
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const scroller = page.locator('.todo-panel-list')
@@ -269,6 +279,7 @@ test.describe('the card holds still around it', () => {
 
   test('BP-C38: a pointer drag on the card body never starts a task drag and moves no task', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], allTasks: true })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const tasks = () => page.locator('.todo-panel .todo-panel-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
     const before = await tasks()
@@ -290,6 +301,7 @@ test.describe('the card holds still around it', () => {
   test('BP-C46: a 1600px window with an 800px task panel: opening the bell, then System, leaves the first visible task row where it was', async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 900 })
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')], allTasks: true })
+    await expandSystemAttention(page)
     await page.addStyleTag({ content: '.main-page-todo { flex: 0 0 800px !important; width: 800px !important; max-width: 800px !important; }' })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const first = page.locator('.todo-panel .todo-panel-item').first()
@@ -324,6 +336,7 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
       await page.waitForTimeout(250)
     }
     await page.mouse.move(2, 2)
+    await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 5_000 })
     const dur = await page.locator('.todo-panel .ab-mount-anim').first().evaluate((el) => getComputedStyle(el).transitionDuration)
       .catch(() => '0s')
@@ -339,6 +352,7 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
       hosts: [failed('devbox', 'Dev box', 'cert_expired'), signedOut('signbox', 'Sign box')],
       feed: [hostErrorRecord('devbox', 1), hostErrorRecord('devbox', 2)],
     })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     await pickRail(page, 'Errors')
@@ -391,6 +405,7 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
     test.skip(browserName !== 'webkit', 'WebKit only: the Mac app engine')
     await page.setViewportSize({ width: 1600, height: 900 })
     const h = await bpSetup(page, { hosts: three() })
+    await expandSystemAttention(page)
     await page.addStyleTag({ content: '.main-page-todo { flex: 0 0 800px !important; width: 800px !important; max-width: 800px !important; }' })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'netbox', 'proxybox'])
     const r2y = (await row(page, 'netbox').boundingBox())!.y
@@ -419,13 +434,14 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
   test('BP-C64: one announcer for the page, none inside the card; opening System and hiding the task panel say nothing; a new problem is announced', async ({ page }) => {
     // The slot is shown, so hiding the task panel MOVES the card (the quiet move under test).
     const h = await bpSetup(page, { hosts: [failed('keybox', 'Key box', 'auth')], before: chatShownLayout })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await expect(page.locator('.attention-banner [aria-live]')).toHaveCount(0)
     const announcer = page.locator('[data-testid="host-banner-announcer"]')
     await expect(announcer).toHaveCount(1)
     const said = await announcer.textContent()
     for (let i = 0; i < 3; i++) { await openSystemHosts(page); await closePanel(page, 'escape') }
-    for (let i = 0; i < 2; i++) { await hideTaskPanel(page); await showTaskPanel(page) }
+    for (let i = 0; i < 2; i++) { await hideTaskPanel(page); await showTaskPanel(page); await expandSystemAttention(page) }
     expect(await announcer.textContent()).toBe(said)
     await page.mouse.move(2, 2)
     await h.push(failed('netbox', 'Net box', 'unreachable'))

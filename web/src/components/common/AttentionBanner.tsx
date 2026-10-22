@@ -20,12 +20,11 @@
  * below it already speaks for. Dismiss all is the same quiet text button at the
  * end of the list on every mount (a corner x sat 5px from a row x, N3).
  */
-import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
-import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { HOST_SUBHEAD, HOST_TITLE, READY_HOLD_MS, activeHiddenIds, nextBanner, type BannerRow } from '@/utils/attention-banner-model';
 import {
@@ -33,7 +32,7 @@ import {
 } from '@/utils/host-banner-dismiss';
 import { setBannerRowsDeferred, type BannerMount } from '@/utils/host-banner-placement';
 import {
-  cardMounted, getBannerState, isResumingAfterGap, setBannerState, withoutReplayedReady,
+  cardMounted, getBannerState, isResumingAfterGap, setBannerState, useRowExpanded, withoutReplayedReady,
 } from '@/utils/attention-banner-session';
 import { useUserEngagedHosts, useUserRetryingHosts } from '@/utils/host-user-retrying';
 import { useGateBarHosts } from '@/utils/host-gate-shown';
@@ -107,6 +106,11 @@ export function AttentionBanner({
   mount, health, healthLoading, onNavigateSettings, onStartSession, onLeave, focusOnLeave, holdLayout,
 }: AttentionBannerProps) {
   const compact = mount === 'draft';
+  const tasks = mount === 'tasks';
+  const [expanded, setExpanded] = useRowExpanded('system-attention', false);
+  const bodyId = useId();
+  const disclosureRef = useRef<HTMLButtonElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   const { pointerInside, focusInside, handlers } = usePointerFocus(el);
@@ -120,7 +124,9 @@ export function AttentionBanner({
   });
 
   // An undo line leaving with focus inside: the next row's x, else the mount's named target.
+  const flushLayoutRef = useRef<() => void>(() => {});
   const onUndoGone = useCallback((entry: UndoEntry, hadFocus: boolean) => {
+    flushLayoutRef.current();
     if (!hadFocus || !el) return;
     const node = el.querySelector(`[data-undo-id="${entry.id}"]`);
     const xs = Array.from(el.querySelectorAll<HTMLElement>('li.hpb-row:not(.hpb-leaving) .hpb-x'));
@@ -142,11 +148,7 @@ export function AttentionBanner({
   const gateHosts = useGateBarHosts();
   // The draft column's compact card leaves out a host its own gate bar speaks for.
   const statuses = compact && gateHosts.size ? allStatuses.filter((s) => !gateHosts.has(s.host)) : allStatuses;
-  // A phone's home card rides inside the task list (TodoPanel, N2-13/N2-15): the list
-  // scrolls, so the card takes its natural height and never scrolls on its own.
-  const phoneList = usePhoneLayout() && mount === 'tasks';
-  const measuredH = useMountHeight(el, mount);
-  const mountH = phoneList ? null : measuredH;
+  const mountH = useMountHeight(el, mount);
   const marginY = verticalMarginPx(el);
   // A cap at its 132px floor (a phone's task band, a very short panel) cannot hold
   // an opened row plus its buttons, so every row is one line there: headline + first action.
@@ -179,6 +181,7 @@ export function AttentionBanner({
   };
   const readySeenRef = useRef(new Map<string, BannerRow>());
   const held = useHeldLayout(live, layoutSignature(live, !compact && local.present ? local.kind : null), !!holdLayout);
+  flushLayoutRef.current = held.flush;
   const shown = held.value;
   // Held structure, live contents: a row still in the model renders its latest frame.
   // A host that healed while the layout is held shows its success line in its row's
@@ -307,7 +310,13 @@ export function AttentionBanner({
   const allUndo = shown.undo.find((e) => e.kind === 'all');
   const slots = withUndoSlots(rows, shown.undo);
   const hostEntries = rows.some((r) => r.type !== 'ready') || shown.more > 0;
-  if (!shown.localNode && !localUndo && !allUndo && slots.length === 0) return null;
+  const hasContent = !!shown.localNode || !!localUndo || !!allUndo || slots.length > 0;
+  const issueCount = view.issueCount + (local.present && !compact ? 1 : 0);
+  const feedback = undo.entries.length ? 'Undo available' : issueCount === 0 ? 'Resolved' : '';
+  useLayoutEffect(() => {
+    if (tasks && !hasContent) setExpanded(false);
+  }, [tasks, hasContent, setExpanded]);
+  if (!hasContent) return null;
   const style = mountH
     ? ({ '--ab-slot-h': `${Math.round(mountH)}px`, '--ab-cap': `${cardCapPx(mountH, capMargin)}px` } as CSSProperties)
     : undefined;
@@ -322,7 +331,7 @@ export function AttentionBanner({
   const tight = !singleLineRows && fitsTight(mountH ? cardCapPx(mountH, capMargin) : null, both);
   tightRef.current = tight;
   const cls = `setup-banner attention-banner${compact ? ' attention-banner-compact' : ''}${singleLineRows ? ' attention-banner-single' : ''}${both ? ' ab-both' : ''}${tight ? ' ab-fit' : ''}${tight && compactRows ? ' ab-fit-rows' : ''}`;
-  const hostHeader = !compact && !localShown && (
+  const hostHeader = !compact && !localShown && hostEntries && (
     <div className="setup-banner-header hpb-header">
       <span className="setup-banner-title">{shown.title ?? HOST_TITLE}</span>
       {count && <span className="hpb-count">{count}</span>}
@@ -335,7 +344,7 @@ export function AttentionBanner({
       {subCount && <span className="hpb-count">{subCount}</span>}
     </div>
   );
-  return (
+  const card = (
     <div
       ref={setEl}
       className={cls}
@@ -431,5 +440,28 @@ export function AttentionBanner({
         </section>
       )}
     </div>
+  );
+  if (!tasks) return card;
+  return (
+    <section className="system-attention" data-testid="system-attention">
+      <button type="button" tabIndex={0} ref={disclosureRef} className="system-attention-toggle"
+        aria-expanded={expanded} aria-controls={bodyId}
+        aria-label={`System attention, ${issueCount} issue${issueCount === 1 ? '' : 's'} need action${feedback ? `, ${feedback}` : ''}`}
+        title={`${expanded ? 'Collapse' : 'Expand'} system attention`}
+        onClick={() => {
+          if (expanded && bodyRef.current?.contains(document.activeElement)) disclosureRef.current?.focus({ preventScroll: true });
+          setExpanded(!expanded);
+        }}>
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" className="system-attention-chevron">
+          <path d="m4 2 4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
+        <span>System attention</span>
+        <span className="system-attention-count">{issueCount}</span>
+        {feedback && <span className="system-attention-feedback">{feedback}</span>}
+      </button>
+      <div id={bodyId} ref={bodyRef} className="system-attention-body" hidden={!expanded} inert={!expanded}>
+        {card}
+      </div>
+    </section>
   );
 }

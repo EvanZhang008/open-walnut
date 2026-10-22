@@ -886,6 +886,10 @@ export function getSystemHealth(): SystemHealthState {
   return systemHealth
 }
 
+export function getGitAutoCommitHealth(): Readonly<GitAutoCommitHealth> {
+  return gitAutoCommitHandle?.health ?? { protected: false, error: 'not started', consecutiveFailures: 0 }
+}
+
 /** Re-run all health checks, update shared state, and broadcast to clients. */
 export async function refreshSystemHealth(): Promise<SystemHealthState> {
   systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
@@ -2279,8 +2283,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
 
   app.get('/api/git-sync/status', (_req, res) => {
-    const health = gitAutoCommitHandle?.health ?? { protected: false, error: 'not started', consecutiveFailures: 0 }
-    res.json(health)
+    res.json(getGitAutoCommitHealth())
   })
 
   // In-flight Personal AI turns — the deploy drain's probe (scripts/dev-prod.sh).

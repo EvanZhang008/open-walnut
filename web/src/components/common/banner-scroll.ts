@@ -53,8 +53,10 @@ export function useScrollCue(scroll: HTMLElement | null, dep: string): { below: 
 export function rowHeadPx(li: HTMLElement): number {
   const stop = li.querySelector<HTMLElement>('.hpb-actions')
     ?? li.querySelector<HTMLElement>('.hft-headline, .hpb-headline, .hpb-trying, .hpb-fixing');
-  if (!stop) return 0;
-  return Math.ceil(stop.getBoundingClientRect().bottom - li.getBoundingClientRect().top) + 2;
+  const repair = li.querySelector<HTMLElement>('.host-agent-fix-button');
+  if (!stop && !repair) return 0;
+  const bottom = Math.max(stop?.getBoundingClientRect().bottom ?? 0, repair?.getBoundingClientRect().bottom ?? 0);
+  return Math.ceil(bottom - li.getBoundingClientRect().top) + 2;
 }
 
 /** The first row's head (it always fits the list). */

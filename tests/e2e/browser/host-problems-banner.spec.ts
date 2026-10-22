@@ -29,15 +29,16 @@
  */
 import { test, expect, type Locator } from '@playwright/test'
 import {
-  DISMISS_KEY, Hosts, SHOTS, banner, base, connected, connecting, failed, isolatePrefs, loadHome, now, outdated,
+  DISMISS_KEY, Hosts, SHOTS, banner, base, connected, connecting, expandSystemAttention, failed, isolatePrefs, loadHome, now, outdated,
   reconnecting, resetServerHostFixture, routeHealth, row, rows, setup, signedOut, slotLayout, storedKeys, type HS,
 } from './host-problems-helpers'
 import { bannerRow, loadApp, loadFixture, panelBanner, slotBanner, wireHost } from './host-problems-fixture-helpers'
 import {
-  closePanel, errorsBadge, openProblems, openSystemHosts, problemRow, problemRowHosts, systemHostRow,
+  closePanel, errorsBadge, openProblems, openSystemHosts, problemRow, problemRowHosts, seedFeed, systemHostRow,
 } from './banner-placement-helpers'
 
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
+test.beforeEach(async ({ page }) => { await seedFeed(page, []) })
 
 /** No Claude Code on the host: a banner readiness row. */
 const missing = (host: string, label: string): HS => connected(host, label, {
@@ -56,6 +57,7 @@ test.describe('home attention banner: which hosts, which title', () => {
       connected('devbox', 'Dev box'), signedOut('signbox', 'Sign box'), outdated('buildbox', 'Build box'),
       failed('netbox', 'Net box', 'unreachable'), connecting('cbox', 'Connecting box'),
     ])
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1)
     await expect(page.locator('[data-testid="attention-banner"]')).toHaveCount(1)
     await expect(page.locator('.host-connect-banner')).toHaveCount(0)
@@ -79,6 +81,7 @@ test.describe('home attention banner: which hosts, which title', () => {
   // (This machine's claude_outdated takes no section, the same rule as a host's: BP-C50.)
   test('local sign-in + host problems: one card, local title, Remote hosts subhead after the local section (C14)', async ({ page }) => {
     await setup(page, [signedOut('signbox', 'Sign box')], 'sign-in')
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1)
     await expect(banner(page).locator('.setup-banner-title').first()).toHaveText('Sign in to Claude Code')
     await expect(banner(page).locator('.hpb-subhead')).toHaveText('Remote hosts')
@@ -97,6 +100,7 @@ test.describe('home attention banner: which hosts, which title', () => {
       failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'),
       failed('proxybox', 'Proxy box', 'proxy'), missing('barebox', 'Bare box'), signedOut('signbox', 'Sign box'),
     ])
+    await expandSystemAttention(page)
     await expect(rows(page)).toHaveCount(3)
     const more = banner(page).locator('.hpb-more')
     await expect(more).toHaveText('and 2 more')
@@ -109,8 +113,10 @@ test.describe('home attention banner: which hosts, which title', () => {
       failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'),
       failed('proxybox', 'Proxy box', 'proxy'), signedOut('signbox', 'Sign box'),
     ])
+    await expandSystemAttention(page)
     await expect(rows(page)).toHaveCount(4)
     await expect(banner(page).locator('.hpb-more')).toHaveCount(0)
+    await page.mouse.move(0, 0)
     for (const host of ['keybox', 'netbox', 'proxybox']) await h.push({ ...base(host, host), removed: true })
     await expect(rows(page)).toHaveCount(1)
     await expect(banner(page).locator('.setup-banner-title')).toHaveText('Sign box needs attention')
@@ -125,6 +131,7 @@ test.describe('home attention banner: dismissal and live clearing', () => {
   test('row x survives a reload; a new floor brings it back; clearing shows the ready row and drops the key (C17, C18, C19); the panel\'s problems follow the card each time', async ({ page }) => {
     // listHosts: the health names the routed hosts, so the notification panel's problems can list them.
     const h = await setup(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')], undefined, { listHosts: true })
+    await expandSystemAttention(page)
     await row(page, 'signbox').getByRole('button', { name: 'Dismiss Sign box' }).click()
     await expect(row(page, 'signbox')).toHaveCount(0)
     expect(await storedKeys(page)).toContain('signbox|claude_not_logged_in|2.1.280')
@@ -133,6 +140,7 @@ test.describe('home attention banner: dismissal and live clearing', () => {
     await page.evaluate(() => sessionStorage.setItem('hp-keep', '1'))
     await page.reload()
     await loadHome(page)
+    await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible()
     await expect(row(page, 'signbox')).toHaveCount(0)
     // The panel reads the same stored key: Sign box is out of All's problems and the Errors count.
@@ -161,6 +169,7 @@ test.describe('home attention banner: dismissal and live clearing', () => {
       failed('certbox', 'Cert box', 'cert_expired', { retryAt: now() + 192_000 }),
       failed('netbox', 'Net box', 'unreachable'),
     ])
+    await expandSystemAttention(page)
     const when = row(page, 'certbox').locator('.hft-when')
     await expect(when).toHaveText(/^Walnut tries again in 3m \d+s$/)
     const secs = (t: string) => { const m = /(\d+)m (\d+)s/.exec(t)!; return Number(m[1]) * 60 + Number(m[2]) }
@@ -179,6 +188,7 @@ test.describe('home attention banner: dismissal and live clearing', () => {
       failed('certbox', 'Cert box', 'cert_expired', { retryAt: now() + 192_000 }),
       failed('certbox2', 'Cert box 2', 'cert_expired', { retryAt: now() + 250_000 }),
     ])
+    await expandSystemAttention(page)
     await expect(rows(page)).toHaveCount(1)
     const merged = rows(page).first()
     await expect(merged).toHaveAttribute('data-host', 'certbox certbox2')
@@ -191,6 +201,7 @@ test.describe('home attention banner: dismissal and live clearing', () => {
 
   test('a dismissed connect row stays hidden through kind flips and short connections, and returns after 10 connected minutes (C81)', async ({ page }) => {
     const h = await setup(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
+    await expandSystemAttention(page)
     await row(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
     await expect(row(page, 'netbox')).toHaveCount(0)
     await page.mouse.move(2, 2)
@@ -218,6 +229,7 @@ test.describe('home attention banner: dismissal and live clearing', () => {
 test.describe('home attention banner: reconnects, size, sync', () => {
   test('a reconnect takes a row only after 2 minutes with a known cause (C72)', async ({ page }) => {
     const h = await setup(page, [reconnecting('devbox', 'Dev box', 110_000, 'timeout'), signedOut('signbox', 'Sign box')])
+    await expandSystemAttention(page)
     await expect(row(page, 'signbox')).toBeVisible()
     await expect(row(page, 'devbox')).toHaveCount(0)
     // 10 more seconds of the same reconnect: the banner's own timer brings the row in.
@@ -262,6 +274,7 @@ test.describe('home attention banner: reconnects, size, sync', () => {
     await setup(page, [
       failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth'), failed('proxybox', 'Proxy box', 'proxy'),
     ], 'sign-in')
+    await expandSystemAttention(page)
     const section = banner(page).locator('[data-testid="host-problems"]')
     await expect(rows(page)).toHaveCount(3)
     const panelH = await page.locator('.todo-panel').evaluate((el) => el.getBoundingClientRect().height)
@@ -315,6 +328,7 @@ test.describe('home attention banner: reconnects, size, sync', () => {
     await setup(page, [
       failed('certbox', 'Cert box', 'cert_expired', { retryAt: now() + 192_000 }), signedOut('signbox', 'Sign box'),
     ])
+    await expandSystemAttention(page)
     await page.addStyleTag({ content: '.main-page-todo { flex: 0 0 300px !important; width: 300px !important; min-width: 0 !important; max-width: 300px !important; }' })
     await expect.poll(() => page.locator('.todo-panel').evaluate((el) => Math.round(el.getBoundingClientRect().width))).toBeLessThanOrEqual(300)
     await expectNarrowLayout(banner(page), 'banner-narrow-tasks')
@@ -322,6 +336,7 @@ test.describe('home attention banner: reconnects, size, sync', () => {
 
   test('a dismissal made here is hidden in a second browser too (ui-prefs sync) (C92)', async ({ page, browser }) => {
     await setup(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')], undefined, { serverPrefs: true })
+    await expandSystemAttention(page)
     expect(DISMISS_KEY.startsWith('open-walnut-')).toBe(true)
     // Listen first: the debounced PUT can land before a listener set up after the click.
     const synced = page.waitForResponse((r) => r.url().includes('/api/ui-prefs') && r.request().method() === 'PUT'
@@ -330,11 +345,13 @@ test.describe('home attention banner: reconnects, size, sync', () => {
     await synced
     const other = await browser.newContext()
     const page2 = await other.newPage()
+    await seedFeed(page2, [])
     try {
       const h2 = new Hosts(page2)
       await h2.install([signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')])
       await routeHealth(page2)
       await loadHome(page2)
+      await expandSystemAttention(page2)
       await expect(row(page2, 'netbox')).toBeVisible()
       await expect(row(page2, 'signbox')).toHaveCount(0)
     } finally {
@@ -349,6 +366,7 @@ test.describe('home attention banner: reconnects, size, sync', () => {
   test('a synced dismissal hides the row on the second browser\'s card and in its panel\'s problems (one fewer on Errors), while its System list still gives the host its row, with no x (C92 panel)', async ({ page, browser }) => {
     const hosts = () => [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')]
     await setup(page, hosts(), undefined, { serverPrefs: true })
+    await expandSystemAttention(page)
     const synced = page.waitForResponse((r) => r.url().includes('/api/ui-prefs') && r.request().method() === 'PUT'
       && (r.request().postData() ?? '').includes(DISMISS_KEY), { timeout: 10_000 })
     // The notification panel has no x: a dismissal is the card's.
@@ -358,11 +376,13 @@ test.describe('home attention banner: reconnects, size, sync', () => {
     await expect(row(page, 'signbox')).toHaveCount(0)
     const other = await browser.newContext()
     const page2 = await other.newPage()
+    await seedFeed(page2, [])
     try {
       const h2 = new Hosts(page2)
       await h2.install(hosts())
       await routeHealth(page2, 'ready', { daemons: () => hosts().map((s) => ({ host: s.host, label: s.label, connected: s.connected })) })
       await loadHome(page2)
+      await expandSystemAttention(page2)
       await expect(row(page2, 'netbox')).toBeVisible()
       await expect(row(page2, 'signbox')).toHaveCount(0)
       // The panel's problems follow the synced dismissal too: only Net box leads All, and Errors counts it alone.
@@ -396,6 +416,7 @@ test.describe('home attention banner: a version floor takes no row (server fixtu
   test('Build box (claude_outdated) has no row while /api/hosts/status still reports it; the four banner problems all show, no "and N more"', async ({ page, request }) => {
     await loadFixture(request, 'host-problems')
     await loadApp(page)
+    await expandSystemAttention(page)
     const hostsOf = () => banner(page).locator('li.hpb-row[data-host]')
       .evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
     // Connect failures in Settings order, then the signed-out host.
