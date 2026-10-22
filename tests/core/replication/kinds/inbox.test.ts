@@ -128,14 +128,17 @@ describe('the inbox index copy', () => {
 })
 
 describe('letter bodies', () => {
-  it('are not copied unless the host chose them (default off)', async () => {
-    const results = await syncCopyKinds([index, bodies], { targets: () => [h.target] })
-    expect(results.map((r) => [r.kind, r.action, r.error ?? null])).toEqual([['inbox', 'synced', null], ['inbox-bodies', 'unsupported', 'kind_not_copied']])
-    expect(fs.existsSync(path.join(WALNUT_HOME, 'human-inbox', 'bodies'))).toBe(false)
+  it('are not copied to a host that turned them off', async () => {
+    const off = await startCopyHarness({ id: 'host:no-bodies', copies: async () => ({ inbox_bodies: false }) })
+    try {
+      const results = await syncCopyKinds([index, bodies], { targets: () => [off.target] })
+      expect(results.map((r) => [r.kind, r.action, r.error ?? null])).toEqual([['inbox', 'synced', null], ['inbox-bodies', 'unsupported', 'kind_not_copied']])
+      expect(fs.existsSync(path.join(WALNUT_HOME, 'human-inbox', 'bodies'))).toBe(false)
+    } finally { await off.close() }
   })
 
-  it('go by {k, h} when chosen: a body the replica holds is never sent again', async () => {
-    const chosen = await startCopyHarness({ id: 'host:bodies', copies: async () => ({ inbox_bodies: true }) })
+  it('go by {k, h} by default, as to every replica: a body the replica holds is never sent again', async () => {
+    const chosen = await startCopyHarness({ id: 'host:bodies' })
     try {
       const results = await syncCopyKinds([index, bodies], { targets: () => [chosen.target] })
       expect(results.map((r) => [r.kind, r.action, r.sent])).toEqual([['inbox', 'synced', 6], ['inbox-bodies', 'synced', 6]])
@@ -204,14 +207,17 @@ describe('letter bodies', () => {
     const server = await new Promise<Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)) })
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/body`
     try {
-      await syncCopyKinds([index, bodies], { targets: () => [h.target] }) // the default: index only
+      const off = await startCopyHarness({ id: 'host:bodies-off', copies: async () => ({ inbox_bodies: false }) })
+      try {
+        await syncCopyKinds([index, bodies], { targets: () => [off.target] }) // bodies turned off: index only
+      } finally { await off.close() }
       const away = await fetch(`${base}/${letters[0].id}`)
       expect(away.status).toBe(503)
       expect(away.headers.get('retry-after')).toBe('5')
       expect(await away.json()).toMatchObject({ error: { code: 'needs_leader', why: 'kind_not_copied', retryAfter: 5 } })
       // A letter the index does not have is still a plain 404.
       expect((await fetch(`${base}/lt-zzzzzz-b0000`)).status).toBe(404)
-      const chosen = await startCopyHarness({ id: 'host:bodies-served', copies: async () => ({ inbox_bodies: true }) })
+      const chosen = await startCopyHarness({ id: 'host:bodies-served' }) // the default: bodies too
       try {
         await syncCopyKinds([index, bodies], { targets: () => [chosen.target] })
       } finally { await chosen.close() }
@@ -261,12 +267,14 @@ describe('letter bodies', () => {
       // No index here any more: every letter needs the Mac while away, none is a 404.
       expect((await fetch(`${base}/${letters[0].id}`)).status).toBe(503)
 
+      // Back to the defaults: the index and its bodies, as every replica keeps them.
       choice = {}
       from = host.calls.length
       await syncCopyKinds([index, bodies], { targets: () => [host.target] })
-      expect(stepsSince(host.calls, from)).toEqual(['sync:inbox', 'put:inbox:6'])
+      expect(stepsSince(host.calls, from)).toEqual(['sync:inbox', 'put:inbox:6', 'sync:inbox-bodies', 'put:inbox-bodies:6'])
       expect(await copiedIds()).toEqual(letters.map((l) => l.id))
       expect(stateOf('inbox').off).toBeUndefined()
+      expect(kept().length).toBe(6)
     } finally {
       await host.close()
       await new Promise<void>((resolve) => server.close(() => resolve()))

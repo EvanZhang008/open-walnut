@@ -22,8 +22,8 @@
  * at most RENDER_BUDGET per round with the rest in the next round soon after; a row not
  * rendered yet, or whose read failed, rides in `keep` (the companion keeps its copy).
  *
- * Off for a host by default (no host read takes it, `hosts.<key>.server.copies.
- * conversation_bodies`), on for the companion (copy-kind.ts choiceOf). Unordered, no digest.
+ * On by default for every replica, like every kind (`hosts.<key>.server.copies.
+ * conversation_bodies` turns it off for a host). Unordered, no digest.
  */
 
 import { agentIdFromPathSegment } from '../../../constants.js'

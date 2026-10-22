@@ -1,29 +1,40 @@
 /**
  * The per-host choice of copied kinds (docs/plan/walnut-replica-servers-impl.md,
  * WP4): `hosts.<key>.server.copies` in config.yaml, read by the host-server
- * settings, defaults filled in for the copy kinds (every kind on, letter
- * bodies off).
+ * settings, defaults filled in for the copy kinds: every kind on, the same for
+ * every replica (a host and the cloud companion alike).
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../../helpers/mock-constants.js'
 
 vi.mock('../../../../src/constants.js', () => createMockConstants('walnut-copy-choice', { CLOUD_MODE: false }))
 
-import { DEFAULT_COPY_CHOICE, copyChoiceFrom } from '../../../../src/core/replication/kinds/copy-kind.js'
+import { DEFAULT_COPY_CHOICE, copyChoiceFrom, copyChoiceOf, type CopyTarget } from '../../../../src/core/replication/kinds/copy-kind.js'
 import { hostServerSettingsFrom } from '../../../../src/core/host-server/index.js'
 import { copyKinds } from '../../../../src/core/replication/kinds/index.js'
 
 describe('the copied kinds choice', () => {
-  it('defaults to every kind kept and letter bodies read from the Mac', () => {
+  it('defaults to every kind kept, letter and conversation bodies included', () => {
     expect(DEFAULT_COPY_CHOICE).toEqual({
-      sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false,
+      sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: true,
       // WP5: routines, the Ask lists, prefs and favorites, the allowlisted config.
       routines: true, conversations: true, prefs: true, config: true, personas: true,
-      // 3e: a conversation's messages, kept by the companion only.
-      conversation_bodies: false,
+      // 3e: a conversation's messages.
+      conversation_bodies: true,
     })
     expect(copyChoiceFrom(undefined)).toEqual(DEFAULT_COPY_CHOICE)
-    expect(copyChoiceFrom({ inbox_bodies: true, boards: false, sessions: 'no', other: true })).toEqual({ ...DEFAULT_COPY_CHOICE, inbox_bodies: true, boards: false })
+    expect(copyChoiceFrom({ inbox_bodies: false, boards: false, sessions: 'no', other: true })).toEqual({ ...DEFAULT_COPY_CHOICE, inbox_bodies: false, boards: false })
+  })
+
+  it('is the same for every replica: only a host switch differs', async () => {
+    const target = (kind: CopyTarget['kind'], copies?: () => Promise<unknown>): CopyTarget => ({
+      id: `${kind}:x`, kind, label: 'x', post: async () => ({ ok: true }), available: async () => true, ...(copies ? { copies } : {}),
+    } as unknown as CopyTarget)
+    expect(await copyChoiceOf(target('companion'))).toEqual(DEFAULT_COPY_CHOICE)
+    expect(await copyChoiceOf(target('host'))).toEqual(DEFAULT_COPY_CHOICE)
+    expect(await copyChoiceOf(target('host', async () => ({ inbox_bodies: false })))).toEqual({ ...DEFAULT_COPY_CHOICE, inbox_bodies: false })
+    // A choice that fails to read keeps the defaults.
+    expect(await copyChoiceOf(target('host', async () => { throw new Error('config unreadable') }))).toEqual(DEFAULT_COPY_CHOICE)
   })
 
   it('keeps no letter bodies on a host that keeps no inbox', () => {
@@ -31,7 +42,7 @@ describe('the copied kinds choice', () => {
   })
 
   it('keeps no conversation bodies on a host that keeps no conversation lists', () => {
-    expect(copyChoiceFrom({ conversation_bodies: true })).toEqual({ ...DEFAULT_COPY_CHOICE, conversation_bodies: true })
+    expect(copyChoiceFrom({ conversation_bodies: false })).toEqual({ ...DEFAULT_COPY_CHOICE, conversation_bodies: false })
     expect(copyChoiceFrom({ conversations: false, conversation_bodies: true })).toEqual({ ...DEFAULT_COPY_CHOICE, conversations: false, conversation_bodies: false })
   })
 

@@ -7,15 +7,15 @@
  *                 digest). A letter is never removed by a manifest that removes
  *                 most of them (the half rule from 50 letters).
  *   inbox-bodies  the body files, keyed by file name and sent by `{k, h}`: a
- *                 body whose hash the replica holds is never sent again. Only
- *                 for a host whose Settings row turned "letter bodies" on
- *                 (`hosts.<key>.server.copies.inbox_bodies`, default off: the
- *                 replica fetches a body from the Mac while it answers, and
- *                 answers `needs_leader {why:'kind_not_copied'}` while away).
+ *                 body whose hash the replica holds is never sent again. On by
+ *                 default; a host whose Settings row turned "letter bodies" off
+ *                 (`hosts.<key>.server.copies.inbox_bodies`) fetches a body from
+ *                 the Mac while it answers, and answers `needs_leader
+ *                 {why:'kind_not_copied'}` while away.
  *                 A body over INBOX_BODY_COPY_MAX_BYTES is never copied.
  *
  * The cloud companion keeps both (stage 3c of docs/plan/walnut-companion-unified-replica.md),
- * bodies on by default (git sync already brings them to the box), in its copy store
+ * with the same defaults as a host, in its copy store
  * (`cache/replica/home/human-inbox/...`, gate.ts copyPath): the box's away inbox reads
  * take it once it is held (human-inbox/replica-state.ts).
  */

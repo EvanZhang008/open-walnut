@@ -67,7 +67,7 @@ export interface HostServerSettings {
   /**
    * Which kinds the Mac copies to this host's replica (`hosts.<key>.server.copies`,
    * the host's Settings row): sessions, requests, boards, inbox, inbox bodies.
-   * Unset: replication/kinds/copy-kind.ts DEFAULT_COPY_CHOICE (inbox bodies off).
+   * Unset: replication/kinds/copy-kind.ts DEFAULT_COPY_CHOICE (every kind on).
    */
   copies?: Record<string, boolean>
   /** `hosts.<key>.server.ask_bypass`: a new ask on the host while the Mac is away may start in bypass (WP12). */

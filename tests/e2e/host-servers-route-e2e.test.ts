@@ -23,7 +23,8 @@ let port: number
 const SESSION = { 'content-type': 'application/json', 'x-walnut-caller-sid': 'sess-1' }
 const PERSON = { 'content-type': 'application/json' }
 // The copies choice the route reports with defaults filled in (no `copies` in the config yet).
-const DEFAULT_COPIES = { sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false, routines: true, conversations: true, prefs: true, config: true, personas: true }
+/** Every kind on, the same defaults for every replica. */
+const DEFAULT_COPIES = { sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: true, routines: true, conversations: true, prefs: true, config: true, personas: true, conversation_bodies: true }
 
 function api(pathname: string, init?: RequestInit) {
   return fetch(`http://localhost:${port}${pathname}`, init)
@@ -122,7 +123,7 @@ describe('a host\'s Walnut, as a setting', () => {
     expect(((await getConfig()).hosts?.devbox?.server as { copies?: unknown })?.copies).toEqual({ inbox_bodies: false, inbox: false })
     // On again: the bodies stay off until chosen again.
     const on = await put({ copies: { inbox: true } })
-    expect(((await on.json()) as { host: { settings: { copies: unknown } } }).host.settings.copies).toEqual(DEFAULT_COPIES)
+    expect(((await on.json()) as { host: { settings: { copies: unknown } } }).host.settings.copies).toEqual({ ...DEFAULT_COPIES, inbox_bodies: false })
   })
 
   it('a copies change of the wrong shape is a 400 that writes nothing; a good one merges with the stored choice', async () => {
@@ -133,7 +134,7 @@ describe('a host\'s Walnut, as a setting', () => {
     for (const copies of [null, [], [true], 'sessions', 7, true, { sessions: null }, { sessions: 1 }, { sessions: 'false' }]) {
       const res = await put({ copies })
       const error = ((await res.json()) as { error?: string }).error
-      expect([JSON.stringify(copies), res.status, error]).toEqual([JSON.stringify(copies), 400, 'copies names only sessions, requests, boards, inbox, inbox_bodies, routines, conversations, prefs, config, personas, each true or false'])
+      expect([JSON.stringify(copies), res.status, error]).toEqual([JSON.stringify(copies), 400, 'copies names only sessions, requests, boards, inbox, inbox_bodies, routines, conversations, prefs, config, personas, conversation_bodies, each true or false'])
     }
     // A bad choice beside a good field writes neither.
     expect((await put({ enabled: false, copies: [] })).status).toBe(400)
@@ -145,7 +146,7 @@ describe('a host\'s Walnut, as a setting', () => {
     expect(res.status).toBe(200)
     expect(await stored()).toEqual({ ...before, sessions: false, boards: false })
     expect(((await res.json()) as { host: { settings: { copies: unknown } } }).host.settings.copies)
-      .toEqual({ ...DEFAULT_COPIES, sessions: false, boards: false })
+      .toEqual({ ...DEFAULT_COPIES, inbox_bodies: false, sessions: false, boards: false })
     // A change of another field, or an empty choice, keeps the stored one.
     expect((await put({ expose: { enabled: false } })).status).toBe(200)
     expect((await put({ copies: {} })).status).toBe(200)

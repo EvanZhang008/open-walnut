@@ -1204,7 +1204,7 @@ export interface Config {
         options?: Record<string, string>;
       };
       /** What the Mac copies to this host's replica (docs/plan/walnut-replica-servers-impl.md, WP4).
-       *  Unset keys keep the default: every kind on, inbox bodies off (fetched while the Mac answers). */
+       *  Unset keys keep the default, the same for every replica: every kind on. */
       copies?: {
         sessions?: boolean;
         requests?: boolean;
@@ -1217,7 +1217,7 @@ export interface Config {
         config?: boolean;
         /** The Ask personas, so a new ask starts on the host while the Mac is away (WP12). */
         personas?: boolean;
-        /** Each recent conversation's messages (default off for a host; the companion takes them). */
+        /** Each recent conversation's messages. */
         conversation_bodies?: boolean;
       };
       /** A new ask on this host while the Mac is away may start in bypassPermissions
