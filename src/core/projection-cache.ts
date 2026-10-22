@@ -126,8 +126,8 @@ export async function readTranscriptCache(sessionId: string): Promise<unknown | 
 /** Prefer the envelope with the newer exportedAt (ties → cache). Blind
  *  cache-first would serve a stale cache over a fresher git-synced legacy
  *  file during a long bridge outage while `sync.legacy_projection_files` is
- *  still on; once the legacy files are untracked this degenerates to
- *  cache-only. */
+ *  on; with it off (the default) the legacy files stop moving, so the first
+ *  push that lands wins and this degenerates to cache-only. */
 export function pickFresherEnvelope<T extends { exportedAt?: string }>(cache: T | null, legacy: T | null): T | null {
   if (!cache) return legacy;
   if (!legacy) return cache;
@@ -142,24 +142,30 @@ let legacyFlagCache: { value: boolean; at: number } | null = null;
 const LEGACY_FLAG_TTL_MS = 30_000;
 
 /**
- * config `sync.legacy_projection_files` — while TRUE (the default), the
- * exporters ALSO write the legacy git-tracked files (sessions/projection.json,
- * tasks/projection.json, sessions/transcripts/) so a cloud box still running
- * pre-cache code keeps working off git-sync. Flip to false AFTER the cloud
- * deploy to kill the git churn (then untrack + gitignore the legacy paths).
- * TTL-cached: the flag is read on every debounced export and on inline
- * exports (GET /tasks, GET /sessions on the primary).
+ * config `sync.legacy_projection_files`: while TRUE, the exporters ALSO write
+ * the legacy git-tracked files (sessions/projection.json, tasks/projection.json,
+ * sessions/transcripts/) so a cloud box still running pre-cache code keeps
+ * working off git-sync. OFF by default since stage 4d of
+ * docs/plan/walnut-companion-unified-replica.md: a current companion reads its
+ * copies of the Mac's tasks and sessions, and the pushed cache for the rest (the
+ * task list's extras, the project order and folders, the transcript tails), and
+ * reads these files only as the fallback pickFresherEnvelope passes over once a
+ * push lands; the rewrites were most of the Mac's git churn into the box. The
+ * files stay tracked, never removed (an untrack would delete them on every box
+ * that pulls it), so a box on an older build keeps the last ones. `true` turns
+ * the rewrites back on. TTL-cached: the flag is read on every debounced export
+ * and on inline exports (GET /tasks, GET /sessions on the primary).
  */
 export async function legacyProjectionFilesEnabled(): Promise<boolean> {
   if (legacyFlagCache && Date.now() - legacyFlagCache.at < LEGACY_FLAG_TTL_MS) {
     return legacyFlagCache.value;
   }
-  let value = true; // fail-open to legacy: worst case is churn, never data loss
+  let value = false; // an unreadable config is the default: no legacy rewrites
   try {
     const { getConfig } = await import('./config-manager.js');
     const config = await getConfig();
-    value = config.sync?.legacy_projection_files !== false;
-  } catch { /* unreadable config → default true */ }
+    value = config.sync?.legacy_projection_files === true;
+  } catch { /* unreadable config → the default */ }
   legacyFlagCache = { value, at: Date.now() };
   return value;
 }

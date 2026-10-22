@@ -9,7 +9,7 @@
  * Primary box: exportSessionProjection() rewrites the cache + pushes a
  * `projection-upsert` bridge frame when sessions change (debounced off
  * session:* bus events) and once at startup. While the config knob
- * `sync.legacy_projection_files` is true (default), it ALSO writes the
+ * `sync.legacy_projection_files` is true (off by default), it ALSO writes the
  * legacy git-tracked `sessions/projection.json` so a cloud box running
  * pre-cache code keeps working off git-sync.
  * Cloud box: the pushed frames land in the same cache paths (events-v1 →

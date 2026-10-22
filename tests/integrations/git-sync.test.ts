@@ -342,6 +342,43 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
       .toContain('notes/ml/models/new.md');
   });
 
+  // 2026-10-21 (stage 4d of the companion plan): three runtime stores were ignored
+  // but still tracked from an older install, so every change of them was a commit
+  // the companion pulled over its own copy.
+  it('untracks a tracked triage-state.json, session-requests.json and root local/, keeping them on disk', async () => {
+    initSync();
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');
+    const files = {
+      triage: path.join(tmpDir, 'triage-state.json'),
+      requests: path.join(tmpDir, 'session-requests.json'),
+      journal: path.join(tmpDir, 'local', 'spawn-journal.jsonl'),
+      note: path.join(tmpDir, 'notes', 'local', 'cafes.md'),
+    };
+    for (const f of Object.values(files)) await fsp.mkdir(path.dirname(f), { recursive: true });
+    await fsp.writeFile(files.triage, '{"pending":[]}\n');
+    await fsp.writeFile(files.requests, '{"requests":[]}\n');
+    await fsp.writeFile(files.journal, '{"sid":"s1"}\n');
+    await fsp.writeFile(files.note, '# Cafes near me\n');
+    execSync('git add -A && git commit -q -m "legacy: runtime stores tracked"', { cwd: tmpDir });
+
+    ensureCriticalIgnores();
+    const lines = (await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8')).split('\n');
+    expect(lines).toEqual(expect.arrayContaining(['triage-state.json', 'session-requests.json', '/local/']));
+    expect(lines.filter((l) => l === '/local/')).toHaveLength(1);
+    expect(lines).not.toContain('local/');
+
+    expect(ensureMachineLocalUntracked().sort()).toEqual(['local/spawn-journal.jsonl', 'session-requests.json', 'triage-state.json']);
+    const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked).not.toContain('triage-state.json');
+    expect(tracked).not.toContain('session-requests.json');
+    expect(tracked).not.toContain('local/spawn-journal.jsonl');
+    // A notes folder named local is the user's own notes.
+    expect(tracked).toContain('notes/local/cafes.md');
+    await expect(fsp.readFile(files.journal, 'utf-8')).resolves.toBe('{"sid":"s1"}\n');
+    await expect(fsp.readFile(files.requests, 'utf-8')).resolves.toBe('{"requests":[]}\n');
+    await expect(fsp.readFile(files.triage, 'utf-8')).resolves.toBe('{"pending":[]}\n');
+  });
+
   // ── 2026-07-25 incident: a remote deletion of a TRACKED-but-ignored
   // config.yaml wiped the local file, taking the `stt:` section with it —
   // voice input went grey with "No STT engine configured".
