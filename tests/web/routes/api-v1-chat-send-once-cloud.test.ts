@@ -69,6 +69,12 @@ class FakePrimaryDaemon extends EventEmitter {
   send(payload: string): void {
     const frame = JSON.parse(payload) as UplinkFrame
     this.received.push(frame)
+    // Other control asks (the companion's server.journal.due when the bridge connects)
+    // are answered plainly: only a chat turn is the case's to answer, or to lose.
+    if (frame.cmd === 'session.control' && frame.action !== 'server.chat.turn') {
+      setTimeout(() => this.inbound({ id: frame.id, ok: true, result: {} }), 0)
+      return
+    }
     if (frame.cmd === 'session.control' && this.onControl) {
       const reply = this.onControl(frame)
       if (reply === 'never') return
