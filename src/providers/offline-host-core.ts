@@ -798,8 +798,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return `The Walnut server is not reachable from this host right now; this host answered from its copy as of ${asOf(home)}.`
   }
 
-  function needsServer(what: string): GatewayResult {
-    return fail('hub_unreachable', `${what} needs the Walnut server, which is not answering this host right now. Meanwhile this host still answers: ${OFFLINE_NAMES}.`)
+  /** `home` names the ops this host answers for that Walnut (a letter, say); without it, the fixed list. */
+  function needsServer(what: string, home?: string): GatewayResult {
+    const names = home === undefined ? OFFLINE_NAMES : awayOps(home).map((o) => o.name).join(', ')
+    return fail('hub_unreachable', `${what} needs the Walnut server, which is not answering this host right now. Meanwhile this host still answers: ${names}.`)
   }
 
   function admitWrite(callerSid: string): GatewayResult | null {
@@ -1859,13 +1861,13 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         const ops = awayOps(home).concat(deps.replica ? deps.replica.ops(home) : []).filter((o) => !wanted || o.name === wanted)
         return ok({ ops: ops.map((o) => ({ ...o, remote: 'allow' })), offline: true, hint: offlineNote(home) })
       }
-      if (capability !== 'tools.call') return needsServer(`"${capability}"`)
+      if (capability !== 'tools.call') return needsServer(`"${capability}"`, home)
       const name = typeof payload.name === 'string' ? payload.name : ''
       const args = (payload.args && typeof payload.args === 'object' && !Array.isArray(payload.args) ? payload.args : {}) as Record<string, unknown>
       if (typeof payload.argsFile === 'string') {
         // The file lane is for payloads over 1 MB; this host does not read them back.
         const letterHere = name === 'human_inbox_send' && !!deps.letters && drainsKind(home, 'letter')
-        return needsServer(letterHere ? 'A letter over 1 MB (its arguments ride in a file; a smaller letter is saved on this host)' : 'A call whose arguments ride in a file')
+        return needsServer(letterHere ? 'A letter over 1 MB (its arguments ride in a file; a smaller letter is saved on this host)' : 'A call whose arguments ride in a file', home)
       }
       switch (name) {
         case 'task_get': return opTaskGet(home, args)
@@ -1873,30 +1875,30 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         case 'session_list': return opSessionList(home)
         case 'request_get': return opRequestGet(home, args)
         case 'task_send': case 'session_send': return await opTaskSend(home, callerSid, args)
-        case 'open_items': if (deps.openItems) return opOpenItems(home, callerSid, args); return needsServer('"open_items"')
-        case 'search': if (deps.search) return opSearch(home, args); return needsServer('"search"')
+        case 'open_items': if (deps.openItems) return opOpenItems(home, callerSid, args); return needsServer('"open_items"', home)
+        case 'search': if (deps.search) return opSearch(home, args); return needsServer('"search"', home)
         case 'walnut_status': return opWalnutStatus(home)
-        case 'trigger_list': if (deps.triggers) return opTriggerList(home); return needsServer('"trigger_list"')
-        case 'trigger_test': if (deps.triggers) return await opTriggerTest(home, callerSid, args); return needsServer('"trigger_test"')
+        case 'trigger_list': if (deps.triggers) return opTriggerList(home); return needsServer('"trigger_list"', home)
+        case 'trigger_test': if (deps.triggers) return await opTriggerTest(home, callerSid, args); return needsServer('"trigger_test"', home)
         case 'trigger_pause': case 'trigger_resume': case 'trigger_delete':
           if (deps.triggers) return opTriggerWrite(home, callerSid, name, args)
-          return needsServer(`"${name}"`)
+          return needsServer(`"${name}"`, home)
         // WP11: a note written while away, when the leading Mac drains notes and this host keeps them.
         case 'note_write': case 'note_edit':
           if (deps.replica && deps.replica.has(home, 'notes') && drainsKind(home, 'note')) {
             return name === 'note_write' ? opNoteWrite(home, callerSid, args) : opNoteEdit(home, callerSid, args)
           }
-          return needsServer(`"${name}"`)
+          return needsServer(`"${name}"`, home)
         // A letter to the user, when the leading Mac drains letters; an older one: as before.
         case 'human_inbox_send':
           if (deps.letters && drainsKind(home, 'letter')) return whenUnlocked(home, name, () => opLetter(home, callerSid, args))
-          return needsServer('"human_inbox_send"')
+          return needsServer('"human_inbox_send"', home)
         default: {
           const fromCopy = deps.replica ? deps.replica.answer(home, name, args, offlineNote(home)) : null
           if (fromCopy) return fromCopy
           if (deps.boards && deps.boards.BOARD_OPS.indexOf(name) !== -1) return opBoard(home, callerSid, name, args)
           if (QUEUED_OPS.includes(name)) return whenUnlocked(home, name, () => opQueued(home, callerSid, name, args))
-          return needsServer(name ? `"${name}"` : 'That call')
+          return needsServer(name ? `"${name}"` : 'That call', home)
         }
       }
     } catch (err) {

@@ -148,6 +148,9 @@ describe('offline letter: a Mac that drains letters', () => {
     expect(one).toMatchObject({ ok: true, result: { ops: [{ name: 'human_inbox_send', readonly: false, remote: 'allow' }] } })
     const status = await gatewayCall(h.host, SID_A, 'walnut_status', {})
     expect(status.ok && status.result.answersHere).toContain('human_inbox_send')
+    // An op this host cannot answer names the letter among the ones it can.
+    const other = await gatewayCall(h.host, SID_A, 'task_create', { title: 'x' })
+    expect(other).toMatchObject({ ok: false, error: { code: 'hub_unreachable', message: expect.stringMatching(/still answers: .*human_inbox_send/) } })
   })
 
   it('hands the record to the Mac that drains it, holds the gateway until then, and frees the body at ack', async () => {
@@ -188,6 +191,7 @@ describe('offline letter: an older Mac keeps today\'s answer', () => {
     expect(names(await h.host.handle(JHOME, SID_A, 'tools.list', {}))).not.toContain('human_inbox_send')
     const status = await gatewayCall(h.host, SID_A, 'walnut_status', {})
     expect(status.ok && status.result.answersHere).not.toContain('human_inbox_send')
+    expect(r.ok ? '' : r.error.message).not.toMatch(/still answers: .*human_inbox_send/)
     const file = await h.host.handle(JHOME, SID_A, 'tools.call', { name: 'human_inbox_send', argsFile: '/fixture/payload.json' })
     expect(file).toMatchObject({ ok: false, error: { message: expect.stringMatching(/^A call whose arguments ride in a file/) } })
   })
