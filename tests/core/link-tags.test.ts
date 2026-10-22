@@ -211,10 +211,13 @@ describe('file-path link tags', () => {
       '- html: /tmp/run/result.html',
       '- **file**: `/Users/me/out/summary-of-the-whole-run.md`',
       '- design doc: /Users/me/docs/sync.md',
+      '- screenshot: /tmp/run/shot.png',
+      '- log: /tmp/run/test.log',
+      '- script: /tmp/run/check.py',
       '- notes: see the folder',
       '- pr: https://github.com/acme/app/pull/3',
     ].join('\n'), DEFAULT_LINK_PATTERNS)
-    // A file type or the word "file" is no kind: the file's name gives a better one.
+    // Only documents a person reviews; a file type or the word "file" is no kind, the name gives one.
     expect(tags).toEqual([
       'report:/tmp/run/result.html',
       'report:/Users/me/out/summary-of-the-whole-run.md',
@@ -225,6 +228,11 @@ describe('file-path link tags', () => {
     expect(linkTagLabel('report:/tmp/run/result.html')).toBe('result.html')
     expect(linkTagLabel('report:/Users/me/out/summary-of-the-whole-run.md')).toHaveLength(16)
     expect(linkUrlOfTag('report:/tmp/run/result.html')).toBeUndefined()
+  })
+
+  it('never tags a file the work only used along the way', () => {
+    expect(newLinkTags({}, ['image:/tmp/run/shot.png', 'log:/tmp/run/a.log', 'config:/tmp/a.yaml', 'report:/tmp/run/r.html']))
+      .toEqual(['report:/tmp/run/r.html'])
   })
 
   it('dedupes a path like a URL, under any key', () => {
