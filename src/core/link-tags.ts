@@ -134,6 +134,13 @@ export function linkKind(named: string): string | undefined {
   return key.length <= 24 && isTagKey(key) ? key : undefined
 }
 
+/** Whether a file is a document a person comes back to review (an HTML explainer, a design doc,
+ *  a plan, a report). Only these become link tags: a screenshot, a log, a script, a config or a
+ *  data file is something the work used along the way, not what it is about. */
+export function isReviewablePath(path: string): boolean {
+  return /\.(?:html?|md|markdown|pdf|docx)$/i.test(path)
+}
+
 /** What a file most likely is, from its name, for a file nobody named well: one or two words,
  *  never `file` unless the name says nothing at all. */
 export function pathKind(path: string): string {
@@ -175,7 +182,7 @@ export function linkTagsFromField(field: string, patterns: readonly LinkPattern[
       // A file to open (`- html: /tmp/run/result.html`): its kind before the colon, the path after.
       const m = /^([^:]{1,40}?)\s*[:=]\s*(\S+)/.exec(line.replace(/[*`[\]()<>]/g, ''))
       const path = m ? canonicalLinkPath(m[2]!) : undefined
-      if (!m || !path || seen.has(path)) continue
+      if (!m || !path || !isReviewablePath(path) || seen.has(path)) continue
       seen.add(path)
       const kind = linkKind(m[1]!)
       out.push(`${kind && !isGenericLinkKey(kind) ? kind : pathKind(path)}:${path}`)
@@ -297,6 +304,8 @@ export function newLinkTags(
     const target = linkTargetOfTag(tag)
     // A tag past the stored length would be clipped, and a clipped URL opens the wrong page.
     if (!target || tag.length > MAX_TAG_LENGTH || held.has(target) || count >= MAX_LINK_TAGS) continue
+    const path = linkPathOfTag(tag)
+    if (path && !isReviewablePath(path)) continue
     held.add(target)
     count++
     out.push(tag)

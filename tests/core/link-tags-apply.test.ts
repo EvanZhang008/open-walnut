@@ -95,11 +95,11 @@ describe('link tags on a task', () => {
 
   it('a better kind for a link Walnut tagged generically renames it in place', async () => {
     const id = await newTask(['sev:2'])
-    await addLinkTags(id, ['link:https://docs.example.com/d/sync', 'file:/tmp/run/out.txt'], 'test')
-    expect(await tagLinksFromReportField(id, '- design doc: https://docs.example.com/d/sync\n- report: /tmp/run/out.txt')).toEqual([
-      'design-doc:https://docs.example.com/d/sync', 'report:/tmp/run/out.txt',
+    await addLinkTags(id, ['link:https://docs.example.com/d/sync', 'file:/tmp/run/out.md'], 'test')
+    expect(await tagLinksFromReportField(id, '- design doc: https://docs.example.com/d/sync\n- report: /tmp/run/out.md')).toEqual([
+      'design-doc:https://docs.example.com/d/sync', 'report:/tmp/run/out.md',
     ])
-    expect((await getTask(id)).tags).toEqual(['sev:2', 'design-doc:https://docs.example.com/d/sync', 'report:/tmp/run/out.txt'])
+    expect((await getTask(id)).tags).toEqual(['sev:2', 'design-doc:https://docs.example.com/d/sync', 'report:/tmp/run/out.md'])
     // Once named, a generic mention never renames it back.
     expect(await addLinkTags(id, ['link:https://docs.example.com/d/sync'], 'test')).toEqual([])
   })
