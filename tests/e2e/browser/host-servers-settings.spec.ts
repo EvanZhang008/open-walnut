@@ -123,12 +123,17 @@ test.describe('Walnut on a host', () => {
     await expect(copies).toBeVisible({ timeout: 15_000 })
     await expect(copies).toContainText('Kept on this host')
     const box = (key: string) => page.getByTestId(`host-server-copy-${KEY}-${key}`)
-    // Default: every kind kept, letter bodies read from the Mac.
-    for (const key of ['sessions', 'requests', 'boards', 'inbox']) await expect(box(key)).toBeChecked()
-    await expect(box('inbox_bodies')).not.toBeChecked()
+    // Default: every kind kept, letter bodies too (the same defaults as every replica).
+    for (const key of ['sessions', 'requests', 'boards', 'inbox', 'inbox_bodies']) await expect(box(key)).toBeChecked()
+    await expect(copies).not.toContainText('read from your Mac')
     await copies.scrollIntoViewIfNeeded()
     await shot(page, '2b-copies-default', group)
 
+    // The user's switch still turns one off, and on again.
+    await copies.getByText('Letter bodies', { exact: true }).click()
+    await expect(box('inbox_bodies')).not.toBeChecked({ timeout: 15_000 })
+    await expect.poll(async () => ((await hostsNow(page))[KEY]?.server as { copies?: Record<string, boolean> })?.copies, { timeout: 15_000 })
+      .toMatchObject({ inbox_bodies: false })
     await copies.getByText('Letter bodies', { exact: true }).click()
     await expect(box('inbox_bodies')).toBeChecked({ timeout: 15_000 })
     await expect.poll(async () => ((await hostsNow(page))[KEY]?.server as { copies?: Record<string, boolean> })?.copies, { timeout: 15_000 })

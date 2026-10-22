@@ -43,26 +43,23 @@ export const COPY_FIRST_ROUND_MS = 15_000
 export const DELTA_MAX_ROWS = 1_000
 
 /**
- * Which kinds a host copies (hosts.<key>.server.copies). Inbox bodies are off unless chosen.
- * WP5 adds routines, conversations (the Ask lists), prefs (ui prefs and favorites) and the
- * allowlisted config, all on by default.
+ * Which kinds a replica copies (hosts.<key>.server.copies). Every kind is on unless the
+ * user turned it off, for every replica alike: a host's and the cloud companion's
+ * defaults are the same. WP5 added routines, conversations (the Ask lists), prefs (ui
+ * prefs and favorites) and the allowlisted config.
  */
 export interface CopyChoice {
   sessions: boolean; requests: boolean; boards: boolean; inbox: boolean; inbox_bodies: boolean
   routines: boolean; conversations: boolean; prefs: boolean; config: boolean
   /** WP12: the Ask personas, so a new ask starts on the host while the Mac is away. */
   personas: boolean
-  /**
-   * Stage 3e of the companion plan: each recent conversation's messages as the phone
-   * reads them (kinds/conversation-bodies.ts). Off for a host (no host read takes them),
-   * on for the companion.
-   */
+  /** Stage 3e of the companion plan: each recent conversation's messages as the phone reads them (kinds/conversation-bodies.ts). */
   conversation_bodies: boolean
 }
 export const DEFAULT_COPY_CHOICE: Readonly<CopyChoice> = Object.freeze({
-  sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: false,
+  sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: true,
   routines: true, conversations: true, prefs: true, config: true, personas: true,
-  conversation_bodies: false,
+  conversation_bodies: true,
 })
 
 /** The choice from config, defaults filled in (anything but a boolean keeps the default). */
@@ -259,12 +256,9 @@ async function defaultTargets(): Promise<() => CopyTarget[]> {
   return (await import('../replica-targets.js')).replicaTargets
 }
 
-async function choiceOf(target: CopyTarget): Promise<CopyChoice> {
-  // The companion takes the letter bodies too: git sync already brings them to the box,
-  // and its away reads open a letter from the copy (human-inbox/replica-state.ts). The
-  // same for its conversations' messages (stage 3e, companion-conversations.ts).
-  const base = target.kind === 'companion' ? { ...DEFAULT_COPY_CHOICE, inbox_bodies: true, conversation_bodies: true } : { ...DEFAULT_COPY_CHOICE }
-  try { return target.copies ? copyChoiceFrom(await target.copies()) : base } catch { return base }
+/** The target's choice: the same defaults for every replica, with the user's switches over them. */
+export async function copyChoiceOf(target: CopyTarget): Promise<CopyChoice> {
+  try { return copyChoiceFrom(target.copies ? await target.copies() : undefined) } catch { return copyChoiceFrom(undefined) }
 }
 
 /**
@@ -278,7 +272,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
   // Only a target that keeps one of this round's kinds is asked whether it is up.
   const all = (deps.targets ?? await defaultTargets())().filter((t) => kinds.some((k) => keepsCopiesTarget(t, k.kind)))
   const ready: Array<{ target: CopyTarget; choice: CopyChoice }> = []
-  for (const target of all) if (await target.available()) ready.push({ target, choice: await choiceOf(target) })
+  for (const target of all) if (await target.available()) ready.push({ target, choice: await copyChoiceOf(target) })
   const results: CopyRoundResult[] = []
   if (ready.length === 0) return results
   const asOf = now()

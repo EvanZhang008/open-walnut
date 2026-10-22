@@ -100,8 +100,12 @@ and team, triggers, the team Board, reply requests) is always kept: that is the
 | Kind | What is copied | Answers |
 |---|---|---|
 | notes | the `.md` text of the vault; no dot folders, no `_attachment`, nothing over 1 MB, none of the folders the user left out | `note_read` (by path, id or title), `note_search` (keyword, every word, title first; the server's search exclusions apply) |
-| memory | the global and user memory documents | `memory_read` |
-| skills | every skill `skill_read` can open | `skill_read` |
+| memory | the global and user memory documents, and the rest of the memory dir (`f/<path>`, `r/<repo>`, the `files.v1` marker) | `memory_read` (the two documents) |
+| skills | every skill `skill_read` can open, and each skill's reference files (`<skill>/references/<file>`) | `skill_read` (a name without a slash) |
+| attachments | the pictures and files the notes embed (the files the attachment route serves, at most 50 MB each), on a daemon with `attachment-copy-v1` | a host replica's picture reads while the Mac is away (`attachments.list`, `attachments.read`) |
+
+Every replica keeps the same copy: the cloud companion's round is this one over HTTPS
+(docs/plan/walnut-companion-unified-replica.md, stage 4e), with the same defaults.
 
 The Mac sends each kind as a manifest of `{key, sha256 head, size, metadata}`
 (`replica.sync`); the host names the bodies it lacks, and the Mac sends those
@@ -114,6 +118,9 @@ the Mac, the daemon's own dir elsewhere), files 0600, file names hashed from the
 keys, never the keys themselves. A round runs when the host connects, a few
 seconds after a note, memory or the settings change, and every 5 minutes; a
 round that finds nothing changed sends nothing.
+The attachments go the same way with their own commands (`attachments.sync`, then
+`attachments.put` in 2 MB chunks that resume where the host stopped; the whole sha256
+checked before a file is kept, one blob per hash; `providers/attachment-copy-core.ts`).
 
 When the copy answers: the host has no server, or the server has missed 3
 keepalive beats (a Mac asleep with its sockets still open), or a relayed read

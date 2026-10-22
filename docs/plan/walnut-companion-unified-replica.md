@@ -457,6 +457,7 @@ minutes, and at a build change.
 | 4b | the box's notes reads (`/api/notes-v2` always, `/api/v1/notes` when the Mac does not answer: the tree, a note, links, backlinks, tags, the flat list) take the copy once a whole manifest arrived, through the source a host replica reads (`replica/notes-source.ts`); searches stay the box's own (its copy of the Mac's index) |
 | 4c | a note saved, created or deleted on the box (the v2 save and delete, the v1 save, create and delete) is a `note` record in its journal once the copy is held and the Mac drains `note`, checked as a host checks one (the lock hash against what the box shows, the size, the id from the Mac's copy); the Mac drains it with the notes merge |
 | 4d | the box's memory reads and saves (`memory` records), its skill reads, and v1's note resolve take the copy; a note move or rename on the box is a `note-move` record, a tag rename is `note` saves, a folder change needs the Mac; a pasted picture is a `note-attachment` record too, a picture move or delete needs the Mac; the box's other reads of git sync's files take a copy or need the Mac (letter bodies, the speech vocabulary as the `stt-vocab` kind, boards, transfer options, conflict logs), and the Mac stops most of its git churn into the box (the untrack pass, no legacy projection files); then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
+| 4e | one copy for every replica: a host's daemon gets the round the companion gets (the rest of the memory dir, the skills' references, the pictures and files through the same core, `providers/attachment-copy-core.ts`), and every replica has the same defaults; only capabilities differ (below) |
 
 Every copy read shows the pending saves over the copy (the copy's journal view,
 `core/companion-notes.ts`), and a save the Mac took until a copy round from after its
@@ -513,7 +514,8 @@ not hold. There is no folder rename route (the tree renames notes and never drag
 folder).
 
 **4d, pictures and files.** The box keeps a copy of the Mac's pictures and files too,
-beside the notes copy (`core/companion-attachment-copy.ts`, `cache/replica/attachments/`),
+beside the notes copy (`core/companion-attachment-copy.ts` over the core every replica
+keeps it with, `providers/attachment-copy-core.ts`; `cache/replica/attachments/`),
 filled by the Mac (`core/attachment-replica.ts`) over the same door with four more
 commands (`attachments.sync`, `attachments.put`, `attachments.drop`,
 `attachments.status`). A relay to the Mac was the other choice, and it loses on both
@@ -590,8 +592,8 @@ What 4d leaves for conversations:
   own list.
 - The console's clear and compact refuse even while the Mac answers.
 
-A round runs after the notes, memory and skills rounds whenever the companion keeps notes
-(`hosts.companion.keep.attachments: false` turns it off; the notes' kept-back folders are
+A round runs after the notes, memory and skills rounds whenever the replica keeps notes
+(`hosts.<key>.keep.attachments: false` turns it off; the notes' kept-back folders are
 left out here too). The Mac walks the vault for the files the attachment route serves (by
 extension, at most 50 MB each, the newest 20,000 within 8 GB), hashes a file only when its
 size or time changed (a stat cache; reads in slices, so a large file never holds the loop)
@@ -604,8 +606,7 @@ same bytes at two paths go once, checks each finished file against the manifest'
 of a changed file until the new ones arrive, and refuses a manifest that removes most of a
 copy of 200 files or more (`manifest_removes_most_rows`, as the notes copy does). An
 unchanged manifest is not sent again while the box says it holds one (that memo ends every
-30 minutes and at a build change). Hosts get no such copy: a session there reads note
-text, and the attachment route is the companion's.
+30 minutes and at a build change). Since 4e every host keeps the same copy (below).
 
 Once a whole manifest has arrived the box's picture reads (`GET
 /api/notes-v2/attachment`, `GET /api/v1/notes/attachment`) answer the copy with the disk
@@ -643,9 +644,9 @@ lock a 409 with the hash the box shows. The diary context source (`journal_recen
 `core/context-sources.ts`) reads the newest dated entries of the copy's `journal/Dairy`;
 without a copy it says the diary is on the Mac.
 
-**4d, the rest of the memory dir.** The Mac's memory round to the companion carries the
-whole memory dir, not only MEMORY.md and USER.md (`core/host-replica-extras.ts`, for the
-companion's host key only, so a daemon's copy is unchanged): every `.md` under `memory/`
+**4d, the rest of the memory dir.** The Mac's memory round carries the whole memory dir,
+not only MEMORY.md and USER.md (`core/host-replica-extras.ts`; until 4e for the
+companion's host key only): every `.md` under `memory/`
 as `f/<path>` with its times, every repo memory as `r/<name>`, a file over 1 MB left out,
 and a marker entry (`files.v1`) that tells the box the round was a whole-dir one. The box
 answers the browse tree, the lists, one file and the session summaries from it with the
@@ -655,8 +656,8 @@ but the two docs, a compaction, and the telemetry view answer needs-the-Mac
 (`memory_file_changes_need_mac`, `memory_telemetry_needs_mac`): their records are later
 work, and the box's disk is not the Mac's memory.
 
-**4d, skills and the project overviews.** The skills round to the companion carries each
-skill's `references/` files too (at most 200 a skill, each under 1 MB), and the box lists
+**4d, skills and the project overviews.** The skills round carries each skill's
+`references/` files too (at most 200 a skill, each under 1 MB), and the box lists
 and reads them from the copy. Every skill write on the box needs the Mac
 (`skill_changes_need_mac`). `overview-maintainer`, which writes a project's `SKILL.md`, is
 a leader-only row now (it left `backup-leader`): on the box it would write a copy of the
@@ -817,6 +818,39 @@ line in its project overview only if the Mac's apply of its record raises the ta
 the maintainer listens for (`TASK_CREATED`, `TASK_COMPLETED`); that path is not checked
 yet. The per-round byte budget of the attachments
 round has no test yet.
+
+**4e, one copy for every replica.** Every replica is the same program with the same data;
+only its capabilities differ. Until 4e the Mac sent the companion more than a host by a
+branch on the host key: the rest of the memory dir and the skills' references
+(`host-replica-extras.ts`) went to the companion only, and so did the pictures and files.
+Now one round goes to every target (`syncHostReplica`), decided only by that target's keep
+settings (`hosts.<key>.keep`: notes, notes_exclude, memory, skills, attachments, each on
+unless turned off):
+
+- The extras go to every target. A daemon stores them as more keys of the memory and
+  skills kinds and its readers never take one for a doc: `memory_read` and the offline
+  search read `global` and `user` only, `skill_read` takes a name without a slash. An
+  older daemon just stores the keys.
+- The pictures and files go to every target that keeps them: a daemon with
+  `attachment-copy-v1` (both twins; an older one is skipped) and the companion. Both run
+  the same core (`providers/attachment-copy-core.ts`: index.json, one blob per sha256,
+  2 MB chunks checked against the manifest's hash, resumable, the half rule); the
+  companion adds its door and its pasted pictures. A daemon keeps a Walnut's copy beside
+  its notes copy (`<replica dir>/<home key>/attachments/`), trusted socket only, and its
+  follower reads it (`attachments.list`, `attachments.read`, owner scoped), which is
+  where a host replica's picture reads go while the Mac is away
+  (`replica/attachment-source.ts`). A chunk rides the daemon link's bulk channel as
+  about 2.7 MB of JSON, well under the daemon's 16 MB frame limit. This Mac's own
+  daemon (`__local__`) gets no copy of the pictures: it shares the vault's disk, and the
+  Mac serves its pictures itself.
+- The copy kinds' defaults are the same for every target (`DEFAULT_COPY_CHOICE`: every
+  kind on, letter bodies and conversation bodies included); a host's Settings switches
+  still turn one off.
+
+What still differs is capability, not data: the transport (HTTPS for the companion, the
+daemon link for a host), the box's pasted pictures, and which copy kinds a program reads
+(`COMPANION_COPY_KINDS`; the plain host server keeps none).
+
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 
 `bootPolicy` gets one `replica` column. What only a companion does becomes a

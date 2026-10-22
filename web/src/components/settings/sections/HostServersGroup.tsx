@@ -167,7 +167,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
             {/* The replica is every host's program since D13; 'host-server' is the rollback, which keeps no copies. */}
             {on && host.settings.program !== 'host-server' && host.settings.copies && (
               <div className="settings-disclosure-content host-server-copies" data-testid={`host-server-copies-${host.hostKey}`}>
-                <SettingsRow label="Kept on this host" help="What this host still shows while your Mac sleeps. Letter bodies are read from your Mac unless kept here." />
+                <SettingsRow label="Kept on this host" help="What this host still shows while your Mac sleeps." />
                 {HOST_COPY_ROWS.map((row) => {
                   const copies = host.settings.copies!;
                   return (
