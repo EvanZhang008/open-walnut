@@ -1907,7 +1907,11 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     const reqEnd = capsSrc.indexOf('] as const', reqStart)
     expect(reqStart).toBeGreaterThan(-1)
     expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'snapshot-v1'/)
-    expect(capsSrc).toMatch(/ADVERTISED_DAEMON_CAPABILITIES\s*=\s*\[\s*\n?\s*\.\.\.REQUIRED_DAEMON_CAPABILITIES,\s*\n?\s*'snapshot-v1',/)
+    // In the ADVERTISED array body (its position there is nobody's contract).
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    const advEnd = capsSrc.indexOf('] as const', advStart)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/\.\.\.REQUIRED_DAEMON_CAPABILITIES,/)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/^\s*'snapshot-v1',/m)
     // Both twins answer hello with the ADVERTISED list (template via the
     // placeholder-seeded runtime list — daemonCapabilities() wraps
     // __DAEMON_CAPABILITIES__ to add sidecar-gated caps).
