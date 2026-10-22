@@ -120,6 +120,68 @@
 .home-navigation-scroll .todo-focus-card.task-grouped, .home-navigation-scroll .todo-pinned-card.task-grouped { margin-left: calc(16px + var(--folder-depth, 0) * 16px); }
 .home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { margin-left: -8px; padding: 3px 6px 3px 22px; }
 .home-navigation-scroll .todo-item-title-row { gap: 6px; }
+
+@media (min-width: 769px) and (min-height: 501px), (min-width: 769px) and (pointer: fine) {
+  .home-navigation-scroll .todo-item-title-row {
+    flex-wrap: wrap;
+    padding-left: 24px;
+    padding-right: 28px;
+    row-gap: 4px;
+  }
+  .home-navigation-scroll .todo-item-title-row:has(> .task-start-btn) { padding-right: 54px; }
+  .home-navigation-scroll .todo-item-title-row > .task-phase-icon-btn {
+    position: absolute;
+    left: 0;
+    top: 2px;
+  }
+  .home-navigation-scroll .todo-item-title-row > .todo-item-title {
+    flex: 1 0 auto;
+    width: max-content;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 22px;
+    line-height: 22px;
+  }
+  .home-navigation-scroll .todo-item-title-row > .task-start-btn {
+    position: absolute;
+    right: 28px;
+    top: 1px;
+  }
+  .home-navigation-scroll .todo-item-title-row > .task-kebab-wrapper {
+    position: absolute;
+    right: 0;
+    top: 0;
+  }
+  .home-navigation-scroll .todo-item-title-row > .task-tag-pills {
+    flex: 0 1 auto;
+    max-width: 100%;
+    height: auto;
+    overflow: visible;
+    row-gap: 4px;
+  }
+  .home-navigation-scroll .todo-item-title-row .task-tag-pills > .tag-chip-inline {
+    flex: 0 1 auto;
+    max-width: 100%;
+  }
+  .home-navigation-scroll .todo-item-title-row .task-tag-pills > .tag-chip-whole {
+    flex-shrink: 0;
+  }
+  .home-navigation-scroll .todo-item-title-row > :is(.task-row-pill, .todo-item-due-pill, .task-blocked-badge, .task-completed-time, .away-sync-mark) {
+    flex-shrink: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .home-navigation-scroll .todo-item-title-row > .task-unread-dot {
+    left: var(--dot-pull, -10px);
+    top: 11px;
+  }
+  .home-navigation-scroll .todo-item-title-row > .task-team-pill { margin-left: auto; }
+  /* Search results are capped; measure their variable heights before scrolling. */
+  .home-navigation-scroll .todo-search-results .todo-panel-item { content-visibility: visible; }
+  .home-navigation-scroll .todo-panel-item.todo-panel-item > .collapse-chevron { align-self: flex-start; margin-top: 3px; }
+}
+
 .home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: calc(38px + var(--folder-depth, 0) * 16px); }
 .home-navigation-scroll .todo-panel-item .todo-row-pill { left: 8px; }
 /* The estimate is the CONTENT box: 22 + the 6px padding = the rendered 28px row. At 28 an

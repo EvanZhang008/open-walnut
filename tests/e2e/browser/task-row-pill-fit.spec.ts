@@ -18,6 +18,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { openHome } from './home-navigation-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOT_DIR = '/tmp/task-row-pill-fit'
@@ -173,7 +174,16 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   const wordyTitle = await titleWidth(row(f.tagWorkerTrigger))
   await forceFit(page, 'tight')
   console.log(`[pill-fit] ${shotName} title width on tag+Worker+TRIGGER @306: folded ${foldedTitle}, words ${wordyTitle}`)
-  expect(foldedTitle - wordyTitle, 'folding the pills gives the title room').toBeGreaterThan(25)
+  if (shotName === 'row') {
+    const available = await row(f.tagWorkerTrigger).locator('.todo-item-title-row').evaluate((el) => {
+      const style = getComputedStyle(el)
+      return el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    })
+    expect(foldedTitle, 'wrapped metadata leaves the whole content width for the title').toBeGreaterThanOrEqual(available - 2)
+    expect(Math.abs(foldedTitle - wordyTitle), 'metadata labels never squeeze the title').toBeLessThan(2)
+  } else {
+    expect(foldedTitle - wordyTitle, 'folding the pills gives the title room').toBeGreaterThan(25)
+  }
 
   // Dashed only when EVERY trigger is off; solid while any polls; never a count or PAUSED.
   const paused = await pillLook(row(f.allPaused), 'task-trigger-pill')
@@ -253,7 +263,8 @@ test('list rows draw every pill as W / T / L in a tight column and keep the titl
   const project = `Pill fit rows ${stamp}`
   const f = await seed(project, stamp, false)
   await presetPanelView(page, { section: 'all', project: '' })
-  await page.goto('/')
+  await page.addInitScript((ids) => { localStorage.setItem('walnut-todo-expanded-parents', JSON.stringify(ids)) }, [...litter.tasks])
+  await openHome(page, `${API}/`)
   await expect(listRow(page, f.tagWorkerTrigger)).toBeVisible({ timeout: 90_000 })
   await runSurface(page, listRow, f, 'row', browserName)
 })
@@ -272,6 +283,7 @@ test('a trigger arriving or leaving later is a letter at once on a list row', as
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const worker = await seedLate(`Pill fit late rows ${stamp}`, stamp, false)
   await presetPanelView(page, { section: 'all', project: '' })
-  await page.goto('/')
+  await page.addInitScript((ids) => { localStorage.setItem('walnut-todo-expanded-parents', JSON.stringify(ids)) }, [...litter.tasks])
+  await openHome(page, `${API}/`)
   await runLateArrival(page, listRow, worker, stamp)
 })

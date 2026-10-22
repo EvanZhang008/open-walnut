@@ -40,16 +40,18 @@ async function rowLayout(page: Page, taskId: string) {
     const title = rowEl.querySelector('.todo-item-title')!.getBoundingClientRect()
     const pills = rowEl.querySelector('[data-testid="task-tag-pills"]')!.getBoundingClientRect()
     const overflow = [...rowEl.children].some((child) => child.getBoundingClientRect().right > r.right + 1)
-    return { row: r.width, title: title.width, pillsLeft: pills.left, pillsWidth: pills.width, titleRight: title.right, overflow }
+    return { row: r.width, title: title.width, pillsLeft: pills.left, pillsTop: pills.top, pillsWidth: pills.width, titleRight: title.right, titleBottom: title.bottom, overflow }
   })
 }
 
 async function expectTitleFirst(page: Page, ids: string[], { titleLeads = true } = {}) {
   for (const id of ids) {
     const box = await rowLayout(page, id)
-    expect(box.pillsWidth, `pills of ${id}`).toBeLessThanOrEqual(box.row * 0.34 + 1)
-    expect(box.pillsLeft, `pills of ${id} sit after the title`).toBeGreaterThanOrEqual(box.titleRight - 1)
-    if (titleLeads) expect(box.title, `title of ${id} keeps more than its tags`).toBeGreaterThan(box.pillsWidth)
+    const wrapped = box.pillsTop >= box.titleBottom
+    expect(box.pillsWidth, `pills of ${id}`).toBeLessThanOrEqual(box.row + 1)
+    if (!wrapped) expect(box.pillsLeft, `pills of ${id} sit after the title`).toBeGreaterThanOrEqual(box.titleRight - 1)
+    if (titleLeads && !wrapped) expect(box.title, `title of ${id} keeps more than its tags`).toBeGreaterThan(box.pillsWidth)
+    if (wrapped) expect(box.title, `wrapped title of ${id} stays readable`).toBeGreaterThan(Math.min(80, box.row * 0.5))
     expect(box.overflow, `row of ${id} overflows`).toBe(false)
   }
 }
@@ -140,8 +142,7 @@ test('tags show as pills on the row and in the detail pane, and follow live edit
   expect(cardBox.overflow, 'pinned card overflows').toBe(false)
   expect(cardBox.title, 'pinned card title keeps room').toBeGreaterThan(80)
 
-  // The pills never starve the title: they take at most a third of the row, sit
-  // after the title, get less room than it, and every control stays inside the row.
+  // Metadata may wrap, but must never starve the title or leave the row.
   const tagged = [ticket, many, sev, longTitle]
   await expectTitleFirst(page, tagged)
 
@@ -159,17 +160,16 @@ test('tags show as pills on the row and in the detail pane, and follow live edit
     return prefix.bottom <= chip.bottom + 0.5 && prefix.width > 20 && value.scrollWidth <= value.clientWidth + 1
   }), { message: 'prefix and id both read in a wide column' }).toBe(true)
 
-  // A 300px column (the default at a 1280px window): the chip keeps the id and lets
-  // the "ticket:" prefix go first, all at once, and the title still leads.
   await setColumnWidth(page, 300)
-  const squeezed = row(page, longTitle).locator('[data-testid="task-tag-pills"] .tag-chip').first()
-  await expect.poll(async () => squeezed.evaluate((el) => {
-    // The prefix has dropped onto the chip's hidden second line, whole: never a fragment.
+  await expect.poll(async () => {
+    const box = await rowLayout(page, longTitle)
+    return box.pillsTop >= box.titleBottom && box.title > 160
+  }).toBe(true)
+  await expect.poll(async () => row(page, longTitle).locator('.task-tag-pills .tag-chip').first().evaluate((el) => {
     const chip = el.getBoundingClientRect()
-    const prefix = (el.querySelector('.tag-chip-prefix') as HTMLElement)
-    const box = prefix.getBoundingClientRect()
-    const value = (el.querySelector('.tag-chip-value') as HTMLElement).getBoundingClientRect().width
-    return box.top >= chip.bottom - 1 && prefix.scrollWidth <= prefix.clientWidth + 1 && value > 30
+    const prefix = el.querySelector('.tag-chip-prefix') as HTMLElement
+    const value = el.querySelector('.tag-chip-value') as HTMLElement
+    return prefix.getBoundingClientRect().bottom <= chip.bottom + 1 && prefix.scrollWidth <= prefix.clientWidth + 1 && value.scrollWidth <= value.clientWidth + 1
   })).toBe(true)
   await expectTitleFirst(page, tagged)
   await row(page, longTitle).screenshot({ path: `${SHOT_DIR}/${browserName}-squeezed.png` })
