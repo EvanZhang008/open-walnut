@@ -308,6 +308,9 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   // The cloud companion's memory and skills (stage 4d: companion-memory.ts, companion-copy-routes.ts).
   memory_too_large: 'A memory document over 1 MB can only be changed on your Mac.',
   skill_changes_need_mac: 'Skills here are a copy of the ones on your Mac, so a skill is changed on your Mac.',
+  memory_file_changes_need_mac: 'Memory files here are a copy of the ones on your Mac, so they are changed on your Mac.',
+  memory_telemetry_needs_mac: 'Memory usage is counted on your Mac.',
+  notes_index_is_the_macs: 'The notes index is kept on your Mac.',
   // The cloud companion's other note paths (stage 4d: companion-note-paths.ts).
   folder_changes_need_mac: 'This box holds a copy of your notes, so a folder is made or deleted on your Mac.',
   tag_rename_needs_mac: 'Some of your notes are only on your Mac, so a tag is renamed there.',
@@ -315,6 +318,10 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   // The cloud companion's other copies and Mac-only records (stage 4d: routes/stt.ts, offline-conflicts-v1.ts).
   stt_vocab_writes_need_mac: 'The word list here is a copy of the one on your Mac, so a word is added on your Mac.',
   conflict_log_needs_mac: 'The full list of conflicts is kept on your Mac.',
+  // The cloud companion's notifications and chats (stage 4d: companion-feed.ts, routes/chat-history.ts).
+  notification_changes_need_mac: 'Notifications are kept on your Mac, so they are marked read or dismissed there.',
+  chat_changes_need_mac: 'Clearing or compacting a chat needs your Mac.',
+  chat_history_needs_mac: 'This chat\'s messages are on your Mac.',
 }
 
 const GENERIC_REASON = 'Your Mac is not answering right now.'
