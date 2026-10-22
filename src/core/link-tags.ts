@@ -233,6 +233,14 @@ export function isLinkTag(tag: string): boolean {
 }
 
 /** The short label a link tag's pill reads after its key: a URL's label, a path's file name. */
+/** Kinds whose id is how a person tells two of them apart (`ticket:ENG-12`, `pr:app#7`). Every
+ *  other link pill shows its kind alone (`report`, `design-doc`); the tooltip has the target. */
+const ID_LINK_KEYS: ReadonlySet<string> = new Set(['ticket', 'issue', 'cr', 'pr', 'mr'])
+
+export function linkTagShowsId(tag: string): boolean {
+  return ID_LINK_KEYS.has(linkTagKey(tag) ?? '')
+}
+
 export function linkTagLabel(tag: string): string | undefined {
   const url = linkUrlOfTag(tag)
   if (url) return linkLabel(url)

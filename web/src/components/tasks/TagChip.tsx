@@ -1,5 +1,5 @@
 import React from 'react';
-import { linkPathOfTag, linkTagKey, linkTagLabel, linkUrlOfTag } from '../../../../src/core/link-tags';
+import { linkPathOfTag, linkTagKey, linkTagLabel, linkTagShowsId, linkUrlOfTag } from '../../../../src/core/link-tags';
 
 interface TagChipProps {
   tag: string;
@@ -37,13 +37,14 @@ const keepToLink = (e: React.SyntheticEvent) => { e.stopPropagation(); };
 export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks, whole, valueOnly, href, onOpenPath }: TagChipProps) {
   const colonIdx = tag.indexOf(':');
   const hasPrefix = colonIdx > 0 && colonIdx < tag.length - 1;
-  // A link tag (`pr:https://…`) always leads with its key, the kind of link it is, then a short
-  // label (`pr app#12`), whatever a value-only rule says; the tooltip has the URL.
+  // A link tag reads as its kind (`report`), plus a short id for the kinds told apart by one
+  // (`pr:app#12`), whatever a value-only rule says; the tooltip has the URL or path.
   const ownUrl = linkUrlOfTag(tag);
   const ownPath = ownUrl ? undefined : linkPathOfTag(tag);
   const isLink = !!(ownUrl || ownPath);
-  const prefix = isLink ? linkTagKey(tag)! : hasPrefix && !valueOnly ? tag.slice(0, colonIdx) : null;
-  const value = isLink ? linkTagLabel(tag)! : hasPrefix ? tag.slice(colonIdx + 1) : tag;
+  const showsId = isLink && linkTagShowsId(tag);
+  const prefix = showsId ? linkTagKey(tag)! : hasPrefix && !valueOnly && !isLink ? tag.slice(0, colonIdx) : null;
+  const value = isLink ? (showsId ? linkTagLabel(tag)! : linkTagKey(tag)!) : hasPrefix ? tag.slice(colonIdx + 1) : tag;
   const openPath = ownPath && onOpenPath && !onClick ? () => onOpenPath(ownPath) : undefined;
 
   const className = [
