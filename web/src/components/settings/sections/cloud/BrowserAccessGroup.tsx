@@ -5,6 +5,8 @@
  *
  *   Tunnel             which provider (the built-in command, or one a plugin added)
  *   <its options>      a tunnel name, say; saved on Enter or when the field loses focus
+ *   Runs on            an always-on host the provider names, or this computer
+ *                      (src/core/expose/placement.ts); shown only when there is a host to pick
  *   Open from anywhere the switch, with one sentence of state and Retry when it waits
  *   Address            the public address while connected
  *   Connect a phone    a QR code that opens Walnut on the phone, signed in, for each address
@@ -120,7 +122,7 @@ export function BrowserAccessGroup() {
   // (400) is still in its box after the reload below, where the person can fix it instead of retyping it.
   // A success drops the mark only while the box still holds what was saved (the host form does the same).
   // A refusal stays under its option until that option saves; a write of anything else leaves it be.
-  const write = async (body: { enabled?: boolean; provider?: string; options?: Record<string, string> }, optionKey?: string) => {
+  const write = async (body: { enabled?: boolean; provider?: string; options?: Record<string, string>; run_on?: string | null }, optionKey?: string) => {
     setBusy(true);
     setError(null);
     readSeq.current++;
@@ -130,7 +132,12 @@ export function BrowserAccessGroup() {
         if ((typed.current[optionKey] ?? '') === (body.options?.[optionKey] ?? '')) editing.current.delete(optionKey);
         setOptionError(optionKey, null);
       }
-      setData((prev) => (prev ? { ...prev, status: res.status, settings: { ...prev.settings, ...body, options: body.options ?? prev.settings.options } as ExposeResponse['settings'] } : prev));
+      setData((prev) => {
+        if (!prev) return prev;
+        const { run_on: runOn, ...rest } = body;
+        const placed = runOn !== undefined && runOn !== null ? { runOn, placedOn: runOn } : {};
+        return { ...prev, status: res.status, settings: { ...prev.settings, ...rest, ...placed, options: body.options ?? prev.settings.options } as ExposeResponse['settings'] };
+      });
       void load();
     } catch (err) {
       log.warn('settings', 'tunnel setting not saved', { error: saveErrorMessage(err) });
@@ -188,6 +195,9 @@ export function BrowserAccessGroup() {
   }
 
   const { status, providers, settings } = data;
+  const places = data.places ?? [];
+  const placedOn = settings.placedOn ?? 'here';
+  const placedHost = places.find((p) => p.id === placedOn && p.id !== 'here');
   const providerId = settings.provider ?? providers[0]?.id ?? null;
   const provider = providers.find((p) => p.id === providerId) ?? null;
   const line = describeExpose(status, provider?.title ?? 'the tunnel');
@@ -255,6 +265,24 @@ export function BrowserAccessGroup() {
               }
             />
           ))}
+          {places.length > 0 && (
+            <SettingsRow
+              label="Runs on"
+              help={placedHost
+                ? `${placedHost.label} stays on, so the address answers while this computer sleeps.`
+                : 'The address answers while this computer is awake.'}
+              data-testid="browser-access-runs-on"
+              control={
+                <SegmentedControl
+                  aria-label="Runs on"
+                  value={placedOn}
+                  disabled={busy}
+                  onChange={(v) => { if (v !== placedOn) void write({ run_on: v }); }}
+                  options={places.map((p) => ({ value: p.id, label: p.label, testId: `browser-access-runs-on-${p.id}` }))}
+                />
+              }
+            />
+          )}
           <SettingsRow
             label="Open from anywhere"
             htmlFor="browser-access-enabled"

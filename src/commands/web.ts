@@ -24,7 +24,7 @@ import {
   ephemeralRuntimeDir,
   removeEphemeralRuntimeDirs,
 } from './ephemeral-registry.js'
-import { copyDataSnapshot, ephemeralChildEnv, pauseSnapshotCronJobs, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
+import { copyDataSnapshot, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
 /** Auto-shutdown after 10 minutes of no HTTP requests. */
 const EPHEMERAL_IDLE_TTL_MS = 10 * 60 * 1000
@@ -351,6 +351,7 @@ async function runEphemeralLauncher(): Promise<void> {
   // The copied automations and phone registrations belong to the real Walnut.
   const pausedCronJobs = pauseSnapshotCronJobs(tmpDir)
   const removedPushTokens = stripSnapshotPushTokens(tmpDir)
+  const stoppedTunnels = stopSnapshotTunnels(tmpDir)
 
   // 5. Spawn detached child
   const binPath = process.argv[1]
@@ -402,7 +403,7 @@ async function runEphemeralLauncher(): Promise<void> {
     ])
     // 7. Print JSON to stdout (exec tool captures this). daemonDir holds this
     // server's own daemon and logs (open-walnut-<date>.log).
-    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, pausedCronJobs, removedPushTokens }))
+    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, pausedCronJobs, removedPushTokens, stoppedTunnels }))
     process.exit(0)
   } catch (err) {
     process.stderr.write(`ephemeral: ${err instanceof Error ? err.message : String(err)}\n`)

@@ -1684,6 +1684,9 @@ export interface Config {
     options?: Record<string, string>;
     /** The loopback port tunnels connect to. Default: a free port picked at start. */
     port?: number;
+    /** Where the tunnel runs: `here`, or a host key (that host's Walnut server runs it).
+     *  Unset: an always-on host the provider names, else here (src/core/expose/placement.ts). */
+    run_on?: string;
     /**
      * The built-in `command` provider: `{port}` in args is the tunnel port; `url_pattern` finds the
      * address in its output, `ready_pattern` (optional) the line that says it is up.

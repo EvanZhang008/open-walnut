@@ -38,7 +38,12 @@ export interface HostServerEntry {
   hostKey: string;
   label: string;
   settings: {
-    enabled: boolean; expose: { enabled: boolean; provider: string | null; options: Record<string, string> }; node?: string;
+    enabled: boolean;
+    /** Why the host's own tunnel does not run although it is on (it would take this computer's address). */
+    expose: { enabled: boolean; provider: string | null; options: Record<string, string>; blocked?: string };
+    node?: string;
+    /** This computer's tunnel (Open from a browser) runs on this host, so its server runs whatever its switch said. */
+    carriesTunnel?: boolean;
     /** What the Mac copies to the host's replica (WP4), defaults filled in by the server. */
     copies?: HostCopyChoice;
     program?: 'replica' | 'host-server';
