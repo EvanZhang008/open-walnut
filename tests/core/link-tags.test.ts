@@ -20,6 +20,7 @@ import {
   newLinkTags,
   linkKind,
   linkTagKey,
+  linkTagShowsId,
   pathKind,
   relabelLinkTags,
 } from '../../src/core/link-tags.js'
@@ -268,6 +269,15 @@ describe('link kinds', () => {
     expect(linkTagKey('ticket:https://acme.atlassian.net/browse/ENG-1')).toBe('ticket')
     expect(linkTagKey('link:https://example.com/x')).toBe('link')
     expect(linkTagKey('sev:2')).toBeUndefined()
+  })
+
+  it('only the kinds told apart by an id show one', () => {
+    expect(linkTagShowsId('ticket:https://acme.atlassian.net/browse/ENG-1')).toBe(true)
+    expect(linkTagShowsId('issue:https://github.com/a/b/issues/1')).toBe(true)
+    expect(linkTagShowsId('cr:https://reviews.example.com/r/RV-1')).toBe(true)
+    expect(linkTagShowsId('resume:https://docs.example.com/d/Claude-Resume-2026')).toBe(false)
+    expect(linkTagShowsId('report:/tmp/x/result.html')).toBe(false)
+    expect(linkTagShowsId('sev:2')).toBe(false)
   })
 
   it('renames a generic kind Walnut gave, never a key the user gave or a generic candidate', () => {
