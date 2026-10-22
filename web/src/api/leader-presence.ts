@@ -312,6 +312,9 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   folder_changes_need_mac: 'This box holds a copy of your notes, so a folder is made or deleted on your Mac.',
   tag_rename_needs_mac: 'Some of your notes are only on your Mac, so a tag is renamed there.',
   attachment_changes_need_mac: 'Pictures and files in your notes are kept on your Mac, so they are moved or deleted there.',
+  // The cloud companion's other copies and Mac-only records (stage 4d: routes/stt.ts, offline-conflicts-v1.ts).
+  stt_vocab_writes_need_mac: 'The word list here is a copy of the one on your Mac, so a word is added on your Mac.',
+  conflict_log_needs_mac: 'The full list of conflicts is kept on your Mac.',
 }
 
 const GENERIC_REASON = 'Your Mac is not answering right now.'

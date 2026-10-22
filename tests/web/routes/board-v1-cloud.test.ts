@@ -1,7 +1,8 @@
 /**
- * Task Board routes on a REPLICA (CLOUD_MODE): reads serve the board that came
- * with the data sync; every write answers 501 not_supported_cloud before it
- * touches the store or the send path (the primary is the single writer).
+ * Task Board routes on a REPLICA (CLOUD_MODE): reads serve the box's copy of the
+ * Mac's boards (with no copy they need the Mac: companion-away-reads-cloud.test.ts);
+ * every write answers 501 not_supported_cloud before it touches the store or the
+ * send path (the primary is the single writer).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -16,6 +17,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', async (importOriginal
 })
 
 import express from 'express'
+import path from 'node:path'
 import request from 'supertest'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { boardV1Router } from '../../../src/web/routes/board-v1.js'
@@ -40,6 +42,11 @@ beforeAll(async () => {
   taskId = (await addTask({ title: 'Replica board', project: 'acme' })).task.id
   await setBoardHtml(taskId, '<h1>Synced</h1>', { by: 'human' })
   synced = await postBoardMessage(taskId, 'synced', { author: 'user', text: 'Came with the sync' })
+  // The board as the Mac's boards copy holds it (kinds/boards.ts: the file, and the copy's state).
+  const replica = path.join(WALNUT_HOME, 'cache', 'replica')
+  await fs.mkdir(path.join(replica, 'home', 'boards'), { recursive: true })
+  await fs.copyFile(path.join(WALNUT_HOME, 'boards', `${taskId}.json`), path.join(replica, 'home', 'boards', `${taskId}.json`))
+  await fs.writeFile(path.join(replica, 'boards.json'), JSON.stringify({ v: 1, asOf: Date.now(), at: Date.now(), hashes: { [taskId]: 'h' } }))
 })
 
 afterAll(async () => {

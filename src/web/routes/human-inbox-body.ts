@@ -132,15 +132,23 @@ export function parseTurn(raw: unknown): number | undefined {
 
 // ── Local disk: stream the file ──────────────────────────────────────────────
 
+/**
+ * The body on this box's disk: the companion reads its copy of the Mac's bodies once it
+ * holds one, never the folder git sync wrote (replica-state.ts bodySourceDir); a body
+ * the copy lacks (over the copy's cap, or newer than its last round) is relayed.
+ */
 async function statLocalBody(id: string, turn: number | undefined): Promise<LetterBodyStat | null> {
-  const { statLetterBody } = await import('../../core/human-inbox/store.js')
-  return statLetterBody(id, turn)
+  const [{ statLetterBody }, { bodySourceDir }] = await Promise.all([
+    import('../../core/human-inbox/store.js'), import('../../core/human-inbox/replica-state.js'),
+  ])
+  return statLetterBody(id, turn, await bodySourceDir())
 }
 
 /**
  * The body document a REPLICA can serve itself, or null.
  *
- * The blob rides git-sync, so a replica normally holds a byte-identical copy of
+ * The companion holds the Mac's letter bodies as a copy (the `inbox-bodies` kind,
+ * before it the files git sync wrote), so it normally holds a byte-identical copy of
  * every letter body — reading it locally is one file stream instead of an N-chunk
  * round trip per Range over the bridge, and it keeps working while the bridge is
  * down. Two cases still have to relay, and the second is the subtle one: the
@@ -329,8 +337,10 @@ async function serveFramed(res: Response, id: string, turn: number | undefined):
       return chunk === null ? null : { data: chunk.data, fileSize: chunk.fileSize, format: chunk.format }
     }
     : async (start: number, length: number) => {
-      const { readLetterBodyRange } = await import('../../core/human-inbox/store.js')
-      const slice = await readLetterBodyRange(id, { ...(turn !== undefined ? { turn } : {}), start, length })
+      const [{ readLetterBodyRange }, { bodySourceDir }] = await Promise.all([
+        import('../../core/human-inbox/store.js'), import('../../core/human-inbox/replica-state.js'),
+      ])
+      const slice = await readLetterBodyRange(id, { ...(turn !== undefined ? { turn } : {}), start, length, dir: await bodySourceDir() })
       if (!slice) {
         sendError(res, 404, 'not_found', `Letter body not found: ${id}`)
         return null
@@ -346,6 +356,9 @@ async function serveFramed(res: Response, id: string, turn: number | undefined):
     res.setHeader('Content-Length', String(first.fileSize))
     res.status(200)
     await streamRest(res, readSlice, 0, first.fileSize, first.data)
+    // Ended here too: the client stops at Content-Length, but an open response holds
+    // its keep-alive socket, and every later request on it waited behind this one.
+    res.end()
     return
   }
   const peekBytes = utf8SafeLength(first.data.subarray(0, Math.min(first.data.length, FRAME_PEEK_BYTES)))

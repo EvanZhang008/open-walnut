@@ -1,9 +1,9 @@
 /**
- * Stages 2a, 2b, 3c and 3e of docs/plan/walnut-companion-unified-replica.md on a real
+ * Stages 2a, 2b, 3c, 3e and 4d of docs/plan/walnut-companion-unified-replica.md on a real
  * CLOUD_MODE server: the Mac's copy scheduler (kinds/copy-kind.ts syncCopyKinds)
  * sends the companion the kinds it keeps (since 3e every copy kind: requests, routines,
  * prefs, personas, boards, config, inbox, inbox-bodies, sessions, conversations,
- * conversation-bodies, model-catalogs) over the real client (cloud-ingest.ts
+ * conversation-bodies, model-catalogs, and since 4d stt-vocab) over the real client (cloud-ingest.ts
  * postToCloudReplica, machine token, gzip). The chat reads over the two conversation
  * kinds are pinned by companion-chat-cloud.test.ts.
  *
@@ -19,8 +19,9 @@
  *     status, the favorites, a board, the settings view, each with
  *     `x-walnut-copy-as-of` where it reads a copy, and the inbox list and a letter
  *     with its body (`mirrorUpdatedAt` the copy's clock); before any round, the old
- *     answers (503 from the relay, the box's own favorites, settings and board, the
- *     inbox git sync wrote).
+ *     answers (503 from the relay, the box's own favorites and settings, the inbox git
+ *     sync wrote), and a board needs the Mac (stage 4d: never the file git sync wrote;
+ *     the 4d reads are pinned by companion-away-reads-cloud.test.ts).
  *
  * auth.json is written fresh (tokens known to the test); nothing is copied.
  */
@@ -117,6 +118,7 @@ function macKinds(): CopyKind<any>[] {
     'conversation-bodies': async () => [bodyRow('general', 'conv-acme', [{ id: 'm0', role: 'user', text: 'Acme plan?', createdAt: NOW }], [])],
     sessions: async () => [{ claudeSessionId: 's-mac-worker', taskId: '', project: 'Acme', process_status: 'running', mode: 'default', startedAt: NOW, lastActiveAt: NOW, messageCount: 1 }],
     'model-catalogs': async () => [{ key: 'devbox', models: [{ value: 'sonnet', displayName: 'Sonnet' }], fetchedAt: NOW }],
+    'stt-vocab': async () => [{ key: 'vocab', words: ['Acme'] }],
   }
   return copyKinds().map((k) => ({
     ...k,
@@ -193,10 +195,10 @@ afterAll(async () => {
 })
 
 describe('who keeps which kind', () => {
-  it('the companion keeps the stage 2, 3c and 3e kinds; a host replica keeps every kind; the plain host server none', () => {
-    expect([...COMPANION_COPY_KINDS].sort()).toEqual(['boards', 'config', 'conversation-bodies', 'conversations', 'inbox', 'inbox-bodies', 'model-catalogs', 'personas', 'prefs', 'requests', 'routines', 'sessions'])
+  it('the companion keeps the stage 2, 3c, 3e and 4d kinds; a host replica keeps every kind; the plain host server none', () => {
+    expect([...COMPANION_COPY_KINDS].sort()).toEqual(['boards', 'config', 'conversation-bodies', 'conversations', 'inbox', 'inbox-bodies', 'model-catalogs', 'personas', 'prefs', 'requests', 'routines', 'sessions', 'stt-vocab'])
     const host = (program: string): CopyTarget => ({ ...companion, id: 'host:devbox', kind: 'host', program: () => program })
-    for (const k of ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs']) {
+    for (const k of ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs', 'stt-vocab']) {
       expect([k, keepsCopiesTarget(companion, k)]).toEqual([k, true])
       expect([k, keepsCopiesTarget(host('replica'), k)]).toEqual([k, true])
       expect([k, keepsCopiesTarget(host('host-server'), k)]).toEqual([k, false])
@@ -211,14 +213,14 @@ describe('who keeps which kind', () => {
 })
 
 describe('the Mac away, before any round: the old answers', () => {
-  it('routines relay to the Mac (503), favorites are the box\'s own, a request the box does not hold is 404', async () => {
+  it('routines relay to the Mac (503), favorites are the box\'s own, a request the box does not hold is 404, a board needs the Mac', async () => {
     const routines = await get('/api/v1/routines')
     expect(routines.status).toBe(503)
     expect(routines.asOf).toBeNull()
     expect((await get('/api/v1/favorites')).body).toEqual({ projects: ['BoxOnly'], notes: [] })
     expect((await get('/api/v1/requests/rq-acac01')).status).toBe(404)
     const b = await get(`/api/v1/tasks/${BOARD_TASK}/board`)
-    expect([b.status, (b.body.board as { html: string }).html, b.body.board_version]).toEqual([200, '<p>Acme plan, from git sync</p>', 1])
+    expect([b.status, (b.body.error as { why?: string } | undefined)?.why]).toEqual([503, 'kind_not_copied'])
     const cfg = await get('/api/v1/config')
     expect((cfg.body.config as { user: unknown }).user).toEqual({ name: 'Ada' })
     expect(cfg.asOf).toBeNull()
@@ -229,7 +231,7 @@ describe('the Mac away, before any round: the old answers', () => {
 })
 
 describe('a round of every kind from the Mac', () => {
-  it('sends the twelve kinds the companion keeps, and leaves the box\'s own files as they were', async () => {
+  it('sends the thirteen kinds the companion keeps, and leaves the box\'s own files as they were', async () => {
     macRequests = [request('rq-acac01', 'pending'), request('rq-acac02', 'replied')]
     await writeMacRoutines([job('rt-acme-digest', 'Acme digest'), job('rt-acme-watch', 'Acme watch')])
     const before = await ownFiles()
@@ -237,8 +239,9 @@ describe('a round of every kind from the Mac', () => {
     expect(results.map((r) => `${r.target}:${r.kind}:${r.action}`).sort()).toEqual([
       'companion:boards:synced', 'companion:config:synced', 'companion:conversation-bodies:synced', 'companion:conversations:synced', 'companion:inbox-bodies:synced', 'companion:inbox:synced',
       'companion:model-catalogs:synced', 'companion:personas:synced', 'companion:prefs:synced', 'companion:requests:synced', 'companion:routines:synced', 'companion:sessions:synced',
+      'companion:stt-vocab:synced',
     ])
-    expect([...new Set(read)].sort()).toEqual(['boards', 'config', 'conversation-bodies', 'conversations', 'inbox', 'inbox-bodies', 'model-catalogs', 'personas', 'prefs', 'requests', 'routines', 'sessions'])
+    expect([...new Set(read)].sort()).toEqual(['boards', 'config', 'conversation-bodies', 'conversations', 'inbox', 'inbox-bodies', 'model-catalogs', 'personas', 'prefs', 'requests', 'routines', 'sessions', 'stt-vocab'])
     expect(await ownFiles()).toEqual(before)
     // (The box's own engine rewrote its file at boot, in its own layout: still its one job.)
     expect(before[0]).toEqual(BOX_REQUESTS)
@@ -251,7 +254,7 @@ describe('a round of every kind from the Mac', () => {
     expect(JSON.parse(await fs.readFile(path.join(home, 'boards', `${BOARD_TASK}.json`), 'utf8')).html).toBe('<p>Acme plan, from the Mac</p>')
     expect(JSON.parse(await fs.readFile(path.join(home, path.relative(WALNUT_HOME, CRON_FILE)), 'utf8')).jobs.map((j: { id: string }) => j.id)).toEqual(['rt-acme-digest', 'rt-acme-watch'])
     const replica = await fs.readdir(path.join(WALNUT_HOME, 'cache', 'replica'))
-    for (const f of ['requests.json', 'routines.json', 'prefs.json', 'personas.json', 'boards.json', 'config.json', 'inbox.json', 'inbox-bodies.json', 'sessions.json', 'conversations.json', 'conversation-bodies.json', 'model-catalogs.json']) expect(replica).toContain(f)
+    for (const f of ['requests.json', 'routines.json', 'prefs.json', 'personas.json', 'boards.json', 'config.json', 'inbox.json', 'inbox-bodies.json', 'sessions.json', 'conversations.json', 'conversation-bodies.json', 'model-catalogs.json', 'stt-vocab.json']) expect(replica).toContain(f)
     // The inbox copy beside the box's own (git sync's) inbox, which stays as it was.
     expect(JSON.parse(await fs.readFile(path.join(home, 'human-inbox', 'index.json'), 'utf8')).letters.map((l: LetterRecord) => l.subject)).toEqual(['Acme digest, from the Mac', 'Acme launch notes, from the Mac'])
     expect(JSON.parse(await fs.readFile(humanInboxPaths.indexFile, 'utf8')).letters.map((l: LetterRecord) => l.subject).sort()).toEqual(['Box deploy', 'Box digest'])

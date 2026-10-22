@@ -2,9 +2,9 @@
  * The WP4 copy kinds (docs/plan/walnut-replica-servers-impl.md, section 4):
  * sessions, requests, boards, inbox (index and bodies), the WP5 ones:
  * routines, conversations, prefs, config, the conversations' messages
- * (stage 3e of the companion plan), and the hosts' model catalogs. One list for the
- * leader's scheduler (copy-kind.ts) and one registration for the follower
- * route (web/routes/bridge-replica.ts builtinKinds).
+ * (stage 3e of the companion plan), the hosts' model catalogs, and the speech
+ * vocabulary (stage 4d). One list for the leader's scheduler (copy-kind.ts) and
+ * one registration for the follower route (web/routes/bridge-replica.ts builtinKinds).
  */
 
 import { keepsCopies } from './gate.js'
@@ -28,11 +28,14 @@ import { CONVERSATION_BODIES_KIND } from './conversation-bodies.js'
 import { conversationBodiesFollower } from './conversation-bodies-follower.js'
 // Stage 2c of the companion plan: the hosts' model catalogs, for the session model picker.
 import { MODEL_CATALOGS_KIND, modelCatalogsFollower } from './model-catalogs.js'
+// Stage 4d of the companion plan: the speech vocabulary, for the box's own transcriber.
+import { STT_VOCAB_KIND, sttVocabFollower } from './stt-vocab.js'
 
 /** The leader's copy kinds, in the order a round serves them. */
 export function copyKinds(): CopyKind<any>[] {
   return [SESSIONS_KIND, REQUESTS_KIND, BOARDS_KIND, INBOX_KIND, INBOX_BODIES_KIND,
-    ROUTINES_KIND, CONVERSATIONS_KIND, PREFS_KIND, CONFIG_KIND, PERSONAS_KIND, CONVERSATION_BODIES_KIND, MODEL_CATALOGS_KIND]
+    ROUTINES_KIND, CONVERSATIONS_KIND, PREFS_KIND, CONFIG_KIND, PERSONAS_KIND, CONVERSATION_BODIES_KIND, MODEL_CATALOGS_KIND,
+    STT_VOCAB_KIND]
 }
 
 /**
@@ -56,7 +59,7 @@ export function copyKeepersOnly(h: FollowerKindHandler): FollowerKindHandler {
 export function registerCopyFollowerKinds(): () => void {
   const off = [sessionsFollower(), requestsFollower(), boardsFollower(), inboxFollower(), inboxBodiesFollower(),
     routinesFollower(), conversationsFollower(), prefsFollower(), configFollower(), personasFollower(),
-    conversationBodiesFollower(), modelCatalogsFollower()].map((h) => registerFollowerKind(copyKeepersOnly(h)))
+    conversationBodiesFollower(), modelCatalogsFollower(), sttVocabFollower()].map((h) => registerFollowerKind(copyKeepersOnly(h)))
   return () => { for (const u of off) u() }
 }
 

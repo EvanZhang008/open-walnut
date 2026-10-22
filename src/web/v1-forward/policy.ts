@@ -65,8 +65,10 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // Who the phone is talking to, and who the phone is: the companion speaks for itself.
   { re: /^\/(devices|setup)(\/|$)/, why: 'identity' },
   { re: /^\/(status|canary|me|instance|routes|client-logs)(\/|$)/, why: 'identity' },
-  // File and media bytes do not ride the bridge.
-  { re: /^\/(media|stt|file-content|file-raw)(\/|$)/, why: 'bytes' },
+  // File and media bytes do not ride the bridge. The speech vocabulary is a word
+  // list, not bytes: the Mac answers it and takes its words (the box reads its copy
+  // only while away, and a word added there needs the Mac: routes/stt.ts).
+  { re: /^\/(media|stt|file-content|file-raw)(\/|$)/, unless: /^\/stt\/vocab$/, why: 'bytes' },
   { re: /^\/timeline\/images\//, why: 'bytes' },
   { re: /^\/notes\/attachment(\/|$)/, why: 'bytes' },
   // A letter's document (up to 100 MB) has its own chunked relay.
@@ -77,7 +79,9 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // The companion's exact copy of the task store: its reads are as fresh as the
   // Mac's. Its writes go to the Mac while it answers (one writer, replica plan
   // WP13); away, the companion's own route applies them and queues them by field.
-  { methods: ['GET'], re: /^\/(tasks|focus)(\/|$)/, unless: /^\/tasks\/[^/]+\/board(\/|$)/, why: 'task-copy' },
+  // A board and a task's transfer options read more than the task store (the
+  // boards, the hosts and their profiles): the Mac answers those.
+  { methods: ['GET'], re: /^\/(tasks|focus)(\/|$)/, unless: /^\/tasks\/[^/]+\/(board(\/|$)|transfer-options$)/, why: 'task-copy' },
   // Long pages with their own paged relays.
   { methods: ['GET'], re: /^\/sessions$/, why: 'paged' },
   { methods: ['GET'], re: /^\/sessions\/[^/]+\/(transcript|history)$/, why: 'paged' },

@@ -338,8 +338,10 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
 })
 
 // ── Custom vocabulary (Wave 3) ───────────────────────────────────────────────
-// Class A: the vocab file lives in config/share/, which IS synced, so every box
-// converges on the same word list and each serves it locally. The internal
+// The Mac's word list. The companion carries both calls to the Mac while it
+// answers (v1-forward/policy.ts); while it is away the box answers the Mac's
+// words from its copy once it holds one (with `x-walnut-copy-as-of`), and a word
+// added there needs the Mac (routes/stt.ts addSttVocabWord). The internal
 // route's `path` field is still dropped — where the file sits is the serving
 // box's business, not a paired device's.
 
@@ -347,7 +349,8 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
 sttV1Router.get('/stt/vocab', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const { readSttVocab } = await import('./stt.js')
-    const { words } = await readSttVocab()
+    const { words, copyAsOf } = await readSttVocab()
+    if (copyAsOf !== null) res.setHeader('x-walnut-copy-as-of', String(copyAsOf))
     res.json({ words })
   } catch (err) {
     next(err)
