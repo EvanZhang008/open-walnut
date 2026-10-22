@@ -7,6 +7,10 @@
  * carrying the durable record, not the raw `session:permission-request`);
  * this endpoint is the on-load snapshot + the read/dismiss mutators so the feed
  * and unread count survive a refresh. Store lives in core/notifications/store.ts.
+ *
+ * On the cloud companion the Mac owns the feed (stage 4d): the read and both
+ * mutators go to the Mac, and the read answers from what the box has while the
+ * Mac does not answer (core/notifications/companion-feed.ts).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -26,6 +30,7 @@ import {
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
 import { listTasksByIds } from '../../core/task-manager.js'
 import { getVersion } from '../../core/version.js'
+import { isCompanion } from '../../core/server-role.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { log } from '../../logging/index.js'
 
@@ -56,7 +61,10 @@ function sanitizeBody(body?: string): string | undefined {
 // GET /api/notifications — feed (newest-last) + unread count.
 notificationsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { feed, unreadCount } = await listNotifications()
+    // The companion: the Mac's feed, or what the box has (`offline`) while it is away.
+    const { feed, unreadCount, offline } = isCompanion()
+      ? await (await import('../../core/notifications/companion-feed.js')).companionFeed()
+      : { ...(await listNotifications()), offline: undefined }
     // `detail` (the raw technical line behind an error card's Details toggle)
     // gets the SAME treatment as body — it is written by the same producers and
     // read by the same UI, so an uncapped one would be the hole the cap exists
@@ -64,11 +72,32 @@ notificationsRouter.get('/', async (_req: Request, res: Response, next: NextFunc
     res.json({
       feed: feed.map(n => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail) })),
       unreadCount,
+      ...(offline ? { offline: true } : {}),
     })
   } catch (err) {
     next(err)
   }
 })
+
+type CompanionFeed = typeof import('../../core/notifications/companion-feed.js')
+
+/**
+ * A mutator on the companion: the Mac's answer, or its refusal in this router's
+ * `{ error }` shape. A Mac that does not answer throws needs_leader (503) to the
+ * error handler.
+ */
+async function answerFromMac(res: Response, run: (feed: CompanionFeed) => Promise<unknown>): Promise<void> {
+  const feed = await import('../../core/notifications/companion-feed.js')
+  try {
+    res.json(await run(feed))
+  } catch (err) {
+    if (err instanceof feed.MacRefusedError) {
+      res.status(err.status).json({ error: err.message })
+      return
+    }
+    throw err
+  }
+}
 
 function parseStringArray(res: Response, value: unknown, field: string): { ok: boolean; value?: string[] } {
   if (value !== undefined && (!Array.isArray(value) || value.some(v => typeof v !== 'string'))) {
@@ -88,6 +117,10 @@ notificationsRouter.post('/mark-read', async (req: Request, res: Response, next:
     // dedupKeys: a live entry's id is frontend-local, its key is the shared identity.
     const dedupKeys = parseStringArray(res, body.dedupKeys, 'dedupKeys')
     if (!dedupKeys.ok) return
+    if (isCompanion()) {
+      await answerFromMac(res, (feed) => feed.companionMarkRead({ ids: ids.value, dedupKeys: dedupKeys.value }))
+      return
+    }
     // An explicitly EMPTY dedupKeys list names nothing; it must not become mark-ALL.
     if (dedupKeys.value && dedupKeys.value.length === 0 && !ids.value?.length) {
       res.json({ unreadCount: (await listNotifications()).unreadCount })
@@ -110,6 +143,10 @@ notificationsRouter.post('/dismiss', async (req: Request, res: Response, next: N
     if (!ids.ok) return
     const dedupKeys = parseStringArray(res, body.dedupKeys, 'dedupKeys')
     if (!dedupKeys.ok) return
+    if (isCompanion()) {
+      await answerFromMac(res, (feed) => feed.companionDismiss({ ids: ids.value, dedupKeys: dedupKeys.value }))
+      return
+    }
     const { unreadCount, removed } = await dismissNotifications({ ids: ids.value, dedupKeys: dedupKeys.value })
     res.json({ unreadCount, removed })
   } catch (err) {

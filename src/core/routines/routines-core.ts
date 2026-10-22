@@ -6,7 +6,9 @@
  *
  * Single-writer rule: the PRIMARY's cron engine owns cron-jobs.json. A cloud
  * REPLICA never mutates its local copy — every v1 call relays to the primary
- * (see the dual-engine blind-write cron storm this rule exists to prevent).
+ * (see the dual-engine blind-write cron storm this rule exists to prevent), and
+ * its console's calls here read the routines copy and run every write on the
+ * Mac (stage 4d, companion-routines.ts).
  *
  * Error contract: throws SessionControlError with an HTTP-ish statusCode so
  * both the frozen v1 error shape and the relay errorKind map cleanly.
@@ -21,7 +23,7 @@ import { requireTriggerDaemon } from './trigger-daemon.js';
 import { assertCheckHostAllowed, checkCallerOrigin, checkCommandChanged } from './check-host-policy.js';
 import { exemptTemplateRun } from './trigger-templates.js';
 import { REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js';
-import { isHostReplicaProgram } from '../server-role.js';
+import { isCompanion, isHostReplicaProgram } from '../server-role.js';
 import { NeedsLeaderError } from '../replication/needs-leader.js';
 
 /** Resolve the live cron service or throw a 503 (server still booting). */
@@ -228,13 +230,18 @@ function refuseRoutineWriteOnReplica(): void {
   if (isHostReplicaProgram()) throw new NeedsLeaderError('routine_writes_need_mac');
 }
 
+/** The companion's half of this core (stage 4d): reads from the copy, writes on the Mac. */
+const companion = () => import('./companion-routines.js');
+
 export async function listRoutines(includeDisabled: boolean): Promise<{ jobs: unknown[] }> {
   if (isHostReplicaProgram()) return { jobs: await copiedRoutines(includeDisabled) };
+  if (isCompanion()) return (await companion()).companionListRoutines(includeDisabled);
   const service = await requireCronService();
   return { jobs: await service.list({ includeDisabled }) };
 }
 
 export async function getRoutine(id: string): Promise<{ job: unknown }> {
+  if (isCompanion()) return (await companion()).companionGetRoutine(id);
   const jobs = isHostReplicaProgram() ? await copiedRoutines(true) : await (await requireCronService()).list({ includeDisabled: true });
   const job = jobs.find((j) => j.id === id);
   if (!job) throw new SessionControlError(`Cron job not found: ${id}`, 404);
@@ -244,6 +251,7 @@ export async function getRoutine(id: string): Promise<{ job: unknown }> {
 /** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
 export async function createRoutine(body: unknown, origin?: string): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
+  if (isCompanion()) return await (await companion()).companionRoutineWrite('create', { body: body ?? {} }) as { job: unknown };
   const service = await requireCronService();
   const { normalizeCronJobCreate } = await import('../cron/index.js');
   const input = normalizeCronJobCreate(body);
@@ -268,6 +276,7 @@ export async function createRoutine(body: unknown, origin?: string): Promise<{ j
 /** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
 export async function patchRoutine(id: string, body: unknown, origin?: string): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
+  if (isCompanion()) return await (await companion()).companionRoutineWrite('patch', { id, body: body ?? {} }) as { job: unknown };
   const service = await requireCronService();
   const { normalizeCronJobPatch } = await import('../cron/index.js');
   const patch = normalizeCronJobPatch(body);
@@ -290,6 +299,7 @@ export async function patchRoutine(id: string, body: unknown, origin?: string): 
 
 export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed: boolean }> {
   refuseRoutineWriteOnReplica();
+  if (isCompanion()) return await (await companion()).companionRoutineWrite('delete', { id }) as { ok: boolean; removed: boolean };
   const service = await requireCronService();
   const before = await findJob(service, id);
   const result = await service.remove(id);
@@ -308,6 +318,7 @@ export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed:
 
 export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
+  if (isCompanion()) return await (await companion()).companionRoutineWrite('toggle', { id }) as { job: unknown };
   const service = await requireCronService();
   try {
     const job = await service.toggle(id);
@@ -322,6 +333,7 @@ export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
 
 export async function runRoutineNow(id: string): Promise<{ result: unknown }> {
   refuseRoutineWriteOnReplica();
+  if (isCompanion()) return await (await companion()).companionRoutineWrite('run', { id }) as { result: unknown };
   const service = await requireCronService();
   try {
     const result = await service.run(id, 'force');
@@ -333,6 +345,7 @@ export async function runRoutineNow(id: string): Promise<{ result: unknown }> {
 }
 
 export async function getRoutinesStatus(): Promise<Record<string, unknown>> {
+  if (isCompanion()) return (await companion()).companionRoutinesStatus();
   if (isHostReplicaProgram()) {
     // The engine does not run here: the copy's count, and no next wake.
     return { enabled: false, storePath: '', jobs: (await copiedRoutines(true)).length, nextWakeAtMs: null };

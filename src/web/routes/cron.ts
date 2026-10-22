@@ -9,13 +9,17 @@
  * shared core (src/core/routines/routines-core.ts), reused verbatim by the
  * /api/v1 mobile router and the cloud control relay. Only the NL draft route
  * (LLM call) stays here — it is primary-web-only.
+ *
+ * On the cloud companion the core reads the Mac's routines copy and runs every
+ * write on the Mac (stage 4d, core/routines/companion-routines.ts); the trigger
+ * and its check test below go to the Mac the same way.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import type { CronService } from '../../core/cron/index.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
-import { isHostReplicaProgram } from '../../core/server-role.js'
+import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import {
   listRoutines, getRoutine, createRoutine, patchRoutine, deleteRoutine,
@@ -124,6 +128,11 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // caller's origin (check-host-policy.ts).
   router.post('/check-test', async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (isCompanion()) {
+        const { companionRoutineWrite } = await import('../../core/routines/companion-routines.js')
+        res.json(await companionRoutineWrite('check-test', { body: req.body ?? {} }))
+        return
+      }
       const { testRoutineCheck } = await import('../../core/routines/trigger-api.js')
       res.json(await testRoutineCheck(req.body, requestOrigin(req), callerSid(req)))
     } catch (err) {
@@ -135,6 +144,12 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // resolves from the caller header the ops executor stamps.
   router.post('/trigger', async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (isCompanion()) {
+        const { companionRoutineWrite } = await import('../../core/routines/companion-routines.js')
+        const sid = callerSid(req)
+        res.status(201).json(await companionRoutineWrite('trigger', { body: req.body ?? {}, ...(sid ? { callerSid: sid } : {}) }))
+        return
+      }
       const { createTriggerRoutine } = await import('../../core/routines/trigger-api.js')
       res.status(201).json(await createTriggerRoutine(req.body, callerSid(req), requestOrigin(req)))
     } catch (err) {

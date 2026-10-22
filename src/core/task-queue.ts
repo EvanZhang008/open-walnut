@@ -235,12 +235,18 @@ async function enqueue(op: TaskOp): Promise<void> {
  * re-touch a GIT-TRACKED file every 60s forever — the exact churn Phase 3/4
  * exist to kill. Skip when the file is already there; if the primary consumed
  * and deleted it, the queued copy's RPC is what delivers next.
+ *
+ * Stage 4d: never for a Mac that drains the journal's task kinds. Such a Mac is
+ * no pre-Phase-4 primary (its relay failed on the way, an older daemon of its
+ * own), the journal or the queued copy carries the op, and the file is the git
+ * path the box stops writing.
  */
 async function writeLegacyOutboxFallback(op: TaskOp): Promise<void> {
   // An old primary's consumption loop predates the order ops — a legacy file
   // it can't parse would be retried on every git pull forever. Ordering is
   // cosmetic; the queued copy converges the moment the primary upgrades.
   if (op.type === 'reorder' || op.type === 'reorder-pins') return;
+  if (await macDrainsTaskKinds()) return;
   try {
     const { OUTBOX_DIR } = await import('./task-outbox.js');
     const file = path.join(OUTBOX_DIR, `${op.opId}.json`);
@@ -341,8 +347,9 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
       return;
     }
     if (outcome === 'rejected') return;
-    // The Mac did not answer: a field write it merges goes into the journal it drains.
-    if (outcome === 'retry' && (await journalOp(op))) return;
+    // The Mac did not answer (or its relay predates the action, while it drains the
+    // journal): a field write it merges goes into the journal it drains.
+    if ((outcome === 'retry' || outcome === 'needs_upgrade') && (await journalOp(op))) return;
     await enqueue(op);
     if (outcome === 'needs_upgrade') await writeLegacyOutboxFallback(op);
   } catch (err) {
@@ -355,6 +362,16 @@ export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
     // Applied, refused, or queued (a queued op holds the task from its file).
     if (heldId) releaseLive(heldId);
     liveOps--;
+  }
+}
+
+/** The Mac drains the journal's task kinds (its last drain named them). */
+async function macDrainsTaskKinds(): Promise<boolean> {
+  try {
+    const { macDrains } = await import('./companion-journal.js');
+    return macDrains('task-fields') || macDrains('task-create');
+  } catch {
+    return false;
   }
 }
 

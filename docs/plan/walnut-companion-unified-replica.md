@@ -583,6 +583,71 @@ conversation list edits and the chat lane (3e); note pictures, notes keyword sea
 memory beyond MEMORY.md and USER.md, the lane's skills. Then `reconcileAfterPull` goes on
 the box, and git sync stops writing its data dir.
 
+**4d, the files the box writes itself: one owner, the Mac.** Files the box wrote into
+its data dir for the Mac, and console writes that landed on its disk, now have the Mac
+as their one writer, without git:
+
+- **The box's own cards.** Its notification store is `cache/companion-notifications.json`
+  (never git); on its first start it takes its own error cards (`origin: 'replica'`)
+  from the data dir's file. Every write its producers make (its cloud-exec sessions'
+  permission and error cards, its plugins, the overview maintainer, the chat history's
+  cron cards, the log-error bridge) is reported (`notifications/mirror.ts`) into an
+  outbox, `cache/companion-notification-outbox.json`, one entry per card key (a later
+  change folds in, at most 500), sent with `server.notifications.cards` (at most 50 a
+  call; 300 ms after a change, when the bridge connects, every 60 s;
+  `notifications/companion-cards.ts`). The Mac applies each card by its dedupKey with
+  the box's id (`notifications/apply-companion-cards.ts`): add, upsert (a newer
+  occurrence folds in and counts the box's folds), replace, state (a settled stamp;
+  it never brings back a card dismissed on the Mac, and never settles a newer
+  occurrence) and remove (only the box's copy). A resend changes nothing, a bad card
+  is refused alone, a letter or a repair link (`fix`) is never taken. An older Mac
+  answers needs-upgrade and the cards wait; a refusal (4xx) drops the batch, logged
+  as a warning (an error line would become a card that goes the same way).
+- **The console's feed on the box** (`/api/notifications`,
+  `notifications/companion-feed.ts`): the Mac's feed over `server.notifications`,
+  the box's waiting cards on top; while the Mac is away, the Mac's file as git sync
+  last brought it with the box's own cards, marked `offline: true`. Mark read
+  (`server.notifications.mark`, new: ids and keys with the console route's rules;
+  the old `mark-read` takes ids only, so an older Mac given keys would mark all) and
+  dismiss run on the Mac; away they answer `503 needs_leader`
+  (`notification_changes_need_mac`), an older Mac a 400. Git sync on the box never
+  stages `notifications.json` (`CLOUD_NEVER_STAGE_FILES`) and restores a diverged one
+  from HEAD with an info line.
+- **Routines.** The console's routes (`/api/routines`, `/api/cron`, through
+  `routines-core.ts` and `routines/companion-routines.ts`) answer the `routines` copy
+  once held (the list, one routine, the status) and relay before it (`503
+  kind_not_copied` away). Create, patch, delete, toggle, Run now, a trigger and a check
+  test run on the Mac over the existing `server.routines.*` actions (`503
+  routine_writes_need_mac` away), so the box's `cron-jobs.json` keeps only its own
+  infra jobs. The wake counter skips the jobs the box's engine skips
+  (`cloudModeSkipsJob`), so a Mac wake routine is never counted or run there; the
+  `routine-wake` row still starts, for the box's own jobs.
+- **Layout prefs.** `GET /api/ui-prefs` answers the `prefs` copy with
+  `x-walnut-copy-as-of` once held; `PUT` is `server.ui-prefs.put` (new), merged on the
+  Mac with the route's last-writer-wins rule (`503 prefs_writes_need_mac` away, a
+  patch over 256 KB refused).
+- **The Ask Walnut launch memory.** `GET /api/sessions/ask-walnut-launch` and quick
+  start read the `personas` copy's `launchModel`/`launchEffort` (a pick made on the
+  box after the copy's time wins); the Mac's personas round also follows launch
+  memory writes now.
+- **The old task outbox.** A relay that answers needs-upgrade from a Mac that drains
+  `task-fields` or `task-create` puts a field write into the journal and never writes
+  the legacy `tasks/outbox/` file; a Mac that never drained keeps it, as before.
+
+What this leaves:
+
+- The feed's away answer reads the Mac's `notifications.json` as git sync brought it.
+  Once git sync stops writing the box's data dir it only ages, so it needs a
+  `notifications` copy kind (or the away answer shows only the box's cards). The v1
+  feed (`/api/v1/notifications`) still relays and answers 503 while the Mac is away.
+- A launch pick made on the box (`rememberAskWalnutLaunch`) still writes the box's own
+  file, which reaches the Mac only through git; it needs a relay or a journal kind.
+- Task ops the journal cannot take (a delete, a reorder) that met needs-upgrade wait in
+  the box's queue for the Mac's update; legacy outbox files already written are left to
+  git.
+- The box's cron engine still persists its own infra jobs in `cron-jobs.json`, a file
+  git tracks; when git sync stops, those jobs need a box-local store.
+
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 
 `bootPolicy` gets one `replica` column. What only a companion does becomes a

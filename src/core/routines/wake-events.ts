@@ -36,6 +36,7 @@
 import { bus, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { CronJob } from '../cron/types.js';
+import { cloudModeSkipsJob } from '../cron/jobs.js';
 
 /** The ONE subscriber name. Re-arming overwrites it; nothing else may use it. */
 export const WAKE_SUBSCRIBER = 'routine-wake';
@@ -249,7 +250,10 @@ export function startRoutineWake(deps: RoutineWakeDeps = {}): RoutineWakeHandle 
     }
     if (stopped) return;
     watchers = jobs
-      .filter((j) => j.enabled && j.wake && j.wake.events.length > 0)
+      // The cloud companion runs only its own infra jobs (cron/jobs.ts cloudModeSkipsJob):
+      // a wake routine there is the Mac's, which the Mac counts and runs itself, so
+      // the box never bumps it into cron-jobs.json or starts it (stage 4d).
+      .filter((j) => j.enabled && j.wake && j.wake.events.length > 0 && !cloudModeSkipsJob(j))
       .map((j) => ({
         jobId: j.id,
         events: new Set(j.wake!.events),

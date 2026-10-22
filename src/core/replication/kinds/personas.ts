@@ -96,10 +96,13 @@ export const PERSONAS_KIND: CopyKind<PersonaRow> = {
   choice: 'personas',
   rows: leaderRows,
   watch: (soon) => {
-    let stop: (() => void) | null = null
+    const stops: Array<() => void> = []
     let stopped = false
-    void import('../../config-manager.js').then((cm) => { if (!stopped) stop = cm.onConfigWritten(soon) })
-    return () => { stopped = true; stop?.() }
+    // The config renders the personas; the Ask Walnut launch memory rides on every row.
+    void Promise.all([import('../../config-manager.js'), import('../../sessions/ask-walnut-launch.js')]).then(([cm, launch]) => {
+      if (!stopped) stops.push(cm.onConfigWritten(soon), launch.onAskWalnutLaunchWritten(soon))
+    })
+    return () => { stopped = true; for (const s of stops) s() }
   },
 }
 

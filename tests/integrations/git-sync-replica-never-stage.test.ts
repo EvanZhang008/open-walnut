@@ -13,6 +13,12 @@
  * keep committing this data (git is its only backup), so the rule cannot live in
  * the .gitignore template. It lives in the staging step, gated on CLOUD_MODE.
  *
+ * Stage 4d (docs/plan/walnut-companion-unified-replica.md) adds notifications.json
+ * as a file of its own: the Mac owns the feed, the companion's console reads and
+ * marks it there, and the box's own cards live in cache/ and reach the Mac over the
+ * relay. The box never writes the data dir's file, so a divergence there is an
+ * older build's leftover, restored with an info line, never an error.
+ *
  * Everything here runs against a REAL git repo in an isolated WALNUT_HOME and
  * drives the actual staging entry point (`stageAllForCommit`) — the assertions
  * read `git diff --cached` and `git status`, never a reimplementation of them.
@@ -28,11 +34,13 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-never-stage'
 
 import {
   CLOUD_NEVER_STAGE_DIRS,
+  CLOUD_NEVER_STAGE_FILES,
   initSync,
   stageAllArgs,
   stageAllForCommit,
 } from '../../src/integrations/git-sync.js';
 import { WALNUT_HOME } from '../../src/constants.js';
+import { log } from '../../src/logging/index.js';
 
 /**
  * Test-side reader over git output: does this path live under a never-author dir?
@@ -43,7 +51,8 @@ import { WALNUT_HOME } from '../../src/constants.js';
  * would imply a caller that does not exist.
  */
 function underNeverStageDir(file: string): boolean {
-  return CLOUD_NEVER_STAGE_DIRS.some(dir => file === dir || file.startsWith(`${dir}/`));
+  return CLOUD_NEVER_STAGE_DIRS.some(dir => file === dir || file.startsWith(`${dir}/`))
+    || CLOUD_NEVER_STAGE_FILES.includes(file);
 }
 
 function gitOut(args: string): string {
@@ -118,18 +127,41 @@ describe('which paths the rule covers', () => {
     expect(staged.filter(underNeverStageDir)).toEqual([]);
   });
 
-  it('does NOT cover notifications.json — the replica genuinely authors that', async () => {
-    // routes/notifications.ts writes the LOCAL store with no relay, and
-    // session-tracker / hooks / plugins all record into it on the box they run
-    // on. Refusing to commit it would silently discard the phone's own mark-read
-    // and dismiss actions instead of syncing them, which is a different bug, not
-    // the same fix.
-    expect(CLOUD_NEVER_STAGE_DIRS).not.toContain('notifications.json');
+  it('covers notifications.json since stage 4d, and nothing that merely looks like it', async () => {
+    // The companion's console reads and marks the feed on the Mac, and its own
+    // cards live in cache/ (core/notifications/companion-cards.ts): nothing on the
+    // box authors this file any more, so a commit of it could only revert the Mac.
+    expect(CLOUD_NEVER_STAGE_FILES).toEqual(['notifications.json']);
     writeMixedDirt();
+    write('notifications.json.old', '{"not":"the feed"}');
+    write('memory/notifications.json', '{"not":"the feed either"}');
 
     await stageAllForCommit({ cloudMode: true });
 
-    expect(stagedPaths()).toContain('notifications.json');
+    const staged = stagedPaths();
+    expect(staged).not.toContain('notifications.json');
+    expect(staged).toContain('notifications.json.old');
+    expect(staged).toContain('memory/notifications.json');
+  });
+
+  it('restores a diverged notifications.json from HEAD with an info line, not an error', async () => {
+    write('notifications.json', '{"version":1,"notifications":["from the Mac"]}');
+    gitOut('add -A');
+    gitOut('commit -q -m "the Mac\'s feed"');
+    const fromMac = read('notifications.json');
+    write('notifications.json', '{"version":1,"notifications":["an older box build"]}');
+    const errors = vi.spyOn(log.git, 'error');
+    const infos = vi.spyOn(log.git, 'info');
+    try {
+      await stageAllForCommit({ cloudMode: true });
+      expect(read('notifications.json')).toBe(fromMac);
+      expect(dirtyPaths()).not.toContain('notifications.json');
+      expect(errors).not.toHaveBeenCalled();
+      expect(infos.mock.calls.some(([msg]) => /no longer writes/.test(String(msg)))).toBe(true);
+    } finally {
+      errors.mockRestore();
+      infos.mockRestore();
+    }
   });
 
   it('keeps the letter store OUT of the ignore template, so the primary still backs it up', () => {
@@ -148,7 +180,6 @@ describe('a replica-shaped staging pass', () => {
 
     const staged = stagedPaths();
     expect(staged).toContain('tasks/tasks.json');
-    expect(staged).toContain('notifications.json');
     expect(staged.filter(underNeverStageDir)).toEqual([]);
   });
 
@@ -210,6 +241,8 @@ describe('a primary-shaped staging pass', () => {
     expect(staged).toContain('human-inbox/index.json');
     expect(staged).toContain('human-inbox/bodies/lt-abcdef-112233.md');
     expect(staged).toContain('tasks/tasks.json');
+    // The Mac still backs up its feed.
+    expect(staged).toContain('notifications.json');
 
     gitOut('commit -q -m "primary backup"');
     // A deletion is a change too: `add -A -- .` on the replica shape must not
@@ -222,5 +255,6 @@ describe('a primary-shaped staging pass', () => {
   it('uses the plain add on the primary and an excluding one on the replica', () => {
     expect(stageAllArgs(false)).toBe('add -A');
     expect(stageAllArgs(true)).toContain(":(exclude)human-inbox'");
+    expect(stageAllArgs(true)).toContain(":(exclude)notifications.json'");
   });
 });

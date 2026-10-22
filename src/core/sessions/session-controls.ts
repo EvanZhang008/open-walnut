@@ -919,6 +919,14 @@ export type SessionControlAction =
   | 'message.withdraw'
   // Box-level family (sessionId ignored):
   | 'server.notifications' | 'server.notifications.mark-read' | 'server.notifications.dismiss'
+  // Stage 4d: the companion console's mark-read (ids and dedupKeys, the console
+  // route's rules; mark-read above takes ids only, so an older Mac given keys would
+  // mark everything read), and the cards the companion writes about itself, which
+  // reach this Mac's feed here instead of through git (notifications/companion-cards.ts).
+  | 'server.notifications.mark' | 'server.notifications.cards'
+  // Stage 4d: a layout change made in the companion's console, merged into this
+  // Mac's ui-prefs.json (the companion reads the prefs copy).
+  | 'server.ui-prefs.put'
   // Global search: the search index lives on the primary only, so a
   // replica relays the query here instead of refusing outright — the Mac
   // being reachable is exactly the common case for a phone on the replica.
@@ -1337,6 +1345,36 @@ export async function handleSessionControlRelay(
         const ids = Array.isArray(p.ids) && p.ids.every((v) => typeof v === 'string')
           ? p.ids as string[] : undefined;
         result = await markRead(ids) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.notifications.mark': {
+        // The console route's rules (routes/notifications.ts): no filter marks all
+        // but letters, an explicitly empty key list names nothing.
+        const { markRead, listNotifications } = await import('../notifications/store.js');
+        const strings = (v: unknown): string[] | undefined => (Array.isArray(v) && v.every((x) => typeof x === 'string') ? v as string[] : undefined);
+        const ids = strings(p.ids);
+        const dedupKeys = strings(p.dedupKeys);
+        result = dedupKeys && dedupKeys.length === 0 && !ids?.length
+          ? { unreadCount: (await listNotifications()).unreadCount }
+          : await markRead(ids, dedupKeys) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.notifications.cards': {
+        const { applyCompanionCards, MAX_CARDS_PER_CALL } = await import('../notifications/apply-companion-cards.js');
+        if (!Array.isArray(p.cards) || p.cards.length > MAX_CARDS_PER_CALL) {
+          throw new SessionControlError(`cards must be an array of at most ${MAX_CARDS_PER_CALL}`, 400);
+        }
+        result = await applyCompanionCards(p.cards) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.ui-prefs.put': {
+        const { mergeUiPrefs, UiPrefsInputError } = await import('../../web/routes/ui-prefs.js');
+        try {
+          result = await mergeUiPrefs(p.prefs) as unknown as Record<string, unknown>;
+        } catch (err) {
+          if (err instanceof UiPrefsInputError) throw new SessionControlError(err.message, 400);
+          throw err;
+        }
         break;
       }
       case 'server.notifications.dismiss': {
