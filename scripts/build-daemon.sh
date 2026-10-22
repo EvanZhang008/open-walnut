@@ -145,6 +145,7 @@ SOURCES=(
   src/providers/transfer-core.ts
   src/providers/transfer-pack-core.ts
   src/providers/host-facts-core.ts
+  src/providers/desktop-update-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

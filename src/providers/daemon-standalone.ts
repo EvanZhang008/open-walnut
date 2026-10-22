@@ -108,6 +108,7 @@ import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
 import { createTransferCore, type TransferCoreDeps } from './transfer-core.js'
 import { createTransferPack, type TransferPackDeps } from './transfer-pack-core.js'
 import { createHostFacts, type HostFactsDeps } from './host-facts-core.js'
+import { createDesktopUpdate } from './desktop-update-core.js'
 import { createWorkspaceCore, type WorkspaceCoreDeps } from './workspace-core.js'
 import {
   computeHostLocalChanges,
@@ -2102,6 +2103,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'transfer.fetch': return replyTransfer(ws, id as number, 'transfer.fetch', () => transferCore.fetch(cmd), true)
     case 'transfer.realpath': return replyTransfer(ws, id as number, 'transfer.realpath', () => transferCore.realpath(cmd), false)
     case 'host.facts': return replyTransfer(ws, id as number, 'host.facts', () => hostFacts.facts(cmd), false)
+    case 'desktop.updateStatus': return replyTransfer(ws, id as number, 'desktop.updateStatus', () => desktopUpdate.status(), false)
+    case 'desktop.restart': return replyTransfer(ws, id as number, 'desktop.restart', () => desktopUpdate.restart(cmd.token), true)
     case 'usage.scan': return cmdUsageScan(ws, id as number, cmd)
     case 'usage.costState': return cmdUsageCostState(ws, id as number, cmd)
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id as number, cmd)
@@ -9049,6 +9052,7 @@ const transferCore = createTransferCore({
 const transferPack = createTransferPack({
   fs, path, crypto, spawn: spawn as unknown as TransferPackDeps['spawn'], env: process.env, home: HOME_DIR,
 })
+const desktopUpdate = createDesktopUpdate({ fs, execFile, spawn, platform: process.platform, home: HOME_DIR, env: process.env, isolated: !IS_PROD_DAEMON_DIR })
 const hostFacts = createHostFacts({
   fs, os, execFile: execFile as unknown as HostFactsDeps['execFile'], http, https,
   env: process.env, home: HOME_DIR, platform: process.platform, arch: process.arch,

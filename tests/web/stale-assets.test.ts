@@ -103,6 +103,18 @@ describe('stale-assets: readUnsavedSnapshot (real DOM shapes)', () => {
     expect(isUnsaved(snap(`${FILE_OPEN}<span class="fv-dirty-dot">●</span>`))).toBe(true);
   });
 
+  it.each(['saving', 'error'])('a note with %s status blocks restart or reload', (status) => {
+    expect(isUnsaved(snap(`<span class="notes-save-status ${status}">Save status</span>`))).toBe(true);
+  });
+
+  it.each(['global-notes-saving', 'global-notes-error'])('global notes %s blocks restart or reload', (status) => {
+    expect(isUnsaved(snap(`<span class="${status}">Save status</span>`))).toBe(true);
+  });
+
+  it('a saved note does not block restart or reload', () => {
+    expect(isUnsaved(snap('<span class="notes-save-status saved">Saved</span>'))).toBe(false);
+  });
+
   it('a composer draft counts even without focus', () => {
     const { document } = parseHTML('<!DOCTYPE html><html><body><textarea>half a thought</textarea></body></html>');
     expect(isUnsaved(readUnsavedSnapshot(document as unknown as Document, null))).toBe(true);

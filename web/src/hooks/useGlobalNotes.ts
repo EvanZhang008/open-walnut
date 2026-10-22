@@ -12,7 +12,7 @@ import type { Editor } from '@tiptap/core';
 export interface UseGlobalNotesReturn {
   content: string;
   onEditorUpdate: (editor: Editor) => void;
-  /** True while a save is in-flight. Backed by a ref — reads are snapshot-only. */
+  /** True while a save is pending or in flight. */
   saving: boolean;
   saveError: string | null;
   collapsed: boolean;
@@ -28,8 +28,8 @@ const DEBOUNCE_MS = 500;
 
 export function useGlobalNotes(): UseGlobalNotesReturn {
   const [content, setContent] = useState('');
-  // saving is a ref — no re-renders during typing. We expose a snapshot via return.
   const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [popupOpen, setPopupOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
@@ -199,6 +199,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
     if (inFlightRef.current) return; // in-flight settle path reschedules if newer edits arrived
     inFlightRef.current = true;
     savingRef.current = true;
+    setSaving(true);
     beginDocSave(GLOBAL_NOTES_DOC_KEY);
     const seqAtSerialize = editSeqRef.current;
     const hash = contentHashRef.current ?? undefined;
@@ -246,6 +247,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
       .finally(() => {
         inFlightRef.current = false;
         savingRef.current = false;
+        setSaving(false);
         endDocSave(GLOBAL_NOTES_DOC_KEY);
         // Keystrokes (or a failed save) left us dirty — schedule the next
         // attempt. Back off to 5s after a failure so a persistent 5xx doesn't
@@ -257,6 +259,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
   const scheduleSave = useCallback((delayMs: number = DEBOUNCE_MS) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     savingRef.current = true;
+    setSaving(true);
     saveTimer.current = setTimeout(() => {
       const ed = editorRef.current;
       if (!ed || ed.isDestroyed) {
@@ -264,6 +267,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
         // run (nothing recoverable). Reset the flags — leaving dirty=true here
         // permanently blocked WS + focus reloads, freezing the panel stale.
         savingRef.current = false;
+        setSaving(false);
         dirty.current = false;
         const deferred = deferredWsHashRef.current;
         deferredWsHashRef.current = null;
@@ -274,6 +278,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
         performSave(ed.storage.markdown.getMarkdown());
       } catch {
         savingRef.current = false;
+        setSaving(false);
       }
     }, delayMs);
   }, [performSave, reloadContent]);
@@ -299,6 +304,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
           // keeps accepting external updates.
           dirty.current = false;
           savingRef.current = false;
+          setSaving(false);
         }
       });
     }
@@ -350,5 +356,5 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
   const openPopup = useCallback(() => setPopupOpen(true), []);
   const closePopup = useCallback(() => setPopupOpen(false), []);
 
-  return { content, onEditorUpdate, saving: savingRef.current, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup };
+  return { content, onEditorUpdate, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup };
 }

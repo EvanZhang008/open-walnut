@@ -54,7 +54,7 @@ swiftc -O -o "$MACOS/${APP_NAME}_arm64" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
-    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
     -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -target arm64-apple-macos12.0
 
@@ -64,7 +64,7 @@ swiftc -O -o "$MACOS/${APP_NAME}_x86_64" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
-    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
     -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -target x86_64-apple-macos12.0
 

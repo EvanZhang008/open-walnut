@@ -4,7 +4,8 @@
 
 import { Router } from 'express'
 import { getSystemHealth } from '../server.js'
-import { getDaemonPoolStatus } from '../../providers/daemon-connection.js'
+import { getDaemonPoolStatus, getConnectedDaemonConnection } from '../../providers/daemon-connection.js'
+import { isPersonAtThisMachine } from './expose.js'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { validateBearerCredential } from '../middleware/auth.js'
@@ -68,6 +69,30 @@ systemRouter.get('/health', async (req, res) => {
   } catch { /* config not ready */ }
 
   res.json(response)
+})
+
+systemRouter.get('/desktop-update', async (req, res) => {
+  const empty = { available: false, token: null, version: null }
+  if (!isPersonAtThisMachine(req) || process.platform !== 'darwin') { res.json(empty); return }
+  const daemon = getConnectedDaemonConnection('__local__')
+  if (!daemon?.hasCapability('desktop-update-v1')) { res.json(empty); return }
+  try {
+    const result = await daemon.send('desktop.updateStatus', {}, 7000)
+    res.json(result.ok ? { available: result.available, token: result.token, version: result.version, restarting: result.restarting, error: result.error } : empty)
+  } catch { res.json(empty) }
+})
+
+systemRouter.post('/desktop-update/restart', async (req, res) => {
+  if (!isPersonAtThisMachine(req) || process.platform !== 'darwin') { res.status(403).json({ error: 'Restart is only available at this computer.' }); return }
+  const daemon = getConnectedDaemonConnection('__local__')
+  if (!daemon?.hasCapability('desktop-update-v1')) { res.status(503).json({ error: 'The local daemon is not ready.' }); return }
+  const token = req.body?.token
+  if (typeof token !== 'string' || !token || token.length > 200) { res.status(400).json({ error: 'An update token is required.' }); return }
+  try {
+    const result = await daemon.send('desktop.restart', { token }, 7000)
+    if (!result.ok || !result.accepted) { res.status(409).json({ error: 'The installed update changed. Check again before restarting.' }); return }
+    res.status(202).json({ accepted: true })
+  } catch { res.status(503).json({ error: 'Could not request the app restart. Try again.' }) }
 })
 
 // ── Is a newer Open Walnut published? (src/core/self-update) ──

@@ -2354,6 +2354,7 @@ runCalendarBridgeIfRequested()
 // `Walnut --reader-bridge read|probe <path>` reads one Full Disk Access file, so
 // that grant is Walnut's too: see desktop/ReaderBridge.swift.
 runReaderBridgeIfRequested()
+runDesktopUpdateBridgeIfRequested()
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
