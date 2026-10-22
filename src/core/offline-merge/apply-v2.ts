@@ -31,11 +31,12 @@ export { RefusedWrite };
 
 /**
  * The v2 kinds this Mac applies (`offline.drain {kinds}`); `note` since WP11 (offline-merge/notes.ts);
- * `session-meta`, `inbox-state`, `chat-turn`, `memory`, `note-move` and `note-attachment`
- * only the cloud companion writes (apply-session-meta.ts, apply-inbox-state.ts,
- * apply-chat-turn.ts, apply-memory.ts, apply-note-move.ts, apply-note-attachment.ts).
+ * `session-meta`, `inbox-state`, `chat-turn`, `memory`, `note-move`, `note-attachment` and
+ * `conversation-edit` only the cloud companion writes (apply-session-meta.ts,
+ * apply-inbox-state.ts, apply-chat-turn.ts, apply-memory.ts, apply-note-move.ts,
+ * apply-note-attachment.ts, apply-conversation-edit.ts).
  */
-export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment'] as const;
+export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit'] as const;
 /** What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks. */
 export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor'];
 
@@ -374,6 +375,8 @@ export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
     case 'note-move': return (await import('./apply-note-move.js')).applyNoteMove(ctx, record);
     // Stage 4d: a picture pasted into a note on the companion.
     case 'note-attachment': return (await import('./apply-note-attachment.js')).applyNoteAttachment(ctx, record);
+    // Stage 4d: a chat made, renamed, pinned or deleted on the companion.
+    case 'conversation-edit': return (await import('./apply-conversation-edit.js')).applyConversationEdit(ctx, record);
     default: throw new Error(`unknown journal kind ${record.kind}`);
   }
 }

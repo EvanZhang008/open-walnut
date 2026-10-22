@@ -18,7 +18,9 @@
  * results and background notifications route into the ACTIVE conversation.
  *
  * Cloud companion (REPLICA): Class A — the conversation store and the turn queue
- * are local, so these operate on them directly. No bridge. The two ENGINE routes
+ * are local, so these operate on them directly. No bridge. A rename, pin or delete
+ * there is also a `conversation-edit` record for the Mac (stage 4d,
+ * core/companion-conversations.ts), and a clear or a compaction needs the Mac. The two ENGINE routes
  * are the exception: a chat turn is relayed to the primary, so the lane session
  * behind a conversation is a fact about the primary. Those relay, and when the
  * primary cannot be reached they answer 503 `primary_unreachable` — never this
@@ -484,6 +486,9 @@ personalAiV1Router.get('/chat/stats', async (req: Request, res: Response, next: 
 // from the model's point of view.
 personalAiV1Router.post('/chat/clear', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // The companion answers this only while the Mac does not (v1 forward): it waits for the Mac.
+    const refused = (await import('./chat-history.js')).companionChatChangeRefusal()
+    if (refused) throw refused
     const ids = await resolveChatTarget(req, res)
     if (!ids) return
     const chatHistory = await import('../../core/chat-history.js')
@@ -500,10 +505,12 @@ personalAiV1Router.post('/chat/clear', async (req: Request, res: Response, next:
 // POST /api/v1/chat/compact?agentId&conversationId (Wave 3) — fire-and-forget
 // background compaction (the same trigger the web console uses). Answers
 // immediately: { ok, async: true }, or { ok, alreadyRunning: true } when a
-// compaction is already in flight. Class A (the replica compacts its own
-// Personal AI's conversation with its own model credentials).
+// compaction is already in flight. On the companion it needs the Mac (stage 4d):
+// the conversation is the Mac's, and the box holds only a copy of its tail.
 personalAiV1Router.post('/chat/compact', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const refused = (await import('./chat-history.js')).companionChatChangeRefusal()
+    if (refused) throw refused
     const ids = await resolveChatTarget(req, res)
     if (!ids) return
     const { isCompactionInProgress, triggerBackgroundCompaction } = await import('../background-compaction.js')

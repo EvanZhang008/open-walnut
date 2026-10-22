@@ -5,9 +5,10 @@
  *
  * Real: startServer in CLOUD_MODE, the api-v1 router and its SSE channel, the
  * fallback predicate (cloudChatCapability / decideCloudFallback), the per-agent
- * turn queue, runLaneTurn, the companion lane, the non-git outbox, the chat
- * history store and the fake-primary bridge socket for the relayed read.
- * Mocked: constants (temp dirs); the 'session-runner' bus subscriber (a fake CLI
+ * turn queue, runLaneTurn, the companion lane, the non-git outbox, the copy door
+ * (the Mac's copy of a conversation) and the fake-primary bridge socket for the
+ * relayed read. Mocked: constants (temp dirs); the bridge config (the copy
+ * round's address and machine credential); the 'session-runner' bus subscriber (a fake CLI
  * that never spawns); the CLI probe; and the relay outcome for `server.chat.turn`
  * and `server.chat.messages` (what is under test is what happens when the relay
  * provably went nowhere).
@@ -15,9 +16,9 @@
  * Matrix: exec on + CLI present → available; exec off, CLI missing, an unusable
  * chat folder (exec reports enabled, yet no turn could run) → unavailable; the
  * predicate throwing → key omitted; for every one of those the status value
- * agrees with what a real turn then does; a banked answer, its synced adopted
- * copy and a relayed primary page each carry `answeredBy` on the cloud answer
- * only.
+ * agrees with what a real turn then does; a banked answer, the Mac's copy of it
+ * once adopted and a relayed primary page each carry `answeredBy` on the cloud
+ * answer only.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -48,6 +49,13 @@ vi.mock('../../../src/web/routes/v1-control-relay.js', async (orig) => {
   }
 })
 
+// The Mac's copy round reaches this box over the real copy door (machine credential).
+let bridgeCfg: { enabled: boolean; url?: string; token?: string } = { enabled: false }
+vi.mock('../../../src/integrations/cloud-bridge-config.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/integrations/cloud-bridge-config.js')>()),
+  getBridgeConfigForHost: async () => bridgeCfg,
+}))
+
 import yaml from 'js-yaml'
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
@@ -60,7 +68,9 @@ import {
   _setCloudChatCliProbeForTesting, PRIMARY_UNREACHABLE_MESSAGE, cloudChatCapability,
 } from '../../../src/web/routes/cloud-chat-fallback.js'
 import { CLOUD_CHAT_OUTBOX_DIR, listCloudTurns } from '../../../src/core/cloud-chat-outbox.js'
-import * as chatHistory from '../../../src/core/chat-history.js'
+import { _resetCloudIngestForTesting, postToCloudReplica } from '../../../src/core/cloud-ingest.js'
+import { syncCopyKinds, type CopyTarget } from '../../../src/core/replication/kinds/copy-kind.js'
+import { CONVERSATION_BODIES_KIND, bodyRow } from '../../../src/core/replication/kinds/conversation-bodies.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import type { SessionStartEvent, SessionSendEvent } from '../../../src/core/event-types.js'
 import { markProcessing, removeProcessed } from '../../../src/core/session-message-queue.js'
@@ -233,6 +243,8 @@ beforeAll(async () => {
   if (!addr || typeof addr === 'string') throw new Error('no port')
   port = addr.port
   deviceToken = (await createDevice('cloud-chat-status-phone')).token
+  bridgeCfg = { enabled: true, url: `ws://127.0.0.1:${port}/bridge`, token: (await createDevice('bridge-local', { kind: 'machine' })).token }
+  _resetCloudIngestForTesting()
   installFakeRunner()
 }, 90_000)
 
@@ -346,15 +358,19 @@ describe('GET /messages on the replica: answeredBy on the cloud answer only', ()
     expect('answeredBy' in rows[0]).toBe(false)
   }, 60_000)
 
-  it('the same turn once its adopted copy synced back: still labelled, still once', async () => {
+  it('the same turn once the Mac adopted it, as its copy carries it: still labelled, still once', async () => {
     const conv = await createConversation('general')
     await sendTurn(conv.id, 'remind me about the plants')
     const [entry] = await listCloudTurns({ conversationId: conv.id })
-    // The primary's own writer, as git-sync would deliver its file back here.
-    await chatHistory.adoptCloudTurn({
-      agentId: 'general', conversationId: conv.id, turnId: entry.turnId, userText: entry.userText,
-      userAt: entry.userAt, answerText: entry.answerText, answeredAt: entry.answeredAt, engine: entry.engine!,
-    })
+    // Stage 4d: the adopted turn comes back in the Mac's copy of the conversation, never in
+    // a file git sync wrote here; the copy names its turn id and labels its answer.
+    const macRows = [
+      { id: 'm0', role: 'user', text: entry.userText, createdAt: entry.userAt },
+      { id: 'm1', role: 'assistant', text: entry.answerText, createdAt: entry.answeredAt, answeredBy: 'cloud' },
+    ]
+    const target: CopyTarget = { id: 'companion', kind: 'companion', label: 'Cloud companion', available: async () => true, post: (p, o) => postToCloudReplica(p, o) }
+    const round = await syncCopyKinds([{ ...CONVERSATION_BODIES_KIND, watch: () => () => {}, rows: async () => [bodyRow('general', conv.id, macRows, [entry.turnId])], keep: () => [] }], { targets: () => [target] })
+    expect(round.map((r) => r.action)).toEqual(['synced'])
     const rows = await getMessages(conv.id)
     expect(rows.map((r) => [r.role, r.text, r.answeredBy])).toEqual([
       ['user', 'remind me about the plants', undefined],

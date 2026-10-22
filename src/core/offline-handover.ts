@@ -437,7 +437,8 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
   const early = key ? lookupJournaled(key) : null;
   if (early) return ledgerHit(batch, record, early, { retryKey, taskId, callerSid, opName, letter });
   if (giveUpKeys(record, taskId).some((k) => batch.givenUp.has(k))) {
-    const what = (record.kind as string) === 'memory' ? 'memory document' : isNoteRecord(record) || (record.kind as string) === 'note-move' ? 'note' : 'task';
+    const what = (record.kind as string) === 'memory' ? 'memory document' : isNoteRecord(record) || (record.kind as string) === 'note-move' ? 'note'
+      : (record.kind as string) === 'conversation-edit' ? 'chat' : 'task';
     if (!(await letter('given-up', `an earlier change to this ${what} could not be applied, so this later one was not applied either`))) return 'stop';
     if (key) recordApplied(key, { outcome: 'given-up', detail: 'earlier record of the task given up', source: 'drain' });
     batch.result.failed++;
@@ -553,7 +554,9 @@ function isNoteRecord(record: OfflineRecord): boolean {
  * letter (a note record names no task).
  */
 function giveUpKeys(record: OfflineRecord, taskId: string | undefined): string[] {
-  const r = record as { path?: unknown; noteId?: unknown; doc?: unknown; from?: unknown; to?: unknown };
+  const r = record as { path?: unknown; noteId?: unknown; doc?: unknown; from?: unknown; to?: unknown; agentId?: unknown; conversationId?: unknown };
+  // A chat's later list changes wait behind one that could not be applied (4d).
+  if ((record.kind as string) === 'conversation-edit') return typeof r.conversationId === 'string' ? [`conversation:${String(r.agentId)}/${r.conversationId}`] : [];
   // A note move (4d) names both of its paths: a save at either waits behind it.
   if ((record.kind as string) === 'note-move') {
     return [

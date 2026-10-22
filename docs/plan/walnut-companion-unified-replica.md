@@ -400,8 +400,8 @@ goes at once).
   (`GET /api/v1/conversations/:id/messages`): the copy's rows and ids with
   `x-walnut-copy-as-of`, the turns the box answered itself on the tail until the copy
   names their turn id, an older page the copy holds whole, and `503
-  primary_unreachable` past what it holds. Before the copy, git's chat history, as
-  before; while the Mac answers, its answer.
+  primary_unreachable` past what it holds. Before the copy, git's chat history (until
+  4d); while the Mac answers, its answer.
 - **A chat turn** the box answers itself while the Mac does not answer
   (`routes/cloud-chat-fallback.ts`) still starts in the outbox, so the user's words
   survive a crash and a read during the turn shows them. When it ends and the Mac
@@ -421,10 +421,10 @@ goes at once).
 What 3e leaves:
 
 - The box's list edits (a chat made, renamed, pinned or deleted there) reach the Mac
-  only through git sync, as before. Before git sync stops writing the box's data dir
-  (4d), they need a journal kind of their own or a forwarded write.
+  only through git sync, as before. 4d makes them `conversation-edit` records (see
+  "4d, conversations and the chat lane").
 - The box's chat lane still seeds and catches up from git's chat history, not from
-  the bodies copy.
+  the bodies copy. 4d moves it onto the copy.
 - The list answer carries no `x-walnut-copy-as-of`, and the overlay of acked turns is
   in memory: a box restarted in the minutes between the ack and the next copy round
   shows such a turn only once the copy has it.
@@ -523,6 +523,72 @@ bulk uploads leave the bridge"). On correctness: a relay shows nothing while the
 away, which is when the box answers at all. The copy costs the box the files' size once
 (1.5 GB for the measured vault of 1,395 files) and one upload, after which only changed
 files go again.
+
+**4d, conversations and the chat lane.** Once the Mac drains `conversation-edit`, a chat
+made, renamed, pinned or deleted on the box, through the v1 routes or the console's, is
+one record (`journalConversationEdit`). `core/companion-conversations.ts` writes it
+before the box's own list, so a record the journal refuses answers needs-the-Mac and
+changes nothing. Only a person's rename is sent: the box's automatic titles are not, the
+Mac titles its own chats. A rename or a pin carries what the box showed (`base`: the
+copy's row with the box's changes on top). A record, not a forwarded write: these routes
+stay on the companion whoever answers (`v1-forward/policy.ts`, `chat`), the box shows
+the change at once, and the Mac's list keeps one writer, its own conversation calls. The
+record also asks the Mac to drain at once (`server.journal.due`), so while the Mac
+answers the change reaches it within a round trip. The Mac applies a record by op id
+(`offline-merge/apply-conversation-edit.ts`), and every step is a no-op when its result
+is already there:
+
+- a create lists the chat under the box's id, never as the active one, and is nothing
+  when the Mac lists it already (the chat relay made it);
+- a delete wins: the chat goes, and any later change of it is nothing; the main chat is
+  never deleted, so that one is kept and lettered;
+- a pin lands;
+- a rename lands, unless a person renamed the chat on the Mac since the title the box
+  showed (`titleSetAt` on the Mac's row, stamped by a person's rename, and with the
+  box's moment on a rename applied from a record): then the newer rename stays and the
+  other is in the letter, either way.
+
+The box shows each change while its record waits and, after the ack, until a copy round
+from after the ack (the Mac's clock) or 10 minutes; the ack is kept in the overlay file,
+so a restart in between keeps showing it. The title a chat was made with is no rename:
+the Mac's title shows once its list names the chat. An older Mac keeps the 3e path (the
+box's own list and git sync).
+
+The reads stop reading git's chat history on the box. `GET
+/api/v1/conversations/:id/messages` while the Mac does not answer: without a copy of the
+conversation, one with messages on the list answers `503 primary_unreachable` (an older
+page too: an empty page would tell the phone it reached the start), and one with none
+(made here) is the box's own turns. The console's `GET /api/chat/history` pages the
+copy's rows (a tool with its result, thinking, cards) with the box's own turns on the
+tail until the copy names them (`core/companion-conversation-rows.ts`); with no copy, a
+chat with messages answers needs-the-Mac (`chat_history_needs_mac`).
+
+A clear or a compaction on the box needs the Mac (`chat_changes_need_mac`), console and
+v1. A clear rewrites the Mac's conversation and retires its lane, which only the Mac can
+stop; a compaction rewrites a history the box holds only the tail of; neither merges with
+what the Mac did meanwhile, and a record would land out of order with the turns around
+it. The v1 routes go to the Mac while it answers, so they refuse only while it does not;
+the console's have no forward and refuse on the box always.
+
+The companion's chat lane seeds its mint and its catch-up from the bodies copy once that
+kind is held: the user's words and the answers, an answer the box gave stamped as the
+lane's own so it is never caught up again. The kind now carries the Mac's compaction
+summary and the newest turn time it covers (`summary`, `summaryAt`, counted in the 2 MB);
+the seed puts the summary ahead and leaves the rows it covers out, as the chat history's
+own seed does. A conversation the copy does not hold seeds nothing. Without a persona
+copy, the lane's skills index (the prompt's scope, never the CLI's own skills) and its
+standing memory come from the host replica copy when it is held.
+
+What 4d leaves for conversations:
+
+- Without the bodies copy (an older Mac, or the kind off) the lane still seeds from git's
+  chat history.
+- The lane's skills index names the Mac's skills, but the lane reads no skill from the
+  copy (its location says `(on the Mac)`; the lane has no skill tools).
+- `/api/chat/stats`, `/api/v1/chat/stats` and the triage read the box's own chat files,
+  and a console call with no `conversationId` resolves the active chat from the box's
+  own list.
+- The console's clear and compact refuse even while the Mac answers.
 
 A round runs after the notes, memory and skills rounds whenever the companion keeps notes
 (`hosts.companion.keep.attachments: false` turns it off; the notes' kept-back folders are

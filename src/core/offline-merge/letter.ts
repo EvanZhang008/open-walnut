@@ -62,6 +62,7 @@ function itemLine(e: ConflictEntry): string {
     case 'board': return `a Board edit conflicted; the Mac's page was kept: ${preview(e.reason)}.`;
     case 'note': return noteLine(e);
     case 'memory': return `${e.why === 'conflict' ? 'both sides changed the same lines; the newer change is in the document' : 'it could not be merged line by line; the newer version is the document'}, the other version is in the full entry.`;
+    case 'conversation': return `both sides renamed it; kept ${e.kept === 'replica' ? 'the name given while away' : 'the Mac\'s name'}. Mac: "${preview(e.mac)}"; while away: "${preview(e.replica)}".`;
   }
 }
 
@@ -109,7 +110,7 @@ export function buildConflictLetter(file: ConflictLogFile): ConflictLetter | nul
     const e = file.entries[i];
     const entryLink = conflictEntryLink(file.drainId, i);
     const target = e.taskId ? `[task ${e.taskId}](${taskLink(e.taskId)})` : e.boardTaskId ? `[Board of ${e.boardTaskId}](${taskLink(e.boardTaskId)})`
-      : e.notePath ? `[note ${e.notePath}](${noteLink(e.notePath)})` : memoryDocName(e) ?? 'a change';
+      : e.notePath ? `[note ${e.notePath}](${noteLink(e.notePath)})` : memoryDocName(e) ?? (e.recordKind === 'conversation-edit' ? 'a chat' : 'a change');
     const line = `- ${target}: ${itemLine(e)} [Full entry](${entryLink})\n`;
     if (Buffer.byteLength(body) + Buffer.byteLength(line) > LETTER_BODY_MAX - 200) break;
     body += line;

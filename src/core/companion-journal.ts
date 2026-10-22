@@ -21,7 +21,8 @@
  * texts as blobs: companion-chat-turns.ts), 4d `memory` (MEMORY.md or USER.md saved here:
  * companion-memory.ts), 4d `note-move` (a note moved or renamed here:
  * companion-note-paths.ts), 4d `note-attachment` (a picture pasted into a note here,
- * its bytes as a blob: companion-note-attachments.ts); the other queues are unchanged until their slice. A record carries no device actor
+ * its bytes as a blob: companion-note-attachments.ts), 4d `conversation-edit` (a chat
+ * made, renamed, pinned or deleted here: companion-conversations.ts); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -341,6 +342,29 @@ export function journalChatTurn(input: {
   return r
 }
 
+/**
+ * Save one list change of a chat made here (stage 4d): `conversation-edit`, applied on the
+ * Mac with its own conversation calls (offline-merge/apply-conversation-edit.ts). `base` is
+ * what this box showed before the change. Null when the Mac does not drain the kind: the
+ * change reaches it through the box's own list and git sync, as before.
+ */
+export function journalConversationEdit(input: {
+  agentId: string; conversationId: string; op: 'create' | 'rename' | 'pin' | 'delete'
+  title?: string; pinned?: boolean; base?: { title?: string; pinned?: boolean }
+}): AppendResult | null {
+  if (!macDrains('conversation-edit')) return null
+  const r = journalOf().append(COMPANION_JOURNAL_HOME, { kind: 'conversation-edit', ...input }, { limit: true, coalesce: false })
+  if (r.ok) {
+    log.agent.info('companion journal: saved a chat list change for the Mac', { agentId: input.agentId, conversationId: input.conversationId, op: input.op, opId: r.opId, seq: r.seq })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+    // The Mac drains it at once when it answers (one ask at a time).
+    void tellMacJournalDue('conversation-edit')
+  } else {
+    log.agent.error('companion journal: a chat list change was refused', { agentId: input.agentId, conversationId: input.conversationId, op: input.op, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
 /** Sessions a record still names (their queued patches wait behind them). */
 export function companionJournalSessionIds(): Set<string> {
   const out = new Set<string>()
@@ -454,6 +478,9 @@ export async function ackCompanionJournal(seqs: unknown, macNow?: unknown): Prom
   // A pasted picture the same way (4d): its bytes stay in the box's attachments copy, read before the ack frees them.
   const pictures = acked.filter((x) => x.kind === 'note-attachment')
   if (pictures.length) await (await import('./companion-attachment-copy.js')).companionAttachmentsAcked(pictures, at)
+  // A chat list change the same way, kept on disk (4d).
+  const chats = acked.filter((x) => x.kind === 'conversation-edit')
+  if (chats.length) await (await import('./companion-conversations.js')).companionConversationEditsAcked(chats, at)
   const r = journalOf().ack(COMPANION_JOURNAL_HOME, { seqs })
   if (r.error) return { ok: false, remaining: r.remaining, error: r.error }
   if (r.acked.length) {

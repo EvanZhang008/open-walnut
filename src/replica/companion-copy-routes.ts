@@ -30,7 +30,7 @@ import { companionMemoryAsOf, companionMemoryDoc, companionMemorySave, isMemoryD
 import { companionMemoryFiles, copyListMemories, copyMemoryBrowseTree, copyMemoryEntry } from '../core/companion-memory-files.js'
 import { isCompanion } from '../core/server-role.js'
 import { computeContentHash } from '../utils/file-ops.js'
-import { COMPANION_REPLICA_HOME, companionCopyHolds, companionHostReplica } from '../core/companion-host-replica.js'
+import { COMPANION_REPLICA_HOME, companionCopyHolds, companionCopySkills, companionHostReplica, parseCopySkill, type CopySkill } from '../core/companion-host-replica.js'
 import { LEGACY_SKILL_DIR_ALIASES } from '../core/skill-loader.js'
 import { log } from '../logging/index.js'
 import { needsLeaderAnswer, refusalAnswer, type PortAnswer } from './write-port.js'
@@ -141,35 +141,7 @@ function memoryDoc(flavor: Flavor, doc: MemoryDocName, read: boolean, req: Reque
 
 // ── skills ──
 
-type CopySkill = Record<string, unknown> & { dirName: string }
-
-function parseSkill(body: string): CopySkill | null {
-  try {
-    const s = JSON.parse(body) as CopySkill
-    // The Mac's file path means nothing here, and the copy does not carry it (core/host-replica.ts).
-    return s && typeof s.dirName === 'string' ? { ...s, location: '' } : null
-  } catch {
-    return null
-  }
-}
-
-/** Every skill of the copy, in the copy's key order (a key with a slash is a skill's reference file). */
-function copySkills(): CopySkill[] {
-  const r = companionHostReplica()
-  const list = r?.list(COMPANION_REPLICA_HOME, 'skills')
-  if (!r || !list) return []
-  const out: CopySkill[] = []
-  let want = list.entries.map((e) => e.k).filter((k) => !k.includes('/'))
-  while (want.length > 0) {
-    const got = r.readMany(COMPANION_REPLICA_HOME, 'skills', want, 8 * 1024 * 1024)
-    if (!got) break
-    for (const f of got.files) { const s = parseSkill(f.body); if (s) out.push(s) }
-    if (got.more.length >= want.length) break
-    want = got.more
-  }
-  return out
-}
-
+// The Mac's file path means nothing here, and the copy does not carry it (core/host-replica.ts).
 function copySkillKey(dirName: string): string | null {
   const r = companionHostReplica()
   if (r?.read(COMPANION_REPLICA_HOME, 'skills', dirName)) return dirName
@@ -180,7 +152,7 @@ function copySkillKey(dirName: string): string | null {
 function copySkill(dirName: string): CopySkill | null {
   const key = copySkillKey(dirName)
   const hit = key ? companionHostReplica()?.read(COMPANION_REPLICA_HOME, 'skills', key) : null
-  return hit ? parseSkill(hit.body) : null
+  return hit ? parseCopySkill(hit.body) : null
 }
 
 /** The path under the skills prefix (web: /api/skills; v1: /api/v1/skills), or null for another route. */
@@ -223,7 +195,7 @@ export function companionSkillRoutes(flavor: Flavor): RequestHandler {
     const parts = p.split('/').filter(Boolean).map((x) => { try { return decodeURIComponent(x) } catch { return x } })
     asOf(res, companionHostReplica()?.status(COMPANION_REPLICA_HOME).skills?.asOf)
     if (parts.length === 0) {
-      const skills = copySkills()
+      const skills = companionCopySkills()
       res.json({ skills: flavor === 'v1' ? skills.map(({ content: _content, ...rest }) => rest) : skills })
       return
     }
