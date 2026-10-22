@@ -84,7 +84,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
   } else {
     body = (
       <fieldset className="xfer-fields" disabled={busy}>
-        <Group label="Engine">
+        <Group label="Harness">
           {options.engines.map((e) => {
             const reason = blockedReason(options, e.id, form.host);
             return (
@@ -182,7 +182,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="xfer-head">
-          <div className="app-modal-title">Transfer to another engine or host</div>
+          <div className="app-modal-title">Transfer to another harness or host</div>
           <button type="button" className="xfer-close" onClick={onClose} aria-label="Close">×</button>
         </div>
         <div className="xfer-intro">

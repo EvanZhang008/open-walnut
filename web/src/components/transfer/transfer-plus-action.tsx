@@ -1,10 +1,10 @@
 /**
- * "Transfer…" in a session composer's "+" menu, beside "Engine settings": the
+ * "Transfer harness/host…" in a session composer's "+" menu, beside "Engine settings": the
  * same dialog as the task kebab's row (TransferMenuItem), for the task this
  * session belongs to. A window without the dialog host (a pop-out) has no row.
  */
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
-import { canOpenTransfer, openTransferDialog } from './transfer-events';
+import { canOpenTransfer, openTransferDialog, TRANSFER_LABEL } from './transfer-events';
 
 export const TRANSFER_PLUS_ACTION_ID = 'transfer';
 
@@ -18,8 +18,8 @@ export function transferPlusAction(taskId: string | undefined): PlusMenuAction |
   if (!taskId || !canOpenTransfer()) return null;
   return {
     id: TRANSFER_PLUS_ACTION_ID,
-    label: 'Transfer…',
-    title: "Move this task's work to another engine or host",
+    label: TRANSFER_LABEL,
+    title: "Move this task's work to another harness (engine) or host",
     icon: TRANSFER_ICON,
     onSelect: () => openTransferDialog(taskId),
   };

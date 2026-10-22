@@ -5,6 +5,9 @@
  */
 export const TRANSFER_OPEN_EVENT = 'transfer:open';
 
+/** The row's label everywhere it appears (task kebab, session ⋮, composer "+"). */
+export const TRANSFER_LABEL = 'Transfer harness/host…';
+
 let hosts = 0;
 
 /** TransferDialogHost registers itself; a window without one (a pop-out) shows no Transfer row. */

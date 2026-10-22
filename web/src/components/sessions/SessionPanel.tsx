@@ -1208,7 +1208,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // Read every render: the dialog host registers in an effect that may run after this panel's first render.
   const transferAvailable = canOpenTransfer();
   const composerPlusActions = useMemo<PlusMenuAction[] | undefined>(() => {
-    // "Transfer…" sits under "Engine settings": both are about where this work runs.
+    // "Transfer harness/host…" sits under "Engine settings": both are about where this work runs.
     const transfer = transferAvailable ? transferPlusAction(session?.taskId) : null;
     const rest = [
       ...(triggerPicker.action ? [triggerPicker.action] : []),
