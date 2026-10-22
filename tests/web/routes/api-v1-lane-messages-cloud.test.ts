@@ -91,6 +91,14 @@ async function getMessages(convId: string, qs = ''): Promise<V1Message[]> {
   return await res.json() as V1Message[]
 }
 
+async function getStatus(convId: string, qs = ''): Promise<{ status: number; code?: string; retry?: boolean }> {
+  const res = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages${qs}`), {
+    headers: { Authorization: `Bearer ${deviceToken}` },
+  })
+  const body = await res.json().catch(() => ({})) as { error?: { code?: string }; retry?: boolean }
+  return { status: res.status, code: body.error?.code, retry: body.retry }
+}
+
 /** What the primary would answer for a lane conversation: rows it already paged. */
 const LANE_ROWS: V1Message[] = [
   { id: 'm0', role: 'user', text: 'lane question one' },
@@ -164,24 +172,28 @@ describe('bridge up', () => {
     }
   }, 30_000)
 
-  it("falls back to local history when the primary does not know the conversation", async () => {
+  // Stage 4d of docs/plan/walnut-companion-unified-replica.md: a reply this box cannot use
+  // is the bridge down. Without the Mac's copy of the conversation, the chat history git
+  // sync wrote here is never read: a chat the list says has messages is 503, one with none
+  // (made here) is this box's own turns.
+  it("the primary does not know the conversation: git's chat history is never served", async () => {
     const primary = connectFakePrimary()
     primary.onControl = () => ({ ok: true, result: { messages: [], source: 'chat-history', known: false } })
     const conv = await createConversation('general')
     try {
+      expect(await getMessages(conv.id, '?limit=50')).toEqual([])
       await chatHistory.addUserMessage('typed on the phone', {
         displayText: 'typed on the phone', agentId: 'general', conversationId: conv.id,
       })
-      const msgs = await getMessages(conv.id, '?limit=50')
-      expect(msgs.map((m) => m.text)).toEqual(['typed on the phone'])
+      expect(await getStatus(conv.id, '?limit=50')).toEqual({ status: 503, code: 'primary_unreachable', retry: true })
     } finally {
       primary.close()
     }
   }, 30_000)
 
-  it('falls back to local history when the primary is too old to know the action', async () => {
+  it('the primary is too old to know the action: a 503, not a 500, and one uplink', async () => {
     const primary = connectFakePrimary()
-    // Verbatim shape of an older daemon's refusal — this is what makes
+    // Verbatim shape of an older daemon's refusal: this is what makes
     // callPrimaryControl report `needs_upgrade`, and it must degrade, not 500.
     primary.onControl = () => ({ error: 'Unknown control action: server.chat.messages' })
     const conv = await createConversation('general')
@@ -189,15 +201,14 @@ describe('bridge up', () => {
       await chatHistory.addUserMessage('question on an old primary', {
         displayText: 'question on an old primary', agentId: 'general', conversationId: conv.id,
       })
-      const msgs = await getMessages(conv.id, '?limit=50')
-      expect(msgs.map((m) => m.text)).toEqual(['question on an old primary'])
+      expect(await getStatus(conv.id, '?limit=50')).toEqual({ status: 503, code: 'primary_unreachable', retry: true })
       expect(primary.controlFrames('server.chat.messages')).toHaveLength(1)
     } finally {
       primary.close()
     }
   }, 30_000)
 
-  it('falls back to local history when the reply is not the expected shape', async () => {
+  it('the reply is not the expected shape: never handed to the phone', async () => {
     const primary = connectFakePrimary()
     // `messages` is not an array: a truthy-but-wrong body must never be handed to
     // the phone, because res.json would ship it straight through the frozen v1
@@ -208,8 +219,7 @@ describe('bridge up', () => {
       await chatHistory.addUserMessage('question with a broken reply', {
         displayText: 'question with a broken reply', agentId: 'general', conversationId: conv.id,
       })
-      const msgs = await getMessages(conv.id, '?limit=50')
-      expect(msgs.map((m) => m.text)).toEqual(['question with a broken reply'])
+      expect(await getStatus(conv.id, '?limit=50')).toEqual({ status: 503, code: 'primary_unreachable', retry: true })
     } finally {
       primary.close()
     }
@@ -217,8 +227,8 @@ describe('bridge up', () => {
 })
 
 describe('bridge down', () => {
-  it("serves this box's git-synced chat history instead of hanging or erroring", async () => {
-    // No bridge attached at all — callPrimaryControl fails fast (bridge_offline).
+  it("never answers from this box's git-synced chat history", async () => {
+    // No bridge attached at all: callPrimaryControl fails fast (bridge_offline).
     const conv = await createConversation('general')
     await chatHistory.addUserMessage('offline question', {
       displayText: 'offline question', agentId: 'general', conversationId: conv.id,
@@ -227,18 +237,12 @@ describe('bridge down', () => {
       [{ role: 'assistant', content: [{ type: 'text', text: 'offline answer' }] }] as never,
       { agentId: 'general', conversationId: conv.id },
     )
-
-    const msgs = await getMessages(conv.id, '?limit=50')
-    expect(msgs).toEqual([
-      { id: 'm0', role: 'user', text: 'offline question', createdAt: expect.any(String) },
-      { id: 'm1', role: 'assistant', text: 'offline answer', createdAt: expect.any(String) },
-    ])
+    expect(await getStatus(conv.id, '?limit=50')).toEqual({ status: 503, code: 'primary_unreachable', retry: true })
   }, 30_000)
 
   it('says so instead of answering an empty conversation the index says has messages', async () => {
-    // The git-synced index proves this conversation HAS turns; the only reason the
-    // local store is empty is that they live in the primary's lane transcript, and
-    // 200 [] would tell the phone "this chat is empty" — which is what it paints,
+    // The index proves this conversation HAS turns; this box holds none of them,
+    // and 200 [] would tell the phone "this chat is empty", which is what it paints,
     // wiping whatever it had. A thrown error leaves its rows alone and retries.
     const conv = await createConversation('general')
     const indexPath = conversationIndexFile('general')
@@ -247,21 +251,9 @@ describe('bridge down', () => {
     }
     index.conversations.find((c) => c.id === conv.id)!.messageCount = 11
     await fs.writeFile(indexPath, JSON.stringify(index))
-
-    const res = await fetch(apiUrl(`/api/v1/conversations/${conv.id}/messages?limit=50`), {
-      headers: { Authorization: `Bearer ${deviceToken}` },
-    })
-    expect(res.status).toBe(503)
-    const body = await res.json() as { error: { code: string }; retry?: boolean }
-    expect(body.error.code).toBe('primary_unreachable')
-    expect(body.retry).toBe(true)
-
-    // A page request (before=) is NOT turned into an error: the client is asking
-    // for more of a list it already has, and a short page is the honest answer.
-    const paged = await fetch(apiUrl(`/api/v1/conversations/${conv.id}/messages?limit=50&before=m4`), {
-      headers: { Authorization: `Bearer ${deviceToken}` },
-    })
-    expect(paged.status).toBe(200)
-    expect(await paged.json()).toEqual([])
+    expect(await getStatus(conv.id, '?limit=50')).toEqual({ status: 503, code: 'primary_unreachable', retry: true })
+    // An older page too: [] would tell the phone it reached the start (the Mac's copy
+    // answers a page past what it holds the same way, stage 3e).
+    expect(await getStatus(conv.id, '?limit=50&before=m4')).toEqual({ status: 503, code: 'primary_unreachable', retry: true })
   }, 30_000)
 })

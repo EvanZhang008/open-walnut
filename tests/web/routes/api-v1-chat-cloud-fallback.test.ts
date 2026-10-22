@@ -646,8 +646,8 @@ describe('reads and the hand-over to the primary', () => {
       ['m1', 'assistant', 'Cloud answer.'],
     ])
 
-    // The adopted turn arrives back by git-sync before this box deleted its
-    // entry: the synced copy wins, and the turn still shows exactly once.
+    // A file git sync once wrote here holding the turn too: never read (stage 4d),
+    // so the turn still shows exactly once, from the outbox.
     const [entry] = await listCloudTurns({ conversationId: conv.id })
     await fs.writeFile(conversationFile('general', conv.id), JSON.stringify({
       version: 2, lastUpdated: new Date().toISOString(), compactionCount: 0, compactionSummary: null,
@@ -662,37 +662,19 @@ describe('reads and the hand-over to the primary', () => {
     expect((await getMessages(conv.id)).map((r) => r.text)).toEqual(['banked question', 'Cloud answer.'])
   }, 60_000)
 
-  it('relay down on a phone-driven lane conversation: synced rows and banked rows merge by time, once each', async () => {
+  it('relay down on a phone-driven lane conversation with no copy of it: 503, git\'s chat history is never read', async () => {
+    // Stage 4d: git sync stops writing this box, so the file it wrote is never an answer.
+    // The Mac's copy of the conversation carries its rows and this turn on the tail
+    // (companion-chat-cloud.test.ts); without it, the phone keeps what it has.
     const conv = await createConversation('general')
     await persistPrimaryTurn(conv.id, 'earlier phone question', 'earlier mac answer', { macLaneSid: crypto.randomUUID() })
-    const turnId = await answerOneTurn(conv.id, 'asked while the mac slept')
-    const expected = [
-      ['m0', 'user', 'earlier phone question'], ['m1', 'assistant', 'earlier mac answer'],
-      ['m2', 'user', 'asked while the mac slept'], ['m3', 'assistant', 'Cloud answer.'],
-    ]
-    expect((await getMessages(conv.id)).map((r) => [r.id, r.role, r.text])).toEqual(expected)
-
-    // The primary adopts the turn and git-sync brings its file back BEFORE this
-    // box deleted the entry: the synced copy and the outbox both hold it, and
-    // turnId keeps it to one appearance. (The primary's own writer, same shape.)
-    const [entry] = await listCloudTurns({ conversationId: conv.id })
-    expect(await chatHistory.adoptCloudTurn({
-      agentId: 'general', conversationId: conv.id, turnId, userText: entry.userText, userAt: entry.userAt,
-      answerText: entry.answerText, answeredAt: entry.answeredAt, engine: entry.engine!,
-    })).toBe('adopted')
-    expect((await getMessages(conv.id)).map((r) => [r.id, r.role, r.text])).toEqual(expected)
-
-    // Then the hand-over deletes the entry; the synced copy alone still shows it.
-    relayOverride.fn = (action) => (action === 'server.chat.messages' ? NOT_SENT : undefined)
-    const primary = connectFakePrimary((frame) => (frame.action === 'server.chat.adopt'
-      ? { ok: true, result: { turnId: frame.params?.turnId, adopted: false, duplicate: true } }
-      : { ok: false, error: `Unknown control action: ${frame.action}` }))
-    try {
-      await until(async () => (await listCloudTurns({ conversationId: conv.id })).length === 0)
-    } finally {
-      primary.close()
-    }
-    expect((await getMessages(conv.id)).map((r) => [r.id, r.role, r.text])).toEqual(expected)
+    await answerOneTurn(conv.id, 'asked while the mac slept')
+    const res = await fetch(apiUrl(`/api/v1/conversations/${conv.id}/messages`), {
+      headers: { Authorization: `Bearer ${deviceToken}` },
+    })
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('primary_unreachable')
+    expect(await listCloudTurns({ conversationId: conv.id })).toHaveLength(1)
   }, 60_000)
 
   it('relay down on a conversation driven from a Mac session panel: banked rows never stand in for its history', async () => {

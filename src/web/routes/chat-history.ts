@@ -5,6 +5,10 @@
  * GET  /api/chat/stats    — real conversation stats (API msg count + tokens)
  * POST /api/chat/clear    — clear entire conversation
  * POST /api/chat/compact  — force smart compaction
+ *
+ * On the cloud companion (stage 4d of docs/plan/walnut-companion-unified-replica.md) the
+ * history is the Mac's copy (core/companion-conversation-rows.ts), never the file git sync
+ * wrote here, and a clear or a compaction needs the Mac (companionChatChangeRefusal).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -15,6 +19,8 @@ import { getContextWindowSize } from '../../model/model.js'
 import { getLastTurnTokens } from '../agent-turn-queue.js'
 import { log } from '../../logging/index.js'
 import { isCompactionInProgress, triggerBackgroundCompaction } from '../background-compaction.js'
+import { isCompanion } from '../../core/server-role.js'
+import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const chatHistoryRouter = Router()
 
@@ -110,12 +116,32 @@ export async function computeChatStats(
   return result
 }
 
+/**
+ * On the cloud companion: a clear or a compaction rewrites the Mac's conversation (and a
+ * clear retires the Mac's lane, which only the Mac can stop), and neither merges with what
+ * the Mac did since, so it waits for the Mac. The phone's v1 routes reach the Mac while it
+ * answers; this box's own routes never write the file git sync used to carry.
+ */
+export function companionChatChangeRefusal(): NeedsLeaderError | null {
+  return isCompanion() ? new NeedsLeaderError('chat_changes_need_mac', 'Clearing or compacting a chat is done on your Mac, which is not answering right now.') : null
+}
+
 // GET /api/chat/history?page=1&pageSize=100&agentId=general
 chatHistoryRouter.get('/history', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const page = req.query.page ? parseInt(req.query.page as string, 10) : 1
     const pageSize = req.query.pageSize ? parseInt(req.query.pageSize as string, 10) : 100
     const { agentId, conversationId } = await resolveChatRef(req)
+    if (isCompanion()) {
+      // The Mac's copy, this box's own turns on the tail; a chat the copy does not hold needs the Mac.
+      const { listConversations } = await import('../../core/conversations.js')
+      const meta = (await listConversations(agentId ?? 'general')).find((c) => c.id === conversationId)
+      const { companionChatHistoryPage } = await import('../../core/companion-conversation-rows.js')
+      const copied = await companionChatHistoryPage(agentId ?? 'general', conversationId, page, pageSize, meta?.messageCount ?? 0)
+      if (!copied) throw new NeedsLeaderError('chat_history_needs_mac')
+      res.json(copied)
+      return
+    }
     const result = await chatHistory.getDisplayEntries(page, pageSize, agentId, conversationId)
     res.json(result)
   } catch (err) {
@@ -153,6 +179,8 @@ chatHistoryRouter.get('/triage', async (req: Request, res: Response, next: NextF
 // so a user clearing for privacy would not actually have forgotten anything.
 chatHistoryRouter.post('/clear', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const refused = companionChatChangeRefusal()
+    if (refused) throw refused
     const { agentId, conversationId } = await resolveChatRef(req)
     await chatHistory.clear(agentId, conversationId)
     const { archiveLaneForConversation } = await import('../../core/sessions/personal-ai-lane.js')
@@ -167,6 +195,8 @@ chatHistoryRouter.post('/clear', async (req: Request, res: Response, next: NextF
 // POST /api/chat/compact?agentId=general&conversationId=conv-... — fire-and-forget background compaction
 chatHistoryRouter.post('/compact', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const refused = companionChatChangeRefusal()
+    if (refused) throw refused
     const { agentId, conversationId } = await resolveChatRef(req)
     if (isCompactionInProgress(agentId, conversationId)) {
       res.json({ ok: true, alreadyRunning: true })

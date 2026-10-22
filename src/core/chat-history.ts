@@ -536,9 +536,17 @@ export async function getDisplayEntries(
   conversationId?: string,
 ): Promise<PaginatedEntries> {
   const store = await readStore(agentId, conversationId);
+  return pageDisplayEntries(store.entries ?? [], page, pageSize);
+}
+
+/**
+ * One page of display entries out of `entries` (getDisplayEntries' paging, for any
+ * list of entries: the cloud companion pages its copy of a conversation with it).
+ */
+export function pageDisplayEntries(entries: ChatEntry[], page = 1, pageSize = 100): PaginatedEntries {
   // Keep legacy error entries on disk for model context/forensics, but exclude
   // them before pagination so they neither render nor consume chat page slots.
-  const allEntries = (store.entries ?? []).filter((entry) => !isNotificationOnlyError(entry));
+  const allEntries = entries.filter((entry) => !isNotificationOnlyError(entry));
 
   // Build an index of logical message positions
   const logicalIndices: number[] = [];
@@ -1613,9 +1621,9 @@ function renderSeed(
 export async function buildConversationSeed(
   agentId: string,
   conversationId: string,
-  opts?: { maxTokens?: number; maxBytes?: number },
+  opts?: { maxTokens?: number; maxBytes?: number; source?: SeedSource },
 ): Promise<ConversationSeed> {
-  const store = await readStore(agentId, conversationId);
+  const store = opts?.source ? await opts.source() : await readStore(agentId, conversationId);
   return renderSeed(
     collectSeedTurns(store.entries ?? []),
     store.compactionSummary,
@@ -1661,7 +1669,17 @@ export function clipRenderedSeed(seed: string, maxBytes: number): string {
   return clipToBytes(render(kept), maxBytes);
 }
 
+/** The entries and summary a seed is rendered from: the conversation's store by default. */
+export interface SeedStore { entries?: ChatEntry[]; compactionSummary: string | null }
+/**
+ * Another place to read them from: the cloud companion's chat lane reads the Mac's copy
+ * of the conversation (companion-conversation-rows.ts), not the chat history git wrote.
+ */
+export type SeedSource = () => Promise<SeedStore>;
+
 export interface LaneCatchUpInput {
+  /** Where the conversation is read (absent: this box's chat history store). */
+  source?: SeedSource;
   agentId: string;
   conversationId: string;
   /** laneEngineLabel(sessionId) of the lane about to be sent to. */
@@ -1754,7 +1772,7 @@ export interface LaneCatchUpInput {
  */
 export async function buildLaneCatchUp(input: LaneCatchUpInput): Promise<ConversationSeed | null> {
   const { agentId, conversationId, laneLabel, seededAtMint } = input;
-  const store = await readStore(agentId, conversationId) as LaneSeenStore;
+  const store = (input.source ? await input.source() : await readStore(agentId, conversationId)) as LaneSeenStore;
   const watermark = input.readMark ? await input.readMark() : store.laneSeen?.[laneLabel];
   const turns = collectSeedTurns(store.entries ?? []);
   if (turns.length === 0) return null;

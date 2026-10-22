@@ -367,10 +367,11 @@ describe('runOfflineHandover over journal v2', () => {
     const drain = d.calls.find((c) => c.cmd === 'offline.drain')!
     // `note`: a note written while this Mac was away (WP11); `session`: a new ask a host
     // started while this Mac was away (WP12, apply-session.ts); `session-meta`,
-    // `inbox-state`, `chat-turn`, `memory`, `note-move`, `note-attachment`: the cloud
-    // companion's (apply-session-meta.ts, apply-inbox-state.ts, apply-chat-turn.ts,
-    // apply-memory.ts, apply-note-move.ts, apply-note-attachment.ts).
-    expect(drain.params).toEqual({ home: WALNUT_HOME, kinds: ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment'] })
+    // `inbox-state`, `chat-turn`, `memory`, `note-move`, `note-attachment`,
+    // `conversation-edit`: the cloud companion's (apply-session-meta.ts,
+    // apply-inbox-state.ts, apply-chat-turn.ts, apply-memory.ts, apply-note-move.ts,
+    // apply-note-attachment.ts, apply-conversation-edit.ts).
+    expect(drain.params).toEqual({ home: WALNUT_HOME, kinds: ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit'] })
     // `now`: the Mac's clock as it acks (a host replica's overlay compares a manifest's asOf on it).
     expect(d.calls.filter((c) => c.cmd === 'offline.ack').map((c) => c.params)).toEqual([{ home: WALNUT_HOME, seqs: [1, 2], now: expect.any(Number) }])
     expect(d.pending.size).toBe(0)

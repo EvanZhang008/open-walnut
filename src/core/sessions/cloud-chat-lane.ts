@@ -21,13 +21,15 @@
  *     `cache/`, never in the conversation file (one writer: the primary).
  *
  * The conversation's history is still the context: the mint seeds the spawn
- * profile from the companion's synced copy of the conversation (buildLaneProfile),
- * and each later send prepends the turns the Mac answered since (buildLaneCatchUp
- * with this lane's own label and mark). That copy holds EVERY entry the primary
- * persisted: phone turns (the user row plus the `lane:<sid>` answer) and the web
- * chat's compat copies (answer unstamped), all foreign to this lane. What it does
- * not hold is a turn typed into a session panel on the Mac (the Ask Walnut slot):
- * that sender only bumps the index, and the turn lives in the Mac's CLI transcript.
+ * profile from the companion's copy of the conversation (buildLaneProfile), and each
+ * later send prepends the turns the Mac answered since (buildLaneCatchUp with this
+ * lane's own label and mark). Since stage 4d that copy is the Mac's
+ * `conversation-bodies` copy kind once held (companion-conversation-rows.ts: the
+ * phone's rows, the lane's turns and the Mac's compaction summary included); before,
+ * the chat history git sync wrote, which holds every entry the primary persisted but
+ * not a turn typed into a session panel on the Mac (that one lives in the Mac's CLI
+ * transcript). Without a persona copy, the skills index and the standing memory come
+ * from the Mac's copies too when held (laneCopyContext).
  */
 
 import crypto from 'node:crypto';
@@ -180,6 +182,36 @@ export function toCloudChatProfile(profile: SessionProfile, seedHeader: string):
   return out;
 }
 
+/**
+ * Stage 4d, for a lane with no persona copy: the skills index and the standing memory
+ * from the Mac's copies when this box holds them (companion-host-replica.ts), so the lane
+ * never reads the files git sync wrote here. A copy not held leaves its field to
+ * buildLaneProfile, which reads this box's files as before. A skill's SKILL.md is on the
+ * Mac: the lane cannot read it, so its location says so.
+ */
+async function laneCopyContext(): Promise<{ skillsIndex?: string; memoryContext?: string }> {
+  const { companionCopyHolds, companionCopySkills } = await import('../companion-host-replica.js');
+  const out: { skillsIndex?: string; memoryContext?: string } = {};
+  const text = (v: unknown): string => (typeof v === 'string' ? v : '');
+  if (companionCopyHolds('skills')) {
+    const { formatSessionSkillsPrompt } = await import('../skill-loader.js');
+    // The prompt's own scope (skill-loader.ts getPromptSearchDirs): never the CLI's store.
+    out.skillsIndex = formatSessionSkillsPrompt(companionCopySkills()
+      .filter((s) => s.source !== 'claude' && s.enabled !== false && s.eligible !== false)
+      .map((s) => ({
+        name: text(s.name) || s.dirName, description: text(s.description), location: '(on the Mac)',
+        category: text(s.category) || 'general', type: s.type === 'knowledge' ? 'knowledge' as const : 'action' as const,
+        ...(s.metadata && typeof s.metadata === 'object' ? { metadata: s.metadata as Record<string, unknown> } : {}),
+      })));
+  }
+  if (companionCopyHolds('memory')) {
+    const { companionMemoryDoc } = await import('../companion-memory.js');
+    const { laneMemoryContextOf } = await import('./personal-ai-lane.js');
+    out.memoryContext = laneMemoryContextOf(text(companionMemoryDoc('global')?.content).trim(), text(companionMemoryDoc('user')?.content).trim());
+  }
+  return out;
+}
+
 // ── Sidecar marks ──
 
 type MarksFile = Record<string, { mark: string; lane: string; updatedAt: string }>;
@@ -255,18 +287,23 @@ async function resolveCloudChatLane(
   const config = await getConfig();
   const { buildLaneProfile } = await import('./personal-ai-lane.js');
   const {
-    CONVERSATION_SEED_HEADER, CATCH_UP_BANNER_OPEN, CATCH_UP_BANNER_CLOSE, buildConversationSeed,
+    CONVERSATION_SEED_HEADER, CATCH_UP_BANNER_OPEN, CATCH_UP_BANNER_CLOSE, buildConversationSeed, cloudEngineLabel,
   } = await import('../chat-history.js');
-  // The seed is read from THIS box's synced copy of the conversation: read-only,
-  // and the only history the companion has while the primary is unreachable.
+  const sessionId = crypto.randomUUID();
+  // The seed is read from THIS box's copy of the conversation: read-only, and the
+  // only history the companion has while the primary is unreachable (the Mac's
+  // copy once held, stage 4d; before, the chat history git sync wrote).
+  const { companionSeedSource } = await import('../companion-conversation-rows.js');
+  const source = await companionSeedSource(agentId, conversationId, cloudEngineLabel(sessionId)).catch(() => null);
   // The persona as the Mac renders it, when this box holds the copy (stage 2a of
   // docs/plan/walnut-companion-unified-replica.md): an agent the Mac's config
   // defines, and the Mac's memory in the prompt. Without one, this box renders it.
   const { readPersonaCopy } = await import('../replication/kinds/personas.js');
   const persona = await readPersonaCopy(agentId).catch(() => null);
-  const { profile: base, effort, seed } = await buildLaneProfile(config, agentId, { conversationId, ...(persona ? { persona } : {}) });
+  const { profile: base, effort, seed } = await buildLaneProfile(config, agentId, {
+    conversationId, ...(persona ? { persona } : await laneCopyContext()), ...(source ? { seedSource: source } : {}),
+  });
   const profile = toCloudChatProfile(base, CONVERSATION_SEED_HEADER);
-  const sessionId = crypto.randomUUID();
 
   // Same two carriers as the primary lane: the profile when the recap fits the
   // argv, otherwise the first message (stdin has no ceiling).
@@ -274,7 +311,7 @@ async function resolveCloudChatLane(
   let message = firstMessage;
   let mark: string | null = seedInProfile ? (seed?.watermark ?? '') : null;
   if (!seedInProfile && firstMessage) {
-    const recap = await buildConversationSeed(agentId, conversationId).catch(() => null);
+    const recap = await buildConversationSeed(agentId, conversationId, source ? { source } : undefined).catch(() => null);
     if (recap?.text) {
       message = `${CATCH_UP_BANNER_OPEN}\n${recap.text}\n${CATCH_UP_BANNER_CLOSE}\n\n${firstMessage}`;
       mark = recap.watermark;
@@ -336,11 +373,13 @@ export async function cloudChatLaneCatchUp(
       buildLaneCatchUp, cloudEngineLabel, CONVERSATION_SEED_HEADER, CATCH_UP_BANNER_OPEN, CATCH_UP_BANNER_CLOSE,
     } = await import('../chat-history.js');
     const lane = cloudChatLaneKey(agentId, conversationId);
+    const { companionSeedSource } = await import('../companion-conversation-rows.js');
+    const source = await companionSeedSource(agentId, conversationId, cloudEngineLabel(sessionId));
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     let recordOnce: Promise<{ profile?: { systemPrompt?: string }; startedAt?: string } | null> | undefined;
     const record = () => (recordOnce ??= getSessionByClaudeId(sessionId).catch(() => null));
     const catchUp = await buildLaneCatchUp({
-      agentId, conversationId,
+      agentId, conversationId, ...(source ? { source } : {}),
       laneLabel: cloudEngineLabel(sessionId),
       readMark: () => readCloudLaneMark(sessionId),
       seededAtMint: async () => !!(await record())?.profile?.systemPrompt?.includes(CONVERSATION_SEED_HEADER),

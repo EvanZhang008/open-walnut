@@ -518,6 +518,43 @@ export async function ensureConversationRow(
   }
 }
 
+/**
+ * A chat made on the cloud companion, with the id the box minted (the Mac's side of a
+ * `conversation-edit` create, offline-merge/apply-conversation-edit.ts). Never the
+ * active one, and main only when the agent has none. Null when the id is already listed
+ * (the chat relay ensured it, or a redrain).
+ */
+export async function adoptConversationRow(
+  agentId: string,
+  conversationId: string,
+  row: { title: string; createdAt: string },
+): Promise<ConversationMeta | null> {
+  validateConversationId(conversationId);
+  await migrateIfNeeded(agentId);
+  return withIndexLock(agentId, async () => {
+    const index = await readIndex(agentId);
+    if (index.conversations.some((c) => c.id === conversationId)) return null;
+    // A file already there (an adopted turn's) is kept: it holds the chat.
+    const file = conversationFile(agentId, conversationId);
+    if (!(await fsp.stat(file).catch(() => null))) await writeJsonFile(file, freshStore());
+    const meta: ConversationMeta = {
+      id: conversationId,
+      agentId,
+      title: row.title.trim().slice(0, MAX_TITLE_LEN) || 'New Conversation',
+      createdAt: row.createdAt,
+      lastMessageAt: row.createdAt,
+      messageCount: 0,
+      ...(index.conversations.some((c) => c.isMain) ? {} : { isMain: true }),
+      lastDistilledAt: null,
+      lastDistilledMessageCount: 0,
+    };
+    index.conversations.push(meta);
+    await writeIndex(agentId, index);
+    log.agent.info('conversation made on the cloud companion is here', { agentId, conversationId });
+    return meta;
+  });
+}
+
 /** The active conversation id for an agent (guaranteed non-null after migrate). */
 export async function getActiveConversationId(agentId: string): Promise<string> {
   if (isHostReplicaProgram()) {
@@ -642,8 +679,6 @@ export async function createConversation(agentId: string, title?: string): Promi
     const index = await readIndex(agentId);
     const newId = newConversationId();
     const now = new Date().toISOString();
-    // Write an empty store for the new conversation.
-    await writeJsonFile(conversationFile(agentId, newId), freshStore());
     const meta: ConversationMeta = {
       id: newId,
       agentId,
@@ -657,11 +692,14 @@ export async function createConversation(agentId: string, title?: string): Promi
       lastDistilledAt: null,
       lastDistilledMessageCount: 0,
     };
+    // On the companion the Mac's record comes first: a refused one makes nothing here.
+    await noteBoxEdit(agentId, newId, { created: true, title: meta.title });
+    // Write an empty store for the new conversation.
+    await writeJsonFile(conversationFile(agentId, newId), freshStore());
     index.conversations.push(meta);
     index.activeConversationId = newId;
     await writeIndex(agentId, index);
     log.agent.info('conversation created', { agentId, conversationId: newId });
-    await noteBoxEdit(agentId, newId, { created: true });
     return meta;
   });
 }
@@ -680,13 +718,18 @@ async function withCopiedRow(agentId: string, index: ConversationIndex, conversa
 }
 
 /**
- * On the cloud companion, a change to the box's own list is shown over the Mac's copy
- * until the copy carries it (companion-conversations.ts). A no-op anywhere else.
+ * On the cloud companion, a person's change to the list: a `conversation-edit` record for
+ * the Mac (once it drains the kind), shown over the Mac's copy until the copy carries it
+ * (companion-conversations.ts). Called before the box's own write, so a change the
+ * journal refuses throws and is not made here either. `own`: the box's row before it.
+ * A no-op anywhere else.
  */
-async function noteBoxEdit(agentId: string, id: string, change: { created?: true; deleted?: true; title?: string; pinned?: boolean }): Promise<void> {
+async function noteBoxEdit(
+  agentId: string, id: string, change: { created?: true; deleted?: true; title?: string; pinned?: boolean }, own?: ConversationMeta,
+): Promise<void> {
   if (followerKind() !== 'companion') return;
   const { noteBoxConversationEdit } = await import('./companion-conversations.js');
-  await noteBoxConversationEdit(agentId, id, change);
+  await noteBoxConversationEdit(agentId, id, change, own ? { ...own } : undefined);
 }
 
 /**
@@ -719,6 +762,7 @@ export async function deleteConversation(agentId: string, conversationId: string
       return;
     }
 
+    await noteBoxEdit(agentId, conversationId, { deleted: true }, target);
     // Remove the conversation file (best-effort).
     await fsp.unlink(conversationFile(agentId, conversationId)).catch(() => {});
 
@@ -764,7 +808,6 @@ export async function deleteConversation(agentId: string, conversationId: string
 
     await writeIndex(agentId, index);
     log.agent.info('conversation deleted', { agentId, conversationId, activeConversationId: index.activeConversationId });
-    await noteBoxEdit(agentId, conversationId, { deleted: true });
     if (target?.askTaskId) askLink((m) => m.conversationDeleted(agentId, conversationId, target.askTaskId!));
   });
 }
@@ -871,8 +914,9 @@ export async function renameConversation(
   agentId: string,
   conversationId: string,
   title: string,
-  /** `fromAsk`: the ask's own title is being copied here, so it is not copied back. */
-  opts?: { auto?: boolean; fromAsk?: boolean },
+  /** `fromAsk`: the ask's own title is being copied here, so it is not copied back.
+   *  `at`: when the person renamed it (a rename made on the companion, applied later). */
+  opts?: { auto?: boolean; fromAsk?: boolean; at?: string },
 ): Promise<ConversationMeta> {
   validateConversationId(conversationId);
   await migrateIfNeeded(agentId);
@@ -892,15 +936,19 @@ export async function renameConversation(
     }
     before = meta.title;
     beforeFromAsk = meta.titleFromAsk === true;
-    meta.title = title.trim().slice(0, MAX_TITLE_LEN) || meta.title;
+    const next = title.trim().slice(0, MAX_TITLE_LEN) || meta.title;
+    const byPerson = !opts?.auto && !opts?.fromAsk;
+    // Only a person's rename goes to the Mac: it titles its own chats itself.
+    if (byPerson) await noteBoxEdit(agentId, conversationId, { title: next }, meta);
+    meta.title = next;
     meta.titleAutoGenerated = true;
+    if (byPerson) meta.titleSetAt = opts?.at ?? new Date().toISOString();
     if (opts?.fromAsk) meta.titleFromAsk = true;
     else delete meta.titleFromAsk;
     await writeIndex(agentId, index);
     return meta;
   });
   if (lostRace) return renamed;
-  await noteBoxEdit(agentId, conversationId, { title: renamed.title });
   if (!opts?.fromAsk) noteTitleChange(renamed, before, opts?.auto ? 'auto' : 'user', beforeFromAsk);
   return renamed;
 }
@@ -979,9 +1027,9 @@ export async function setPinned(agentId: string, conversationId: string, pinned:
     await withCopiedRow(agentId, index, conversationId);
     const meta = collapseTwinsForWrite(index, conversationId);
     if (!meta) throw new Error(`Conversation not found: ${conversationId}`);
+    await noteBoxEdit(agentId, conversationId, { pinned }, meta);
     meta.pinned = pinned;
     await writeIndex(agentId, index);
-    await noteBoxEdit(agentId, conversationId, { pinned });
     return meta;
   });
 }

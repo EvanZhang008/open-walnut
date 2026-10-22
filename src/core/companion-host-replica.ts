@@ -93,6 +93,37 @@ export function companionHostReplicaCommand(cmd: unknown, params: Record<string,
   }
 }
 
+/** One skill of the copy: the Mac's skill list row (skill-store.ts SkillInfo, no file path). */
+export type CopySkill = Record<string, unknown> & { dirName: string }
+
+/** A skill doc of the copy, or null. Its path is the Mac's and means nothing here: `location` is ''. */
+export function parseCopySkill(body: string): CopySkill | null {
+  try {
+    const s = JSON.parse(body) as CopySkill
+    return s && typeof s.dirName === 'string' ? { ...s, location: '' } : null
+  } catch {
+    return null
+  }
+}
+
+/** Every skill of the copy, in the copy's key order (none when no copy is held). */
+export function companionCopySkills(): CopySkill[] {
+  const r = companionHostReplica()
+  const list = r?.list(COMPANION_REPLICA_HOME, 'skills')
+  if (!r || !list) return []
+  const out: CopySkill[] = []
+  // A key with a slash is a skill's reference file, not a skill.
+  let want = list.entries.map((e) => e.k).filter((k) => !k.includes('/'))
+  while (want.length > 0) {
+    const got = r.readMany(COMPANION_REPLICA_HOME, 'skills', want, 8 * 1024 * 1024)
+    if (!got) break
+    for (const f of got.files) { const s = parseCopySkill(f.body); if (s) out.push(s) }
+    if (got.more.length >= want.length) break
+    want = got.more
+  }
+  return out
+}
+
 /** Tests: a fresh copy object over the files on disk. */
 export function _resetCompanionHostReplicaForTesting(): void {
   replica = null

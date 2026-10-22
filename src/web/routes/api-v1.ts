@@ -1422,16 +1422,25 @@ export async function handlePrimaryChatMessagesRelay(
 export async function conversationMessagesForCopy(
   agentId: string,
   conversationId: string,
-): Promise<{ messages: ApiV1Message[]; adoptedTurnIds: string[] } | null> {
+): Promise<{ messages: ApiV1Message[]; adoptedTurnIds: string[]; summary?: { summary: string; summaryAt?: string } } | null> {
   const adoptedIn = (entries: ChatEntry[] | undefined): string[] => [...new Set((entries ?? [])
     .filter((e) => chatHistory.isAdoptedCloudEntry(e) && !!e.turnId).map((e) => e.turnId as string))]
+  // 4d: the compaction summary the companion's chat lane seeds with (chat-history.ts
+  // collectSeedTurns), with the newest turn time it covers: those rows are left out there.
+  const summaryOf = async (entries: ChatEntry[] | undefined): Promise<{ summary?: { summary: string; summaryAt?: string } }> => {
+    const summary = await chatHistory.getCompactionSummary(agentId, conversationId).catch(() => null)
+    if (typeof summary !== 'string' || !summary.trim()) return {}
+    let summaryAt = ''
+    for (const e of entries ?? []) if (e.compacted && typeof e.timestamp === 'string' && e.timestamp > summaryAt) summaryAt = e.timestamp
+    return { summary: { summary, ...(summaryAt ? { summaryAt } : {}) } }
+  }
   const snapshot: { entries?: ChatEntry[] } = {}
   const lane: { failed?: boolean } = {}
   const laneMessages = await laneMessagesForConversation(agentId, conversationId, snapshot, lane)
   if (lane.failed) return null
-  if (laneMessages) return { messages: laneMessages, adoptedTurnIds: adoptedIn(snapshot.entries) }
+  if (laneMessages) return { messages: laneMessages, adoptedTurnIds: adoptedIn(snapshot.entries), ...(await summaryOf(snapshot.entries)) }
   const { messages: entries } = await chatHistory.getDisplayEntries(1, Number.MAX_SAFE_INTEGER, agentId, conversationId)
-  return { messages: normalizeEntries(entries), adoptedTurnIds: adoptedIn(entries) }
+  return { messages: normalizeEntries(entries), adoptedTurnIds: adoptedIn(entries), ...(await summaryOf(entries)) }
 }
 
 // GET /api/v1/conversations/:id/messages?limit=50&before=<cursor>&agentId=
@@ -1449,7 +1458,6 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
     }
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
     const before = typeof req.query.before === 'string' ? req.query.before : undefined
-    let relayFailed = false
     // Turns this companion answered itself that the primary may not hold yet (its
     // outbox, its journal's `chat-turn` records, the ones acked but not in the copy
     // yet: companion-chat-turns.ts). They exist nowhere else until adopted, so every
@@ -1473,7 +1481,6 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
           : mergeCloudRowsIntoRelayedPage(relayed.messages, cloudTurnRows(unadopted)))
         return
       }
-      relayFailed = true
       // The Mac's copy of this conversation, once held (stage 3e, companion-conversations.ts):
       // its own rows and ids, the lane's turns included, which git's chat history lacks.
       const copied = await (await import('../../core/companion-conversations.js')).copiedConversation(agentId, conversationId)
@@ -1492,7 +1499,21 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
         sendError(res, 503, 'primary_unreachable', 'Your primary box is unreachable, so the older part of this conversation could not be loaded yet', { retry: true })
         return
       }
-      // else: fall through to this box's chat history (git-synced mirror).
+      // No copy of this conversation (stage 4d): git's chat history is never read here,
+      // since git sync stops writing this box. A chat with no message on the Mac (one made
+      // here) is this box's own turns; any other needs the Mac. A 200 that left the Mac's
+      // turns out would make the phone REPLACE its rows with it (ChatStore.loadMessages);
+      // on the 503 it keeps what it has and retries.
+      const meta = (await listConversations(agentId)).find((c) => c.id === conversationId)
+      if ((meta?.messageCount ?? 0) > 0) {
+        sendError(res, 503, 'primary_unreachable',
+          before ? 'Your primary box is unreachable, so the older part of this conversation could not be loaded yet' : 'Your primary box is unreachable, so this conversation could not be loaded yet',
+          { retry: true })
+        return
+      }
+      // Only a tail page: nothing older than this box's own turns exists.
+      res.json(before ? [] : pageApiV1Messages(stampApiV1Ids(cloudTurnRows(banked), new Date().toISOString()), limit, undefined, conversationId))
+      return
     } else {
       // A lane-bound conversation's transcript belongs to its CLI sessions, so its
       // chat-history file is empty by design — read the lane, not [].
@@ -1505,41 +1526,7 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
     const { messages: entries } = await chatHistory.getDisplayEntries(
       1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
     )
-    let rows = normalizeEntries(entries)
-    // Judged on the SYNCED rows alone, before banked turns join them. The synced
-    // file holds every phone and web-chat turn, but a conversation driven from a
-    // session panel on the Mac keeps its turns only in the Mac's CLI transcript
-    // (that sender bumps the index count and writes no entry): its file is empty
-    // while the index says it has messages. A 200 carrying only this box's banked
-    // turns would then make the phone REPLACE its whole history with them, on the
-    // very refetch it runs at every `message-end`.
-    const syncedEmpty = rows.length === 0
-    if (banked.length > 0) {
-      // The synced copy may already carry an adopted turn (git-sync delivered it
-      // back before this box deleted its entry): turnId decides, once each.
-      const synced = new Set(entries.map((e) => e.turnId).filter((id): id is string => !!id))
-      const extra = cloudTurnRows(banked.filter((e) => !synced.has(e.turnId)))
-      if (extra.length > 0) {
-        rows = stampApiV1Ids(mergeRowsByTime(rows.map(({ id: _id, ...rest }) => rest), extra), new Date().toISOString())
-      }
-    }
-    const local = pageApiV1Messages(rows, limit, before, conversationId)
-    // A replica whose relay failed and whose own copy is EMPTY for a conversation
-    // the index says has messages must not answer 200-[]: the iOS client REPLACES
-    // its rows with a 200 body (ChatStore.loadMessages), so a false empty wipes a
-    // conversation the phone was correctly showing a second ago. On a thrown error
-    // it keeps what it has and reports reachability instead, which is the truthful
-    // outcome here — the history exists, this box just cannot reach it yet.
-    if (relayFailed && syncedEmpty && !before) {
-      const meta = (await listConversations(agentId)).find((c) => c.id === conversationId)
-      if ((meta?.messageCount ?? 0) > 0) {
-        sendError(res, 503, 'primary_unreachable',
-          'Your primary box is unreachable, so this conversation could not be loaded yet',
-          { retry: true })
-        return
-      }
-    }
-    res.json(local)
+    res.json(pageApiV1Messages(normalizeEntries(entries), limit, before, conversationId))
   } catch (err) {
     next(err)
   }

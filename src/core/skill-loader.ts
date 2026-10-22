@@ -587,6 +587,14 @@ export async function buildSessionSkillsPrompt(): Promise<string> {
   return cachedSessionPrompt;
 }
 
+/**
+ * The same index for skills read elsewhere: the cloud companion's chat lane builds it from
+ * its copy of the Mac's skills (stage 4d), never from the skill files git sync wrote there.
+ */
+export function formatSessionSkillsPrompt(skills: SkillMeta[]): string {
+  return formatSkillsPrompt(skills, SESSION_SKILLS_PREAMBLE);
+}
+
 /** List all eligible skills with dirName, name, and description (for UI/API). */
 export async function listAvailableSkills(): Promise<(SkillMeta & { dirName: string })[]> {
   return getEligibleSkills();

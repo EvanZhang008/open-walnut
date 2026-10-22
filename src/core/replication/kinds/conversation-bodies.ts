@@ -10,7 +10,9 @@
  * as `server.chat.messages` pages it (web/routes/api-v1.ts conversationMessagesForCopy,
  * ids m0 and up), cut to the newest rows that fit CONVERSATION_BODY_MAX_BYTES (`total`
  * keeps the ids right), every text run through the log redactor, and the turn ids of
- * the cloud turns the Mac adopted into it.
+ * the cloud turns the Mac adopted into it. Stage 4d adds the chat history's compaction
+ * summary and the time of the newest turn it covers (`summary`, `summaryAt`), so the
+ * companion's chat lane seeds from this copy as it did from git's chat history.
  *
  * Which conversations: per agent, its main one and the CONVERSATION_BODIES_PER_AGENT
  * newest with a message in the last 30 days (the ones a phone opens while the Mac
@@ -39,6 +41,8 @@ export const CONVERSATION_BODIES_PER_AGENT = 50
 export const CONVERSATION_BODIES_MAX_AGE_MS = 30 * 24 * 60 * 60_000
 /** One conversation's rows in the copy, as JSON: the newest that fit. */
 export const CONVERSATION_BODY_MAX_BYTES = 2 * 1024 * 1024
+/** The compaction summary kept in a row, at most (it counts toward the row's size). */
+export const CONVERSATION_SUMMARY_MAX_BYTES = 64 * 1024
 /** Conversations rendered in one round, and the time they may take; the rest go in the next one. */
 export const RENDER_BUDGET = 20
 const RENDER_TIME_MS = 3_000
@@ -60,10 +64,16 @@ export interface ConversationBodyRow {
   total: number
   messages: CopiedMessage[]
   adoptedTurnIds: string[]
+  /** 4d: the chat history's compaction summary, and the newest turn time it covers (ISO). */
+  summary?: string
+  summaryAt?: string
 }
 
+/** The compaction summary of a conversation (its text, and the newest turn time it covers). */
+export interface ConversationSummary { summary: string; summaryAt?: string }
+
 /** What a render answers: the whole list, or null when the Mac cannot read it now. */
-export type RenderConversation = (agentId: string, conversationId: string) => Promise<{ messages: Array<Record<string, unknown>>; adoptedTurnIds: string[] } | null>
+export type RenderConversation = (agentId: string, conversationId: string) => Promise<{ messages: Array<Record<string, unknown>>; adoptedTurnIds: string[]; summary?: ConversationSummary } | null>
 
 /** Fields that carry no text of the user's: never run through the redactor. */
 const PLAIN_FIELDS = new Set(['id', 'role', 'createdAt', 'kind', 'source', 'messageId', 'detailRef', 'answeredBy', 'isError', 'inFlight'])
@@ -82,10 +92,22 @@ export function messageOk(m: unknown): m is CopiedMessage {
     && (r.createdAt === undefined || typeof r.createdAt === 'string')
 }
 
+/** A summary as a row keeps it: redacted and cut to its byte share. */
+export function rowSummary(s: ConversationSummary | undefined): Pick<ConversationBodyRow, 'summary' | 'summaryAt'> {
+  if (!s || typeof s.summary !== 'string' || !s.summary.trim()) return {}
+  let text = redactSensitiveText(s.summary)
+  if (Buffer.byteLength(text) > CONVERSATION_SUMMARY_MAX_BYTES) {
+    text = Buffer.from(text, 'utf8').subarray(0, CONVERSATION_SUMMARY_MAX_BYTES).toString('utf8').replace(/\uFFFD+$/, '')
+  }
+  return { summary: text, ...(typeof s.summaryAt === 'string' && s.summaryAt ? { summaryAt: s.summaryAt } : {}) }
+}
+
 /** The body row of one whole list: redacted, cut to the newest rows that fit. */
-export function bodyRow(agent: string, id: string, all: Array<Record<string, unknown>>, adoptedTurnIds: string[]): ConversationBodyRow {
+export function bodyRow(agent: string, id: string, all: Array<Record<string, unknown>>, adoptedTurnIds: string[], summary?: ConversationSummary): ConversationBodyRow {
+  const kept = rowSummary(summary)
   const messages: CopiedMessage[] = []
-  let bytes = 0
+  // The summary's bytes come out of the row's budget.
+  let bytes = kept.summary ? Buffer.byteLength(kept.summary) : 0
   for (let i = all.length - 1; i >= 0; i--) {
     const m = redactMessage(all[i])
     if (!messageOk(m)) continue
@@ -97,7 +119,7 @@ export function bodyRow(agent: string, id: string, all: Array<Record<string, unk
   messages.reverse()
   // `total` names the whole list; a row the cut skipped as malformed never shifts the ids.
   const first = messages.length ? Number(messages[0].id.slice(1)) : all.length
-  return { agent, id, total: first + messages.length, messages, adoptedTurnIds: [...new Set(adoptedTurnIds)].sort() }
+  return { agent, id, total: first + messages.length, messages, adoptedTurnIds: [...new Set(adoptedTurnIds)].sort(), ...kept }
 }
 
 interface Cached { sig: string; hash: string; renderedAt: number; row?: ConversationBodyRow; bytes: number }
@@ -126,10 +148,10 @@ function keepRow(key: string, c: Cached, row: ConversationBodyRow, bytes: number
 }
 
 let renderImpl: RenderConversation | null = null
-async function render(agentId: string, id: string): Promise<{ messages: Array<Record<string, unknown>>; adoptedTurnIds: string[] } | null> {
+async function render(agentId: string, id: string): ReturnType<RenderConversation> {
   if (renderImpl) return renderImpl(agentId, id)
   const { conversationMessagesForCopy } = await import('../../../web/routes/api-v1.js')
-  return conversationMessagesForCopy(agentId, id) as unknown as Promise<{ messages: Array<Record<string, unknown>>; adoptedTurnIds: string[] } | null>
+  return conversationMessagesForCopy(agentId, id) as unknown as ReturnType<RenderConversation>
 }
 
 /** Render one conversation into the cache. False when the Mac could not read it now. */
@@ -138,7 +160,7 @@ async function renderInto(key: string, agent: string, id: string, sig: string): 
   try { out = await render(agentIdFromPathSegment(agent), id) } catch { out = null }
   if (!out) { failedAt.set(key, Date.now()); return false }
   failedAt.delete(key)
-  const row = bodyRow(agent, id, out.messages, out.adoptedTurnIds)
+  const row = bodyRow(agent, id, out.messages, out.adoptedTurnIds, out.summary)
   const json = JSON.stringify(row)
   const c = cache.get(key) ?? { sig, hash: '', renderedAt: 0, bytes: 0 }
   c.sig = sig

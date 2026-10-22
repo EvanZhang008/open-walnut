@@ -336,6 +336,11 @@ export async function buildLaneMemoryContext(homeDir: string = WALNUT_HOME): Pro
     readOr('memory/MEMORY.md'),
     readOr('memory/USER.md'),
   ]);
+  return laneMemoryContextOf(memoryMd, userMd);
+}
+
+/** The standing memory block for these two documents (buildLaneMemoryContext's text). */
+export function laneMemoryContextOf(memoryMd: string, userMd: string): string {
   const parts = [
     LANE_MEMORY_HEADER,
     'Walnut injects this at session start — standing context, the same role the old per-turn memory sections played. The live files under your working directory are the source of truth; your edits to them are picked up on the next session start.',
@@ -412,6 +417,14 @@ export async function buildLaneProfile(
      * chat lane passes it (cloud-chat-lane.ts).
      */
     persona?: { systemPrompt: string; systemPromptMode: 'append' | 'replace'; effort?: string };
+    /**
+     * Without a persona: the skills index and the standing memory as the caller read
+     * them, and where the conversation seed is read. The companion's chat lane passes
+     * the Mac's copies (stage 4d), not the files git sync wrote on the box.
+     */
+    skillsIndex?: string;
+    memoryContext?: string;
+    seedSource?: import('../chat-history.js').SeedSource;
   },
 ): Promise<{
   profile: import('../types.js').SessionProfile;
@@ -424,10 +437,10 @@ export async function buildLaneProfile(
   // ~/.claude/skills is excluded (Claude Code loads it natively). Failure is
   // non-fatal: a lane without the index still answers.
   const persona = opts?.persona;
-  const skillsIndex = persona ? '' : await buildSessionSkillsPrompt().catch(() => '');
+  const skillsIndex = persona ? '' : opts?.skillsIndex ?? await buildSessionSkillsPrompt().catch(() => '');
   // Standing memory — Walnut-owned injection, engine-neutral (see
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
-  const memoryContext = persona ? '' : await buildLaneMemoryContext().catch(() => '');
+  const memoryContext = persona ? '' : opts?.memoryContext ?? await buildLaneMemoryContext().catch(() => '');
   // general = the Personal AI persona; any other agent gets ITS persona plus the
   // same two work modes — one engine, one consistent chat feel, per-agent
   // identity. Any REGISTRY agent, not only a console one: the console flag
@@ -472,7 +485,7 @@ export async function buildLaneProfile(
     return { profile, effort };
   }
   const { buildConversationSeed } = await import('../chat-history.js');
-  const seed = await buildConversationSeed(agentId, opts.conversationId, { maxBytes: headroom })
+  const seed = await buildConversationSeed(agentId, opts.conversationId, { maxBytes: headroom, ...(opts.seedSource ? { source: opts.seedSource } : {}) })
     .catch((err) => {
       // A lane without prior turns still answers; a lane that failed to mint
       // does not. Never let the seed fail the spawn.

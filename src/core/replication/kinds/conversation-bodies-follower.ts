@@ -15,7 +15,7 @@ import { log } from '../../../logging/index.js'
 import { NOTHING_HELD, createRowSetFollower, serialChain, writeCopyFile, type RowSetFollower } from '../kind-follower.js'
 import { agentOfRowKey, agentSegmentOk, conversationIdOk, conversationRowKey } from './conversations.js'
 import {
-  CONVERSATION_BODIES_REMOVAL_FLOOR, CONVERSATION_BODIES_SCHEMA_VERSION, CONVERSATION_BODY_MAX_BYTES, messageOk, redactMessage,
+  CONVERSATION_BODIES_REMOVAL_FLOOR, CONVERSATION_BODIES_SCHEMA_VERSION, CONVERSATION_BODY_MAX_BYTES, messageOk, redactMessage, rowSummary,
   type ConversationBodyRow,
 } from './conversation-bodies.js'
 import { copyPath, copyRefusal, markCopyOff } from './gate.js'
@@ -43,6 +43,7 @@ function isRow(v: unknown): v is ConversationBodyRow {
   return !!r && typeof r === 'object' && typeof r.agent === 'string' && agentSegmentOk(r.agent) && conversationIdOk(r.id)
     && Number.isInteger(r.total) && Array.isArray(r.messages) && (r.total as number) >= r.messages.length
     && r.messages.every(messageOk) && Array.isArray(r.adoptedTurnIds) && r.adoptedTurnIds.every((x) => typeof x === 'string')
+    && (r.summary === undefined || typeof r.summary === 'string') && (r.summaryAt === undefined || typeof r.summaryAt === 'string')
 }
 
 let io = copyStateIo('conversation-bodies')
@@ -73,7 +74,8 @@ export function conversationBodiesFollower(): RowSetFollower {
       const skipped: string[] = []
       for (const r of rows ?? []) {
         const messages = r.messages.map((m) => redactMessage(m))
-        const body = { v: 1, agent: r.agent, id: r.id, total: r.total, messages, adoptedTurnIds: r.adoptedTurnIds }
+        // The summary is redacted and cut again too (4d: the chat lane seeds from it).
+        const body = { v: 1, agent: r.agent, id: r.id, total: r.total, messages, adoptedTurnIds: r.adoptedTurnIds, ...rowSummary(r.summary ? { summary: r.summary, summaryAt: r.summaryAt } : undefined) }
         if (Buffer.byteLength(JSON.stringify(body)) > CONVERSATION_BODY_MAX_BYTES * 2) { skipped.push(conversationRowKey(r.agent, r.id)); continue }
         await writeCopyFile(bodyFile(r.agent, r.id), body)
       }

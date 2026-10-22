@@ -32,7 +32,8 @@ export type ConflictKind =
   | 'create-collision'// a created task's id was taken; it got a new id
   | 'board'           // a Board edit that conflicted (the Mac's html kept)
   | 'note'            // a note write made while away that needed a choice (WP11, offline-merge/notes.ts)
-  | 'memory';         // MEMORY.md or USER.md saved on the companion that conflicted (offline-merge/apply-memory.ts)
+  | 'memory'          // MEMORY.md or USER.md saved on the companion that conflicted (offline-merge/apply-memory.ts)
+  | 'conversation';   // a chat both sides renamed (offline-merge/apply-conversation-edit.ts)
 
 export interface ConflictEntry {
   kind: ConflictKind;
