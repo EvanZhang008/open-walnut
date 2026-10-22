@@ -835,10 +835,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - Scope: all open tasks + tasks completed in the last 14 days (older
   completions are excluded from the projection).
 - Provenance: `syncedAt` is when the primary box exported the snapshot. On the
-  cloud companion the data rides the periodic git sync, so it can lag by up to
-  a sync cycle; treat it as read-only replica data.
+  cloud companion the data is its copy of the Mac's tasks, sent by the Mac on
+  every change, so it can lag by a copy round; treat it as read-only replica data.
 - `503 { "error": { "code": "unavailable" } }` — projection not synced yet
-  (fresh companion before its first git pull).
+  (fresh companion before the Mac's first copy round).
 - `POST /api/v1/tasks` (additive, 2026-08) body `{ "title", "project"?,
   "priority"?, "due_date"?, "start_date"?, "end_date"?, "description"?,
   "pinned"?, "focus_tier"?, "group_id"?, "launch_cwd"?, "launch_host"? }` → `201 { "task": ProjectedTask,

@@ -55,7 +55,7 @@ function nothingWritten(): void {
 describe('the WP5 kinds are registered and chosen like the WP4 ones', () => {
   it('each is a leader kind, a confirmable name, and on by default in the host choice', () => {
     // (model-catalogs, stage 2c of the companion plan, the companion keeps too.)
-    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', ...HOST_ONLY, 'conversation-bodies', 'model-catalogs', 'stt-vocab'])
+    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', ...HOST_ONLY, 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications'])
     for (const k of HOST_ONLY) expect(COPY_KIND_NAMES).toContain(k)
     expect(DEFAULT_COPY_CHOICE).toMatchObject({ routines: true, conversations: true, prefs: true, config: true, personas: true })
     expect(copyChoiceFrom({ config: false, prefs: 'no' })).toMatchObject({ config: false, prefs: true })

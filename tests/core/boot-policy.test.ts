@@ -43,8 +43,8 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'terminal-sweep': leaderOnly,
   'letter-push': leaderOnly,
   'audio': leaderOnly,
-  'git-pull': always,
-  'git-auto-commit': always,
+  'git-pull': leaderOnly, // 4d: the companion reads its copies; git sync no longer writes its data dir
+  'git-auto-commit': leaderOnly, // 4d: what the box writes for the Mac goes through its journal
   'git-maintenance': always,
   'git-compaction': leaderOnly,
   'session-auto-recover': leaderOnly,
@@ -168,7 +168,7 @@ describe('boot policy', () => {
 /** The rows each capability turns on: the design's table, plus expose (a door to the public too). */
 const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
   'public-door': ['setup-token-banner', 'revoke-queue', 'expose-runtime', 'stt-auto-setup'],
-  'bridge-door': ['companion-ingest-routes'],
+  'bridge-door': ['companion-ingest-routes', 'git-maintenance'],
   'cloud-exec': ['cloud-exec', 'local-daemon', 'stream-file-cleanup', 'send-path-canary'],
   'backup-leader': ['backup-leader', 'project-summary', 'routine-wake', 'cron'],
 }
@@ -177,7 +177,6 @@ const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
 const COMPANION_UNTIL: Partial<Record<BootJob, string>> = {
   'v1-forward': '5b', 'companion-stream-forward': '5b', 'companion-queues': '5b',
   'plugins': '5b', 'companion-plugin-cards': '5b', 'update-check': '5b',
-  'git-pull': '4d', 'git-auto-commit': '4d', 'git-maintenance': '4d',
   'completed-task-session-migration': '2c',
 }
 

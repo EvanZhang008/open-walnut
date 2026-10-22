@@ -316,7 +316,13 @@ function parseStringArray(res: Response, value: unknown, field: string): { ok: b
 searchMemoryV1Router.get('/notifications', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.notifications', SERVER_RELAY_SID, undefined, 200)
+      // The Mac's feed when it answers this relay; while it does not, what the box has
+      // (the Mac's cards from its copy and the box's own), marked `offline`, never a 503
+      // (core/notifications/companion-feed.ts). Read only: mark-read and dismiss need the Mac.
+      const { companionFeedAnswer } = await import('../../core/notifications/companion-feed.js')
+      const { answer, copyAsOf } = await companionFeedAnswer()
+      if (copyAsOf !== null) res.setHeader((await import('../../core/replication/kinds/gate.js')).COPY_AS_OF_HEADER, String(copyAsOf))
+      res.json({ ...answer, feed: answer.feed.map((n) => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail) })) })
       return
     }
     const { listNotifications } = await import('../../core/notifications/store.js')

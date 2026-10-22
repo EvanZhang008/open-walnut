@@ -111,15 +111,16 @@ describe('global search B-relay on a REPLICA', () => {
 
 describe('notifications B-relay on a REPLICA', () => {
   it('GET /notifications relays server.notifications', async () => {
-    const result = { feed: [{ id: 'n1', title: 'Hello' }], unreadCount: 1 }
+    const result = { feed: [{ id: 'n1', kind: 'cron', severity: 'info', title: 'Hello', dedupKey: 'cron:n1', timestamp: 1_000, read: false }], unreadCount: 1 }
     bridgeRequestMock.mockResolvedValue({ ok: true, result })
     const res = await request(createApp()).get('/api/v1/notifications')
     expect(res.status).toBe(200)
     expect(res.body).toEqual(result)
+    expect(res.headers['x-walnut-copy-as-of']).toBeUndefined()
     expect(bridgeRequestMock).toHaveBeenCalledWith(
       '__local__', 'session.control',
       { action: 'server.notifications', sessionId: '__server__' },
-      30_000,
+      8_000,
     )
   })
 
@@ -148,17 +149,16 @@ describe('notifications B-relay on a REPLICA', () => {
     )
   })
 
-  it('bridge offline → 503 bridge_offline', async () => {
+  // Stage 4d: the feed the box has (the Mac's copy, none here, and its own cards), marked offline, never a 503.
+  it('bridge offline: the box\'s away feed, marked offline', async () => {
     bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
     const res = await request(createApp()).get('/api/v1/notifications')
-    expect(res.status).toBe(503)
-    expect(res.body.error.code).toBe('bridge_offline')
+    expect([res.status, res.body.offline, res.body.feed]).toEqual([200, true, []])
   })
 
-  it('old primary (Unknown control action) → 400 session_control_needs_upgrade', async () => {
+  it('old primary (Unknown control action): the box\'s away feed, marked offline', async () => {
     bridgeRequestMock.mockResolvedValue({ ok: false, error: 'Unknown control action: server.notifications', errorKind: 'bad_request' })
     const res = await request(createApp()).get('/api/v1/notifications')
-    expect(res.status).toBe(400)
-    expect(res.body.error.code).toBe('session_control_needs_upgrade')
+    expect([res.status, res.body.offline]).toEqual([200, true])
   })
 })
