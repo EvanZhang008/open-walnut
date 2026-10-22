@@ -288,6 +288,18 @@ async function mirrorSource(kind: 'inbox' | 'inbox-bodies'): Promise<{ dir: stri
 }
 
 /**
+ * The inbox a body read on this box looks in (the index that names the body, and its
+ * bodies dir): the companion's copy once it holds the Mac's letter bodies, so the
+ * folder git sync wrote is never read beside it; else this box's own (on the Mac and
+ * a host replica that is the live inbox; on a companion before its first bodies
+ * round, the files git sync wrote: a body is write-once, and the body route checks
+ * its size against the one the Mac recorded).
+ */
+export async function bodySourceDir(): Promise<string> {
+  return (await mirrorSource('inbox-bodies')).dir;
+}
+
+/**
  * The replica's copy of the index, or null when there is none (a box that never
  * received the inbox) or it cannot be parsed after a few tries.
  */

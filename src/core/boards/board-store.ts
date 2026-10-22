@@ -23,6 +23,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { bootPolicy } from '../boot-policy.js';
+import { isCompanion } from '../server-role.js';
+import { NeedsLeaderError } from '../replication/needs-leader.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { withFileLock } from '../../utils/file-lock.js';
 import { log } from '../../logging/index.js';
@@ -225,13 +227,20 @@ function boardFile(taskId: string): string {
 
 /**
  * Where a READ of boards looks: on the companion, its copy of the Mac's boards
- * once it holds one (docs/plan/walnut-companion-unified-replica.md, stage 2b);
- * elsewhere this server's own dir. Writes always name boardFile: nothing on the
- * companion writes a board (its board writes answer 501, no board job runs there).
+ * (docs/plan/walnut-companion-unified-replica.md, stage 2b); elsewhere this
+ * server's own dir. Writes always name boardFile: nothing on the companion writes
+ * a board (its board writes answer 501, no board job runs there).
+ *
+ * The companion holding no copy (before the first round, an older Mac, or the
+ * user turned boards off for it) answers needs_leader {why:'kind_not_copied'}, never
+ * the files git sync wrote into its data dir: those stop being written (stage 4d),
+ * and a board read from them would show the Mac's board as it once was.
  */
 async function readBoardsDir(): Promise<string> {
-  const { copyReadPath } = await import('../replication/kinds/gate.js');
-  return copyReadPath('boards', boardsDir());
+  if (!isCompanion()) return boardsDir();
+  const { copyKindHeld, copyPath, KIND_NOT_COPIED } = await import('../replication/kinds/gate.js');
+  if (!(await copyKindHeld('boards'))) throw new NeedsLeaderError(KIND_NOT_COPIED);
+  return copyPath(boardsDir());
 }
 
 async function readBoardFile(taskId: string): Promise<string> {

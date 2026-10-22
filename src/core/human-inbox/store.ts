@@ -366,13 +366,14 @@ export function bodyStatIsComplete(stat: LetterBodyStat): boolean {
 /**
  * Read one slice of a body document. The bounded primitive both chunked lanes
  * sit on (the replica's bridge relay, and any future incremental reader), so
- * nothing anywhere has to hold a 100MB body to serve part of it.
+ * nothing anywhere has to hold a 100MB body to serve part of it. `dir`: another
+ * inbox in the same layout (the companion's copy, replica-state.ts bodySourceDir).
  */
 export async function readLetterBodyRange(
   id: string,
-  opts: { turn?: number; start?: number; length: number },
+  opts: { turn?: number; start?: number; length: number; dir?: string },
 ): Promise<{ data: Buffer; bytesRead: number; fileSize: number; eof: boolean; format: 'html' | 'markdown' } | null> {
-  const stat = await statLetterBody(id, opts.turn);
+  const stat = await statLetterBody(id, opts.turn, opts.dir);
   if (!stat) return null;
   const start = Math.max(0, Math.trunc(opts.start ?? 0));
   if (start >= stat.bytes) {

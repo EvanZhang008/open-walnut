@@ -16,6 +16,9 @@ import { detectSystem } from '../../core/stt/detect.js';
 import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, BREW_PACKAGES, type SetupEvent } from '../../core/stt/setup.js';
 import { setupMlxEnv, downloadMlxModel, isAllowedMlxModel, DEFAULT_MLX_MODEL } from '../../core/stt/setup-mlx.js';
 import { bootPolicy } from '../../core/boot-policy.js';
+import { noteSttVocabWritten, vocabWords } from '../../core/stt/vocab.js';
+import { NeedsLeaderError } from '../../core/replication/needs-leader.js';
+import { COPY_AS_OF_HEADER } from '../../core/replication/kinds/gate.js';
 import { log } from '../../logging/index.js';
 
 export const sttRouter = Router();
@@ -419,21 +422,32 @@ sttRouter.post('/recordings/:id/transcribe', express.json(), async (req: Request
  */
 const VOCAB_DISPLAY_PATH = relative(WALNUT_HOME, STT_VOCAB_FILE);
 
-/** Read the custom vocabulary file. Shared by /api/stt/vocab and /api/v1. */
-export async function readSttVocab(): Promise<{ words: string[]; path: string }> {
+/**
+ * Read the custom vocabulary. Shared by /api/stt/vocab and /api/v1. A server that
+ * keeps the Mac's copy answers the Mac's words once it holds them, and `copyAsOf`
+ * says when they were the Mac's (replication/kinds/stt-vocab.ts); null: this
+ * server's own file.
+ */
+export async function readSttVocab(): Promise<{ words: string[]; path: string; copyAsOf: number | null }> {
+  const copied = await (await import('../../core/replication/kinds/stt-vocab.js')).readSttVocabCopy();
+  if (copied) return { words: copied.words, path: VOCAB_DISPLAY_PATH, copyAsOf: copied.asOf };
   await ensureSttVocabMigrated();
   let raw = '';
   try { raw = await readFile(STT_VOCAB_FILE, 'utf-8'); } catch { /* file doesn't exist yet */ }
-  const words = raw.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-  return { words, path: VOCAB_DISPLAY_PATH };
+  return { words: vocabWords(raw), path: VOCAB_DISPLAY_PATH, copyAsOf: null };
 }
 
 /**
  * Add one word to the vocabulary file (case-insensitive dedup). Shared by
  * /api/stt/vocab and /api/v1. Returns added:false when already present.
+ * Where the reads answer the Mac's copy, the word needs the Mac: written to this
+ * server's own file it would never show.
  */
 export async function addSttVocabWord(word: string): Promise<{ added: boolean; word: string; reason?: string }> {
   const trimmed = word.trim();
+  if (await (await import('../../core/replication/kinds/stt-vocab.js')).readSttVocabCopy()) {
+    throw new NeedsLeaderError('stt_vocab_writes_need_mac');
+  }
   await ensureSttVocabMigrated();
 
   // Read existing file
@@ -451,6 +465,7 @@ export async function addSttVocabWord(word: string): Promise<{ added: boolean; w
   await mkdir(dirname(STT_VOCAB_FILE), { recursive: true });
   const prefix = raw.endsWith('\n') || raw === '' ? '' : '\n';
   await appendFile(STT_VOCAB_FILE, `${prefix}${trimmed}\n`);
+  noteSttVocabWritten();
   log.stt.info(`Added vocab word: "${trimmed}"`);
   return { added: true, word: trimmed };
 }
@@ -461,7 +476,9 @@ export async function addSttVocabWord(word: string): Promise<{ added: boolean; w
  */
 sttRouter.get('/vocab', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await readSttVocab());
+    const { words, path, copyAsOf } = await readSttVocab();
+    if (copyAsOf !== null) res.setHeader(COPY_AS_OF_HEADER, String(copyAsOf));
+    res.json({ words, path });
   } catch (err) {
     next(err);
   }

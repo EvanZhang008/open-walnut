@@ -34,6 +34,9 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['POST', '/client-logs', 'identity'],
     ['GET', '/media', 'bytes'],
     ['POST', '/stt/transcribe', 'bytes'],
+    // Only the vocabulary itself leaves the bytes rule.
+    ['GET', '/stt/vocabulary', 'bytes'],
+    ['POST', '/stt/vocab/words', 'bytes'],
     ['GET', '/file-content', 'bytes'],
     ['PUT', '/file-content', 'bytes'],
     ['GET', '/file-raw/devbox/a/b.png', 'bytes'],
@@ -49,6 +52,7 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['GET', '/tasks/t1', 'task-copy'],
     ['GET', '/tasks/meta/tags', 'task-copy'],
     ['GET', '/focus', 'task-copy'],
+    ['GET', '/tasks/t1/transfer-options-x', 'task-copy'],
     ['GET', '/sessions', 'paged'],
     ['GET', '/sessions/abc/transcript', 'paged'],
     ['GET', '/sessions/abc/history', 'paged'],
@@ -82,6 +86,12 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['PUT', '/tasks/t1/board'],
     ['POST', '/tasks/t1/board/edits'],
     ['PUT', '/tasks/t1/board/cards/t2'],
+    // The transfer options read the hosts and their profiles, which the task copy does not hold.
+    ['GET', '/tasks/t1/transfer-options'],
+    ['HEAD', '/tasks/t1/transfer-options'],
+    // The vocabulary is the Mac's word list (stage 4d): read and added there while it answers.
+    ['GET', '/stt/vocab'],
+    ['POST', '/stt/vocab'],
     ['GET', '/sessions/abc'],
     ['GET', '/sessions/abc/model-options'],
     ['POST', '/sessions/abc/model'],

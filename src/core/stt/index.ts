@@ -19,6 +19,7 @@ import { createWhisperServerEngine } from './engine-whisper-server.js';
 import { createMlxEngine } from './engine-mlx.js';
 import { createQwenEngine } from './engine-qwen.js';
 import { writeRecordingSecondary } from './recordings.js';
+import { vocabWords } from './vocab.js';
 
 export type { SttEngine, SttRequest, SttResult } from './types.js';
 
@@ -232,15 +233,16 @@ export function _resetSttVocabMigrationForTest(): void {
   vocabMigration = null;
 }
 
-async function loadVocabPrompt(): Promise<string> {
+/** The vocabulary a transcription is biased with (comma-joined words, '' for none). Exported for tests. */
+export async function loadVocabPrompt(): Promise<string> {
   try {
+    // A server that keeps the Mac's copy (the companion, a host replica) transcribes
+    // with the Mac's words once it holds them, never the file git sync wrote
+    // (replication/kinds/stt-vocab.ts); before the first round, its own file.
+    const copied = await (await import('../replication/kinds/stt-vocab.js')).readSttVocabCopy();
+    if (copied) return copied.words.join(', ');
     await ensureSttVocabMigrated();
-    const raw = await readFile(STT_VOCAB_FILE, 'utf-8');
-    const words = raw
-      .split('\n')
-      .map(l => l.trim())
-      .filter(l => l && !l.startsWith('#'));
-    return words.join(', ');
+    return vocabWords(await readFile(STT_VOCAB_FILE, 'utf-8')).join(', ');
   } catch {
     return '';
   }

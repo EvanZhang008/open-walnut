@@ -40,6 +40,7 @@ import { getConfig, updatePluginConfig } from '../config-manager.js'
 import { emitConfigChanged } from '../config-broadcast.js'
 import { getVersion } from '../version.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { isFollower } from '../server-role.js'
 import { createPluginMacos } from './plugin-macos.js'
 import { createPluginMcp } from './plugin-mcp.js'
 import { createPluginExpose } from './plugin-expose.js'
@@ -889,7 +890,11 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         const { getLetter } = await import('../human-inbox/store.js')
         // `inlineMaxBytes: 0` keeps a 100MB media body off this path: the caller asked about the
         // letter's STATE, and reading the document to answer that would be the expensive bug.
-        const letter = await getLetter(letterId, { inlineMaxBytes: 0 })
+        // A follower's letters are the Mac's copy, as its inbox list shows them (the box's own
+        // changes on top), never the folder git sync wrote beside it (human-inbox/replica-state.ts).
+        const letter = isFollower()
+          ? await (await import('../human-inbox/replica-state.js')).mirrorRecord(letterId)
+          : await getLetter(letterId, { inlineMaxBytes: 0 })
         if (!letter) return null
         return {
           letterId: letter.id,
