@@ -6,8 +6,9 @@
  *   1. Round-trips: cache/projections/{sessions,tasks}.json and
  *      cache/transcripts/<sid>.json survive write→read; corrupt files and
  *      unsafe session ids return null (ids land in filenames).
- *   2. `sync.legacy_projection_files` knob: default TRUE (fail-open to the
- *      legacy git files — a cloud box on old code must keep working), FALSE
+ *   2. `sync.legacy_projection_files` knob: default FALSE since stage 4d of
+ *      the companion plan (a current companion reads its copies and the pushed
+ *      cache; the files stay as they were for a box on an older build), TRUE
  *      only when config says so.
  *   3. Seam read order: readSessionProjection/readSessionTranscript/
  *      readTaskProjection arbitrate cache vs legacy git-synced file by
@@ -133,21 +134,27 @@ describe('cache round-trips', () => {
 });
 
 describe('sync.legacy_projection_files knob', () => {
-  it('defaults TRUE with no config file (fail-open to legacy git files)', async () => {
-    expect(await legacyProjectionFilesEnabled()).toBe(true);
+  it('defaults FALSE with no config file (no legacy git rewrites)', async () => {
+    expect(await legacyProjectionFilesEnabled()).toBe(false);
   });
 
-  it('reads FALSE from config, TTL-cached until reset', async () => {
+  it('reads TRUE from config, TTL-cached until reset', async () => {
     await fsp.mkdir(WALNUT_HOME, { recursive: true });
-    await fsp.writeFile(CONFIG_FILE, 'version: 1\nsync:\n  legacy_projection_files: false\n', 'utf-8');
-    expect(await legacyProjectionFilesEnabled()).toBe(false);
-
-    // Flag flips back in config but the TTL cache still holds false…
     await fsp.writeFile(CONFIG_FILE, 'version: 1\nsync:\n  legacy_projection_files: true\n', 'utf-8');
-    expect(await legacyProjectionFilesEnabled()).toBe(false);
+    expect(await legacyProjectionFilesEnabled()).toBe(true);
+
+    // Flag flips back in config but the TTL cache still holds true…
+    await fsp.writeFile(CONFIG_FILE, 'version: 1\nsync:\n  legacy_projection_files: false\n', 'utf-8');
+    expect(await legacyProjectionFilesEnabled()).toBe(true);
     // …until reset (stands in for TTL expiry).
     _resetProjectionCacheForTesting();
-    expect(await legacyProjectionFilesEnabled()).toBe(true);
+    expect(await legacyProjectionFilesEnabled()).toBe(false);
+  });
+
+  it('anything but true is the default', async () => {
+    await fsp.mkdir(WALNUT_HOME, { recursive: true });
+    await fsp.writeFile(CONFIG_FILE, 'version: 1\nsync:\n  legacy_projection_files: "yes"\n', 'utf-8');
+    expect(await legacyProjectionFilesEnabled()).toBe(false);
   });
 });
 

@@ -209,7 +209,7 @@ Routine writes while the Mac is away still answer that they need the Mac.
 
 | Kind | The box read that switches to the copy | Today, Mac away |
 |---|---|---|
-| `boards` | every board read (`board-store.ts` `getBoard`, `hasBoard`, `listBoardTaskIds`: the team walk too) once the copy is held | the file git sync wrote |
+| `boards` | every board read (`board-store.ts` `getBoard`, `hasBoard`, `listBoardTaskIds`: the team walk too) once the copy is held; without one, needs the Mac (4d) | the file git sync wrote |
 | `config` | the phone's settings view (`GET /api/v1/config`): the copy laid over the box's own config, top-level key by key | the box's own config |
 
 Nothing on the companion writes a board (its board writes answer 501, and no board
@@ -456,7 +456,7 @@ minutes, and at a build change.
 | 4a | the copy and its round (no reader yet) |
 | 4b | the box's notes reads (`/api/notes-v2` always, `/api/v1/notes` when the Mac does not answer: the tree, a note, links, backlinks, tags, the flat list) take the copy once a whole manifest arrived, through the source a host replica reads (`replica/notes-source.ts`); searches stay the box's own (its copy of the Mac's index) |
 | 4c | a note saved, created or deleted on the box (the v2 save and delete, the v1 save, create and delete) is a `note` record in its journal once the copy is held and the Mac drains `note`, checked as a host checks one (the lock hash against what the box shows, the size, the id from the Mac's copy); the Mac drains it with the notes merge |
-| 4d | the box's memory reads and saves (`memory` records), its skill reads, and v1's note resolve take the copy; a note move or rename on the box is a `note-move` record, a tag rename is `note` saves, a folder change needs the Mac; a pasted picture is a `note-attachment` record too, a picture move or delete needs the Mac; then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
+| 4d | the box's memory reads and saves (`memory` records), its skill reads, and v1's note resolve take the copy; a note move or rename on the box is a `note-move` record, a tag rename is `note` saves, a folder change needs the Mac; a pasted picture is a `note-attachment` record too, a picture move or delete needs the Mac; the box's other reads of git sync's files take a copy or need the Mac (letter bodies, the speech vocabulary as the `stt-vocab` kind, boards, transfer options, conflict logs), and the Mac stops most of its git churn into the box (the untrack pass, no legacy projection files); then the box stops committing notes, memory and skills, and git sync stops writing its data dir (after 3e) |
 
 Every copy read shows the pending saves over the copy (the copy's journal view,
 `core/companion-notes.ts`), and a save the Mac took until a copy round from after its
@@ -528,6 +528,60 @@ picture. Moving or deleting a picture or file on the box answers needs-the-Mac
 (`attachment_changes_need_mac`): the box holds no copy of the Mac's files to check a
 move or delete against. Once git sync stops writing the box's data dir (after 3e), the
 box's picture reads need a source of their own.
+
+**4d, the other reads of what git sync wrote.** Each takes a copy or needs the Mac, so
+git sync can stop writing the box's data dir without one of them going stale:
+
+- *Letter bodies.* The body route (`GET /api/v1/human-inbox/:id/body`, its Range and its
+  framed form) reads the `inbox-bodies` copy once the box holds it
+  (`human-inbox/replica-state.ts` `bodySourceDir`: the copy's index and bodies), and a
+  body the copy lacks (over its 4 MB cap, or newer than its last round) is relayed from
+  the Mac, never read from the folder git sync wrote. A plugin's `letters.get` on a
+  follower reads the inbox copy the way the list does (`mirrorRecord`, the box's queued
+  flags on top). Before the first bodies round (an older Mac) both read the box's own
+  folder, as before: a body is write-once, and the route checks its size against the one
+  the Mac recorded. (The framed form of a markdown body now ends its response: it never
+  did, so the next request on that keep-alive socket waited behind it.)
+- *Speech vocabulary.* A copy kind of its own, `stt-vocab` (`kinds/stt-vocab.ts`,
+  `cache/replica/stt-vocab.json`): one row of the file's words (comments left out, a
+  secret-shaped word never sent), riding the `config` choice, rounded after every word
+  the Mac adds and by the sweep after a hand edit. Once the box holds it, its own
+  transcriber (`core/stt/index.ts` `loadVocabPrompt`), `GET /api/v1/stt/vocab` and
+  `GET /api/stt/vocab` answer the Mac's words (with `x-walnut-copy-as-of`).
+  `/api/v1/stt/vocab` left the `bytes` rule of `v1-forward/policy.ts`, so the Mac answers
+  the GET and takes the POST while it answers. A word added on the box while it holds the
+  copy (the Mac away, or the console's own `POST /api/stt/vocab`) answers needs-the-Mac
+  (`stt_vocab_writes_need_mac`) rather than going into a journal: it is one word, rarely
+  added, that the user adds again when the Mac is back, and a journal kind would need a
+  drain and a merge for nothing more. Before the first round the box reads and writes its
+  own file, as before.
+- *Boards.* With no boards copy (before the first round, or the user turned boards off for
+  the box), every board read needs the Mac (`kind_not_copied`), never the file git sync
+  wrote (`board-store.ts` `readBoardsDir`).
+- *Transfer options.* `GET /api/v1/tasks/:id/transfer-options` reads the hosts and their
+  profiles, which the task copy does not hold: an exception of the task-copy rule, so the
+  Mac answers it while it answers.
+- *Conflict logs.* `GET /api/v1/offline-conflicts/:drainId`: the logs are the Mac's and
+  are copied nowhere, so a follower answering it (the Mac away) needs the Mac
+  (`conflict_log_needs_mac`). `frequent-directories.json` stays the box's own (a hint list).
+- *The Mac's side.* The untrack pass (`git-sync.ts` `CRITICAL_IGNORE_FILES`/`DIRS`) now
+  drops `triage-state.json`, `session-requests.json` and `local/` from the index: each was
+  ignored but still tracked from an older install, so the Mac committed it on every change
+  and the box pulled it over its own; git was never their backup (a fresh install never
+  tracked them). A box on the same build untracks its copies before the pull that brings
+  the Mac's removal, so the files stay on disk on both. `sync.legacy_projection_files` is
+  off by default (`projection-cache.ts`): a current box reads its task and session copies
+  and the pushed cache, and reads the legacy files only as the fallback the first push
+  passes over. In the last 40 auto-saves of a real data repo they were about 360 of about
+  410 changed paths (the transcript tails, then the two projections). The files stay
+  tracked as they last were, never removed (an untrack would delete them on every box
+  that pulls it), so a box on an older build keeps them; `true` turns the rewrites back on.
+
+Still writing the box's data dir or read from it, owned by the other 4d slices: the
+notifications, the console's routines and cron, ui prefs and the Ask launch settings; the
+conversation list edits and the chat lane (3e); note pictures, notes keyword search,
+memory beyond MEMORY.md and USER.md, the lane's skills. Then `reconcileAfterPull` goes on
+the box, and git sync stops writing its data dir.
 
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 

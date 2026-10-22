@@ -7,7 +7,7 @@
  * Primary box: exportTaskProjection() rewrites the cache + pushes a
  * `projection-upsert` bridge frame when tasks change (debounced off task:*
  * bus events) and once at startup. While the config knob
- * `sync.legacy_projection_files` is true (default), it ALSO writes the
+ * `sync.legacy_projection_files` is true (off by default), it ALSO writes the
  * legacy git-tracked `tasks/projection.json` for cloud boxes still running
  * pre-cache code.
  * Cloud box: the pushed frames land in the same cache path (events-v1 →

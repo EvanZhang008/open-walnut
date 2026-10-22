@@ -1711,12 +1711,12 @@ export interface Config {
   };
   /** Data-sync transition knobs (Phase 3 of the data-architecture plan). */
   sync?: {
-    /** While true (DEFAULT), the projection exporters also write the legacy
-     *  git-tracked files (sessions/projection.json, tasks/projection.json,
+    /** While true, the projection exporters also write the legacy git-tracked
+     *  files (sessions/projection.json, tasks/projection.json,
      *  sessions/transcripts/) alongside the non-git cache/ copies, so a cloud
-     *  box still running pre-cache code keeps working off git-sync. Flip to
-     *  false after the cloud deploy to stop the git churn, then untrack +
-     *  gitignore those paths in the data repo. */
+     *  box still running pre-cache code keeps working off git-sync. Off by
+     *  default (stage 4d of the companion plan: a current companion reads its
+     *  copies and the pushed cache; projection-cache.ts). */
     legacy_projection_files?: boolean;
   };
 }

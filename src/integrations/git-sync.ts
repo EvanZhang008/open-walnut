@@ -830,14 +830,25 @@ sessions.json.*
  *    like models/, because a health folder inside notes/ is the user's own notes.
  *  - places/: the visits the iPhone records once the user turns Places on
  *    (places.sqlite). Same rule as health/, and root-anchored for the same reason.
+ *  - triage-state.json, session-requests.json, local/: each box's own runtime
+ *    state (the triage buffer, the reply-request ledger, the per-host spawn
+ *    journal; the reasons are in GITIGNORE_CONTENT). Ignored, but an install
+ *    older than those rules still tracked them, so the Mac committed them on
+ *    every change and the companion pulled them over its own (2026-10-21). The
+ *    companion reads the Mac's reply requests from its copy
+ *    (replication/kinds/requests.ts), and git was never their backup: a fresh
+ *    install never tracked them. local/ is root-anchored like models/.
  *
  * These are also actively untracked (see ensureMachineLocalUntracked): being
  * gitignored on THIS box while still tracked in the index is the dangerous
  * state — see that function for the incident this prevents.
  */
-const CRITICAL_IGNORE_FILES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
+const CRITICAL_IGNORE_FILES = [
+  'auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json',
+  'triage-state.json', 'session-requests.json',
+];
 /** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
-const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/'];
+const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/'];
 /**
  * The .gitignore LINE for a dir when it differs from the prefix. `models/` is
  * root-anchored: a `models` folder inside notes/ is user content, and an
@@ -845,7 +856,9 @@ const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/',
  * matcher stays on the bare prefix because `ls-files` prints repo-relative paths
  * (and git would take a leading `/` in that pathspec literally).
  */
-const CRITICAL_IGNORE_LINES: Record<string, string> = { 'health/': '/health/', 'models/': '/models/', 'places/': '/places/', 'voice-archive/': '/voice-archive/' };
+const CRITICAL_IGNORE_LINES: Record<string, string> = {
+  'health/': '/health/', 'models/': '/models/', 'places/': '/places/', 'voice-archive/': '/voice-archive/', 'local/': '/local/',
+};
 const CRITICAL_IGNORES = [
   ...CRITICAL_IGNORE_FILES,
   ...CRITICAL_IGNORE_DIRS.map((dir) => CRITICAL_IGNORE_LINES[dir] ?? dir),
@@ -893,8 +906,7 @@ const EXTRA_IGNORE_PATTERNS = [
   'memory/**/*.bak.*', 'tmp/', 'time-tracking/outside/', '*.conflicted-*', '*.corrupt-*',
   // quiet.json: machine-local runtime state (see GITIGNORE_CONTENT), new in 2026-09.
   'quiet.json',
-  // /local/: per-host records such as the spawn journal (see GITIGNORE_CONTENT), new in 2026-09.
-  '/local/',
+  // (/local/, new in 2026-09, is a CRITICAL_IGNORE_DIRS entry since 2026-10: untracked too.)
 ];
 
 /**

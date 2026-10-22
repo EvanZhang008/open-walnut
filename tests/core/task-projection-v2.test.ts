@@ -26,7 +26,8 @@ import {
 } from '../../src/core/task-projection.js';
 import { _resetForTesting, addTask, addTaskFull } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
-import { WALNUT_HOME } from '../../src/constants.js';
+import { CONFIG_FILE, WALNUT_HOME } from '../../src/constants.js';
+import { _resetProjectionCacheForTesting, projectionCachePath } from '../../src/core/projection-cache.js';
 import type { Task } from '../../src/core/types.js';
 
 /** Write a raw projection payload, bypassing the exporter (to forge old shapes). */
@@ -35,8 +36,9 @@ async function writeRawProjection(payload: unknown): Promise<void> {
   await fsp.writeFile(PROJECTION_FILE, JSON.stringify(payload, null, 2), 'utf-8');
 }
 
+/** What the exporter wrote: the projection cache (the legacy git file is off by default). */
 async function readRaw(): Promise<Record<string, unknown>> {
-  return JSON.parse(await fsp.readFile(PROJECTION_FILE, 'utf-8')) as Record<string, unknown>;
+  return JSON.parse(await fsp.readFile(projectionCachePath('tasks'), 'utf-8')) as Record<string, unknown>;
 }
 
 async function wipe(): Promise<void> {
@@ -131,6 +133,25 @@ describe('done-retention scope', () => {
     const titles = projection!.tasks.map((t) => t.title);
     expect(titles).not.toContain('Ancient pinned chore');
     expect(titles).not.toContain('Ancient loose chore');
+  });
+});
+
+describe('the legacy git file (sync.legacy_projection_files)', () => {
+  // Stage 4d of the companion plan: the rewrites were most of the Mac's git churn
+  // into the companion, which reads its task copy and this cache instead.
+  it('is not written by default; with the knob on it is written beside the cache', async () => {
+    _resetProjectionCacheForTesting();
+    await addTask({ title: 'Cache only', project: 'Marina' });
+    await exportTaskProjection();
+    await expect(fsp.access(PROJECTION_FILE)).rejects.toThrow();
+    expect(((await readRaw()).tasks as Array<{ title: string }>).map((t) => t.title)).toEqual(['Cache only']);
+
+    await fsp.writeFile(CONFIG_FILE, 'version: 1\nsync:\n  legacy_projection_files: true\n', 'utf-8');
+    _resetProjectionCacheForTesting();
+    await exportTaskProjection();
+    const legacy = JSON.parse(await fsp.readFile(PROJECTION_FILE, 'utf-8')) as { tasks: Array<{ title: string }> };
+    expect(legacy.tasks.map((t) => t.title)).toEqual(['Cache only']);
+    _resetProjectionCacheForTesting();
   });
 });
 
