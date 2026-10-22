@@ -1963,7 +1963,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             // message over through the draft key it reads on mount.
             if (result.restoredPrompt) {
               try {
-                localStorage.setItem(`draft:session:${result.sessionId}`, result.restoredPrompt);
+                localStorage.setItem(sessionDraftKey(result.sessionId), result.restoredPrompt);
               } catch { /* private browsing — the copy just opens with an empty box */ }
             }
             // Fork: the rewound session is a NEW id continuing the same task, so

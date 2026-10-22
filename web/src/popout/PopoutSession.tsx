@@ -1,105 +1,115 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
-import { useEvent } from '@/hooks/useWebSocket';
-import { wsClient } from '@/api/ws';
-import { trackSession } from '@/cache/session-cache';
-import { fetchSession } from '@/api/sessions';
-import type { SessionRecord } from '@/types/session';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
+import { draftComposerKey, type DraftColumn } from '@/components/sessions/draft-column';
+import { TasksProvider } from '@/contexts/TasksContext';
+import { NotificationProvider, useNotifications } from '@/contexts/notifications';
+import { FocusBarProvider } from '@/contexts/FocusBarContext';
+import { NotificationToaster } from '@/components/common/NotificationToaster';
+import { OperationErrorBridge } from '@/components/common/OperationErrorBridge';
+import { TransferDialogHost } from '@/components/transfer/TransferDialogHost';
+import { useConfirm } from '@/hooks/useConfirm';
+import { yieldFullscreen } from '@/hooks/useFullscreen';
+import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { fetchSession, forkSessionInWalnut } from '@/api/sessions';
+import type { ImageAttachment } from '@/api/chat';
+import { openPopout, popoutPath } from './openPopout';
+import './popout-session.css';
 
-/**
- * Standalone READ-ONLY session viewer for a pop-out window.
- *
- * Renders the shared `SessionChatHistory` (history + live stream) filling the
- * window. Unlike the in-app SessionPanel, it mounts NO task lists, ChatInput,
- * or app-shell providers — the window holds only the one WS connection that
- * `SessionChatHistory` needs.
- *
- * To avoid receiving the full event firehose in this extra window, on mount we
- * narrow the connection's server-side interest to this single session
- * (`setInterest('lightweight', [id])`) and `trackSession(id)` so the global
- * session-cache listeners accumulate its stream. Interest is per-connection and
- * RESETS on reconnect, so we re-apply it on `_ws:reconnected`. On unmount we
- * restore the firehose (`setInterest('global')`) so the main window (if any,
- * sharing this origin's connection in its own tab) isn't left starved.
- *
- * Interaction callbacks (send/edit/delete/retry) are intentionally omitted — the
- * pop-out is a viewer. `SessionChatHistory` renders fine with them undefined.
- *
- * Layout uses a small `.popout-session` wrapper (see globals.css) mirroring the
- * `.popout-file` precedent so the scroll container fills the window.
- */
 export function PopoutSession() {
-  const [params] = useSearchParams();
+  return <TasksProvider><NotificationProvider><FocusBarProvider>
+    <PopoutSessionPanel />
+    <NotificationToaster />
+    <OperationErrorBridge />
+    <TransferDialogHost />
+  </FocusBarProvider></NotificationProvider></TasksProvider>;
+}
+
+function PopoutSessionPanel() {
+  const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const id = params.get('id') ?? '';
-  const host = params.get('host') ?? undefined;
-  const cwd = params.get('cwd') ?? undefined;
+  const [fork, setFork] = useState<DraftColumn | null>(null);
+  const [forking, setForking] = useState(false);
+  const { notify } = useNotifications();
+  const confirm = useConfirm();
+  const { isKnownProject } = useProjectRegistry();
 
-  const [session, setSession] = useState<SessionRecord | null>(null);
-
-  // Narrow this connection's interest to just this session so the pop-out
-  // doesn't pull the whole firehose. Re-applied on reconnect below.
-  const applyInterest = useCallback(() => {
-    if (!id) return;
-    wsClient.setInterest('lightweight', [id]).catch(() => {});
-  }, [id]);
-
-  useEffect(() => {
-    if (!id) return;
-    trackSession(id);
-    applyInterest();
-    // Restore the firehose when this window closes/unmounts.
-    return () => {
-      wsClient.setInterest('global').catch(() => {});
-    };
-  }, [id, applyInterest]);
-
-  // Interest is per-connection and resets when the socket reconnects — re-apply.
-  useEvent('_ws:reconnected', applyInterest);
-
-  // Fetch metadata for the header title + to fill cwd/host if not in the URL.
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    fetchSession(id)
-      .then((s) => { if (!cancelled) setSession(s); })
-      .catch(() => {});
+    fetchSession(id).then(session => {
+      if (!cancelled) document.title = `${session?.title || session?.description || 'Session'} · Walnut`;
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, [id]);
 
-  useEffect(() => {
-    const t = session?.title || session?.description || session?.slug || id;
-    if (t) document.title = `${t} — Walnut`;
-  }, [session, id]);
+  const replaceSession = useCallback((_oldId: string, newId: string) => {
+    setParams(previous => {
+      const next = new URLSearchParams(previous);
+      next.set('id', newId);
+      return next;
+    }, { replace: true });
+  }, [setParams]);
 
-  if (!id) {
-    return (
-      <div className="popout-stub">
-        <h2>No session</h2>
-        <code>(no session)</code>
-      </div>
-    );
-  }
+  const closeFork = useCallback(async () => {
+    if (!fork || forking) return;
+    const text = document.querySelector<HTMLTextAreaElement>('.popout-session-fork textarea')?.value ?? localStorage.getItem(draftComposerKey(fork.id));
+    const hasImages = document.querySelector('.popout-session-fork .chat-image-preview') != null;
+    if ((text?.trim() || hasImages) && !await confirm({ title: 'Close fork draft?', message: 'The unsent fork message will be discarded.', confirmLabel: 'Discard and Close', cancelLabel: 'Keep Open' })) return;
+    localStorage.removeItem(draftComposerKey(fork.id));
+    setFork(null);
+  }, [fork, forking, confirm]);
 
-  const title = session?.title || session?.description || session?.slug || id;
-  const resolvedCwd = session?.cwd ?? cwd;
-  const resolvedHost = session?.host ?? host;
+  const startFork = useCallback(async (_draftId: string, text: string, images?: ImageAttachment[]) => {
+    if (!fork?.forkOf || forking) return false;
+    setForking(true);
+    try {
+      const result = await forkSessionInWalnut(fork.forkOf.sessionId, {
+        ...(text.trim() ? { message: text.trim() } : {}),
+        ...(images?.length ? { images } : {}),
+        ...(fork.metaTouched && fork.meta.model ? { model: fork.meta.model } : {}),
+      });
+      navigate(popoutPath('session', { id: result.sessionId }));
+      setFork(null);
+      return true;
+    } catch (error) {
+      notify({ kind: 'operation-error', severity: 'error', title: 'Could not fork session', body: error instanceof Error ? error.message : 'Try again.', persistent: false, dedupKey: 'popout-fork-error' });
+      return false;
+    } finally { setForking(false); }
+  }, [fork, forking, navigate, notify]);
 
-  return (
-    <div className="popout-session">
-      <div className="popout-session-header">
-        <span className="popout-session-title" title={id}>{title}</span>
-        {resolvedHost && <span className="popout-session-host">SSH: {resolvedHost}</span>}
-      </div>
-      <div className="popout-session-body">
-        <SessionChatHistory
-          key={id}
-          sessionId={id}
-          engine={session?.engine}
-          sessionCwd={resolvedCwd}
-          sessionHost={resolvedHost}
-        />
-      </div>
-    </div>
-  );
+  if (!id) return <div className="popout-stub"><h2>No session</h2></div>;
+
+  return <div className="popout-session popout-session-interactive">
+    <SessionPanel
+      key={id}
+      sessionId={id}
+      embedded
+      onClose={() => window.close()}
+      onSessionClick={sessionId => openPopout('session', { id: sessionId })}
+      onTaskClick={taskId => openPopout('task', { id: taskId })}
+      onOpenTaskDetail={taskId => openPopout('task', { id: taskId })}
+      onSessionReplaced={replaceSession}
+      onOpenForkDraft={seed => {
+        if (fork) return;
+        yieldFullscreen('popout-fork');
+        setFork({ ...seed, id: `popout-fork:${Date.now()}`, meta: { unread: false, priority: 'none', pinTier: undefined, model: seed.model, engine: undefined } });
+      }}
+    />
+    {fork && <div className="popout-session-fork" aria-busy={forking}>
+      <DraftSessionPanel
+        draft={fork}
+        autoFocus
+        onStart={startFork}
+        onSaveAsTask={() => {}}
+        onClose={() => { void closeFork(); }}
+        onPathChange={(_id, path, meta) => setFork(current => current && { ...current, cwd: path.cwd, host: path.host ?? null, meta })}
+        onProjectChange={(_id, project) => setFork(current => current && { ...current, project })}
+        onMetaChange={(_id, update) => setFork(current => current && { ...current, meta: update(current.meta), metaTouched: true })}
+        isKnownProject={isKnownProject}
+      />
+    </div>}
+  </div>;
 }
