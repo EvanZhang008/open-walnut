@@ -514,6 +514,11 @@ walnut tools call human_inbox_send @/tmp/digest.json      # read the file
 walnut tools call human_inbox_send - < /tmp/digest.json   # read stdin
 ```
 
+**While the Walnut server is away**, your host may keep a letter of up to 1MB for it.
+The answer then says `queued` and gives the `letterId`; the letter reaches the inbox,
+dated when you sent it, once the server is back. Do not send it again. A bigger one
+needs the server.
+
 When the human answers or replies, it arrives in this session as a message;
 answer into the same thread:
 

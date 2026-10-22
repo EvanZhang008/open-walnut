@@ -371,7 +371,7 @@ describe('runOfflineHandover over journal v2', () => {
     // `conversation-edit`: the cloud companion's (apply-session-meta.ts,
     // apply-inbox-state.ts, apply-chat-turn.ts, apply-memory.ts, apply-note-move.ts,
     // apply-note-attachment.ts, apply-conversation-edit.ts).
-    expect(drain.params).toEqual({ home: WALNUT_HOME, kinds: ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit'] })
+    expect(drain.params).toEqual({ home: WALNUT_HOME, kinds: ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit', 'letter'] })
     // `now`: the Mac's clock as it acks (a host replica's overlay compares a manifest's asOf on it).
     expect(d.calls.filter((c) => c.cmd === 'offline.ack').map((c) => c.params)).toEqual([{ home: WALNUT_HOME, seqs: [1, 2], now: expect.any(Number) }])
     expect(d.pending.size).toBe(0)

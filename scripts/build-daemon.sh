@@ -136,6 +136,7 @@ SOURCES=(
   src/providers/host-resume-core.ts
   src/providers/host-start-core.ts
   src/core/sessions/open-items-text.ts
+  src/core/human-inbox/letter-check.ts
   src/providers/git-diff-core.ts
   src/providers/bridge-uplink-core.ts
   src/providers/workspace-core.ts

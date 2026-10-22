@@ -24,6 +24,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { ensureLetterBridge, mirrorLetterReadState } from '../notifications/letter-bridge.js';
 import { derivePreview, truncatePreview } from './preview.js';
+import { createLetterCheck } from './letter-check.js';
 import {
   BODY_FILE_RE,
   CLIENT_ID_RE,
@@ -37,7 +38,6 @@ import {
 import { statStagedBody, takeStagedBody } from './staged-body.js';
 import {
   LETTER_INLINE_BODY_MAX_BYTES,
-  LETTER_TYPES,
   letterFieldMaxBytes,
   type AgentReplyInput,
   type LetterDetail,
@@ -167,18 +167,14 @@ function generateId(): string {
 const THREAD_TEXT_MAX_CHARS = 4_000;
 
 /**
- * Index-resident field caps. Bodies are files, but actions, task refs and thread
- * text live IN index.json — which every letter operation (and every panel
- * refresh) reads, parses and rewrites on the server's single event loop. Without
- * these, one send under the express body limit could leave a multi-MB index
- * behind that only hand-editing could undo (archive is not a delete).
+ * The shape rules of a new letter (letter-check.ts), shared with the daemon's offline
+ * host. Its caps on actions and task refs are index-resident field caps: bodies are
+ * files, but actions, task refs and thread text live IN index.json, which every letter
+ * operation (and every panel refresh) reads, parses and rewrites on the server's single
+ * event loop. Without them, one send under the express body limit could leave a multi-MB
+ * index behind that only hand-editing could undo (archive is not a delete).
  */
-const MAX_ACTIONS = 12;
-const ACTION_ID_MAX_CHARS = 64;
-const ACTION_LABEL_MAX_CHARS = 200;
-const ACTION_DESCRIPTION_MAX_CHARS = 500;
-const MAX_TASK_REFS = 50;
-const TASK_REF_MAX_CHARS = 200;
+const letterCheck = createLetterCheck();
 
 /** Keep newlines (a reply is prose); truncatePreview would flatten them. */
 function boundThreadText(text: string): string {
@@ -451,68 +447,57 @@ function emitLetterEvent(
 // ── Public API ──
 
 /**
+ * How a letter written elsewhere keeps what it was given there: a session's letter a
+ * host saved while the server was away, sent when this Mac drains it
+ * (offline-merge/apply-letter.ts). No other caller passes these.
+ */
+export interface SendLetterOptions {
+  /** The id the host gave the session. A taken id gets a new one. */
+  id?: string;
+  /** When it was written (epoch ms, on this server's clock); never later than now. */
+  createdAt?: number;
+  /** The journal op it came from: a second send of it answers the letter already sent. */
+  opKey?: string;
+}
+
+/** The letter a journal op already sent (`createdByOp`), or null. */
+export async function findLetterByOp(opKey: string): Promise<LetterRecord | null> {
+  if (!opKey) return null;
+  return (await readStore()).letters.find(l => l.createdByOp === opKey) ?? null;
+}
+
+/**
  * Persist a new letter: body to its own file, envelope to the index.
  *
  * Validation is deliberately strict (a letter is a document a human will read
  * blind on a phone): non-empty subject, a known type, EXACTLY one body format,
- * and buttons only on the one type that means "I need a decision".
+ * and buttons only on the one type that means "I need a decision" (letter-check.ts).
  */
-export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
-  const subject = str(input.subject).trim();
-  if (!subject) throw invalid('subject is required');
-  if (!LETTER_TYPES.includes(input.type)) {
-    throw invalid(`type must be one of ${LETTER_TYPES.join(', ')}`);
-  }
-  const htmlRef = str(input.htmlRef ?? input.html_ref ?? '');
-  const hasHtml = typeof input.html === 'string' && input.html.length > 0;
-  const hasHtmlRef = htmlRef.length > 0;
-  const hasMarkdown = typeof input.markdown === 'string' && input.markdown.length > 0;
-  const bodyLanes = [hasHtml, hasHtmlRef, hasMarkdown].filter(Boolean).length;
-  if (bodyLanes !== 1) {
-    throw invalid('exactly one of html | html_ref | markdown is required');
-  }
+export async function sendLetter(input: NewLetter, opts: SendLetterOptions = {}): Promise<LetterRecord> {
+  return (await sendLetterOnce(input, opts)).letter;
+}
+
+/**
+ * sendLetter, also saying whether `opts.opKey` named a letter already sent: then
+ * nothing is written and no event goes out, so a drain that runs twice sends once.
+ */
+export async function sendLetterOnce(
+  input: NewLetter,
+  opts: SendLetterOptions = {},
+): Promise<{ letter: LetterRecord; duplicate: boolean }> {
+  const checked = letterCheck.shape(input as unknown as Record<string, unknown>);
+  if (!checked.ok) throw invalid(checked.message);
+  const { subject, lane, format: bodyFormat } = checked.shape;
   const actions = input.actions;
-  // An action_required letter with no buttons is a dead end: the reader shows a
-  // subject and a decision badge with nothing to decide with, and the human is
-  // left guessing what the options even were (2026-08-30, a real letter). The
-  // type is the PROMISE of an affordance, so it is required here rather than
-  // patched over in each reader.
-  if (input.type === 'action_required') {
-    if (!Array.isArray(actions) || actions.length === 0) {
-      throw invalid(
-        'action_required needs at least one action in `actions` — that is what the human taps; '
-        + 'use type=review or info if the human only needs to read this',
-      );
-    }
-  } else if (actions !== undefined) {
-    throw invalid('actions are only allowed when type is action_required');
-  }
-  if (actions !== undefined) {
-    if (actions.length > MAX_ACTIONS) {
-      throw invalid(`at most ${MAX_ACTIONS} actions — a letter asks ONE question the human can answer with one tap`);
-    }
-    for (const action of actions) {
-      if (!action || typeof action !== 'object' || !str(action.id).trim() || !str(action.label).trim()) {
-        throw invalid('each action needs a non-empty id and label');
-      }
-      if (str(action.id).length > ACTION_ID_MAX_CHARS) {
-        throw invalid(`action id is over ${ACTION_ID_MAX_CHARS} chars`);
-      }
-      if (str(action.label).length > ACTION_LABEL_MAX_CHARS) {
-        throw invalid(`action label is over ${ACTION_LABEL_MAX_CHARS} chars — a button label, not a paragraph`);
-      }
-      if (action.description !== undefined && str(action.description).length > ACTION_DESCRIPTION_MAX_CHARS) {
-        throw invalid(`action description is over ${ACTION_DESCRIPTION_MAX_CHARS} chars — put the detail in the body`);
-      }
-    }
-    const ids = new Set(actions.map(a => a.id));
-    if (ids.size !== actions.length) throw invalid('action ids must be unique');
+  const opKey = typeof opts.opKey === 'string' && opts.opKey ? opts.opKey : undefined;
+  if (opKey) {
+    const first = await findLetterByOp(opKey);
+    if (first) return { letter: first, duplicate: true };
   }
 
-  const bodyFormat = hasMarkdown ? 'markdown' : 'html';
   const bodySource = await resolveBodySource(
-    hasMarkdown ? input.markdown : input.html,
-    hasHtmlRef ? htmlRef : undefined,
+    lane === 'markdown' ? input.markdown : input.html,
+    lane === 'html_ref' ? str(input.htmlRef ?? input.html_ref ?? '') : undefined,
     bodyFormat,
   );
   // The preview only ever reads the first few thousand chars (derivePreview), so
@@ -521,7 +506,19 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
     ? bodySource.text
     : await peekStagedBody(bodySource.ref);
 
-  const id = generateId();
+  let id = generateId();
+  if (typeof opts.id === 'string' && LETTER_ID_RE.test(opts.id)) {
+    // Checked before the body is written: a body file is named by its letter's id.
+    if ((await readStore()).letters.some(l => l.id === opts.id)) {
+      log.notif.warn('human-inbox: the given letter id is taken; the letter gets a new one', { givenId: opts.id, letterId: id, opKey });
+    } else {
+      id = opts.id;
+    }
+  }
+  const createdAt = typeof opts.createdAt === 'number' && Number.isFinite(opts.createdAt) && opts.createdAt > 0
+    ? Math.min(Math.round(opts.createdAt), Date.now())
+    : Date.now();
+  const refs = letterCheck.taskRefs(input.taskRefs ?? input.task_refs);
   const record: LetterRecord = {
     id,
     subject: truncatePreview(subject, 200),
@@ -532,7 +529,7 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
       ...(bodyFormat === 'html' ? { html: previewSource } : { markdown: previewSource }),
     }),
     sender: normalizeSender(input.sender),
-    createdAt: Date.now(),
+    createdAt,
     read: false,
     pinned: input.pin === true,
     archived: false,
@@ -541,31 +538,40 @@ export async function sendLetter(input: NewLetter): Promise<LetterRecord> {
     bodyBytes: bodySource.bytes,
     thread: [],
     ...(actions ? { actions: actions.map(a => ({ ...a })) } : {}),
-    ...(() => {
-      // Bounded, not rejected: task refs are a courtesy (pills under the body),
-      // so a chatty caller loses the tail instead of losing the whole letter.
-      const refs = (input.taskRefs ?? input.task_refs ?? [])
-        .filter(t => typeof t === 'string' && t && t.length <= TASK_REF_MAX_CHARS)
-        .slice(0, MAX_TASK_REFS);
-      return refs.length > 0 ? { taskRefs: refs } : {};
-    })(),
+    // Bounded, not rejected: task refs are a courtesy (pills under the body),
+    // so a chatty caller loses the tail instead of losing the whole letter.
+    ...(refs.length > 0 ? { taskRefs: refs } : {}),
+    ...(opKey ? { createdByOp: opKey } : {}),
   };
 
   // Body first: an index entry pointing at a file that was never written would
   // read as a corrupt letter. A body file with no index entry is invisible junk.
+  const bodyFile = path.join(BODIES_DIR, `${id}.${bodyExt(bodyFormat)}`);
   await commitBodySource(`${id}.${bodyExt(bodyFormat)}`, bodySource);
+  let first: LetterRecord | null = null;
   try {
-    await withWriteLock(() => withStore((store) => { store.letters.push(record); }));
+    await withWriteLock(() => withStore((store) => {
+      // The same op sent meanwhile (checked again under the lock): keep that one.
+      const sent = opKey ? store.letters.find(l => l.createdByOp === opKey) : undefined;
+      if (sent) { first = { ...sent }; return; }
+      store.letters.push(record);
+    }));
   } catch (err) {
-    await fsp.rm(path.join(BODIES_DIR, `${id}.${bodyExt(bodyFormat)}`), { force: true }).catch(() => {});
+    await fsp.rm(bodyFile, { force: true }).catch(() => {});
     throw err;
+  }
+  if (first) {
+    const kept: LetterRecord = first;
+    if (kept.id !== id) await fsp.rm(bodyFile, { force: true }).catch(() => {});
+    return { letter: kept, duplicate: true };
   }
 
   log.notif.info('human-inbox: letter sent', {
     letterId: id, type: record.type, senderSessionId: record.sender.sessionId, host: record.sender.host,
+    ...(opKey ? { opKey, createdAt } : {}),
   });
   emitLetterEvent(record, 'new', record.textPreview);
-  return record;
+  return { letter: record, duplicate: false };
 }
 
 /** Pinned first, then newest — what both the rail and the phone list want. */

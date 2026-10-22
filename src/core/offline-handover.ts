@@ -396,7 +396,8 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
   const { lookupJournaled, recordApplied, reserveJournaled } = await import('./offline-merge/ledger.js');
   const actor = (record as { actor?: { kind?: string; deviceId?: string; name?: string } }).actor;
   const callerSid = record.kind === 'op' ? record.callerSid : actor?.kind === 'session' ? String((actor as { sid?: unknown }).sid ?? '') : '';
-  const opName = record.kind === 'op' ? record.op : record.kind;
+  // The op a session called, for the notice it gets when its write did not land.
+  const opName = record.kind === 'op' ? record.op : (record.kind as string) === 'letter' ? 'human_inbox_send' : record.kind;
   const retryKey = `${host}|${opId ?? `seq:${record.seq}`}`;
   // A record whose letter entry could not be written waits out its backoff first.
   const letterWait = letterFailing.get(retryKey);
@@ -803,7 +804,7 @@ async function tellCallers(unapplied: Unapplied[]): Promise<void> {
         attrs: { from: 'Walnut', note: 'automated Walnut status notice' },
         body: [
           'While the Walnut server was away, this host saved changes you made and said they would be applied later. These were NOT applied:',
-          ...items.map((u) => `- ${u.op} ${u.taskId}: ${u.reason}`),
+          ...items.map((u) => `- ${u.op}${u.taskId ? ` ${u.taskId}` : ''}: ${u.reason}`),
           'Read the task (walnut tools call task_get) and redo the change if it still applies.',
         ].join('\n'),
       });

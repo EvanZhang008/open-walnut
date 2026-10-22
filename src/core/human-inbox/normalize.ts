@@ -163,6 +163,8 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     ...(Array.isArray(r.taskRefs)
       ? { taskRefs: r.taskRefs.filter((t): t is string => typeof t === 'string') }
       : {}),
+    // A rewrite must keep it: it is what makes a redrain of the same journal op a no-op.
+    ...(typeof r.createdByOp === 'string' && r.createdByOp ? { createdByOp: r.createdByOp } : {}),
   };
 }
 

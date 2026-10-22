@@ -11,7 +11,8 @@
  *   journal-<key>.state.json  {v:2, journalId, nextSeq, frozen, rows, settledCopies, ...}
  *   journal-<key>.lock        the per-home writer lock (O_EXCL, pid plus start time)
  *   blobs/<sha256>            content-addressed bodies: a note's (`baseBlob`, `oursBlob`), and
- *                             any other record's texts (named in its `blobs`, appendBlobs)
+ *                             any other record's texts (named in its `blobs`, appendBlobs: a
+ *                             companion chat turn's, a letter's body)
  *
  * Rules this file owns:
  *   - a record is `{v:2, seq, opId, rev, at, actor?, kind, supersedes?, ...}`; readers fold by
@@ -122,7 +123,7 @@ export interface OfflineJournalDeps {
 /** v1 kinds: every Mac drains these. 'op' is v1 only. */
 export const JOURNAL_V1_KINDS = ['row', 'settle', 'delivery', 'settings', 'stop', 'resume', 'op']
 /** v2 kinds a new Mac lists in `leader.configure {drains}` (device-actor is a capability, not a kind). */
-export const JOURNAL_V2_DRAINS = ['task-fields', 'task-create', 'task-move', 'board', 'note', 'session', 'device-actor', 'device-revoke']
+export const JOURNAL_V2_DRAINS = ['task-fields', 'task-create', 'task-move', 'board', 'note', 'session', 'device-actor', 'device-revoke', 'letter']
 
 /** Options of one append (a type only: the factory below stays self-contained as text). */
 export interface AppendOpts {

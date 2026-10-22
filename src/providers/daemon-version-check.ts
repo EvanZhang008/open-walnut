@@ -189,6 +189,8 @@ const DAEMON_SOURCE_FILES = [
   // A new ask while the Mac is away (replica-start-v1): same import-or-inline rule.
   'src/providers/host-start-core.ts',
   'src/core/sessions/open-items-text.ts',
+  // A letter from a session, checked on the host while the Mac is away: same rule.
+  'src/core/human-inbox/letter-check.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
   // The paced bridge uplink and loop-drift probe: same import-or-inline rule.
