@@ -96,10 +96,7 @@ export function __resetBannerUndoForTests(): void { undoEntries = []; undoListen
 export function useBannerUndo({ pointerInside, reducedMotion, onGone, root }: UndoOptions) {
   const all = useSyncExternalStore(subscribeUndo, getUndo, getUndo);
   const setEntries = setUndoEntries;
-  // A line whose window ended while no card was on screen never comes back.
-  const entries = all.some((e) => Date.now() - e.shownAt >= UNDO_MAX_MS + UNDO_COLLAPSE_MS)
-    ? all.filter((e) => Date.now() - e.shownAt < UNDO_MAX_MS + UNDO_COLLAPSE_MS) : all;
-  useEffect(() => { if (entries !== all) setEntries(entries); }, [entries, all, setEntries]);
+  const entries = all;
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
   const onGoneRef = useRef(onGone);
@@ -122,6 +119,12 @@ export function useBannerUndo({ pointerInside, reducedMotion, onGone, root }: Un
     setEntries(drop);
     onGoneRef.current(gone, hadFocus);
   }, [root, setEntries]);
+
+  useLayoutEffect(() => {
+    for (const entry of entries) {
+      if (Date.now() - entry.shownAt >= UNDO_MAX_MS + UNDO_COLLAPSE_MS) remove(entry.id);
+    }
+  });
 
   const undo = useCallback((id: string) => {
     const e = undoEntries.find((x) => x.id === id);

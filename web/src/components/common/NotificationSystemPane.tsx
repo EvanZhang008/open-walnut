@@ -21,6 +21,7 @@ import { useAllHostStatus } from '@/hooks/useHostStatus';
 import { hostProblemOf } from '@open-walnut/host-problem';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { NotificationHostRow } from './NotificationHostRow';
+import { HostFixButton } from './HostFixButton';
 import { NotificationUpdateCard } from './NotificationUpdateCard';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import '@/styles/attention-banner.css';
@@ -98,10 +99,11 @@ export interface NotificationSystemPaneProps {
   disabled: ReadonlySet<string>;
   /** Called before any navigation away (Open Settings, Open API settings): the panel closes. */
   onLeave?: () => void;
+  onNavigate?: (to: string) => void;
 }
 
 export const NotificationSystemPane = memo(function NotificationSystemPane(
-  { indexStatus, disabled, onLeave }: NotificationSystemPaneProps,
+  { indexStatus, disabled, onLeave, onNavigate }: NotificationSystemPaneProps,
 ) {
   const { health, gitSync, loading } = useSystemHealth();
   const statuses = useAllHostStatus();
@@ -144,7 +146,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
 
           <ul className="notification-card-details nfc-host-list">
             {health.daemons.map((d) => (
-              <NotificationHostRow key={d.host} daemon={d} disabled={disabled.has(d.host)} onOpenSettings={onOpenSettings} />
+              <NotificationHostRow key={d.host} daemon={d} disabled={disabled.has(d.host)} onOpenSettings={onOpenSettings} onNavigate={onNavigate} />
             ))}
           </ul>
         </div>
@@ -159,6 +161,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
           </span>
           <span className="notification-card-label">Data Backup</span>
         </div>
+        {!gitOk && <HostFixButton target={{ system: 'backup' }} name="Data Backup" onNavigate={onNavigate} />}
 
         <div className="notification-card-details">
           {!gitSync.protected ? (
@@ -220,6 +223,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
             </span>
             <span className="notification-card-label">Embedding Search</span>
           </div>
+          {indexStatus.status === 'error' && <HostFixButton target={{ system: 'search' }} name="Embedding Search" onNavigate={onNavigate} />}
 
           <div className="notification-card-details">
             <div className="notification-detail-row">

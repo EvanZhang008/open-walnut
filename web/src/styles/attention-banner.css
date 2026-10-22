@@ -1,6 +1,14 @@
 /* The home attention banner (AttentionBanner + HostProblemRows). The card is
    the setup banner's (.setup-banner in globals.css); existing variables only. */
 
+.host-agent-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; max-width: 100%; margin: 4px 0; }
+.host-agent-fix-button { flex: none; }
+.host-agent-fix-error { flex: 1 1 100%; color: var(--error); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 72px; overflow-y: auto; }
+/* Repair is an explicit row action, not part of the compact primary-action cap. */
+.attention-banner .hpb-row .host-agent-fix { flex: 0 1 auto; margin: 0; }
+.attention-banner .hpb-row:has(.host-agent-fix) > .hpb-body { flex-wrap: wrap; }
+
+
 .attention-banner {
   position: relative;
   container-type: inline-size;

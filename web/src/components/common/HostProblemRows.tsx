@@ -29,6 +29,7 @@ import { activeStepLabel } from '@/utils/host-connect';
 import type { BannerRow } from '@/utils/attention-banner-model';
 import { useRowExpanded } from '@/utils/attention-banner-session';
 import { log } from '@/utils/log';
+import { HostFixButton } from './HostFixButton';
 
 export interface HostRowProps {
   row: BannerRow;
@@ -47,6 +48,7 @@ export interface HostRowProps {
    */
   statusList?: boolean;
   onOpenSettings: (alias?: string) => void;
+  onNavigate?: (to: string) => void;
 }
 
 /** A button whose width never changes with its text: every label it may show reserves the cell. */
@@ -252,7 +254,7 @@ export function splitReadinessMessage(message: string): { head: string; rest: st
 }
 
 /** A row for ONE host: connect failure, reconnect with a cause, readiness, or an attempt in flight. */
-export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving, onDismiss, statusList, onOpenSettings }: HostRowProps) {
+export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving, onDismiss, statusList, onOpenSettings, onNavigate }: HostRowProps) {
   const alias = row.hosts[0];
   const label = row.labels[0];
   const status = useHostStatus(alias);
@@ -281,7 +283,7 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
       : null)
     : <ActionButtons ids={ids} actions={actions} alias={alias} name={label} fixFailed={fixFailed && !!autofix}
         onOpenSettings={onOpenSettings} onLock={lock} />;
-  const after = <>{actionsNode}<Receipts actions={actions} /></>;
+  const after = <>{actionsNode}{row.type !== 'trying' && <HostFixButton target={{ host: row.hosts.length === 1 ? row.hosts[0] : row.hosts }} name={row.labels.join(', ')} onNavigate={onNavigate} />}<Receipts actions={actions} /></>;
   let body: ReactNode;
   if (trying) {
     const mine = userRetry || actions.pending === 'fix';
@@ -359,7 +361,7 @@ function groupActionKey(hosts: readonly string[]): string {
  * From the click until every member settles the row is the user's own attempt:
  * 'Connecting to Cert box and Cert box 2...' with a disabled 'Retrying...'.
  */
-export function GroupRow({ row, defaultExpanded, singleLine, dense, leaving, onDismiss, onOpenSettings }: HostRowProps) {
+export function GroupRow({ row, defaultExpanded, singleLine, dense, leaving, onDismiss, onOpenSettings, onNavigate }: HostRowProps) {
   const [expanded, setExpanded] = useRowExpanded(row.id, defaultExpanded);
   const hostsKey = row.hosts.join(' ');
   const key = useSyncExternalStore(subscribeHostActions, () => groupActionKey(row.hosts), () => groupActionKey(row.hosts));
@@ -386,7 +388,7 @@ export function GroupRow({ row, defaultExpanded, singleLine, dense, leaving, onD
       <ActionButtons ids={singleLine || (dense && !expanded) ? row.actions.slice(0, 1) : row.actions} actions={actions} alias={row.hosts[0]} name={row.labels.join(', ')} many={row.hosts.length > 1}
         onOpenSettings={onOpenSettings} onLock={lock} />
     );
-  const after = <>{actionsNode}<Receipts actions={actions} /></>;
+  const after = <>{actionsNode}{row.type !== 'trying' && <HostFixButton target={{ host: row.hosts.length === 1 ? row.hosts[0] : row.hosts }} name={row.labels.join(', ')} onNavigate={onNavigate} />}<Receipts actions={actions} /></>;
   const body = row.type === 'trying' || pending
     ? (
       <>

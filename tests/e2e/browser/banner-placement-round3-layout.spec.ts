@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { CHAT_VISIBLE_KEY, banner, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, row } from './host-problems-helpers'
+import { CHAT_VISIBLE_KEY, banner, expandSystemAttention, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, row } from './host-problems-helpers'
 import { openDraft } from './draft-helpers'
 import { loadApp, loadFixture, openPicker, picker } from './host-problems-fixture-helpers'
 import { BP_SHOTS, boxGap, bpSetup, fixtureHosts, hostsOf } from './banner-placement-helpers'
@@ -52,6 +52,7 @@ test.describe('every problem at a glance (N1, N9)', () => {
   test('BP-R3-N1: 1280x800, four problems: each row starts as its headline and one action, and all four headlines show', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await page.waitForTimeout(400)
     const v = await listView(banner(page))
@@ -66,6 +67,7 @@ test.describe('every problem at a glance (N1, N9)', () => {
   test('BP-R3-N1: 980x800, chat hidden (the report): shown headlines are whole, the rest are one click away, nothing is cut in half', async ({ page }) => {
     await page.setViewportSize({ width: 980, height: 800 })
     await bpSetup(page, { hosts: fixtureHosts(), before: chatHidden })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await page.waitForTimeout(400)
     const v = await listView(banner(page))
@@ -90,6 +92,7 @@ test.describe('one scroll region, a whole local sentence, a footer that stays (N
   test('BP-R3-N2: 980x600, local sign-in over four hosts: the card never scrolls, the host list is the one scroller, the fix reads whole, Dismiss all shows', async ({ page }) => {
     await page.setViewportSize({ width: 980, height: 600 })
     await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in', before: chatHidden })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 20_000 })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await page.waitForTimeout(400)
@@ -117,6 +120,7 @@ test.describe('one scroll region, a whole local sentence, a footer that stays (N
 
   test('BP-R3-N4: five problems: the cap link reads and 2 more and no scroll cue says more below beside it', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('devbox', 'Dev box', 'unreachable'), ...fixtureHosts().filter((h) => h.host !== 'devbox')] })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('.hpb-more')).toHaveText('and 2 more', { timeout: 20_000 })
     await page.waitForTimeout(300)
     await expect(banner(page).locator('[data-testid="hpb-below"]')).toHaveCount(0)
@@ -126,6 +130,7 @@ test.describe('one scroll region, a whole local sentence, a footer that stays (N
   test('BP-R3-N8 + N16: Dismiss all is a quiet text button that stays put while the list scrolls', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 600 })
     await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const all = banner(page).locator('.ab-dismiss-all')
     const retry = row(page, 'keybox').getByTestId('hpb-retry')
@@ -152,6 +157,7 @@ test.describe('narrow and compact (N3, N10)', () => {
   test('BP-R3-N10: a task panel dragged to 20% of 980: whole host names, no sideways scrolling', async ({ page }) => {
     await page.setViewportSize({ width: 980, height: 800 })
     await bpSetup(page, { hosts: fixtureHosts(), before: async (p) => { await chatHidden(p); await p.addInitScript(() => localStorage.setItem('open-walnut-todo-width', '20')) } })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await page.waitForTimeout(400)
     const m = await banner(page).evaluate((el) => {

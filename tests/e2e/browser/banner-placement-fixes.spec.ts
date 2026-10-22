@@ -15,14 +15,14 @@
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
-  CHAT_VISIBLE_KEY, banner, chatShownLayout, connected, failed, hideTaskPanel, isolatePrefs, now, resetServerHostFixture, row,
+  CHAT_VISIBLE_KEY, banner, chatShownLayout, connected, expandSystemAttention, failed, hideTaskPanel, isolatePrefs, now, resetServerHostFixture, row,
   showTaskPanel, signedOut,
 } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, FIXTURE_ORDER, bellDot, bpSetup, closePanel, expectHomeCardStill, fixtureHosts, goRail, hostErrorRecord, hostsOf,
+  BP_SHOTS, FIXTURE_ORDER, bellDot, bpSetup, closePanel, expectFocusAfterSystemAttention, expectHomeCardStill, fixtureHosts, goRail, hostErrorRecord, hostsOf,
   markHomeCard, openRow, openSystemHosts, pickRail, problemRow, problemRowHosts, railButton, systemHostRow, systemHosts,
-  systemRowHosts, toolbarHide,
+  systemRowHosts,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -70,6 +70,7 @@ test.describe('the first host row is always readable (N1, N2)', () => {
     test(`BP-N1: ${size.name}, a local sign-in over four host problems: the first host row shows its headline and a whole button`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height })
       await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in', before: size.narrow ? chatHidden : chatShownLayout })
+      await expandSystemAttention(page)
       await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
       await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible()
       await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
@@ -83,6 +84,7 @@ test.describe('the first host row is always readable (N1, N2)', () => {
     test(`BP-N2: ${size.name}, four host problems: row 1's headline and a whole button show without scrolling`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height })
       await bpSetup(page, { hosts: fixtureHosts(), before: size.narrow ? chatHidden : chatShownLayout })
+      await expandSystemAttention(page)
       await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
       await page.waitForTimeout(400)
       expect(await firstRowSeen(banner(page))).toMatchObject({ headline: true, button: true, host: 'keybox' })
@@ -109,6 +111,7 @@ async function visibleRows(card: Locator): Promise<{ total: number; visible: num
 test.describe('counts, cues and reading order (N3, N10, N13, N15)', () => {
   test('BP-N3: the card says how many hosts need attention; a clipped list fades and counts the rows below; and N more counts only unrendered rows', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await expect(banner(page).locator('.hpb-header .hpb-count')).toHaveText('(4)')
     await page.waitForTimeout(300)
@@ -124,6 +127,7 @@ test.describe('counts, cues and reading order (N3, N10, N13, N15)', () => {
 
   test('BP-N3: five problems: 5 hosts in the title; the rendered rows are the visible ones plus the cue; and 2 more are the rest', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('devbox', 'Dev box', 'unreachable'), ...fixtureHosts().filter((h) => h.host !== 'devbox')] })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('.hpb-more')).toHaveText('and 2 more', { timeout: 20_000 })
     await expect(banner(page).locator('.hpb-header .hpb-count')).toHaveText('(5)')
     await page.waitForTimeout(300)
@@ -135,6 +139,7 @@ test.describe('counts, cues and reading order (N3, N10, N13, N15)', () => {
 
   test('BP-N10 + BP-N15: every row starts with a bold headline naming its host, then its buttons, then details, then the x', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const order = await banner(page).locator('li.hpb-row[data-host]').evaluateAll((lis) => lis.map((li) => {
       const head = li.querySelector<HTMLElement>('.hft-headline, .hpb-headline')!
@@ -162,6 +167,7 @@ test.describe('counts, cues and reading order (N3, N10, N13, N15)', () => {
 
   test('BP-N13: the host subhead reads Remote hosts, as the System pane label does (no upper case)', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in' })
+    await expandSystemAttention(page)
     const sub = banner(page).locator('.hpb-subhead')
     await expect(sub).toHaveText('Remote hosts', { timeout: 20_000 })
     expect(await sub.evaluate((el) => [getComputedStyle(el).textTransform, (el as HTMLElement).innerText])).toEqual(['none', 'Remote hosts'])
@@ -170,6 +176,7 @@ test.describe('counts, cues and reading order (N3, N10, N13, N15)', () => {
 
   test('BP-N12: the local section copies with the same text Copy button as the host rows, at least 24px tall', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in' })
+    await expandSystemAttention(page)
     const copy = banner(page).locator('[data-testid="setup-banner-sign-in"] .setup-copy-btn')
     await expect(copy).toHaveText('Copy', { timeout: 20_000 })
     expect((await copy.boundingBox())!.height).toBeGreaterThanOrEqual(24)
@@ -181,6 +188,7 @@ test.describe('narrow and phone widths (N6, N11, C30, C31)', () => {
   test('BP-N6 + BP-C31: a 390x844 phone: the first row names its host (the headline wraps, never cut) and a button shows', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await page.waitForTimeout(300)
     const head = row(page, 'keybox').locator('.hft-headline')
@@ -193,6 +201,7 @@ test.describe('narrow and phone widths (N6, N11, C30, C31)', () => {
   test('BP-C30: a 980px window with a 300px task panel: the readiness row headline is 2 lines at most, folded and open', async ({ page }) => {
     await page.setViewportSize({ width: 980, height: 800 })
     await bpSetup(page, { hosts: [failed('certbox', 'Cert box', 'cert_expired', { retryAt: now() + 192_000 }), signedOut('signbox', 'Sign box')] })
+    await expandSystemAttention(page)
     await page.addStyleTag({ content: '.main-page-todo { flex: 0 0 300px !important; width: 300px !important; min-width: 0 !important; max-width: 300px !important; }' })
     await expect(row(page, 'signbox')).toBeVisible({ timeout: 20_000 })
     const lines = (l: Locator) => l.evaluate((el) => Math.round(el.getBoundingClientRect().height / (parseFloat(getComputedStyle(el).lineHeight) || 17)))
@@ -207,6 +216,7 @@ test.describe('narrow and phone widths (N6, N11, C30, C31)', () => {
   test('BP-N11: a 980px window: code breaks only between tokens (a host name or URL never splits)', async ({ page }) => {
     await page.setViewportSize({ width: 980, height: 800 })
     await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in', before: chatHidden })
+    await expandSystemAttention(page)
     await expect(row(page, 'keybox')).toBeVisible({ timeout: 20_000 })
     await openRow(row(page, 'keybox'))
     await expect(row(page, 'keybox').locator('.hft-hint')).toBeVisible()
@@ -251,6 +261,7 @@ async function focusInView(page: Page): Promise<{ inCard: boolean; whole: boolea
 test.describe('acting on a row (N4, N19)', () => {
   test('BP-N4: Retry on row 1 reads its result in place: the list never scrolls, the row keeps its height, the headline stays', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const r = row(page, 'keybox')
     const sc = banner(page).locator('.hpb-scroll')
@@ -268,23 +279,36 @@ test.describe('acting on a row (N4, N19)', () => {
   test('BP-N4: tabbing through the rows keeps each focused control whole and its row headline in view', async ({ page, browserName }) => {
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await bpSetup(page, { hosts: fixtureHosts() })
+    const disclosure = page.locator('.todo-panel .system-attention-toggle')
+    const body = page.locator('.todo-panel .system-attention-body')
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    await expect(body).toHaveAttribute('hidden', '')
+    await expect(body).toHaveAttribute('inert', '')
+    await disclosure.focus()
+    await page.keyboard.press('Space')
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+    await expect(body).not.toHaveAttribute('hidden')
+    await expect(body).not.toHaveAttribute('inert')
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
-    await toolbarHide(page).focus()
     let inCard = 0
-    for (let i = 0; i < 12; i++) {
+    let leftCard = false
+    for (let i = 0; i < 40; i++) {
       await page.keyboard.press(TAB)
       await page.waitForTimeout(50)
       const f = await focusInView(page)
-      if (!f.inCard) break
+      if (!f.inCard) { leftCard = true; break }
       inCard++
       expect(f.whole, `stop ${i}`).toBe(true)
       if (f.fits) expect(f.rowTopShown, `stop ${i}`).toBe(true)
     }
     expect(inCard).toBeGreaterThan(4)
+    expect(leftCard, 'Tab leaves the card rather than trapping focus').toBe(true)
+    await expectFocusAfterSystemAttention(page)
   })
 
   test('BP-N19: a successful Retry: the success line keeps the row height while the pointer is in the card; the rows below stay put', async ({ page }) => {
     const h = await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     h.connectAnswer = (host) => (host === 'netbox' ? connected('netbox', 'Net box') : null)
     const net = row(page, 'netbox')
@@ -311,6 +335,7 @@ test.describe('undo lines (N7, N8)', () => {
   // card; holding it only under the pointer made it grow back after an owner switch.
   test('BP-N7: an undo line holds its row height with the pointer in the card or away, until it collapses', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const key = (await row(page, 'keybox').boundingBox())!
     await row(page, 'keybox').getByRole('button', { name: 'Dismiss Key box' }).click()
@@ -327,6 +352,7 @@ test.describe('undo lines (N7, N8)', () => {
   // and its title no longer says 'need attention' over a hidden list.
   test('BP-N7: Dismiss all holds the card height under a plain section title', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const h0 = (await banner(page).boundingBox())!.height
     await banner(page).getByRole('button', { name: 'Dismiss all' }).click()
@@ -339,6 +365,7 @@ test.describe('undo lines (N7, N8)', () => {
 
   test('BP-N8: an undo line on the Home card holds through a panel open on System (the card never remounts) and still undoes; System lists the host throughout', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await row(page, 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
     await expect(banner(page).getByTestId('hpb-undo-row')).toBeVisible()
@@ -383,6 +410,7 @@ test.describe('the card only changed place (N5, N18)', () => {
         .observe(document, { subtree: true, attributes: true, attributeFilter: ['data-phase'] })
     })
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     // The first load is part of the load: no grow either.
     expect(await page.evaluate(() => (window as unknown as { __bpOpening: number }).__bpOpening)).toBe(0)
@@ -390,6 +418,7 @@ test.describe('the card only changed place (N5, N18)', () => {
     await expect(banner(page)).toHaveCount(0)
     await sampleMountAfterClick(page)
     await goRail(page, 'home')
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1)
     await page.waitForTimeout(500)
     const s = await mountSamples(page)
@@ -402,6 +431,7 @@ test.describe('the card only changed place (N5, N18)', () => {
   test('BP-N18: showing the task panel: the card never rewraps at a growing width', async ({ page }) => {
     // The slot is shown, so the card comes BACK from it while the panel grows.
     await bpSetup(page, { hosts: fixtureHosts(), before: chatShownLayout })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const finalWidth = (await banner(page).boundingBox())!.width
     await hideTaskPanel(page)
@@ -420,6 +450,7 @@ test.describe('the card only changed place (N5, N18)', () => {
       }, { capture: true, once: true })
     })
     await showTaskPanel(page)
+    await expandSystemAttention(page)
     await page.waitForTimeout(700)
     const widths = await page.evaluate(() => (window as unknown as { __bpW: number[] }).__bpW)
     expect(widths.length).toBeGreaterThan(3)
@@ -440,6 +471,7 @@ test.describe('the rail and the bell (N16; N9 moved to BP-R3-N12)', () => {
     await expect(bellDot(page)).toHaveClass(/is-host-warn/, { timeout: 3_000 })
     await expect(row(page, 'netbox')).toHaveCount(0)
     await page.mouse.move(2, 2)
+    await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 5_000 })
     await expect(bellDot(page)).toHaveCount(0)
   })
@@ -449,6 +481,7 @@ test.describe('the System pane and panel keyboard (N14, C25; N17 moved to BP-R3-
   test('BP-C25: with a feed item on All (no card in the panel), Tab from Close reaches Needs Action; Tab from All lands on the first problem row, and past the problems on the feed item; in System, Tab from All lands on the first problem row (WebKit too)', async ({ page, browserName }) => {
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await bpSetup(page, { hosts: fixtureHosts(), feed: [hostErrorRecord('devbox', 1)] })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await openBell(page)
     // The panel opens on All: the problems first (the Home card covers them, and they still lead), then the feed.
@@ -482,6 +515,7 @@ test.describe('the System pane and panel keyboard (N14, C25; N17 moved to BP-R3-
     await isolatePrefs(page)
     await loadFixture(request, 'host-problems')
     await loadApp(page)
+    await expandSystemAttention(page)
     await openBell(page)
     await railButton(page, 'System').click()
     const hosts = systemHosts(page)

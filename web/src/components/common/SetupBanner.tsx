@@ -22,6 +22,7 @@ import { recheckLocalClaudeNow } from '@/utils/local-claude-recheck';
 import { log } from '@/utils/log';
 import { firstSentence } from '@open-walnut/host-problem';
 import { InlineCodeText } from './InlineCodeText';
+import { HostFixButton } from './HostFixButton';
 import '@/styles/attention-banner.css';
 import '@/styles/host-status.css';
 
@@ -50,6 +51,7 @@ interface SetupBannerProps {
   onStartSession?: () => void;
   /** The local x wrote this key (the card turns the section into an undo line). */
   onDismissed?: (key: string) => void;
+  onRepairNavigate?: (to: string) => void;
 }
 
 export interface LocalClaudeNotice {
@@ -72,7 +74,7 @@ const TITLES: Record<ClaudeBannerView['kind'], string> = {
 const NONE: LocalClaudeNotice = { present: false, title: null, node: null, kind: null };
 
 /** The local Claude Code section for the attention banner (no frame of its own). */
-export function useLocalClaudeNotice({ health, loading, onNavigateSettings, onDismissed }: SetupBannerProps): LocalClaudeNotice {
+export function useLocalClaudeNotice({ health, loading, onNavigateSettings, onDismissed, onRepairNavigate }: SetupBannerProps): LocalClaudeNotice {
   const dismissedList = useLocalDismissed();
   const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -136,6 +138,7 @@ export function useLocalClaudeNotice({ health, loading, onNavigateSettings, onDi
         <QuietSection
           header={header}
           dismiss={dismiss}
+          onRepairNavigate={onRepairNavigate}
           view={view}
           pending={pending}
           error={actionError}
@@ -151,6 +154,7 @@ export function useLocalClaudeNotice({ health, loading, onNavigateSettings, onDi
       <InstallSection
         header={header}
         dismiss={dismiss}
+        onRepairNavigate={onRepairNavigate}
         view={view}
         pending={pending}
         error={actionError}
@@ -169,15 +173,16 @@ export function SetupBanner(props: SetupBannerProps) {
 }
 
 // ── Not ready: Claude Code is missing (that is the only thing a default install needs). ──
-function InstallSection({ header, dismiss, view, pending, error, onFix, onNavigateSettings }: {
+function InstallSection({ header, dismiss, view, pending, error, onFix, onNavigateSettings, onRepairNavigate }: {
   header: ReactNode; dismiss: ReactNode; view: ClaudeBannerView | null; pending: boolean; error: string | null;
-  onFix: (kind: string) => void; onNavigateSettings: (hash?: string) => void;
+  onFix: (kind: string) => void; onNavigateSettings: (hash?: string) => void; onRepairNavigate?: (to: string) => void;
 }) {
   const install = view?.kind === 'install' ? view : null;
   const problem = install?.problem;
   return (
     <section className="ab-local" data-testid="setup-banner-install">
       {header}
+      <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />
       {install?.fixable ? (
         <p className="setup-lead">
           Walnut runs on <strong>Claude Code</strong>. {problem && problem.kind !== 'claude_missing'
@@ -231,15 +236,16 @@ function FixRow({ view, label, pending, error, onFix }: {
   );
 }
 
-function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck }: {
+function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck, onRepairNavigate }: {
   header: ReactNode; dismiss: ReactNode; view: ClaudeBannerView; pending: boolean; error: string | null;
-  onFix: () => void; onCheck: () => void;
+  onFix: () => void; onCheck: () => void; onRepairNavigate?: (to: string) => void;
 }) {
   const problem = view.problem!;
   const signIn = view.kind === 'sign-in';
   return (
     <section className="ab-local" data-testid={signIn ? 'setup-banner-sign-in' : 'setup-banner-outdated'}>
       {header}
+      <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />
       <LeadText message={problem.message} />
       {signIn ? (
         <>

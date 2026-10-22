@@ -7479,8 +7479,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </div>
       </div>
 
-      {!bannerInList && banner}
-
       {/* ✦ AI lane: an in-process agent searches tasks AND session transcripts,
           streaming its progress live. Anchored here — directly under the search
           bar, OUTSIDE every scroll container — so it is always visible at the
@@ -7534,7 +7532,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           task list, so the Needs-you strip above them lands in the same commit
           instead of pushing painted controls down under the thumb (the spinner
           below holds the place). */}
-      {bannerInList && !phoneFirstLoad && banner}
       {!phoneFirstLoad && !(isSearchMode && isAll) && (anyTierVisible || recentVisible) && (
         <DndContext sensors={pinnedSensors} collisionDetection={pinnedCollision} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
@@ -8191,13 +8188,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       </NavigationSection>
       </NavigationSections>
-      {/* R3-03: on a phone the footer is the list's last line, not a bar that
-          takes a row's height off every screen (landscape kept one row). */}
-      {bannerInList && filterFooter}
       </div>
-
-      {/* Filter footer: what the default filters hide in this view (spec 5.6). */}
-      {!bannerInList && filterFooter}
 
       {/* Detail pane: the project registry row (inline split-pane). Task detail now
           opens in a full-screen modal hosted by MainPage, not inline here. */}
@@ -8250,6 +8241,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           </button>
         </div>
       )}
+      {banner}
+      {/* Filter footer: what the default filters hide in this view. */}
+      {filterFooter}
     </div>
   );
 });

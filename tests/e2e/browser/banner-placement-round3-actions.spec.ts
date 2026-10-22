@@ -14,7 +14,7 @@
 import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
 import {
-  bareLayout, banner, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, routeHealth, row, showTaskPanel,
+  bareLayout, banner, expandSystemAttention, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, routeHealth, row, showTaskPanel,
 } from './host-problems-helpers'
 import { bell, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
@@ -37,6 +37,7 @@ const where = (page: Page): Promise<string> => page.evaluate(() => {
 test.describe('the notification panel is a dialog for the keyboard (N5)', () => {
   test('BP-R3-N5: Enter on the bell moves focus into the panel (All, no card); Tab goes header, then the rail; Enter on System, then Tab past All reaches the first problem row; it never leaves; Escape returns to the bell', async ({ page, browserName }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await bell(page).focus()
     await page.keyboard.press('Enter')
@@ -82,6 +83,7 @@ test.describe('the notification panel is a dialog for the keyboard (N5)', () => 
 test.describe('undo lines and search (N7, N11)', () => {
   test('BP-R3-N7: dismissing an opened row leaves a line about one row tall, not the opened height', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const key = row(page, 'keybox')
     await key.getByRole('button', { name: 'Show details' }).click()
@@ -99,6 +101,7 @@ test.describe('undo lines and search (N7, N11)', () => {
 
   test('BP-R3-N11: while searching the card keeps its rows and buttons; nothing is a dead strip', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts(), allTasks: true })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await page.locator('.todo-search-input').fill('walnut')
     await page.waitForTimeout(400)
@@ -140,6 +143,7 @@ test.describe('one look, one sentence, one verb (N12, N13, N14, N15)', () => {
     expect((await lookOf('.notification-badge-dot')).split('|')[0]).toBe(warn)
     // System has no Dismiss all: the hosts are dismissed on the Home card (the task panel shown for it).
     await showTaskPanel(page)
+    await expandSystemAttention(page)
     await banner(page).getByRole('button', { name: 'Dismiss all' }).click()
     await hideTaskPanel(page)
     // Hosts dismissed, git sync still failing: the same dot, the same look, and its name no longer says hosts.
@@ -150,6 +154,7 @@ test.describe('one look, one sentence, one verb (N12, N13, N14, N15)', () => {
 
   test('BP-R3-N13: Retry with the same result: the row keeps its height through the result line and after it', async ({ page }) => {
     const h = await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     h.connectDelayMs = 300
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const net = row(page, 'netbox')
@@ -171,6 +176,7 @@ test.describe('one look, one sentence, one verb (N12, N13, N14, N15)', () => {
     await healthyGitSync(page)
     await routeHealth(page)
     await loadApp(page)
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     await railButton(page, 'System').click()
@@ -185,6 +191,7 @@ test.describe('one look, one sentence, one verb (N12, N13, N14, N15)', () => {
 
   test('BP-R3-N15: one verb for re-checking (Check again, local and hosts); the subhead reads Remote hosts (4)', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('[data-testid="setup-banner-check"]')).toHaveText('Check again', { timeout: 20_000 })
     await expect(row(page, 'signbox').getByTestId('hpb-check')).toHaveText('Check again')
     await expect(banner(page).locator('.hpb-subhead-row')).toHaveText(/^Remote hosts\s*\(4\)$/)
@@ -195,6 +202,7 @@ test.describe('one look, one sentence, one verb (N12, N13, N14, N15)', () => {
 test.describe('a Retry settles on its own answer (C23, C48)', () => {
   test('BP-R3-C23: a different result after a frame re-stamped with the old kind: the new sentence, and no same-result line', async ({ page }) => {
     const h = await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     h.connectDelayMs = 1_500
     h.connectAnswer = (host) => (host === 'keybox' ? failed('keybox', 'Key box', 'unreachable') : null)
@@ -213,6 +221,7 @@ test.describe('a Retry settles on its own answer (C23, C48)', () => {
 
   test('BP-R3-C48: connect held 2s, Retry in the task panel, bell and System at 300ms: the System row is pending, one request, and the receipt lands there', async ({ page }) => {
     const h = await bpSetup(page, { hosts: fixtureHosts() })
+    await expandSystemAttention(page)
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     h.connectDelayMs = 2_000
     // A frame for this host inside the old 1s slack of the click.

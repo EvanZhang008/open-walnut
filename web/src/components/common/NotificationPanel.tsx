@@ -456,6 +456,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
       health={health}
       healthLoading={healthLoading}
       onLeave={onClose}
+      onNavigate={onNavigate}
       renderHostCards={(alias) => {
         const cards = hostCards.get(alias);
         return cards?.length ? (
@@ -586,7 +587,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
               /* Long-running status (hosts, backup, embedding search): its own
                  component so the search-index poll only runs while this tab is
                  showing. */
-              <NotificationSystemPane indexStatus={indexStatus} disabled={disabledHosts} onLeave={onClose} />
+              <NotificationSystemPane indexStatus={indexStatus} disabled={disabledHosts} onLeave={onClose} onNavigate={onNavigate} />
             ) : section === 'inbox' ? (
               <InboxPane
                 letters={inboxRows}
@@ -1085,7 +1086,8 @@ const FeedItem = memo(function FeedItem({
   // An error card is the one kind that can be handed to a coding session, and
   // only where a source tree exists (canFix) or a session already ran (n.fix) —
   // on a cloud replica or a git-less install the affordance simply isn't there.
-  const showFixActions = n.kind === 'operation-error' && (!!n.fix || !!canFix);
+  const showFixActions = n.kind === 'operation-error'
+    || (n.severity === 'error' && ['cron', 'skill', 'hook'].includes(n.kind));
   // A navigate action the PRODUCER attached (server record `action`), on a card
   // with no session of its own. A session-bound card already opens its session
   // on click, and a second button saying the same would be noise; a recovered
@@ -1251,13 +1253,13 @@ const FeedItem = memo(function FeedItem({
             <button
               className="nfc-card-action nfc-fix-start"
               data-testid="nfc-fix-start"
-              title="Start a coding session in Walnut's source with this error as the brief"
-              disabled={fixBusy}
+              title={canFix ? "Start a coding session in Walnut's source with this error as the brief" : 'Agent repair is unavailable on this server'}
+              disabled={fixBusy || !canFix}
               onClick={(e) => { e.stopPropagation(); void startFix(false); }}
             >
               {fixBusy
                 ? (fixNeedsClone ? 'Cloning Walnut source… (first time only)' : 'Starting…')
-                : 'Ask AI to fix'}
+                : 'Fix with agent'}
             </button>
           )}
           {fixError && <span className="nfc-fix-error">{fixError}</span>}

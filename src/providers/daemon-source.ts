@@ -12369,6 +12369,8 @@ async function startDaemon() {
     throw new Error('--service requires the daemon-cron-runtime.cjs and daemon-instance-lock.cjs sidecars');
   }
   fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
+  // Build directories are retired while detached daemons are still running.
+  process.chdir(DAEMON_DIR);
   // One deterministic port per uid+runtime dir, taken BEFORE reconcile so no
   // second daemon can reap or adopt this host's CLIs. The kernel releases it on
   // any death, including SIGKILL.

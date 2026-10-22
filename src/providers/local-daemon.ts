@@ -243,12 +243,12 @@ export class LocalDaemon {
   private readonly envOverrides: Record<string, string | undefined>
 
   constructor(opts: LocalDaemonOptions = {}) {
-    this.daemonDir = opts.daemonDir ?? DEFAULT_DAEMON_DIR
+    this.daemonDir = path.resolve(opts.daemonDir ?? DEFAULT_DAEMON_DIR)
     this.portFile = path.join(this.daemonDir, 'daemon.port')
     this.pidFile = path.join(this.daemonDir, 'daemon.pid')
     this.instanceIdFile = path.join(this.daemonDir, 'daemon.instance')
     this.ownerFile = path.join(this.daemonDir, DAEMON_OWNER_FILE)
-    this.overrideBinaryPath = opts.binaryPath
+    this.overrideBinaryPath = opts.binaryPath ? path.resolve(opts.binaryPath) : undefined
     this.busyHelloMs = opts.busyHelloMs ?? BUSY_DAEMON_HELLO_MS
     this.persistent = opts.persistent === true
     this.envOverrides = opts.envOverrides ?? {}
@@ -912,6 +912,7 @@ export class LocalDaemon {
     const stderrFd = this.openStderrLog()
     const proc = spawn(spawnCmd, spawnArgs, {
       detached: true,
+      cwd: this.daemonDir,
       stdio: ['ignore', 'ignore', stderrFd ?? 'ignore'],
       // Pass our daemonDir to the spawned binary so it writes its port/pid/streams
       // into the SAME dir this LocalDaemon instance watches. Without this the
@@ -982,6 +983,7 @@ export class LocalDaemon {
       const [retryCmd, retryArgs] = withUtilityQosClamp(cmd, args)
       const retry = spawn(retryCmd, retryArgs, {
         detached: true,
+        cwd: this.daemonDir,
         stdio: ['ignore', 'ignore', retryFd ?? 'ignore'],
         env,
       })

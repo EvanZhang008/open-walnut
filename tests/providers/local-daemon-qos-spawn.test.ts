@@ -28,6 +28,7 @@ fs.mkdirSync(DIR, { recursive: true })
 const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
 wss.on('listening', () => {
   fs.writeFileSync(DIR + '/clamp-env', process.env.${QOS_CLAMP_ENV} ?? 'unset')
+  fs.writeFileSync(DIR + '/spawn-cwd', process.cwd())
   fs.writeFileSync(DIR + '/daemon.port', String(wss.address().port))
   fs.writeFileSync(DIR + '/daemon.pid', String(process.pid))
 })
@@ -99,6 +100,13 @@ describe('local daemon spawn and the QoS clamp', () => {
     // The request is this server's, not the daemon's: a Walnut server started
     // inside one of its sessions must not clamp its own children by inheritance.
     expect(fs.readFileSync(path.join(daemonDir, 'clamp-env'), 'utf8')).toBe('unset')
+  }, 15_000)
+
+  it('starts in its stable runtime directory, not the retiring server build', async () => {
+    const bin = mockDaemon(dir, daemonDir)
+    const daemon = new LocalDaemon({ daemonDir: path.relative(process.cwd(), daemonDir), binaryPath: path.relative(process.cwd(), bin) })
+    expect(await daemon.ensureRunning()).toBeGreaterThan(0)
+    expect(fs.readFileSync(path.join(daemonDir, 'spawn-cwd'), 'utf8')).toBe(fs.realpathSync(daemonDir))
   }, 15_000)
 
   it('never hands the request down, even when process.env still carries it at spawn', async () => {

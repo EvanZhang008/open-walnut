@@ -16,7 +16,7 @@ import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import { hostReadySentence } from '../../../src/core/hosts/host-problem'
 import {
-  anyBanner, banner, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut, storedKeys,
+  anyBanner, banner, connected, expandSystemAttention, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut, storedKeys,
 } from './host-problems-helpers'
 import { hostRow, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
@@ -41,6 +41,7 @@ const five = () => [
 test.describe('the card in the task panel, the rows in System', () => {
   test('BP-C19: local sign-in plus hosts in the task panel: local section first, the Remote hosts subhead, the sign-in title', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in' })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await expect(banner(page).locator('.setup-banner-title').first()).toHaveText('Sign in to Claude Code')
     await expect(banner(page).locator('.hpb-subhead')).toHaveText('Remote hosts')
@@ -59,6 +60,7 @@ test.describe('the card in the task panel, the rows in System', () => {
     await healthyGitSync(page)
     await routeHealth(page)
     await loadApp(page)
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openSystemHosts(page)
     await openRow(systemHostRow(page, 'keybox'))
@@ -71,6 +73,7 @@ test.describe('the card in the task panel, the rows in System', () => {
 
   test('BP-C21: five problems: the Home card caps at 3 rows and "and 2 more"; All\'s problems and System list all five once each, with no "more" link', async ({ page }) => {
     await bpSetup(page, { hosts: five() })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await expect(banner(page).locator('li.hpb-row[data-host]')).toHaveCount(3)
     await expect(banner(page).locator('.hpb-more')).toHaveText('and 2 more')
@@ -88,6 +91,7 @@ test.describe('the card in the task panel, the rows in System', () => {
 
   test('BP-C22: Retry in a System row keeps the panel open and holds the row height while it tries; the host then reads Connected there, and the Home card says it is ready', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     h.connectDelayMs = 1500
     h.connectAnswer = (host) => connected(host, 'Net box')
@@ -107,6 +111,7 @@ test.describe('the card in the task panel, the rows in System', () => {
 
   test('BP-C23: Retry in the task panel card: the new attempt\'s failure, then Tried again just now: same result', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
+    await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 20_000 })
     h.connectAnswer = (host) => failed(host, 'Net box', 'timeout')
     await row(page, 'netbox').getByTestId('hpb-retry').click()
@@ -120,6 +125,7 @@ test.describe('the card in the task panel, the rows in System', () => {
 test.describe('one attempt, one state, whichever mount shows it', () => {
   test('BP-C48: a Retry started in the task panel is the same pending attempt in the panel (All\'s problem row, where the bell lands); one connect request in all', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth'), signedOut('signbox', 'Sign box')] })
+    await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 20_000 })
     h.connectDelayMs = 2000
     h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
@@ -150,6 +156,7 @@ test.describe('one attempt, one state, whichever mount shows it', () => {
 
   test('BP-C52: a double click on the last row x opens no menu and changes no task; the undo row stays and Undo was not hit', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')], allTasks: true })
+    await expandSystemAttention(page)
     await expect(row(page, 'signbox')).toBeVisible({ timeout: 20_000 })
     const tasksState = () => page.locator('.todo-panel .todo-panel-item').evaluateAll((els) =>
       els.map((e) => `${e.getAttribute('data-task-id')}|${e.className}`))
@@ -170,6 +177,7 @@ test.describe('landing, the named cap, and the success sentence', () => {
       hosts: [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'), failed('certbox', 'Cert box', 'cert_expired'), signedOut('signbox', 'Sign box')],
       feed: [askRecord(1), askRecord(2)],
     })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     await expect(railButton(page, 'Needs Action')).toHaveAttribute('aria-current', 'true')
@@ -224,6 +232,7 @@ test.describe('landing, the named cap, and the success sentence', () => {
       }).observe(document, { subtree: true, attributes: true, attributeFilter: ['class'] })
     })
     await loadApp(page)
+    await expandSystemAttention(page)
     await expect(banner(page).locator('.hpb-more')).toHaveText('and 2 more', { timeout: 20_000 })
     const shown = await hostsOf(banner(page))
     await banner(page).locator('.hpb-more').click()
@@ -242,6 +251,7 @@ test.describe('landing, the named cap, and the success sentence', () => {
 
   test('BP-C67: after a Retry that works, the card\'s success sentence has no check mark and starts with the ok dot', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
+    await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 20_000 })
     h.connectAnswer = (host) => connected(host, 'Net box')
     await row(page, 'netbox').getByTestId('hpb-retry').click()

@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import {
-  anyBanner, banner, bareLayout, connected, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, routeHealth, signedOut,
+  anyBanner, banner, bareLayout, connected, expandSystemAttention, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, routeHealth, signedOut,
 } from './host-problems-helpers'
 import { bell, fixtureFile, HEALTHY, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
@@ -50,6 +50,7 @@ test.describe('the rail and the bell speak when no card is on the page', () => {
 
   test('BP-C16: default Home with the card in the task panel and no ask: no bell dot, the name is Notifications', async ({ page }) => {
     await bpSetup(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications')
     await expect(bellDot(page)).toHaveCount(0)
@@ -58,6 +59,7 @@ test.describe('the rail and the bell speak when no card is on the page', () => {
 
   test('BP-C17: a pending ask: the amber number alone while the card is on Home; on /notes the number plus a corner dot', async ({ page }) => {
     await bpSetup(page, { feed: [askRecord(1)] })
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await expect(bellCount(page)).toHaveText('1')
     await expect(bellCount(page)).toHaveClass(/notification-badge-attention/)
@@ -74,6 +76,7 @@ test.describe('the rail and the bell speak when no card is on the page', () => {
 
   test('BP-C18: only a local sign-in problem: no bell dot while the task panel shows it; with no mount the bell names Claude Code', async ({ page }) => {
     await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], local: 'sign-in', before: chatHidden })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 20_000 })
     await expect(bellDot(page)).toHaveCount(0)
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications')
@@ -89,6 +92,7 @@ test.describe('the rail and the bell speak when no card is on the page', () => {
 test.describe('local Claude Code: the re-check and the version floor', () => {
   test('BP-C49: on /notes the sign-in re-check runs with no card mounted; the bell lands on All, whose Claude Code card asks once; signing in clears the dot', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 20_000 })
     await goRail(page, 'notes')
     await expect(bell(page)).toHaveAttribute('aria-label', LOCAL_REASON)
@@ -133,6 +137,7 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
     try {
       // Two hosts, so the card takes the shared title (one host would title it by name, C82).
       await bpSetup(page2, { hosts: [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')], local: 'outdated' })
+      await expandSystemAttention(page2)
       await expect(banner(page2)).toHaveCount(1, { timeout: 20_000 })
       await expect(banner(page2).locator('[data-testid="setup-banner-outdated"]')).toHaveCount(0)
       await expect(banner(page2).locator('.setup-banner-title')).toHaveText('Remote hosts need attention')
@@ -155,6 +160,7 @@ test.describe('the rail counts (server fixture)', () => {
     // This machine ready: the count is the host alone.
     await routeHealth(page)
     await loadApp(page)
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     const system = railButton(page, 'System')
@@ -201,6 +207,7 @@ test.describe('the bell names its reason word for word', () => {
   /** On /notes (nothing covered): both, then hosts, then local, each read off the bell. */
   async function sampleReasons(page: Page, count: 0 | 1): Promise<void> {
     const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')], local: 'sign-in', feed: count ? [askRecord(1)] : [] })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await goRail(page, 'notes')
     const name = (sentence: string) => count ? sentence.replace('Notifications: ', 'Notifications, 1 waiting; ') : sentence
@@ -227,6 +234,7 @@ test.describe('the bell names its reason word for word', () => {
 
   test('BP-C59: Quiet: the title starts with the quiet label, then "; " and the reason; the name stays the reason', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')] })
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await goRail(page, 'notes')
     await expect(bell(page)).toHaveAttribute('aria-label', HOSTS_REASON)
@@ -260,6 +268,7 @@ test.describe('Open Settings from System and the Remote hosts pane', () => {
     await healthyGitSync(page)
     await routeHealth(page)
     await loadApp(page)
+    await expandSystemAttention(page)
     await expectTasksCard(page)
     await goRail(page, 'notes')
     await openBell(page)
@@ -268,6 +277,7 @@ test.describe('Open Settings from System and the Remote hosts pane', () => {
     await expect(problemRow(page, 'keybox')).toBeVisible({ timeout: 20_000 })
     await closePanel(page, 'escape')
     await goRail(page, 'home')
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openSystemHosts(page)
     // Rows start closed (dense): Show details puts the row's Open Settings on screen.
@@ -285,6 +295,7 @@ test.describe('Open Settings from System and the Remote hosts pane', () => {
     await expect(settingsDot(page)).toHaveCount(0)
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications')
     await goRail(page, 'home')
+    await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await expect(anyBanner(page)).toHaveCount(1)
   })

@@ -10426,6 +10426,8 @@ if (action === '--start' || SERVICE_MODE) {
     throw new Error('--service requires an absolute WALNUT_DAEMON_STATE_DIR')
   }
   fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 })
+  // Build directories are retired while detached daemons are still running.
+  process.chdir(DAEMON_DIR)
   const lock = await acquireDaemonInstanceLock({
     runtimeDir: DAEMON_DIR, uid: os.userInfo().uid, pid: process.pid, instanceId: DAEMON_INSTANCE_ID,
   })

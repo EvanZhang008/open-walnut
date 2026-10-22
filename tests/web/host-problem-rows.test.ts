@@ -40,6 +40,7 @@ const ws = vi.hoisted(() => {
 })
 vi.mock('@/api/ws', () => ({ wsClient: ws.wsClient }))
 
+const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
 const { SingleHostRow, GroupRow, ReadyRow, readySentenceText } = await import('../../web/src/components/common/HostProblemRows')
 const { __resetBannerSessionForTests, getRowExpanded } = await import('../../web/src/utils/attention-banner-session')
 const { __resetHostActionStoreForTests } = await import('../../web/src/utils/host-action-store')
@@ -83,7 +84,7 @@ const frame = (o: Partial<HostStatus> & { host: string }): HostStatus => ({
   phaseElapsedMs: 0, connectElapsedMs: 0, at: ++at, serverNow: at, ...o,
 } as HostStatus)
 const push = async (f: HostStatus) => { server.set(f.host, f); await act(async () => { ws.emit('host:status', f) }) }
-const render = async (el: unknown) => { await act(async () => { root!.render(el) }) }
+const render = async (el: unknown) => { await act(async () => { root!.render(createElement(MemoryRouter, null, el)) }) }
 const click = async (el: Element) => { await act(async () => { el.dispatchEvent(new win.Event('click', { bubbles: true })); await Promise.resolve() }) }
 const buttons = () => Array.from(host.querySelectorAll('button'))
 const byText = (t: string) => buttons().find((b) => (b.textContent ?? '').replace(/\s+/g, ' ').trim() === t)

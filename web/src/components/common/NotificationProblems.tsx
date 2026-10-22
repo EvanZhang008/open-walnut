@@ -92,9 +92,10 @@ export interface NotificationProblemsProps {
   renderHostCards: (alias: string) => ReactNode;
   /** Called before any navigation away (Open Settings): the panel closes. */
   onLeave: () => void;
+  onNavigate: (to: string) => void;
 }
 
-export function NotificationProblems({ hosts, health, healthLoading, renderHostCards, onLeave }: NotificationProblemsProps): ReactNode {
+export function NotificationProblems({ hosts, health, healthLoading, renderHostCards, onLeave, onNavigate }: NotificationProblemsProps): ReactNode {
   const navigate = useNavigate();
   // Open Settings lands on the host's own Settings row, as the Home card's button does.
   const onOpenSettings = useCallback((alias?: string) => {
@@ -105,7 +106,7 @@ export function NotificationProblems({ hosts, health, healthLoading, renderHostC
     onLeave();
     navigate(`/settings${hash ?? ''}`);
   }, [navigate, onLeave]);
-  const local = useLocalClaudeNotice({ health, loading: healthLoading, onNavigateSettings });
+  const local = useLocalClaudeNotice({ health, loading: healthLoading, onNavigateSettings, onRepairNavigate: onNavigate });
   if (!local.present && hosts.length === 0) return null;
   return (
     <div className="nfc-problems" data-testid="nfc-problems">
@@ -128,7 +129,7 @@ export function NotificationProblems({ hosts, health, healthLoading, renderHostC
             {hosts.map(({ alias, row }) => {
               const cards = renderHostCards(alias);
               return [
-                <SingleHostRow key={alias} row={row} defaultExpanded={false} dense statusList onOpenSettings={onOpenSettings} />,
+                <SingleHostRow key={alias} row={row} defaultExpanded={false} dense statusList onOpenSettings={onOpenSettings} onNavigate={onNavigate} />,
                 cards ? <li key={`${alias}:cards`} className="nfc-problem-cards" data-host-cards={alias}>{cards}</li> : null,
               ];
             })}

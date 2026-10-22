@@ -61,10 +61,12 @@ export function fixtureFile(hosts: Record<string, Record<string, unknown>>, extr
 
 export const HEALTHY = { version: '2.1.281', auth: 'ok', installMethod: 'native' }
 
-/** The first load (the only page.goto): Home, or Settings. */
+/** Initial entry; all subsequent navigation uses the UI. */
 export async function loadApp(page: Page, path: '/' | '/settings' = '/'): Promise<void> {
-  await page.goto(path)
-  await page.waitForLoadState('networkidle')
+  await Promise.all([
+    page.waitForURL(`http://localhost:${process.env.PW_TEST_PORT ?? 3457}${path}`, { waitUntil: 'domcontentloaded' }),
+    page.evaluate((url) => window.location.assign(url), `http://localhost:${process.env.PW_TEST_PORT ?? 3457}${path}`),
+  ])
   if (path === '/') await waitForHome(page)
   else await expect(page.getByTestId('settings-nav-remote-hosts')).toBeVisible({ timeout: 30_000 })
 }

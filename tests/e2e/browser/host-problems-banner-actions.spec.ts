@@ -15,7 +15,7 @@
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import {
-  banner, connected, connecting, failed, now, resetServerHostFixture, row, rows, setup, signedOut,
+  banner, connected, connecting, expandSystemAttention, failed, now, resetServerHostFixture, row, rows, setup, signedOut,
   storedKeys, type HS,
 } from './host-problems-helpers'
 import {
@@ -38,6 +38,7 @@ test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 test.describe('home attention banner: rows never move under the hand', () => {
   test('an on-screen row that retries by itself stays in place reading Trying again (C61)', async ({ page }) => {
     const h = await setup(page, [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable')])
+    await expandSystemAttention(page)
     const target = row(page, 'netbox')
     const y0 = (await target.boundingBox())!.y
     const samples: Array<{ y: number | null; text: string }> = []
@@ -65,6 +66,7 @@ test.describe('home attention banner: rows never move under the hand', () => {
 
   test('Retry holds the row height; with the pointer on the card a new row appends last until it leaves (C62)', async ({ page }) => {
     const h = await setup(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
+    await expandSystemAttention(page)
     h.connectDelayMs = 1500
     h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
     const target = row(page, 'netbox')
@@ -100,6 +102,7 @@ test.describe('home attention banner: rows never move under the hand', () => {
 
   test('paired labels keep one width: Retry / Retrying..., Check again / Checking..., Copy / Copied (C63)', async ({ page }) => {
     const h = await setup(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
+    await expandSystemAttention(page)
     h.connectDelayMs = 1200
     const retry = row(page, 'netbox').getByTestId('hpb-retry')
     const w1 = (await retry.boundingBox())!.width
@@ -135,8 +138,12 @@ test.describe('home attention banner: buttons and keyboard', () => {
   test('Tab and Enter alone: Retry, Show SSH output, row x; focus lands on the next row x (C44)', async ({ page }) => {
     const h = await setup(page, [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth')])
     h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
-    // Start in the task panel's toolbar: the card is the next thing in Tab order.
-    await page.locator('.todo-panel-toolbar').click({ position: { x: 2, y: 2 } }).catch(() => {})
+    // Enter opens the bottom disclosure before Tab enters the card's body.
+    const disclosure = page.locator('.todo-panel .system-attention-toggle')
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    await disclosure.focus()
+    await page.keyboard.press('Enter')
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'true')
     const first = row(page, 'netbox')
     await tabTo(page, first.getByTestId('hpb-retry'))
     await page.keyboard.press('Enter')
@@ -161,6 +168,7 @@ test.describe('home attention banner: buttons and keyboard', () => {
 
   test('Check again: Checking..., then the ready sentence when the re-check clears it (C55 banner half)', async ({ page }) => {
     const h = await setup(page, [signedOut('signbox', 'Sign box')])
+    await expandSystemAttention(page)
     h.checkAnswer = (host) => connected(host, 'Sign box')
     const check = row(page, 'signbox').getByRole('button', { name: 'Check again' })
     await check.click()
@@ -171,6 +179,7 @@ test.describe('home attention banner: buttons and keyboard', () => {
   // ('Checked just now: still <version>' is the claude_outdated wording, which takes no banner row.)
   test('same result still answers: Tried again just now / Checked just now: same result, for about 5s (C77 banner half)', async ({ page }) => {
     const h = await setup(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
+    await expandSystemAttention(page)
     h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
     h.checkAnswer = (host) => ({ ...signedOut(host, 'Sign box'), readiness: { ...signedOut(host, 'Sign box').readiness!, checkedAt: now() } })
     await row(page, 'netbox').getByTestId('hpb-retry').click()
@@ -185,6 +194,7 @@ test.describe('home attention banner: buttons and keyboard', () => {
 
   test('no Connecting... button, success sentences in one shape, Other ways matches the full list (C94)', async ({ page }) => {
     const h = await setup(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')])
+    await expandSystemAttention(page)
     h.connectDelayMs = 800
     await row(page, 'netbox').getByTestId('hpb-retry').click()
     await expect(banner(page).getByRole('button', { name: /^Connecting\.\.\.$/ })).toHaveCount(0)
@@ -204,6 +214,7 @@ test.describe('home attention banner: buttons and keyboard', () => {
       failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'),
       failed('proxybox', 'Proxy box', 'proxy'), missing('barebox', 'Bare box'), signedOut('signbox', 'Sign box'),
     ], 'sign-in')
+    await expandSystemAttention(page)
     // Two of the five sit behind 'and 2 more'.
     await expect(banner(page).locator('.hpb-more')).toHaveText('and 2 more')
     const all = banner(page).getByRole('button', { name: 'Dismiss all' })
@@ -238,6 +249,7 @@ test.describe('home attention banner: the real routes behind Check again and Ins
     }))
     await hostFixture(request, { action: 'check-slow', host: 'signbox', ms: 1_200 })
     await loadApp(page)
+    await expandSystemAttention(page)
     const r = bannerRow(page, 'signbox')
     await expect(r).toHaveAttribute('data-kind', 'claude_not_logged_in', { timeout: 20_000 })
     // The next answer is healthy: the user signed in from a terminal.
@@ -251,6 +263,7 @@ test.describe('home attention banner: the real routes behind Check again and Ins
   test('Install: the row reads Installing Claude Code on Fix box... until the re-check answers, never the old warning (C29 banner half)', async ({ page, request }) => {
     await loadFixture(request, FIX_FILE)
     await loadApp(page)
+    await expandSystemAttention(page)
     const r = bannerRow(page, 'fixbox')
     await expect(r).toHaveAttribute('data-kind', 'claude_missing', { timeout: 20_000 })
     const warning = (await r.locator('.hpb-message').innerText()).trim()
@@ -280,6 +293,7 @@ test.describe('home attention banner: the real routes behind Check again and Ins
     await loadFixture(request, FIX_FILE)
     await hostFixture(request, { action: 'autofix-slow', host: 'fixbox', ms: 200_000 })
     await loadApp(page)
+    await expandSystemAttention(page)
     const r = bannerRow(page, 'fixbox')
     await expect(r).toHaveAttribute('data-kind', 'claude_missing', { timeout: 20_000 })
     await r.getByTestId('hpb-fix').click()
