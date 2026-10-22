@@ -185,6 +185,24 @@ function matchSuffix(index: string[], suffix: string): string[] {
 }
 
 /**
+ * The same resolution over a list of vault-relative paths instead of the disk:
+ * the cloud companion's copy of the Mac's pictures (core/companion-attachment-copy.ts).
+ * Returns the chosen path from `index`, or null.
+ */
+export function resolveAttachmentInIndex(raw: string, notePath: string | undefined, index: readonly string[]): string | null {
+  const cleaned = cleanRawPath(raw)
+  if (!cleaned) return null
+  if (index.includes(cleaned)) return cleaned
+  const noteDir = notePath ? path.posix.dirname(cleanRawPath(notePath) || '') : undefined
+  const segments = cleaned.split('/')
+  for (let start = 0; start < segments.length; start++) {
+    const hits = matchSuffix(index as string[], segments.slice(start).join('/'))
+    if (hits.length) return pickBest(hits, noteDir === '.' ? undefined : noteDir)
+  }
+  return null
+}
+
+/**
  * Resolve a raw `![[...]]` inner path to an absolute file under NOTES_DIR, or
  * null if it can't be resolved safely to an existing regular file.
  *

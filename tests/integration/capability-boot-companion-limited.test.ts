@@ -64,7 +64,9 @@ describe('the companion with WALNUT_CAPABILITIES=public-door', () => {
     expect(boot.capabilities).toEqual(['public-door'])
     expect(boot.on).toEqual(expect.arrayContaining(jobsOfCapability('public-door')))
     for (const cap of ['bridge-door', 'cloud-exec', 'backup-leader'] as const) expect(boot.off, cap).toEqual(expect.arrayContaining(jobsOfCapability(cap)))
-    expect(boot.on).toEqual(expect.arrayContaining(['v1-forward', 'companion-stream-forward', 'companion-queues', 'plugins', 'git-pull', 'notes-indexer']))
+    expect(boot.on).toEqual(expect.arrayContaining(['v1-forward', 'companion-stream-forward', 'companion-queues', 'plugins', 'git-pull']))
+    // 4d: the companion searches its copy of the Mac's notes, so it keeps no notes index of its own.
+    expect(boot.off).toEqual(expect.arrayContaining(['notes-indexer', 'notes-watcher']))
   })
 
   it('public-door: the setup token check ran', () => {

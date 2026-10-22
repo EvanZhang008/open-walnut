@@ -5,8 +5,9 @@
  * keyword search of its own copies, marked offline. Notifications are B-class: the
  * durable store lives on the primary, so the replica relays through the
  * `session.control` command's `server.*` action family (bridge mocked at its
- * module seam). Notes search stays local (its semantic leg self-gates on
- * CLOUD_MODE inside performNotesSearch — string leg answers).
+ * module seam). Notes search stays on the companion: its string leg searches its
+ * copy of the Mac's notes (stage 4d; it keeps no notes index of its own), so with no
+ * copy yet it needs the Mac.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -100,10 +101,10 @@ describe('global search B-relay on a REPLICA', () => {
     expect(bridgeRequestMock).not.toHaveBeenCalled()
   })
 
-  it('GET /notes/search still answers locally (string leg; semantic self-gated)', async () => {
+  it('GET /notes/search with no copy of the notes yet needs the Mac (never the box\'s disk index)', async () => {
     const res = await request(createApp()).get('/api/v1/notes/search?q=zebra')
-    expect(res.status).toBe(200)
-    expect(Array.isArray(res.body.results)).toBe(true)
+    expect(res.status).toBe(503)
+    expect(res.body).toMatchObject({ error: { code: 'needs_leader', why: 'kind_not_copied' } })
     expect(bridgeRequestMock).not.toHaveBeenCalled()
   })
 })

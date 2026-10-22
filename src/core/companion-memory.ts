@@ -13,10 +13,10 @@
  *            round from after its ack (or 10 minutes): the box never shows a save
  *            going back
  *
- * Both halves start together, once the copy is held AND the Mac drains `memory`: a copy
- * read beside a save that still went to the box's disk would show that save reverted
- * until git sync brought it round, and the next save would answer 409. Before that, the
- * routes read and write the box's disk, as before.
+ * The reads take the copy once it is held; a save is a record once the Mac drains
+ * `memory` too. A save the box cannot journal (no copy yet, a Mac too old to drain the
+ * kind) needs the Mac and is never written to the box's disk, so a copy read never shows
+ * a save reverted (the box's disk is not the Mac's memory once git sync stops writing it).
  *
  * Cloud companion only.
  */
@@ -61,6 +61,14 @@ export function isMemoryDocName(v: unknown): v is MemoryDocName {
 /** The box's memory reads and saves take the copy and the journal (see the file comment). */
 export function companionMemoryActive(): boolean {
   return followerKind() === 'companion' && companionCopyHolds('memory') && macDrains('memory')
+}
+
+/** Why the box takes no memory save now, or null (it does, or this is not the companion). */
+export function companionMemoryBlocked(): { why: 'kind_not_copied' | 'mac_too_old'; message: string } | null {
+  if (followerKind() !== 'companion') return null
+  if (!companionCopyHolds('memory')) return { why: 'kind_not_copied', message: 'This box keeps no copy of the memory yet; that needs your Mac.' }
+  if (!macDrains('memory')) return { why: 'mac_too_old', message: 'Your Mac runs an older Walnut that cannot take a memory change later; it needs your Mac.' }
+  return null
 }
 
 /** The copy's own doc (the Mac's, as of its last round), or null when it has none. */
@@ -126,7 +134,8 @@ export type MemorySaveResult =
  * `memory` record for the Mac.
  */
 export function companionMemorySave(req: { doc: MemoryDocName; content: unknown; expectedHash?: unknown }): MemorySaveResult {
-  if (!companionMemoryActive()) return { ok: false, code: 'needs_leader', message: 'This box keeps no copy of the memory yet; that needs your Mac.', detail: { why: 'kind_not_copied' } }
+  const blocked = followerKind() === 'companion' ? companionMemoryBlocked() : { why: 'kind_not_copied' as const, message: 'This needs your Mac.' }
+  if (blocked) return { ok: false, code: 'needs_leader', message: blocked.message, detail: { why: blocked.why } }
   if (typeof req.content !== 'string') return { ok: false, code: 'bad_request', message: 'content (string) is required' }
   if (Buffer.byteLength(req.content) > MEMORY_MAX_BYTES) return { ok: false, code: 'needs_leader', message: 'A memory document over 1 MB can only be changed on your Mac.', detail: { why: 'memory_too_large' } }
   const current = companionMemoryDoc(req.doc)

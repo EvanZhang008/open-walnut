@@ -29,9 +29,10 @@
  * `degraded: 'offline-keyword'`). Notes search degrades
  * gracefully to its string leg
  * (performNotesSearch runs the semantic leg on a replica only while that copy
- * is ready). Memory,
- * favorites, and notes ride the git-synced data dir (Class A — local files on
- * both boxes). Notifications live in the primary's store only → Class B relay
+ * is ready). Favorites ride the git-synced data dir (Class A); on the companion,
+ * memory and notes read its copy of the Mac's (stage 4d of
+ * docs/plan/walnut-companion-unified-replica.md: replica/companion-copy-routes.ts,
+ * core/companion-attachment-copy.ts), never its own disk. Notifications live in the primary's store only → Class B relay
  * over the `session.control` bridge command's `server.*` action family
  * (sessionId is ignored; '__server__' is passed as a placeholder).
  *

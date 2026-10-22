@@ -11,6 +11,7 @@ import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { MAX_NOTE_SIZE, NotesOpError } from './notes-v2.js'
+import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const notesRouter = Router()
 
@@ -19,6 +20,13 @@ export const notesRouter = Router()
  * Shared by GET /api/notes/global and GET /api/v1/notes/global.
  */
 export async function readGlobalNotes(): Promise<{ content: string; contentHash: string }> {
+  // The cloud companion shows the Mac's copy with its own pending saves (stage 4d), never its disk.
+  const { companionGlobalNotes } = await import('../../core/companion-notes.js')
+  const copied = companionGlobalNotes()
+  if (copied) {
+    if ('needs' in copied) throw new NeedsLeaderError(copied.needs)
+    return { content: copied.content, contentHash: computeContentHash(copied.content) }
+  }
   let content = ''
   try {
     content = await fsp.readFile(GLOBAL_NOTES_FILE, 'utf-8')
@@ -42,6 +50,26 @@ export class GlobalNotesConflictError extends NotesOpError {
   }
 }
 
+/**
+ * A global notes save on the cloud companion (stage 4d): a `note` record in its journal,
+ * checked against what the box shows, as a note save is (core/companion-notes.ts), never
+ * a write to its disk. Null anywhere else.
+ */
+async function companionGlobalNotesSave(content: string, expectedHash: unknown): Promise<{ ok: true; contentHash: string } | null> {
+  const notes = await import('../../core/companion-notes.js')
+  if (!notes.companionGlobalNotes()) return null
+  const blocked = notes.companionNotesBlocked()
+  if (blocked) throw new NeedsLeaderError(blocked.why)
+  const r = notes.companionNoteSave({ path: notes.GLOBAL_NOTES_KEY, content, expectedHash })
+  if (r.ok) {
+    log.memory.info('companion: global notes change kept for the Mac', { size: content.length, seq: r.seq })
+    return { ok: true, contentHash: computeContentHash(content) }
+  }
+  if (r.code === 'conflict') throw new GlobalNotesConflictError(String(r.detail?.serverHash ?? ''))
+  if (r.code === 'bad_request') throw new NotesOpError(r.message, 400)
+  throw new NeedsLeaderError(typeof r.detail?.why === 'string' ? r.detail.why : r.code)
+}
+
 export async function writeGlobalNotes(
   content: unknown,
   expectedHash?: unknown,
@@ -52,6 +80,8 @@ export async function writeGlobalNotes(
   if (content.length > MAX_NOTE_SIZE) {
     throw new NotesOpError(`Content too large (max ${MAX_NOTE_SIZE} bytes)`, 413)
   }
+  const companion = await companionGlobalNotesSave(content, expectedHash)
+  if (companion) return companion
 
   // Optimistic locking: reject if file was modified externally.
   // Optional for backward compatibility — callers that don't send

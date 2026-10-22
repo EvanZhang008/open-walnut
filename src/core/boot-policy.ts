@@ -73,7 +73,8 @@ export const BOOT_POLICY = [
   { job: 'one-session-per-task', leader: true, replica: false, why: 'the session copy is written by the apply connection only' },
   { job: 'stream-file-cleanup', leader: true, replica: false, capability: 'cloud-exec', why: 'a host replica keeps no session streams' },
   { job: 'session-integrity-check', leader: true, replica: false, why: OFF_HOST_DATA },
-  { job: 'notes-watcher', leader: true, replica: false, companionUntil: '4d', why: 'notes live in the daemon copy (WP6)' },
+  // Stage 4d: the companion reads its copy of the Mac's notes too, so it watches and indexes no vault of its own.
+  { job: 'notes-watcher', leader: true, replica: false, why: 'notes live in the copy (WP6; the companion\'s since 4d)' },
   { job: 'notes-semantic', leader: true, replica: false, why: 'the search copy is used instead' },
   { job: 'search-wiring', leader: true, replica: false, why: 'the search copy is used instead' },
   { job: 'thread-ai', leader: true, replica: false, why: 'side threads are named on the Mac' },
@@ -90,7 +91,9 @@ export const BOOT_POLICY = [
   { job: 'lane-ask-sync', leader: true, replica: false, why: OFF_HOST_DATA },
   { job: 'pin-retirement', leader: true, replica: false, why: OFF_HOST_DATA },
   { job: 'session-health-monitor', leader: true, replica: false, why: OFF_HOST_DAEMON },
-  { job: 'overview-maintainer', leader: true, replica: false, capability: 'backup-leader', why: OFF_HOST_DATA },
+  // Stage 4d: off on the companion too. Its project skill writes went to the box's disk, a
+  // copy of the Mac's skills that git sync no longer brings round.
+  { job: 'overview-maintainer', leader: true, replica: false, why: 'project skills are written on the Mac; a replica holds a copy' },
   { job: 'project-summary', leader: true, replica: false, capability: 'backup-leader', why: OFF_HOST_DATA },
   { job: 'host-learning', leader: true, replica: false, why: 'host profiles have one writer, the Mac' },
   { job: 'routine-wake', leader: true, replica: false, capability: 'backup-leader', why: 'routines never run on a host replica' },
@@ -111,7 +114,7 @@ export const BOOT_POLICY = [
   { job: 'wait-until', leader: true, replica: false, why: 'the wait_until clock runs on the Mac' },
   { job: 'title-reconciler', leader: true, replica: false, why: 'titles are written on the Mac' },
   { job: 'link-tags', leader: true, replica: false, why: 'link tags are written on the Mac' },
-  { job: 'notes-indexer', leader: true, replica: false, companionUntil: '4d', why: 'notes live in the daemon copy (WP6)' },
+  { job: 'notes-indexer', leader: true, replica: false, why: 'notes live in the copy (WP6; the companion searches its copy since 4d)' },
   { job: 'stt-auto-setup', leader: true, replica: false, capability: 'public-door', why: 'voice is answered by the Mac or the companion' },
 ] as const satisfies readonly BootRow[]
 

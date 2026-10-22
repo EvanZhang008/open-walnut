@@ -3,17 +3,23 @@
  * the box's memory and skill reads take the Mac's copy (core/companion-host-replica.ts),
  * a memory save there is a `memory` record in its journal (core/companion-memory.ts), a
  * skill write needs the Mac, and v1's note resolve (note_read by id or title) reads the
- * copy (replica/notes-source.ts).
+ * copy (replica/notes-source.ts). The box never reads or writes its own disk for these.
  *
  * Pinned:
- *   - before the Mac drains `memory`, the memory reads and saves are the box's disk's;
+ *   - before the copy is held, the memory and skill reads need the Mac (`kind_not_copied`),
+ *     and so does every skill write;
+ *   - before the Mac drains `memory`, the reads take the copy and a save needs the Mac
+ *     (`mac_too_old`), the disk untouched;
  *   - once it does, GET /api/memory/global and /api/v1/memory/global answer the copy, a
  *     web or v1 PUT is a journal record (the disk untouched) shown at once, a stale lock
  *     is a 409 with the hash the box shows, and after the ack the box shows its text until
  *     a copy round from after the ack;
- *   - the skill reads (web and v1, one and the list) answer the copy, with the Mac's
- *     skill even when the box's disk no longer has it; every skill write is a 503
- *     needs_leader `skill_changes_need_mac`; the references stay the box's own;
+ *   - the rest of the memory dir answers the copy (the browse tree, the category lists,
+ *     one file, the session summaries, web and v1); a save of another memory file, a
+ *     daily log compaction and the telemetry view need the Mac;
+ *   - the skill reads (web and v1, one and the list, a skill's references) answer the
+ *     copy, with the Mac's skill even when the box's disk no longer has it; every skill
+ *     write is a 503 needs_leader `skill_changes_need_mac`;
  *   - /api/v1/notes/resolve answers from the copy by id, path and title, 404 and 409 in
  *     the route's shape.
  */
@@ -32,11 +38,12 @@ vi.mock('../../../src/integrations/cloud-bridge-config.js', async (orig) => ({
   getBridgeConfigForHost: async () => bridgeCfg,
 }))
 
-import { GLOBAL_SKILLS_DIR, MEMORY_FILE, NOTES_DIR, WALNUT_HOME } from '../../../src/constants.js'
+import { GLOBAL_SKILLS_DIR, MEMORY_DIR, MEMORY_FILE, NOTES_DIR, REPOS_MEMORY_DIR, WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { _resetCloudIngestForTesting, postToCloudJournal } from '../../../src/core/cloud-ingest.js'
 import { _resetHostReplicaForTesting, forgetCompanionHostReplica, syncCompanionHostReplica } from '../../../src/core/host-replica.js'
+import { _resetAttachmentReplicaForTesting } from '../../../src/core/attachment-replica.js'
 import { companionCopyHolds } from '../../../src/core/companion-host-replica.js'
 import { companionJournalRecords } from '../../../src/core/companion-journal.js'
 import { APPLIED_V2_KINDS } from '../../../src/core/offline-merge/apply-v2.js'
@@ -66,6 +73,17 @@ async function api(p: string, init: RequestInit = {}): Promise<{ status: number;
 }
 const put = (p: string, body: unknown) => api(p, { method: 'PUT', body: JSON.stringify(body) })
 const memoryRecords = () => companionJournalRecords().filter((r) => r.kind === 'memory')
+const why = (r: { status: number; body: Record<string, any> }) => ({ status: r.status, why: r.body.error?.why })
+/** The rest of the memory dir, as the Mac has it. */
+const MEMORY_FILES: Record<string, string> = {
+  'daily/2026-10-19.md': '# 2026-10-19\n\nCalled the venue.\n',
+  'daily/2026-10-20.md': '# 2026-10-20\n\nBooked the hall.\n',
+  'projects/acme.md': '# Acme project\n\nThe launch is in March.\n',
+  'sessions/2026-10-20-acme-review.md': '# Session: Acme review\nDate: 2026-10-20\nProject: Acme\nStatus: completed\n\n## Summary\nReviewed the launch plan.\n',
+  'topics/venues.md': '# Venues\n\nThe hall seats 200.\n',
+  'compaction/2026-10-18.md': '# Compaction\n\nOlder context.\n',
+  'working-memory.md': '# Working memory\n\nNow: the launch.\n',
+}
 
 beforeAll(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true })
@@ -82,6 +100,12 @@ beforeAll(async () => {
   await fs.mkdir(path.join(GLOBAL_SKILLS_DIR, 'acme-tool', 'references'), { recursive: true })
   await fs.writeFile(path.join(GLOBAL_SKILLS_DIR, 'acme-tool', 'SKILL.md'), SKILL)
   await fs.writeFile(path.join(GLOBAL_SKILLS_DIR, 'acme-tool', 'references', 'flags.md'), 'Use --twice.\n')
+  for (const [rel, text] of Object.entries(MEMORY_FILES)) {
+    await fs.mkdir(path.dirname(path.join(MEMORY_DIR, rel)), { recursive: true })
+    await fs.writeFile(path.join(MEMORY_DIR, rel), text)
+  }
+  await fs.mkdir(path.join(REPOS_MEMORY_DIR, 'acme-repo'), { recursive: true })
+  await fs.writeFile(path.join(REPOS_MEMORY_DIR, 'acme-repo', 'SKILL.md'), '# acme-repo\n\nBuild with make.\n')
   _resetDeviceAuthForTesting()
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
@@ -90,27 +114,47 @@ beforeAll(async () => {
   bridgeCfg = { enabled: true, url: `ws://127.0.0.1:${port}/bridge`, token: T.local }
   _resetCloudIngestForTesting()
   _resetHostReplicaForTesting()
-  await syncCompanionHostReplica()
-  expect(companionCopyHolds('memory')).toBe(true)
-  expect(companionCopyHolds('skills')).toBe(true)
+  _resetAttachmentReplicaForTesting()
 }, 60_000)
 
 afterAll(async () => {
+  _resetAttachmentReplicaForTesting()
   await stopServer()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
+describe('before the copy is held', () => {
+  it('the memory and skill reads need the Mac, and so does every skill write; the disk is untouched', async () => {
+    expect(companionCopyHolds('memory')).toBe(false)
+    const reads = [
+      await api('/api/memory/global'), await api('/api/v1/memory/global'), await api('/api/memory/browse'),
+      await api('/api/memory/daily/2026-10-20.md'), await api('/api/v1/memory?category=project'),
+      await api('/api/sessions/summaries'), await api('/api/v1/sessions/summaries'),
+      await api('/api/skills'), await api('/api/skills/acme-tool'), await api('/api/v1/skills'), await api('/api/skills/acme-tool/references'),
+    ]
+    for (const r of reads) expect(why(r)).toEqual({ status: 503, why: 'kind_not_copied' })
+    expect(why(await put('/api/memory/global', { content: 'x' }))).toEqual({ status: 503, why: 'kind_not_copied' })
+    expect(why(await api('/api/skills/acme-tool', { method: 'PUT', body: JSON.stringify({ content: '# Changed' }) }))).toEqual({ status: 503, why: 'skill_changes_need_mac' })
+    expect(await fs.readFile(MEMORY_FILE, 'utf8')).toBe(MEMORY)
+    expect(await fs.readFile(path.join(GLOBAL_SKILLS_DIR, 'acme-tool', 'SKILL.md'), 'utf8')).toBe(SKILL)
+    await syncCompanionHostReplica()
+    expect(companionCopyHolds('memory')).toBe(true)
+    expect(companionCopyHolds('skills')).toBe(true)
+  })
+})
+
 describe('memory on the box', () => {
-  it('before the Mac drains memory, the reads and saves are the box\'s disk\'s', async () => {
+  it('before the Mac drains memory, the reads take the copy and a save needs the Mac', async () => {
     // A Mac that drains the older kinds only.
     await postToCloudJournal('offline.drain', { home: '/x', kinds: APPLIED_V2_KINDS.filter((k) => k !== 'memory') })
     await fs.writeFile(MEMORY_FILE, `${MEMORY}- Disk only\n`)
     const r = await api('/api/memory/global')
-    expect(r.body.memory.content).toContain('Disk only')
-    expect(r.asOf).toBeNull()
+    expect(r.body.memory.content).toBe(MEMORY)
+    expect(r.asOf).toBeTruthy()
     const saved = await put('/api/memory/global', { content: `${MEMORY}- Saved to disk\n`, expectedHash: r.body.memory.contentHash })
-    expect(saved.status).toBe(200)
-    expect(await fs.readFile(MEMORY_FILE, 'utf8')).toContain('Saved to disk')
+    expect(why(saved)).toEqual({ status: 503, why: 'mac_too_old' })
+    expect(why(await put('/api/v1/memory/user', { content: 'x' }))).toEqual({ status: 503, why: 'mac_too_old' })
+    expect(await fs.readFile(MEMORY_FILE, 'utf8')).toBe(`${MEMORY}- Disk only\n`)
     expect(memoryRecords()).toEqual([])
     await fs.writeFile(MEMORY_FILE, MEMORY)
   })
@@ -163,9 +207,53 @@ describe('memory on the box', () => {
   })
 })
 
+describe('the rest of the memory dir on the box', () => {
+  it('the browse tree, the lists, one file and the session summaries answer the copy (web and v1)', async () => {
+    // The disk moves on without a round: the box shows the copy.
+    await fs.writeFile(path.join(MEMORY_DIR, 'daily/2026-10-20.md'), '# 2026-10-20\n\nDisk only.\n')
+    await fs.rm(path.join(MEMORY_DIR, 'projects/acme.md'))
+    const browse = await api('/api/memory/browse')
+    expect(browse.status).toBe(200)
+    expect(browse.asOf).toBeTruthy()
+    const tree = browse.body.tree
+    expect(tree.global).toMatchObject({ path: 'MEMORY.md' })
+    expect(tree.daily.map((d: { path: string }) => d.path)).toEqual(['daily/2026-10-20.md', 'daily/2026-10-19.md'])
+    expect(tree.projects).toEqual([expect.objectContaining({ path: 'projects/acme.md', title: 'Acme project' })])
+    expect(tree.sessions.map((x: { path: string }) => x.path)).toEqual(['sessions/2026-10-20-acme-review.md'])
+    expect(tree.topics.map((x: { path: string }) => x.path)).toEqual(['topics/venues.md'])
+    expect(tree.compaction.map((x: { path: string }) => x.path)).toEqual(['compaction/2026-10-18.md'])
+    expect(tree.special.map((x: { path: string }) => x.path)).toEqual(['working-memory.md'])
+    expect(tree.repos).toEqual([expect.objectContaining({ path: 'repos/acme-repo/SKILL.md', title: 'acme-repo' })])
+    expect((await api('/api/v1/memory/browse')).body.tree.daily).toHaveLength(2)
+    const one = await api('/api/memory/daily/2026-10-20.md')
+    expect(one).toMatchObject({ status: 200, body: { memory: { path: 'daily/2026-10-20.md', content: MEMORY_FILES['daily/2026-10-20.md'], contentHash: sha12(MEMORY_FILES['daily/2026-10-20.md']!) } } })
+    expect((await api('/api/memory/daily/2026-01-01.md')).status).toBe(404)
+    expect((await api('/api/memory?category=project')).body.memories).toEqual([expect.objectContaining({ path: 'projects/acme.md', category: 'project', content: MEMORY_FILES['projects/acme.md'] })])
+    expect((await api('/api/v1/memory?category=session')).body.memories.map((m: { path: string }) => m.path)).toEqual(['sessions/2026-10-20-acme-review.md'])
+    for (const p of ['/api/sessions/summaries', '/api/v1/sessions/summaries']) {
+      expect((await api(p)).body.summaries).toEqual([expect.objectContaining({ id: '2026-10-20-acme-review', project: 'Acme', summary: 'Reviewed the launch plan.' })])
+    }
+    await fs.writeFile(path.join(MEMORY_DIR, 'daily/2026-10-20.md'), MEMORY_FILES['daily/2026-10-20.md']!)
+    await fs.writeFile(path.join(MEMORY_DIR, 'projects/acme.md'), MEMORY_FILES['projects/acme.md']!)
+  })
+
+  it('a save of another memory file, a compaction and the telemetry view need the Mac; the disk is untouched', async () => {
+    const answers = [
+      await put('/api/memory/daily/2026-10-20.md', { content: 'x' }),
+      await api('/api/memory/daily-log/compact', { method: 'POST', body: JSON.stringify({ date: '2026-10-20', summarizer: 'extract' }) }),
+      await api('/api/v1/memory/daily-log/compact', { method: 'POST', body: JSON.stringify({ date: '2026-10-20', summarizer: 'extract' }) }),
+    ]
+    for (const a of answers) expect(why(a)).toEqual({ status: 503, why: 'memory_file_changes_need_mac' })
+    expect(why(await api('/api/memory/telemetry'))).toEqual({ status: 503, why: 'memory_telemetry_needs_mac' })
+    expect(why(await api('/api/v1/memory/telemetry'))).toEqual({ status: 503, why: 'memory_telemetry_needs_mac' })
+    expect(await fs.readFile(path.join(MEMORY_DIR, 'daily/2026-10-20.md'), 'utf8')).toBe(MEMORY_FILES['daily/2026-10-20.md'])
+  })
+})
+
 describe('skills on the box', () => {
   it('the reads answer the copy, even for a skill the box\'s disk no longer has', async () => {
     await fs.rm(path.join(GLOBAL_SKILLS_DIR, 'acme-tool', 'SKILL.md'))
+    await fs.rm(path.join(GLOBAL_SKILLS_DIR, 'acme-tool', 'references', 'flags.md'))
     const one = await api('/api/skills/acme-tool')
     expect(one).toMatchObject({ status: 200, body: { skill: { dirName: 'acme-tool', name: 'acme-tool', content: SKILL, location: '' } } })
     expect(one.asOf).toBeTruthy()
@@ -173,14 +261,20 @@ describe('skills on the box', () => {
     expect(v1.body.skill.description).toBe('How to run the Acme tool')
     const list = await api('/api/skills')
     expect(list.body.skills.find((s: { dirName: string }) => s.dirName === 'acme-tool')?.content).toBe(SKILL)
+    // A skill's reference files are keys of the copy, never skills of their own.
+    expect(list.body.skills.some((s: { dirName: string }) => s.dirName.includes('/'))).toBe(false)
     const v1list = await api('/api/v1/skills')
     const row = v1list.body.skills.find((s: { dirName: string }) => s.dirName === 'acme-tool')
     expect(row).toBeTruthy()
     expect(row.content).toBeUndefined()
     expect((await api('/api/skills/no-such-skill')).status).toBe(404)
     expect((await api('/api/v1/skills/no-such-skill')).body).toMatchObject({ error: { code: 'not_found' } })
-    // Its references are the box's own files.
-    expect((await api('/api/skills/acme-tool/references')).status).not.toBe(503)
+    // Its references come from the copy too (web and v1).
+    expect((await api('/api/skills/acme-tool/references')).body).toEqual({ files: [{ name: 'flags.md', size: 13 }] })
+    expect((await api('/api/skills/acme-tool/references/flags.md')).body).toEqual({ content: 'Use --twice.\n' })
+    expect((await api('/api/v1/skills/acme-tool/references/flags.md')).body).toEqual({ content: 'Use --twice.\n' })
+    expect((await api('/api/skills/acme-tool/references/nothing.md')).status).toBe(404)
+    expect((await api('/api/skills/no-such-skill/references')).status).toBe(404)
   })
 
   it('every skill write needs the Mac', async () => {

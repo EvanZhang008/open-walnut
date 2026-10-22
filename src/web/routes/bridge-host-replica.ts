@@ -10,23 +10,31 @@
  *   {cmd:'replica.drop', params:{home, kind}}         -> {ok, dropped}
  *   {cmd:'replica.status'}                            -> {ok, kinds}
  *
+ * And the pictures and files of the notes (stage 4d, core/companion-attachment-copy.ts),
+ * which no host keeps: `attachments.sync` {entries:[{k,h,n}], asOf} -> {ok, need, ...},
+ * `attachments.put` {k, h, offset, data} -> {ok, have, stored}, `attachments.drop`,
+ * `attachments.status`.
+ *
  * A refusal answers `{ok:false, error, errorKind?}` with 200, as a daemon's error
  * reply reaches the round. Only the Mac's machine credential passes
  * (bridge-ingest.ts authenticate), checked before the body is read.
  */
 
 import express, { Router, type Request, type Response } from 'express'
-import { companionHostReplicaCommand } from '../../core/companion-host-replica.js'
+import { companionHostReplicaCommand, type HostReplicaReply } from '../../core/companion-host-replica.js'
+import { companionAttachmentCommand } from '../../core/companion-attachment-copy.js'
 import { authenticate, parseErrors } from './bridge-ingest.js'
 
 export const BRIDGE_HOST_REPLICA_PATH = '/bridge/host-replica'
-/** A put batch is 512 KB of bodies (a note is at most 1 MB); a manifest of 20,000 notes stays under it. */
+/** A put batch is 512 KB of bodies (a note is at most 1 MB), a picture chunk 2 MB (base64); a manifest of 20,000 notes stays under it. */
 const BODY_LIMIT = '8mb'
 
-function hostReplica(req: Request, res: Response): void {
+async function hostReplica(req: Request, res: Response): Promise<void> {
   const body = (req.body ?? {}) as { cmd?: unknown; params?: unknown }
   const params = (body.params && typeof body.params === 'object' ? body.params : {}) as Record<string, unknown>
-  const reply = companionHostReplicaCommand(body.cmd, params)
+  const reply = typeof body.cmd === 'string' && body.cmd.startsWith('attachments.')
+    ? await companionAttachmentCommand(body.cmd, params) as HostReplicaReply
+    : companionHostReplicaCommand(body.cmd, params)
   if (!reply.ok && reply.errorKind === 'bad_request') {
     res.status(400).json(reply)
     return
@@ -40,7 +48,7 @@ export function createBridgeHostReplicaRouter(): Router {
     '/',
     (req, res, next) => { void authenticate(req, res, next).catch(next) },
     express.json({ limit: BODY_LIMIT }),
-    (req, res) => hostReplica(req, res),
+    (req, res, next) => { hostReplica(req, res).catch(next) },
   )
   router.use(parseErrors)
   return router

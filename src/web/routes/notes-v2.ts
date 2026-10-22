@@ -305,6 +305,12 @@ const ATTACHMENT_MIME: Record<string, string> = {
   ppt: 'application/vnd.ms-powerpoint',
 }
 
+/** A vault file the attachment route serves (by its extension): what the companion's copy carries. */
+export function isServedAttachment(name: string): boolean {
+  return !!ATTACHMENT_MIME[path.extname(name).slice(1).toLowerCase()]
+}
+export const MAX_SERVED_ATTACHMENT_BYTES = 50 * 1024 * 1024
+
 // Extensions the browser can render inline; everything else downloads.
 // heic/heif are inline for iOS (native decode) and for the iOS app, which hands
 // the bytes to ImageIO — it decodes heic fine.
@@ -316,7 +322,7 @@ function rfc5987Encode(s: string): string {
   return encodeURIComponent(s).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
 }
 
-const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024 // 50 MB (mirror local-image)
+const MAX_ATTACHMENT_SIZE = MAX_SERVED_ATTACHMENT_BYTES // 50 MB (mirror local-image)
 
 /**
  * Resolve + read a vault attachment for streaming. Shared by this router's
@@ -345,6 +351,22 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown): Prom
   // filename — strip it before reading the extension or every sized embed 400s.
   const reqExt = path.extname(raw.split('|')[0]).slice(1).toLowerCase()
   if (!ATTACHMENT_MIME[reqExt]) throw new NotesOpError('File type not allowed', 400)
+
+  // The cloud companion reads its copy of the Mac's files and the pictures pasted on it
+  // (core/companion-attachment-copy.ts), never its git-written disk once that copy is held.
+  const { companionAttachmentRead } = await import('../../core/companion-attachment-copy.js')
+  const copied = await companionAttachmentRead(raw, typeof notePath === 'string' ? notePath : undefined)
+  if (copied === null) throw new NotesOpError('Attachment not found', 404)
+  if (copied) {
+    const cext = path.extname(copied.rel).slice(1).toLowerCase()
+    const cmime = ATTACHMENT_MIME[cext]
+    if (!cmime) throw new NotesOpError('File type not allowed', 400)
+    if (copied.bytes.length > MAX_ATTACHMENT_SIZE) throw new NotesOpError('File too large', 400)
+    return {
+      buffer: copied.bytes, mime: cmime,
+      contentDisposition: INLINE_EXTS.has(cext) ? 'inline' : `attachment; filename*=UTF-8''${rfc5987Encode(path.posix.basename(copied.rel))}`,
+    }
+  }
 
   const fullPath = await resolveAttachmentPath(
     raw,
@@ -473,13 +495,13 @@ const PASTE_MIME_TO_EXT: Record<string, string> = {
 const MAX_UPLOAD_BASE64 = 10_000_000 // ~7.5 MB decoded (mirror images.ts)
 
 /**
- * Save a pasted-image attachment into the vault. Shared by this router's
- * POST /attachment and POST /api/v1/notes/attachment — throws NotesOpError
- * for every validation failure so each edge maps its own error shape.
+ * A pasted image's checks and its place in the vault, without writing it. Shared by
+ * saveNoteAttachment and the cloud companion's paste, which keeps the bytes in its
+ * journal instead of its disk (core/companion-note-attachments.ts).
  */
-export async function saveNoteAttachment(
+export function planNoteAttachment(
   notePath: unknown, data: unknown, mediaType: unknown,
-): Promise<{ ok: true; path: string; name: string }> {
+): { filePath: string; relPath: string; filename: string; buffer: Buffer } {
   if (typeof notePath !== 'string' || typeof data !== 'string' || typeof mediaType !== 'string') {
     throw new NotesOpError('notePath, data (base64) and mediaType are required', 400)
   }
@@ -505,10 +527,20 @@ export async function saveNoteAttachment(
     `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
   const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 6)
   const filename = `pasted-image-${ts}-${hash}.${ext}`
+  const filePath = path.join(path.dirname(noteFile), '_attachment', filename)
+  return { filePath, relPath: toRelPath(filePath), filename, buffer }
+}
 
-  const attachmentDir = path.join(path.dirname(noteFile), '_attachment')
-  await fsp.mkdir(attachmentDir, { recursive: true })
-  const filePath = path.join(attachmentDir, filename)
+/**
+ * Save a pasted-image attachment into the vault. Shared by this router's
+ * POST /attachment and POST /api/v1/notes/attachment. It throws NotesOpError
+ * for every validation failure so each edge maps its own error shape.
+ */
+export async function saveNoteAttachment(
+  notePath: unknown, data: unknown, mediaType: unknown,
+): Promise<{ ok: true; path: string; name: string }> {
+  const { filePath, filename, buffer } = planNoteAttachment(notePath, data, mediaType)
+  await fsp.mkdir(path.dirname(filePath), { recursive: true })
   await fsp.writeFile(filePath, buffer)
 
   const relPath = toRelPath(filePath)
@@ -1252,12 +1284,31 @@ async function performNotesSearchInner(opts: {
       }))
     }
 
+    // The cloud companion's string leg is a keyword search of its copy of the Mac's notes
+    // (stage 4d, core/companion-notes.ts): its own disk index is off. Null elsewhere; it
+    // throws needs-the-Mac while the box keeps no copy.
+    const { companionNotesSearch } = await import('../../core/companion-notes.js')
+    const companionLeg = wantString ? await companionNotesSearch(q, limit * 2) : null
+
     const [stringSettled, semanticSettled] = await Promise.allSettled([
-      wantString ? Promise.resolve(stringSearch(q, limit * 2, { excludeFolders })) : Promise.resolve([]),
+      wantString && !companionLeg ? Promise.resolve(stringSearch(q, limit * 2, { excludeFolders })) : Promise.resolve([]),
       wantSemantic ? v2SemanticLeg() : Promise.resolve([]),
     ])
 
     const byId = new Map<string, SearchResultRow>()
+    // A semantic hit names its note by path when this server has no index of its own (the companion).
+    const byPath = new Map<string, SearchResultRow>()
+
+    for (const h of companionLeg?.rows ?? []) {
+      if (isPathExcluded(h.path, excludeFolders)) continue
+      const row: SearchResultRow = {
+        id: h.id, path: h.path, title: h.title,
+        snippet: highlightTokens(cleanSnippetText(h.snippet), snippetTokens(q), q),
+        matchType: 'exact', score: 0, stringScore: h.stringScore,
+      }
+      byId.set(h.id, row)
+      byPath.set(h.path, row)
+    }
 
     if (stringSettled.status === 'fulfilled') {
       for (const h of stringSettled.value) {
@@ -1311,7 +1362,7 @@ async function performNotesSearchInner(opts: {
         const sem = h.cos
         if (sem === undefined) continue
         const id = idFromAbsPath(h.filepath)
-        const existing = byId.get(id)
+        const existing = byId.get(id) ?? byPath.get(relForFilter)
         if (existing) {
           // Already a string hit → promote to 'both' (no floor — string match
           // already proves relevance). Keep the highlighted string snippet.
@@ -1379,16 +1430,18 @@ async function performNotesSearchInner(opts: {
     // Direct folder-name scan: a folder holding only attachments (a PDF dossier
     // folder) has zero note rows, so no result can ever carry its folderMatch —
     // without this it is simply unfindable by name.
-    if (wantString) {
+    if (wantString && !companionLeg) {
       try {
         for (const p of searchFolders(q, 5, { excludeFolders })) matchedFolders.add(p)
       } catch { /* folder scan is best-effort */ }
     }
+    const copiedCounts = new Map((companionLeg?.folders ?? []).filter((f) => !isPathExcluded(f.path, excludeFolders)).map((f) => [f.path, f.noteCount]))
+    for (const p of copiedCounts.keys()) matchedFolders.add(p)
     const folders: FolderGroupRow[] = [...matchedFolders]
       .map((p) => ({
         path: p,
         name: p.split('/').pop() ?? p,
-        noteCount: countNotesUnderFolder(p),
+        noteCount: copiedCounts.get(p) ?? countNotesUnderFolder(p),
       }))
       .sort((a, b) => b.noteCount - a.noteCount || a.path.localeCompare(b.path))
 

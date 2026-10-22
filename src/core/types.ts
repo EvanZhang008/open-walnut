@@ -1185,6 +1185,9 @@ export interface Config {
       notes_exclude?: string[];
       memory?: boolean;
       skills?: boolean;
+      /** The cloud companion only: the pictures and files in the notes (core/attachment-replica.ts).
+       *  On unless set false, and only while `notes` is kept. */
+      attachments?: boolean;
     };
     /** A Walnut server this Mac keeps running on the host, following it
      *  (core/host-server/, docs/plan/walnut-servers-everywhere.md). Off unless enabled. */
