@@ -131,7 +131,7 @@ const prefetchedEngineCatalogs = new Set<string>();
  * provider is clickable (the engine is still a choice here), and picking an ACP
  * engine clears the model (ACP discovers models at session start).
  */
-function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
+function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
@@ -140,6 +140,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
   /** Ask Walnut: the profile rides the CLI's system-prompt flags, so only the
    *  claude engine can carry it — other providers render locked with that reason. */
   walnut?: boolean;
+  fork?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   // The clicked pill — anchor for the popout picker (portalled, clip-proof).
@@ -219,9 +220,11 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
           onProviderSwitch={(provider) => {
             onMetaChange((m) => ({ ...m, engine: normalizeEngine(provider), model: undefined }));
           }}
-          providerLockReason={(provider) => (walnut && provider !== 'claude'
-            ? 'Ask Walnut runs on the claude engine (the Personal AI profile rides its system prompt)'
-            : engineLockReason(engineEntry(catalog, provider), host))}
+          providerLockReason={(provider) => (fork && provider !== engine
+            ? 'A fork keeps the source session provider'
+            : walnut && provider !== 'claude'
+              ? 'Ask Walnut runs on the claude engine (the Personal AI profile rides its system prompt)'
+              : engineLockReason(engineEntry(catalog, provider), host))}
           autoRow={{ resolvedLabel: autoResolved, active: isAuto }}
           // ACP draft: selection lands in meta.model (same field the claude
           // pane uses — the launch payload already carries it) and rides the
@@ -903,6 +906,7 @@ export function DraftSessionPanel({
                 host={draft.host}
                 cwd={draft.cwd || undefined}
                 walnut={isWalnut}
+                fork={isFork}
               />
               {/* No "Start ↵" here: the composer's send arrow (and Enter) already
                   starts the session, and two buttons for one action read as two

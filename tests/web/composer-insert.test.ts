@@ -46,6 +46,19 @@ describe('insertIntoSessionComposer', () => {
     expect(store.size).toBe(0);
   });
 
+  it('a popout has its own draft key and cannot clear the home draft', async () => {
+    const { sessionDraftKey } = await import('@/utils/composer-insert');
+    pathname = '/';
+    const homeKey = sessionDraftKey(SID);
+    store.set(homeKey, 'Home draft');
+    pathname = '/popout';
+    const childKey = sessionDraftKey(SID);
+    expect(childKey).not.toBe(homeKey);
+    store.set(childKey, 'Child draft');
+    store.delete(childKey);
+    expect(store.get(homeKey)).toBe('Home draft');
+  });
+
   it('already on Home → no navigation', async () => {
     const { insertIntoSessionComposer, COMPOSER_INSERT_EVENT } = await import('@/utils/composer-insert');
     pathname = '/';

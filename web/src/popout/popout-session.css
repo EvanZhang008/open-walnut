@@ -1,0 +1,26 @@
+.popout-session.popout-session-interactive {
+  flex-direction: row;
+}
+
+.popout-session-interactive > .session-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.popout-session-fork {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+}
+
+@media (max-width: 700px) {
+  .popout-session-interactive:has(.popout-session-fork) > .session-panel {
+    display: none;
+  }
+
+  .popout-session-fork {
+    border-left: 0;
+  }
+}

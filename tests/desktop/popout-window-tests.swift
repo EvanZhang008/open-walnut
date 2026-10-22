@@ -55,8 +55,17 @@ struct PopoutWindowTests {
         try await wait { delegate.popoutWindows.count == 1 }
         let firstWindow = delegate.popoutWindows.values.first!
         let first = firstWindow.contentView as! WKWebView
-        try await wait { (try? await js(first, "!!document.querySelector('.popout-session-title')")) as? Bool == true }
+        try await wait { (try? await js(first, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
         print("Loaded native session popout")
+        let composerFits = try await js(first, "(() => {const e=document.querySelector('.session-panel-input textarea');const r=e.getBoundingClientRect();return r.height>0 && r.bottom<=innerHeight})()")
+        precondition(composerFits as? Bool == true)
+        let tools = try await js(first, "Array.from(document.querySelectorAll('.session-panel-header button')).some(b=>b.textContent.trim()==='Files')")
+        precondition(tools as? Bool == true)
+        _ = try await js(first, "(() => {const e=document.querySelector('.session-panel-input textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,'Native popout round trip');e.dispatchEvent(new Event('input',{bubbles:true}));return true})()")
+        try await wait { (try? await js(first, "!document.querySelector('.session-panel-input .chat-send-btn-icon').disabled")) as? Bool == true }
+        _ = try await js(first, "document.querySelector('.session-panel-input .chat-send-btn-icon').click(); true")
+        try await wait { (try? await js(first, "Array.from(document.querySelectorAll('.session-msg-assistant')).some(e=>e.textContent.includes('Native popout round trip'))")) as? Bool == true }
+        print("Native composer sent and received the CLI reply")
         precondition(first.url?.path == "/popout")
         precondition(first.configuration.userContentController !== parent.configuration.userContentController)
         _ = try await js(parent, "document.querySelector('.main-page-session-column [data-session-id=\"\(sid)\"] .session-panel-popout').click(); true")
@@ -96,7 +105,7 @@ struct PopoutWindowTests {
         let recycled = firstWindow.contentView as! WKWebView
         precondition(recycled !== oldChild)
         precondition(delegate.popoutWindows.count == 2)
-        try await wait { (try? await js(recycled, "!!document.querySelector('.popout-session-title')")) as? Bool == true }
+        try await wait { (try? await js(recycled, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
         precondition(WebContentWatchdog.webContentPid(recycled) != childPid)
         print("Recycled WebContent PID: \(WebContentWatchdog.webContentPid(recycled) ?? 0)")
         _ = try await js(recycled, "const t=document.createElement('textarea');t.id='child-draft';t.value='unsent child draft';document.body.append(t);true")
@@ -118,11 +127,12 @@ struct PopoutWindowTests {
         let reopened = delegate.popoutWindows.values.first { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true }
         try await wait { delegate.popoutWindows.values.contains { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true } }
         let final = reopened ?? delegate.popoutWindows.values.first { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true }!
-        try await wait { (try? await js(final.contentView as! WKWebView, "!!document.querySelector('.popout-session-title')")) as? Bool == true }
+        try await wait { (try? await js(final.contentView as! WKWebView, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
         delegate.window.close()
         precondition(delegate.popoutWindows.count == 2)
         precondition(!final.isVisible)
         let finalView = final.contentView as! WKWebView
+        try await wait { (try? await js(finalView, "!document.querySelector('.session-panel-header').textContent.includes('Loading...')")) as? Bool == true }
         let finalTitle = try await js(finalView, "document.title")
         precondition(finalTitle is String)
         if let output = ProcessInfo.processInfo.environment["WALNUT_TEST_SCREENSHOT"] {

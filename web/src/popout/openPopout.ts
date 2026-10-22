@@ -3,7 +3,7 @@
  *
  * Opens a standalone `/popout?view=<view>&...params` route in a NEW BROWSER TAB
  * that renders a single view (file / note / session / task / global-notes)
- * without the app shell, sidebar, or providers. See PopoutRoot.tsx for the
+ * without the app shell or sidebar. See PopoutRoot.tsx for the
  * receiving end and the SHARED CONTRACT in the popout/ dir.
  *
  * We open a plain tab (window.open(url, '_blank')) rather than a popup window:

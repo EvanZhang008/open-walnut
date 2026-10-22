@@ -9,6 +9,7 @@ import type { SessionPinnedQuote } from '@/types/session';
 import { QUOTE_CONTEXT_CHARS } from '@/utils/text-quote-anchor';
 import { ROOT_THREAD_KEY, THREAD_HUES, normalizePassage, pathToRoot, type ThreadTree } from '@/utils/thread-tree';
 import { stripQuestionTag } from '@/utils/question-tag';
+import { sessionDraftKey } from '@/utils/composer-insert';
 import {
   displayTitleOf, metaOf, openBelow, viewStatusOf,
   type ThreadLiveState, type ThreadMetaIndex, type ThreadViewStatus,
@@ -38,7 +39,7 @@ export function isPendingKey(key: string | undefined): boolean {
  * is keyed by its head row, a pending page by its own key.
  */
 export function composerDraftKey(sessionId: string, pageKey: string, tree: ThreadTree): string {
-  const base = `draft:session:${sessionId}`;
+  const base = sessionDraftKey(sessionId);
   if (pageKey === ROOT_THREAD_KEY) return base;
   if (isPendingKey(pageKey)) return `${base}:${pageKey}`;
   const head = tree.byKey.get(pageKey)?.headId;

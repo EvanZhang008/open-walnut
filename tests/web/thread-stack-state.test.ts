@@ -3,7 +3,7 @@
  * cross-branch navigation, page and draft keys, the Esc decision, landing
  * arithmetic, sliver bars and the quote head's context.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   composerDraftKey, deriveThreadStats, escapeDecision, hashText, isPendingKey, isStillClick, landingCorrection,
   contextSide, needsFallbackJump, pageLeave, pendingPageKey, planNavigation, quoteHeadParts, samePath, sliverBarWidth,
@@ -37,6 +37,17 @@ describe('page keys', () => {
     expect(isPendingKey(ROOT_THREAD_KEY)).toBe(false);
     expect(pendingPageKey('r1', 'x')).not.toBe(pendingPageKey('r2', 'x'));
     expect(hashText('abc')).toBe(hashText('abc'));
+  });
+
+  it('isolates popout drafts for root, question and pending pages', () => {
+    vi.stubGlobal('window', { location: { pathname: '/popout' } });
+    try {
+      const { tree, A } = fixture();
+      expect(composerDraftKey('s1', ROOT_THREAD_KEY, tree)).toBe('draft:session:s1:popout');
+      expect(composerDraftKey('s1', A, tree)).toBe('draft:session:s1:popout:u2');
+      const pending = pendingPageKey('r2', 'x y');
+      expect(composerDraftKey('s1', pending, tree)).toBe(`draft:session:s1:popout:${pending}`);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it('keeps the root draft key and keys pages by head id or pending key', () => {

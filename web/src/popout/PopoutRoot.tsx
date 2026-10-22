@@ -33,9 +33,9 @@ function applyStoredTheme() {
 
 /**
  * Root of a pop-out window. Mounted by App.tsx when the path starts with
- * `/popout`, BEFORE <AppShell> — so a pop-out never mounts the sidebar,
- * TasksProvider, MainPage, or any app-shell context. Restores the saved theme
- * then dispatches to the requested leaf view by `?view=`.
+ * `/popout`, BEFORE <AppShell>: no sidebar or MainPage. Each leaf mounts the
+ * providers its interactions need. Restores the saved theme, then dispatches
+ * to the requested leaf view by `?view=`.
  */
 export function PopoutRoot() {
   const [params] = useSearchParams();

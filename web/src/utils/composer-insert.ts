@@ -27,7 +27,10 @@ export interface ComposerInsertDetail {
 
 /** Draft key a session composer persists under (ChatInput `draftKey`). */
 export function sessionDraftKey(sessionId: string): string {
-  return `draft:session:${sessionId}`;
+  const base = `draft:session:${sessionId}`;
+  return typeof window !== 'undefined' && window.location.pathname === '/popout'
+    ? `${base}:popout`
+    : base;
 }
 
 export type ComposerInsertOutcome = 'inserted' | 'queued';
