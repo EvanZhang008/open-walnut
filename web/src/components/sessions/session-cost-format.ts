@@ -1,6 +1,6 @@
 /** Pure formatting for the picker's cost block (SessionCostBlock). */
 import { formatModelName } from '@/utils/model-name';
-import type { SessionCost, SessionCostModel, SessionCostRates } from '@/api/session-cost';
+import type { SessionCost, SessionCostLine, SessionCostModel, SessionCostRates, SessionCostTier } from '@/api/session-cost';
 
 /** $29.19, $0.42, $0.0031 (small amounts keep two significant digits). */
 export function fmtUsd(n: number): string {
@@ -13,6 +13,30 @@ export function fmtUsd(n: number): string {
 /** A per-million rate: $4, $0.2, $0.125. */
 export function fmtRate(n: number): string {
   return `$${Number(n.toPrecision(4))}`;
+}
+
+/** A table cell amount: $1,234.56, $0.16, $0.0031. */
+export function fmtCost(n: number): string {
+  if (n >= 0.01) return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return fmtUsd(n);
+}
+
+const LINE_LABELS: Record<SessionCostLine['kind'], string> = {
+  input: 'Input', cacheWrite: 'Cache write', cacheWrite5m: 'Cache write (5m)', cacheWrite1h: 'Cache write (1h)',
+  cacheRead: 'Cache read', output: 'Output', webSearch: 'Web search',
+};
+export function costLineLabel(kind: SessionCostLine['kind']): string { return LINE_LABELS[kind]; }
+
+/** The rows worth a line: anything that was used or cost something. */
+export function visibleLines(tier: SessionCostTier): SessionCostLine[] {
+  return tier.lines.filter(l => l.count > 0 || l.costUsd > 0);
+}
+
+/** "Prompt up to 272K · 1,052 requests" / "Prompt over 272K · 746 requests"; "" for a model with one price. */
+export function tierLabel(tier: SessionCostTier, threshold?: number): string {
+  const n = `${tier.responses.toLocaleString('en-US')} request${tier.responses === 1 ? '' : 's'}`;
+  if (!threshold) return '';
+  return `Prompt ${tier.tier === 'long' ? 'over' : 'up to'} ${fmtTokenCount(threshold)} · ${n}`;
 }
 
 export function fmtTokenCount(n: number): string {
