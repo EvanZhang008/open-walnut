@@ -11,6 +11,10 @@
  * `reconcile()` brings both in line with config.yaml's `expose` section and the
  * registered providers; calls are serialized. It runs at start, after a settings
  * change, and when a plugin adds or removes a provider.
+ *
+ * While a host carries the tunnel (core/expose/placement.ts), none runs here: the
+ * host's server runs it, and the status is that host's report. The port stays open
+ * for the host server's way back to this Mac.
  */
 
 import http, { type RequestListener, type Server as HttpServer } from 'node:http'
@@ -19,8 +23,10 @@ import { log } from '../logging/index.js'
 import { getConfig } from '../core/config-manager.js'
 import { ExposeSupervisor, httpProbe, nodeSpawn, resolveRun, type SupervisorDeps } from '../core/expose/supervisor.js'
 import { getExposeProvider, onExposeProvidersChanged } from '../core/expose/registry.js'
+import { exposePlacement, statusOnHost, type PlacementHostView } from '../core/expose/placement.js'
 import { setExposeStatusSource } from '../core/expose/status.js'
-import type { ExposeStatus } from '../core/expose/types.js'
+import type { ExposeProviderDefinition, ExposeRunsOn, ExposeStatus } from '../core/expose/types.js'
+import { getHostServerManager, peekHostServerViews } from '../core/host-server/index.js'
 import { mcpServerEnv } from '../core/mcp-servers/env.js'
 import { markTunnelPort, unmarkTunnelPort } from './middleware/local-trust.js'
 
@@ -29,6 +35,11 @@ export interface ExposeRuntimeOptions {
   mainServer: HttpServer
   /** Tests: a fake child process and clock. */
   deps?: Partial<SupervisorDeps>
+  /** Tests: the host server's view and tunnel retry (default: core/host-server). */
+  hosts?: {
+    view(hostKey: string): PlacementHostView | null
+    retry(hostKey: string): Promise<void>
+  }
 }
 
 export interface ExposeRuntime {
@@ -47,6 +58,8 @@ export interface ExposeRuntime {
 }
 
 let current: ExposeRuntime | null = null
+/** Each runtime's own bus subscriber name: one stopping never removes another's. */
+let runtimeSeq = 0
 
 export function getExposeRuntime(): ExposeRuntime | null {
   return current
@@ -65,6 +78,17 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
   let stopped = false
   /** Who keeps the tunnel port open apart from a running tunnel (host servers). */
   const holders = new Set<string>()
+  /** The host that carries the tunnel instead of this computer, and its provider. */
+  let elsewhere: { runsOn: ExposeRunsOn; def: ExposeProviderDefinition } | null = null
+  const hostServers = opts.hosts ?? {
+    view: (hostKey: string) => peekHostServerViews().find((v) => v.hostKey === hostKey) ?? null,
+    retry: async (hostKey: string) => {
+      const manager = getHostServerManager()
+      if (!manager) return
+      // Not set up yet (an install that failed, say): set it up again.
+      await manager.retryExpose(hostKey).catch(() => manager.reconcile(hostKey))
+    },
+  }
 
   const deps: SupervisorDeps = {
     spawn: nodeSpawn,
@@ -82,6 +106,7 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
 
   function status(): ExposeStatus {
     if (!enabled || !providerId) return { enabled, provider: providerId, state: 'off', since: 0 }
+    if (elsewhere) return statusOnHost(elsewhere.runsOn, elsewhere.def, hostServers.view(elsewhere.runsOn.hostKey))
     if (override) return { enabled, provider: providerId, ...(providerTitle ? { providerTitle } : {}), state: override.state, since: override.since, lastError: override.lastError }
     return { enabled, provider: providerId, ...(providerTitle ? { providerTitle } : {}), ...supervisor.status() }
   }
@@ -126,11 +151,13 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
 
   async function reconcileNow(): Promise<ExposeStatus> {
     if (stopped) return status()
-    const cfg = (await getConfig().catch(() => null))?.expose ?? {}
+    const config = await getConfig().catch(() => null)
+    const cfg = config?.expose ?? {}
     enabled = cfg.enabled === true
     providerId = typeof cfg.provider === 'string' && cfg.provider ? cfg.provider : null
     wantedPort = Number.isInteger(cfg.port) && cfg.port! > 0 && cfg.port! < 65536 ? cfg.port! : 0
     if (!enabled || !providerId) {
+      elsewhere = null
       override = null
       providerTitle = undefined
       await supervisor.stop()
@@ -139,6 +166,7 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
     }
     const def = getExposeProvider(providerId, cfg.command)
     if (!def) {
+      elsewhere = null
       await supervisor.stop()
       await settleListener()
       providerTitle = undefined
@@ -149,6 +177,18 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
       return status()
     }
     providerTitle = def.title
+    const placed = exposePlacement(cfg.run_on, def, config?.hosts)
+    if (placed.where === 'host') {
+      // The host's server runs it; one here too would fight it for the same name.
+      override = null
+      await supervisor.stop()
+      await settleListener()
+      elsewhere = { runsOn: { hostKey: placed.hostKey, label: placed.label, auto: placed.auto }, def }
+      notePlace(placed.hostKey, placed.auto, def.id)
+      return status()
+    }
+    elsewhere = null
+    notePlace(null, placed.auto, def.id)
     let port: number
     try {
       port = await openListener(wantedPort)
@@ -174,6 +214,14 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
     return status()
   }
 
+  let placeNoted = ''
+  function notePlace(hostKey: string | null, auto: boolean, provider: string): void {
+    const key = `${hostKey ?? ''}|${auto}|${provider}`
+    if (key === placeNoted) return
+    placeNoted = key
+    log.web.info(hostKey ? 'expose: the tunnel runs on a host' : 'expose: the tunnel runs here', { ...(hostKey ? { host: hostKey } : {}), auto, provider })
+  }
+
   function serialize<T>(fn: () => Promise<T>): Promise<T> {
     const next = chain.then(fn, fn)
     chain = next.catch(() => undefined)
@@ -184,11 +232,24 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
     return serialize(reconcileNow)
   }
 
-  const unsubscribe = onExposeProvidersChanged(() => { void reconcile() })
+  const offProviders = onExposeProvidersChanged(() => { void reconcile() })
+  // Where it runs follows the hosts too (a host added, renamed, its server turned off).
+  const busName = `expose-runtime-config-${++runtimeSeq}`
+  let offConfig: (() => void) | null = null
+  void import('../core/event-bus.js').then(({ bus, EventNames }) => {
+    if (stopped) return
+    bus.subscribe(busName, () => { void reconcile() }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+    offConfig = () => bus.unsubscribe(busName)
+  })
+  const unsubscribe = () => { offProviders(); offConfig?.() }
   const runtime: ExposeRuntime = {
     reconcile,
     status,
-    retry: () => supervisor.retryNow(),
+    retry: () => {
+      if (!elsewhere) { supervisor.retryNow(); return }
+      const hostKey = elsewhere.runsOn.hostKey
+      void hostServers.retry(hostKey).catch((err) => log.web.warn('expose: the host tunnel retry failed', { host: hostKey, error: err instanceof Error ? err.message : String(err) }))
+    },
     holdTunnelPort: (holder) => serialize(async () => {
       if (stopped) throw new Error('the server is stopping')
       holders.add(holder)

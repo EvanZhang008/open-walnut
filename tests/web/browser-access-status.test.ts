@@ -39,6 +39,22 @@ describe('describeExpose', () => {
   })
 })
 
+describe('describeExpose, the tunnel on a host', () => {
+  const runsOn = { hostKey: 'devbox', label: 'Dev box', auto: true }
+
+  it('names the host while it starts, connects and stops; the wait it reports while starting', () => {
+    expect(describeExpose(status({ state: 'connected', runsOn, url: 'https://x.example' }), 'Acme').text).toBe('Connected through Acme on Dev box.')
+    expect(describeExpose(status({ state: 'starting', runsOn }), 'Acme').text).toBe('Starting Acme on Dev box...')
+    expect(describeExpose(status({ state: 'starting', runsOn, lastError: 'Waiting to connect to Dev box.' }), 'Acme').text).toBe('Waiting to connect to Dev box.')
+    expect(describeExpose(status({ state: 'retrying', runsOn }), 'Acme').text).toBe('Acme stopped on Dev box.')
+  })
+
+  it('this computer\'s tunnel reads as before', () => {
+    expect(describeExpose(status({ state: 'starting', lastError: 'ignored' }), 'Acme').text).toBe('Starting Acme...')
+    expect(describeExpose(status({ state: 'connected' }), 'Acme').text).toBe('Connected through Acme.')
+  })
+})
+
 describe('exposePollMs', () => {
   it('often while it moves or waits on the person, rarely once settled', () => {
     expect(exposePollMs(null)).toBe(3_000)

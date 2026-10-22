@@ -19,7 +19,7 @@ import { getConfig, updateHostServerConfig } from '../../core/config-manager.js'
 import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
-import { getHostServerManager, hostServerSettingsFrom } from '../../core/host-server/index.js'
+import { getHostServerManager, hostServerSettingsFrom, withThisWalnutTunnel } from '../../core/host-server/index.js'
 import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
 import { DEFAULT_COPY_CHOICE, copyChoiceChanged, copyChoiceFrom } from '../../core/replication/kinds/copy-kind.js'
@@ -35,9 +35,15 @@ function refuse(res: Response): void {
 }
 
 async function hostEntry(hostKey: string) {
-  const host = (await getConfig()).hosts?.[hostKey]
+  const config = await getConfig()
+  const host = config.hosts?.[hostKey]
   if (!host || host.cloud_box) return null
-  const settings = hostServerSettingsFrom(host.server)
+  const own = hostServerSettingsFrom(host.server)
+  // This Walnut's tunnel placed (Open from a browser): the host that carries it runs a server.
+  const settings = withThisWalnutTunnel(hostKey, own, config)
+  // The host's own tunnel as set (the carried one is this computer's, set in Open from a browser),
+  // with the reason when it is held back.
+  const expose = settings.expose.blocked ? { ...own.expose, blocked: settings.expose.blocked } : own.expose
   return {
     hostKey,
     label: host.label?.trim() || hostKey,
@@ -45,7 +51,8 @@ async function hostEntry(hostKey: string) {
     // as in GET /api/config. PUT puts a mask back.
     settings: {
       enabled: settings.enabled,
-      expose: { ...settings.expose, options: maskSecretShapes(settings.expose.options) },
+      ...(settings.carriesTunnel ? { carriesTunnel: true } : {}),
+      expose: { ...expose, options: maskSecretShapes(expose.options) },
       ...(settings.node ? { node: settings.node } : {}),
       // Which kinds the Mac copies to this host's replica (WP4), defaults filled in.
       copies: copyChoiceFrom((host.server as { copies?: unknown } | undefined)?.copies),

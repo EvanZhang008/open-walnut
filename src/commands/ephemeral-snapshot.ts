@@ -7,7 +7,8 @@
  * sessions those jobs started reached out to real services. Jobs the tester
  * creates inside the snapshot still run: cron and trigger features stay testable.
  * The same copy carries the phone's push tokens, so a test turn that finished
- * with no browser attached sent a notification to the user's real phone.
+ * with no browser attached sent a notification to the user's real phone, and the
+ * tunnel settings, so a test server took the user's tunnel address.
  */
 
 import fs from 'node:fs'
@@ -222,6 +223,50 @@ export function stripSnapshotPushTokens(snapshotDir: string): number {
     }
   }
   return removed
+}
+
+/**
+ * Turn off every tunnel in the snapshot's config files: this computer's
+ * (`expose.enabled`) and each host server's (`hosts.<key>.server.expose.enabled`).
+ * Returns how many were on. A tunnel service gives a name to whoever connected
+ * last, so a test server starting the copied tunnel took the user's real address
+ * for as long as it ran, and left it answering nothing when it stopped. A tester
+ * who turns one on inside the snapshot gets it, under whatever name they give it.
+ * A file that has tunnels on but cannot be rewritten is removed (fail closed).
+ */
+export function stopSnapshotTunnels(snapshotDir: string): number {
+  let stopped = 0
+  for (const name of CONFIG_FILES) {
+    const file = path.join(snapshotDir, name)
+    let raw: string
+    try {
+      raw = fs.readFileSync(file, 'utf-8')
+    } catch {
+      continue
+    }
+    if (!raw.includes('expose')) continue
+    try {
+      const doc = yaml.load(raw) as Record<string, unknown> | null
+      if (!doc || typeof doc !== 'object') continue
+      let here = 0
+      const turnOff = (section: unknown) => {
+        const e = section as { enabled?: unknown } | null
+        if (e && typeof e === 'object' && e.enabled === true) { e.enabled = false; here++ }
+      }
+      turnOff(doc.expose)
+      const hosts = doc.hosts && typeof doc.hosts === 'object' ? doc.hosts as Record<string, { server?: { expose?: unknown } } | null> : {}
+      for (const host of Object.values(hosts)) turnOff(host?.server?.expose)
+      if (here === 0) continue
+      const tmp = `${file}.${process.pid}.tmp`
+      fs.writeFileSync(tmp, yaml.dump(doc, { indent: 2, lineWidth: 120 }))
+      fs.renameSync(tmp, file)
+      // The two files are copies of one config: count one of them.
+      stopped = Math.max(stopped, here)
+    } catch {
+      try { fs.rmSync(file, { force: true }) } catch { /* best-effort */ }
+    }
+  }
+  return stopped
 }
 
 /**

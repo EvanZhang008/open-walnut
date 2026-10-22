@@ -1,8 +1,12 @@
 /**
  * /api/expose: this server's tunnel (docs/plan/walnut-servers-everywhere.md).
  *
- *   GET  /            → { status, providers, settings }
- *   PUT  /            { enabled?, provider?, options? } → { status }
+ *   GET  /            → { status, providers, places, settings }
+ *   PUT  /            { enabled?, provider?, options?, run_on? } → { status }
+ *
+ * `run_on` is where the tunnel runs (core/expose/placement.ts): `here`, a host key
+ * (that host's Walnut server runs it), or null to follow the provider's always-on
+ * host. `places` lists the choices; `settings.placedOn` says where it runs now.
  *   POST /retry       → { status }
  *
  * Reading is for any caller the auth middleware let in. Changing it (turning a
@@ -15,7 +19,9 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
-import { listExposeProviders } from '../../core/expose/registry.js'
+import { getExposeProvider, listExposeProviders } from '../../core/expose/registry.js'
+import { RUN_ON_HERE, exposePlaces, exposePlacement, validRunOn } from '../../core/expose/placement.js'
+import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
 import { requestOrigin } from '../middleware/request-origin.js'
@@ -43,13 +49,22 @@ function offStatus() {
 
 exposeRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const cfg = (await getConfig()).expose ?? {}
+    const config = await getConfig()
+    const cfg = config.expose ?? {}
+    const providers = listExposeProviders(cfg.command)
+    const providerId = cfg.provider ?? providers[0]?.id ?? null
+    const def = providerId ? getExposeProvider(providerId, cfg.command) : null
     res.json({
       status: getExposeRuntime()?.status() ?? offStatus(),
-      providers: listExposeProviders(cfg.command),
+      providers,
+      // Where it can run (a host the provider names as always on, and here); empty: here only.
+      places: exposePlaces(cfg.run_on, def, config.hosts),
       settings: {
         enabled: cfg.enabled === true,
         provider: cfg.provider ?? null,
+        runOn: cfg.run_on ?? null,
+        // Where it runs now: the pick, else the provider's always-on host, else here.
+        placedOn: (() => { const p = exposePlacement(cfg.run_on, def, config.hosts); return p.where === 'host' ? p.hostKey : RUN_ON_HERE })(),
         // A provider's options are a free-form map (a tunnel name, say, or its token):
         // secret-shaped values masked, as in GET /api/config. PUT puts a mask back.
         options: maskSecretShapes(cfg.options ?? {}),
@@ -64,13 +79,17 @@ exposeRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
 exposeRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!isPersonAtThisMachine(req)) return refuse(res)
-    const body = (req.body ?? {}) as { enabled?: unknown; provider?: unknown; options?: unknown }
+    const body = (req.body ?? {}) as { enabled?: unknown; provider?: unknown; options?: unknown; run_on?: unknown }
     if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
       res.status(400).json({ error: 'enabled is true or false' })
       return
     }
     if (body.provider !== undefined && body.provider !== null && (typeof body.provider !== 'string' || !EXPOSE_PROVIDER_ID.test(body.provider))) {
       res.status(400).json({ error: 'provider is a provider id' })
+      return
+    }
+    if (body.run_on !== undefined && !validRunOn(body.run_on, (await getConfig()).hosts)) {
+      res.status(400).json({ error: 'run_on is "here", a host in config.yaml, or null' })
       return
     }
     let options: Record<string, string> | undefined
@@ -93,13 +112,16 @@ exposeRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     if (options) options = restoreMaskedSecrets(options, before.options ?? {}, 'expose.options')
     const nextExpose = {
       ...before,
+      ...(body.run_on !== undefined ? { run_on: (body.run_on as string | null) ?? undefined } : {}),
       ...(body.enabled !== undefined ? { enabled: body.enabled as boolean } : {}),
       ...(body.provider !== undefined ? { provider: (body.provider as string | null) ?? undefined } : {}),
       ...(options ? { options } : {}),
     }
     await updateConfig({ expose: nextExpose })
-    log.web.info('expose settings changed', { enabled: nextExpose.enabled === true, provider: nextExpose.provider ?? null })
+    log.web.info('expose settings changed', { enabled: nextExpose.enabled === true, provider: nextExpose.provider ?? null, runOn: nextExpose.run_on ?? null })
     const status = await getExposeRuntime()?.reconcile() ?? offStatus()
+    // The host servers follow (the one that carries the tunnel starts it), and other tabs see it.
+    emitConfigChanged(await getConfig(), ['web-ui'], { source: 'api' })
     res.json({ status })
   } catch (err) {
     if (err instanceof MaskedValueError) {

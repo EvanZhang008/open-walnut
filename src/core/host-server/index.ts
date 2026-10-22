@@ -10,6 +10,9 @@ import { log } from '../../logging/index.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
 import { createHostServerManager, type HostServerHost, type HostServerManager, type HostServerSettings } from './manager.js'
 import { buildHostAppPackage, type HostAppPackage } from './package.js'
+import { getExposeProvider, onExposeProvidersChanged, type CommandProviderConfig } from '../expose/registry.js'
+import { exposePlacement, type PlacementHost } from '../expose/placement.js'
+import type { ExposeProviderDefinition } from '../expose/types.js'
 
 let manager: HostServerManager | null = null
 let unsubscribe: (() => void) | null = null
@@ -53,14 +56,61 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostSer
   }
 }
 
+/** The fields of config.yaml the tunnel placement reads. */
+interface TunnelConfig {
+  expose?: { enabled?: boolean; provider?: string; options?: Record<string, string>; run_on?: string; command?: CommandProviderConfig }
+  hosts?: Record<string, PlacementHost>
+}
+
+/** An option's value as a run fills it in: what was set, else the provider's default. */
+function filledOptions(def: ExposeProviderDefinition, values: Record<string, string>): string {
+  return JSON.stringify((def.options ?? []).map((o) => (values[o.key] ?? o.default ?? '').trim()))
+}
+
+/**
+ * One host's server settings with this Walnut's tunnel placed (expose/placement.ts):
+ * the host that carries it runs a server (whatever its own switch says) and that
+ * tunnel, with this computer's provider and options. Any other host's own tunnel
+ * that would hold the same address is held back, wherever this one runs: the
+ * service gives a name to whoever connected last, so the two would take it from
+ * each other.
+ */
+export function withThisWalnutTunnel(
+  hostKey: string,
+  settings: HostServerSettings,
+  config: TunnelConfig,
+  lookup: (id: string, command?: CommandProviderConfig) => ExposeProviderDefinition | null = getExposeProvider,
+): HostServerSettings {
+  const e = config.expose
+  if (e?.enabled !== true || !e.provider) return settings
+  const def = lookup(e.provider, e.command)
+  if (!def) return settings
+  const placed = exposePlacement(e.run_on, def, config.hosts)
+  if (placed.where === 'host' && placed.hostKey === hostKey) {
+    return { ...settings, enabled: true, carriesTunnel: true, expose: { enabled: true, provider: e.provider, options: { ...(e.options ?? {}) } } }
+  }
+  // Wherever this Walnut's tunnel runs (here, or on another host), this host's own must not take its address.
+  const own = settings.expose
+  if (settings.enabled && own.enabled && own.provider === def.id && filledOptions(def, own.options) === filledOptions(def, e.options ?? {})) {
+    return { ...settings, expose: { ...own, enabled: false, blocked: 'It would use the same address as this computer\'s tunnel; give it another name.' } }
+  }
+  return settings
+}
+
 export function getHostServerManager(): HostServerManager | null {
   if (CLOUD_MODE) return null
   if (manager) return manager
   manager = createHostServerManager({
     settingsOf: async (hostKey) => {
+      // A host can connect before the plugins load (or while one reloads): a tunnel provider
+      // that is seconds away would read as gone, and the host's server would drop the tunnel it
+      // carries, then start it again. Its settings wait for the plugin set to settle.
+      const { registry } = await import('../integration-registry.js')
+      await registry.waitForPlugins(60_000)
       const { getConfig } = await import('../config-manager.js')
-      const host = (await getConfig()).hosts?.[hostKey]
-      return host ? hostServerSettingsFrom(host.server, host.server_program) : null
+      const config = await getConfig()
+      const host = config.hosts?.[hostKey]
+      return host ? withThisWalnutTunnel(hostKey, hostServerSettingsFrom(host.server, host.server_program), config) : null
     },
     label: async (hostKey) => {
       const { getConfig } = await import('../config-manager.js')
@@ -127,11 +177,17 @@ export function getHostServerManager(): HostServerManager | null {
       }
     },
   })
+  // A provider that arrives (a plugin loading after the hosts connected) may place the tunnel on a host.
+  const offProviders = onExposeProvidersChanged(() => { void reconcileAllHostServers() })
+  const name = 'host-server-settings'
+  let offBus: (() => void) | null = null
+  let stopped = false
   void import('../event-bus.js').then(({ bus, EventNames }) => {
-    const name = 'host-server-settings'
+    if (stopped) return
     bus.subscribe(name, () => { void reconcileAllHostServers() }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
-    unsubscribe = () => bus.unsubscribe(name)
+    offBus = () => bus.unsubscribe(name)
   })
+  unsubscribe = () => { stopped = true; offProviders(); offBus?.() }
   return manager
 }
 

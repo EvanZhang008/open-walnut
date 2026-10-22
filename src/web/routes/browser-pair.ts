@@ -72,13 +72,15 @@ browserCodeRouter.post('/browser-code', async (req: Request, res: Response, next
   try {
     const { code, expiresAt } = mintBrowserCode()
     const status = getExposeRuntime()?.status()
-    const url = status?.state === 'connected' ? status.url : undefined
+    // A tunnel a host carries is that host's address, which hostAddresses lists.
+    const url = status?.state === 'connected' && !status.runsOn ? status.url : undefined
     const own: SignInAddress[] = url ? [{ where: 'this-computer', label: 'This computer', url, link: withCode(url, code), alwaysOn: false }] : []
     let hosts: SignInAddress[] = []
     try { hosts = await hostAddresses(code) } catch (err) {
       log.web.warn('browser sign-in: host addresses unavailable', { error: err instanceof Error ? err.message : String(err) })
     }
-    const addresses = [...own, ...hosts]
+    // One row per address: a host that carried this computer's tunnel reports it until its next poll.
+    const addresses = [...own, ...hosts.filter((h) => !own.some((o) => o.url === h.url))]
     log.web.info('browser sign-in code minted', { expiresAt, exposed: Boolean(url), hostAddresses: hosts.length })
     res.json({
       code,

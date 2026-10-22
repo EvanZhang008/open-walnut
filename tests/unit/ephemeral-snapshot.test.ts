@@ -7,6 +7,9 @@
  *     runs them repeats their real-world effects.
  *   - stripSnapshotPushTokens: the copied config lists the user's real phones;
  *     a test turn finishing with no browser attached pushed to them.
+ *   - stopSnapshotTunnels: the copied config runs the user's tunnel; a tunnel
+ *     service gives the name to whoever connected last, so the test server took
+ *     the user's real address and left it dead when it stopped.
  *   - ephemeralChildEnv: the launcher usually runs inside a session of the real
  *     Walnut, whose env names that Walnut's daemon, socket and API URL.
  */
@@ -16,7 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import yaml from 'js-yaml'
-import { ephemeralChildEnv, pauseSnapshotCronJobs, stripSnapshotPushTokens } from '../../src/commands/ephemeral-snapshot.js'
+import { ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTunnels, stripSnapshotPushTokens } from '../../src/commands/ephemeral-snapshot.js'
 
 let dir: string
 const cronFile = () => path.join(dir, 'cron-jobs.json')
@@ -93,6 +96,46 @@ describe('stripSnapshotPushTokens', () => {
 
   it('never throws when there is no config at all', () => {
     expect(stripSnapshotPushTokens(dir)).toBe(0)
+  })
+})
+
+describe('stopSnapshotTunnels', () => {
+  const cfg = (name = 'config.yaml') => path.join(dir, name)
+
+  it('turns off this computer\'s tunnel and every host server\'s, keeping every other setting', () => {
+    const doc = {
+      version: 1,
+      expose: { enabled: true, provider: 'acme-tunnel', options: { name: 'walnut' }, run_on: 'box' },
+      hosts: {
+        box: { hostname: 'box.example.test', server: { enabled: true, expose: { enabled: true, provider: 'acme-tunnel', options: { name: 'box' } } } },
+        idle: { hostname: 'idle.example.test', server: { enabled: true, expose: { enabled: false } } },
+        bare: { hostname: 'bare.example.test' },
+      },
+    }
+    fs.writeFileSync(cfg(), yaml.dump(doc))
+    fs.writeFileSync(cfg('config.yaml.bak'), yaml.dump(doc))
+    expect(stopSnapshotTunnels(dir)).toBe(2)
+    for (const name of ['config.yaml', 'config.yaml.bak']) {
+      const out = yaml.load(fs.readFileSync(cfg(name), 'utf-8')) as typeof doc
+      expect(out.expose).toEqual({ ...doc.expose, enabled: false })
+      expect(out.hosts.box.server).toEqual({ enabled: true, expose: { ...doc.hosts.box.server.expose, enabled: false } })
+      expect(out.hosts.idle).toEqual(doc.hosts.idle)
+      expect(out.hosts.bare).toEqual(doc.hosts.bare)
+    }
+  })
+
+  it('leaves a config with no tunnel on byte-identical', () => {
+    const raw = '# my comment\nversion: 1\nexpose:\n  enabled: false\n'
+    fs.writeFileSync(cfg(), raw)
+    expect(stopSnapshotTunnels(dir)).toBe(0)
+    expect(fs.readFileSync(cfg(), 'utf-8')).toBe(raw)
+  })
+
+  it('fails closed: a file that names expose but cannot be parsed is removed; no config never throws', () => {
+    expect(stopSnapshotTunnels(dir)).toBe(0)
+    fs.writeFileSync(cfg(), 'expose: { enabled: true\n  : : :')
+    stopSnapshotTunnels(dir)
+    expect(fs.existsSync(cfg())).toBe(false)
   })
 })
 

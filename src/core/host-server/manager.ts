@@ -61,7 +61,13 @@ export interface HostServerSettings {
   enabled: boolean
   node?: string
   buildEnv: Record<string, string>
-  expose: { enabled: boolean; provider: string | null; options: Record<string, string> }
+  expose: {
+    enabled: boolean; provider: string | null; options: Record<string, string>
+    /** Why the host's own tunnel does not run although it is on (it would take this computer's address). */
+    blocked?: string
+  }
+  /** This Walnut's tunnel (Open from a browser) runs here, instead of on this computer (expose/placement.ts). */
+  carriesTunnel?: boolean
   /** The host's choice (`hosts.<key>.server_program`): 'host-server' keeps the plain host server; else `web --replica` where the daemon can (D13). */
   program?: 'replica' | 'host-server'
   /**

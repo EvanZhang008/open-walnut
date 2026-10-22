@@ -17,6 +17,15 @@ export interface ExposeStatus {
   lastError?: string;
   hint?: string;
   nextRetryAt?: number;
+  /** Set while a host's Walnut server runs the tunnel instead of this computer. */
+  runsOn?: { hostKey: string; label: string; auto: boolean };
+}
+
+/** One place the tunnel can run: `here`, or a host key. */
+export interface ExposePlace {
+  id: string;
+  label: string;
+  alwaysOn: boolean;
 }
 
 export interface ExposeProviderOption {
@@ -38,7 +47,15 @@ export interface ExposeProviderInfo {
 export interface ExposeResponse {
   status: ExposeStatus;
   providers: ExposeProviderInfo[];
-  settings: { enabled: boolean; provider: string | null; options: Record<string, string>; port?: number };
+  /** Where it can run; empty or absent (an older server): this computer only. */
+  places?: ExposePlace[];
+  settings: {
+    enabled: boolean; provider: string | null; options: Record<string, string>; port?: number;
+    /** The person's pick (`here` or a host key); null follows the provider. */
+    runOn?: string | null;
+    /** Where it runs now. */
+    placedOn?: string;
+  };
 }
 
 export type StatusDot = 'pending' | 'action' | 'done' | 'error';
@@ -58,20 +75,22 @@ function clock(ms: number): string {
 export function describeExpose(status: ExposeStatus | null, title: string): StatusLine {
   if (!status) return { dot: 'pending', text: 'Reading the tunnel state...', retry: false };
   const name = status.providerTitle ?? title;
+  const on = status.runsOn ? ` on ${status.runsOn.label}` : '';
   const retryAt = status.nextRetryAt ? ` Trying again at ${clock(status.nextRetryAt)}.` : '';
   switch (status.state) {
     case 'off':
       return { dot: 'pending', text: `Runs ${name} while Walnut runs, so a browser you sign in can open Walnut from anywhere.`, retry: false };
     case 'starting':
-      return { dot: 'pending', text: `Starting ${name}...`, retry: false };
+      // On a host: what it waits for (the host to connect, Walnut to install there).
+      return { dot: 'pending', text: status.runsOn && status.lastError ? status.lastError : `Starting ${name}${on}...`, retry: false };
     case 'connected':
-      return { dot: 'done', text: `Connected through ${name}.`, retry: false };
+      return { dot: 'done', text: `Connected through ${name}${on}.`, retry: false };
     case 'needs-sign-in':
       return { dot: 'action', text: `${status.hint ?? status.lastError ?? `${name} needs you to sign in again.`}${retryAt}`, retry: true };
     case 'missing':
       return { dot: 'action', text: [status.lastError, status.hint].filter(Boolean).join(' ') + retryAt, retry: true };
     case 'retrying':
-      return { dot: 'error', text: `${status.lastError ?? `${name} stopped.`}${retryAt}`, retry: true };
+      return { dot: 'error', text: `${status.lastError ?? `${name} stopped${on}.`}${retryAt}`, retry: true };
     case 'unavailable':
       return { dot: 'error', text: status.lastError ?? `${name} cannot run.`, retry: false };
   }

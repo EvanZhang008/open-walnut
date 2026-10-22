@@ -45,6 +45,13 @@ export interface ExposeProviderDefinition {
   installHint?: string
   /** Check the URL answers every minute while connected, restart a silent tunnel. Default true. */
   probe?: boolean
+  /**
+   * A regular expression (source text, case-insensitive) on a host's hostname in config.yaml.
+   * A matching host is a machine that stays on: until the person picks where the tunnel runs,
+   * it runs there (on that host's Walnut server), so the address answers while this computer
+   * sleeps. Unset: the tunnel runs on this computer unless the person picks a host.
+   */
+  alwaysOnHostPattern?: string
 }
 
 export type ExposeState =
@@ -78,6 +85,15 @@ export interface ExposeStatus {
   /** What the person can do about it, when the provider said (sign in, install). */
   hint?: string
   nextRetryAt?: number
+  /** Set while the tunnel runs on a host's server instead of this computer (placement.ts). */
+  runsOn?: ExposeRunsOn
+}
+
+export interface ExposeRunsOn {
+  hostKey: string
+  label: string
+  /** Picked by the provider's always-on host pattern, not by the person. */
+  auto: boolean
 }
 
 export interface ExposeProviderInfo {

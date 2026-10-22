@@ -45,7 +45,10 @@ export function validateExposeDefinition(def: ExposeProviderDefinition): void {
     throw new Error(`Tunnel provider "${def.id}": env values must be strings`)
   }
   if (typeof def.urlPattern !== 'string' || !def.urlPattern) throw new Error(`Tunnel provider "${def.id}" needs a urlPattern`)
-  for (const p of [def.urlPattern, def.readyPattern ?? '', ...(def.signInPatterns ?? []), ...(def.options ?? []).map((o) => o.pattern ?? '')]) {
+  if (def.alwaysOnHostPattern !== undefined && typeof def.alwaysOnHostPattern !== 'string') {
+    throw new Error(`Tunnel provider "${def.id}": alwaysOnHostPattern is a pattern`)
+  }
+  for (const p of [def.urlPattern, def.readyPattern ?? '', def.alwaysOnHostPattern ?? '', ...(def.signInPatterns ?? []), ...(def.options ?? []).map((o) => o.pattern ?? '')]) {
     try { new RegExp(p) } catch { throw new Error(`Tunnel provider "${def.id}": "${p}" is not a valid pattern`) }
   }
   for (const option of def.options ?? []) {

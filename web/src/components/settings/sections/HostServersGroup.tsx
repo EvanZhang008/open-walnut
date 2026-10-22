@@ -2,7 +2,9 @@
  * "Walnut on a host" in Remote Hosts (docs/plan/walnut-servers-everywhere.md,
  * "A server on a host"): for each host, a switch that keeps a Walnut running
  * there, one sentence of state, and, while it is on, the host's own tunnel (which
- * provider, its options, the switch, its address).
+ * provider, its options, the switch, its address). The host that carries this
+ * computer's tunnel (Phones & Cloud, Open from a browser, Runs on) shows that one
+ * instead, and its switch stays on: Runs on is where it moves.
  *
  * State comes from GET /api/host-servers, every 3s while a host is being set up
  * or its tunnel moves and every 30s once settled, never while the tab is hidden,
@@ -132,6 +134,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
             .then((saved) => { if (saved) dropDraft(key, value); });
         };
         const running = host.view?.phase === 'running';
+        const carries = host.settings.carriesTunnel === true;
         return (
           <Fragment key={host.hostKey}>
             <SettingsRow
@@ -156,6 +159,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                   <ToggleSwitch
                     id={`host-server-enabled-${host.hostKey}`}
                     checked={on}
+                    disabled={carries}
                     busy={busy === host.hostKey}
                     aria-label={`Run Walnut on ${host.label}`}
                     data-testid={`host-server-enabled-${host.hostKey}`}
@@ -186,7 +190,30 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                 })}
               </div>
             )}
-            {on && (providers.length === 0 ? (
+            {on && carries && (
+              <>
+                <SettingsRow
+                  indent
+                  label="Open from anywhere"
+                  help={
+                    <span className="browser-access-state" data-testid={`host-server-tunnel-state-${host.hostKey}`}>
+                      <span className="browser-access-dot" data-dot={running ? tunnelLine.dot : 'pending'} aria-hidden="true" />
+                      <span>Runs this computer&apos;s tunnel: change it in Phones &amp; Cloud, Open from a browser.</span>
+                    </span>
+                  }
+                  data-testid={`host-server-carries-${host.hostKey}`}
+                />
+                {running && tunnel?.state === 'connected' && tunnel.url && (
+                  <SettingsRow
+                    indent
+                    label="Address"
+                    help={<a className="settings-addons-link browser-access-url" href={tunnel.url} target="_blank" rel="noopener noreferrer" data-testid={`host-server-url-${host.hostKey}`}>{tunnel.url.replace(/^https?:\/\//, '')}</a>}
+                    control={<CopyButton text={tunnel.url} data-testid={`host-server-copy-url-${host.hostKey}`} />}
+                  />
+                )}
+              </>
+            )}
+            {on && !carries && (providers.length === 0 ? (
               <SettingsRow indent label="Tunnel" help="No tunnel is set up for hosts; add a tunnel plugin." data-testid={`host-server-no-provider-${host.hostKey}`} />
             ) : (
               <>
@@ -240,7 +267,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                   help={
                     <span className="browser-access-state" data-testid={`host-server-tunnel-state-${host.hostKey}`}>
                       <span className="browser-access-dot" data-dot={running ? tunnelLine.dot : 'pending'} aria-hidden="true" />
-                      <span>{running ? tunnelLine.text : `${provider?.title ?? 'The tunnel'} starts on the host once Walnut runs there.`}</span>
+                      <span>{exposeSettings.blocked ?? (running ? tunnelLine.text : `${provider?.title ?? 'The tunnel'} starts on the host once Walnut runs there.`)}</span>
                     </span>
                   }
                   control={

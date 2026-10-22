@@ -98,6 +98,43 @@ A definition is data, not code, so a host server can run a provider whose plugin
 is installed only on the Mac: in stage 2 the Mac sends the definition along with
 the host's settings.
 
+### Where the tunnel runs
+
+This Walnut has one tunnel, under one name, and it runs on one machine: this
+computer, or the server this computer keeps on one of its hosts
+(`src/core/expose/placement.ts`). Settings, Open from a browser, shows it as
+**Runs on**, with the hosts a provider names as always on and This computer.
+
+- **Default.** A provider may name the machines that stay on, as a pattern on a
+  host's hostname (`alwaysOnHostPattern`). Until the person picks, the tunnel
+  runs on the first such host (by key) whose Walnut server is on; with none,
+  here. Never a host whose server is off: following a provider must not install
+  a server and copy this Walnut's data there unasked, or leave the address dark
+  while it installs (picking the host turns its server on). The built-in
+  `command` provider always runs here: its command is written for this computer.
+- **A pick** (`expose.run_on`: `here` or a host key) wins, for any host. A host
+  removed from config.yaml puts it back here.
+- **On a host**, none runs here. That host's server runs (whatever its own switch
+  says, which Settings then holds on) with this computer's provider and options,
+  and the status here is that host's report, with `runsOn` naming the host. The
+  sign-in code lists the host's address once, as the host's.
+- **Why one machine.** A tunnel service may give a name to whoever connected last
+  (measured on one: the second machine took the address at once, and the first
+  stayed "connected" while it got nothing). Two machines holding one name would
+  take it from each other at every reconnect. So the place is one answer both
+  sides read, and a host's own tunnel that would use this computer's address
+  (same provider, same options) is held back with the reason, wherever this
+  computer's runs. A host that connects while the plugins still load (or one
+  reloads) waits for them before its settings are read, so a provider seconds
+  away never reads as gone and the host never drops the tunnel it carries.
+  Moving the tunnel back here while the host cannot be reached starts it here at
+  once (the newest connection takes the name); the host lets go when it is
+  reached again. For the same
+  reason a test server (`web --ephemeral`) starts with every copied tunnel off.
+- **Moves** follow config: a pick, a host added or removed, a host's server
+  turned off, a provider that registers late. The runtime here and the host
+  servers' manager both reconcile on each.
+
 ### Signing in a browser
 
 A browser that is not this machine needs a device token. The console mints a
