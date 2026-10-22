@@ -178,6 +178,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/offline-search-core.ts',
   'src/providers/offline-board-core.ts',
   'src/providers/host-replica-core.ts',
+  // The copy of the pictures in the notes (attachment-copy-v1): same rule.
+  'src/providers/attachment-copy-core.ts',
   // Owner-scoped follower reads (replica-reads-v1): same import-or-inline rule.
   'src/providers/follower-reads-core.ts',
   // The host server the daemon keeps running (host-server-v1): same rule.

@@ -1088,6 +1088,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (!front.link.capabilities()?.includes('replica-reads-v1')) return Promise.reject(new Error('daemon_needs_upgrade: this host\'s daemon has no replica-reads-v1'))
       return front.link.request(cmd, params, timeoutMs)
     })))
+    // Its notes' pictures and files: the daemon's copy of those, where it keeps one.
+    ;(await import('../replica/attachment-source.js')).installReplicaAttachments((cmd, params, timeoutMs) => {
+      if (!front.link.capabilities()?.includes('attachment-copy-v1')) return Promise.reject(new Error('daemon_needs_upgrade: this host\'s daemon has no attachment-copy-v1'))
+      return front.link.request(cmd, params, timeoutMs)
+    })
     hostReplicaDoor = createLeaderDoor({
       devices: replicaDeviceCopy(),
       status: () => front.status(),
@@ -6159,6 +6164,7 @@ export async function stopServer(): Promise<void> {
     await hostReplicaFront.stop().catch(() => {})
     hostReplicaFront = null
     ;(await import('../replica/notes-source.js')).installReplicaNotesSource(null)
+    ;(await import('../replica/attachment-source.js')).installReplicaAttachments(null)
   }
   if (bootPolicy('leader-heartbeat')) {
     try { await (await import('../core/leader/primary-leader.js')).announceLeaderRestart(800) } catch { /* best-effort */ }

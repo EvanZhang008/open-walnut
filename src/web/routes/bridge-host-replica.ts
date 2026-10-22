@@ -11,7 +11,7 @@
  *   {cmd:'replica.status'}                            -> {ok, kinds}
  *
  * And the pictures and files of the notes (stage 4d, core/companion-attachment-copy.ts),
- * which no host keeps: `attachments.sync` {entries:[{k,h,n}], asOf} -> {ok, need, ...},
+ * the copy a host daemon keeps too: `attachments.sync` {entries:[{k,h,n}], asOf} -> {ok, need, ...},
  * `attachments.put` {k, h, offset, data} -> {ok, have, stored}, `attachments.drop`,
  * `attachments.status`.
  *

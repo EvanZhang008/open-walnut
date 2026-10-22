@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createHostReplica } from '../../src/providers/host-replica-core.js'
+import { createAttachmentCopy } from '../../src/providers/attachment-copy-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 
 const root = path.join(import.meta.dirname, '..', '..')
@@ -45,6 +46,21 @@ describe('host copy: both twins', () => {
       expect(fnBody(src, 'cmdReplica')).toMatch(/origin === 'bridge'\) return sendError\(ws, id,/)
     })
 
+    it(`${name}: attachments.* reach the trusted primary only, on the shared core, and its follower reads it`, () => {
+      const list = allowlist(src)
+      for (const c of ['attachments.sync', 'attachments.put', 'attachments.drop', 'attachments.status']) {
+        expect(list).not.toContain(`'${c}'`)
+        expect(src).toContain(`case '${c}':`)
+      }
+      expect(src).toMatch(/case 'attachments\.status': return cmdAttachments\(ws, id( as number)?, cmd\)/)
+      const cmd = fnBody(src, 'cmdAttachments')
+      expect(cmd).toMatch(/origin === 'bridge'\) return sendError\(ws, id,/)
+      expect(cmd).toMatch(/attachmentCopy\.command\(cmd\.home( as string)?, cmd\.cmd, cmd\)/)
+      // Beside the notes copy, under the same hashed home key.
+      expect(src).toMatch(/dirOf: (\(home\) => |function \(home\) \{ return )path\.join\(REPLICA_DIR, crypto\.createHash\('sha1'\)\.update\(home\)\.digest\('hex'\)\.slice\(0, 16\), 'attachments'\)/)
+      expect(src).toMatch(/attachments: attachmentCopy,/)
+    })
+
     it(`${name}: the copy is the offline host's, kept beside the trigger state`, () => {
       expect(src).toMatch(/replica: hostReplica,/)
       expect(src).toMatch(/process\.env\.WALNUT_REPLICA_DIR \|\| \(IS_PROD_DAEMON_DIR \? path\.join\(HOME_DIR, '\.open-walnut', 'tmp', 'host-replica'\)/)
@@ -72,13 +88,21 @@ describe('host copy: both twins', () => {
     })
   }
 
-  it('the core is part of the daemon version hash, in the build script', () => {
-    expect(read('src/providers/daemon-version-check.ts')).toContain("'src/providers/host-replica-core.ts'")
-    expect(read('scripts/build-daemon.sh')).toContain('src/providers/host-replica-core.ts')
+  it('the cores are part of the daemon version hash, in the build script', () => {
+    for (const core of ['src/providers/host-replica-core.ts', 'src/providers/attachment-copy-core.ts']) {
+      expect(read('src/providers/daemon-version-check.ts')).toContain(`'${core}'`)
+      expect(read('scripts/build-daemon.sh')).toContain(core)
+    }
   })
 
-  it('the primary sends bodies on the bulk channel', () => {
-    expect(read('src/providers/daemon-connection.ts')).toMatch(/BULK_COMMANDS = new Set\(\[[^\]]*'replica\.put'/)
+  it('the primary sends bodies and picture chunks on the bulk channel, pictures only to a daemon that keeps them', () => {
+    const conn = read('src/providers/daemon-connection.ts')
+    expect(conn).toMatch(/BULK_COMMANDS = new Set\(\[[^\]]*'replica\.put'/)
+    expect(conn).toMatch(/BULK_COMMANDS = new Set\(\[[^\]]*'attachments\.put'/)
+    // Not to this Mac's own daemon: it shares the vault's disk.
+    expect(conn).toMatch(/const attachments = this\.hostKey !== '__local__' && this\.hasCapability\('attachment-copy-v1'\)/)
+    expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('attachment-copy-v1')
+    expect(REQUIRED_DAEMON_CAPABILITIES as readonly string[]).not.toContain('attachment-copy-v1')
   })
 })
 
@@ -87,6 +111,14 @@ describe('the source twin template', () => {
     const rendered = getDaemonSource() // throws if an injected function fails its smoke check
     expect(rendered).not.toContain('__CREATE_HOST_REPLICA__')
     const text = createHostReplica.toString()
+    expect(text).not.toMatch(/__name\(|__vite|import\(/)
+    expect(rendered).toContain(text)
+  })
+
+  it('inlines the attachments copy core the companion runs too', () => {
+    const rendered = getDaemonSource()
+    expect(rendered).not.toContain('__CREATE_ATTACHMENT_COPY__')
+    const text = createAttachmentCopy.toString()
     expect(text).not.toMatch(/__name\(|__vite|import\(/)
     expect(rendered).toContain(text)
   })

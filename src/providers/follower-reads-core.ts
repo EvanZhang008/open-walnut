@@ -15,8 +15,9 @@
  *     session cwds, after `~`, `..` and links are resolved; when another
  *     Walnut's session works in a deeper dir, that dir is the other Walnut's;
  *   - `replica.list`, `replica.read`, `replica.readMany` answer from this
- *     host's copy of that Walnut's notes, memory and skills, whatever home the
- *     frame names.
+ *     host's copy of that Walnut's notes, memory and skills, and
+ *     `attachments.list`, `attachments.read` from its copy of the notes'
+ *     pictures and files ('attachment-copy-v1'), whatever home the frame names.
  *
  * Anything else of another Walnut answers `not_found`, the same as a session
  * or a file that does not exist, so a follower cannot even tell it is there.
@@ -32,6 +33,12 @@ export interface FollowerReplicaReads {
   list(home: string, kind: unknown): { entries: Array<{ k: string; h: string; n?: number; m?: Record<string, unknown> }>; asOf: string | null; manifestHash: string } | null
   read(home: string, kind: unknown, key: unknown): { k: string; h: string; n?: number; m?: Record<string, unknown>; body: string } | null
   readMany(home: string, kind: unknown, keys: unknown, maxBytes: number): { files: Array<{ k: string; h: string; body: string }>; missing: string[]; more: string[] } | null
+}
+
+/** This host's copy of the notes' pictures and files (attachment-copy-core.ts), for its own Walnut's follower. */
+export interface FollowerAttachmentReads {
+  list(home: string, after: unknown, maxBytes: number): { keys: string[]; asOf: string | null; next: string | null }
+  readChunk(home: string, key: unknown, offset: unknown, maxBytes: number): { k: string; h: string; n: number; offset: number; data: string } | null
 }
 
 export interface FollowerReadsDeps {
@@ -58,6 +65,8 @@ export interface FollowerReadsDeps {
   /** The spawn journal's text ('' when there is none): its first line per session names the cwd. */
   readJournal: () => string
   replica: FollowerReplicaReads
+  /** Absent: this daemon keeps no attachments copy (the reads answer an error). */
+  attachments?: FollowerAttachmentReads
   /**
    * Dirs no follower reads through, whatever session works above them: the
    * daemon's own dirs (its copies of every Walnut's notes among them), every
@@ -88,6 +97,7 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
     'fs.ls', 'fs.read', 'fs.stat', 'fs.readRange', 'fs.resolvePath', 'fs.grep',
     'git.diff', 'git.fileShow', 'git.fileLog', 'changes.compute', 'changes.file',
     'replica.list', 'replica.read', 'replica.readMany', 'fs.find',
+    'attachments.list', 'attachments.read',
   ]
   const MAX_ANSWER_BYTES = 4 * 1024 * 1024
   const MAX_REAL_CACHE = 5000
@@ -315,6 +325,24 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
   }
 
   /**
+   * `home`'s copy of the pictures: its paths a page at a time (a quarter of
+   * MAX_ANSWER_BYTES of characters, so a page of CJK names stays under it), and
+   * one 2 MB slice of a file per answer (base64 stays under it too).
+   */
+  function attachmentAnswer(home: string, c: string, cmd: Record<string, unknown>): FollowerDecision {
+    const a = deps.attachments
+    if (!a) return { error: c + ': this host keeps no copy of the attachments' }
+    try {
+      if (c === 'attachments.list') return { answer: a.list(home, cmd.after, MAX_ANSWER_BYTES / 4) as unknown as Record<string, unknown> }
+      const r = a.readChunk(home, cmd.key, cmd.offset, 2 * 1024 * 1024)
+      return r ? { answer: r as unknown as Record<string, unknown> } : refuse(home, c)
+    } catch (err) {
+      deps.log('error', 'follower: attachments read failed', { cmd: c, home, error: (err as Error).message })
+      return { error: c + ': ' + (err as Error).message }
+    }
+  }
+
+  /**
    * One follower frame of the Walnut `home`: go on to the handler (`pass`; a
    * `status` loses `includeArgs` on the way), refuse it as not found, or answer
    * it here (the replica reads). `home` null: the socket has not said hello.
@@ -332,6 +360,7 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
       return { pass: true }
     }
     if (c === 'replica.list' || c === 'replica.read' || c === 'replica.readMany') return replicaAnswer(home, c, cmd)
+    if (c === 'attachments.list' || c === 'attachments.read') return attachmentAnswer(home, c, cmd)
     if (c === 'changes.compute' || c === 'changes.file') {
       // The answer is the owned session's own change list (or one file of it):
       // that Walnut's data wherever the session edited, so no path check.

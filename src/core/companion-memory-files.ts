@@ -3,7 +3,7 @@
  * docs/plan/walnut-companion-unified-replica.md): daily logs, projects, sessions,
  * knowledge, topics, compaction snapshots, agents, working memory and the repo
  * memories, read from the Mac's copy (companion-host-replica.ts, kind `memory`, the
- * entries core/host-replica-extras.ts adds for the companion), never from the box's
+ * entries core/host-replica-extras.ts adds for every replica), never from the box's
  * git-written disk. MEMORY.md and USER.md are the copy's two docs (companion-memory.ts).
  *
  * The readers keep the disk functions' shapes (core/memory.ts getMemory and

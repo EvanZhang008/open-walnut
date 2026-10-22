@@ -54,6 +54,7 @@ function normalizeKeep(keep: HostKeep | undefined): HostKeep | undefined {
     ...(exclude.length > 0 ? { notes_exclude: exclude } : {}),
     ...(keep.memory === false ? { memory: false } : {}),
     ...(keep.skills === false ? { skills: false } : {}),
+    ...(keep.attachments === false ? { attachments: false } : {}),
   };
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -304,10 +305,19 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         <SettingsRow
           label="Notes"
           htmlFor={`rh-keep-notes-${idx}`}
-          help="A copy of the note text (no attachments), so its sessions read notes while this Mac is away."
+          help="A copy of the notes, so its sessions and pages read them while this Mac is away."
           indent
           control={<ToggleSwitch id={`rh-keep-notes-${idx}`} checked={keep.notes !== false} onChange={(v) => updateKeep(idx, { notes: v })} aria-label={`Keep notes on ${name}`} />}
         />
+        {keep.notes !== false && (
+          <SettingsRow
+            label="Pictures and files"
+            htmlFor={`rh-keep-attachments-${idx}`}
+            help="The pictures and files the notes embed."
+            indent
+            control={<ToggleSwitch id={`rh-keep-attachments-${idx}`} checked={keep.attachments !== false} onChange={(v) => updateKeep(idx, { attachments: v })} aria-label={`Keep attachments on ${name}`} />}
+          />
+        )}
         {keep.notes !== false && (
           <SettingsRow
             label="Leave out folders"
@@ -331,14 +341,14 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         <SettingsRow
           label="Memory"
           htmlFor={`rh-keep-memory-${idx}`}
-          help="MEMORY.md and USER.md."
+          help="MEMORY.md, USER.md and the rest of the memory folder."
           indent
           control={<ToggleSwitch id={`rh-keep-memory-${idx}`} checked={keep.memory !== false} onChange={(v) => updateKeep(idx, { memory: v })} aria-label={`Keep memory on ${name}`} />}
         />
         <SettingsRow
           label="Skills"
           htmlFor={`rh-keep-skills-${idx}`}
-          help="The skills sessions read with skill_read."
+          help="The skills, with their reference files."
           indent
           control={<ToggleSwitch id={`rh-keep-skills-${idx}`} checked={keep.skills !== false} onChange={(v) => updateKeep(idx, { skills: v })} aria-label={`Keep skills on ${name}`} />}
         />

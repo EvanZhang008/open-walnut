@@ -2,12 +2,14 @@
  * Settings › Remote Hosts › Edit: what a host keeps a read copy of (hosts.<alias>.keep).
  *
  *   locked      "Its own work" reads Always kept and has no switch
- *   defaults    notes, memory and skills on; nothing written for them
+ *   defaults    notes, their pictures and files, memory and skills on; nothing
+ *               written for them (the same defaults as every replica)
  *   folders     "Leave out folders" saves as a list, and a comma typed before
  *               the save comes back still typed (the save's own config echo
  *               must not rebuild the field)
  *   off         a kind turned off is written as false; notes off hides the
- *               folder field and keeps the folders for when notes come back
+ *               folder field and the pictures switch, and keeps both for when
+ *               notes come back
  *   reload      the saved choice is what the editor opens with
  *
  * The config writes are real, on the fixture server; the host is off so the
@@ -73,7 +75,9 @@ test('the host keeps its own work always, and the user picks the rest', async ({
   await expect(own.getByRole('switch')).toHaveCount(0)
 
   // Defaults: everything on, nothing written.
-  for (const kind of ['notes', 'memory', 'skills']) await expect(section.getByRole('switch', { name: `Keep ${kind} on ${ALIAS}` })).toBeChecked()
+  for (const kind of ['notes', 'attachments', 'memory', 'skills']) await expect(section.getByRole('switch', { name: `Keep ${kind} on ${ALIAS}` })).toBeChecked()
+  await expect(section.locator('.settings-row', { hasText: 'Pictures and files' })).toContainText('The pictures and files the notes embed.')
+  await expect(section.locator('.settings-row', { hasText: 'Notes' }).first()).not.toContainText('no attachments')
   expect(await keepOf(page)).toBeUndefined()
 
   // Folders: a list in config, the typed comma stays in the field.
@@ -91,12 +95,22 @@ test('the host keeps its own work always, and the user picks the rest', async ({
   // Off: written as false.
   await section.getByRole('switch', { name: `Keep memory on ${ALIAS}` }).click()
   await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health', 'finance'], memory: false })
+  const pictures = section.getByRole('switch', { name: `Keep attachments on ${ALIAS}` })
+  await pictures.click()
+  await expect(pictures).not.toBeChecked()
+  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health', 'finance'], memory: false, attachments: false })
   await section.getByRole('switch', { name: `Keep notes on ${ALIAS}` }).click()
   await expect(section.locator('#rh-keep-exclude-0')).toHaveCount(0)
-  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes: false, notes_exclude: ['health', 'finance'], memory: false })
-  // Notes back on: the folders are still there.
+  await expect(section.locator('#rh-keep-attachments-0')).toHaveCount(0)
+  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes: false, notes_exclude: ['health', 'finance'], memory: false, attachments: false })
+  // Notes back on: the folders and the pictures choice are still there.
   await section.getByRole('switch', { name: `Keep notes on ${ALIAS}` }).click()
   await expect(section.locator('#rh-keep-exclude-0')).toHaveValue('health, finance')
+  await expect(pictures).not.toBeChecked()
+  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health', 'finance'], memory: false, attachments: false })
+  // Pictures back on: nothing written for them again.
+  await pictures.click()
+  await expect(pictures).toBeChecked()
   await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health', 'finance'], memory: false })
 
   // The rest of the host survived every keep write.
@@ -115,9 +129,25 @@ test('a reload opens with the saved choice', async ({ page }) => {
   await expect(section.getByRole('switch', { name: `Keep notes on ${ALIAS}` })).toBeChecked()
   await expect(section.getByRole('switch', { name: `Keep memory on ${ALIAS}` })).not.toBeChecked()
   await expect(section.getByRole('switch', { name: `Keep skills on ${ALIAS}` })).toBeChecked()
+  await expect(section.getByRole('switch', { name: `Keep attachments on ${ALIAS}` })).toBeChecked()
   await expect(section.locator('#rh-keep-exclude-0')).toHaveValue('health, finance')
   // Clearing the folders and turning memory back on writes no keep at all.
   await section.locator('#rh-keep-exclude-0').fill('')
   await section.getByRole('switch', { name: `Keep memory on ${ALIAS}` }).click()
+  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toBeUndefined()
+})
+
+test('a pictures choice survives a reload, and a save of another field keeps it', async ({ page }) => {
+  let section = await openEditor(page)
+  await section.getByRole('switch', { name: `Keep attachments on ${ALIAS}` }).click()
+  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ attachments: false })
+  // Another kind's save writes the whole host again: the pictures choice stays.
+  await section.getByRole('switch', { name: `Keep skills on ${ALIAS}` }).click()
+  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ skills: false, attachments: false })
+  section = await openEditor(page)
+  await expect(section.getByRole('switch', { name: `Keep attachments on ${ALIAS}` })).not.toBeChecked()
+  await expect(section.getByRole('switch', { name: `Keep skills on ${ALIAS}` })).not.toBeChecked()
+  await section.getByRole('switch', { name: `Keep attachments on ${ALIAS}` }).click()
+  await section.getByRole('switch', { name: `Keep skills on ${ALIAS}` }).click()
   await expect.poll(() => keepOf(page), { timeout: 15_000 }).toBeUndefined()
 })

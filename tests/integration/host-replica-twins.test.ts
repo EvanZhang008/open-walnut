@@ -29,7 +29,8 @@ vi.mock('../../src/core/skill-store.js', () => ({
 let config: Record<string, unknown> = {}
 vi.mock('../../src/core/config-manager.js', () => ({ getConfig: async () => config }))
 
-import { NOTES_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'
+import crypto from 'node:crypto'
+import { NOTES_DIR, MEMORY_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { syncHostReplica, forgetHostReplica, sha12 } from '../../src/core/host-replica.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
@@ -55,6 +56,8 @@ setTimeout(() => process.exit(0), 10 * 60_000)
 `
 
 const RETRO = '# Retro\nThe build broke twice; the rollback worked.'
+/** A picture over one 2 MB chunk: it crosses the daemon link as two attachments.put frames. */
+const DIAGRAM = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(2 * 1024 * 1024 + 500, 7)])
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function waitFor(cond: () => boolean | Promise<boolean>, ms: number, label: string): Promise<void> {
   const end = Date.now() + ms
@@ -220,8 +223,14 @@ beforeAll(async () => {
   writeNote('Projects/Retro.md', RETRO)
   writeNote('health/Checkup.md', '# Checkup\nBlood test on Friday.')
   writeNote('_attachment/scan.md', 'ocr')
+  // The pictures of the notes: one kept, one in a folder this host leaves out.
+  writeNote('Projects/_attachment/diagram.png', DIAGRAM)
+  writeNote('health/_attachment/xray.png', 'left out')
   fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true })
   fs.writeFileSync(MEMORY_FILE, '# Memory\n- deploy with the script\n')
+  // The rest of the memory dir rides along (a daily log that also says "deploy script").
+  fs.mkdirSync(path.join(MEMORY_DIR, 'daily'), { recursive: true })
+  fs.writeFileSync(path.join(MEMORY_DIR, 'daily', '2026-10-21.md'), '# 2026-10-21\n- ran the deploy script\n')
 }, 30_000)
 
 afterAll(async () => {
@@ -249,15 +258,23 @@ for (const twin of twinsToRun) {
       expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
       forgetHostReplica(twin)
       config = { hosts: { [twin]: { hostname: 'h', keep: { notes_exclude: ['health'] } } } }
-      const round = await syncHostReplica({ hostKey: twin, send: primary.send })
+      // Both twins keep the pictures too (attachment-copy-v1): the round sends them after the kinds.
+      const round = await syncHostReplica({ hostKey: twin, send: primary.send, attachments: true })
       expect(round.map((r) => `${r.kind}:${r.action}`)).toEqual(['notes:synced', 'memory:synced', 'skills:synced'])
     }, 120_000)
 
     afterAll(() => { primary?.close(); proxy?.close() })
 
-    it('the copy is on disk under the replica dir, and has no left-out folder and no attachment', async () => {
+    it('the copy is on disk under the replica dir, and has no left-out folder; the pictures are beside it', async () => {
       const status = await primary.send('replica.status', { home: WALNUT_HOME })
-      expect(status).toMatchObject({ ok: true, kinds: { notes: { entries: 2, pending: 0 }, memory: { entries: 1 }, skills: { entries: 1 } } })
+      // memory: the two docs' one (MEMORY.md), the files.v1 marker and the daily log, as the companion gets them.
+      expect(status).toMatchObject({ ok: true, kinds: { notes: { entries: 2, pending: 0 }, memory: { entries: 3 }, skills: { entries: 1 } } })
+      const pics = await primary.send('attachments.status', { home: WALNUT_HOME })
+      expect(pics, JSON.stringify(pics)).toMatchObject({ ok: true, entries: 1, pending: 0, bytes: DIAGRAM.length })
+      const homeKey = crypto.createHash('sha1').update(WALNUT_HOME).digest('hex').slice(0, 16)
+      const blob = path.join(d.dir, 'replica', homeKey, 'attachments', 'b', crypto.createHash('sha256').update(DIAGRAM).digest('hex'))
+      expect(fs.readFileSync(blob).equals(DIAGRAM)).toBe(true)
+      expect(fs.statSync(blob).mode & 0o777).toBe(0o600)
       const files = fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String)
       expect(files.some((f) => f.endsWith('index.json'))).toBe(true)
       const all = files.filter((f) => /[/\\]f[/\\]/.test(f)).map((f) => fs.readFileSync(path.join(d.dir, 'replica', f), 'utf8')).join('\n')
@@ -367,8 +384,11 @@ for (const twin of twinsToRun) {
       expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
       forgetHostReplica(twin)
       config = { hosts: { [twin]: { hostname: 'h', keep: { notes: false } } } }
-      const round = await syncHostReplica({ hostKey: twin, send: primary.send })
+      const round = await syncHostReplica({ hostKey: twin, send: primary.send, attachments: true })
       expect(round.find((r) => r.kind === 'notes')).toMatchObject({ action: 'dropped' })
+      // No notes, no pictures of them either.
+      expect(await primary.send('attachments.status', { home: WALNUT_HOME })).toMatchObject({ ok: true, entries: 0, asOf: null })
+      expect(fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String).some((f) => f.includes('attachments'))).toBe(false)
       // A stuck server: a note read is the server's again (it times out as before),
       // while memory, still kept here, comes from the copy at the timeout.
       primary.answerRelays = false

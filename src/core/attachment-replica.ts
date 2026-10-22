@@ -1,31 +1,31 @@
 /**
- * The Mac's side of the cloud companion's copy of the pictures and files in the notes
- * (stage 4d of docs/plan/walnut-companion-unified-replica.md; the box's side is
- * core/companion-attachment-copy.ts). Hosts never get one: a session there reads note
- * text, and the attachment route is the companion's, answered for the phone and the
- * console wherever the Mac is.
+ * The Mac's side of every replica's copy of the pictures and files in the notes: each
+ * host daemon (capability 'attachment-copy-v1') and the cloud companion keep the same
+ * copy (providers/attachment-copy-core.ts), so a note's pictures show wherever the
+ * notes do. A target that keeps no notes keeps no attachments either
+ * (`hosts.<key>.keep.attachments`, on unless set false; core/host-replica.ts).
  *
  * Why a copy and not a relay to the Mac: a picture read happens in bursts (one note
  * fires 20 to 40 at once), must work while the Mac is away, and file bytes do not ride
  * the bridge (docs/reference/cloud-sync.md, "Why bulk uploads leave the bridge"). A copy
- * answers every read on the box at disk speed and costs the box the files' size once
+ * answers every read on the replica at disk speed and costs it the files' size once
  * (1.5 GB for the measured vault, 1,395 files); only changed files go again, found by a
- * stat cache, and each chunk is its own short HTTPS request, so a damaged one costs one
- * retry and a broken upload resumes where the box says it stopped.
+ * stat cache, and each chunk is its own short request, so a damaged one costs one retry
+ * and a broken upload resumes where the replica says it stopped.
  *
- * One round: walk the vault for the files the attachment route serves (by extension,
- * at most 50 MB each), hash what changed since the last walk (read in slices: a large
- * file never holds the loop), keep the newest within the byte budget, send the manifest,
- * then send the files the box lacks, at most ROUND_BYTES a round; a round that stops
- * there runs again 15 s later. The manifest is not sent again while it stays the same
- * and the box says it holds it.
+ * One round per target: walk the vault for the files the attachment route serves (by
+ * extension, at most 50 MB each; the targets' rounds share one walk), hash what changed
+ * since the last walk (read in slices: a large file never holds the loop), keep the
+ * newest within the byte budget, send the manifest, then send the files the target lacks,
+ * at most ROUND_BYTES a round; a round that stops there runs again 15 s later. The
+ * manifest is not sent again while it stays the same and the target says it holds it.
  */
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR } from '../constants.js'
+import { NOTES_DIR, WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 
 const MAX_FILES = 20_000
@@ -42,6 +42,9 @@ const MEMO_MS = 30 * 60_000
 export interface AttachmentEntry { k: string; h: string; n: number; mtimeMs: number }
 
 type Send = (cmd: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>
+/** Where a round goes: a host's daemon link or the companion's door (core/host-replica.ts ReplicaTarget). */
+export interface AttachmentTarget { hostKey: string; send: Send }
+export interface AttachmentKeep { on: boolean; exclude: string[] }
 
 const statCache = new Map<string, { mtimeMs: number; size: number; h: string }>()
 
@@ -55,8 +58,20 @@ function inFolder(rel: string, folders: string[]): boolean {
   return folders.some((f) => rel === f || rel.startsWith(`${f}/`))
 }
 
-/** Every file the attachment route serves, newest first, within the budget. */
-export async function attachmentEntries(exclude: string[], root = NOTES_DIR): Promise<AttachmentEntry[]> {
+/** Walks in progress: the targets' rounds a note edit starts together share one walk of the vault. */
+const walking = new Map<string, Promise<AttachmentEntry[]>>()
+
+/** Every file the attachment route serves, within the budget, in path order. */
+export function attachmentEntries(exclude: string[], root = NOTES_DIR): Promise<AttachmentEntry[]> {
+  const key = JSON.stringify([root, exclude])
+  const running = walking.get(key)
+  if (running) return running
+  const p = walkAttachments(exclude, root).finally(() => walking.delete(key))
+  walking.set(key, p)
+  return p
+}
+
+async function walkAttachments(exclude: string[], root: string): Promise<AttachmentEntry[]> {
   const { isServedAttachment } = await import('../web/routes/notes-v2.js')
   const out: AttachmentEntry[] = []
   const seen = new Set<string>()
@@ -83,7 +98,11 @@ export async function attachmentEntries(exclude: string[], root = NOTES_DIR): Pr
     }
   }
   await walk(root, '')
-  for (const abs of statCache.keys()) if (abs.startsWith(root + path.sep) && !seen.has(abs)) statCache.delete(abs)
+  // A file gone since the last walk leaves the cache; one in a folder this walk left out stays (another target keeps it).
+  for (const abs of statCache.keys()) {
+    if (!abs.startsWith(root + path.sep) || seen.has(abs)) continue
+    if (!inFolder(path.relative(root, abs).split(path.sep).join('/'), exclude)) statCache.delete(abs)
+  }
   out.sort((a, b) => b.mtimeMs - a.mtimeMs || a.k.localeCompare(b.k))
   const kept: AttachmentEntry[] = []
   let bytes = 0
@@ -92,13 +111,13 @@ export async function attachmentEntries(exclude: string[], root = NOTES_DIR): Pr
     bytes += e.n
     kept.push(e)
   }
-  if (kept.length < out.length) log.session.info('companion attachments: the copy keeps the newest files within its budget', { kept: kept.length, of: out.length })
+  if (kept.length < out.length) log.session.info('attachments copy: the copy keeps the newest files within its budget', { kept: kept.length, of: out.length })
   // In path order: a file touched without a change keeps the manifest (and its memo) as it was.
   return kept.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0))
 }
 
 /** Upload one file from `from`; the bytes sent, or -1 when it stopped (the next round goes on). */
-async function upload(send: Send, root: string, e: AttachmentEntry, from: number): Promise<number> {
+async function upload(target: AttachmentTarget, root: string, e: AttachmentEntry, from: number): Promise<number> {
   const abs = path.join(root, e.k)
   let fh: fsp.FileHandle
   try { fh = await fsp.open(abs, 'r') } catch { return -1 }
@@ -112,10 +131,10 @@ async function upload(send: Send, root: string, e: AttachmentEntry, from: number
       const len = Math.min(CHUNK_BYTES, e.n - offset)
       const buf = Buffer.alloc(len)
       if (len > 0) await fh.read(buf, 0, len, offset)
-      const r = await send('attachments.put', { k: e.k, h: e.h, offset, data: buf.toString('base64') }, PUT_TIMEOUT_MS)
+      const r = await target.send('attachments.put', { home: WALNUT_HOME, k: e.k, h: e.h, offset, data: buf.toString('base64') }, PUT_TIMEOUT_MS)
       if (r.ok !== true) {
         if (r.errorKind === 'offset' && typeof r.have === 'number' && r.have < offset) { offset = r.have; continue }
-        log.session.warn('companion attachments: a file did not go', { path: e.k, error: r.error })
+        log.session.warn('attachments copy: a file did not go', { host: target.hostKey, path: e.k, error: r.error })
         return -1
       }
       sent += len
@@ -128,44 +147,55 @@ async function upload(send: Send, root: string, e: AttachmentEntry, from: number
   }
 }
 
-let memo: { hash: string; at: number } | null = null
-let dropped = false
-let running = false
-let again: ReturnType<typeof setTimeout> | null = null
-let unsupportedUntil = 0
+interface TargetState {
+  memo: { hash: string; at: number } | null
+  dropped: boolean
+  running: boolean
+  again: ReturnType<typeof setTimeout> | null
+  unsupportedUntil: number
+}
+const states = new Map<string, TargetState>()
+function stateOf(hostKey: string): TargetState {
+  let s = states.get(hostKey)
+  if (!s) { s = { memo: null, dropped: false, running: false, again: null, unsupportedUntil: 0 }; states.set(hostKey, s) }
+  return s
+}
 
 export interface AttachmentRoundResult { action: 'synced' | 'unchanged' | 'dropped' | 'skipped' | 'failed'; entries?: number; sent?: number; bytes?: number; more?: boolean; error?: string }
 
 /**
- * One round of the companion's attachments copy. `keep` is the companion's keep settings
- * (config hosts.companion.keep). Never throws; one round at a time.
+ * One round of `target`'s attachments copy. `keep` is the target's keep settings
+ * (config hosts.<key>.keep: on while notes and attachments are kept). Never throws;
+ * one round per target at a time.
  */
-export async function syncCompanionAttachments(send: Send, keep: { on: boolean; exclude: string[] }, root = NOTES_DIR): Promise<AttachmentRoundResult> {
-  if (running) return { action: 'skipped' }
-  if (Date.now() < unsupportedUntil) return { action: 'skipped' }
-  running = true
+export async function syncAttachments(target: AttachmentTarget, keep: AttachmentKeep, root = NOTES_DIR): Promise<AttachmentRoundResult> {
+  const s = stateOf(target.hostKey)
+  if (s.running) return { action: 'skipped' }
+  if (Date.now() < s.unsupportedUntil) return { action: 'skipped' }
+  s.running = true
+  const home = WALNUT_HOME
   try {
     if (!keep.on) {
-      if (dropped) return { action: 'unchanged' }
-      const r = await send('attachments.drop', {})
+      if (s.dropped) return { action: 'unchanged' }
+      const r = await target.send('attachments.drop', { home })
       if (r.ok !== true) return { action: 'failed', error: String(r.error ?? 'refused') }
-      dropped = true
-      memo = null
+      s.dropped = true
+      s.memo = null
       return { action: 'dropped' }
     }
-    dropped = false
-    const st = await send('attachments.status', {})
+    s.dropped = false
+    const st = await target.send('attachments.status', { home })
     if (st.ok !== true) {
-      // An older box answers the command it does not know: ask again in 10 minutes.
-      if (st.errorKind === 'bad_request' || st.errorKind === 'unsupported') unsupportedUntil = Date.now() + 10 * 60_000
+      // An older replica answers the command it does not know: ask again in 10 minutes.
+      if (st.errorKind === 'bad_request' || st.errorKind === 'unsupported') s.unsupportedUntil = Date.now() + 10 * 60_000
       return { action: 'failed', error: String(st.error ?? 'no status') }
     }
-    if (st.asOf == null || (memo && Date.now() - memo.at > MEMO_MS)) memo = null
+    if (st.asOf == null || (s.memo && Date.now() - s.memo.at > MEMO_MS)) s.memo = null
     const entries = await attachmentEntries(keep.exclude, root)
     const manifest = entries.map(({ k, h, n }) => ({ k, h, n }))
     const hash = crypto.createHash('sha256').update(JSON.stringify(manifest)).digest('hex')
-    if (memo?.hash === hash) return { action: 'unchanged', entries: entries.length }
-    const reply = await send('attachments.sync', { entries: manifest, asOf: Date.now() })
+    if (s.memo?.hash === hash) return { action: 'unchanged', entries: entries.length }
+    const reply = await target.send('attachments.sync', { home, entries: manifest, asOf: Date.now() })
     if (reply.ok !== true) return { action: 'failed', error: String(reply.error ?? 'refused') }
     const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
     const have = (reply.have && typeof reply.have === 'object' ? reply.have : {}) as Record<string, unknown>
@@ -177,45 +207,47 @@ export async function syncCompanionAttachments(send: Send, keep: { on: boolean; 
       const e = byKey.get(k)
       if (!e) { short = true; continue }
       if (bytes >= ROUND_BYTES) { short = true; break }
-      const n = await upload(send, root, e, typeof have[k] === 'number' ? have[k] as number : 0)
+      const n = await upload(target, root, e, typeof have[k] === 'number' ? have[k] as number : 0)
       if (n < 0) { short = true; continue }
       bytes += n
       sent++
     }
-    memo = short ? null : { hash, at: Date.now() }
-    if (short) scheduleAgain(send, keep, root)
+    s.memo = short ? null : { hash, at: Date.now() }
+    if (short) scheduleAgain(target, keep, root)
     return { action: 'synced', entries: entries.length, sent, bytes, ...(short ? { more: true } : {}) }
   } catch (err) {
-    memo = null
+    s.memo = null
     return { action: 'failed', error: err instanceof Error ? err.message : String(err) }
   } finally {
-    running = false
+    s.running = false
   }
 }
 
-function scheduleAgain(send: Send, keep: { on: boolean; exclude: string[] }, root: string): void {
-  if (again) return
-  again = setTimeout(() => {
-    again = null
-    void syncCompanionAttachments(send, keep, root).then((r) => {
-      if (r.action !== 'unchanged' && r.action !== 'skipped') log.session.info('companion attachments: round', { ...r })
+function scheduleAgain(target: AttachmentTarget, keep: AttachmentKeep, root: string): void {
+  const s = stateOf(target.hostKey)
+  if (s.again) return
+  s.again = setTimeout(() => {
+    s.again = null
+    void syncAttachments(target, keep, root).then((r) => {
+      if (r.action !== 'unchanged' && r.action !== 'skipped') log.session.info('attachments copy: round', { host: target.hostKey, ...r })
     })
   }, NEXT_ROUND_MS)
-  again.unref?.()
+  s.again.unref?.()
 }
 
-/** The companion changed build or was replaced: its next round sends the manifest again. */
-export function forgetCompanionAttachments(): void {
-  memo = null
-  dropped = false
-  unsupportedUntil = 0
+/** `hostKey` changed connection, build or box: its next round asks and sends the manifest again. */
+export function forgetAttachments(hostKey: string): void {
+  const s = states.get(hostKey)
+  if (!s) return
+  s.memo = null
+  s.dropped = false
+  s.unsupportedUntil = 0
 }
 
 /** Tests: no state, no round armed. */
 export function _resetAttachmentReplicaForTesting(): void {
-  forgetCompanionAttachments()
+  for (const s of states.values()) if (s.again) clearTimeout(s.again)
+  states.clear()
   statCache.clear()
-  running = false
-  if (again) clearTimeout(again)
-  again = null
+  walking.clear()
 }

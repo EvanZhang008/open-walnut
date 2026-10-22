@@ -549,9 +549,10 @@ export class DaemonConnection {
    * it's open. Everything else (fs.ls, status, sends, events) stays on the
    * main WS. Membership is by frame size, not command family: replica.put
    * is the one whose REQUEST is big (a batch of note bodies, host-replica.ts),
-   * and so is fs.writePart (a relayed file chunk, transfer-core.ts).
+   * and so are fs.writePart (a relayed file chunk, transfer-core.ts) and
+   * attachments.put (a 2 MB chunk of a note's picture, attachment-replica.ts).
    */
-  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart'])
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart', 'attachments.put'])
   /** Delay before re-dialing the bulk channel after it drops (main stays up). */
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */
@@ -1233,14 +1234,17 @@ export class DaemonConnection {
   }
 
   /**
-   * Bring this host's read copy of the notes, memory and skills up to date
-   * (core/host-replica.ts). Rounds are serialized per host there; a round with
-   * nothing changed sends nothing.
+   * Bring this host's read copy of the notes, memory, skills and the notes'
+   * pictures up to date (core/host-replica.ts). Rounds are serialized per host
+   * there; a round with nothing changed sends nothing. The pictures go only to
+   * a daemon that keeps them ('attachment-copy-v1') on another machine: this
+   * Mac's own daemon shares the vault's disk, and nothing there reads a copy.
    */
   pushHostReplica(): void {
     if (this.isReadOnlyRemote || !this._connected || !this.hasCapability('host-replica-v1')) return
+    const attachments = this.hostKey !== '__local__' && this.hasCapability('attachment-copy-v1')
     void import('../core/host-replica.js')
-      .then((m) => m.syncHostReplica({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) }))
+      .then((m) => m.syncHostReplica({ hostKey: this.hostKey, attachments, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) }))
       .catch((err) => log.session.warn('DaemonConnection: host replica round failed', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) }))
   }
 

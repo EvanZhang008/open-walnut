@@ -1,9 +1,11 @@
 /**
  * The primary's side of a host's read copy (core/host-replica.ts), against the
- * REAL daemon core (host-replica-core.ts) behind an in-process transport: what
- * is copied (note text only, no dot or attachment folders, none the user left
- * out), what each round sends (only what changed; nothing when nothing did),
- * and what a kind turned off does (removed from the host).
+ * REAL daemon cores (host-replica-core.ts, attachment-copy-core.ts) behind an
+ * in-process transport: what is copied (note text only, no dot or attachment
+ * folders, none the user left out; the rest of the memory dir and the skills'
+ * references, as the companion gets them; the pictures and files to a daemon
+ * that keeps them), what each round sends (only what changed; nothing when
+ * nothing did), and what a kind turned off does (removed from the host).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
@@ -15,10 +17,13 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-replica'))
 /** Where the shipped skills are served from: a deploy's stage dir, new with every deploy. */
 let stageDir = '/stage/one'
+/** A skill with reference files, on disk (set by the tests that need one). */
+let refSkillDir = ''
 vi.mock('../../src/core/skill-store.js', () => ({
   listAllSkills: async () => [
     { dirName: 'walnut-board', name: 'walnut-board', description: 'Keep a Board', location: `${stageDir}/dist/data/skills/walnut-board/SKILL.md`, content: '---\nname: walnut-board\n---\nboard body' },
     { dirName: 'deploy', name: 'deploy', description: 'Ship it', location: '/home/me/.claude/skills/deploy/SKILL.md', content: '---\nname: deploy\n---\ndeploy body' },
+    ...(refSkillDir ? [{ dirName: 'acme-tool', name: 'acme-tool', description: 'Run the tool', location: path.join(refSkillDir, 'SKILL.md'), content: '---\nname: acme-tool\n---\ntool body' }] : []),
   ],
 }))
 
@@ -91,11 +96,14 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(daemonDir, { recursive: true, force: true }) })
 
 describe('what a host keeps', () => {
-  it('everything unless the user turned it off', () => {
-    expect(hostKeepFor({} as Config, 'devbox')).toEqual({ notes: true, notesExclude: [], memory: true, skills: true })
+  it('everything unless the user turned it off, the same for every target', () => {
+    for (const key of ['devbox', 'companion']) expect(hostKeepFor({} as Config, key)).toEqual({ notes: true, notesExclude: [], memory: true, skills: true, attachments: true })
     const c = { hosts: { devbox: { hostname: 'h', keep: { notes: false, notes_exclude: [' /health/ ', '', 'finance'], skills: false } } } } as unknown as Config
-    expect(hostKeepFor(c, 'devbox')).toEqual({ notes: false, notesExclude: ['health', 'finance'], memory: true, skills: false })
+    // No notes, no pictures of them.
+    expect(hostKeepFor(c, 'devbox')).toEqual({ notes: false, notesExclude: ['health', 'finance'], memory: true, skills: false, attachments: false })
     expect(hostKeepFor(c, 'oldbox').notes).toBe(true)
+    const pics = { hosts: { devbox: { hostname: 'h', keep: { attachments: false } } } } as unknown as Config
+    expect(hostKeepFor(pics, 'devbox')).toMatchObject({ notes: true, attachments: false })
   })
 
   it('note text only: no dot folders, no attachments, nothing over 1 MB, none left out', async () => {
@@ -230,6 +238,137 @@ describe('a round', () => {
     await first
     // The rerun found nothing new to send for notes, so it asked once per kind in round two.
     expect(syncs).toBe(3)
+  })
+})
+
+// -- Stage 4e of docs/plan/walnut-companion-unified-replica.md: one copy for every
+// replica. A host's daemon gets what the companion gets, decided by its keep settings only. --
+
+import { MEMORY_DIR, REPOS_MEMORY_DIR } from '../../src/constants.js'
+import { COMPANION_REPLICA_HOST } from '../../src/core/host-replica.js'
+import { createAttachmentCopy } from '../../src/providers/attachment-copy-core.js'
+import { _resetAttachmentReplicaForTesting } from '../../src/core/attachment-replica.js'
+
+describe('every target gets the same copy', () => {
+  let extraDir = ''
+  beforeEach(() => {
+    extraDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whx-'))
+    _resetAttachmentReplicaForTesting()
+  })
+  afterEach(() => {
+    refSkillDir = ''
+    fs.rmSync(path.join(MEMORY_DIR, 'daily'), { recursive: true, force: true })
+    fs.rmSync(REPOS_MEMORY_DIR, { recursive: true, force: true })
+    fs.rmSync(extraDir, { recursive: true, force: true })
+    _resetAttachmentReplicaForTesting()
+  })
+
+  /** The manifest each kind's replica.sync carried, by kind. */
+  const manifests = (from: number): Record<string, string[]> => Object.fromEntries(calls.slice(from).filter((c) => c.cmd === 'replica.sync')
+    .map((c) => [String(c.params.kind), (c.params.entries as Array<{ k: string }>).map((e) => e.k).sort()]))
+
+  it('a host gets the rest of the memory dir and the skills\' references, as the companion does; its readers take only the docs', async () => {
+    fs.mkdirSync(path.join(MEMORY_DIR, 'daily'), { recursive: true })
+    fs.writeFileSync(path.join(MEMORY_DIR, 'daily', '2026-10-21.md'), '# 2026-10-21\n- shipped the build\n')
+    fs.mkdirSync(path.join(REPOS_MEMORY_DIR, 'marina'), { recursive: true })
+    fs.writeFileSync(path.join(REPOS_MEMORY_DIR, 'marina', 'SKILL.md'), '# marina\nThe marina repo.\n')
+    refSkillDir = path.join(extraDir, 'acme-tool')
+    fs.mkdirSync(path.join(refSkillDir, 'references'), { recursive: true })
+    fs.writeFileSync(path.join(refSkillDir, 'references', 'flags.md'), 'Use --twice.\n')
+    await syncHostReplica(target)
+    const host = manifests(0)
+    expect(host.memory).toEqual(['f/daily/2026-10-21.md', 'files.v1', 'global', 'r/marina'])
+    expect(host.skills).toEqual(['acme-tool', 'acme-tool/references/flags.md', 'deploy', 'walnut-board'])
+    // The companion's round carries the very same manifest.
+    const from = calls.length
+    forgetHostReplica(COMPANION_REPLICA_HOST)
+    await syncHostReplica({ hostKey: COMPANION_REPLICA_HOST, send: target.send })
+    expect(manifests(from)).toEqual(host)
+    // Stored and served by the daemon core as more keys of the kind.
+    expect(daemon.read(WALNUT_HOME, 'memory', 'f/daily/2026-10-21.md')?.body).toBe('# 2026-10-21\n- shipped the build\n')
+    expect(daemon.read(WALNUT_HOME, 'skills', 'acme-tool/references/flags.md')?.body).toBe('Use --twice.\n')
+    // The daemon's own readers never take one for a doc or a skill.
+    expect(read('memory_read', { doc: 'global' })).toMatchObject({ ok: true, result: { memory: { path: 'MEMORY.md' } } })
+    expect(read('memory_read', { doc: 'files.v1' })).toMatchObject({ ok: false, error: { code: 'bad_request' } })
+    expect(read('memory_read', { doc: 'f/daily/2026-10-21.md' })).toMatchObject({ ok: false, error: { code: 'bad_request' } })
+    expect(daemon.memoryDocs(WALNUT_HOME).map((d) => d.path)).toEqual(['MEMORY.md'])
+    expect(read('skill_read', { dirName: 'acme-tool' })).toMatchObject({ ok: true, result: { skill: { name: 'acme-tool', content: '---\nname: acme-tool\n---\ntool body' } } })
+    expect(read('skill_read', { dirName: 'acme-tool/references/flags.md' })).toMatchObject({ ok: false, error: { code: 'bad_request' } })
+    expect(daemon.ops(WALNUT_HOME).map((o) => o.name)).toEqual(['note_read', 'note_search', 'memory_read', 'skill_read'])
+    // A reference changed on the Mac goes alone.
+    calls = []
+    fs.writeFileSync(path.join(refSkillDir, 'references', 'flags.md'), 'Use --thrice.\n')
+    await syncHostReplica(target)
+    const put = calls.find((c) => c.cmd === 'replica.put' && c.params.kind === 'skills')!
+    expect((put.params.files as Array<{ k: string }>).map((f) => f.k)).toEqual(['acme-tool/references/flags.md'])
+  })
+
+  it('pictures and files go to a daemon that keeps them, through the real core; none to one without it', async () => {
+    write('health/xray.png', 'left out')
+    write('Projects/_attachment/logo.png', 'logo bytes')
+    config = { hosts: { devbox: { hostname: 'h', keep: { notes_exclude: ['health'] } } } } as unknown as Config
+    const picsDir = path.join(extraDir, 'pics')
+    const pics = createAttachmentCopy({ fs, path, crypto, dirOf: () => picsDir, log: () => {} })
+    const homes: string[] = []
+    const keeper: ReplicaTarget = {
+      hostKey: 'devbox', attachments: true,
+      send: async (cmd, params, timeoutMs) => {
+        if (!cmd.startsWith('attachments.')) return target.send(cmd, params, timeoutMs)
+        calls.push({ cmd, params })
+        homes.push(String(params.home))
+        return pics.command(params.home as string, cmd, params)
+      },
+    }
+    // A daemon without attachment-copy-v1: the same round, no picture command.
+    await syncHostReplica(target)
+    expect(cmds().some((c) => c.startsWith('attachments.'))).toBe(false)
+    calls = []
+    await syncHostReplica(keeper)
+    expect(cmds().filter((c) => c.startsWith('attachments.'))).toEqual(['attachments.status:undefined', 'attachments.sync:undefined', 'attachments.put:undefined', 'attachments.put:undefined'])
+    expect([...new Set(homes)]).toEqual([WALNUT_HOME])
+    expect(pics.held(WALNUT_HOME)).toBe(true)
+    // The served files of the vault, never a note, never a folder left out.
+    expect(pics.keys(WALNUT_HOME)).toEqual(['Projects/_attachment/logo.png', 'Projects/diagram.png'])
+    expect(await pics.readFile(WALNUT_HOME, 'Projects/_attachment/logo.png')).toEqual(Buffer.from('logo bytes'))
+    // Unchanged: the next round asks the status and sends nothing.
+    calls = []
+    await syncHostReplica(keeper)
+    expect(cmds().filter((c) => c.startsWith('attachments.'))).toEqual(['attachments.status:undefined'])
+    // Turned off for that host: removed there, and not asked again every round.
+    config = { hosts: { devbox: { hostname: 'h', keep: { notes_exclude: ['health'], attachments: false } } } } as unknown as Config
+    calls = []
+    await syncHostReplica(keeper)
+    expect(cmds().filter((c) => c.startsWith('attachments.'))).toEqual(['attachments.drop:undefined'])
+    expect(pics.held(WALNUT_HOME)).toBe(false)
+    expect(fs.existsSync(picsDir)).toBe(false)
+    calls = []
+    await syncHostReplica(keeper)
+    expect(cmds().filter((c) => c.startsWith('attachments.'))).toEqual([])
+    // On again: filled again. Notes off: no pictures either.
+    config = { hosts: { devbox: { hostname: 'h' } } } as unknown as Config
+    await syncHostReplica(keeper)
+    expect(pics.keys(WALNUT_HOME)).toEqual(['Projects/_attachment/logo.png', 'Projects/diagram.png', 'health/xray.png'])
+    config = { hosts: { devbox: { hostname: 'h', keep: { notes: false } } } } as unknown as Config
+    await syncHostReplica(keeper)
+    expect(pics.held(WALNUT_HOME)).toBe(false)
+  })
+
+  it('a new connection asks the status and sends the manifest again', async () => {
+    write('Projects/_attachment/logo.png', 'logo bytes')
+    const pics = createAttachmentCopy({ fs, path, crypto, dirOf: () => path.join(extraDir, 'pics'), log: () => {} })
+    const keeper: ReplicaTarget = {
+      hostKey: 'devbox', attachments: true,
+      send: async (cmd, params, timeoutMs) => {
+        if (!cmd.startsWith('attachments.')) return target.send(cmd, params, timeoutMs)
+        calls.push({ cmd, params })
+        return pics.command(params.home as string, cmd, params)
+      },
+    }
+    await syncHostReplica(keeper)
+    forgetHostReplica('devbox')
+    calls = []
+    await syncHostReplica(keeper)
+    expect(cmds().filter((c) => c.startsWith('attachments.'))).toEqual(['attachments.status:undefined', 'attachments.sync:undefined'])
   })
 })
 
