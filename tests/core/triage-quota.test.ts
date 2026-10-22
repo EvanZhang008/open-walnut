@@ -406,6 +406,10 @@ describe('assist differs from ask only in what a run may do on its own', () => {
     expect(budget).toContain('at most 3 decision letters');
     expect(budget).toContain('refuses a fourth decision letter');
     expect(budget).toContain('Withdraw a decision letter an earlier');
+    expect(budget).toContain('items entry bound to its exact account/message');
+    expect(budget).toContain('mark_read, find_task and create_task');
+    expect(budget).toContain('Whole-letter actions only ask the AI');
+    expect(budget).toContain('human_inbox_reply');
   });
 
   it('both modes still route every outward action through the same approval ops', () => {
@@ -424,7 +428,8 @@ describe('assist differs from ask only in what a run may do on its own', () => {
     const ask = triageModeText('ask', false);
     expect(ask).toContain('only read, update the triage and tracking notes, and hand an');
     expect(ask).toContain('item to the task that already owns it (task_send)');
-    expect(ask).toContain('creating or editing a task');
+    expect(ask).toContain('use create_task or find_task for task work');
+    expect(ask).toContain('Other requests go to the user as a decision letter: editing a task or unsubscribing');
 
     const assist = triageModeText('assist', false);
     expect(assist).toContain('create and update tasks');
@@ -439,7 +444,8 @@ describe('assist differs from ask only in what a run may do on its own', () => {
     expect(triageModeText('ask', true)).toContain(TRIAGE_MARK_READ_RULE);
     expect(triageModeText('ask', true)).not.toContain('marking mail read, ');
     expect(triageModeText('ask', false)).not.toContain(TRIAGE_MARK_READ_RULE);
-    expect(triageModeText('ask', false)).toContain('marking mail read, unsubscribing');
+    expect(triageModeText('ask', false)).toContain('mark_read for a single email');
+    expect(triageModeText('ask', false)).toContain('independent typed items');
     // The rule names the tool and keeps the doubtful case unread.
     expect(TRIAGE_MARK_READ_RULE).toContain('mail_mark_read');
     expect(TRIAGE_MARK_READ_RULE).toContain('when unsure, leave it unread');

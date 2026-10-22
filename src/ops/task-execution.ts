@@ -15,6 +15,7 @@ export const TASK_START_INPUT = {
   engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Coding engine; default claude'),
   expect_reply: z.boolean().optional().describe('Report back to the caller; defaults to true for a tracked caller. false opts out'),
   reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before a no-reply notification (default 3600)'),
+  start_attempt_id: z.string().uuid().optional().describe('Stable attempt identity for a confirmed launch'),
 }
 
 export function taskExecution(task: Record<string, unknown>): Record<string, unknown> {

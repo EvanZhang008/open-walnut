@@ -33,10 +33,116 @@ export function createLetterCheck() {
   const MAX_TASK_REFS = 50
   const TASK_REF_MAX_CHARS = 200
   /** human_inbox_send's inputs (src/ops/human-inbox.ts): the op refuses any other key. */
-  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'task_refs', 'pin']
+  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin']
 
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
   const filled = (v: unknown): boolean => typeof v === 'string' && v.length > 0
+  const ITEM_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+  const INTENTS = ['mark_read', 'find_task', 'create_task', 'attach_task']
+  // z.string().datetime({ offset: true }), including leap years and optional seconds.
+  const date = '(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))'
+  const ITEM_TIMESTAMP = new RegExp(`^${date}T(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$`)
+
+  function objectError(value: unknown, path: string, keys: string[]): string | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return `${path}: must be an object`
+    for (const key of Object.keys(value)) if (keys.indexOf(key) === -1) return `${path}.${key}: unrecognized key`
+    return null
+  }
+
+  function textError(value: unknown, path: string, max: number, nonempty = false): string | null {
+    if (typeof value !== 'string') return `${path}: must be a string`
+    if (value.length > max) return `${path}: must be at most ${max} chars`
+    if (nonempty && !value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim()) return `${path}: must not be empty after cleaning`
+    return null
+  }
+
+  function idError(value: unknown, path: string): string | null {
+    return typeof value === 'string' && ITEM_ID.test(value) ? null : `${path}: invalid item or action id`
+  }
+
+  function timestampError(value: unknown, path: string): string | null {
+    return typeof value === 'string' && ITEM_TIMESTAMP.test(value) ? null : `${path}: must be an ISO datetime with Z or a colon-separated offset`
+  }
+
+  /** The new-item schema only. Check bounded lists without changing the host's raw journal args. */
+  function itemsError(raw: unknown): string | null {
+    if (raw === undefined) return null
+    if (!Array.isArray(raw) || raw.length > 100) return 'items: must be an array of at most 100 items'
+    for (let i = 0; i < raw.length; i++) {
+      const path = `items.${i}`
+      let error = objectError(raw[i], path, ['id', 'subject', 'summary', 'source', 'display', 'readObservation', 'actions'])
+      if (error) return error
+      const item = raw[i] as Record<string, unknown>
+      error = idError(item.id, `${path}.id`) || textError(item.subject, `${path}.subject`, 1000, true) || textError(item.summary, `${path}.summary`, 16000)
+      if (error) return error
+      error = objectError(item.source, `${path}.source`, ['kind', 'account', 'message'])
+      if (error) return error
+      const source = item.source as Record<string, unknown>
+      if (source.kind !== 'mail') return `${path}.source.kind: must be mail`
+      for (const [key, max] of [['account', 1024], ['message', 4096]] as const) {
+        const value = source[key]
+        error = textError(value, `${path}.source.${key}`, max)
+        if (error) return error
+        if (!filled(value) || /[\u0000-\u001f\u007f]/.test(value as string)) return `${path}.source.${key}: must be non-empty without control characters`
+      }
+      if (item.display !== undefined) {
+        error = objectError(item.display, `${path}.display`, ['sender', 'sentAt', 'accountLabel', 'accountHint'])
+        if (error) return error
+        const display = item.display as Record<string, unknown>
+        if (display.sender !== undefined) {
+          error = objectError(display.sender, `${path}.display.sender`, ['name', 'address'])
+          if (error) return error
+          const sender = display.sender as Record<string, unknown>
+          for (const [key, max] of [['name', 300], ['address', 500]] as const) {
+            if (sender[key] !== undefined && (error = textError(sender[key], `${path}.display.sender.${key}`, max))) return error
+          }
+        }
+        if (display.sentAt !== undefined && (error = timestampError(display.sentAt, `${path}.display.sentAt`))) return error
+        for (const [key, max] of [['accountLabel', 300], ['accountHint', 1000]] as const) {
+          if (display[key] !== undefined && (error = textError(display[key], `${path}.display.${key}`, max))) return error
+        }
+      }
+      if (item.readObservation !== undefined) {
+        error = objectError(item.readObservation, `${path}.readObservation`, ['read', 'observedAt'])
+        if (error) return error
+        const observation = item.readObservation as Record<string, unknown>
+        if (typeof observation.read !== 'boolean') return `${path}.readObservation.read: must be a boolean`
+        if ((error = timestampError(observation.observedAt, `${path}.readObservation.observedAt`))) return error
+      }
+      if (!Array.isArray(item.actions) || item.actions.length > 8) return `${path}.actions: must be an array of at most 8 actions`
+      const intents = new Set<string>()
+      for (let j = 0; j < item.actions.length; j++) {
+        const actionPath = `${path}.actions.${j}`
+        const action = item.actions[j] as Record<string, unknown> | null
+        error = objectError(action, actionPath, action?.kind === 'op' ? ['id', 'kind', 'intent'] : ['id', 'kind', 'label', 'question'])
+        if (error) return error
+        if ((error = idError(action!.id, `${actionPath}.id`))) return error
+        if (action!.kind === 'op') {
+          if (INTENTS.indexOf(action!.intent as string) === -1) return `${actionPath}.intent: must be one of ${INTENTS.join(' | ')}`
+        } else if (action!.kind === 'reply_ai') {
+          error = textError(action!.label, `${actionPath}.label`, 200, true) || textError(action!.question, `${actionPath}.question`, 4000, true)
+          if (error) return error
+        } else return `${actionPath}.kind: must be op or reply_ai`
+        const intent = action!.kind === 'op' ? action!.intent as string : `reply_ai:${action!.id}`
+        if (intents.has(intent)) return `${actionPath}: duplicate item action intent`
+        intents.add(intent)
+      }
+    }
+    return null
+  }
+
+  /** Store-level uniqueness spans legacy buttons, every item and every item action. */
+  function itemIdsError(raw: unknown, actions: unknown): string | null {
+    if (!Array.isArray(raw)) return null
+    const used = new Set(Array.isArray(actions) ? actions.map(a => a.id) : [])
+    for (const item of raw) {
+      for (const id of [item.id, ...item.actions.map((a: Record<string, unknown>) => a.id)]) {
+        if (used.has(id)) return `Duplicate item or action id: ${id}`
+        used.add(id)
+      }
+    }
+    return null
+  }
 
   /**
    * A new letter as the store takes it: a subject, a known type, exactly one body,
@@ -87,6 +193,8 @@ export function createLetterCheck() {
       const ids = new Set(list.map((a) => (a as Record<string, unknown>).id))
       if (ids.size !== list.length) return { ok: false, message: 'action ids must be unique' }
     }
+    const itemError = itemsError(input.items) || itemIdsError(input.items, actions)
+    if (itemError) return { ok: false, message: itemError }
     const lane = hasMarkdown ? 'markdown' as const : hasHtmlRef ? 'html_ref' as const : 'html' as const
     return { ok: true, shape: { subject, lane, format: hasMarkdown ? 'markdown' : 'html' } }
   }
@@ -138,6 +246,8 @@ export function createLetterCheck() {
         })
       }
     }
+    const itemError = itemsError(args.items)
+    if (itemError) issues.push(itemError)
     return issues.length ? `Invalid arguments for human_inbox_send: ${issues.join('; ')}` : null
   }
 

@@ -87,7 +87,8 @@ async function sendLetter(
 // ── UI helpers ──
 
 async function loadHome(page: Page): Promise<void> {
-  await page.goto('/')
+  const { home } = await import('./inbox-items-helpers')
+  await home(page)
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -502,12 +503,12 @@ test('a pasted /sessions?tab=inbox&letter= URL lands on the letter in the sessio
     text: `Nightly report (${NONCE}).`,
   }, sid)
 
-  // A deliberate exception to "no page.goto": this IS the pasted/bookmarked link,
-  // and it is the page's INITIAL load, not navigation around the app. It exercises
-  // a different code path from test 1 — `SessionsRedirect` in App.tsx parses the
-  // query and hands it to the same mailbox, then replaces the URL with `/`, so the
-  // session panel mounts while the route is still changing underneath it.
-  await page.goto(`/sessions?id=${sid}&tab=inbox&letter=${letterId}`)
+  // Load the bookmarked link through a document anchor, then use only SPA clicks.
+  await page.setContent('<a id="fixture-deep-link">Open saved letter</a>')
+  await page.locator('#fixture-deep-link').evaluate((element, href) => {
+    (element as HTMLAnchorElement).href = href
+  }, `http://localhost:${TEST_PORT}/sessions?id=${sid}&tab=inbox&letter=${letterId}`)
+  await page.locator('#fixture-deep-link').click()
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
 
   const panel = page.locator(`.session-panel[data-session-id="${sid}"]`)

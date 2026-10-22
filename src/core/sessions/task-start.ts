@@ -1,17 +1,18 @@
 import { randomUUID } from 'node:crypto';
+import { requireFrozenWorkspaceReady, resolveTaskLaunchReadOnly } from './task-launch-plan.js';
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
-import { getTask, getProjectMetadata, linkSession, updateTaskRaw } from '../task-manager.js';
+import { getTask, linkSession, updateTaskRaw } from '../task-manager.js';
 import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { QuickStartError } from './quick-start.js';
-import { continueTaskConversation, taskConversation } from './task-session-claim.js';
-import { inheritedLaunchPair } from './caller-placement.js';
-import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
+import { continueTaskConversation, detachTaskSession, taskConversation } from './task-session-claim.js';
+import { stableJson } from '../task-create-idempotency.js';
 import type { Task, SessionEngine, SessionMode } from '../types.js';
 import { engineCaps, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
-import { deferTaskStart, workspaceCwdOf, workspaceStartPlace } from '../workspaces/launch.js';
+import { withInboxStartAuthorization } from '../human-inbox/item-ledger.js';
+import { deferTaskStart, workspaceCwdOf } from '../workspaces/launch.js';
 
 export interface SessionStartParams {
   taskIdPrefix: string;
@@ -24,6 +25,7 @@ export interface SessionStartParams {
   expectReply?: boolean;
   replyTimeoutSecs?: number;
   callerSid?: string;
+  startAttemptId?: string;
   source: string;
 }
 
@@ -86,9 +88,19 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     if (message.includes('Ambiguous ID prefix')) throw new QuickStartError(message, 400);
     throw err;
   }
+  let recovery: { previousStartId: string } | undefined;
+  if (params.startAttemptId) {
+    if (task.phase === 'COMPLETE') throw new QuickStartError('This task changed. Review the action again.', 409);
+    const { validateInboxStartBoundary } = await import('../human-inbox/item-execution.js');
+    recovery = await validateInboxStartBoundary(task.id, params.startAttemptId);
+    if (task.last_start && ['starting', 'unconfirmed'].includes(task.last_start.state) && recovery?.previousStartId !== task.last_start.id) {
+      throw new QuickStartError('This task changed. Review the action again.', 409);
+    }
+  }
   const pending = pendingStarts.get(task.id);
   if (pending !== undefined) throw alreadyStarted(task, pending);
-  // A workspace still being made: the start waits for it (core/workspaces/launch.ts).
+  // A frozen human plan cannot authorize a later workspace launch with different settings.
+  if (params.startAttemptId) requireFrozenWorkspaceReady(task, params);
   const deferred = await deferTaskStart(task, params);
   if (deferred) return deferred;
   const engine = normalizeEngine(params.engine);
@@ -102,15 +114,32 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     releaseAdmission = await admitStartWithinLimits(task, params.callerSid);
     const records = await getSessionsForTask(task.id);
     const live = records.find((s) => !s.archived && LIVE_STATUSES.has(s.process_status));
-    if (live && live.status_reason !== 'awaiting_spawn') throw alreadyStarted(task, live.claudeSessionId);
     const previous = records.find((s) => s.claudeSessionId === task.last_start?.session_id);
-    const previousConfirmed = previous && (previous.pid || previous.outputFile);
-    if (live || (!previousConfirmed && (task.last_start?.state === 'unconfirmed' || task.last_start?.state === 'starting'))) {
-      await cancelUnconfirmedStart(task, live ?? previous);
+    const interrupted = (record: typeof previous) => !!record && record.claudeSessionId === task.last_start?.session_id
+      && ['awaiting_spawn', 'spawn_outcome_unknown'].includes(record.status_reason ?? '');
+    if (live && (recovery ? !interrupted(live) : live.status_reason !== 'awaiting_spawn')) {
+      throw alreadyStarted(task, live.claudeSessionId);
+    }
+    if (recovery) {
+      const conversation = await taskConversation(task.id);
+      if (conversation && !interrupted(conversation)) throw alreadyStarted(task, conversation.claudeSessionId);
+      const { validateInboxStartBoundary } = await import('../human-inbox/item-execution.js');
+      const authorized = await validateInboxStartBoundary(task.id, params.startAttemptId!);
+      if (authorized?.previousStartId !== task.last_start?.id) throw new QuickStartError('This task changed. Review the action again.', 409);
+      // Only a confirmed recovery may cancel the old host's pending start. Keep
+      // its row unchanged until the final frozen-plan check and task CAS.
+      await cancelUnconfirmedStart(task, previous, true);
+    } else {
+      const previousConfirmed = previous && (previous.pid || previous.outputFile);
+      if (live || (!previousConfirmed && (task.last_start?.state === 'unconfirmed' || task.last_start?.state === 'starting'))) {
+        if (params.startAttemptId || params.source === 'human-inbox') throw new QuickStartError('The previous start needs an explicitly confirmed recovery.', 409);
+        await cancelUnconfirmedStart(task, live ?? previous);
+      }
     }
     // One session per task: a task that already holds a conversation continues it.
-    const conversation = await taskConversation(task.id, { retire: true });
+    const conversation = recovery ? undefined : await taskConversation(task.id, { retire: true });
     if (conversation) {
+      if (params.startAttemptId) throw new QuickStartError('This task changed. Review the action again.', 409);
       refuseDifferentPlace(task, conversation, params);
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
@@ -131,12 +160,18 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       }
     }
     const attempt: NonNullable<Task['last_start']> = {
-      id: randomUUID(), at: new Date().toISOString(), state: 'starting',
+      id: params.startAttemptId ?? randomUUID(), at: new Date().toISOString(), state: 'starting',
       session_id: sid, runtime_id: runtimeId, host: launch.host || '__local__', engine,
     };
-    const claimed = await updateTaskRaw(task.id, { last_start: attempt }, {
-      source: 'task-start', shouldUpdate: (current) => current.last_start?.id === task.last_start?.id,
-    });
+    if (params.startAttemptId) {
+      const { validateInboxStartBoundary } = await import('../human-inbox/item-execution.js');
+      await validateInboxStartBoundary(task.id, params.startAttemptId);
+    }
+    const claimed = await withInboxStartAuthorization(task.id, params.startAttemptId, () => updateTaskRaw(task.id, { last_start: attempt }, {
+      source: 'task-start', shouldUpdate: (current) => current.last_start?.id === task.last_start?.id
+        && (!params.startAttemptId || stableJson(current.last_start) === stableJson(task.last_start)
+          && current.phase !== 'COMPLETE' && current.phase === task.phase && current.cwd === task.cwd && current.project === task.project),
+    }));
     if (!claimed.changed) throw new QuickStartError(`Task ${task.id} changed before its start could be recorded. Read task_get before retrying.`, 409);
     const settle = async (updates: Partial<NonNullable<Task['last_start']>>) => {
       try {
@@ -150,6 +185,10 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     const result: SessionStartResult = { taskId: task.id, title: task.title, sessionId: sid, requestId, started: false };
     const work = (async (): Promise<SessionStartResult> => {
       try {
+        if (recovery && previous) {
+          await updateSessionRecord(previous.claudeSessionId, { process_status: 'error', status_reason: 'api_error', status_changed_by: 'session-runner' });
+          await detachTaskSession(task.id, previous.claudeSessionId, 'confirmed recovery cancelled the previous pending start');
+        }
         if (callerSessionId) {
           const { createSessionRequest, buildReplyTrailer } = await import('../session-requests.js');
           const request = await createSessionRequest({
@@ -252,7 +291,7 @@ export function refuseDifferentPlace(
     + `continue it with task_send, or move the work with task_transfer {"id":"${task.id}"} to a new task on the other engine or host.`, 409);
 }
 
-async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<typeof getSessionsForTask>>[number]): Promise<void> {
+async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<typeof getSessionsForTask>>[number], keepRecord = false): Promise<void> {
   const attempt = task.last_start;
   const runtimeId = attempt?.runtime_id || attempt?.session_id || record?.claudeSessionId;
   if (!runtimeId) throw new QuickStartError(`Task ${task.id} has an unconfirmed start without a runtime identity. Read task_get; another start cannot be safely issued.`, 409);
@@ -275,8 +314,8 @@ async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<ty
       timer = setTimeout(() => reject(new Error('The execution host has not confirmed the previous start outcome')), 8_000);
     })]);
     if (result.alive) throw alreadyStarted(task, record?.claudeSessionId || '');
-    if (!result.ok || result.cancelled !== true) throw new Error(String(result.error || 'Previous start could not be cancelled'));
-    if (record) await updateSessionRecord(record.claudeSessionId, { process_status: 'error', status_reason: 'api_error', status_changed_by: 'session-runner' });
+    if (!result.ok || result.cancelled !== true || result.alive !== false) throw new Error(String(result.error || 'Previous start could not be cancelled'));
+    if (record && !keepRecord) await updateSessionRecord(record.claudeSessionId, { process_status: 'error', status_reason: 'api_error', status_changed_by: 'session-runner' });
   } catch (error) {
     if (error instanceof SessionExistsError) throw error;
     throw new QuickStartError(`Task ${task.id} still has an unconfirmed start: ${String(error)}. Retry task_start with this id after the host reconnects; do not create another task.`, 409);
@@ -311,44 +350,8 @@ export async function recordedCwd(task: Pick<Task, 'id' | 'project' | 'cwd' | 'p
 }
 
 async function prepareLaunch(task: Task, params: SessionStartParams) {
-  if (params.cwd !== undefined && !params.cwd.startsWith('/')) throw new QuickStartError('cwd must be an absolute path', 400);
-  if (params.mode !== undefined && !VALID_SESSION_MODE_IDS.has(params.mode)) {
-    throw new QuickStartError(`Invalid mode: ${params.mode}`, 400);
-  }
-  let model: string | undefined;
-  if (params.model && params.model !== 'default') {
-    model = resolveModelSwitchValue(params.model) ?? undefined;
-    if (!model) throw new QuickStartError(`Invalid model: ${params.model}. Use one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}`, 400);
-  }
-  const metadata = await getProjectMetadata(task.project || '');
-  // The task's own ready workspace: its cwd and host as ONE pair (core/workspaces/launch.ts).
-  const wsPlace = workspaceStartPlace(task, params);
-  let cwd = wsPlace?.cwd ?? params.cwd ?? await recordedCwd(task);
-  // A worker starting another task of its own project, with no place named and
-  // none recorded, runs it where the worker runs: host and cwd as ONE pair, so
-  // a path never lands on a machine it does not exist on (caller-placement.ts).
-  const pair = !cwd && params.host === undefined && params.callerSid
-    ? await inheritedLaunchPair(params.callerSid, task).catch(() => undefined)
-    : undefined;
-  const requestedHost = wsPlace ? wsPlace.host : params.host ?? (pair ? pair.host : metadata?.default_host);
-  const host = requestedHost === '__local__' || requestedHost === 'local' ? '' : requestedHost;
-  if (host && host !== '__local__' && host !== 'local') {
-    const { getConfig } = await import('../config-manager.js');
-    const entry = (await getConfig()).hosts?.[host];
-    if (!entry || entry.enabled === false) throw new QuickStartError(`Unknown host: ${host}`, 400);
-  }
-  cwd ||= pair?.cwd || metadata?.default_cwd;
-  if (!cwd) {
-    if (host && host !== '__local__' && host !== 'local') {
-      throw new QuickStartError(`Task ${task.id} needs a cwd on host "${host}". Pass cwd or set project default_cwd.`, 400);
-    }
-    const { PROJECTS_MEMORY_DIR } = await import('../../constants.js');
-    cwd = path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase());
-    await mkdir(cwd, { recursive: true });
-  }
-  return {
-    taskId: task.id, project: task.project, cwd, host, model,
-    mode: params.mode, engine: params.engine,
-    message: params.message?.trim() || task.description || `Working on task: ${task.title}`,
-  };
+  const launch = await resolveTaskLaunchReadOnly(task, params);
+  if (launch.createLocalDirectory) await mkdir(launch.cwd, { recursive: true });
+  const { createLocalDirectory, ...resolved } = launch;
+  return resolved;
 }

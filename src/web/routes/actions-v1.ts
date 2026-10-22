@@ -37,8 +37,8 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
-import { HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 import { requestOrigin } from '../middleware/request-origin.js'
+import { humanActionRefusal, humanActionApiBase } from '../../ops/human-action-policy.js'
 
 export const actionsV1Router = Router()
 
@@ -48,42 +48,6 @@ export const actionsV1Router = Router()
  * op still produces a real answer instead of a 504.
  */
 const ROUTE_DEADLINE_MS = 12_000
-
-/** Never invocable from a card — see the header. */
-const BLOCKED_OPS = new Set(['api'])
-
-/**
- * Confirmation floor. The registry's `destructive` tag is the real signal; these
- * names are pinned so a rename or a forgotten tag cannot quietly make a
- * one-click delete unconfirmed.
- */
-const DESTRUCTIVE_OPS = new Set(['task_delete', 'task_merge'])
-
-/**
- * The second half of the floor, for a different reason than data loss: these ops
- * EXECUTE CODE (session_start spawns a coding CLI with a model-chosen prompt,
- * cwd and permission mode; session_send types into a live one) or WRITE THE
- * USER'S DOCUMENTS (memory_write; note_write with an expectedHash overwrites an
- * existing note, without one it creates a new file in the vault; note_edit
- * rewrites a passage inside an existing note; note_attach drops a binary file
- * into the vault).
- *
- * The threat is not only a buggy model. The Personal AI reads task titles from
- * sync plugins, notes, and session transcripts, so any of those can steer it into
- * emitting a harmless-looking `label` over an arbitrary call — and the card face
- * shows the label, not the args. One click must not be enough for these.
- */
-const POWERFUL_OPS = new Set([
-  'task_create', 'task_start', 'task_send', 'session_start', 'session_send',
-  'memory_write', 'note_write', 'note_edit', 'note_attach',
-])
-
-/** Why `tool` may not run on a bare click, or null when a bare click is fine. */
-function confirmReason(tool: string, destructiveTag: boolean): string | null {
-  if (destructiveTag || DESTRUCTIVE_OPS.has(tool)) return `${tool} cannot be undone — confirm before running it`
-  if (POWERFUL_OPS.has(tool)) return `${tool} runs code or writes the user's documents — confirm before running it`
-  return null
-}
 
 function body(req: Request): Record<string, unknown> {
   const b = req.body
@@ -103,10 +67,7 @@ function callerSid(req: Request): string | undefined {
  * ephemeral or test server would mutate production data.
  */
 function apiBaseFor(req: Request): string {
-  const fromHost = Number(req.get('host')?.split(':')[1])
-  if (Number.isInteger(fromHost) && fromHost > 0) return `http://127.0.0.1:${fromHost}`
-  const local = req.socket.localPort
-  return `http://127.0.0.1:${Number.isInteger(local) && local! > 0 ? local : 3456}`
+  return humanActionApiBase(req)
 }
 
 /**
@@ -168,23 +129,12 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
       refuse(res, 400, 'unknown_tool', `Unknown action: ${tool}`, tool)
       return
     }
-    if (BLOCKED_OPS.has(tool)) {
-      refuse(res, 400, 'not_invocable', `${tool} cannot be invoked from an action card`, tool)
+    const policy = humanActionRefusal(op, requestOrigin(req), b.confirmed === true)
+    if (policy) {
+      refuse(res, policy.status, policy.code, policy.message, tool)
       return
     }
     const origin = requestOrigin(req)
-    if ((op.tags.localHostGateway || op.tags.remote === 'deny') && origin !== LOCAL_ORIGIN) {
-      const message = op.tags.localHostGateway
-        ? `${tool} refused: ${op.localOnlyMessage ?? HEALTH_LOCAL_ONLY_MESSAGE}`
-        : `${tool} runs only from the console on this Mac`
-      refuse(res, 403, 'local_only', message, tool)
-      return
-    }
-    const needsConfirm = confirmReason(tool, op.tags.destructive === true)
-    if (needsConfirm && b.confirmed !== true) {
-      refuse(res, 400, 'confirmation_required', needsConfirm, tool)
-      return
-    }
 
     const parsed = parseOpArgs(op, args)
     if (!parsed.ok) {
@@ -196,7 +146,7 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
     const startedAt = Date.now()
     const outcome = await executeOp(tool, parsed.args, {
       apiBase: apiBaseFor(req),
-      ...(sid ? { callerSid: sid } : {}),
+      callerMode: 'human',
       origin,
     })
     const ms = Date.now() - startedAt

@@ -2636,7 +2636,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
   try {
     const { title, project, priority, due_date: dueDate, start_date: startDate,
       end_date: endDate, description, pinned, focus_tier: focusTier, group_id: groupId,
-      launch_cwd: launchCwd, launch_host: launchHost, project_reason: projectReason } = (req.body ?? {}) as {
+      launch_cwd: launchCwd, launch_host: launchHost, project_reason: projectReason, idempotency_key: idempotencyKey, tags } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown
       project_reason?: unknown
@@ -2650,6 +2650,16 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       group_id?: unknown
       launch_cwd?: unknown
       launch_host?: unknown
+      idempotency_key?: unknown
+      tags?: unknown
+    }
+    if (tags !== undefined && (!Array.isArray(tags) || tags.some(value => typeof value !== 'string'))) {
+      sendError(res, 400, 'bad_request', 'tags must be an array of strings'); return
+    }
+    const { addTaskIdempotently, validateIdempotencyKey, TaskCreateConflict } = await import('../../core/task-create-idempotency.js')
+    if (idempotencyKey !== undefined) {
+      try { validateIdempotencyKey(idempotencyKey) }
+      catch (error) { sendError(res, 400, 'bad_request', String(error)); return }
     }
     if (typeof title !== 'string' || !title.trim()) {
       sendError(res, 400, 'bad_request', 'title must be a non-empty string')
@@ -2789,6 +2799,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       // immediately, so don't block the response on an external sync push.
       const createInput = {
         title: finalTitle,
+        ...(Array.isArray(tags) ? { tags: tags as string[] } : {}),
         ...(decision.project !== undefined ? { project: decision.project } : {}),
         ...(stampedCwd ? { cwd: stampedCwd } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
@@ -2809,9 +2820,12 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       let parentWarning: string | undefined
       // A session's task is its subtask wherever it lands (see caller-placement).
       let parentInput: { parent_task_id?: string } = decision.parentTaskId ? { parent_task_id: decision.parentTaskId } : {}
+      let reused = false
       const add = async (folder: { group_id?: string }): Promise<Awaited<ReturnType<typeof addTask>>['task']> => {
         try {
-          return (await addTask({ ...createInput, ...tierInput, ...parentInput, ...folder })).task
+          const result = await addTaskIdempotently({ ...createInput, ...tierInput, ...parentInput, ...folder }, idempotencyKey as string | undefined, req.body)
+          reused = result.reused
+          return result.task
         } catch (err) {
           // An INHERITED custom tier deleted since the caller was read: a tier
           // the body never named must not fail the create; Satellite instead.
@@ -2832,6 +2846,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       // decided after it, under the store lock (placeBesideCaller below), so a
       // folder that vanished since the caller was read can never fail a create.
       const created = await add(decision.group_id ? { group_id: decision.group_id } : {})
+      if (reused) { res.json({ task: projectTask(created), reused: true }); return }
       let task = created
       let folderCreated = false
       let folderLabel = decision.group_id && caller.kind === 'worker' && decision.group_id === caller.task.group_id
@@ -2904,6 +2919,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         },
       })
     } catch (err) {
+      if (err instanceof TaskCreateConflict) { sendError(res, 409, err.code, err.message); return }
       if (err instanceof ProjectSourceConflictError) {
         sendError(res, 409, 'conflict', err.message)
         return
@@ -4220,7 +4236,9 @@ apiV1Router.delete('/notes/*path', async (req: Request, res: Response, next: Nex
 // the rest of the v1 surface it is additive to.
 
 import { humanInboxV1Router } from './human-inbox-v1.js'
+import { humanInboxItemsV1Router } from './human-inbox-items-v1.js'
 
+apiV1Router.use(humanInboxItemsV1Router)
 apiV1Router.use(humanInboxV1Router)
 
 // ─── Action cards (one clicked registry op) ────────────────────────────────

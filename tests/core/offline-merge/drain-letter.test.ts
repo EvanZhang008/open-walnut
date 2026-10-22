@@ -22,6 +22,10 @@ vi.mock('../../../src/core/sessions/session-send-core.js', async (importOriginal
     return { delivery: 'queued' }
   }),
 }))
+vi.mock('../../../src/ops/executor.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/ops/executor.js')>()),
+  executeOp: vi.fn(async () => { throw new Error('Draining a letter must not execute its item actions') }),
+}))
 
 import { runOfflineHandover, _resetOfflineHandoverForTesting, _setHandoverBackoffForTesting } from '../../../src/core/offline-handover.js'
 import { addTask } from '../../../src/core/task-manager.js'
@@ -30,11 +34,14 @@ import { closeDb } from '../../../src/core/task-db.js'
 import { _resetHostClocksForTesting } from '../../../src/core/offline-merge/host-clock.js'
 import { conflictDir, readConflictLog, type ConflictEntry } from '../../../src/core/offline-merge/conflict-log.js'
 import { lookupJournaled } from '../../../src/core/offline-merge/ledger.js'
-import { getLetter, humanInboxPaths, listLetters, sendLetterOnce } from '../../../src/core/human-inbox/store.js'
+import { agentReply, getLetter, humanInboxPaths, listLetters, sendLetterOnce, setArchived, setPinned, setRead, writeItemReceipt } from '../../../src/core/human-inbox/store.js'
+import { readItemLedger } from '../../../src/core/human-inbox/item-ledger.js'
+import type { InboxItemReceipt, InboxLetterItem } from '../../../src/core/human-inbox/types.js'
 import { bus, type BusEvent } from '../../../src/core/event-bus.js'
+import { executeOp } from '../../../src/ops/executor.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { JOURNAL_V2_DRAINS } from '../../../src/providers/offline-journal-core.js'
-import { JHOME, journalHost, journalTmpDir, cleanupJournalDirs, jslice, gatewayCall } from '../../helpers/offline-journal-harness.js'
+import { JHOME, journalHost, journalLines, journalTmpDir, cleanupJournalDirs, jslice, gatewayCall } from '../../helpers/offline-journal-harness.js'
 
 const SID = 'efefefef-5555-4555-8555-555555555555'
 const HOST = 'devbox'
@@ -44,12 +51,32 @@ const ASK = {
   actions: [{ id: 'a', label: 'Layout A', description: 'denser' }, { id: 'b', label: 'Layout B' }],
 }
 
+const DIGEST_BODY = '## Mail digest\n\nThirty messages, each with its own available actions.\n'
+const DIGEST = { subject: 'Marina mail digest', type: 'info' as const, markdown: DIGEST_BODY }
+const mailItem = (id: string): InboxLetterItem => ({
+  id, subject: `Marina update ${id}`, summary: 'Details: \u{e9} \u{4e2d}\u{6587} \u{1f680}.\nKeep each mail action separate.',
+  source: { kind: 'mail', account: `account-${id}`, message: `message-${id}` },
+  display: {
+    sender: { name: 'Marina desk', address: 'desk@example.test' },
+    sentAt: '2026-10-14T09:30:00Z', accountLabel: `Mailbox ${id}`, accountHint: 'A neutral test mailbox',
+  },
+  actions: [
+    { id: `${id}-read`, kind: 'op', intent: 'mark_read' },
+    { id: `${id}-find`, kind: 'op', intent: 'find_task' },
+    { id: `${id}-create`, kind: 'op', intent: 'create_task' },
+    { id: `${id}-attach`, kind: 'op', intent: 'attach_task' },
+    { id: `${id}-ask`, kind: 'reply_ai', label: 'Ask about this mail', question: `Explain mail ${id}` },
+  ],
+})
+const digestItems = (): InboxLetterItem[] => Array.from({ length: 30 }, (_, n) => mailItem(`digest-${n}`))
+
 /** A host that saved letters, and the connection the Mac drains it over. */
 function hostWithLetters(opts: { journalV2?: boolean; dropAcks?: number; skew?: number; mutate?: (r: Record<string, unknown>) => Record<string, unknown> } = {}) {
   // `skew`: how far this host's clock runs ahead of the Mac's.
   const skew = opts.skew ?? 0
   const clock = { now: Date.now() + skew }
-  const h = journalHost(journalTmpDir(), clock, { letters: true })
+  const journalDir = journalTmpDir()
+  const h = journalHost(journalDir, clock, { letters: true })
   h.host.configure(jslice())
   const calls: Array<{ cmd: string; params?: Record<string, unknown> }> = []
   const gone = new Set<string>()
@@ -83,7 +110,7 @@ function hostWithLetters(opts: { journalV2?: boolean; dropAcks?: number; skew?: 
     if (!r.ok) throw new Error(JSON.stringify(r))
     return r.result as { letterId: string; seq: number }
   }
-  return { ...h, clock, conn, calls, gone, write, handed: () => handed }
+  return { ...h, journalDir, clock, conn, calls, gone, write, handed: () => handed }
 }
 
 const settle = (ms = 30) => new Promise((r) => setTimeout(r, ms))
@@ -111,6 +138,7 @@ beforeEach(async () => {
   fs.rmSync(conflictDir(), { recursive: true, force: true })
   told.texts.length = 0
   seen.length = 0
+  vi.mocked(executeOp).mockClear()
   bus.subscribe('test-drain-letter', (e) => { seen.push(e) }, { global: true })
   if (!taskId) {
     taskId = (await addTask({ title: 'Marina page', project: 'Acme' } as never)).task.id
@@ -172,6 +200,138 @@ describe('a letter saved on the host reaches the inbox as if sent online', () =>
     const letters = await sessionLetters()
     expect(letters.map((l) => l.id).sort()).toEqual([...ids].sort())
     expect(newLetterEvents()).toHaveLength(5)
+  })
+})
+
+describe('typed mail items survive the offline letter journal', () => {
+  it('drains all thirty items exactly once without executing their actions', async () => {
+    const h = hostWithLetters({ dropAcks: 2 })
+    const items = digestItems()
+    const { letterId } = await h.write({ ...DIGEST, items })
+    const rec = h.journal.records(JHOME)[0] as unknown as { opId: string; rev: number; args: { items: InboxLetterItem[] } }
+    expect(h.journal.records(JHOME)).toHaveLength(1)
+    expect(rec.args.items).toEqual(items)
+    expect(journalLines(h.journalDir).map(line => JSON.parse(line))).toEqual([
+      expect.objectContaining({ v: 2, h: 1, home: JHOME, nextSeq: 1 }),
+      expect.objectContaining({ kind: 'letter', letterId, args: expect.objectContaining({ items }) }),
+    ])
+    const executionBefore = await readItemLedger()
+
+    await drain(h.conn)
+    await drain(h.conn)
+
+    const saved = (await getLetter(letterId))!
+    expect(saved).toMatchObject({ id: letterId, type: 'info', body: DIGEST_BODY, createdByOp: rec.opId })
+    expect(saved.items).toEqual(items.map(item => ({ ...item, receipts: [] })))
+    expect(saved.items).toHaveLength(30)
+    expect(saved.thread).toEqual([])
+    expect(saved.answered).toBeUndefined()
+    expect((await sessionLetters()).map(letter => letter.id)).toEqual([letterId])
+    expect(newLetterEvents()).toHaveLength(1)
+    expect(h.handed()).toBeGreaterThanOrEqual(3)
+    expect(h.journal.records(JHOME)).toEqual([])
+    expect(lookupJournaled({ hostKey: HOST, home: WALNUT_HOME, opId: rec.opId, rev: rec.rev })).toMatchObject({ outcome: 'applied' })
+    expect(await readItemLedger()).toEqual(executionBefore)
+    expect(executeOp).not.toHaveBeenCalled()
+    expect(told.texts).toEqual([])
+    expect(entries()).toEqual([])
+  })
+
+  it('a crash before the ledger and a lost ack preserve root items, thread items, receipts and reader flags on redrain', async () => {
+    // Ten lost acks keep the real journal pending across two separate handovers.
+    const h = hostWithLetters({ dropAcks: 10 })
+    const items = digestItems()
+    const { letterId } = await h.write({ ...DIGEST, items })
+    const rec = h.journal.records(JHOME)[0] as unknown as { opId: string; rev: number; args: { items: InboxLetterItem[] } }
+    expect(rec.args.items).toEqual(items)
+    const key = { hostKey: HOST, home: WALNUT_HOME, opId: rec.opId, rev: rec.rev }
+    expect(lookupJournaled(key)).toBeNull()
+    // The crashed drain sent the original letter but never recorded or acked the op.
+    const sent = await sendLetterOnce({ ...DIGEST, items, sender: { sessionId: SID, host: HOST } }, { id: letterId, opKey: rec.opId })
+    expect(sent.duplicate).toBe(false)
+    expect(sent.letter).toMatchObject({ id: letterId, createdByOp: rec.opId })
+    expect(newLetterEvents()).toHaveLength(1)
+    const followup = mailItem('followup-mail')
+    await agentReply(letterId, { text: 'One more message arrived', markdown: '## Follow-up\n\nKeep this thread document.', items: [followup] })
+    const receipt: InboxItemReceipt = {
+      actionId: items[0].actions[0].id, requestId: 'digest-read-request', planId: 'digest-read-plan', planVersion: 1,
+      revision: 1, updatedAt: '2026-10-14T10:00:00Z', status: 'success', intent: 'mark_read', source: items[0].source,
+      input: {}, stage: 'finished', recovery: [],
+    }
+    await writeItemReceipt(letterId, items[0].id, receipt)
+    const newerReceipt = { ...receipt, revision: 2, updatedAt: '2026-10-14T10:01:00Z' }
+    await writeItemReceipt(letterId, items[0].id, newerReceipt)
+    await setRead(letterId, true)
+    await setPinned(letterId, true)
+    await setArchived(letterId, true)
+    const before = (await getLetter(letterId))!
+    expect(before.items).toEqual(items.map((item, n) => ({ ...item, receipts: n === 0 ? [newerReceipt] : [] })))
+    expect(before.thread).toEqual([expect.objectContaining({
+      from: 'agent', text: 'One more message arrived', body: '## Follow-up\n\nKeep this thread document.',
+      items: [{ ...followup, receipts: [] }],
+    })])
+    expect(before).toMatchObject({ read: true, pinned: true, archived: true, body: DIGEST_BODY, createdByOp: rec.opId })
+    const executionBefore = await readItemLedger()
+    seen.length = 0
+
+    await drain(h.conn)
+    expect(h.journal.records(JHOME)).toHaveLength(1)
+    expect(lookupJournaled(key)).toMatchObject({ outcome: 'applied' })
+    expect(await getLetter(letterId)).toEqual(before)
+    await drain(h.conn)
+
+    expect(h.handed()).toBeGreaterThanOrEqual(11)
+    expect(h.journal.records(JHOME)).toEqual([])
+    expect(await getLetter(letterId)).toEqual(before)
+    const kept = await sendLetterOnce({ ...DIGEST, items, sender: { sessionId: SID, host: HOST } }, { id: letterId, opKey: rec.opId })
+    expect(kept.duplicate).toBe(true)
+    expect(kept.letter).toEqual((await listLetters({ archived: true })).letters[0])
+    expect((await listLetters()).letters).toEqual([])
+    expect((await listLetters({ archived: true })).letters.map(letter => letter.id)).toEqual([letterId])
+    expect(newLetterEvents()).toHaveLength(0)
+    expect(await readItemLedger()).toEqual(executionBefore)
+    expect(executeOp).not.toHaveBeenCalled()
+    expect(told.texts).toEqual([])
+    expect(entries()).toEqual([])
+  })
+
+  it.each([
+    ['an arbitrary tool', [{ ...mailItem('unsafe'), actions: [{ id: 'unsafe-read', kind: 'op', intent: 'mark_read', tool: 'arbitrary_tool' }] }], /actions\.0\.tool/],
+    ['arbitrary arguments', [{ ...mailItem('unsafe'), actions: [{ id: 'unsafe-read', kind: 'op', intent: 'mark_read', args: { account: 'another-account' } }] }], /actions\.0\.args/],
+    ['duplicate item ids', [mailItem('same'), { ...mailItem('other'), id: 'same' }], /Duplicate item or action id: same/],
+    ['duplicate action ids', [mailItem('one'), { ...mailItem('two'), actions: [{ id: 'one-read', kind: 'op', intent: 'mark_read' }] }], /Duplicate item or action id: one-read/],
+  ] as Array<[string, unknown[], RegExp]>)('rejects %s without saving a journal record', async (_label, items, message) => {
+    const h = hostWithLetters()
+    const result = await gatewayCall(h.host, SID, 'human_inbox_send', { ...DIGEST, items })
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad_request', message: expect.stringMatching(message) } })
+    expect(h.journal.records(JHOME)).toEqual([])
+    expect(journalLines(h.journalDir)).toEqual([])
+    expect(await sessionLetters()).toEqual([])
+    expect(executeOp).not.toHaveBeenCalled()
+  })
+
+  it('rejects metadata over 256 KiB honestly instead of dropping mail items', async () => {
+    const h = hostWithLetters()
+    // Every item is valid on its own; only the journal's aggregate metadata cap is exceeded.
+    const items = digestItems().map(item => ({ ...item, summary: 's'.repeat(10_000) }))
+    const args = { ...DIGEST, items }
+    expect(Buffer.byteLength(JSON.stringify({ subject: args.subject, type: args.type, items }), 'utf8')).toBeGreaterThan(256 * 1024)
+    const result = await gatewayCall(h.host, SID, 'human_inbox_send', args)
+    expect(result).toMatchObject({
+      ok: false, error: { code: 'bad_request', message: "the letter's fields are too large to save on this host (limit 262144 bytes besides the body)" },
+    })
+    expect(h.journal.records(JHOME)).toEqual([])
+    expect(journalLines(h.journalDir)).toEqual([])
+    expect(items).toHaveLength(30)
+    expect(items.every(item => item.summary.length === 10_000)).toBe(true)
+    expect(await sessionLetters()).toEqual([])
+    expect(newLetterEvents()).toHaveLength(0)
+    // A smaller retry keeps all thirty items rather than inheriting any truncated save.
+    const retryItems = digestItems()
+    await h.write({ ...DIGEST, items: retryItems })
+    expect(h.journal.records(JHOME)).toHaveLength(1)
+    expect(h.journal.records(JHOME)[0].args).toMatchObject({ items: retryItems })
+    expect(executeOp).not.toHaveBeenCalled()
   })
 })
 

@@ -97,6 +97,7 @@ struct LetterThreadEntry: Codable, Equatable, Identifiable {
     /// server after the delivery attempt. Absent while it runs and on servers
     /// that predate the field.
     let delivery: LetterTurnDelivery?
+    @LossyInboxItems var items: [InboxEmailItem]? = nil
 
     /// Stable within one letter: the store appends turns and never reorders.
     var id: String { "\(from)|\(at ?? 0)|\(bodyFile ?? "")" }
@@ -144,6 +145,7 @@ struct Letter: Codable, Identifiable, Equatable {
     let bodyDeferred: Bool?
     /// Relative path of the streaming route (`/api/v1/human-inbox/:id/body`).
     let bodyUrl: String?
+    @LossyInboxItems var items: [InboxEmailItem]? = nil
 
     var kind: LetterKind { LetterKind(type) }
     var isRead: Bool { read ?? false }
@@ -294,6 +296,8 @@ struct LetterListResponse: Codable {
 /// GET /api/v1/human-inbox/:id and the read/pin/archive toggles → { letter }.
 struct LetterResponse: Codable {
     let letter: Letter
+    var servedFrom: String? = nil
+    var capabilities: InboxItemCapabilities? = nil
 }
 
 /// How far a human answer/reply got toward the origin session.

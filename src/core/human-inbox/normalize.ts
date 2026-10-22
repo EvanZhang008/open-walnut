@@ -19,6 +19,7 @@ import {
   type ThreadEntryDelivery,
 } from './types.js';
 import { truncatePreview } from './preview.js';
+import { normalizeItems, disableDuplicateItems } from './item-schema.js';
 
 /** `lt-<timestamp36>-<rand>` — the only id shape that can name a body file. */
 export const LETTER_ID_RE = /^lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}$/;
@@ -83,6 +84,7 @@ function normalizeThread(raw: unknown): ThreadEntry[] {
       ...(from === 'human' && typeof e.clientId === 'string' && CLIENT_ID_RE.test(e.clientId)
         ? { clientId: e.clientId } : {}),
       ...(from === 'human' ? normalizeDelivery(e.delivery) : {}),
+      ...(from === 'agent' && e.items !== undefined ? { items: normalizeItems(e.items) } : {}),
     });
   }
   return out;
@@ -128,7 +130,7 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     ? (r.answered as Record<string, unknown>)
     : null;
   const actions = normalizeActions(r.actions);
-  return {
+  return disableDuplicateItems({
     id: r.id,
     subject: str(r.subject, '(no subject)'),
     type,
@@ -150,6 +152,7 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     ...(typeof r.archivedAt === 'number' && r.archivedAt > 0 ? { archivedAt: r.archivedAt } : {}),
     thread: normalizeThread(r.thread),
     ...(actions ? { actions } : {}),
+    ...(r.items !== undefined ? { items: normalizeItems(r.items) } : {}),
     ...(answered && typeof answered.actionId === 'string'
       ? {
         answered: {
@@ -165,7 +168,7 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
       : {}),
     // A rewrite must keep it: it is what makes a redrain of the same journal op a no-op.
     ...(typeof r.createdByOp === 'string' && r.createdByOp ? { createdByOp: r.createdByOp } : {}),
-  };
+  });
 }
 
 /** Wrong version / non-array letters → fresh store, same as the notif store. */

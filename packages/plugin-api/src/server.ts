@@ -1,4 +1,6 @@
 export type * from './shared.js'
+export type * from './inbox-items.js'
+import type { InboxLetterItem } from './inbox-items.js'
 export { WalnutPluginError } from './shared.js'
 
 import type {
@@ -55,6 +57,7 @@ export interface TaskCreateInput {
   dueDate?: string
   startDate?: string
   endDate?: string
+  idempotency_key?: string
 }
 
 export interface TaskPatch {
@@ -546,6 +549,7 @@ export interface LetterSendInput {
   text?: string
   /** Present makes this a decision the human must answer; absent makes it a document. */
   actions?: LetterActionInput[]
+  items?: InboxLetterItem[]
   taskRefs?: string[]
   pin?: boolean
 }
@@ -590,7 +594,7 @@ export interface LetterAnsweredEvent {
 export interface LettersService {
   send(input: LetterSendInput): Promise<{ letterId: string }>
   /** Add a turn to the letter's thread, so the human sees what happened after they answered. */
-  reply(letterId: string, input: { markdown?: string; html?: string; text?: string }): Promise<void>
+  reply(letterId: string, input: { markdown?: string; html?: string; text?: string; items?: InboxLetterItem[] }): Promise<void>
   /**
    * Take the question back: the letter is answered server-side with the action id
    * `withdrawn` and your note, and nothing is delivered. Use it the moment the thing the

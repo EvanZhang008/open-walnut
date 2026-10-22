@@ -32,6 +32,7 @@ final class InboxStore {
     /// The Archived shelf — kept SEPARATE so browsing it can never zero the
     /// unread badge or hide a letter that still wants a decision.
     var archivedLetters: [Letter] = []
+    var itemAccess: [String: LetterResponse] = [:]
 
     var loading = false
     var loadingArchived = false
@@ -198,8 +199,9 @@ final class InboxStore {
     func detail(id: String) async throws -> Letter {
         let asked = stamp()
         do {
-            let letter = adoptRead(try await api.letter(id: id), askedAt: asked)
-            if isActive { merge(letter) }
+            let response = try await api.inboxLetterResponse(id: id)
+            let letter = adoptRead(response.letter, askedAt: asked)
+            if isActive { itemAccess[id] = response; merge(letter) }
             connection?.reportReachability(true, source: "inbox-rest")
             return letter
         } catch {

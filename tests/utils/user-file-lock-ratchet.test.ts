@@ -35,6 +35,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/bounded-memory.ts: this.filePath',                  // an agent's memory under WALNUT_HOME
   'src/core/cron/timer.ts: state.deps.storePath',               // the cron jobs store
   'src/core/device-store.ts: authFilePath()',                   // auth.json
+  'src/core/human-inbox/item-ledger.ts: FILE',                  // WALNUT_HOME/human-inbox/item-ledger.json
   'src/core/memory-telemetry.ts: file',                         // telemetry under WALNUT_HOME
   'src/core/notes-identity.ts: NOTES_INDEX_PATH',               // the notes index (not a note)
   'src/core/notes-indexer.ts: NOTES_INDEX_PATH',                // the notes index (not a note)

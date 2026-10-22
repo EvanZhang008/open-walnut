@@ -40,6 +40,12 @@ export function triageLetterBudgetText(): string {
   return [
     `Letters, per run: at most ${TRIAGE_SUMMARY_LETTERS_PER_RUN} summary letter`,
     '(type=review or info, with task_refs for every task you touched)',
+    'For every email listed, include an independent items entry bound to its exact account/message.',
+    'Keep safe cached display metadata and summary; never guess a source or a task target.',
+    'Use fixed op actions mark_read, find_task and create_task only where the human should act.',
+    'The human reviews task work in that item. Whole-letter actions only ask the AI a question.',
+    'An agent reply may append new items with human_inbox_reply, using new unique item/action IDs.',
+    'Label mailbox counts as a dated snapshot; groups and omitted-email counts have no actions.',
     'Send the summary only when this run has something for the user: a decision, or an item',
     'they need to know about. A run that only handed items to their tasks, updated notes or',
     'marked mail read sends no letter; State.md and the run journal record it.',
@@ -82,8 +88,10 @@ export function triageModeText(mode: TriageMode, autoMarkRead: boolean): string 
   return [
     'Mode: ask. On your own you may only read, update the triage and tracking notes, and hand an',
     `item to the task that already owns it (task_send)${autoMarkRead ? `. You may also ${TRIAGE_MARK_READ_RULE}` : ''}.`,
-    'Everything else goes to the user as a decision letter: creating or editing a task,',
-    `${autoMarkRead ? '' : 'marking mail read, '}unsubscribing. Sending mail, posting to Slack and marking Slack read`,
+    'Email work that needs confirmation goes in the summary as independent typed items:',
+    'use create_task or find_task for task work, and mark_read for a single email.',
+    'Other requests go to the user as a decision letter: editing a task or unsubscribing.',
+    'Sending mail, posting to Slack and marking Slack read',
     `always go through their approval ops (${TRIAGE_APPROVAL_OPS.join(', ')}).`,
     TRIAGE_NO_REMOVAL,
   ].join('\n');

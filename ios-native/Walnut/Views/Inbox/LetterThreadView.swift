@@ -27,6 +27,7 @@ struct LetterThreadView: View {
     var onRetryTurn: (LetterThreadEntry) -> Void = { _ in }
     var onRetryPending: (String) -> Void = { _ in }
     var onEditPending: (String) -> Void = { _ in }
+    var onOpenTask: (String, String?) -> Void = { _, _ in }
 
     /// The gap between replies.
     static let rowSpacing: CGFloat = 10
@@ -50,6 +51,9 @@ struct LetterThreadView: View {
                     switch item {
                     case .turn(let entry):
                         turn(entry)
+                        if !entry.isHuman {
+                            EmailItemsView(letterId: letter.id, items: entry.items ?? [], onOpenTask: onOpenTask)
+                        }
                         if entry.isHuman, let line = status(entry) {
                             LetterReplyStatusLine(
                                 status: line,

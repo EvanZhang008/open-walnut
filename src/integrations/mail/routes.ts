@@ -297,6 +297,15 @@ export function registerMailRoutes(
       // what lets a double click, a retry and an agent re-reading its transcript all be safe.
       return { status: answered.created ? 201 : 200, json: answered }
     } catch (error) {
+      if (error instanceof Error && /^Target deleted:/.test(error.message)) {
+        return { status: 409, json: { error: 'target_deleted', message: error.message } };
+      }
+      if (error instanceof Error && /^Target unavailable:/.test(error.message)) {
+        return { status: 503, json: { error: 'target_unavailable', message: error.message } };
+      }
+      if (error instanceof Error && 'code' in error && error.code === 'source_conflict') {
+        return { status: 409, json: { error: 'source_conflict', message: error.message } };
+      }
       return errorReply(walnut, error)
     }
   })

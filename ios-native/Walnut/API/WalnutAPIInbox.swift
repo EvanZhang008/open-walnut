@@ -21,6 +21,12 @@ protocol InboxTransport {
     func setLetterArchived(id: String, archived: Bool) async throws -> Letter
     func answerLetter(id: String, actionId: String, freeText: String?) async throws -> LetterActionResult
     func replyToLetter(id: String, text: String) async throws -> LetterActionResult
+    func inboxLetterResponse(id: String) async throws -> LetterResponse
+}
+extension InboxTransport {
+    func inboxLetterResponse(id: String) async throws -> LetterResponse {
+        LetterResponse(letter: try await letter(id: id))
+    }
 }
 
 extension WalnutAPI: InboxTransport {}
@@ -36,8 +42,10 @@ extension WalnutAPI {
     /// One letter with its body and every rich thread turn inlined.
     /// 404 not_found for an unknown/expired id.
     func letter(id: String) async throws -> Letter {
-        let response: LetterResponse = try await get("/human-inbox/\(escape(id))")
-        return response.letter
+        try await inboxLetterResponse(id: id).letter
+    }
+    func inboxLetterResponse(id: String) async throws -> LetterResponse {
+        try await get("/human-inbox/\(escape(id))")
     }
 
     /// Read state. The LETTER store is canonical here — the notification

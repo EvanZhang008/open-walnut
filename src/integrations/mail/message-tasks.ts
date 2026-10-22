@@ -6,17 +6,15 @@
  * IDEMPOTENCE. "Make a task from this mail" is a button, an agent tool and an HTTP route, and all
  * three get pressed twice: a double click, a retry after a route hit its response budget, an agent
  * that re-reads its own transcript. So the ledger is consulted first and a second ask is answered
- * with the SAME task id and `created: false`. The one case that does create again is a task the
- * human deleted, because refusing there would leave a message that can never be turned into a task
- * again, and pointing at a dead id would show the console a pill that opens nothing.
+ * with the SAME task id and `created: false`. A deleted original retains its source binding and
+ * returns Target deleted. A read failure returns Target unavailable. Neither permits a replacement.
  *
  * Idempotence has to hold for asks that OVERLAP, not just for asks that follow one another, and a
  * read-then-create is not idempotent on its own: two calls landing together both read an empty
  * ledger, both create, and one of the two tasks is orphaned with nothing pointing at it. Two things
- * close that, in this order. `inFlight` makes a second ask for the same message WAIT for the first
- * and report its answer, which is what the button, the route and the tool all actually want. And
- * `claimMessageTask` is a conditional insert that answers with the winner, so the database decides
- * even if a caller ever reaches this class from somewhere the map does not cover.
+ * close that: a shared durable source claim reserves the exact task ID before create, and the
+ * task adapter atomically inserts that ID with a payload fingerprint. `inFlight` only lets same-process
+ * callers wait for the first result. The claim survives another process and an interrupted write.
  *
  * UNTRUSTED TEXT. A subject, a display name and a snippet were all typed by whoever sent the mail.
  * Every one of them is control-stripped, and every one that lands in a field Walnut renders as
@@ -30,6 +28,7 @@
  * visible in one place is what makes the property checkable by reading.
  */
 import { escapeMarkdown, quotedMarkdown } from './render.js'
+import { claimSourceTask, markSourceTaskCreated, sourcePairKey } from '../../core/source-task-claims.js'
 import { oneLine, truncateUtf8 } from './untrusted.js'
 import type { MailMessageDto } from './contract.js'
 import type { MailEvents } from './events.js'
@@ -175,6 +174,7 @@ export interface MessageTaskHost {
     description?: string
     project?: string
     tags?: string[]
+    idempotency_key?: string
   }): Promise<{ id: string }>
   appendNote(id: string, markdown: string): Promise<void>
 }
@@ -273,39 +273,32 @@ export class MailMessageTasks {
     message: MailMessageDto,
     input: MessageTaskInput,
   ): Promise<MessageTaskResult> {
-    const existing = await this.deps.store.tasks.getMessageTask(key)
-    if (existing) {
-      // The task the ledger points at may be gone: the human deleted it, or a data restore rolled
-      // it back. `get` is what tells us, and a dead id is repointed rather than reported.
-      const alive = await this.deps.tasks.get(existing.task_id).catch(() => null)
-      if (alive) return { taskId: existing.task_id, created: false }
-    }
-
     const accountLabel = await this.deps.read.accountLabel(input.accountId)
-    const title = oneLine(input.title ?? '') || taskTitleOf(message.subject)
-    const task = await this.deps.tasks.create({
-      title,
+    const payload = {
+      title: oneLine(input.title ?? '') || taskTitleOf(message.subject),
       description: taskDescriptionOf({ message, accountLabel }),
-      ...(input.project ? { project: input.project } : {}),
-      tags: [MAIL_TASK_TAG],
-    })
-    const winner = await this.deps.store.tasks.claimMessageTask({
-      key,
-      accountId: input.accountId,
-      messageId: input.messageId,
-      taskId: task.id,
-      now: this.now,
-      ...(existing ? { replacing: existing.task_id } : {}),
-    })
-    // Someone else's task holds the key. The one just made is left in place rather than deleted: a
-    // task is the human's, deleting one to tidy a race is the more surprising of the two outcomes,
-    // and this is reachable only if a caller got past `inFlight`, which no path in Walnut does.
-    if (winner !== task.id) {
-      this.deps.log.warn('mail lost a race to link a message to a task', {
-        taskId: task.id, winner, accountId: input.accountId,
-      })
-      return { taskId: winner, created: false }
+      project: input.project ?? '', tags: [MAIL_TASK_TAG],
     }
+    const claim = await claimSourceTask({ key, pair: sourcePairKey(input.accountId, input.messageId), createPayload: payload,
+      adapter: {
+        legacyTaskId: async canonical => (await this.deps.store.tasks.getMessageTask(canonical))?.task_id,
+        writeLegacy: async (canonical, taskId) => {
+          const winner = await this.deps.store.tasks.claimMessageTask({ key: canonical, accountId: input.accountId, messageId: input.messageId, taskId, now: this.now });
+          if (winner !== taskId) throw new Error('The saved email task records disagree');
+        },
+      },
+    })
+    if (claim.created || claim.confirmed?.intent === 'attach_task') {
+      // A deleted or unreachable original keeps its binding. Neither is permission to recreate.
+      let alive: Awaited<ReturnType<MessageTaskHost['get']>>;
+      try { alive = await this.deps.tasks.get(claim.taskId); }
+      catch (error) { throw new Error(`Target unavailable: ${String(error).slice(0, 150)}`); }
+      if (!alive) throw new Error(`Target deleted: ${claim.taskId}. The email remains linked to its original task.`)
+      return { taskId: claim.taskId, created: false }
+    }
+    const task = await this.deps.tasks.create({ ...(claim.createPayload ?? payload) as typeof payload, idempotency_key: `mail-source:${key}` })
+    if (task.id !== claim.taskId) throw new Error('The task adapter did not honor the reserved email task identity')
+    await markSourceTaskCreated(key, task.id)
     this.deps.events.messageTasked(input.accountId, input.messageId, task.id)
 
     if (!input.note) return { taskId: task.id, created: true }

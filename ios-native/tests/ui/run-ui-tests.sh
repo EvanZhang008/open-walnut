@@ -46,7 +46,10 @@
 #                         below). Default unset. Exporting it alone is NOT enough —
 #                         like the two above it only reaches the runner through the
 #                         .xctestrun, which is why this script injects it.
-#   WALNUT_UITEST_UDID    simulator. Default: the booted one.
+#   WALNUT_UITEST_UDID    explicit gate simulator; must match WALNUT_UITEST_GATE_UDID.
+#   WALNUT_UITEST_GATE_UDID  simulator reserved for isolated UI verification.
+#   WALNUT_HEAVY_SLOT_SCRIPT  machine-wide heavy-command admission script.
+#   WALNUT_UITEST_ISOLATED=1  confirms the loopback fixture, never a paired live server.
 #   WALNUT_UITEST_DD      derived data path. Default: /tmp/walnut-uitest-dd.
 #
 # The default server is deliberately a dead port, and it touches nobody's data.
@@ -85,6 +88,24 @@ if [ -z "$UDID" ]; then
          | sed -n 's/.*(\([0-9A-F-]\{36\}\)) (Booted).*/\1/p' | head -1)
 fi
 [ -n "$UDID" ] || die "no booted simulator; boot one or set WALNUT_UITEST_UDID"
+if [ "${WALNUT_UITEST_INBOX_ITEMS:-}" = 1 ]; then
+  [ "$UDID" = "${WALNUT_UITEST_GATE_UDID:-}" ] || die "simulator must match explicit WALNUT_UITEST_GATE_UDID"
+  [ "${WALNUT_UITEST_ISOLATED:-}" = 1 ] || die "only an isolated fixture server is allowed"
+  [ -z "$ALLOW_SPRINGBOARD" ] || die "SpringBoard launch is not allowed on the gate runner"
+  python3 - "$SERVER" <<'PY' || die "server must be an isolated loopback port, never production"
+import sys, urllib.parse
+u = urllib.parse.urlparse(sys.argv[1])
+assert u.scheme == 'http' and u.hostname in ('127.0.0.1', 'localhost')
+assert u.port and u.port not in (3456, 3457)
+PY
+fi
+SLOT="${WALNUT_HEAVY_SLOT_SCRIPT:-}"
+run_heavy() {
+  if [ -n "$SLOT" ] && [ "${WALNUT_UITEST_HEAVY_HELD:-}" != 1 ]; then bash "$SLOT" "$@"; else "$@"; fi
+}
+if [ -n "$SLOT" ] && [ "${WALNUT_UITEST_HEAVY_HELD:-}" != 1 ]; then
+  exec bash "$SLOT" env WALNUT_UITEST_HEAVY_HELD=1 bash "${BASH_SOURCE[0]}" "$@"
+fi
 say "simulator $UDID"
 if [ "$SERVER" = "http://127.0.0.1:59999" ]; then
   say "pairing at the OFFLINE DEFAULT ($SERVER): enough for the voice/warm-delivery tests; pass WALNUT_UITEST_SERVER for anything needing real board content"
@@ -106,16 +127,24 @@ command -v xcodegen >/dev/null || die "xcodegen not on PATH"
 # reclaimed. TERM is trapped alongside EXIT because a bare `trap … EXIT` does NOT
 # run when a supervisor kills this script on a timeout, which leaks the lease and
 # blocks the machine for everyone.
-LOCK=/tmp/walnut-ios-sim.lock
+case "${SIM_LANE:-a}" in
+  a) LOCK=/tmp/walnut-ios-sim.lock ;;
+  b) LOCK=/tmp/walnut-ios-sim-b.lock ;;
+  *) die "SIM_LANE must be a or b" ;;
+esac
 # Release only a lease this process actually owns. A queuing run that gets killed
 # must not drop the ACTIVE holder's lease, which would unleash the exact
 # concurrency the lease exists to prevent.
 release_lease() { [ "$(cat "$LOCK/pid" 2>/dev/null || true)" = "$$" ] && rm -rf "$LOCK"; return 0; }
 took=no
 for attempt in $(seq 1 240); do
+  if [ -n "${WALNUT_SIM_QUEUE_SCRIPT:-}" ] && ! bash "$WALNUT_SIM_QUEUE_SCRIPT" may "${WALNUT_SIM_QUEUE_NAME:-inbox-items}"; then
+    sleep 15; continue
+  fi
   if mkdir "$LOCK" 2>/dev/null; then
     echo "$$" > "$LOCK/pid"
     trap release_lease EXIT INT TERM HUP
+    if [ -n "${WALNUT_SIM_QUEUE_SCRIPT:-}" ]; then bash "$WALNUT_SIM_QUEUE_SCRIPT" taken "${WALNUT_SIM_QUEUE_NAME:-inbox-items}"; fi
     took=yes; break
   fi
   holder=$(cat "$LOCK/pid" 2>/dev/null || true)
@@ -143,10 +172,11 @@ say "build-for-testing → $DD"
 # It is injected into the .xctestrun below, NOT merely exported: exporting it does
 # exactly nothing, which cost one run to discover even with this file's own warning
 # already written down.
-xcodebuild build-for-testing \
+run_heavy xcodebuild build-for-testing \
   -project "$PROJ" -scheme Walnut \
   -destination "platform=iOS Simulator,id=$UDID" \
   -derivedDataPath "$DD" -quiet \
+  -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   "TEST_RUNNER_WALNUT_UITEST_SERVER=$SERVER" \
   "TEST_RUNNER_WALNUT_UITEST_TOKEN=$TOKEN" \
   || die "build-for-testing failed"
@@ -163,10 +193,11 @@ say "xctestrun $XCTESTRUN"
 # The opt-in flag has no TEST_RUNNER_ path at all, so when it is requested the
 # injector must run even if the server variables did arrive on their own.
 if [ -n "$ALLOW_SPRINGBOARD" ] || [ -n "$ROW_ID" ] || [ -n "$ROW_QUERY" ] \
+  || [ "${WALNUT_UITEST_INBOX_ITEMS:-}" = 1 ] \
   || ! /usr/bin/plutil -p "$XCTESTRUN" | grep -q WALNUT_UITEST_SERVER; then
   say "injecting runner environment into the .xctestrun directly"
   python3 - "$XCTESTRUN" "$SERVER" "$TOKEN" "$ALLOW_SPRINGBOARD" "$ROW_ID" "$ROW_QUERY" <<'PY' || die "xctestrun injection failed"
-import plistlib, sys
+import os, plistlib, sys
 path, server, token, allow_springboard, row_id, row_query = sys.argv[1:7]
 with open(path, 'rb') as f: doc = plistlib.load(f)
 def inject(target):
@@ -174,6 +205,8 @@ def inject(target):
         env = dict(target.get(key) or {})
         env['WALNUT_UITEST_SERVER'] = server
         env['WALNUT_UITEST_TOKEN'] = token
+        if os.environ.get('WALNUT_UITEST_INBOX_ITEMS') == '1':
+            env['WALNUT_UITEST_INBOX_ITEMS'] = '1'
         # Absent, not empty: the test reads presence, and an empty string would
         # opt a caller in who never asked.
         for name, value in (
@@ -224,8 +257,14 @@ xcrun simctl privacy "$UDID" grant microphone "$BUNDLE" >/dev/null 2>&1 \
   || say "could not grant microphone (install the app once, then re-run)"
 
 say "test-without-building ${ONLY[*]}"
-xcodebuild test-without-building \
+RESULT_ARGS=()
+if [ -n "${WALNUT_UITEST_RESULT_BUNDLE:-}" ]; then
+  RESULT_ARGS=(-resultBundlePath "$WALNUT_UITEST_RESULT_BUNDLE")
+fi
+run_heavy xcodebuild test-without-building \
   -xctestrun "$XCTESTRUN" \
+  ${RESULT_ARGS[@]+"${RESULT_ARGS[@]}"} \
+  -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   -destination "platform=iOS Simulator,id=$UDID" \
   "${ONLY[@]}"
 rc=$?

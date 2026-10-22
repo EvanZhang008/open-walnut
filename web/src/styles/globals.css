@@ -29385,11 +29385,15 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   }
 
   /* Sidebar + slide-out panels — macOS sidebar material. */
-  .sidebar,
-  .notification-panel {
+  .sidebar {
     background: var(--glass-bg);
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
+  }
+
+  /* Text behind a reading panel must not depend on backdrop compositing. */
+  .notification-panel {
+    background: var(--bg);
   }
 
   /* Voice panel matches the sidebar surface — keep that intent, translucent. */
@@ -31436,7 +31440,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   border-left: 2px solid transparent;
   font-size: 12.5px;
   color: var(--fg-secondary);
-  transition: background 0.1s;
 }
 
 .nfc-rail-btn:hover { background: var(--bg-secondary); color: var(--fg); }

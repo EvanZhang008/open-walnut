@@ -27,6 +27,7 @@ import { log } from '../../../logging/index.js'
 // The store's own shapes: a letter id or body name the Mac's store accepts is one this copy accepts.
 import { BODY_FILE_RE, LETTER_ID_RE } from '../../human-inbox/normalize.js'
 import type { LetterRecord } from '../../human-inbox/types.js'
+import { mergeLetterItemFacts } from '../../human-inbox/item-merge.js'
 import { sha12 } from '../kind.js'
 import { createRowSetFollower, serialChain, writeCopyFile, writeCopyText, type RowSetFollower, type RowSetState } from '../kind-follower.js'
 import type { CopyKind } from './copy-kind.js'
@@ -204,7 +205,7 @@ export function inboxFollower(): RowSetFollower {
       for (const id of removeIds ?? []) byId.delete(id)
       for (const l of rows ?? []) {
         if (!byId.has(l.id)) ids.push(l.id)
-        byId.set(l.id, l)
+        byId.set(l.id, mergeLetterItemFacts(byId.get(l.id), l))
       }
       const listed: string[] = []
       const placed = new Set<string>()

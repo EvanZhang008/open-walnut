@@ -4840,7 +4840,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (event.name === 'session:error') {
       const { error, taskId, sessionId, errorKind } = eventData<'session:error'>(event)
       const isDeliveryFailure = errorKind === 'delivery_failed'
-      let shouldPublish = true
+      const { inboxOwnsStartFailure } = await import('../core/human-inbox/item-start-notification.js')
+      let shouldPublish = !(taskId && !isDeliveryFailure && await inboxOwnsStartFailure(taskId, sessionId).catch(() => false))
 
       // delivery_failed = connectivity status, not a turn outcome. The session is
       // still valid and the message batch is safely back in 'pending'. Avoid

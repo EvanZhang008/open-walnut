@@ -1070,8 +1070,8 @@ export function retryOpenMessageBody(): Promise<void> {
  * showing and says so in one line, because a link from a task made months ago is allowed to point
  * at a message the cache has since dropped.
  */
-export function openMailDeepLink(accountId: string, messageId: string): Promise<void> {
-  return run(`deep-link:${pairKey(accountId, messageId)}`, async () => {
+export function openMailDeepLink(accountId: string, messageId: string, options: { markRead?: boolean } = {}): Promise<void> {
+  return run(`deep-link:${pairKey(accountId, messageId)}:${options.markRead !== false}`, async () => {
     const seq = ++store.openSeq;
     try {
       const answer = await readMailMessage(accountId, messageId);
@@ -1092,7 +1092,8 @@ export function openMailDeepLink(accountId: string, messageId: string): Promise<
           taskError: null,
         },
       });
-      await markReadIfAllowed(answer.message);
+      // Inbox source navigation is a read-only preview, not a mail flag action.
+      if (options.markRead !== false) await markReadIfAllowed(answer.message);
     } catch (error) {
       const failure = mailFailure(error);
       log.warn('mail', 'deep link could not be opened', { accountId, messageId, error: failure.message });

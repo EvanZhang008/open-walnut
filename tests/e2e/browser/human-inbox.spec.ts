@@ -26,7 +26,7 @@ import { TINY_MP3_BASE64 } from './fixtures/tiny-audio'
 import { TINY_MP4_BASE64 } from './fixtures/tiny-video'
 import { LETTER_HTML_MAX_BYTES } from '../../../src/core/human-inbox/types.js'
 
-const SCREENSHOT_DIR = '/tmp/human-inbox'
+const SCREENSHOT_DIR = '/tmp/inbox-item-actions'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 
 /** Provenance header the ops executor sets (src/ops: CALLER_SID_HEADER). */
@@ -100,12 +100,13 @@ async function sendLetter(
 // ── UI helpers ──
 
 async function loadHome(page: Page): Promise<void> {
-  await page.goto('/')
+  const { home } = await import('./inbox-items-helpers')
+  await home(page)
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
 }
 
 async function openCenter(page: Page): Promise<Locator> {
-  await page.getByRole('button', { name: 'Notifications' }).click()
+  await page.getByRole('button', { name: /^Notifications/ }).click()
   const panel = page.locator('.notification-panel')
   await expect(panel).toBeVisible()
   return panel
@@ -222,6 +223,9 @@ test('an action_required letter arrives, reads in the reader, and one click answ
   const reader = page.locator('.hib-reader')
   await expect(reader).toBeVisible({ timeout: 15_000 })
   await expect(reader.locator('.hib-reader-subject')).toHaveText(DECISION_SUBJECT)
+  await expect(reader.locator('.hib-actions-head')).toHaveText('Ask AI decision')
+  await expect(reader.locator('.hib-actions')).toContainText('They do not directly change email or tasks.')
+  await expect(reader.locator('.hib-action-label').first()).toHaveText('Ask AI: Ship it now')
 
   // Email-client posture: popups only (so a link is not a dead click), never scripts.
   const frame = reader.locator('.hib-html-frame')

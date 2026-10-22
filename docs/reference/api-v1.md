@@ -3010,6 +3010,28 @@ usual (absent → `general`).
   regenerating joins that run, and closing the request stops the model turn
   once no other request waits on it. **REPLICA: 501**.
 
+### Independent Inbox email actions (additive)
+
+`human_inbox_send`, `human_inbox_reply` and plugin letters accept `items` independently of whole-letter decisions. Each item has an `id`, plain `subject` and `summary`, exact `source: {kind:"mail",account,message}`, optional display metadata and a timestamped `readObservation`. An action is `{id,kind:"op",intent}` with `mark_read`, `find_task`, `create_task` or `attach_task`, or `{id,kind:"reply_ai",label,question}`. Op labels, targets and arguments are rejected. Item and action IDs are unique across the letter and all thread entries. A corrupt stored item remains readable but cannot run.
+
+All item endpoints use `/api/v1/human-inbox/:letter/items/:item`:
+
+| Method and suffix | Request | Response |
+| --- | --- | --- |
+| POST `/prepare` | `actionId`, optional human `goal`, `title`, `project`, exact `selectedTaskId`, `retryStart`, `markReadAgain` | source, real project options, existing work, restrictions, receipts and an optional frozen plan |
+| POST `/execute` | **Only** `actionId`, `requestId`, `confirmed`, `planId`, `planVersion` | receipt and execution snapshot; 202 when accepted work is pending |
+| GET `/execution` | none | ordered revision receipts, exact current task status, read observation and restrictions |
+| GET `/tasks` | query/title/project/full ID; `offset`, `limit` (1 to 100) | `tasks`, `total`, `offset`, `limit`, `hasMore` |
+| GET `/tasks/:taskId` | exact full task ID | title/project/phase, recorded description/summary and available activity |
+
+Prepare never creates, starts or sends. Task work and repeat set-read require confirmation of the saved plan. Task changes, launch changes, source conflicts and completed tasks refuse the plan rather than silently changing it. Create uses `task_create` followed by `task_start`; an existing conversation uses `task_send` with a stable message ID. Source identity is cache-derived, and source bindings share the existing mail task ledger. A deleted task stays bound to its original ID, never automatically recreated. Only the human work goal and safely labelled source references enter the instruction.
+
+Execution facts are separate from letter read/answered flags and from current task status. A historical start means **Started**, not currently **Running**. Mail receipts require the plugin's first-line JSON to confirm the exact account, `read:true`, `changed:1` and no failed messages. Read history is exact-pair scoped, while task identity may share a trustworthy RFC message identity. Unknown outcomes can only be checked, not blindly retried. A confirmed worker death may offer review of a same-ID create retry or a start recovery. Start recovery first cancels the original pending start on its owning host, only after the human confirms; a live original or a host without that capability refuses it.
+
+Replica execution requires the primary. Relays always use remote HTTP trust, refuse local mail changes and never queue item mutations offline. A proven unsent relay reports `primary_unavailable` with `notSent:true`; a dispatched unknown result reports `status_unconfirmed`. Whole-letter `actions/invoke` retains its cloud refusal.
+
+`task_create`, `POST /tasks` and the plugin task adapter accept optional `idempotency_key`. Same key and create payload return one deterministic ID with `reused:true`; different payload returns 409 `idempotency_conflict`. Repeated create-and-start does not start the existing task again. Calls without a key retain their previous behavior.
+
 ### Human inbox replies (additive, 2026-09): `clientId` and a recorded `delivery` per turn
 
 `POST /api/v1/human-inbox/:id/human-reply` body `{ "text", "clientId"? }` → `{ letter, delivery }`, and `POST /api/v1/human-inbox/:id/answer` → `{ letter, delivery }`. The human turn is written to the letter thread BEFORE delivery to the origin session is tried, as before. Two additive fields make the outcome durable and a retry safe:

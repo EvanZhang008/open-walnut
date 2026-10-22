@@ -77,7 +77,8 @@ async function seedOptionlessLetter(): Promise<string> {
 }
 
 async function loadHome(page: Page): Promise<void> {
-  await page.goto('/')
+  const { home } = await import('./inbox-items-helpers')
+  await home(page)
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
 }
 

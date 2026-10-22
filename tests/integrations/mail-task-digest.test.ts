@@ -7,8 +7,8 @@
  *
  * - "Make a task" is IDEMPOTENT, for asks that follow one another AND for asks that overlap. A double
  *   click, a retry after a route ran out of budget and an agent re-reading its own transcript all
- *   answer with the same task id and `created: false`. The one case that creates again is a task the
- *   human deleted.
+ *   answer with the same task id and `created: false`. A deleted task keeps its source binding;
+ *   neither deletion nor a missing legacy SQL row permits a replacement.
  * - A SUBJECT CANNOT FORGE any document Walnut renders as markdown: the description's provenance
  *   lines, its quoted snippet, the digest letter's headings. The task TITLE is the deliberate
  *   exception and keeps the subject verbatim, because nothing renders a title as markdown.
@@ -50,7 +50,7 @@ import {
   renderDigest,
   type DigestAccountBlock,
 } from '../../src/integrations/mail/digest.js';
-import { MAIL_TASK_TAG, TASK_TITLE_CHARS } from '../../src/integrations/mail/message-tasks.js';
+import { MAIL_TASK_TAG, TASK_TITLE_CHARS, taskTitleOf } from '../../src/integrations/mail/message-tasks.js';
 import { MailSync, mailSyncForTesting, type MailSyncHost } from '../../src/integrations/mail/sync.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 
@@ -251,7 +251,7 @@ function envelopeOf(mailbox, uidValidity, message) {
     messageId: mailbox + ':' + uidValidity + ':' + message.uid,
     rfcMessageId: '<m' + message.uid + '.' + mailbox + '@example.invalid>',
     mailboxId: mailbox,
-    from: { name: 'Alice Nguyen', address: message.from },
+    from: { name: 'Fixture Sender', address: message.from },
     to: [{ address: 'me@example.invalid' }],
     // Both fields land in the payload blob rather than in a column, so they need no migration and
     // the console can offer Reply all without a second fetch.
@@ -300,7 +300,7 @@ export function activate(walnut) {
     },
     listAccounts: async () => [{
       accountId: '${ACCOUNT_ID}', providerId: 'tasky', displayName: 'Fixture mailbox',
-      address: 'alice@example.invalid', state: 'active',
+      address: 'sender@example.invalid', state: 'active',
     }],
     health: async () => ({ state: 'ok', checkedAt: Date.now() }),
     listMailboxes: async () => S().mailboxes.map((box) => {
@@ -330,7 +330,9 @@ export function activate(walnut) {
       if (!message) fail('not-found', 'no such message: ' + messageId);
       return { format: 'text', text: message.text, bytes: Buffer.byteLength(message.text) };
     },
-    markRead: async () => undefined,
+    markRead: async (accountId, messageId, read) => {
+      S().read = read ? [...new Set([...S().read, messageId])] : S().read.filter(one => one !== messageId);
+    },
     send: async () => fail('unsupported', 'the fixture does not send'),
     removeAccount: async (accountId) => { S().removed.push(accountId); },
   });
@@ -342,7 +344,7 @@ export function activate(walnut) {
 function message(uid: number, subject: string, text: string): FixtureMessage {
   return {
     uid,
-    from: 'alice@example.invalid',
+    from: 'sender@example.invalid',
     subject,
     text,
     // One day apart, so retention's "newest N" and the digest's "newest first" both have a real
@@ -394,7 +396,7 @@ beforeAll(async () => {
 
   const created = await api<{ account: { accountId: string } }>('POST', '/accounts', {
     providerId: 'tasky',
-    values: { address: 'alice@example.invalid' },
+    values: { address: 'sender@example.invalid' },
   });
   expect(created.status).toBe(201);
   await waitForMessages(MESSAGE_COUNT, 60_000);
@@ -434,7 +436,7 @@ describe('one message becomes one task', () => {
 
     // The provenance block: who, when, which account, and the way back. The link is the CORE app's
     // route with both ids percent-encoded, so an id containing a colon or an ampersand survives.
-    expect(task.description).toContain('From: Alice Nguyen &lt;alice@example.invalid&gt;');
+    expect(task.description).toContain('From: Fixture Sender &lt;sender@example.invalid&gt;');
     expect(task.description).toContain('Account: Fixture mailbox');
     // A markdown LINK, because the description is rendered as markdown and a bare path is a
     // copy-and-paste job. The route is the CORE app's with both ids percent-encoded, so an id
@@ -470,15 +472,11 @@ describe('one message becomes one task', () => {
     expect(task.project).toBe('Finance');
   });
 
-  it('creates a new task when the ledger points at one the human deleted', async () => {
-    await deleteTask(made[HOSTILE]!);
+  it('retains the original source claim even if a legacy SQL row is missing', async () => {
+    await runSql('DELETE FROM message_tasks WHERE rfc_message_id = ?', ['rfc:<m3.INBOX@example.invalid>']);
     const answered = await makeTask(HOSTILE);
-    expect(answered.status).toBe(201);
-    expect(answered.body.created).toBe(true);
-    expect(answered.body.taskId).not.toBe(made[HOSTILE]);
-    made[HOSTILE] = answered.body.taskId!;
-
-    // Repointed, not duplicated: one row per message, whatever happened to the task.
+    expect(answered.status).toBe(200);
+    expect(answered.body).toEqual({ taskId: made[HOSTILE], created: false });
     const ledger = await rows<{ task_id: string }>(
       'SELECT task_id FROM message_tasks WHERE rfc_message_id = ?',
       ['rfc:<m3.INBOX@example.invalid>'],
@@ -505,30 +503,28 @@ describe('a subject reaches the task the way the sender typed it', () => {
    * below and in `renderDigest`'s own block.
    */
   it('keeps the subject verbatim in the title, which is never rendered as markdown', async () => {
-    // No title this time, so the SUBJECT is what becomes the title.
-    await runSql('DELETE FROM message_tasks WHERE rfc_message_id = ?', ['rfc:<m3.INBOX@example.invalid>']);
+    // The pure title formatter is independent of the existing source binding.
+    const title = taskTitleOf(HOSTILE_SUBJECT);
+    expect(title).toBe(HOSTILE_SUBJECT);
+    expect(title).not.toContain('\\');
+    expect(title).not.toContain('&lt;');
     const answered = await makeTask(HOSTILE);
-    expect(answered.status).toBe(201);
-    made[HOSTILE] = answered.body.taskId!;
-    const task = await getTask(answered.body.taskId!);
-
-    expect(task.title).toBe(HOSTILE_SUBJECT);
-    expect(task.title).not.toContain('\\');
-    expect(task.title).not.toContain('&lt;');
+    expect(answered.status).toBe(200);
+    expect(answered.body.taskId).toBe(made[HOSTILE]);
   });
 
   it('escapes the description, which IS rendered as markdown', async () => {
     const task = await getTask(made[HOSTILE]!);
     // The sender's display name and the snippet are the untrusted halves of a markdown document
     // Walnut authors, so the angle brackets around an address are entities and cannot open a tag.
-    expect(task.description).toContain('From: Alice Nguyen &lt;alice@example.invalid&gt;');
-    expect(task.description).not.toContain('<alice@example.invalid>');
+    expect(task.description).toContain('From: Fixture Sender &lt;sender@example.invalid&gt;');
+    expect(task.description).not.toContain('<sender@example.invalid>');
     // And the snippet is quoted, so no amount of markup in it reads as one of the lines above it.
     expect(task.description).toContain('> A short body.');
   });
 
   it('bounds the title, so a subject cannot be a paragraph', async () => {
-    const answered = await makeTask(LONG);
+    const answered = await makeTask(LONG, { note: true });
     expect(answered.status).toBe(201);
     made[LONG] = answered.body.taskId!;
     const task = await getTask(answered.body.taskId!);
@@ -540,9 +536,9 @@ describe('note: true appends the body, bounded', () => {
   it('quotes the first 2 KB and says where the rest is', async () => {
     // Same message, and the ledger already has it: the note rides an EXISTING task rather than a
     // second one, which is what the idempotent shape has to allow for.
-    await runSql('DELETE FROM message_tasks WHERE rfc_message_id = ?', ['rfc:<m4.INBOX@example.invalid>']);
     const answered = await makeTask(LONG, { note: true });
-    expect(answered.status).toBe(201);
+    expect(answered.status).toBe(200);
+    expect(answered.body.created).toBe(false);
     expect(answered.body.noteSkipped).toBeUndefined();
     made[LONG] = answered.body.taskId!;
 
@@ -710,6 +706,16 @@ describe('the daily digest letter', () => {
     // tomorrow's digest would sit under a pin.
     expect(letter.type).toBe('info');
     expect(letter.actions ?? []).toEqual([]);
+    expect(letter.items).toHaveLength(2);
+    expect(letter.items?.map(item => item.source)).toEqual([
+      { kind: 'mail', account: ACCOUNT_ID, message: 'INBOX:100:6' },
+      { kind: 'mail', account: ACCOUNT_ID, message: 'INBOX:100:5' },
+    ]);
+    for (const item of letter.items ?? []) {
+      expect(item.actions.map(action => action.kind === 'op' && action.intent)).toEqual(['mark_read', 'find_task', 'create_task']);
+      expect(item.display?.sentAt).toBeTruthy();
+      expect(item.readObservation?.read).toBe(false);
+    }
     expect(letter.pinned ?? false).toBe(false);
     // SIX, from the mailbox the provider reports, which is the same number the sidebar badge shows.
     // The cache holds only five of them by now (retention evicted `Ancient` above), and that gap is
@@ -719,11 +725,12 @@ describe('the daily digest letter', () => {
     expect(letter.subject).toBe('Mail digest: 6 unread across 1 account');
 
     const body = await letterBody(letter.id);
+    expect(body).toContain('Mailbox snapshot at');
     expect(body).toContain('### Fixture mailbox (6 unread)');
     // Newest first, capped at `digest_max_items`, with the remainder counted rather than guessed
     // from the length of a truncated page.
-    expect(body).toContain('- **Alice Nguyen**: Fifth (');
-    expect(body).toContain('- **Alice Nguyen**: Fourth (');
+    expect(body).toContain('- **Fixture Sender**: Fifth (');
+    expect(body).toContain('- **Fixture Sender**: Fourth (');
     expect(body).not.toContain('Kickoff');
     expect(body).toContain('and 4 more');
     // A markdown link, so the one thing this letter asks for is one tap on a phone.
@@ -732,6 +739,33 @@ describe('the daily digest letter', () => {
     expect(eventsOf('digest-sent')).toEqual([{ letterId: letter.id, unread: 6 }]);
     expect(await digestDay()).toBe(localDay(Date.now()));
   }, 120_000);
+
+  it('prepares a digest item from the real cache and executes only its exact email flag', async () => {
+    const letter = (await mailLetters())[0]!;
+    const item = letter.items![1]!;
+    const action = item.actions.find(action => action.kind === 'op' && action.intent === 'mark_read')!;
+    const root = `http://127.0.0.1:${port}/api/v1/human-inbox/${letter.id}/items/${item.id}`;
+    const prepare = await fetch(`${root}/prepare`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actionId: action.id }) });
+    expect(prepare.status).toBe(200);
+    const { plan } = await prepare.json();
+    expect(plan.ops).toEqual([{ tool: 'mail_mark_read', args: { account: ACCOUNT_ID, messages: ['INBOX:100:5'], read: true } }]);
+    const execute = await fetch(`${root}/execute`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actionId: action.id, requestId: 'digest-exact-read', planId: plan.id, planVersion: plan.version }) });
+    expect(execute.status).toBe(202);
+    await vi.waitFor(async () => {
+      const status = await (await fetch(`${root}/execution`)).json();
+      expect(status.receipts.at(-1).status).toBe('success');
+    });
+    expect(marks().read).toEqual(['INBOX:100:5']);
+    const persisted = await getLetter(letter.id);
+    expect(persisted?.answered).toBeUndefined();
+    expect(await letterBody(letter.id)).toContain('(6 unread)');
+    // Restore the fixture mailbox so later daily-count tests retain their original initial state.
+    marks().read = [];
+    await runSql('UPDATE messages SET flags_json = ?, seen = 0 WHERE message_id = ?', ['[]', 'INBOX:100:5']);
+    await runSql('UPDATE mailboxes SET unread = 6 WHERE account_id = ? AND role = ?', [ACCOUNT_ID, 'inbox']);
+  });
 
   it('sends nothing on the next tick of the same day', async () => {
     await mailSyncForTesting()!.runTick({ force: true });
@@ -997,6 +1031,7 @@ describe('the letter body is capped in bytes', () => {
       label: `Mailbox ${index}`,
       unread: 500,
       items: Array.from({ length: items }, (_, at) => ({
+        account: `acct:${index}`, message: `message-${at}`,
         sender: `Sender ${at}`,
         subject: 'S'.repeat(subjectChars),
         sentAt: Date.UTC(2026, 4, 10, 8, 0, 0) - at * 60_000,
@@ -1008,8 +1043,10 @@ describe('the letter body is capped in bytes', () => {
     const rendered = renderDigest([block(1, 50, 60), block(2, 50, 60), block(3, 50, 60)], Date.now());
     expect(rendered.subject).toBe('Mail digest: 1500 unread across 3 accounts');
     expect(Buffer.byteLength(rendered.markdown, 'utf8')).toBeLessThan(DIGEST_MAX_BYTES);
-    // Each account says how many it did not list, from its own count.
-    expect(rendered.markdown.match(/and 450 more$/gm)).toHaveLength(3);
+    // The 100-item contract cap drops the third whole account, body and items together.
+    expect(rendered.markdown.match(/and 450 more$/gm)).toHaveLength(2);
+    expect(rendered.markdown).toContain('and 1 more account');
+    expect(rendered.items).toHaveLength(100);
   });
 
   it('drops WHOLE accounts when the cap bites, and says how many', () => {

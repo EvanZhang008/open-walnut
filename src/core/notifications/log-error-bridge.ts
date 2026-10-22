@@ -376,6 +376,10 @@ export function installLogErrorNotifications(
         const initialized = !!rec && (!!rec.outputFile || rec.consumedOffset !== undefined);
         if (rec && isSideThreadLane(rec.lane) && initialized) return;
       }
+      if (payload.subsystem === 'session' && payload.message === 'transport start failed' && taskId) {
+        const { inboxOwnsStartFailure } = await import('../human-inbox/item-start-notification.js');
+        if (await inboxOwnsStartFailure(taskId, sessionId).catch(() => false)) return;
+      }
       await upsertNotification({
         kind: 'operation-error', severity: 'error', title, body,
         timestamp: now, dedupKey,

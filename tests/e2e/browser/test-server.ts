@@ -4179,6 +4179,10 @@ if (builtSpa && !process.env.WALNUT_WEB_STATIC_DIR) {
   throw new Error('PW_BUILT_SPA requires WALNUT_WEB_STATIC_DIR')
 }
 const apiServer = await startServer({ port: builtSpa ? testPort : 0, dev: !builtSpa })
+if (process.env.PW_INBOX_ITEMS_FIXTURE === '1') {
+  const { installInboxItemsFixture } = await import('./inbox-items-fixture')
+  await installInboxItemsFixture(tmpBase)
+}
 
 // The stale-question row needs a live pid. The health monitor's orphan dead-pool
 // stops any local running record with pid==null once last_status_change is >2

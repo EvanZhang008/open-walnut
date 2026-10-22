@@ -76,6 +76,14 @@ final class LocalDataResetTests: XCTestCase {
         // Drafts: the composer and letter replies.
         ComposerDrafts.shared.setDraft(marker, key: "reset-test")
         LetterReplyStore.shared.setDraft(marker, for: "l-reset-test")
+        let itemKey = InboxItemStoreTests.key
+        let emailItem = try InboxItemContractTests.item()
+        InboxItemStore.shared.seed([emailItem], letterId: itemKey.letter)
+        InboxItemStore.shared.activateDraft(itemKey, action: emailItem.actions[2])
+        var itemDraft = InboxItemStore.shared.draft(itemKey); itemDraft.input.goal = marker
+        InboxItemStore.shared.setDraft(itemDraft, key: itemKey)
+        InboxItemStore.shared.merge(.init(itemId: itemKey.item, receipts: [try InboxItemStoreTests.receipt()], currentTask: nil,
+            readObservation: nil, restrictions: [], receipt: nil), key: itemKey)
 
         // Unsent chat messages (the durable send queue) and disk caches.
         XCTAssertTrue(DurableStore.save([marker], key: "chat-send-queue"))
@@ -156,6 +164,12 @@ final class LocalDataResetTests: XCTestCase {
         XCTAssertNil(UserDefaults.standard.object(forKey: "walnut.composerDrafts"))
         XCTAssertEqual(LetterReplyStore.shared.draft(for: "l-reset-test"), "")
         XCTAssertNil(UserDefaults.standard.object(forKey: LetterReplyStore.storageKey))
+        XCTAssertNil(InboxItemStore.shared.draft(itemKey).input.goal)
+        XCTAssertTrue(InboxItemStore.shared.state(itemKey).receipts.isEmpty)
+        XCTAssertNil(InboxItemStore.shared.state(itemKey).source)
+        InboxItemStore.shared.activateDraft(itemKey, action: emailItem.actions[2])
+        XCTAssertNil(InboxItemStore.shared.draft(itemKey).input.goal)
+        InboxItemStore.shared.eraseAll()
 
         // Unsent messages and caches.
         let queue: [String]? = await DurableStore.loadAsync([String].self, key: "chat-send-queue")

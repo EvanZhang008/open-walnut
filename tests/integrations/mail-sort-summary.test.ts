@@ -6,8 +6,8 @@
 import { describe, expect, it } from 'vitest'
 import { MailDigest, renderDigest, renderGroupedDigest } from '../../src/integrations/mail/digest.js'
 
-const MARINA = 'marina:robin@marina.example.invalid'
-const FERRY = 'ferry:robin.harbour@ferry.example.invalid'
+const MARINA = 'marina:reader@marina.example.invalid'
+const FERRY = 'ferry:reader.harbour@ferry.example.invalid'
 const NOW = 1_790_000_000_000
 // The middle dot of the spec's headline, as an escape (non-ASCII test data stays escaped).
 const DOT = '\u00b7'
@@ -23,12 +23,12 @@ function digestWith(grouped: boolean) {
   const letters: Array<{ subject: string; markdown?: string; text?: string }> = []
   const rows = new Map<string, ReturnType<typeof row>[]>([
     [MARINA, [
-      row(MARINA, 1, 'important', 'Carol Pier', 'Lunch on the quay Thursday?'),
+      row(MARINA, 1, 'important', 'Fixture Sender A', 'Lunch on the quay Thursday?'),
       row(MARINA, 2, 'u:build-results', 'Build Robot', 'Build 301 passed'),
-      row(MARINA, 3, null, 'Jo Quay', 'Re: slip 14 paperwork'),
+      row(MARINA, 3, null, 'Fixture Sender B', 'Re: slip 14 paperwork'),
       row(MARINA, 4, 'u:shopping', 'Shop Deals', 'Your weekend picks are here'),
     ]],
-    [FERRY, [row(FERRY, 5, 'important', 'Pier, Dana', 'Can you cover the late crossing?'), row(FERRY, 6, 's:name:change desk', 'Change Desk', '[Action Required] Change 5500')]],
+    [FERRY, [row(FERRY, 5, 'important', 'Fixture Sender C', 'Can you cover the late crossing?'), row(FERRY, 6, 's:name:change desk', 'Change Desk', '[Action Required] Change 5500')]],
   ])
   const counts = [
     { account_id: MARINA, grp: 'important', total: 9, unread: 2 },
@@ -53,8 +53,8 @@ function digestWith(grouped: boolean) {
     events: { digestSent: () => {} } as never,
     letters: { send: async (input) => { letters.push(input); return { letterId: `letter-${letters.length}` } } },
     accounts: async () => [
-      { accountId: MARINA, displayName: 'Marina', address: 'robin@marina.example.invalid', unreadInbox: 19 },
-      { accountId: FERRY, displayName: 'Ferry', address: 'robin.harbour@ferry.example.invalid', unreadInbox: 3 },
+      { accountId: MARINA, displayName: 'Marina', address: 'reader@marina.example.invalid', unreadInbox: 19 },
+      { accountId: FERRY, displayName: 'Ferry', address: 'reader.harbour@ferry.example.invalid', unreadInbox: 3 },
     ] as never,
     config: { get: async () => ({}) as never },
     log: { debug: () => {}, info: () => {}, warn: () => {} },
@@ -71,13 +71,13 @@ function digestWith(grouped: boolean) {
 describe('renderGroupedDigest', () => {
   it('headlines need-you and sorted counts and gives each group one line', () => {
     const rendered = renderGroupedDigest(
-      [{ accountId: MARINA, label: 'Marina', unread: 3, items: [{ sender: 'Carol Pier', subject: 'Lunch?', sentAt: NOW - 60_000 }] }],
+      [{ accountId: MARINA, label: 'Marina', unread: 3, items: [{ sender: 'Fixture Sender A', subject: 'Lunch?', sentAt: NOW - 60_000 }] }],
       [{ label: 'Build results', unread: 11 }, { label: 'Deals & shops', unread: 8 }],
       NOW,
     )
     expect(rendered.subject).toBe(`Mail digest: 3 need you ${DOT} 19 sorted into groups`)
-    expect(rendered.text).toBe(`3 need you ${DOT} 19 sorted into groups.`)
-    expect(rendered.markdown).toContain('- **Carol Pier**: Lunch?')
+    expect(rendered.text).toBe(`3 need you ${DOT} 19 sorted into groups. Mailbox snapshot at ${new Date(NOW).toISOString()}`)
+    expect(rendered.markdown).toContain('- **Fixture Sender A**: Lunch?')
     expect(rendered.markdown).toContain('- Build results: 11 unread')
     expect(rendered.markdown).toContain('- Deals &amp; shops: 8 unread')
     expect(rendered.unread).toBe(22)
@@ -97,9 +97,9 @@ describe('MailDigest with grouping on and off (C93)', () => {
     expect(result.letterId).toBe('letter-1')
     const letter = letters[0]!
     expect(letter.subject).toBe(`Mail digest: 3 need you ${DOT} 19 sorted into groups`)
-    expect(letter.markdown).toContain('Carol Pier')
-    expect(letter.markdown).toContain('Jo Quay')
-    expect(letter.markdown).toContain('Pier, Dana')
+    expect(letter.markdown).toContain('Fixture Sender A')
+    expect(letter.markdown).toContain('Fixture Sender B')
+    expect(letter.markdown).toContain('Fixture Sender C')
     // Mail in a group is counted on its group's line, never listed one by one.
     expect(letter.markdown).not.toContain('Build 301 passed')
     expect(letter.markdown).not.toContain('Your weekend picks')
