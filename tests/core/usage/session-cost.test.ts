@@ -61,6 +61,31 @@ describe('session cost', () => {
     close(haiku.costUsd, (1_000 * 0.1 + 1_000 * 0.5 + 50_000 * 0.01) / 1e6 + (1_000 * 0.5 + 1_000 * 2.5 + 150_000 * 0.05) / 1e6);
     expect(haiku.longResponses).toBe(1);
     expect(haiku.rates).toMatchObject({ threshold: 100_000, long: { input: 0.5 } });
+    // The cost table: one block per tier, each row tokens x its own tier's rate.
+    expect(haiku.tiers.map(t => [t.tier, t.responses])).toEqual([['base', 1], ['long', 1]]);
+    const long = haiku.tiers[1]!;
+    expect(long.lines.find(l => l.kind === 'cacheRead')).toMatchObject({ count: 150_000, rate: 0.05 });
+    close(long.lines.find(l => l.kind === 'cacheRead')!.costUsd, 150_000 * 0.05 / 1e6);
+    close(haiku.tiers.reduce((n, t) => n + t.costUsd, 0), haiku.costUsd!);
+    for (const t of haiku.tiers) close(t.lines.reduce((n, l) => n + l.costUsd, 0), t.costUsd);
+  });
+
+  it('sums buckets of one tier into one table row per token kind, with one cache write rate for OpenAI', async () => {
+    resetPriceBookForTests(SNAPSHOT);
+    const t = priceThresholds();
+    const band = t.indexOf(272_000) + 1;
+    const cost = await priceSessionScan(scan([
+      bucket({ model: 'gpt-6-1-sol', band, input: 100, cacheRead: 300_000, cacheWrite: 1_000, output: 10 }),
+      bucket({ model: 'gpt-6-1-sol', band, geo: 'us', input: 100, cacheRead: 300_000, cacheWrite: 1_000, output: 10 }),
+    ]), t);
+    const sol = cost.models[0]!;
+    expect(sol.tiers).toHaveLength(1);
+    const lines = sol.tiers[0]!.lines;
+    expect(lines.map(l => l.kind)).toEqual(['input', 'cacheWrite', 'cacheRead', 'output']);
+    expect(lines.find(l => l.kind === 'cacheWrite')).toMatchObject({ count: 2_000, rate: 5 });
+    // The US-only request's row cost carries its 1.1x; the rate column stays the list price.
+    close(lines.find(l => l.kind === 'cacheRead')!.costUsd, 300_000 * 0.2 / 1e6 * 2.1);
+    close(sol.tiers[0]!.costUsd, sol.costUsd!);
   });
 
   it('keeps the known part and counts what has no price, never as zero', async () => {
@@ -74,6 +99,7 @@ describe('session cost', () => {
     expect(cost.unpricedResponses).toBe(4);
     const unknown = cost.models.find(m => m.model === 'some-new-model')!;
     expect(unknown.costUsd).toBeNull();
+    expect(unknown.tiers).toEqual([]);
     expect(unknown.unpricedReason).toMatch(/no price for some-new-model/);
   });
 
@@ -121,6 +147,7 @@ describe('session cost', () => {
     resetPriceBookForTests(SNAPSHOT);
     const cost = await priceSessionScan(scan([bucket({ webSearches: 3 })]), priceThresholds());
     close(cost.totalUsd, 0.03);
+    expect(cost.models[0]!.tiers[0]!.lines.find(l => l.kind === 'webSearch')).toMatchObject({ count: 3, rate: 10 });
   });
 
   it('reports an unreadable session as unavailable with its reason, and an empty one as $0', async () => {

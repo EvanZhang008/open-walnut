@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { costHeadline, costModelLabel, costTimes, fmtDuration, fmtRates, fmtUsd } from '../../web/src/components/sessions/session-cost-format';
+import { costHeadline, costLineLabel, costModelLabel, costTimes, fmtCost, fmtDuration, fmtRates, fmtUsd, tierLabel, visibleLines } from '../../web/src/components/sessions/session-cost-format';
 import type { SessionCost } from '../../web/src/api/session-cost';
 
 const base: SessionCost = { sessionId: 's', engine: 'claude', source: 'claude-transcript', status: 'priced', totalUsd: 29.1949,
@@ -33,5 +33,17 @@ describe('session cost format', () => {
     expect(fmtRates({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, cacheWrite1h: 8 }))
       .toBe('$4 in · $20 out · $0.2 cache read · $5 / $8 cache write (5m / 1h)');
     expect(fmtRates({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }, true)).toBe('$2 in · $10 out · $0.1 cache read · $2.5 cache write');
+  });
+
+  it('labels the cost table: amounts with cents, tiers by their threshold, unused rows hidden', () => {
+    expect([fmtCost(1234.5), fmtCost(0.16), fmtCost(0.0031), fmtCost(0)]).toEqual(['$1,234.50', '$0.16', '$0.0031', '$0']);
+    const tier = { tier: 'long' as const, responses: 746, costUsd: 1, lines: [
+      { kind: 'input' as const, count: 10, rate: 4, costUsd: 0.00004 },
+      { kind: 'cacheWrite1h' as const, count: 0, rate: 8, costUsd: 0 },
+    ] };
+    expect(tierLabel(tier, 272_000)).toBe('Prompt over 272K · 746 requests');
+    expect(tierLabel({ ...tier, tier: 'base', responses: 1 }, 272_000)).toBe('Prompt up to 272K · 1 request');
+    expect(tierLabel(tier)).toBe('');
+    expect(visibleLines(tier).map(l => costLineLabel(l.kind))).toEqual(['Input']);
   });
 });

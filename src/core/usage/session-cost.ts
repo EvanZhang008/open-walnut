@@ -20,6 +20,25 @@ export interface SessionCostRates extends PricingRates {
   singleCacheWrite?: boolean;
 }
 
+/** One row of a model's cost table: tokens (searches for webSearch) times a rate. */
+export interface SessionCostLine {
+  kind: 'input' | 'cacheWrite' | 'cacheWrite5m' | 'cacheWrite1h' | 'cacheRead' | 'output' | 'webSearch';
+  /** Tokens, or searches for webSearch. */
+  count: number;
+  /** USD per million tokens, or per thousand searches. */
+  rate: number;
+  /** What the row cost, the US-region surcharge included. */
+  costUsd: number;
+}
+
+/** The priced requests of one model at one prompt tier: base, or past the model's threshold. */
+export interface SessionCostTier {
+  tier: 'base' | 'long';
+  responses: number;
+  costUsd: number;
+  lines: SessionCostLine[];
+}
+
 export interface SessionCostModel {
   /** The model name as the engine reported it (normalized). */
   model: string;
@@ -36,6 +55,8 @@ export interface SessionCostModel {
   /** Responses billed at the US-only region surcharge (1.1x). */
   usRegionResponses: number;
   rates?: SessionCostRates;
+  /** Cost table per prompt tier, priced requests only. */
+  tiers: SessionCostTier[];
   priceSource?: { kind: PriceSourceKind; key: string; asOf?: string };
   firstAt: string;
   lastAt: string;
@@ -75,13 +96,15 @@ function ratesOf(entry: PricingEntry): SessionCostRates {
   };
 }
 
+interface BucketPrice { costUsd: number; long: boolean; lines: SessionCostLine[] }
+
 /** Price one bucket; a string is the reason it cannot be priced. */
-export function priceBucket(bucket: SessionCostBucket, entry: PricingEntry, thresholds: number[]): number | string {
+export function priceBucket(bucket: SessionCostBucket, entry: PricingEntry, thresholds: number[]): BucketPrice | string {
   if (bucket.tier !== 'standard') return `${bucket.tier} service tier has no price here`;
   if (!['global', 'us', ''].includes(bucket.geo)) return `region ${bucket.geo} has no price here`;
   const separate = entry.separateCacheCreation === true;
   if (!separate && bucket.cacheWrite > 0) return 'cache writes were reported without their 5m/1h split';
-  let long: boolean | undefined = false;
+  let long = false;
   if (entry.contextThreshold !== undefined && entry.longContext) {
     const index = thresholds.indexOf(entry.contextThreshold);
     if (index < 0) return 'request sizes were not grouped by this model\'s tier threshold';
@@ -101,8 +124,37 @@ export function priceBucket(bucket: SessionCostBucket, entry: PricingEntry, thre
     const missing = Object.entries(price.components).filter(([, v]) => v === null).map(([k]) => k);
     return `no rate for ${missing.join(', ') || 'these tokens'}`;
   }
-  const searches = bucket.model.startsWith('claude-') ? bucket.webSearches * WEB_SEARCH_USD : 0;
-  return price.costUsd + searches;
+  const rates = (long ? entry.longContext : entry) ?? entry;
+  const c = price.components;
+  const lines: SessionCostLine[] = [
+    { kind: 'input', count: bucket.input, rate: rates.input, costUsd: c.input ?? 0 },
+    ...(separate
+      ? [{ kind: 'cacheWrite' as const, count: writes, rate: rates.cacheWrite ?? 0, costUsd: c.cacheWrite ?? 0 }]
+      : [{ kind: 'cacheWrite5m' as const, count: bucket.cacheWrite5m, rate: rates.cacheWrite ?? 0, costUsd: c.cacheWrite5m ?? 0 },
+        { kind: 'cacheWrite1h' as const, count: bucket.cacheWrite1h, rate: rates.cacheWrite1h ?? 0, costUsd: c.cacheWrite1h ?? 0 }]),
+    { kind: 'cacheRead', count: bucket.cacheRead, rate: rates.cacheRead ?? 0, costUsd: c.cacheRead ?? 0 },
+    { kind: 'output', count: bucket.output, rate: rates.output, costUsd: c.output ?? 0 },
+  ];
+  const searches = bucket.model.startsWith('claude-') ? bucket.webSearches : 0;
+  if (searches > 0) lines.push({ kind: 'webSearch', count: searches, rate: WEB_SEARCH_USD * 1_000, costUsd: searches * WEB_SEARCH_USD });
+  return { costUsd: price.costUsd + searches * WEB_SEARCH_USD, long, lines };
+}
+
+/** Fold a priced bucket's rows into its model's tier table. */
+function addToTier(m: SessionCostModel, priced: BucketPrice, responses: number): void {
+  const tier = priced.long ? 'long' : 'base';
+  let t = m.tiers.find(x => x.tier === tier);
+  if (!t) {
+    t = { tier, responses: 0, costUsd: 0, lines: [] };
+    m.tiers.push(t);
+    m.tiers.sort((a, b) => (a.tier === 'base' ? 0 : 1) - (b.tier === 'base' ? 0 : 1));
+  }
+  t.responses += responses;
+  t.costUsd += priced.costUsd;
+  for (const line of priced.lines) {
+    const row = t.lines.find(l => l.kind === line.kind);
+    if (row) { row.count += line.count; row.costUsd += line.costUsd; } else t.lines.push({ ...line });
+  }
 }
 
 export async function priceSessionScan(scan: SessionCostScan, thresholds: number[], overrides?: Record<string, UserPriceRates>): Promise<SessionCostPayload> {
@@ -116,7 +168,7 @@ export async function priceSessionScan(scan: SessionCostScan, thresholds: number
     if (!m) {
       m = { model: bucket.model, speed, responses: 0,
         tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: 0 },
-        costUsd: null, unpricedResponses: 0, longResponses: 0, webSearches: 0, usRegionResponses: 0,
+        costUsd: null, unpricedResponses: 0, longResponses: 0, webSearches: 0, usRegionResponses: 0, tiers: [],
         ...(resolved ? { rates: ratesOf(resolved.entry), priceSource: { kind: resolved.source, key: resolved.sourceKey, ...(resolved.asOf ? { asOf: resolved.asOf } : {}) } } : {}),
         firstAt: bucket.firstAt, lastAt: bucket.lastAt };
       models.set(id, m);
@@ -129,9 +181,10 @@ export async function priceSessionScan(scan: SessionCostScan, thresholds: number
     if (bucket.lastAt > m.lastAt) m.lastAt = bucket.lastAt;
     const cost = resolved ? priceBucket(bucket, resolved.entry, thresholds)
       : `no price for ${bucket.model}${speed === 'fast' ? ' in fast mode' : ''}`;
-    if (typeof cost === 'number') {
-      m.costUsd = (m.costUsd ?? 0) + cost;
-      if (resolved?.entry.contextThreshold !== undefined && bucket.band > thresholds.indexOf(resolved.entry.contextThreshold)) m.longResponses += bucket.responses;
+    if (typeof cost !== 'string') {
+      m.costUsd = (m.costUsd ?? 0) + cost.costUsd;
+      addToTier(m, cost, bucket.responses);
+      if (cost.long) m.longResponses += bucket.responses;
       if (bucket.geo === 'us') m.usRegionResponses += bucket.responses;
     } else {
       m.unpricedResponses += bucket.responses;

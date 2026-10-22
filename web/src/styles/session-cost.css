@@ -106,5 +106,56 @@
 
 /* Several models open at once hold more than the details card's 260px. */
 .model-picker-details.session-cost {
-  max-height: 340px;
+  max-height: 420px;
+}
+
+/* A model's cost table: tokens x price per million = cost, grouped by prompt tier. */
+.session-cost-table {
+  width: 100%;
+  margin: 2px 0 4px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-cost-table th,
+.session-cost-table td {
+  padding: 1px 0 1px 12px;
+  text-align: right;
+  white-space: nowrap;
+  font-weight: normal;
+}
+
+.session-cost-table th:first-child {
+  padding-left: 0;
+  text-align: left;
+}
+
+.session-cost-table thead th {
+  color: var(--fg-muted, #888);
+  font-size: 0.92em;
+  border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+}
+
+.session-cost-table tbody td:last-child,
+.session-cost-table tfoot td {
+  color: var(--fg, inherit);
+}
+
+.session-cost-tier th,
+.session-cost-tier td {
+  padding-top: 5px;
+  color: var(--fg-muted, #888);
+  font-size: 0.92em;
+}
+
+.session-cost-table tbody tr:not(.session-cost-tier) th {
+  padding-left: 8px;
+}
+
+.session-cost-table tfoot th,
+.session-cost-table tfoot td {
+  padding-top: 3px;
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  font-weight: 600;
+  color: var(--fg, inherit);
 }

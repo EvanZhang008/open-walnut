@@ -8,8 +8,8 @@ import React from 'react';
 import { fetchSessionCost, type SessionCost, type SessionCostModel } from '@/api/session-cost';
 import { log } from '@/utils/log';
 import {
-  cacheWriteTokens, costHeadline, costModelLabel, costTimes, engineName, fmtPriceSource, fmtRate, fmtRates,
-  fmtTokenCount, fmtUsd,
+  cacheWriteTokens, costHeadline, costLineLabel, costModelLabel, costTimes, engineName, fmtCost, fmtPriceSource, fmtRate,
+  fmtRates, fmtTokenCount, fmtUsd, tierLabel, visibleLines,
 } from './session-cost-format';
 import '@/styles/session-cost.css';
 
@@ -20,6 +20,42 @@ interface Props {
   sessionId: string;
   /** The live CLI's own model time, when the picker already pulled it. */
   liveApiMs?: number | null;
+}
+
+/** Tokens × price per million = cost, one block per prompt tier, and the model's total. */
+function CostTable({ m }: { m: SessionCostModel }) {
+  const tiers = m.tiers ?? [];
+  const threshold = m.rates?.threshold;
+  return (
+    <table className="session-cost-table" data-testid="session-cost-table">
+      <thead>
+        <tr><th scope="col" /><th scope="col">Tokens</th><th scope="col">Price / 1M</th><th scope="col">Cost</th></tr>
+      </thead>
+      {tiers.map((t) => (
+        <tbody key={t.tier} data-tier={t.tier}>
+          {threshold ? (
+            <tr className="session-cost-tier">
+              <th scope="rowgroup" colSpan={3}>{tierLabel(t, threshold)}</th>
+              <td>{fmtCost(t.costUsd)}</td>
+            </tr>
+          ) : null}
+          {visibleLines(t).map((l) => (
+            <tr key={l.kind} data-kind={l.kind}>
+              <th scope="row">{costLineLabel(l.kind)}</th>
+              <td title={l.count.toLocaleString('en-US')}>
+                {l.kind === 'webSearch' ? `${l.count.toLocaleString('en-US')} searches` : fmtTokenCount(l.count)}
+              </td>
+              <td>{l.kind === 'webSearch' ? `${fmtRate(l.rate)} / 1K` : fmtRate(l.rate)}</td>
+              <td>{fmtCost(l.costUsd)}</td>
+            </tr>
+          ))}
+        </tbody>
+      ))}
+      <tfoot>
+        <tr><th scope="row" colSpan={3}>Total</th><td data-testid="session-cost-table-total">{fmtCost(tiers.reduce((n, t) => n + t.costUsd, 0))}</td></tr>
+      </tfoot>
+    </table>
+  );
 }
 
 function ModelRow({ m }: { m: SessionCostModel }) {
@@ -38,33 +74,19 @@ function ModelRow({ m }: { m: SessionCostModel }) {
       </button>
       {open && (
         <div className="session-cost-model-detail" data-testid="session-cost-model-detail">
-          {r ? (
-            <>
-              <div>Per million tokens: {fmtRates(r, r.singleCacheWrite)}</div>
-              {r.threshold && r.long && (
-                <div>
-                  Prompt above {fmtTokenCount(r.threshold)}: {fmtRates(r.long, r.singleCacheWrite)}
-                  {` (${m.longResponses} of ${m.responses} requests)`}
-                </div>
-              )}
-              <div className="session-cost-muted">Price: {fmtPriceSource(m)}</div>
-            </>
-          ) : null}
-          <div className="session-cost-muted">
-            Tokens: {fmtTokenCount(m.tokens.input)} input · {fmtTokenCount(m.tokens.cacheRead)} cache read
-            {' · '}{fmtTokenCount(cacheWriteTokens(m))} cache write
-            {m.tokens.cacheWrite1h > 0 ? ` (${fmtTokenCount(m.tokens.cacheWrite1h)} for 1h)` : ''}
-            {' · '}{fmtTokenCount(m.tokens.output)} output
-          </div>
-          {m.usRegionResponses > 0 && (
-            <div className="session-cost-muted">{m.usRegionResponses} requests ran US-only, billed at 1.1x.</div>
+          {m.tiers && m.tiers.length > 0 ? <CostTable m={m} /> : r ? <div>Per million tokens: {fmtRates(r, r.singleCacheWrite)}</div> : null}
+          {r?.threshold && r.long && (
+            <div className="session-cost-muted">
+              A request whose prompt is over {fmtTokenCount(r.threshold)} tokens pays the higher prices on all of its tokens.
+            </div>
           )}
-          {m.webSearches > 0 && (
-            <div className="session-cost-muted">{m.webSearches} web searches at {fmtRate(10)} per thousand.</div>
+          {m.usRegionResponses > 0 && (
+            <div className="session-cost-muted">{m.usRegionResponses} requests ran US-only; their cost includes the 1.1x US-region price.</div>
           )}
           {m.unpricedResponses > 0 && (
             <div className="session-cost-warn">{m.unpricedResponses} request{m.unpricedResponses === 1 ? '' : 's'} without a price: {m.unpricedReason}</div>
           )}
+          {m.priceSource && <div className="session-cost-muted">Prices: {fmtPriceSource(m)}</div>}
         </div>
       )}
     </div>

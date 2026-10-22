@@ -12,6 +12,23 @@ export interface SessionCostRates {
   singleCacheWrite?: boolean;
 }
 
+/** One row of a model's cost table. */
+export interface SessionCostLine {
+  kind: 'input' | 'cacheWrite' | 'cacheWrite5m' | 'cacheWrite1h' | 'cacheRead' | 'output' | 'webSearch';
+  /** Tokens, or searches for webSearch. */
+  count: number;
+  /** USD per million tokens, or per thousand searches. */
+  rate: number;
+  costUsd: number;
+}
+
+export interface SessionCostTier {
+  tier: 'base' | 'long';
+  responses: number;
+  costUsd: number;
+  lines: SessionCostLine[];
+}
+
 export interface SessionCostModel {
   model: string;
   speed: 'standard' | 'fast';
@@ -24,6 +41,8 @@ export interface SessionCostModel {
   webSearches: number;
   usRegionResponses: number;
   rates?: SessionCostRates;
+  /** Cost table per prompt tier (priced requests only); absent from older servers. */
+  tiers?: SessionCostTier[];
   priceSource?: { kind: 'override' | 'litellm' | 'builtin'; key: string; asOf?: string };
   firstAt: string;
   lastAt: string;
