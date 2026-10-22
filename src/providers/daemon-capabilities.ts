@@ -380,6 +380,19 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // it (the core is text-injected into the source twin), so it is NOT
   // sidecar-gated. Optional: without it the primary pushes nothing.
   'host-replica-v1',
+  // 'attachment-copy-v1' (attachment-copy-core.ts, the same core the cloud companion
+  // keeps its copy with): this host keeps a copy of the pictures and files in the
+  // notes. `attachments.sync {home, entries:[{k,h,n}], asOf}` answers the paths whose
+  // bytes it lacks (and `have` for a broken upload), `attachments.put {home, k, h,
+  // offset, data}` takes one base64 chunk of at most 2 MB and keeps a finished file
+  // only when its sha256 is the manifest's, `attachments.drop {home}` and
+  // `attachments.status {home}`. Trusted socket only, never bridge-reachable. A
+  // follower of `home` reads it with `attachments.list {after?}` (sorted paths, 1 MB
+  // a page, `next`) and `attachments.read {key, offset}` (one 2 MB slice, base64).
+  // Both twins (the core is text-injected). Optional: without it the primary sends
+  // this host no pictures and a replica here shows them only while the Mac answers.
+  // The Mac's own daemon is never sent them: it shares the vault's disk.
+  'attachment-copy-v1',
   // 'replica-host-v1' (docs/plan/walnut-replica-servers-impl.md, WP2): this daemon
   // may run the full server program as its host's replica (`web --replica`).
   // It calls the Mac away by ONE window, LEADER_QUIET_MS (env

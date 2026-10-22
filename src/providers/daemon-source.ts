@@ -54,6 +54,7 @@ import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
+import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
@@ -254,6 +255,7 @@ export function getDaemonSource(): string {
     ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
     ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
+    ['__CREATE_ATTACHMENT_COPY__', createAttachmentCopy.toString()],
     ['__CREATE_FOLLOWER_READS__', createFollowerReads.toString()],
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
@@ -414,6 +416,14 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const noDir = { readFileSync: () => { throw new Error('none') } } as unknown as typeof fs
       const replica = createReplica({ fs: noDir, path, dir: '/nonexistent', now: () => 0, keyOf: () => 'k', hash: () => '000000000000', log: () => {} })
       if (replica.answer('/x', 'note_read', { path: 'a' }, '') !== null || replica.READ_OPS.indexOf('note_read') === -1) throw new Error('host copy did not build')
+    }
+    // Attachments copy smoke: a reconstructed copy must refuse a path that climbs
+    // out and hold nothing, without touching disk.
+    const createAttachments = reconstructed['__CREATE_ATTACHMENT_COPY__'] as typeof createAttachmentCopy | undefined
+    if (createAttachments) {
+      const noDir = { readFileSync: () => { throw new Error('none') }, promises: {} } as unknown as typeof fs
+      const copy = createAttachments({ fs: noDir, path, crypto: {} as typeof import('node:crypto'), dirOf: () => '/nonexistent', log: () => {} })
+      if (copy.keyOf('a/../b.png') !== null || copy.keyOf('a/b.png') !== 'a/b.png' || copy.held('/x') || copy.keys('/x').length !== 0) throw new Error('attachments copy did not build')
     }
     // Follower reads smoke: a reconstructed gate must refuse another Walnut's
     // session and pass its own, without touching disk.
@@ -3433,6 +3443,11 @@ function dispatchCommand(ws, id, cmd) {
     case 'replica.put': return cmdReplica(ws, id, 'put', cmd);
     case 'replica.drop': return cmdReplica(ws, id, 'drop', cmd);
     case 'replica.status': return cmdReplica(ws, id, 'status', cmd);
+    // The host's copy of the notes' pictures (attachment-copy-v1): NOT in BRIDGE_ALLOWED_COMMANDS either.
+    case 'attachments.sync':
+    case 'attachments.put':
+    case 'attachments.drop':
+    case 'attachments.status': return cmdAttachments(ws, id, cmd);
     // NOT in BRIDGE_ALLOWED_COMMANDS: reverse direction — the trusted walnut
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
@@ -4090,6 +4105,14 @@ var hostReplica = (__CREATE_HOST_REPLICA__)({
   now: function () { return Date.now(); },
   keyOf: function (value) { return crypto.createHash('sha1').update(value).digest('hex').slice(0, 16); },
   hash: function (body) { return crypto.createHash('sha256').update(body).digest('hex').slice(0, 12); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+// Beside it, each Walnut's copy of the pictures and files in its notes (attachment-copy-v1,
+// attachment-copy-core.ts, inlined): <REPLICA_DIR>/<home key>/attachments/. Twin of the
+// daemon-standalone.ts block.
+var attachmentCopy = (__CREATE_ATTACHMENT_COPY__)({
+  fs: fs, path: path, crypto: crypto,
+  dirOf: function (home) { return path.join(REPLICA_DIR, crypto.createHash('sha1').update(home).digest('hex').slice(0, 16), 'attachments'); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });
 
@@ -5068,6 +5091,16 @@ function cmdReplica(ws, id, op, cmd) {
   }
 }
 
+// The host's copy of the notes' pictures (attachment-copy-v1): trusted sockets only, like replica.*.
+function cmdAttachments(ws, id, cmd) {
+  if (ws.origin === 'bridge') return sendError(ws, id, String(cmd.cmd) + ': trusted clients only');
+  return attachmentCopy.command(cmd.home, cmd.cmd, cmd).then(function (r) {
+    if (r.ok === true) return sendOk(ws, id, r);
+    // A refusal the leader reads (offset, hash_mismatch, manifest_removes_most_rows) carries its code and sizes.
+    sendError(ws, id, String(r.error || 'refused'), r);
+  });
+}
+
 // Follower reads, owner scoped ('replica-reads-v1', follower-reads-core.ts,
 // inlined). Twin of the daemon-standalone.ts block (rationale there).
 var followerReads = (__CREATE_FOLLOWER_READS__)({
@@ -5082,6 +5115,7 @@ var followerReads = (__CREATE_FOLLOWER_READS__)({
   journalSize: function () { try { return fs.statSync(SPAWN_JOURNAL).size; } catch (e) { return -1; } },
   readJournal: function () { try { return fs.readFileSync(SPAWN_JOURNAL, 'utf8'); } catch (e) { return ''; } },
   replica: hostReplica,
+  attachments: attachmentCopy,
   denyRoots: function () { return followerDenyRoots(); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });

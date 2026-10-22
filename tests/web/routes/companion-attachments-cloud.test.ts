@@ -42,7 +42,7 @@ import { startServer, stopServer } from '../../../src/web/server.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { _resetCloudIngestForTesting, postToCloudHostReplica, postToCloudJournal } from '../../../src/core/cloud-ingest.js'
 import { _resetHostReplicaForTesting, syncCompanionHostReplica } from '../../../src/core/host-replica.js'
-import { _resetAttachmentReplicaForTesting, syncCompanionAttachments } from '../../../src/core/attachment-replica.js'
+import { _resetAttachmentReplicaForTesting, syncAttachments } from '../../../src/core/attachment-replica.js'
 import { companionAttachmentsHeld, companionAttachmentCopyDir } from '../../../src/core/companion-attachment-copy.js'
 import { companionJournalRecords } from '../../../src/core/companion-journal.js'
 import { APPLIED_V2_KINDS } from '../../../src/core/offline-merge/apply-v2.js'
@@ -86,7 +86,9 @@ const send = async (cmd: string, params: Record<string, unknown>, timeoutMs?: nu
   } else sent.push({ cmd })
   return postToCloudHostReplica(cmd, params, timeoutMs ? { timeoutMs } : {})
 }
-const round = async () => { sent.length = 0; return syncCompanionAttachments(send, { on: true, exclude: [] }) }
+/** The companion is one target of the round every replica gets (core/attachment-replica.ts). */
+const companion = { hostKey: 'companion', send }
+const round = async () => { sent.length = 0; return syncAttachments(companion, { on: true, exclude: [] }) }
 const puts = () => sent.filter((s) => s.cmd === 'attachments.put')
 
 beforeAll(async () => {
@@ -266,7 +268,7 @@ describe('the copy\'s bounds', () => {
     expect(await postToCloudHostReplica('attachments.sync', { entries: many, asOf: Date.now() })).toMatchObject({ ok: true })
     expect(await postToCloudHostReplica('attachments.sync', { entries: many.slice(0, 10), asOf: Date.now() }))
       .toMatchObject({ ok: false, errorKind: 'manifest_removes_most_rows' })
-    expect(await syncCompanionAttachments(send, { on: false, exclude: [] })).toMatchObject({ action: 'dropped' })
+    expect(await syncAttachments(companion, { on: false, exclude: [] })).toMatchObject({ action: 'dropped' })
     expect(companionAttachmentsHeld()).toBe(false)
     await expect(fs.stat(companionAttachmentCopyDir())).rejects.toThrow()
     // Back on: the next round fills it again.

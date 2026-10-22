@@ -84,6 +84,7 @@ import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
+import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
@@ -2209,6 +2210,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'replica.put': return cmdReplica(ws, id as number, 'put', cmd)
     case 'replica.drop': return cmdReplica(ws, id as number, 'drop', cmd)
     case 'replica.status': return cmdReplica(ws, id as number, 'status', cmd)
+    // The host's copy of the notes' pictures ('attachment-copy-v1'): NOT in BRIDGE_ALLOWED_COMMANDS either.
+    case 'attachments.sync':
+    case 'attachments.put':
+    case 'attachments.drop':
+    case 'attachments.status': return cmdAttachments(ws, id as number, cmd)
     case 'acpModelCatalog': {
       if (typeof cmd.binary !== 'string' || !path.isAbsolute(cmd.binary)) return sendError(ws, id as number, 'acpModelCatalog: missing absolute binary')
       return acp.modelCatalog(cmd.binary, { cwd: cmd.cwd as string | undefined, env: cmd.env as Record<string, string> | undefined })
@@ -3017,6 +3023,14 @@ const hostReplica = createHostReplica({
   now: () => Date.now(),
   keyOf: (value) => crypto.createHash('sha1').update(value).digest('hex').slice(0, 16),
   hash: (body) => crypto.createHash('sha256').update(body).digest('hex').slice(0, 12),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+// Beside it, each Walnut's copy of the pictures and files in its notes ('attachment-copy-v1',
+// attachment-copy-core.ts, the core the cloud companion keeps its copy with):
+// <REPLICA_DIR>/<home key>/attachments/. Mirror daemon-source.ts.
+const attachmentCopy = createAttachmentCopy({
+  fs, path, crypto,
+  dirOf: (home) => path.join(REPLICA_DIR, crypto.createHash('sha1').update(home).digest('hex').slice(0, 16), 'attachments'),
   log: (level, msg, data) => logMsg(level, msg, data),
 })
 
@@ -4056,6 +4070,16 @@ function cmdReplica(ws: ServerWebSocket<WsData>, id: number, op: 'sync' | 'put' 
   }
 }
 
+// The host's copy of the notes' pictures ('attachment-copy-v1'): trusted sockets only, like replica.*.
+function cmdAttachments(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws.data?.origin === 'bridge') return sendError(ws, id, `${String(cmd.cmd)}: trusted clients only`)
+  return attachmentCopy.command(cmd.home as string, cmd.cmd, cmd).then((r) => {
+    if (r.ok === true) return sendOk(ws, id, r)
+    // A refusal the leader reads (offset, hash_mismatch, manifest_removes_most_rows) carries its code and sizes.
+    sendError(ws, id, String(r.error ?? 'refused'), r)
+  })
+}
+
 // ── Follower reads, owner scoped ('replica-reads-v1', follower-reads-core.ts;
 // docs/plan/walnut-replica-servers-impl.md WP6). A follower reads its own
 // Walnut's sessions, the files under that Walnut's session cwds and this host's
@@ -4073,6 +4097,7 @@ const followerReads = createFollowerReads({
   journalSize: () => { try { return fs.statSync(SPAWN_JOURNAL).size } catch { return -1 } },
   readJournal: () => { try { return fs.readFileSync(SPAWN_JOURNAL, 'utf8') } catch { return '' } },
   replica: hostReplica,
+  attachments: attachmentCopy,
   denyRoots: () => followerDenyRoots(),
   log: (level, msg, data) => logMsg(level, msg, data),
 })

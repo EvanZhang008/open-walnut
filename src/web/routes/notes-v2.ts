@@ -352,10 +352,13 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown): Prom
   const reqExt = path.extname(raw.split('|')[0]).slice(1).toLowerCase()
   if (!ATTACHMENT_MIME[reqExt]) throw new NotesOpError('File type not allowed', 400)
 
-  // The cloud companion reads its copy of the Mac's files and the pictures pasted on it
-  // (core/companion-attachment-copy.ts), never its git-written disk once that copy is held.
+  // A replica reads its copy of the Mac's files once that copy is held: the cloud companion
+  // its own, with the pictures pasted on it (core/companion-attachment-copy.ts), a host
+  // replica its daemon's (replica/attachment-source.ts). The Mac reads its disk.
+  const note = typeof notePath === 'string' ? notePath : undefined
   const { companionAttachmentRead } = await import('../../core/companion-attachment-copy.js')
-  const copied = await companionAttachmentRead(raw, typeof notePath === 'string' ? notePath : undefined)
+  let copied = await companionAttachmentRead(raw, note)
+  if (copied === undefined) copied = await (await import('../../replica/attachment-source.js')).replicaAttachmentRead(raw, note)
   if (copied === null) throw new NotesOpError('Attachment not found', 404)
   if (copied) {
     const cext = path.extname(copied.rel).slice(1).toLowerCase()

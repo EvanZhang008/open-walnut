@@ -1,19 +1,21 @@
 /**
- * What the cloud companion's copy of the memory and skills holds beyond a host's (stage
- * 4d of docs/plan/walnut-companion-unified-replica.md). A host keeps MEMORY.md, USER.md
- * and each skill's SKILL.md for its sessions; the companion also answers the console's
- * and the phone's memory and skill pages, so its copy carries what those read:
+ * What a replica's copy of the memory and skills holds beyond the two docs and each
+ * skill's own document (stage 4d of docs/plan/walnut-companion-unified-replica.md). Every
+ * target gets it, a host's daemon as much as the cloud companion: the console's and the
+ * phone's memory and skill pages read it there while the Mac is away.
  *
  *   memory  every `.md` under memory/ but the two docs (daily logs, projects, sessions,
  *           knowledge, topics, compaction snapshots, agents, working memory), as
  *           `f/<path under memory/>`, with each file's times; the repo memories
  *           (skills/repos/<name>/SKILL.md) as `r/<name>`; and `files.v1`, which tells the
- *           box its copy carries these (an older Mac sends the two docs only)
+ *           replica its copy carries these (an older Mac sends the two docs only)
  *   skills  each skill's reference files (`<dirName>/references/<file>`, text only)
  *
+ * A reader of the copy tells these from the docs by key: a memory doc is `global` or
+ * `user`, a skill is a key without a slash (host-replica-core.ts reads only those).
  * All of it is text, about 2.4 MB of memory for the measured data dir. A file over 1 MB
- * stays on the Mac (the box answers needs-the-Mac for it). Bodies are read only for the
- * keys the box asks for; a stat cache keeps an unchanged file from being read again.
+ * stays on the Mac (the replica answers needs-the-Mac for it). Bodies are read only for
+ * the keys the replica asks for; a stat cache keeps an unchanged file from being read again.
  */
 
 import fs from 'node:fs'
@@ -114,8 +116,8 @@ async function skillExtras(skills: Array<{ dirName: string; location?: string }>
   }
 }
 
-/** The companion's extra entries of `kind`. `skills` is the list the round already read (with each skill's location). */
-export async function companionReplicaExtras(kind: 'memory' | 'skills', skills: Array<{ dirName: string; location?: string }> = []): Promise<Extras> {
+/** The extra entries of `kind`. `skills` is the list the round already read (with each skill's location). */
+export async function replicaExtras(kind: 'memory' | 'skills', skills: Array<{ dirName: string; location?: string }> = []): Promise<Extras> {
   return kind === 'memory' ? memoryExtras() : skillExtras(skills)
 }
 

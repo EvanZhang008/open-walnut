@@ -310,3 +310,37 @@ describe('the roots and owners are looked up once per generation (WP6 fix round)
     expect(refused(r.gate(A, { cmd: 'fs.read', path: file }))).toBe(true)
   })
 })
+
+describe('the copy of the notes\' pictures (attachment-copy-v1)', () => {
+  it('answers the follower\'s own Walnut\'s copy, whatever home the frame names; a file not there is not_found', () => {
+    const asked: Array<[string, string]> = []
+    const r = createFollowerReads({
+      path, homeDir: path.join(base, 'home'), realpath: () => null, sliceOwner: () => undefined, journalOwner: () => undefined,
+      liveSessions: () => [], journalSize: () => -1, readJournal: () => '',
+      replica: { list: () => null, read: () => null, readMany: () => null },
+      attachments: {
+        list: (home, after, maxBytes) => { asked.push(['list', home]); expect(maxBytes).toBeLessThanOrEqual(r.MAX_ANSWER_BYTES / 2); return { keys: home === A ? ['a/pic.png'] : [], asOf: '2026-10-22T00:00:00.000Z', next: after ? null : null } },
+        readChunk: (home, key, offset, maxBytes) => {
+          asked.push(['read', home])
+          // One 2 MB slice at most: its base64 stays under the answer cap.
+          expect(maxBytes * 4 / 3).toBeLessThan(r.MAX_ANSWER_BYTES)
+          return home === A && key === 'a/pic.png' ? { k: 'a/pic.png', h: 'f'.repeat(64), n: 3, offset: Number(offset) || 0, data: 'AAAA' } : null
+        },
+      },
+      log: () => {},
+    })
+    expect(r.COMMANDS).toEqual(expect.arrayContaining(['attachments.list', 'attachments.read']))
+    expect(r.gate(A, { cmd: 'attachments.list', home: B })).toEqual({ answer: { keys: ['a/pic.png'], asOf: '2026-10-22T00:00:00.000Z', next: null } })
+    expect(r.gate(A, { cmd: 'attachments.read', key: 'a/pic.png', offset: 0, home: B })).toMatchObject({ answer: { k: 'a/pic.png', n: 3, data: 'AAAA' } })
+    expect(refused(r.gate(B, { cmd: 'attachments.read', key: 'a/pic.png' }))).toBe(true)
+    expect(asked.every(([, home]) => home === A || home === B)).toBe(true)
+    expect(asked.filter(([, home]) => home === B)).toEqual([['read', B]])
+    expect(r.gate(null, { cmd: 'attachments.list' })).toEqual({ error: 'attachments.list: send follower.hello first' })
+  })
+
+  it('a daemon without the copy answers an error, never another Walnut\'s data', () => {
+    const r = make()
+    expect(r.gate(A, { cmd: 'attachments.list' })).toEqual({ error: 'attachments.list: this host keeps no copy of the attachments' })
+    expect(r.gate(A, { cmd: 'attachments.read', key: 'a/pic.png' })).toEqual({ error: 'attachments.read: this host keeps no copy of the attachments' })
+  })
+})

@@ -3,9 +3,12 @@
  * "What a host keeps"; the daemon side is
  * src/providers/host-replica-core.ts).
  *
- * A host keeps a copy of the note text (never attachments), MEMORY.md and
- * USER.md, and the skills, so a session there reads them while the leader cannot
- * answer. What a host keeps is the user's choice (config `hosts.<alias>.keep`,
+ * Every replica keeps the same copy, whatever it is (a host's daemon or the cloud
+ * companion): the note text, the memory (MEMORY.md, USER.md and the rest of the
+ * memory dir), the skills with their references (host-replica-extras.ts), and the
+ * pictures and files of the notes (attachment-replica.ts, where the target's daemon
+ * has 'attachment-copy-v1'), so its sessions and pages read them while the leader
+ * cannot answer. What a host keeps is the user's choice (config `hosts.<alias>.keep`,
  * Settings > Remote Hosts); each kind is on unless turned off, and a kind turned
  * off is removed from that host on the next round.
  *
@@ -16,7 +19,8 @@
  * (the measured vault), later rounds only stat, and hash what changed.
  *
  * The cloud companion gets the same rounds over HTTPS (syncCompanionHostReplica,
- * host key `companion`; its side is core/companion-host-replica.ts).
+ * host key `companion`; its side is core/companion-host-replica.ts). Only the
+ * transport differs.
  */
 
 import fsp from 'node:fs/promises'
@@ -25,8 +29,8 @@ import crypto from 'node:crypto'
 import { NOTES_DIR, WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import type { Config } from './types.js'
-import { forgetCompanionAttachments, syncCompanionAttachments } from './attachment-replica.js'
-import { companionReplicaExtras, type Extras } from './host-replica-extras.js'
+import { _resetAttachmentReplicaForTesting, forgetAttachments, syncAttachments } from './attachment-replica.js'
+import { replicaExtras, type Extras } from './host-replica-extras.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 export const REPLICA_KINDS: readonly ReplicaKind[] = ['notes', 'memory', 'skills']
@@ -37,6 +41,8 @@ export interface HostKeep {
   notesExclude: string[]
   memory: boolean
   skills: boolean
+  /** The pictures and files of the notes: only while the notes are kept. */
+  attachments: boolean
 }
 
 /** Bigger notes stay on the primary (none of the measured vault comes close). */
@@ -62,6 +68,7 @@ export function hostKeepFor(config: Config, hostKey: string): HostKeep {
     notesExclude: cleanFolders(keep?.notes_exclude),
     memory: keep?.memory !== false,
     skills: keep?.skills !== false,
+    attachments: keep?.notes !== false && keep?.attachments !== false,
   }
 }
 
@@ -173,6 +180,8 @@ async function jsonBodies(kind: 'memory' | 'skills'): Promise<Map<string, string
 export interface ReplicaTarget {
   hostKey: string
   send: (cmd: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>
+  /** The target keeps the pictures and files too (a daemon with 'attachment-copy-v1', the companion). */
+  attachments?: boolean
 }
 
 export interface ReplicaRoundResult { kind: ReplicaKind; action: 'synced' | 'unchanged' | 'dropped' | 'failed'; entries?: number; sent?: number; held?: number; error?: string }
@@ -223,6 +232,7 @@ const lastManifest = new Map<string, string>()
 /** A host's connection changed: its next round sends every manifest again. */
 export function forgetHostReplica(hostKey: string): void {
   for (const key of [...lastManifest.keys()]) if (key.startsWith(`${hostKey}\u0000`)) lastManifest.delete(key)
+  forgetAttachments(hostKey)
 }
 
 // ── WP11: notes written on the host while away (section 4 "held", section 6) ──
@@ -257,7 +267,7 @@ export function _resetHostReplicaForTesting(): void {
   heldReruns.clear()
   lastManifest.clear()
   companionMemoAt = 0
-  forgetCompanionAttachments()
+  _resetAttachmentReplicaForTesting()
 }
 
 /** The Settings row's target for a host's copy (replica-status.ts), the half rule's refusals. */
@@ -303,12 +313,10 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   } else {
     bodies = await jsonBodies(kind)
     entries = [...bodies].map(([k, body]) => ({ k, h: sha12(body), n: Buffer.byteLength(body) }))
-    // The companion's copy also carries the rest of the memory dir and the skills' references (4d).
-    if (target.hostKey === COMPANION_REPLICA_HOST) {
-      const skills = kind === 'skills' ? await (await import('./skill-store.js')).listAllSkills() : []
-      extras = await companionReplicaExtras(kind, skills)
-      entries.push(...extras.entries)
-    }
+    // The rest of the memory dir and the skills' references, for every target alike.
+    const skills = kind === 'skills' ? await (await import('./skill-store.js')).listAllSkills() : []
+    extras = await replicaExtras(kind, skills)
+    entries.push(...extras.entries)
   }
   const opts = kind === 'notes'
     ? { searchExclude: await searchExclude(config), keepExclude: keep.notesExclude, tooBig: notesTooBig() }
@@ -367,12 +375,13 @@ let companionMemoAt = 0
 
 const companionTarget: ReplicaTarget = {
   hostKey: COMPANION_REPLICA_HOST,
+  attachments: true,
   send: async (cmd, params, timeoutMs) => (await import('./cloud-ingest.js')).postToCloudHostReplica(cmd, params, timeoutMs ? { timeoutMs } : {}),
 }
 
 /**
- * One round of the companion's notes, memory and skills copy over HTTPS
- * (`/bridge/host-replica`), the round a daemon gets. A daemon's memo ends with its
+ * One round of the companion's copy over HTTPS (`/bridge/host-replica`), the round a
+ * daemon gets. A daemon's memo ends with its
  * connection; the companion has no connection to end, so its memo ends when the box
  * says a kind never arrived whole (a new box), every 30 minutes, and when its build
  * changes (forgetCompanionHostReplica). Never throws.
@@ -388,31 +397,19 @@ export async function syncCompanionHostReplica(): Promise<ReplicaRoundResult[]> 
     forgetHostReplica(COMPANION_REPLICA_HOST)
     companionMemoAt = Date.now()
   }
-  const results = await syncHostReplica(companionTarget)
-  // Then the pictures and files of the notes, which only the companion keeps (core/attachment-replica.ts).
-  try {
-    const { getConfig } = await import('./config-manager.js')
-    const config = await getConfig()
-    const keep = hostKeepFor(config, COMPANION_REPLICA_HOST)
-    const on = keep.notes && config.hosts?.[COMPANION_REPLICA_HOST]?.keep?.attachments !== false
-    const r = await syncCompanionAttachments(companionTarget.send, { on, exclude: keep.notesExclude })
-    if (r.action !== 'unchanged' && r.action !== 'skipped') log.session.info('host replica: companion attachments round', { ...r })
-  } catch (err) {
-    log.session.warn('host replica: companion attachments round failed', { error: err instanceof Error ? err.message : String(err) })
-  }
-  return results
+  return syncHostReplica(companionTarget)
 }
 
 /** The companion changed build: its copy rounds go again at once. */
 export function forgetCompanionHostReplica(): void {
   companionMemoAt = 0
   forgetHostReplica(COMPANION_REPLICA_HOST)
-  forgetCompanionAttachments()
 }
 
 /**
- * Bring `target`'s copy up to date, every kind. One round per host at a time;
- * a request during a round runs one more round after it. Never throws.
+ * Bring `target`'s copy up to date, every kind, then its pictures and files. One
+ * round per host at a time; a request during a round runs one more round after it.
+ * Never throws.
  */
 export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRoundResult[]> {
   const running = inFlight.get(target.hostKey)
@@ -420,12 +417,13 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
   const state = { rerun: false }
   inFlight.set(target.hostKey, state)
   const results: ReplicaRoundResult[] = []
+  let keep: HostKeep | null = null
   try {
     do {
       state.rerun = false
       const { getConfig } = await import('./config-manager.js')
       const config = await getConfig()
-      const keep = hostKeepFor(config, target.hostKey)
+      keep = hostKeepFor(config, target.hostKey)
       for (const kind of REPLICA_KINDS) {
         const startedAt = Date.now()
         try {
@@ -444,5 +442,13 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
   } finally {
     inFlight.delete(target.hostKey)
   }
+  // Outside the kinds' round: a first fill of the pictures never holds a note edit back.
+  if (keep && target.attachments) await attachmentsRound(target, keep)
   return results
+}
+
+async function attachmentsRound(target: ReplicaTarget, keep: HostKeep): Promise<void> {
+  const r = await syncAttachments(target, { on: keep.attachments, exclude: keep.notesExclude })
+  if (r.action === 'failed') log.session.warn('host replica: attachments round failed', { host: target.hostKey, error: r.error })
+  else if (r.action !== 'unchanged' && r.action !== 'skipped') log.session.info('host replica: attachments round', { host: target.hostKey, ...r })
 }
