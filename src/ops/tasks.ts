@@ -534,10 +534,12 @@ defineOp({
     priority: PRIORITY.optional().describe('immediate | important | backlog | none'),
     due_date: z.string().optional().describe('YYYY-MM-DD or a full ISO-8601 datetime'),
     description: z.string().optional().describe('Longer body text (write-only)'),
+    tags: z.array(z.string()).optional().describe('Initial task tags'),
     pinned: z.boolean().optional().describe('Join the pinned board. Default: your task\'s (from inside a task), otherwise true. false keeps the task off the board'),
     // Exact ids only — this rides straight to the server, which validates
     // against the registry. Label tolerance lives in the agent tool.
     focus_tier: z.string().optional().describe('Pin tier the task is born into (implies pinned): focus | satellite | wait (Parked) | a registered ct_* id. Omit for your task\'s tier (from inside a task) or Satellite (elsewhere); unknown tiers are rejected, not silently downgraded'),
+    idempotency_key: z.string().min(1).max(1024).optional().describe('Stable create key. Same key and payload reuse one task without starting it again; a different payload conflicts.'),
     record_only: z.boolean().optional().describe('Explicitly save a placeholder WITHOUT starting work. Default false: create and start'),
     ...TASK_START_INPUT,
     start_session: z.boolean().optional().describe('Legacy spelling: false means record_only=true; true starts work (already the default)'),
@@ -566,7 +568,7 @@ defineOp({
       throw new Error('record_only does not accept execution options. Omit record_only to start work.')
     }
     const created = await call('POST', '/tasks', fields) as
-      { task?: Record<string, unknown>; placement?: Placement } | undefined
+      { task?: Record<string, unknown>; placement?: Placement; reused?: boolean } | undefined
     const task = created?.task
     const id = taskId(task)
     if (!task || !id) throw new Error('Create response has no task id. Check task_list before retrying; the write may have succeeded.')
@@ -582,6 +584,9 @@ defineOp({
     // Where its card sits depends on whether a session started, so it is read after the start answers.
     const parentId = placement?.parent_task_id ?? (task.parent_task_id as string | undefined)
     const cardLine = (started: boolean) => boardCardSentence(parentId, id, started, call)
+    if (created?.reused) {
+      return withOutcome(withRef(view, { ...extra, reused: true }), 'The original task was reused. No start was issued.', 'Read task_get for the current state.');
+    }
     if (recordOnly) {
       return withOutcome(
         withRef({ ...view, execution: { state: 'not_started' } }, { ...extra, execution: { state: 'not_started' } }),

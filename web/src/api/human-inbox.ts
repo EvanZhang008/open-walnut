@@ -13,6 +13,7 @@
  * never from the notification record.
  */
 import { apiGet, apiPost } from './client';
+import type { InboxLetterItem } from './human-inbox-items';
 
 export type LetterType = 'completion' | 'action_required' | 'review' | 'info';
 export type LetterBodyFormat = 'html' | 'markdown';
@@ -46,6 +47,7 @@ export interface LetterThreadEntry {
   bodyFormat?: LetterBodyFormat;
   bodyFile?: string;
   at: number;
+  items?: InboxLetterItem[];
   /** Rich body content, present only on GET /:id (the list omits all bodies). */
   body?: string;
   /** Size of this turn's document on disk. */
@@ -75,6 +77,7 @@ export interface LetterEnvelope {
   pinned: boolean;
   archived: boolean;
   actions?: LetterAction[];
+  items?: InboxLetterItem[];
   answered?: LetterAnswer;
   thread?: LetterThreadEntry[];
   /** Task ids the letter cites — rendered as the usual task pills. */
@@ -165,6 +168,7 @@ function normalizeDetail(raw: unknown): LetterDetail {
       ...(typeof entry.bodyBytes === 'number' ? { bodyBytes: entry.bodyBytes } : {}),
       ...(entry.bodyDeferred === true ? { bodyDeferred: true } : {}),
       ...(str(entry.bodyUrl) ? { bodyUrl: str(entry.bodyUrl) } : {}),
+      ...(Array.isArray(entry.items) ? { items: entry.items as InboxLetterItem[] } : {}),
     };
   });
   return {

@@ -263,3 +263,19 @@ describe('readAt follows read (the grace-window clock)', () => {
     expect('readAt' in getLetterSnapshot().letters[0]).toBe(false);
   });
 });
+
+describe('item receipts across list detail and flag writes', () => {
+  it('keeps the greater receipt revision through a late list and a flag mutation', async () => {
+    const source = { kind: 'mail' as const, account: 'fixture-account-a', message: 'fixture-message-a' };
+    const receipt = { actionId: 'read-a', requestId: 'request-a', planId: 'plan-a', planVersion: 1,
+      revision: 3, updatedAt: '2026-10-22T00:00:03Z', status: 'success' as const, intent: 'mark_read' as const,
+      source, input: {}, stage: 'finished' as const, recovery: [] };
+    const item = { id: 'item-a', subject: 'Mail update', summary: 'Summary', source, actions: [], receipts: [receipt] };
+    serve([letter({ id: 'lt-item', items: [item] })]);
+    await loadLetters();
+    serve([letter({ id: 'lt-item', items: [{ ...item, receipts: [{ ...receipt, revision: 1, status: 'pending' }] }] })]);
+    await loadLetters();
+    patchLetter('lt-item', { pinned: true, read: true });
+    expect(getLetterSnapshot().letters[0].items?.[0].receipts?.[0]).toEqual(receipt);
+  });
+});

@@ -153,6 +153,7 @@ enum LocalDataReset {
         filePreview?.closeDocked()
         ComposerDrafts.shared.clearAll()
         LetterReplyStore.shared.eraseAll()
+        InboxItemStore.shared.eraseAll()
         AttachmentLoader.shared.eraseAll()
         SessionStreamResumeIDs.shared.removeAll()
         TimeHeartbeatReporter.shared.eraseLocalData()

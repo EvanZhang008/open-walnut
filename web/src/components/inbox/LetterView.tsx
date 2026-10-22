@@ -32,6 +32,9 @@ import {
 } from '@/api/human-inbox';
 import { LetterBody } from './LetterBody';
 import { LetterThread } from './LetterThread';
+import { EmailItems } from './EmailItems';
+import { askAILabel } from './item-receipt-model';
+import { refreshWatchedItems } from './item-store';
 import { senderLabelOf } from './LetterEnvelopeRow';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
 import { useLetterEnvelope } from './letter-store';
@@ -166,6 +169,7 @@ export function LetterView({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useLetterEvents(useCallback((changed: string | null) => {
     if (changed && changed !== letterId) return;
+    refreshWatchedItems(letterId);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { timer.current = null; reload(true); }, LIVE_REFRESH_MS);
   }, [letterId, reload]));
@@ -302,7 +306,8 @@ export function LetterView({
             ask must be the most visible thing in it. */}
         {canDecide && (
           <div className="hib-actions">
-            <div className="hib-actions-head">This letter needs a decision</div>
+            <div className="hib-actions-head">Ask AI decision</div>
+            <p className="hib-note">These buttons send a request to the letter's AI. They do not directly change email or tasks.</p>
             {actions.map((action) => (
               <button
                 key={action.id}
@@ -310,7 +315,7 @@ export function LetterView({
                 disabled={busy}
                 onClick={() => void onAnswer(action.id)}
               >
-                <span className="hib-action-label">{action.label || action.id}</span>
+                <span className="hib-action-label">{askAILabel(action.label || action.id)}</span>
                 {action.description && (
                   <span className="hib-action-desc">{action.description}</span>
                 )}
@@ -339,7 +344,7 @@ export function LetterView({
           </div>
         )}
 
-        {loadError && <div className="hib-note hib-note-error">{loadError}</div>}
+        {loadError && <div className="hib-note hib-note-error">{loadError} <button type="button" className="hib-row-btn" onClick={() => reload(false)}>Try again</button></div>}
         {!letter && !loadError && <div className="hib-note">Opening…</div>}
         {letter && (
           <>
@@ -359,6 +364,7 @@ export function LetterView({
                 {...(letter.bodyDeferred && letter.bodyUrl ? { bodyUrl: letter.bodyUrl } : {})}
               />
             )}
+            <EmailItems letterId={letterId} items={letter.items} onNavigate={onNavigate} />
             {(letter.taskRefs?.length ?? 0) > 0 && (
               <div className="hib-taskrefs" onClick={onBodyClick}>
                 <span className="hib-taskrefs-label">Tasks</span>
@@ -369,6 +375,8 @@ export function LetterView({
             )}
             <LetterThread
               entries={letter.thread}
+              letterId={letterId}
+              onNavigate={onNavigate}
               subject={letter.subject}
               onBodyClick={onBodyClick}
             />

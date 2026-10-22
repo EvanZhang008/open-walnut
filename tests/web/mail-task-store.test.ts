@@ -302,6 +302,19 @@ describe('a backlink from somewhere else in Walnut', () => {
     expect(calls.filter((call) => call.url.includes(encodeURIComponent(MESSAGE)))).toHaveLength(1);
   });
 
+  it('previews an unread Inbox source without any mail flag write', async () => {
+    patch({ loaded: true, selected: { accountId: ACCOUNT, mailboxId: 'INBOX' } });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? 'GET', body: (init?.body as string) ?? null });
+      return json({ message: envelope(MESSAGE, { mailboxId: 'Archive', flags: [] }),
+        body: { format: 'text', text: 'Saved source body', bytes: 17, truncated: false } });
+    }));
+    await openMailDeepLink(ACCOUNT, MESSAGE, { markRead: false });
+    expect(getMailSnapshot().open?.message?.flags).toEqual([]);
+    expect(getMailSnapshot().open?.messageId).toBe(MESSAGE);
+    expect(calls.filter(call => call.method !== 'GET')).toEqual([]);
+  });
+
   it('says so in one line when the link points at a message the cache dropped', async () => {
     patch({ loaded: true, selected: { accountId: ACCOUNT, mailboxId: 'INBOX' } });
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'not-found', message: 'gone' }, 404)));

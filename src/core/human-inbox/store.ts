@@ -36,6 +36,8 @@ import {
   type LetterStoreFile,
 } from './normalize.js';
 import { statStagedBody, takeStagedBody } from './staged-body.js';
+import { validateNewItems, allLetterItems, assertItemIds } from './item-schema.js';
+import type { InboxItemReceipt } from './types.js';
 import {
   LETTER_INLINE_BODY_MAX_BYTES,
   letterFieldMaxBytes,
@@ -495,6 +497,21 @@ export async function sendLetterOnce(
     if (first) return { letter: first, duplicate: true };
   }
 
+  let items: NewLetter['items'];
+  try { items = validateNewItems(input.items, { items: [], thread: [], actions }); }
+  catch (error) { throw invalid(errMsg(error)); }
+  if (items?.length) {
+    const { storedPairReceipts } = await import('./item-ledger.js');
+    const { resolveInboxSource } = await import('./item-source-registry.js');
+    for (const item of items) {
+      item.receipts = await storedPairReceipts(item.source.account, item.source.message);
+      if (item.readObservation) {
+        const trusted = await resolveInboxSource(item.source).catch(() => undefined);
+        if (trusted?.readObservation) item.readObservation = trusted.readObservation;
+        else delete item.readObservation;
+      }
+    }
+  }
   const bodySource = await resolveBodySource(
     lane === 'markdown' ? input.markdown : input.html,
     lane === 'html_ref' ? str(input.htmlRef ?? input.html_ref ?? '') : undefined,
@@ -538,6 +555,7 @@ export async function sendLetterOnce(
     bodyBytes: bodySource.bytes,
     thread: [],
     ...(actions ? { actions: actions.map(a => ({ ...a })) } : {}),
+    ...(items ? { items } : {}),
     // Bounded, not rejected: task refs are a courtesy (pills under the body),
     // so a chatty caller loses the tail instead of losing the whole letter.
     ...(refs.length > 0 ? { taskRefs: refs } : {}),
@@ -736,11 +754,27 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
     )
     : null;
 
+  let newItems: AgentReplyInput['items'];
+  try { newItems = validateNewItems(input.items); } catch (error) { throw invalid(errMsg(error)); }
+  if (newItems?.length) {
+    const { storedPairReceipts } = await import('./item-ledger.js');
+    const { resolveInboxSource } = await import('./item-source-registry.js');
+    for (const item of newItems) {
+      item.receipts = await storedPairReceipts(item.source.account, item.source.message);
+      if (item.readObservation) {
+        const trusted = await resolveInboxSource(item.source).catch(() => undefined);
+        if (trusted?.readObservation) item.readObservation = trusted.readObservation;
+        else delete item.readObservation;
+      }
+    }
+  }
   // The turn index names the body file, so it has to be assigned under the lock.
   let bodyFileToWrite: string | null = null;
   const record = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
-    const entry: ThreadEntry = { from: 'agent', text: boundThreadText(text), at: Date.now() };
+    try { if (newItems) assertItemIds(newItems, letter); }
+    catch (error) { throw invalid(errMsg(error)); }
+    const entry: ThreadEntry = { from: 'agent', text: boundThreadText(text), at: Date.now(), ...(newItems ? { items: newItems } : {}) };
     if (richSource !== null) {
       bodyFileToWrite = `${letter.id}.r${letter.thread.length}.${bodyExt(richFormat)}`;
       entry.bodyFormat = richFormat;
@@ -757,6 +791,25 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
   log.notif.info('human-inbox: agent replied', { letterId: id, turns: record.thread.length });
   emitLetterEvent(record, 'reply', truncatePreview(text));
   return record;
+}
+
+/** Persist an execution fact without changing reader flags or making another letter. */
+export async function writeItemReceipt(id: string, itemId: string, receipt: InboxItemReceipt): Promise<void> {
+  const { receiptSourcePairs } = await import('./item-ledger.js');
+  const pairs = await receiptSourcePairs(receipt);
+  await withWriteLock(() => withStore(store => {
+    const letter = find(store, requireValidId(id));
+    if (!allLetterItems(letter).some(i => i.id === itemId)) throw notFound(itemId);
+    for (const current of store.letters) for (const item of allLetterItems(current)) {
+      if (!pairs.has(JSON.stringify([item.source.account, item.source.message]))) continue;
+      if (receipt.intent === 'reply_ai' && (current.id !== id || item.id !== itemId)) continue;
+      const receipts = item.receipts ??= [];
+      const previous = receipts.findIndex(r => r.requestId === receipt.requestId);
+      if (previous < 0) receipts.push(receipt);
+      else if (receipts[previous].revision < receipt.revision) receipts[previous] = receipt;
+    }
+  }));
+  bus.emit('human-inbox:item', { letterId: id, itemId, receipt }, ['web-ui'], { source: 'human-inbox' });
 }
 
 /** The three flags that belong to the reader rather than to the work. */

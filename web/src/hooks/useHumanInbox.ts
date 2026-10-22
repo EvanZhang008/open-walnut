@@ -21,6 +21,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
+import { refreshWatchedItems, mergeItemReceipts, itemKey } from '@/components/inbox/item-store';
 import { compareLetters, type LetterEnvelope } from '@/api/human-inbox';
 import {
   applyLetterChange, ensureLetters, getLetterSnapshot, markLettersStale, patchLetter, refreshLetters,
@@ -64,6 +65,30 @@ export function useLetterEvents(onLetter: (letterId: string | null) => void): vo
     const r = data as { letterId?: string } | undefined;
     cb.current(r?.letterId ?? null);
   });
+  useEvent('human-inbox:item', data => {
+    const r = data as { letterId?: string; itemId?: string; receipt?: import('@/api/human-inbox-items').InboxItemReceipt };
+    if (r.letterId && r.itemId && r.receipt) mergeItemReceipts(itemKey(r.letterId, r.itemId), [r.receipt]);
+    cb.current(r?.letterId ?? null);
+  });
+  const taskChanged = (data: unknown) => {
+    const r = data as { taskId?: string; task?: { id?: string }; id?: string };
+    const id = r?.taskId ?? r?.task?.id ?? r?.id;
+    if (id) refreshWatchedItems(undefined, id);
+  };
+  useEvent('task:updated', taskChanged);
+  useEvent('task:phase-changed', taskChanged);
+  useEvent('session:status-changed', data => {
+    const r = data as { taskId?: string };
+    if (r?.taskId) refreshWatchedItems(undefined, r.taskId);
+    else refreshWatchedItems();
+  });
+  useEvent('_ws:reconnected', () => { refreshWatchedItems(); cb.current(null); });
+  useEffect(() => {
+    const foreground = () => { if (!document.hidden) { refreshWatchedItems(); cb.current(null); } };
+    window.addEventListener('focus', foreground);
+    document.addEventListener('visibilitychange', foreground);
+    return () => { window.removeEventListener('focus', foreground); document.removeEventListener('visibilitychange', foreground); };
+  }, []);
 }
 
 export interface HumanInboxState {

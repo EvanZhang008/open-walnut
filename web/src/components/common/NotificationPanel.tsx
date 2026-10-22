@@ -21,7 +21,8 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { takeInboxReturn } from '@/components/inbox/item-drafts';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -150,6 +151,37 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // gated on the panel being open; every letter WS event refreshes it (D8).
   const [showArchived, setShowArchived] = useState(false);
   const [openLetterId, setOpenLetterId] = useState<string | null>(null);
+  const location = useLocation();
+  const returningLetter = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const restoreReturn = () => {
+      const letterId = takeInboxReturn();
+      if (!letterId) return;
+      returningLetter.current = letterId;
+      // Both the Sidebar and this panel install listeners on mount. Restore after those effects.
+      queueMicrotask(() => window.dispatchEvent(new CustomEvent('notification:open-center', { detail: { letterId } })));
+    };
+    restoreReturn();
+    window.addEventListener('popstate', restoreReturn);
+    return () => window.removeEventListener('popstate', restoreReturn);
+  }, [location.key, location.pathname, location.search]);
+  useEffect(() => {
+    const restore = (event: Event) => {
+      const letterId = (event as CustomEvent).detail?.letterId;
+      if (typeof letterId === 'string') {
+        returningLetter.current = letterId;
+        if (open) { setOpenLetterId(letterId); returningLetter.current = undefined; }
+      }
+    };
+    window.addEventListener('notification:open-center', restore);
+    return () => window.removeEventListener('notification:open-center', restore);
+  }, [open]);
+  useEffect(() => {
+    if (open && returningLetter.current) {
+      setOpenLetterId(returningLetter.current);
+      returningLetter.current = undefined;
+    }
+  }, [open]);
   const inbox = useHumanInbox({ enabled: open, archived: showArchived });
   const inboxRef = useRef(inbox);
   inboxRef.current = inbox;

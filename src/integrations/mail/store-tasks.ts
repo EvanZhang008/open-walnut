@@ -10,8 +10,8 @@
  *   used to write one row twice and orphan one of the two tasks, because an unconditional
  *   `DO UPDATE SET task_id` lets the loser overwrite the winner. `DO NOTHING` plus a re-read makes
  *   the database pick, and both callers then report the same id.
- * - A REPOINT NAMES THE ID IT IS REPLACING. Repointing after the human deleted a task is a
- *   compare-and-swap on the dead id, so a repoint racing a claim cannot undo it.
+ * - A BINDING IS NEVER REPOINTED. A deleted task retains its source history; callers return a
+ *   tombstone instead of using deletion as permission to create replacement work.
  *
  * Unread is decided in SQL, never by reading rows and filtering in JS: an account with 50,000
  * cached messages has to answer the digest in ten rows of work, inside the sync tick's shared
@@ -86,13 +86,7 @@ export class MailTaskStore {
     now: number
     replacing?: string
   }): Promise<string> {
-    if (row.replacing) {
-      await this.db.run(
-        'UPDATE message_tasks SET account_id = ?, message_id = ?, task_id = ?, created_at = ?'
-        + ' WHERE rfc_message_id = ? AND task_id = ?',
-        [row.accountId, row.messageId, row.taskId, row.now, row.key, row.replacing],
-      )
-    }
+    if (row.replacing) throw new Error('An email task binding cannot be replaced. Review the original task.');
     // Runs in both cases: a repoint whose row was deleted between the read and the update has to
     // end with a row, and on the ordinary path this IS the claim.
     await this.db.run(

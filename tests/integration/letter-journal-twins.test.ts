@@ -24,6 +24,7 @@ import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import { fetchOfflineBlob } from '../../src/core/offline-merge/blob.js'
 import { LETTER_ID_RE } from '../../src/core/human-inbox/normalize.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
+import type { InboxLetterItem } from '../../src/core/human-inbox/types.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/marina-home'
@@ -32,7 +33,19 @@ const A = 'aaaaaaaa-6666-4666-8666-666666666666'
 const TASK_A = 'mtaskaaa-0006'
 // Accents, CJK and an astral emoji: the body crosses the host byte for byte.
 const BODY = '## Two layouts\n\nPick one: café 中文 🚀.\n'
-const LETTER = { subject: 'Pick a layout', type: 'action_required', markdown: BODY, actions: [{ id: 'a', label: 'Layout A' }, { id: 'b', label: 'Layout B' }] }
+const ITEMS: InboxLetterItem[] = Array.from({ length: 30 }, (_, n) => ({
+  id: `twin-mail-${n}`, subject: `Marina update ${n}`, summary: 'Details: \u{e9} \u{4e2d}\u{6587} \u{1f680}.\nAn independent mail action.',
+  source: { kind: 'mail', account: `twin-account-${n}`, message: `twin-message-${n}` },
+  display: { sender: { name: 'Marina desk', address: 'desk@example.test' }, sentAt: '2026-10-14T09:30:00Z', accountLabel: `Mailbox ${n}` },
+  actions: [
+    { id: `twin-read-${n}`, kind: 'op', intent: 'mark_read' },
+    { id: `twin-find-${n}`, kind: 'op', intent: 'find_task' },
+    { id: `twin-create-${n}`, kind: 'op', intent: 'create_task' },
+    { id: `twin-attach-${n}`, kind: 'op', intent: 'attach_task' },
+    { id: `twin-ask-${n}`, kind: 'reply_ai', label: 'Ask about this mail', question: `Explain mail ${n}` },
+  ],
+}))
+const LETTER = { subject: 'Pick a layout', type: 'action_required', markdown: BODY, actions: [{ id: 'a', label: 'Layout A' }, { id: 'b', label: 'Layout B' }], items: ITEMS }
 const OLD_DRAINS = JOURNAL_V2_DRAINS.filter((k) => k !== 'letter')
 const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
@@ -82,10 +95,15 @@ async function spawnDaemon(dir: string, twin: Twin): Promise<Daemon> {
   delete env.WALNUT_DAEMON_STATE_DIR
   let proc: ChildProcess
   if (twin === 'standalone') {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
+    const binary = process.env.WALNUT_LETTER_TEST_BINARY
+    proc = spawn(binary ?? BUN!, [...(binary ? [] : [path.join(ROOT, 'src/providers/daemon-standalone.ts')]), '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
   } else {
     const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
+    const compiledModule = process.env.WALNUT_LETTER_TEST_SOURCE_MODULE
+    const source = compiledModule
+      ? (await import(compiledModule) as { getDaemonSource(): string }).getDaemonSource()
+      : getDaemonSource()
+    fs.writeFileSync(script, source, { mode: 0o755 })
     buildSync({ entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')], bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent' })
     proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'] })
   }
@@ -222,6 +240,8 @@ async function run(d: Daemon): Promise<void> {
     letterId, format: 'markdown', actor: { kind: 'session', sid: A },
     args: { subject: 'Pick a layout', type: 'action_required', actions: LETTER.actions },
   })
+  expect(letters[0].args.items).toHaveLength(30)
+  expect(letters[0].args.items).toEqual(ITEMS)
   expect(letters[0].args).not.toHaveProperty('markdown')
   const conn = { send: (c: string, p: Record<string, unknown> = {}) => cmd(mac, { cmd: c, ...p }) }
   expect((await fetchOfflineBlob(conn, letters[0].bodyBlob)).toString('utf8')).toBe(BODY)

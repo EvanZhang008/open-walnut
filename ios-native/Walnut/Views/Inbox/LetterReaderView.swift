@@ -80,21 +80,22 @@ struct LetterReaderView: View {
                     if !letter.openActions.isEmpty { decisionCard(letter) }
                     if let answer = letter.answered { answeredCard(letter, answer) }
                     bodySection(letter)
+                    EmailItemsView(letterId: letterId, items: letter.items ?? [], onOpenTask: openTask)
                     taskRefs(letter)
                     if !letter.threadEntries.isEmpty || !replies.pendingReplies(for: letterId).isEmpty {
                         thread(letter)
                     }
                     if let note = deliveryNote { deliveryLine(note) }
                 } else if loading {
-                    ProgressView().controlSize(.large)
+                    ProgressView("Opening…").controlSize(.large)
                         .frame(maxWidth: .infinity, minHeight: 200)
                 } else if let loadError {
                     ContentUnavailableView {
-                        Label("Can't open this letter", systemImage: "envelope.badge.shield.half.filled")
+                        Label("Could not open this letter", systemImage: "envelope.badge.shield.half.filled")
                     } description: {
                         Text(loadError)
                     } actions: {
-                        Button("Try Again") { Task { await load() } }
+                        Button("Try again") { Task { await load() } }
                     }
                 }
             }
@@ -105,6 +106,10 @@ struct LetterReaderView: View {
         }
         // Dragging the letter down puts the keyboard away, as in a chat.
         .scrollDismissesKeyboard(.interactively)
+        .refreshable {
+            await load(markingRead: false)
+            await InboxItemStore.shared.refreshVisible()
+        }
         // A sent reply and its status line come into view above the reply box.
         .modifier(LetterFollowsNewestStatus(
             key: newestStatusKey, target: newestReplyItem?.id, contentId: Self.contentId, sendTick: followTick,
@@ -130,6 +135,9 @@ struct LetterReaderView: View {
             if LetterLiveThread.storeRowRereads(storeCount: count, readerCount: letter?.threadEntries.count) {
                 rereadThread("inbox-row")
             }
+        }
+        .onChange(of: inbox.itemAccess[letterId]?.servedFrom) { _, _ in
+            InboxItemStore.shared.setAccess(letterId: letterId, response: inbox.itemAccess[letterId])
         }
         .navigationTitle(Self.title(for: letter))
         .navigationBarTitleDisplayMode(.inline)
@@ -236,16 +244,18 @@ struct LetterReaderView: View {
     /// "option B, but only after the tests pass" doesn't need a second message.
     private func decisionCard(_ letter: Letter) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("This letter needs a decision", systemImage: "hand.raised")
+            Label("Ask AI decision", systemImage: "hand.raised")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.warning)
+            Text("These buttons send a request to the letter's AI. They do not directly change email or tasks.")
+                .font(.caption).foregroundStyle(.secondary)
             ForEach(letter.openActions) { action in
                 Button {
                     Task { await answer(action) }
                 } label: {
                     HStack(alignment: .top, spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(action.label)
+                            Text(InboxItemAction.aiLabel(action.label))
                                 .font(.subheadline.weight(.semibold))
                                 .multilineTextAlignment(.leading)
                             if let description = action.description, !description.isEmpty {
@@ -467,7 +477,8 @@ struct LetterReaderView: View {
                 replyField.endEditing()
                 replies.edit(letterId: letterId, clientId: clientId)
                 replyFocused = true
-            }
+            },
+            onOpenTask: openTask
         )
     }
 
@@ -762,6 +773,8 @@ struct LetterReaderView: View {
             // A reply whose response was lost but which the server recorded shows
             // once, as the recorded turn; one it does not hold gets Edit back.
             replies.reconcile(letterId: letterId, with: loaded, readStartedAt: started)
+            InboxItemStore.shared.seedLetter(loaded)
+            InboxItemStore.shared.setAccess(letterId: letterId, response: inbox.itemAccess[letterId])
             letter = loaded
             loadError = nil
         } catch {

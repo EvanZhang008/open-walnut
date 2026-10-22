@@ -3,8 +3,8 @@
  *
  * A letter rather than a notification because a letter is the one thing that reaches the human
  * wherever they are (console, phone push, relay) and stays readable afterwards. It carries NO
- * actions, which is what makes it a document instead of a question: there is nothing here for the
- * human to decide, and a letter with buttons badges as a decision waiting on them.
+ * whole-letter decisions. Optional email items let the human act on each exact source without
+ * turning the digest into an AI decision or changing its unread count snapshot.
  *
  * Four rules this file exists to hold, each of them a way a digest goes wrong:
  *
@@ -35,6 +35,9 @@
  */
 import { clipChars, NAME_CHARS, SUBJECT_CHARS } from './agent-format.js'
 import { escapeMarkdown } from './render.js'
+import type { InboxLetterItem } from '../../../packages/plugin-api/src/inbox-items.js'
+import { digestItemFromRow, digestLetterItem, type DigestItem } from './digest-items.js'
+export type { DigestItem } from './digest-items.js'
 import { oneLine } from './untrusted.js'
 import type { MailAccountDto } from './contract.js'
 import type { MailEvents } from './events.js'
@@ -58,12 +61,6 @@ export const DIGEST_MAX_ITEMS_CEILING = 50
  * on a phone, and a digest nobody scrolls to the end of is not a better digest.
  */
 export const DIGEST_MAX_BYTES = 16 * 1024
-
-export interface DigestItem {
-  sender: string
-  subject: string
-  sentAt: number
-}
 
 export interface DigestAccountBlock {
   accountId: string
@@ -146,6 +143,7 @@ export interface RenderedDigest {
   text: string
   unread: number
   accounts: number
+  items: InboxLetterItem[]
 }
 
 /**
@@ -167,7 +165,8 @@ function itemLine(item: DigestItem, now: number): string {
   // and hide every other message, which is a mailbox anyone can empty by being verbose in a header.
   const sender = escapeMarkdown(clipChars(item.sender, NAME_CHARS)) || '(no sender)'
   const subject = escapeMarkdown(clipChars(item.subject, SUBJECT_CHARS)) || '(no subject)'
-  return `- **${sender}**: ${subject} (${relativeTime(item.sentAt, now)})`
+  const sourceNote = digestLetterItem(item) ? '' : ' [Email actions unavailable: source identity missing]'
+  return `- **${sender}**: ${subject} (${relativeTime(item.sentAt, now)})${sourceNote}`
 }
 
 /**
@@ -185,8 +184,9 @@ function renderBlock(
   now: number,
   budget: number,
   cutItems: boolean,
-): string | null {
-  const heading = `### ${escapeMarkdown(clipChars(block.label, NAME_CHARS)) || block.accountId}`
+  itemBudget: number,
+): { markdown: string; items: InboxLetterItem[] } | null {
+  const heading = `### ${escapeMarkdown(clipChars(block.label, NAME_CHARS)) || escapeMarkdown(oneLine(block.accountId))}`
     + ` (${block.unread} unread)`
   const footer = `[Open Mail](${mailAccountLink(block.accountId)})`
   // The heading, the link and the "and N more" line are what make a truncated block readable, so
@@ -194,13 +194,18 @@ function renderBlock(
   let used = bytes(heading) + bytes(footer) + MORE_LINE_BYTES + 4
   if (used > budget) return null
   const kept: string[] = []
+  const items: InboxLetterItem[] = []
+  const seen = new Set<string>()
   for (const item of block.items) {
+    const structured = digestLetterItem(item)
+    if (structured && seen.has(structured.id)) continue
     const line = itemLine(item, now)
-    if (used + bytes(line) + 1 > budget) {
+    if (used + bytes(line) + 1 > budget || (structured && items.length >= itemBudget)) {
       if (cutItems) break
       return null
     }
     kept.push(line)
+    if (structured) { items.push(structured); seen.add(structured.id) }
     used += bytes(line) + 1
   }
   const body = [...kept]
@@ -215,15 +220,14 @@ function renderBlock(
   // printed as text makes that a copy-and-paste job on the phone where the letter is read. Nothing
   // untrusted is in it (Walnut's own words, and an id this file percent-encoded), so it cannot be
   // the hole the escaping above exists to close.
-  return [heading, '', ...body, '', footer].join('\n')
+  return { markdown: [heading, '', ...body, '', footer].join('\n'), items }
 }
 
-export interface RenderedDigest {
-  subject: string
-  markdown: string
-  text: string
-  unread: number
-  accounts: number
+function snapshotLine(now: number): string {
+  const date = new Date(now)
+  return Number.isFinite(date.getTime())
+    ? `Mailbox snapshot at ${date.toISOString()}`
+    : 'Mailbox counts in this summary are a snapshot, not live status.'
 }
 
 /**
@@ -236,21 +240,25 @@ export function renderDigest(blocks: DigestAccountBlock[], now: number): Rendere
   const unread = blocks.reduce((sum, block) => sum + block.unread, 0)
   const subject = `Mail digest: ${unread} unread across ${plural(blocks.length, 'account')}`
   const sections: string[] = []
-  let used = 0
+  const items: InboxLetterItem[] = []
+  const snapshot = snapshotLine(now)
+  let used = bytes(snapshot) + 2 + 64 // Reserve the whole-account truncation notice.
   for (const block of blocks) {
-    const section = renderBlock(block, now, DIGEST_MAX_BYTES - used, sections.length === 0)
+    const section = renderBlock(block, now, DIGEST_MAX_BYTES - used, sections.length === 0, 100 - items.length)
     if (!section) break
-    sections.push(section)
-    used += bytes(section) + 2
+    sections.push(section.markdown)
+    items.push(...section.items)
+    used += bytes(section.markdown) + 2
   }
   const dropped = blocks.length - sections.length
   if (dropped > 0) sections.push(`and ${plural(dropped, 'more account')}`)
   return {
     subject,
-    markdown: sections.join('\n\n'),
-    text: `${unread} unread across ${plural(blocks.length, 'account')}.`,
+    markdown: [snapshot, ...sections].join('\n\n'),
+    text: `${unread} unread across ${plural(blocks.length, 'account')}. ${snapshot}`,
     unread,
     accounts: blocks.length,
+    items,
   }
 }
 
@@ -269,15 +277,27 @@ export function renderGroupedDigest(blocks: DigestAccountBlock[], groups: Digest
   const need = blocks.reduce((sum, block) => sum + block.unread, 0)
   const sorted = groups.reduce((sum, group) => sum + group.unread, 0)
   const headline = `${need} need you \u00b7 ${sorted} sorted into groups`
-  const groupLines = groups.map((group) => `- ${escapeMarkdown(clipChars(group.label, NAME_CHARS))}: ${group.unread} unread`)
+  const groupLines: string[] = []
+  let groupBytes = 64
+  for (const group of groups) {
+    const line = `- ${escapeMarkdown(clipChars(group.label, NAME_CHARS))}: ${group.unread} unread`
+    if (groupBytes + bytes(line) + 1 > 4096) break
+    groupLines.push(line)
+    groupBytes += bytes(line) + 1
+  }
+  const droppedGroups = groups.length - groupLines.length
+  if (droppedGroups) groupLines.push(`and ${plural(droppedGroups, 'more group')}`)
   const tail = groupLines.length > 0 ? ['### Sorted into groups', '', ...groupLines].join('\n') : ''
   const sections: string[] = []
-  let used = bytes(tail) + 2
+  const items: InboxLetterItem[] = []
+  const snapshot = snapshotLine(now)
+  let used = bytes(tail) + bytes(snapshot) + 4 + 64
   for (const block of blocks) {
-    const section = renderBlock(block, now, DIGEST_MAX_BYTES - used, sections.length === 0)
+    const section = renderBlock(block, now, DIGEST_MAX_BYTES - used, sections.length === 0, 100 - items.length)
     if (!section) break
-    sections.push(section)
-    used += bytes(section) + 2
+    sections.push(section.markdown)
+    items.push(...section.items)
+    used += bytes(section.markdown) + 2
   }
   const dropped = blocks.length - sections.length
   if (dropped > 0) sections.push(`and ${plural(dropped, 'more account')}`)
@@ -285,10 +305,11 @@ export function renderGroupedDigest(blocks: DigestAccountBlock[], groups: Digest
   if (tail) sections.push(tail)
   return {
     subject: `Mail digest: ${headline}`,
-    markdown: sections.join('\n\n'),
-    text: `${headline}.`,
+    markdown: [snapshot, ...sections].join('\n\n'),
+    text: `${headline}. ${snapshot}`,
     unread: need + sorted,
     accounts: blocks.length,
+    items,
   }
 }
 
@@ -299,6 +320,7 @@ export interface DigestLetters {
     markdown?: string
     text?: string
     pin?: boolean
+    items?: InboxLetterItem[]
   }): Promise<{ letterId: string }>
 }
 
@@ -413,6 +435,7 @@ export class MailDigest {
       subject: rendered.subject,
       markdown: rendered.markdown,
       text: rendered.text,
+      items: rendered.items,
       // Never pinned: a digest is today's news, and a pin is for something that has to be dealt
       // with. Tomorrow's would sit under it.
       pin: false,
@@ -460,11 +483,7 @@ export class MailDigest {
         // (a flag change the poll has not pushed yet). Listing four messages under "3 unread" is the
         // one incoherence a reader can see without leaving the letter.
         unread: Math.max(unread, rows.length),
-        items: rows.map((row) => ({
-          sender: senderOf(row.payload, row.from_addr),
-          subject: row.subject,
-          sentAt: row.sent_at,
-        })),
+        items: rows.map((row) => digestItemFromRow(row, account)),
       })
     }
     return { blocks, complete: true }
@@ -509,7 +528,7 @@ export class MailDigest {
         accountId: account.accountId,
         label: account.displayName || account.address || account.accountId,
         unread: Math.max(unread, rows.length),
-        items: rows.map((row) => ({ sender: senderOf(row.payload, row.from_addr), subject: row.subject, sentAt: row.sent_at })),
+        items: rows.map((row) => digestItemFromRow(row, account)),
       })
     }
     // Unread groups only, biggest first (the letter's job is "how much is waiting where").
@@ -518,22 +537,4 @@ export class MailDigest {
       .sort((a, b) => b.unread - a.unread || a.label.localeCompare(b.label))
     return { blocks, complete: true, groups }
   }
-}
-
-/**
- * The sender's display name when there is one, else the bare address.
- *
- * Read from the payload blob here rather than through a DTO: the digest wants two strings per row
- * and building a full `MailMessageDto` for each would parse attachments and flags nobody reads.
- */
-function senderOf(payload: string | null, fromAddr: string): string {
-  if (payload) {
-    try {
-      const parsed = JSON.parse(payload) as { from?: { name?: string; address?: string } }
-      const name = parsed.from?.name?.trim()
-      if (name) return name
-      if (parsed.from?.address) return parsed.from.address
-    } catch { /* a payload that will not parse is not worth a failed digest */ }
-  }
-  return fromAddr
 }

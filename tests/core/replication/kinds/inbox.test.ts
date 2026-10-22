@@ -19,10 +19,13 @@ vi.mock('../../../../src/constants.js', () => createMockConstants('walnut-copy-i
 
 import { WALNUT_HOME } from '../../../../src/constants.js'
 import { _resetServerRoleForTesting } from '../../../../src/core/server-role.js'
-import { buildCopyManifest, runCopyRound, syncCopyKinds, type CopyKind } from '../../../../src/core/replication/kinds/copy-kind.js'
+import { buildCopyManifest, manifestDigest, runCopyRound, syncCopyKinds, type CopyKind } from '../../../../src/core/replication/kinds/copy-kind.js'
+import type { RowSetState } from '../../../../src/core/replication/kind-follower.js'
 import { INBOX_BODIES_KIND, INBOX_KIND, leaderBodies, _resetInboxCopyForTesting, type LetterBodyRow } from '../../../../src/core/replication/kinds/inbox.js'
 import { _resetReplicaStatusForTesting, forgetKindManifests } from '../../../../src/core/replication/replica-status.js'
-import type { LetterRecord } from '../../../../src/core/human-inbox/types.js'
+import { mergeLetterItemFacts } from '../../../../src/core/human-inbox/item-merge.js'
+import { normalizeItems } from '../../../../src/core/human-inbox/item-schema.js'
+import type { InboxItemReceipt, InboxLetterItem, LetterRecord } from '../../../../src/core/human-inbox/types.js'
 
 const T0 = '2026-10-15T08:00:00.000Z'
 const ENV = ['WALNUT_ROLE', 'WALNUT_PLACEMENT', 'WALNUT_HOST_SERVER'] as const
@@ -37,6 +40,26 @@ const copiedIds = async () => (JSON.parse(await fsp.readFile(indexFile(), 'utf8'
 
 function letter(i: number, over: Partial<LetterRecord> = {}): LetterRecord {
   return { id: `lt-${(1_700_000 + i).toString(36)}-a${String(i).padStart(4, '0')}`, type: 'report', title: `Weekly report ${i}`, createdAt: T0, read: false, bodyFile: `lt-${(1_700_000 + i).toString(36)}-a${String(i).padStart(4, '0')}.md`, bodyFormat: 'md', ...over } as unknown as LetterRecord
+}
+
+function itemLetter(revision: number): LetterRecord {
+  const item = (id: string): InboxLetterItem => {
+    const source = { kind: 'mail' as const, account: 'demo-account', message: `message-${id}` }
+    const receipt: InboxItemReceipt = {
+      actionId: `mark-${id}`, requestId: `request-${id}`, planId: `plan-${id}`, planVersion: 1,
+      revision, updatedAt: T0, status: revision >= 9 ? 'success' : 'pending', intent: 'mark_read',
+      source, input: {}, stage: revision >= 9 ? 'finished' : 'accepted', recovery: [],
+    }
+    return { id, subject: `Message ${id}`, summary: 'A message to review', source,
+      actions: [{ id: receipt.actionId, kind: 'op', intent: 'mark_read' }], receipts: [receipt] }
+  }
+  return {
+    id: 'lt-maildemo-0001', subject: 'Mail review', type: 'review', bodyFormat: 'markdown',
+    textPreview: 'Two messages to review', sender: { sessionId: 'external', host: 'local' },
+    createdAt: Date.parse(T0), read: false, pinned: false, archived: false,
+    items: [item('envelope-item')],
+    thread: [{ from: 'agent', text: 'Another message', at: Date.parse(T0), items: [item('thread-item')] }],
+  }
 }
 
 /** One round as syncCopyKinds runs it (the bodies it could not read in `keep`). */
@@ -84,6 +107,46 @@ describe('the inbox index copy', () => {
     expect(stepsSince(h.calls, from)).toEqual(['status:inbox'])
   })
 
+  it('keeps newer local receipts without changing the leader row hash or requesting it again', async () => {
+    const local = itemLetter(9)
+    const incoming = itemLetter(3)
+    const localBefore = structuredClone(local)
+    const incomingBefore = structuredClone(incoming)
+    // Exercise the real receipt schema, not a receipt silently discarded by normalization.
+    for (const row of [local, incoming]) {
+      expect(normalizeItems(row.items)).toEqual(row.items)
+      expect(normalizeItems(row.thread[0].items)).toEqual(row.thread[0].items)
+    }
+    await fsp.mkdir(path.dirname(indexFile()), { recursive: true })
+    await fsp.writeFile(indexFile(), JSON.stringify({ version: 1, copiedAt: T0, letters: [local] }))
+    letters = [incoming]
+    const manifest = await buildCopyManifest(index)
+    const leaderHash = INBOX_KIND.hash(incoming)
+    const digest = manifestDigest(manifest, index.ordered)
+    expect(manifest.entries).toEqual([{ k: incoming.id, h: leaderHash }])
+
+    expect(await runCopyRound(index, manifest, h.target, { asOf: Date.now() })).toMatchObject({ action: 'synced', sent: 1, held: 0 })
+    expect(stepsSince(h.calls)).toEqual(['status:inbox', 'sync:inbox', 'put:inbox:1'])
+    const stored = (JSON.parse(await fsp.readFile(indexFile(), 'utf8')) as { letters: LetterRecord[] }).letters[0]
+    expect(stored.items?.[0].receipts).toEqual(local.items?.[0].receipts)
+    expect(stored.thread[0].items?.[0].receipts).toEqual(local.thread[0].items?.[0].receipts)
+    expect(INBOX_KIND.hash(stored)).not.toBe(leaderHash)
+    const state = JSON.parse(await fsp.readFile(path.join(WALNUT_HOME, 'cache', 'replica', 'inbox.json'), 'utf8')) as RowSetState & { v: number }
+    expect(state).toMatchObject({ v: 1, order: [incoming.id], hashes: { [incoming.id]: leaderHash } })
+    const status = await h.target.post({ op: 'status', kind: index.kind, schemaVersion: index.schemaVersion, digest })
+    expect(status).toMatchObject({ ok: true, reply: { ok: true, inSync: true, digest } })
+
+    for (let i = 0; i < 2; i++) {
+      // Forget the leader's shortcut so each sweep actually asks the follower's digest.
+      forgetKindManifests(['inbox'])
+      const from = h.calls.length
+      expect(await round(index)).toMatchObject({ action: 'unchanged' })
+      expect(stepsSince(h.calls, from)).toEqual(['status:inbox'])
+    }
+    expect(incoming).toEqual(incomingBefore)
+    expect(local).toEqual(localBefore)
+  })
+
   it('a letter read on the Mac goes as one put with the digest; the order stays', async () => {
     await round(index)
     letters[2] = { ...letters[2], read: true } as LetterRecord
@@ -124,6 +187,58 @@ describe('the inbox index copy', () => {
     expect(await readLetterIndexForReplica()).toEqual([])
     expect(await syncCopyKinds([real], { targets: () => [h.target] })).toEqual([])
     expect(h.calls).toEqual([])
+  })
+})
+
+describe('letter item fact merge', () => {
+  it.each([3, 9, 12])('merges revision %i into new envelope and thread items without changing either input', (revision) => {
+    const previous = itemLetter(9)
+    const incoming = itemLetter(revision)
+    const previousBefore = structuredClone(previous)
+    const incomingBefore = structuredClone(incoming)
+    const merged = mergeLetterItemFacts(previous, incoming)
+    const expected = revision > 9 ? incoming : previous
+    expect(merged).not.toBe(incoming)
+    expect(merged.items).not.toBe(incoming.items)
+    expect(merged.items?.[0]).not.toBe(incoming.items?.[0])
+    expect(merged.items?.[0].receipts).toEqual(expected.items?.[0].receipts)
+    expect(merged.thread).not.toBe(incoming.thread)
+    expect(merged.thread[0]).not.toBe(incoming.thread[0])
+    expect(merged.thread[0].items?.[0]).not.toBe(incoming.thread[0].items?.[0])
+    expect(merged.thread[0].items?.[0].receipts).toEqual(expected.thread[0].items?.[0].receipts)
+    expect(previous).toEqual(previousBefore)
+    expect(incoming).toEqual(incomingBefore)
+  })
+
+  it.each(['account', 'message', 'id'] as const)('does not carry receipts into an item with a changed %s', (field) => {
+    const previous = itemLetter(9)
+    const incoming = itemLetter(3)
+    for (const item of [incoming.items![0], incoming.thread[0].items![0]]) {
+      if (field === 'id') item.id = `other-${item.id}`
+      else item.source = { ...item.source, [field]: `other-${item.source[field]}` }
+      item.receipts = item.receipts?.map(receipt => ({ ...receipt, source: item.source }))
+    }
+    const previousBefore = structuredClone(previous)
+    const incomingBefore = structuredClone(incoming)
+    const merged = mergeLetterItemFacts(previous, incoming)
+    expect(merged).toEqual(incomingBefore)
+    expect(merged.items?.[0]).toBe(incoming.items?.[0])
+    expect(merged.thread[0].items?.[0]).toBe(incoming.thread[0].items?.[0])
+    expect(previous).toEqual(previousBefore)
+    expect(incoming).toEqual(incomingBefore)
+  })
+
+  it('keeps a first copy unchanged and preserves local receipts missing from a later copy', () => {
+    const previous = itemLetter(9)
+    const incoming = itemLetter(3)
+    delete incoming.items![0].receipts
+    delete incoming.thread[0].items![0].receipts
+    const incomingBefore = structuredClone(incoming)
+    expect(mergeLetterItemFacts(undefined, incoming)).toBe(incoming)
+    const merged = mergeLetterItemFacts(previous, incoming)
+    expect(merged.items?.[0].receipts).toEqual(previous.items?.[0].receipts)
+    expect(merged.thread[0].items?.[0].receipts).toEqual(previous.thread[0].items?.[0].receipts)
+    expect(incoming).toEqual(incomingBefore)
   })
 })
 

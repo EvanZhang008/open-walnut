@@ -11,9 +11,12 @@ import { formatRelative } from '@/contexts/notifications';
 import { LinkifiedText } from '@/components/common/LinkifiedText';
 import type { LetterThreadEntry } from '@/api/human-inbox';
 import { LetterBody } from './LetterBody';
+import { EmailItems } from './EmailItems';
 
-export function LetterThread({ entries, subject, onBodyClick }: {
+export function LetterThread({ entries, subject, onBodyClick, letterId, onNavigate }: {
   entries: LetterThreadEntry[];
+  letterId: string;
+  onNavigate: (to: string) => void;
   subject: string;
   onBodyClick?: (e: React.MouseEvent) => void;
 }) {
@@ -46,6 +49,7 @@ export function LetterThread({ entries, subject, onBodyClick }: {
               />
             </div>
           )}
+          {entry.from === 'agent' && <EmailItems letterId={letterId} items={entry.items} onNavigate={onNavigate} />}
           {!entry.body && !entry.bodyDeferred && entry.bodyFile && (
             <div className="hib-note">The rich body of this reply is no longer on disk.</div>
           )}

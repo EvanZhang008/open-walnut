@@ -26,6 +26,8 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { listLetters, type LetterEnvelope } from '@/api/human-inbox';
 import { log } from '@/utils/log';
+import { mergeReceipts } from './item-receipt-model';
+import { ingestItem, itemKey } from './item-store';
 
 /** Coalesce a burst of letter events (a send plus its bridge update) into one GET. */
 const REFRESH_DEBOUNCE_MS = 350;
@@ -75,7 +77,8 @@ export function loadLetters(): Promise<void> {
   inflight = (async () => {
     try {
       const letters = await listLetters();
-      snapshot = { ...snapshot, letters, loaded: true, error: null };
+      const merged = letters.map(next => mergeLetterPatch(snapshot.letters.find(old => old.id === next.id) ?? next, next));
+      snapshot = { ...snapshot, letters: merged, loaded: true, error: null };
       lastLoadedAt = Date.now();
     } catch (err) {
       snapshot = { ...snapshot, loaded: true, error: 'Could not load letters' };
@@ -94,7 +97,8 @@ export function loadArchivedLetters(): Promise<void> {
   archivedInflight = (async () => {
     try {
       const archived = await listLetters({ archived: true });
-      snapshot = { ...snapshot, archived, archivedLoaded: true, error: null };
+      const merged = archived.map(next => mergeLetterPatch(snapshot.archived.find(old => old.id === next.id) ?? next, next));
+      snapshot = { ...snapshot, archived: merged, archivedLoaded: true, error: null };
       lastArchivedAt = Date.now();
     } catch (err) {
       snapshot = { ...snapshot, archivedLoaded: true, error: 'Could not load the inbox' };
@@ -187,6 +191,15 @@ function mergeLetterPatch(l: LetterEnvelope, patch: Partial<LetterEnvelope>): Le
     ? (flipped ? Date.now() : l.readAt)
     : (l.readAt !== undefined && patch.readAt < l.readAt ? l.readAt : patch.readAt);
   const next: LetterEnvelope = { ...l, ...patch };
+  const mergeItems = (old: LetterEnvelope['items'], incoming: LetterEnvelope['items']) => incoming?.map(item => {
+    const prior = old?.find(o => o.id === item.id);
+    const merged = { ...item, receipts: mergeReceipts(prior?.receipts ?? [], item.receipts ?? []) };
+    ingestItem(itemKey(l.id, item.id), merged);
+    return merged;
+  });
+  if (patch.items) next.items = mergeItems(l.items, patch.items);
+  if (patch.thread) next.thread = patch.thread.map((entry, index) => ({ ...entry,
+    ...(entry.items ? { items: mergeItems(l.thread?.[index]?.items, entry.items) } : {}) }));
   if (readAt === undefined) delete next.readAt;
   else next.readAt = readAt;
   return next;

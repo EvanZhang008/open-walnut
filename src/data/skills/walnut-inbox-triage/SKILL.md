@@ -1,15 +1,14 @@
 ---
 name: walnut-inbox-triage
 description: >-
-  The procedure for ONE Inbox Triage run: what to read, which notes to update,
-  and what to ask. Use only when launched as the Inbox Triage agent with a batch
-  of new mail and Slack items. Not for one message, not for triaging tasks (the
-  `walnut-triage` skill), not for general mail or Slack questions.
+  One Inbox Triage batch: reads, notes, decisions. Only for the Inbox Triage
+  agent. Not for single messages, mail/Slack questions or task triage
+  (the `walnut-triage` skill).
 ---
 
 # One triage run
 
-One batch, worked once, then stop.
+One batch, then stop.
 
 1. Read `notes/Walnut/Triage/State.md` (its body rides the batch).
 2. Read what the batch omits: `mail_list`, `mail_thread`, `slack_*`, `task_search`.
@@ -26,13 +25,15 @@ One batch, worked once, then stop.
    - **Noise** (newsletter, ad, a notice asking nothing): mark it read if your
      run rules allow.
    - **FYI**: one line in the summary.
-5. Letters (`human_inbox_send`): **at most one** summary (`review`, `task_refs`
-   for every task touched), only for a decision or an item the user must know;
-   handovers, notes and mark-read alone send none. At most **three**
-   `action_required`, each with buttons (`Make a task` / `Reply for me` /
-   `Unsubscribe` / `Ignore`); a 4th is refused: fold it into the summary. A tap
-   returns to THIS run; act, then `human_inbox_reply`. `Reply for me` = a draft
-   plus `mail_request_send`. Withdraw an earlier run's decision once handled.
+5. `human_inbox_send`: at most **one** `review` summary, only when needed.
+   No handover FYIs. `task_refs`: touched tasks. Each email gets `items`:
+   exact `source.account/message`, cached summary/display, fixed `mark_read`,
+   `find_task`, `create_task` actions. No op target/goal/label/args. Ask-mode
+   email work belongs there, not whole-letter buttons. Counts are snapshots;
+   groups/omissions are not items. At most **three** `action_required` AI
+   decisions; fold a 4th into the summary. Their taps ask THIS run, not ops.
+   `human_inbox_reply` may add items with letter-wide unique IDs.
+   `Reply for me` = draft + `mail_request_send`. Withdraw handled decisions.
 6. Rewrite `State.md` (`## Awaiting`, `## Watching`, `## Recently handled`,
    `## Notes for next run`), append to `notes/Walnut/Triage/Runs/<YYYY-MM>.md`,
    `memory_write` what lasts.

@@ -17,6 +17,8 @@
  */
 
 import { z } from 'zod'
+import { AsyncLocalStorage } from 'node:async_hooks'
+const humanCallerScope = new AsyncLocalStorage<boolean>()
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 import { getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
 import {
@@ -56,7 +58,7 @@ export const CALLER_HOST_HEADER = 'x-walnut-caller-host'
  * trust class the self-call carries (src/lib/caller-origin.ts): the receiving
  * route may LOWER trust on it, never raise it.
  */
-interface CallerProvenance { sid?: string; host?: string; origin: string }
+interface CallerProvenance { sid?: string; host?: string; origin: string; beforeMutation?: () => Promise<void> }
 
 /**
  * Who is calling, for ops whose server side stamps provenance (the human inbox
@@ -112,6 +114,7 @@ async function rawRequest(
   const self = getSelfApiRoot()
   const selfToken = self && resolveApiBase(self) === base ? getSelfCallToken() : null
   let res: Response
+  if (method !== 'GET' && method !== 'HEAD') await prov.beforeMutation?.()
   try {
     res = await fetch(url, {
       method,
@@ -208,6 +211,10 @@ export function materializeBinding(
 export interface ExecuteOpOptions {
   apiBase?: string
   callerSid?: string
+  /** Human clicks never inherit a session id from headers or the process environment. */
+  callerMode?: 'session' | 'human'
+  /** Recheck a frozen human plan immediately before each mutation self-call. */
+  beforeMutation?: () => Promise<void>
   callerHost?: string
   /**
    * REQUIRED: who this call acts for (src/lib/caller-origin.ts). `__local__` only
@@ -299,11 +306,13 @@ export async function executeOp(
   const args = parsed.args
 
   const base = resolveApiBase(options.apiBase)
-  return runOp(op, args, base, {
-    sid: resolveCallerSid(options.callerSid),
+  const human = options.callerMode === 'human' || humanCallerScope.getStore() === true
+  return humanCallerScope.run(human, () => runOp(op, args, base, {
+    sid: options.callerMode === 'human' || humanCallerScope.getStore() ? undefined : resolveCallerSid(options.callerSid),
     host: options.callerHost?.trim() || undefined,
+    beforeMutation: options.beforeMutation,
     origin,
-  })
+  }))
 }
 
 async function runOp(

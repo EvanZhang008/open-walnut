@@ -16,6 +16,7 @@ import { MailDrafts } from './drafts.js'
 import { MailEvents } from './events.js'
 import { MailFilterMover } from './mail-filter-moves.js'
 import { MailMessageTasks } from './message-tasks.js'
+import { registerMailItemSource } from './item-source.js'
 import { createMailOps } from './ops.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
 import { createMailTriggerTemplate } from './trigger-template.js'
@@ -119,6 +120,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
 
   const db = openMailDatabase(walnut)
   const store = new MailStore(db)
+  const unregisterItemSource = registerMailItemSource(store)
   const bodies = new MailBodyStore(walnut.storage.dataDir)
   // Inbox sorting. Built before the service because ingest classifies each row it writes. The rules
   // file lives in this plugin's data dir; its poll is a HOST timer so teardown cancels it.
@@ -461,6 +463,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // reaching for "the current one" could.
   return {
     dispose: async () => {
+      unregisterItemSource()
       accountsWatch.dispose()
       firstSyncTimer.dispose()
       retryTimer?.dispose()

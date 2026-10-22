@@ -9,6 +9,10 @@
  * Frozen contract: docs/plan/human-inbox-todo.md → "Letter record (store)".
  */
 
+// @ts-ignore Shared type-only package contract is outside the server emit root.
+import type { InboxLetterItem } from '../../../packages/plugin-api/src/inbox-items.js';
+export type * from '../../../packages/plugin-api/src/inbox-items.js';
+
 /** WHY the letter exists. Drives how the UI treats it (badges, Needs Action). */
 export type LetterType = 'completion' | 'action_required' | 'review' | 'info';
 
@@ -55,6 +59,7 @@ export interface LetterAnswer {
 export interface ThreadEntry {
   from: 'agent' | 'human';
   text: string;
+  items?: InboxLetterItem[];
   bodyFormat?: LetterBodyFormat;
   bodyFile?: string;
   /**
@@ -141,6 +146,7 @@ export interface LetterRecord {
    */
   bodyBytes?: number;
   actions?: LetterAction[];
+  items?: InboxLetterItem[];
   answered?: LetterAnswer;
   thread: ThreadEntry[];
   /** Task ids the letter cites; the reader renders them as task pills. */
@@ -172,6 +178,7 @@ export interface NewLetter {
   text?: string;
   /** action_required only. */
   actions?: LetterAction[];
+  items?: InboxLetterItem[];
   /** Accepts either spelling — the op/route body uses `task_refs`. */
   taskRefs?: string[];
   task_refs?: string[];
@@ -182,6 +189,7 @@ export interface NewLetter {
 
 /** A rich thread reply from the origin agent. */
 export interface AgentReplyInput {
+  items?: InboxLetterItem[];
   html?: string;
   markdown?: string;
   /** Staged body ref — same lane as NewLetter.htmlRef, either spelling. */

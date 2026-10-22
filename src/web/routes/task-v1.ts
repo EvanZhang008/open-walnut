@@ -268,6 +268,10 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       sendError(res, 400, 'bad_request', `engine must be one of: ${SESSION_ENGINE_IDS.join(', ')}`)
       return
     }
+    if (b.start_attempt_id !== undefined && !(typeof b.start_attempt_id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(b.start_attempt_id))) {
+      sendError(res, 400, 'bad_request', 'start_attempt_id must be a UUID')
+      return
+    }
     const rawSid = req.headers['x-walnut-caller-sid']
     const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim() || undefined
     const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
@@ -288,6 +292,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         expectReply: typeof b.expect_reply === 'boolean' ? b.expect_reply : undefined,
         replyTimeoutSecs: typeof b.reply_timeout === 'number' ? b.reply_timeout : undefined,
         callerSid,
+        startAttemptId: str('start_attempt_id'),
         source: 'api-v1',
       }))
     } catch (err) {

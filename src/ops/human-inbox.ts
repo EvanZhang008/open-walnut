@@ -22,6 +22,7 @@
 
 import { z } from 'zod'
 import { defineOp } from './registry.js'
+import { inboxItemsSchema } from '../core/human-inbox/item-schema.js'
 
 const LETTER_TYPE = z.enum(['completion', 'action_required', 'review', 'info'])
 
@@ -67,6 +68,7 @@ defineOp({
     actions: z.array(ACTION).min(1).optional().describe(
       'The options rendered as buttons. REQUIRED (at least one) when type=action_required, and '
       + 'rejected on any other type: a decision letter with no options is one the human cannot answer'),
+    items: inboxItemsSchema.optional().describe('Independent email items. Supply exact account/message, safe display data and typed actions for every email in a summary. Fixed intents only; no tool, args, label or target on op actions. These do not answer the whole letter.'),
     task_refs: z.array(z.string()).optional().describe('Task ids this letter is about; rendered as clickable pills'),
     pin: z.boolean().optional().describe('Pin it to the top of the inbox (digests, standing reports)'),
   },
@@ -93,6 +95,7 @@ defineOp({
     text: z.string().min(1).describe('Your reply as plain text (always required: it is the thread line)'),
     markdown: z.string().optional().describe('Optional richer body rendered under the reply'),
     html: z.string().optional().describe('Optional self-contained HTML body, no scripts'),
+    items: inboxItemsSchema.optional().describe('New independent email items for this reply only. Item and action ids must be unique across the whole letter and thread.'),
   },
   bind: { method: 'POST', path: '/human-inbox/:letter/reply' },
   tags: { readonly: false, remote: 'allow' },

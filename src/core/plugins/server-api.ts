@@ -211,6 +211,7 @@ interface PluginLetterInput {
   html?: string
   text?: string
   actions?: Array<{ id: string; label: string; description?: string }>
+  items?: import('../../../packages/plugin-api/src/inbox-items.js').InboxLetterItem[]
   taskRefs?: string[]
   pin?: boolean
 }
@@ -556,7 +557,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         const { getTask } = await import('../task-manager.js')
         try { return publicTask(await getTask(id)) }
         catch (error) {
-          if (error instanceof Error && /not found/i.test(error.message)) return null
+          if (error instanceof Error && /not found|No task found matching/i.test(error.message)) return null
           throw error
         }
       },
@@ -581,10 +582,11 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
       async create(input: {
         title: string; description?: string; priority?: TaskPriority; phase?: TaskPhase; project?: string;
-        parentTaskId?: string; dependsOn?: string[]; tags?: string[]; dueDate?: string; startDate?: string; endDate?: string;
+        parentTaskId?: string; dependsOn?: string[]; tags?: string[]; dueDate?: string; startDate?: string; endDate?: string; idempotency_key?: string;
       }) {
-        const { addTask, updateTask } = await import('../task-manager.js')
-        const { task } = await addTask({
+        const { updateTask } = await import('../task-manager.js')
+        const { addTaskIdempotently } = await import('../task-create-idempotency.js')
+        const { task, reused } = await addTaskIdempotently({
           title: input.title,
           description: input.description,
           priority: input.priority,
@@ -595,7 +597,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           due_date: input.dueDate,
           start_date: input.startDate,
           end_date: input.endDate,
-        })
+        }, input.idempotency_key, input)
+        if (reused) return publicTask(task)
         const created = input.phase && input.phase !== task.phase
           ? (await updateTask(task.id, { phase: input.phase })).task
           : task
@@ -858,6 +861,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           ...(input.html !== undefined ? { html: input.html } : {}),
           ...(input.text !== undefined ? { text: input.text } : {}),
           ...(input.actions?.length ? { actions: input.actions.map((one) => ({ ...one })) } : {}),
+          ...(input.items !== undefined ? { items: input.items } : {}),
           ...(input.taskRefs ? { taskRefs: [...input.taskRefs] } : {}),
           ...(input.pin !== undefined ? { pin: input.pin } : {}),
           // `local` matches the sender the inbox already uses for a caller with no session: a
@@ -866,13 +870,14 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         })
         return { letterId: letter.id }
       },
-      async reply(letterId: string, input: { markdown?: string; html?: string; text?: string }): Promise<void> {
+      async reply(letterId: string, input: { markdown?: string; html?: string; text?: string; items?: import('../../../packages/plugin-api/src/inbox-items.js').InboxLetterItem[] }): Promise<void> {
         const { agentReply } = await import('../human-inbox/store.js')
         // A thread turn always carries plain text (that is what the thread renders), so a rich
         // reply that omitted it would be refused by the store. Derived rather than rejected.
         const text = input.text?.trim() || (input.markdown ?? input.html ?? '').trim()
         await agentReply(letterId, {
           text,
+          ...(input.items !== undefined ? { items: input.items } : {}),
           ...(input.markdown !== undefined ? { markdown: input.markdown } : {}),
           ...(input.html !== undefined ? { html: input.html } : {}),
         })

@@ -73,6 +73,29 @@ export async function handleHumanInboxRelayAction(
   p: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   switch (sub) {
+    case 'item-prepare':
+    case 'item-execute':
+    case 'item-execution':
+    case 'item-tasks':
+    case 'item-task': {
+      const origin = 'remote-http';
+      const letterId = str(p.letterId);
+      const itemId = str(p.itemId);
+      const { prepareInboxItem, storedInboxItem } = await import('./item-plans.js');
+      if (sub === 'item-prepare') return await prepareInboxItem(letterId, itemId, p.body, origin) as unknown as Record<string, unknown>;
+      const { executeInboxItem, queryInboxItem } = await import('./item-execution.js');
+      if (sub === 'item-execute') {
+        const { humanActionApiBase } = await import('../../ops/human-action-policy.js');
+        const receipt = await executeInboxItem(letterId, itemId, p.body, origin, humanActionApiBase());
+        return { ...await queryInboxItem(letterId, itemId, origin), receipt };
+      }
+      if (sub === 'item-execution') return await queryInboxItem(letterId, itemId, origin) as unknown as Record<string, unknown>;
+      await storedInboxItem(letterId, itemId);
+      const { itemTaskPage, itemTaskPreview } = await import('./item-status.js');
+      if (sub === 'item-task') return await itemTaskPreview(str(p.taskId)) as unknown as Record<string, unknown>;
+      const query = (p.query ?? {}) as Record<string, unknown>;
+      return await itemTaskPage(str(query.query ?? query.q), Math.max(0, Number(query.offset) || 0), Math.min(100, Math.max(1, Number(query.limit) || 25))) as unknown as Record<string, unknown>;
+    }
     case 'list':
       return await listLetters({ archived: p.archived === true }) as unknown as Record<string, unknown>;
     case 'get': {

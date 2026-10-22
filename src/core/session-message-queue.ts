@@ -101,6 +101,10 @@ export async function enqueueMessage(
   message: string,
   opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string },
 ): Promise<QueuedMessage> {
+  if (opts?.id?.startsWith('qm-inbox-') && !opts.id.startsWith('qm-inbox-ai-')) {
+    const { validateInboxMessageBoundary } = await import('./human-inbox/item-execution.js');
+    await validateInboxMessageBoundary(sessionId, opts.id);
+  }
   const { sessionStops, SessionStopSupersededError } = await import('./sessions/session-stop.js');
   const stopFence = await sessionStops.fence(sessionId);
   if (opts?.stopFence !== undefined && opts.stopFence !== stopFence) {
@@ -124,6 +128,7 @@ export async function enqueueMessage(
   };
   // A relayed row is written strictly: on a disk failure the companion is told
   // (QueueNotStoredError) instead of the row living in this process alone.
+  const itemAction = opts?.id?.startsWith('qm-inbox-') === true;
   const relayed = opts?.relayTaken === true;
   const outcome = await mutateStore((s) => {
     if (!s.queues[sessionId]) {
@@ -137,7 +142,7 @@ export async function enqueueMessage(
     }
     s.queues[sessionId].push(msg);
     return { queueDepth: s.queues[sessionId].length, existing: null };
-  }, relayed, relayed).catch((err: unknown) => { throw relayed ? new QueueNotStoredError(err) : err; });
+  }, relayed || itemAction, relayed || itemAction).catch((err: unknown) => { throw relayed || itemAction ? new QueueNotStoredError(err) : err; });
   if (outcome.existing) {
     log.session.info('message enqueue deduped by id (already queued)', {
       sessionId, messageId: outcome.existing.id, queueDepth: outcome.queueDepth,

@@ -91,10 +91,10 @@ function useMailDeepLink(search: string, ready: boolean): void {
     const accountId = params.get('account');
     const messageId = params.get('message');
     if (!accountId || !messageId) return;
-    const key = JSON.stringify([accountId, messageId]);
+    const key = JSON.stringify([accountId, messageId, params.get('readOnly')]);
     if (applied.current === key) return;
     applied.current = key;
-    void openMailDeepLink(accountId, messageId);
+    void openMailDeepLink(accountId, messageId, { markRead: params.get('readOnly') !== '1' });
   }, [search, ready]);
 }
 
