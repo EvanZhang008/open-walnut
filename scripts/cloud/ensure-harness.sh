@@ -19,7 +19,8 @@
 #      every spawn would die on it. A second drop-in, launcher.conf, starts the
 #      server through scripts/cloud/companion-launch.mjs, which runs the build
 #      the Mac installed (or this tree), and says whether the box takes builds
-#      from the Mac (WALNUT_COMPANION_MAC_BUILDS).
+#      from the Mac (WALNUT_COMPANION_MAC_BUILDS). It runs on the runtime the
+#      base unit names: bun on a unit setup.sh writes now.
 #   5. config.yaml keys that turn cloud exec on (src/core/cloud-exec.ts) plus
 #      defaults.engine, each seeded ONLY when absent. Cloud exec is seeded only
 #      once Claude Code is installed AND has a credential (the instance role,
@@ -139,12 +140,19 @@ SEED_SCRIPT="$SCRIPT_DIR/seed-harness-config.mjs"
 EXPOSED_MARKER="$ROOT/root/.walnut-code-tree-exposed"
 
 # `sudo` on AL2023 resets PATH to a secure_path without /usr/local/bin,
-# which is where setup.sh links node and npm. Appended, so it never outranks
-# anything already on PATH.
+# which is where setup.sh links bun (and node and npm, on AL2023). Appended, so
+# it never outranks anything already on PATH.
 if [ -z "$ROOT" ]; then
   case ":$PATH:" in *":/usr/local/bin:"*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
   export PATH
 fi
+# The seed script is plain JavaScript, run by bun like Walnut itself (setup.sh
+# installs it). --no-install: bun would otherwise fetch a package the given
+# checkout lacks from the registry, where js-yaml must come from that checkout.
+SEED_RUNTIME="$(command -v bun 2>/dev/null || true)"
+# No transpiler cache either: bun would write one into the service user's home
+# (~/.cache/bun), and a --dry-run promises to change nothing.
+SEED_ENV=(env BUN_RUNTIME_TRANSPILER_CACHE_PATH=0)
 
 if [ -z "$ROOT" ] && [ "$DRY_RUN" = 0 ] && [ "$(id -u)" != 0 ]; then
   echo "FATAL: run as root (sudo bash $0 ...), or add --dry-run to preview" >&2
@@ -166,9 +174,10 @@ done
 
 # The code tree this script runs from is root's, read-only to the service user.
 # That user runs agents (cloud exec), and root runs code from this tree on every
-# deploy (this script, npm lifecycle scripts, the build, git). Anything in it the
-# service user could change is a path to root for a prompt-injected agent, so
-# record it in $EXPOSED_MARKER and refuse to go on rather than run on top of it.
+# deploy (this script, the install's lifecycle scripts, the build, git).
+# Anything in it the service user could change is a path to root for a
+# prompt-injected agent, so record it in $EXPOSED_MARKER and refuse to go on
+# rather than run on top of it.
 # setup.sh makes the same check and refuses too; the deploy replaces such a tree
 # from a fresh clone. None of them takes an exposed tree back in place.
 # Test hook: WALNUT_HARNESS_CODE_TREE names the tree to check; in a sandboxed run
@@ -384,8 +393,10 @@ link_npm_bin() {
   if mkdir -p "$LINK_DIR" 2>/dev/null && ln -sfn "$target" "$link" 2>/dev/null; then echo linked; else echo failed; fi
 }
 
-# Node floors from each package's `engines` field (npm view <pkg> engines).
-# Packages without one are absent. This script warns and never upgrades node.
+# Node floors of the agent CLIs' npm packages, from each package's `engines`
+# field (npm view <pkg> engines). These are third-party tools that run on node;
+# Walnut itself runs on bun. Packages without a floor are absent. This script
+# warns and never upgrades node.
 npm_node_floor() {
   case "$1" in
     "$CLAUDE_NPM_PACKAGE") echo 22.0.0 ;;
@@ -551,8 +562,10 @@ fi
 engine_source="--engine"
 if [ -z "$ENGINE" ]; then
   configured=""
-  if command -v node >/dev/null 2>&1 && [ -e "$CONFIG_FILE" ]; then
-    configured="$(as_walnut "$(command -v node)" "$SEED_SCRIPT" --config "$CONFIG_FILE" --repo "$REPO_DIR" --print-engine </dev/null 2>/dev/null || true)"
+  if [ -e "$CONFIG_FILE" ] && [ -z "$SEED_RUNTIME" ]; then
+    echo "    bun not found, so config.yaml's defaults.engine was not read"
+  elif [ -e "$CONFIG_FILE" ]; then
+    configured="$(as_walnut "${SEED_ENV[@]}" "$SEED_RUNTIME" --no-install "$SEED_SCRIPT" --config "$CONFIG_FILE" --repo "$REPO_DIR" --print-engine </dev/null 2>/dev/null || true)"
   fi
   if [ -n "$configured" ] && is_engine_id "$configured"; then
     ENGINE="$configured"; engine_source="config.yaml"
@@ -737,9 +750,12 @@ unit_word() {
   v="$(sed -n "s/^$1=\(..*\)\$/\1/p" "$UNIT_FILE" 2>/dev/null | head -n 1 || true)"
   printf '%s\n' "${v%% *}"
 }
-# The node the unit already runs, so the launcher and the server use the same one.
-LAUNCH_NODE="$(unit_word ExecStart)"
-case "$LAUNCH_NODE" in /*) ;; *) LAUNCH_NODE="$(command -v node 2>/dev/null || true)" ;; esac
+# The runtime the unit already runs, so the launcher and the server use the
+# same one: bun on a unit setup.sh writes now. A unit an older setup.sh wrote
+# names node, and is taken as it is until setup.sh rewrites the unit. A unit
+# that names no absolute path gets bun from PATH, never node.
+LAUNCH_RUNTIME="$(unit_word ExecStart)"
+case "$LAUNCH_RUNTIME" in /*) ;; *) LAUNCH_RUNTIME="$(command -v bun 2>/dev/null || true)" ;; esac
 # The tree the unit serves from, not REPO_DIR: a deploy may run this script from
 # a sibling tree it renames into place afterwards, and the drop-in has to name
 # the place the tree ends up in. REPO_DIR only when the unit names none.
@@ -753,24 +769,24 @@ fi
 MAC_BUILDS="${MAC_BUILDS:-1}"
 mac_builds_note="Mac builds on"
 if [ "$MAC_BUILDS" = 0 ]; then mac_builds_note="Mac builds off"; fi
-if [ -z "$LAUNCH_NODE" ]; then
-  record "launcher drop-in" warned "no node found (walnut.service ExecStart or PATH); the unit keeps its own ExecStart"
-elif ! plain_abs_path "$LAUNCH_NODE"; then
-  record "launcher drop-in" warned "node $LAUNCH_NODE is not a plain absolute path; the unit keeps its own ExecStart"
+if [ -z "$LAUNCH_RUNTIME" ]; then
+  record "launcher drop-in" warned "no runtime found (no absolute path in walnut.service ExecStart, no bun on PATH); the unit keeps its own ExecStart"
+elif ! plain_abs_path "$LAUNCH_RUNTIME"; then
+  record "launcher drop-in" warned "runtime $LAUNCH_RUNTIME is not a plain absolute path; the unit keeps its own ExecStart"
 elif ! plain_abs_path "$LAUNCH_TREE"; then
   record "launcher drop-in" warned "the code tree $LAUNCH_TREE is not a plain absolute path; the unit keeps its own ExecStart"
 else
   # The unit outlives the tree it names: a rollback to a commit without the
   # launcher must still start the server, so the command checks for it and
   # otherwise runs the tree's own dist/cli.js, as the base unit does. Both
-  # branches exec, so the main pid is node either way (KillMode=process and the
-  # launcher's signal forwarding rely on that). No $ or % in it: systemd expands
-  # both, and the paths were checked to be plain characters above.
+  # branches exec, so the main pid is the runtime either way (KillMode=process
+  # and the launcher's signal forwarding rely on that). No $ or % in it: systemd
+  # expands both, and the paths were checked to be plain characters above.
   # SuccessExitStatus: the launcher exits 128+N when the server died of signal N
   # (143 after the SIGTERM of a stop), and systemd counts only exit 0 or a death
   # by the signal itself as clean, so every stop would leave the unit failed.
   LAUNCH_SCRIPT="$LAUNCH_TREE/scripts/cloud/companion-launch.mjs"
-  LAUNCH_CMD="/bin/sh -c 'if [ -f $LAUNCH_SCRIPT ]; then exec $LAUNCH_NODE $LAUNCH_SCRIPT web --port 3456; else exec $LAUNCH_NODE $LAUNCH_TREE/dist/cli.js web --port 3456; fi'"
+  LAUNCH_CMD="/bin/sh -c 'if [ -f $LAUNCH_SCRIPT ]; then exec $LAUNCH_RUNTIME $LAUNCH_SCRIPT web --port 3456; else exec $LAUNCH_RUNTIME $LAUNCH_TREE/dist/cli.js web --port 3456; fi'"
   LAUNCHER_CONTENT="# Written by scripts/cloud/ensure-harness.sh: the server runs through the launcher, which starts the build this Mac installed (docs/plan/walnut-companion-unified-replica.md).
 # A code tree without the launcher (an older commit) runs its own dist/cli.js.
 [Service]
@@ -778,7 +794,7 @@ ExecStart=
 ExecStart=$LAUNCH_CMD
 SuccessExitStatus=129 130 143
 Environment=WALNUT_COMPANION_MAC_BUILDS=$MAC_BUILDS"
-  ensure_dropin "$LAUNCHER_DROPIN" "$LAUNCHER_CONTENT" "launcher drop-in" "$LAUNCH_SCRIPT with $LAUNCH_NODE, $mac_builds_note"
+  ensure_dropin "$LAUNCHER_DROPIN" "$LAUNCHER_CONTENT" "launcher drop-in" "$LAUNCH_SCRIPT with $LAUNCH_RUNTIME, $mac_builds_note"
 fi
 
 # ── 5. config.yaml: cloud exec on, default engine ────────────────────────────
@@ -812,11 +828,11 @@ if [ "$ENGINE_READY" = 1 ] && [ "$ENGINE" != custom ]; then seed_args+=(--engine
 if [ "$DRY_RUN" = 1 ]; then seed_args+=(--dry-run); fi
 
 if [ "$seed_keys" = 1 ]; then
-  if ! command -v node >/dev/null 2>&1; then
-    record config.yaml warned "node not found; nothing seeded"
+  if [ -z "$SEED_RUNTIME" ]; then
+    record config.yaml warned "bun not found (setup.sh installs it); nothing seeded"
   else
     err_file="$(mktemp "${TMPDIR:-/tmp}/walnut-harness.XXXXXX")"
-    if seed_out="$(as_walnut "$(command -v node)" "$SEED_SCRIPT" "${seed_args[@]}" </dev/null 2>"$err_file")"; then
+    if seed_out="$(as_walnut "${SEED_ENV[@]}" "$SEED_RUNTIME" --no-install "$SEED_SCRIPT" "${seed_args[@]}" </dev/null 2>"$err_file")"; then
       while IFS=$'\t' read -r key status detail; do
         [ -n "$key" ] || continue
         record "$key" "$status" "$detail"

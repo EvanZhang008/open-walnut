@@ -1,8 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Seed the cloud companion's config.yaml with the keys that make it an exec
  * host. Run by scripts/cloud/ensure-harness.sh as the service user, so the file
- * stays owned by the user the server runs as.
+ * stays owned by the user the server runs as. Plain JavaScript with node:
+ * builtins, run by bun with --no-install, so js-yaml comes from the --repo
+ * checkout and never from the registry.
  *
  *   --config <file>     config.yaml to edit (created when absent)
  *   --repo <dir>        checkout whose node_modules provides js-yaml
@@ -75,7 +77,7 @@ let jsyaml
 try {
   jsyaml = createRequire(path.join(args.repo, 'package.json'))('js-yaml')
 } catch {
-  fail(`js-yaml is not installed under ${args.repo}/node_modules (run npm ci there); nothing was changed`)
+  fail(`js-yaml is not installed under ${args.repo}/node_modules (run bun install there); nothing was changed`)
 }
 
 let text = ''

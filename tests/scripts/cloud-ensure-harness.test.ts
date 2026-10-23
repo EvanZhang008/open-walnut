@@ -7,8 +7,10 @@
  * user, with every command that could touch the machine replaced by a stub that
  * sits first on PATH: curl (both upstream installers and the EC2 metadata
  * service), npm, systemctl, sudo, runuser, dnf, apt-get, timeout, plus a node
- * wrapper whose `--version` is fixed. The stubs record their argv, so a test can
- * assert exactly which installer ran.
+ * wrapper whose `--version` is fixed (the node floors of the npm agent CLIs) and
+ * a bun wrapper around a real bun (the runtime of the seed script and of the
+ * launcher). The stubs record their argv, so a test can assert exactly which
+ * installer, and which runtime, ran.
  * sudo/runuser exit 97 on purpose: running as the target user must never try
  * to switch users. The one root-path test swaps in an `id` that answers root and
  * a runuser that records and runs its command. No test ever needs root.
@@ -31,8 +33,15 @@ import { SESSION_ENGINE_IDS } from '../../src/core/types.js'
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
 const SCRIPT = path.join(REPO_ROOT, 'scripts', 'cloud', 'ensure-harness.sh')
 const SETUP_SH = path.join(REPO_ROOT, 'scripts', 'cloud', 'setup.sh')
+const SEED = path.join(REPO_ROOT, 'scripts', 'cloud', 'seed-harness-config.mjs')
 const BASH = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash'
 const USER = os.userInfo().username
+/** The dirs every sandbox PATH ends with; a test that needs "no bun" checks they hold none. */
+const SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+const onPath = (name: string, PATH: string): string =>
+  spawnSync('/bin/sh', ['-c', `command -v ${name} || true`], { env: { PATH }, encoding: 'utf-8' }).stdout.trim()
+/** The real bun the stub wraps: this runtime when the suite runs on bun, else the one on PATH. */
+const REAL_BUN = process.versions.bun ? process.execPath : onPath('bun', process.env.PATH ?? '')
 
 const STUBS: Record<string, string> = {
   curl: `#!/bin/sh
@@ -158,14 +167,23 @@ function makeSandbox(): Sandbox {
   for (const [name, body] of Object.entries(STUBS)) {
     fs.writeFileSync(path.join(stubs, name), body, { mode: 0o755 })
   }
-  // node is the one real tool the script needs; wrap it alone so nothing else
-  // from node's install dir (a real npm, a real claude) can leak onto PATH.
-  // `--version` answers STUB_NODE_VERSION, so the package node floors are
-  // judged the same on every machine.
+  // node and bun are the real tools the script needs; each is wrapped alone so
+  // nothing else from its install dir (a real npm, a real claude) can leak onto
+  // PATH. node's `--version` answers STUB_NODE_VERSION, so the package node
+  // floors are judged the same on every machine; bun runs a real bun. Each
+  // records its argv beside the log (not in it: `changes` would count it).
   fs.writeFileSync(path.join(stubs, 'node'), [
     '#!/bin/sh',
+    'echo "node $*" >> "$STUB_LOG.node"',
     'if [ "$1" = --version ] && [ -n "$STUB_NODE_VERSION" ]; then echo "$STUB_NODE_VERSION"; exit 0; fi',
     `exec '${process.execPath}' "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 })
+  if (!REAL_BUN) throw new Error('no bun found: the harness runs the seed script and the launcher on bun')
+  fs.writeFileSync(path.join(stubs, 'bun'), [
+    '#!/bin/sh',
+    'echo "bun $*" >> "$STUB_LOG.bun"',
+    `exec '${REAL_BUN}' "$@"`,
     '',
   ].join('\n'), { mode: 0o755 })
   const log = path.join(dir, 'calls.log')
@@ -184,7 +202,7 @@ function makeSandbox(): Sandbox {
     env: {
       // sbin: macOS keeps chown there. Linux's real runuser/systemctl in these
       // dirs are shadowed by the stubs, which come first.
-      PATH: `${stubs}:/usr/bin:/bin:/usr/sbin:/sbin`,
+      PATH: `${stubs}:${SYSTEM_PATH}`,
       HOME: dir,
       TMPDIR: path.join(dir, 'tmp'),
       LANG: 'C',
@@ -220,9 +238,12 @@ function run(sb: Sandbox | null, args: string[], extraEnv: NodeJS.ProcessEnv = {
 const calls = (sb: Sandbox): string[] => fs.readFileSync(sb.log, 'utf-8').split('\n').filter(Boolean)
 /** Calls that change something: everything but the read-only probes. */
 const changes = (sb: Sandbox): string[] => calls(sb).filter((c) => !c.startsWith('npm prefix') && !c.startsWith('imds '))
-const bounded = (sb: Sandbox): string[] => {
-  try { return fs.readFileSync(`${sb.log}.timeout`, 'utf-8').split('\n').filter(Boolean) } catch { return [] }
+const sideLog = (sb: Sandbox, kind: string): string[] => {
+  try { return fs.readFileSync(`${sb.log}.${kind}`, 'utf-8').split('\n').filter(Boolean) } catch { return [] }
 }
+const bounded = (sb: Sandbox): string[] => sideLog(sb, 'timeout')
+/** Every run of the seed script, by runtime: `bun <args>` / `node <args>`. */
+const seedRuns = (sb: Sandbox, runtime: 'bun' | 'node'): string[] => sideLog(sb, runtime).filter((c) => c.includes(SEED))
 const CLAUDE_CURL = 'curl -fsSL --connect-timeout 20 --retry 2 https://claude.ai/install.sh'
 /** True for a file, a directory, or a link (even a dangling one). */
 const lexists = (p: string): boolean => {
@@ -237,15 +258,19 @@ function writeUnit(sb: Sandbox, lines: string[]): void {
   fs.mkdirSync(path.dirname(unit), { recursive: true })
   fs.writeFileSync(unit, ['[Unit]', 'Description=test unit', '', '[Service]', 'User=walnut', ...lines, 'Restart=always', ''].join('\n'))
 }
-/** What the launcher drop-in should hold for this node, tree and Mac builds value. */
-const launcherConf = (node: string, tree: string, macBuilds: 0 | 1): string => [
+/** The runtime a unit setup.sh writes now names (bun, linked from /opt/bun). */
+const UNIT_BUN = '/opt/bun/bin/bun'
+/** The runtime a unit an older setup.sh wrote names. */
+const OLD_UNIT_NODE = '/opt/node-test/bin/node'
+/** What the launcher drop-in should hold for this runtime, tree and Mac builds value. */
+const launcherConf = (runtime: string, tree: string, macBuilds: 0 | 1): string => [
   '# Written by scripts/cloud/ensure-harness.sh: the server runs through the launcher, which starts the build this Mac installed (docs/plan/walnut-companion-unified-replica.md).',
   '# A code tree without the launcher (an older commit) runs its own dist/cli.js.',
   '[Service]',
   'ExecStart=',
   // A rollback to a tree without the launcher still starts the server; both branches exec.
-  `ExecStart=/bin/sh -c 'if [ -f ${tree}/scripts/cloud/companion-launch.mjs ]; then exec ${node} ${tree}/scripts/cloud/companion-launch.mjs web --port 3456; ` +
-    `else exec ${node} ${tree}/dist/cli.js web --port 3456; fi'`,
+  `ExecStart=/bin/sh -c 'if [ -f ${tree}/scripts/cloud/companion-launch.mjs ]; then exec ${runtime} ${tree}/scripts/cloud/companion-launch.mjs web --port 3456; ` +
+    `else exec ${runtime} ${tree}/dist/cli.js web --port 3456; fi'`,
   // The launcher exits 128+N for a server that died of signal N (143 on a stop).
   'SuccessExitStatus=129 130 143',
   `Environment=WALNUT_COMPANION_MAC_BUILDS=${macBuilds}`,
@@ -394,6 +419,13 @@ describe('a fresh box', () => {
     expect(row(res.stdout, 'cloud.exec.enabled')?.status).toBe('seeded')
     expect(row(res.stdout, 'engine-auth')?.detail).toContain('instance role')
     expect(res.stdout).toMatch(/restart:\s+needed/)
+
+    // The seed script ran once, on bun, with --no-install (js-yaml from the
+    // checkout, never the registry); node never ran it.
+    expect(seedRuns(sb, 'bun')).toEqual([
+      `bun --no-install ${SEED} --config ${sb.config} --repo ${REPO_ROOT} --exec-root ${workDir} --engine claude`,
+    ])
+    expect(seedRuns(sb, 'node')).toEqual([])
   })
 
   it('is idempotent: a second run changes nothing and installs nothing', async () => {
@@ -431,45 +463,69 @@ describe('a fresh box', () => {
 })
 
 describe('the launcher drop-in', () => {
-  it('starts the server through the launcher, with the node and the tree of the base unit', async () => {
+  it('starts the server through the launcher, with the runtime (bun) and the tree of the base unit', async () => {
     const sb = makeSandbox()
     writeUnit(sb, [
       'WorkingDirectory=/opt/walnut-tree',
       'Environment=WALNUT_CLOUD_MODE=1',
-      'ExecStart=/opt/node-test/bin/node /opt/walnut-tree/dist/cli.js web --port 3456',
+      `ExecStart=${UNIT_BUN} /opt/walnut-tree/dist/cli.js web --port 3456`,
     ])
     const res = await run(sb, [])
     expect(res.status, res.stdout + res.stderr).toBe(0)
-    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf('/opt/node-test/bin/node', '/opt/walnut-tree', 1))
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(UNIT_BUN, '/opt/walnut-tree', 1))
     expect(fs.statSync(launcherDropin(sb)).mode & 0o777).toBe(0o644)
     expect(row(res.stdout, 'launcher drop-in')).toEqual({
       status: 'written',
-      detail: '/opt/walnut-tree/scripts/cloud/companion-launch.mjs with /opt/node-test/bin/node, Mac builds on (daemon-reload done)',
+      detail: `/opt/walnut-tree/scripts/cloud/companion-launch.mjs with ${UNIT_BUN}, Mac builds on (daemon-reload done)`,
     })
     expect(res.stdout).toMatch(/restart:\s+needed/)
     // No temp file left beside the drop-ins.
     expect(fs.readdirSync(path.dirname(sb.dropin)).sort()).toEqual(['harness.conf', 'launcher.conf'])
   })
 
-  it('without a base unit: node from PATH and this checkout, whose launcher exists', async () => {
+  it('keeps the node an old unit names, as it is: a box keeps its old unit until setup.sh rewrites it', async () => {
+    const sb = makeSandbox()
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', `ExecStart=${OLD_UNIT_NODE} /opt/walnut-tree/dist/cli.js web --port 3456`])
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(OLD_UNIT_NODE, '/opt/walnut-tree', 1))
+    expect(row(res.stdout, 'launcher drop-in')?.detail).toContain(`with ${OLD_UNIT_NODE}, `)
+  })
+
+  it('without a base unit: bun from PATH and this checkout, whose launcher exists', async () => {
     const sb = makeSandbox()
     const res = await run(sb, [])
     expect(res.status, res.stdout + res.stderr).toBe(0)
-    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(path.join(sb.stubs, 'node'), REPO_ROOT, 1))
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(path.join(sb.stubs, 'bun'), REPO_ROOT, 1))
     expect(fs.existsSync(path.join(REPO_ROOT, 'scripts', 'cloud', 'companion-launch.mjs'))).toBe(true)
   })
 
-  it('takes node from PATH when the unit ExecStart does not start with an absolute path', async () => {
+  it('takes bun from PATH, never node, when the unit ExecStart does not start with an absolute path', async () => {
     const sb = makeSandbox()
     writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=node /opt/walnut-tree/dist/cli.js web --port 3456'])
     const res = await run(sb, [])
     expect(res.status, res.stdout + res.stderr).toBe(0)
-    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(path.join(sb.stubs, 'node'), '/opt/walnut-tree', 1))
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(path.join(sb.stubs, 'bun'), '/opt/walnut-tree', 1))
+  })
+
+  it('with no runtime in the unit and no bun on PATH: warns and writes nothing, even with a node at hand', async (ctx) => {
+    // Needs a PATH that has no bun of its own past the stubs.
+    if (onPath('bun', SYSTEM_PATH)) ctx.skip()
+    const sb = makeSandbox()
+    fs.rmSync(path.join(sb.stubs, 'bun'))
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(row(res.stdout, 'launcher drop-in')).toEqual({
+      status: 'warned',
+      detail: 'no runtime found (no absolute path in walnut.service ExecStart, no bun on PATH); the unit keeps its own ExecStart',
+    })
+    expect(lexists(launcherDropin(sb))).toBe(false)
   })
 
   it('is idempotent: a second run leaves it alone and reloads nothing', async () => {
     const sb = makeSandbox()
-    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/node-test/bin/node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', `ExecStart=${UNIT_BUN} /opt/walnut-tree/dist/cli.js web --port 3456`])
     expect((await run(sb, [])).status).toBe(0)
     const before = snapshot(sb.root)
     const callsBefore = calls(sb).length
@@ -483,10 +539,10 @@ describe('the launcher drop-in', () => {
 
   it('--no-mac-builds writes 0, a later run without a flag keeps it, and --mac-builds turns it back on', async () => {
     const sb = makeSandbox()
-    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/node-test/bin/node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', `ExecStart=${UNIT_BUN} /opt/walnut-tree/dist/cli.js web --port 3456`])
     const off = await run(sb, ['--no-mac-builds'])
     expect(off.status, off.stdout + off.stderr).toBe(0)
-    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf('/opt/node-test/bin/node', '/opt/walnut-tree', 0))
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(UNIT_BUN, '/opt/walnut-tree', 0))
     expect(row(off.stdout, 'launcher drop-in')?.detail).toContain('Mac builds off')
 
     // A deploy runs the script with no flags: the box keeps its choice.
@@ -498,24 +554,25 @@ describe('the launcher drop-in', () => {
     const on = await run(sb, ['--mac-builds'])
     expect(on.status, on.stderr).toBe(0)
     expect(row(on.stdout, 'launcher drop-in')?.status).toBe('written')
-    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf('/opt/node-test/bin/node', '/opt/walnut-tree', 1))
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(UNIT_BUN, '/opt/walnut-tree', 1))
     expect(on.stdout).toMatch(/restart:\s+needed/)
   })
 
-  it('rewrites a drop-in that names another node or tree, keeping its Mac builds value', async () => {
+  it('moves a node drop-in to bun once setup.sh rewrote the unit, keeping its Mac builds value', async () => {
     const sb = makeSandbox()
-    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/node-new/bin/node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', `ExecStart=${UNIT_BUN} /opt/walnut-tree/dist/cli.js web --port 3456`])
     fs.mkdirSync(path.dirname(launcherDropin(sb)), { recursive: true })
-    fs.writeFileSync(launcherDropin(sb), launcherConf('/opt/node-old/bin/node', '/opt/walnut-old', 0))
+    fs.writeFileSync(launcherDropin(sb), launcherConf(OLD_UNIT_NODE, '/opt/walnut-old', 0))
     const res = await run(sb, [])
     expect(res.status, res.stdout + res.stderr).toBe(0)
-    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf('/opt/node-new/bin/node', '/opt/walnut-tree', 0))
+    expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(UNIT_BUN, '/opt/walnut-tree', 0))
     expect(row(res.stdout, 'launcher drop-in')?.status).toBe('written')
+    expect(res.stdout).toMatch(/restart:\s+needed/)
   })
 
   it('has an ExecStart systemd passes on untouched: no $, no %, no backslash, one quoted sh script', async () => {
     const sb = makeSandbox()
-    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/node-test/bin/node /opt/walnut-tree/dist/cli.js web --port 3456'])
+    writeUnit(sb, ['WorkingDirectory=/opt/walnut-tree', `ExecStart=${UNIT_BUN} /opt/walnut-tree/dist/cli.js web --port 3456`])
     expect((await run(sb, [])).status).toBe(0)
     const lines = fs.readFileSync(launcherDropin(sb), 'utf-8').split('\n').filter((l) => l.startsWith('ExecStart='))
     expect(lines).toHaveLength(2)
@@ -543,32 +600,33 @@ describe('the launcher drop-in', () => {
   it.each([
     ['has the launcher', true, 'launcher'],
     ['lacks it (a rollback to an older commit)', false, 'cli'],
-  ])('its command line runs in a tree that %s, and exec keeps node as the pid systemd started', async (_label, hasLauncher, which) => {
+  ])('its command line runs in a tree that %s, on bun, and exec keeps bun as the pid systemd started', async (_label, hasLauncher, which) => {
     const sb = makeSandbox()
     const tree = path.join(sb.dir, 'tree')
-    const report = (name: string) => `console.log(JSON.stringify({ which: ${JSON.stringify(name)}, argv: process.argv.slice(2), pid: process.pid }))\n`
+    const report = (name: string) =>
+      `console.log(JSON.stringify({ which: ${JSON.stringify(name)}, argv: process.argv.slice(2), pid: process.pid, bun: process.versions.bun ?? null }))\n`
     fs.mkdirSync(path.join(tree, 'dist'), { recursive: true })
     fs.writeFileSync(path.join(tree, 'dist', 'cli.js'), report('cli'))
     if (hasLauncher) {
       fs.mkdirSync(path.join(tree, 'scripts', 'cloud'), { recursive: true })
       fs.writeFileSync(path.join(tree, 'scripts', 'cloud', 'companion-launch.mjs'), report('launcher'))
     }
-    // The stub node (a sh wrapper that execs the real node) stands in for the unit's node.
-    writeUnit(sb, [`WorkingDirectory=${tree}`, `ExecStart=${path.join(sb.stubs, 'node')} ${tree}/dist/cli.js web --port 3456`])
+    // The stub bun (a sh wrapper that execs a real bun) stands in for the unit's bun.
+    writeUnit(sb, [`WorkingDirectory=${tree}`, `ExecStart=${path.join(sb.stubs, 'bun')} ${tree}/dist/cli.js web --port 3456`])
     const res = await run(sb, [])
     expect(res.status, res.stdout + res.stderr).toBe(0)
     expect(row(res.stdout, 'launcher drop-in')?.status).toBe('written')
 
     const out = await runExecStart(sb)
     expect(out.status, out.stderr).toBe(0)
-    expect(JSON.parse(out.stdout)).toEqual({ which, argv: ['web', '--port', '3456'], pid: out.pid })
+    expect(JSON.parse(out.stdout)).toEqual({ which, argv: ['web', '--port', '3456'], pid: out.pid, bun: expect.any(String) })
   })
 
   it.each([
-    ['a % in the tree', ['WorkingDirectory=/opt/walnut%itree', 'ExecStart=/opt/node-test/bin/node /x/dist/cli.js web'], 'the code tree /opt/walnut%itree is not a plain absolute path'],
-    ['a $ in the node', ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/no$de/bin/node /x/dist/cli.js web'], 'node /opt/no$de/bin/node is not a plain absolute path'],
-    ['a quote in the tree', ["WorkingDirectory=/opt/walnut'tree", 'ExecStart=/opt/node-test/bin/node /x/dist/cli.js web'], 'is not a plain absolute path'],
-    ['a relative tree', ['WorkingDirectory=-/opt/walnut-tree', 'ExecStart=/opt/node-test/bin/node /x/dist/cli.js web'], 'the code tree -/opt/walnut-tree is not a plain absolute path'],
+    ['a % in the tree', ['WorkingDirectory=/opt/walnut%itree', `ExecStart=${UNIT_BUN} /x/dist/cli.js web`], 'the code tree /opt/walnut%itree is not a plain absolute path'],
+    ['a $ in the runtime', ['WorkingDirectory=/opt/walnut-tree', 'ExecStart=/opt/b$n/bin/bun /x/dist/cli.js web'], 'runtime /opt/b$n/bin/bun is not a plain absolute path'],
+    ['a quote in the tree', ["WorkingDirectory=/opt/walnut'tree", `ExecStart=${UNIT_BUN} /x/dist/cli.js web`], 'is not a plain absolute path'],
+    ['a relative tree', ['WorkingDirectory=-/opt/walnut-tree', `ExecStart=${UNIT_BUN} /x/dist/cli.js web`], 'the code tree -/opt/walnut-tree is not a plain absolute path'],
   ])('refuses to write it for %s, and the unit keeps its own ExecStart', async (_label, unitLines, message) => {
     const sb = makeSandbox()
     writeUnit(sb, unitLines)
@@ -585,7 +643,7 @@ describe('the launcher drop-in', () => {
     expect(res.status, res.stderr).toBe(0)
     expect(row(res.stdout, 'launcher drop-in')).toEqual({
       status: 'planned',
-      detail: `${REPO_ROOT}/scripts/cloud/companion-launch.mjs with ${path.join(sb.stubs, 'node')}, Mac builds off, then systemctl daemon-reload`,
+      detail: `${REPO_ROOT}/scripts/cloud/companion-launch.mjs with ${path.join(sb.stubs, 'bun')}, Mac builds off, then systemctl daemon-reload`,
     })
     expect(lexists(launcherDropin(sb))).toBe(false)
   })
@@ -747,6 +805,23 @@ describe('the default engine', () => {
     expect(res.stdout).toContain('Default engine: codex (from config.yaml)')
     expect(calls(sb)).toContain('npm install -g --no-fund --no-audit @openai/codex')
     expect(row(res.stdout, 'defaults.engine')).toMatchObject({ status: 'present', detail: 'kept "codex"' })
+    // The engine was read by the seed script on bun.
+    expect(seedRuns(sb, 'bun')[0]).toBe(`bun --no-install ${SEED} --config ${sb.config} --repo ${REPO_ROOT} --print-engine`)
+    expect(seedRuns(sb, 'node')).toEqual([])
+  })
+
+  it('without bun: reads no engine, seeds nothing and says so, and never runs the seed script on node', async (ctx) => {
+    if (onPath('bun', SYSTEM_PATH)) ctx.skip()
+    const sb = makeSandbox()
+    fs.rmSync(path.join(sb.stubs, 'bun'))
+    fs.writeFileSync(sb.config, 'defaults:\n  engine: codex\n')
+    const res = await run(sb, [])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    expect(res.stdout).toContain("bun not found, so config.yaml's defaults.engine was not read")
+    expect(res.stdout).toContain('Default engine: claude (from default)')
+    expect(row(res.stdout, 'config.yaml')).toEqual({ status: 'warned', detail: 'bun not found (setup.sh installs it); nothing seeded' })
+    expect(fs.readFileSync(sb.config, 'utf-8')).toBe('defaults:\n  engine: codex\n')
+    expect(seedRuns(sb, 'node')).toEqual([])
   })
 
   it('goose uses the official script non-interactively, found through ~/.local/bin (no root link)', async () => {
@@ -841,7 +916,8 @@ describe('running as root', () => {
     expect(viaRunuser.some((c) => c.includes('bash -c set -o pipefail; curl') && c.includes('https://claude.ai/install.sh'))).toBe(true)
     expect(viaRunuser.some((c) => c.includes(' write-settings '))).toBe(true)
     expect(viaRunuser.some((c) => c.includes(' mkdir-work '))).toBe(true)
-    expect(viaRunuser.some((c) => c.includes('seed-harness-config.mjs'))).toBe(true)
+    // The seed script, as the service user, on bun.
+    expect(viaRunuser.some((c) => c.includes(` ${path.join(sb.stubs, 'bun')} --no-install ${SEED} `))).toBe(true)
     expect(calls(sb).some((c) => c.startsWith('sudo '))).toBe(false)
     expect(readConfig(sb).cloud.exec.enabled).toBe(true)
   })
@@ -941,12 +1017,22 @@ describe('edges', () => {
     expect(row(ok.stdout, 'engine:gemini')?.status).toBe('installed')
   })
 
+  it('the seed script is plain JavaScript for bun: a bun shebang and node: builtins only', () => {
+    const src = fs.readFileSync(SEED, 'utf-8')
+    expect(src.split('\n')[0]).toBe('#!/usr/bin/env bun')
+    const imports = [...src.matchAll(/^import .* from '([^']+)'$/gm)].map((m) => m[1])
+    expect(imports.length).toBeGreaterThan(0)
+    expect(imports.filter((s) => !s.startsWith('node:'))).toEqual([])
+  })
+
   it('without js-yaml it warns and leaves config.yaml alone', async () => {
     const sb = makeSandbox()
     const res = await run(sb, [], { WALNUT_HARNESS_REPO: path.join(sb.dir, 'no-checkout') })
     expect(res.status, res.stdout + res.stderr).toBe(0)
     expect(row(res.stdout, 'config.yaml')?.status).toBe('warned')
+    // --no-install: bun says so instead of fetching some js-yaml from the registry.
     expect(row(res.stdout, 'config.yaml')?.detail).toContain('js-yaml is not installed')
+    expect(row(res.stdout, 'config.yaml')?.detail).toContain('run bun install there')
     expect(fs.existsSync(sb.config)).toBe(false)
   })
 
@@ -1150,7 +1236,7 @@ describe('setup.sh wiring', () => {
   })
 
   it('checks the flags before the long build, and runs the harness after it and before the restart', async () => {
-    const build = setup.indexOf('\nnpm run build\n')
+    const build = setup.indexOf('\nbun --bun run build\n')
     const harness = setup.indexOf('bash "$HARNESS_SCRIPT" ${HARNESS_ARGS')
     const restart = setup.indexOf('systemctl restart caddy.service walnut.service')
     expect(build).toBeGreaterThan(-1)
@@ -1168,7 +1254,7 @@ describe('setup.sh wiring', () => {
     const args = setup.indexOf('# >>> harness args')
     const install = setup.indexOf('\nbun install --frozen-lockfile\n')
     const normalize = setup.lastIndexOf('chmod -R a+rX,go-w "$REPO_DIR"')
-    const build = setup.indexOf('\nnpm run build\n')
+    const build = setup.indexOf('\nbun --bun run build\n')
     const harness = setup.indexOf('bash "$HARNESS_SCRIPT" ${HARNESS_ARGS')
     // Checked before root runs a line of it (the argument check already runs the
     // harness script), never taken back in place (that erases the evidence),
@@ -1182,6 +1268,33 @@ describe('setup.sh wiring', () => {
     // Never handed to the service user, and git's ownership guard is not bypassed.
     expect(setup).not.toMatch(/chown -R "\$WALNUT_USER:\$WALNUT_USER" "\$REPO_DIR"/)
     expect(setup).not.toMatch(/safe\.directory "\$REPO_DIR"/)
+  })
+
+  it('installs, builds and runs Walnut with bun alone; node and npm are left to the agent CLIs', async () => {
+    const step = (n: number) => setup.indexOf(`echo "==> [${n}/10]`)
+    const lines = setup.split('\n')
+    // The build: bun install, then the server and the web app with --bun, so
+    // tsup and vite (node shebangs) run on bun too, not on the box's node.
+    const install = lines.indexOf('bun install --frozen-lockfile')
+    expect(install).toBeGreaterThan(-1)
+    expect(lines.slice(install, install + 5).filter((l) => !l.startsWith('#'))).toEqual([
+      'bun install --frozen-lockfile',
+      'bun --bun run build',
+      '(cd web && bun --bun x vite build)',
+    ])
+    // No npm or node anywhere in Walnut's own install, build or start, and no
+    // native SQLite module left to check (bun:sqlite is built in).
+    expect(setup).not.toMatch(/better-sqlite3|npm rebuild|npm run|npm ci|npx vite|npx tsup/)
+    expect(setup).not.toMatch(/^\s*node /m)
+    expect(setup).not.toContain('NODE_BIN')
+    // The unit runs the bun step 3 resolved, which happens before the build.
+    expect(setup).toContain('\nExecStart=$BUN_BIN $REPO_DIR/dist/cli.js web --port 3456\n')
+    expect(setup.indexOf('# >>> bun path')).toBeGreaterThan(step(3))
+    expect(setup.indexOf('# >>> bun path')).toBeLessThan(step(4))
+    expect(setup.search(/^export PATH=.\/usr\/local\/bin:\$PATH.$/m)).toBeGreaterThan(step(3))
+    expect(setup.search(/^export PATH=.\/usr\/local\/bin:\$PATH.$/m)).toBeLessThan(setup.indexOf('BUN_HAVE="$(bun --version'))
+    // Node stays in step 1, for npm installs of third-party CLIs only.
+    expect(setup.slice(step(1), step(2))).toMatch(/Node\n# and npm stay installed only because third-party agent CLIs/)
   })
 })
 
@@ -1212,7 +1325,8 @@ describe('setup.sh root-side blocks, run for real', () => {
     if (process.platform !== 'linux') {
       fs.writeFileSync(path.join(bin, 'mv'), [
         '#!/bin/sh',
-        'case "$1" in -*T*) exec node -e \'require("fs").renameSync(process.argv[1], process.argv[2])\' "$2" "$3" ;; esac',
+        // perl, not node: on bun (the test runner) `node` is bun's stand-in, whose -e drops the first argument.
+        'case "$1" in -*T*) exec perl -e \'rename($ARGV[0], $ARGV[1]) or die "mv -T: $!\\n"\' "$2" "$3" ;; esac',
         'exec /bin/mv "$@"',
         '',
       ].join('\n'), { mode: 0o755 })
@@ -1221,7 +1335,8 @@ describe('setup.sh root-side blocks, run for real', () => {
     return { dir, bin }
   }
 
-  function runBlock(bin: string, vars: Record<string, string>, body: string, stdin = '') {
+  /** `pathFirst`: dirs put before `bin` on the block's PATH (a bun stand-in somewhere odd, say). */
+  function runBlock(bin: string, vars: Record<string, string>, body: string, opts: { stdin?: string; pathFirst?: string[] } = {}) {
     const assigns = Object.entries(vars).map(([k, v]) => `${k}='${v}'`).join('\n')
     const script = [
       'set -euo pipefail',
@@ -1234,8 +1349,8 @@ describe('setup.sh root-side blocks, run for real', () => {
       '',
     ].join('\n')
     const res = spawnSync(BASH, ['-c', script], {
-      env: { PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: os.tmpdir(), LANG: 'C' },
-      input: stdin,
+      env: { PATH: `${[...(opts.pathFirst ?? []), bin].join(':')}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: os.tmpdir(), LANG: 'C' },
+      input: opts.stdin ?? '',
       encoding: 'utf-8',
       timeout: 30_000,
     })
@@ -1428,6 +1543,83 @@ describe('setup.sh root-side blocks, run for real', () => {
       expect(res.status, res.stderr).toBe(0)
       expect(fs.readdirSync(victimDir)).toEqual([])
       expect(fs.lstatSync(path.join(hub, 'hooks', 'post-receive')).isFile()).toBe(true)
+    })
+  })
+
+  describe('bun path', () => {
+    /** A bun stand-in in `dir` that answers --version with `version` (or fails when null). */
+    function fakeBun(dir: string, version: string | null = '1.4.4'): string {
+      fs.mkdirSync(dir, { recursive: true })
+      const body = version === null ? 'exit 1' : `[ "$1" = --version ] && echo ${version}`
+      fs.writeFileSync(path.join(dir, 'bun'), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+      return path.join(dir, 'bun')
+    }
+
+    it('names the bun on PATH by its absolute path, for the unit', () => {
+      const { dir, bin } = scratch()
+      const bun = fakeBun(path.join(dir, 'opt-bun', 'bin'))
+      const res = runBlock(bin, {}, `${block('bun path')}\necho "BUN_BIN=$BUN_BIN"`, { pathFirst: [path.dirname(bun)] })
+      expect(res.status, res.stderr).toBe(0)
+      expect(res.stdout.split('\n')).toEqual(expect.arrayContaining([`bun: ${bun} (1.4.4)`, `BUN_BIN=${bun}`]))
+    })
+
+    it('stops before the build when there is no bun', (ctx) => {
+      if (onPath('bun', SYSTEM_PATH)) ctx.skip()
+      const { bin } = scratch()
+      const res = runBlock(bin, {}, `${block('bun path')}\necho reached-the-build`)
+      expect(res.status).toBe(1)
+      expect(res.stderr).toContain('FATAL: no bun on PATH after step 3')
+      expect(res.stdout).not.toContain('reached-the-build')
+    })
+
+    it.each([
+      ['does not run', 'plain', null, 'does not run'],
+      ['lives where an ExecStart line cannot name it', 'odd%dir', '1.4.4', 'which a systemd ExecStart line cannot name as is'],
+    ])('stops before the build when bun %s', (_label, sub, version, message) => {
+      const { dir, bin } = scratch()
+      const bun = fakeBun(path.join(dir, sub), version)
+      const res = runBlock(bin, {}, `${block('bun path')}\necho reached-the-build`, { pathFirst: [path.dirname(bun)] })
+      expect(res.status).toBe(1)
+      expect(res.stderr).toContain(message)
+      expect(res.stdout).not.toContain('reached-the-build')
+    })
+
+    it('stops before the build when bun resolves to a relative path', () => {
+      const { dir, bin } = scratch()
+      fakeBun(path.join(dir, 'rel'))
+      const res = runBlock(bin, {}, `cd '${dir}'\n${block('bun path')}\necho reached-the-build`, { pathFirst: ['rel'] })
+      expect(res.status).toBe(1)
+      expect(res.stderr).toContain("bun resolves to 'rel/bun', not an absolute path")
+      expect(res.stdout).not.toContain('reached-the-build')
+    })
+  })
+
+  describe('walnut unit', () => {
+    it('runs dist/cli.js on the bun from step 3, and the harness gives the launcher that same bun', async () => {
+      const { dir, bin } = scratch()
+      const unitFile = path.join(dir, 'walnut.service')
+      const res = runBlock(bin, {
+        UNIT_FILE: unitFile, WALNUT_USER: 'walnut', REPO_DIR: '/opt/walnut', DATA_HOME: '/var/lib/walnut/.open-walnut',
+        WALNUT_LIB: '/var/lib/walnut', CLAIM_DIR: '/etc/walnut/claim', ENV_FILE: '/etc/walnut/walnut.env', BUN_BIN: UNIT_BUN,
+      }, block('walnut unit'))
+      expect(res.status, res.stderr).toBe(0)
+      const unit = fs.readFileSync(unitFile, 'utf-8')
+      const lines = unit.split('\n')
+      expect(lines.filter((l) => l.startsWith('ExecStart='))).toEqual([`ExecStart=${UNIT_BUN} /opt/walnut/dist/cli.js web --port 3456`])
+      expect(lines).toEqual(expect.arrayContaining([
+        'User=walnut', 'WorkingDirectory=/opt/walnut', 'Environment=WALNUT_CLOUD_MODE=1',
+        // The server's error handler reads it: no stack traces in production answers.
+        'Environment=NODE_ENV=production',
+      ]))
+
+      // ensure-harness.sh, reading this very unit, starts the launcher on that bun.
+      const sb = makeSandbox()
+      const target = path.join(sb.root, 'etc', 'systemd', 'system', 'walnut.service')
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, unit)
+      const harness = await run(sb, [])
+      expect(harness.status, harness.stdout + harness.stderr).toBe(0)
+      expect(fs.readFileSync(launcherDropin(sb), 'utf-8')).toBe(launcherConf(UNIT_BUN, '/opt/walnut', 1))
     })
   })
 

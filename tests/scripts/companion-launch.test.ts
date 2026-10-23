@@ -38,7 +38,10 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   })
 }
 const keys = ['WALNUT_COMPANION_LAUNCHER', 'WALNUT_COMPANION_BUILD', 'WALNUT_COMPANION_TRIAL', 'FAKE_PASS_THROUGH']
-record('start', { argv: process.argv.slice(2), cwd: process.cwd(), env: Object.fromEntries(keys.map((k) => [k, env[k] ?? null])) })
+record('start', {
+  argv: process.argv.slice(2), cwd: process.cwd(), env: Object.fromEntries(keys.map((k) => [k, env[k] ?? null])),
+  execPath: process.execPath, bun: process.versions.bun ?? null,
+})
 if (env.FAKE_CONFIRM === '1') {
   const state = path.join(env.WALNUT_COMPANION_ROOT, 'companion')
   fs.writeFileSync(path.join(state, 'current'), env.WALNUT_COMPANION_BUILD + '\\n')
@@ -57,6 +60,8 @@ interface Rec {
   argv?: string[]
   cwd?: string
   env?: Record<string, string | null>
+  execPath?: string
+  bun?: string | null
   signal?: string
   code?: number
 }
@@ -208,6 +213,30 @@ describe('which tree the launcher runs', () => {
     const lines = run.stdout().trim().split('\n')
     expect(lines.every((l) => l.startsWith('[companion-launch] ')), run.stdout()).toBe(true)
     expect(run.stdout()).toContain(`running the base tree ${fx.base}`)
+  })
+
+  it('runs the server on its own runtime: bun when systemd starts it on bun', async () => {
+    const fx = makeFixture()
+    fx.app('b1')
+    fx.write('current', 'b1\n')
+    // The launcher runs on this runtime (bun when the suite does), as the
+    // drop-in runs it on the unit's bun; the server must get the same one.
+    const run = launch(fx)
+    expect((await run.done).code).toBe(0)
+    const start = only(starts(fx))
+    expect(fs.realpathSync(start.execPath!)).toBe(fs.realpathSync(process.execPath))
+    expect(start.bun).toBe(process.versions.bun ?? null)
+  })
+
+  it('is plain JavaScript for bun: a bun shebang and node: builtins only, so it runs before any install', () => {
+    const src = fs.readFileSync(LAUNCHER, 'utf-8')
+    expect(src.split('\n')[0]).toBe('#!/usr/bin/env bun')
+    const imports = [...src.matchAll(/^import .* from '([^']+)'$/gm)].map((m) => m[1])
+    expect(imports.length).toBeGreaterThan(0)
+    expect(imports.filter((s) => !s.startsWith('node:'))).toEqual([])
+    // The server is started on process.execPath, never on a runtime looked up by name.
+    expect(src).toMatch(/spawn\(process\.execPath, \[path\.join\(choice\.dir, 'dist', 'cli\.js'\)/)
+    expect(src).not.toMatch(/spawn\('(node|bun)'/)
   })
 
   it('runs current when its directory is ready', async () => {
@@ -406,8 +435,8 @@ describe('the server process', () => {
 
   it.each([
     ['a sleep', 'sleep', ['30']],
-    ['a node process naming cli.js but not web', process.execPath, ['-e', 'setTimeout(() => {}, 30000)', 'dist/cli.js', 'serve']],
-    ['a node process naming web but not cli.js', process.execPath, ['-e', 'setTimeout(() => {}, 30000)', 'web']],
+    ['a process of this runtime naming cli.js but not web', process.execPath, ['-e', 'setTimeout(() => {}, 30000)', 'dist/cli.js', 'serve']],
+    ['a process of this runtime naming web but not cli.js', process.execPath, ['-e', 'setTimeout(() => {}, 30000)', 'web']],
   ])('never signals a process server.pid names that is not a server (%s)', async (_label, cmd, args) => {
     const fx = makeFixture()
     const bystander = spawn(cmd, args, { stdio: 'ignore' })

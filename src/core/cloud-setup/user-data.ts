@@ -289,7 +289,7 @@ export function manualUserDataSteps(domain: string): string[] {
     'Create a VM with a public IPv4 address, ports 80 and 443 open inbound (2 GB RAM minimum, arm64 or x86_64).',
     hostNote,
     'Paste the script below as the VM\'s cloud-init / user-data, or save it on the box and run it as root.',
-    'First boot clones the repo, installs Node and Caddy, builds Walnut, and obtains a certificate. It takes 5-15 minutes.',
+    'First boot clones the repo, installs bun and Caddy (and Node, for the agent CLIs), builds Walnut with bun, and obtains a certificate. It takes 5-15 minutes.',
     'Follow along on the box with: tail -f /var/log/walnut-setup.log',
     'Walnut watches for the box to come up and claims it automatically with the pairing code baked into the script.',
   ]

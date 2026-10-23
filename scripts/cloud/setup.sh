@@ -24,6 +24,9 @@
 #
 # What it sets up:
 #   Caddy (443/80, auto Let's Encrypt) → Walnut server (localhost:3456)
+#   Walnut: installed, built and run by bun (step 3). It needs no Node; node
+#         and npm (step 1) are there only for the agent CLIs that install
+#         from npm.
 #   Data: /var/lib/walnut/.open-walnut  = git working tree (OPEN_WALNUT_HOME)
 #         /var/lib/walnut/git/walnut-data.git = bare hub repo (Mac pushes here
 #         over git smart HTTP through Caddy; post-receive materializes into
@@ -32,7 +35,7 @@
 #         box runs sessions itself through its loopback daemon (cloud exec)
 set -euo pipefail
 
-# cloud-init runs user-data with no HOME; npm/git need one.
+# cloud-init runs user-data with no HOME; bun, npm and git need one.
 export HOME="${HOME:-/root}"
 
 DOMAIN="${1:?usage: setup.sh <domain> [--engine <id>] [--bedrock-region <region>] [--no-mac-builds]}"
@@ -58,12 +61,12 @@ WALNUT_GROUP=walnut
 
 # >>> code-tree exposure (tests/scripts/cloud-ensure-harness.test.ts runs this block)
 # The code tree is root's and read-only to the service user, which runs agents
-# (cloud exec). Root runs code from it below (the harness script, npm lifecycle
-# scripts, the build), and bash is reading this very file out of it, so a tree
-# that user could change is a path to root. This runs before anything else and
-# never repairs the tree: taking it back (chown) would erase the only evidence,
-# after which nothing tells that a .npmrc, node_modules or .git in it is the
-# service user's work. The finding goes into a root-only marker instead, and a
+# (cloud exec). Root runs code from it below (the harness script, the install's
+# lifecycle scripts, the build), and bash is reading this very file out of it,
+# so a tree that user could change is a path to root. This runs before anything
+# else and never repairs the tree: taking it back (chown) would erase the only
+# evidence, after which nothing tells that a .npmrc, bunfig.toml, node_modules
+# or .git in it is the service user's work. The finding goes into a root-only marker instead, and a
 # tree with a marker is replaced from a fresh clone, never built on in place.
 # A link in the tree is as safe as what it resolves to: one leaving the tree
 # for the service home, for something the service user controls, or for a name
@@ -202,8 +205,12 @@ as_walnut_in() {
 as_walnut() { as_walnut_in "$@" </dev/null; }
 
 echo "==> [1/10] System packages"
+# Walnut itself needs no Node: bun (step 3) installs, builds and runs it. Node
+# and npm stay installed only because third-party agent CLIs (Codex and others)
+# and Claude Code's npm fallback install from npm (ensure-harness.sh, step 9).
 if [ "$PKG" = dnf ]; then
-  # gcc-c++/make/python3: insurance for native npm modules if a prebuild is missing.
+  # gcc-c++/make/python3: insurance for an agent CLI's npm install whose native
+  # module has no prebuild here (Walnut's own install compiles nothing).
   pkg_install git tar nodejs22 gcc-c++ make python3
   # npm ships separately for versioned node packages on AL2023.
   dnf install -y nodejs22-npm || true
@@ -217,12 +224,12 @@ if [ "$PKG" = dnf ]; then
     fi
   done
 else
-  # build-essential is the apt equivalent of gcc-c++/make; ca-certificates so
+  # build-essential is the apt equivalent of gcc-c++/make (the same insurance); ca-certificates so
   # the NodeSource fetch below can verify TLS on a minimal image.
   pkg_install git tar build-essential python3 curl ca-certificates gnupg
-  # Ubuntu 24.04's own nodejs is 18.x — too old (package.json wants >=20), so
-  # take Node 22 from NodeSource. Skipped when a good enough node is present,
-  # which is what makes a re-run cheap.
+  # Ubuntu 24.04's own nodejs is 18.x, too old for the agent CLIs (Claude
+  # Code's npm package wants 22), so take Node 22 from NodeSource. Skipped when
+  # a good enough node is present, which is what makes a re-run cheap.
   NODE_MAJOR="$(node --version 2>/dev/null | sed -n 's/^v\([0-9]*\).*/\1/p' || true)"
   if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
     echo "    (installing Node 22 from NodeSource; found '${NODE_MAJOR:-none}')"
@@ -232,11 +239,10 @@ else
   fi
 fi
 command -v npm >/dev/null 2>&1 || { echo "FATAL: npm not found after install"; exit 1; }
-NODE_BIN="$(command -v node)"
 # systemd units take absolute paths, and git is /usr/bin/git on both images —
 # resolve it rather than assume, since a NodeSource-style repo can shadow it.
 GIT_BIN="$(command -v git)"
-echo "node: $NODE_BIN ($(node --version)), npm $(npm --version), git $GIT_BIN"
+echo "node $(node --version) and npm $(npm --version) (for the agent CLIs), git $GIT_BIN"
 
 echo "==> [2/10] Swap (a 2GB box — t4g.small, CX22 — needs headroom for vite/tsup)"
 if [ ! -f /swapfile ]; then
@@ -248,7 +254,10 @@ fi
 swapon --show | grep -q /swapfile || swapon /swapfile
 grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
-echo "==> [3/10] Bun (installs the dependencies; scripts/build-daemon.sh compiles with it)"
+echo "==> [3/10] Bun (runs Walnut, and installs and builds it)"
+# /usr/local/bin first: this step links bun there, and sudo's secure_path on
+# AL2023 leaves it out, so a re-run would not see the bun it installed.
+export PATH="/usr/local/bin:$PATH"
 # The version package.json pins (packageManager). bun.lock is read only by that
 # version or a newer one, so an older Bun left by an earlier boot is replaced too.
 BUN_VERSION="$(sed -n 's/^ *"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' "$REPO_DIR/package.json")"
@@ -259,6 +268,23 @@ if [ -z "$BUN_HAVE" ] || [ "$(printf '%s\n%s\n' "$BUN_VERSION" "$BUN_HAVE" | sor
   curl -fsSL https://bun.sh/install | bash -s "bun-v$BUN_VERSION"
   ln -sf /opt/bun/bin/bun /usr/local/bin/bun
 fi
+# >>> bun path (tests/scripts/cloud-ensure-harness.test.ts runs this block)
+# walnut.service (step 8) runs Walnut on this bun. systemd wants an absolute
+# path of plain characters there, and without a bun there is no Walnut, so
+# stop here, before the long build.
+BUN_BIN="$(command -v bun || true)"
+case "$BUN_BIN" in
+  "") echo "FATAL: no bun on PATH after step 3 (PATH=$PATH)" >&2; exit 1 ;;
+  /*) ;;
+  *) echo "FATAL: bun resolves to '$BUN_BIN', not an absolute path; walnut.service needs one" >&2; exit 1 ;;
+esac
+case "$BUN_BIN" in
+  *[!A-Za-z0-9/._+-]*) echo "FATAL: bun is at '$BUN_BIN', which a systemd ExecStart line cannot name as is" >&2; exit 1 ;;
+esac
+BUN_HAVE="$("$BUN_BIN" --version 2>/dev/null || true)"
+[ -n "$BUN_HAVE" ] || { echo "FATAL: $BUN_BIN does not run ($BUN_BIN --version failed)" >&2; exit 1; }
+echo "bun: $BUN_BIN ($BUN_HAVE)"
+# <<< bun path
 
 echo "==> [4/10] Caddy (static binary — neither AL2023 nor Ubuntu ships a current caddy)"
 if ! id -u caddy >/dev/null 2>&1; then
@@ -481,8 +507,7 @@ if ! as_walnut git -C "$HUB_REPO" rev-parse --verify main >/dev/null 2>&1; then
   as_walnut git -C "$DATA_HOME" push -u origin main
 fi
 
-echo "==> [7/10] Build Walnut ($REPO_DIR)"
-export PATH="/usr/local/bin:$PATH"
+echo "==> [7/10] Build Walnut ($REPO_DIR, with $BUN_BIN)"
 # The code tree is ROOT's; the service user only reads it (the check at the top
 # refused anything else before root ran a line from it). The server writes
 # nothing here at runtime: on a package it cannot write it keeps plugin bundles
@@ -492,10 +517,15 @@ export PATH="/usr/local/bin:$PATH"
 # guard is the right default again.
 git config --global --unset-all safe.directory "^$REPO_DIR\$" || true
 cd "$REPO_DIR"
+# Install scripts that call node run on the node step 1 installed for the
+# agent CLIs (bun stands in for node only where none is installed); the
+# postinstall also installs web/ with bun. SQLite is bun's own (bun:sqlite), so
+# there is no native SQLite module to check or rebuild here.
 bun install --frozen-lockfile
-# SQLite is bun's own (src/lib/sqlite.ts): there is no native SQLite module to check or rebuild.
-npm run build
-(cd web && npx vite build)
+# --bun runs the build tools that name node in their shebang (tsup, vite) on
+# bun as well, so the build does not change with the node next to it.
+bun --bun run build
+(cd web && bun --bun x vite build)
 # Readable and traversable by the service user (incl. node_modules), writable
 # only by root. ensure-harness.sh (step 9) refuses to run from anything else.
 chown -R -P root:root "$REPO_DIR"
@@ -578,7 +608,13 @@ fi
 
 # Port note: the server takes its port from the --port CLI flag (default 3456
 # in src/web/server.ts DEFAULT_PORT) — there is no PORT env var.
-cat > /etc/systemd/system/walnut.service <<EOF
+UNIT_FILE=/etc/systemd/system/walnut.service
+# >>> walnut unit (tests/scripts/cloud-ensure-harness.test.ts runs this block)
+# The server runs on the bun from step 3. ensure-harness.sh (step 9) takes the
+# runtime from the first word of ExecStart for its launcher drop-in, so this
+# line is also what the launcher runs on. NODE_ENV stays: the server's error
+# handler leaves stack traces out of its answers in production.
+cat > "$UNIT_FILE" <<EOF
 [Unit]
 Description=Open Walnut server (cloud companion)
 After=network-online.target
@@ -598,7 +634,7 @@ Environment=HOME=$WALNUT_LIB
 Environment=WALNUT_SETUP_TOKEN_FILE=$CLAIM_DIR/setup-token
 # Optional secrets (see walnut.env above); '-' = absent file is fine.
 EnvironmentFile=-$ENV_FILE
-ExecStart=$NODE_BIN $REPO_DIR/dist/cli.js web --port 3456
+ExecStart=$BUN_BIN $REPO_DIR/dist/cli.js web --port 3456
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
@@ -606,6 +642,7 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
+# <<< walnut unit
 
 echo "==> [9/10] Agent harness (Claude Code, default engine CLI, cloud exec)"
 # Makes the box a real exec host: see the header of ensure-harness.sh. It never

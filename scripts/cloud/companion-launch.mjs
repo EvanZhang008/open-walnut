@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // The cloud companion's launcher. systemd runs it as the service user (the
 // launcher.conf drop-in from ensure-harness.sh), and it starts the server from
 // one of three trees, in this order:
@@ -8,7 +8,10 @@
 // Builds live in the service user's home and run as that user; root never runs
 // them (why: docs/plan/walnut-companion-unified-replica.md, stage 1).
 //
-// Plain Node, node: builtins only: it must run before any build is installed.
+// Plain JavaScript with node: builtins only, run by bun: it must run before any
+// build is installed. The server runs on the same runtime as the launcher
+// (process.execPath), so the drop-in's runtime is the server's too: bun on a
+// unit setup.sh writes now.
 // Knobs: WALNUT_COMPANION_ROOT (default ~/.open-walnut-host),
 // WALNUT_COMPANION_BASE (default the tree two levels up),
 // WALNUT_COMPANION_TRIAL_DEADLINE_MS (600000), WALNUT_COMPANION_KILL_GRACE_MS
