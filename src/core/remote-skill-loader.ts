@@ -15,6 +15,7 @@
 import path from 'node:path';
 import { log } from '../logging/index.js';
 import type { DaemonConnection } from '../providers/daemon-connection.js';
+import { linkFailureKind } from '../providers/link-failure.js';
 import { commandDescription } from '../utils/frontmatter.js';
 import {
   discoverPluginSkills,
@@ -42,6 +43,16 @@ const REMOTE_SETTINGS_FILE = '~/.claude/settings.json';
 const REMOTE_PLUGINS_DIR = '~/.claude/plugins';
 const REMOTE_FLAT_SKILLS_DIR = '~/.claude/skills';
 
+/**
+ * A failed read of the LINK (lost, refused, no answer) fails the whole scan:
+ * read as "no such file", it gave the palette a list without the host's skills
+ * that did not say it was degraded, and the cache kept that list.
+ */
+function missingUnlessLinkFailed<T>(err: unknown, missing: T): T {
+  if (linkFailureKind(err) !== null) throw err;
+  return missing;
+}
+
 /** Build a SkillFs that reads the remote host over a daemon connection. */
 function daemonSkillFs(conn: DaemonConnection): SkillFs {
   return {
@@ -50,8 +61,8 @@ function daemonSkillFs(conn: DaemonConnection): SkillFs {
         const res = await conn.send('fs.read', { path: p, encoding: 'utf-8' });
         if (!res.ok) return null;
         return typeof res.data === 'string' ? res.data : null;
-      } catch {
-        return null;
+      } catch (err) {
+        return missingUnlessLinkFailed(err, null);
       }
     },
     async list(p) {
@@ -60,16 +71,16 @@ function daemonSkillFs(conn: DaemonConnection): SkillFs {
         if (!res.ok) return null;
         const entries = res.entries as Array<{ name: string }> | undefined;
         return entries ? entries.map((e) => e.name) : null;
-      } catch {
-        return null;
+      } catch (err) {
+        return missingUnlessLinkFailed(err, null);
       }
     },
     async isDir(p) {
       try {
         const res = await conn.send('fs.ls', { path: p });
         return res.ok === true;
-      } catch {
-        return false;
+      } catch (err) {
+        return missingUnlessLinkFailed(err, false);
       }
     },
     // Remote paths are always posix; never touch the local separator.
