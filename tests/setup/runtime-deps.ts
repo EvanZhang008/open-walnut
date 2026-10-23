@@ -7,15 +7,15 @@
  * `'__esModule' in ns` with true, so a package whose default export is a namespace
  * (zod: `export { z }; export default z`) loses its named exports: `z` came back
  * undefined in every server module. bun's own import already gives a CJS module
- * its named exports, so the interop is turned off there and the code under test
- * sees exactly what the bun runtime gives it. Node keeps vitest's default.
+ * its named exports, so the interop is turned off and the code under test sees
+ * exactly what the bun runtime gives it.
  */
 /**
  * The oldest bun a vitest run is trusted on. With the forks pool, bun 1.3.9 ends
  * a run after its first file whenever a worker is reused, with no summary and
  * often exit 0: a green run that tested one file. Fixed in 1.4.4.
  */
-const MIN_BUN = [1, 4, 4]
+export const MIN_BUN = [1, 4, 4]
 
 function olderThan(version: string, min: number[]): boolean {
   const parts = version.split(/[.-]/).slice(0, 3).map((n) => Number.parseInt(n, 10) || 0)
@@ -25,12 +25,32 @@ function olderThan(version: string, min: number[]): boolean {
   return false
 }
 
-export function runtimeDeps(): { interopDefault?: boolean } {
-  const bun = process.versions.bun
-  if (typeof bun !== 'string') return {}
-  if (olderThan(bun, MIN_BUN)) {
-    throw new Error(`vitest on bun ${bun} silently skips test files; run it on bun ${MIN_BUN.join('.')} or newer (package.json packageManager)`)
+/**
+ * Why the test tiers must not run in this process, or null. They run on bun only
+ * (docs/plan/walnut-single-binary.md, "One runtime"): Walnut's SQLite, terminal
+ * and plugin loader are bun's, so a run on Node tests code no build of Walnut
+ * runs. The package scripts start vitest as `bun --bun vitest`; `npx vitest` and
+ * `./node_modules/.bin/vitest` start it on Node, whose shebang they follow.
+ */
+export function testRuntimeProblem(versions: NodeJS.ProcessVersions & { bun?: string } = process.versions): string | null {
+  const bun = versions.bun
+  if (typeof bun !== 'string') {
+    return `the test tiers run on bun, not on Node ${versions.node}: use \`bun run test:quick\` (or another package test script), or \`bun --bun vitest run --config <config>\``
   }
+  if (olderThan(bun, MIN_BUN)) {
+    return `vitest on bun ${bun} silently skips test files; run it on bun ${MIN_BUN.join('.')} or newer (package.json packageManager)`
+  }
+  return null
+}
+
+/** Throws when the tiers must not run here (testRuntimeProblem). */
+export function assertTestRuntime(): void {
+  const problem = testRuntimeProblem()
+  if (problem) throw new Error(problem)
+}
+
+export function runtimeDeps(): { interopDefault?: boolean } {
+  assertTestRuntime()
   return { interopDefault: false }
 }
 

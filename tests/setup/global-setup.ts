@@ -25,8 +25,8 @@
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import { acquireTestSlot, releaseTestSlot } from './test-gate';
+import { assertTestRuntime } from './runtime-deps';
 import { sweepStaleTmpDirs } from './stale-tmp';
 // Shared with runtime-dir-isolation.ts (workers): one name, one sweep rule.
 import { PROD_RUNTIME_DIR, RUNTIME_DIR_PREFIX, isCallerChosenRuntime } from './runtime-dir-choice';
@@ -36,44 +36,6 @@ import { EXEC_GUARD_HOME_PREFIX, formatHit, unattributedHitsSince, unreadHitsOfR
 /** When this run started, for the exec guard's unattributed-hit check at teardown. */
 const RUN_STARTED_MS = Date.now();
 
-/**
- * Fail fast when the running Node can't load better-sqlite3.
- *
- * The addon is compiled against one Node ABI (NODE_MODULE_VERSION), so running
- * the suite under a different Node makes every sqlite-backed test fail. Measured:
- * a single ABI mismatch produced 3003 error lines and ~300 failures across
- * task-manager / session-tracker / task-db, none of which name the real cause.
- * One clear abort in ~200ms beats minutes of misleading red.
- *
- * Unlike the server's preflight (src/core/native-abi-preflight.ts) this does NOT
- * auto-rebuild: test runs are machine-wide-serialized but can still overlap with
- * a server start, and two concurrent `npm rebuild`s on one node_modules is a
- * corruption risk. Tests report; only the server repairs.
- */
-function assertNativeAbiMatches(): void {
-  // On bun, SQLite is bun:sqlite (src/lib/sqlite.ts): no addon, no ABI to match.
-  if (typeof (process.versions as { bun?: string }).bun === 'string') return;
-  try {
-    const req = createRequire(import.meta.url);
-    const Database = req('better-sqlite3') as new (p: string) => { close(): void };
-    new Database(':memory:').close();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!/NODE_MODULE_VERSION|compiled against a different Node\.js version/i.test(message)) {
-      return;  // Some other sqlite problem — let the individual tests report it.
-    }
-    throw new Error(
-      `\n\nNative module ABI mismatch — the test suite cannot run under this Node.\n`
-      + `  running Node: ${process.versions.node} (NODE_MODULE_VERSION ${process.versions.modules})\n`
-      + `  better-sqlite3 was compiled for a different ABI.\n\n`
-      + `Fix either side:\n`
-      + `  npm rebuild better-sqlite3      # recompile for the Node you're using\n`
-      + `  or switch to a Node matching package.json "engines" and re-run\n\n`
-      + `Original error:\n${message}\n`,
-    );
-  }
-}
-
 export async function setup(): Promise<void> {
   // Before anything spawns git: an inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE
   // outranks the `cwd` every git test passes, so the runner and its children would
@@ -82,7 +44,9 @@ export async function setup(): Promise<void> {
   // reaches an already-forked one.
   stripGitRedirectEnv();
 
-  assertNativeAbiMatches();
+  // On bun only, and a bun that runs every file (runtime-deps.ts). The configs
+  // that take no module interop setting (the frontend ones) are checked here.
+  assertTestRuntime();
 
   // Machine-wide gate: a second concurrent vitest run queues instead of
   // stacking another ~8GB of fork workers (see tests/setup/test-gate.ts).
