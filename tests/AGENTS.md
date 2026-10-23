@@ -8,8 +8,13 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
 - Tiers: unit (`tests/core|model`) → integration (`tests/web/routes`, supertest) → e2e
   (`tests/e2e`, real server on port 0) → browser (`tests/e2e/browser`, Playwright) → live
   (`*.live.test.ts`, real APIs, opt-in via `WALNUT_LIVE_TEST=1`).
+- **Every tier runs on bun, with no Node needed** (`bun run test:quick`, `bun run test:focus
+  <path>`, `bun --bun vitest run --config <config>`). `npx vitest` starts vitest on Node and the
+  global setup refuses it. A child a test starts runs `process.execPath` or `bunRuntime()`
+  (`tests/helpers/bun-runtime.ts`), never `node`, `tsx` or `npx`. Only the Playwright runner
+  stays on Node; its fixture servers run on bun.
 - **Live cloud journeys** (`tests/e2e/cloud-mobile-journey.live.test.ts`): run via
-  `npm run test:live:cloud` — the runner script derives the cloud URL + device token from the
+  `bun run test:live:cloud`: the runner script derives the cloud URL + device token from the
   data repo's git remote and injects them via env (zero secrets in the repo; in-process
   derivation is impossible because VITEST forces `WALNUT_HOME` to a temp dir). Asserts the
   CLI's actual reply text, not status codes. Born from the 2026-08-07 incident: all mocked
@@ -63,7 +68,7 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   flapped its cloud bridge for an hour. Gate a new live test on its own `WALNUT_LIVE_<NAME>`
   variable, name the file `*.live.test.ts`, and run it with `--config vitest.live.config.ts`.
 - **Browser tier is serialized machine-wide.** One Chromium per worker (~385 MB), `workers`
-  capped at 4, and an exclusive lease on :3457 so a second `npx playwright test` queues instead
+  capped at 4, and an exclusive lease on :3457 so a second `bun x playwright test` queues instead
   of colliding (specs hardcode that port; `reuseExistingServer` would otherwise let two runs
   share one fixture server). `[pw-concurrency] … Queuing` = working as designed. Debris from a
   killed run: `scripts/pw-cleanup.sh status|clean`. Details in the root AGENTS.md.

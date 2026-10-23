@@ -12,20 +12,31 @@ For the layered pipeline (which tier to run when), see
 ## Run the cheap layer (start here)
 
 ```bash
-npm run test:quick          # 306 pure-logic files, ~51s — the default
-npm run test:focus <path>   # one file/dir, 0.3-30s
-npm run test:baseline       # ⭐ the honest verdict: fails ONLY on NEW failures
-npm run test:pre-commit     # maps your diff → affected tiers
+bun run test:quick          # the fast files (~2,250), the default
+bun run test:focus <path>   # one file/dir, 0.3-30s
+bun run test:baseline       # ⭐ the honest verdict: fails ONLY on NEW failures
+bun run test:pre-commit     # maps your diff to the affected tiers
 ```
 
-**`npm run test:baseline` is how you judge a change.** The suite carries **118
+**Every tier runs on bun, and needs no Node** (CI removes the runner image's Node
+first: `scripts/ci-remove-node.sh`). The package scripts start vitest as
+`bun --bun vitest`, by its bare name, so bun also puts its own `node` shim first on
+PATH and every child a test starts as `node` runs on bun too. `npx vitest`,
+`bun x vitest` and `./node_modules/.bin/vitest` start vitest on Node, and the global
+setup refuses that run, as it refuses a bun older than 1.4.4
+(`tests/setup/runtime-deps.ts`). A test that starts a server or a script spawns
+`process.execPath` (in a vitest worker, that is bun) or `bunRuntime()` from
+`tests/helpers/bun-runtime.ts`; never `node`, `tsx` or `npx`. Only the Playwright
+runner stays on Node; the fixture servers it starts run on bun.
+
+**`bun run test:baseline` is how you judge a change.** The suite carries **118
 pre-existing failures on `main`** (recorded in `tests/setup/known-failures.json`,
 measured in a clean clone of `844dc84`). The baseline gate ignores those and fails
 only on failures absent from the list, so you get a yes/no answer instead of
-eyeballing an aggregate. Fixed some? `npm run test:baseline:record`.
+eyeballing an aggregate. Fixed some? `bun run test:baseline:record`.
 
-⚠️ **Never raise the worker budget** (`tests/setup/worker-budget.ts`, 2 workers
-locally). Uncapped fan-out hard-crashed the dev Mac twice in July 2026. `npm test`
+⚠️ **Never raise the worker budget** (`tests/setup/worker-budget.ts`, 1 worker
+locally). Uncapped fan-out hard-crashed the dev Mac twice in July 2026. `bun run test`
 runs tiers *sequentially* for the same reason — don't "optimise" it back to parallel.
 
 ### The mergeConfig trap (cost 2× suite runtime for months)
@@ -89,11 +100,11 @@ rather than hand-editing it.
 
 ## Judging whether YOUR change caused a failure (read before you panic)
 
-The suite has a meaningful baseline of **pre-existing failures** — a full `npm test` /
+The suite has a meaningful baseline of **pre-existing failures**: a full `bun run test` /
 full-integration run reports a large, scary aggregate number that is mostly NOT your fault.
 Do **not** judge regressions from the aggregate count. Instead:
 
-1. **Run the touched file(s) in isolation** — `npx vitest run --config <tier>.config.ts <file>`.
+1. **Run the touched file(s) in isolation**: `bun --bun vitest run --config <tier>.config.ts <file>`.
 2. **Diff against a clean HEAD baseline** — stash-free method (project policy blocks `git
    stash`): `cp` your working files aside, `git checkout HEAD -- <src>`, run the same isolated
    file, then restore your files. If the failure count + the failing test *names* are identical
@@ -111,7 +122,7 @@ which is a perf artifact, not a correctness one.
 
 **These are now enumerated machine-readably in `tests/setup/known-failures.json`
 (118 entries, measured 2026-07-25 in a clean clone of `844dc84`), so prefer
-`npm run test:baseline` over the manual HEAD-baseline dance below** — it does the
+`bun run test:baseline` over the manual HEAD-baseline dance below**: it does the
 same comparison automatically and exits non-zero only on genuinely new failures.
 The prose below explains *why* the big clusters fail.
 
@@ -125,7 +136,7 @@ The prose below explains *why* the big clusters fail.
   `createSessionIO`) — owned by the sessions subsystem, tracked separately.
 - **`claude-code-session.test.ts`** also needs a running local daemon
   (`Local daemon not running. Call localDaemon.ensureRunning()`); ~37 fail without it under a bare
-  `npx vitest` invocation.
+  `bun --bun vitest` run.
 - Assorted contract-drift assertions (e.g. `context-inspector` expecting model `claude-opus-4-6`;
   task DELETE expecting `200` vs actual `204`).
 
@@ -219,9 +230,9 @@ describe.skipIf(!isLiveTest() || !hasAwsCredentials())('Bedrock live', () => {
 
 Two modes:
 
-1. **Automated code tests** (`tests/e2e/browser/`): Run with `npx playwright test`. Playwright config starts the web server automatically. Parallel workers (half CPUs locally, 4 in CI), each test creates unique data. Tests are standard `@playwright/test` specs.
+1. **Automated code tests** (`tests/e2e/browser/`): Run with `bun x playwright test`. The runner itself needs Node on PATH (`bun x` starts it through Playwright's own `node` shebang; it cannot load its config on bun), and the config starts the fixture server on bun automatically. At most 4 workers, each test creates unique data. Tests are standard `@playwright/test` specs.
 
-2. **Manual MCP verification** (final human-in-the-loop step): After automated tests pass, use Playwright MCP tools for visual spot-checks. Point them at an ephemeral server (`npm run dev:ephemeral` prints its port), never at :3456 when the check creates or changes data. A check that must write on :3456 runs as a test run (an automated browser marks itself; `curl`/`walnut` need `x-walnut-test-run` / `WALNUT_TEST_RUN`), so its objects stay off the user's board and are swept: see "Live verification" in the repo AGENTS.md.
+2. **Manual MCP verification** (final human-in-the-loop step): After automated tests pass, use Playwright MCP tools for visual spot-checks. Point them at an ephemeral server (`bun run dev:ephemeral` prints its port), never at :3456 when the check creates or changes data. A check that must write on :3456 runs as a test run (an automated browser marks itself; `curl`/`walnut` need `x-walnut-test-run` / `WALNUT_TEST_RUN`), so its objects stay off the user's board and are swept: see "Live verification" in the repo AGENTS.md.
    ```
    mcp__playwright__browser_navigate → http://localhost:<ephemeral port>
    mcp__playwright__browser_snapshot → verify DOM structure

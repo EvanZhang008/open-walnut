@@ -1,15 +1,17 @@
 # Testing pipeline
 
-Five layers, chosen so the one you run most often is the one that costs least. Run `npm run test:quick` on every change, `npm run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push — Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners). Cross-machine features additionally need the L5 live journey before they count as done.
+Five layers, chosen so the one you run most often is the one that costs least. Run `bun run test:quick` on every change, `bun run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push: Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners). Cross-machine features additionally need the L5 live journey before they count as done.
 
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
-| **L1 quick** | `npm run test:quick` | ~1,500 fast test files | ~3 min (1 worker, machine-wide default) | every code change |
-| **L2 focus** | `npm run test:focus <path>` | whatever you name | 0.3–30 s | while working on one module |
-| **L3 pre-commit** | `npm run test:pre-commit` | the tiers your diff can break | 1–6 min | before a larger commit |
+| **L1 quick** | `bun run test:quick` | ~2,250 fast test files | ~3 min (1 worker, machine-wide default) | every code change |
+| **L2 focus** | `bun run test:focus <path>` | whatever you name | 0.3 to 30 s | while working on one module |
+| **L3 pre-commit** | `bun run test:pre-commit` | the tiers your diff can break | 1 to 6 min | before a larger commit |
 | **L4 CI** | GitHub Actions, automatic | everything + lint + build | ~6 min wall-clock, free | every push and PR |
-| **L5 live** | `npm run test:live:cloud` / `test:live:daemon` | real cloud + real daemon, zero mocks | ~25 s / ~2 min | cross-machine feature sign-off; part of `test:full` |
+| **L5 live** | `bun run test:live:cloud` / `test:live:daemon` | real cloud + real daemon, zero mocks | ~25 s / ~2 min | cross-machine feature sign-off; part of `test:full` |
 | **Fleet** | `npm run test:fleet` | the Mac + Linux host containers over real SSH, with link faults | ~3 min for both files once the image is cached | a change to how the Mac reaches, deploys to or hands over to a host; opt-in, never in CI |
+
+Every layer runs on bun (1.4.4 or newer), and none needs Node. The package scripts start vitest as `bun --bun vitest`, by its bare name, so bun also puts its own `node` shim first on PATH and every `node` a test starts is bun too. `npx vitest` starts vitest on Node, and the global setup refuses that run (`tests/setup/runtime-deps.ts`). CI's build and test jobs remove the runner image's Node before they install (`scripts/ci-remove-node.sh`), so a step that still needs Node fails there instead of on a machine without one; `tests/scripts/ci-bun-only.test.ts` pins that. Two things stay on Node: the Playwright runner (the fixture servers it starts run on bun), and the plugin package check, which packs, installs and tests the plugin packages with npm the way an outside plugin author does. Both run in CI's blocking `node-side` job, and the runner in the browser shards.
 
 ## L5 — live journeys (why mocked-green is not enough)
 
@@ -42,14 +44,14 @@ What it caught that the cluster could not (2026-10-23): the ControlMaster socket
 
 `vitest.quick.config.ts` runs everything EXCEPT the 26 files measured over 2 s (`tests/setup/slow-tests.ts`), the two end-to-end-heavy directories (`tests/e2e`, `tests/commands`), and the four frontend-rooted ones under `tests/web/` whose deps live in `web/node_modules`. Those 26 are slow because they start something real — a `claude` CLI, a local daemon, a git subprocess, an HTTP server — so they are exactly the wrong thing to run on every save.
 
-The split is by **measured time**, not by a hand-drawn "unit vs integration" line. A new fast test is therefore included automatically; only a test that actually becomes slow needs a list entry. `npm run test:slow` runs exactly the complement, and `tests/setup/quick-tier.test.ts` asserts the two sets partition the suite with no overlap and no orphans (311 + 26 = 337).
+The split is by **measured time**, not by a hand-drawn "unit vs integration" line. A new fast test is therefore included automatically; only a test that actually becomes slow needs a list entry. `bun run test:slow` runs exactly the complement, and `tests/setup/quick-tier.test.ts` asserts the two sets partition the suite with no overlap and no orphans (311 + 26 = 337).
 
 ## L2 — focus one path
 
 ```bash
-npm run test:focus tests/core/task-manager.test.ts   # one file
-npm run test:focus tests/core                        # one directory
-npm run test:focus -- -t 'reorder'                   # one test by name
+bun run test:focus tests/core/task-manager.test.ts   # one file
+bun run test:focus tests/core                        # one directory
+bun run test:focus -- -t 'reorder'                   # one test by name
 ```
 
 ## L3 — only the tiers your diff touches
@@ -66,7 +68,7 @@ npm run test:focus -- -t 'reorder'                   # one test by name
 | `package.json` / lockfile | quick + slow + frontend |
 | `docs/**`, `site/**`, `ios-native/**`, `infra/**`, `.github/**`, assets | none |
 
-`npm run test:changed` narrows the quick tier to the diff's module graph; `npm run test:pre-commit` runs the affected tiers in full. An unrecognised path always falls back to running the quick tier rather than skipping.
+`bun run test:changed` narrows the quick tier to the diff's module graph; `bun run test:pre-commit` runs the affected tiers in full. An unrecognised path always falls back to running the quick tier rather than skipping.
 
 ## L4 — CI (free)
 
@@ -85,12 +87,12 @@ The quick tier currently has **one known failure on the committed tree**. A tier
 So the quick and e2e tiers go through a **baseline gate** instead:
 
 ```bash
-npm run test:baseline          # fails ONLY on failures absent from the baseline
-npm run test:baseline:record   # re-snapshot (do this when you fix some)
+bun run test:baseline          # fails ONLY on failures absent from the baseline
+bun run test:baseline:record   # re-snapshot (do this when you fix some)
 
 # the e2e tier, as CI judges it
 WALNUT_BASELINE_CONFIG=vitest.e2e.config.ts WALNUT_BASELINE_FILE=tests/setup/known-failures-e2e.json \
-  WALNUT_BASELINE_MIN_FILES=120 node scripts/test-baseline.mjs check --maxWorkers=1
+  WALNUT_BASELINE_MIN_FILES=120 bun scripts/test-baseline.mjs check --maxWorkers=1
 ```
 
 `tests/setup/known-failures.json` (quick) and `tests/setup/known-failures-e2e.json` (e2e) are committed, so a PR that adds entries is visibly making things worse. Both gates run per shard on CI: each leg judges only the files it ran (a baseline entry from another shard is neither new nor "fixed" there), and uploads its own failures as the `known-failures-e2e-<shard>` artifact (`WALNUT_BASELINE_RUN_OUT`), so a new e2e baseline is the union of the four artifacts of one run, with no second run of the tier. The slow tier has no baseline: it blocks on any failure.
