@@ -36,6 +36,7 @@ import { log } from '../../src/logging/index.js';
 import type { BusEvent } from '../../src/core/event-bus.js';
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
 import { enqueueMessage, getQueue, markProcessing, resetCache as resetQueueCache } from '../../src/core/session-message-queue.js';
+import { turnUserUuid } from '../../src/providers/batch-uuid.js';
 import fs from 'node:fs';
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js';
 
@@ -3759,9 +3760,10 @@ describe('activeProcessing safety timeout — batch ids survive for a late resul
 });
 
 // The safety timeout re-enters processNext while the CLI may still be inside the
-// previous turn. A question row (userUuid) written then was answered inside that
-// turn (2026-10-06: one reply for two questions, the first card stuck on
-// "Answering", the second never in progress). It must wait for the turn end.
+// previous turn. Every row, a question row (userUuid) included, is written then:
+// holding a question back hid the user's message from the CLI until the turn
+// ended (2026-10-23, 8 minutes). The running turn's answer is then mixed, so no
+// question claims it.
 describe('processNext while the CLI is still inside a turn', () => {
   function fakeSession(sid: string, inTurn: boolean) {
     return {
@@ -3780,23 +3782,20 @@ describe('processNext while the CLI is still inside a turn', () => {
     };
   }
 
-  it('keeps a question row pending until the turn is over, then sends it', async () => {
+  it('writes a question row into the running turn and leaves the turn unattributed', async () => {
     const runner = useDaemon(new SessionRunner(MOCK_CLI));
-    const sid = 'question-waits-for-turn';
+    const sid = 'question-written-mid-turn';
+    const uuid = '33333333-3333-4333-8333-333333333333';
     const fake = fakeSession(sid, true);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (runner as any).sessions.set('question-waits-task', fake);
-    await enqueueMessage(sid, '[Q3] what does the year range mean?', { userUuid: '33333333-3333-4333-8333-333333333333' });
+    (runner as any).sessions.set('question-mid-turn-task', fake);
+    await enqueueMessage(sid, '[Q3] what does the year range mean?', { userUuid: uuid });
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (runner as any).processNext(sid);
-    expect(fake.writeMessage).not.toHaveBeenCalled();
-    expect((await getQueue(sid))[0]?.status).toBe('pending');
-
-    fake.inTurn = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (runner as any).processNext(sid);
     expect(fake.writeMessage).toHaveBeenCalledOnce();
+    expect(fake.writeMessage.mock.calls[0]?.[0]).toBe('[Q3] what does the year range mean?');
+    expect(turnUserUuid(sid)).toBeUndefined();
     runner.destroyAndKill();
   });
 

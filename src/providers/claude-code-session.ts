@@ -11438,9 +11438,7 @@ export class SessionRunner {
       await new Promise(r => setTimeout(r, 200))
     }
 
-    // Atomically move pending messages to processing state. `midTurn` leaves the
-    // whole queue to processNext while any row carries a pre-assigned uuid: a
-    // question's head row must start its own turn (session-message-queue.ts).
+    // Atomically move pending messages to processing state.
     // One line per batch, under the uuid its rows were given the first time they
     // went out: rows that may already be in the CLI go alone, and the daemon is
     // asked before anything is written for them (lineTries > 1).
@@ -11451,7 +11449,7 @@ export class SessionRunner {
     const { ready, release } = this.holdMidTurnWrite(sessionId)
     try {
       await ready
-      const newMsgs = await markProcessing(sessionId, stopFence, { midTurn: true, tracked: targetSession.reportsLineLifecycle })
+      const newMsgs = await markProcessing(sessionId, stopFence, { tracked: targetSession.reportsLineLifecycle })
       if (newMsgs.length === 0) return
       releaseHeld(sessionId, newMsgs.map((m) => m.id))
 
@@ -12343,17 +12341,15 @@ export class SessionRunner {
     // went out. Rows that may already be in a CLI (lineTries > 1) go out alone,
     // and the daemon is asked before anything is written for them.
     // A CLI this server already knows reports its queue: its rows say so on disk.
-    // A question row starts its own turn also here: the safety timeout re-enters
-    // processNext while the CLI may still be answering the previous question, and
-    // a question written then was answered inside that turn (2026-10-06: two
-    // questions under one reply, the first card stuck on "Answering").
+    // The CLI may still be inside a turn here (the safety timeout re-enters
+    // processNext); the line still goes now and the CLI queues it.
     let tracked = false
     let inTurn = false
     for (const [, s] of this.sessions) if (s.sessionId === sessionId) { tracked = s.reportsLineLifecycle; inTurn = s.inTurn; break }
     // A mid-turn write still out holds an earlier line as 'processing': taking the
     // queue's head now would send a later line first (see midTurnWrites).
     await this.midTurnWrites.get(sessionId)
-    const msgs = await markProcessing(sessionId, stopFence, { tracked, midTurn: inTurn })
+    const msgs = await markProcessing(sessionId, stopFence, { tracked })
     if (msgs.length === 0) return
     releaseHeld(sessionId, msgs.map((m) => m.id))
     const dedupe = (msgs[0].lineTries ?? 1) > 1
@@ -12366,7 +12362,8 @@ export class SessionRunner {
     const batchUuid = pickBatchUuid(msgs)
     // The uuid this turn answers (undefined for a plain batch): the thread titler
     // reads it at session:result to prove which question a result belongs to.
-    noteTurnUserUuid(sessionId, batchUuid)
+    // Written into a running turn, the result is mixed, so no question owns it.
+    noteTurnUserUuid(sessionId, inTurn ? undefined : batchUuid)
     // The uuid the line goes out under on EVERY path below (live FIFO write and
     // cold --resume), fixed when its rows first went out (QueuedMessage.lineUuid).
     // The CLI skips a uuid its transcript already holds, so a resume after the old

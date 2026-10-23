@@ -447,9 +447,10 @@ show inline after the open ones, other completed hits that show the query fold i
   WebKit, which may not draw a highlight's underline) while the map folds it into `N archived`,
   the row that shows it again. **A live turn belongs to its NEWEST `[Qn]` tag**
   (`tagKeyAtBlock`, each block to the newest tag at or before it): a turn that moved on to another
-  question is answering that one, and the question it left is answered. The server keeps a question
-  row out of a running turn on every path (`processNextNow` passes `midTurn` from the session's
-  `inTurn`), because the 60s safety timeout re-enters the drain while the CLI is still answering. **A question being answered scans its line**
+  question is answering that one, and the question it left is answered. The server never holds a
+  question row back from a running turn: it goes to the CLI at once and the CLI queues it (holding
+  it hid the user's message for 8 minutes, 2026-10-23); a turn that took one mid-turn claims no
+  question (`noteTurnUserUuid(…, undefined)`). **A question being answered scans its line**
   (`utils/thread-live-lines.ts`, `useThreadMarks`' `live` option, keys from `useAnsweringKeys`):
   its highlight turns `thread-mark-live-*` (the fill, no underline) and one element per line of
   text draws the underline instead, with the working indicator's sweeping band, until the answer
