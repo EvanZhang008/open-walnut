@@ -892,7 +892,7 @@ if [[ "$RUNTIME" == "file" && "${WALNUT_DEVPROD_SKIP_SELFTEST:-0}" != "1" ]]; th
   SELFTEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/walnut-selftest.XXXXXX")"
   mkdir -p "$SELFTEST_TMP/home" "$SELFTEST_TMP/daemon"
   echo "Self-testing $SERVER_FILE."
-  if ! env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR \
+  if ! env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u BUN_BE_BUN \
     OPEN_WALNUT_HOME="$SELFTEST_TMP/home" \
     WALNUT_DAEMON_DIR="$SELFTEST_TMP/daemon" \
     WALNUT_RUNTIME_DIR="$STAGE_DIR/runtime" \
@@ -996,7 +996,7 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
     if [[ "$REHEARSAL" == "1" && "${WALNUT_DEVPROD_REHEARSAL_FAIL_SMOKE:-0}" == "1" ]]; then
       smoke_argv=(/bin/sh -c 'echo "rehearsal: forced smoke failure" >&2; exit 3' rehearsal-smoke)
     fi
-    env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR \
+    env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN \
       OPEN_WALNUT_HOME="$SMOKE_TMP/home" \
       WALNUT_DAEMON_DIR="$SMOKE_TMP/daemon" \
       WALNUT_DISABLE_SEARCH=1 \
@@ -1429,7 +1429,8 @@ xml_escape() {
 # The job's command line, shared by the plist and the submit fallback: the
 # server program set_server_argv chose (the compiled file runs directly, no node).
 # WALNUT_RUNTIME_DIR is dropped first: a deploy started from inside a session of
-# the old server inherits that server's, which names the OLD stage.
+# the old server inherits that server's, which names the OLD stage. BUN_BE_BUN=1
+# would make the compiled file run as the bun CLI instead of Walnut.
 launchd_job_argv() {
   launchd_argv=(/bin/sh -c 'cd "$1" && shift && exec "$@"' open-walnut
     "$SERVE_ROOT" /usr/bin/env
@@ -1438,6 +1439,7 @@ launchd_job_argv() {
     -u WALNUT_DAEMON_DIR
     -u VITEST
     -u WALNUT_RUNTIME_DIR
+    -u BUN_BE_BUN
     PATH="$PATH"
     WALNUT_LAUNCHD_LABEL="$LAUNCH_LABEL"
     "${server_argv[@]}" web --port "$PORT")
@@ -1572,6 +1574,7 @@ launch_server() {
       -u WALNUT_DAEMON_DIR \
       -u VITEST \
       -u WALNUT_RUNTIME_DIR \
+      -u BUN_BE_BUN \
       "${server_argv[@]}" web --port "$PORT" \
       </dev/null >>"$SERVER_LOG" 2>&1 &
     pid=$!

@@ -68,6 +68,8 @@ describe('dev-prod.sh smoke boot ordering', () => {
     const block = script.slice(script.lastIndexOf('SELFTEST_TMP="$(mktemp -d', selftest), selftest)
     expect(block).toMatch(/OPEN_WALNUT_HOME="\$SELFTEST_TMP\/home"/)
     expect(block).toMatch(/WALNUT_DAEMON_DIR="\$SELFTEST_TMP\/daemon"/)
+    // BUN_BE_BUN=1 would make the file run as the bun CLI, and the selftest pass on bun's own exit code.
+    expect(block).toMatch(/env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u BUN_BE_BUN/)
   })
 
   it('aborts the deploy (prod untouched) when the smoke boot fails', () => {
@@ -88,8 +90,14 @@ describe('dev-prod.sh smoke boot isolation', () => {
     expect(script).toMatch(/WALNUT_DAEMON_DIR="\$SMOKE_TMP\/daemon"/)
     // The compiled file unpacks its tree into the smoke dir, not the stage the
     // production server runs from, and an inherited value is dropped first.
-    expect(script).toMatch(/env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR/)
+    expect(script).toMatch(/env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN/)
     expect(script).toMatch(/WALNUT_RUNTIME_DIR="\$SMOKE_TMP\/runtime"/)
+  })
+
+  it('every server launch drops BUN_BE_BUN, the nohup fallback included', () => {
+    const launch = /^launch_server\(\) \{\n[\s\S]*?^\}\n/m.exec(script)![0]
+    const nohup = launch.slice(launch.indexOf('nohup env'))
+    expect(nohup.slice(0, nohup.indexOf('"${server_argv[@]}"'))).toMatch(/-u BUN_BE_BUN/)
   })
 
   it('temp home is NOT named open-walnut-* (resolveOpenWalnutHome would silently revert it to prod data)', () => {
