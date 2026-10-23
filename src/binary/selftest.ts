@@ -70,6 +70,21 @@ export async function runSelftest(): Promise<number> {
       },
     },
     {
+      // Its encoder is a wasm file the package reads through __dirname (DIRNAME_PACKAGES in
+      // scripts/build-binary.mjs); estimateTokens would hide a miss behind its length/4 fallback.
+      name: 'tokenizer', required: true, run: async () => {
+        const { getTokenizer } = await import('@anthropic-ai/tokenizer')
+        const tokenizer = getTokenizer()
+        try {
+          const count = tokenizer.encode('hello world', 'all').length
+          if (count < 1) throw new Error(`encoded to ${count} tokens`)
+          return `wasm encoder, ${count} tokens`
+        } finally {
+          tokenizer.free()
+        }
+      },
+    },
+    {
       name: 'daemon-source', required: true, run: async () => {
         const { getDaemonSource } = await import('../providers/daemon-source.js')
         const source = getDaemonSource()
