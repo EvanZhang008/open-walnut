@@ -71,6 +71,8 @@ transferV1Router.get('/tasks/:id/transfer-options', async (req: Request, res: Re
         cwd: session.cwd ?? task.cwd ?? null,
         // What the new session starts with unless the person picks otherwise.
         model: session.cliModel || session.model || null,
+        // The model it runs on, for a label when `model` is the CLI's own 'default'.
+        runningModel: session.model ?? null,
         effort: session.effort ?? null,
         permissionMode: session.mode ?? null,
       } : null,

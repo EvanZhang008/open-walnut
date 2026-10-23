@@ -19,11 +19,15 @@ import { blockedReason, launchDefaults, withEngine, type TransferForm } from './
 
 const EFFORT_LABELS: Record<string, string> = Object.fromEntries(SESSION_EFFORTS.map((e) => [e.id, e.label]));
 
-/** "Opus 5.5 1M · High", "Auto", "gpt-5 (high)": what the new session runs. */
-export function launchLabel(form: TransferForm, acp: boolean): string {
+/** "Opus 5.5 1M · High", "Auto (Opus 5.5 1M)", "gpt-5 (high)": what the new session runs. */
+export function launchLabel(form: TransferForm, acp: boolean, source?: TransferSource): string {
+  // Auto on the source's own harness runs what the source runs: name it.
+  const running = !form.model && source && form.engine === source.engine && source.runningModel
+    ? (acp ? shortAcpModelName(source.runningModel) : formatModelName(source.runningModel))
+    : '';
   const model = form.model
     ? (acp ? shortAcpModelName(form.model) : formatModelName(form.model))
-    : 'Auto';
+    : running ? `Auto (${running})` : 'Auto';
   const effort = !acp && form.effort ? EFFORT_LABELS[form.effort] ?? form.effort : null;
   return effort ? `${model} · ${effort}` : model;
 }
@@ -78,12 +82,12 @@ export function TransferLaunchRows({ options, source, form, onChange, group }: {
             data-testid="xfer-model"
           >
             <span className="xfer-opt-line">
-              <span className="xfer-opt-name">{launchLabel(form, acp)}</span>
-              {isDefault && defaults.model && <span className="xfer-now">Now</span>}
+              <span className="xfer-opt-name">{launchLabel(form, acp, source)}</span>
+              {isDefault && form.engine === source.engine && <span className="xfer-now">Now</span>}
               <span className="xfer-model-caret" aria-hidden="true">▾</span>
             </span>
             <span className="xfer-opt-sub">
-              {defaults.model ? 'Starts on the current model and effort. Click to change.' : "Starts on the harness's default. Click to change."}
+              {form.engine === source.engine ? 'Starts on the current model and effort. Click to change.' : "Starts on the harness's default. Click to change."}
             </span>
           </button>
           {open && (

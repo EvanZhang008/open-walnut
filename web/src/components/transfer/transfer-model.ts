@@ -48,7 +48,9 @@ export function hostLabel(host: string, hosts?: readonly { alias: string; label?
  *  and effort on the same engine, the engine's defaults on another one. */
 export function launchDefaults(source: TransferSource, engine: string): Pick<TransferForm, 'model' | 'effort'> {
   if (engine !== source.engine) return { model: undefined, effort: undefined };
-  return { model: source.model ?? undefined, effort: source.effort ?? undefined };
+  // 'default' is the CLI's own default, which the picker calls Auto.
+  const model = source.model && source.model !== 'default' ? source.model : undefined;
+  return { model, effort: source.effort ?? undefined };
 }
 
 export function initialForm(source: TransferSource): TransferForm {

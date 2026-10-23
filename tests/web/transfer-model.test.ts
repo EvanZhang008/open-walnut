@@ -52,6 +52,14 @@ describe('transfer launch defaults', () => {
     expect(withEngine(form, source, 'claude')).toMatchObject({ engine: 'claude', model: 'opus[1m]', effort: 'high' });
   });
 
+  it('a source on the CLI\'s own default model starts on Auto, and Auto sends no model', () => {
+    const onDefault = { ...source, model: 'default', runningModel: 'global.anthropic.claude-opus-5-5[1m]' };
+    const form = initialForm(onDefault);
+    expect(form.model).toBeUndefined();
+    expect(buildTransferBody(onDefault, { ...form, host: 'devbox' })).not.toHaveProperty('model');
+    expect(buildTransferBody(onDefault, { ...form, host: 'devbox', model: 'sonnet' }).model).toBe('sonnet');
+  });
+
   it('a model change alone is enough to transfer; nothing changed is not', () => {
     expect(submitBlocker(options, initialForm(source))).toMatch(/Nothing would change/);
     expect(submitBlocker(options, { ...initialForm(source), model: 'sonnet' })).toBeNull();

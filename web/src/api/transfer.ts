@@ -17,6 +17,8 @@ export interface TransferSource {
   cwd: string | null;
   /** The source session's launch settings: the new session's defaults. */
   model?: string | null;
+  /** The model the source runs on (names "Auto" when `model` is the CLI's 'default'). */
+  runningModel?: string | null;
   effort?: string | null;
   permissionMode?: string | null;
 }

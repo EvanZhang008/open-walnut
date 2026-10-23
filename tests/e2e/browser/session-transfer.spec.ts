@@ -246,6 +246,17 @@ test('the new session starts on the source model, effort and permissions, and th
   await expect(pill).toContainText('Now')
 })
 
+test('a source on the CLI default model reads "Auto (<the model it runs>)"', async ({ page }) => {
+  const onDefault = { ...OPTIONS, source: { ...OPTIONS.source, model: 'default', runningModel: 'global.anthropic.claude-opus-5-5[1m]', effort: null } }
+  await page.route(`**/api/v1/tasks/${TASK_ID}/transfer-options`, (route) => route.fulfill({ json: onDefault }))
+  const dialog = await openTransferFromPanel(page)
+  const pill = dialog.getByTestId('xfer-model')
+  await expect(pill).toContainText('Auto (Opus 5.5 1M)')
+  await expect(pill).toContainText('Now')
+  await dialog.getByTestId('xfer-engine-codex').click()
+  await expect(pill.locator('.xfer-opt-name')).toHaveText('Auto')
+})
+
 test('a refused transfer shows the server error inline and keeps the choices', async ({ page }) => {
   await cannedOptions(page)
   const err = 'The workspace could not be packed: disk full on this Mac'
