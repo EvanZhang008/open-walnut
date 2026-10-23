@@ -122,6 +122,10 @@ const DAEMON_SOURCE_FILES = [
   // entry that ships it to the source twin: same lockstep rule.
   'src/providers/trigger-envelope-core.ts',
   'src/providers/trigger-check-sidecar.ts',
+  // Clock routines (clock-routine-v1): the rules ride the sidecar, the schedule
+  // math is imported by the standalone twin and inlined into the source twin.
+  'src/providers/trigger-clock-core.ts',
+  'src/providers/clock-schedule-core.ts',
   'src/core/cron/trigger-timing.ts',
   'src/core/transcript-chain.ts',
   'src/core/transcript-chain-leaf.ts',

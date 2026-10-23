@@ -89,6 +89,8 @@ SOURCES=(
   src/providers/trigger-check-core.ts
   src/providers/trigger-envelope-core.ts
   src/providers/trigger-check-sidecar.ts
+  src/providers/trigger-clock-core.ts
+  src/providers/clock-schedule-core.ts
   src/core/cron/trigger-timing.ts
   src/core/transcript-chain.ts
   src/core/transcript-chain-leaf.ts

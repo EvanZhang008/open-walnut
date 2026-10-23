@@ -5,22 +5,18 @@
  * tell who built it; this module keeps the server's import path.
  */
 
-import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { CronJob } from '../cron/types.js';
+import { buildScheduledMessage } from '../../providers/trigger-envelope-core.js';
 
 export {
-  ITEMS_JSON_CAP, boundedItemsJson, buildTriggerBody, buildTriggerMessage, triggerNote,
+  ITEMS_JSON_CAP, boundedItemsJson, buildScheduledMessage, buildTriggerBody, buildTriggerMessage, triggerNote,
 } from '../../providers/trigger-envelope-core.js';
 
 /**
  * A plain scheduled run of the `session` executor (a routine with no check):
  * same envelope, so the session sees one shape whether the clock or a script
- * decided.
+ * decided, and whether this server or the host's daemon kept the clock.
  */
 export function buildScheduledSessionMessage(job: Pick<CronJob, 'name'>, prompt: string): string {
-  return buildWalnutMessage({
-    kind: 'trigger',
-    attrs: { from: `Trigger: ${job.name}`, note: 'scheduled' },
-    body: prompt.trim(),
-  });
+  return buildScheduledMessage(job.name, prompt);
 }

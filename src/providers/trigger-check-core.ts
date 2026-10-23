@@ -17,6 +17,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
+import { clockSpecKey, validateClockSpec, type ClockHostState, type TriggerClockSpec } from './trigger-clock-core.js';
 
 // ── Limits (every number is a cron-storm lesson; keep them in one place) ──
 
@@ -145,12 +146,17 @@ export interface TriggerDeliverSpec {
   prompt: string;
 }
 
-/** One armed trigger as the server pushes it (`triggers.configure`). */
+/**
+ * One armed trigger as the server pushes it (`triggers.configure`). Exactly one of
+ * `check` (a script decides) and `clock` (a clock routine, clock-routine-v1: the
+ * schedule decides; trigger-clock-core.ts) is set.
+ */
 export interface TriggerDef {
   id: string;
   name: string;
   everyMs: number;
-  check: TriggerCheckSpec;
+  check?: TriggerCheckSpec;
+  clock?: TriggerClockSpec;
   limits?: TriggerLimits;
   deliver?: TriggerDeliverSpec;
 }
@@ -211,6 +217,11 @@ export interface PendingFire {
   hostTriedAt?: number;
   /** What the daemon repaired in the run that made this fire (TriggerCheckOutput.warnings). */
   warnings?: string[];
+  /**
+   * A clock routine's run: the slot it stands for (the oldest, when slots waited
+   * behind it) and the handover it was made under (TriggerClockSpec.fromMs).
+   */
+  clock?: { slotMs: number; fromMs: number };
 }
 
 /** Per-trigger state the daemon persists at `trigger-state/<id>.json`. */
@@ -236,6 +247,8 @@ export interface TriggerHostState {
   seq: number;
   lastRunAtMs?: number;
   lastFireAtMs?: number;
+  /** A clock routine's place in its schedule (trigger-clock-core.ts). */
+  clock?: ClockHostState;
 }
 
 export type CheckDecision =
@@ -315,6 +328,8 @@ export interface TriggerFiredEvent {
   host?: HostDelivery;
   /** What the daemon repaired in the run that made this fire. */
   warnings?: string[];
+  /** A clock routine's run (clock-routine-v1): the slot it stands for and its handover. */
+  clock?: { slotMs: number; fromMs: number };
 }
 
 export type TriggerEvent = TriggerCheckedEvent | TriggerFiredEvent;
@@ -397,7 +412,15 @@ export function coerceHostState(raw: unknown, nowMs: number): TriggerHostState {
     seq: typeof r.seq === 'number' ? r.seq : 0,
     ...(typeof r.lastRunAtMs === 'number' ? { lastRunAtMs: r.lastRunAtMs } : {}),
     ...(typeof r.lastFireAtMs === 'number' ? { lastFireAtMs: r.lastFireAtMs } : {}),
+    ...(coerceClock(r.clock) ? { clock: coerceClock(r.clock) } : {}),
   };
+}
+
+function coerceClock(raw: unknown): ClockHostState | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const c = raw as Record<string, unknown>;
+  if (typeof c.fromMs !== 'number' || !Number.isFinite(c.fromMs)) return undefined;
+  return { fromMs: c.fromMs, ...(typeof c.nextRunAtMs === 'number' && Number.isFinite(c.nextRunAtMs) ? { nextRunAtMs: c.nextRunAtMs } : {}) };
 }
 
 /**
@@ -690,6 +713,27 @@ export function applyCheckOutcome(
 }
 
 /**
+ * A clock routine's slot came (clock-routine-v1): queue its run as a fire with no
+ * items, the way applyCheckOutcome queues a check's. `slotMs` is the slot it
+ * stands for, `fromMs` the handover it runs under; `arbitrated` as for a check
+ * (the def carries `deliver`).
+ */
+export function applyClockFire(state: TriggerHostState, nowMs: number, slotMs: number, arbitrated: boolean, fromMs: number): PendingFire {
+  state.lastRunAtMs = nowMs;
+  state.lastFireAtMs = nowMs;
+  state.consecutiveErrors = 0;
+  state.seq += 1;
+  const fire: PendingFire = {
+    seq: state.seq, atMs: nowMs, items: [], durationMs: 0,
+    ...(arbitrated ? { arbitrated: true as const } : {}),
+    clock: { slotMs, fromMs },
+  };
+  state.pendingFires.push(fire);
+  trimPendingFires(state);
+  return fire;
+}
+
+/**
  * Keep at most PENDING_FIRES_MAX. A fire the host already delivered goes first:
  * only its history line is lost, while an undelivered one would lose its items.
  */
@@ -947,7 +991,8 @@ export function runCheckProcess(
 export function triggersSetHash(defs: TriggerDef[]): string {
   const sorted = [...defs].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const canonical = sorted.map((d) => [
-    d.id, d.name, d.everyMs, d.check.run, d.check.cwd ?? '', d.check.timeoutSeconds ?? 0,
+    d.id, d.name, d.everyMs,
+    ...(d.check ? [d.check.run, d.check.cwd ?? '', d.check.timeoutSeconds ?? 0] : ['clock', d.clock ? clockSpecKey(d.clock) : '', 0]),
     d.limits?.maxFiresPerDay ?? -1,
     // Appended only when present, so a set without host delivery keeps the hash
     // it always had and an upgrade does not rewrite every triggers.json.
@@ -995,6 +1040,7 @@ export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } 
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'trigger must be an object' };
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== 'string' || !r.id.trim()) return { ok: false, error: 'trigger.id is required' };
+  if (r.clock !== undefined) return validateClockDef(r as Record<string, unknown> & { id: string });
   if (typeof r.everyMs !== 'number' || !Number.isFinite(r.everyMs) || r.everyMs < MIN_EVERY_MS) {
     return { ok: false, error: `trigger ${r.id}: everyMs must be a number >= ${MIN_EVERY_MS}` };
   }
@@ -1027,6 +1073,24 @@ export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } 
       ...(typeof limits.maxFiresPerDay === 'number'
         ? { limits: { maxFiresPerDay: Math.floor(limits.maxFiresPerDay) } }
         : {}),
+      ...(deliver ? { deliver } : {}),
+    },
+  };
+}
+
+/** A clock routine's def: no check, and no fire budget (its schedule is its limit). */
+function validateClockDef(r: Record<string, unknown> & { id: string }): { ok: true; def: TriggerDef } | { ok: false; error: string } {
+  if (r.check !== undefined) return { ok: false, error: `trigger ${r.id}: a def carries a check or a clock, not both` };
+  const clock = validateClockSpec(r.clock);
+  if (!clock.ok) return { ok: false, error: `trigger ${r.id}: ${clock.error}` };
+  const deliver = deliverSpecOf(r.deliver);
+  return {
+    ok: true,
+    def: {
+      id: r.id,
+      name: typeof r.name === 'string' && r.name.trim() ? r.name : r.id,
+      everyMs: typeof r.everyMs === 'number' && Number.isFinite(r.everyMs) ? Math.floor(r.everyMs) : 0,
+      clock: clock.spec,
       ...(deliver ? { deliver } : {}),
     },
   };

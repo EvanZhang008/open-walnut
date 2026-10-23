@@ -60,6 +60,7 @@ import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createHostStart } from './host-start-core.js'
+import { createClockSchedule } from './clock-schedule-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createLetterCheck } from '../core/human-inbox/letter-check.js'
@@ -208,7 +209,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -261,6 +262,7 @@ export function getDaemonSource(): string {
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
+    ['__CREATE_CLOCK_SCHEDULE__', createClockSchedule.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
     ['__CREATE_LETTER_CHECK__', createLetterCheck.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
@@ -505,6 +507,17 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const hs = createStart({ fs: noDir, path, dir: '/nonexistent', keyOf: () => 'k', now: () => 0, log: () => {}, busy: () => 0 })
       const r = hs.plan('/h', { sid: 'aaaaaaaa-1111-4111-8111-111111111111', taskId: 't' }, 'h')
       if (r.ok || r.code !== 'needs_leader' || r.detail?.why !== 'no_spawn_template') throw new Error('host start did not build')
+    }
+    // Clock schedule smoke (clock-routine-v1): a reconstructed copy must find the
+    // next 09:00 in a named zone and refuse a pattern only croner reads.
+    const createClock = reconstructed['__CREATE_CLOCK_SCHEDULE__'] as typeof createClockSchedule | undefined
+    if (createClock) {
+      const clock = createClock()
+      const day = Date.UTC(2026, 0, 15, 12, 0, 0)
+      if (clock.nextRunAtMs({ kind: 'cron', expr: '0 9 * * *', tz: 'UTC' }, day) !== Date.UTC(2026, 0, 16, 9, 0, 0)
+        || clock.supports({ kind: 'cron', expr: '0 9 * * 1#2', tz: 'UTC' })) {
+        throw new Error('clock schedule did not build')
+      }
     }
     // Replica logs smoke (logs.tail, WP14): a reconstructed reader must refuse an
     // unknown source and read nothing for a Walnut that runs nothing here.
@@ -4225,7 +4238,8 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   triggers: {
     armed: function () {
       if (!triggerCheckCore) return [];
-      return [...armedTriggers.values()].map(function (e) {
+      // Clock routines are not triggers a session lists, pauses or tests here.
+      return [...armedTriggers.values()].filter(function (e) { return !!e.def.check; }).map(function (e) {
         return {
           def: e.def,
           status: {
@@ -6642,7 +6656,83 @@ function hostDeliveryGraceMs() {
 // exactly what at-least-once wants. armedAtMs: fires left from before this daemon
 // armed the trigger give the server a fresh grace before the host delivers them.
 function newArmedTrigger(def, state, nextRunAtMs, now) {
-  return { def: def, state: state, nextRunAtMs: nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now };
+  var entry = { def: def, state: state, nextRunAtMs: nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now };
+  if (def.clock) armClock(entry, now, nextRunAtMs - now);
+  return entry;
+}
+
+// ── Clock routines (clock-routine-v1): the schedule is the fire condition ──
+// A routine whose work runs on this host keeps its clock here (trigger-clock-core.ts):
+// no script runs; a due slot queues a fire with no items, which goes the way a
+// trigger's does (claims, host delivery into the task's session, acks). The server
+// stopped ticking it before it pushed the def, and takes it back only from this
+// daemon's report that it disarmed it (configure's released). Mirror daemon-standalone.ts.
+var clockSchedule = (__CREATE_CLOCK_SCHEDULE__)();
+
+// Arm a clock def on entry: its place under the same handover, else a fresh start at the def's slot.
+function armClock(entry, now, delayMs) {
+  var spec = entry.def.clock;
+  var prev = entry.state.clock;
+  var clock = triggerCheckCore.clockStateOnArm(spec, prev);
+  if (clock !== prev) {
+    entry.state.clock = clock;
+    // A new handover: runs nobody took under an older one are not this clock's.
+    triggerCheckCore.dropStaleClockFires(entry.state, spec.fromMs);
+    persistTriggerState(entry.def.id, entry.state);
+    logMsg('info', 'clock routine armed', { id: entry.def.id, fromMs: spec.fromMs, nextRunAtMs: clock.nextRunAtMs, handover: prev ? 'new' : 'first' });
+  }
+  entry.nextRunAtMs = triggerCheckCore.clockDueMs(clock, now, Math.max(0, delayMs));
+}
+
+// A clock's slot came, or someone asked for a run now (manual, which leaves the
+// schedule where it is). While a run nobody took yet is owed, a slot only moves the
+// clock on: the owed one stands for it.
+function runClock(entry, manual) {
+  var now = Date.now();
+  var spec = entry.def.clock;
+  var clock = entry.state.clock || triggerCheckCore.clockStateOnArm(spec, undefined);
+  var slotMs = manual ? now : (clock.nextRunAtMs !== undefined ? clock.nextRunAtMs : now);
+  if (!manual) {
+    var next = clockSchedule.afterRun(spec.schedule, Math.max(now, slotMs));
+    entry.state.clock = next !== undefined ? { fromMs: clock.fromMs, nextRunAtMs: next } : { fromMs: clock.fromMs };
+    entry.nextRunAtMs = next !== undefined ? next : Number.POSITIVE_INFINITY;
+  }
+  var owed = !manual && triggerCheckCore.clockFireOwed(entry.state.pendingFires);
+  var fire = owed ? null : triggerCheckCore.applyClockFire(entry.state, now, slotMs, !!entry.def.deliver, clock.fromMs);
+  persistTriggerState(entry.def.id, entry.state);
+  var line = { id: entry.def.id, outcome: fire ? 'fired' : 'held', slotMs: slotMs, manual: manual, nextRunAtMs: entry.state.clock && entry.state.clock.nextRunAtMs !== undefined ? entry.state.clock.nextRunAtMs : null };
+  if (fire) line.seq = fire.seq;
+  logMsg('info', 'clock routine run', line);
+  if (fire) sendTriggerFire(entry, fire, false);
+  return fire ? 'fired' : 'held';
+}
+
+// Where a clock stands, for the configure reply.
+function clockReportOf(tid, entry) {
+  var report = { id: tid, fromMs: entry.state.clock ? entry.state.clock.fromMs : entry.def.clock.fromMs };
+  if (entry.state.clock && entry.state.clock.nextRunAtMs !== undefined) report.nextRunAtMs = entry.state.clock.nextRunAtMs;
+  return report;
+}
+
+function clockReports() {
+  var out = [];
+  for (const [tid, entry] of armedTriggers) {
+    if (entry.def.clock) out.push(clockReportOf(tid, entry));
+  }
+  return out;
+}
+
+// The server took this clock back: say where it stood, and hand over the run it
+// had queued that nobody took (the server runs it, so it must not stay here).
+function releaseClock(tid, entry) {
+  var owedSlotMs = triggerCheckCore.releaseClockFires(entry.state, hostDeliveriesInFlight.get(tid) || new Set());
+  if (owedSlotMs !== undefined) persistTriggerState(tid, entry.state);
+  var line = { id: tid };
+  if (owedSlotMs !== undefined) line.owedSlotMs = owedSlotMs;
+  logMsg('info', 'clock routine released', line);
+  var report = clockReportOf(tid, entry);
+  if (owedSlotMs !== undefined) report.owedSlotMs = owedSlotMs;
+  return report;
 }
 
 // Which trigger a command is about. The trigger id rides triggerId, never id:
@@ -6797,6 +6887,7 @@ function sendTriggerFire(entry, fire, replay) {
   if (fire.itemsTruncated) payload.itemsTruncated = true;
   if (fire.host) payload.host = fire.host;
   if (fire.warnings && fire.warnings.length) payload.warnings = fire.warnings;
+  if (fire.clock) payload.clock = fire.clock;
   if (replay) payload.replay = true;
   var delivered = sendTriggerEvent('trigger.fired', payload);
   if (delivered) entry.fireSentAt.set(fire.seq, Date.now());
@@ -6804,6 +6895,8 @@ function sendTriggerFire(entry, fire, replay) {
 }
 
 async function runTrigger(entry) {
+  if (entry.def.clock) return runClock(entry, false) === 'fired' ? { outcome: 'fired' } : { outcome: 'quiet' };
+  if (!entry.def.check) return { outcome: 'error', error: 'trigger has no check' };
   entry.running = true;
   var startedAt = Date.now();
   // A configure that lands mid-run may have disarmed this trigger. The run is
@@ -6915,7 +7008,11 @@ function deliverUnclaimedFires(now) {
     const seqs = due.map(function (f) { return f.seq; });
     const epoch = entry.state.epoch;
     const messageId = 'qm-trigger-' + crypto.randomBytes(6).toString('hex');
-    const text = triggerCheckCore.buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now });
+    const text = entry.def.clock
+      ? triggerCheckCore.buildScheduledMessage(entry.def.name, spec.prompt, {
+        dueAtMs: Math.min.apply(null, due.map(function (f) { return f.clock ? f.clock.slotMs : f.atMs; })), deliveredAtMs: now,
+      })
+      : triggerCheckCore.buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now });
     hostDeliveriesInFlight.set(id, new Set(seqs));
     offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then(function (r) {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
@@ -6987,16 +7084,25 @@ function effectiveTriggerDefs(defs) {
 // out instead.
 function armTriggerSet(defs, now) {
   var ids = new Set(defs.map(function (def) { return def.id; }));
-  for (const tid of [...armedTriggers.keys()]) {
-    if (!ids.has(tid)) armedTriggers.delete(tid);
+  var released = [];
+  for (const [tid, entry] of [...armedTriggers]) {
+    if (ids.has(tid)) continue;
+    armedTriggers.delete(tid);
+    if (entry.def.clock) released.push(releaseClock(tid, entry));
   }
   for (var d = 0; d < defs.length; d++) {
     var existing = armedTriggers.get(defs[d].id);
     // A trigger that stays keeps its state file, its cursor and its schedule;
-    // only the definition is refreshed.
-    if (existing) { existing.def = defs[d]; continue; }
+    // only the definition is refreshed. A clock the server started over (a new
+    // fromMs) starts from that slot; a def that changed kind is armed anew.
+    if (existing && !!existing.def.clock === !!defs[d].clock) {
+      existing.def = defs[d];
+      if (defs[d].clock) armClock(existing, now, TRIGGER_FIRST_RUN_DELAY_MS);
+      continue;
+    }
     armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], readTriggerState(defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now));
   }
+  return released;
 }
 
 // A session paused, resumed or deleted a trigger here: arm by it now.
@@ -7032,12 +7138,13 @@ async function configureTriggers(ws, id, cmd) {
   var hash = triggerCheckCore.triggersSetHash(defs);
   var changed = hash !== armedTriggersHash;
   configuredTriggerDefs = defs;
-  armTriggerSet(effectiveTriggerDefs(defs), now);
+  var released = armTriggerSet(effectiveTriggerDefs(defs), now);
   if (changed) persistTriggersFile(defs);
   armedTriggersHash = hash;
   pruneTriggerStateFiles(now);
-  logMsg('info', 'triggers configured', { hash: hash, count: defs.length, changed: changed });
-  sendOk(ws, id, { applied: true, changed: changed, count: defs.length });
+  var clocks = clockReports();
+  logMsg('info', 'triggers configured', { hash: hash, count: defs.length, changed: changed, clocks: clocks.length, released: released.map(function (r) { return r.id; }) });
+  sendOk(ws, id, { applied: true, changed: changed, count: defs.length, clocks: clocks, released: released });
 
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server
@@ -7088,7 +7195,7 @@ async function runTriggerTest(check, targetId) {
     var output = parsed.ok ? parsed.output : null;
     // Synthetic def for the decision: a test never consults the real cadence, and
     // an unarmed check has no limits of its own yet.
-    var def = entry ? entry.def
+    var def = entry && entry.def.check ? entry.def
       : { id: targetId || 'trigger-test', name: 'trigger test', everyMs: triggerCheckCore.MIN_EVERY_MS, check: spec };
     // A test is a human pressing a button on host data, so it is worth one line:
     // "the check the form showed me was fine" is otherwise unverifiable later.
@@ -7121,6 +7228,7 @@ function cmdTriggersRun(ws, id, cmd) {
   var tid = triggerIdOf(cmd);
   var entry = tid ? armedTriggers.get(tid) : undefined;
   if (!entry) return sendError(ws, id, 'triggers.run: unknown trigger: ' + tid);
+  if (entry.def.clock) return sendOk(ws, id, { ran: true, started: true, outcome: runClock(entry, true) });
   if (entry.running) return sendOk(ws, id, { ran: false, reason: 'running' });
   runTrigger(entry).catch(function (err) {
     logMsg('error', 'trigger run threw', { id: entry.def.id, error: err && err.message });
@@ -10745,6 +10853,7 @@ function daemonCapabilities() {
   if (triggerCheckCore) caps.push('triggers-v1');
   // Host delivery needs the envelope builder the newer sidecar carries.
   if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1');
+  if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.buildScheduledMessage === 'function') caps.push('clock-routine-v1');
   if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1');
   if (cronRuntimeCore && typeof cronRuntimeCore.prepareDaemonServiceHandover === 'function') caps.push('service-handover-v1');
   // 'grep-v1' is NOT sidecar-gated: cmdFsGrep is inlined above and needs only

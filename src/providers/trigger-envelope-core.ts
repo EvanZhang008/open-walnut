@@ -162,3 +162,27 @@ export function buildTriggerMessage(
     body: buildTriggerBody(prompt, items, mergedInput(ordered), timing, warnings.slice(0, CHECK_WARNINGS_MAX)),
   });
 }
+
+/**
+ * A clock routine's run: the routine's prompt, nothing else, so the session sees
+ * one shape whether the server's timer or a host's daemon kept the clock
+ * (note="scheduled"; the console's card reads it as "Routine ran on schedule").
+ * A run delivered long after its slot (no session was live on the host and the
+ * Mac was away) says so under the prompt; the note stays `scheduled`.
+ */
+export function buildScheduledMessage(
+  name: string,
+  prompt: string,
+  opts: { dueAtMs?: number; deliveredAtMs?: number } = {},
+): string {
+  const parts = [prompt.trim()];
+  const age = opts.dueAtMs !== undefined && opts.deliveredAtMs !== undefined ? opts.deliveredAtMs - opts.dueAtMs : 0;
+  if (age > LATE_DELIVERY_MS) {
+    parts.push(`This run was due at ${isoOf(opts.dueAtMs!)} and arrives ${describeSpan(age)} late. ${LATE_FIRE_ADVICE}`);
+  }
+  return kit.buildWalnutMessage({
+    kind: 'trigger',
+    attrs: { from: `Trigger: ${name}`, note: 'scheduled' },
+    body: parts.join('\n\n'),
+  });
+}

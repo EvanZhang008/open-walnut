@@ -258,6 +258,15 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * started for that Walnut, whose transcript is here. Informational: the server
  * sends nothing new for it. Sidecar-gated in the source twin like triggers-v1.
  *
+ * 'clock-routine-v1': a routine runs where its work runs. The trigger table takes
+ * a CLOCK def (no check; the schedule is the fire condition, clock-schedule-core.ts
+ * and trigger-clock-core.ts), so a routine that delivers into a task's session on
+ * this host, or starts a session here, fires while the Mac sleeps. The configure
+ * reply says where each clock stands (`clocks`) and which it disarmed
+ * (`released`), and the server takes a clock back only from that report. Optional:
+ * without it every clock routine stays on the server's own timer. Sidecar-gated in
+ * the source twin like triggers-v1.
+ *
  * 'git-file-history-v1' — host-local git history for ONE file (git.fileLog /
  * git.fileShow), backing the History panel of the Files viewer. Same rule as
  * git.diff: git and the file must live on the same host, so the daemon runs the
@@ -448,6 +457,8 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // them, a set it pushes does not undo them. Informational. Sidecar-gated in the
   // source twin like triggers-v1.
   'offline-triggers-v1',
+  // 'clock-routine-v1': clock defs in the trigger table (see the note above).
+  'clock-routine-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs-write-atomic-v1',

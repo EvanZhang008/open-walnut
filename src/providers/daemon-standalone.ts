@@ -127,6 +127,7 @@ import {
   ackFire,
   applyCheckError,
   applyCheckOutcome,
+  applyClockFire,
   buildCheckStdin,
   checkErrorOf,
   claimFires,
@@ -155,7 +156,9 @@ import {
   type TriggerHostState,
   type TriggersTestResult,
 } from './trigger-check-core.js'
-import { buildTriggerMessage } from './trigger-envelope-core.js'
+import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-core.js'
+import { clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, releaseClockFires, type ClockReport } from './trigger-clock-core.js'
+import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
 import { createUsageBudgetRuntime } from './usage-budget-runtime.js'
@@ -3151,7 +3154,8 @@ const offlineHost = createOfflineHostCore({
   letters: createLetterCheck(),
   // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
   triggers: {
-    armed: () => [...armedTriggers.values()].map((e) => ({
+    // Clock routines are not triggers a session lists, pauses or tests here.
+    armed: () => [...armedTriggers.values()].filter((e) => !!e.def.check).map((e) => ({
       def: e.def as unknown as OfflineTrigger,
       status: {
         nextRunAtMs: e.nextRunAtMs, running: e.running, consecutiveErrors: e.state.consecutiveErrors,
@@ -5346,7 +5350,59 @@ function hostDeliveryGraceMs(): number {
 }
 
 function newArmedTrigger(def: TriggerDef, state: TriggerHostState, nextRunAtMs: number, now: number): ArmedTrigger {
-  return { def, state, nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now }
+  const entry: ArmedTrigger = { def, state, nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now }
+  if (def.clock) armClock(entry, now, nextRunAtMs - now)
+  return entry
+}
+
+// ── Clock routines (clock-routine-v1): the schedule is the fire condition ──
+// A routine whose work runs on this host keeps its clock here (trigger-clock-core.ts):
+// no script runs; a due slot queues a fire with no items, which goes the way a
+// trigger's does (claims, host delivery into the task's session, acks). The server
+// stopped ticking it before it pushed the def, and takes it back only from this
+// daemon's report that it disarmed it (configure's `released`). Keep in sync with
+// daemon-source.ts.
+const clockSchedule = createClockSchedule()
+
+/** Arm a clock def on `entry`: its place under the same handover, else a fresh start at the def's slot. */
+function armClock(entry: ArmedTrigger, now: number, delayMs: number): void {
+  const spec = entry.def.clock!
+  const prev = entry.state.clock
+  const clock = clockStateOnArm(spec, prev)
+  if (clock !== prev) {
+    entry.state.clock = clock
+    // A new handover: runs nobody took under an older one are not this clock's.
+    dropStaleClockFires(entry.state, spec.fromMs)
+    persistTriggerState(entry.def.id, entry.state)
+    logMsg('info', 'clock routine armed', { id: entry.def.id, fromMs: spec.fromMs, nextRunAtMs: clock.nextRunAtMs, handover: prev ? 'new' : 'first' })
+  }
+  entry.nextRunAtMs = clockDueMs(clock, now, Math.max(0, delayMs))
+}
+
+/**
+ * A clock's slot came, or someone asked for a run now (`manual`, which leaves the
+ * schedule where it is). While a run nobody took yet is owed, a slot only moves the
+ * clock on: the owed one stands for it.
+ */
+function runClock(entry: ArmedTrigger, manual: boolean): 'fired' | 'held' {
+  const now = Date.now()
+  const spec = entry.def.clock!
+  const clock = entry.state.clock ?? clockStateOnArm(spec, undefined)
+  const slotMs = manual ? now : (clock.nextRunAtMs ?? now)
+  if (!manual) {
+    const next = clockSchedule.afterRun(spec.schedule, Math.max(now, slotMs))
+    entry.state.clock = { fromMs: clock.fromMs, ...(next !== undefined ? { nextRunAtMs: next } : {}) }
+    entry.nextRunAtMs = next ?? Number.POSITIVE_INFINITY
+  }
+  const owed = !manual && clockFireOwed(entry.state.pendingFires)
+  const fire = owed ? null : applyClockFire(entry.state, now, slotMs, !!entry.def.deliver, clock.fromMs)
+  persistTriggerState(entry.def.id, entry.state)
+  logMsg('info', 'clock routine run', {
+    id: entry.def.id, outcome: fire ? 'fired' : 'held', slotMs, manual,
+    ...(fire ? { seq: fire.seq } : {}), nextRunAtMs: entry.state.clock?.nextRunAtMs ?? null,
+  })
+  if (fire) sendTriggerFire(entry, fire, false)
+  return fire ? 'fired' : 'held'
 }
 
 /**
@@ -5496,6 +5552,7 @@ function sendTriggerFire(entry: ArmedTrigger, fire: PendingFire, replay: boolean
     durationMs: fire.durationMs, nextRunAtMs: entry.nextRunAtMs,
     ...(fire.host ? { host: fire.host } : {}),
     ...(fire.warnings?.length ? { warnings: fire.warnings } : {}),
+    ...(fire.clock ? { clock: fire.clock } : {}),
     ...(replay ? { replay: true } : {}),
   })
   if (delivered) entry.fireSentAt.set(fire.seq, Date.now())
@@ -5511,6 +5568,8 @@ function triggerCadenceMs(entry: ArmedTrigger): number {
 }
 
 async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'quiet' | 'error'; reason?: string; error?: string }> {
+  if (entry.def.clock) return runClock(entry, false) === 'fired' ? { outcome: 'fired' } : { outcome: 'quiet' }
+  if (!entry.def.check) return { outcome: 'error', error: 'trigger has no check' }
   entry.running = true
   const startedAt = Date.now()
   // A configure that lands mid-run may have disarmed this trigger. The run is
@@ -5618,7 +5677,9 @@ function deliverUnclaimedFires(now: number): void {
     const seqs = due.map((f) => f.seq)
     const epoch = entry.state.epoch
     const messageId = `qm-trigger-${crypto.randomBytes(6).toString('hex')}`
-    const text = buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now })
+    const text = entry.def.clock
+      ? buildScheduledMessage(entry.def.name, spec.prompt, { dueAtMs: Math.min(...due.map((f) => f.clock?.slotMs ?? f.atMs)), deliveredAtMs: now })
+      : buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now })
     hostDeliveriesInFlight.set(id, new Set(seqs))
     void offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then((r) => {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
@@ -5687,23 +5748,57 @@ function effectiveTriggerDefs(defs: TriggerDef[]): TriggerDef[] {
  * destroy the dedup set, the script's cursor or an unacked fire. Stale files age
  * out instead.
  */
-function armTriggerSet(defs: TriggerDef[], now: number): void {
+function armTriggerSet(defs: TriggerDef[], now: number): ClockReport[] {
   const ids = new Set(defs.map((def) => def.id))
-  for (const [tid] of armedTriggers) {
-    if (!ids.has(tid)) armedTriggers.delete(tid)
+  const released: ClockReport[] = []
+  for (const [tid, entry] of armedTriggers) {
+    if (ids.has(tid)) continue
+    armedTriggers.delete(tid)
+    if (entry.def.clock) released.push(releaseClock(tid, entry))
   }
   for (const def of defs) {
     const existing = armedTriggers.get(def.id)
     // A trigger that stays keeps its state file, its cursor and its schedule;
-    // only the definition is refreshed.
-    if (existing) { existing.def = def; continue }
+    // only the definition is refreshed. A clock the server started over (a new
+    // fromMs) starts from that slot; a def that changed kind is armed anew.
+    if (existing && !!existing.def.clock === !!def.clock) {
+      existing.def = def
+      if (def.clock) armClock(existing, now, TRIGGER_FIRST_RUN_DELAY_MS)
+      continue
+    }
     armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now))
   }
+  return released
+}
+
+/** Where a clock stands, for the configure reply. */
+function clockReportOf(tid: string, entry: ArmedTrigger): ClockReport {
+  const clock = entry.state.clock
+  return { id: tid, fromMs: clock?.fromMs ?? entry.def.clock!.fromMs, ...(clock?.nextRunAtMs !== undefined ? { nextRunAtMs: clock.nextRunAtMs } : {}) }
+}
+
+function clockReports(): ClockReport[] {
+  const out: ClockReport[] = []
+  for (const [tid, entry] of armedTriggers) {
+    if (entry.def.clock) out.push(clockReportOf(tid, entry))
+  }
+  return out
+}
+
+/**
+ * The server took this clock back: say where it stood, and hand over the run it
+ * had queued that nobody took (the server runs it, so it must not stay here).
+ */
+function releaseClock(tid: string, entry: ArmedTrigger): ClockReport {
+  const owedSlotMs = releaseClockFires(entry.state, hostDeliveriesInFlight.get(tid) ?? new Set<number>())
+  if (owedSlotMs !== undefined) persistTriggerState(tid, entry.state)
+  logMsg('info', 'clock routine released', { id: tid, ...(owedSlotMs !== undefined ? { owedSlotMs } : {}) })
+  return { ...clockReportOf(tid, entry), ...(owedSlotMs !== undefined ? { owedSlotMs } : {}) }
 }
 
 /** A session paused, resumed or deleted a trigger here: arm by it now. */
 function triggerHoldsChanged(): void {
-  armTriggerSet(effectiveTriggerDefs(configuredTriggerDefs), Date.now())
+  void armTriggerSet(effectiveTriggerDefs(configuredTriggerDefs), Date.now())
   logMsg('info', 'triggers rearmed after a change on this host', { armed: armedTriggers.size, configured: configuredTriggerDefs.length })
 }
 
@@ -5732,12 +5827,13 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   const hash = triggersSetHash(defs)
   const changed = hash !== armedTriggersHash
   configuredTriggerDefs = defs
-  armTriggerSet(effectiveTriggerDefs(defs), now)
+  const released = armTriggerSet(effectiveTriggerDefs(defs), now)
   if (changed) persistTriggersFile(defs)
   armedTriggersHash = hash
   pruneTriggerStateFiles(now)
-  logMsg('info', 'triggers configured', { hash, count: defs.length, changed })
-  sendOk(ws, id, { applied: true, changed, count: defs.length })
+  const clocks = clockReports()
+  logMsg('info', 'triggers configured', { hash, count: defs.length, changed, clocks: clocks.length, released: released.map((r) => r.id) })
+  sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released })
 
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server
@@ -5788,7 +5884,7 @@ async function runTriggerTest(check: unknown, targetId: string | undefined): Pro
     const output = parsed.ok ? parsed.output : null
     // Synthetic def for the decision: a test never consults the real cadence, and
     // an unarmed check has no limits of its own yet.
-    const def: TriggerDef = entry ? entry.def : { id: targetId ?? 'trigger-test', name: 'trigger test', everyMs: MIN_EVERY_MS, check: spec }
+    const def: TriggerDef = entry && entry.def.check ? entry.def : { id: targetId ?? 'trigger-test', name: 'trigger test', everyMs: MIN_EVERY_MS, check: spec }
     const result: TriggersTestResult = {
       ok: !error,
       exitCode: proc.exitCode,
@@ -5822,6 +5918,7 @@ function cmdTriggersRun(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   const tid = triggerIdOf(cmd)
   const entry = tid ? armedTriggers.get(tid) : undefined
   if (!entry) return sendError(ws, id, 'triggers.run: unknown trigger: ' + tid)
+  if (entry.def.clock) return sendOk(ws, id, { ran: true, started: true, outcome: runClock(entry, true) })
   if (entry.running) return sendOk(ws, id, { ran: false, reason: 'running' })
   void runTrigger(entry).catch((err) => {
     logMsg('error', 'trigger run threw', { id: entry.def.id, error: (err as Error).message })
