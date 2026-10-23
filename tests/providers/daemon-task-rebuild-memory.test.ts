@@ -21,6 +21,8 @@ import { spawnSync } from 'node:child_process'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 let tmpDir = ''
+/** A child's last line: its own peak RSS (KB on Node and bun). */
+const PEAK_LINE = 'console.log(JSON.stringify({ maxRSSkb: process.resourceUsage().maxRSS }));'
 let jsonlPath = ''
 
 /** Extract a top-level `function <name>(...) {...}` from the emitted template. */
@@ -186,16 +188,17 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
     expect(Object.keys(ts.tasks).length).toBeGreaterThan(0)
   }, 60_000)
 
-  it('under a hard heap cap, the streamed rebuild survives a whale the whole-file read dies on', () => {
+  it('the streamed rebuild\'s peak memory stays flat on a whale the whole-file read holds whole', () => {
     // This IS the incident mechanism: the old readFileSync+split rebuild
-    // materialized the whole stream (string + line array ≈ 2× file size) and
-    // the daemon runtime died on a 156MB whale. Encode it directly: cap the
-    // child heap at 48MB and rebuild a 96MB file — the naive replay must OOM,
-    // the streamed production code must succeed. (RSS deltas are too noisy to
-    // assert — Buffer.concat garbage inflates RSS until GC — so we assert
-    // survival under a cap instead, which is the property that matters.)
-    const FILE_MB = 96
-    const CAP_MB = 48
+    // materialized the whole stream and the daemon runtime died on a 156MB whale.
+    // Encoded as each child's own peak RSS (resourceUsage().maxRSS) above an
+    // empty child's: the naive replay holds about the whole file, the streamed
+    // production code a fixed few MB of chunks. Measured on bun 1.4.4: streamed
+    // +34MB at 96MB and +37MB at 192MB (flat), naive +102MB and +202MB; three runs
+    // each within 1MB. On Node, Buffer.concat garbage inflates RSS until a GC
+    // (+79MB at 128MB), so there a hard heap cap (--max-old-space-size, which bun
+    // does not have) is the measure instead: the naive replay must die under it.
+    const FILE_MB = 128
     writeWhale(FILE_MB * 1024 * 1024)
     const src = getDaemonSource()
     const prelude = [
@@ -218,6 +221,7 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
       extractFn(src, 'rebuildTaskStateFromJsonl'),
       `const ts = rebuildTaskStateFromJsonl(${JSON.stringify(jsonlPath)}, Date.now());`,
       'console.log(JSON.stringify({ taskCount: Object.keys(ts.tasks).length }));',
+      PEAK_LINE,
     ].join('\n'))
 
     const naiveScript = path.join(tmpDir, 'naive.cjs')
@@ -235,17 +239,31 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
       '  try { applyTaskEvent(ts, JSON.parse(line), v, now); } catch {}',
       '}',
       'console.log(JSON.stringify({ taskCount: Object.keys(ts.tasks).length }));',
+      PEAK_LINE,
     ].join('\n'))
 
-    const run = (script: string) => spawnSync(process.execPath, [`--max-old-space-size=${CAP_MB}`, script], {
-      encoding: 'utf-8', timeout: 120_000,
-    })
-    const streamed = run(streamedScript)
-    expect(streamed.status, `streamed rebuild died under a ${CAP_MB}MB cap: ${streamed.stderr?.slice(0, 400)}`).toBe(0)
-    const parsed = JSON.parse(streamed.stdout.trim()) as { taskCount: number }
-    expect(parsed.taskCount).toBeGreaterThan(0)
-
-    const naive = run(naiveScript)
-    expect(naive.status, 'the naive whole-file replay unexpectedly SURVIVED the heap cap — the memory test proves nothing').not.toBe(0)
+    if (typeof process.versions.bun !== 'string') {
+      const CAP_MB = 48
+      const capped = (script: string) => spawnSync(process.execPath, [`--max-old-space-size=${CAP_MB}`, script], { encoding: 'utf-8', timeout: 120_000 })
+      const streamed = capped(streamedScript)
+      expect(streamed.status, `streamed rebuild died under a ${CAP_MB}MB cap: ${streamed.stderr?.slice(0, 400)}`).toBe(0)
+      expect((JSON.parse(streamed.stdout.trim().split('\n')[0]!) as { taskCount: number }).taskCount).toBeGreaterThan(0)
+      expect(capped(naiveScript).status, 'the naive whole-file replay unexpectedly SURVIVED the heap cap: the memory test proves nothing').not.toBe(0)
+      return
+    }
+    const peakMB = (script: string): { mb: number; stdout: string } => {
+      const r = spawnSync(process.execPath, [script], { encoding: 'utf-8', timeout: 120_000 })
+      expect(r.status, `${path.basename(script)} failed: ${r.stderr?.slice(0, 400)}`).toBe(0)
+      const out = JSON.parse(r.stdout.trim().split('\n').pop()!) as { maxRSSkb: number }
+      return { mb: out.maxRSSkb / 1024, stdout: r.stdout }
+    }
+    const emptyScript = path.join(tmpDir, 'empty.cjs')
+    fs.writeFileSync(emptyScript, PEAK_LINE)
+    const base = peakMB(emptyScript).mb
+    const streamed = peakMB(streamedScript)
+    expect((JSON.parse(streamed.stdout.trim().split('\n')[0]!) as { taskCount: number }).taskCount).toBeGreaterThan(0)
+    const naive = peakMB(naiveScript)
+    expect(streamed.mb - base, `the streamed rebuild peaked ${Math.round(streamed.mb - base)}MB above an empty child on a ${FILE_MB}MB file`).toBeLessThan(FILE_MB / 2)
+    expect(naive.mb - base, 'the naive whole-file replay did not hold the file: the memory test proves nothing').toBeGreaterThan(FILE_MB * 0.75)
   }, 300_000)
 })
