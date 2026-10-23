@@ -620,6 +620,41 @@ if [[ "$DRY_RUN" == "1" ]]; then
 fi
 echo "Deploying $RUNTIME_DESC on :$PORT."
 
+# ── Build clones an interrupted deploy left ─────────────────────────────────
+# scripts/deploy-committed.sh builds in <TMPDIR>/open-walnut-build.<sha>.<pid> and
+# removes it on exit; one it never got to remove (a killed run) holds about
+# 1.2 GB. Swept beside this run's own clone (or in TMPDIR): only a dir of that
+# exact name, owned by this user, older than this deploy's lock (a clone made
+# after it belongs to a deploy waiting for the lock), whose deploy-committed pid
+# is gone and that no process runs from. A rehearsal sweeps only inside its own dir.
+sweep_build_clones() {
+  local parent clone
+  command -v pgrep >/dev/null 2>&1 || return 0
+  if [[ "$(basename "$REPO_ROOT")" == open-walnut-build.* ]]; then
+    parent="$(dirname "$REPO_ROOT")"
+  else
+    parent="${TMPDIR%/}"
+  fi
+  parent="$(cd "$parent" 2>/dev/null && pwd -P)" || return 0
+  if [[ "$REHEARSAL" == "1" ]]; then
+    case "$parent/" in
+      "$REHEARSAL_ROOT/"*) ;;
+      *) return 0 ;;
+    esac
+  fi
+  for clone in "$parent"/open-walnut-build.*; do
+    [[ -d "$clone" && ! -L "$clone" && -O "$clone" && "$clone" != "$REPO_ROOT" ]] || continue
+    [[ "$(basename "$clone")" =~ ^open-walnut-build\.[0-9a-f]{12}\.([0-9]+)$ ]] || continue
+    if kill -0 "${BASH_REMATCH[1]}" 2>/dev/null; then continue; fi
+    [[ "$clone" -ot "$LOCK_DIR" ]] || continue
+    if pgrep -f "$clone/" >/dev/null 2>&1; then continue; fi
+    rm -rf "$clone" 2>/dev/null || true
+    echo "Removed a build clone an interrupted deploy left: $clone"
+  done
+  return 0
+}
+sweep_build_clones
+
 # ── Type-check the SPA before building it ───────────────────────────────────
 # 2026-09-02: a deploy built the shared working tree while another agent was
 # mid-refactor in a component (state variable deleted, a useMemo deps array
@@ -1291,6 +1326,25 @@ dir_has_live_process() {
   return 1
 }
 
+# Whether a server (`... web`) runs from a stage, as opposed to only its daemon or
+# a session's MCP child. True when the process table cannot be read.
+stage_serves_web() {
+  local base spid cmd pids rc=0
+  base="$(basename "$1")"
+  pids="$(pgrep -f 'dist/cli\.js web|dist-bin/walnut-[a-z0-9-]+ web' 2>/dev/null)" || rc=$?
+  if (( rc > 1 )) || ! command -v ps >/dev/null 2>&1; then
+    return 0
+  fi
+  for spid in $pids; do
+    [[ -n "$spid" ]] || continue
+    cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
+    if [[ "$cmd" == *"$base/dist/cli.js web"* || "$cmd" == *"$base/dist-bin/walnut-"*" web"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
   if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" ]]; then
     continue
@@ -1302,6 +1356,16 @@ for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
   fi
   if [[ -n "$live_pid" ]]; then
     echo "Keeping stage $old_stage: PID $live_pid is still running from it." >&2
+    # Only a serving server reads its stage's other files (host servers take them
+    # from beside its own file, src/core/host-server/host-file.ts); a stage kept
+    # for a daemon or a session's MCP child needs only this machine's, and the
+    # four Linux files are most of its size.
+    if ! stage_serves_web "$old_stage"; then
+      for sibling in "$old_stage"/dist-bin/walnut-*; do
+        [[ -f "$sibling" && "$sibling" != "$old_stage/dist-bin/walnut-$MACHINE_TARGET" ]] || continue
+        rm -f "$sibling" 2>/dev/null || true
+      done
+    fi
     continue
   fi
   rm -rf "$old_stage" 2>/dev/null || true
