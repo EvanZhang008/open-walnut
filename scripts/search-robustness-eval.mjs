@@ -1,8 +1,8 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
- * Search robustness eval (`npm run search:robustness`).
+ * Search robustness eval (`bun run search:robustness`).
  *
- * The golden set (`npm run search:eval`) asks "does THIS query find THIS doc".
+ * The golden set (`bun run search:eval`) asks "does THIS query find THIS doc".
  * This asks the other question: when a person types a doc's name the way people
  * actually type, does the doc still come back? It samples real docs from a copy
  * of a search index, derives a control query from each title (its rarest words,
@@ -16,8 +16,8 @@
  * are printed, so the report carries no document text. `--show <class>` prints
  * failing examples for local debugging; never paste that output anywhere public.
  *
- * Usage (needs tsx: the lib backend imports the TypeScript library):
- *   tsx scripts/search-robustness-eval.mjs --index-db /tmp/copy/search.sqlite
+ * Usage (on bun: the lib backend imports the TypeScript library):
+ *   bun scripts/search-robustness-eval.mjs --index-db /tmp/copy/search.sqlite
  *   ... --semantic [--deadline 3000]       keyword + vector rescore/recall
  *   ... --backend http --server http://localhost:<port>   the full /api/search stack
  *   ... --n 300 --seed 7 --kinds task,note --json out.json --show typo-1
@@ -31,11 +31,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-
-const require = createRequire(import.meta.url);
-const Database = require('better-sqlite3');
+// Walnut's own SQLite module (bun:sqlite under the better-sqlite3 API).
+import Database from '../src/lib/sqlite.ts';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // ── args ──

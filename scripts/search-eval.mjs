@@ -1,6 +1,6 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
- * Search golden-set eval runner (`npm run search:eval`).
+ * Search golden-set eval runner (`bun run search:eval`).
  *
  * Merges two query files:
  *   tests/search-golden.yaml                     public, neutral, committed
@@ -15,13 +15,13 @@
  *                     built by src/core/search/build.ts — never production's)
  *
  * Usage:
- *   node scripts/search-eval.mjs                      run all, print report
- *   node scripts/search-eval.mjs --dump               print top-10 per query
- *   node scripts/search-eval.mjs --explain <queryId>  full results for one query
- *   node scripts/search-eval.mjs --family cjk         only one family
- *   node scripts/search-eval.mjs --write-baseline     write tests/search-golden-baseline.json
- *   node scripts/search-eval.mjs --check              exit 1 if metrics regress vs baseline
- *   node scripts/search-eval.mjs --server http://localhost:3456
+ *   bun scripts/search-eval.mjs                      run all, print report
+ *   bun scripts/search-eval.mjs --dump               print top-10 per query
+ *   bun scripts/search-eval.mjs --explain <queryId>  full results for one query
+ *   bun scripts/search-eval.mjs --family cjk         only one family
+ *   bun scripts/search-eval.mjs --write-baseline     write tests/search-golden-baseline.json
+ *   bun scripts/search-eval.mjs --check              exit 1 if metrics regress vs baseline
+ *   bun scripts/search-eval.mjs --server http://localhost:3456
  *
  * The baseline file contains ONLY query ids + numbers (no query text), so the
  * local file's internal terms can never leak into the repo through it.
@@ -151,7 +151,7 @@ if (EXPLAIN_ID && queries.length === 0) {
 let v2Lib = null;
 async function loadV2() {
   if (!v2Lib) {
-    // Requires the tsx-based npm script (plain node cannot import the TS lib).
+    // bun imports the TypeScript library as it is.
     v2Lib = await import('../src/lib/hybrid-search/index.js');
   }
   return v2Lib;

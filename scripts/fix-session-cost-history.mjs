@@ -1,5 +1,5 @@
-#!/usr/bin/env node
-import Database from '../node_modules/better-sqlite3/lib/index.js';
+#!/usr/bin/env bun
+import Database from '../src/lib/sqlite.ts';
 import path from 'node:path';
 import os from 'node:os';
 

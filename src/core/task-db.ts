@@ -1,7 +1,7 @@
 /**
  * task-db.ts — SQLite foundation for the tasks store.
  *
- * This module owns the singleton `better-sqlite3` connection, schema
+ * This module owns the singleton SQLite connection (src/lib/sqlite.ts), schema
  * initialization (WAL + busy_timeout + NORMAL sync), and the row↔Task
  * (de)serialization helpers that the rest of the rewrite (task-manager,
  * migration, bulk update APIs) builds on top of.
@@ -109,7 +109,7 @@ let initAttempted = false;
 // The original open error, rethrown on every subsequent call. Without this a
 // failed open degrades to `getDb()` returning null forever, and every caller's
 // `getDb()!.prepare(...)` dies with an uninformative "null.prepare" TypeError
-// while the real cause (e.g. a missing better-sqlite3 native binding) is
+// while the real cause (e.g. a database file that cannot be opened) is
 // logged exactly once and lost.
 let initError: unknown = null;
 
@@ -1180,9 +1180,10 @@ function migrateToProjectOnly(handle: DatabaseType): void {
     // 6. Drop the category column. Index MUST go first — SQLite refuses to drop
     //    an indexed column.
     //    Requires SQLite >= 3.35 for ALTER TABLE ... DROP COLUMN (added 2021-03).
-    //    better-sqlite3 bundles its own amalgamation (3.51 at time of writing), so
-    //    the host's sqlite3 version is irrelevant — but a future switch to a
-    //    system-linked build must re-check this.
+    //    bun:sqlite carries its own SQLite on Linux, and on macOS src/lib/sqlite.ts
+    //    loads the upstream build in vendor/sqlite (3.51 at time of writing), so
+    //    the system's sqlite3 version is irrelevant; a switch to the system's
+    //    library must re-check this.
     handle.exec(`DROP INDEX IF EXISTS tasks_category_project;`);
     handle.exec(`ALTER TABLE tasks DROP COLUMN category;`);
     handle.exec(`DROP TABLE IF EXISTS task_categories;`);

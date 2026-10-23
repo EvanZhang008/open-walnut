@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Repair sessions whose `task_id` points at a task that no longer exists.
  *
@@ -47,12 +47,12 @@
  * overrides can live in an uncommitted JSON file — see OVERRIDES_FILE.
  *
  * Usage:
- *   node scripts/repair-orphan-session-links.mjs                          # dry-run
- *   node scripts/repair-orphan-session-links.mjs --apply                  # buckets A, C, D
- *   node scripts/repair-orphan-session-links.mjs --apply --create-holding # also bucket B
- *   node scripts/repair-orphan-session-links.mjs --verify                 # re-count only
+ *   bun scripts/repair-orphan-session-links.mjs                          # dry-run
+ *   bun scripts/repair-orphan-session-links.mjs --apply                  # buckets A, C, D
+ *   bun scripts/repair-orphan-session-links.mjs --apply --create-holding # also bucket B
+ *   bun scripts/repair-orphan-session-links.mjs --verify                 # re-count only
  */
-import Database from '../node_modules/better-sqlite3/lib/index.js';
+import Database from '../src/lib/sqlite.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';

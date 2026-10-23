@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * Cleanup: merge duplicate MS To-Do task copies without losing session links.
  *
@@ -15,9 +15,9 @@
  *      deletion retried by the sync tick until confirmed.
  *
  * Usage:
- *   npx tsx scripts/cleanup-mstodo-duplicates.ts --dry-run       # preview (default)
- *   npx tsx scripts/cleanup-mstodo-duplicates.ts --live          # actually merge
- *   npx tsx scripts/cleanup-mstodo-duplicates.ts --live --title "Session: walnut"
+ *   bun scripts/cleanup-mstodo-duplicates.ts --dry-run       # preview (default)
+ *   bun scripts/cleanup-mstodo-duplicates.ts --live          # actually merge
+ *   bun scripts/cleanup-mstodo-duplicates.ts --live --title "Session: walnut"
  */
 
 import path from 'node:path';

@@ -1339,7 +1339,6 @@ function isStoreUnavailableError(err: unknown): boolean {
   return (
     /task-db is not open/i.test(msg) ||
     /before database was successfully opened/i.test(msg) ||
-    /bindings file/i.test(msg) ||            // better-sqlite3 native module missing
     /SQLITE_CANTOPEN/i.test(msg) ||
     /reading 'prepare'/.test(msg)            // getDb()! returned null
   );

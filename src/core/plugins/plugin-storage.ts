@@ -1,10 +1,9 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import { WALNUT_HOME } from '../../constants.js'
-import { ON_BUN, sqliteModuleFile } from '../../lib/sqlite.js'
+import { sqliteModuleFile } from '../../lib/sqlite.js'
 import { readJsonFile, updateJsonFile, writeJsonFile } from '../../utils/fs.js'
 import type { Disposable } from './disposable.js'
 import { validatePluginId } from './ids.js'
@@ -82,10 +81,9 @@ parentPort.on('message', ({ id, method, args }) => {
 })
 `
 
-// The worker opens its database with better-sqlite3 on Node. bun cannot load
-// that addon, so there the worker loads src/lib/sqlite.ts (dist/lib/sqlite.js
-// in a build), which runs on bun:sqlite.
-const SQLITE_DRIVER_PATH = ON_BUN ? sqliteModuleFile() : createRequire(import.meta.url).resolve('better-sqlite3')
+// The worker shares no module with this thread, so it loads src/lib/sqlite.ts
+// itself (dist/lib/sqlite.js in a build): the same bun:sqlite as the server.
+const SQLITE_DRIVER_PATH = sqliteModuleFile()
 
 interface PendingRequest {
   resolve(value: unknown): void

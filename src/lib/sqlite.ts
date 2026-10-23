@@ -2,10 +2,10 @@
  * SQLite for Walnut: the one place that opens a database
  * (docs/plan/walnut-single-binary.md).
  *
- * Walnut runs on bun, whose SQLite is built in (`bun:sqlite`, no native
+ * Walnut runs only on bun, whose SQLite is built in (`bun:sqlite`, no native
  * module to compile). The rest of the code keeps the better-sqlite3 API it was
- * written against, which this module provides over bun:sqlite. Until no Node
- * build of Walnut is left, a process running on Node gets better-sqlite3 itself.
+ * written against, which this module provides over bun:sqlite. A process on
+ * Node cannot open a database at all: the first open says so.
  *
  * What bun:sqlite does differently, and what this module does about it:
  *  - no busy timeout by default (better-sqlite3 waits 5 s): set from `timeout`;
@@ -34,7 +34,7 @@
  * better-sqlite3. Same value in INTEGER and REAL columns and in comparisons;
  * it differs only as TEXT ('3' vs '3.0'), in integer division and in json text.
  * bun also accepts what better-sqlite3 refuses (a boolean, get() on a write,
- * two statements in one prepare), so code that works on Node works on bun.
+ * two statements in one prepare).
  */
 
 import fs from 'node:fs'
@@ -43,9 +43,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
-
-/** True when this process runs on bun. */
-export const ON_BUN = typeof (process.versions as { bun?: string }).bun === 'string'
 
 /**
  * The file a worker thread loads to get this module (a worker shares nothing
@@ -177,10 +174,14 @@ export function builtSqliteLibrary(here: string = fileURLToPath(import.meta.url)
 }
 
 let bunModule: BunSqlite | null = null
-let library = 'better-sqlite3'
+let library = 'bun'
 let libraryProblem: string | null = null
 function bunSqlite(): BunSqlite {
   if (bunModule) return bunModule
+  const bunVersion = (process.versions as { bun?: string }).bun
+  if (typeof bunVersion !== 'string') {
+    throw new Error(`Walnut runs on bun, whose SQLite is built in; this process runs on Node ${process.version}, which has none Walnut uses. Run it with bun (https://bun.sh).`)
+  }
   bunModule = require('bun:sqlite') as BunSqlite
   library = 'bun'
   if (process.platform === 'darwin') {
@@ -209,18 +210,18 @@ function bunSqlite(): BunSqlite {
 }
 
 /**
- * Which SQLite this process opens databases with: 'better-sqlite3' on Node;
- * on bun, the library file it loaded on macOS, 'system' for the Apple build
- * there, or 'bun' for the one bun carries elsewhere.
+ * Which SQLite this process opens databases with: the library file it loaded
+ * on macOS, 'system' for the Apple build there, or 'bun' for the one bun
+ * carries elsewhere.
  */
 export function sqliteLibrary(): string {
-  if (ON_BUN) bunSqlite()
+  bunSqlite()
   return library
 }
 
 /** Why this process runs on the macOS system SQLite without being asked to, or null. */
 export function sqliteLibraryProblem(): string | null {
-  if (ON_BUN) bunSqlite()
+  bunSqlite()
   return libraryProblem
 }
 
@@ -471,15 +472,8 @@ class SqliteDatabase {
 
 // ── the constructor everyone imports ────────────────────────────────────────
 
-function resolveConstructor(): DatabaseConstructor {
-  if (ON_BUN) {
-    const ctor = function (this: unknown, filename?: string, options?: Options) {
-      return new SqliteDatabase(filename, options)
-    }
-    return ctor as unknown as DatabaseConstructor
-  }
-  return require('better-sqlite3') as DatabaseConstructor
-}
-
-const Database: DatabaseConstructor = resolveConstructor()
+/** Callable with or without `new`, as better-sqlite3's constructor is. */
+const Database = function (this: unknown, filename?: string, options?: Options) {
+  return new SqliteDatabase(filename, options)
+} as unknown as DatabaseConstructor
 export default Database

@@ -1,14 +1,13 @@
 /**
- * The SQLite contract (src/lib/sqlite.ts): what the code relies on behaves the
- * same on bun (over bun:sqlite) as better-sqlite3 behaves on Node. The suite runs
- * on both runtimes, so the two cannot drift.
+ * The SQLite contract (src/lib/sqlite.ts): the better-sqlite3 API the code was
+ * written against, over bun:sqlite, behaving as the code relies on.
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Database, {
-  builtSqliteLibrary, ON_BUN, sqliteLibrary, sqliteLibraryProblem, sqliteModuleFile, type Database as DatabaseType,
+  builtSqliteLibrary, sqliteLibrary, sqliteLibraryProblem, sqliteModuleFile, type Database as DatabaseType,
 } from '../../src/lib/sqlite.js'
 import { DYLIB, SQLITE_VERSION, stampIsCurrent } from '../../scripts/build-sqlite-dylib.mjs'
 
@@ -26,7 +25,7 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-describe(`sqlite on ${ON_BUN ? 'bun' : 'node'}`, () => {
+describe('sqlite on bun', () => {
   it('runs, reads a row, a missing row is undefined, and a BLOB is a Buffer', () => {
     const res = db.prepare('INSERT INTO t (name, b) VALUES (?, ?)').run('a', Buffer.from('hi'))
     expect(res).toMatchObject({ changes: 1 })
@@ -94,8 +93,7 @@ describe(`sqlite on ${ON_BUN ? 'bun' : 'node'}`, () => {
   })
 
   it('names the SQLite it runs on', () => {
-    if (!ON_BUN) expect(sqliteLibrary()).toBe('better-sqlite3')
-    else if (process.platform !== 'darwin') expect(sqliteLibrary()).toBe('bun')
+    if (process.platform !== 'darwin') expect(sqliteLibrary()).toBe('bun')
     else if (process.env.WALNUT_SQLITE_LIBRARY === 'system') expect(sqliteLibrary()).toBe('system')
     else expect(sqliteLibrary()).toBe(process.env.WALNUT_SQLITE_LIBRARY || builtSqliteLibrary())
   })
@@ -209,7 +207,7 @@ describe.runIf(process.platform === 'darwin')('the upstream SQLite macOS bun loa
     expect(builtSqliteLibrary()).toBe(DYLIB)
   })
 
-  it.runIf(ON_BUN && process.env.WALNUT_SQLITE_LIBRARY !== 'system')('is what this bun process runs on', () => {
+  it.runIf(process.env.WALNUT_SQLITE_LIBRARY !== 'system')('is what this bun process runs on', () => {
     expect(sqliteLibraryProblem()).toBeNull()
     expect(db.prepare('SELECT sqlite_version()').pluck().get()).toBe(process.env.WALNUT_SQLITE_LIBRARY ? expect.any(String) : SQLITE_VERSION)
     const opts = db.prepare('SELECT compile_options FROM pragma_compile_options').pluck().all()
@@ -253,6 +251,22 @@ describe('sqliteModuleFile: the file a worker loads to get this module', () => {
       }
     } finally {
       fs.rmSync(pkg, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('a process on Node', () => {
+  it('cannot open a database, and the first open says to run Walnut on bun', async () => {
+    const bun = process.versions.bun
+    vi.resetModules()
+    delete (process.versions as { bun?: string }).bun
+    try {
+      const fresh = await import('../../src/lib/sqlite.js')
+      expect(() => new fresh.default(':memory:')).toThrow(/Walnut runs on bun.*Run it with bun/)
+      expect(() => fresh.sqliteLibrary()).toThrow(/Walnut runs on bun/)
+    } finally {
+      ;(process.versions as { bun?: string }).bun = bun
+      vi.resetModules()
     }
   })
 })

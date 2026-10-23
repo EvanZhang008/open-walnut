@@ -62,7 +62,7 @@ overview: |
 architecture: |
   Frontend: React SPA with Vite (web/src/)
   Backend: Express REST API (src/web/)
-  Storage: SQLite via better-sqlite3
+  Storage: SQLite via bun:sqlite
   Key dirs: src/core/ (business logic), src/model/ (model calls)
 architecture_notes: |
   Frontend: React SPA (web/src/)

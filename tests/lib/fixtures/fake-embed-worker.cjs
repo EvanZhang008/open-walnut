@@ -14,11 +14,8 @@ const DIMS = 4;
 function recallTopK(k) {
   if (!workerData || !workerData.dbPath) return undefined;
   try {
-    // The real worker opens SQLite through src/lib/sqlite.ts: better-sqlite3 on
-    // Node, bun:sqlite on bun (which cannot load the addon).
-    const Database = process.versions.bun
-      ? require(require('node:path').join(__dirname, '../../../src/lib/sqlite.ts')).default
-      : require('better-sqlite3');
+    // The real worker opens SQLite through src/lib/sqlite.ts (bun:sqlite).
+    const Database = require(require('node:path').join(__dirname, '../../../src/lib/sqlite.ts')).default;
     const db = new Database(workerData.dbPath, { readonly: true, fileMustExist: true });
     try {
       const rows = db.prepare('SELECT doc_id, vec FROM doc_vec WHERE seq = 0').all();

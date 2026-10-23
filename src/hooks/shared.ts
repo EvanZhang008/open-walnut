@@ -8,8 +8,9 @@ import Database from '../lib/sqlite.js';
 // Local TASK_DB_PATH copy (kept in sync with src/core/task-db.ts): hooks are
 // bundled as standalone scripts, so they open the database through
 // src/lib/sqlite.ts (bundled in) rather than the server's task-db singleton.
-// `better-sqlite3` stays in tsup's `external` array; if it is removed, hook
-// bundles will try to inline the native addon and fail at load time.
+// That is bun:sqlite, so a hook runs on bun (`bun dist/hooks/on-stop.js`) or
+// inside the compiled file (`walnut <runtime root>/dist/hooks/on-stop.js`).
+// `bun:sqlite` stays in tsup's `external` array: it exists only at runtime.
 const TASK_DB_PATH = path.join(TASKS_DIR, 'tasks.sqlite');
 
 /**

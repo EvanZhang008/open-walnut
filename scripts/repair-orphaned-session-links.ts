@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * One-time repair: re-point sessions whose task_id references a task that no
  * longer exists.
@@ -14,14 +14,14 @@
  * reported, not guessed at.
  *
  * Usage:
- *   npx tsx scripts/repair-orphaned-session-links.ts             # dry run (default)
- *   npx tsx scripts/repair-orphaned-session-links.ts --live      # apply
- *   npx tsx scripts/repair-orphaned-session-links.ts --live --backup <path-to-old-tasks.sqlite>
+ *   bun scripts/repair-orphaned-session-links.ts             # dry run (default)
+ *   bun scripts/repair-orphaned-session-links.ts --live      # apply
+ *   bun scripts/repair-orphaned-session-links.ts --live --backup <path-to-old-tasks.sqlite>
  */
 
 import path from 'node:path';
 import fs from 'node:fs';
-import Database from 'better-sqlite3';
+import Database from '../src/lib/sqlite.ts';
 
 const WALNUT_HOME = process.env.OPEN_WALNUT_HOME ?? path.join(process.env.HOME!, '.open-walnut');
 const SESSIONS_DB = path.join(WALNUT_HOME, 'sessions.sqlite');

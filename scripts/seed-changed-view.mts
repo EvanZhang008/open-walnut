@@ -4,10 +4,11 @@
  * file (filtered out) — so the "Changed" view has rich data to verify in the UI.
  *
  * Run with an explicit isolated home, e.g.:
- *   OPEN_WALNUT_HOME=/tmp/walnut-changed-ui node_modules/.bin/vite-node scripts/seed-changed-view.mts
+ *   OPEN_WALNUT_HOME=/tmp/walnut-changed-ui bun scripts/seed-changed-view.mts
  *
- * NOTE: this imports from src/ (via vite-node) so it shares the exact path
- * encoding + session-tracker the server uses. Never point it at ~/.open-walnut.
+ * NOTE: this imports from src/ (bun runs it directly) so it shares the exact path
+ * encoding + session-tracker the server uses, and its SQLite (bun:sqlite).
+ * Never point it at ~/.open-walnut.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';

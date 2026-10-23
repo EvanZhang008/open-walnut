@@ -2,7 +2,7 @@
  * session-db.ts — SQLite foundation for the sessions store.
  *
  * Mirrors task-db.ts exactly in layout and semantics. Owns the singleton
- * `better-sqlite3` connection for `sessions.sqlite`, schema initialization
+ * SQLite connection (src/lib/sqlite.ts) for `sessions.sqlite`, schema initialization
  * (WAL + busy_timeout=5000 + NORMAL sync + wal_checkpoint(TRUNCATE) on open),
  * and the row↔SessionRecord (de)serialization helpers that the rest of the
  * sessions rewrite (session-tracker router, one-shot migration, bulk APIs)

@@ -2,7 +2,7 @@
 
 Self-contained hybrid search core: SQLite FTS5 keyword retrieval with an identifier-aware tokenizer, interpretable additive scoring, and an optional semantic rescore lane. Built for personal-tool corpora (tasks, notes, chat transcripts, markdown knowledge bases) in the 10³-10⁵ document range, where queries mix natural language, code identifiers, and CJK text.
 
-This directory is written as a standalone library. It imports nothing outside `node:*`, `../sqlite.js` (the better-sqlite3 API: better-sqlite3 itself on Node, bun:sqlite on bun; it imports nothing from Walnut either), `@huggingface/transformers`, and sibling files (a boundary test enforces this). Publishing it later is: copy the directory and `../sqlite.ts`, add a package.json with `better-sqlite3` as a peer dependency for Node.
+This directory is written as a standalone library. It imports nothing outside `node:*`, `../sqlite.js` (the better-sqlite3 API over bun:sqlite; it imports nothing from Walnut either), `@huggingface/transformers`, and sibling files (a boundary test enforces this). Publishing it later is: copy the directory and `../sqlite.ts`, add a package.json that names bun as its engine.
 
 ## Why it exists
 

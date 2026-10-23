@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Find (and optionally repair) tasks that share ONE remote id with another task.
  *
@@ -28,11 +28,11 @@
  * covered the moment it registers one.
  *
  * Usage:
- *   node scripts/repair-remote-id-duplicates.mjs                 # report only (default)
- *   node scripts/repair-remote-id-duplicates.mjs --apply         # merge duplicates
- *   node scripts/repair-remote-id-duplicates.mjs --apply --source <id>
- *   node scripts/repair-remote-id-duplicates.mjs --enforce       # upgrade indexes to UNIQUE
- *   node scripts/repair-remote-id-duplicates.mjs --json          # machine-readable report
+ *   bun scripts/repair-remote-id-duplicates.mjs                 # report only (default)
+ *   bun scripts/repair-remote-id-duplicates.mjs --apply         # merge duplicates
+ *   bun scripts/repair-remote-id-duplicates.mjs --apply --source <id>
+ *   bun scripts/repair-remote-id-duplicates.mjs --enforce       # upgrade indexes to UNIQUE
+ *   bun scripts/repair-remote-id-duplicates.mjs --json          # machine-readable report
  *   WALNUT_URL=http://127.0.0.1:3456 ... (default)
  *
  * WHY --enforce EXISTS AT ALL:
@@ -63,7 +63,7 @@
  * mergeTaskInto also folds the earliest created_at onto the survivor and unions
  * session_ids, so choosing the original loses nothing.
  */
-import Database from 'better-sqlite3';
+import Database from '../src/lib/sqlite.ts';
 import path from 'node:path';
 import os from 'node:os';
 import process from 'node:process';

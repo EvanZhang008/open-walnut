@@ -54,7 +54,7 @@ beforeAll(async () => {
     format: 'esm',
     platform: 'node',
     target: 'node22',
-    external: ['better-sqlite3'],
+    external: ['bun:sqlite'],
     logLevel: 'silent',
     plugins: [{
       name: 'rebase-walnut-imports',
