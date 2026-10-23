@@ -35,9 +35,24 @@ export function runLogged(cmd, argv, { env, cwd, logFile, timeoutMs }) {
   })
 }
 
+/** A process's group: `ps`, or /proc where a minimal container has no ps. */
+function processGroupOf(pid) {
+  try {
+    return Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf8' }).trim())
+  } catch {
+    // /proc/<pid>/stat: "pid (comm) state ppid pgrp ..."; comm may hold spaces, so read after its ')'.
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+    return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2])
+  }
+}
+
 export class IsolatedWalnut {
-  /** `name` labels the work subdirectory; `npm` is the npm binary to install with. */
-  constructor({ work, name, npm = 'npm', extraEnv = {} }) {
+  /**
+   * `name` labels the work subdirectory; `npm` is the npm binary to install with;
+   * `bin` is a Walnut file already in place (the compiled one), used instead of an install.
+   */
+  constructor({ work, name, npm = 'npm', extraEnv = {}, bin = null }) {
+    this.fixedBin = bin
     this.dir = path.join(work, name)
     this.prefix = path.join(this.dir, 'prefix')
     this.home = path.join(this.dir, 'home')
@@ -51,7 +66,9 @@ export class IsolatedWalnut {
     this.port = null
     for (const d of [this.prefix, this.home, this.project, this.binDir, path.join(this.home, '.local/bin')]) fs.mkdirSync(d, { recursive: true })
     // The CLI the daemon spawns, on PATH and where Claude Code's installer puts it.
-    const shim = `#!/bin/sh\nexec "${process.execPath}" "${MOCK_CLAUDE}" "$@"\n`
+    // Run as a compiled Walnut file acting as bun (BUN_BE_BUN), the mock needs the same.
+    const beBun = process.env.BUN_BE_BUN ? 'BUN_BE_BUN=1 ' : ''
+    const shim = `#!/bin/sh\n${beBun}exec "${process.execPath}" "${MOCK_CLAUDE}" "$@"\n`
     for (const p of [path.join(this.binDir, 'claude'), path.join(this.home, '.local/bin/claude')]) fs.writeFileSync(p, shim, { mode: 0o755 })
     const prefixBin = path.join(this.prefix, 'bin')
     this.env = {
@@ -74,7 +91,7 @@ export class IsolatedWalnut {
     }
   }
 
-  get bin() { return path.join(this.prefix, 'bin', 'open-walnut') }
+  get bin() { return this.fixedBin ?? path.join(this.prefix, 'bin', 'open-walnut') }
   get base() { return `http://127.0.0.1:${this.port}` }
 
   /**
@@ -164,7 +181,7 @@ export class IsolatedWalnut {
     // Mock CLIs the daemon spawned: process groups recorded in our own streams dir,
     // never this process's own group.
     const streams = `${this.daemonDir}-streams`
-    const ownGroup = Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8' }).trim())
+    const ownGroup = processGroupOf(process.pid)
     for (const f of fs.existsSync(streams) ? fs.readdirSync(streams) : []) {
       if (!f.endsWith('.pgid')) continue
       const pgid = Number(fs.readFileSync(path.join(streams, f), 'utf8').trim())

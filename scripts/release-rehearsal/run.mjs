@@ -6,6 +6,7 @@
  *   node scripts/release-rehearsal/run.mjs --current <B.tgz> [--older <A.tgz>] [--field latest] [--work <dir>] [--keep]
  *   node scripts/release-rehearsal/run.mjs --packs <dir>/packs.json --field latest --runtime   (pack.mjs --rehearsal wrote it)
  *   node scripts/release-rehearsal/run.mjs --archive <open-walnut-x-<platform>-<arch>.tar.gz>
+ *   BUN_BE_BUN=1 <walnut file> scripts/release-rehearsal/run.mjs --binary <walnut file>   (binary.mjs)
  *
  * Scenarios (each isolated: own npm prefix, HOME, data, daemon; mock `claude`):
  *   install    `npm install -g` the tarball with the updater's --allow-scripts list;
@@ -40,13 +41,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { readPackedManifest, startRegistry } from './registry.mjs'
+import { rehearseBinary } from './binary.mjs'
 import { rehearseRuntime } from './runtime.mjs'
 import { IsolatedWalnut } from './walnut.mjs'
 import { compareVersions } from './version-order.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
 
 function parseArgs(argv) {
-  const out = { current: null, older: null, field: null, work: null, keep: false, runtime: false, archive: null }
+  const out = { current: null, older: null, field: null, work: null, keep: false, runtime: false, archive: null, binary: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--packs') {
@@ -60,9 +62,10 @@ function parseArgs(argv) {
     else if (a === '--keep') out.keep = true
     else if (a === '--runtime') out.runtime = true
     else if (a === '--archive') out.archive = path.resolve(argv[++i])
+    else if (a === '--binary') out.binary = path.resolve(argv[++i])
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!out.current && !out.archive) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--field latest] [--runtime] [--work <dir>] [--keep] | --archive <archive>')
+  if (!out.current && !out.archive && !out.binary) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--field latest] [--runtime] [--work <dir>] [--keep] | --archive <archive> | --binary <walnut file>')
   if (out.runtime && !out.older) throw new Error('--runtime builds the archive from --older and updates it to --current')
   return out
 }
@@ -231,6 +234,11 @@ async function main() {
   // Create before resolving: CI names a --work dir that does not exist yet.
   if (opts.work) fs.mkdirSync(opts.work, { recursive: true })
   const work = fs.realpathSync(opts.work ?? fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-rehearsal-')))
+  if (opts.binary) {
+    process.stdout.write(`rehearsing ${path.basename(opts.binary)} in ${work}\n`)
+    const expected = await rehearseBinary({ work, binary: opts.binary, scenario, walnuts })
+    return finish(opts, work, path.basename(opts.binary), expected)
+  }
   if (opts.archive) {
     process.stdout.write(`rehearsing ${path.basename(opts.archive)} in ${work}\n`)
     const ran = await rehearseRuntime({ work, archive: opts.archive, scenario, walnuts })
