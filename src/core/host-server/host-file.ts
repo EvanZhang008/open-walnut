@@ -14,9 +14,11 @@
  *     the build's commit (host-file-build.ts), about a minute, once per build;
  *     targets asked together are one build;
  *   any other build (the compiled file, an npm install) of a published version:
- *     the release asset walnut-<version>-<target>.gz (the release's
- *     SHA256SUMS checks it). The host needs no network: this computer downloads
- *     it once and sends it;
+ *     downloaded (host-file-download.ts): the GitHub release asset
+ *     walnut-<version>-<target>.gz, else npm's @open-walnut/<target> package,
+ *     which is the only place a nightly is published (a prerelease asks npm
+ *     first). The host needs no network: this computer downloads it once and
+ *     sends it;
  *   anything else (running from source, a build with uncommitted changes, a
  *     version that was never released, a build that names no commit): an error
  *     that says so. There is no fallback to installing anything on the host.
@@ -33,18 +35,21 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { Readable, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import zlib from 'node:zlib'
-import { WALNUT_REPO_URL } from '../../constants.js'
 import { formatBuildVersion, getBuildInfo, type BuildInfo } from '../../lib/build-info.js'
 import { singleFile } from '../../lib/single-file.js'
 import { buildIdOf } from '../companion-build/wire.js'
 import {
   buildFileInClone, findBun, packageJsonAt, pinnedBun, pruneAbandonedWork, WORK_OWNER, type BunPick, type CloneBuild,
 } from './host-file-build.js'
+import {
+  defaultNpmRegistry, defaultReleaseBase, fromGithubRelease, fromNpm, hasher, hashFile, MAX_FILE_BYTES, type Fetched,
+} from './host-file-download.js'
 import type { HostFileTarget } from './host-target.js'
 import { readRunningBuild, runningDist } from './package.js'
+
+export { defaultNpmRegistry, defaultReleaseBase, sumsFor } from './host-file-download.js'
 
 export interface HostFile {
   id: string
@@ -90,6 +95,8 @@ export interface HostFileSourceOptions {
   fetch?: typeof fetch
   /** Like install.sh's OPEN_WALNUT_RELEASE_BASE_URL: `<base>/v<version>/<asset>`; `file://<dir>` is a directory laid out the same way. */
   releaseBase?: string
+  /** The npm registry the platform packages are read from (default OPEN_WALNUT_NPM_REGISTRY, else registry.npmjs.org). */
+  npmRegistry?: string
   /** Builds the files in a clone (host-file-build.ts); returns each built file's path. */
   build?: (b: CloneBuild) => Promise<Partial<Record<HostFileTarget, string>>>
   /** A bun of `min` or newer to build with (host-file-build.ts findBun). */
@@ -106,18 +113,13 @@ export interface HostFileSourceOptions {
 
 const KEEP_BUILDS = 3
 const LOG_KEEP_MS = 7 * 24 * 3_600_000
-const SUMS_MS = 30_000
-const DOWNLOAD_MS = 10 * 60_000
-const MAX_FILE_BYTES = 400 * 1024 * 1024
+/** How long a dead process's download dir is left before a prune removes it. */
+const DOWNLOAD_KEEP_MS = 60 * 60_000
 const RELEASE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const WORK_PREFIX = 'walnut-host-file-'
 export const SOURCE_ROOT_MARKER = '.walnut-source-root'
 /** src/binary/runtime-tree.ts RUNTIME_MARKER: an unpacked runtime tree's file naming its asset archive id. */
 const RUNTIME_MARKER = '.walnut-runtime'
-
-export function defaultReleaseBase(env: NodeJS.ProcessEnv = process.env): string {
-  return env.OPEN_WALNUT_RELEASE_BASE_URL?.trim().replace(/\/+$/, '') || `${WALNUT_REPO_URL.replace(/\.git$/, '')}/releases/download`
-}
 
 async function isCheckout(root: string): Promise<boolean> {
   const has = (rel: string) => fs.promises.access(path.join(root, rel)).then(() => true, () => false)
@@ -170,39 +172,6 @@ export async function runningOrigin(
     kind: 'none',
     why: 'This server runs from source, not from a build, so it has no build to send to a host. Build it (`bun run build`) and run the server from dist.',
   }
-}
-
-/** sha256 of a file, read in chunks (a file of 60 MB hashed at once would hold the event loop). */
-async function hashFile(file: string): Promise<string> {
-  const hash = crypto.createHash('sha256')
-  await pipeline(fs.createReadStream(file), hasher(hash, MAX_FILE_BYTES, file), new Writable({ write(_c, _e, cb) { cb() } }))
-  return hash.digest('hex')
-}
-
-/** Hashes what passes through. */
-function hasher(hash: crypto.Hash, limit: number, what: string): Transform {
-  let n = 0
-  return new Transform({
-    transform(chunk: Buffer, _enc, cb) {
-      n += chunk.length
-      if (n > limit) { cb(new Error(`${what} is larger than ${Math.round(limit / 2 ** 20)} MB`)); return }
-      hash.update(chunk)
-      cb(null, chunk)
-    },
-  })
-}
-
-/** `{ gz, file }` sha256s of `walnut-<version>-<target>` in a SHA256SUMS text (release-files.mjs writes both). */
-export function sumsFor(text: string, version: string, target: string): { gz?: string; file?: string } {
-  const out: { gz?: string; file?: string } = {}
-  const name = `walnut-${version}-${target}`
-  for (const line of text.split('\n')) {
-    const m = /^([0-9a-f]{64}) [ *]?(\S+)$/.exec(line.trim())
-    if (!m) continue
-    if (m[2] === `${name}.gz`) out.gz = m[1]
-    else if (m[2] === name) out.file = m[1]
-  }
-  return out
 }
 
 /** Whether a `--version` line names this build: `<version> (<commit>, <date>)` or `<version> (<commit>)`. */
@@ -345,7 +314,7 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
         else if (/^build-.+\.log$/.test(n) || /^download-/.test(n)) {
           // Build logs: a week, long enough to read why one failed. A download's dir: a process that died in it.
           const age = Date.now() - ((await fs.promises.stat(file).catch(() => null))?.mtimeMs ?? Date.now())
-          if (age > (n.startsWith('download-') ? DOWNLOAD_MS * 6 : LOG_KEEP_MS)) await fs.promises.rm(file, { recursive: true, force: true })
+          if (age > (n.startsWith('download-') ? DOWNLOAD_KEEP_MS : LOG_KEEP_MS)) await fs.promises.rm(file, { recursive: true, force: true })
         }
       }
     } catch { /* hygiene only */ }
@@ -454,17 +423,11 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
     })
   }
 
-  async function body(url: string, timeoutMs: number): Promise<Readable | null> {
-    if (url.startsWith('file://')) {
-      const file = decodeURI(url.slice('file://'.length))
-      return (await fs.promises.access(file).then(() => true, () => false)) ? fs.createReadStream(file) : null
-    }
-    const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs), redirect: 'follow' })
-    if (res.status === 404) return null
-    if (!res.ok || !res.body) throw new Error(`${url} answered HTTP ${res.status}`)
-    return Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0])
-  }
-
+  /**
+   * A published build's file: the GitHub release first, then npm (a prerelease
+   * the other way round: nightlies are on npm only). Only "not there" moves on
+   * to the next source; a failed or mismatching download is the answer.
+   */
   async function fromRelease(o: Extract<BuildOrigin, { kind: 'release' }>, target: HostFileTarget): Promise<HostFile> {
     const { version, commit } = o.info
     const noCheckout = `${o.what} has no checkout to build the walnut file for ${target} from`
@@ -474,47 +437,27 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
     if (!RELEASE_VERSION.test(version)) throw new Error(`This Walnut's version (${version}) is not a release version, and ${noCheckout}.`)
     // The host checks the file names this commit: without one, nothing could tell a release of another commit.
     if (!commit) throw new Error(`This Walnut's build (${formatBuildVersion(o.info)}) names no commit, and ${noCheckout}.`)
-    const base = (opts.releaseBase ?? defaultReleaseBase()).replace(/\/+$/, '')
-    const sumsUrl = `${base}/v${version}/SHA256SUMS`
-    const asset = `walnut-${version}-${target}.gz`
-    let sums: { gz?: string; file?: string }
-    try {
-      const stream = await body(sumsUrl, SUMS_MS)
-      if (!stream) throw Object.assign(new Error('absent'), { absent: true })
-      const parts: Buffer[] = []
-      for await (const c of stream) parts.push(c as Buffer)
-      sums = sumsFor(Buffer.concat(parts).toString('utf8'), version, target)
-    } catch (err) {
-      if ((err as { absent?: boolean }).absent) {
-        throw new Error(`Walnut ${version} is not a published release (${sumsUrl} is not there), and ${noCheckout}. Install a released Walnut, or run Walnut from a checkout.`)
-      }
-      throw new Error(`Could not read the release's checksums (${sumsUrl}: ${(err as Error).message}); this computer downloads the walnut file for the host once.`)
-    }
-    if (!sums.gz) throw new Error(`Release ${version} has no walnut file for ${target} (${asset} is not in its SHA256SUMS).`)
-    tell(target, `Downloading Walnut ${version} for ${target} (${asset}).`)
+    const releaseBase = opts.releaseBase ?? defaultReleaseBase()
+    const registry = opts.npmRegistry ?? defaultNpmRegistry()
     await fs.promises.mkdir(opts.cacheDir, { recursive: true })
     const work = await fs.promises.mkdtemp(path.join(opts.cacheDir, 'download-'))
     try {
-      const gzTmp = path.join(work, asset)
-      const gzHash = crypto.createHash('sha256')
-      const stream = await body(`${base}/v${version}/${asset}`, DOWNLOAD_MS)
-      if (!stream) throw new Error(`Release ${version} lists ${asset} but does not have it.`)
-      await pipeline(stream, hasher(gzHash, MAX_FILE_BYTES, asset), fs.createWriteStream(gzTmp))
-      if (gzHash.digest('hex') !== sums.gz) throw new Error(`${asset} does not match its SHA256SUMS entry (a broken or tampered download).`)
-      // The file inside, hashed for the host's own check (and against the release's line for it).
-      const fileHash = crypto.createHash('sha256')
-      const plain = path.join(work, `walnut-${target}`)
-      await pipeline(fs.createReadStream(gzTmp), zlib.createGunzip(), hasher(fileHash, MAX_FILE_BYTES, 'the walnut file'), fs.createWriteStream(plain))
-      const fileSha = fileHash.digest('hex')
-      if (sums.file && sums.file !== fileSha) throw new Error(`${asset} does not unpack to the file its SHA256SUMS names.`)
-      // A release of the same version from another commit is not this server's build. Seen here
-      // when the file runs on this machine; the host's install checks it either way.
-      await fs.promises.chmod(plain, 0o755)
-      const said = await askVersion(plain, target).catch(() => null)
-      if (said && !versionLineMatches(said.line, version, commit)) {
-        throw new Error(`Release ${version} was built from another commit than this Walnut (its file says "${said.line}", this is ${formatBuildVersion(o.info)}), and ${noCheckout}.`)
+      const ctx = (sub: string) => ({ fetch: fetchImpl, work: path.join(work, sub), say: (m: string) => tell(target, m) })
+      const github = async () => { const c = ctx('github'); await fs.promises.mkdir(c.work); return fromGithubRelease(c, releaseBase, version, target) }
+      const npm = async () => { const c = ctx('npm'); await fs.promises.mkdir(c.work); return fromNpm(c, registry, version, commit, target) }
+      const missing: string[] = []
+      for (const get of version.includes('-') ? [npm, github] : [github, npm]) {
+        const got: Fetched = await get()
+        if ('absent' in got) { missing.push(got.absent); continue }
+        // A file of the same version from another commit is not this server's build. Seen here
+        // when the file runs on this machine; the host's install checks it either way.
+        const said = await askVersion(got.file, target).catch(() => null)
+        if (said && !versionLineMatches(said.line, version, commit)) {
+          throw new Error(`Walnut ${version} from ${got.from} was built from another commit than this Walnut (its file says "${said.line}", this is ${formatBuildVersion(o.info)}), and ${noCheckout}.`)
+        }
+        return got.gz ? await store(o.id, version, commit, target, got.gz, got.sha256) : await storeFile(o.id, o.info, target, got.file, work)
       }
-      return await store(o.id, version, commit, target, gzTmp, fileSha)
+      throw new Error(`Walnut ${version} has no walnut file for ${target} to download: ${missing.join(', and ')}. And ${noCheckout}: install a released Walnut, or run Walnut from a checkout.`)
     } finally {
       await fs.promises.rm(work, { recursive: true, force: true })
     }

@@ -1,12 +1,13 @@
 /**
  * Where a host's walnut file comes from (src/core/host-server/host-file.ts): this
  * server's build, found beside it, built from its checkout or downloaded from its
- * release, kept in the data dir's cache. The clone build is a stand-in here (its
- * real run is host-server-file-build.test.ts); the release is real files, read
- * over file:// and over a real HTTP server; the staged copy production runs from
- * is a real dir with its marker.
+ * release or from npm, kept in the data dir's cache. The clone build is a
+ * stand-in here (its real run is host-server-file-build.test.ts); the release is
+ * real files, read over file:// and over a real HTTP server; npm is a real HTTP
+ * server answering as the registry does (a version document, then the tarball
+ * it names); the staged copy production runs from is a real dir with its marker.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -19,9 +20,11 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-file'))
 
 import {
-  createHostFileSource, defaultReleaseBase, fileContains, runningOrigin, sumsFor, versionLineMatches,
+  createHostFileSource, defaultNpmRegistry, defaultReleaseBase, fileContains, runningOrigin, sumsFor, versionLineMatches,
   type BuildOrigin, type FileVersion, type HostFileSourceOptions,
 } from '../../src/core/host-server/host-file.js'
+import { sha512sOf } from '../../src/core/host-server/host-file-download.js'
+import { packTar } from '../../src/lib/tar.js'
 import { WORK_OWNER, type CloneBuild } from '../../src/core/host-server/host-file-build.js'
 import type { HostFileTarget } from '../../src/core/host-server/host-target.js'
 import type { BuildInfo } from '../../src/lib/build-info.js'
@@ -30,11 +33,32 @@ let dir = ''
 let cacheDir = ''
 let workDir = ''
 
+/** A stand-in npm registry: `<registry>/@open-walnut%2f<target>/<version>`, and the tarballs those name. */
+const npm = { url: '', seen: [] as string[], docs: new Map<string, unknown>(), tarballs: new Map<string, Buffer>(), server: null as http.Server | null }
+
+beforeAll(async () => {
+  npm.server = http.createServer((req, res) => {
+    npm.seen.push(req.url!)
+    const tgz = npm.tarballs.get(req.url!)
+    if (tgz) { res.end(tgz); return }
+    const doc = npm.docs.get(req.url!)
+    res.statusCode = doc ? 200 : 404
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify(doc ?? { error: 'Not found' }))
+  })
+  await new Promise<void>((r) => npm.server!.listen(0, '127.0.0.1', () => r()))
+  npm.url = `http://127.0.0.1:${(npm.server.address() as AddressInfo).port}/registry`
+})
+afterAll(() => { npm.server?.close() })
+
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hsf-'))
   cacheDir = path.join(dir, 'cache', 'host-server')
   workDir = path.join(dir, 'work')
   fs.mkdirSync(workDir)
+  npm.seen.length = 0
+  npm.docs.clear()
+  npm.tarballs.clear()
 })
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 
@@ -67,7 +91,7 @@ const pinned = async () => JSON.stringify({ name: 'open-walnut', packageManager:
 const aBun = async () => ({ path: '/opt/bun/bin/bun', version: '1.4.4' })
 /** A source with the stand-ins every test wants, `over` on top. */
 const source = (over: Partial<HostFileSourceOptions>) => createHostFileSource({
-  cacheDir, workDir, bun: aBun, packageJsonAt: pinned, versionHere: async () => null, batchWindowMs: 20, ...over,
+  cacheDir, workDir, bun: aBun, packageJsonAt: pinned, versionHere: async () => null, batchWindowMs: 20, npmRegistry: npm.url, ...over,
 })
 
 describe('from this server\'s checkout', () => {
@@ -359,12 +383,21 @@ describe('from the release of this server\'s version', () => {
     await expect(src.file('linux-x64')).rejects.toThrow(/does not unpack to the file its SHA256SUMS names/)
   })
 
-  it('a version that was never released, or a target it has no file for, says so', async () => {
+  it('a version on neither GitHub nor npm, or a target neither has a file for, says plainly what is missing', async () => {
     const base = path.join(dir, 'releases')
     const src = source({ origin: async () => released(), releaseBase: `file://${base}` })
-    await expect(src.file('linux-x64')).rejects.toThrow(/Walnut 0\.6\.14 is not a published release .* and this compiled walnut file has no checkout to build the walnut file for linux-x64 from/)
+    const err = await src.file('linux-x64').then(() => null, (e: Error) => e.message)
+    expect(err).toBe(
+      `Walnut 0.6.14 has no walnut file for linux-x64 to download: there is no GitHub release of it (file://${base}/v0.6.14/SHA256SUMS is not there), `
+      + `and npm has no @open-walnut/linux-x64@0.6.14 (${npm.url}/@open-walnut%2flinux-x64/0.6.14 is not there). `
+      + 'And this compiled walnut file has no checkout to build the walnut file for linux-x64 from: install a released Walnut, or run Walnut from a checkout.',
+    )
     release(base, '0.6.14', { 'linux-x64': linuxFile })
-    await expect(src.file('linux-arm64-musl')).rejects.toThrow(/Release 0\.6\.14 has no walnut file for linux-arm64-musl/)
+    await expect(src.file('linux-arm64-musl')).rejects.toThrow(
+      /no walnut file for linux-arm64-musl to download: its GitHub release has no walnut-0\.6\.14-linux-arm64-musl\.gz \(not in its SHA256SUMS\), and npm has no @open-walnut\/linux-arm64-musl@0\.6\.14/,
+    )
+    expect(fs.existsSync(path.join(cacheDir, 'files'))).toBe(false)
+    expect(fs.readdirSync(cacheDir).filter((n) => n.startsWith('download-'))).toEqual([])
   })
 
   it('a release of the same version from another commit is refused when its file runs here', async () => {
@@ -376,7 +409,7 @@ describe('from the release of this server\'s version', () => {
       versionHere: async (file) => { lines.push(fs.readFileSync(file, 'utf8').slice(0, 9)); return { line, assetsId: null } },
     })
     await expect(answering('0.6.14 (5bf3ccc9f, 2026-10-20)').file('linux-x64'))
-      .rejects.toThrow(/Release 0\.6\.14 was built from another commit than this Walnut \(its file says "0\.6\.14 \(5bf3ccc9f, 2026-10-20\)", this is 0\.6\.14 \(80dc024a8/)
+      .rejects.toThrow(/Walnut 0\.6\.14 from walnut-0\.6\.14-linux-x64\.gz was built from another commit than this Walnut \(its file says "0\.6\.14 \(5bf3ccc9f, 2026-10-20\)", this is 0\.6\.14 \(80dc024a8/)
     expect(fs.existsSync(path.join(cacheDir, 'files'))).toBe(false)
     // It ran the downloaded file itself, unpacked.
     expect(lines).toEqual(['the linux'])
@@ -403,6 +436,107 @@ describe('from the release of this server\'s version', () => {
   it('the release base is install.sh\'s knob, else the project\'s GitHub releases', () => {
     expect(defaultReleaseBase({ OPEN_WALNUT_RELEASE_BASE_URL: 'https://mirror.example.invalid/dl/' })).toBe('https://mirror.example.invalid/dl')
     expect(defaultReleaseBase({})).toBe('https://example.invalid/open-walnut/releases/download')
+  })
+})
+
+/** Publish `@open-walnut/<target>@<version>` on the stand-in registry as npm-packages.mjs lays it out. */
+function publishNpm(target: string, version: string, file: Buffer, opts: { gitHead?: string; integrity?: string; noFile?: boolean } = {}): string {
+  const name = `@open-walnut/${target}`
+  const tgz = zlib.gzipSync(packTar([
+    { path: 'package/package.json', type: 'file', data: Buffer.from(JSON.stringify({ name, version, files: ['walnut'] })) },
+    ...(opts.noFile ? [] : [{ path: 'package/walnut', type: 'file' as const, mode: 0o755, data: file }]),
+    { path: 'package/README.md', type: 'file', data: Buffer.from(`# ${name}\n`) },
+  ]))
+  const tarballPath = `/registry/${name}/-/${target}-${version}.tgz`
+  npm.tarballs.set(tarballPath, tgz)
+  npm.docs.set(`/registry/@open-walnut%2f${target}/${version}`, {
+    name, version, gitHead: opts.gitHead ?? '80dc024a8' + 'e'.repeat(31),
+    dist: { tarball: `${npm.url.replace(/\/registry$/, '')}${tarballPath}`, integrity: opts.integrity ?? `sha512-${crypto.createHash('sha512').update(tgz).digest('base64')}`, shasum: 'x' },
+  })
+  return tarballPath
+}
+
+describe('from npm, where every version is published and a nightly only there', () => {
+  const nightly = '0.6.15-nightly.20261023.300'
+  const nightlyOrigin = (): BuildOrigin => ({ kind: 'release', info: info({ version: nightly }), id: `${nightly}-80dc024a8`, what: 'this compiled walnut file' })
+  const linuxFile = Buffer.from('the linux-x64 walnut file from npm\n'.repeat(5000))
+
+  it('a nightly: the platform package\'s version document, its tarball checked by its integrity, package/walnut kept; GitHub is not asked', async () => {
+    const tarball = publishNpm('linux-x64', nightly, linuxFile)
+    const github: string[] = []
+    const said: string[] = []
+    const src = source({
+      origin: async () => nightlyOrigin(), releaseBase: 'https://releases.example.invalid/dl',
+      fetch: (async (url: string, init?: RequestInit) => { if (!String(url).startsWith(npm.url.replace(/\/registry$/, ''))) github.push(String(url)); return fetch(url, init) }) as typeof fetch,
+    })
+    const f = await src.file('linux-x64', (m) => said.push(m))
+    expect(zlib.gunzipSync(f.gz).equals(linuxFile)).toBe(true)
+    expect(f).toMatchObject({ id: `${nightly}-80dc024a8`, version: nightly, commit: '80dc024a8', target: 'linux-x64', sha256: sha(linuxFile), gzSha256: sha(f.gz) })
+    expect(said).toEqual([`Downloading Walnut ${nightly} for linux-x64 from npm (@open-walnut/linux-x64@${nightly}).`])
+    expect(npm.seen).toEqual([`/registry/@open-walnut%2flinux-x64/${nightly}`, tarball])
+    expect(github).toEqual([])
+    expect(fs.readdirSync(cacheDir).filter((n) => n.startsWith('download-'))).toEqual([])
+    // Cached: the next ask (a restart too) reads nothing from npm.
+    await source({ origin: async () => nightlyOrigin() }).file('linux-x64')
+    expect(npm.seen).toHaveLength(2)
+  })
+
+  it('a stable version whose GitHub release lacks the file comes from npm', async () => {
+    const base = path.join(dir, 'releases')
+    release(base, '0.6.14', { 'darwin-arm64': Buffer.from('mac') })
+    publishNpm('linux-arm64', '0.6.14', linuxFile)
+    const said: string[] = []
+    const f = await source({ origin: async () => released(), releaseBase: `file://${base}` }).file('linux-arm64', (m) => said.push(m))
+    expect(zlib.gunzipSync(f.gz).equals(linuxFile)).toBe(true)
+    expect(said).toEqual(['Downloading Walnut 0.6.14 for linux-arm64 from npm (@open-walnut/linux-arm64@0.6.14).'])
+  })
+
+  it('a tarball that does not match its integrity is refused and not kept', async () => {
+    publishNpm('linux-x64', nightly, linuxFile, { integrity: `sha512-${crypto.createHash('sha512').update('something else').digest('base64')}` })
+    await expect(source({ origin: async () => nightlyOrigin() }).file('linux-x64')).rejects.toThrow(
+      `The download of @open-walnut/linux-x64@${nightly} does not match its integrity on npm (a broken or tampered download).`,
+    )
+    expect(fs.existsSync(path.join(cacheDir, 'files'))).toBe(false)
+    expect(fs.readdirSync(cacheDir).filter((n) => n.startsWith('download-'))).toEqual([])
+    // Only a sha512 counts: npm's old sha1 shasum cannot check a download.
+    publishNpm('linux-x64', nightly, linuxFile, { integrity: 'sha1-AAAAAAAAAAAAAAAAAAAAAAAAAAA=' })
+    await expect(source({ origin: async () => nightlyOrigin() }).file('linux-x64')).rejects.toThrow(/carries no sha512 integrity/)
+  })
+
+  it('a package built from another commit is refused before its tarball is fetched', async () => {
+    const tarball = publishNpm('linux-x64', nightly, linuxFile, { gitHead: 'deadbeef0' + '1'.repeat(31) })
+    await expect(source({ origin: async () => nightlyOrigin() }).file('linux-x64')).rejects.toThrow(
+      `npm's @open-walnut/linux-x64@${nightly} was built from commit deadbeef0111, not from this Walnut's 80dc024a8.`,
+    )
+    expect(npm.seen).not.toContain(tarball)
+  })
+
+  it('its file, run here, must name this build\'s version and commit', async () => {
+    publishNpm('linux-x64', nightly, linuxFile)
+    const ran: string[] = []
+    const answering = (line: string) => source({
+      origin: async () => nightlyOrigin(),
+      versionHere: async (file) => { ran.push(fs.readFileSync(file, 'utf8').slice(0, 14)); return { line, assetsId: null } },
+    })
+    await expect(answering(`${nightly} (5bf3ccc9f, 2026-10-23)`).file('linux-x64'))
+      .rejects.toThrow(`Walnut ${nightly} from @open-walnut/linux-x64@${nightly} was built from another commit than this Walnut (its file says "${nightly} (5bf3ccc9f, 2026-10-23)"`)
+    expect(fs.existsSync(path.join(cacheDir, 'files'))).toBe(false)
+    expect(ran).toEqual(['the linux-x64 '])
+    expect((await answering(`${nightly} (80dc024a8, 2026-10-23)`).file('linux-x64')).sha256).toBe(sha(linuxFile))
+  })
+
+  it('a package without package/walnut is refused', async () => {
+    publishNpm('linux-x64', nightly, linuxFile, { noFile: true })
+    await expect(source({ origin: async () => nightlyOrigin() }).file('linux-x64')).rejects.toThrow(/holds no walnut file \(package\/walnut\)/)
+  })
+
+  it('reads sha512 from an integrity string, and the registry is a knob', () => {
+    const d = crypto.createHash('sha512').update('x').digest()
+    expect(sha512sOf(`sha1-abc= sha512-${d.toString('base64')}`)).toEqual([d])
+    expect(sha512sOf('sha512-short==')).toEqual([])
+    expect(sha512sOf(undefined)).toEqual([])
+    expect(defaultNpmRegistry({ OPEN_WALNUT_NPM_REGISTRY: 'https://npm.example.invalid/' })).toBe('https://npm.example.invalid')
+    expect(defaultNpmRegistry({})).toBe('https://registry.npmjs.org')
   })
 })
 
