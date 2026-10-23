@@ -132,18 +132,40 @@ describe('Part 1: Typed session slots', () => {
     expect(fetched.plan_session_id).toBeUndefined();
   });
 
-  it('linkSessionSlot sets plan_session_id independently of exec', async () => {
+  // One session per task (core/sessions/one-session-per-task.ts): the plan and
+  // exec slots are mirrors of the task's one session, never two sessions.
+  it('the plan and exec slots both name the task\'s one session', async () => {
     const task = await createTask('Slot test - link plan', { project: 'work' });
     const taskId = task.id as string;
 
     const { linkSessionSlot } = await import('../../src/core/task-manager.js');
     await linkSessionSlot(taskId, 'session-plan-001', 'plan');
-    await linkSessionSlot(taskId, 'session-exec-002', 'exec');
+    await linkSessionSlot(taskId, 'session-plan-001', 'exec');
 
     const fetched = await getTask(taskId);
+    expect(fetched.session_id).toBe('session-plan-001');
     expect(fetched.plan_session_id).toBe('session-plan-001');
-    expect(fetched.exec_session_id).toBe('session-exec-002');
-    expect((fetched.session_ids as string[]).length).toBe(2);
+    expect(fetched.exec_session_id).toBe('session-plan-001');
+    expect(fetched.session_ids).toEqual(['session-plan-001']);
+  });
+
+  it('linkSessionSlot refuses a second session for a task that owns one', async () => {
+    const task = await createTask('Slot test - second session', { project: 'work' });
+    const taskId = task.id as string;
+
+    const { linkSessionSlot } = await import('../../src/core/task-manager.js');
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js');
+    await createSessionRecord('session-own-001', taskId, 'work', undefined, { initialProcessStatus: 'stopped' });
+    await linkSessionSlot(taskId, 'session-own-001', 'plan');
+
+    await expect(linkSessionSlot(taskId, 'session-other-002', 'exec'))
+      .rejects.toMatchObject({ code: 'task_has_session', existingSessionId: 'session-own-001' });
+    const fetched = await getTask(taskId);
+    // Nothing on the task names the refused session.
+    expect(fetched.session_id).toBe('session-own-001');
+    expect(fetched.plan_session_id).toBe('session-own-001');
+    expect(fetched.exec_session_id).not.toBe('session-other-002');
+    expect(fetched.session_ids).toEqual(['session-own-001']);
   });
 
   it('clearSessionSlot clears exec slot by session ID', async () => {
@@ -165,14 +187,15 @@ describe('Part 1: Typed session slots', () => {
     const taskId = task.id as string;
 
     const { linkSessionSlot, clearSessionSlot } = await import('../../src/core/task-manager.js');
-    await linkSessionSlot(taskId, 'session-plan-clear', 'plan');
-    await linkSessionSlot(taskId, 'session-exec-clear', 'exec');
+    // Both slots mirror the task's one session.
+    await linkSessionSlot(taskId, 'session-slot-clear', 'plan');
+    await linkSessionSlot(taskId, 'session-slot-clear', 'exec');
 
     // Clear plan slot
     await clearSessionSlot(taskId, undefined, 'plan');
     const fetched = await getTask(taskId);
     expect(fetched.plan_session_id).toBeUndefined();
-    expect(fetched.exec_session_id).toBe('session-exec-clear');
+    expect(fetched.exec_session_id).toBe('session-slot-clear');
   });
 
   it('DELETE /api/tasks/:id returns 409 when typed slots occupied', async () => {
@@ -288,21 +311,20 @@ describe('Part 2: Child task decomposition', () => {
 
     const { linkSessionSlot } = await import('../../src/core/task-manager.js');
 
-    // Link sessions to parent
+    // Each task owns its own one session (core/sessions/one-session-per-task.ts).
     await linkSessionSlot(parentId, 'parent-exec', 'exec');
-
-    // Link sessions to child independently
     await linkSessionSlot(childId, 'child-plan', 'plan');
-    await linkSessionSlot(childId, 'child-exec', 'exec');
 
     const parentFetched = await getTask(parentId);
     const childFetched = await getTask(childId);
 
     expect(parentFetched.exec_session_id).toBe('parent-exec');
     expect(parentFetched.plan_session_id).toBeUndefined();
+    expect(parentFetched.session_ids).toEqual(['parent-exec']);
 
     expect(childFetched.plan_session_id).toBe('child-plan');
-    expect(childFetched.exec_session_id).toBe('child-exec');
+    expect(childFetched.exec_session_id).toBeUndefined();
+    expect(childFetched.session_ids).toEqual(['child-plan']);
   });
 });
 

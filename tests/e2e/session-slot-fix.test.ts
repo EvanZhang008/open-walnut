@@ -1,17 +1,22 @@
 /**
- * E2E tests for the 1-task-1-session slot rule:
- *   1. A terminal (stopped / error) session does NOT block a new start
- *   2. A live session DOES block it, with the live session's id in the body
- *   3. checkSessionLimit skips error and embedded/sdk sessions
+ * E2E tests for the 1-task-1-session slot rule (core/sessions/one-session-per-task.ts):
+ *   1. A terminal (stopped / error) session that held a conversation is the
+ *      task's session for good: a start continues it, never replaces it
+ *   2. A session whose start failed before a single turn ran does NOT hold the
+ *      task: a new start replaces it (the old row is kept as history)
+ *   3. A live session blocks a start, with the live session's id in the body
+ *   4. checkSessionLimit skips error and embedded/sdk sessions
  *
- * Tests 1-2 go through POST /api/v1/tasks/:id/start (the route behind the
- * session_start op) on a real server; test 3 calls session-tracker directly.
+ * Tests 1-3 go through POST /api/v1/tasks/:id/start (the route behind the
+ * session_start op) on a real server; test 4 calls session-tracker directly.
  *
  * They deliberately post a RELATIVE cwd, which the route refuses with 400 —
  * AFTER the slot check. So 409 means "the slot was taken" and 400 means "the
  * slot was free", and no session is ever spawned: a spawned session would still
- * be settling its process_status while test 3 counts running sessions, which
- * made that count flap by one.
+ * be settling its process_status while test 4 counts running sessions, which
+ * made that count flap by one. A start that would continue a conversation in
+ * another directory is refused (409) before anything is sent, so the continue
+ * case spawns nothing either.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -74,11 +79,11 @@ afterAll(async () => {
 });
 
 // ══════════════════════════════════════════════════════════════════
-// Tests 1-2: which sessions occupy the task's slot
+// Tests 1-3: which sessions occupy the task's slot
 // ══════════════════════════════════════════════════════════════════
 
 describe('POST /tasks/:id/start — the slot rule', () => {
-  it('a stopped session does not occupy the slot', async () => {
+  it('a stopped session that held a conversation is continued, never replaced', async () => {
     const task = await createTask('Stopped session slot test', { category: 'Test' });
     const taskId = task.id as string;
 
@@ -88,12 +93,17 @@ describe('POST /tasks/:id/start — the slot rule', () => {
     await linkSessionSlot(taskId, 'stopped-sess-001', 'exec');
 
     const { status, body } = await startSession(taskId);
-    // Past the slot check, refused only on the deliberately relative cwd.
-    expect(status).toBe(400);
-    expect(JSON.stringify(body)).toContain('absolute');
+    // The start found the task's one conversation and would continue it, but in
+    // another directory than the conversation's, so it is refused (a new place is
+    // a new task: task_transfer). It never reached the cwd check (400).
+    expect(status).toBe(409);
+    expect(JSON.stringify(body)).toContain('already has its one session');
+    // The stopped session is still the task's session.
+    const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    expect((await getSessionByClaudeId('stopped-sess-001'))?.taskId).toBe(taskId);
   });
 
-  it('an error session does not occupy the slot', async () => {
+  it('an error session that held a conversation is continued, never replaced', async () => {
     const task = await createTask('Error session slot test', { category: 'Test' });
     const taskId = task.id as string;
 
@@ -103,8 +113,29 @@ describe('POST /tasks/:id/start — the slot rule', () => {
     await linkSessionSlot(taskId, 'error-sess-001', 'exec');
 
     const { status, body } = await startSession(taskId);
+    expect(status).toBe(409);
+    expect(JSON.stringify(body)).toContain('already has its one session');
+  });
+
+  it('an error session whose start failed before a turn does not occupy the slot', async () => {
+    const task = await createTask('Failed start slot test', { category: 'Test' });
+    const taskId = task.id as string;
+
+    const failed = await createSessionRecord('failed-start-sess-001', taskId, 'Test', '/tmp', { pid: 99992 });
+    await updateSessionRecord(failed.claudeSessionId, { process_status: 'error', status_reason: 'api_error' });
+    const { linkSessionSlot, getTask } = await import('../../src/core/task-manager.js');
+    await linkSessionSlot(taskId, 'failed-start-sess-001', 'exec');
+
+    const { status, body } = await startSession(taskId);
+    // Past the slot check, refused only on the deliberately relative cwd.
     expect(status).toBe(400);
     expect(JSON.stringify(body)).toContain('absolute');
+    // The failed start was detached as history, not deleted.
+    const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    const row = await getSessionByClaudeId('failed-start-sess-001');
+    expect(row?.taskId).toBe('');
+    expect(row?.legacyTaskId).toBe(taskId);
+    expect((await getTask(taskId)).legacy_session_ids).toContain('failed-start-sess-001');
   });
 
   it('a running session occupies the slot and its id comes back in the 409', async () => {

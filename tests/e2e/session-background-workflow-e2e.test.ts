@@ -119,15 +119,17 @@ beforeAll(async () => {
     path.join(tasksDir, 'tasks.json'),
     JSON.stringify({
       version: 1,
-      tasks: [{
-        id: 'wf-task-001',
+      // One task per case: a task keeps one session (core/sessions/one-session-per-task.ts),
+      // and the large fan-out needs a fresh spawn of its own, not a continue of case 1.
+      tasks: ['wf-task-001', 'wf-task-002'].map((id) => ({
+        id,
         title: 'Dynamic workflow E2E task',
         status: 'todo', priority: 'immediate',
         category: 'Work', project: 'Walnut',
         session_ids: [], active_session_ids: [],
         created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         description: '', summary: '', note: '', subtasks: [],
-      }],
+      })),
     }),
   )
 
@@ -210,7 +212,7 @@ describe('Dynamic workflow E2E: stays running until idle, surfaces progress', ()
     const bgCollector = collectWsEvents(ws, 'session:background-tasks')
 
     const rpc = await sendWsRpc(ws, 'session:start', {
-      taskId: 'wf-task-001',
+      taskId: 'wf-task-002',
       message: 'workflow-test-big',
       project: 'Walnut',
     })

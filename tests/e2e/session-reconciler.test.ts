@@ -7,7 +7,8 @@
  *
  * Tests verify:
  *   1. Pre-seeded zombie sessions in sessions.json are cleaned up on server start
- *   2. Task active_session_ids references are cleaned up
+ *   2. Task session references survive (a legacy multi-session task keeps one
+ *      session and lists the rest as legacy_session_ids)
  *   3. Already-completed sessions are not touched
  *   4. WebSocket clients receive status-changed events for reconciled sessions
  */
@@ -283,32 +284,40 @@ describe('Zombie session reconciliation on startup', () => {
   it('task session references are preserved for agent_complete sessions', async () => {
     // Reconciler sets agent_complete (not completed), so session slots are NOT cleared.
     // The deprecated active_session_ids field is migrated away and no longer present.
+    // task-with-zombie held three sessions before one-session-per-task; the boot split
+    // (core/sessions/split-multi-session-tasks.ts) keeps one in session_ids and the
+    // rest as legacy_session_ids, so every reference survives.
     const res = await fetch(apiUrl('/api/tasks/task-with-zombie'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      task: { session_ids?: string[]; active_session_ids?: string[] }
+      task: { session_ids?: string[]; legacy_session_ids?: string[] }
     }
-    // session_ids historical log is preserved
-    expect(body.task.session_ids).toContain(ZOMBIE_SESSION_IN_PROGRESS)
-    expect(body.task.session_ids).toContain(ZOMBIE_SESSION_TURN_COMPLETED)
+    expect(body.task.session_ids).toHaveLength(1)
+    expect([...(body.task.session_ids ?? []), ...(body.task.legacy_session_ids ?? [])]).toEqual(
+      expect.arrayContaining([ZOMBIE_SESSION_IN_PROGRESS, ZOMBIE_SESSION_TURN_COMPLETED, COMPLETED_SESSION]),
+    )
 
-    // Task with dead PID zombie — same: session_ids preserved
+    // Task with dead PID zombie — its only session stays its session.
     const res2 = await fetch(apiUrl('/api/tasks/task-with-dead-pid'))
     expect(res2.status).toBe(200)
     const body2 = (await res2.json()) as {
       task: { session_ids?: string[] }
     }
-    expect(body2.task.session_ids).toContain(ZOMBIE_SESSION_DEAD_PID)
+    expect(body2.task.session_ids).toEqual([ZOMBIE_SESSION_DEAD_PID])
   })
 
-  it('session_ids are preserved (only active_session_ids are cleared)', async () => {
+  it('the kept session is the one still linked to the task; the others are history', async () => {
     const res = await fetch(apiUrl('/api/tasks/task-with-zombie'))
     const body = (await res.json()) as {
-      task: { session_ids?: string[] }
+      task: { session_ids?: string[]; legacy_session_ids?: string[] }
     }
-    // session_ids should still contain the session references (historical record)
-    expect(body.task.session_ids).toContain(ZOMBIE_SESSION_IN_PROGRESS)
-    expect(body.task.session_ids).toContain(ZOMBIE_SESSION_TURN_COMPLETED)
+    const kept = body.task.session_ids![0]
+    const sessRes = await fetch(apiUrl('/api/sessions/task/task-with-zombie'))
+    expect(sessRes.status).toBe(200)
+    const sessBody = (await sessRes.json()) as { sessions: Array<{ claudeSessionId: string }> }
+    // One session per task: only the kept row still names the task.
+    expect(sessBody.sessions.map((s) => s.claudeSessionId)).toEqual([kept])
+    expect(body.task.legacy_session_ids ?? []).not.toContain(kept)
   })
 
   it('server can still start new sessions after reconciliation', async () => {

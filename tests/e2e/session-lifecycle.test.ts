@@ -171,6 +171,26 @@ beforeAll(async () => {
           note: '',
           subtasks: [],
         },
+        // One task per case that needs its own fresh session: a task keeps one
+        // session for its whole life (core/sessions/one-session-per-task.ts), so
+        // a start on a task that already talked continues that conversation (no
+        // new spawn, no new mode, and the earlier turns' results and usage).
+        ...['mode-plan', 'mode-bypass', 'mode-nomode', 'mode-default', 'resume', 'usage'].map((m) => ({
+          id: `sess-task-${m}`,
+          title: `Session lifecycle test task (${m})`,
+          status: 'todo',
+          priority: 'none',
+          category: 'Work',
+          project: 'Walnut',
+          session_ids: [],
+          active_session_ids: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          description: '',
+          summary: '',
+          note: '',
+          subtasks: [],
+        })),
       ],
     }),
   )
@@ -415,7 +435,7 @@ describe('Session send (resume existing session)', () => {
     // First, start a session to get a sessionId
     const firstResult = waitForWsEvent(ws, 'session:result')
     await sendWsRpc(ws, 'session:start', {
-      taskId: 'sess-task-001',
+      taskId: 'sess-task-resume',
       message: 'start session for resume',
       project: 'Walnut',
     })
@@ -437,7 +457,7 @@ describe('Session send (resume existing session)', () => {
     // The resumed session should produce a valid response
     expect(rd.result).toBeTruthy()
     expect(rd.result).toContain('follow-up message to session')
-    expect(rd.taskId).toBe('sess-task-001')
+    expect(rd.taskId).toBe('sess-task-resume')
 
     ws.close()
     await delay(50)
@@ -454,7 +474,7 @@ describe('Context usage from final stream counters', () => {
 
     const firstResult = waitForWsEvent(ws, 'session:result')
     await sendWsRpc(ws, 'session:start', {
-      taskId: 'sess-task-002',
+      taskId: 'sess-task-usage',
       message: 'final-usage-turn:436,488,265328',
       project: 'Walnut',
     })
@@ -548,7 +568,7 @@ describe('Session permission mode', () => {
     const resultPromise = waitForWsEvent(ws, 'session:result')
 
     await sendWsRpc(ws, 'session:start', {
-      taskId: 'sess-task-001',
+      taskId: 'sess-task-mode-plan',
       message: 'plan mode e2e test',
       project: 'Walnut',
       mode: 'plan',
@@ -556,7 +576,7 @@ describe('Session permission mode', () => {
 
     const resultEvent = await resultPromise
     const rd = resultEvent.data as { result: string; taskId: string; isError: boolean }
-    expect(rd.taskId).toBe('sess-task-001')
+    expect(rd.taskId).toBe('sess-task-mode-plan')
     expect(rd.isError).toBe(false)
     // Mock CLI echoes back the --permission-mode flag value in the result text
     expect(rd.result).toContain('[permission-mode:plan]')
@@ -573,7 +593,7 @@ describe('Session permission mode', () => {
     const resultPromise = waitForWsEvent(ws, 'session:result')
 
     await sendWsRpc(ws, 'session:start', {
-      taskId: 'sess-task-002',
+      taskId: 'sess-task-mode-bypass',
       message: 'bypass mode e2e test',
       project: 'Walnut',
       mode: 'bypass',
@@ -581,7 +601,7 @@ describe('Session permission mode', () => {
 
     const resultEvent = await resultPromise
     const rd = resultEvent.data as { result: string; taskId: string; isError: boolean }
-    expect(rd.taskId).toBe('sess-task-002')
+    expect(rd.taskId).toBe('sess-task-mode-bypass')
     expect(rd.isError).toBe(false)
     expect(rd.result).toContain('[permission-mode:bypassPermissions]')
 
@@ -594,7 +614,7 @@ describe('Session permission mode', () => {
     const resultPromise = waitForWsEvent(ws, 'session:result')
 
     await sendWsRpc(ws, 'session:start', {
-      taskId: 'sess-task-001',
+      taskId: 'sess-task-mode-nomode',
       message: 'default mode e2e test',
       project: 'Walnut',
     })
@@ -614,7 +634,7 @@ describe('Session permission mode', () => {
     const resultPromise = waitForWsEvent(ws, 'session:result')
 
     await sendWsRpc(ws, 'session:start', {
-      taskId: 'sess-task-002',
+      taskId: 'sess-task-mode-default',
       message: 'explicit default mode e2e test',
       project: 'Walnut',
       mode: 'default',

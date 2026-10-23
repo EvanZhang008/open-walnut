@@ -168,8 +168,11 @@ beforeAll(async () => {
     path.join(tasksDir, 'tasks.json'),
     JSON.stringify({
       version: 1,
-      tasks: [{
-        id: 'hist-task-001',
+      // hist-task-001 holds the seeded sessions; hist-task-002 is for the live
+      // start: a task keeps one session (core/sessions/one-session-per-task.ts),
+      // so a start on hist-task-001 would continue a seeded conversation instead.
+      tasks: ['hist-task-001', 'hist-task-002'].map((id) => ({
+        id,
         title: 'History test task',
         status: 'todo',
         priority: 'none',
@@ -182,7 +185,7 @@ beforeAll(async () => {
         summary: '',
         note: '',
         subtasks: [],
-      }],
+      })),
     }),
   )
 
@@ -304,7 +307,7 @@ describe('live session via mock CLI — default history works', () => {
       const resultPromise = waitForWsEvent(ws, 'session:result')
 
       const rpcRes = await sendWsRpc(ws, 'session:start', {
-        taskId: 'hist-task-001',
+        taskId: 'hist-task-002',
         message: 'hello from history test',
         project: 'Test',
       })

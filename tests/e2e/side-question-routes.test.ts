@@ -6,7 +6,7 @@
  *     (askSideQuestion is intercepted; the answer is persisted, NOT echoed to
  *     the transcript) — proves the route → askSideQuestion → store → response path.
  *   - GET history reflects the persisted entry.
- *   - POST .../promote creates a task linked to the session.
+ *   - POST .../promote creates a task holding the Q&A (never linked to the session).
  *   - DELETE removes the entry.
  *   - 404 when no live session is registered.
  *
@@ -111,7 +111,7 @@ describe('side-question routes', () => {
     expect(list.sideQuestions.some((q) => q.id === body.sideQuestion.id)).toBe(true);
   });
 
-  it('promotes a side question into a task linked to the session', async () => {
+  it('promotes a side question into a task that carries the Q&A, not the session', async () => {
     registerFakeSession('promotable answer');
     const askRes = await fetch(apiUrl(`/api/sessions/${SID}/side-question`), {
       method: 'POST',
@@ -127,12 +127,22 @@ describe('side-question routes', () => {
     const { taskId } = await promoteRes.json() as { taskId: string };
     expect(typeof taskId).toBe('string');
 
-    // The task exists and is linked to this session.
+    // The task exists and carries the Q&A in its description. It is NOT linked to
+    // the session: a session belongs to one task (core/sessions/one-session-per-task.ts).
     const taskRes = await fetch(apiUrl(`/api/tasks/${taskId}`));
     expect(taskRes.status).toBe(200);
-    const { task } = await taskRes.json() as { task: { title: string; session_ids?: string[] } };
+    const { task } = await taskRes.json() as {
+      task: { title: string; description?: string; session_id?: string; session_ids?: string[] };
+    };
     expect(task.title).toBe('promote me');
-    expect(task.session_ids ?? []).toContain(SID);
+    expect(task.description).toBe('promotable answer');
+    expect(task.session_id).toBeUndefined();
+    expect(task.session_ids ?? []).not.toContain(SID);
+
+    // The side question remembers the task it became.
+    const listRes = await fetch(apiUrl(`/api/sessions/${SID}/side-questions`));
+    const list = await listRes.json() as { sideQuestions: Array<{ id: string; promotedTaskId?: string }> };
+    expect(list.sideQuestions.find((q) => q.id === sideQuestion.id)?.promotedTaskId).toBe(taskId);
   });
 
   it('promotes into a SUBTASK when the session is working on a task', async () => {

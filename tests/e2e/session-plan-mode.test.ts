@@ -11,7 +11,8 @@
  * Tests verify:
  *   1. Plan mode session stores mode='plan' in SessionRecord
  *   2. Plan info capture (planFile, planCompleted) from JSONL events
- *   3. REST execute endpoint (POST /api/sessions/:id/execute)
+ *   3. REST execute endpoint (POST /api/sessions/:id/execute): the execution runs
+ *      in a new task beside the plan's, never in the plan's own task
  *   4. A non-plan session is refused by the execute endpoint
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -138,6 +139,24 @@ beforeAll(async () => {
           note: '',
           subtasks: [],
         },
+        {
+          // Its own task: a task keeps one session (core/sessions/one-session-per-task.ts),
+          // so a normal start on plan-task-001 would just continue the plan's conversation.
+          id: 'plan-task-002',
+          title: 'Non-plan session test task',
+          status: 'todo',
+          priority: 'none',
+          category: 'Work',
+          project: 'TestProject',
+          session_ids: [],
+          active_session_ids: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          description: '',
+          summary: '',
+          note: '',
+          subtasks: [],
+        },
       ],
     }),
   )
@@ -234,11 +253,10 @@ describe('Plan mode session lifecycle', () => {
     expect(planRec).toBeDefined()
   })
 
-  it('REST execute endpoint starts a new session from completed plan', async () => {
-    const ws = await connectWs()
-
-    // Call the execute endpoint (provide working_directory since mock sessions don't have cwd stored)
-    const execRes = await fetch(apiUrl(`/api/sessions/${planSessionId}/execute`), {
+  it('REST execute endpoint refuses to put the execution in the plan\'s own task', async () => {
+    // One session per task: the plan task already holds the plan's conversation,
+    // so naming it as the execution's task is refused and the plan is kept.
+    const res = await fetch(apiUrl(`/api/sessions/${planSessionId}/execute`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -246,11 +264,32 @@ describe('Plan mode session lifecycle', () => {
         working_directory: process.cwd(),
       }),
     })
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { error: string; planSessionId: string; planPreserved: boolean }
+    expect(body.planSessionId).toBe(planSessionId)
+    expect(body.planPreserved).toBe(true)
+    expect(body.error).toContain(planSessionId)
+  })
+
+  it('REST execute endpoint starts the execution in a new task beside the plan\'s', async () => {
+    const ws = await connectWs()
+
+    // Call the execute endpoint (provide working_directory since mock sessions don't have cwd stored).
+    // No task_id: a clean context is a new conversation, so it gets a new task.
+    const execRes = await fetch(apiUrl(`/api/sessions/${planSessionId}/execute`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        working_directory: process.cwd(),
+      }),
+    })
     expect(execRes.status).toBe(200)
-    const execBody = (await execRes.json()) as { status: string; planSessionId: string; mode: string }
+    const execBody = (await execRes.json()) as { status: string; planSessionId: string; mode: string; taskId: string }
     expect(execBody.status).toBe('started')
     expect(execBody.planSessionId).toBe(planSessionId)
     expect(execBody.mode).toBe('bypass')
+    expect(execBody.taskId).toBeTruthy()
+    expect(execBody.taskId).not.toBe('plan-task-001')
 
     // Wait for the execution session's result
     const resultEvent = await waitForWsEvent(ws, 'session:result')
@@ -260,7 +299,7 @@ describe('Plan mode session lifecycle', () => {
       sessionId: string
       isError: boolean
     }
-    expect(rd.taskId).toBe('plan-task-001')
+    expect(rd.taskId).toBe(execBody.taskId)
     expect(rd.isError).toBe(false)
     // Execution session runs in bypass mode and, like every session since
     // 0a49aad2, carries buildSessionContext's short identity note.
@@ -268,6 +307,17 @@ describe('Plan mode session lifecycle', () => {
     expect(rd.result).toContain('[permission-mode:bypassPermissions]')
     // The session ID should be different from the plan session (new clean context)
     expect(rd.sessionId).not.toBe(planSessionId)
+
+    // The plan task's work is done and it points at the task carrying it out.
+    await pollUntil(async () => {
+      const res = await fetch(apiUrl('/api/tasks/plan-task-001'))
+      const { task } = (await res.json()) as { task: { phase?: string; transferred_to?: string } }
+      return task.phase === 'COMPLETE' && task.transferred_to === execBody.taskId
+    })
+    const execTaskRes = await fetch(apiUrl(`/api/tasks/${execBody.taskId}`))
+    const { task: execTask } = (await execTaskRes.json()) as { task: { title: string; transferred_from?: string } }
+    expect(execTask.title).toBe('Execute: Plan mode test task')
+    expect(execTask.transferred_from).toBe('plan-task-001')
 
     ws.close()
     await delay(200)
@@ -283,7 +333,7 @@ describe('Plan mode edge cases', () => {
     // Start a normal (non-plan) session
     const resultPromise = waitForWsEvent(ws, 'session:result')
     await sendWsRpc(ws, 'session:start', {
-      taskId: 'plan-task-001',
+      taskId: 'plan-task-002',
       message: 'normal session for rejection test',
       project: 'TestProject',
     })

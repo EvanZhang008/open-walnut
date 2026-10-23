@@ -126,29 +126,25 @@ describe('Task deletion — blocked by active sessions', () => {
     expect(listBody.tasks.find((t) => t.id === task.id)).toBeDefined();
   });
 
-  it('DELETE returns 409 with multiple active session IDs', async () => {
-    const task = await createTask('Has many sessions');
-    // Use both slots (plan + exec) to have 2 active sessions
-    await seedSession('sess-multi-1', task.id, 'idle');
-    await seedSession('sess-multi-2', task.id);
-    await linkSessionSlot(task.id, 'sess-multi-1', 'plan');
-    await linkSessionSlot(task.id, 'sess-multi-2', 'exec');
+  // A task keeps one session (core/sessions/one-session-per-task.ts); the plan
+  // and exec slots are mirrors of it, so the 409 names that session once.
+  it('DELETE returns 409 naming the one session once when it fills both slots', async () => {
+    const task = await createTask('Session in both slots');
+    await seedSession('sess-both-1', task.id);
+    await linkSessionSlot(task.id, 'sess-both-1', 'plan');
+    await linkSessionSlot(task.id, 'sess-both-1', 'exec');
 
     const deleteRes = await fetch(apiUrl(`/api/tasks/${task.id}`), { method: 'DELETE' });
     expect(deleteRes.status).toBe(409);
 
     const body = await deleteRes.json() as { error: string; active_session_ids: string[] };
-    expect(body.active_session_ids).toHaveLength(2);
-    expect(body.active_session_ids).toContain('sess-multi-1');
-    expect(body.active_session_ids).toContain('sess-multi-2');
+    expect(body.active_session_ids).toEqual(['sess-both-1']);
   });
 
   it('allows deletion after clearing all active sessions', async () => {
     const task = await createTask('Clear then delete');
     await seedSession('sess-clear-1', task.id);
-    await seedSession('sess-clear-2', task.id);
-    await linkSessionSlot(task.id, 'sess-clear-1', 'plan');
-    await linkSessionSlot(task.id, 'sess-clear-2', 'exec');
+    await linkSessionSlot(task.id, 'sess-clear-1', 'exec');
 
     // Should fail first
     const failRes = await fetch(apiUrl(`/api/tasks/${task.id}`), { method: 'DELETE' });
