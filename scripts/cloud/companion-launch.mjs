@@ -11,7 +11,15 @@
 // Plain JavaScript with node: builtins only, run by bun: it must run before any
 // build is installed. The server runs on the same runtime as the launcher
 // (process.execPath), so the drop-in's runtime is the server's too: bun on a
-// unit setup.sh writes now.
+// unit setup.sh writes now, node on a box set up before.
+//
+// A build the Mac sends is the compiled walnut file with a small dist/cli.js
+// that starts it (src/core/companion-build/package.ts): it runs under either
+// runtime. A dist build runs only on the runtime it was smoke-booted on, which
+// the box wrote to its .runtime file; a dist with none came from a box that
+// installed and smoke-booted everything on node. A current build for another
+// runtime is skipped (the base tree runs, and the Mac sends a build again); a
+// trial for another runtime is given up.
 // Knobs: WALNUT_COMPANION_ROOT (default ~/.open-walnut-host),
 // WALNUT_COMPANION_BASE (default the tree two levels up),
 // WALNUT_COMPANION_TRIAL_DEADLINE_MS (600000), WALNUT_COMPANION_KILL_GRACE_MS
@@ -45,6 +53,16 @@ const statePath = (name) => path.join(STATE, name)
 const appDir = (id) => path.join(ROOT, 'app', id)
 const exists = (p) => fs.existsSync(p)
 const isReady = (dir) => exists(path.join(dir, '.ready')) && exists(path.join(dir, 'dist', 'cli.js'))
+const RUNTIME = process.versions.bun ? 'bun' : 'node'
+
+/** What a build needs to run: `file` (either runtime), else the runtime its dist was tried on. */
+function buildRuntime(dir) {
+  if (exists(path.join(dir, 'walnut'))) return 'file'
+  let recorded = ''
+  try { recorded = fs.readFileSync(path.join(dir, '.runtime'), 'utf8').trim() } catch { /* none */ }
+  return recorded === 'bun' || recorded === 'node' ? recorded : 'node'
+}
+const runsHere = (dir) => { const r = buildRuntime(dir); return r === 'file' || r === RUNTIME }
 
 function readText(name) {
   try { return fs.readFileSync(statePath(name), 'utf8').trim() } catch { return null }
@@ -102,6 +120,12 @@ function choose() {
       fs.rmSync(statePath('trial'), { force: true })
       fs.rmSync(statePath('attempts'), { force: true })
       log(`trial ${trial} is not installed; given up`)
+    } else if (!runsHere(appDir(trial))) {
+      const r = buildRuntime(appDir(trial))
+      writeState(path.join('failed', trial), `trial build was tried on ${r}, and this box runs its builds on ${RUNTIME}\n`)
+      fs.rmSync(statePath('trial'), { force: true })
+      fs.rmSync(statePath('attempts'), { force: true })
+      log(`trial ${trial} was tried on ${r}, not ${RUNTIME}; given up`)
     } else if (attempts < MAX_TRIAL_STARTS) {
       // Counted before the start, so a start that never comes back still counts.
       writeState('attempts', `${attempts + 1}\n`)
@@ -115,11 +139,12 @@ function choose() {
     }
   }
   const current = readId('current')
-  if (current && isReady(appDir(current))) {
+  if (current && isReady(appDir(current)) && runsHere(appDir(current))) {
     log(`running current build ${current}`)
     return { id: current, dir: appDir(current), trial: false }
   }
-  if (current) log(`current build ${current} is not ready (no .ready or dist/cli.js); skipped`)
+  if (current && !isReady(appDir(current))) log(`current build ${current} is not ready (no .ready or dist/cli.js); skipped`)
+  else if (current) log(`current build ${current} runs on ${buildRuntime(appDir(current))}, and this launcher on ${RUNTIME}; skipped until the Mac sends a build again`)
   log(`running the base tree ${BASE}`)
   return { id: 'base', dir: BASE, trial: false }
 }

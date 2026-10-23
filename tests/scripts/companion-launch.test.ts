@@ -66,14 +66,25 @@ interface Rec {
   code?: number
 }
 
+/** The runtime this suite (and so the launcher it starts) runs on. */
+const HERE_RUNTIME = process.versions.bun ? 'bun' : 'node'
+const OTHER_RUNTIME = HERE_RUNTIME === 'bun' ? 'node' : 'bun'
+
+interface TreeOpts { ready?: boolean; cli?: boolean; runtime?: string | null; file?: boolean }
+
 interface Fixture {
   dir: string
   root: string
   base: string
   recordFile: string
-  /** Writes a tree with the fake server; `ready: false` leaves out .ready, `cli: false` dist/cli.js. */
-  tree(dir: string, label: string, opts?: { ready?: boolean; cli?: boolean }): string
-  app(id: string, opts?: { ready?: boolean; cli?: boolean }): string
+  /**
+   * Writes a tree with the fake server; `ready: false` leaves out .ready, `cli: false` dist/cli.js.
+   * An app's `.runtime` (the runtime the box smoke-booted it on) is this suite's own unless
+   * `runtime` names another, or is null (a box from before the record wrote none); `file`
+   * adds a `walnut` beside dist/, as a build of the compiled file has.
+   */
+  tree(dir: string, label: string, opts?: TreeOpts): string
+  app(id: string, opts?: TreeOpts): string
   write(name: string, text: string): void
   read(name: string): string | null
   records(): Rec[]
@@ -119,9 +130,15 @@ function makeFixture(): Fixture {
       fs.writeFileSync(path.join(treeDir, 'package.json'), '{"type":"commonjs"}\n')
       if (opts.cli !== false) fs.writeFileSync(path.join(treeDir, 'dist', 'cli.js'), fakeServer(label))
       if (opts.ready !== false) fs.writeFileSync(path.join(treeDir, '.ready'), '')
+      if (opts.file) fs.writeFileSync(path.join(treeDir, 'walnut'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
       return treeDir
     },
-    app(id, opts) { return fx.tree(path.join(root, 'app', id), id, opts) },
+    app(id, opts = {}) {
+      const dir = fx.tree(path.join(root, 'app', id), id, opts)
+      const runtime = opts.runtime === undefined ? HERE_RUNTIME : opts.runtime
+      if (runtime !== null) fs.writeFileSync(path.join(dir, '.runtime'), `${runtime}\n`)
+      return dir
+    },
     write(name, text) {
       fs.mkdirSync(path.dirname(state(name)), { recursive: true })
       fs.writeFileSync(state(name), text)
@@ -289,6 +306,62 @@ describe('which tree the launcher runs', () => {
     expect(only(starts(fx))).toMatchObject({ tree: 'b1', env: { WALNUT_COMPANION_TRIAL: null } })
     expect(fx.read('attempts')).toBeNull()
     expect(run.stdout()).toContain('trial holds "../b1", not a build id; treated as absent')
+  })
+})
+
+describe('the runtime a build was tried on', () => {
+  it('skips a current dist tried on another runtime, runs the base tree, and keeps current for the Mac', async () => {
+    const fx = makeFixture()
+    fx.app('b1', { runtime: OTHER_RUNTIME })
+    fx.write('current', 'b1\n')
+    const run = launch(fx)
+    expect((await run.done).code).toBe(0)
+    expect(only(starts(fx)).tree).toBe('base')
+    expect(run.stdout()).toContain(`current build b1 runs on ${OTHER_RUNTIME}, and this launcher on ${HERE_RUNTIME}; skipped`)
+    // Nothing is given up or rewritten: a launcher on the other runtime (a rollback) runs it again.
+    expect(fx.read('current')).toBe('b1\n')
+    expect(fx.read(path.join('failed', 'b1'))).toBeNull()
+  })
+
+  it('takes a dist with no record for one a box installed and tried on node', async () => {
+    const fx = makeFixture()
+    fx.app('old', { runtime: null })
+    fx.write('current', 'old\n')
+    const run = launch(fx)
+    expect((await run.done).code).toBe(0)
+    if (HERE_RUNTIME === 'node') {
+      expect(only(starts(fx)).tree).toBe('old')
+    } else {
+      // The review's case: a box whose unit setup.sh moved to bun, with a current build it got on node.
+      expect(only(starts(fx)).tree).toBe('base')
+      expect(run.stdout()).toContain('current build old runs on node, and this launcher on bun; skipped')
+    }
+  })
+
+  it('runs a build of the walnut file under any runtime, whatever its record says', async () => {
+    const fx = makeFixture()
+    for (const [id, runtime] of [['f-none', null], ['f-other', OTHER_RUNTIME]] as const) {
+      fx.app(id, { runtime, file: true })
+      fx.write('current', `${id}\n`)
+      const run = launch(fx)
+      expect((await run.done).code).toBe(0)
+      expect(starts(fx).at(-1)).toMatchObject({ tree: id })
+      expect(run.stdout()).toContain(`running current build ${id}`)
+    }
+  })
+
+  it('gives up a trial tried on another runtime, without starting it, and runs current', async () => {
+    const fx = makeFixture()
+    fx.app('b1')
+    fx.app('t1', { runtime: OTHER_RUNTIME })
+    fx.write('current', 'b1\n')
+    fx.write('trial', 't1\n')
+    const run = launch(fx)
+    expect((await run.done).code).toBe(0)
+    expect(only(starts(fx)).tree).toBe('b1')
+    expect(fx.read(path.join('failed', 't1'))).toBe(`trial build was tried on ${OTHER_RUNTIME}, and this box runs its builds on ${HERE_RUNTIME}\n`)
+    expect(fx.read('trial')).toBeNull()
+    expect(fx.read('attempts')).toBeNull()
   })
 })
 

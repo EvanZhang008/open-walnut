@@ -17,7 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  _setBoxHooksForTesting, boxBuildStatus, putPackageChunk, runningBuild, startActivate, startInstall, startTrialConfirm, installEnv,
+  _setBoxHooksForTesting, boxBuildStatus, putPackageChunk, runningBuild, startActivate, startInstall, startTrialConfirm, installEnv, smokeRuntime,
 } from '../../src/core/companion-build/box.js'
 import { MAX_CHUNK_BYTES, MAX_PACKAGE_BYTES, type InstallRequest } from '../../src/core/companion-build/wire.js'
 
@@ -170,6 +170,14 @@ describe('the install environment', () => {
       PATH: process.env.PATH, HOME: '/var/lib/walnut', LANG: 'C.UTF-8', HTTPS_PROXY: 'http://proxy:3128', npm_config_registry: 'https://registry.example',
       BUN_INSTALL_CACHE_DIR: '/var/cache/bun', BUN_CONFIG_REGISTRY: 'https://registry.example',
     })
+  })
+})
+
+describe('the runtime a build is tried on', () => {
+  it('names the runtime a smoke boot ran on: bun for bun, else node', () => {
+    expect(smokeRuntime({ ...process.versions, bun: '1.4.4' } as NodeJS.ProcessVersions)).toBe('bun')
+    const { bun: _bun, ...nodeOnly } = process.versions as NodeJS.ProcessVersions & { bun?: string }
+    expect(smokeRuntime(nodeOnly as NodeJS.ProcessVersions)).toBe('node')
   })
 })
 
@@ -336,6 +344,8 @@ describe('install and activate on a real tree', () => {
     expect(await startActivate({ id: 'other' })).toMatchObject({ ok: false })
     await waitFor('the restart', () => restarts === 1)
     expect(read('companion/trial')).toBe('g1')
+    // The launcher runs a dist build only on the runtime its smoke boot passed on.
+    expect(read('app/g1/.runtime')).toBe(process.versions.bun ? 'bun' : 'node')
     expect(has('companion/attempts')).toBe(false)
     expect(has('companion/failed/g1')).toBe(false)
     expect((await boxBuildStatus()).activate).toMatchObject({ id: 'g1', state: 'restarting' })

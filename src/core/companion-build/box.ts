@@ -382,6 +382,8 @@ async function runActivation(d: Dirs, id: string): Promise<void> {
       timeoutMs: knobMs(process.env.WALNUT_COMPANION_SMOKE_MS, 150_000),
     })
     if (result.ok) {
+      // A dist build runs only on the runtime it was tried on (the launcher reads this).
+      await writeAtomic(d.runtime(id), `${smokeRuntime()}\n`)
       await writeAtomic(d.trial, `${id}\n`)
       await Promise.all([rmFile(d.attempts), rmFile(path.join(d.failedDir, id))])
       await writeAtomic(d.activateRec, JSON.stringify({ id, state: 'restarting', at: Date.now() } satisfies ActivateRecord))
@@ -396,6 +398,11 @@ async function runActivation(d: Dirs, id: string): Promise<void> {
   } catch (err) {
     await failActivation(d, id, `the smoke boot could not run: ${errText(err)}`, [], 0).catch(() => {})
   }
+}
+
+/** The runtime a smoke boot runs a build's dist/cli.js on: this server's own. */
+export function smokeRuntime(versions: NodeJS.ProcessVersions = process.versions): 'bun' | 'node' {
+  return typeof (versions as { bun?: string }).bun === 'string' ? 'bun' : 'node'
 }
 
 async function failActivation(d: Dirs, id: string, reason: string, tail: string[], ms: number): Promise<void> {

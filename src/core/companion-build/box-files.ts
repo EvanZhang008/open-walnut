@@ -23,6 +23,8 @@ export function dirs(R = companionRoot()) {
     R, incoming, state,
     app: (id: string) => path.join(R, 'app', id),
     ready: (id: string) => path.join(R, 'app', id, '.ready'),
+    /** The runtime the build was smoke-booted on (`bun` or `node`): the launcher runs a dist build only on that one. */
+    runtime: (id: string) => path.join(R, 'app', id, '.runtime'),
     tgz: (id: string) => path.join(incoming, `${id}.tgz`),
     part: (id: string) => path.join(incoming, `${id}.tgz.part`),
     meta: (id: string) => path.join(incoming, `${id}.upload.json`),
