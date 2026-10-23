@@ -11,7 +11,7 @@
  *   4. Terminal → full-screen split [terminal | chat] (was a centered modal).
  *   5. Clicking a view while another is open switches the left column (mutually exclusive).
  *
- * Usage: node scripts/verify-session-split-views.mjs [--session <id>] [--headed]
+ * Usage: bun scripts/verify-session-split-views.mjs [--session <id>] [--headed]
  */
 import { chromium } from 'playwright';
 

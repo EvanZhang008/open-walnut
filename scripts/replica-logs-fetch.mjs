@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // The host-side lines of `scripts/walnut-logs.sh replica --host <alias>` (WP14):
 // asks the Mac's own server (GET /api/replicas/logs, read only), which asks the
 // host's daemon (`logs.tail`, cap replica-logs-v1). Prints one JSON object per
 // line, each with `source` (replica | journal | stdout) and `file`, oldest first
 // within a source, so jq can read them beside the Mac's own log lines.
 //
-//   node scripts/replica-logs-fetch.mjs --host <alias> [--n 500] [--sources replica,journal] [--match a,b] [--url http://127.0.0.1:<port>]
+//   bun scripts/replica-logs-fetch.mjs --host <alias> [--n 500] [--sources replica,journal] [--match a,b] [--url http://127.0.0.1:<port>]
 //
 // --url (or WALNUT_LOGS_API_URL, then OPEN_WALNUT_API_URL) picks the server; the
 // default is this Mac's own Walnut on loopback. Exit 0 with lines, 2 when the server

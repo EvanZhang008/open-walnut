@@ -12,7 +12,7 @@
     <string>dev.openwalnut.bridge-monitor</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__NODE__</string>
+        <string>__BUN__</string>
         <string>__APP__/collector.mjs</string>
     </array>
     <key>WorkingDirectory</key>

@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Notes-search golden eval — runs a LOCAL (never-committed) case file against
  * a live server's /api/notes-v2/search and reports per-family recall.
  *
  * The case file lives OUTSIDE the repo (personal vault paths):
  *   default ~/.claude/walnut-notes-search-golden.local.yaml
- *   override: NOTES_GOLDEN=/path node scripts/notes-search-eval.mjs
+ *   override: NOTES_GOLDEN=/path bun scripts/notes-search-eval.mjs
  *
  * Case shape:
  *   - { id, query, expect: <vault-relative path>, assert: top1|top5|top10|present,
@@ -13,8 +13,8 @@
  *                                  # the folders[] rows or any result path is under it
  *
  * Usage:
- *   node scripts/notes-search-eval.mjs                 # run all, summary + failures
- *   node scripts/notes-search-eval.mjs --explain <id>  # dump top-10 for one case
+ *   bun scripts/notes-search-eval.mjs                 # run all, summary + failures
+ *   bun scripts/notes-search-eval.mjs --explain <id>  # dump top-10 for one case
  *   NOTES_EVAL_URL=http://localhost:3456 …             # server (default prod :3456)
  *   --check-paths <vaultDir>                           # only verify expect paths exist
  */

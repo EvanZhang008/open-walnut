@@ -63,7 +63,7 @@ function fakeConn(caps: string[]): DaemonConnection {
 function run(args: string[]): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
     execFile('bash', [SCRIPT, ...args], {
-      env: { ...process.env, WALNUT_LOG_DIR: logDir, WALNUT_LOGS_API_URL: `http://127.0.0.1:${port}`, WALNUT_NODE: process.execPath },
+      env: { ...process.env, WALNUT_LOG_DIR: logDir, WALNUT_LOGS_API_URL: `http://127.0.0.1:${port}`, WALNUT_BUN: process.execPath },
       timeout: 60_000,
     }, (err, stdout, stderr) => resolve({ code: err ? ((err as { code?: number }).code ?? 1) : 0, out: stdout + stderr }))
   })

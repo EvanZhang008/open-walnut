@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Daily bridge summary: reads the monitor's NDJSON store (collector + probe,
  * plus replica log exports when configured), classifies every drop M1-M6,

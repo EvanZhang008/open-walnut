@@ -10,7 +10,7 @@
     <string>dev.openwalnut.bridge-monitor-summary</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__NODE__</string>
+        <string>__BUN__</string>
         <string>__APP__/summarize.mjs</string>
     </array>
     <key>WorkingDirectory</key>

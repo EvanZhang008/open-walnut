@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Remove stored addresses and Wi-Fi names from monitor records in place:
  * the same scrub the collector runs once on its first start of a new
  * version (lib/privacy.mjs), for copies of the store kept elsewhere.
  *
- *   node scripts/bridge-monitor/scrub.mjs <dir | file.ndjson | collector.json>...
+ *   bun scripts/bridge-monitor/scrub.mjs <dir | file.ndjson | collector.json>...
  *
  * A directory means its `*.ndjson` files. The live store is refused while a
  * collector holds the lock: it is the only writer there, and it scrubs its

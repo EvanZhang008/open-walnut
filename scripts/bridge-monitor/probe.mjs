@@ -1,7 +1,7 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Control probe: a second, independent client of the cloud `/bridge`
- * endpoint (Node + the `ws` library, not the daemon's Bun client) that
+ * endpoint (the npm `ws` library, not the daemon's Bun client) that
  * mimics the daemon's traffic, so a drop can be pinned on the path or the
  * cloud side (both links drop together) versus the daemon (only it drops).
  *
@@ -27,8 +27,13 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import WebSocket from 'ws'
+// The npm `ws` library on bun too: bun answers a bare `ws` import with its own
+// WebSocket (no socket under it, no byte counts, the daemon's client), and an
+// import by file path is not remapped (src/lib/ws-npm.ts follows the same rule).
+const WS_DIR = path.dirname(createRequire(import.meta.url).resolve('ws/package.json'))
+const { default: WebSocket } = await import(path.join(WS_DIR, 'wrapper.mjs'))
 import { ensureDir, loadConfig } from './lib/config.mjs'
 import { Store } from './lib/store.mjs'
 import { BRIDGE_WATCHDOG, quantile } from './lib/classify.mjs'

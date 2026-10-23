@@ -1,8 +1,8 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * Manual latency and accuracy benchmark for quick-task parsing.
  *
- * Usage: npx tsx scripts/bench-quick-parse.mts [modelAlias...]
+ * Usage: bun scripts/bench-quick-parse.mts [modelAlias...]
  * Requires real provider credentials. Add --dry-run to print the synthetic
  * fixture, digest, and model matrix without making provider calls.
  */

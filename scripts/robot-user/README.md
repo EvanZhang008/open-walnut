@@ -12,7 +12,7 @@ scripts/robot-user/robot.sh --device <udid> --minutes 60 --seed 7 --driver ai
 scripts/robot-user/robot.sh --device <udid> --minutes 10 --server http://localhost:3456 --no-judge
 
 # Harness self-test — no simulator involved, stubbed driver:
-node scripts/robot-user/episode.mjs --dry-run --seed 1 --steps 20
+bun scripts/robot-user/episode.mjs --dry-run --seed 1 --steps 20
 ```
 
 Exit code: `0` = clean, `2` = anomalies found, `1` = setup error. `Ctrl-C` is forwarded so the journal is finished cleanly instead of truncated.

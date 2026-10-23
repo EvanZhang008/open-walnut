@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * One-time cleanup for ~/.open-walnut/chat-history.json (and per-agent variants).
  *
@@ -11,6 +11,8 @@
  *   - compactionSummary / compactionCount / version preserved
  *
  * Refuses to run while walnut is listening on port 3456 (stop it first).
+ *
+ * Usage: bun scripts/prune-chat-history.mjs
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -49,13 +51,22 @@ function atomicWrite(filePath, data) {
   fs.renameSync(tmp, filePath);
 }
 
-function checkPortFree(port) {
+// Free means nothing answers on the port, over IPv4 or IPv6. A test bind on
+// 127.0.0.1 is not proof: the server listens on the IPv6 wildcard (*:3456), and a
+// bind to 127.0.0.1:3456 still succeeds beside it, so walnut looked stopped while
+// it ran.
+function answers(port, host) {
   return new Promise((resolve) => {
-    const srv = net.createServer();
-    srv.once('error', () => resolve(false));
-    srv.once('listening', () => srv.close(() => resolve(true)));
-    srv.listen(port, '127.0.0.1');
+    const sock = net.connect({ port, host });
+    const done = (up) => { sock.destroy(); resolve(up); };
+    sock.setTimeout(2000, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
   });
+}
+async function checkPortFree(port) {
+  const [v4, v6] = await Promise.all([answers(port, '127.0.0.1'), answers(port, '::1')]);
+  return !v4 && !v6;
 }
 
 function bytes(n) {

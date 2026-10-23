@@ -1,7 +1,7 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Summarize a CPU profile kept by the stall flight recorder (src/core/stall-recorder.ts).
 //
-//   node scripts/stall-profile-summary.mjs <file.cpuprofile | dir> [--top N] [--all]
+//   bun scripts/stall-profile-summary.mjs <file.cpuprofile | dir> [--top N] [--all]
 //
 // With a directory, the newest profile in it is used (default dir:
 // $WALNUT_DAEMON_DIR/stall-profiles, else /tmp/open-walnut/stall-profiles).

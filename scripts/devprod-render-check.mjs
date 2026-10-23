@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * First-paint render check for a freshly built Walnut dist.
  *
@@ -19,7 +19,7 @@
  *   2  UNDETERMINED: playwright or its browser is missing, the browser failed
  *      to launch, or the page never settled within the budget (machine load)
  *
- * Usage: node scripts/devprod-render-check.mjs <url> [--browser chromium|webkit]
+ * Usage: bun scripts/devprod-render-check.mjs <url> [--browser chromium|webkit]
  *        [--timeout-ms N] [--strict]
  * `--strict` also treats any uncaught page exception as a crash (default: warn).
  */

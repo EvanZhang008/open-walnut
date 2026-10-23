@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * A local stand-in for the cloud `/bridge` endpoint, for testing the probe
  * without touching the real box. It follows the replica's contract
@@ -7,14 +7,18 @@
  * a silence sweep. On top, it checks every probe frame (seq continuity and
  * sha256) and acks it, and it can inject faults.
  *
- *   node fake-bridge.mjs --port 8799 --token dev-token
+ *   bun fake-bridge.mjs --port 8799 --token dev-token
  */
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
+import { createRequire } from 'node:module'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { WebSocketServer } from 'ws'
+// The npm `ws` server on bun too (bun's bare `ws` is its own; a file path is not remapped).
+const WS_DIR = path.dirname(createRequire(import.meta.url).resolve('ws/package.json'))
+const { WebSocketServer } = await import(path.join(WS_DIR, 'wrapper.mjs'))
 
 // The replica's silence sweep (SILENCE_MS and SILENCE_SWEEP_MS in
 // src/web/ws/bridge-registry.ts): a link it has heard nothing from for this

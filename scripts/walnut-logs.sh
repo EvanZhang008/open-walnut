@@ -607,7 +607,7 @@ PY
     # one line per kept stall with its verdict (cpu / starved / gc / paging /
     # off-cpu), the loop thread's CPU against the hold, GC, faults, machine paging,
     # and the kept CPU profile. Summarize a profile with
-    #   node scripts/stall-profile-summary.mjs <profile>   (no argument: the newest)
+    #   bun scripts/stall-profile-summary.mjs <profile>   (no argument: the newest)
     mins="${1:-1440}"
     if [[ "$mins" == "0" ]]; then since="1970-01-01T00:00:00"; else
       since=$(date -u -v "-${mins}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d "-${mins} minutes" '+%Y-%m-%dT%H:%M:%S')
@@ -732,7 +732,8 @@ PY
       cat $logs | grep -aE '"message":"(journal drain|drain record failed|offline merge conflict|replica copy round|forward stale refused|offline drain: conflict letter)' \
         | jq -c --arg h "$host" --arg since "$since" 'select(.time >= $since) | select(((.host // .hostKey // .target // "") | tostring) as $x | $x == $h or $x == ("host:" + $h))' > "$here"
     fi
-    "${WALNUT_NODE:-node}" "$(dirname "$0")/replica-logs-fetch.mjs" --host "$host" --n 2000 --sources replica,journal \
+    # WALNUT_BUN: the bun to run it with (default the first `bun` on PATH).
+    "${WALNUT_BUN:-bun}" "$(dirname "$0")/replica-logs-fetch.mjs" --host "$host" --n 2000 --sources replica,journal \
       --match "replica presence,replica forward,replica away answer,journal" 2>&1 >"$there" | sed 's/^/  (host) /'
     jq -c --arg since "$since" 'select((.time // "") >= $since)' "$there" > "$there.f" 2>/dev/null && mv "$there.f" "$there"
     echo "── replica ${host}, last ${mins}min (since ${since}Z): $(wc -l < "$there" | tr -d ' ') host lines, $(wc -l < "$here" | tr -d ' ') Mac lines ──"

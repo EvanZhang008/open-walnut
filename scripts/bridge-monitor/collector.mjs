@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Bridge monitor collector: a long-running LaunchAgent process that records
  * the Mac side of the Mac to cloud bridge, change-only where it can, into

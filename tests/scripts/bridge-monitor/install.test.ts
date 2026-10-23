@@ -28,7 +28,7 @@ beforeEach(() => {
     BRIDGE_MONITOR_SUPPORT_DIR: path.join(tmp, 'support'),
     BRIDGE_MONITOR_LOG_DIR: path.join(tmp, 'logs', 'bridge-monitor'),
     BRIDGE_MONITOR_AGENTS_DIR: path.join(tmp, 'agents'),
-    BRIDGE_MONITOR_NODE: process.execPath,
+    BRIDGE_MONITOR_BUN: process.execPath,
   }
 })
 afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }) })

@@ -23,7 +23,7 @@ trap 'rm -rf "$TMP"' EXIT
 git archive HEAD src package.json tsconfig.json | tar -x -C "$TMP"
 
 ESBUILD="node_modules/.bin/esbuild"
-[ -x "$ESBUILD" ] || { echo "check-committed-bundle: esbuild not found — skipping (run npm install)"; exit 0; }
+[ -x "$ESBUILD" ] || { echo "check-committed-bundle: esbuild not found, skipping (run bun install)"; exit 0; }
 
 # Keep in sync with tsup.config.ts entry[] (plugin entries are covered
 # transitively where imported; standalone ones listed explicitly).
@@ -77,7 +77,7 @@ echo "✓ Committed tree bundles clean ($(git rev-parse --short HEAD))."
 # exists in someone's worktree and sail through the check above — which is
 # exactly what happened hours after the dynamic-import hole was closed:
 # session-error-kind.ts imported `SessionErrorKind`, the declaration sat
-# uncommitted in src/core/types.ts, HEAD bundled clean and CI's `npm run lint`
+# uncommitted in src/core/types.ts, HEAD bundled clean and CI's `bun run lint`
 # went red. tsc is the only thing that sees this class, so run it on HEAD too.
 #
 # Skipped when src/ is CLEAN: the worktree tsc the pre-push hook already ran was
@@ -93,17 +93,23 @@ if [ -z "$(git status --porcelain -- src)" ]; then
 fi
 
 TSC="node_modules/.bin/tsc"
-[ -x "$TSC" ] || { echo "check-committed-bundle: tsc not found — skipping type-check (run npm install)"; exit 0; }
+[ -x "$TSC" ] || { echo "check-committed-bundle: tsc not found, skipping type-check (run bun install)"; exit 0; }
+# tsc's bin says `#!/usr/bin/env node`; it runs on bun here, the repo's one runtime.
+BUN=""
+for cand in "${WALNUT_BUN:-}" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  if [ -n "$cand" ] && [ -x "$cand" ]; then BUN="$cand"; break; fi
+done
+[ -n "$BUN" ] || { echo "check-committed-bundle: bun not found, skipping type-check (curl -fsSL https://bun.sh/install | bash)"; exit 0; }
 # tsconfig.json includes only src/**, which the archive above already holds.
 ln -s "$OLDPWD/node_modules" "$TMP/node_modules" 2>/dev/null || true
 echo "Type-checking the committed tree (src/ is dirty, so HEAD differs)…"
-if ! (cd "$TMP" && "$OLDPWD/$TSC" --noEmit 2>"$TMP/tsc.log"); then
+if ! (cd "$TMP" && "$BUN" "$OLDPWD/$TSC" --noEmit 2>"$TMP/tsc.log"); then
   echo ""
   echo "✗ Committed tree (HEAD) fails to type-check:"
   head -8 "$TMP/tsc.log"
   echo ""
   echo "HEAD imports something that exists only in a worktree (a type, an"
-  echo "interface field, an export). CI runs npm run lint on a clean checkout and"
+  echo "interface field, an export). CI runs bun run lint on a clean checkout and"
   echo "will fail the same way. Commit the missing half before pushing."
   exit 1
 fi

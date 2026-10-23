@@ -28,7 +28,7 @@
 // payload cost. If only the history scale freezes, it is cost-per-cycle and the
 // field freeze needs a different explanation.
 //
-// Usage: node make-idle-fixture.mjs [outPath] [apiRows]   (env: MODE=field|history)
+// Usage: bun make-idle-fixture.mjs [outPath] [apiRows]   (env: MODE=field|history)
 import fs from 'node:fs'
 
 const OUT = process.argv[2] || '/tmp/ios-freeze/idle-fixture.json'

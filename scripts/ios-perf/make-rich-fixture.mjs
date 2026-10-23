@@ -1,9 +1,9 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Transcript fixture for verifying RICH HTML rendering in the iOS app on a real
 // session page (not the DEBUG timeline harness).
 //
-//   node scripts/ios-perf/make-rich-fixture.mjs > /tmp/rich-ios/fixture.json
-//   PORT=3512 FIXTURE=/tmp/rich-ios/fixture.json node scripts/ios-perf/mock-server.mjs
+//   bun scripts/ios-perf/make-rich-fixture.mjs > /tmp/rich-ios/fixture.json
+//   PORT=3512 FIXTURE=/tmp/rich-ios/fixture.json bun scripts/ios-perf/mock-server.mjs
 //
 // then point the simulator app at that port (see scripts/ios-perf-check.sh's L2
 // block for the `defaults write walnut.serverUrl` recipe) and open the session.

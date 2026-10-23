@@ -4,7 +4,7 @@
  * (src/core/usage/price-book.ts); this snapshot is what a fresh install, an
  * offline machine, or a failed refresh falls back to.
  *
- *   ./node_modules/.bin/tsx scripts/update-model-prices.ts [path-to-downloaded.json]
+ *   bun scripts/update-model-prices.ts [path-to-downloaded.json]
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';

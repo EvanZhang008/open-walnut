@@ -12,6 +12,9 @@
 #
 #   scripts/ios-client-log-e2e.sh [--device "iPhone 16 Pro"] [--port 3459]
 #
+# The server builds and runs on bun (WALNUT_BUN, else `bun` on PATH, ~/.bun/bin/bun,
+# /opt/homebrew/bin/bun or /usr/local/bin/bun).
+#
 # Exit 0 = the marker line reached disk. Exit 1 = it did not (with the reason).
 set -uo pipefail
 
@@ -24,7 +27,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --device) DEVICE_NAME="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -33,6 +36,15 @@ done
 # production. Same guard as walnut-sandbox.sh.
 if [ "$PORT" = "3456" ]; then
   echo "refusing to act on port 3456 (production)" >&2
+  exit 1
+fi
+
+BUN=""
+for cand in "${WALNUT_BUN:-}" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  if [ -n "$cand" ] && [ -x "$cand" ]; then BUN="$cand"; break; fi
+done
+if [ -z "$BUN" ]; then
+  echo "needs bun to build and run the server: curl -fsSL https://bun.sh/install | bash (or set WALNUT_BUN)" >&2
   exit 1
 fi
 
@@ -55,7 +67,7 @@ mkdir -p "$HOME_DIR" "$LOG_DIR"
 SERVER_PID=""
 cleanup() {
   # Kill by LISTENER, not by the recorded pid: the server runs inside a `( … ) &`
-  # subshell, so $SERVER_PID is the subshell and killing it leaves `node` holding
+  # subshell, so $SERVER_PID is the subshell and killing it leaves the server holding
   # the port. That orphan made the NEXT run fail with EADDRINUSE while its app
   # happily uploaded into the PREVIOUS run's log dir — a confusing false negative.
   [ -n "$SERVER_PID" ] && kill -15 "$SERVER_PID" 2>/dev/null
@@ -73,7 +85,8 @@ step() { echo "── $*"; }
 
 # ── 1. Build the server, start it isolated ─────────────────────────────────
 step "building server"
-(cd "$REPO" && npx tsup >/dev/null 2>&1) || fail "server build failed"
+# The bare name, so bun also puts its node stand-in on PATH for anything tsup starts.
+(cd "$REPO" && "$BUN" --bun tsup >/dev/null 2>&1) || fail "server build failed"
 
 # Reap a listener a previous run's SIGKILL left behind. Without this the server
 # below silently dies on EADDRINUSE and the app uploads into the OLD run's dir.
@@ -88,7 +101,7 @@ step "starting throwaway server on :$PORT (data $HOME_DIR, logs $LOG_DIR)"
 (
   cd "$REPO"
   OPEN_WALNUT_HOME="$HOME_DIR" WALNUT_DAEMON_DIR="$LOG_DIR" \
-    node dist/cli.js web --port "$PORT" >"$WORK/server.log" 2>&1
+    "$BUN" dist/cli.js web --port "$PORT" >"$WORK/server.log" 2>&1
 ) &
 SERVER_PID=$!
 
@@ -110,7 +123,7 @@ fi
 # ── 2. Mint a device token on THAT server's data dir ───────────────────────
 step "pairing a throwaway device"
 TOKEN="$(cd "$REPO" && OPEN_WALNUT_HOME="$HOME_DIR" WALNUT_DAEMON_DIR="$LOG_DIR" \
-  node dist/cli.js device add "$PROBE_DEVICE" --json 2>/dev/null | python3 -c \
+  "$BUN" dist/cli.js device add "$PROBE_DEVICE" --json 2>/dev/null | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["token"])')" || fail "device add failed"
 [ -n "$TOKEN" ] || fail "device add produced no token"
 

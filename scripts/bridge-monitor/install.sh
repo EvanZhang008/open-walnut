@@ -12,6 +12,8 @@
 # `launchctl submit`: a submitted job is KeepAlive and relaunches forever.
 # The agents run a COPY of the code under Application Support, so edits in
 # this shared worktree never change a running monitor until the next install.
+# They run on bun: BRIDGE_MONITOR_BUN, else the first of `bun` on PATH,
+# ~/.bun/bin/bun, /opt/homebrew/bin/bun, /usr/local/bin/bun.
 set -euo pipefail
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -27,7 +29,12 @@ STATE="$SUPPORT/bridge-monitor/state"
 CONFIG="$SUPPORT/bridge-monitor.json"
 LOGDIR="${BRIDGE_MONITOR_LOG_DIR:-$HOME/Library/Logs/Walnut/bridge-monitor}"
 AGENTS="${BRIDGE_MONITOR_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
-NODE="${BRIDGE_MONITOR_NODE:-$(command -v node || true)}"
+BUN="${BRIDGE_MONITOR_BUN:-}"
+if [ -z "$BUN" ]; then
+  for cand in "$(command -v bun || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then BUN="$cand"; break; fi
+  done
+fi
 DOMAIN="gui/$(id -u)"
 LABELS=(dev.openwalnut.bridge-monitor dev.openwalnut.bridge-monitor-summary)
 PROBE_LABEL=dev.openwalnut.bridge-monitor-probe
@@ -42,12 +49,13 @@ for a in "$@"; do
   esac
 done
 
-if [ -z "$NODE" ] || ! "$NODE" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'; then
-  echo "bridge monitor: needs Node 20+ (set BRIDGE_MONITOR_NODE)" >&2
+# It must print bun's own version: an exit code alone would pass for any binary.
+if [ -z "$BUN" ] || [ -z "$("$BUN" -e 'process.stdout.write(process.versions.bun || "")' 2>/dev/null)" ]; then
+  echo "bridge monitor: needs bun (curl -fsSL https://bun.sh/install | bash, or set BRIDGE_MONITOR_BUN)" >&2
   exit 1
 fi
 if [ ! -f "$REPO/node_modules/ws/package.json" ]; then
-  echo "bridge monitor: $REPO/node_modules/ws is missing; run npm install first" >&2
+  echo "bridge monitor: $REPO/node_modules/ws is missing; run bun install first" >&2
   exit 1
 fi
 
@@ -78,7 +86,7 @@ fi
 render() {
   local label="$1"
   local out="$AGENTS/$label.plist"
-  sed -e "s#__NODE__#$NODE#g" -e "s#__APP__#$APP#g" -e "s#__LOGDIR__#$LOGDIR#g" \
+  sed -e "s#__BUN__#$BUN#g" -e "s#__APP__#$APP#g" -e "s#__LOGDIR__#$LOGDIR#g" \
     "$SRC/launchd/$label.plist.in" > "$out.tmp"
   plutil -lint "$out.tmp" > /dev/null
   mv "$out.tmp" "$out"
@@ -103,7 +111,7 @@ load() {
 }
 
 probe_ready() {
-  BRIDGE_MONITOR_CONFIG="$CONFIG" "$NODE" --input-type=module -e "
+  BRIDGE_MONITOR_CONFIG="$CONFIG" "$BUN" -e "
     import fs from 'node:fs'
     const { loadConfig } = await import('$APP/lib/config.mjs')
     const p = loadConfig().cfg.probe

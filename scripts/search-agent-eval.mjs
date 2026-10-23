@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * AI task-search lane eval: runs the golden queries through the REAL agent
  * contract (slim claude -p child, Bash + curl searches) once per model, and
  * reports quality, latency and cost side by side.
  *
- * Usage (tsx, because it imports the TypeScript contract directly):
- *   ./node_modules/.bin/tsx scripts/search-agent-eval.mjs --models haiku,sonnet,opus
+ * Usage (on bun, which imports the TypeScript contract directly):
+ *   bun scripts/search-agent-eval.mjs --models haiku,sonnet,opus
  *   ... --family human-vague          only one family
  *   ... --limit 10                    first N eligible cases
  *   ... --json /tmp/x/agent-eval.json write per-case results
