@@ -43,10 +43,13 @@ self-hosted, local-first, and has no telemetry.
 
 ### Requirements
 
-- macOS or Linux. The one-line installer and Homebrew bring their own Node; the npm and
-  checkout routes need Node.js 22 or newer (`curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash` then `nvm install 22`).
+- macOS, or Linux with glibc or musl (Alpine), on arm64 or x64. Walnut is one compiled file
+  with everything inside: the one-line installer, Homebrew and the Mac app need nothing
+  installed first, and the npm package needs only an npm (any Node 18 or newer) to start it.
+  On Alpine, add the C++ runtime it links first: `apk add libstdc++ libgcc`.
+  The checkout route needs Node.js 22 or newer (`curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash` then `nvm install 22`).
 - git and [Bun](https://bun.sh) 1.4.4 or newer, only for the checkout route below (git: `xcode-select --install` on macOS, `sudo apt install git` on Ubuntu; Bun: `curl -fsSL https://bun.sh/install | bash`)
-- Linux: a C library from 2019 or later (glibc 2.29+: Ubuntu 20.04+, Debian 11+, AL2023, Fedora). Older distros compile one native module and need a newer Python and GCC first; `bun run start` prints the exact commands, and [Getting Started](GETTING_STARTED.md#older-linux-glibc-before-229) has them too.
+- Linux, checkout route only: a C library from 2019 or later (glibc 2.29+: Ubuntu 20.04+, Debian 11+, AL2023, Fedora). Older distros compile one native module and need a newer Python and GCC first; `bun run start` prints the exact commands, and [Getting Started](GETTING_STARTED.md#older-linux-glibc-before-229) has them too.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`)
 
 That is the whole AI setup. Every AI turn Walnut runs is a Claude Code session: Ask Walnut (the Walnut agent), your coding sessions, scheduled routines, and the agents a session hook dispatches all use the `claude` you already have, however it signs in (Anthropic account, Bedrock, or Vertex). An Anthropic API key or AWS Bedrock credentials are optional, and they change only where the small single calls go (session titles, summaries, voice cleanup, quick parses): by default those also go through your Claude Code login, and Settings → Ask Walnut Provider points them at a provider instead.
@@ -60,9 +63,11 @@ curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/
 walnut web
 ```
 
-It downloads the newest release for your machine, with its own Node inside, checks it
-against the release's checksums, puts it in `~/.local/share/open-walnut` and links `walnut`
-into `~/.local/bin`. Running it again installs the newest release over the old one.
+It downloads the newest release's file for your machine, checks it against the release's
+`SHA256SUMS`, puts it in `~/.local/share/open-walnut/versions/<version>/` and links `walnut`
+into `~/.local/bin`. Running it again installs the newest release beside the old one and
+switches to it in one step; the one before stays for a rollback
+([Getting Started](GETTING_STARTED.md#updating-and-rolling-back)).
 
 With Homebrew:
 
@@ -78,7 +83,7 @@ or install it with `brew install --cask evanzhang008/tap/walnut`. It carries Wal
 its first launch sets Walnut up in `~/.local/share/open-walnut` with no download, and it keeps
 itself up to date: a new release downloads in the background and installs on "Restart to update".
 
-With Node 22 or newer, the npm package (nothing to build either):
+With npm, which installs only the package built for your machine (nothing to build):
 
 ```bash
 npm install -g open-walnut
@@ -105,13 +110,15 @@ For provider options, remote hosts, and troubleshooting, see
 
 Walnut checks npm once a day for a newer release and shows it in the notification panel
 (System) and at the bottom of Settings, with the one command that updates your install.
-Restarting applies it, however you installed it (the one-line installer and Homebrew
-update with their own Node): `open-walnut web` installs a newer published version before it
-starts (Settings > General > `Install updates on start`, or `updates.auto: false` in
-config.yaml, or `WALNUT_NO_AUTO_UPDATE=1`, to turn that off). `open-walnut update` does the
-same right away, `open-walnut update --check` only reports, and `open-walnut doctor` carries
-the same line. A checkout you run from source is never asked to update (pull and build it
-yourself), and `WALNUT_NO_UPDATE_CHECK=1` turns the check off.
+Restarting applies it: `walnut web` installs a newer published version before it starts,
+the way it was installed (the one-line installer's next version goes beside the current
+one, an npm install updates through npm), and Settings > General > `Install updates on
+start`, `updates.auto: false` in config.yaml, or `WALNUT_NO_AUTO_UPDATE=1` turn that off. A
+new version that cannot start is gone back from on its own, and skipped until a newer one.
+`walnut update` does the same right away, `walnut update --check` only reports, and
+`walnut doctor` carries the same line. Homebrew updates with `brew upgrade open-walnut`, the
+Mac app with its own "Restart to update". A checkout you run from source is never asked to
+update (pull and build it yourself), and `WALNUT_NO_UPDATE_CHECK=1` turns the check off.
 
 Two channels are published: `nightly` is the newest commit on `main` that CI passed, every six
 hours, and `latest` is a tagged release, promoted each day from a nightly that has been out a

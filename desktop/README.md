@@ -7,23 +7,25 @@ starts the local server, and shows the web console in a `WKWebView` window.
 It's deliberately thin — **all** the product lives in the main Open Walnut
 codebase. This wrapper only:
 
-- On first launch it installs the self-contained Walnut by itself (its own
-  Node inside) with the `install.sh` it carries in `Contents/Resources`, the same
-  script `curl … | sh` runs, into `~/.local/share/open-walnut` (also linking
-  `walnut` into `~/.local/bin`). A release's app carries that Walnut too
-  (`Contents/Resources/release/`, one DMG per Mac architecture; a signed build
-  signs every binary inside that archive too, since notarization looks inside
-  it), so this takes a few seconds and no network; one without it for this Mac
-  downloads it (about
-  300 MB, with a progress bar). Nothing else needs to be installed. That copy
-  also updates itself with its own npm.
+- On first launch it installs Walnut by itself, the compiled file with
+  everything inside, with the `install.sh` it carries in `Contents/Resources`,
+  the same script `curl … | sh` runs, into `~/.local/share/open-walnut`
+  (`versions/<version>/walnut`, with `walnut` linked into `~/.local/bin`). A
+  release's app carries that file too (`Contents/Resources/release/`, one DMG
+  per Mac architecture, signed with the app's identity and the hardened runtime
+  with `walnut-file.entitlements`, since notarization looks at every binary in
+  the app), so this takes a few seconds and no network; one without it for
+  this Mac downloads it (with a progress bar). Nothing else needs to be
+  installed. That copy also updates itself in place. A Mac that still has the
+  Node archive an older app installed keeps running it until the next app
+  update installs the file over it.
 - Updates itself the way T3 Code's app does: a quiet check 15 seconds after
   launch and every 4 minutes, an update item in the sidebar once there is one,
   a download you start, and **Restart to update** (see [Updates](#updates)).
   Or point it at an existing `~/.open-walnut` install or a source checkout.
 - For a source checkout, locates a suitable **Node.js** (mise / nvm / fnm /
   Homebrew / system, newest first, requires **Node 22+**) and **Git**.
-- Starts the server (`dist/cli.js web`) on port **3456** (falls back to 4567),
+- Starts the server (`walnut web`, or `node dist/cli.js web` for a checkout) on port **3456** (falls back to 4567),
   reclaiming a stale server orphaned by a previous crash, and loads
   `http://localhost:<port>` in the window.
 - Restarts an owned server automatically after an unexpected exit, with bounded
@@ -49,8 +51,8 @@ Two scripts, same output bundle (`Walnut.app` in this directory):
 # Distributable: universal binary (arm64 + x86_64) + Walnut.dmg
 ./build-release.sh
 
-# A release's: carries that release's archive for one Mac, + Walnut-<arch>.dmg
-WALNUT_APP_VERSION=0.7.0 WALNUT_APP_RUNTIME=open-walnut-0.7.0-darwin-arm64.tar.gz \
+# A release's: carries that release's file for one Mac, + Walnut-<arch>.dmg
+WALNUT_APP_VERSION=0.7.0 WALNUT_APP_RUNTIME=walnut-0.7.0-darwin-arm64.gz \
   WALNUT_APP_RUNTIME_SUMS=SHA256SUMS ./build-release.sh
 ```
 
@@ -121,13 +123,14 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
   on the release the app carries for this Mac, as a `file://` base, or else on
   the GitHub release (reading the download's percentage off its progress bar),
   and the server then
-  runs on that copy's own Node. **Set Up Now** (from Use
+  runs as that copy's `bin/walnut` link, so a restart after an update runs the
+  new version (an older Node archive: on its own Node). **Set Up Now** (from Use
   Existing, for a folder with no build) clones
   `https://github.com/EvanZhang008/open-walnut.git`, runs `npm install`, then
   builds the CLI/server (`tsup`) and web UI (`vite`) directly. Progress and a full
   `bootstrap.log` land in `~/Library/Application Support/Walnut/`; Retry runs
   the setup that failed again.
-- **Server lifecycle** — spawns `node dist/cli.js web --port <port>` with
+- **Server lifecycle**: spawns `walnut web --port <port>` (a checkout: `node dist/cli.js web --port <port>`) with
   `OPEN_WALNUT_EXIT_ON_ORPHAN=1` so the server self-terminates if the app dies
   uncleanly (no port left held). Detects an already-running server and only
   reclaims it if it's an *orphaned* Walnut process (parent PID 1).
@@ -170,6 +173,14 @@ the state and its rules in `AppUpdateMachine.swift`, a port of T3's
    first launch it installs that copy over the older one before the server
    starts (offline, a few seconds), and never over a newer one (a runtime that
    updated itself, or follows the nightly channel, keeps its own).
+5. **Walnut's own updates.** Between app updates, the self-contained Walnut
+   updates itself while its server runs, never before it listens: the app
+   starts the server with `WALNUT_LAUNCHER_UPDATES=1` (a download before listen
+   would count against the app's startup deadline, and the restart after it
+   would be a process the app does not know), and once the server answers it
+   runs `walnut update --auto` once in the background (`runtime_update_*` in
+   desktop.log). It keeps `updates.auto: false` and a version held back after
+   a failed start; the next server start runs the new version.
 
 Updates are off in a build with no feed (`build.sh`; a release build names the
 GitHub releases page in Info.plist as `WalnutUpdateFeed`), in an ad-hoc signed

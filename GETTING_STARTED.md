@@ -8,11 +8,12 @@ Open Walnut is a Personal AI that manages tasks, accumulates knowledge, and coor
 
 ## Fast Track (5 Minutes + Model Download)
 
-No Node.js? One command installs a self-contained Walnut (its own Node inside) on macOS or
-Linux: `curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh`
-(or `brew install evanzhang008/tap/open-walnut`), then `walnut web`.
+No Node.js? Walnut is one compiled file with everything inside, and one command installs it
+on macOS or Linux: `curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh`
+(or `brew install evanzhang008/tap/open-walnut`), then `walnut web`. On Alpine, run
+`apk add libstdc++ libgcc` first: the musl build links the C++ runtime.
 
-If you already have Node.js >= 22, here's the quickest path:
+With npm (any Node 18 or newer; npm installs only the package built for your machine):
 
 ```bash
 # 1. Install Claude Code CLI (needed for coding sessions)
@@ -76,11 +77,13 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 
 | Dependency | Version | How to install | Why |
 |---|---|---|---|
-| **Node.js** | >= 22 | [nodejs.org](https://nodejs.org/) or `nvm install 22` | Runtime for the server and frontend build |
+| **Node.js** | >= 22 | [nodejs.org](https://nodejs.org/) or `nvm install 22` | Only to run from a checkout (below); an installed Walnut is one file with its own runtime |
 | **npm** | (comes with Node.js) | — | Package manager for dependencies |
 | **Claude Code CLI** | Latest | `npm install -g @anthropic-ai/claude-code` | Every AI turn is a `claude` session: the home page chat, coding sessions, scheduled routines, and the agents a session hook dispatches |
 | **Disk space** | ~2 GB free | — | For the embedding model (~640 MB) and search index |
 
+> The notes below are for a checkout and for versions from before the compiled file.
+>
 > **Native modules**: Open Walnut uses `better-sqlite3` (for search index) and `sharp` (for image processing). Both ship prebuilt binaries for macOS, Linux, and Windows — no compiler needed in most cases. If prebuilds fail on your platform, you may need Python 3 and a C++ compiler (`xcode-select --install` on macOS, `build-essential` on Ubuntu).
 >
 > npm 12 runs a dependency's install script only when it is allowed, and that script is what fetches the better-sqlite3 binary. After a plain `npm install -g open-walnut` with npm 12, the first `open-walnut web` notices the missing binary and finishes the install itself (about 15 seconds, once). `open-walnut update` and the update on start pass the flag that allows it.
@@ -145,6 +148,40 @@ bun install
 
 This installs both backend and frontend dependencies, at the exact versions in
 `bun.lock` and `web/bun.lock`. The first `bun run start` will build everything automatically.
+
+### Updating and rolling back
+
+The one-line installer keeps each version in its own folder and one link to the version in use:
+
+```text
+~/.local/share/open-walnut/versions/<version>/walnut
+~/.local/share/open-walnut/bin/walnut -> ../versions/<version>/walnut
+~/.local/bin/walnut -> ~/.local/share/open-walnut/bin/walnut
+```
+
+`walnut web` installs a newer published version into its own folder before it starts, checks
+it against the integrity npm publishes for it and runs its `--version`, and only then moves
+the link, so a failed update leaves the old version in use. A download that takes longer
+than a minute is left for later (`walnut update` takes as long as it needs), and Ctrl-C
+while it runs cleans up and starts nothing. `walnut update` does the same at once, and
+running `install.sh` again does it from the GitHub release. The version before stays, and
+so does any version a running server was started from; older ones are removed.
+
+When a new version exits before it starts serving, Walnut goes back on its own: the link
+points at the version before again, that version starts, and the new one is skipped (marked
+in `~/.local/share/open-walnut/bad/`) until a newer release is published. To go back by
+hand, point the link at the version before and restart:
+
+```bash
+ls ~/.local/share/open-walnut/versions
+ln -sfn ../versions/<version>/walnut ~/.local/share/open-walnut/bin/walnut
+```
+
+While a newer version is still installed beside the one linked, starting Walnut does not
+install it again: it updates once a release newer than that one is published.
+`walnut update` installs the newest one whenever you ask. An npm install updates through npm
+the same way (`npm install -g open-walnut@<version>` goes back; turn updates on start off to
+stay there), Homebrew with `brew upgrade open-walnut`.
 
 ---
 

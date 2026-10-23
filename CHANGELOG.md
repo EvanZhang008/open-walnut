@@ -6,6 +6,20 @@ breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- Walnut installs as one compiled file with everything inside, for macOS and for Linux with
+  glibc or musl (Alpine, with `apk add libstdc++ libgcc`), on arm64 and x64. The one-line `install.sh`, Homebrew and the Mac app
+  install it with nothing else on the machine, not even Node. `npm install -g open-walnut`
+  installs a small launcher and only the package built for your machine
+  (`@open-walnut/<target>`), with nothing to build. install.sh keeps each version in
+  `~/.local/share/open-walnut/versions/` and switches with one link, so the version before stays
+  for a rollback ([Getting Started](GETTING_STARTED.md#updating-and-rolling-back)), and
+  `walnut web` and `walnut update` install new versions the same way. A new version that exits
+  before it serves is gone back from on its own and skipped until a newer release. Homebrew installs update
+  with `brew upgrade open-walnut`. An install from the self-contained Node archive keeps updating
+  itself onto the new packages, and the archives are published for two more releases.
+
 ## [0.6.14] - 2026-10-17
 
 ### Added
