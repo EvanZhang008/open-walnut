@@ -6,8 +6,8 @@
  *
  *  1. Every vitest config loads it as its FIRST setupFile, directly or through
  *     vitest.config.ts. Exempt, by name: the live tier (it runs the real claude
- *     and ssh on purpose) and infra/ (a separate package of CDK synth tests that
- *     spawn nothing).
+ *     and ssh on purpose), the fleet tier (real ssh to its own containers) and
+ *     infra/ (a separate package of CDK synth tests that spawn nothing).
  *  2. Only the guard's own files name its variables or consume its hits.
  *  3. A test that hands a child a literal PATH (`PATH: '/usr/bin:/bin'`) drops the
  *     guard for that child, so /usr/bin/ssh is what it runs. The ones that exist
@@ -27,6 +27,7 @@ const GUARD = 'tests/setup/exec-guard.ts'
 
 const EXEMPT_CONFIGS: Record<string, string> = {
   'vitest.live.config.ts': 'the live tier runs the real claude and ssh on purpose',
+  'vitest.fleet.config.ts': 'the fleet runs the real ssh on purpose, with its own key and config, to its own containers',
   'infra/vitest.config.ts': 'CDK synth tests in a separate package; they spawn nothing',
 }
 

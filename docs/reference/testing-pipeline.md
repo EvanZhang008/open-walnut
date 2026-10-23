@@ -9,6 +9,7 @@ Five layers, chosen so the one you run most often is the one that costs least. R
 | **L3 pre-commit** | `npm run test:pre-commit` | the tiers your diff can break | 1–6 min | before a larger commit |
 | **L4 CI** | GitHub Actions, automatic | everything + lint + build | ~6 min wall-clock, free | every push and PR |
 | **L5 live** | `npm run test:live:cloud` / `test:live:daemon` | real cloud + real daemon, zero mocks | ~25 s / ~2 min | cross-machine feature sign-off; part of `test:full` |
+| **Fleet** | `npm run test:fleet` | the Mac + Linux host containers over real SSH, with link faults | ~3 min for both files once the image is cached | a change to how the Mac reaches, deploys to or hands over to a host; opt-in, never in CI |
 
 ## L5 — live journeys (why mocked-green is not enough)
 
@@ -19,6 +20,23 @@ Rules that keep it honest and cheap:
 - **Zero secrets in the repo** — `scripts/run-live-cloud-tests.sh` derives the cloud URL + device token from the data repo's git remote and injects them via env (in-process derivation is impossible: under VITEST, `WALNUT_HOME` is force-pointed at a temp dir). No cloud companion configured → loud SKIPPED banner, exit 0, explicitly non-authoritative.
 - **Assert the end effect** — the journey passes only when the CLI's reply contains the unique marker the test sent. Anything less lets "accepted but never delivered" slip through.
 - **Feed catches back down the pyramid** — every bug the live layer finds must be pinned as a fast mocked regression too (the spawn race lives on as an integration case with a mock daemon that answers `exists=false` twice). Live is for discovery; the cheap tiers are for retention.
+
+## Fleet: separate machines on one Mac (opt-in)
+
+The in-process cluster (`tests/helpers/replica-cluster.ts`) runs every piece as a process on this machine: one filesystem, one clock, and a test transport where a real host has SSH. The fleet (`tests/fleet/`, see its README) keeps the Mac on this machine as an isolated server child (its own data, daemon and temp dirs, HOME and port) and puts each host in its own Linux container, which the Mac reaches the way it reaches a real host: OpenSSH with a key and config made for the run, the daemon deployed over that SSH (nothing is preinstalled), the ControlMaster, the tunnel and the bulk lane, all through a fault proxy on 127.0.0.1. The host's `claude` is a mock, so no model is called.
+
+Faults are methods of the fleet: the lid (SIGSTOP and SIGCONT of the Mac processes the run started and pinned), `docker pause` of a host, a link cut silent, severed or dropped, a slow link, a cap on bytes per connection, and a clock offset on a host (libfaketime). Assertions read the stores themselves: the Mac's `tasks.sqlite` (read only) and its log, and the host's stream, journal and copy files through `docker exec`.
+
+| File | What it proves | Time |
+|---|---|---|
+| `tests/fleet/mac-and-host.fleet.ts` | add a host, deploy over SSH, a session answers; notes and memory reach the host copy without the folder it does not keep; a write made while the lid is closed, and one made across a cut link, is journaled on the host and applied once | ~1 min |
+| `tests/fleet/host-faults.fleet.ts` | a deploy through a link that cuts large transfers falls back to chunks; a host frozen mid-turn delivers its write and reply once; a host 10 minutes behind journals a write that the Mac applies once | ~2 min (70 s of it is the chunked deploy) |
+
+When to run it: a change to how the Mac deploys to or reaches a host (`daemon-connection.ts`, `ssh-control-master.ts`, the deploy), to the offline host and its journal, or to what a host keeps. Not on every change, and never in CI: it needs Docker. Without Docker each file prints a SKIPPED line and the script exits 0, which proves nothing.
+
+Cost: the first run pulls `node:22-bookworm-slim` and builds the host image (a minute or two); both are cached after that, until `bash scripts/run-fleet-tests.sh clean`. Each container is capped at 1 GB, 1.5 CPUs and 512 processes, and binds on 127.0.0.1 only. It holds a Walnut server, its daemons and one container per host, so run one fleet at a time, on a machine that is not already busy.
+
+What it caught that the cluster could not (2026-10-23): the ControlMaster socket path limit was 100, but `ssh -M` binds `<ControlPath>.<16 random chars>` before renaming it into place, so on macOS (104 bytes) any path of 87 to 100 characters failed with `too long for Unix domain socket`, and that host ran without a master. The cluster has no SSH, so it could never see it.
 
 ## L1 — the fast tier
 
