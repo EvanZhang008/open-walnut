@@ -152,6 +152,7 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     expect(r.status, r.stderr).toBe(0)
     expect(r.stdout).toMatch(/would run the compiled file walnut-(darwin|linux)-(arm64|x64)(-musl)? \(bun /)
     expect(r.stdout).toMatch(/with linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl beside it/)
+    expect(r.stdout).toMatch(/helper scripts \(type-check, render checks, publish\) run on \S+\/bun;/)
     const none = await dryRun({ WALNUT_DEVPROD_FILE_TARGETS: '' })
     expect(none.stdout).not.toMatch(/beside it/)
     const bad = await dryRun({ WALNUT_DEVPROD_FILE_TARGETS: 'linux-x64 plan9-mips' })
@@ -163,6 +164,8 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     const node = await dryRun({ WALNUT_DEVPROD_RUNTIME: 'node' })
     expect(node.status, node.stderr).toBe(0)
     expect(node.stdout).toMatch(/would run node .* with dist\/cli\.js \(WALNUT_DEVPROD_RUNTIME=node\)\./)
+    // The way back from a bun problem runs its helpers on node, bun or not.
+    expect(node.stdout).toMatch(/helper scripts \(type-check, render checks, publish\) run on \S+\/node;/)
     const other = await dryRun({ WALNUT_DEVPROD_RUNTIME: 'deno' })
     expect(other.status).toBe(1)
     expect(other.stderr).toMatch(/WALNUT_DEVPROD_RUNTIME='deno' is neither file/)

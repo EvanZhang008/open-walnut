@@ -435,9 +435,15 @@ else
     exit 1
   fi
 fi
-# Runs the repo's own helper scripts (render check, publish): bun when there is
-# one (Playwright included), else node.
-JS_BIN="${BUN_BIN:-$NODE_BIN}"
+# Runs the repo's own helper scripts (the type-check, both render checks, the
+# publish): bun when there is one (Playwright included), else node. The Node
+# build runs them on node: it is the way back from a bun problem, so it must
+# not need a working bun past the build.
+if [[ "$RUNTIME" == "node" ]]; then
+  JS_BIN="$NODE_BIN"
+else
+  JS_BIN="${BUN_BIN:-$NODE_BIN}"
+fi
 if [[ -z "$JS_BIN" ]]; then
   echo "Need bun or node to run the deploy's helper scripts." >&2
   exit 1
