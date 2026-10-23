@@ -332,6 +332,18 @@ export async function prewarmRemoteHost(host: string | undefined): Promise<void>
 }
 
 /**
+ * The env of a terminal's shell: the server's, minus WALNUT_RUNTIME_DIR. A
+ * compiled-file server runs with its deploy stage's runtime dir, which a later
+ * deploy deletes; a `walnut` run in the terminal would unpack into that stage, or
+ * mkdir it back inside a dead one. Without it a compiled walnut uses its own tree.
+ */
+export function terminalEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env = { ...base, TERM: 'xterm-256color' } as Record<string, string>
+  delete env.WALNUT_RUNTIME_DIR
+  return env
+}
+
+/**
  * Spawn a terminal pty for a session record. Local → dtach; remote → ssh→dtach.
  * The pty is loaded lazily so a native-binary load failure (node-pty on Node)
  * can be caught by the caller and degrade gracefully (terminal disabled, server
@@ -348,7 +360,7 @@ export async function resolveSpawnForSession(
   opts: { persistent?: boolean } = {},
 ): Promise<SpawnResult> {
   const pty = await loadPty()
-  const env = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
+  const env = terminalEnv()
   const persistent = opts.persistent !== false
 
   if (!persistent) {

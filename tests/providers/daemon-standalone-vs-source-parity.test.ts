@@ -1227,6 +1227,25 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       .not.toContain("'fs-mutate-v1'")
   })
 
+  it('both twins scrub WALNUT_RUNTIME_DIR from the CLI spawn env', () => {
+    // A compiled-file daemon runs with the serving stage's runtime dir; a session
+    // that inherited it unpacked a `walnut` into that stage, or mkdir'd it back
+    // inside a stage the next deploy had deleted (scripts/dev-prod.sh).
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      // The CLI's own env object: from the one key only it sets to its closing brace.
+      const at = src.indexOf('WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH')
+      expect(at).toBeGreaterThan(0)
+      const start = src.lastIndexOf('env: {', at)
+      const end = src.indexOf('\n    },', at)
+      expect(start).toBeGreaterThan(0)
+      expect(end).toBeGreaterThan(at)
+      const envObject = src.slice(start, end)
+      expect(envObject).toContain('...process.env')
+      expect(envObject).toMatch(/\bWALNUT_RUNTIME_DIR:\s*undefined/)
+    }
+  })
+
   it('both twins scrub WALNUT_DAEMON_PARENT_PID from the CLI spawn env', () => {
     // Env-carrier chain: isolated daemon → CLI → `npm run dev:prod` → PROD daemon
     // inherits a dead parent pid, watchdog trips, prod sessions die.

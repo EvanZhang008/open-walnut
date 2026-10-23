@@ -5033,6 +5033,11 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // and with this var it could reach the service daemon's journals and state.
       // Keep in sync with daemon-source.ts.
       WALNUT_DAEMON_STATE_DIR: undefined,
+      // And the compiled file's runtime dir (src/binary/runtime-tree.ts): it names the
+      // SERVING stage's runtime/, which a later deploy deletes. A walnut CLI the session runs
+      // would unpack there or, after that deploy, mkdir it back inside a dead stage; without
+      // it a compiled walnut uses its own default tree. Keep in sync with daemon-source.ts.
+      WALNUT_RUNTIME_DIR: undefined,
     },
   }
   let barrier: ReturnType<typeof spawnBehindRegistry> | null = null
