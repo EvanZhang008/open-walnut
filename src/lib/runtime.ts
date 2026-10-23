@@ -36,17 +36,26 @@ export function runsCompiledFile(): boolean {
 }
 
 /**
+ * Does this process's executable act as bun only when told (BUN_BE_BUN=1)? A
+ * walnut file does: the compiled file itself, and a walnut file running a dist
+ * build as bun, where neither the entry nor argv[1] says so. Decided from the
+ * executable, never the entry; a bun binary is named bun (bun-debug, bun.exe).
+ */
+export function execNeedsBunBeBun(execPath: string = process.execPath): boolean {
+  return runsCompiledFile() || !/^bun(-debug|-profile)?(\.exe)?$/i.test(execPath.split(/[\\/]/).pop() ?? '')
+}
+
+/**
  * How this process runs bun itself: a script outside the compiled file's own
  * tree, `-e` code, `bun info`, `bun add`. From source that is the bun binary
- * running this process. Inside the compiled file, process.execPath is the
- * walnut file, which acts as the bun CLI when BUN_BE_BUN=1 is in its env; it
- * carries all of bun, so a machine needs no other bun, Node or npm.
- * Outside the compiled file the variable is dropped: bun itself ignores it, and
- * a child must not hand it on to a walnut file it starts.
+ * running this process. A walnut file (execNeedsBunBeBun) acts as the bun CLI
+ * when BUN_BE_BUN=1 is in its env; it carries all of bun, so a machine needs no
+ * other bun, Node or npm. For a bun binary the variable is dropped: bun ignores
+ * it, and a child must not hand it on to a walnut file it starts.
  */
-export function bunCommand(env: NodeJS.ProcessEnv = process.env): { command: string; env: NodeJS.ProcessEnv } {
+export function bunCommand(env: NodeJS.ProcessEnv = process.env, execPath: string = process.execPath): { command: string; env: NodeJS.ProcessEnv } {
   const out: NodeJS.ProcessEnv = { ...env }
-  if (runsCompiledFile()) out.BUN_BE_BUN = '1'
+  if (execNeedsBunBeBun(execPath)) out.BUN_BE_BUN = '1'
   else delete out.BUN_BE_BUN
-  return { command: process.execPath, env: out }
+  return { command: execPath, env: out }
 }

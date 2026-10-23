@@ -45,7 +45,7 @@ import http from 'node:http'
 import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import { log } from '../../logging/index.js'
-import { runsCompiledFile } from '../../lib/runtime.js'
+import { execNeedsBunBeBun } from '../../lib/runtime.js'
 import type { HostServerStatus } from '../../providers/host-server-core.js'
 import { getExposeProvider } from '../expose/registry.js'
 import type { ExposeProviderDefinition, ExposeStatus } from '../expose/types.js'
@@ -203,19 +203,16 @@ export interface ManagerDeps {
   /**
    * Tests only (WALNUT_HOST_SERVER_APP_DIR): run `<appCommand> <appDir>/dist/cli.js`
    * on the host instead of installing the file. Meant for a "host" that is this
-   * machine, so appCommand defaults to this process's own executable: bun from
-   * source, or the compiled file, then told to act as bun (BUN_BE_BUN=1).
+   * machine, so appCommand defaults to this process's own bun. A walnut file is
+   * no default: it would run the dist build only told to be bun (BUN_BE_BUN=1),
+   * which every child of that server (its daemon, each `claude`) would inherit.
    */
   appDir?: string
   appCommand?: string
 }
 
-/**
- * How the host runs Walnut: `<command> ...prefix <subcommand>`; `asBun` when the
- * command is a walnut file, which runs `-e` code only told to be bun; `env` is
- * added to its environment (BUN_BE_BUN for a walnut file that runs a dist build).
- */
-interface HostProgram { command: string; prefix: string[]; asBun: boolean; env?: Record<string, string> }
+/** How the host runs Walnut: `<command> ...prefix <subcommand>`; `asBun` when the command is the walnut file. */
+interface HostProgram { command: string; prefix: string[]; asBun: boolean }
 
 /** Unpack, check and try the file once: seconds, minutes on a slow disk. */
 const INSTALL_TIMEOUT_MS = 5 * 60_000
@@ -370,12 +367,11 @@ export function createHostServerManager(deps: ManagerDeps) {
     if (deps.appDir) {
       // Tests: a local tree stands in for an installed build.
       if (!deps.appDir.startsWith('/')) throw new Error('WALNUT_HOST_SERVER_APP_DIR must be an absolute path')
-      set(host.hostKey, { build: 'local-app', install: { state: 'ready' } })
-      const asBun = !deps.appCommand && runsCompiledFile()
-      const program: HostProgram = {
-        command: deps.appCommand ?? process.execPath, prefix: [`${deps.appDir}/dist/cli.js`], asBun, ...(asBun ? { env: { BUN_BE_BUN: '1' } } : {}),
+      if (!deps.appCommand && execNeedsBunBeBun()) {
+        throw new Error('WALNUT_HOST_SERVER_APP_DIR runs a dist build, which needs bun; this Walnut runs as the compiled file')
       }
-      return { id: 'local-app', program, ...dirs }
+      set(host.hostKey, { build: 'local-app', install: { state: 'ready' } })
+      return { id: 'local-app', program: { command: deps.appCommand ?? process.execPath, prefix: [`${deps.appDir}/dist/cli.js`], asBun: false }, ...dirs }
     }
     const { id } = await deps.hostFile.buildId()
     const installed = { id, program: { command: `${root}/app/${id}/walnut`, prefix: [], asBun: true }, ...dirs }
@@ -543,7 +539,6 @@ export function createHostServerManager(deps: ManagerDeps) {
       const { command, prefix } = install.program
       const hostServerArgs = [...prefix, 'host-server']
       const hostServerEnv: Record<string, string> = {
-        ...install.program.env,
         OPEN_WALNUT_HOME: install.dataDir,
         // Its own run dir (logs, scratch): never the host daemon's /tmp/open-walnut.
         WALNUT_DAEMON_DIR: install.runDir,

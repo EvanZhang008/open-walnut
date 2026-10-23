@@ -18,7 +18,7 @@ import { execFile, spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { getBuildInfo } from '../../lib/build-info.js'
-import { runsCompiledFile } from '../../lib/runtime.js'
+import { execNeedsBunBeBun } from '../../lib/runtime.js'
 import { createSubsystemLogger } from '../../logging/index.js'
 import { installScript, parseInstallState, stateScript, type InstallState } from '../host-server/install.js'
 import { dirs, errText, exists, knobMs, readJson, readLine, rmFile, sha256File, sizeOf, writeAtomic, type Dirs } from './box-files.js'
@@ -312,7 +312,7 @@ async function startInstallLocked(d: Dirs, req: InstallRequest): Promise<StepRep
   try {
     script = installScript({
       id: req.id, depsHash: req.depsHash, dependencies: req.dependencies, optionalDependencies: req.optionalDependencies,
-      appPackageJson: req.appPackageJson, bun: { command: process.execPath, asBun: runsCompiledFile() }, buildEnv: {}, root: d.R, keep,
+      appPackageJson: req.appPackageJson, bun: { command: process.execPath, asBun: execNeedsBunBeBun() }, buildEnv: {}, root: d.R, keep,
     })
   } catch (err) {
     return { ok: false, error: 'refused', message: errText(err) }

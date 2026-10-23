@@ -71,11 +71,13 @@ describe('the plugin bundler', () => {
 })
 
 describe('how a process runs bun itself (bunCommand)', () => {
+  const HOME = { OPEN_WALNUT_HOME: '/tmp/walnut-home' }
+
   it('from source: this bun, with BUN_BE_BUN dropped so no walnut file it starts inherits it', async () => {
     const { bunCommand } = await import('../../src/lib/runtime.js')
-    const run = bunCommand({ PATH: '/usr/bin', BUN_BE_BUN: '1' })
+    const run = bunCommand({ ...HOME, BUN_BE_BUN: '1' })
     expect(run.command).toBe(process.execPath)
-    expect(run.env).toEqual({ PATH: '/usr/bin' })
+    expect(run.env).toEqual(HOME)
   })
 
   it('inside the compiled file: the walnut file itself, told to act as bun', async () => {
@@ -83,13 +85,24 @@ describe('how a process runs bun itself (bunCommand)', () => {
     const { bunCommand } = await import('../../src/lib/runtime.js')
     setSingleFile({ root: '/rt', daemonVersion: 'd', modules: {} })
     try {
-      const env = { PATH: '/usr/bin' }
+      const env = { ...HOME }
       const run = bunCommand(env)
       expect(run.command).toBe(process.execPath)
-      expect(run.env).toEqual({ PATH: '/usr/bin', BUN_BE_BUN: '1' })
-      expect(env).toEqual({ PATH: '/usr/bin' })
+      expect(run.env).toEqual({ ...HOME, BUN_BE_BUN: '1' })
+      expect(env).toEqual(HOME)
     } finally {
       delete (globalThis as Record<string, unknown>).__WALNUT_SINGLE_FILE__
     }
+  })
+
+  it('decides from the executable: a walnut file running a dist build is told to be bun, a bun binary never', async () => {
+    const { bunCommand, execNeedsBunBeBun } = await import('../../src/lib/runtime.js')
+    // Neither singleFile() nor the entry says "compiled" here: only the executable's name does.
+    expect(bunCommand(HOME, '/srv/app/walnut')).toEqual({ command: '/srv/app/walnut', env: { ...HOME, BUN_BE_BUN: '1' } })
+    for (const bun of ['/usr/local/bin/bun', '/opt/bun/bin/bun-debug', 'C:\\bun\\bun.exe']) {
+      expect(execNeedsBunBeBun(bun), bun).toBe(false)
+      expect(bunCommand({ ...HOME, BUN_BE_BUN: '1' }, bun).env).toEqual(HOME)
+    }
+    expect(execNeedsBunBeBun('/home/alice/.local/share/open-walnut/versions/0.7.0/walnut')).toBe(true)
   })
 })
