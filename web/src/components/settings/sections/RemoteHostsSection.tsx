@@ -16,6 +16,7 @@ import { AddLimitRow } from './RemoteHostLimits';
 import { HostServersGroup } from './HostServersGroup';
 import { HostProfileDisclosure } from './HostProfileDisclosure';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
+import { ReplicaKeepRows, normalizeKeep, splitKeepEntries, type ReplicaKeep } from './ReplicaKeepRows';
 import { CopyHostDiagnosticsButton, DiagnosticsFallback, useCopyDiagnostics } from '../CopyDiagnostics';
 import { hasStatusHosts } from '../diagnostics-copy';
 import '@/styles/settings-sections-addons.css';
@@ -39,29 +40,11 @@ interface HostEntry {
   autofix?: boolean;
   /** What the host keeps a read copy of (core/host-replica.ts); undefined = everything. */
   keep?: HostKeep;
-  /** The "Leave out folders" text as typed (a trailing comma survives a save). */
+  /** The "Leave out folders or notes" text as typed (a trailing comma survives a save). */
   excludeText?: string;
 }
 
-type HostKeep = NonNullable<NonNullable<Config['hosts']>[string]['keep']>;
-
-/** Only what differs from "keep everything" is written, so a saved host round-trips unchanged. */
-function normalizeKeep(keep: HostKeep | undefined): HostKeep | undefined {
-  if (!keep) return undefined;
-  const exclude = (keep.notes_exclude ?? []).map((f) => f.trim()).filter(Boolean);
-  const out: HostKeep = {
-    ...(keep.notes === false ? { notes: false } : {}),
-    ...(exclude.length > 0 ? { notes_exclude: exclude } : {}),
-    ...(keep.memory === false ? { memory: false } : {}),
-    ...(keep.skills === false ? { skills: false } : {}),
-    ...(keep.attachments === false ? { attachments: false } : {}),
-  };
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function splitFolders(text: string): string[] {
-  return text.split(',').map((f) => f.trim()).filter(Boolean);
-}
+type HostKeep = ReplicaKeep;
 
 /**
  * The persisted `hosts` map from local entries, dropping incomplete rows (no
@@ -72,7 +55,7 @@ function entriesToHosts(hosts: HostEntry[]): NonNullable<Config['hosts']> {
   const hostsConfig: NonNullable<Config['hosts']> = {};
   for (const h of hosts) {
     if (!h.alias || !h.hostname) continue;
-    const keep = normalizeKeep(h.excludeText === undefined ? h.keep : { ...(h.keep ?? {}), notes_exclude: splitFolders(h.excludeText) });
+    const keep = normalizeKeep(h.excludeText === undefined ? h.keep : { ...(h.keep ?? {}), notes_exclude: splitKeepEntries(h.excludeText) });
     hostsConfig[h.alias] = {
       hostname: h.hostname,
       user: h.user || undefined,
@@ -293,66 +276,16 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   // answer. Its own work is always kept; the rest is the user's choice.
   const keepRows = (idx: number) => {
     const keep = hosts[idx].keep ?? {};
-    const name = hostName(hosts[idx], idx);
     return (
-      <>
-        <SettingsRow
-          label="Its own work"
-          help="Its sessions, their tasks, triggers, the team Board and replies are always kept."
-          indent
-          control={<SettingsTag>Always kept</SettingsTag>}
-        />
-        <SettingsRow
-          label="Notes"
-          htmlFor={`rh-keep-notes-${idx}`}
-          help="A copy of the notes, so its sessions and pages read them while this Mac is away."
-          indent
-          control={<ToggleSwitch id={`rh-keep-notes-${idx}`} checked={keep.notes !== false} onChange={(v) => updateKeep(idx, { notes: v })} aria-label={`Keep notes on ${name}`} />}
-        />
-        {keep.notes !== false && (
-          <SettingsRow
-            label="Pictures and files"
-            htmlFor={`rh-keep-attachments-${idx}`}
-            help="The pictures and files the notes embed."
-            indent
-            control={<ToggleSwitch id={`rh-keep-attachments-${idx}`} checked={keep.attachments !== false} onChange={(v) => updateKeep(idx, { attachments: v })} aria-label={`Keep attachments on ${name}`} />}
-          />
-        )}
-        {keep.notes !== false && (
-          <SettingsRow
-            label="Leave out folders"
-            htmlFor={`rh-keep-exclude-${idx}`}
-            help="Folders of the vault never copied to this host, separated by commas."
-            indent
-            wide
-            control={
-              <input
-                id={`rh-keep-exclude-${idx}`}
-                type="text"
-                className="settings-input settings-input--long"
-                value={hosts[idx].excludeText ?? (keep.notes_exclude ?? []).join(', ')}
-                onChange={(e) => updateHost(idx, 'excludeText', e.target.value)}
-                placeholder="health, finance"
-                spellCheck={false}
-              />
-            }
-          />
-        )}
-        <SettingsRow
-          label="Memory"
-          htmlFor={`rh-keep-memory-${idx}`}
-          help="MEMORY.md, USER.md and the rest of the memory folder."
-          indent
-          control={<ToggleSwitch id={`rh-keep-memory-${idx}`} checked={keep.memory !== false} onChange={(v) => updateKeep(idx, { memory: v })} aria-label={`Keep memory on ${name}`} />}
-        />
-        <SettingsRow
-          label="Skills"
-          htmlFor={`rh-keep-skills-${idx}`}
-          help="The skills, with their reference files."
-          indent
-          control={<ToggleSwitch id={`rh-keep-skills-${idx}`} checked={keep.skills !== false} onChange={(v) => updateKeep(idx, { skills: v })} aria-label={`Keep skills on ${name}`} />}
-        />
-      </>
+      <ReplicaKeepRows
+        idOf={(field) => `rh-keep-${field}-${idx}`}
+        name={hostName(hosts[idx], idx)}
+        keep={keep}
+        excludeText={hosts[idx].excludeText ?? (keep.notes_exclude ?? []).join(', ')}
+        onKeep={(patch) => updateKeep(idx, patch)}
+        onExcludeText={(text) => updateHost(idx, 'excludeText', text)}
+        ownWork="Its sessions, their tasks, triggers, the team Board and replies are always kept."
+      />
     );
   };
 

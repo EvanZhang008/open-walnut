@@ -19,12 +19,12 @@ import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
-import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { CopyButton } from '../inputs/CopyButton';
 import { saveErrorMessage } from '../settings-pane-context';
 import { describeExpose } from './cloud/browser-access-status';
-import { HOST_COPY_ROWS, describeHostServer, hostServersPollMs, type HostCopyChoice, type HostServerEntry, type HostServersResponse } from './host-servers-status';
+import { describeHostServer, hostServersPollMs, type HostCopyChoice, type HostServerEntry, type HostServersResponse } from './host-servers-status';
+import { ReplicaCopyRows } from './ReplicaCopyRows';
 import '@/styles/browser-access.css';
 
 const PATH = '/api/host-servers';
@@ -171,23 +171,13 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
             {/* The replica is every host's program since D13; 'host-server' is the rollback, which keeps no copies. */}
             {on && host.settings.program !== 'host-server' && host.settings.copies && (
               <div className="settings-disclosure-content host-server-copies" data-testid={`host-server-copies-${host.hostKey}`}>
-                <SettingsRow label="Kept on this host" help="What this host still shows while your Mac sleeps." />
-                {HOST_COPY_ROWS.map((row) => {
-                  const copies = host.settings.copies!;
-                  return (
-                    <SettingsCheckbox
-                      key={row.key}
-                      id={`host-server-copy-${host.hostKey}-${row.key}`}
-                      checked={copies[row.key]}
-                      disabled={busy === host.hostKey || (row.key === 'inbox_bodies' && !copies.inbox)}
-                      label={row.label}
-                      data-testid={`host-server-copy-${host.hostKey}-${row.key}`}
-                      // Bodies ride with the index: the inbox turned off turns its bodies off too, so
-                      // turning it on again never brings back a body choice the row showed as off.
-                      onChange={(v) => { void write(host.hostKey, { copies: row.key === 'inbox' && !v ? { inbox: false, inbox_bodies: false } : { [row.key]: v } }); }}
-                    />
-                  );
-                })}
+                <ReplicaCopyRows
+                  idOf={(key) => `host-server-copy-${host.hostKey}-${key}`}
+                  copies={host.settings.copies}
+                  busy={busy === host.hostKey}
+                  help="What this host still shows while your Mac sleeps."
+                  onChange={(patch) => { void write(host.hostKey, { copies: patch }); }}
+                />
               </div>
             )}
             {on && carries && (

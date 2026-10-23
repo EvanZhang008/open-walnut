@@ -4,9 +4,10 @@
  *   locked      "Its own work" reads Always kept and has no switch
  *   defaults    notes, their pictures and files, memory and skills on; nothing
  *               written for them (the same defaults as every replica)
- *   folders     "Leave out folders" saves as a list, and a comma typed before
- *               the save comes back still typed (the save's own config echo
- *               must not rebuild the field)
+ *   left out    "Leave out folders or notes" saves as a list (a folder, or one
+ *               note with or without .md), and a comma typed before the save
+ *               comes back still typed (the save's own config echo must not
+ *               rebuild the field)
  *   off         a kind turned off is written as false; notes off hides the
  *               folder field and the pictures switch, and keeps both for when
  *               notes come back
@@ -23,7 +24,7 @@ import { test, expect, type Page } from '@playwright/test'
 test.setTimeout(120_000)
 test.describe.configure({ mode: 'serial' })
 
-const SHOTS = '/tmp/host-replica'
+const SHOTS = '/tmp/g8-keep'
 const ALIAS = 'keepbox'
 
 async function readHosts(page: Page): Promise<Record<string, Record<string, unknown>>> {
@@ -80,8 +81,12 @@ test('the host keeps its own work always, and the user picks the rest', async ({
   await expect(section.locator('.settings-row', { hasText: 'Notes' }).first()).not.toContainText('no attachments')
   expect(await keepOf(page)).toBeUndefined()
 
-  // Folders: a list in config, the typed comma stays in the field.
+  // Left out: one row for folders and single notes, its one sentence and example.
+  const leaveOut = section.locator('.settings-row', { hasText: 'Leave out folders or notes' })
+  await expect(leaveOut).toContainText('Folders or single notes that stay only on this Mac, separated by commas.')
   const folders = section.locator('#rh-keep-exclude-0')
+  await expect(folders).toHaveAttribute('placeholder', 'health, finance/taxes.md')
+  // A list in config, the typed comma stays in the field.
   await folders.click()
   await page.keyboard.type('health,')
   await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health'] })
@@ -90,7 +95,13 @@ test('the host keeps its own work always, and the user picks the rest', async ({
   await page.keyboard.type(' finance')
   await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health', 'finance'] })
   await expect(folders).toHaveValue('health, finance')
-  await section.locator('.settings-row', { hasText: 'Leave out folders' }).screenshot({ path: `${SHOTS}/keep-folders-${test.info().project.name}.png` })
+  // A single note, with its .md, beside the folders.
+  await page.keyboard.type(', work/review.md')
+  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health', 'finance', 'work/review.md'] })
+  await leaveOut.screenshot({ path: `${SHOTS}/host-keep-left-out-${test.info().project.name}.png`, scale: 'css' })
+  // Back to the two folders for the rest of the run.
+  await folders.fill('health, finance')
+  await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health', 'finance'] })
 
   // Off: written as false.
   await section.getByRole('switch', { name: `Keep memory on ${ALIAS}` }).click()
@@ -119,7 +130,7 @@ test('the host keeps its own work always, and the user picks the rest', async ({
 
   await section.locator('#rh-keep-notes-0').scrollIntoViewIfNeeded()
   const box = await section.boundingBox()
-  await page.screenshot({ path: `${SHOTS}/keep-rows-${test.info().project.name}.png`, clip: box ? { x: box.x, y: Math.max(0, box.y), width: Math.min(box.width, 1280), height: Math.min(box.height, 900) } : undefined })
+  await page.screenshot({ path: `${SHOTS}/host-keep-rows-${test.info().project.name}.png`, scale: 'css', clip: box ? { x: box.x, y: Math.max(0, box.y), width: Math.min(box.width, 1280), height: Math.min(box.height, 900) } : undefined })
   expect(errors).toEqual([])
 })
 

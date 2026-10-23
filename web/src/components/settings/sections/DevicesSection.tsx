@@ -19,6 +19,7 @@ import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { RemoteAccessCard } from './cloud/RemoteAccessCard';
 import { BackupLeaderGroup } from './cloud/BackupLeaderGroup';
+import { CompanionKeepGroup } from './cloud/CompanionKeepGroup';
 import { BrowserAccessGroup } from './cloud/BrowserAccessGroup';
 import type { Config } from '@open-walnut/core';
 import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud/cloud-change-timeout';
@@ -464,6 +465,11 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
         {/* Only with a cloud companion to take over, and only on the Mac it would stand in for. */}
         {!replica && config && onSave && targets.some((t) => t.kind === 'cloud') && (
           <BackupLeaderGroup config={config} onSave={onSave} />
+        )}
+
+        {/* What the companion keeps: the same rows and defaults as a host's (Remote Hosts). */}
+        {!replica && config && onSave && targets.some((t) => t.kind === 'cloud') && (
+          <CompanionKeepGroup config={config} onSave={onSave} />
         )}
 
         <SettingsGroup heading="Pair a phone">

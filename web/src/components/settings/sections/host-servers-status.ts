@@ -23,16 +23,50 @@ export interface HostServerView {
   } | null;
 }
 
-export interface HostCopyChoice { sessions: boolean; requests: boolean; boards: boolean; inbox: boolean; inbox_bodies: boolean }
+/** Which kinds the Mac copies to a replica (core/replication/kinds/copy-kind.ts CopyChoice): every one on by default. */
+export interface HostCopyChoice {
+  sessions: boolean; requests: boolean; boards: boolean; inbox: boolean; inbox_bodies: boolean
+  routines: boolean; conversations: boolean; conversation_bodies: boolean; prefs: boolean; config: boolean; personas: boolean
+}
 
-/** The copy choices in the order Settings lists them, each with its label. */
-export const HOST_COPY_ROWS: ReadonlyArray<{ key: keyof HostCopyChoice; label: string }> = [
+export const DEFAULT_HOST_COPY_CHOICE: Readonly<HostCopyChoice> = Object.freeze({
+  sessions: true, requests: true, boards: true, inbox: true, inbox_bodies: true,
+  routines: true, conversations: true, conversation_bodies: true, prefs: true, config: true, personas: true,
+});
+
+/**
+ * The copy choices in the order Settings lists them, each with its label. A row with
+ * `with` rides with that one: off when it is off (bodies ride with their index).
+ */
+export const HOST_COPY_ROWS: ReadonlyArray<{ key: keyof HostCopyChoice; label: string; with?: keyof HostCopyChoice }> = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'requests', label: 'Reply requests' },
   { key: 'boards', label: 'Boards' },
   { key: 'inbox', label: 'Inbox' },
-  { key: 'inbox_bodies', label: 'Letter bodies' },
+  { key: 'inbox_bodies', label: 'Letter bodies', with: 'inbox' },
+  { key: 'conversations', label: 'Chat list' },
+  { key: 'conversation_bodies', label: 'Chat messages', with: 'conversations' },
+  { key: 'routines', label: 'Routines' },
+  { key: 'personas', label: 'Agents' },
+  { key: 'prefs', label: 'Layout and favorites' },
+  { key: 'config', label: 'Settings' },
 ];
+
+/** The choice from what the server stored, defaults filled in (an older server sends fewer keys). */
+export function copyChoiceOf(raw: Partial<HostCopyChoice> | undefined | null): HostCopyChoice {
+  const out = { ...DEFAULT_HOST_COPY_CHOICE };
+  for (const k of Object.keys(out) as Array<keyof HostCopyChoice>) if (typeof raw?.[k] === 'boolean') out[k] = raw[k] as boolean;
+  if (!out.inbox) out.inbox_bodies = false;
+  if (!out.conversations) out.conversation_bodies = false;
+  return out;
+}
+
+/** The change one row's click writes: turning an index off turns the rows riding with it off too. */
+export function copyChoicePatch(key: keyof HostCopyChoice, on: boolean): Partial<HostCopyChoice> {
+  const patch: Partial<HostCopyChoice> = { [key]: on };
+  if (!on) for (const row of HOST_COPY_ROWS) if (row.with === key) patch[row.key] = false;
+  return patch;
+}
 
 export interface HostServerEntry {
   hostKey: string;
@@ -45,7 +79,7 @@ export interface HostServerEntry {
     /** This computer's tunnel (Open from a browser) runs on this host, so its server runs whatever its switch said. */
     carriesTunnel?: boolean;
     /** What the Mac copies to the host's replica (WP4), defaults filled in by the server. */
-    copies?: HostCopyChoice;
+    copies?: Partial<HostCopyChoice>;
     program?: 'replica' | 'host-server';
   };
   view: HostServerView | null;
