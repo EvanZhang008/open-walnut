@@ -28,7 +28,7 @@ const script = fs.readFileSync(SCRIPT, 'utf-8')
 
 /** The PORT_PROBE detection + listener_pids() definition, standalone. */
 function listenerPidsSnippet(): string {
-  const start = script.indexOf('PORT_PROBE=""')
+  const start = script.indexOf('is_busybox() {')
   const fnStart = script.indexOf('listener_pids() {', start)
   const fnEnd = script.indexOf('\n}\n', fnStart)
   expect(start).toBeGreaterThan(-1)
@@ -449,6 +449,43 @@ describe('dev-prod.sh listener detection', () => {
     expect(r.status).toBe(1)
     expect(r.stdout).not.toMatch(/REACHED/)
     expect(r.stderr).toMatch(/lsof \/ ss \/ fuser/)
+  })
+
+  // Alpine's BusyBox answers to lsof, fuser and ps, and takes none of the options
+  // used here (its lsof lists every open file, its fuser has no -n, its ps no -p).
+  function withStubs(stubs: Record<string, string>, tail: string): { status: number; stdout: string; stderr: string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-busybox-'))
+    for (const [name, body] of Object.entries(stubs)) fs.writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+    const tools = path.join(dir, 'tools')
+    fs.mkdirSync(tools)
+    for (const t of ['grep', 'cut', 'sort', 'tr', 'sh']) {
+      const real = execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf-8' }).trim()
+      fs.symlinkSync(real, path.join(tools, t))
+    }
+    return runBash(`set -euo pipefail\nPORT=3456\nPATH=${dir}:${tools}\n${listenerPidsSnippet()}\n${tail}`)
+  }
+  const busybox = `if [ "$1" = --help ]; then echo 'BusyBox v1.36.1 (2024-06-10) multi-call binary.'; exit 1; fi\necho '1\t/bin/busybox\t0\t/dev/null'`
+
+  it('never takes a BusyBox applet for a probe', () => {
+    const r = withStubs({ lsof: busybox, fuser: busybox }, 'echo REACHED')
+    expect(r.status).toBe(1)
+    expect(r.stdout).not.toMatch(/REACHED/)
+    expect(r.stderr).toMatch(/not BusyBox's/)
+  })
+
+  it('passes over a BusyBox lsof to a real ss', () => {
+    const ss = `printf '%s\\n' 'LISTEN 0 511 0.0.0.0:3456 0.0.0.0:* users:(("walnut",pid=4242,fd=20))'`
+    const r = withStubs({ lsof: busybox, ss }, 'echo "probe=$PORT_PROBE"; listener_pids')
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout.trim().split('\n')).toEqual(['probe=ss', '4242'])
+  })
+
+  it('refuses a BusyBox ps: every server check looks up one process with -p', () => {
+    const ss = `printf '%s\\n' 'LISTEN 0 511 0.0.0.0:3456 0.0.0.0:* users:(("walnut",pid=4242,fd=20))'`
+    const r = withStubs({ ss, ps: busybox }, 'echo REACHED')
+    expect(r.status).toBe(1)
+    expect(r.stdout).not.toMatch(/REACHED/)
+    expect(r.stderr).toMatch(/Install procps/)
   })
 
   // The ss/fuser arms can't run on macOS, so their PARSING (the part that can
