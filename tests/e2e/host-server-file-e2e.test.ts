@@ -3,19 +3,26 @@
  * (docs/plan/walnut-servers-everywhere.md, "Runtime"). The "host" is this
  * machine with a temp root and a temp HOME; everything that runs there is real:
  *
+ *   the Mac's server, as production runs it: from a staged copy of its dist
+ *     (scripts/dev-prod.sh stage_dist: dist, package.json, a node_modules link and
+ *     the `.walnut-source-root` marker naming this checkout); runningOrigin reads it
  *   the Mac's host-server manager (src/core/host-server/manager.ts)
- *     | the target probe, the install script, the launch and the state polls run in `sh -s` here
- *     |   (on a real host: the same scripts over the Mac's SSH master)
- *     | the file: this checkout's commit built for this machine's target in a clone
+ *     | the target probe, the install script, the launch, the state polls and the
+ *     |   prune run in `sh -s` here (on a real host: the same scripts over SSH)
+ *     | the file: this checkout's HEAD built for this machine's target in a clone
  *     |   (host-file.ts + host-file-build.ts, real bun), gzipped, cached
- *     | the upload: written into <root>/incoming here (on a real host: DaemonConnection.uploadFile)
+ *     | the upload: the real DaemonConnection.uploadFile through a stand-in `ssh`
+ *     |   that runs each command here and cuts any transfer over 8 MB as a proxy
+ *     |   does, so the 50 MB file goes in 256 KB chunks
  *     v
  *   a real session daemon (the source twin, a process), linked as the Mac links
- *     | server.configure: `<root>/app/<id>/walnut host-server`
+ *     | server.configure: `<root>/app/<id>/walnut host-server`, then the replica
+ *     |   `<root>/app/<id>/walnut web --replica`
  *     v
  *   the compiled walnut file as the host server: it finds its port with itself
  *   (BUN_BE_BUN=1 <file> -e), links to the daemon, reports, and answers a
- *   browser on its public port by a stream through the daemon to the Mac's door.
+ *   browser on its public port by a stream through the daemon to the Mac's door;
+ *   as the replica it answers that browser itself.
  *
  * What a real Linux host adds (its SSH, an old glibc, musl) is not here: the
  * probe and the script are tested against those systems' answers in
@@ -36,9 +43,12 @@ import { WebSocket } from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { createHostServerManager, type HostServerHost, type HostServerManager } from '../../src/core/host-server/manager.js'
-import { createHostFileSource } from '../../src/core/host-server/host-file.js'
+import { createHostFileSource, runningOrigin, versionHere, type BuildOrigin } from '../../src/core/host-server/host-file.js'
+import type { HostFileTarget } from '../../src/core/host-server/host-target.js'
+import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { findBun, pinnedBun } from '../../src/core/host-server/host-file-build.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const HOME = '/fixture/mac-home'
@@ -58,8 +68,10 @@ async function waitFor<T>(fn: () => T | Promise<T>, ms: number, label: string): 
 const bunPick = await findBun(process.env, pinnedBun(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')))
 if ('why' in bunPick) console.warn(`host-server-file-e2e: skipped: ${bunPick.why}`)
 const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version as string
-const commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, env: gitChildEnv(), encoding: 'utf8' }).trim()
+// The length build-info.mjs stamps (and so the compiled file prints).
+const commit = execFileSync('git', ['rev-parse', '--short=9', 'HEAD'], { cwd: ROOT, env: gitChildEnv(), encoding: 'utf8' }).trim()
 const id = `${version}-${commit}`
+const ownTarget = `${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}` as HostFileTarget
 
 let base = ''
 let hostHome = ''
@@ -70,7 +82,15 @@ let macDoor: http.Server
 let macDoorPort = 0
 let link: { ws: WebSocket; streams: StreamEndpoint; cmd: (b: Record<string, unknown>) => Promise<Record<string, any>>; beat: ReturnType<typeof setInterval> } | null = null
 let manager: HostServerManager | null = null
-const uploads: Array<{ path: string; bytes: number }> = []
+const uploads: Array<{ path: string; bytes: number; skipped?: boolean }> = []
+/** The Mac's connection, for its uploadFile only (through the stand-in ssh). */
+let conn: DaemonConnection | null = null
+let sshState = ''
+let origin: BuildOrigin | null = null
+let settingsNow: { program?: 'replica' | 'host-server' } = { program: 'host-server' }
+const caps = new Set(['host-server-v1', 'follower-v1', 'stream-relay-v1'])
+let savedPath: string | undefined
+let savedSshState: string | undefined
 /** The host server's pid, as the daemon reports it. */
 let serverPid = 0
 
@@ -107,7 +127,7 @@ function host(): HostServerHost {
   return {
     hostKey: 'devbox',
     connected: true,
-    hasCapability: (cap) => ['host-server-v1', 'follower-v1', 'stream-relay-v1'].includes(cap),
+    hasCapability: (cap) => caps.has(cap),
     async send(cmd, params) { return link!.cmd({ cmd, ...(params ?? {}) }) },
     runRemoteScript: (script, timeoutMs = 30_000) => new Promise((resolve, reject) => {
       const child = spawn('sh', ['-s'], { env: { HOME: hostHome, PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: os.tmpdir() }, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -119,11 +139,10 @@ function host(): HostServerHost {
       child.on('close', (code) => { clearTimeout(t); if (code === 0) resolve(out); else reject(new Error(`sh exited ${code}: ${err.trim().slice(-300)}`)) })
       child.stdin.end(script)
     }),
-    async uploadFile(remotePath, data) {
-      uploads.push({ path: remotePath, bytes: data.length })
-      fs.mkdirSync(path.dirname(remotePath), { recursive: true })
-      fs.writeFileSync(`${remotePath}.part`, data)
-      fs.renameSync(`${remotePath}.part`, remotePath)
+    async uploadFile(remotePath, data, opts) {
+      const r = await conn!.uploadFile(remotePath, data, opts)
+      uploads.push({ path: remotePath, bytes: data.length, skipped: r.skipped })
+      return r
     },
     async openStream() { throw new Error('this test opens no stream to the host server') },
   }
@@ -137,6 +156,29 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     hostHome = path.join(base, 'host-home')
     hostRoot = path.join(base, 'host-root')
     fs.mkdirSync(hostHome)
+    // The staged copy production runs from (dev-prod.sh stage_dist), of a dist built from HEAD.
+    const stage = path.join(base, 'open-walnut-stage.1792700000.4242')
+    fs.mkdirSync(path.join(stage, 'dist', 'web'), { recursive: true })
+    if (fs.existsSync(path.join(ROOT, 'dist', 'web', 'static', 'index.html'))) fs.cpSync(path.join(ROOT, 'dist', 'web', 'static'), path.join(stage, 'dist', 'web', 'static'), { recursive: true })
+    fs.writeFileSync(path.join(stage, 'dist', 'build-info.json'), JSON.stringify({ version, commit, branch: null, builtAt: new Date().toISOString(), dirty: false }))
+    fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(stage, 'package.json'))
+    fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(stage, 'node_modules'))
+    fs.writeFileSync(path.join(stage, '.walnut-source-root'), `${ROOT}\n`)
+    origin = await runningOrigin({ root: stage, distDir: path.join(stage, 'dist') }, null)
+    // The stand-in ssh: each command runs here; a transfer over 8 MB is cut, as a proxy does.
+    const sshBin = path.join(base, 'ssh-bin')
+    sshState = path.join(base, 'ssh-state')
+    fs.mkdirSync(sshBin)
+    fs.mkdirSync(path.join(sshState, 'hide'), { recursive: true })
+    fs.copyFileSync(path.join(ROOT, 'tests', 'providers', 'fixtures', 'fake-ssh-upload.sh'), path.join(sshBin, 'ssh'))
+    fs.chmodSync(path.join(sshBin, 'ssh'), 0o755)
+    fs.writeFileSync(path.join(sshState, 'max-bytes'), `${8 * 2 ** 20}\n`)
+    savedPath = process.env.PATH
+    savedSshState = process.env.FAKE_SSH_STATE
+    process.env.PATH = guardedPath([sshBin])
+    process.env.FAKE_SSH_STATE = sshState
+    conn = new DaemonConnection('devbox', { hostname: 'devbox.example.test', user: 'me' })
+    ;(conn as unknown as Record<string, unknown>).chunkPacing = { backoffMs: [10, 10, 10, 10, 10], gapMs: 0 }
     macDoor = http.createServer((req, res) => { res.setHeader('content-type', 'text/plain'); res.end(`mac door: ${req.method} ${req.url}`) })
     await new Promise<void>((r) => macDoor.listen(0, '127.0.0.1', () => r()))
     macDoorPort = (macDoor.address() as net.AddressInfo).port
@@ -156,22 +198,20 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     daemonPort = Number(fs.readFileSync(path.join(daemonDir, 'daemon.port'), 'utf8'))
     link = await linkAsMac()
     manager = createHostServerManager({
-      settingsOf: async () => ({ enabled: true, program: 'host-server', expose: { enabled: false, provider: null, options: {} } }),
+      settingsOf: async () => ({ enabled: true, ...settingsNow, expose: { enabled: false, provider: null, options: {} } }),
       label: async () => 'Dev box',
       walnutId: async () => WALNUT,
       home: HOME,
       holdTunnelPort: async () => macDoorPort,
       releaseTunnelPort: async () => {},
-      // This checkout's HEAD, built for whatever the probe says this machine is.
-      hostFile: createHostFileSource({
-        cacheDir,
-        origin: async () => ({ kind: 'checkout', checkout: ROOT, distDir: path.join(ROOT, 'dist'), id, info: { version, commit, branch: null, builtAt: null, dirty: false } }),
-      }),
+      // This checkout's HEAD, found through the stage's marker, built for whatever the probe says this machine is.
+      hostFile: createHostFileSource({ cacheDir, origin: async () => origin! }),
       stateFile: path.join(base, 'host-servers.json'),
       now: Date.now,
       hostRoot,
       installPollMs: 200,
-      firstReportMs: 60_000,
+      // A replica boots a whole server; on a loaded machine that takes a while.
+      firstReportMs: 240_000,
     })
   }, 30 * 60_000)
 
@@ -186,8 +226,16 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
       await new Promise((r) => { daemon!.once('exit', r); setTimeout(r, 10_000) })
     }
     macDoor?.close()
+    if (savedPath !== undefined) process.env.PATH = savedPath
+    if (savedSshState === undefined) delete process.env.FAKE_SSH_STATE
+    else process.env.FAKE_SSH_STATE = savedSshState
     if (base) fs.rmSync(base, { recursive: true, force: true })
   }, 60_000)
+
+  it('production\'s staged copy finds this checkout by its marker', () => {
+    expect(origin).toMatchObject({ kind: 'checkout', checkout: ROOT, id, info: { version, commit, dirty: false } })
+    expect((origin as { distDir: string }).distDir.endsWith(path.join('open-walnut-stage.1792700000.4242', 'dist'))).toBe(true)
+  })
 
   it('installs the file for this machine under the root and starts it; the host needs no Node', async () => {
     await manager!.connected(host())
@@ -195,6 +243,11 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     expect(view, view.message).toMatchObject({ phase: 'running', build: id, install: { state: 'ready' }, program: 'host-server' })
     // What went to the host: the gz and the script, nothing else.
     expect(uploads.map((u) => path.basename(u.path))).toEqual([`${id}.gz`, `${id}.install.sh`])
+    // The 50 MB gz went in chunks after the one stream was cut; the script in one stream.
+    const sshLog = fs.readFileSync(path.join(sshState, 'log'), 'utf8').split('\n').filter(Boolean)
+    expect(sshLog.filter((l) => l === 'stream cut')).toHaveLength(1)
+    expect(sshLog.filter((l) => /^chunk_\d+ ok$/.test(l)).length).toBe(Math.ceil(uploads[0]!.bytes / 262_144))
+    expect(fs.readdirSync(path.join(hostRoot, 'incoming')).filter((n) => n.includes('.chunks'))).toEqual([])
     const file = path.join(hostRoot, 'app', id, 'walnut')
     expect(fs.readdirSync(path.join(hostRoot, 'app', id)).sort()).toEqual(['.ready', 'walnut'])
     expect(fs.existsSync(path.join(hostRoot, 'deps'))).toBe(false)
@@ -202,7 +255,7 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     // The file's runtime tree is unpacked in the host server's data dir, not this machine's ~/.open-walnut.
     expect(fs.readdirSync(path.join(hostRoot, 'data', 'local', 'runtime')).some((n) => n.startsWith(`${version}-`))).toBe(true)
     // It is the file this checkout's commit builds, for this machine.
-    const printed = spawnSync(file, ['--version'], { env: { HOME: hostHome, OPEN_WALNUT_HOME: path.join(hostRoot, 'data'), PATH: '/usr/bin:/bin' }, encoding: 'utf8' }).stdout.trim()
+    const printed = spawnSync(file, ['--version'], { env: { HOME: hostHome, OPEN_WALNUT_HOME: path.join(hostRoot, 'data'), PATH: guardedPath([], '/usr/bin:/bin') }, encoding: 'utf8' }).stdout.trim()
     expect(printed.startsWith(`${version} (${commit}`)).toBe(true)
     // The daemon runs it as the file, not under a Node.
     const status = (await link!.cmd({ cmd: 'server.status', home: HOME })).status as Record<string, any>
@@ -217,6 +270,15 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     expect(await res.text()).toBe('mac door: GET /api/anything?x=1')
   }, 30 * 60_000)
 
+  it('the install ran the file\'s own self-check on the host', () => {
+    const lines = fs.readFileSync(path.join(hostRoot, 'incoming', `${id}.selftest`), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { check: string; ok: boolean; required?: boolean })
+    expect(lines.find((l) => l.check === 'sqlite')).toMatchObject({ ok: true })
+    expect(lines.filter((l) => !l.ok && l.required !== false)).toEqual([])
+    // The server it started is kept as the one that works.
+    const record = JSON.parse(fs.readFileSync(path.join(base, 'host-servers.json'), 'utf8')).devbox
+    expect(record.working).toMatchObject({ id, command: path.join(hostRoot, 'app', id, 'walnut'), args: ['host-server'] })
+  })
+
   it('the next connect installs nothing and keeps the same server process', async () => {
     const before = ((await link!.cmd({ cmd: 'server.status', home: HOME })).status as Record<string, any>).pid
     const sent = uploads.length
@@ -225,6 +287,60 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     expect(uploads.length).toBe(sent)
     expect(((await link!.cmd({ cmd: 'server.status', home: HOME })).status as Record<string, any>).pid).toBe(before)
   }, 120_000)
+
+  it('as the replica (the default where the daemon can): the same file runs `web --replica` and answers a browser itself', async () => {
+    caps.add('replica-host-v1')
+    settingsNow = {}
+    const sent = uploads.length
+    await manager!.reconcile('devbox')
+    const view = manager!.view('devbox')
+    expect(view, view.message).toMatchObject({ phase: 'running', build: id, program: 'replica' })
+    expect(uploads.length).toBe(sent)
+    const file = path.join(hostRoot, 'app', id, 'walnut')
+    const status = (await link!.cmd({ cmd: 'server.status', home: HOME })).status as Record<string, any>
+    expect(status).toMatchObject({ state: 'running', program: 'primary' })
+    serverPid = Number(status.pid)
+    expect(execFileSync('ps', ['-o', 'command=', '-p', String(status.pid)], { encoding: 'utf8' }).trim()).toBe(`${file} web --replica`)
+    expect(manager!.programOf('devbox')).toEqual({ command: file, args: ['web', '--replica'] })
+    // It reports once its link follows; its port may take a moment more.
+    const status200 = await waitFor(async () => (await fetch(`http://127.0.0.1:${view.port}/api/v1/instance`).then((r) => r.status, () => 0)) === 200, 60_000, 'the replica to answer a browser')
+    expect(status200).toBe(true)
+  }, 10 * 60_000)
+
+  it('a file of the same build-binary run beside the running build is taken as it is; a file of another run is built instead', async () => {
+    // The real compiled file stands for both this machine's own file (its --version and its
+    // runtime tree's archive id say which run made it) and a cross-compiled sibling of that run.
+    const real = path.join(hostRoot, 'app', id, 'walnut')
+    const said = await versionHere(real, ownTarget)
+    expect(said?.line.startsWith(`${version} (${commit}`)).toBe(true)
+    const assetsId = said!.assetsId!
+    expect(assetsId).toMatch(new RegExp(`^${version.replace(/\./g, '\\.')}-[0-9a-f]{12}$`))
+    const other: HostFileTarget = ownTarget === 'linux-arm64' ? 'linux-x64' : 'linux-arm64'
+    const bin = path.join(base, 'sibling-stage', 'dist-bin')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.copyFileSync(real, path.join(bin, `walnut-${ownTarget}`))
+    fs.copyFileSync(real, path.join(bin, `walnut-${other}`))
+    // Another run's file: the same bytes, every copy of the archive id changed.
+    const bytes = fs.readFileSync(real)
+    const from = Buffer.from(JSON.stringify(assetsId))
+    const to = Buffer.from(JSON.stringify(assetsId.slice(0, -1) + (assetsId.endsWith('0') ? '1' : '0')))
+    let n = 0
+    for (let at = bytes.indexOf(from); at >= 0; at = bytes.indexOf(from, at + 1)) { to.copy(bytes, at); n++ }
+    expect(n).toBeGreaterThan(0)
+    fs.writeFileSync(path.join(bin, 'walnut-linux-x64-musl'), bytes)
+    const builds: string[] = []
+    const src = createHostFileSource({
+      cacheDir: path.join(base, 'sibling-cache'),
+      origin: async () => ({ ...(origin as Extract<BuildOrigin, { kind: 'checkout' }>), siblings: [{ dir: bin }] }),
+      build: async (b) => { builds.push(b.targets.join(',')); throw new Error('no build in this test') },
+      batchWindowMs: 0,
+    })
+    const f = await src.file(other)
+    expect(builds).toEqual([])
+    expect(f).toMatchObject({ id, target: other, sha256: crypto.createHash('sha256').update(fs.readFileSync(real)).digest('hex') })
+    await expect(src.file('linux-x64-musl')).rejects.toThrow(/no build in this test/)
+    expect(builds).toEqual(['linux-x64-musl'])
+  }, 180_000)
 
   it('the cached file is the one installed (sha256 of the file on the host)', () => {
     const gz = path.join(cacheDir, 'files', id)
