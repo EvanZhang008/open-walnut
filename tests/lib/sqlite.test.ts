@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import Database, { ON_BUN, type Database as DatabaseType } from '../../src/lib/sqlite.js'
+import Database, { ON_BUN, sqliteModuleFile, type Database as DatabaseType } from '../../src/lib/sqlite.js'
 
 let dir: string
 let db: DatabaseType
@@ -136,9 +136,59 @@ describe(`sqlite on ${ON_BUN ? 'bun' : 'node'}`, () => {
 
   it('stores and reads non-ASCII text and large integers as better-sqlite3 does', () => {
     // Latin accent, CJK and an astral-plane emoji.
-    const text = 'café 任务 \u{1F330}'
+    const text = 'caf\u00e9 \u4efb\u52a1 \u{1F330}'
     db.prepare('INSERT INTO t (name) VALUES (?)').run(text)
     expect(db.prepare('SELECT name FROM t').pluck().get()).toBe(text)
     expect(db.prepare('SELECT 4102444800000 AS v').pluck().get()).toBe(4102444800000)
+  })
+
+  it('close releases the database at once, with statements still alive: the WAL is merged and a statement then throws', () => {
+    const file = path.join(dir, 'c.db')
+    const c = new Database(file)
+    c.pragma('journal_mode = WAL')
+    c.exec('CREATE TABLE t (x)')
+    const insert = c.prepare('INSERT INTO t VALUES (?)')
+    insert.run(1)
+    c.transaction(() => { insert.run(2) }).immediate()
+    const select = c.prepare('SELECT x FROM t')
+    expect(select.all()).toEqual([{ x: 1 }, { x: 2 }])
+    expect(fs.existsSync(`${file}-wal`)).toBe(true)
+    c.close()
+    expect(c.open).toBe(false)
+    expect(fs.readdirSync(dir).filter((f) => f.startsWith('c.db'))).toEqual(['c.db'])
+    expect(() => insert.run(2)).toThrow('The database connection is not open')
+    expect(() => select.get()).toThrow('The database connection is not open')
+    expect(() => c.prepare('SELECT 1')).toThrow('The database connection is not open')
+    expect(() => c.exec('SELECT 1')).toThrow('The database connection is not open')
+    expect(() => c.close()).not.toThrow()
+    const again = new Database(file, { readonly: true })
+    // Read-only after the last writer closed, so with no -wal on disk.
+    expect(again.prepare('SELECT x FROM t').pluck().all()).toEqual([1, 2])
+    again.close()
+  })
+})
+
+describe('sqliteModuleFile: the file a worker loads to get this module', () => {
+  it('is this very file when unbundled', () => {
+    expect(sqliteModuleFile()).toBe(path.resolve(import.meta.dirname, '../../src/lib/sqlite.ts'))
+    expect(sqliteModuleFile('/x/src/lib/sqlite.ts')).toBe('/x/src/lib/sqlite.ts')
+    expect(sqliteModuleFile('/x/dist/lib/sqlite.js')).toBe('/x/dist/lib/sqlite.js')
+  })
+
+  it('is dist/lib/sqlite.js from any bundle that inlined it, and null when the build has none', () => {
+    const pkg = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-sqlite-layout-'))
+    try {
+      const built = path.join(pkg, 'dist', 'lib', 'sqlite.js')
+      for (const bundle of ['dist/cli.js', 'dist/web/server.js', 'dist/integrations/mail/index.js', '.plugin-cache/p-1.mjs']) {
+        expect(sqliteModuleFile(path.join(pkg, bundle)), bundle).toBeNull()
+      }
+      fs.mkdirSync(path.dirname(built), { recursive: true })
+      fs.writeFileSync(built, '')
+      for (const bundle of ['dist/cli.js', 'dist/web/server.js', 'dist/integrations/mail/index.js', '.plugin-cache/p-1.mjs']) {
+        expect(sqliteModuleFile(path.join(pkg, bundle)), bundle).toBe(built)
+      }
+    } finally {
+      fs.rmSync(pkg, { recursive: true, force: true })
+    }
   })
 })
