@@ -18,7 +18,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage } from './threads-helpers'
+import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, unfoldQuestions } from './threads-helpers'
 import { buildTaggedSession, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TITLES } from './threads-fixture'
 
 const IDS = buildTaggedSession(Date.now()).ids
@@ -242,6 +242,7 @@ test.describe('Choices around the comment card', () => {
 
   test('the rule beside a question\'s turn opens its card, the same as its label', async ({ page }) => {
     const panel = await open(page)
+    await unfoldQuestions(panel)
     // The rule beside the question's ANSWER row: any row of the turn counts.
     const bar = panel.locator(`.session-history .session-msg--threaded[data-message-id="${IDS.Q1.a}"]`)
     await expect(bar).toHaveCount(1)

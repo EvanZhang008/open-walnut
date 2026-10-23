@@ -479,9 +479,37 @@ show inline after the open ones, other completed hits that show the query fold i
   and the box has no native scroll anchoring, so `useThreadMapLayout` puts the old gutter back
   for one measure and holds the first row on screen; and a row key holds a NUL, which
   `CSS.escape` turns into U+FFFD, so DOM ids are `encodeURIComponent`ed.
+  An open question's row carries an × (`ThreadMapArchive.tsx`, 2026-10-15) that archives it with
+  the toast's Undo and never opens it; it sits in the status word's slot on hover or focus, and is
+  the row's sibling in `.thread-map-item` (a button cannot hold a button). ArrowRight on the row
+  reaches it, since the map stays one tab stop. A question with open follow-ups asks first
+  (`alsoDoneTitle`, as the page header and the drawer do), and while that confirm (a portal) is
+  up, the map's `confirming` ref holds the rail's list open against its close-out timer and its
+  outside-press closer. Archived rows, pins and the main conversation have no ×.
   Ratchets: `tests/web/thread-tree.test.ts`, `tests/web/thread-stack-state.test.ts`,
   `tests/web/thread-map.test.ts`, `tests/e2e/browser/session-threads*.spec.ts`,
-  `tests/e2e/browser/session-thread-map.spec.ts`.
+  `tests/e2e/browser/session-thread-map.spec.ts`, `tests/e2e/browser/session-thread-map-archive.spec.ts`.
+  **Conversation Mode folds a question to its label line in the main chat** (2026-10-15, the
+  user: "it should auto collapse in the main chat if it is about a question"). The rule is
+  `utils/thread-fold.ts`: a question is open while it, or one of its follow-ups, is the composer's
+  target, has its card open, is live (queued, answering, failed), or was asked after the main
+  conversation's newest own message (`askedAfterMain`, read off the timeline's order, bubbles not
+  persisted yet included: the reader is in it, and an answer they wait for never folds away as it
+  lands; a sticky "was live" set failed here, because a main reply streaming before history
+  catches up can be filed under the question for a moment); every other one is ONE
+  `ThreadTurnLabel` line per stretch of the timeline (`foldParts`, `data-thread-fold`), its
+  follow-ups folded into it (`foldGroupOf`). The label's chevron (`thread-turn-fold`, only on the
+  question's own label) overrides the rule until the main conversation's newest own message
+  changes (an optimistic bubble counts: history catches up only after the turn), so a reply in
+  the main chat folds everything back; a folded question's bubbles and live blocks not persisted
+  yet fold into the same line in the tail (`tailFoldGroup` carries the last history line's
+  question so the boundary shows one line); the title still opens the card,
+  which opens the turns. A fold change keeps the first main-conversation row on screen where it
+  was (anchored at render time, restored before paint, skipped while following the bottom): the
+  box has no native scroll anchoring. `jumpToPlace` shows a folded question first (`revealFolded`), or a pin
+  or a passage inside it had no row to land on. Specs reading a non-target question's rows in
+  Conversation Mode call `unfoldQuestions` (threads-helpers.ts) first. Ratchets:
+  `tests/web/thread-fold.test.ts`, `tests/e2e/browser/session-conversation-fold.spec.ts`.
   **The transcript's selection pill has both ways to ask, like the Files tab's** (2026-10-22):
   `Ask here` opens a question page on the passage (the old Ask), `Quote` puts the passage as
   a Markdown quote at the head of the MAIN conversation's composer (`buildPassagePrefill`,

@@ -4,9 +4,12 @@
  * below it carry nothing else; a grey rule down the turn's left edge groups
  * them (`.session-msg--threaded`). A click makes the question the composer's
  * target (the next message is a follow-up on it) without leaving the view.
+ * With `fold`, a chevron before it folds the question's turns down to this
+ * line or shows them again (utils/thread-fold.ts).
  */
 import { memo } from 'react';
 import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
+import { ThreadChevronIcon } from '@/components/sessions/ThreadIcons';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import '@/styles/thread-stack.css';
 
@@ -21,10 +24,13 @@ export interface ThreadTurnLabelProps {
   /** The turn was filed by send order, not by the reply's own tag. */
   byOrder?: boolean;
   onSelect: (key: string) => void;
+  /** The fold chevron: whether the turns are folded, and its press. */
+  folded?: boolean;
+  onToggleFold?: (key: string) => void;
 }
 
 export const ThreadTurnLabel = memo(function ThreadTurnLabel(p: ThreadTurnLabelProps) {
-  return (
+  const label = (
     <button
       type="button"
       className="thread-turn-label"
@@ -38,5 +44,22 @@ export const ThreadTurnLabel = memo(function ThreadTurnLabel(p: ThreadTurnLabelP
       <ThreadStatusWord status={p.status} unread={!!p.unread} className="thread-turn-label-status" />
       {p.byOrder && <span className="thread-turn-label-by" title="Filed by send order: the reply carried no question tag">by order</span>}
     </button>
+  );
+  if (!p.onToggleFold) return label;
+  const toggle = p.onToggleFold;
+  return (
+    <div className="thread-turn-head" data-folded={p.folded ? 'true' : undefined}>
+      <button
+        type="button"
+        className="thread-turn-fold"
+        aria-expanded={!p.folded}
+        aria-label={p.folded ? `Show “${p.title}”` : `Fold “${p.title}”`}
+        title={p.folded ? 'Show this question here' : 'Fold this question'}
+        onClick={() => toggle(p.threadKey)}
+      >
+        <ThreadChevronIcon size={9} />
+      </button>
+      {label}
+    </div>
   );
 });

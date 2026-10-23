@@ -300,3 +300,16 @@ export async function noBannedGlyphs(page: Page, scope?: Locator, opts: { includ
   const hits = await findBannedGlyphs(page, scope, opts)
   expect(hits, `banned glyphs or words in the UI: ${JSON.stringify(hits)}`).toEqual([])
 }
+
+/** Conversation Mode folds every question that is not the composer's target
+ *  (utils/thread-fold.ts): press each folded line's chevron until none is left. */
+export async function unfoldQuestions(panel: Locator): Promise<void> {
+  const folded = panel.locator('.session-history .thread-turn-head[data-folded="true"] .thread-turn-fold')
+  for (let i = 0; i < 150 && await folded.count() > 0; i++) {
+    // Real wheels first: a box at its bottom follows it, and WebKit pulls a
+    // programmatic scroll back there.
+    await centreInHistory(panel.page(), panel, folded.first(), { capRow: true })
+    await folded.first().click()
+  }
+  await expect(folded).toHaveCount(0)
+}

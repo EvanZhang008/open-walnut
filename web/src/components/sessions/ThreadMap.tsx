@@ -30,6 +30,7 @@ import {
 import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
 import { ThreadChevronIcon, ThreadListIcon, ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { answeredAgo } from '@/components/sessions/ThreadTreeRows';
+import { MapArchiveButton, useMapArchive, type MapArchiveApi } from '@/components/sessions/ThreadMapArchive';
 import { mapOverlayWidth, mapStep, onPathIds, railMarks, type ThreadMapShape } from '@/utils/thread-map';
 import { openChipCount, pluralQuestions, toggleLabel, type ThreadCounts } from '@/utils/thread-meta-counts';
 import type { TreeRow } from '@/utils/thread-tree-rows';
@@ -56,6 +57,8 @@ export interface ThreadMapProps {
   onActivate: (row: TreeRow) => void;
   onOpenList: () => void;
   onCollapse: (collapsed: boolean) => void;
+  /** Archive from a row's ×; absent where the questions cannot be written. */
+  archive?: MapArchiveApi;
 }
 
 /** Close-out delay: a diagonal path from the rail to a row leaves the map for a
@@ -238,6 +241,8 @@ interface ListProps extends ThreadMapProps {
   onDone?: (byKey: boolean) => void;
   /** The head's hide / keep open button was pressed. */
   onToggleShape: (collapsed: boolean, byKey: boolean) => void;
+  /** A row's × was pressed (the row's own button is `anchor`'s sibling). */
+  onArchiveRow?: (key: string, anchor: HTMLElement) => void;
 }
 
 /** The labelled tree: head (title, count, list, hide/keep open), rows, Back. */
@@ -288,8 +293,19 @@ function MapList(p: ListProps) {
 
   const onKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
     const root = e.currentTarget;
+    const active = document.activeElement as HTMLElement | null;
+    // ArrowRight on a question row reaches its ×, ArrowLeft goes back.
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      const item = active?.closest('.thread-map-item');
+      const to = item?.querySelector<HTMLElement>(e.key === 'ArrowRight' ? '.thread-map-archive' : '.thread-map-row');
+      if (!to || to === active) return;
+      e.preventDefault();
+      e.stopPropagation();
+      focusInPlace(to);
+      return;
+    }
     const els = Array.from(root.querySelectorAll<HTMLElement>('[data-map-stop]'));
-    const at = (document.activeElement as HTMLElement | null)?.dataset?.mapStop;
+    const at = active?.dataset?.mapStop ?? active?.dataset?.mapArchive;
     const rowEls = els.filter((el) => el.dataset.mapRow !== undefined);
     const pool = e.key === 'Home' || e.key === 'End' ? rowEls : els;
     const next = mapStep(pool.map((el) => el.dataset.mapStop ?? ''), at, e.key);
@@ -312,6 +328,20 @@ function MapList(p: ListProps) {
     if (!row || (row.kind === 'done-group' && row.disclosureDisabled)) return;
     if (row.kind !== 'done-group') props.onDone?.(byKey);
     props.onActivate(row);
+  }, []);
+  // The row leaves the open list once archived: a keyboard user's focus moves to
+  // the row after it (else the one before), never to <body>.
+  const onArchive = useCallback((id: string, el: HTMLElement, byKey: boolean) => {
+    const { p: props, byId: rowsById } = live.current;
+    const row = rowsById.get(id);
+    const item = el.closest<HTMLElement>('.thread-map-item');
+    if (!row || !item || !props.onArchiveRow) return;
+    if (byKey) {
+      const near = (item.nextElementSibling ?? item.previousElementSibling) as HTMLElement | null;
+      const to = near?.matches('[data-map-row]') ? near : near?.querySelector<HTMLElement>('[data-map-row]');
+      if (to) { setCursor(to.dataset.mapStop); focusInPlace(to); }
+    }
+    props.onArchiveRow(row.key, item);
   }, []);
 
   const unreadTitle = (row: TreeRow): string | undefined => (
@@ -354,7 +384,7 @@ function MapList(p: ListProps) {
       <div className="thread-map-rows" ref={listRef}>
         {rows.map((row) => {
           const stop = rowDomId(row.id);
-          return (
+          const mapRow = (
             <MapRow
               key={row.id}
               id={row.id}
@@ -378,6 +408,13 @@ function MapList(p: ListProps) {
               onClickRow={onClickRow}
             />
           );
+          if (!p.onArchiveRow || row.kind !== 'thread' || row.status === 'resolved') return mapRow;
+          return (
+            <div key={row.id} className="thread-map-item">
+              {mapRow}
+              <MapArchiveButton stop={stop} title={row.title} onPress={(el, byKey) => onArchive(row.id, el, byKey)} />
+            </div>
+          );
         })}
       </div>
       {p.canGoBack && (
@@ -398,14 +435,20 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
     ['--thread-map-overlay-w' as string]: `${mapOverlayWidth(p.boxWidth)}px`,
   } as CSSProperties;
   const [open, setOpen] = useState(false);
+  // Read by the close-out timer, which is older than the confirm state it guards.
+  const confirming = useRef(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(closeTimer.current), []);
   const show = useCallback(() => { clearTimeout(closeTimer.current); setOpen(true); }, []);
   const hide = useCallback(() => {
     clearTimeout(closeTimer.current);
-    closeTimer.current = setTimeout(() => setOpen(false), CLOSE_DELAY_MS);
+    closeTimer.current = setTimeout(() => { if (!confirming.current) setOpen(false); }, CLOSE_DELAY_MS);
   }, []);
   const closeNow = useCallback(() => { clearTimeout(closeTimer.current); setOpen(false); }, []);
+  // A follow-ups confirm holds the rail's list open (its rows anchor it); once
+  // answered, the list closes the usual way unless the pointer comes back.
+  const arch = useMapArchive(p.archive, confirming, hide);
+  const archiveRow = p.archive ? arch.request : undefined;
   const navRef = useRef<HTMLElement>(null);
   const railRef = useRef<HTMLButtonElement>(null);
   const focusInside = () => !!navRef.current?.contains(document.activeElement);
@@ -448,6 +491,7 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
+      if (confirming.current) return;
       if (e.target instanceof Node && navRef.current?.contains(e.target)) return;
       closeNow();
     };
@@ -458,7 +502,8 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
   if (shape === 'panel') {
     return (
       <nav ref={navRef} className="thread-map" data-shape="panel" aria-label="Questions map" style={style}>
-        <div className="thread-map-body"><MapList {...p} maxHeight={maxHeight} overlay={false} onToggleShape={toggleShape} /></div>
+        <div className="thread-map-body"><MapList {...p} maxHeight={maxHeight} overlay={false} onToggleShape={toggleShape} onArchiveRow={archiveRow} /></div>
+        {arch.confirm}
       </nav>
     );
   }
@@ -531,9 +576,10 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
       </div>
       {open && (
         <div className="thread-map-overlay" data-thread-rail="">
-          <MapList {...p} maxHeight={maxHeight} overlay onDone={doneFromOverlay} onToggleShape={toggleShape} />
+          <MapList {...p} maxHeight={maxHeight} overlay onDone={doneFromOverlay} onToggleShape={toggleShape} onArchiveRow={archiveRow} />
         </div>
       )}
+      {arch.confirm}
     </nav>
   );
 });

@@ -17,6 +17,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
   AI_SESSION, centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, noBannedGlyphs, openThreadsSession, passageRects, selectPassage, sessionPanel, modePill, openQuestionList, switchView,
+  unfoldQuestions,
 } from './threads-helpers'
 import {
   AI_PASSAGE, buildMapSession, MAP_PASSAGES, MAP_PIN_QUOTE_TEXT, MAP_SESSION, MAP_TITLES, PINS_ONLY_READY, PINS_ONLY_SESSION,
@@ -347,6 +348,7 @@ test.describe('Question map', () => {
     const rail = map.locator('.thread-map-rail')
     await expect(map).toHaveAttribute('data-shape', 'rail')
     await switchView(panel, 'linear')
+    await unfoldQuestions(panel)
     // Q2's bar: its passage sits in the first answer, far above its own rows.
     const bar = panel.locator(`.session-msg--threaded[data-message-id="${MAP_IDS.Q2.u}"]`)
     await centreInHistory(page, panel, bar, { capRow: true })
