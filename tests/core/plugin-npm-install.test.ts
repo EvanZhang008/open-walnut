@@ -35,8 +35,12 @@ interface FakePackage {
   packageJsonName?: string;
   packageJsonVersion?: string;
   receiptIntegrity?: string;
-  /** The receipt's tarball field ("" = the configured registry's own URL). */
+  /** The receipt's tarball field (default: the advertised URL; bun writes "" for registry.npmjs.org). */
   receiptResolved?: string;
+  /** The registry origin `bun info` advertises tarballs on (default https://registry.example). */
+  registryOrigin?: string;
+  /** Materialize the plugin's own node_modules as a symlink to this dir. */
+  ownModulesSymlinkTo?: string;
   /** The receipt's ident (default `name@version`). */
   receiptIdent?: string;
   omitReceipt?: boolean;
@@ -83,7 +87,7 @@ const fakeRunner: NpmRunner = async (args, opts) => {
         name,
         version: pkg.version,
         ...(pkg.integrity ? { 'dist.integrity': pkg.integrity } : {}),
-        'dist.tarball': `https://registry.example/${name}/-/${name}-${pkg.version}.tgz`,
+        'dist.tarball': `${pkg.registryOrigin ?? 'https://registry.example'}/${name}/-/${name}-${pkg.version}.tgz`,
       }),
       stderr: '',
     };
@@ -125,6 +129,10 @@ const fakeRunner: NpmRunner = async (args, opts) => {
     const hoisted = pkg.hoisted ?? { 'left-pad': { 'index.js': '// dep' } };
     for (const [dep, files] of Object.entries(hoisted)) await writeTree(path.join(modulesDir, ...dep.split('/')), files);
     await fsp.mkdir(path.join(modulesDir, '.bin'), { recursive: true });
+    if (pkg.ownModulesSymlinkTo) {
+      await fsp.mkdir(pkg.ownModulesSymlinkTo, { recursive: true });
+      await fsp.symlink(pkg.ownModulesSymlinkTo, path.join(target, 'node_modules'), 'dir');
+    }
     for (const [dep, files] of Object.entries(pkg.nested ?? {})) await writeTree(path.join(target, 'node_modules', dep), files);
 
     const packages: Record<string, unknown[]> = {};
@@ -133,7 +141,7 @@ const fakeRunner: NpmRunner = async (args, opts) => {
       const integrity = pkg.receiptIntegrity ?? pkg.integrity ?? 'sha512-FAKE==';
       packages[name] = pkg.receiptNotRegistry
         ? [ident, {}, integrity]
-        : [ident, pkg.receiptResolved ?? '', {}, integrity];
+        : [ident, pkg.receiptResolved ?? `${pkg.registryOrigin ?? 'https://registry.example'}/${name}/-/${name}-${pkg.version}.tgz`, {}, integrity];
     }
     for (const dep of Object.keys(hoisted)) packages[dep] = [`${dep}@1.0.0`, '', {}, 'sha512-LEFTPAD=='];
     if (!pkg.omitReceipt) {
@@ -478,6 +486,32 @@ describe('installNpmPlugin', () => {
     await expect(installNpmPlugin({
       spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
     })).resolves.toMatchObject({ tarball: 'https://registry.example/walnut-plugin/-/walnut-plugin-1.0.0.tgz' });
+  });
+
+  it('reads "" in the receipt as a tarball on registry.npmjs.org, and checks its origin like any other', async () => {
+    registryFixtures['walnut-plugin'] = {
+      version: '1.0.0', registryOrigin: 'https://registry.npmjs.org', receiptResolved: '', files: { 'manifest.json': MANIFEST('p') },
+    };
+    await expect(installNpmPlugin({
+      spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
+    })).resolves.toMatchObject({ tarball: 'https://registry.npmjs.org/walnut-plugin/-/walnut-plugin-1.0.0.tgz' });
+
+    // A mirror advertised its own tarball, and bun says it fetched from npmjs: not the advertised origin.
+    registryFixtures['walnut-plugin'] = { version: '1.0.0', receiptResolved: '', files: { 'manifest.json': MANIFEST('p') } };
+    await expect(installNpmPlugin({
+      spec: 'walnut-plugin', finalDir: path.join(stagingRoot(), 'npm-walnut-plugin-2'), stagingRoot: stagingRoot(),
+    })).rejects.toThrow('different tarball origin');
+  });
+
+  it('refuses a plugin whose own node_modules is a symlink, moving nothing through it', async () => {
+    const outside = path.join(tmpRoot, 'outside-modules');
+    registryFixtures['walnut-plugin'] = {
+      version: '1.0.0', ownModulesSymlinkTo: outside, files: { 'manifest.json': MANIFEST('p') },
+    };
+    await expect(installNpmPlugin({
+      spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
+    })).rejects.toThrow("the Plugin package's node_modules is a symlink");
+    expect(fs.readdirSync(outside)).toEqual([]);
   });
 
   it.each([

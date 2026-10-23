@@ -115,7 +115,8 @@ const fakeNpmRunner: NpmRunner = async (args, opts) => {
   await fsp.writeFile(path.join(prefix, 'bun.lock'), JSON.stringify({
     lockfileVersion: 2,
     packages: {
-      [name]: [`${name}@${pkg.version}`, '', {}, pkg.receiptIntegrity ?? pkg.integrity ?? 'sha512-FAKE=='],
+      // As bun writes it for a registry other than npmjs: the tarball's full URL.
+      [name]: [`${name}@${pkg.version}`, `https://registry.example/${name}.tgz`, {}, pkg.receiptIntegrity ?? pkg.integrity ?? 'sha512-FAKE=='],
     },
   }));
   return { stdout: 'installed', stderr: '' };
@@ -502,7 +503,7 @@ describe('npm source lifecycle', () => {
     });
   });
 
-  it('records integrity from npm installed-tree receipt when metadata omits it', async () => {
+  it('records integrity from the bun.lock receipt when metadata omits it', async () => {
     npmRegistry['walnut-plugin-receipt'] = {
       version: '1.0.0',
       receiptIntegrity: 'sha512-RECEIPT==',

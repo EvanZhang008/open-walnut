@@ -485,9 +485,12 @@ export function parseBunLock(text: string): unknown {
 /**
  * The receipt: the bun.lock `bun add` wrote in the staging dir. Its entry for
  * the package (`[ident, url, meta, integrity]`) names the exact version, the
- * tarball it came from ("" for the configured registry's own URL), and the
- * integrity bun checked the tarball against.
+ * tarball it came from, and the integrity bun checked the tarball against. bun
+ * writes "" for a tarball on registry.npmjs.org and the full URL for any other.
  */
+/** What "" in a bun.lock entry stands for. */
+const NPMJS_REGISTRY = 'https://registry.npmjs.org/';
+
 async function verifyInstallReceipt(stagingDir: string, resolved: ResolvedNpmPackage): Promise<VerifiedNpmPackage> {
   const lockPath = path.join(stagingDir, 'bun.lock');
   let lock: { lockfileVersion?: unknown; packages?: unknown };
@@ -515,12 +518,9 @@ async function verifyInstallReceipt(stagingDir: string, resolved: ResolvedNpmPac
     throw new Error('bun.lock receipt is missing a valid integrity value.');
   }
   const advertisedUrl = secureTarballUrl(resolved.tarball, 'Registry tarball');
-  // "": the tarball at the configured registry's own URL, the registry `bun info` asked.
-  if (tarball !== '') {
-    const installedUrl = secureTarballUrl(tarball, 'Installed tarball');
-    if (advertisedUrl.origin !== installedUrl.origin) {
-      throw new Error('bun installed the Plugin from a different tarball origin than the registry advertised.');
-    }
+  const installedUrl = secureTarballUrl(tarball || NPMJS_REGISTRY, 'Installed tarball');
+  if (advertisedUrl.origin !== installedUrl.origin) {
+    throw new Error('bun installed the Plugin from a different tarball origin than the registry advertised.');
   }
   const verified = integrity.trim();
   if (resolved.integrity && resolved.integrity.trim() !== verified) {
@@ -543,6 +543,9 @@ async function verifyInstallReceipt(stagingDir: string, resolved: ResolvedNpmPac
 async function placeDependencies(stagingDir: string, packageRoot: string, name: string): Promise<void> {
   const modules = path.join(stagingDir, 'node_modules');
   const own = path.join(packageRoot, 'node_modules');
+  // The package's own node_modules (a version it needs that differs from a hoisted
+  // one), when it has one, must be a real directory: the moves land inside it.
+  if (await pathExists(own)) await assertRealDirectory(own, 'the Plugin package\'s node_modules');
   const moves: Array<{ from: string; rel: string }> = [];
   for (const entry of await fsp.readdir(modules)) {
     // .bin holds links to bins; bun keeps its own bookkeeping under dot names too.
@@ -563,7 +566,9 @@ async function placeDependencies(stagingDir: string, packageRoot: string, name: 
     if (await pathExists(to)) {
       throw new Error(`${name} needs two versions of ${rel} beside it, which one Plugin directory cannot hold.`);
     }
-    await fsp.mkdir(path.dirname(to), { recursive: true });
+    const scope = path.dirname(to);
+    if (scope !== own && await pathExists(scope)) await assertRealDirectory(scope, `the Plugin package's scope "${path.basename(scope)}"`);
+    await fsp.mkdir(scope, { recursive: true });
     await fsp.rename(from, to);
   }
 }
@@ -634,7 +639,6 @@ async function stagePackage(
       throw new Error(`Installed package is ${String(pkg.name)}@${String(pkg.version)}, expected ${resolved.resolved}.`);
     }
     const verified = await verifyInstallReceipt(stagingDir, resolved);
-    await placeDependencies(stagingDir, packageRoot, resolved.name);
 
     // A Walnut plugin is a manifest at the package root. Without it the install
     // would land a directory the loader silently ignores.
@@ -651,6 +655,7 @@ async function stagePackage(
     if (typeof manifest.id !== 'string' || !manifest.id.trim()) {
       throw new Error(`${resolved.resolved} has a manifest.json without a string "id".`);
     }
+    await placeDependencies(stagingDir, packageRoot, resolved.name);
 
     return { stagingDir, packageRoot, resolved: verified };
   } catch (err) {
@@ -673,7 +678,7 @@ async function pathExists(target: string): Promise<boolean> {
 }
 
 export interface NpmInstallResult extends ResolvedNpmPackage {
-  /** Integrity read from npm's installed-tree receipt, not the earlier metadata lookup. */
+  /** Integrity read from the bun.lock receipt, not the earlier metadata lookup. */
   integrity: string;
   /** Final on-disk plugin directory. */
   dir: string;
