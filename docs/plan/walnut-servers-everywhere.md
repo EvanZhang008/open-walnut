@@ -184,30 +184,48 @@ phone ── tunnel (on the host) ── host server ── stream via the host'
 - **Runtime.** A host server is the compiled walnut file for the host's system
   (docs/plan/walnut-single-binary.md), so the host needs nothing installed first:
   no Node, no npm, no compiler, no network. On connect the Mac:
-  1. reads the host's system with one sh probe: `uname`, and musl or glibc
+  1. reads the host's system with one sh probe: `uname`, musl or glibc,
+     `getconf LONG_BIT` and the loader the file starts through
      (`src/core/host-server/host-target.ts`). Linux x64 gets bun's baseline
-     build, which needs no AVX2; Alpine gets the musl build.
-  2. gets its own build as that file (`src/core/host-server/host-file.ts`).
-     A server that runs a dist of a checkout builds it in a clone of the dist's
-     commit, never in the checkout (`host-file-build.ts`; about a minute, once
-     per build and target). A server that runs a released build (the compiled
-     file, an npm install) downloads the release's `walnut-<version>-<target>.gz`
-     and checks it against `SHA256SUMS`. Anything else (running from source, a
-     build with uncommitted changes and no checkout, a version that was never
-     released) stops with a sentence in the host's status that says which;
-     nothing is installed on the host instead. The file is cached in the data
-     dir (`cache/host-server/files/<id>/`).
+     build, which needs no AVX2; Alpine gets the musl build; a 32-bit system on
+     a 64-bit kernel (Raspberry Pi OS) is told plainly that it is not supported.
+  2. gets its own build as that file (`src/core/host-server/host-file.ts`), only
+     a build of a commit (a server built from uncommitted changes says so and
+     installs nothing):
+     - the `walnut-<target>` files beside the running build, when the same
+       `build-binary.mjs` run made them: production runs the compiled file as
+       `<stage>/dist-bin/walnut-<mac target>` with its siblings in that dir, and
+       every file of one run carries the same asset archive id;
+     - else, when the running build comes from a checkout (production's staged
+       copy names its checkout in `.walnut-source-root`, scripts/dev-prod.sh),
+       a build in a clone of the build's commit, never in the checkout
+       (`host-file-build.ts`; about a minute, once per build; targets asked
+       together are one run);
+     - else, for a released build (an install of the compiled file, an npm
+       install), the release's `walnut-<version>-<target>.gz`, checked against
+       `SHA256SUMS`.
+     Anything else (running from source, a version that was never released, a
+     build that names no commit) stops with a sentence in the host's status
+     that says which; nothing is installed on the host instead. The file is
+     cached in the data dir (`cache/host-server/files/<id>/`).
   3. sends it over the daemon deploy's SSH path (`DaemonConnection.uploadFile`:
-     one stream, then small chunks over their own connections when a proxy
-     kills a large transfer), with the install script.
+     one stream, then 256 KB chunks over their own connections when a proxy
+     kills a large transfer), with the install script. A file the host already
+     has is not sent again, and a cut chunked upload goes on from the chunks
+     already there.
   4. installs it on the host (`fileInstallScript` in `install.ts`):
-     `~/.open-walnut-host/app/<id>/walnut`, checked by its sha256 and by
-     `--version` (which also unpacks the file's own runtime tree into the
-     host server's data dir), `.ready` written last. The build before it is
-     kept, older ones go.
+     `~/.open-walnut-host/app/<id>/walnut`, checked by its sha256, by
+     `--version` (it must name this build's version and commit; it also unpacks
+     the file's own runtime tree into the host server's data dir) and by its
+     `__selftest`, `.ready` written last. An install that failed is not sent
+     again until the person presses Retry.
   5. asks the installed file for a free port (`BUN_BE_BUN=1 <file> -e`, the
      file running as bun) and has the daemon start `<file> host-server`, or
      `<file> web --replica` (the replica).
+  6. once it reports, keeps that program as the one that works (the state file)
+     and removes the older builds on the host, keeping the one that ran before
+     it (`pruneScript`). A new build that does not report in time gives the host
+     back the program that worked, and is not tried again until Retry.
 
 ### One kind of link
 
