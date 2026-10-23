@@ -39,6 +39,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { WebSocket } from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
@@ -46,6 +47,7 @@ import { createHostServerManager, type HostServerHost, type HostServerManager } 
 import { createHostFileSource, runningOrigin, versionHere, type BuildOrigin } from '../../src/core/host-server/host-file.js'
 import type { HostFileTarget } from '../../src/core/host-server/host-target.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
+import { packTar } from '../../src/lib/tar.js'
 import { findBun, pinnedBun } from '../../src/core/host-server/host-file-build.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
 import { guardedPath } from '../setup/exec-guard.js'
@@ -341,6 +343,47 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     await expect(src.file('linux-x64-musl')).rejects.toThrow(/no build in this test/)
     expect(builds).toEqual(['linux-x64-musl'])
   }, 180_000)
+
+  it('a published build with no GitHub release takes the real file from npm, and its --version must name this commit', async () => {
+    const real = path.join(hostRoot, 'app', id, 'walnut')
+    const bytes = fs.readFileSync(real)
+    // The platform package as scripts/npm-packages.mjs lays it out, behind a registry that answers as npm does.
+    const tgz = zlib.gzipSync(packTar([
+      { path: 'package/package.json', type: 'file', data: Buffer.from(JSON.stringify({ name: `@open-walnut/${ownTarget}`, version })) },
+      { path: 'package/walnut', type: 'file', mode: 0o755, data: bytes },
+    ]), { level: 1 })
+    const seen: string[] = []
+    const registry = http.createServer((req, res) => {
+      seen.push(req.url!)
+      if (req.url === `/@open-walnut%2f${ownTarget}/${version}`) {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({
+          name: `@open-walnut/${ownTarget}`, version,
+          dist: { tarball: `http://127.0.0.1:${(registry.address() as net.AddressInfo).port}/t.tgz`, integrity: `sha512-${crypto.createHash('sha512').update(tgz).digest('base64')}` },
+        }))
+      } else if (req.url === '/t.tgz') res.end(tgz)
+      else { res.statusCode = 404; res.end('{"error":"Not found"}') }
+    })
+    await new Promise<void>((r) => registry.listen(0, '127.0.0.1', () => r()))
+    try {
+      const npmRegistry = `http://127.0.0.1:${(registry.address() as net.AddressInfo).port}`
+      const published = (c: string): BuildOrigin => ({ kind: 'release', info: { version, commit: c, branch: null, builtAt: new Date().toISOString(), dirty: false }, id: `${version}-${c}`, what: 'this compiled walnut file' })
+      const fromNpm = (c: string, dirName: string) => createHostFileSource({
+        cacheDir: path.join(base, dirName), origin: async () => published(c), releaseBase: `file://${path.join(base, 'no-releases')}`, npmRegistry,
+      })
+      // The file runs here (real --version, its own runtime tree unpacked to a temp dir) and names HEAD.
+      const f = await fromNpm(commit, 'npm-cache').file(ownTarget)
+      expect(f.sha256).toBe(crypto.createHash('sha256').update(bytes).digest('hex'))
+      expect(seen).toEqual([`/@open-walnut%2f${ownTarget}/${version}`, '/t.tgz'])
+      // A server of another commit of the same version is refused by the file's own answer.
+      await expect(fromNpm('0000000aa', 'npm-cache-2').file(ownTarget)).rejects.toThrow(
+        new RegExp(`from @open-walnut/${ownTarget}@${version.replace(/\./g, '\\.')} was built from another commit than this Walnut \\(its file says "${version.replace(/\./g, '\\.')} \\(${commit}`),
+      )
+      expect(fs.existsSync(path.join(base, 'npm-cache-2', 'files'))).toBe(false)
+    } finally {
+      registry.close()
+    }
+  }, 300_000)
 
   it('the cached file is the one installed (sha256 of the file on the host)', () => {
     const gz = path.join(cacheDir, 'files', id)
