@@ -41,6 +41,8 @@ export interface EmbedderRuntimeConfig {
   recallFreshMs?: number;
   /** Launcher that execs node in front of the worker (index.ts EmbedderConfig). */
   workerLauncher?: WorkerLauncher;
+  /** Where the worker imports the model library from (index.ts EmbedderConfig). */
+  moduleUrl?: () => string | null | undefined;
 }
 
 /** One semantic-recall candidate from the worker's doc-level KNN. */
@@ -74,6 +76,8 @@ export interface Embedder {
   suspend(): Promise<void>;
   resume(): void;
   isSuspended(): boolean;
+  /** The model library is on this machine (config.moduleUrl did not answer null). */
+  available(): boolean;
   /** Stop the passage worker now unless a run is in flight (end of a backfill
    *  pass). Resolves true when it stopped one. */
   releasePassageWorker(): Promise<boolean>;
@@ -227,8 +231,63 @@ export interface EmbedderOptions {
  */
 export const DEFAULT_QUERY_IDLE_MS = 10 * 60_000;
 
+/** The one place the worker process starts: the embedder's lanes and the selftest probe below. */
+function forkEmbedWorker(file: string, workerConfig: object, launcher: WorkerLauncher | undefined, captureStderr = false): ChildProcess {
+  return fork(file, [], {
+    // 'advanced' carries the ArrayBuffer replies; JSON would not.
+    serialization: 'advanced',
+    // The worker is compiled JS: a host's loader or inspector flags
+    // (tsx, vitest, --inspect) must not follow it. A launcher (a
+    // scheduling clamp that execs node) goes in front of it instead.
+    ...(launcher ? { execPath: launcher.execPath, execArgv: [...launcher.execArgv] } : { execArgv: [] }),
+    env: { ...process.env, [EMBED_WORKER_CONFIG_ENV]: JSON.stringify(workerConfig) },
+    stdio: ['ignore', 'inherit', captureStderr ? 'pipe' : 'inherit', 'ipc'],
+  });
+}
+
+/**
+ * `walnut __selftest`: start the worker exactly as a lane does, have it import
+ * the library from `moduleUrl` and run `model` (a one-node ONNX graph, no model
+ * download) on that library's onnxruntime, then stop it. Resolves with the
+ * output; throws with what failed.
+ */
+export async function probeEmbedWorker(opts: {
+  workerPath: string; moduleUrl: string; model: Uint8Array; launcher?: WorkerLauncher; timeoutMs?: number;
+}): Promise<{ pipeline: string; y: number[] }> {
+  const child = forkEmbedWorker(opts.workerPath, { moduleUrl: opts.moduleUrl, modelId: 'selftest', dims: 2 }, opts.launcher, true);
+  let stderr = '';
+  child.stderr?.on('data', (d: Buffer) => { stderr = (stderr + d.toString()).slice(-2000); });
+  const said = () => (stderr.trim() ? `: ${stderr.trim()}` : '');
+  try {
+    return await new Promise<{ pipeline: string; y: number[] }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`the embed worker did not answer in ${opts.timeoutMs ?? 60_000} ms${said()}`)), opts.timeoutMs ?? 60_000);
+      child.once('message', (m: { probe?: { pipeline: string; y: number[] }; error?: string }) => {
+        clearTimeout(timer);
+        if (m.probe) resolve(m.probe);
+        else reject(new Error(`the embed worker failed: ${m.error ?? JSON.stringify(m)}`));
+      });
+      child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`the embed worker exited (${code})${said()}`)); });
+      child.send({ id: 1, probe: { model: opts.model } });
+    });
+  } finally {
+    // Ends between runs on its own (embed-worker.ts); this is its own child, killed only if it does not.
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>((r) => child.once('exit', () => r()));
+      if (child.connected) child.send({ stop: true });
+      const force = setTimeout(() => { child.kill(); }, WORKER_STOP_GRACE_MS);
+      await exited;
+      clearTimeout(force);
+    }
+  }
+}
+
 export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, options: EmbedderOptions = {}): Embedder {
   const stopGraceMs = options.stopGraceMs ?? WORKER_STOP_GRACE_MS;
+  /** The library's location now; a throwing resolver counts as not there. */
+  const moduleUrlNow = (): string | null | undefined => {
+    if (!config.moduleUrl) return undefined;
+    try { return config.moduleUrl(); } catch { return null; }
+  };
   let disposed = false;
   // Suspended: no lane may spawn a worker (each holds a full model copy).
   let suspended = false;
@@ -258,15 +317,20 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
 
     /** An idle worker never keeps the host alive (see holdOpen). */
     function hold(w: ChildProcess, on: boolean): void {
-      if (on) { w.ref(); w.channel?.ref(); } else { w.unref(); w.channel?.unref(); }
+      // bun's IPC channel has no ref()/unref() (1.4.4): the call is optional there.
+      if (on) { w.ref(); w.channel?.ref?.(); } else { w.unref(); w.channel?.unref?.(); }
     }
 
     function getWorker(): ChildProcess | null {
       if (disposed || crashes >= MAX_CONSECUTIVE_CRASHES) return null;
       if (worker) return worker;
       if (suspended) return null;
+      // Not on this machine yet (a component still to download): no worker, no crash.
+      const moduleUrl = moduleUrlNow();
+      if (moduleUrl === null) return null;
       const scriptPath = config.workerPath ?? new URL('./embed-worker.js', import.meta.url);
       const workerConfig = {
+        ...(moduleUrl ? { moduleUrl } : {}),
         modelId: config.modelId,
         dims: config.dims,
         dtype: config.dtype,
@@ -279,18 +343,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         const file = scriptPath instanceof URL || scriptPath.startsWith('file:') ? fileURLToPath(scriptPath) : scriptPath;
         // Not built: no process to start (it would only print a stack and exit).
         if (!fs.existsSync(file)) throw new Error(`no worker script at ${file}`);
-        w = fork(file, [], {
-          // 'advanced' carries the ArrayBuffer replies; JSON would not.
-          serialization: 'advanced',
-          // The worker is compiled JS: a host's loader or inspector flags
-          // (tsx, vitest, --inspect) must not follow it. A launcher (a
-          // scheduling clamp that execs node) goes in front of it instead.
-          ...(config.workerLauncher
-            ? { execPath: config.workerLauncher.execPath, execArgv: [...config.workerLauncher.execArgv] }
-            : { execArgv: [] }),
-          env: { ...process.env, [EMBED_WORKER_CONFIG_ENV]: JSON.stringify(workerConfig) },
-          stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-        });
+        w = forkEmbedWorker(file, workerConfig, config.workerLauncher);
       } catch (err) {
         crashes++;
         log('warn', 'hybrid-search: embed worker failed to spawn', {
@@ -566,6 +619,10 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
 
     isSuspended() {
       return suspended;
+    },
+
+    available() {
+      return moduleUrlNow() !== null;
     },
 
     async dispose() {

@@ -5,6 +5,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { audioCaptureService, type RecordingOptions } from '../../core/audio-capture.js'
 import { log } from '../../logging/index.js'
+import { componentStatus } from '../../core/components/index.js'
 
 export const audioRouter = Router()
 
@@ -17,7 +18,8 @@ audioRouter.get('/status', (_req: Request, res: Response) => {
 audioRouter.get('/available', (_req: Request, res: Response) => {
   const available = audioCaptureService.isAvailable()
   const permissions = available ? audioCaptureService.checkPermissions() : null
-  res.json({ available, permissions })
+  // The addon's download (src/core/components/): Settings > Audio Capture offers it when missing.
+  res.json({ available, permissions, component: componentStatus('audio-capture') })
 })
 
 // GET /api/audio/apps — list capturable applications

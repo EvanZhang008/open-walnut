@@ -118,6 +118,11 @@ export interface EmbedderConfig {
    *  example a scheduling clamp): fork runs `execPath [...execArgv, worker]`,
    *  so execArgv must end with the node binary. Omitted: plain node. */
   workerLauncher?: WorkerLauncher;
+  /** Where the worker imports @huggingface/transformers from, asked at every
+   *  worker start: a URL (a downloaded copy), undefined (the bare package), or
+   *  null (not on this machine yet: no worker starts, nothing counts as a
+   *  crash, and the backfill holds its place until it is). */
+  moduleUrl?: () => string | null | undefined;
 }
 
 export interface WorkerLauncher {
@@ -771,7 +776,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       // where it is. Not drained, and no doc is touched, so nothing is
       // quarantined for a missing worker.
       const hold = () => ({ embedded: 0, drained: false, cursor: backfillOptions.cursor ?? null });
-      const workerAway = () => embedder.isSuspended() || embedderStopped;
+      const workerAway = () => embedder.isSuspended() || embedderStopped || !embedder.available();
       if (workerAway()) return hold();
       const batchDocs = backfillOptions.batchDocs ?? 16;
       const { docs, cursor, drained, scanned } = writer.listDocsMissingVectors(
@@ -940,7 +945,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     releasePassageWorker: async () => (embedder ? embedder.releasePassageWorker() : false),
     resumeEmbedder: () => { embedder?.resume(); },
     warmQueryWorker: async (deadlineMs = 60_000) => {
-      if (!embedder || closed || embedder.isSuspended()) return false;
+      if (!embedder || closed || embedder.isSuspended() || !embedder.available()) return false;
       // A query cache entry older than its freshness window goes back to the
       // worker, so a periodic warm restarts the idle clock every time.
       const reply = await embedder.embedQuery(EMBED_HEALTH_PROBE_TEXT, deadlineMs);

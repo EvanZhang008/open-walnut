@@ -41,6 +41,7 @@ import { listTasks } from '../task-manager.js';
 import { listSessions } from '../session-tracker.js';
 import { markdownToDoc, sessionToDoc, taskToDoc } from './serializers.js';
 import { semanticLaneDecision, type SemanticLaneDecision } from './semantic-default.js';
+import { ensureComponent, resolveComponent } from '../components/index.js';
 import { iterateAllDocs, readSessionBody } from './build.js';
 import { backfillBatchLogFields, crossedProgressMilestone } from './backfill-log.js';
 
@@ -173,9 +174,28 @@ function buildEmbedderConfig(): EmbedderConfig | undefined {
   const launch = utilityQosForkExec([]);
   return {
     ...model, workerPath, cacheDir: embedModelCacheDir(),
+    moduleUrl: embeddingModuleUrl,
     ...(Number.isFinite(idle) && idle >= 0 ? { queryIdleMs: idle } : {}),
     ...(launch.execPath ? { workerLauncher: { execPath: launch.execPath, execArgv: launch.execArgv } } : {}),
   };
+}
+
+/**
+ * Where the embed worker imports the model library from, asked at each worker
+ * start (src/core/components/): undefined when Walnut's own node_modules has it,
+ * the downloaded copy's entry when the `embedding` component is installed (or an
+ * older install, until the pinned one lands), null when neither. Asked only while
+ * the semantic lane is on, so a missing library is fetched then, in the
+ * background, on the primary and on a follower alike: until it lands, search is
+ * keyword only. ensureComponent backs off after a failure and never retries one
+ * that no retry can fix.
+ */
+export function embeddingModuleUrl(): string | null | undefined {
+  const loaded = resolveComponent('embedding');
+  if (loaded) return loaded.source === 'installed' ? loaded.entryUrl : undefined;
+  // Looks at disk first (an install already there is used, nothing fetched); this ask stays keyword only.
+  void ensureComponent('embedding', 'feature');
+  return null;
 }
 
 /**
@@ -707,6 +727,9 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
     // Memory pressure: the model is released (below) and the walk holds its
     // place; look again in a minute instead of spinning on a suspended worker.
     if (memoryPressureShedding()) return 60_000;
+    // The model library is not on this machine yet (a component the person has
+    // not turned on): the walk holds its place, so a minute, not a 25 ms spin.
+    if (resolveComponent('embedding') === null) return 60_000;
     // Extreme-only memory guard: macOS keeps freemem tiny by design (file
     // cache counts as used), so only genuine exhaustion should trip this.
     if (os.freemem() / os.totalmem() < 0.03) return 15_000;

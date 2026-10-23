@@ -20,11 +20,13 @@ import yaml from 'js-yaml'
  * Top-level WALNUT_HOME entries the ephemeral snapshot does not copy because
  * their owners already treat them as regenerable. See the filter in
  * copyDataSnapshot() for the measured sizes and the anchoring rationale.
+ * `components` holds downloaded platform binaries (src/core/components/): a
+ * test server running from source loads them from node_modules instead.
  * `health` and `places` are the exception: the Apple Health store and the
  * iPhone's place visits are not regenerable, they are PRIVATE, and a test server
  * must never carry a copy of them into $TMPDIR.
  */
-export const SNAPSHOT_SKIP_TOP_LEVEL = new Set(['.git', '.smart-env', 'cache', 'health', 'places'])
+export const SNAPSHOT_SKIP_TOP_LEVEL = new Set(['.git', '.smart-env', 'cache', 'components', 'health', 'places'])
 
 /**
  * Copy the data dir `home` into the snapshot dir `dest`, leaving out what a test

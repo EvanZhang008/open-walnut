@@ -107,6 +107,7 @@ import { systemRouter } from './routes/system.js'
 import { hostsRouter } from './routes/hosts.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
 import { searchIndexRouter } from './routes/search-index.js'
+import { componentsRouter } from './routes/components.js'
 import { notesRouter } from './routes/notes.js'
 import { notesV2Router } from './routes/notes-v2.js'
 import { repositoriesRouter } from './routes/repositories.js'
@@ -2307,6 +2308,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/bug-report', bugReportRouter)
   // `open-walnut doctor` report (Settings > Copy diagnostics; also curl-able).
   app.use('/api/diagnostics', diagnosticsRouter)
+  app.use('/api/components', componentsRouter)
   app.use('/api/audio', audioRouter)
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
@@ -2991,6 +2993,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       error: err instanceof Error ? err.message : String(err),
     })
   }
+
+  // ── Components (src/core/components/): look at what is installed, in the
+  // background. Only an upgrade downloads here: a component the person already
+  // had, at an older version than this build pins, is brought up to date. ──
+  void import('../core/components/index.js').then((m) => m.startComponentUpgrades()).catch((err) => {
+    log.web.warn('components init failed', { error: err instanceof Error ? err.message : String(err) })
+  })
 
   // ── Search index wiring (hybrid-search) ──
   // Primary only: on a cloud replica the embed model would pin the instance.

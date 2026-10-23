@@ -98,6 +98,7 @@ export const SLOW_TEST_FILES = [
   'tests/scripts/release-promote-steps.test.ts', // ~10-40s: the release job's steps against a bare origin, real git pushes
   'tests/scripts/test-baseline-shard-cut.test.ts', // ~5-15s: three real nested vitest runs, checking the gate's --shard cut
   'tests/lib/hybrid-search-embed-worker-process.test.ts', // ~5-15s: real node hosts and workers through tsx
+  'tests/core/components/features.test.ts', // ~5-10s: packs the real component archives (gzip -9 of ~55 MB) and installs them
   'tests/providers/daemon-isolated-exit-reap-twins.test.ts', // ~15s: both daemon twins exit with live sessions; one case waits out the 5s SIGINT grace
   'tests/providers/daemon-link-liveness-twins-e2e.test.ts', // ~35s: both daemon twins, the bridge silence watchdog and the trusted-client keepalive on sub-second clocks
   'tests/providers/daemon-bridge-slow-link-twins-e2e.test.ts', // ~55s: three daemon runtimes, a 1 MB read across a rate-limited bridge link, and a dead link's teardown

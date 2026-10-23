@@ -93,15 +93,12 @@ export async function runSelftest(): Promise<number> {
         return `${source.length} bytes, parses`
       },
     },
-    // Literal specifiers, as at the real load sites, so the build treats them the same way.
-    ...([
-      ['sharp', () => import('sharp' as string)],
-      ['@huggingface/transformers', () => import('@huggingface/transformers' as string)],
-      ['screencapturekit-audio-capture', () => import('screencapturekit-audio-capture' as string)],
-    ] as Array<[string, () => Promise<unknown>]>).map(([name, load]): Check => ({
+    // Downloaded components: where each feature loads from, and one real call
+    // through its own load path once installed (src/core/components/selftest.ts).
+    ...(['embedding', 'images', 'audio-capture'] as const).map((name): Check => ({
       name: `component ${name}`, required: false, run: async () => {
-        await load()
-        return 'present'
+        const { componentSelftest } = await import('../core/components/selftest.js')
+        return componentSelftest(name)
       },
     })),
   ]

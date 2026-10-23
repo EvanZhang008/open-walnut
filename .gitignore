@@ -112,3 +112,6 @@ mise.toml
 # Dependencies install with Bun (bun.lock). npm, when a checkout is installed with
 # it anyway, writes its own package-lock.json: never a second source of versions.
 package-lock.json
+
+# Component archives (scripts/components/build.ts)
+dist-components/

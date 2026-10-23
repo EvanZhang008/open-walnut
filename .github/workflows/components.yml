@@ -1,0 +1,119 @@
+name: Components
+
+# The optional parts Walnut downloads on first use (src/core/components/):
+# scripts/components/build.ts packs each archive from pinned npm packages and
+# checks that its tar is byte for byte the one pinned in
+# src/core/components/manifest-data.ts. Each platform then installs its own
+# archives and runs one real call per component (src/core/components/smoke.ts).
+# With `publish`, the archives and their checksums go to the prerelease
+# `component-<name>-<version>` named in the manifest. Changing a recipe means
+# bumping its revision, `bun scripts/components/build.ts --write`, committing
+# the new pins, then this. A published asset is never replaced: one already on
+# its release must hold the pinned tar, or the publish fails.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Attach the archives to their component-<name>-<version> prereleases'
+        required: false
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - 'scripts/components/**'
+      - 'src/core/components/**'
+      - 'src/lib/tar.ts'
+      - '.github/workflows/components.yml'
+
+permissions:
+  contents: read
+
+# A newer check replaces an older one; a publish runs in its own group and is never cancelled.
+concurrency:
+  group: components-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.publish) && 'publish' || 'check' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish) }}
+
+jobs:
+  verify:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: darwin-arm64, runner: macos-14 }
+          - { platform: darwin-x64, runner: macos-15-intel }
+          - { platform: linux-x64, runner: ubuntu-24.04 }
+          - { platform: linux-arm64, runner: ubuntu-24.04-arm }
+          # musl: the steps run on the runner, the build and smoke inside Alpine
+          # (the runner cannot run its own actions inside an arm64 Alpine container).
+          - { platform: linux-x64-musl, runner: ubuntu-24.04, alpine: 'oven/bun:1.4.4-alpine' }
+          - { platform: linux-arm64-musl, runner: ubuntu-24.04-arm, alpine: 'oven/bun:1.4.4-alpine' }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - if: ${{ !matrix.alpine }}
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # Build this platform's archives, prove the tars are the pinned ones, install and smoke them.
+      - if: ${{ !matrix.alpine }}
+        run: bun scripts/components/build.ts --platform ${{ matrix.platform }} --check --verify
+      - if: ${{ matrix.alpine }}
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w "${{ matrix.alpine }}" \
+            bun scripts/components/build.ts --platform ${{ matrix.platform }} --check --verify
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: components-${{ matrix.platform }}
+          path: |
+            dist-components/*.tar.gz
+            dist-components/*.sha256
+          retention-days: 7
+
+  release:
+    name: Attach to the component prereleases
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # Every platform's archive from one machine (the tars are reproducible, and checked against the pins here).
+      - run: bun scripts/components/build.ts --check
+      # Upload only what the release lacks. An asset already there is never
+      # replaced: it is downloaded and its tar must be the pinned one.
+      - name: Upload each component's archives and checksums
+        run: |
+          set -euo pipefail
+          bun -e "const m=JSON.parse(require('fs').readFileSync('dist-components/manifest.json','utf8'));for(const c of Object.values(m.components))for(const e of Object.values(c.platforms))console.log(c.tag,e.asset,e.tarSha256)" > assets.txt
+          seen="$(mktemp -d)"
+          while read -r tag asset pinned; do
+            [ -f "dist-components/$asset" ] || { echo "::error::$asset is pinned but was not built"; exit 1; }
+            if ! gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create "$tag" -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
+                --target "$GITHUB_SHA" --title "Walnut component: ${tag#component-}" \
+                --notes "Downloaded by Walnut the first time a feature needs it. Walnut checks the SHA-256 of the tar inside each archive against src/core/components/manifest-data.ts."
+            fi
+            on_release="$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+            if grep -qxF "$asset" <<<"$on_release"; then
+              gh release download "$tag" -R "$GITHUB_REPOSITORY" --pattern "$asset" --dir "$seen"
+              got="$(gzip -dc "$seen/$asset" | sha256sum | cut -d' ' -f1)"
+              if [ "$got" != "$pinned" ]; then
+                echo "::error::$tag already has $asset with tar $got; the pin is $pinned. A published asset is never replaced: bump the revision."
+                exit 1
+              fi
+              echo "$asset: already on $tag, its tar is the pinned one"
+            else
+              gh release upload "$tag" -R "$GITHUB_REPOSITORY" "dist-components/$asset"
+            fi
+            grep -qxF "$asset.sha256" <<<"$on_release" || gh release upload "$tag" -R "$GITHUB_REPOSITORY" "dist-components/$asset.sha256"
+          done < assets.txt
+          cat dist-components/*.sha256 | tee -a "$GITHUB_STEP_SUMMARY"

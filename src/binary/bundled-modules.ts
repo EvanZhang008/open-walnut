@@ -2,7 +2,7 @@
  * Modules a Node build of Walnut reads as separate dist files, carried inside
  * the compiled file instead.
  *
- * A Node build starts some as programs (`node <dist file>`, `fork(<dist file>)`)
+ * A Node build starts some as programs (`node <dist file>`, or forks `<dist file>`)
  * and imports others by path (the built-in actions). In the compiled file,
  * process.execPath is the file, so a program arrives as
  * `walnut <runtime root>/<dist file> ...` and src/binary/main.ts evaluates the

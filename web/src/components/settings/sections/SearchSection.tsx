@@ -15,6 +15,7 @@ import { log } from '@/utils/log';
 import { visibleInterval } from '@/utils/page-visibility';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useSerialSave, type OnSave } from './GeneralSection';
+import { ComponentDownloadButton, componentHelp, useComponentStatus } from './component-download';
 
 interface Props {
   config: Config;
@@ -26,8 +27,10 @@ interface Props {
  *
  * There is no model picker any more: the embedding model is an ONNX model the
  * embed worker fetches on first use (env override WALNUT_SEARCH_EMBED_MODEL for
- * experiments), so there is nothing for a user to choose or download. What the
- * panel still owns: index health, a manual re-index, and the excluded-folders
+ * experiments). The library that runs it is a component the compiled Walnut
+ * downloads when the person turns search by meaning on here (its row offers the
+ * download); running from source or an npm install it is already there. What the
+ * panel also owns: index health, a manual re-index, and the excluded-folders
  * list.
  */
 
@@ -116,6 +119,8 @@ export function SearchSection({ config, onSave }: Props) {
   const pollRef = useRef<(() => void) | undefined>(undefined);
 
   const save = useSerialSave(config, onSave);
+  // Search by meaning loads a model library the compiled Walnut downloads on first use (src/core/components/).
+  const embedding = useComponentStatus('embedding');
   const excluded = useOptimisticSetting<string[]>(
     config.search?.excluded_folders ?? [],
     (next) => save((c) => ({ search: { ...c.search, excluded_folders: next.length > 0 ? next : undefined } }), { rowKey: 'search.excluded' }),
@@ -233,11 +238,30 @@ export function SearchSection({ config, onSave }: Props) {
                 </span>
               }
             />
-            {indexStatus && (
-              <SettingsRow label="Embedding model" control={indexStatus.model.name && indexStatus.model.name !== 'disabled'
-                ? <code className="settings-mono-value">{indexStatus.model.name}</code>
-                : <span className="settings-addons-muted">Off, keyword search only</span>} />
-            )}
+            {indexStatus && (() => {
+              const laneOn = !!indexStatus.model.name && indexStatus.model.name !== 'disabled';
+              const comp = embedding.status;
+              if (laneOn && comp && comp.state !== 'ready' && comp.state !== 'unsupported') {
+                return (
+                  <SettingsRow
+                    label="Search by meaning"
+                    help={componentHelp(comp)}
+                    state={comp.state === 'failed' ? 'warning' : undefined}
+                    data-testid="search-embedding-component"
+                    control={<ComponentDownloadButton status={comp} onInstall={() => { void embedding.install(); }} testId="search-embedding-download" />}
+                  />
+                );
+              }
+              return (
+                <SettingsRow
+                  label="Embedding model"
+                  help={laneOn && comp?.state === 'unsupported' ? 'Search by meaning is not available on this system.' : undefined}
+                  control={laneOn && comp?.state !== 'unsupported'
+                    ? <code className="settings-mono-value">{indexStatus.model.name}</code>
+                    : <span className="settings-addons-muted">Off, keyword search only</span>}
+                />
+              );
+            })()}
           </>
         )}
         {fetchError && (
