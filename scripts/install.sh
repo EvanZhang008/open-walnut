@@ -258,10 +258,12 @@ $1
 }
 
 # Does a process run from the Node archive? It marks nothing, so its command line
-# says; when ps cannot answer, the answer is yes.
+# says; when ps cannot answer, the answer is yes. The archive's launcher finds its
+# root with `pwd -P`, so a HOME reached through a link shows its physical path.
 app_in_use() {
   commands="$(ps -axo command= 2>/dev/null)" || return 0
-  case "$commands" in *"$install_dir/app/"*) return 0 ;; esac
+  physical="$(cd "$install_dir" 2>/dev/null && pwd -P)" || physical="$install_dir"
+  case "$commands" in *"$install_dir/app/"* | *"$physical/app/"*) return 0 ;; esac
   return 1
 }
 

@@ -369,6 +369,33 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
     expect(entries(home)).not.toContain('app')
   })
 
+  it('keeps the Node archive a process runs from when HOME is reached through a link', async () => {
+    // The archive's launcher finds its root with `pwd -P`, so its processes name the
+    // physical path (macOS /tmp is /private/tmp; Fedora Atomic's /home is /var/home).
+    const real = freshHome()
+    const home = path.join(scratch, `link-${crypto.randomBytes(4).toString('hex')}`)
+    fs.symlinkSync(real, home)
+    await releaseArchive('0.6.9')
+    expect((await install(home, { OPEN_WALNUT_VERSION: '0.6.9' })).code).toBe(0)
+    releaseFile('0.7.0')
+    expect((await install(home)).code).toBe(0)
+    const runner = path.join(share(real), 'app', 'bin', 'runner')
+    fs.writeFileSync(runner, '#!/bin/sh\nwhile :; do sleep 1; done\n', { mode: 0o755 })
+    const child = spawn(runner, [], { stdio: 'ignore' })
+    try {
+      releaseFile('0.8.0')
+      const kept = await install(home)
+      expect(kept.code, kept.out).toBe(0)
+      expect(entries(home)).toContain('app')
+    } finally {
+      child.kill()
+    }
+    await new Promise((resolve) => (child.exitCode !== null || child.signalCode !== null ? resolve(null) : child.on('exit', resolve)))
+    releaseFile('0.9.0')
+    expect((await install(home)).code).toBe(0)
+    expect(entries(home)).not.toContain('app')
+  })
+
   it('installing the version in use again changes nothing and keeps the one before it', async () => {
     const home = freshHome()
     releaseFile('0.7.0')

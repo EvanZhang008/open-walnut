@@ -272,9 +272,10 @@ Release get is what the matrix ran. Both channels also publish only a commit who
   rollback, and so does a version a server still runs from (each server marks its own in
   `running/<pid>`); older ones go, and only in a root its marker was in before the run, and
   only directories holding a `walnut` (the Node archive's `app/` only while no process runs
-  from it). It takes the updater's lock (`.update.lock`, whose `owner` names a pid and when
-  that process started, so a reused pid is no holder; a stale lock is taken over one taker at a
-  time, `src/core/self-update/install-lock.ts`) and waits a minute for an update in progress.
+  from it, by its physical path too: the archive's launcher runs from that one). It takes the
+  updater's lock (`.update.lock`, whose `owner` names a pid and when that process started,
+  so a reused pid is no holder; a stale lock is taken over one taker at a time,
+  `src/core/self-update/install-lock.ts`) and waits a minute for an update in progress.
   The whole script is one `main` called on its last line, so a download cut short runs
   nothing. `OPEN_WALNUT_VERSION` must be a version; a refusal from GitHub's API (its limit for
   an address without a login) says so and names `OPEN_WALNUT_VERSION`. A version with no file (a release
