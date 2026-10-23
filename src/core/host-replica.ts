@@ -36,6 +36,8 @@ import type { Config } from './types.js'
 import { _resetAttachmentReplicaForTesting, forgetAttachments, syncAttachments } from './attachment-replica.js'
 import { replicaExtras, type Extras } from './host-replica-extras.js'
 import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
+import { companionKeepOf } from './replication/companion-keep.js'
+import { CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 export const REPLICA_KINDS: readonly ReplicaKind[] = ['notes', 'memory', 'skills']
@@ -60,18 +62,26 @@ export function sha12(body: string): string {
   return crypto.createHash('sha256').update(body).digest('hex').slice(0, 12)
 }
 
-/** The companion's host key: its copy's Settings row (`host:companion`), its keep settings. */
+/**
+ * The companion's host key: its copy's Settings row (`host:companion`), its memo. No host
+ * takes the alias (replication/companion-keep.ts companionAliasRefusal).
+ */
 export const COMPANION_REPLICA_HOST = 'companion'
 
-/** Where a replica's keep settings live: a host's `hosts.<key>.keep`; the companion's `cloud_bridge.keep`. */
-export function keepSettingsOf(config: Config, hostKey: string): NonNullable<Config['cloud_bridge']>['keep'] {
-  if (hostKey === COMPANION_REPLICA_HOST) return config.cloud_bridge?.keep ?? config.hosts?.[hostKey]?.keep
+/**
+ * Where a replica's keep settings live: a host's `hosts.<key>.keep`; the companion's
+ * `cloud_bridge.keep` (replication/companion-keep.ts companionKeepOf). The cloud box's
+ * daemon (`__cloudbox__`, the Mac's sessions on the companion's machine) keeps what the
+ * companion keeps: one choice for the box, "What the cloud companion keeps".
+ */
+export function keepSettingsOf(config: Config, hostKey: string, opts: { companion?: boolean } = {}): NonNullable<Config['cloud_bridge']>['keep'] {
+  if (opts.companion || hostKey === CLOUD_BOX_HOST_ALIAS) return companionKeepOf(config)
   return config.hosts?.[hostKey]?.keep
 }
 
-/** What `hostKey` keeps. A replica with no settings keeps everything. */
-export function hostKeepFor(config: Config, hostKey: string): HostKeep {
-  const keep = keepSettingsOf(config, hostKey)
+/** What `hostKey` keeps (`companion`: the cloud companion's own copy). A replica with no settings keeps everything. */
+export function hostKeepFor(config: Config, hostKey: string, opts: { companion?: boolean } = {}): HostKeep {
+  const keep = keepSettingsOf(config, hostKey, opts)
   return {
     notes: keep?.notes !== false,
     notesExclude: cleanKeepEntries(keep?.notes_exclude),
@@ -187,6 +197,8 @@ export interface ReplicaTarget {
   send: (cmd: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>
   /** The target keeps the pictures and files too (a daemon with 'attachment-copy-v1', the companion). */
   attachments?: boolean
+  /** The cloud companion's own copy: its keep is `cloud_bridge.keep`, never a host's. */
+  companion?: true
 }
 
 export interface ReplicaRoundResult { kind: ReplicaKind; action: 'synced' | 'unchanged' | 'dropped' | 'failed'; entries?: number; sent?: number; held?: number; error?: string }
@@ -379,6 +391,7 @@ let companionMemoAt = 0
 const companionTarget: ReplicaTarget = {
   hostKey: COMPANION_REPLICA_HOST,
   attachments: true,
+  companion: true,
   send: async (cmd, params, timeoutMs) => (await import('./cloud-ingest.js')).postToCloudHostReplica(cmd, params, timeoutMs ? { timeoutMs } : {}),
 }
 
@@ -427,7 +440,7 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
       state.rerun = false
       const { getConfig } = await import('./config-manager.js')
       const config = await getConfig()
-      keep = hostKeepFor(config, target.hostKey)
+      keep = hostKeepFor(config, target.hostKey, { companion: target.companion })
       for (const kind of REPLICA_KINDS) {
         const startedAt = Date.now()
         try {

@@ -252,7 +252,14 @@ const CONSOLE_COPY_WRITES: ReadonlyArray<{ methods: readonly string[]; re: RegEx
   { methods: ['PUT', 'DELETE'], re: /^\/api\/notes-v2\/content\/.+$/ },
   { methods: ['POST'], re: /^\/api\/notes-v2\/(move|tags\/rename)$/ },
   { methods: ['PUT'], re: /^\/api\/notes\/global$/ },
+  // Every memory write route (routes/memory.ts; a ratchet walks it): MEMORY.md and USER.md
+  // (their saves go here only with memory off for the box: kept, the box journals them for
+  // the Mac, companion-copy-routes.ts) and the daily log compaction.
   { methods: ['PUT'], re: /^\/api\/memory\/(global|user)$/ },
+  { methods: ['POST'], re: /^\/api\/memory\/daily-log\/compact$/ },
+  // A skill is changed on the Mac: the box's copy holds it as one document.
+  { methods: ['POST'], re: /^\/api\/skills\/?$/ },
+  { methods: ['PUT', 'PATCH', 'DELETE'], re: /^\/api\/skills\/[^/]+$/ },
 ]
 
 /**

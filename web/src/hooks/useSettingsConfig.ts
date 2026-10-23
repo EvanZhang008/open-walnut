@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Config } from '@open-walnut/core';
-import { fetchConfig, updateConfig } from '@/api/config';
+import { fetchConfig, fetchFreshConfig, updateConfig } from '@/api/config';
 import { useEvent } from './useWebSocket';
 import { rebaseOnto } from './config-rebase';
 
@@ -55,7 +55,8 @@ export function useSettingsConfig() {
   const saveSection = useCallback((partial: Partial<Config>) => {
     const base = baseRef.current;
     const run = async () => {
-      const payload = base ? rebaseOnto(partial, base, await fetchConfig()) : partial;
+      // Laid over the server's config as of now (never a shared answer a few seconds old).
+      const payload = base ? rebaseOnto(partial, base, await fetchFreshConfig()) : partial;
       await updateConfig(payload);
       const refreshed = await read();
       if (refreshed) setConfig(refreshed);

@@ -1297,16 +1297,17 @@ async function performNotesSearchInner(opts: {
     // The cloud companion's string leg is a keyword search of its copy of the Mac's notes
     // (stage 4d, core/companion-notes.ts): its own disk index is off. Null elsewhere; it
     // throws needs-the-Mac while the box keeps no copy.
-    const { companionNotesSearch, companionNotesPartial, companionNoteKept, companionNotesOff } = await import('../../core/companion-notes.js')
+    const { companionNotesSearch, companionNotesExcluded, companionNoteLeftOutByChoice, companionNotesOff } = await import('../../core/companion-notes.js')
     // Notes turned off for the box: a search of any mode needs the Mac, never an empty list (4f).
     if (isFollower() && companionNotesOff()) {
       const { NeedsLeaderError } = await import('../../core/replication/needs-leader.js')
       throw new NeedsLeaderError('not_kept_here', 'Your notes are kept only on your Mac.')
     }
     const companionLeg = wantString ? await companionNotesSearch(q, limit * 2) : null
-    // The companion's copy leaves notes out: no hit of one shows (its search copy may still
-    // name it), and the answer says some notes are only on the Mac.
-    const copyPartial = companionNotesPartial()
+    // The user left notes out of the companion's copy: no hit of one shows (its search copy
+    // holds none, an older one may), and the answer says some notes are only on the Mac. A
+    // note over the size cap is in the search copy: its semantic hit shows, no partial.
+    const copyPartial = companionNotesExcluded()
 
     const [stringSettled, semanticSettled] = await Promise.allSettled([
       wantString && !companionLeg ? Promise.resolve(stringSearch(q, limit * 2, { excludeFolders })) : Promise.resolve([]),
@@ -1379,7 +1380,7 @@ async function performNotesSearchInner(opts: {
         // semantic opinion worth merging.
         const sem = h.cos
         if (sem === undefined) continue
-        if (copyPartial && !companionNoteKept(relForFilter)) continue
+        if (copyPartial && companionNoteLeftOutByChoice(relForFilter)) continue
         const id = idFromAbsPath(h.filepath)
         const existing = byId.get(id) ?? byPath.get(relForFilter)
         if (existing) {

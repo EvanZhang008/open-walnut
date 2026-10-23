@@ -11,6 +11,11 @@
  *   reload      the saved choice is what the group opens with
  *   back on     turning everything back on writes no keep and no copies at all
  *   failure     a failed save puts the switch back and says why
+ *   typed text  a failed save of the leave-out box, or of a switch flipped while
+ *               typing there, never clears what was typed
+ *   older keys  a choice an older build kept under hosts.companion shows here; a save
+ *               writes cloud_bridge, drops the older keys, and keeps a cloud_bridge
+ *               setting changed on disk after this page loaded
  *   none        no cloud companion: no group
  *
  * GET /api/devices is a page.route fixture with neutral names; the config writes are
@@ -18,8 +23,11 @@
  * real clicks. Runs in both engines: Chromium by default, WebKit (the Mac app is a
  * WKWebView) with `PW_WEBKIT=1 ... --project=webkit`.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import yaml from 'js-yaml'
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { fixtureHome } from './engine-settings-helpers'
 
 test.setTimeout(120_000)
 
@@ -271,7 +279,7 @@ test.describe('Settings → Phones & Cloud: what the cloud companion keeps', () 
     await expect(sw(page, 'memory')).toBeChecked()
     await shot(page, 'save-failed-keep', group)
     // A copies change that fails says so in the copies list instead.
-    await copies(page).getByText('Inbox', { exact: true }).click()
+    await copies(page).getByText('Inbox and notification cards', { exact: true }).click()
     await expect(copies(page).getByTestId('companion-keep-error')).toBeVisible({ timeout: 15_000 })
     await expect(error).toHaveCount(1)
     await expect(box(page, 'inbox')).toBeChecked()
@@ -288,6 +296,75 @@ test.describe('Settings → Phones & Cloud: what the cloud companion keeps', () 
     await expect(alert).toHaveCount(0)
     await sw(page, 'memory').click()
     await expect.poll(() => keepOf(page), { timeout: 15_000 }).toBeUndefined()
+  })
+
+  test('what is typed stays when a save fails: the leave-out box, and a switch flipped while typing', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await mockDevices(page, [LAN, CLOUD])
+    const group = await openGroup(page)
+    const configUrl = (url: URL) => url.pathname === '/api/config'
+    await page.route(configUrl, (route) =>
+      route.request().method() === 'PUT' ? json(route, { error: 'Config is read-only right now' }, 500) : route.fallback())
+    const field = page.getByTestId('companion-keep-exclude')
+    const error = page.getByTestId('companion-keep-error')
+    // The box's own save fails: the text stays, the error says why.
+    await field.click()
+    await page.keyboard.type('health')
+    await page.keyboard.press('Enter')
+    await expect(error).toContainText('Not saved', { timeout: 15_000 })
+    await page.waitForTimeout(1_000)
+    await expect(field).toHaveValue('health')
+    // Typed on, then a switch flipped before any save took the text: both fail, the text stays.
+    await page.keyboard.type(', travel')
+    await sw(page, 'memory').click()
+    await expect(error).toBeVisible({ timeout: 15_000 })
+    await expect(sw(page, 'memory')).toBeChecked()
+    await page.waitForTimeout(1_000)
+    await expect(field).toHaveValue('health, travel')
+    await shot(page, 'typed-kept-after-failure', group)
+    expect(await keepOf(page)).toBeUndefined()
+    // The server takes writes again: Enter saves what is in the box, as typed.
+    await page.unroute(configUrl)
+    await field.click()
+    await page.keyboard.press('End')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => keepOf(page), { timeout: 15_000 }).toEqual({ notes_exclude: ['health', 'travel'] })
+    await expect(error).toHaveCount(0)
+    await expect(field).toHaveValue('health, travel')
+    await field.fill('')
+    await field.press('Enter')
+    await expect.poll(() => keepOf(page), { timeout: 15_000 }).toBeUndefined()
+  })
+
+  test('a choice an older build kept under hosts.companion shows; a save moves it to cloud_bridge and keeps a change made since', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 })
+    const file = path.join(await fixtureHome(page.request), 'config.yaml')
+    const read = () => (yaml.load(readFileSync(file, 'utf8')) ?? {}) as Record<string, any>
+    const raw = read()
+    writeFileSync(file, yaml.dump({
+      ...raw,
+      cloud_bridge: { enabled: false, url: BRIDGE_URL },
+      hosts: { ...(raw.hosts ?? {}), companion: { keep: { memory: false, notes_exclude: ['health'] }, server: { copies: { boards: false } } } },
+    }))
+    await mockDevices(page, [LAN, CLOUD])
+    const group = await openGroup(page)
+    await expect(sw(page, 'memory')).not.toBeChecked()
+    await expect(sw(page, 'skills')).toBeChecked()
+    await expect(page.getByTestId('companion-keep-exclude')).toHaveValue('health')
+    await expect(box(page, 'boards')).not.toBeChecked()
+    await expect(box(page, 'inbox')).toBeChecked()
+    await shot(page, 'older-keys', group)
+    // The bridge url changes after this page loaded, with no event to tell it (an edit of
+    // config.yaml): the save lays its change over the server's config as of the save.
+    const other = 'wss://other.example.com/bridge'
+    const now = read()
+    writeFileSync(file, yaml.dump({ ...now, cloud_bridge: { ...now.cloud_bridge, url: other } }))
+    await sw(page, 'skills').click()
+    await expect.poll(() => read().cloud_bridge, { timeout: 15_000 }).toEqual({
+      enabled: false, url: other, keep: { memory: false, notes_exclude: ['health'], skills: false }, copies: { boards: false },
+    })
+    expect(read().hosts?.companion).toBeUndefined()
+    await writeBridge(page, { enabled: false, url: BRIDGE_URL })
   })
 
   test('no cloud companion: no group', async ({ page }) => {

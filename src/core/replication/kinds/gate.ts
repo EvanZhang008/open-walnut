@@ -79,12 +79,39 @@ export async function markCopyOff(kind: string, now = Date.now()): Promise<void>
   await writeCopyFile(copyStateFile(kind), { v: 1, off: true, at: now })
 }
 
+/**
+ * What each kind's state file says (off, and when its held copy's rows were the leader's),
+ * kept in memory and read again only when the file was written since: a state file may be
+ * megabytes (every row's hash), and these are asked on every read the box answers from a
+ * copy. A stat (inode, size, mtime) tells a new write, whoever wrote it.
+ */
+const stateMemo = new Map<string, { sig: string; off: boolean; asOf: number | null }>()
+
+async function stateOf(kind: string): Promise<{ off: boolean; asOf: number | null }> {
+  const file = copyStateFile(kind)
+  let sig: string
+  try {
+    const st = await fsp.stat(file)
+    sig = `${st.ino}:${st.size}:${st.mtimeMs}`
+  } catch {
+    stateMemo.delete(kind)
+    return { off: false, asOf: null }
+  }
+  const hit = stateMemo.get(kind)
+  if (hit && hit.sig === sig) return hit
+  type Raw = { v?: unknown; off?: unknown; hashes?: unknown; asOf?: unknown } | null
+  let raw: Raw
+  try { raw = JSON.parse(await fsp.readFile(file, 'utf8')) as Raw } catch { raw = null }
+  const off = raw?.off === true
+  const asOf = raw?.v === 1 && !off && !!raw.hashes && typeof raw.hashes === 'object' ? Number(raw.asOf) || 0 : null
+  const next = { sig, off, asOf }
+  stateMemo.set(kind, next)
+  return next
+}
+
 /** True when the host's choice turned `kind` off here (its last purge, no round since). */
 export async function copyKindOff(kind: string): Promise<boolean> {
-  try {
-    const raw = JSON.parse(await fsp.readFile(copyStateFile(kind), 'utf8')) as { off?: unknown } | null
-    return raw?.off === true
-  } catch { return false }
+  return (await stateOf(kind)).off
 }
 
 /**
@@ -99,11 +126,7 @@ export async function copyKindHeld(kind: string): Promise<boolean> {
 
 /** When the leader's rows of a held copy were read (ms; 0 when not recorded), or null when none is held. */
 export async function copyKindAsOf(kind: string): Promise<number | null> {
-  try {
-    const raw = JSON.parse(await fsp.readFile(copyStateFile(kind), 'utf8')) as { v?: unknown; off?: unknown; hashes?: unknown; asOf?: unknown } | null
-    if (!(raw?.v === 1 && raw.off !== true && !!raw.hashes && typeof raw.hashes === 'object')) return null
-    return Number(raw.asOf) || 0
-  } catch { return null }
+  return (await stateOf(kind)).asOf
 }
 
 /** The header a box read answered from a copy carries: when the copy's rows were the leader's. */

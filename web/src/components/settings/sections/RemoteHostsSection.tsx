@@ -1,5 +1,6 @@
 import { Fragment, useState, useEffect, useRef } from 'react';
 import type { Config } from '@open-walnut/core';
+import { COMPANION_ALIAS, companionAliasRefusal } from '@open-walnut/companion-keep';
 import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
@@ -183,11 +184,17 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   // host. Hold the autosave until every started row is complete (Remove is the
   // way to delete one); a fresh blank row holds nothing back.
   const midEdit = hosts.some((h) => !h.alias !== !h.hostname);
+  // `companion` names the cloud companion (its keep choice, its copy rounds): a new host may
+  // not take it, and nothing saves while one row asks to. A host an older build saved under
+  // it keeps saving, and its row asks for another alias.
+  const savedUnderCompanion = !!config.hosts?.[COMPANION_ALIAS]?.hostname;
+  const aliasRefusal = (h: HostEntry): string | null => companionAliasRefusal(h.alias, { saved: savedUnderCompanion });
+  const aliasTaken = !savedUnderCompanion && hosts.some((h) => aliasRefusal(h) !== null);
   useSettingsAutoSave({
     current: JSON.stringify({ hosts: buildHostsConfig(), limits: normalizeLimits(sessionLimits) }),
     baseline: JSON.stringify({ hosts: normalizeHosts(config.hosts), limits: normalizeLimits(config.session_limits ?? {}) }),
     save: handleSave,
-    enabled: !midEdit,
+    enabled: !midEdit && !aliasTaken,
   });
 
   // The row title is the label, the same name the banner and the picker use (G14);
@@ -254,6 +261,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       htmlFor={`rh-${field}-${idx}`}
       indent
       wide={size === 'long'}
+      error={field === 'alias' ? aliasRefusal(hosts[idx]) ?? undefined : undefined}
       control={
         <input
           id={`rh-${field}-${idx}`}

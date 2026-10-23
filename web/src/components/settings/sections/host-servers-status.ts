@@ -39,17 +39,18 @@ export const DEFAULT_HOST_COPY_CHOICE: Readonly<HostCopyChoice> = Object.freeze(
  * `with` rides with that one: off when it is off (bodies ride with their index).
  */
 export const HOST_COPY_ROWS: ReadonlyArray<{ key: keyof HostCopyChoice; label: string; with?: keyof HostCopyChoice }> = [
-  { key: 'sessions', label: 'Sessions' },
+  // Each label names every copy its switch covers (the kinds whose `choice` is the key, kinds/*.ts).
+  { key: 'sessions', label: 'Sessions and model lists' },
   { key: 'requests', label: 'Reply requests' },
   { key: 'boards', label: 'Boards' },
-  { key: 'inbox', label: 'Inbox' },
+  { key: 'inbox', label: 'Inbox and notification cards' },
   { key: 'inbox_bodies', label: 'Letter bodies', with: 'inbox' },
   { key: 'conversations', label: 'Chat list' },
   { key: 'conversation_bodies', label: 'Chat messages', with: 'conversations' },
   { key: 'routines', label: 'Routines' },
-  { key: 'personas', label: 'Agents' },
+  { key: 'personas', label: 'Agents and their model picks' },
   { key: 'prefs', label: 'Layout and favorites' },
-  { key: 'config', label: 'Settings' },
+  { key: 'config', label: 'Settings and speech vocabulary' },
 ];
 
 /** The choice from what the server stored, defaults filled in (an older server sends fewer keys). */

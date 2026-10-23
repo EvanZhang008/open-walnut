@@ -13,7 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import express from 'express'
 import http from 'node:http'
 import type net from 'node:net'
-import { awayKindReads, SESSIONS_NOT_KEPT } from '../../src/replica/away-kind-reads.js'
+import { awayKindReads, SESSIONS_NOT_KEPT, SESSIONS_PARTIAL } from '../../src/replica/away-kind-reads.js'
 
 const state = { alone: true, off: new Set<string>(), offFails: false, own: new Set<string>() }
 let port = 0
@@ -85,5 +85,81 @@ describe('everything else passes', () => {
   it('an unreadable off mark: the routes answer', async () => {
     state.offFails = true
     expect((await call('/api/sessions')).status).toBe(200)
+  })
+})
+
+/** One more app, mounted the way server.ts mounts it on a host replica or the companion. */
+async function mount(deps: Partial<Parameters<typeof awayKindReads>[0]>, route: express.RequestHandler): Promise<{ call: (p: string) => Promise<{ status: number; json: any }>; close: () => Promise<unknown> }> {
+  const app = express()
+  app.use('/api', awayKindReads({
+    alone: () => state.alone,
+    off: async (kind) => state.off.has(kind),
+    own: async (sid) => state.own.has(sid),
+    ...deps,
+  }))
+  app.use('/api', route)
+  const srv = http.createServer(app)
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()))
+  const at = (srv.address() as net.AddressInfo).port
+  return {
+    call: async (p) => {
+      const res = await fetch(`http://127.0.0.1:${at}${p}`)
+      const text = await res.text()
+      return { status: res.status, json: text ? JSON.parse(text) : null }
+    },
+    close: () => new Promise((r) => srv.close(r)),
+  }
+}
+
+describe('a host replica: its own sessions stay listed (ownLists)', () => {
+  it('every list answers the replica\'s own sessions, marked partial; a session of the Mac needs the Mac', async () => {
+    const app = await mount({ ownLists: true }, (req, res) => {
+      if (req.path === '/sessions/recent') { res.json(['s-own']); return }
+      res.json({ ran: req.path, sessions: ['s-own'] })
+    })
+    try {
+      state.off.add('sessions')
+      state.own.add('s-own')
+      for (const p of ['/api/sessions', '/api/sessions/status?ids=s-own', '/api/sessions/task/t-1', '/api/v1/sessions']) {
+        const r = await app.call(p)
+        expect([p, r.status, r.json.sessions, r.json.partial]).toEqual([p, 200, ['s-own'], SESSIONS_PARTIAL])
+      }
+      expect((await app.call('/api/sessions/s-own/history')).json).not.toHaveProperty('partial')
+      expect((await app.call('/api/sessions/s-mac')).status).toBe(503)
+      // Only a 2xx object answer is marked: an array goes as it is.
+      expect(await app.call('/api/sessions/recent')).toEqual({ status: 200, json: ['s-own'] })
+      // Kept (the default): no mark.
+      state.off.clear()
+      expect((await app.call('/api/sessions')).json).toEqual({ ran: '/sessions', sessions: ['s-own'] })
+      // The Mac answers: no mark.
+      state.off.add('sessions')
+      state.alone = false
+      expect((await app.call('/api/sessions')).json).not.toHaveProperty('partial')
+    } finally { await app.close() }
+  })
+
+  it('a list whose route answers an error goes as it is, unmarked', async () => {
+    const app = await mount({ ownLists: true }, (_req, res) => { res.status(500).json({ error: 'broken' }) })
+    try {
+      state.off.add('sessions')
+      expect((await app.call('/api/sessions'))).toEqual({ status: 500, json: { error: 'broken' } })
+    } finally { await app.close() }
+  })
+})
+
+describe('the companion: only the phone\'s session reads (scope v1), only its main list is its own', () => {
+  it('its console session routes pass (they read its own registry); the v1 list is partial; other v1 lists need the Mac', async () => {
+    const app = await mount({ scope: 'v1', ownLists: /^\/v1\/sessions\/?$/i }, (req, res) => { res.json({ ran: req.path }) })
+    try {
+      state.off.add('sessions')
+      state.own.add('cloud-1')
+      for (const p of ['/api/sessions', '/api/sessions/s-mac', '/api/sessions/recent']) expect([p, (await app.call(p)).json]).toEqual([p, { ran: p.slice('/api'.length) }])
+      const list = await app.call('/api/v1/sessions')
+      expect([list.status, list.json.partial]).toEqual([200, SESSIONS_PARTIAL])
+      expect((await app.call('/api/v1/sessions/')).status).toBe(200)
+      expect((await app.call('/api/v1/sessions/recent')).status).toBe(503)
+      expect((await app.call('/api/v1/sessions/cloud-1/transcript')).status).toBe(200)
+      expect((await app.call('/api/v1/sessions/s-mac/transcript')).status).toBe(503)
+    } finally { await app.close() }
   })
 })

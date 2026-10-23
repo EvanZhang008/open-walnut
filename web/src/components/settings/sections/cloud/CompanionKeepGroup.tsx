@@ -1,12 +1,16 @@
 /**
  * What the cloud companion keeps (`cloud_bridge.keep`, `cloud_bridge.copies`;
  * docs/plan/walnut-companion-unified-replica.md, 4f): the same rows and defaults as a
- * host's (Remote Hosts), every one on. What it does not keep is answered by this Mac.
- * A switch answers the click at once and saves; a failed save puts it back and says why,
- * beside the half that changed. The leave-out box saves when it loses focus or takes Enter.
+ * host's (Remote Hosts), every one on, every row a switch. What it does not keep is
+ * answered by this Mac. The choice is read the way the server reads it
+ * (@open-walnut/companion-keep: cloud_bridge, else where an older build kept it). A switch
+ * answers the click at once and saves; a failed save puts it back and says why, beside the
+ * half that changed. The leave-out box saves when it loses focus or takes Enter, and what is
+ * typed there stays until a save takes it (a failed one never clears it).
  */
 import { useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
+import { companionCopiesOf, companionKeepOf } from '@open-walnut/companion-keep';
 import { SettingsGroup, SettingsRow } from '../../SettingsSection';
 import { saveErrorMessage } from '../../settings-pane-context';
 import { ReplicaKeepRows, normalizeKeep, splitKeepEntries, type ReplicaKeep } from '../ReplicaKeepRows';
@@ -22,10 +26,11 @@ interface Props {
 type Bridge = NonNullable<Config['cloud_bridge']>;
 
 const excludeOf = (keep: ReplicaKeep | undefined): string => (keep?.notes_exclude ?? []).join(', ');
+const sameList = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean => JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
 
 export function CompanionKeepGroup({ config, onSave }: Props) {
-  const savedKeep = config.cloud_bridge?.keep;
-  const savedCopies = config.cloud_bridge?.copies;
+  const savedKeep = companionKeepOf(config);
+  const savedCopies = companionCopiesOf(config);
   const savedKey = JSON.stringify([savedKeep ?? null, savedCopies ?? null]);
   const [keep, setKeep] = useState<ReplicaKeep>(savedKeep ?? {});
   const [copies, setCopies] = useState<Partial<HostCopyChoice>>(savedCopies ?? {});
@@ -35,8 +40,10 @@ export function CompanionKeepGroup({ config, onSave }: Props) {
   const [error, setError] = useState<{ at: 'keep' | 'copies'; message: string } | null>(null);
   /** Saves on their way: the config they echo back is older than the choice shown, so it is not applied. */
   const pending = useRef(0);
-  /** The leave-out box holds text not saved yet: an echo never replaces it. */
-  const typing = useRef(false);
+  /** The leave-out box holds text no save has taken yet (being typed, or its save failed): nothing replaces it. */
+  const draft = useRef(false);
+  const text = useRef(excludeText);
+  text.current = excludeText;
   /** A save of this batch failed: once the last one settles, the saved choice is shown again. */
   const failed = useRef(false);
   const saved = useRef({ keep: savedKeep, copies: savedCopies });
@@ -44,7 +51,7 @@ export function CompanionKeepGroup({ config, onSave }: Props) {
   const showSaved = () => {
     setKeep(saved.current.keep ?? {});
     setCopies(saved.current.copies ?? {});
-    if (!typing.current) setExcludeText((text) => (splitKeepEntries(text).join(', ') === excludeOf(saved.current.keep) ? text : excludeOf(saved.current.keep)));
+    if (!draft.current) setExcludeText((t) => (splitKeepEntries(t).join(', ') === excludeOf(saved.current.keep) ? t : excludeOf(saved.current.keep)));
   };
   // A save elsewhere (another tab, config.yaml) shows here.
   useEffect(() => {
@@ -67,9 +74,13 @@ export function CompanionKeepGroup({ config, onSave }: Props) {
     setBusy(true);
     pending.current += 1;
     try {
-      // Only what differs from "keep everything" is written.
+      // Only what differs from "keep everything" is written. The other cloud_bridge settings
+      // are the page's: the save lays only what changed over the freshest config
+      // (useSettingsConfig rebaseOnto), and the server moves an older build's keys here.
       const bridge: Bridge = { ...(config.cloud_bridge ?? {}), keep: normalizeKeep(next.keep), copies: offOnly(next.copies) };
       await onSave({ cloud_bridge: bridge } as Partial<Config>);
+      // The box's text is saved once a save took exactly what it holds now.
+      if (sameList(splitKeepEntries(text.current), next.keep.notes_exclude)) draft.current = false;
     } catch (err) {
       log.warn('settings', 'companion keep setting not saved', { error: err instanceof Error ? err.message : String(err) });
       undo();
@@ -84,9 +95,8 @@ export function CompanionKeepGroup({ config, onSave }: Props) {
     }
   };
 
+  // A switch takes the typed list with it; a failed save puts the switch back and keeps the text.
   const onKeep = (patch: Partial<ReplicaKeep>) => {
-    // The typed list rides along with the switch.
-    typing.current = false;
     const before = latest.current.keep;
     const next = { ...before, ...patch, notes_exclude: splitKeepEntries(excludeText) };
     setKeep(next);
@@ -94,13 +104,16 @@ export function CompanionKeepGroup({ config, onSave }: Props) {
   };
 
   const commitExclude = () => {
-    typing.current = false;
     const entries = splitKeepEntries(excludeText);
     const before = latest.current.keep;
-    if (JSON.stringify(entries) === JSON.stringify(before.notes_exclude ?? [])) return;
+    if (sameList(entries, before.notes_exclude)) {
+      // Nothing new to send: the text is saved once nothing is on its way and it is what is stored.
+      if (pending.current === 0 && sameList(entries, saved.current.keep?.notes_exclude)) draft.current = false;
+      return;
+    }
     const next = { ...before, notes_exclude: entries };
     setKeep(next);
-    void save('keep', { ...latest.current, keep: next }, () => { setKeep(before); setExcludeText(excludeOf(before)); });
+    void save('keep', { ...latest.current, keep: next }, () => setKeep(before));
   };
 
   const onCopies = (patch: Partial<HostCopyChoice>) => {
@@ -122,7 +135,7 @@ export function CompanionKeepGroup({ config, onSave }: Props) {
         keep={keep}
         excludeText={excludeText}
         onKeep={onKeep}
-        onExcludeText={(text) => { typing.current = true; setExcludeText(text); }}
+        onExcludeText={(t) => { draft.current = true; setExcludeText(t); }}
         onExcludeCommit={commitExclude}
       />
       {error?.at === 'keep' && <SettingsRow label="Not saved" indent error={error.message} data-testid="companion-keep-error" />}

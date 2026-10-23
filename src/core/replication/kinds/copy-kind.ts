@@ -115,6 +115,18 @@ export function keepsCopiesTarget(t: CopyTarget, kind?: string): boolean {
   return t.kind === 'companion' && (kind === undefined || COMPANION_COPY_KINDS.has(kind))
 }
 
+/**
+ * The target holds this Mac's copy of `kind` now: its last round of the kind was taken
+ * (synced, or unchanged). False after a purge (the kind turned off), before the first round
+ * since this Mac started, and while the rounds since fail: a kind turned on again is still
+ * the off marker there until a round lands (the Mac's door then takes the box's read of it,
+ * v1-forward/target.ts).
+ */
+export function copyKindHeldBy(targetId: string, kind: string): boolean {
+  const action = peekKindState(targetId, kind)?.action
+  return action === 'synced' || action === 'unchanged'
+}
+
 /** The digest of a manifest, worked out once per manifest object. */
 const manifestDigests = new WeakMap<object, string>()
 /** An ordered kind's digest also names its order (kind-follower.ts rowSetDigest works it out the same way). */

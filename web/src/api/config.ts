@@ -25,6 +25,16 @@ export async function fetchConfig(): Promise<Config & { _envTokenHint?: string }
 }
 
 /**
+ * The server's config as of now, never a shared answer from the last few seconds: what a
+ * Settings save lays its change over (useSettingsConfig). A change no event announced (an
+ * edit of config.yaml, a write an event has not reached this page for yet) is in it.
+ */
+export async function fetchFreshConfig(): Promise<Config & { _envTokenHint?: string }> {
+  invalidateSharedGet(CONFIG_URL);
+  return fetchConfig();
+}
+
+/**
  * Whether an error notification's "Ask AI to fix" can start a repair session
  * here, and in which source tree. `source: null` with `available: true` means
  * the first click has to CLONE upstream first (minutes, once), and the button says

@@ -148,6 +148,32 @@ describe('PUT /api/config', () => {
     const onDisk = yaml.load(raw) as any;
     expect(onDisk.providers.bedrock.aws_credential_export).toBe('my-export-cmd');
   });
+
+  // `companion` names the cloud companion (replication/companion-keep.ts).
+  it('refuses a new host saved under the alias companion, with a plain message; nothing is written', async () => {
+    const app = createApp();
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, hosts: { dev: { hostname: 'dev.example' } } }), 'utf-8');
+    const before = await fs.readFile(CONFIG_FILE, 'utf-8');
+    const res = await request(app).put('/api/config').send({ hosts: { dev: { hostname: 'dev.example' }, companion: { hostname: 'box.example' } } });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: 'The name "companion" is taken by the cloud companion. Give this host another alias.',
+      code: 'host_alias_taken',
+      field: 'hosts.companion',
+    });
+    expect(await fs.readFile(CONFIG_FILE, 'utf-8')).toBe(before);
+    // Any other alias saves.
+    expect((await request(app).put('/api/config').send({ hosts: { dev: { hostname: 'dev.example' }, 'companion-2': { hostname: 'box.example' } } })).status).toBe(200);
+  });
+
+  it('a real host already saved as companion keeps saving', async () => {
+    const app = createApp();
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, hosts: { companion: { hostname: 'box.example' } } }), 'utf-8');
+    const res = await request(app).put('/api/config').send({ hosts: { companion: { hostname: 'box.example', user: 'me' } } });
+    expect(res.status).toBe(200);
+    const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(onDisk.hosts.companion).toMatchObject({ hostname: 'box.example', user: 'me' });
+  });
 });
 
 describe('POST /api/config/test-connection — credential_process', () => {

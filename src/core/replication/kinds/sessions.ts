@@ -230,7 +230,10 @@ export function sessionsFollower(): RowSetFollower {
     changed,
     purge: async () => {
       const db = await import('../../session-db.js')
-      const ids = onCompanion() ? db.companionSessionCopyIds(companionCopyFile()) : db.sessionIdsInStore()
+      // A host replica's own sessions (the ones that run on it) are its own work, always
+      // kept: the purge takes only the Mac's others (docs/plan/walnut-control-plane.md).
+      const own = onCompanion() ? '' : (process.env.WALNUT_HOST_KEY ?? '').trim()
+      const ids = onCompanion() ? db.companionSessionCopyIds(companionCopyFile()) : db.sessionIdsInStore(own ? { exceptHost: own } : {})
       if (ids.length > 0) {
         if (onCompanion()) db.applyCompanionSessionCopy(companionCopyFile(), { removeIds: ids })
         else db.applySessionCopy({ removeIds: ids })

@@ -143,11 +143,21 @@ removed from the host (`replica.drop`, which leaves an off marker), and so is a
 note left out. What a host does not keep is never answered from its copy: while
 the server answers, the read goes there; while it is away, `note_read`,
 `note_search` misses, `memory_read` and `skill_read` answer `needs_leader` with
-why `not_kept_here`, never "not found". A `note_search` over a copy that leaves
-notes out says so (`partial`). The commands are trusted-socket only: the
-companion's bridge can neither send nor read a copy. An old daemon (no
+why `not_kept_here`, never "not found". A `note_search` over a copy the user
+keeps less on says so (`partial`); a note over 1 MB is no choice and makes no
+search partial (the search copy keeps it). The commands are trusted-socket only:
+the companion's bridge can neither send nor read a copy. An old daemon (no
 `host-replica-v1`) keeps no copy and is never sent one. The same rule for every
 replica and every copy kind: docs/plan/walnut-companion-unified-replica.md, 4f.
+
+A host replica (a Walnut server on the host, `WALNUT_ROLE=replica`) reads its
+memory and skills from this copy too, through the follower link
+(`replica.list/readMany {kind}`, `replica-reads-v1`; `replica/host-copy-reads.ts`),
+never from its own data dir. Its sessions copy, when the user turns it off, keeps
+the rows of the sessions that run on the host, so its own sessions stay listed
+(marked `partial`) and readable while the Mac is away; they are the rows as of the
+purge. The cloud companion's host row (`__cloudbox__`) follows `cloud_bridge.keep`,
+and no host may take the alias `companion`.
 
 ## The companion's copy of the tasks
 

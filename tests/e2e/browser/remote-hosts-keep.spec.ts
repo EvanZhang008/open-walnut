@@ -12,6 +12,8 @@
  *               folder field and the pictures switch, and keeps both for when
  *               notes come back
  *   reload      the saved choice is what the editor opens with
+ *   alias       a host may not take the alias "companion" (the cloud companion's
+ *               own): the row says why in plain words and nothing saves
  *
  * The config writes are real, on the fixture server; the host is off so the
  * fixture never dials it. page.goto only loads the app; the rest is clicks and keys.
@@ -161,4 +163,28 @@ test('a pictures choice survives a reload, and a save of another field keeps it'
   await section.getByRole('switch', { name: `Keep attachments on ${ALIAS}` }).click()
   await section.getByRole('switch', { name: `Keep skills on ${ALIAS}` }).click()
   await expect.poll(() => keepOf(page), { timeout: 15_000 }).toBeUndefined()
+})
+
+test('a host may not take the alias companion: the row says why, nothing saves', async ({ page }) => {
+  const section = await openEditor(page)
+  // The page itself sends no save that names the host companion (the server would refuse it too).
+  const sent: string[] = []
+  page.on('request', (r) => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/config') sent.push(r.postData() ?? '') })
+  const alias = section.locator('#rh-alias-0')
+  await alias.fill('companion')
+  const refusal = section.getByRole('alert').filter({ hasText: 'The name "companion" is taken by the cloud companion. Give this host another alias.' })
+  await expect(refusal).toBeVisible()
+  await page.waitForTimeout(1_500)
+  expect(sent.filter((b) => b.includes('"companion"'))).toEqual([])
+  const hosts = await readHosts(page)
+  expect(hosts.companion).toBeUndefined()
+  expect(hosts[ALIAS]).toMatchObject({ hostname: 'keepbox.example.com' })
+  const row = section.locator('.settings-row:has(#rh-alias-0)')
+  await row.scrollIntoViewIfNeeded()
+  const box = await row.boundingBox()
+  await page.screenshot({ path: `${SHOTS}/host-alias-companion-${test.info().project.name}.png`, scale: 'css', clip: box ? { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: Math.min(box.width + 16, 1280), height: box.height + 64 } : undefined })
+  // Any other name saves again.
+  await alias.fill(ALIAS)
+  await expect(refusal).toHaveCount(0)
+  await expect.poll(async () => Object.keys(await readHosts(page)).filter((k) => k !== '__cloudbox__').sort(), { timeout: 15_000 }).toContain(ALIAS)
 })

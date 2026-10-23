@@ -48,10 +48,13 @@ async function hostReplicaGlobalNotes(): Promise<{ content: string; contentHash:
   const src = replicaNotesSource()
   if (!src) return null
   const key = 'global-notes.md'
-  const st = await src.copyState()
+  // The daemon could not be read (one too old for the copy reads, or not reachable): the
+  // answer every other notes read gives then (replica/notes-routes.ts), never a 500.
+  const unreadable = (): never => { throw new NeedsLeaderError('copy_unreadable', 'The notes copy on this host could not be read; your Mac answers this when it is back.') }
+  const st = await src.copyState().catch(unreadable)
   if (!st.held) throw new NeedsLeaderError(st.off ? 'not_kept_here' : 'kind_not_copied')
-  if (st.partial && await src.leftOut(key)) throw new NeedsLeaderError('not_kept_here')
-  const content = (await src.content(key))?.content ?? ''
+  if (st.partial && await src.leftOut(key).catch(unreadable)) throw new NeedsLeaderError('not_kept_here')
+  const content = (await src.content(key).catch(unreadable))?.content ?? ''
   return { content, contentHash: computeContentHash(content) }
 }
 

@@ -421,3 +421,26 @@ describe('the host turned the sessions copy off', () => {
     } finally { await host.close() }
   })
 })
+
+describe('a host replica\'s own sessions survive the purge', () => {
+  it('turned off, the rows of the sessions that run on this host stay; the Mac\'s others go', async () => {
+    let choice: Record<string, boolean> = {}
+    const host = await startCopyHarness({ id: 'host:sessions-own', copies: async () => choice })
+    const prev = process.env.WALNUT_HOST_KEY
+    process.env.WALNUT_HOST_KEY = 'devbox'
+    try {
+      await syncCopyKinds([kind], { targets: () => [host.target] })
+      const own = leaderRows.filter((r) => r.host === 'devbox').map((r) => r.claudeSessionId).sort()
+      expect(own.length).toBe(4)
+      choice = { sessions: false }
+      const off = await syncCopyKinds([kind], { targets: () => [host.target] })
+      expect(off[0]).toMatchObject({ kind: 'sessions', removed: 8 })
+      expect(sessionDb.sessionIdsInStore().sort()).toEqual(own)
+      expect(sessionDb.sessionIdsInStore({ exceptHost: 'devbox' })).toEqual([])
+    } finally {
+      if (prev === undefined) delete process.env.WALNUT_HOST_KEY
+      else process.env.WALNUT_HOST_KEY = prev
+      await host.close()
+    }
+  })
+})

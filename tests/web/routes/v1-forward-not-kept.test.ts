@@ -45,6 +45,10 @@ import { createV1Forward, type CallOutcome, type PrimarySnapshot } from '../../.
 import { runForwardedCall, ForwardError } from '../../../src/web/v1-forward/target.js'
 import { companionUnkeptKindReads } from '../../../src/core/companion-forward.js'
 import { setSelfApiRoot } from '../../../src/lib/self-api-root.js'
+import { createCompanionDoor } from '../../../src/web/v1-forward/stream-door.js'
+import { kindState } from '../../../src/core/replication/replica-status.js'
+import http from 'node:http'
+import net from 'node:net'
 
 const fresh = (over: Partial<PrimarySnapshot> = {}): PrimarySnapshot => ({
   bridge: true, heard: true, lastSeenAt: Date.now() - 1_000, leading: 0, backupAllowed: true, takeoverMs: 60_000, ...over,
@@ -155,6 +159,9 @@ describe('the console\'s calls about what the box does not keep', () => {
   })
 })
 
+/** This Mac's record that the companion took its last round of `kind` (copy-kind.ts copyKindHeldBy). */
+const held = (kind: string, action: string | undefined) => { kindState({ id: 'companion', kind: 'companion', label: 'Cloud companion' }, kind).action = action }
+
 describe('the Mac\'s door for them (target.ts)', () => {
   let server: Server
   const hits: string[] = []
@@ -172,7 +179,7 @@ describe('the Mac\'s door for them (target.ts)', () => {
     await new Promise<void>((r) => server.close(() => r()))
     await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
   })
-  beforeEach(() => { hits.length = 0 })
+  beforeEach(() => { hits.length = 0; held('conversations', 'synced'); held('conversation-bodies', 'synced') })
 
   const choose = (bridge: Record<string, unknown> | undefined) => fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, ...(bridge ? { cloud_bridge: bridge } : {}) }))
   const refused = async (params: Record<string, unknown>) => {
@@ -187,6 +194,18 @@ describe('the Mac\'s door for them (target.ts)', () => {
     await choose({ copies: { prefs: false } })
     expect(await refused({ method: 'GET', url: '/api/v1/conversations/c1/messages' })).toMatchObject({ code: 'forward_refused' })
     expect(hits).toEqual([])
+  })
+
+  it('turned on again, and no round of it has reached the box yet: the read runs (the box still holds the off marker)', async () => {
+    await choose(undefined)
+    for (const action of [undefined, 'off', 'failed', 'unsupported']) {
+      held('conversations', action)
+      expect([action, (await runForwardedCall({ method: 'GET', url: '/api/v1/conversations' }, 'remote-http')).status]).toEqual([action, 200])
+    }
+    // Once a round lands, the box answers its copy itself again.
+    held('conversations', 'unchanged')
+    expect(await refused({ method: 'GET', url: '/api/v1/conversations' })).toMatchObject({ code: 'forward_refused' })
+    expect(hits).toEqual(['GET /api/v1/conversations', 'GET /api/v1/conversations', 'GET /api/v1/conversations', 'GET /api/v1/conversations'])
   })
 
   it('the Mac\'s choice turned the kind off for the box: the read runs', async () => {
@@ -209,6 +228,118 @@ describe('the Mac\'s door for them (target.ts)', () => {
     hits.length = 0
     for (const params of [{ method: 'GET', url: '/api/config' }, { method: 'PUT', url: '/api/ui-prefs' }, { method: 'GET', url: '/api/notes-v2/content/../../config' }]) {
       expect(await refused(params)).toMatchObject({ code: 'forward_refused' })
+    }
+    expect(hits).toEqual([])
+  })
+})
+
+describe('the Mac\'s two doors run one check (target.ts checkForwardTarget; stream-door.ts)', () => {
+  let mac: Server
+  let front: net.Server
+  let door: ReturnType<typeof createCompanionDoor>
+  let frontPort = 0
+  const hits: string[] = []
+
+  beforeAll(async () => {
+    await fs.mkdir(WALNUT_HOME, { recursive: true })
+    const app = express()
+    app.use((req, res) => { hits.push(`${req.method} ${req.originalUrl}`); res.json({ fromMac: true }) })
+    mac = await new Promise<Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)) })
+    const addr = mac.address()
+    const root = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+    setSelfApiRoot(root)
+    // A stream is any duplex: a socket stands in for the one the Mac's daemon hands over.
+    door = createCompanionDoor({ root: () => root })
+    front = net.createServer((socket) => door.accept(socket, 'remote-http'))
+    await new Promise<void>((r) => front.listen(0, '127.0.0.1', () => r()))
+    frontPort = (front.address() as net.AddressInfo).port
+  })
+  afterAll(async () => {
+    setSelfApiRoot(null)
+    door.close()
+    await new Promise<void>((r) => front.close(() => r()))
+    await new Promise<void>((r) => mac.close(() => r()))
+    await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
+  })
+  beforeEach(() => { hits.length = 0; held('conversations', 'synced'); held('conversation-bodies', 'synced') })
+
+  const choose = (bridge: Record<string, unknown> | undefined) => fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, ...(bridge ? { cloud_bridge: bridge } : {}) }))
+
+  /** One call on a stream to the door, as the companion's stream forward writes it. */
+  const onStream = (method: string, url: string, body?: string) => new Promise<{ status: number; refused: boolean }>((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1', port: frontPort, method, path: url, agent: false,
+      headers: { host: 'primary', ...(body !== undefined ? { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) } : {}) },
+    }, (res) => {
+      res.resume()
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, refused: res.headers['x-walnut-forward-refused'] === '1' }))
+    })
+    req.on('error', reject)
+    req.end(body)
+  })
+  /** The same call as one server.http frame. */
+  const asFrame = async (method: string, url: string, body?: string): Promise<{ status: number; refused: boolean }> => {
+    const data = body !== undefined ? Buffer.from(body) : null
+    try {
+      const r = await runForwardedCall({ method, url, ...(data ? { headers: { 'content-type': 'application/json' }, data: data.toString('base64'), size: data.byteLength } : {}) }, 'remote-http')
+      return { status: r.status, refused: false }
+    } catch (err) {
+      if (err instanceof ForwardError && err.code === 'forward_refused') return { status: err.status, refused: true }
+      throw err
+    }
+  }
+
+  const NOTE = JSON.stringify({ content: '# Plan \u4e2d\n' })
+  const CONSOLE_CALLS: Array<[string, string, string?]> = [
+    ['GET', '/api/notes-v2/list'],
+    ['GET', '/api/notes-v2/content/health/a.md'],
+    ['GET', '/api/search?q=acme%20plan'],
+    ['GET', '/api/ui-prefs'],
+    ['GET', '/api/memory/global'],
+    ['GET', '/api/skills'],
+    ['PUT', '/api/notes-v2/content/health/a.md', NOTE],
+    ['PUT', '/api/memory/global', JSON.stringify({ content: 'x' })],
+    ['POST', '/api/memory/daily-log/compact', '{}'],
+  ]
+
+  it('a console call about what the box does not keep runs on a stream as it runs as a frame', async () => {
+    await choose(undefined)
+    for (const [method, url, body] of CONSOLE_CALLS) {
+      const stream = await onStream(method, url, body)
+      const frame = await asFrame(method, url, body)
+      expect([method, url, stream]).toEqual([method, url, { status: 200, refused: false }])
+      expect([method, url, frame]).toEqual([method, url, stream])
+    }
+    // Each ran twice on the Mac's own route, once per door.
+    expect(hits).toEqual(CONSOLE_CALLS.flatMap(([m, u]) => [`${m} ${u}`, `${m} ${u}`]))
+  })
+
+  it('a phone read the box keeps: both doors refuse it while the box holds it, both run it when it does not', async () => {
+    await choose(undefined)
+    const cases: Array<{ copies?: Record<string, boolean>; action?: string; runs: boolean }> = [
+      { runs: false },
+      { copies: { conversations: false }, runs: true },
+      { action: 'off', runs: true },
+      { action: undefined, runs: true },
+    ]
+    for (const c of cases) {
+      await choose(c.copies ? { copies: c.copies } : undefined)
+      held('conversations', 'action' in c ? c.action : 'synced')
+      for (const url of ['/api/v1/conversations?agentId=general']) {
+        const stream = await onStream('GET', url)
+        const frame = await asFrame('GET', url)
+        expect([c, stream.refused]).toEqual([c, !c.runs])
+        expect([c, frame]).toEqual([c, stream])
+      }
+    }
+  })
+
+  it('what neither door runs, it refuses before any route: a kept send, a path off the lists, a dot segment', async () => {
+    await choose({ copies: { conversations: false } })
+    for (const [method, url, body] of [['POST', '/api/v1/conversations/c1/messages', '{}'], ['GET', '/api/config'], ['PUT', '/api/ui-prefs', '{}'], ['GET', '/api/notes-v2/content/../../config']] as Array<[string, string, string?]>) {
+      const stream = await onStream(method, url, body)
+      const frame = await asFrame(method, url, body)
+      expect([method, url, stream.refused, frame.refused]).toEqual([method, url, true, true])
     }
     expect(hits).toEqual([])
   })

@@ -220,10 +220,16 @@ export function openCopyApplyConnection(): DatabaseType {
 
 let applyHandle: DatabaseType | null = null;
 
-/** The ids this store holds (the sessions copy's local keys). */
-export function sessionIdsInStore(): string[] {
+/**
+ * The ids this store holds (the sessions copy's local keys). `exceptHost`: leave out the
+ * sessions that run on that host (a host replica's own, which its purge keeps).
+ */
+export function sessionIdsInStore(opts: { exceptHost?: string } = {}): string[] {
   const handle = getDb();
   if (!handle) return [];
+  if (opts.exceptHost) {
+    return handle.prepare('SELECT claude_session_id FROM sessions WHERE host IS NULL OR host != ?').pluck().all(opts.exceptHost) as string[];
+  }
   return handle.prepare('SELECT claude_session_id FROM sessions').pluck().all() as string[];
 }
 

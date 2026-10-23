@@ -16,12 +16,40 @@
 
 import path from 'node:path'
 import { COMPANION_REPLICA_HOME, companionCopyHolds, companionHostReplica } from './companion-host-replica.js'
-import { companionMemoryDoc } from './companion-memory.js'
+import { companionMemoryDoc, type MemoryDocName } from './companion-memory.js'
 import { followerKind } from './server-role.js'
 import type { MemoryEntry } from './memory.js'
 
 /** Kept in step with core/host-replica-extras.ts MEMORY_FILES_MARKER (the Mac's side). */
-const MARKER = 'files.v1'
+export const MEMORY_FILES_MARKER = 'files.v1'
+const MARKER = MEMORY_FILES_MARKER
+
+/**
+ * What the readers below read: the companion's copy (with its pending saves over the two
+ * docs), or what a host replica read of its daemon's copy for one request
+ * (replica/host-copy-reads.ts).
+ */
+export interface MemoryCopyView {
+  entries(): ReadonlyArray<{ k: string; m?: Record<string, unknown> }>
+  read(key: string): { body: string; m?: Record<string, unknown> } | null
+  doc(name: MemoryDocName): { content: string; createdAt: string; updatedAt: string } | null
+}
+
+const companionView: MemoryCopyView = {
+  entries: () => companionHostReplica()?.list(COMPANION_REPLICA_HOME, 'memory')?.entries ?? [],
+  read: (key) => companionHostReplica()?.read(COMPANION_REPLICA_HOME, 'memory', key) ?? null,
+  doc: (name) => companionMemoryDoc(name),
+}
+let override: MemoryCopyView | null = null
+
+/** Run `fn` (synchronous, so nothing else reads in between) over `view` instead of the companion's copy. */
+export function withMemoryCopyView<T>(view: MemoryCopyView, fn: () => T): T {
+  const prev = override
+  override = view
+  try { return fn() } finally { override = prev }
+}
+
+const view = (): MemoryCopyView => override ?? companionView
 
 interface Row { rel: string; updatedAt: string; createdAt: string }
 
@@ -35,10 +63,9 @@ export function companionMemoryFiles(): 'copy' | 'needs-mac' | null {
 
 /** Every file of the copy under `prefix` (a path under memory/, '' for all), metadata only. */
 function rows(prefix: string, kind: 'f' | 'r' = 'f'): Row[] {
-  const list = companionHostReplica()?.list(COMPANION_REPLICA_HOME, 'memory')
   const head = `${kind}/${prefix}`
   const out: Row[] = []
-  for (const e of list?.entries ?? []) {
+  for (const e of view().entries()) {
     if (!e.k.startsWith(head)) continue
     const m = e.m ?? {}
     out.push({ rel: e.k.slice(2), updatedAt: typeof m.updatedAt === 'string' ? m.updatedAt : '', createdAt: typeof m.createdAt === 'string' ? m.createdAt : '' })
@@ -47,7 +74,7 @@ function rows(prefix: string, kind: 'f' | 'r' = 'f'): Row[] {
 }
 
 function body(key: string): string | null {
-  return companionHostReplica()?.read(COMPANION_REPLICA_HOME, 'memory', key)?.body ?? null
+  return view().read(key)?.body ?? null
 }
 
 /** core/memory.ts extractTitle and resolveCategory, the same rules. */
@@ -65,10 +92,10 @@ function categoryOf(rel: string): MemoryEntry['category'] {
 export function copyMemoryEntry(rel: string): MemoryEntry | null {
   const clean = rel.split('\\').join('/').replace(/^\/+/, '')
   if (clean === 'MEMORY.md' || clean === 'USER.md') {
-    const d = companionMemoryDoc(clean === 'MEMORY.md' ? 'global' : 'user')
+    const d = view().doc(clean === 'MEMORY.md' ? 'global' : 'user')
     return d ? { path: clean, title: titleOf(d.content, clean), category: 'knowledge', content: d.content, createdAt: d.createdAt, updatedAt: d.updatedAt } : null
   }
-  const r = companionHostReplica()?.read(COMPANION_REPLICA_HOME, 'memory', `f/${clean}`)
+  const r = view().read(`f/${clean}`)
   if (!r) return null
   const m = r.m ?? {}
   return {
@@ -100,8 +127,8 @@ export function copyMemoryBrowseTree(): {
   projects: BrowseItem[]; sessions: BrowseItem[]; knowledge: BrowseItem[]; repos: BrowseItem[]
   topics: BrowseItem[]; compaction: BrowseItem[]; special: BrowseItem[]
 } {
-  const g = companionMemoryDoc('global')
-  const u = companionMemoryDoc('user')
+  const g = view().doc('global')
+  const u = view().doc('user')
   const direct = (prefix: string) => rows(prefix).filter((r) => r.rel.endsWith('.md') && !r.rel.slice(prefix.length).includes('/'))
   const daily = direct('daily/').sort((a, b) => b.rel.localeCompare(a.rel)).map((r) => {
     const date = path.posix.basename(r.rel).replace(/\.md$/, '')

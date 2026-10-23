@@ -47,8 +47,8 @@ const COMPANION: ReplicaTarget = {
   available: async () => (await import('../cloud-ingest.js')).cloudReplicaAvailable(),
   // Its Settings rows (Phones & Cloud) write cloud_bridge.copies; the same defaults as a host's.
   copies: async () => {
-    const config = await (await import('../config-manager.js')).getConfig()
-    return config.cloud_bridge?.copies ?? config.hosts?.companion?.server?.copies
+    const [{ getConfig }, { companionCopiesOf }] = await Promise.all([import('../config-manager.js'), import('./companion-keep.js')])
+    return companionCopiesOf(await getConfig())
   },
 }
 
