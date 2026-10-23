@@ -8,7 +8,6 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { MIN_GAP_HOURS, allowedScripts, bumpFor, generatedNotes, planRelease, rollReleased, soakedNightly } from '../../scripts/stable-promote.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
-import { INSTALL_SCRIPT_PACKAGES } from '../../src/core/self-update/install-kind.js'
 
 const HOUR = 3_600_000
 const NOW = new Date('2026-10-06T16:47:00Z')
@@ -261,11 +260,10 @@ Intro.
 })
 
 describe('allow-scripts', () => {
-  it('is the list the updater passes to npm', () => {
+  it('is this package and the ones package.json allows', () => {
     const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8'))
-    expect(allowedScripts(pkg).sort()).toEqual([...INSTALL_SCRIPT_PACKAGES].sort())
     expect(allowedScripts({ name: 'x', allowScripts: { a: true, b: false } })).toEqual(['x', 'a'])
     const out = execFileSync(process.execPath, [path.resolve(__dirname, '../../scripts/stable-promote.mjs'), 'allow-scripts'], { encoding: 'utf8' })
-    expect(out.trim().split(',').sort()).toEqual([...INSTALL_SCRIPT_PACKAGES].sort())
+    expect(out.trim().split(',').sort()).toEqual(allowedScripts(pkg).sort())
   })
 })

@@ -2,7 +2,7 @@
  * How this Walnut was installed, which decides whether an update check makes
  * sense and what command performs the update.
  *
- *   - `source`: a git checkout run in place (contributors, `npm run dev:prod`).
+ *   - `source`: a git checkout run in place (contributors, `bun run dev:prod`).
  *     The developer manages this tree; a registry comparison would only nag.
  *   - `npm`: a package manager's install (`npm i -g open-walnut`, pnpm, bun,
  *     yarn). The command is the manager that put it there, read off the path.
@@ -103,24 +103,6 @@ export interface DetectInstallInputs {
 }
 
 /**
- * The packages whose install scripts a working install needs: this package's
- * own postinstall plus package.json `allowScripts` (better-sqlite3 and node-pty
- * fetch their native binaries in theirs). npm 12 runs no dependency install
- * script it was not allowed to, and a global install has no project
- * package.json to allow them in.
- */
-export const INSTALL_SCRIPT_PACKAGES = [
-  PACKAGE_NAME,
-  '@homebridge/node-pty-prebuilt-multiarch',
-  'better-sqlite3',
-  'esbuild',
-  'onnxruntime-node',
-  'protobufjs',
-  'screencapturekit-audio-capture',
-  'sharp',
-] as const
-
-/**
  * The npm prefix a package root was installed into globally, when the path has
  * that shape (`<prefix>/lib/node_modules/open-walnut`); null otherwise.
  */
@@ -148,22 +130,19 @@ function installArgv(manager: PackageManager, spec: string): { file: string; arg
 
 /**
  * The manager's global install of one spec (`@latest`, `@nightly`, `@0.6.0`), as argv: no shell.
- * npm gets `--allow-scripts`: without it npm 12 installs a Walnut whose database cannot open.
- * npm 10 ignores the flag and npm 11 only warns about it.
+ * What it installs is the launcher and this machine's platform package, neither of
+ * which has an install script, so no manager needs one allowed.
  */
 export function managerArgv(manager: PackageManager, spec: string, runtimePrefix: string | null = null): { file: string; args: string[] } {
-  const allow = `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`
   if (runtimePrefix) {
     // The archive's own Node runs its own npm, into its own prefix.
     const npmCli = path.join(runtimePrefix, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
-    return { file: path.join(runtimePrefix, 'bin', 'node'), args: [npmCli, 'install', '-g', '--prefix', runtimePrefix, spec, allow] }
+    return { file: path.join(runtimePrefix, 'bin', 'node'), args: [npmCli, 'install', '-g', '--prefix', runtimePrefix, spec] }
   }
-  const argv = installArgv(manager, spec)
-  if (manager !== 'npm') return argv
-  return { ...argv, args: [...argv.args, allow] }
+  return installArgv(manager, spec)
 }
 
-/** The command a person types. Short on purpose: a start after a plain npm 12 install repairs the native modules itself. */
+/** The command a person types: the same install, through the manager that put Walnut there. */
 export function managerCommand(manager: PackageManager, tag: 'latest' | 'nightly' = 'latest'): string {
   const { file, args } = installArgv(manager, `${PACKAGE_NAME}@${tag}`)
   return [file, ...args].join(' ')

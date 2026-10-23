@@ -12,7 +12,7 @@ import { readBunLock, runtimeClosure, splitSpec } from '../../helpers/bun-lock.j
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-install-kind'))
 
 import {
-  BINARY_MARKER, detectInstall, globalPrefixOf, INSTALL_SCRIPT_PACKAGES, LAUNCHER_ENV, managerArgv, managerCommand, managerFromPath, RUNTIME_MARKER, runsCompiled, runtimePrefixOf,
+  BINARY_MARKER, detectInstall, globalPrefixOf, LAUNCHER_ENV, managerArgv, managerCommand, managerFromPath, RUNTIME_MARKER, runsCompiled, runtimePrefixOf,
 } from '../../../src/core/self-update/install-kind.js'
 
 describe('managerFromPath', () => {
@@ -44,7 +44,8 @@ describe('managerCommand and managerArgv', () => {
   })
 
   it('argv is the same words without a shell', () => {
-    expect(managerArgv('npm', 'open-walnut@0.6.0')).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0', `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`] })
+    // The launcher and the platform packages run no install script: no manager is told to allow one.
+    expect(managerArgv('npm', 'open-walnut@0.6.0')).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('pnpm', 'open-walnut@0.6.0')).toEqual({ file: 'pnpm', args: ['add', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('bun', 'open-walnut@0.6.0')).toEqual({ file: 'bun', args: ['add', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('yarn', 'open-walnut@0.6.0')).toEqual({ file: 'yarn', args: ['global', 'add', 'open-walnut@0.6.0'] })
@@ -64,7 +65,7 @@ describe('the self-contained archive', () => {
     const prefix = '/home/alice/.local/share/open-walnut/app/runtime'
     expect(managerArgv('npm', 'open-walnut@0.6.3', prefix)).toEqual({
       file: `${prefix}/bin/node`,
-      args: [`${prefix}/lib/node_modules/npm/bin/npm-cli.js`, 'install', '-g', '--prefix', prefix, 'open-walnut@0.6.3', `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`],
+      args: [`${prefix}/lib/node_modules/npm/bin/npm-cli.js`, 'install', '-g', '--prefix', prefix, 'open-walnut@0.6.3'],
     })
   })
 })
@@ -197,12 +198,10 @@ describe('detectInstall for the compiled file', () => {
   })
 })
 
-// npm 12 runs no dependency install script that is not allowed, and neither
-// does Bun. A dependency whose script fetches its binary (better-sqlite3,
-// node-pty) then installs without it, and Walnut cannot open its database: every
-// such dependency must be allowed in package.json (`allowScripts` for npm: the
-// published package, `npm rebuild` in it; `trustedDependencies` for Bun: a
-// checkout) and named by the global install the updater runs.
+// Neither npm 12 nor bun runs a dependency's install script it was not told to
+// trust. A checkout installs with bun, which runs only `trustedDependencies`; the
+// same list is `allowScripts` for `npm rebuild` inside an unpacked package. Every
+// runtime dependency whose install script matters must be on it.
 describe('install scripts a working install needs', () => {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as {
@@ -219,16 +218,12 @@ describe('install scripts a working install needs', () => {
       if (meta?.hasInstallScript) needed.add(splitSpec(spec)[0])
     }
     // The closure is real: it reaches the native modules a server needs.
-    expect(needed).toContain('better-sqlite3')
-    expect(needed).toContain('@homebridge/node-pty-prebuilt-multiarch')
+    expect(needed).toContain('sharp')
+    expect(needed).toContain('onnxruntime-node')
     expect([...needed].filter((name) => !(name in (pkg.allowScripts ?? {}))).sort()).toEqual([])
   })
 
   it('Bun trusts exactly the packages npm is allowed to run scripts for', () => {
     expect([...(pkg.trustedDependencies ?? [])].sort()).toEqual([...allowed].sort())
-  })
-
-  it('the updater names this package and exactly the allowed ones', () => {
-    expect([...INSTALL_SCRIPT_PACKAGES].sort()).toEqual(['open-walnut', ...allowed].sort())
   })
 })

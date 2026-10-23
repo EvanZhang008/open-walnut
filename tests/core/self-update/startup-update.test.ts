@@ -16,10 +16,7 @@ import {
 } from '../../../src/core/self-update/startup-update.js'
 import type { UpdateStatus } from '../../../src/core/self-update/update-check.js'
 
-import { INSTALL_SCRIPT_PACKAGES } from '../../../src/core/self-update/install-kind.js'
-
 const NPM_ROOT = '/usr/local/lib/node_modules/open-walnut'
-const ALLOW = `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`
 const BASE: UpdateStatus = {
   enabled: true,
   install: { kind: 'npm', sourceDir: null, packageRoot: NPM_ROOT, manager: 'npm', updateCommand: 'npm install -g open-walnut@latest' },
@@ -52,7 +49,7 @@ describe('installDirWritable', () => {
 
 describe('decideStartupUpdate', () => {
   it('installs the exact published version through the manager when everything lines up', () => {
-    expect(decideStartupUpdate(BASE, ALL)).toEqual({ action: 'install', version: '0.6.0', argv: { file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0', ALLOW] } })
+    expect(decideStartupUpdate(BASE, ALL)).toEqual({ action: 'install', version: '0.6.0', argv: { file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0'] } })
   })
 
   it('skips, in order: just applied, switched off, not an npm install, check disabled, registry unreachable, current, read-only prefix', () => {
@@ -67,7 +64,7 @@ describe('decideStartupUpdate', () => {
 
   it('a nightly build installs the exact nightly', () => {
     const nightly: UpdateStatus = { ...BASE, current: '0.6.1-nightly.20261001.4', channel: 'nightly', latest: '0.6.1-nightly.20261002.1' }
-    expect(decideStartupUpdate(nightly, ALL)).toMatchObject({ action: 'install', argv: { args: ['install', '-g', 'open-walnut@0.6.1-nightly.20261002.1', ALLOW] } })
+    expect(decideStartupUpdate(nightly, ALL)).toMatchObject({ action: 'install', argv: { args: ['install', '-g', 'open-walnut@0.6.1-nightly.20261002.1'] } })
   })
 })
 
@@ -104,7 +101,7 @@ describe('updateOnStart', () => {
     const { d, err, run } = deps(BASE, { env: { HOME: '/Users/alice' }, reexec })
     const out = await updateOnStart(d)
     expect(out).toEqual({ kind: 'reexeced', version: '0.6.0', exitCode: 3 })
-    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW], expect.anything())
+    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0'], expect.anything())
     expect(reexec).toHaveBeenCalledWith({ HOME: '/Users/alice', [APPLIED_ENV]: '1' }, BASE.install)
     expect(run.mock.invocationCallOrder[0]).toBeLessThan(reexec.mock.invocationCallOrder[0]!)
     expect(err[0]).toContain('0.6.0 is published (this is 0.5.1); installing it before starting')
@@ -278,7 +275,7 @@ describe('an npm install that did not bring its file', () => {
     const { d, run, reexec, err } = deps(BASE, { versionOf })
     expect(await updateOnStart(d)).toMatchObject({ kind: 'continue', installFailed: 'it still starts nothing' })
     expect(run.mock.calls.map((c) => (c as unknown[])[1])).toEqual([
-      ['install', '-g', 'open-walnut@0.6.0', ALLOW], ['install', '-g', 'open-walnut@0.6.0', ALLOW], ['install', '-g', 'open-walnut@0.5.1', ALLOW],
+      ['install', '-g', 'open-walnut@0.6.0'], ['install', '-g', 'open-walnut@0.6.0'], ['install', '-g', 'open-walnut@0.5.1'],
     ])
     expect(reexec).not.toHaveBeenCalled()
     expect(err.at(-1)).toBe('Open Walnut 0.6.0 did not install its file for this machine (it still starts nothing); 0.5.1 is back.')
