@@ -12,7 +12,7 @@ export default defineConfig({
     environment: 'node',
     globalSetup: ['tests/setup/global-setup.ts'],
     // Per-worker parent-liveness watchdog — see vitest.config.ts.
-    setupFiles: ['tests/setup/prod-server-guard.ts', 'tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts', 'tests/setup/bun-vi-mock.ts'],
+    setupFiles: ['tests/setup/bun-compat.ts', 'tests/setup/prod-server-guard.ts', 'tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts'],
     include: ['tests/**/*.live.test.ts'],
     // Live tests run the real CLI on purpose; every other tier is held to the
     // mock (src/core/test-claude-guard.ts).

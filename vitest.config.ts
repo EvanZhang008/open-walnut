@@ -48,13 +48,13 @@ export default defineConfig({
     // PATH before anything else reads HOME or spawns (tests/setup/exec-guard.ts).
     setupFiles: [
       'tests/setup/exec-guard.ts',
+      // bun only (vi.mock paths, os.homedir): see the file.
+      'tests/setup/bun-compat.ts',
       'tests/setup/runtime-dir-isolation.ts',
       'tests/setup/git-env-isolation.ts',
       'tests/setup/tmp-reaper.ts',
       'tests/setup/temp-tree-rm.ts',
       'tests/setup/worker-watchdog.ts',
-      // vi.mock of a relative path on bun: see the file.
-      'tests/setup/bun-vi-mock.ts',
     ],
     include: ['tests/**/*.test.ts'],
     // notes-roundtrip runs under its own DOM-shimmed config (its deps live in
