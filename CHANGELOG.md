@@ -19,6 +19,36 @@ breaking changes).
   before it serves is gone back from on its own and skipped until a newer release. Homebrew installs update
   with `brew upgrade open-walnut`. An install from the self-contained Node archive keeps updating
   itself onto the new packages, and the archives are published for two more releases.
+- Walnut runs on one runtime, bun, from a checkout to production. The server, its build, the
+  tests and the dev scripts all run on bun; Node stays only under the Playwright test runner. To
+  work on Walnut you install git and bun 1.4.4 or newer, then `bun install` and `bun run start`:
+  nothing is compiled on install, and no Node is needed.
+  Repo commands are `bun run <script>` (`bun run dev:ephemeral`, `bun run test:quick`,
+  `bun run build:binary` for this machine's compiled file).
+- Big optional parts are components, downloaded the first time a feature needs them: search by
+  meaning (`embedding`), image resizing (`images`) and, on macOS, audio capture. Tasks, sessions,
+  the board, notes, keyword search and the tunnel all work from the file alone.
+- A host server is the same compiled file: the Mac sends the file of its own build to the host
+  over the session daemon's SSH path, so the host needs no Node, npm or compiler.
+- `npm install -g open-walnut` keeps working and keeps updating through npm. What it installs is
+  a small launcher plus the one package built for your machine, which holds the compiled file;
+  the launcher needs any Node 18 or newer, and Walnut itself does not run on it.
+- The deploy (`scripts/deploy-committed.sh`, `bun run dev:prod`) serves only the compiled file.
+  `WALNUT_DEVPROD_RUNTIME=node` is gone: a build that fails after the switch rolls back to the
+  last good file, and a deploy with no file to roll back to says so before it stops the old server.
+- The Mac app's "Set Up Now" for a folder installs the self-contained Walnut with its data in that
+  folder, the same way `install.sh` does, instead of cloning and building with npm. A setup an
+  older version of the app built that way moves to the self-contained Walnut on its next launch
+  and keeps its data. A source checkout picked in the app runs on bun.
+- The setup and restore skills install Walnut with `install.sh`, and the README installs Claude
+  Code with its own installer (`curl -fsSL https://claude.ai/install.sh | bash`), so no step a user
+  takes needs npm.
+- The cloud companion builds and runs Walnut on bun: `scripts/cloud/setup.sh` builds with bun and
+  the service starts `bun dist/cli.js web`. Node stays on the box only for agent CLIs installed
+  from npm. A box set up before keeps a service that starts Walnut with node, which this release
+  cannot run on: run setup.sh on the box again when you update it. A Mac that runs the compiled
+  file cannot update its companion yet (Settings says so); a Mac running a built checkout still
+  can.
 
 ## [0.6.19] - 2026-10-27
 

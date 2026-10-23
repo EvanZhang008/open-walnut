@@ -60,7 +60,7 @@ Where the session runs depends on how Walnut was installed (`src/core/self-repai
 |---|---|---|
 | git checkout run in place | that checkout (`WALNUT_INSTALL_DIR`) | the brief says the running server was built from this tree; the repo's CLAUDE.md workflow applies |
 | npm install, with your own clone | `self_repair.source_dir` in config.yaml (or env `WALNUT_SOURCE_DIR`) | must be a checkout: package.json named `open-walnut` next to `.git` |
-| npm install, nothing else | `~/open-walnut`, cloned from upstream on the first click (minutes) | the brief warns that the running Walnut is the npm package, not this tree, and gives `npm run web:build && npm install -g .` as the apply path; it must not run `dev:prod` or restart the running server |
+| npm install, nothing else | `~/open-walnut`, cloned from upstream on the first click (minutes) | the brief warns that the running Walnut is the npm package, not this tree, and gives `bun run web:build && npm install -g .` as the apply path; it must not run `dev:prod` or restart the running server |
 | cloud replica | not offered | repairs start on the primary console |
 
 The button is hidden when `GET /api/config` reports `selfRepair.available: false` (replica, no `git` on PATH, or `~/open-walnut` exists but is not a Walnut checkout; `selfRepair.reason` says which).

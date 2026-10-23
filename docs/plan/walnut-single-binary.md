@@ -147,12 +147,91 @@ bun run build:binary   # the file for this machine; any other target too
   run makes the Mac's file and the four Linux files, staged side by side
   (`<stage>/dist-bin/walnut-<target>`) so a host server takes the same commit's
   file; the runtime tree is unpacked into `<stage>/runtime/`, not the data home.
-  `WALNUT_DEVPROD_RUNTIME=node` deploys the Node build for one release, as the
-  way back from a bad file. `WALNUT_DEVPROD_REHEARSAL=1` runs the whole deploy
-  on a private port and data dir (AGENTS.md, "Production Server Safety").
+  The way back from a bad file is the last good file (the LKG rollback); there
+  is no other runtime to deploy, and `WALNUT_DEVPROD_RUNTIME=node` is refused.
+  `WALNUT_DEVPROD_REHEARSAL=1` runs the whole deploy on a private port and data
+  dir (AGENTS.md, "Production Server Safety").
+- Every dev script runs on bun: `bun run start` and `bun run dev:ephemeral`
+  build dist/ and run `bun dist/cli.js`, the sandbox (`scripts/walnut-sandbox.sh`)
+  and the onboarding harness do the same, and the build runs its node-shebang
+  tools (tsup, vite) on bun with `--bun`. The server bundle is byte-identical to
+  a node-run build; the web bundle differs in one equivalent token of vite's
+  preload helper.
 - `npm install -g open-walnut` keeps working for people who use npm: the
   package becomes a small launcher whose optional dependencies are one package
   per platform holding the file (the way esbuild and the Codex CLI ship).
+- The Mac app installs the file with the install.sh it carries, for Get Started
+  and for "Set Up Now" on a folder (its data then lives there). A setup an older
+  app built as an npm checkout in `<data home>/source` moves to the file on its
+  next launch. A checkout the user picks runs on bun (at least the bun its
+  package.json pins).
+
+## The cloud companion
+
+The companion box (`scripts/cloud/setup.sh`, `scripts/cloud/ensure-harness.sh`,
+`scripts/cloud/companion-launch.mjs`, `src/core/companion-build/`) moves in two
+phases.
+
+**Phase A (done): the box runs the dist on bun.** setup.sh builds the base tree
+with bun (`bun install --frozen-lockfile`, `bun --bun run build`, the web app
+with vite on bun), and the unit starts `<bun> dist/cli.js web`. The launcher
+drop-in takes its runtime from the unit's first word, or bun from PATH, never
+node. A box set up before keeps its old unit, which names node, until setup.sh
+writes it again; a deploy to such a box has to run setup.sh (or rewrite the
+unit) once Walnut no longer runs on Node. The launcher and the harness seed
+script run on bun (the seed script with `--no-install`, so bun never fetches a
+missing package from the registry). Node and npm stay on the box for one
+reason: third-party agent CLIs (Codex and others) and Claude Code's npm
+fallback install from npm. The Mac still sends a dist (`/bridge/build`), and the
+box installs its dependencies in `deps/<hash>` (`installScript` in
+`src/core/host-server/install.ts`), as before.
+
+The gap phase A leaves: a Mac that runs the compiled file has no dist to send
+(`runningDist()` is null there), so it cannot update its companion. The
+Settings line says so ("the companion still takes only a built checkout"). A
+Mac running a built checkout (`bun dist/cli.js web`) still can.
+
+**Phase B (planned): the box runs the compiled linux-arm64 file.** Host servers
+already install the file over SSH (`fileInstallScript`, `createHostFileSource`
+in `src/core/host-server/`); the companion takes the same file through its door.
+
+1. Wire (`wire.ts`): `BUILD_SCHEMA` 2. The box status says which kinds it takes
+   (`takes: ['dist', 'file']`) and its file target (`linux-arm64`, from
+   `host-target.ts`). The install request gains a file kind:
+   `{ id, kind: 'file', version, commit, sha256 }` (no dependencies, no
+   package.json). The upload stays the chunked PUT; the package is the file's
+   gz instead of the dist tgz. A schema 1 box gets a dist, as today. The
+   status names the runtime it runs (today `node: process.version`, which on
+   bun is a compatibility string).
+2. Mac (`mac.ts`): for a box that takes a file, the package comes from
+   `createHostFileSource` (the sibling file in the stage's `dist-bin/`, a build
+   of the checkout, or a published release), so the companion and every host
+   server run the same file of the same build. A compiled-file Mac and a box
+   that takes only a dist: the state names the one-time fix (run setup.sh on
+   the box again).
+3. Box (`box.ts`, `box-smoke.ts`): a file install runs `fileInstallScript` with
+   the companion's root (unpack, sha256, `--version`, `__selftest`, `.ready`
+   last); the smoke boot runs `app/<id>/walnut web` with its own data, daemon
+   and runtime dirs. Prune keeps current, trial and the running build, as now.
+4. Launcher (`companion-launch.mjs`): `isReady` takes `.ready` with either
+   `walnut` or `dist/cli.js`. A file starts as `app/<id>/walnut web`, a dist as
+   `<runtime> app/<id>/dist/cli.js web`; `stopStaleServer` learns the file's
+   command line too (it matches `cli.js` today). The drop-in from
+   ensure-harness.sh, and its rollback branch, name the file when the base is
+   one. The file's runtime tree goes to `<root>/runtime` in the service user's
+   home (`WALNUT_RUNTIME_DIR`), never root's code tree; trees are named by
+   build, so a trial and the current build share the dir.
+5. setup.sh, later: the base tree becomes the release file from install.sh,
+   and the launcher a subcommand of the file. Then bun leaves the box, and Node
+   stays only for npm-installed agent CLIs.
+
+Proof before it ships: the box tests for both kinds; the launcher tests; a
+linux-arm64 container (Docker on an arm64 Mac, no systemd) that runs the
+launcher on a temp root while a test Mac server pushes a file through the door
+(install, smoke, trial, current, then a broken file that is given up); and a
+schema 1 box still updated with a dist. It was not done in the bun move
+because it changes both sides of a live protocol with a version handshake,
+and the end-to-end proof needs the real box, which this work may not touch.
 
 ## CI: every system, old and new
 
