@@ -21,7 +21,7 @@ Rich mode does not mean "answer in HTML". It means HTML is available for the few
 | a table of values | markdown table |
 | code, commands, output, a diff | markdown fence |
 | colour carrying meaning: good vs bad, before vs after, severity, a highlighted term | HTML |
-| a diagram: boxes and arrows, a pipeline, a tree, a timeline | inline `<svg>` |
+| a diagram: boxes and arrows, a pipeline, a call path, a tree, a timeline | inline `<svg>`, never ASCII or box-drawing art in a code fence |
 | a shape markdown has no syntax for: side-by-side panels, a card grid, a labelled callout | HTML |
 | interactivity: collapse, tabs, a stepper, hover reveal | HTML (`<details>`, CSS `:checked`) |
 

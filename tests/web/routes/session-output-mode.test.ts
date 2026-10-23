@@ -69,6 +69,7 @@ import {
   stripOutputModeWrappers, applyOutputModeDirective,
 } from '../../../src/core/sessions/output-mode.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
+import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import {
   registerEchoClaims, bindEchoClaims, _resetEchoClaimsForTest,
 } from '../../../src/core/echo-claims.js'
@@ -241,6 +242,16 @@ describe('resolveOutputModeDirective', () => {
     expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/code blocks/)
     expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/interactivity/)
   })
+
+  it('makes every diagram SVG and keeps code blocks for real code (2026-10-22)', () => {
+    // A call path fenced as box-drawing art renders as monospace text: the
+    // "code blocks" half of the border must not read as licence for diagrams.
+    for (const s of [RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER]) {
+      expect(s).toMatch(/diagram[^.;]*inline <svg>/)
+      expect(s).toMatch(/never[^.;]*ASCII/)
+      expect(s).toMatch(/code blocks[^.;]*real code/)
+    }
+  })
 })
 
 describe('session:send — markdown', () => {
@@ -321,6 +332,53 @@ describe('session:send — rich', () => {
     // Third send: same — this is the drift fix, so it must not decay either.
     await callSend({ sessionId: sid, message: 'and the third?' })
     expect(await drain(sid)).toBe(`and the third?\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+  })
+
+  // 2026-10-22: after an auto-compaction the summary no longer held the full
+  // instruction, and three hours of reminder-only turns ended in an ASCII diagram.
+  it('a compaction boundary makes the next send carry the full instruction again, once', async () => {
+    await setConfigOutputMode('rich')
+    const sid = await newSession()
+    await callSend({ sessionId: sid, message: TEXT })
+    expect(await drain(sid)).toBe(`${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+
+    await notePlaceCompaction(sid, 'boundary-1')
+    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBeUndefined()
+    await callSend({ sessionId: sid, message: 'after the compaction' })
+    expect(await drain(sid)).toBe(`after the compaction\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+
+    // A replayed tail re-reads the same boundary: it must not void the re-tell.
+    await notePlaceCompaction(sid, 'boundary-1')
+    await callSend({ sessionId: sid, message: 'and then' })
+    expect(await drain(sid)).toBe(`and then\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+
+    // A second, real compaction owes it again.
+    await notePlaceCompaction(sid, 'boundary-2')
+    await callSend({ sessionId: sid, message: 'second compaction' })
+    expect(await drain(sid)).toBe(`second compaction\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+  })
+
+  it('a compaction in a markdown session still appends nothing', async () => {
+    await setConfigOutputMode('markdown')
+    const sid = await newSession()
+    await callSend({ sessionId: sid, message: TEXT })
+    expect(await drain(sid)).toBe(TEXT)
+    await notePlaceCompaction(sid, 'boundary-1')
+    await callSend({ sessionId: sid, message: 'after' })
+    expect(await drain(sid)).toBe('after')
+  })
+
+  it('a slash command right after a compaction stays byte-exact; the next message carries the instruction', async () => {
+    await setConfigOutputMode('rich')
+    const sid = await newSession()
+    await callSend({ sessionId: sid, message: TEXT })
+    await drain(sid)
+    await notePlaceCompaction(sid, 'boundary-1')
+    await callSend({ sessionId: sid, message: '/compact' })
+    expect(await drain(sid)).toBe('/compact')
+    await callSend({ sessionId: sid, message: 'real message' })
+    expect(await drain(sid)).toBe(`real message\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
   })
 
   it('the CONFIG default alone makes a brand-new session hear the instruction', async () => {

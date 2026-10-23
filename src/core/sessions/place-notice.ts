@@ -169,7 +169,8 @@ async function recordTold(sessionId: string, noted: PlaceNoted): Promise<void> {
 
 /**
  * A compaction boundary in the session's stream: a note given before it no
- * longer counts as told. Idempotent per boundary (a replayed tail writes the
+ * longer counts as told, and neither does the rich-output instruction.
+ * Idempotent per boundary (a replayed tail writes the
  * same uuid). Never throws.
  */
 export async function notePlaceCompaction(sessionId: string, boundaryUuid: string, now = Date.now()): Promise<void> {
@@ -187,6 +188,10 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
     await updateSessionRecordConditionally(sessionId, {
       lastCompactUuid: boundaryUuid,
       lastCompactAt: new Date(now).toISOString(),
+      // The summary drops the rich-output instruction too: back to "never told",
+      // so the next send carries it in full (output-mode.ts). Same guarded write,
+      // so a replayed boundary never voids an instruction sent after it.
+      output_mode_injected: undefined,
       ...(hookAnswered && noted ? { placeNoted: { ...noted, compactUuid: boundaryUuid } } : {}),
     }, (cur) => cur.lastCompactUuid !== boundaryUuid, { preserveLastActiveAt: true });
   } catch (err) {
