@@ -31,6 +31,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { PROJECTS_MEMORY_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
+import { sortedByName } from '../lib/dir-order.js';
 
 /** Marker file written after a successful pass. */
 export const MEMORY_DIR_MIGRATION_MARKER = path.join(PROJECTS_MEMORY_DIR, '.migrated-project-only');
@@ -91,7 +92,7 @@ function findCandidates(root: string): Candidate[] {
   const out: Candidate[] = [];
   let level1: fs.Dirent[];
   try {
-    level1 = fs.readdirSync(root, { withFileTypes: true });
+    level1 = sortedByName(fs.readdirSync(root, { withFileTypes: true }));
   } catch {
     return out;
   }
@@ -105,7 +106,7 @@ function findCandidates(root: string): Candidate[] {
     if (fs.existsSync(path.join(catDir, MEMORY_FILE_NAME))) continue;
     let level2: fs.Dirent[];
     try {
-      level2 = fs.readdirSync(catDir, { withFileTypes: true });
+      level2 = sortedByName(fs.readdirSync(catDir, { withFileTypes: true }));
     } catch {
       continue;
     }

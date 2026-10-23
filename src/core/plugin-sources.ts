@@ -39,6 +39,7 @@ import {
   parseNpmSpec, slugForNpmPackage, invalidSpecMessage,
   resolveNpmSpecIsolated, installNpmPlugin, replaceNpmPlugin,
 } from './plugin-npm-install.js';
+import { sortedByName } from '../lib/dir-order.js';
 
 const log = createSubsystemLogger('plugin-sources');
 
@@ -354,7 +355,7 @@ export async function scanStorePlugins(storeDir: string): Promise<DiscoveredStor
   // One level deep: each subdir with a manifest is a plugin
   let entries: fs.Dirent[];
   try {
-    entries = await fsp.readdir(storeDir, { withFileTypes: true });
+    entries = sortedByName(await fsp.readdir(storeDir, { withFileTypes: true }));
   } catch {
     return found;
   }

@@ -88,6 +88,7 @@ import type {
   RegisteredUiApp,
   PluginConnection,
 } from './integration-types.js';
+import { sortedByName } from '../lib/dir-order.js';
 
 const log = createSubsystemLogger('plugin-loader');
 // `resolveBuiltinDir` is a hoisted function declaration further down; the constants that
@@ -1219,7 +1220,7 @@ async function discoverPluginDirs(
   };
 
   const scanRoot = async (root: string, isBuiltin: boolean, followLinks: boolean): Promise<void> => {
-    const entries = await fsp.readdir(root, { withFileTypes: true });
+    const entries = sortedByName(await fsp.readdir(root, { withFileTypes: true }));
     for (const entry of entries) {
       if (!entry.isDirectory() && !(followLinks && entry.isSymbolicLink())) continue;
       await addCandidate(path.join(root, entry.name), isBuiltin);

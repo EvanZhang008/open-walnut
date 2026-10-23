@@ -49,6 +49,7 @@ import {
 import { computeContentHash } from '../utils/file-ops.js'
 import { bus, EventNames } from './event-bus.js'
 import { log } from '../logging/index.js'
+import { sortedByName } from '../lib/dir-order.js'
 
 // Wiki-link: [[target]] or [[target|label]]. We resolve on `target` (the part
 // before a real `|alias`), matching the on-disk Obsidian-native form (§2.2).
@@ -453,7 +454,7 @@ export async function collectIndexableNotePaths(): Promise<string[]> {
   async function walk(dir: string): Promise<void> {
     let entries: fs.Dirent[]
     try {
-      entries = await fsp.readdir(dir, { withFileTypes: true })
+      entries = sortedByName(await fsp.readdir(dir, { withFileTypes: true }))
     } catch {
       return
     }

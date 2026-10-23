@@ -915,7 +915,8 @@ async function locateTranscripts(
   const found = new Map<string, { engine: 'claude' | 'codex'; file: LocatedFile }>()
   const root = path.join(homeDir, '.claude', 'projects')
   let dirs: string[] = []
-  try { dirs = fs.readdirSync(root) } catch { dirs = [] }
+  // Sorted: the first dir holding an id wins, and bun lists in file system order.
+  try { dirs = fs.readdirSync(root).sort() } catch { dirs = [] }
   for (const dirName of dirs) {
     if (wanted.size === 0) break
     await pause()

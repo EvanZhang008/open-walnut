@@ -25,6 +25,7 @@ import { computeContentHash } from '../../utils/file-ops.js'
 import { bus } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { companionMemoryRoutes } from '../../replica/companion-copy-routes.js'
+import { sortedByName } from '../../lib/dir-order.js'
 
 export const memoryRouter = Router()
 // The companion's memory reads and saves take the Mac's copy and its journal (stage 4d); a pass-through elsewhere.
@@ -180,7 +181,7 @@ export async function buildMemoryBrowseTree(): Promise<MemoryBrowseTree> {
     // Repo environment memories
     const repos: BrowseItem[] = []
     try {
-      const dirs = await fsp.readdir(REPOS_MEMORY_DIR, { withFileTypes: true })
+      const dirs = sortedByName(await fsp.readdir(REPOS_MEMORY_DIR, { withFileTypes: true }))
       for (const d of dirs) {
         if (!d.isDirectory()) continue
         const memFile = path.join(REPOS_MEMORY_DIR, d.name, 'SKILL.md')

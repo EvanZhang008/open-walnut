@@ -17,6 +17,7 @@ import { log } from '../logging/index.js';
 import { WALNUT_HOME } from '../constants.js';
 import { bundledModule } from '../lib/single-file.js';
 import type { ActionDefinition, ActionDescriptor, ActionContext, ActionResult } from './types.js';
+import { sortedNames } from '../lib/dir-order.js';
 
 const USER_ACTIONS_DIR = join(WALNUT_HOME, 'actions');
 
@@ -62,7 +63,7 @@ async function scanDir(
   const results: ActionDefinition[] = [];
   let entries: string[];
   try {
-    entries = await readdir(dir);
+    entries = sortedNames(await readdir(dir));
   } catch {
     return results; // directory doesn't exist
   }

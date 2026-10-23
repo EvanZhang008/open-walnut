@@ -128,7 +128,8 @@ export function bucketRows(rows: UsageRow[], thresholds: number[]): SessionCostB
 
 async function claudeFiles(projectsDir: string, sessionId: string, cwd?: string): Promise<{ path: string; agentId?: string }[]> {
   let projects: string[];
-  try { projects = (await readdir(projectsDir, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name); }
+  // Sorted: the first project holding the sid wins, and bun lists in file system order.
+  try { projects = (await readdir(projectsDir, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name).sort(); }
   catch { return []; }
   if (cwd) {
     // The CLI names a project dir after the canonical cwd with every non-alphanumeric replaced.

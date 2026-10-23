@@ -34,6 +34,7 @@ import { isMemorySafetyEnforced, screenMemoryText } from './memory-safety.js';
 import { registry } from './integration-registry.js';
 import { listOwnedSkillDirs } from './plugins/skill-registry.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../constants.js';
+import { sortedNames } from '../lib/dir-order.js';
 
 export type SkillType = 'action' | 'knowledge';
 
@@ -206,7 +207,7 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSki
   for (const base of dirs) {
     let entries: string[];
     try {
-      entries = await fsp.readdir(base);
+      entries = sortedNames(await fsp.readdir(base));
     } catch (err) {
       log.task.debug('skill-loader: skills directory not found', {
         dir: base,
@@ -239,7 +240,7 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSki
       // Category layout: skills/<category>/<name>/SKILL.md
       let subEntries: string[];
       try {
-        subEntries = await fsp.readdir(entryDir);
+        subEntries = sortedNames(await fsp.readdir(entryDir));
       } catch {
         continue; // not a directory — skip
       }
