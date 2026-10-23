@@ -13,6 +13,9 @@
  *   in  : { id, texts: string[], recallK? }  texts arrive prefixed + truncated
  *   out : { id, buf: ArrayBuffer, dims, recall? }  Int8Array rows, one per text
  *         { id, error: string }
+ *   in  : { id, probe: { model } }  `walnut __selftest`: load the library the way
+ *         a job does and run `model` (a one-node ONNX graph) on its onnxruntime
+ *   out : { id, probe: { pipeline, y } }
  *
  * Vectors are mean-pooled, L2-normalized, then quantized to int8
  * (round(v*127)): 384 bytes per vector, and cosine survives quantization to
@@ -26,10 +29,13 @@
  */
 
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const requireModule = createRequire(import.meta.url);
 
 interface WorkerConfig {
+  /** A downloaded copy of @huggingface/transformers (file URL of its entry); absent: the package. */
+  moduleUrl?: string;
   modelId: string;
   dims: number;
   /** transformers.js dtype, default 'q8'. */
@@ -112,10 +118,15 @@ type Extractor = (
 
 let extractorPromise: Promise<Extractor> | null = null;
 
+/** The model library: the downloaded component's copy when the host named one, else the package. */
+async function importTransformers(): Promise<typeof import('@huggingface/transformers')> {
+  return config.moduleUrl ? await import(config.moduleUrl) : await import('@huggingface/transformers');
+}
+
 function loadExtractor(): Promise<Extractor> {
   if (!extractorPromise) {
     extractorPromise = (async () => {
-      const transformers = await import('@huggingface/transformers');
+      const transformers = await importTransformers();
       if (config.cacheDir) {
         (transformers.env as { cacheDir?: string }).cacheDir = config.cacheDir;
       }
@@ -315,10 +326,40 @@ process.on('disconnect', () => {
   setTimeout(() => process.exit(0), ORPHAN_EXIT_MS).unref();
 });
 
-process.on('message', (msg: Job | { stop: true }) => {
+interface Probe { id: number; probe: { model: Uint8Array } }
+
+type Ort = {
+  InferenceSession: { create(model: Uint8Array): Promise<{ run(feeds: Record<string, unknown>): Promise<Record<string, { data: Float32Array }>> }> };
+  Tensor: new (type: string, data: Float32Array, dims: number[]) => unknown;
+};
+
+/** The library loads here as a job loads it, and its onnxruntime runs a model in this process. */
+async function probe(job: Probe): Promise<void> {
+  try {
+    const transformers = await importTransformers();
+    // The onnxruntime next to the library: the component's own copy when it is one.
+    const req = config.moduleUrl ? createRequire(fileURLToPath(config.moduleUrl)) : requireModule;
+    const ort = req('onnxruntime-node') as Ort;
+    const session = await ort.InferenceSession.create(job.probe.model);
+    const out = await session.run({ x: new ort.Tensor('float32', Float32Array.from([1.5, -2]), [2]) });
+    reply({ id: job.id, probe: { pipeline: typeof transformers.pipeline, y: Array.from(out.y.data) } });
+  } catch (err) {
+    reply({ id: job.id, error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    activeJobs--;
+    exitIfDrained();
+  }
+}
+
+process.on('message', (msg: Job | Probe | { stop: true }) => {
   if ('stop' in msg) {
     stopping = true;
     exitIfDrained();
+    return;
+  }
+  if ('probe' in msg) {
+    activeJobs++;
+    void probe(msg);
     return;
   }
   const job = msg;

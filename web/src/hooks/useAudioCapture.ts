@@ -30,20 +30,22 @@ export function useAudioCapture() {
   const startTime = useRef<number | null>(null);
   const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Check availability on mount (on a phone, after the home rows: N19)
-  useEffect(() => {
-    afterFirstScreen(() => {
-      audioApi.fetchAudioAvailability().then((res) => {
-        setState(s => ({
-          ...s,
-          available: res.available,
-          permissionGranted: res.permissions?.granted ?? null,
-        }));
-      }).catch(() => {
-        setState(s => ({ ...s, available: false }));
-      });
+  const refreshAvailability = useCallback(() => {
+    audioApi.fetchAudioAvailability().then((res) => {
+      setState(s => ({
+        ...s,
+        available: res.available,
+        permissionGranted: res.permissions?.granted ?? null,
+      }));
+    }).catch(() => {
+      setState(s => ({ ...s, available: false }));
     });
   }, []);
+
+  // Check availability on mount (on a phone, after the home rows: N19)
+  useEffect(() => {
+    afterFirstScreen(refreshAvailability);
+  }, [refreshAvailability]);
 
   // Sync status on mount (on a phone, after the home rows: N19)
   useEffect(() => {
@@ -203,5 +205,7 @@ export function useAudioCapture() {
     toggleRecording,
     startRecording,
     stopRecording,
+    /** Ask again, after the capture addon's download finished. */
+    refreshAvailability,
   };
 }

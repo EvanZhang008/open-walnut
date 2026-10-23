@@ -14,6 +14,7 @@ import { RECORDINGS_DIR, TMP_DIR } from '../constants.js'
 import { bus, EventNames } from './event-bus.js'
 import { getConfig } from './config-manager.js'
 import { log } from '../logging/index.js'
+import { isCompiledBinary, loadComponent, markInstalledBroken, resolveComponent } from './components/index.js'
 
 // Persistent state file — if this file exists, recording should be active.
 // Written on start(), deleted on stop(). Server reads it on startup to auto-resume.
@@ -25,6 +26,23 @@ const RECORDING_STATE_FILE = path.join(TMP_DIR, 'recording-state.json')
 // Native addons (.node files) can only be loaded via require(), not ESM import().
 // Since tsup bundles as ESM, we create a require function for loading the native addon.
 const require = createRequire(import.meta.url)
+const ADDON = 'screencapturekit-audio-capture'
+
+/**
+ * The require that finds the capture addon: Walnut's own node_modules (source,
+ * an npm install), or the downloaded `audio-capture` component (the compiled
+ * file carries none: Settings > Audio Capture downloads it). Null while neither.
+ */
+function addonRequire(): { req: NodeJS.Require; key: string } | null {
+  const c = resolveComponent('audio-capture')
+  if (!c) return null
+  return c.source === 'bundled' ? { req: require, key: 'bundled' } : { req: c.require, key: c.dir }
+}
+
+/** A probe child runs `<execPath> -e`: the compiled file does that only as bun. */
+export function addonProbeEnv(): NodeJS.ProcessEnv {
+  return isCompiledBinary() ? { ...process.env, BUN_BE_BUN: '1' } : process.env
+}
 
 // ── Types ──
 
@@ -119,6 +137,8 @@ class AudioCaptureService {
   private channels: 1 | 2 = DEFAULT_CHANNELS
   private chunkMinutes = DEFAULT_CHUNK_MINUTES
   private available: boolean | null = null // null = not checked yet
+  /** The addon source that failed to load, so a poll does not retry it every time. */
+  private failedSource: string | null = null
   // Cache verifyPermissions() — the native ScreenCaptureKit call is a
   // SYNCHRONOUS bridge into macOS TCC that has been observed to block the event
   // loop for up to 150s (server log: GET /api/audio/available → 200 (151821ms)).
@@ -146,19 +166,24 @@ class AudioCaptureService {
    * Check if audio capture is available on this platform.
    */
   isAvailable(): boolean {
-    if (this.available !== null) return this.available
-    try {
-      if (process.platform !== 'darwin') {
-        this.available = false
-        return false
-      }
-      // Try loading the native addon
-      require('screencapturekit-audio-capture')
-      this.available = true
-    } catch {
+    if (this.available === true) return true
+    if (process.platform !== 'darwin') {
       this.available = false
+      return false
     }
-    return this.available
+    // Not cached while missing: the component may finish downloading at any time.
+    const addon = addonRequire()
+    if (!addon || addon.key === this.failedSource) return false
+    try {
+      addon.req(ADDON)
+      this.available = true
+    } catch (err) {
+      this.failedSource = addon.key
+      log.audio.warn('audio capture addon does not load', { source: addon.key, error: (err as Error).message })
+      // A downloaded copy that does not load is replaced (once); the next check sees the new one.
+      if (addon.key !== 'bundled') markInstalledBroken('audio-capture', err)
+    }
+    return this.available === true
   }
 
   /**
@@ -193,7 +218,9 @@ class AudioCaptureService {
     this.permissionsRefreshing = true
     let addonPath: string
     try {
-      addonPath = require.resolve('screencapturekit-audio-capture')
+      const addon = addonRequire()
+      if (!addon) throw new Error('Audio capture is not installed')
+      addonPath = addon.req.resolve(ADDON)
     } catch (err) {
       this.permissionsCache = { granted: false, message: (err as Error).message }
       this.permissionsCheckedAt = Date.now()
@@ -205,6 +232,7 @@ class AudioCaptureService {
     const child = spawn(process.execPath, ['-e', script, addonPath], {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 30_000,
+      env: addonProbeEnv(),
     })
     let out = ''
     child.stdout.on('data', (d: Buffer) => { out += d.toString() })
@@ -259,7 +287,9 @@ class AudioCaptureService {
     const startedAt = Date.now()
     let addonPath: string
     try {
-      addonPath = require.resolve('screencapturekit-audio-capture')
+      const addon = addonRequire()
+      if (!addon) throw new Error('Audio capture is not installed')
+      addonPath = addon.req.resolve(ADDON)
     } catch (err) {
       log.audio.error('listApps refresh failed: addon not resolvable', { error: (err as Error).message })
       this.appsCache = this.appsCache ?? []
@@ -272,6 +302,7 @@ class AudioCaptureService {
     const child = spawn(process.execPath, ['-e', script, addonPath], {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 30_000, // wedged CFRunLoop → SIGTERM; cache just stays stale
+      env: addonProbeEnv(),
     })
     let out = ''
     child.stdout.on('data', (d: Buffer) => { out += d.toString() })
@@ -310,7 +341,7 @@ class AudioCaptureService {
       throw new Error('Audio capture not available. macOS 13+ with Screen Recording permission required.')
     }
 
-    const { AudioCapture } = require('screencapturekit-audio-capture')
+    const { AudioCapture } = addonRequire()!.req(ADDON)
 
     this.recordingId = randomBytes(6).toString('hex')
     this.source = options.source
@@ -604,7 +635,7 @@ class AudioCaptureService {
     this.refreshTimer = setInterval(async () => {
       if (!this.recording || !this.capture) return
       try {
-        const { AudioCapture } = require('screencapturekit-audio-capture')
+        const { AudioCapture } = addonRequire()!.req(ADDON)
 
         // Save current chunk before restarting
         await this.saveCurrentChunk()
@@ -840,6 +871,8 @@ class AudioCaptureService {
       const raw = fs.readFileSync(RECORDING_STATE_FILE, 'utf-8')
       const options: RecordingOptions = JSON.parse(raw)
       log.audio.info('resuming recording after server restart', { options })
+      // A downloaded addon is known once the components have looked at disk.
+      await loadComponent('audio-capture')
       await this.start(options)
     } catch (err) {
       log.audio.warn('failed to resume recording', { error: (err as Error).message })

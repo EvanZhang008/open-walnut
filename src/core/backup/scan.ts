@@ -27,6 +27,8 @@ export const EXCLUDED_DIRS = new Set([
   'health',
   // The iPhone's place visits (src/core/places/): same rule as health.
   'places',
+  // Downloaded components (src/core/components/): platform binaries, fetched again on demand.
+  'components',
 ]);
 
 const EXCLUDED_FILE_RE = [

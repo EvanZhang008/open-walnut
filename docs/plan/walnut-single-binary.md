@@ -81,18 +81,21 @@ the web assets. Budget: the core file stays under 150 MB unpacked and under
 
 ## Components
 
-A component is a versioned, platform-specific archive on the GitHub Release,
-listed with its SHA256 in the release's checksums. Walnut downloads one when a
-feature that needs it is first used, verifies it, and unpacks it into
-`~/.open-walnut/components/<name>/<version>/`. The speech runtime downloader
-becomes the general mechanism.
+A component is a versioned, platform-specific archive on a GitHub prerelease
+(`component-<name>-<version>`). The compiled file pins the SHA-256 of the tar
+inside each archive (`src/core/components/manifest-data.ts`), so an archive is
+trusted because this Walnut names it, and a published version never changes its
+bytes. Walnut downloads one when a feature that needs it is first used, checks
+the tar while it unpacks it, and renames it into
+`~/.open-walnut/components/<name>/<version>/<platform>/` only when it matches.
+The speech runtime uses the same downloader and tar reader.
 
 - A feature whose component is missing says so in its own place ("Downloading
   search by meaning, 40 MB") and starts working when the download finishes.
 - No core feature needs a component: tasks, sessions, the board, notes, keyword
   search and the tunnel all work from the file alone.
-- A host server downloads components from the Mac over the same SSH path, so a
-  host without internet access still gets them.
+- A host without internet access installs an archive placed in
+  `components/.downloads/`. Sending it there from the Mac is not built yet.
 
 ## One runtime
 

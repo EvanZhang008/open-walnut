@@ -10,6 +10,7 @@ import { fetchAudioApps, type AppInfo } from '@/api/audio';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
+import { ComponentDownloadButton, componentHelp, useComponentStatus } from './component-download';
 import '@/styles/settings-sections-addons.css';
 
 function formatDuration(seconds: number): string {
@@ -46,6 +47,14 @@ export function AudioCaptureSection({ config, onSave }: Props) {
   // The start/stop control lives here (not the sidebar): recording is still an
   // experimental feature, so it should not occupy a top-level nav slot.
   const audio = useAudioCapture();
+  // Without the capture addon (the compiled Walnut carries none), this row downloads it.
+  const addon = useComponentStatus('audio-capture', audio.available === false);
+  const addonState = addon.status?.state;
+  const needsAddon = audio.available === false && !!addonState && addonState !== 'ready' && addonState !== 'unsupported';
+  const { refreshAvailability } = audio;
+  useEffect(() => {
+    if (audio.available === false && addonState === 'ready') refreshAvailability();
+  }, [audio.available, addonState, refreshAvailability]);
 
   // Sync from config when it changes externally
   useEffect(() => {
@@ -110,14 +119,20 @@ export function AudioCaptureSection({ config, onSave }: Props) {
         <SettingsRow
           label="Recording"
           help={
-            audio.available === false
-              ? 'System audio capture is not available on this machine.'
-              : audio.recording
-                ? <span className="settings-addons-live">{formatDuration(audio.totalDuration)}</span>
-                : 'Records system audio until you stop it.'
+            needsAddon
+              ? componentHelp(addon.status)
+              : audio.available === false
+                ? 'System audio capture is not available on this machine.'
+                : audio.recording
+                  ? <span className="settings-addons-live">{formatDuration(audio.totalDuration)}</span>
+                  : 'Records system audio until you stop it.'
           }
+          state={needsAddon && addonState === 'failed' ? 'warning' : undefined}
           error={audio.lastError || undefined}
-          control={audio.available === false ? undefined : (
+          data-testid="settings-recording-row"
+          control={needsAddon
+            ? <ComponentDownloadButton status={addon.status} onInstall={() => { void addon.install(); }} testId="settings-recording-download" />
+            : audio.available === false ? undefined : (
             <SettingsButton
               variant={audio.recording ? 'danger' : 'default'}
               onClick={audio.toggleRecording}

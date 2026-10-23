@@ -12,19 +12,17 @@
  * llama-server comes from this repo's `stt-runtime-<tag>` prerelease, built against
  * glibc 2.28 (.github/workflows/stt-runtime.yml): upstream's own Linux builds need
  * glibc 2.38 and do not start on Amazon Linux 2023 or Debian 11. Every file is
- * checked against the hash pinned here before it is used, and lands under its final
- * name only once complete, so an interrupted download resumes and never runs.
+ * downloaded to a `.part`, checked there against the hash pinned here, and renamed
+ * to its final name only once it matches: an interrupted download resumes, and a
+ * file under its final name is always the pinned one.
  */
 
-import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { mkdir, rename, rm, stat, statfs, writeFile, readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { LlamaTarget, QwenSize } from './qwen-plan.js';
 import { extractTarGz } from './untar.js';
+import { downloadFile, sha256File } from '../components/download.js';
 
 export const LLAMA_TAG = 'b11756';
 const RUNTIME_BASE = `https://github.com/EvanZhang008/open-walnut/releases/download/stt-runtime-${LLAMA_TAG}`;
@@ -104,65 +102,33 @@ export async function isLlamaInstalled(target: LlamaTarget, size: QwenSize, home
     && await isVerified(paths.mmproj, LLAMA_MODELS[size].mmproj.sha256);
 }
 
+const PINNED_DEADLINE_MS = 12 * 3600_000;
+
 export interface Progress { (doneBytes: number, totalBytes: number, label: string): void }
 
-async function hashFile(path: string): Promise<{ hash: ReturnType<typeof createHash>; bytes: number }> {
-  const hash = createHash('sha256');
-  let bytes = 0;
-  for await (const chunk of createReadStream(path)) { hash.update(chunk as Buffer); bytes += (chunk as Buffer).length; }
-  return { hash, bytes };
-}
-
 /**
- * Download one pinned file to `dest`, resuming a `.part` left by an earlier try.
- * The hash covers the whole file, resumed bytes included; a mismatch deletes the
- * partial so the next try starts clean.
+ * Download one pinned file to `dest` with the shared downloader
+ * (src/core/components/download.ts: resume from a `.part` left by an earlier try,
+ * retries, a stalled-connection timeout). The whole `.part` is checked against
+ * the pinned hash before it is renamed to `dest`; a mismatch deletes it so the
+ * next try starts clean.
  */
 export async function downloadPinned(file: PinnedFile, dest: string, onProgress: Progress, signal?: AbortSignal): Promise<void> {
   if (!file.sha256) throw new Error(`No checksum pinned for ${file.name}`);
   if (await isVerified(dest, file.sha256)) return;
   await mkdir(join(dest, '..'), { recursive: true });
-  const part = `${dest}.part`;
-  let { hash, bytes } = (await exists(part)) ? await hashFile(part) : { hash: createHash('sha256'), bytes: 0 };
-  if (file.size && bytes > file.size) { await rm(part, { force: true }); hash = createHash('sha256'); bytes = 0; }
-  if (!file.size || bytes < file.size) {
-    const res = await fetch(file.url, { headers: bytes ? { Range: `bytes=${bytes}-` } : {}, redirect: 'follow', signal });
-    if (bytes && res.status !== 206) {
-      await res.body?.cancel().catch(() => {});
-      await rm(part, { force: true });
-      return downloadPinned(file, dest, onProgress, signal);
-    }
-    if (!res.ok || !res.body) {
-      await res.body?.cancel().catch(() => {});
-      throw new Error(`Download of ${file.name} answered ${res.status}`);
-    }
-    let lastReport = 0;
-    const counted = bytes;
-    let received = 0;
-    // pipeline: a write error (a full disk) rejects here and closes both ends,
-    // instead of an unhandled stream error taking the server down.
-    await pipeline(
-      Readable.fromWeb(res.body as import('node:stream/web').ReadableStream<Uint8Array>),
-      new Transform({
-        transform(chunk: Buffer, _enc, done) {
-          hash.update(chunk);
-          received += chunk.length;
-          if (Date.now() - lastReport > 1000) { lastReport = Date.now(); onProgress(counted + received, file.size, file.name); }
-          done(null, chunk);
-        },
-      }),
-      createWriteStream(part, { flags: counted ? 'a' : 'w' }),
-      { signal },
-    );
-    bytes = counted + received;
-  }
-  const digest = hash.digest('hex');
-  if (digest !== file.sha256) {
-    await rm(part, { force: true });
-    throw new Error(`${file.name} does not match its pinned checksum`);
-  }
+  const { bytes } = await downloadFile(file.url, dest, {
+    expectedBytes: file.size || undefined,
+    onProgress: (done, total) => onProgress(done, total ?? file.size, file.name),
+    signal,
+    // Model weights run to gigabytes on a slow link: only a stalled connection
+    // (the idle timeout) ends a try, and a stopped one resumes from its `.part`.
+    deadlineMs: PINNED_DEADLINE_MS,
+    verify: async (part) => {
+      if ((await sha256File(part)) !== file.sha256) throw new Error(`${file.name} does not match its pinned checksum`);
+    },
+  });
   onProgress(bytes, file.size || bytes, file.name);
-  await rename(part, dest);
   await writeFile(markerOf(dest), file.sha256);
 }
 

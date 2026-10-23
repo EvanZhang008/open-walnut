@@ -811,6 +811,10 @@ node_modules/
 # ROOT-ANCHORED: a note folder called health/ inside notes/ is user content.
 /health/
 
+# Downloaded components (src/core/components/): platform binaries, one set per
+# machine, fetched again on demand. ROOT-ANCHORED like /health/.
+/components/
+
 # Places store (src/core/places/): the visits the iPhone records stay on this Mac.
 # ROOT-ANCHORED for the same reason.
 /places/
@@ -935,7 +939,7 @@ const CRITICAL_IGNORE_FILES = [
   'triage-state.json', 'session-requests.json', 'code-server/instance.json',
 ];
 /** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
-const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/'];
+const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/', 'components/'];
 /**
  * The .gitignore LINE for a dir when it differs from the prefix. `models/` is
  * root-anchored: a `models` folder inside notes/ is user content, and an
@@ -945,6 +949,7 @@ const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/',
  */
 const CRITICAL_IGNORE_LINES: Record<string, string> = {
   'health/': '/health/', 'models/': '/models/', 'places/': '/places/', 'voice-archive/': '/voice-archive/', 'local/': '/local/',
+  'components/': '/components/',
 };
 const CRITICAL_IGNORES = [
   ...CRITICAL_IGNORE_FILES,
