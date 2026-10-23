@@ -184,6 +184,9 @@ describe('npm-registry-lag · every install of a published package goes through 
   it('the wrapper script is plain node, runnable before npm ci', () => {
     const src = fs.readFileSync(CLI, 'utf8')
     for (const m of src.matchAll(/^import .* from '([^']+)'/gm)) expect(m[1]).toMatch(/^node:/)
-    expect(execFileSync(process.execPath, ['--check', CLI], { encoding: 'utf8' })).toBe('')
+    // A syntax check: node's --check; bun has no such flag, so its own parser there.
+    const bun = (globalThis as { Bun?: { Transpiler: new (o: { loader: 'js' }) => { scan(code: string): unknown } } }).Bun
+    if (bun) new bun.Transpiler({ loader: 'js' }).scan(src)
+    else expect(execFileSync(process.execPath, ['--check', CLI], { encoding: 'utf8' })).toBe('')
   })
 })
