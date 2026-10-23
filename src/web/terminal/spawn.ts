@@ -33,7 +33,7 @@
  * and login shell with no dtach socket, so it dies with its connection. The UI
  * labels it "Not persistent"; see dtach-check.ts for why that beats refusing.
  *
- * The upper layers (TerminalManager / ring buffer / RPC) only see `Pty` — to
+ * The upper layers (TerminalManager / ring buffer / RPC) only see `Pty`, so to
  * change transport you only touch this file.
  */
 

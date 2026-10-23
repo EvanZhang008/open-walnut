@@ -13,7 +13,7 @@
  * without gcc with no terminal at all; a LOUD fallback keeps the no-silent-loss
  * intent. ssh failures stay blocking: nothing can run there. See dtach-check.ts.
  *
- * On Node the pty is node-pty, a native binary — if it fails to load, terminal
+ * On Node the pty is node-pty, a native binary: if it fails to load, terminal
  * support is disabled gracefully (the server still boots). bun has one built in.
  */
 
