@@ -33,6 +33,12 @@ swiftc \
 "$OUT_DIR/walnut-bundled-runtime-tests"
 
 swiftc \
+    "$ROOT/desktop/AppBuiltCheckout.swift" \
+    "$ROOT/tests/desktop/app-built-checkout-tests.swift" \
+    -o "$OUT_DIR/walnut-app-built-checkout-tests"
+"$OUT_DIR/walnut-app-built-checkout-tests"
+
+swiftc \
     "$ROOT/desktop/AppLink.swift" \
     "$ROOT/desktop/BundledRuntime.swift" \
     "$ROOT/desktop/CommandLineTool.swift" \

@@ -12,6 +12,10 @@ struct WalnutConfig: Codable {
     /// from the archive's time, the archive's package root), and unused.
     /// Absent in every config written before it, which keeps meaning "source".
     var runtimeDir: String? = nil
+    /// The checkout an older version of this app built (`<data home>/source`)
+    /// that this setup moved off: removed once the self-contained Walnut has
+    /// served, kept until then so the user can go back (AppBuiltCheckout.swift).
+    var appBuiltCheckout: String? = nil
 }
 
 func configFilePath() -> URL {
@@ -54,10 +58,6 @@ func recordedSpawnedServerPid() -> Int32? {
     return Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines))
 }
 
-// Printed by the server when it recompiles a native addon for the running Node.
-// Keep in sync with REBUILD_MARKER in src/core/native-abi-preflight.ts.
-let REBUILD_MARKER = "rebuilding native module"
-
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -80,6 +80,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var walnutSourceDir: String?
     /// The self-contained runtime this app runs, when it is not a source checkout.
     var runtime: BundledRuntime?
+    /// The old app's checkout this setup moved off, until it is removed
+    /// (WalnutConfig.appBuiltCheckout), and whether that removal is running.
+    var appBuiltCheckout: String?
+    var removingAppBuiltCheckout = false
     /// What Retry does while nothing is set up yet (a first download or build
     /// that failed): that setup again. Retry used to restart a server there was
     /// none of, and sat on the loading screen forever.
@@ -166,18 +170,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let config = loadConfig(),
            FileManager.default.fileExists(atPath: config.walnutHome),
            config.runtimeDir == nil,
-           BundledRuntime.isAppBuiltCheckout(walnutHome: config.walnutHome, sourceDir: config.walnutSourceDir) {
-            // An older version of this app built a checkout with npm into
-            // <data home>/source; Walnut no longer runs that way. Install the
-            // self-contained Walnut and keep the same data.
-            DesktopLogger.shared.log("app_built_checkout_migrated", fields: ["home": config.walnutHome])
-            installRuntime(dataHome: config.walnutHome, offerExisting: false)
+           AppBuiltCheckout.isOldAppLocation(walnutHome: config.walnutHome, sourceDir: config.walnutSourceDir) {
+            // <data home>/source, where an older version of this app built a
+            // checkout with npm: that one moves to the self-contained Walnut, one
+            // the user keeps there runs as it is.
+            adoptOldAppLocation(home: config.walnutHome)
         } else if let config = loadConfig(),
            FileManager.default.fileExists(atPath: config.walnutHome),
            BundledRuntime.setupRuns(runtimeDir: config.runtimeDir, sourceDir: config.walnutSourceDir) {
             walnutHome = config.walnutHome
             walnutSourceDir = config.walnutSourceDir
             runtime = config.runtimeDir.map { BundledRuntime(installDir: $0) }
+            appBuiltCheckout = config.appBuiltCheckout
             showLoadingScreen()
             // An updated app carries a newer Walnut than the one installed: put it
             // in first (offline, seconds), so the update brings both.
@@ -369,7 +373,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         spacer2.heightAnchor.constraint(equalToConstant: 20).isActive = true
         stack.addArrangedSubview(spacer2)
 
-        let reqNote = NSTextField(wrappingLabelWithString: "Get Started needs nothing else installed. Running from a source checkout needs Node.js 22 or newer.")
+        let reqNote = NSTextField(wrappingLabelWithString: "Get Started needs nothing else installed. Running from a source checkout needs Bun.")
         reqNote.font = NSFont.systemFont(ofSize: 12)
         reqNote.textColor = NSColor(white: 0.55, alpha: 1)
         reqNote.preferredMaxLayoutWidth = 400
@@ -524,6 +528,77 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 ])
                 self.statusLabel?.stringValue = "Starting Walnut server..."
                 self.startServer()
+            }
+        }
+    }
+
+    /// A setup on `<home>/source`, where an older version of this app built a
+    /// checkout (AppBuiltCheckout.swift). Decided off the main thread, since it
+    /// reads git: the old app's checkout moves to the self-contained Walnut with
+    /// the same data, after the old app's Node server is stopped (it would hold
+    /// the port, and this app would attach to it), and is removed once the new
+    /// Walnut has served. A checkout the user keeps there runs as it is, on bun.
+    func adoptOldAppLocation(home: String) {
+        let source = AppBuiltCheckout.location(walnutHome: home)
+        let recorded = recordedSpawnedServerPid()
+        let ports = portsToTry
+        setupGeneration += 1
+        let generation = setupGeneration
+        retrySetup = { [weak self] in self?.adoptOldAppLocation(home: home) }
+        showLoadingScreen()
+        statusLabel?.stringValue = "Checking this Walnut setup..."
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let runnable = FileManager.default.fileExists(atPath: source + "/dist/cli.js")
+            let verdict = AppBuiltCheckout.check(sourceDir: source)
+            let moves = AppBuiltCheckout.movesToRuntime(runnable: runnable, verdict: verdict)
+            let stopped = moves
+                ? AppBuiltCheckout.stopOldServers(sourceDir: source, recordedPid: recorded, ports: ports, checkoutIsAppBuilt: verdict == .appBuilt)
+                : []
+            DispatchQueue.main.async {
+                guard let self = self, self.setupGeneration == generation else { return }
+                var fields = ["home": home, "verdict": verdict.logValue, "runnable": String(runnable)]
+                if !stopped.isEmpty { fields["stopped_old_server"] = stopped.map(String.init).joined(separator: ",") }
+                if let pid = recorded, stopped.contains(pid) { clearSpawnedServerPid() }
+                if moves {
+                    self.appBuiltCheckout = AppBuiltCheckout.queuesRemoval(verdict) ? source : nil
+                    DesktopLogger.shared.log("app_built_checkout_migrated", fields: fields)
+                    self.installRuntime(dataHome: home, offerExisting: false)
+                } else {
+                    DesktopLogger.shared.log("user_checkout_kept", fields: fields)
+                    self.runtime = nil
+                    self.appBuiltCheckout = nil
+                    self.walnutHome = home
+                    self.walnutSourceDir = source
+                    self.finishSetup()
+                }
+            }
+        }
+    }
+
+    /// Once the self-contained Walnut this app started has served: the old app's
+    /// checkout goes (about 1 GB), when it is still provably the old app's. Until
+    /// then it stays, so a setup whose new Walnut never starts can go back.
+    func removeAppBuiltCheckoutIfServed() {
+        guard let dir = appBuiltCheckout, let home = walnutHome, let rt = runtime, ownsServer, !removingAppBuiltCheckout else { return }
+        removingAppBuiltCheckout = true
+        let began = Date()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let outcome = AppBuiltCheckout.removeIfServed(sourceDir: dir, walnutHome: home, runtimeDir: rt.installDir, runtimeServed: true)
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.removingAppBuiltCheckout = false
+                var fields = ["dir": dir, "seconds": String(format: "%.1f", Date().timeIntervalSince(began))]
+                switch outcome {
+                case .removed: DesktopLogger.shared.log("app_built_checkout_removed", fields: fields)
+                case .kept(let why): fields["reason"] = why; DesktopLogger.shared.log("app_built_checkout_kept", fields: fields)
+                case .notYet(let why): fields["reason"] = why; DesktopLogger.shared.log("app_built_checkout_removal_deferred", fields: fields)
+                }
+                guard outcome.settled, self.appBuiltCheckout == dir else { return }
+                self.appBuiltCheckout = nil
+                if var config = loadConfig(), config.appBuiltCheckout == dir {
+                    config.appBuiltCheckout = nil
+                    saveConfig(config)
+                }
             }
         }
     }
@@ -713,9 +788,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.walnutHome = dataHome
                 self?.walnutSourceDir = home
                 self?.finishSetup()
-            // A data home (config.yaml, or the source/ checkout an older version
-            // of this app built there): the self-contained Walnut with its data here.
-            } else if fm.fileExists(atPath: home + "/config.yaml") || fm.fileExists(atPath: home + "/source/dist/cli.js") {
+            // A data home with a built source/ checkout, the place an older version
+            // of this app built one: decided as a saved setup there is.
+            } else if fm.fileExists(atPath: AppBuiltCheckout.location(walnutHome: home) + "/dist/cli.js") {
+                beforeUse?()
+                self?.adoptOldAppLocation(home: home)
+            // A data home (config.yaml): the self-contained Walnut with its data here.
+            } else if fm.fileExists(atPath: home + "/config.yaml") {
                 beforeUse?()
                 self?.installRuntime(dataHome: home, offerExisting: false)
             } else {
@@ -740,7 +819,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func finishSetup() {
         guard let home = walnutHome, let source = walnutSourceDir else { return }
-        saveConfig(WalnutConfig(walnutHome: home, walnutSourceDir: source, runtimeDir: runtime?.installDir))
+        saveConfig(WalnutConfig(walnutHome: home, walnutSourceDir: source, runtimeDir: runtime?.installDir, appBuiltCheckout: runtime != nil ? appBuiltCheckout : nil))
         showLoadingScreen()
         startServer()
     }
@@ -828,10 +907,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                             "port": String(port)
                         ])
                         self.statusLabel?.stringValue = "Reclaiming orphaned server on port \(port)..."
-                        kill(orphanPid, SIGTERM)
-                        // Give it a moment to release the port, then start our own.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            self.tryStartServerOnPort(index: index)
+                        // SIGTERM, its own few seconds to exit, then SIGKILL; then start our own.
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            let gone = LocalProcess.stop(pid: orphanPid, grace: 8)
+                            DispatchQueue.main.async {
+                                if gone, recordedSpawnedServerPid() == orphanPid { clearSpawnedServerPid() }
+                                self.tryStartServerOnPort(index: index)
+                            }
                         }
                     } else {
                         DesktopLogger.shared.log("existing_server_attached", fields: [
@@ -912,8 +994,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Whether `ps`'s line is a server this app starts: the self-contained Walnut's, or the checkout's.
+    /// Whether `ps`'s line is a server this app starts: the self-contained Walnut's,
+    /// or the checkout's; or the Node server an older version of this app started
+    /// on the checkout it built, which this setup moved off and has not removed yet.
     func isOwnServerCommand(_ command: String) -> Bool {
+        if let old = appBuiltCheckout, AppBuiltCheckout.isOldAppServerCommand(command, sourceDir: old) { return true }
         if let rt = runtime { return rt.isServerCommand(command) }
         guard let source = walnutSourceDir else { return false }
         return BundledRuntime.isCheckoutServerCommand(command, sourceDir: source)
@@ -1005,10 +1090,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Guards the two failure paths (child death vs startup timeout) so exactly one
         // acts. Mutated only on the main queue, so no locking is needed.
         var settled = false
-        // Set when the server reports it is recompiling a native addon; the startup
-        // deadline is then extended (a from-source build can exceed the
-        // ordinary limit, and killing it mid-compile corrupts the module).
-        var rebuildingNativeModule = false
 
         let outputReader = ProcessOutputReader(
             handle: handle,
@@ -1021,17 +1102,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         serverOutputReader = outputReader
         outputReader.start(onText: { [weak self] snapshot in
             outputBuffer = snapshot
-
-            // The server may recompile a native addon whose ABI doesn't match this
-            // Node (see src/core/native-abi-preflight.ts). That takes far longer
-            // than a normal boot, so stop counting against the startup deadline —
-            // otherwise we'd kill the rebuild partway and leave it broken.
-            if outputBuffer.contains(REBUILD_MARKER) {
-                DispatchQueue.main.async {
-                    self?.statusLabel?.stringValue = "Rebuilding native module (first run after a Node change)…"
-                    rebuildingNativeModule = true
-                }
-            }
 
             if outputBuffer.contains("listening on http://localhost:\(port)") && !portConfirmed {
                 portConfirmed = true
@@ -1139,16 +1209,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // High machine load can delay startup well beyond 15 seconds. Keep a
-        // finite five-minute ceiling for native rebuilds and a three-minute
-        // ceiling for ordinary starts.
+        // High machine load can delay startup well beyond 15 seconds: a finite
+        // three-minute ceiling.
         let startupBeganAt = Date()
         func armStartupDeadline() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
                 guard let self = self, !portConfirmed, !settled, self.serverProcess === process else { return }
-                let timeout = rebuildingNativeModule
-                    ? ServerRestartPolicy.nativeRebuildStartupTimeout
-                    : ServerRestartPolicy.ordinaryStartupTimeout
+                let timeout = ServerRestartPolicy.ordinaryStartupTimeout
                 if Date().timeIntervalSince(startupBeganAt) < timeout {
                     armStartupDeadline()
                     return
@@ -1249,6 +1316,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         timer.invalidate()
                         self?.retryTimer = nil
                         self?.loadWebUI()
+                        self?.removeAppBuiltCheckoutIfServed()
                     }
                 }
             }
@@ -1705,6 +1773,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.walnutHome = nil
             self.walnutSourceDir = nil
             self.runtime = nil
+            self.appBuiltCheckout = nil
             self.showSetupScreen()
         }
     }

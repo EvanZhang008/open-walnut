@@ -204,15 +204,6 @@ struct BundledRuntime {
         return nil
     }
 
-    /// A setup the app's own first-launch build made before the compiled file: it
-    /// cloned the repo into `<data home>/source` and built it with npm. That
-    /// checkout runs on neither runtime now (its packages were built for Node), so
-    /// such a setup moves to the self-contained Walnut, keeping its data home.
-    static func isAppBuiltCheckout(walnutHome: String, sourceDir: String) -> Bool {
-        let home = walnutHome.hasSuffix("/") ? String(walnutHome.dropLast()) : walnutHome
-        return !home.isEmpty && sourceDir == home + "/source"
-    }
-
     /// Whether a folder the user picked is a checkout to run from (its own
     /// package.json and a built dist/cli.js), rather than a data home.
     static func isBuiltCheckout(_ dir: String, fileExists: (String) -> Bool = FileManager.default.fileExists(atPath:)) -> Bool {

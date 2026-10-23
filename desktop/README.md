@@ -127,7 +127,11 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
   new version (an older Node archive: on its own Node). **Set Up Now** (from Use
   Existing, for a folder with no Walnut yet) installs the same self-contained
   Walnut with its data in that folder. A setup an older app made there as an npm
-  checkout (`<folder>/source`) moves to it on the next launch and keeps its data.
+  checkout (`<folder>/source`) moves to it on the next launch and keeps its data
+  (`AppBuiltCheckout.swift`): the old app's Node server is stopped first, and the
+  checkout is removed once the new Walnut has served. Only a checkout that is
+  provably the old app's (its shallow clone, untouched but for its own build)
+  moves; one the user keeps at `<folder>/source` runs as a checkout, on bun.
   Progress and a full `bootstrap.log` land in
   `~/Library/Application Support/Walnut/`; Retry runs the setup that failed again.
 - **Server lifecycle**: spawns `walnut web --port <port>` (a checkout: `bun dist/cli.js web --port <port>`) with

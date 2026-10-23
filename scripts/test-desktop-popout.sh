@@ -19,7 +19,7 @@ swiftc -parse-as-library -D WALNUT_APP -D WALNUT_DESKTOP_TEST \
     "$ROOT/desktop/WebContentPolicy.swift" "$ROOT/desktop/WebContentWatchdog.swift" \
     "$ROOT/desktop/LinkPolicy.swift" "$ROOT/desktop/SessionHost.swift" \
     "$ROOT/desktop/CalendarBridge.swift" "$ROOT/desktop/ReaderBridge.swift" \
-    "$ROOT/desktop/BundledRuntime.swift" "$ROOT/desktop/AppUpdateMachine.swift" \
+    "$ROOT/desktop/BundledRuntime.swift" "$ROOT/desktop/AppBuiltCheckout.swift" "$ROOT/desktop/AppUpdateMachine.swift" \
     "$ROOT/desktop/AppUpdater.swift" "$ROOT/desktop/AppUpdateBridge.swift" \
     "$ROOT/desktop/AppLink.swift" "$ROOT/desktop/CommandLineTool.swift" \
     "$ROOT/src/data/walnut-calendar.swift" "$ROOT/src/data/walnut-reader.swift" \

@@ -68,10 +68,6 @@ struct ProcessOutputReaderTests {
             ServerRestartPolicy.ordinaryStartupTimeout == 180,
             "Ordinary startup must tolerate a loaded machine"
         )
-        precondition(
-            ServerRestartPolicy.nativeRebuildStartupTimeout == 300,
-            "Native rebuild startup must retain its longer deadline"
-        )
 
         precondition(shouldAutomaticallyRestartServer(
             portConfirmed: true,

@@ -160,7 +160,6 @@ final class ProcessOutputReader {
 struct ServerRestartPolicy {
     static let healthyResetInterval: TimeInterval = 120
     static let ordinaryStartupTimeout: TimeInterval = 180
-    static let nativeRebuildStartupTimeout: TimeInterval = 300
     static let delays: [TimeInterval] = [1, 2, 4, 8, 16]
 
     private(set) var attemptCount = 0

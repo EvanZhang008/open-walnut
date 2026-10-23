@@ -118,12 +118,7 @@ struct BundledRuntimeTests {
         precondition(BundledRuntime.pickBun(candidates: ["/a/bun"], pin: nil, fileExists: exists, version: { versions[$0] }) == "/a/bun")
         precondition(BundledRuntime.pickBun(candidates: ["/a/bun"], pin: nil, fileExists: exists, version: { _ in nil }) == nil)
 
-        // The setup the app's old first launch made (an npm-built clone in <data>/source)
-        // moves to the self-contained Walnut; a checkout the user picked does not.
-        precondition(BundledRuntime.isAppBuiltCheckout(walnutHome: "/Users/someone/.open-walnut", sourceDir: "/Users/someone/.open-walnut/source"))
-        precondition(BundledRuntime.isAppBuiltCheckout(walnutHome: "/Users/someone/.open-walnut/", sourceDir: "/Users/someone/.open-walnut/source"))
-        precondition(!BundledRuntime.isAppBuiltCheckout(walnutHome: "/Users/someone/.open-walnut", sourceDir: checkout))
-        precondition(!BundledRuntime.isAppBuiltCheckout(walnutHome: "", sourceDir: "/source"))
+        // (The checkout an older app built in <data>/source: tests/desktop/app-built-checkout-tests.swift.)
         // A folder is a checkout to run from only with its own package.json and a built dist/cli.js.
         precondition(BundledRuntime.isBuiltCheckout(checkout, fileExists: { [checkout + "/package.json", checkout + "/dist/cli.js"].contains($0) }))
         precondition(!BundledRuntime.isBuiltCheckout(checkout, fileExists: { $0 == checkout + "/dist/cli.js" }))
