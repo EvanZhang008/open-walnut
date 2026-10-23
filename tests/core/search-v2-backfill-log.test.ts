@@ -20,6 +20,7 @@ import {
 } from '../../src/core/search/wiring.js';
 import type { BackfillVectorsResult } from '../../src/lib/hybrid-search/index.js';
 import { log } from '../../src/logging/index.js';
+import { fakeNow, pumpFakeTimers } from '../helpers/fake-timer-pump.js';
 
 describe('crossedProgressMilestone', () => {
   it('fires once per multiple of 800, never for small totals', () => {
@@ -67,12 +68,8 @@ describe('the wiring logs each batch', () => {
     resetSearchV2IndexForTests();
   });
 
-  async function pumpUntil(cond: () => boolean, fakeMs = 1_000_000): Promise<void> {
-    for (let t = 0; t < fakeMs && !cond(); t += 250) {
-      await vi.advanceTimersByTimeAsync(250);
-      await new Promise((r) => setImmediate(r));
-    }
-  }
+  // The startup sweep before the first batch is real I/O on the test home.
+  const pumpUntil = (cond: () => boolean, fakeMs = 1_000_000) => pumpFakeTimers(cond, fakeMs);
 
   function script(results: BackfillVectorsResult[]) {
     const index = getSearchV2Index();
@@ -144,19 +141,13 @@ describe('the wiring logs each batch', () => {
         : { embedded: 0, drained: true, cursor: null, scanned: 0 });
     const release = vi.spyOn(index, 'releasePassageWorker').mockResolvedValue(true);
     wiring = startSearchV2Wiring(new EventBus());
-    let fakeMs = 0;
-    const step = async () => {
-      await vi.advanceTimersByTimeAsync(250);
-      fakeMs += 250;
-      await new Promise((r) => setImmediate(r));
-    };
-    while (spy.mock.calls.length < 1 && fakeMs < 120_000) await step();
-    const stalledAt = fakeMs;
+    await pumpUntil(() => spy.mock.calls.length >= 1, 120_000);
+    const stalledAt = fakeNow();
     expect(spy).toHaveBeenCalledTimes(1);
-    while (spy.mock.calls.length < 2 && fakeMs < stalledAt + 1_000_000) await step();
+    await pumpUntil(() => spy.mock.calls.length >= 2, 1_000_000);
     // Not a pause-and-retry loop on a dead worker: the walk waits out the
     // 10-minute sweep interval (a drained pass waits the same).
-    expect(fakeMs - stalledAt).toBeGreaterThanOrEqual(10 * 60_000 - 250);
+    expect(fakeNow() - stalledAt).toBeGreaterThanOrEqual(10 * 60_000 - 250);
     expect(release).toHaveBeenCalled();
   }, 60_000);
 

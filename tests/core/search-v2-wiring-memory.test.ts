@@ -28,6 +28,7 @@ import {
   type SearchV2Wiring,
 } from '../../src/core/search/wiring.js'
 import { log } from '../../src/logging/index.js'
+import { pumpFakeTimers } from '../helpers/fake-timer-pump.js'
 
 const saved = { semantic: process.env.WALNUT_SEARCH_V2_SEMANTIC, model: process.env.WALNUT_SEARCH_V2_EMBED_MODEL }
 
@@ -93,13 +94,8 @@ describe('search wiring under memory pressure', () => {
 })
 
 describe('search wiring vector backfill', () => {
-  /** Drive the wiring's timers in fake time, yielding to real I/O between steps. */
-  async function pumpUntil(cond: () => boolean, fakeMs = 120_000): Promise<void> {
-    for (let t = 0; t < fakeMs && !cond(); t += 250) {
-      await vi.advanceTimersByTimeAsync(250)
-      await new Promise((r) => setImmediate(r))
-    }
-  }
+  /** Drive the wiring's timers in fake time, letting its real I/O (the startup sweep) finish between them. */
+  const pumpUntil = (cond: () => boolean, fakeMs = 120_000) => pumpFakeTimers(cond, fakeMs)
 
   it.each([
     ['drains', 'drained'],
