@@ -172,7 +172,8 @@ a macOS-only path, so a Linux deploy killed the live server and then failed to s
 replacement. Two rules it now encodes: prove every external prerequisite (a writable log)
 BEFORE the first destructive step, and never assume a macOS-only tool (listener detection
 probes `lsof` → `ss` → `fuser`, and refuses to run when none exists rather than failing
-open and starting a second server against the same data dir). Ratchets:
+open and starting a second server against the same data dir; a BusyBox applet under one of
+those names, or a BusyBox `ps`, does not count: they take none of the options used). Ratchets:
 `tests/scripts/dev-prod-portability.test.ts` (the dry run executes the whole script, on
 Linux too, in CI's quick tier) and `tests/scripts/cross-platform-ratchet.test.ts`.
 
