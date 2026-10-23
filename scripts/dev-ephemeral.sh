@@ -62,4 +62,24 @@ fi
 export WALNUT_RUNTIME_DIR="${TMPDIR:-/tmp}"
 WALNUT_RUNTIME_DIR="${WALNUT_RUNTIME_DIR%/}/walnut-ephemeral-runtime"
 mkdir -p "$WALNUT_RUNTIME_DIR"
+
+# One tree per build lands here (about 20 MB each) and the file prunes nothing
+# under WALNUT_RUNTIME_DIR, so this launcher does: it keeps the newest few, and
+# any tree made in the last day (a test server started from it may still run).
+KEEP_TREES="${WALNUT_EPHEMERAL_KEEP_TREES:-3}"
+prune_runtime_trees() {
+  local dir="$1" keep="$2" n=0 tree
+  [[ "$keep" =~ ^[0-9]+$ ]] || keep=3
+  # Newest first; tree names are <version>-<hash>, never with spaces or newlines.
+  for tree in $(ls -1t "$dir" 2>/dev/null); do
+    [[ -d "$dir/$tree" && ! -L "$dir/$tree" ]] || continue
+    n=$(( n + 1 ))
+    (( n > keep )) || continue
+    if [[ -n "$(find "$dir/$tree" -maxdepth 0 -mtime -1 2>/dev/null)" ]]; then continue; fi
+    rm -rf "${dir:?}/$tree"
+  done
+}
+prune_runtime_trees "$WALNUT_RUNTIME_DIR" "$KEEP_TREES"
+# BUN_BE_BUN=1 would make the file run as the bun CLI instead of Walnut.
+unset BUN_BE_BUN
 exec "$file" web --ephemeral
