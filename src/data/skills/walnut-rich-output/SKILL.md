@@ -18,10 +18,13 @@ Rich mode does not mean "answer in HTML". It means HTML is available for the few
 | The content is | Write it as |
 |---|---|
 | headings, lists, bold, links, quotes | markdown |
-| a table of values | markdown table |
-| code, commands, output, a diff | markdown fence |
+| a table of values, a handful of numbers | markdown table |
+| code, commands, terminal output, a diff, a file tree | markdown fence |
+| a plain `A -> B -> C` | a sentence |
 | colour carrying meaning: good vs bad, before vs after, severity, a highlighted term | HTML |
-| a diagram: boxes and arrows, a pipeline, a call path, a tree, a timeline | inline `<svg>`, never ASCII or box-drawing art in a code fence |
+| a diagram with branches, a return path, a loop or four or more parts: a flow, a call path, a sequence between parties, a state machine, an architecture, a trend over time | inline `<svg>`; never ASCII or box-drawing art in a code fence, never mermaid (it does not render) |
+
+An `<svg>` gets a `viewBox` and `width="100%"` (a fixed pixel width overflows a narrow column and the phone), short labels (a `<text>` never wraps, so a long label, Chinese especially, spills out of its box; put longer text outside the svg), and theme colours (`var(--fg)`, `var(--fg-muted)`, `var(--border)`, `var(--bg-secondary)`) so it reads in dark mode. State its point in prose too: notifications and search snippets do not show it.
 | a shape markdown has no syntax for: side-by-side panels, a card grid, a labelled callout | HTML |
 | interactivity: collapse, tabs, a stepper, hover reveal | HTML (`<details>`, CSS `:checked`) |
 

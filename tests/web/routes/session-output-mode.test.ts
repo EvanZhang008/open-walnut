@@ -55,9 +55,9 @@ vi.mock('../../../src/web/ws/handler.js', () => ({
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { bus } from '../../../src/core/event-bus.js'
 import { registerSessionChatRpc } from '../../../src/web/routes/session-chat.js'
-import { markProcessing, resetCache } from '../../../src/core/session-message-queue.js'
+import { markProcessing, resetCache, sendMessageToSession } from '../../../src/core/session-message-queue.js'
 import {
-  createSessionRecord, getSessionByClaudeId, _resetSessionTrackerForTesting,
+  createSessionRecord, getSessionByClaudeId, updateSessionRecord, _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js'
 import { patchSession } from '../../../src/core/sessions/session-lifecycle.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
@@ -250,7 +250,16 @@ describe('resolveOutputModeDirective', () => {
       expect(s).toMatch(/diagram[^.;]*inline <svg>/)
       expect(s).toMatch(/never[^.;]*ASCII/)
       expect(s).toMatch(/code blocks[^.;]*real code/)
+      // File trees and output stay fenced, and mermaid never renders here.
+      expect(s).toMatch(/file trees/)
+      expect(s).toMatch(/mermaid/)
     }
+    // The eval found the over-reach a bare "every diagram" rule causes, so the full
+    // instruction carries a threshold and how an svg must be built.
+    expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/branches, a return path, a loop or four or more parts/)
+    expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/A -> B -> C stays a sentence/)
+    expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/viewBox and width="100%"/)
+    expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toMatch(/theme colours/)
   })
 })
 
@@ -357,6 +366,50 @@ describe('session:send — rich', () => {
     await notePlaceCompaction(sid, 'boundary-2')
     await callSend({ sessionId: sid, message: 'second compaction' })
     expect(await drain(sid)).toBe(`second compaction\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+  })
+
+  it('turns nobody typed carry the directive too: trigger, peer, wait_until, notices, auto-continue', async () => {
+    await setConfigOutputMode('rich')
+    const sid = await newSession()
+    // Never told: the first automated turn carries the full instruction and advances the edge.
+    await sendMessageToSession(sid, 'trigger fired: PR has a new comment', { source: 'routine-trigger' })
+    expect(await drain(sid)).toBe(`trigger fired: PR has a new comment\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+    for (const source of ['routine-watcher', 'wait-until', 'peer', 'walnut-notify', 'human-inbox', 'auto-continue', 'auto-recover']) {
+      await sendMessageToSession(sid, `from ${source}`, { source })
+      expect(await drain(sid)).toBe(`from ${source}\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    }
+  })
+
+  it('a peer message keeps its display text clean; the directive rides the text the CLI gets', async () => {
+    await setConfigOutputMode('rich')
+    const sid = await newSession()
+    await updateSessionRecord(sid, { output_mode_injected: 'rich' })
+    const seen: string[] = []
+    bus.subscribe('test-send-watch', (e) => {
+      if (e.name === 'session:send') seen.push((e.data as { message: string }).message)
+    }, { global: true })
+    await sendMessageToSession(sid, 'bus text', { source: 'peer', enqueueMessage: '<walnut-message>hi</walnut-message>' })
+    expect(await drain(sid)).toBe(`<walnut-message>hi</walnut-message>\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    expect(seen).toEqual(['bus text'])
+  })
+
+  it('other sources, markdown sessions, wrapped text and slash commands are left as they are', async () => {
+    await setConfigOutputMode('rich')
+    const sid = await newSession()
+    await updateSessionRecord(sid, { output_mode_injected: 'rich' })
+    await sendMessageToSession(sid, 'plan step', { source: 'web-api' })
+    expect(await drain(sid)).toBe('plan step')
+    await sendMessageToSession(sid, '/compact', { source: 'auto-continue' })
+    expect(await drain(sid)).toBe('/compact')
+    const wrapped = `already wrapped\n\n${RICH_OUTPUT_MODE_REMINDER}`
+    await sendMessageToSession(sid, wrapped, { source: 'peer' })
+    expect(await drain(sid)).toBe(wrapped)
+
+    await setConfigOutputMode('markdown')
+    const md = await newSession()
+    await sendMessageToSession(md, 'trigger fired', { source: 'routine-trigger' })
+    expect(await drain(md)).toBe('trigger fired')
   })
 
   it('a compaction in a markdown session still appends nothing', async () => {

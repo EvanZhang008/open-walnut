@@ -2595,8 +2595,13 @@ export interface SessionRecord {
    *  edge state: the full instruction is only prefixed when this differs from the
    *  EFFECTIVE mode, so a reload or a second device can't double-inject it.
    *  Undefined = nothing said yet, which is NOT the same as 'markdown' being
-   *  chosen: a default-rich session must still receive the instruction once. */
+   *  chosen: a default-rich session must still receive the instruction once.
+   *  A compaction boundary clears it (sessions/place-notice.ts). */
   output_mode_injected?: SessionOutputMode;
+  /** When the post-compaction hook last restated the rich instruction. A boundary
+   *  read right after it keeps `output_mode_injected`, since the hook already told
+   *  the model about that compaction. */
+  outputModeHookAt?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). Display only. */
   model?: string;
   /** CLI model string passed to --model (e.g. "opus[1m]"). Preserves [1m] suffix for resume. */

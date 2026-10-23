@@ -26,7 +26,8 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-me-
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { addTask, completeTask } from '../../../src/core/task-manager.js'
-import { createSessionRecord } from '../../../src/core/session-tracker.js'
+import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
+import { RICH_OUTPUT_MODE_ON_INSTRUCTION } from '../../../src/core/sessions/output-mode.js'
 import { createSessionRequest, settleReplied } from '../../../src/core/session-requests.js'
 import { executeOp } from '../../../src/ops/executor.js'
 import { LOCAL_ORIGIN } from '../../../src/lib/caller-origin.js'
@@ -44,11 +45,12 @@ async function open(sid?: string): Promise<Record<string, any>> {
 }
 
 let seq = 0
-async function seedSession(title: string, parent?: string): Promise<{ id: string; sid: string }> {
+async function seedSession(title: string, parent?: string, outputMode?: 'rich' | 'markdown'): Promise<{ id: string; sid: string }> {
   seq += 1
   const { task } = await addTask({ title, project: 'Acme', ...(parent ? { parent_task_id: parent } : {}) })
   const sid = `22222222-3333-4444-5555-${String(seq).padStart(12, '0')}`
   await createSessionRecord(sid, task.id, 'Acme', '/repo/acme', { title })
+  if (outputMode) await updateSessionRecord(sid, { output_mode: outputMode })
   return { id: task.id, sid }
 }
 
@@ -161,7 +163,8 @@ describe('GET /api/v1/me/open', () => {
 
 describe('open_items op', () => {
   it('hook mode prints the SessionStart hook JSON, and {} when nothing is open', async () => {
-    const parent = await seedSession('Hooked parent')
+    // Markdown: a rich session's hook also restates the reply-style instruction (next test).
+    const parent = await seedSession('Hooked parent', undefined, 'markdown')
     const child = await seedSession('Hooked child', parent.id)
     const apiBase = `http://localhost:${port}`
     const r = await executeOp('open_items', { hook: 'compact' }, { apiBase, callerSid: parent.sid, origin: LOCAL_ORIGIN })
@@ -175,6 +178,24 @@ describe('open_items op', () => {
     const none = await executeOp('open_items', { hook: 'compact' }, { apiBase, callerSid: parent.sid, origin: LOCAL_ORIGIN })
     expect(none.ok).toBe(true)
     expect((none as { result: unknown }).result).toEqual({})
+  })
+
+  // The summary drops the rich instruction, so the hook puts it back for this
+  // compaction; a direct call (no compaction) leaves it alone (2026-10-23).
+  it('a rich session: hook mode restates the full instruction even with nothing open; a direct call does not', async () => {
+    const quiet = await seedSession('Rich and quiet', undefined, 'rich')
+    const apiBase = `http://localhost:${port}`
+    const direct = await executeOp('open_items', {}, { apiBase, callerSid: quiet.sid, origin: LOCAL_ORIGIN })
+    expect(JSON.stringify((direct as { result: unknown }).result)).not.toContain('Rich output mode')
+    expect((await getSessionByClaudeId(quiet.sid))?.outputModeHookAt).toBeUndefined()
+
+    const r = await executeOp('open_items', { hook: 'compact' }, { apiBase, callerSid: quiet.sid, origin: LOCAL_ORIGIN })
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    const ctx = (r as { result: any }).result.hookSpecificOutput.additionalContext as string
+    expect(ctx).toBe(RICH_OUTPUT_MODE_ON_INSTRUCTION)
+    const record = await getSessionByClaudeId(quiet.sid)
+    expect(record?.output_mode_injected).toBe('rich')
+    expect(record?.outputModeHookAt).toEqual(expect.any(String))
   })
 
   it('called directly: the lists plus an outcome', async () => {

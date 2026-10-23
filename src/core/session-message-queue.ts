@@ -196,7 +196,12 @@ export async function sendMessageToSession(
   // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
   const { pendingOrgDigest } = await import('./org/org-store.js');
   const digest = await pendingOrgDigest(sessionId);
-  const body = opts?.enqueueMessage ?? message;
+  // A turn nobody typed still answers the user: it carries the reply-style
+  // directive a human send would (sessions/output-mode-send.ts).
+  const { prepareAutomatedOutputModeSend } = await import('./sessions/output-mode-send.js');
+  const rawBody = opts?.enqueueMessage ?? message;
+  const outputMode = await prepareAutomatedOutputModeSend(sessionId, opts?.source, rawBody);
+  const body = outputMode?.enqueueText ?? rawBody;
   const notes = [place?.text, digest?.text].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
   const msg = await enqueueMessage(sessionId, enqueueText, {
@@ -210,6 +215,7 @@ export async function sendMessageToSession(
   // A repeat collapsed onto the row already queued: only the row that holds the note counts.
   if (place && msg.message.startsWith(place.text)) await place.markTold();
   if (digest && msg.message.includes(digest.text)) await digest.markTold();
+  if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
 
   // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because
   // the record profile is consumed exactly when this send triggers a cold

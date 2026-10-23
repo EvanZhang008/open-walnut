@@ -183,15 +183,18 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
     // boundary Walnut read answered THIS one. One made before it answered that one.
     const noted = record.placeNoted;
     const hookAt = noted?.byHookAt ? Date.parse(noted.byHookAt) : NaN;
-    const hookAnswered = Number.isFinite(hookAt) && now - hookAt < HOOK_BOUNDARY_MS
-      && (!record.lastCompactAt || hookAt > Date.parse(record.lastCompactAt));
+    const answered = (at: number) => Number.isFinite(at) && now - at < HOOK_BOUNDARY_MS
+      && (!record.lastCompactAt || at > Date.parse(record.lastCompactAt));
+    const hookAnswered = answered(hookAt);
+    const modeHookAnswered = answered(record.outputModeHookAt ? Date.parse(record.outputModeHookAt) : NaN);
     await updateSessionRecordConditionally(sessionId, {
       lastCompactUuid: boundaryUuid,
       lastCompactAt: new Date(now).toISOString(),
       // The summary drops the rich-output instruction too: back to "never told",
-      // so the next send carries it in full (output-mode.ts). Same guarded write,
-      // so a replayed boundary never voids an instruction sent after it.
-      output_mode_injected: undefined,
+      // so the next send carries it in full (output-mode.ts), unless the hook
+      // already restated it for this compaction. Same guarded write, so a
+      // replayed boundary never voids an instruction sent after it.
+      ...(modeHookAnswered ? {} : { output_mode_injected: undefined }),
       ...(hookAnswered && noted ? { placeNoted: { ...noted, compactUuid: boundaryUuid } } : {}),
     }, (cur) => cur.lastCompactUuid !== boundaryUuid, { preserveLastActiveAt: true });
   } catch (err) {

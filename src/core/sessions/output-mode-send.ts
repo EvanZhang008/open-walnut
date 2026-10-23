@@ -27,9 +27,74 @@ import { log } from '../../logging/index.js';
 import type { Config, SessionOutputMode, SessionRecord } from '../types.js';
 import {
   resolveOutputModeDirective,
+  resolveEffectiveOutputMode,
   applyOutputModeDirective,
   stripOutputModeWrappers,
+  RICH_OUTPUT_MODE_ON_INSTRUCTION,
 } from './output-mode.js';
+
+/**
+ * Turns nobody typed, whose replies the user still reads: a trigger fire, another
+ * task's message, the wait_until clock, Walnut's notices, a letter reply, an
+ * automatic continue or recovery. They reach the CLI through the queue directly,
+ * so the queue applies the directive for them (session-message-queue.ts). The
+ * human paths (web, phone, cloud relay) wrap before they enqueue and are not here.
+ */
+export const AUTOMATED_OUTPUT_MODE_SOURCES: ReadonlySet<string> = new Set([
+  'routine-trigger', 'routine-watcher', 'wait-until', 'peer', 'walnut-notify',
+  'human-inbox', 'auto-continue', 'auto-recover',
+]);
+
+/**
+ * The directive for a turn an automated source starts, or null when the source
+ * is not one of those, the text already carries a wrapper, or the session has no
+ * record. Never throws: a send must not fail over a reply-style reminder.
+ */
+export async function prepareAutomatedOutputModeSend(
+  sessionId: string,
+  source: string | undefined,
+  message: string,
+): Promise<PreparedOutputModeSend | null> {
+  if (!source || !AUTOMATED_OUTPUT_MODE_SOURCES.has(source)) return null;
+  try {
+    if (stripOutputModeWrappers(message) !== message) return null;
+    // The edge marker lives on the leader's record; a replica's copy may lag.
+    const { role } = await import('../server-role.js');
+    if (role() !== 'leader') return null;
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const record = await getSessionByClaudeId(sessionId);
+    if (!record) return null;
+    const prepared = await prepareOutputModeSend(sessionId, record, message);
+    return prepared.changed ? prepared : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The full rich instruction for the post-compaction hook to put into context,
+ * recorded as told; null when the session is not on rich. A compaction in the
+ * middle of a turn would otherwise leave the rest of that turn without it until
+ * the next send. Never throws.
+ */
+export async function stateOutputModeAfterCompaction(
+  record: Pick<SessionRecord, 'claudeSessionId' | 'output_mode'>,
+  config?: Pick<Config, 'session'> | null,
+  now = Date.now(),
+): Promise<string | null> {
+  try {
+    const resolvedConfig = config !== undefined ? config : await getConfig().catch(() => null);
+    if (resolveEffectiveOutputMode(record, resolvedConfig) !== 'rich') return null;
+    const { updateSessionRecordConditionally } = await import('../session-tracker.js');
+    await updateSessionRecordConditionally(record.claudeSessionId, {
+      output_mode_injected: 'rich',
+      outputModeHookAt: new Date(now).toISOString(),
+    }, () => true, { preserveLastActiveAt: true });
+    return RICH_OUTPUT_MODE_ON_INSTRUCTION;
+  } catch {
+    return null;
+  }
+}
 
 export interface PreparedOutputModeSend {
   /** The effective mode this send was resolved against. */

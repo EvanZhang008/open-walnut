@@ -68,15 +68,22 @@ export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
  *  fallback notifications and search snippets show. So the line draws the border
  *  first, then invites HTML for the things across it.
  *
- *  The diagram sentence is a rule, not an option: "code blocks" read as licence to
- *  fence a box-drawing call path, which a code block renders as monospace text.
- *  So a fence is for real code, and every diagram is SVG (2026-10-22). */
+ *  The diagram rule has a threshold on purpose. "Draw every diagram as SVG"
+ *  fixed the reported ASCII call path (2026-10-22) and then over-reached in the
+ *  eval (scripts/rich-output-eval.mjs): SVGs for a file tree, a debounce function,
+ *  a complexity table and terminal output, and fixed pixel widths that overflow a
+ *  narrow column. So the instruction names what stays a code block or table, the
+ *  shapes that earn an SVG, and how an SVG must be built. */
 export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
-  `${OUTPUT_MODE_INSTRUCTION_MARKER}ON] Keep writing markdown for what markdown does well `
-  + '(headings, lists, tables, and code blocks for real code, commands and output), and mix raw HTML into the same reply '
-  + '(separated by a blank line) for what markdown cannot express. Draw every diagram (boxes and arrows, a flow, '
-  + 'a call path, a tree, a timeline) as inline <svg>, never as ASCII or box-drawing art in a code block. '
-  + 'HTML is also for colour that carries meaning, '
+  `${OUTPUT_MODE_INSTRUCTION_MARKER}ON] Write markdown for what markdown does well: headings, lists, `
+  + 'tables (also for a handful of numbers), and code blocks for real code, commands, terminal output, diffs '
+  + 'and file trees. Mix raw HTML into the same reply (separated by a blank line) only for what markdown cannot '
+  + 'express. A diagram with branches, a return path, a loop or four or more parts (a flow, a call path, a sequence '
+  + 'between parties, a state machine, an architecture, a trend over time) is inline <svg>, never ASCII or '
+  + 'box-drawing art in a code block and never mermaid, which does not render; a plain A -> B -> C stays a '
+  + 'sentence. Give each <svg> a viewBox and width="100%" (never a fixed pixel width), short labels with any '
+  + 'longer text outside it, and theme colours (var(--fg), var(--fg-muted), var(--border), var(--bg-secondary)); '
+  + 'state the diagram\'s point in prose as well. HTML is also for colour that carries meaning, '
   + 'side-by-side or card layout, and interactivity (<details>, CSS :checked). The client renders it natively '
   + 'while streaming. Write visual HTML directly in your reply, not in a file, screenshot, or HTML code fence, '
   + 'unless the user asks for one. Keep each widget contiguous, without internal blank lines. '
@@ -106,9 +113,10 @@ export const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
  *  (colour, diagrams, layout markdown has no shape for) is what makes the line
  *  steer instead of just remind (reported 2026-09-03). */
 export const RICH_OUTPUT_MODE_REMINDER =
-  `${OUTPUT_MODE_REMINDER_MARKER}: markdown first, code blocks only for real code; diagrams as inline <svg>, never ASCII art; `
-  + 'for colour or layout, write raw HTML directly in this reply. '
-  + 'No files, screenshots or HTML fences unless requested (html-app for scripts); no blank lines inside a widget.]';
+  `${OUTPUT_MODE_REMINDER_MARKER}: markdown first; code blocks for real code, output and file trees; `
+  + 'a real diagram is responsive inline <svg>, never ASCII or mermaid; '
+  + 'colour or layout: raw HTML directly in this reply. '
+  + 'No files, screenshots or HTML fences unless requested; no blank lines in a widget.]';
 
 /** The style a model uses when nothing has been said to it. Compared against the
  *  effective mode to decide whether an edge is owed — deliberately NOT

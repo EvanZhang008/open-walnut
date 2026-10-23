@@ -1,0 +1,98 @@
+# Rich output golden set: questions whose right SHAPE is known.
+# Run with: ./node_modules/.bin/tsx scripts/rich-output-eval.mjs
+#
+# expect:
+#   svg: required | forbidden | any   (default any)
+#   html: forbidden                   no markup at all (a short answer)
+#   code_lang: [..]                   real code in a fence with one of these languages
+#   file_tree: true                   a file tree stays in a fence
+#   fence: true                       some code fence (terminal output, a diff)
+#   table: true                       a markdown table
+# An svg added BESIDE the markdown form (a chart under a table, a coloured
+# breakdown of one column) is fine; one that REPLACES it fails the form check.
+# svg: forbidden is only for answers too short to need a picture.
+# Global checks (every case): no ASCII drawing in a fence, no mermaid, no fenced
+# svg, no hand-built <pre>, every svg has a viewBox and no fixed pixel width.
+cases:
+  - id: call-path-native-addon
+    family: diagram
+    prompt: >-
+      Explain with a small diagram and one short code example: why does the C++
+      code inside a native SQLite addon for Node call V8 APIs, when I thought
+      JavaScript simply calls the C library?
+    expect: { svg: required, code_lang: [cpp, c++, c] }
+
+  - id: sequence-oauth
+    family: diagram
+    prompt: >-
+      Walk me through the OAuth authorization code flow between the browser, the
+      app server and the authorization server, step by step.
+    expect: { svg: required }
+
+  - id: state-machine-tcp-close
+    family: diagram
+    prompt: Show the states a TCP connection goes through when it closes, on both sides.
+    expect: { svg: required }
+
+  - id: architecture-request-path
+    family: diagram
+    prompt: >-
+      How does one request travel from the browser through a load balancer, two
+      app servers, a cache and a primary database with a read replica?
+    expect: { svg: required }
+
+  - id: flowchart-login-lockout
+    family: diagram
+    prompt: >-
+      Draw the flow of a login with up to three password retries, after which the
+      account is locked for 15 minutes.
+    expect: { svg: required }
+
+  - id: cjk-git-areas
+    family: diagram
+    # Chinese prompt: "Use a diagram to explain how git's working tree, staging
+    # area, local repository and remote repository relate."
+    prompt: "\u7528\u56fe\u89e3\u91ca\u4e00\u4e0b Git \u7684\u5de5\u4f5c\u533a\u3001\u6682\u5b58\u533a\u3001\u672c\u5730\u4ed3\u5e93\u548c\u8fdc\u7a0b\u4ed3\u5e93\u4e4b\u95f4\u7684\u5173\u7cfb\u3002"
+    expect: { svg: required }
+
+  - id: file-tree-python-package
+    family: stays-markdown
+    prompt: Show me a typical folder layout for a small Python package with tests and docs.
+    expect: { file_tree: true }
+
+  - id: pure-code-debounce
+    family: stays-markdown
+    prompt: Write a TypeScript debounce function with a cancel method.
+    expect: { code_lang: [ts, typescript] }
+
+  - id: short-answer-port
+    family: stays-markdown
+    prompt: What port does HTTPS use by default?
+    expect: { svg: forbidden, html: forbidden }
+
+  - id: simple-three-steps
+    family: stays-markdown
+    prompt: In two sentences, what happens when I run git add, then git commit, then git push?
+    expect: { svg: forbidden }
+
+  - id: complexity-table
+    family: stays-markdown
+    prompt: Compare the time complexity of linear search, binary search and a hash table lookup.
+    expect: { table: true }
+
+  - id: terminal-output
+    family: stays-markdown
+    prompt: What does the output of ls -la look like? Show an example and explain the columns.
+    expect: { fence: true }
+
+  - id: unified-diff
+    family: stays-markdown
+    prompt: Show a unified diff that renames a function foo to bar in a small Python file.
+    expect: { code_lang: [diff, patch] }
+
+  - id: trend-six-months
+    family: judgement
+    prompt: >-
+      Monthly signups were Jan 120, Feb 180, Mar 260, Apr 240, May 390, Jun 520.
+      Show me the trend.
+    expect: { svg: any }

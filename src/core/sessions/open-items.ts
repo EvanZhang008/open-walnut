@@ -59,7 +59,11 @@ export async function listOpenSubtasks(
 }
 
 /** Everything still open for the calling session. Never throws: a reminder is best effort. */
-export async function collectOpenItems(callerSid: string | undefined, now = Date.now()): Promise<OpenItems> {
+export async function collectOpenItems(
+  callerSid: string | undefined,
+  now = Date.now(),
+  opts: { afterCompaction?: boolean } = {},
+): Promise<OpenItems> {
   const sid = (callerSid ?? '').trim();
   if (!sid) return EMPTY;
   const { CLOUD_MODE } = await import('../../constants.js');
@@ -112,6 +116,14 @@ export async function collectOpenItems(callerSid: string | undefined, now = Date
       };
     }
     items.text = formatOpenItems(items, now);
+    // The summary does not keep the rich instruction. Restated here, server-side
+    // only (the formatter is shared with the daemon), so a compaction in the
+    // middle of a turn is covered before the next send.
+    if (opts.afterCompaction) {
+      const { stateOutputModeAfterCompaction } = await import('./output-mode-send.js');
+      const rich = await stateOutputModeAfterCompaction(caller.record);
+      if (rich) items.text = [items.text, rich].filter(Boolean).join('\n\n');
+    }
     return items;
   } catch {
     return EMPTY;

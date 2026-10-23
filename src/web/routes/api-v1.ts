@@ -3402,7 +3402,9 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
   try {
     const { collectOpenItems } = await import('../../core/sessions/open-items.js')
     const rawSid = req.headers['x-walnut-caller-sid']
-    res.json(await collectOpenItems(Array.isArray(rawSid) ? rawSid[0] : rawSid))
+    res.json(await collectOpenItems(Array.isArray(rawSid) ? rawSid[0] : rawSid, Date.now(), {
+      afterCompaction: req.query.hook === 'compact',
+    }))
   } catch (err) {
     next(err)
   }

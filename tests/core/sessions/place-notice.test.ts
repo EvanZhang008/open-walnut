@@ -27,6 +27,7 @@ import { sendMessageToSession, getQueue, resetCache } from '../../../src/core/se
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { collectOpenItems } from '../../../src/core/sessions/open-items.js'
 import { createOpenItemsText } from '../../../src/core/sessions/open-items-text.js'
+import { RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } from '../../../src/core/sessions/output-mode.js'
 
 describe('placeFromPrompt (reads back the lines session-context.ts writes)', () => {
   it('a project, a folder and a leader', () => {
@@ -104,7 +105,7 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
   })
 
   /** A session spawned on the task as it stands now, with the prompt it really gets. */
-  async function spawned(project: string, opts: { walnutAgent?: boolean; parent?: string } = {}) {
+  async function spawned(project: string, opts: { walnutAgent?: boolean; parent?: string; outputMode?: 'rich' | 'markdown' } = {}) {
     const { task } = await addTask({
       title: 'Sync worker', project,
       ...(opts.walnutAgent ? { walnut_agent: true } : {}),
@@ -113,7 +114,8 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
     const sid = `sid-${task.id}`
     await createSessionRecord(sid, task.id, task.project ?? '', '/repo/marina', { title: task.title })
     const { systemPrompt } = await buildSessionContext(task.id)
-    await updateSessionRecord(sid, { appliedAppendSystemPrompt: systemPrompt })
+    // Markdown unless asked: the place note is the subject here, not the reply-style directive.
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: systemPrompt, output_mode: opts.outputMode ?? 'markdown' })
     return { task, sid, systemPrompt }
   }
   const rows = async (sid: string) => (await getQueue(sid)).map((m) => m.message)
@@ -291,6 +293,52 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       await notePlaceCompaction(sid, 'boundary-4')
       await sendMessageToSession(sid, 'two', { source: 'ui' })
       expect((await rows(sid))[1]).toContain('outcome="moved"')
+    })
+  })
+
+  // The summary drops the rich instruction; a compaction in the middle of a turn
+  // must not leave the rest of that turn without it (2026-10-23).
+  describe('the compaction hook restates the rich instruction', () => {
+    const hook = (sid: string) => collectOpenItems(sid, Date.now(), { afterCompaction: true })
+    const told = (sid: string) => updateSessionRecord(sid, { output_mode_injected: 'rich' })
+
+    it('a rich session gets the full instruction from the hook, and the next send only the reminder', async () => {
+      const { sid } = await spawned('acme', { outputMode: 'rich' })
+      await told(sid)
+      await notePlaceCompaction(sid, 'boundary-1')
+      expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBeUndefined()
+      const open = await hook(sid)
+      expect(open.text).toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
+      expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+      await sendMessageToSession(sid, 'after', { source: 'peer' })
+      expect((await rows(sid)).at(-1)).toBe(`after\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    })
+
+    it('the hook answering before the boundary is read still counts for that compaction', async () => {
+      const { sid } = await spawned('acme', { outputMode: 'rich' })
+      await told(sid)
+      await hook(sid)
+      await notePlaceCompaction(sid, 'boundary-1')
+      expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+      await sendMessageToSession(sid, 'after', { source: 'peer' })
+      expect((await rows(sid)).at(-1)).toBe(`after\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    })
+
+    it('a stale hook statement does not cover a later compaction', async () => {
+      const { sid } = await spawned('acme', { outputMode: 'rich' })
+      await told(sid)
+      await hook(sid)
+      await notePlaceCompaction(sid, 'boundary-1', Date.now() + 10 * 60_000)
+      await sendMessageToSession(sid, 'after', { source: 'peer' })
+      expect((await rows(sid)).at(-1)).toBe(`after\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    })
+
+    it('a direct open_items call and a markdown session restate nothing', async () => {
+      const { sid } = await spawned('acme', { outputMode: 'rich' })
+      expect((await collectOpenItems(sid)).text).not.toContain('Rich output mode')
+      expect((await getSessionByClaudeId(sid))?.outputModeHookAt).toBeUndefined()
+      const md = await spawned('acme')
+      expect((await hook(md.sid)).text).toBe('')
     })
   })
 })
