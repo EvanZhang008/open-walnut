@@ -30,7 +30,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { syncBuiltinESMExports } from 'node:module'
-import { afterAll } from 'vitest'
+import { afterAll, vi } from 'vitest'
 
 const recorded = new Set<string>()
 
@@ -228,6 +228,30 @@ fs.rename = wrapCallback(origRename, 1)
 fs.promises.rename = wrapAsync(origPRename, 1)
 
 syncBuiltinESMExports()
+
+/**
+ * bun: syncBuiltinESMExports() does nothing there. bun builds a builtin's named
+ * exports once, at its first ESM import, so `import { mkdtempSync } from
+ * 'node:fs'` (loaded before this file ran) kept bun's own function and its
+ * creations went unrecorded; node:fs/promises was right or wrong by import
+ * order alone. The runner resolves every test and src import, so both modules
+ * are mocked with the namespace the call above gives on Node: each export as
+ * the module object holds it now, and `default` the live module object.
+ * Still unseen on bun: a file that mocks node:fs itself, whose importOriginal()
+ * is bun's own namespace, and dependencies the runner does not load.
+ */
+if (typeof process.versions.bun === 'string') {
+  const synced = (cjs: object) => {
+    const now: Record<string, unknown> = { ...cjs }
+    return async (importOriginal: () => Promise<Record<string, unknown>>) => {
+      const ns: Record<string, unknown> = { ...(await importOriginal()) }
+      for (const key of Object.keys(ns)) if (key !== 'default' && key in now) ns[key] = now[key]
+      return { ...ns, default: cjs }
+    }
+  }
+  vi.doMock('node:fs', synced(fs))
+  vi.doMock('node:fs/promises', synced(fs.promises))
+}
 
 // ── Reap ──
 

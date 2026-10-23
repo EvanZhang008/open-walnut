@@ -23,7 +23,10 @@
  * How
  * ---
  * Every in-process TCP or unix-socket client (fetch/undici, http, https, ws,
- * net) ends in net.Socket.prototype.connect, so that one method is wrapped. A
+ * net) ends in net.Socket.prototype.connect, so that one method is wrapped. On
+ * bun, fetch is native and never reaches net.Socket (http, ws and net still
+ * do), so there fetch itself is wrapped as well; `Bun.fetch` is a read-only
+ * property and cannot be, and no Walnut code calls it. A
  * connect to port 3456 on this machine (loopback, a local interface address or
  * the host name), or to a unix socket in the production runtime dir (where the
  * live daemon's agent gateway listens), never opens: the socket fails the way a
@@ -99,6 +102,29 @@ export function connectTarget(args: readonly unknown[]): ConnectTarget {
   return {}
 }
 
+/** Default ports of the schemes whose fetch opens a TCP socket. */
+const FETCH_DEFAULT_PORTS: Readonly<Record<string, number>> = { 'http:': 80, 'https:': 443, 'ws:': 80, 'wss:': 443 }
+
+/**
+ * The target of a fetch(input, init) call: bun's `unix` socket option, else the
+ * URL's host and port. Null when the call opens no socket of its own (file:,
+ * data:, blob:, a URL fetch itself rejects).
+ */
+export function fetchTarget(input: unknown, init?: unknown): ConnectTarget | null {
+  const unix = (init as { unix?: unknown } | null | undefined)?.unix
+  if (typeof unix === 'string' && unix) return { path: unix }
+  const href = typeof input === 'string' ? input
+    : input instanceof URL ? input.href
+    : typeof (input as { url?: unknown } | null)?.url === 'string' ? (input as { url: string }).url
+    : null
+  if (href === null) return null
+  let url: URL
+  try { url = new URL(href) } catch { return null }
+  const fallback = FETCH_DEFAULT_PORTS[url.protocol]
+  if (fallback === undefined) return null
+  return { host: url.hostname, port: url.port ? Number(url.port) : fallback }
+}
+
 /** True when `host` names this machine. No host means localhost (net's default). */
 export function isThisMachine(host: string | undefined): boolean {
   if (!host) return true
@@ -154,29 +180,58 @@ function currentTest(): string {
   }
 }
 
-/** Wrap Socket#connect once per worker. */
+/**
+ * Null when `target` may be dialled. Otherwise records and prints the attempt
+ * and returns the refusal's message.
+ */
+function refusal(target: ConnectTarget): string | null {
+  const walnut = productionTargetReason(target)
+  const reason = walnut ?? modelApiReason(target)
+  if (!reason) return null
+  const test = currentTest()
+  const message =
+    `[prod-server-guard] A test${test ? ` (${test})` : ''} tried to connect to ${reason}. ` +
+    (walnut
+      ? 'Refused: tests must never reach the user\'s real Walnut. Pass an explicit apiBase ' +
+        '(or OPEN_WALNUT_API_URL) for a server the test started itself (startServer({ port: 0 })) ' +
+        'or for a local stub.'
+      : 'Refused: tests run on mocks, never a real model. Mock sendMessage or the provider ' +
+        'client this code path uses.')
+  const where = new Error('connect attempted here').stack ?? ''
+  guardState.violations.push(`${message}\n${where}`)
+  // eslint-disable-next-line no-console
+  console.error(`${message}\n${where}`)
+  return message
+}
+
+/**
+ * bun only: wrap the native fetch. A refusal rejects the way bun's fetch rejects
+ * a refused connection, a TypeError with the code on the error itself and no
+ * `cause` (Node's undici puts the socket error on `cause`, which the connect
+ * wrapper's error becomes there).
+ */
+function installFetchGuard(): void {
+  if (typeof process.versions.bun !== 'string') return
+  const original = globalThis.fetch
+  const guardedFetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
+    const target = fetchTarget(args[0], args[1])
+    const message = target && refusal(target)
+    if (!message) return Reflect.apply(original, globalThis, args) as ReturnType<typeof fetch>
+    return Promise.reject(Object.assign(new TypeError(message), { code: 'ERR_TEST_PROD_SERVER' }))
+  }
+  // Keeps bun's fetch.preconnect, which opens a socket but sends no request.
+  globalThis.fetch = Object.assign(guardedFetch, original) as typeof fetch
+}
+
+/** Wrap Socket#connect (and, on bun, fetch) once per worker. */
 export function installProdServerGuard(): void {
   if (guardState.installed) return
   guardState.installed = true
+  installFetchGuard()
   const original = net.Socket.prototype.connect as (this: net.Socket, ...args: unknown[]) => net.Socket
   const guarded = function (this: net.Socket, ...args: unknown[]): net.Socket {
-    const target = connectTarget(args)
-    const walnut = productionTargetReason(target)
-    const reason = walnut ?? modelApiReason(target)
-    if (!reason) return original.apply(this, args)
-    const test = currentTest()
-    const message =
-      `[prod-server-guard] A test${test ? ` (${test})` : ''} tried to connect to ${reason}. ` +
-      (walnut
-        ? 'Refused: tests must never reach the user\'s real Walnut. Pass an explicit apiBase ' +
-          '(or OPEN_WALNUT_API_URL) for a server the test started itself (startServer({ port: 0 })) ' +
-          'or for a local stub.'
-        : 'Refused: tests run on mocks, never a real model. Mock sendMessage or the provider ' +
-          'client this code path uses.')
-    const where = new Error('connect attempted here').stack ?? ''
-    guardState.violations.push(`${message}\n${where}`)
-    // eslint-disable-next-line no-console
-    console.error(`${message}\n${where}`)
+    const message = refusal(connectTarget(args))
+    if (!message) return original.apply(this, args)
     const err = Object.assign(new Error(message), { code: 'ERR_TEST_PROD_SERVER' })
     // Fail like a refused connection. Marked as connecting, so a write made
     // meanwhile (http sends the request at once) waits instead of failing first

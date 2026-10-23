@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import fs, { mkdtempSync as namedMkdtempSync } from 'node:fs'
-import fsp from 'node:fs/promises'
+import fsp, { mkdir as namedPMkdir, mkdtemp as namedPMkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { TMP_REAPER_KEEP, recordedTmpDirs, reapTmpDirs } from './tmp-reaper'
@@ -24,6 +24,20 @@ describe('tmp-reaper records direct children of $TMPDIR', () => {
     const b = namedMkdtempSync(under('tmp-reaper-b-'))
     const c = await fsp.mkdtemp(under('tmp-reaper-c-'))
     for (const d of [a, b, c]) expect(recordedTmpDirs().has(fs.realpathSync(d)), d).toBe(true)
+  })
+
+  it('named imports from node:fs/promises (bun never syncs a builtin\'s named exports itself)', async () => {
+    const a = await namedPMkdtemp(under('tmp-reaper-pa-'))
+    const b = under(tag())
+    await namedPMkdir(b)
+    for (const d of [fs.realpathSync(a), b]) expect(recordedTmpDirs().has(d), d).toBe(true)
+  })
+
+  it('the default import is the live module object, as on Node', async () => {
+    const ns = await import('node:fs')
+    expect(ns.default).toBe(fs)
+    expect(ns.mkdtempSync).toBe(fs.mkdtempSync)
+    expect((await import('node:fs/promises')).default).toBe(fs.promises)
   })
 
   it('mkdtemp callback form', async () => {

@@ -20,8 +20,10 @@ const installedByHarness = (globalThis as unknown as Record<symbol, { installed?
   Symbol.for('open-walnut.test.prod-server-guard')
 ]?.installed === true
 const {
-  PROD_SERVER_PORT, connectTarget, failOnViolations, guardState, isThisMachine, modelApiReason, productionTargetReason,
+  PROD_SERVER_PORT, connectTarget, failOnViolations, fetchTarget, guardState, isThisMachine, modelApiReason, productionTargetReason,
 } = await import('./prod-server-guard.js')
+
+const onBun = typeof (process.versions as { bun?: string }).bun === 'string'
 
 describe('modelApiReason: which targets are a real model API', () => {
   it('refuses the model APIs a test could call with the user\'s credentials', () => {
@@ -136,6 +138,28 @@ describe('connectTarget: every Socket#connect call shape', () => {
   })
 })
 
+describe('fetchTarget: every fetch call shape (wrapped on bun, where fetch never reaches Socket#connect)', () => {
+  it('reads a string, a URL and a Request, with each scheme\'s default port', () => {
+    expect(fetchTarget('http://127.0.0.1:3456/api/v1/tasks/x')).toEqual({ host: '127.0.0.1', port: 3456 })
+    expect(fetchTarget(new URL('http://localhost/api'))).toEqual({ host: 'localhost', port: 80 })
+    expect(fetchTarget(new Request('https://api.anthropic.com/v1/messages'))).toEqual({ host: 'api.anthropic.com', port: 443 })
+    expect(fetchTarget('ws://[::1]:3456/ws')).toEqual({ host: '[::1]', port: 3456 })
+    expect(productionTargetReason(fetchTarget('http://[::1]:3456/')!)).toContain(':3456')
+  })
+
+  it('reads bun\'s unix socket option over the URL', () => {
+    const target = fetchTarget('http://localhost/x', { unix: '/tmp/open-walnut/agent-gateway.sock' })
+    expect(target).toEqual({ path: '/tmp/open-walnut/agent-gateway.sock' })
+    expect(productionTargetReason(target!)).toContain('production runtime dir')
+  })
+
+  it('is null for a call that opens no socket of its own', () => {
+    for (const input of ['file:///tmp/x.json', 'data:text/plain,hi', '/relative/path', 'not a url', 42, null]) {
+      expect(fetchTarget(input), String(input)).toBeNull()
+    }
+  })
+})
+
 describe('the installed guard, on a scratch port', () => {
   const scratchPorts: number[] = []
   afterEach(() => {
@@ -159,6 +183,8 @@ describe('the installed guard, on a scratch port', () => {
   it('is installed in this worker by the setup files, before any test module loads', () => {
     expect(installedByHarness, 'runtime-dir-isolation.ts (or the config) must load prod-server-guard').toBe(true)
     expect(net.Socket.prototype.connect.name).toBe('guarded')
+    // bun's fetch is native, so the guard wraps it; Node's goes through Socket#connect.
+    expect(globalThis.fetch.name === 'guardedFetch').toBe(onBun)
     expect(guardState.ports.has(PROD_SERVER_PORT)).toBe(true)
   })
 
@@ -171,7 +197,14 @@ describe('the installed guard, on a scratch port', () => {
       const url = `http://127.0.0.1:${target.port}/api/v1/tasks/x`
 
       const viaFetch = await fetch(url, { method: 'PATCH', body: '{"phase":"TODO"}' }).then(() => null, (e: unknown) => e)
-      expect((viaFetch as { cause?: { code?: string } } | null)?.cause?.code).toBe('ERR_TEST_PROD_SERVER')
+      // Each runtime's own shape for a refused fetch: Node's undici puts the
+      // socket error on `cause`, bun's fetch carries the code itself.
+      if (onBun) {
+        expect(viaFetch).toBeInstanceOf(TypeError)
+        expect((viaFetch as { code?: string } | null)?.code).toBe('ERR_TEST_PROD_SERVER')
+      } else {
+        expect((viaFetch as { cause?: { code?: string } } | null)?.cause?.code).toBe('ERR_TEST_PROD_SERVER')
+      }
 
       const viaHttp = await new Promise<NodeJS.ErrnoException>((resolve) => {
         http.request(url, { method: 'PATCH' }).on('error', resolve).end('{}')
