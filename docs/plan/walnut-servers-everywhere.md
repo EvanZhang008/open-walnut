@@ -107,17 +107,77 @@ computer, or the server this computer keeps on one of its hosts
 
 - **Default.** A provider may name the machines that stay on, as a pattern on a
   host's hostname (`alwaysOnHostPattern`). Until the person picks, the tunnel
-  runs on the first such host (by key) whose Walnut server is on; with none,
-  here. Never a host whose server is off: following a provider must not install
-  a server and copy this Walnut's data there unasked, or leave the address dark
-  while it installs (picking the host turns its server on). The built-in
+  runs on the first such host (by key), unless its Walnut server was turned off
+  by hand (`hosts.<key>.server.enabled: false`); with none, here. The host that
+  carries it runs a Walnut server, installed there if it had none: installing
+  the plugin and turning the tunnel on is all the person does. The built-in
   `command` provider always runs here: its command is written for this computer.
 - **A pick** (`expose.run_on`: `here` or a host key) wins, for any host. A host
   removed from config.yaml puts it back here.
-- **On a host**, none runs here. That host's server runs (whatever its own switch
-  says, which Settings then holds on) with this computer's provider and options,
-  and the status here is that host's report, with `runsOn` naming the host. The
-  sign-in code lists the host's address once, as the host's.
+- **On a host**, none runs here once the host holds it (the handover, below).
+  That host's server runs (whatever its own switch says, which Settings then
+  holds on) with this computer's provider and options, and the status here is
+  that host's report, with `runsOn` naming the host. The sign-in code lists the
+  host's address once, as the host's.
+- **The handover** (`src/web/expose-runtime.ts`, `hostHolds` in placement.ts).
+  While the host's server installs and starts, the tunnel keeps running here
+  (or starts here), so the address answers meanwhile; the status says
+  `movingTo` with what the host is doing ("Connected through X. Moving to Dev
+  box once it runs there. Installing Walnut on the host."). It moves once the
+  host reports this same tunnel (same provider and filled options, its
+  `tunnelKey`) connected: at the address this computer's had (or with none
+  here), at once; at another address, after 2 minutes (`HOLD_GRACE_MS`). The
+  service gives a name to the newest connection, and which one is newer cannot
+  be read from clocks (a Mac that wakes up reconnects with the same address and
+  is the newest again), so the order is made, not measured: the tunnel here
+  stops first, then the host is asked to connect again (its retry count), then
+  the handover is recorded (`local/expose-handover.json`: the host, the tunnel's
+  key and its address). The address is down for the host's reconnect, a few
+  seconds. A restart of this computer with the record starts nothing here: a
+  newer connection here would take the name from the host silently. The record
+  clears when the tunnel moves back here or to another host, its provider or
+  options change, or it is turned off; a provider that is not registered yet
+  (its plugin still loading) keeps it. A host's view that changes (its tunnel's
+  state, address, key or since) re-checks the handover
+  (`noteHostViewForTunnel`, debounced; the check changes no view).
+- **The record holds only while the host holds** (`src/web/expose-handover.ts`).
+  When this computer has not seen the host hold the tunnel for 5 minutes
+  (`RELEASE_GRACE_MS`: the host down, rebooting, reinstalling, its tunnel
+  retrying or asking for a sign-in), it asks the address itself. A Walnut
+  answering there keeps the record (this computer may only have lost its link
+  to a healthy host); no answer, or the service's error page, releases it, and
+  the tunnel runs here again until the host holds it again (the same handover).
+  A provider with a sign-in page in front answers for everyone: then the host's
+  own report decides while this computer can see it, and the record stays while
+  it cannot.
+- **Which machine answers** (`src/core/expose/probe.ts`). Every listener a
+  tunnel points at (this computer's tunnel port, a host server's public port, a
+  host replica's front) answers `/__walnut/tunnel-probe` itself with its run's
+  token, never forwarding it. The supervisor's check every minute counts an
+  error page as down (an older connection the service no longer routes to gets
+  one, and is restarted after three), and another Walnut answering as fine (the
+  machine the tunnel moves to holds the name; taking it back would start a
+  fight). A sign-in page in front counts as answering, as before.
+- **A restart here leaves the host alone.** A stopping server disposes its
+  plugins while the hosts' links are still up; the provider going with them
+  must not take the tunnel off the host that carries it, so the host-server
+  manager changes no host while this server stops (`frozen`, read from the
+  plugin registry, again right before each configure), and the definition it
+  sends is the one read with the settings. While config.yaml names a provider
+  that is not registered (a plugin still loading, or one that failed), a host
+  that may carry the tunnel is left as it was last configured
+  (`keepAsConfigured`). The host's tunnel retry count is kept across restarts
+  here, machine-local (`local/host-server-tunnel-retries.json`, never synced):
+  the server there restarts its tunnel whenever the count changes, and one that
+  started over at 0 would restart it every time.
+- **A missing CLI installs itself.** A provider may declare `installCommand`, a
+  shell command that installs its CLI. The machine that runs the tunnel (this
+  computer or the host) runs it once when the command is not found, then starts
+  the tunnel; the status says `activity` meanwhile. It runs from the home dir in
+  its own process group: a timeout (10 minutes) or a stopping server ends all of
+  it, and the answer waits until it is gone, so Retry never starts a second one
+  beside it. A failed install waits like a missing CLI, and Retry runs it once
+  more.
 - **Why one machine.** A tunnel service may give a name to whoever connected last
   (measured on one: the second machine took the address at once, and the first
   stayed "connected" while it got nothing). Two machines holding one name would

@@ -5,13 +5,16 @@
  *
  * The settings are kept in this server's data dir, so a tunnel that was on comes
  * back after a restart while the Mac is away. The tunnel points at the public
- * port, which trusts nothing on loopback.
+ * port, which trusts nothing on loopback, and which answers the tunnel probe path
+ * with `probeToken` (main.ts, replica/front.ts) before it forwards anything.
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { ExposeSupervisor, httpProbe, nodeSpawn, resolveRun, type SupervisorDeps } from '../core/expose/supervisor.js'
+import { ExposeSupervisor, nodeSpawn, resolveRun, type SupervisorDeps } from '../core/expose/supervisor.js'
+import { httpProbe } from '../core/expose/probe.js'
 import { validateExposeDefinition } from '../core/expose/registry.js'
+import { tunnelKey } from '../core/expose/placement.js'
 import type { ExposeProviderDefinition, ExposeStatus } from '../core/expose/types.js'
 import { mcpServerEnv } from '../core/mcp-servers/env.js'
 
@@ -26,7 +29,10 @@ export interface HostExpose {
   status(): ExposeStatus
   settings(): HostExposeSettings
   retry(): void
+  /** The server stops: the tunnel, and an install of its CLI still running. */
   stop(): Promise<void>
+  /** What the public port answers the tunnel probe path with (core/expose/probe.ts). */
+  readonly probeToken: string
 }
 
 const OFF: HostExposeSettings = { enabled: false, definition: null, options: {} }
@@ -67,7 +73,8 @@ export function createHostExpose(opts: { port: number; stateFile: string; deps?:
     const def = current.definition
     if (!current.enabled || !def) return { enabled: current.enabled, provider: def?.id ?? null, state: 'off', since: 0 }
     if (override) return { enabled: true, provider: def.id, providerTitle: def.title, state: 'unavailable', since: override.since, lastError: override.lastError }
-    return { enabled: true, provider: def.id, providerTitle: def.title, ...supervisor.status(), port: opts.port }
+    // `tunnelKey`: the Mac hands its own tunnel over only to this same one.
+    return { enabled: true, provider: def.id, providerTitle: def.title, ...supervisor.status(), port: opts.port, tunnelKey: tunnelKey(def, current.options) }
   }
 
   async function reconcile(): Promise<ExposeStatus> {
@@ -114,7 +121,8 @@ export function createHostExpose(opts: { port: number; stateFile: string; deps?:
     status,
     settings: () => current,
     retry: () => supervisor.retryNow(),
-    stop: () => serialize(() => supervisor.stop()),
+    stop: () => serialize(() => supervisor.shutdown()),
+    probeToken: supervisor.probeToken,
   }
 }
 

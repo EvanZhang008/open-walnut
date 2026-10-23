@@ -675,3 +675,115 @@ describe('host server manager: which program (WP2)', () => {
     expect(m.view('devbox').message).toMatch(/plain characters/)
   })
 })
+
+describe('host server manager: the tunnel a host carries outlives this server stopping and restarting', () => {
+  const DEF = {
+    id: 'acme-tunnel', title: 'Acme Tunnel', command: '~/.acme/bin/tunnel', args: ['http', '{port}'],
+    urlPattern: 'https://[a-z0-9.-]+\\.acme-tunnel\\.example',
+  }
+  const carrying = (): HostServerSettings => ({ enabled: true, carriesTunnel: true, buildEnv: {}, expose: { enabled: true, provider: 'acme-tunnel', options: {} } })
+
+  it('frozen (stopping): a reconcile changes nothing on the host, also one that began before', async () => {
+    registerExposeProvider('acme-plugin', DEF)
+    settings = carrying()
+    let frozen = false
+    const m = createHostServerManager(deps({ frozen: () => frozen }))
+    const host = fakeHost()
+    await m.connected(host)
+    expect(host.specs).toHaveLength(1)
+    expect(host.specs[0]!.settings.expose).toMatchObject({ enabled: true, definition: { id: 'acme-tunnel' } })
+    // The provider goes with the plugins while this server stops: nothing reaches the host.
+    frozen = true
+    _resetExposeProvidersForTesting()
+    settings = { ...settings, enabled: false, carriesTunnel: undefined }
+    await m.reconcile('devbox')
+    expect(host.specs).toHaveLength(1)
+    // A reconcile already past its settings read when the stop began (a slow install, say).
+    frozen = false
+    registerExposeProvider('acme-plugin', DEF)
+    settings = carrying()
+    const slow = createHostServerManager(deps({
+      frozen: () => frozen,
+      // A step between the settings read and the configure (the install, its port, the door).
+      holdTunnelPort: async (holder) => {
+        frozen = true
+        _resetExposeProvidersForTesting()
+        held.push(holder)
+        return tunnelPort
+      },
+    }))
+    const other = fakeHost()
+    await slow.connected(other)
+    expect(other.specs).toEqual([])
+    // The stop begins while the settings are read (they then say the host carries nothing):
+    // the host is not even asked what it runs, and its link and door stay.
+    frozen = false
+    settings = carrying()
+    registerExposeProvider('acme-plugin', DEF)
+    const reading = createHostServerManager(deps({
+      frozen: () => frozen,
+      settingsOf: async () => { frozen = true; return { ...settings, enabled: false, carriesTunnel: undefined } },
+    }))
+    const third = fakeHost()
+    third.daemonState = 'running'
+    released = []
+    await reading.connected(third)
+    expect(third.calls).toEqual([])
+    expect(released).toEqual([])
+  })
+
+  it('the definition is the one read with the settings: a provider gone during the setup steps still goes to the host', async () => {
+    registerExposeProvider('acme-plugin', DEF)
+    settings = carrying()
+    const m = createHostServerManager(deps({
+      // A step between the settings read and the configure (the install, its port, the door).
+      holdTunnelPort: async (holder) => {
+        _resetExposeProvidersForTesting()
+        held.push(holder)
+        return tunnelPort
+      },
+    }))
+    const host = fakeHost()
+    await m.connected(host)
+    expect(host.specs[0]!.settings.expose).toMatchObject({ enabled: true, definition: { id: 'acme-tunnel' } })
+  })
+
+  it('a host left as configured (the provider is not registered yet) is not touched at all', async () => {
+    settings = { ...settings, enabled: false, keepAsConfigured: 'the tunnel provider "acme-tunnel" is not registered' }
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.daemonState = 'running'
+    await m.connected(host)
+    // No look, no stop: the server there keeps the tunnel it may carry.
+    expect(host.calls).toEqual([])
+    expect(host.specs).toEqual([])
+  })
+
+  it('the tunnel retry count a host was given is kept across a restart here (machine-local), so its tunnel is not restarted', async () => {
+    registerExposeProvider('acme-plugin', DEF)
+    settings = carrying()
+    const retryFile = path.join(dir, 'local', 'host-server-tunnel-retries.json')
+    const first = createHostServerManager(deps({ retryFile }))
+    const host = fakeHost()
+    await first.connected(host)
+    expect(host.specs[0]!.settings.exposeRetry).toBe(0)
+    await first.retryExpose('devbox')
+    await first.retryExpose('devbox')
+    expect(host.specs.at(-1)!.settings.exposeRetry).toBe(2)
+    expect(JSON.parse(fs.readFileSync(retryFile, 'utf8'))).toEqual({ devbox: 2 })
+    expect(fs.statSync(retryFile).mode & 0o777).toBe(0o600)
+    // Not in the synced host record.
+    const kept = JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox
+    expect(kept).toMatchObject({ publicPort: expect.any(Number) })
+    expect(JSON.stringify(kept)).not.toContain('exposeRetry')
+    first.stop()
+    // The next server here sends the same count: the server there sees no change and keeps its tunnel.
+    const next = createHostServerManager(deps({ retryFile }))
+    await next.connected(host)
+    expect(host.specs.at(-1)!.settings.exposeRetry).toBe(2)
+    // Without the file (or before this change) the count would start over and restart it.
+    const forgetful = createHostServerManager(deps())
+    await forgetful.connected(host)
+    expect(host.specs.at(-1)!.settings.exposeRetry).toBe(0)
+  })
+})

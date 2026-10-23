@@ -8,15 +8,41 @@ import path from 'node:path'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
-import { createHostServerManager, type HostServerHost, type HostServerManager, type HostServerSettings } from './manager.js'
+import { createHostServerManager, type HostServerHost, type HostServerManager, type HostServerSettings, type HostServerView } from './manager.js'
 import { createHostFileSource, type HostFileSource } from './host-file.js'
 import { getExposeProvider, onExposeProvidersChanged, type CommandProviderConfig } from '../expose/registry.js'
-import { exposePlacement, type PlacementHost } from '../expose/placement.js'
-import type { ExposeProviderDefinition } from '../expose/types.js'
+import { exposePlacement, tunnelKey, type PlacementHost } from '../expose/placement.js'
+import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition } from '../expose/types.js'
 
 let manager: HostServerManager | null = null
 let unsubscribe: (() => void) | null = null
 let fileSource: HostFileSource | null = null
+
+/** How long a burst of view changes waits before the tunnel handover looks again. */
+const TUNNEL_RECHECK_MS = 500
+/** Per host, the tunnel its server last reported, as the handover reads it. */
+const tunnelSeen = new Map<string, string>()
+let tunnelRecheck: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * A host's view changed: when the tunnel its server reports did (its state, address, which
+ * one, since when), this computer's tunnel runtime looks at the handover again
+ * (web/expose-runtime.ts). Debounced, and the runtime's look changes no view: no loop.
+ */
+export function noteHostViewForTunnel(view: Pick<HostServerView, 'hostKey' | 'phase' | 'server'>): void {
+  const e = view.phase === 'running' ? view.server?.expose : undefined
+  const seen = e ? [e.provider, e.state, e.url ?? '', e.tunnelKey ?? '', e.since].join('|') : ''
+  if ((tunnelSeen.get(view.hostKey) ?? '') === seen) return
+  tunnelSeen.set(view.hostKey, seen)
+  if (tunnelRecheck) return
+  tunnelRecheck = setTimeout(() => {
+    tunnelRecheck = null
+    void import('../../web/expose-runtime.js')
+      .then(({ getExposeRuntime }) => getExposeRuntime()?.reconcile())
+      .catch((err) => log.web.warn('expose: the handover check failed', { error: err instanceof Error ? err.message : String(err) }))
+  }, TUNNEL_RECHECK_MS)
+  tunnelRecheck.unref?.()
+}
 
 /** The settings of one host's server, defaults filled in. */
 export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostServerSettings {
@@ -57,9 +83,18 @@ interface TunnelConfig {
   hosts?: Record<string, PlacementHost>
 }
 
-/** An option's value as a run fills it in: what was set, else the provider's default. */
-function filledOptions(def: ExposeProviderDefinition, values: Record<string, string>): string {
-  return JSON.stringify((def.options ?? []).map((o) => (values[o.key] ?? o.default ?? '').trim()))
+/**
+ * Whether `hostKey` may carry this Walnut's tunnel while its provider is not registered (so
+ * its always-on pattern is unknown): the host it was placed on, or with no place picked, any
+ * host it could be (not hidden, its server not turned off by hand). The built-in command
+ * provider always runs here.
+ */
+function mayCarryUnknownTunnel(hostKey: string, e: NonNullable<TunnelConfig['expose']>, hosts: TunnelConfig['hosts']): boolean {
+  if (e.provider === COMMAND_PROVIDER_ID) return false
+  const chosen = typeof e.run_on === 'string' ? e.run_on.trim() : ''
+  if (chosen) return chosen === hostKey
+  const host = hosts && Object.hasOwn(hosts, hostKey) ? hosts[hostKey] : undefined
+  return !!host && !host.cloud_box && host.enabled !== false && host.server?.enabled !== false
 }
 
 /**
@@ -79,14 +114,18 @@ export function withThisWalnutTunnel(
   const e = config.expose
   if (e?.enabled !== true || !e.provider) return settings
   const def = lookup(e.provider, e.command)
-  if (!def) return settings
+  if (!def) {
+    // Not registered now (a plugin still loading, or one that failed): where it runs is not
+    // known, so a host that may carry it is left as it was, its tunnel with it.
+    return mayCarryUnknownTunnel(hostKey, e, config.hosts) ? { ...settings, keepAsConfigured: `the tunnel provider "${e.provider}" is not registered` } : settings
+  }
   const placed = exposePlacement(e.run_on, def, config.hosts)
   if (placed.where === 'host' && placed.hostKey === hostKey) {
     return { ...settings, enabled: true, carriesTunnel: true, expose: { enabled: true, provider: e.provider, options: { ...(e.options ?? {}) } } }
   }
   // Wherever this Walnut's tunnel runs (here, or on another host), this host's own must not take its address.
   const own = settings.expose
-  if (settings.enabled && own.enabled && own.provider === def.id && filledOptions(def, own.options) === filledOptions(def, e.options ?? {})) {
+  if (settings.enabled && own.enabled && own.provider === def.id && tunnelKey(def, own.options) === tunnelKey(def, e.options ?? {})) {
     return { ...settings, expose: { ...own, enabled: false, blocked: 'It would use the same address as this computer\'s tunnel; give it another name.' } }
   }
   return settings
@@ -125,7 +164,13 @@ export function getHostServerManager(): HostServerManager | null {
     },
     hostFile: (fileSource ??= createHostFileSource({ cacheDir: path.join(WALNUT_HOME, 'cache', 'host-server') })),
     stateFile: path.join(WALNUT_HOME, 'host-servers.json'),
+    // Machine-local: local/ is never synced (another machine's counts would restart the hosts' tunnels).
+    retryFile: path.join(WALNUT_HOME, 'local', 'host-server-tunnel-retries.json'),
     now: Date.now,
+    // The tunnel handover follows what the host's server reports (expose-runtime.ts).
+    changed: noteHostViewForTunnel,
+    // Stopping: the plugins are disposed before the hosts' links close, and a host must keep its tunnel.
+    frozen: async () => (await import('../integration-registry.js')).registry.isClosing(),
     // Test and safety knobs (docs/plan/walnut-replica-servers-impl.md, WP2): another root
     // on the host, and (tests only) a local tree run in place of an installed build.
     ...(process.env.WALNUT_HOST_SERVER_ROOT?.trim() ? { hostRoot: process.env.WALNUT_HOST_SERVER_ROOT.trim() } : {}),
@@ -208,6 +253,9 @@ export function _resetHostServerManagerForTesting(): void {
   manager = null
   unsubscribe = null
   fileSource = null
+  tunnelSeen.clear()
+  if (tunnelRecheck) clearTimeout(tunnelRecheck)
+  tunnelRecheck = null
 }
 
 /** The host servers' views without making the manager (GET /api/replicas/status, WP14). */

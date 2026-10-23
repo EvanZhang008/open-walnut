@@ -45,6 +45,9 @@ export function validateExposeDefinition(def: ExposeProviderDefinition): void {
     throw new Error(`Tunnel provider "${def.id}": env values must be strings`)
   }
   if (typeof def.urlPattern !== 'string' || !def.urlPattern) throw new Error(`Tunnel provider "${def.id}" needs a urlPattern`)
+  if (def.installCommand !== undefined && (typeof def.installCommand !== 'string' || !def.installCommand.trim() || def.installCommand.length > 2_000)) {
+    throw new Error(`Tunnel provider "${def.id}": installCommand is a shell command of at most 2000 characters`)
+  }
   if (def.alwaysOnHostPattern !== undefined && typeof def.alwaysOnHostPattern !== 'string') {
     throw new Error(`Tunnel provider "${def.id}": alwaysOnHostPattern is a pattern`)
   }

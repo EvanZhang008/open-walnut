@@ -19,6 +19,10 @@ export interface ExposeStatus {
   nextRetryAt?: number;
   /** Set while a host's Walnut server runs the tunnel instead of this computer. */
   runsOn?: { hostKey: string; label: string; auto: boolean };
+  /** What Walnut is doing for it right now (installing the CLI, say). */
+  activity?: string;
+  /** Moving to a host: it runs here until that host's tunnel is up. `note`: what the host is doing. */
+  movingTo?: { hostKey: string; label: string; note?: string };
 }
 
 /** One place the tunnel can run: `here`, or a host key. */
@@ -71,9 +75,22 @@ function clock(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-/** One sentence for the switch row; the URL itself has its own row while connected. */
+function sentence(text: string): string {
+  const t = text.trim();
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
+/** One sentence for the switch row (two while it moves to a host); the URL has its own row while connected. */
 export function describeExpose(status: ExposeStatus | null, title: string): StatusLine {
   if (!status) return { dot: 'pending', text: 'Reading the tunnel state...', retry: false };
+  const line = describeState(status, title);
+  // It runs here until the host's is up: say so, and what the host is doing.
+  if (status.state === 'off' || !status.movingTo) return line;
+  const { label, note } = status.movingTo;
+  return { ...line, text: `${line.text} Moving to ${label} once it runs there.${note ? ` ${sentence(note)}` : ''}` };
+}
+
+function describeState(status: ExposeStatus, title: string): StatusLine {
   const name = status.providerTitle ?? title;
   const on = status.runsOn ? ` on ${status.runsOn.label}` : '';
   const retryAt = status.nextRetryAt ? ` Trying again at ${clock(status.nextRetryAt)}.` : '';
@@ -81,23 +98,26 @@ export function describeExpose(status: ExposeStatus | null, title: string): Stat
     case 'off':
       return { dot: 'pending', text: `Runs ${name} while Walnut runs, so a browser you sign in can open Walnut from anywhere.`, retry: false };
     case 'starting':
-      // On a host: what it waits for (the host to connect, Walnut to install there).
+      // Installing its CLI first; on a host, what it waits for (the host to connect, Walnut to install there).
+      if (status.activity) return { dot: 'pending', text: status.runsOn ? `${status.activity.replace(/\.+$/, '')}${on}...` : status.activity, retry: false };
       return { dot: 'pending', text: status.runsOn && status.lastError ? status.lastError : `Starting ${name}${on}...`, retry: false };
     case 'connected':
       return { dot: 'done', text: `Connected through ${name}${on}.`, retry: false };
     case 'needs-sign-in':
       return { dot: 'action', text: `${status.hint ?? status.lastError ?? `${name} needs you to sign in again.`}${retryAt}`, retry: true };
     case 'missing':
-      return { dot: 'action', text: [status.lastError, status.hint].filter(Boolean).join(' ') + retryAt, retry: true };
+      // Each its own sentence: a CLI's last line (an install that failed) may end without a full stop.
+      return { dot: 'action', text: `${status.runsOn ? `On ${status.runsOn.label}: ` : ''}${[status.lastError, status.hint].filter((t): t is string => !!t?.trim()).map(sentence).join(' ')}${retryAt}`, retry: true };
     case 'retrying':
-      return { dot: 'error', text: `${status.lastError ?? `${name} stopped${on}.`}${retryAt}`, retry: true };
+      return { dot: 'error', text: `${status.lastError ? sentence(status.lastError) : `${name} stopped${on}.`}${retryAt}`, retry: true };
     case 'unavailable':
       return { dot: 'error', text: status.lastError ?? `${name} cannot run.`, retry: false };
   }
 }
 
-/** Poll often while the state is moving or waiting on the person, rarely once it settled. */
+/** Poll often while the state is moving (to a host too) or waits on the person, rarely once it settled. */
 export function exposePollMs(status: ExposeStatus | null): number {
   if (!status) return 3_000;
+  if (status.movingTo) return 3_000;
   return status.state === 'off' || status.state === 'connected' || status.state === 'unavailable' ? 30_000 : 3_000;
 }

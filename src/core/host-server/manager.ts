@@ -80,6 +80,12 @@ export interface HostServerSettings {
   }
   /** This Walnut's tunnel (Open from a browser) runs here, instead of on this computer (expose/placement.ts). */
   carriesTunnel?: boolean
+  /**
+   * Whether this host carries this Walnut's tunnel is not known now (its provider is not
+   * registered: a plugin still loading, or one that failed): the host is left as it was
+   * last configured, so the tunnel it may carry keeps running.
+   */
+  keepAsConfigured?: string
   /** The host's choice (`hosts.<key>.server_program`): 'host-server' keeps the plain host server; else `web --replica` where the daemon can (D13). */
   program?: 'replica' | 'host-server'
   /**
@@ -116,6 +122,12 @@ export interface HostServerView {
     /** The host's journal (its daemon's follower.status line), a replica's report only (WP14). */
     journal?: Record<string, unknown> | null
   } | null
+  /**
+   * The reported tunnel's `since` on this computer's clock (the host's clock may differ): its
+   * age by the host's clock, counted back from before this computer asked, so never later than
+   * it was. A tunnel handover reads it (expose/placement.ts hostHolds).
+   */
+  exposeSince?: number
   port?: number
   /**
    * Which program runs: what the daemon was told (the replica only where the host
@@ -159,6 +171,12 @@ export interface ManagerDeps {
   /** This Mac's build as the walnut file for a host's target (host-file.ts). */
   hostFile: HostFileSource
   stateFile: string
+  /**
+   * Machine-local (never synced): the tunnel retry count each host was last given. The server
+   * there restarts its tunnel when the count changes, so a count that started over at 0 after
+   * a restart here would restart it. Unset: kept in memory only.
+   */
+  retryFile?: string
   now(): number
   /** Copies for the follower (core/replication/replica-targets.ts); `ready` once its server answers. */
   registerTarget?(
@@ -169,6 +187,12 @@ export interface ManagerDeps {
   ): HostCopyTarget
   /** A view changed (the settings page listens). */
   changed?(view: HostServerView): void
+  /**
+   * True while this server is stopping: a reconcile then changes nothing on a host. Its plugins
+   * go first, and a tunnel provider gone with them must not take the tunnel off the host that
+   * carries it; the host's daemon keeps that server running, and the next server sets it again.
+   */
+  frozen?(): boolean | Promise<boolean>
   pollMs?: number
   installPollMs?: number
   /** How long a started server has to send its first report. */
@@ -218,6 +242,9 @@ function requestOver(stream: Duplex, method: string, route: string, body: Buffer
     req.end(body ?? undefined)
   })
 }
+
+/** This server began to stop during a reconcile (ManagerDeps.frozen): it ends without a word. */
+class StoppingHere extends Error {}
 
 export function createHostServerManager(deps: ManagerDeps) {
   const views = new Map<string, HostServerView>()
@@ -278,6 +305,29 @@ export function createHostServerManager(deps: ManagerDeps) {
     if (!r) return
     patch(r)
     writeState(all)
+  }
+
+  function readRetries(): Record<string, unknown> {
+    if (!deps.retryFile) return {}
+    try { return JSON.parse(fs.readFileSync(deps.retryFile, 'utf8')) as Record<string, unknown> } catch { return {} }
+  }
+
+  /** The tunnel retry count the host was last given (kept across restarts here). */
+  function retryCount(hostKey: string): number {
+    const kept = exposeRetries.get(hostKey) ?? readRetries()[hostKey]
+    return typeof kept === 'number' && Number.isInteger(kept) && kept >= 0 ? kept : 0
+  }
+
+  function keepRetryCount(hostKey: string, n: number): void {
+    if (!deps.retryFile) return
+    try {
+      fs.mkdirSync(path.dirname(deps.retryFile), { recursive: true, mode: 0o700 })
+      const tmp = `${deps.retryFile}.${process.pid}.tmp`
+      fs.writeFileSync(tmp, JSON.stringify({ ...readRetries(), [hostKey]: n }), { mode: 0o600 })
+      fs.renameSync(tmp, deps.retryFile)
+    } catch (err) {
+      log.session.warn('host server: the tunnel retry count was not kept', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+    }
   }
 
   function writeState(all: Record<string, HostRecord>): void {
@@ -361,6 +411,7 @@ export function createHostServerManager(deps: ManagerDeps) {
 
   /** The daemon's supervision of the server and the server's last report. */
   async function refreshStatus(host: HostServerHost): Promise<HostServerStatus | undefined> {
+    const asked = deps.now()
     const daemon = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
     const status = (daemon?.status ?? undefined) as HostServerStatus | undefined
     // The host's own clock says how old the report is; the two clocks may differ.
@@ -377,7 +428,11 @@ export function createHostServerManager(deps: ManagerDeps) {
       : status?.state === 'retrying' ? `The server on the host stopped (${status.lastError ?? 'no reason given'}); its daemon starts it again shortly.`
         : status?.state === 'off' ? 'The host\'s daemon is not running the server.'
           : 'Waiting for the server on the host to answer.'
-    set(host.hostKey, { phase, message, daemon: status, server, program: programOf(host.hostKey, status), notice: server ? notices.get(host.hostKey) : undefined })
+    const e = server?.expose
+    const exposeSince = e && typeof e.since === 'number' && typeof status?.reportedAt === 'number' && typeof status.reportAgeMs === 'number'
+      ? asked - status.reportAgeMs - Math.max(0, status.reportedAt - e.since)
+      : undefined
+    set(host.hostKey, { phase, message, daemon: status, server, exposeSince, program: programOf(host.hostKey, status), notice: server ? notices.get(host.hostKey) : undefined })
     return status
   }
 
@@ -394,6 +449,8 @@ export function createHostServerManager(deps: ManagerDeps) {
   /** Tell the daemon to run `spec`, and remember what it runs. */
   async function configure(host: HostServerHost, spec: Record<string, unknown> & { command: string; args: string[] }, replica: boolean): Promise<void> {
     const hostKey = host.hostKey
+    // Stopping since the settings were read (the steps before take a while): the host stays as it was.
+    if (await deps.frozen?.()) throw new StoppingHere()
     const reply = await host.send('server.configure', { home: deps.home, spec }, 15_000)
     if (reply.ok !== true) throw new Error(`the host's daemon refused the server: ${String(reply.error ?? '')}`)
     asked.set(hostKey, replica ? 'replica' : 'host-server')
@@ -425,7 +482,17 @@ export function createHostServerManager(deps: ManagerDeps) {
 
   async function reconcileOnce(hostKey: string, retry = false): Promise<void> {
     const host = hosts.get(hostKey)
+    if (await deps.frozen?.()) return
     const settings = await deps.settingsOf(hostKey)
+    // Read while this server began to stop (its plugins going): what they say is not the person's.
+    if (await deps.frozen?.()) return
+    if (settings?.keepAsConfigured) {
+      log.session.info('host server: left as configured', { host: hostKey, why: settings.keepAsConfigured })
+      return
+    }
+    // The tunnel's definition as it is now, next to the settings: a provider that goes away
+    // during the steps below (plugins stopping) must not turn the host's tunnel off.
+    const exposeSettings = settings?.enabled === true ? await exposeSettingsFor(settings) : null
     const enabled = settings?.enabled === true
     if (!enabled) {
       stopPoll(hostKey)
@@ -434,6 +501,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         const st = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
         const state = (st?.status as HostServerStatus | undefined)?.state
         if (state && state !== 'off') {
+          if (await deps.frozen?.()) return
           await host.send('server.configure', { home: deps.home, spec: null }, 15_000).catch(() => undefined)
           log.session.info('host server: turned off, stopped on the host', { host: hostKey })
         }
@@ -500,7 +568,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         ...(p.fallback ? { fallback: p.fallback } : {}),
         log: p.log, port: rec.publicPort,
         // Read by the server while it runs: a change here restarts nothing.
-        settings: { expose: await exposeSettingsFor(settings!), exposeRetry: exposeRetries.get(hostKey) ?? 0 },
+        settings: { expose: exposeSettings, exposeRetry: retryCount(hostKey) },
       })
       const isReplica = (p: WorkingProgram) => p.args.includes('--replica')
       const working = rec.working && rec.working.id !== fresh.id ? rec.working : undefined
@@ -540,6 +608,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (missed) throw new Error(missed)
       startPoll(hostKey)
     } catch (err) {
+      if (err instanceof StoppingHere) return
       const message = err instanceof Error ? err.message : String(err)
       log.session.warn('host server: setup failed', { host: hostKey, error: message })
       set(hostKey, { phase: 'error', message })
@@ -645,8 +714,9 @@ export function createHostServerManager(deps: ManagerDeps) {
       const host = hosts.get(hostKey)
       const spec = links.get(hostKey)?.spec
       if (!host?.connected || !spec) throw new Error('the server on that host is not set up')
-      const n = (exposeRetries.get(hostKey) ?? 0) + 1
+      const n = retryCount(hostKey) + 1
       exposeRetries.set(hostKey, n)
+      keepRetryCount(hostKey, n)
       const next = { ...spec, settings: { ...(spec.settings as Record<string, unknown>), exposeRetry: n } }
       const reply = await host.send('server.configure', { home: deps.home, spec: next }, 15_000)
       if (reply.ok !== true) throw new Error(`the host's daemon refused it: ${String(reply.error ?? '')}`)
