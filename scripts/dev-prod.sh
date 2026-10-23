@@ -1263,6 +1263,34 @@ stage_has_live_process() {
   return 1
 }
 
+# stage_has_live_process for one exact directory whose basename is not unique
+# (the LKG: a rehearsal's is named the same). Matched on the full path, in both
+# spellings (/var and /private/var), with runs of slashes squeezed (TMPDIR ends
+# in one). Fails closed like the stage check.
+dir_has_live_process() {
+  local dir phys spid cmd pids rc=0
+  dir="$(printf '%s' "${1%/}" | tr -s /)"
+  phys="$(cd "$1" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+  if ! command -v pgrep >/dev/null 2>&1 || ! command -v ps >/dev/null 2>&1; then
+    echo "unknown"
+    return 0
+  fi
+  pids="$(pgrep -f 'dist/cli\.js|dist-bin/walnut-' 2>/dev/null)" || rc=$?
+  if (( rc > 1 )); then
+    echo "unknown"
+    return 0
+  fi
+  for spid in $pids; do
+    [[ -n "$spid" ]] || continue
+    cmd="$(ps -o command= -p "$spid" 2>/dev/null | tr -s / || true)"
+    if [[ "$cmd" == *"$dir/"* || "$cmd" == *"$phys/"* ]]; then
+      echo "$spid"
+      return 0
+    fi
+  done
+  return 1
+}
+
 for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
   if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" ]]; then
     continue
@@ -1495,6 +1523,17 @@ wait_for_config_ready() {
 #   node  dist/ + a node_modules symlink to the serve root's (the bundle
 #         resolves native/spawned deps there, same as a repo launch) + package.json
 snapshot_lkg() {
+  # Rollback servers run from a stage cloned from the LKG (rollback_to_lkg), so
+  # nothing runs from it here; an older deploy's rollback server, or the daemon it
+  # respawned from its own path, may. Replacing the LKG then would delete their
+  # executable and runtime tree from under them: keep it, and this build is not
+  # snapshotted (the LKG stays an older good build).
+  local live
+  live="$(dir_has_live_process "$LKG_DIR" || true)"
+  if [[ -n "$live" ]]; then
+    echo "Keeping the last-known-good build at $LKG_DIR: process $live still runs from it, so this build is not snapshotted." >&2
+    return 0
+  fi
   rm -rf "$LKG_DIR.tmp" 2>/dev/null || true
   mkdir -p "$LKG_DIR.tmp" || return 1
   if [[ "$SERVER_KIND" == "file" ]]; then
@@ -1551,10 +1590,37 @@ stop_new_server() {
 # still FAILS (callers exit 1); this only restores service with the last dist
 # that passed readiness. If the rollback server is slow, it is left running
 # (launchd KeepAlive / nohup) rather than killed — availability wins.
+# A rollback server never runs from the LKG itself: the next good deploy replaces
+# the LKG whole, and the server (or the daemon it respawns from its own path)
+# would lose its executable and runtime tree under it. It runs from a stage
+# cloned from the LKG, which the stage reaper keeps while anything runs from it.
+# Prints the stage, or fails (the caller then starts the LKG in place).
+stage_lkg_for_rollback() {
+  local kind="$1" dir
+  dir="$STAGE_ROOT/open-walnut-stage.rollback.$(date +%s).$$"
+  mkdir -p "$dir" || return 1
+  if [[ "$kind" == "file" ]]; then
+    if ! clone_copy "$LKG_DIR/dist-bin" "$dir/dist-bin" \
+      || { [[ -d "$LKG_DIR/runtime" ]] && ! clone_copy "$LKG_DIR/runtime" "$dir/runtime"; }; then
+      rm -rf "$dir"
+      return 1
+    fi
+  else
+    if ! clone_copy "$LKG_DIR/dist" "$dir/dist" \
+      || ! ln -sfn "$SERVE_ROOT/node_modules" "$dir/node_modules" \
+      || ! cp "$LKG_DIR/package.json" "$dir/package.json"; then
+      rm -rf "$dir"
+      return 1
+    fi
+  fi
+  printf '%s\n' "$SERVE_ROOT" > "$dir/.walnut-source-root" || { rm -rf "$dir"; return 1; }
+  printf '%s' "$dir"
+}
+
 rollback_to_lkg() {
   # Whatever kind the last good build was: a file deploy that fails right after
   # a Node one rolls back to that Node build, and the other way round.
-  local lkg_kind="" lkg_path=""
+  local lkg_kind="" lkg_path="" from=""
   if [[ -n "$MACHINE_TARGET" && -x "$LKG_DIR/dist-bin/walnut-$MACHINE_TARGET" ]]; then
     lkg_kind=file
     lkg_path="$LKG_DIR/dist-bin/walnut-$MACHINE_TARGET"
@@ -1567,6 +1633,11 @@ rollback_to_lkg() {
     fi
   fi
   if [[ -n "$lkg_kind" ]]; then
+    if from="$(stage_lkg_for_rollback "$lkg_kind")"; then
+      lkg_path="$from/${lkg_path#"$LKG_DIR/"}"
+    else
+      echo "Could not stage the last-known-good build; starting it from $LKG_DIR itself." >&2
+    fi
     echo "Rolling back to the last-known-good build ($lkg_kind): $lkg_path" >&2
     launch_server "$lkg_kind" "$lkg_path"
     if wait_for_config_ready 90; then
