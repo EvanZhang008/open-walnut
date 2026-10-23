@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
@@ -181,6 +182,7 @@ async function readRawConfigContent(): Promise<string | null> {
     // host replica, which writes no config.yaml (its config is the Mac's copy).
     if (!isHostReplicaProgram()) {
       try {
+        ownWriteHash = configContentHash(backup);
         await fs.writeFile(CONFIG_FILE, backup, 'utf-8');
       } catch { /* read-only FS or a racing writer: the in-memory value still holds */ }
     }
@@ -221,11 +223,28 @@ export function onConfigWritten(cb: () => void): () => void {
   return () => { configWriteListeners.delete(cb); };
 }
 
+/** Tell the listeners config.yaml changed: after this server's writes, and after an edit made outside it (config-file-watch.ts). */
+export function announceConfigWritten(): void {
+  for (const cb of configWriteListeners) { try { cb(); } catch { /* a listener never fails a write */ } }
+}
+
+/** The hash of the config.yaml content this server wrote last, so the file watch skips its own writes. */
+let ownWriteHash: string | null = null;
+
+export function configContentHash(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+export function isOwnConfigWrite(hash: string): boolean {
+  return hash === ownWriteHash;
+}
+
 /** Mirror freshly written config to the sidecar. Never throws. */
 async function writeConfigWithBackup(content: string): Promise<void> {
   refuseConfigWriteOnReplica();
+  ownWriteHash = configContentHash(content);
   await writeFileAtomic(CONFIG_FILE, content);
-  for (const cb of configWriteListeners) { try { cb(); } catch { /* a listener never fails a write */ } }
+  announceConfigWritten();
   try {
     await writeFileAtomic(CONFIG_BACKUP_FILE, content);
   } catch (err) {

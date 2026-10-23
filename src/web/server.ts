@@ -2255,7 +2255,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The followers' copies of the sessions, requests, boards, inbox and the rest (core/replication/kinds/):
     // a host replica takes every kind, the companion the ones it keeps.
     const copies = (await import('../core/replication/kinds/index.js')).startCopyKinds()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop() } }
+    // A config.yaml edited outside Walnut reaches them like a Settings save (core/config-file-watch.ts).
+    const configFile = (await import('../core/config-file-watch.js')).startConfigFileWatch()
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop(); configFile.stop() } }
     log.leader.info('leader loops: started (heartbeat, copies to the followers)')
   }
   // A follower (the cloud companion, a server on a host) keeps the leader's

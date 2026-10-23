@@ -138,7 +138,10 @@ old it is (`offline: true`, `as_of`); note search from the copy says
 `hosts.<alias>.keep` (Settings, Remote Hosts, Edit; the companion's is
 `cloud_bridge.keep`, Settings, Phones & Cloud): `notes`, `attachments`, `memory`,
 `skills` switches and `notes_exclude`, folders or single notes (with or without
-`.md`, any letter case: `core/replication/keep-rule.ts`). A kind turned off is
+`.md`, any letter case: `core/replication/keep-rule.ts`). They are plain keys of
+config.yaml, so an edit by hand or by an AI session's file tools works as a
+Settings save does: the Mac sees the file change within about 2 s
+(`core/config-file-watch.ts`) and the host's next round starts 3 s later. A kind turned off is
 removed from the host (`replica.drop`, which leaves an off marker), and so is a
 note left out. What a host does not keep is never answered from its copy: while
 the server answers, the read goes there; while it is away, `note_read`,
