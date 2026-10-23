@@ -47,7 +47,7 @@ describe('planUpdate', () => {
     expect(plan.install).toBeUndefined()
     expect(plan.exitCode).toBe(0)
     expect(plan.lines[0]).toContain('source checkout (/Users/alice/open-walnut)')
-    expect(plan.lines[1]).toBe('  cd /Users/alice/open-walnut && git pull && npm run build')
+    expect(plan.lines[1]).toBe('  cd /Users/alice/open-walnut && git pull && bun install && bun run build')
   })
 
   it('points a replica at the primary console', () => {

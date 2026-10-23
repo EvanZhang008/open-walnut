@@ -1242,7 +1242,7 @@ export class AcpSession {
     if (!fsModule.existsSync(artifacts.workerCmd[1])) {
       throw new Error(
         `Engine '${this.engineId}' runs on the ACP worker, which is not built (${artifacts.workerCmd[1]}). `
-        + 'Install Bun (https://bun.sh) and run `npm run build:daemon`, or install Walnut from npm, which ships it.',
+        + 'Install Bun (https://bun.sh) and run `bun run build:daemon`, or install the released Walnut, which ships it.',
       )
     }
     return artifacts

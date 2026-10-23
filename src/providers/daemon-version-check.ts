@@ -454,7 +454,7 @@ function handleMismatch(ctx: {
       + `\n    compiled dist/cli.js, whose embedded file list can lag src/. If dist/`
       + `\n    was built before scripts/build-daemon.sh's SOURCES list last changed,`
       + `\n    the two hash over DIFFERENT files and can never agree. Fix: rebuild —`
-      + `\n        npm run web:build`
+      + `\n        bun run web:build`
       + `\n    (dist/ is gitignored, so this changes nothing tracked.)`
       + `\n    Less likely: the shell hash algorithm in scripts/build-daemon.sh has`
       + `\n    genuinely drifted from computeExpectedDaemonVersion() in`

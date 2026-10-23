@@ -262,7 +262,7 @@ test('Make your own: Build it waits for a description, and the by-hand command r
   await expect(command).not.toBeVisible()
   await manual.locator('summary').click()
   await expect(command).toBeVisible()
-  await expect(command).toContainText('node packages/plugin-cli/dist/cli.js new my-plugin')
+  await expect(command).toContainText('bun packages/plugin-cli/dist/cli.js new my-plugin')
   await expect(command).not.toContainText('npx @open-walnut')
   await expect(page.getByTestId('build-plugin-guide')).toBeVisible()
 })

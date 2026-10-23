@@ -14,7 +14,7 @@ export const WALNUT_HOME = resolveOpenWalnutHome();
  * exactly one process instance (how it was invoked), while env vars inherit down
  * the whole process tree. The old OPEN_WALNUT_EPHEMERAL=1 env flag leaked
  * ephemeral-server → shared local daemon → every claude CLI it spawned → any
- * `npm run dev:prod` run inside such a CLI, booting the production server in
+ * `bun run dev:prod` run inside such a CLI, booting the production server in
  * attach-only mode (all remote sessions stuck on "Reconnecting…"). argv cannot
  * leak that way. In-process embedders (test harnesses) that need ephemeral
  * semantics push '--_ephemeral-child' onto process.argv before importing.

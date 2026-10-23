@@ -171,7 +171,7 @@ describe('buildNotificationFixMessage — a separate checkout', () => {
     // server this tree never built.
     expect(message).toContain('Do NOT run it');
     expect(message).toContain('npm install -g .');
-    expect(message).toContain('npm run web:build');
+    expect(message).toContain('bun run web:build');
   });
 
   it('describes a clone it is reusing rather than one it just made', () => {

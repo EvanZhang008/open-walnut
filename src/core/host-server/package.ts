@@ -66,8 +66,8 @@ export function runningDist(start = path.dirname(fileURLToPath(import.meta.url))
 
 function noBuildMessage(where: string): string {
   return singleFile()
-    ? `This is the compiled walnut file, which cannot install Walnut on ${where} yet: run a Node build of Walnut for that.`
-    : `This server is not running from a build, so there is nothing to install on ${where} (run \`npm run build\`).`
+    ? `This is the compiled walnut file, which cannot install Walnut on ${where} yet: run a built checkout of Walnut (\`bun run build\`) for that.`
+    : `This server is not running from a build, so there is nothing to install on ${where} (run \`bun run build\`).`
 }
 
 function tar(args: string[], cwd: string): Promise<void> {

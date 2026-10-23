@@ -23,8 +23,8 @@ import '@/styles/apps-make-mic.css'
 
 /** The by-hand loop, one command per line, as README.md shows it. */
 export const MANUAL_PLUGIN_COMMANDS = [
-  'npm run build:plugins',
-  'node packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install',
+  'bun run build:plugins',
+  'bun packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install',
 ] as const
 
 const IDEAS = ['A Pomodoro timer tied to my current task', 'A reading list from my notes', 'A weekly review page', 'A board of my open pull requests']

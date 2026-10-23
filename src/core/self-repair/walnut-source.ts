@@ -2,7 +2,7 @@
  * Where is Walnut's own source, so a repair session has something to edit?
  *
  * Three installs exist and the answer differs for each:
- *   - a git checkout run in place (`npm run dev:prod`, contributors): the code
+ *   - a git checkout run in place (`bun run dev:prod`, contributors): the code
  *     the server runs from IS the source → WALNUT_INSTALL_DIR.
  *   - an npm install (`npm i -g open-walnut`): dist only, no sources, no .git.
  *     The user may keep a clone elsewhere (config `self_repair.source_dir` or

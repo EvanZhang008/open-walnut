@@ -81,8 +81,8 @@ function whereSection(ctx: FixBriefingContext): string[] {
     '## Where you are',
     `You are in a git checkout of Walnut's source at ${ctx.source.dir} (${origin}; upstream ${ctx.repoUrl}). The RUNNING Walnut is NOT this tree: it is the installed package open-walnut@${ctx.version}${ctx.packageRoot ? ` at ${ctx.packageRoot}` : ''} (compiled dist only, no sources), with data dir ${ctx.dataDir}.`,
     `${logs} The checkout's HEAD may be newer than the installed version: check \`git log\` and CHANGELOG.md, and compare against what the logs show before assuming the code paths match.`,
-    'Setup: run `npm install` here first if node_modules is missing. Build with `npm run web:build`; run the quick tests with `npm run test:quick`.',
-    'Important: the repo\'s CLAUDE.md describes the maintainer\'s own deploy flow (`npm run dev:prod`, port 3456). Do NOT run it, and do NOT kill or restart the user\'s running Walnut: it is not served from this tree. To apply the fix locally, run `npm run web:build && npm install -g .` in this checkout and ask the user to restart Walnut. If the fix is general, offer to open a pull request upstream.',
+    'Setup: run `bun install` here first if node_modules is missing (the checkout needs bun, https://bun.sh). Build with `bun run web:build`; run the quick tests with `bun run test:quick`.',
+    'Important: the repo\'s CLAUDE.md describes the maintainer\'s own deploy flow (`bun run dev:prod`, port 3456). Do NOT run it, and do NOT kill or restart the user\'s running Walnut: it is not served from this tree. To apply the fix locally, run `bun run web:build && npm install -g .` in this checkout and ask the user to restart Walnut. If the fix is general, offer to open a pull request upstream.',
   ];
 }
 

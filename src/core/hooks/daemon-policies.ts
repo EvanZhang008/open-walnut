@@ -37,7 +37,7 @@ export interface DaemonPolicyDescriptor {
   note: string;
 }
 
-const DAEMON_RESTART_NOTE = 'Read at daemon spawn — a change takes effect after the daemon restarts (next session start on that host after `npm run dev:prod`, or daemon idle-exit).';
+const DAEMON_RESTART_NOTE = 'Read at daemon spawn: a change takes effect after the daemon restarts (next session start on that host after `bun run dev:prod`, or daemon idle-exit).';
 
 export const DAEMON_POLICIES: DaemonPolicyDescriptor[] = [
   {

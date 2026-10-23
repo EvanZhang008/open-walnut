@@ -1145,7 +1145,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       throw new Error(
         `Refusing to bind production port ${DEFAULT_PORT} with WALNUT_HOME=${home} (a test/temp dir).\n` +
         `  Your shell likely has leaked test env vars. Fix with:\n` +
-        `    env -u VITEST -u VITEST_MODE -u VITEST_WORKER_ID -u NODE_ENV -u OPEN_WALNUT_HOME npm run dev:prod`,
+        `    env -u VITEST -u VITEST_MODE -u VITEST_WORKER_ID -u NODE_ENV -u OPEN_WALNUT_HOME bun run dev:prod`,
       )
     }
   }

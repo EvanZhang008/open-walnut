@@ -21,9 +21,8 @@
  *
  *  - **No new deploy mechanism, and no manual scp.** The chunked/gzipped
  *    auto-deploy exists because SSH proxies kill large transfers; there is no
- *    transfer here. `npm run build` on the cloud box already runs
- *    scripts/build-daemon.sh (which is the only reason setup.sh installs bun),
- *    so dist/daemon-binaries/daemon-linux-<arch> is present and
+ *    transfer here. `bun run build` on the cloud box already runs
+ *    scripts/build-daemon.sh, so dist/daemon-binaries/daemon-linux-<arch> is present and
  *    pickDaemonBinary() finds it by exact platform-arch name.
  *  - **The cloud box must never dial its own bridge.** cloud-bridge-config.ts
  *    already returns `{enabled:false}` under CLOUD_MODE; that stays. A self-

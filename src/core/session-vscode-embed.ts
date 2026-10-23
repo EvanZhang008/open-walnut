@@ -119,7 +119,7 @@ export async function buildSessionVscodeEmbed(
   if (!conn.hasCapability('vscode-v1')) {
     throw new SessionVscodeEmbedError(
       `daemon on ${name} needs an upgrade for embedded VS Code`, 503,
-      'redeploy the daemon (npm run build:daemon), then retry',
+      'redeploy the daemon (bun run build:daemon), then retry',
     )
   }
 

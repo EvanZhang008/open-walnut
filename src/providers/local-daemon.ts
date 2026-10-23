@@ -850,7 +850,7 @@ export class LocalDaemon {
     // Scrub test-runner identity before spawning. The daemon is long-lived shared
     // infrastructure: if a vitest-spawned process warms it, the inherited VITEST /
     // NODE_ENV=test / OPEN_WALNUT_HOME would flow daemon → every Claude CLI it
-    // spawns → any `npm run dev:prod` executed inside such a CLI, and constants.ts'
+    // spawns → any `bun run dev:prod` executed inside such a CLI, and constants.ts'
     // test-guard then silently boots that "production" server against the empty
     // test-global temp dir (all sessions 404, tasks gone until the next restart).
     // Seen live 2026-07-05 (incident inc-1783280584117). The daemon itself never

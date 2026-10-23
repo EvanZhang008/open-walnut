@@ -387,7 +387,7 @@ async function runProbe(caps: EngineCapabilities, options: EngineProbeOptions): 
   if (adapter.source === 'bundled') {
     const present = (options.bundledAdapterPresent ?? bundledAdapterExists)(binaryName);
     if (!present) {
-      const remedy = caps.id === 'pi' ? 'reinstall Walnut, or run npm run build:daemon in a source checkout' : 'run npm install';
+      const remedy = caps.id === 'pi' ? 'reinstall Walnut, or run bun run build:daemon in a source checkout' : 'run bun install';
       return { availability: unavailable(`the bundled ${binaryName}-acp adapter is missing from this walnut install (${remedy})`) };
     }
   }

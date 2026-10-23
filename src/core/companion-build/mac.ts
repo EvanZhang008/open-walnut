@@ -19,6 +19,7 @@ import path from 'node:path'
 import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { bootPolicy } from '../boot-policy.js'
+import { singleFile } from '../../lib/single-file.js'
 import { cloudSessionEndpoint, recoverCloudSessionCredential } from '../cloud-ingest.js'
 import { buildCompanionAppPackage, runningBuildId, type CompanionAppPackage } from '../host-server/package.js'
 import { getCloudBoxState } from '../hosts/cloud-box-host.js'
@@ -178,7 +179,13 @@ async function gate(): Promise<Gate> {
   const ep = await cloudSessionEndpoint()
   if (!ep) return { open: false, state: 'no_companion', mine, autoUpdate }
   if (IS_EPHEMERAL && !isLoopbackDomain(new URL(ep.url).host)) return { open: false, state: 'no_companion', mine, autoUpdate }
-  if (!mine) return { open: false, state: 'off', message: 'This Mac runs Walnut from source, so it has no build to send.', mine, autoUpdate }
+  if (!mine) {
+    // The compiled file has no dist to send, and the box takes only a dist until it takes the file (walnut-single-binary.md).
+    const message = singleFile()
+      ? 'This Mac runs the compiled walnut file, and the companion still takes only a built checkout, so it has no build to send.'
+      : 'This Mac runs Walnut from source, so it has no build to send.'
+    return { open: false, state: 'off', message, mine, autoUpdate }
+  }
   return { open: true, ep, mine, autoUpdate: true }
 }
 

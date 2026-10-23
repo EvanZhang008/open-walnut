@@ -67,7 +67,7 @@ export function planUpdate(status: UpdateStatus, opts: { check: boolean }): Upda
       exitCode: 0,
       lines: [
         `Open Walnut ${status.current} here runs from a source checkout (${dir}), so it updates with git:`,
-        `  cd ${dir} && git pull && npm run build`,
+        `  cd ${dir} && git pull && bun install && bun run build`,
         'Then restart the server.',
       ],
     }

@@ -127,8 +127,8 @@ export async function runWeb(options: {
   } catch { /* advisory: the server starts either way */ }
 
   // Sanity check: dist/daemon-binaries/*.version must match current daemon source.
-  // If not, auto-rebuild. This is the belt to the suspenders of `npm run build`
-  // auto-building daemon — catches someone running `node dist/cli.js web`
+  // If not, auto-rebuild. This is the belt to the suspenders of `bun run build`
+  // auto-building daemon: it catches someone running `bun dist/cli.js web`
   // directly after editing daemon source.
   //
   // ⚠️ ADVISORY ONLY — NEVER exit on the result. This used to `process.exit(1)`

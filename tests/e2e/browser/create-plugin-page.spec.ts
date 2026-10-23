@@ -44,7 +44,7 @@ async function openApps(page: Page): Promise<void> {
 }
 
 /** The scaffold command the page shows: from a clone, since the CLI is not on npm yet. */
-const CREATE_COMMAND = 'npm run build:plugins && node packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install'
+const CREATE_COMMAND = 'bun run build:plugins && bun packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install'
 
 test('the Apps page links to the page, which walks the author through to the store', async ({ page, context, browserName }) => {
   // WebKit has no clipboard permissions to grant; there the copy is checked by its label only.
