@@ -160,13 +160,29 @@ fi
 # none of them a bare `lsof` call returns empty, so each guard would FAIL OPEN
 # and happily start a second server against the same data dir — the exact shape
 # behind the stale-cache task-deletion incidents. So: hard failure.
+# BusyBox (Alpine) ships applets under these names that take none of the options
+# used here: its lsof ignores them and lists every open file of the box, its
+# fuser has no -n, its ps no -p. A probe that misreads is worse than none, so an
+# applet does not count. Captured, not piped: under pipefail a `| grep -q` that
+# matches early fails the pipeline with SIGPIPE.
+is_busybox() {
+  local out
+  command -v "$1" >/dev/null 2>&1 || return 1
+  out="$("$1" --help </dev/null 2>&1 || true)"
+  [[ "$out" == *BusyBox* ]]
+}
 PORT_PROBE=""
 for probe in lsof ss fuser; do
-  if command -v "$probe" >/dev/null 2>&1; then PORT_PROBE="$probe"; break; fi
+  if command -v "$probe" >/dev/null 2>&1 && ! is_busybox "$probe"; then PORT_PROBE="$probe"; break; fi
 done
 if [[ -z "$PORT_PROBE" ]]; then
-  echo "Need one of lsof / ss / fuser to tell whether :$PORT is already served." >&2
+  echo "Need one of lsof / ss / fuser (not BusyBox's) to tell whether :$PORT is already served." >&2
   echo "Install one (e.g. iproute2 for ss) and retry." >&2
+  exit 1
+fi
+if is_busybox ps; then
+  echo "ps here is BusyBox's, which cannot look up one process (-p); every server check needs that." >&2
+  echo "Install procps and retry." >&2
   exit 1
 fi
 
