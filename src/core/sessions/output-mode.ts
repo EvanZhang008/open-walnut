@@ -14,6 +14,11 @@
  *     reminder repeats the inline delivery contract even after compaction.
  *     Markdown mode appends NOTHING, so a session on
  *     plain markdown still pays exactly zero.
+ *   · COMPACTION voids the edge: the summary does not keep the full instruction
+ *     (2026-10-22: three hours of reminder-only turns, then a call-path diagram
+ *     drawn as ASCII in a code fence), so the compaction recorder clears
+ *     `output_mode_injected` (place-notice.ts `notePlaceCompaction`) and the next
+ *     send carries the full instruction again.
  *
  * BOTH land AFTER the user's text (recency helps, and the human's words stay
  * first — user-requested 2026-08-31; the instruction used to be a prefix).
@@ -61,11 +66,17 @@ export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
  *  and code blocks by hand (reported 2026-09-03). Markdown is better for those on
  *  every surface — it keeps copy-as-code, highlighting, and the plain-text
  *  fallback notifications and search snippets show. So the line draws the border
- *  first, then invites HTML for the things across it. */
+ *  first, then invites HTML for the things across it.
+ *
+ *  The diagram sentence is a rule, not an option: "code blocks" read as licence to
+ *  fence a box-drawing call path, which a code block renders as monospace text.
+ *  So a fence is for real code, and every diagram is SVG (2026-10-22). */
 export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
   `${OUTPUT_MODE_INSTRUCTION_MARKER}ON] Keep writing markdown for what markdown does well `
-  + '(headings, lists, tables, code blocks), and mix raw HTML into the same reply (separated by a blank line) '
-  + 'for what markdown cannot express: colour that carries meaning, diagrams (inline <svg>), '
+  + '(headings, lists, tables, and code blocks for real code, commands and output), and mix raw HTML into the same reply '
+  + '(separated by a blank line) for what markdown cannot express. Draw every diagram (boxes and arrows, a flow, '
+  + 'a call path, a tree, a timeline) as inline <svg>, never as ASCII or box-drawing art in a code block. '
+  + 'HTML is also for colour that carries meaning, '
   + 'side-by-side or card layout, and interactivity (<details>, CSS :checked). The client renders it natively '
   + 'while streaming. Write visual HTML directly in your reply, not in a file, screenshot, or HTML code fence, '
   + 'unless the user asks for one. Keep each widget contiguous, without internal blank lines. '
@@ -95,8 +106,9 @@ export const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
  *  (colour, diagrams, layout markdown has no shape for) is what makes the line
  *  steer instead of just remind (reported 2026-09-03). */
 export const RICH_OUTPUT_MODE_REMINDER =
-  `${OUTPUT_MODE_REMINDER_MARKER}: markdown first; for colour, diagrams, or layout, write raw HTML directly in this reply. `
-  + 'No files, screenshots, or HTML code fences unless requested (html-app for scripts); no blank lines inside a widget.]';
+  `${OUTPUT_MODE_REMINDER_MARKER}: markdown first, code blocks only for real code; diagrams as inline <svg>, never ASCII art; `
+  + 'for colour or layout, write raw HTML directly in this reply. '
+  + 'No files, screenshots or HTML fences unless requested (html-app for scripts); no blank lines inside a widget.]';
 
 /** The style a model uses when nothing has been said to it. Compared against the
  *  effective mode to decide whether an edge is owed — deliberately NOT
