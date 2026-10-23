@@ -110,6 +110,12 @@ scripts. There is no second runtime to keep in step.
   `tests/lib/sqlite.test.ts` pins the differences it covers: no busy timeout by
   default, `null` for a missing row, Uint8Array BLOBs, no `pragma`/`pluck`/
   `raw`/`backup`, named parameters only in strict mode.
+- On macOS, bun:sqlite would load Apple's system SQLite, so the darwin files
+  carry an upstream one instead: `scripts/build-sqlite-dylib.mjs` compiles the
+  pinned release (universal, macOS 13+) and the file unpacks it with its tree;
+  `walnut __selftest` fails when Apple's is the one loaded. The dylib is built
+  with clang on macOS, so every job that builds the files runs on a macOS
+  runner, which also signs the darwin-x64 file with `codesign`.
 - The terminal uses `Bun.Terminal` (no native module).
 - Plugin TypeScript loads directly (bun runs TypeScript), so the plugin loader
   needs no esbuild.

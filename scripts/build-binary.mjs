@@ -157,10 +157,30 @@ function copyDir(from, to) {
 }
 
 /**
+ * The upstream SQLite every darwin file carries (bun on macOS otherwise loads
+ * Apple's build, see scripts/build-sqlite-dylib.mjs). Built here on macOS (a
+ * matching stamp skips it); elsewhere WALNUT_SQLITE_DYLIB names one built on a Mac.
+ */
+function darwinSqlite() {
+  const given = process.env.WALNUT_SQLITE_DYLIB
+  if (given) {
+    if (!fs.existsSync(given)) throw new Error(`WALNUT_SQLITE_DYLIB=${given} does not exist`)
+    return given
+  }
+  if (process.platform !== 'darwin') {
+    throw new Error('darwin files carry an upstream SQLite built on macOS: build them on a Mac, or set WALNUT_SQLITE_DYLIB to a libsqlite3.dylib built by scripts/build-sqlite-dylib.mjs')
+  }
+  run(process.execPath, ['scripts/build-sqlite-dylib.mjs'])
+  const built = path.join(repo, 'vendor/sqlite/darwin/libsqlite3.dylib')
+  if (!fs.existsSync(built)) throw new Error(`scripts/build-sqlite-dylib.mjs did not write ${built}`)
+  return built
+}
+
+/**
  * The runtime tree: what an installed package has on disk, minus the code.
  * Paths mirror dist/ so the resolvers in src/ find them unchanged.
  */
-async function stageTree(root, { version, sidecars }) {
+async function stageTree(root, { version, sidecars, sqliteDylib }) {
   fs.rmSync(root, { recursive: true, force: true })
   const dist = path.join(root, 'dist')
   fs.mkdirSync(dist, { recursive: true })
@@ -217,6 +237,16 @@ async function stageTree(root, { version, sidecars }) {
   fs.mkdirSync(path.join(codexOut, 'dist'), { recursive: true })
   fs.copyFileSync(path.join(codexAcp, 'dist/index.js'), path.join(codexOut, 'dist/index.js'))
   for (const f of ['package.json', 'LICENSE']) fs.copyFileSync(path.join(codexAcp, f), path.join(codexOut, f))
+
+  // The upstream SQLite a darwin file loads (src/lib/sqlite.ts finds it from dist/).
+  // One tree serves every target of a run (its siblings share the archive id the
+  // host server checks), so a run with a darwin target gives the linux files it
+  // too: about 1.7 MB gzipped, unused there.
+  if (sqliteDylib) {
+    const to = path.join(root, 'vendor/sqlite/darwin/libsqlite3.dylib')
+    fs.mkdirSync(path.dirname(to), { recursive: true })
+    fs.copyFileSync(sqliteDylib, to)
+  }
 
   for (const [name, files] of Object.entries(DIRNAME_PACKAGES)) {
     for (const rel of files) {
@@ -408,7 +438,8 @@ async function main() {
   buildShippedPlugins()
   const daemonVersion = buildDaemonSidecars(path.join(stage, 'sidecars'))
   const root = path.join(stage, 'root')
-  await stageTree(root, { version, sidecars: path.join(stage, 'sidecars') })
+  const sqliteDylib = opts.targets.some((t) => t.startsWith('darwin-')) ? darwinSqlite() : null
+  await stageTree(root, { version, sidecars: path.join(stage, 'sidecars'), sqliteDylib })
   const packed = packTree(root)
   const hash = crypto.createHash('sha256').update(packed.archive).digest('hex').slice(0, 12)
   const id = `${version}-${hash}`
