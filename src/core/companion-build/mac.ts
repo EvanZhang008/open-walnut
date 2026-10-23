@@ -121,6 +121,12 @@ function setView(gen: number, next: Partial<CompanionBuildView> & { state: Compa
   }
 }
 
+/** Every companionBuildChanged so far, settled: tests wait on it instead of on timing. */
+let buildChanges: Promise<void> = Promise.resolve()
+export function _companionBuildChangesForTesting(): Promise<void> {
+  return buildChanges
+}
+
 /**
  * The companion runs another build than this server last saw: the copy kinds go
  * to it again now, and a kind its older build refused (`404 unknown_kind`, a
@@ -128,7 +134,7 @@ function setView(gen: number, next: Partial<CompanionBuildView> & { state: Compa
  * started counts too: a rest from before it is gone with the process anyway.
  */
 function companionBuildChanged(was: string | null, now: string): void {
-  void Promise.all([import('../replication/replica-status.js'), import('../replication/kinds/copy-kind.js'), import('../host-replica.js'), import('../cloud-ingest.js'), import('../projection-push-state.js')])
+  const done = Promise.all([import('../replication/replica-status.js'), import('../replication/kinds/copy-kind.js'), import('../host-replica.js'), import('../cloud-ingest.js'), import('../projection-push-state.js')])
     .then(([status, copies, notes, ingest, pushState]) => {
       status.forgetTarget('companion')
       copies.copyTargetChanged()
@@ -141,6 +147,7 @@ function companionBuildChanged(was: string | null, now: string): void {
       if (was) log.session.info('companion build: the companion changed build, its copies go again', { was, now })
     })
     .catch(() => { /* the next sweep asks again */ })
+  buildChanges = Promise.all([buildChanges, done]).then(() => {})
 }
 
 // --- the gates ----------------------------------------------------------------

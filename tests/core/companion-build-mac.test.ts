@@ -50,7 +50,7 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
 import { WALNUT_HOME } from '../../src/constants.js'
 import { installRequestProblem, type BoxBuildStatus } from '../../src/core/companion-build/wire.js'
 import {
-  _resetCompanionBuildForTesting, companionAutoUpdateChanged, companionBuildView, retryCompanionBuild, tickCompanionBuild,
+  _companionBuildChangesForTesting, _resetCompanionBuildForTesting, companionAutoUpdateChanged, companionBuildView, retryCompanionBuild, tickCompanionBuild,
 } from '../../src/core/companion-build/mac.js'
 import { companionBuildRouter } from '../../src/web/routes/companion-build.js'
 
@@ -103,7 +103,10 @@ function freshBox(): Box {
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json' })
+  // Every answer closes its connection, so a dropped socket is one attempt of the
+  // Mac's: bun's fetch sends a request once more on its own when a connection it
+  // reused drops, which would spend the drops a test counts on.
+  res.writeHead(status, { 'content-type': 'application/json', connection: 'close' })
   res.end(JSON.stringify(body))
 }
 
@@ -275,11 +278,14 @@ describe('tickCompanionBuild', () => {
     rest()
     await tickCompanionBuild('probe')
     // This tick updated it from OLD: the rest it had then ended (async, after the tick).
-    await vi.waitFor(() => expect(status.peekKindState('companion', 'routines')?.restUntil).toBe(0))
+    // Every reset this tick started has landed (the build seen first, then the new
+    // one): waiting for the first 0 alone let the second land on the rest set below.
+    await _companionBuildChangesForTesting()
+    expect(status.peekKindState('companion', 'routines')?.restUntil).toBe(0)
     // The older companion answered unknown_kind: a 10-minute rest, kept while it runs the same build.
     rest()
     await tickCompanionBuild('probe')
-    await new Promise((r) => setTimeout(r, 50))
+    await _companionBuildChangesForTesting()
     expect(status.peekKindState('companion', 'routines')?.restUntil).toBeGreaterThan(Date.now())
     // It changes build (here it went back to the base, and this tick updates it again):
     // the rest ends and the manifest goes again.

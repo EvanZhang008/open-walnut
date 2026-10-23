@@ -129,6 +129,10 @@ async function install(id: string, kind: Kind = 'serve'): Promise<void> {
     if (st?.state === 'failed') throw new Error(`install failed: ${st.message} ${st.logTail}`)
     return st?.id === id && st.state === 'ready'
   })
+  // `.ready` comes before the prune of older builds: the install is over when its
+  // script says so (host-server/install.ts installScript ends with `installed`).
+  const logFile = path.join(R, 'incoming', `${id}.install.log`)
+  await waitFor(`the end of the install script of ${id}`, () => !fs.existsSync(logFile) || /^installed$/m.test(fs.readFileSync(logFile, 'utf8')))
 }
 
 beforeEach(() => {
