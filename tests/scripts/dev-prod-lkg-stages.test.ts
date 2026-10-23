@@ -20,6 +20,15 @@ function fn(name: string): string {
   return m![0]
 }
 
+/** The stage reap loop (top-level code), from its `for` to its `done`. */
+function reapLoop(): string {
+  const start = script.indexOf('for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do')
+  const end = script.indexOf('\ndone\n', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  return script.slice(start, end + '\ndone\n'.length)
+}
+
 function bash(body: string): { status: number | null; stdout: string; stderr: string } {
   const r = spawnSync('bash', ['-c', `set -euo pipefail\n${body}`], { encoding: 'utf-8' })
   return { status: r.status, stdout: r.stdout, stderr: r.stderr }
@@ -55,6 +64,11 @@ async function runFrom(file: string, args: string[]): Promise<ChildProcess> {
     await new Promise((r) => setTimeout(r, 50))
   }
   throw new Error(`${file} never showed up in ps`)
+}
+
+function deadPid(): number {
+  const r = spawnSync('true')
+  return r.pid!
 }
 
 describe('dir_has_live_process (the LKG, whose name is not unique)', () => {
@@ -152,6 +166,75 @@ describe('rollback_to_lkg', () => {
     const stage = path.dirname(path.dirname(launched))
     expect(fs.readFileSync(path.join(stage, 'package.json'), 'utf-8')).toContain('1.2.3')
     expect(fs.readlinkSync(path.join(stage, 'node_modules'))).toBe(`${root}/serve/node_modules`)
+  })
+})
+
+describe('the stage reaper', () => {
+  it('removes dead stages, and strips the Linux files from a stage kept only for a daemon', async () => {
+    // 2026-10-23 review: one live MCP child held a 537 MB stage, 476 MB of it the
+    // four Linux files only a serving server reads.
+    const root = tmp()
+    const tag = `t${process.pid}x${Date.now()}`
+    const stage = (name: string) => path.join(root, `open-walnut-stage.${tag}.${name}`)
+    const files = (dir: string) => {
+      for (const t of ['darwin-arm64', 'linux-x64', 'linux-arm64-musl']) program(path.join(dir, 'dist-bin', `walnut-${t}`))
+      fs.mkdirSync(path.join(dir, 'runtime', 'id'), { recursive: true })
+    }
+    for (const n of ['dead', 'daemon', 'web', 'current']) files(stage(n))
+    await runFrom(path.join(stage('daemon'), 'dist-bin', 'walnut-darwin-arm64'), ['__daemon', '--start'])
+    await runFrom(path.join(stage('web'), 'dist-bin', 'walnut-darwin-arm64'), ['web', '--port', '1'])
+    const r = bash([fn('stage_has_live_process'), fn('stage_serves_web'),
+      `STAGE_ROOT='${root}'`, `STAGE_DIR='${stage('current')}'`, 'MACHINE_TARGET=darwin-arm64', reapLoop()].join('\n'))
+    expect(r.status, r.stderr).toBe(0)
+    expect(fs.existsSync(stage('dead'))).toBe(false)
+    expect(fs.readdirSync(path.join(stage('daemon'), 'dist-bin'))).toEqual(['walnut-darwin-arm64'])
+    expect(fs.existsSync(path.join(stage('daemon'), 'runtime', 'id'))).toBe(true)
+    expect(fs.readdirSync(path.join(stage('web'), 'dist-bin')).sort()).toEqual(['walnut-darwin-arm64', 'walnut-linux-arm64-musl', 'walnut-linux-x64'])
+    expect(fs.readdirSync(path.join(stage('current'), 'dist-bin'))).toHaveLength(3)
+  })
+})
+
+describe('sweep_build_clones', () => {
+  it('removes only a clone an interrupted deploy left: ours, older than the lock, its deploy gone, nothing running from it', async () => {
+    const root = tmp()
+    const clone = (sha: string, pid: number) => {
+      const d = path.join(root, `open-walnut-build.${sha}.${pid}`)
+      fs.mkdirSync(path.join(d, 'scripts'), { recursive: true })
+      return d
+    }
+    const dead = deadPid()
+    const self = clone('000000000000', dead)
+    const stale = clone('111111111111', dead)
+    const ownerAlive = clone('222222222222', process.pid)
+    const newer = clone('333333333333', dead)
+    const inUse = clone('444444444444', dead)
+    const odd = path.join(root, 'open-walnut-build.not-a-clone')
+    fs.mkdirSync(odd)
+    const old = new Date(Date.now() - 3_600_000)
+    for (const d of [self, stale, ownerAlive, inUse, odd]) fs.utimesSync(d, old, old)
+    const lock = path.join(root, 'lock')
+    fs.mkdirSync(lock)
+    const later = new Date(Date.now() + 60_000)
+    fs.utimesSync(newer, later, later)
+    await runFrom(program(path.join(inUse, 'scripts', 'job.sh')), [])
+    const r = bash([fn('sweep_build_clones'), `REPO_ROOT='${self}'`, `LOCK_DIR='${lock}'`, 'REHEARSAL=0', 'REHEARSAL_ROOT=', `TMPDIR='${root}'`, 'sweep_build_clones'].join('\n'))
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout.trim()).toBe(`Removed a build clone an interrupted deploy left: ${stale}`)
+    for (const d of [self, ownerAlive, newer, inUse, odd]) expect(fs.existsSync(d), d).toBe(true)
+    expect(fs.existsSync(stale)).toBe(false)
+  })
+
+  it('in a rehearsal, never sweeps outside the rehearsal dir', () => {
+    const root = tmp()
+    const self = path.join(root, `open-walnut-build.000000000000.${deadPid()}`)
+    const stale = path.join(root, `open-walnut-build.111111111111.${deadPid()}`)
+    for (const d of [self, stale]) fs.mkdirSync(d)
+    const old = new Date(Date.now() - 3_600_000)
+    fs.utimesSync(stale, old, old)
+    fs.mkdirSync(path.join(root, 'lock'))
+    const r = bash([fn('sweep_build_clones'), `REPO_ROOT='${self}'`, `LOCK_DIR='${root}/lock'`, 'REHEARSAL=1', `REHEARSAL_ROOT='${root}/elsewhere'`, 'sweep_build_clones'].join('\n'))
+    expect(r.status, r.stderr).toBe(0)
+    expect(fs.existsSync(stale)).toBe(true)
   })
 })
 
