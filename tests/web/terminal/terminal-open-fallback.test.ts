@@ -7,7 +7,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
  * terminal:open end to end through the real register → dtach-check →
  * dtach-provision → terminal-manager → spawn chain. Only the process edges are
  * stubbed: `execFile` plays the remote host (answers the probe/build scripts
- * per scenario, no real ssh) and node-pty records what would be spawned.
+ * per scenario, no real ssh) and the pty records what would be spawned.
  *
  * Guards the fresh-host report: a host without a C compiler got NO terminal,
  * and an ssh failure was blamed on the compiler.
@@ -76,22 +76,25 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...real, execFile };
 });
 
-// ---- node-pty: record spawns, hand back a controllable fake ----------------
+// ---- the pty (src/lib/pty.ts): record spawns, hand back a controllable fake --
 interface Spawned { file: string; args: string[]; kill: ReturnType<typeof vi.fn>; exit: () => void }
 const spawned: Spawned[] = [];
-vi.mock('@homebridge/node-pty-prebuilt-multiarch', () => ({
-  spawn: (file: string, args: string[]) => {
-    let onExit: (e: { exitCode: number }) => void = () => {};
-    const rec: Spawned = { file, args, kill: vi.fn(), exit: () => onExit({ exitCode: 0 }) };
-    spawned.push(rec);
-    return {
-      onData: () => {},
-      onExit: (cb: typeof onExit) => { onExit = cb; },
-      write: vi.fn(),
-      resize: vi.fn(),
-      kill: rec.kill,
-    };
-  },
+vi.mock('../../../src/lib/pty.js', () => ({
+  loadPty: async () => ({
+    spawn: (file: string, args: string[]) => {
+      let onExit: (e: { exitCode: number }) => void = () => {};
+      const rec: Spawned = { file, args, kill: vi.fn(), exit: () => onExit({ exitCode: 0 }) };
+      spawned.push(rec);
+      return {
+        pid: 1000 + spawned.length,
+        onData: () => {},
+        onExit: (cb: typeof onExit) => { onExit = cb; },
+        write: vi.fn(),
+        resize: vi.fn(),
+        kill: rec.kill,
+      };
+    },
+  }),
 }));
 
 // ---- RPC plumbing, session registry, host config ---------------------------
