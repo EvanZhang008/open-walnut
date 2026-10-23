@@ -249,7 +249,9 @@ describe('the upload', () => {
   })
 
   it('is busy while an install runs, and refuses on a full disk', async () => {
-    const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' })
+    // An install is the pid of a process whose command line names `<id>.install.sh`
+    // (stateScript in src/core/host-server/install.ts), so a reused pid never reads as one.
+    const sleeper = spawn('sh', ['-c', 'while :; do sleep 0.2; done', 'bx.install.sh'], { stdio: 'ignore' })
     children.push(sleeper)
     write('companion/install.json', JSON.stringify({ id: 'bx', at: Date.now() }))
     write('incoming/bx.pid', `${sleeper.pid}\n`)
