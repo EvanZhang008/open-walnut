@@ -7,7 +7,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import Database, { ON_BUN, sqliteModuleFile, type Database as DatabaseType } from '../../src/lib/sqlite.js'
+import Database, {
+  builtSqliteLibrary, ON_BUN, sqliteLibrary, sqliteLibraryProblem, sqliteModuleFile, type Database as DatabaseType,
+} from '../../src/lib/sqlite.js'
+import { DYLIB, SQLITE_VERSION, stampIsCurrent } from '../../scripts/build-sqlite-dylib.mjs'
 
 let dir: string
 let db: DatabaseType
@@ -64,6 +67,37 @@ describe(`sqlite on ${ON_BUN ? 'bun' : 'node'}`, () => {
     const quick = new Database(path.join(dir, 'b.db'), { timeout: 250 })
     expect(quick.pragma('busy_timeout', { simple: true })).toBe(250)
     quick.close()
+  })
+
+  it('foreign keys are on and the page cache is 16 MB, as better-sqlite3 compiles its SQLite', () => {
+    expect(db.pragma('foreign_keys', { simple: true })).toBe(1)
+    expect(db.pragma('cache_size', { simple: true })).toBe(-16000)
+    db.exec('CREATE TABLE p (id INTEGER PRIMARY KEY); CREATE TABLE c (pid INTEGER REFERENCES p(id) ON DELETE CASCADE)')
+    db.exec('INSERT INTO p VALUES (1); INSERT INTO c VALUES (1)')
+    db.exec('DELETE FROM p')
+    expect(db.prepare('SELECT count(*) FROM c').pluck().get()).toBe(0)
+    expect(() => db.exec('INSERT INTO c VALUES (2)')).toThrow()
+  })
+
+  it('a database whose file is deleted while open keeps answering, as better-sqlite3 does', () => {
+    const sub = path.join(dir, 'gone')
+    fs.mkdirSync(sub)
+    const g = new Database(path.join(sub, 'g.db'))
+    g.pragma('journal_mode = WAL')
+    g.exec('CREATE TABLE t (x); INSERT INTO t VALUES (1)')
+    fs.rmSync(sub, { recursive: true, force: true })
+    fs.mkdirSync(sub)
+    // The macOS system SQLite answers SQLITE_IOERR_VNODE here (src/lib/sqlite.ts).
+    expect(() => g.prepare('INSERT INTO t VALUES (2)').run(), `SQLite library: ${sqliteLibrary()}`).not.toThrow()
+    expect(g.prepare('SELECT count(*) FROM t').pluck().get()).toBe(2)
+    g.close()
+  })
+
+  it('names the SQLite it runs on', () => {
+    if (!ON_BUN) expect(sqliteLibrary()).toBe('better-sqlite3')
+    else if (process.platform !== 'darwin') expect(sqliteLibrary()).toBe('bun')
+    else if (process.env.WALNUT_SQLITE_LIBRARY === 'system') expect(sqliteLibrary()).toBe('system')
+    else expect(sqliteLibrary()).toBe(process.env.WALNUT_SQLITE_LIBRARY || builtSqliteLibrary())
   })
 
   it('a transaction commits, rolls back on a throw, nests, and has its modes', () => {
@@ -165,6 +199,36 @@ describe(`sqlite on ${ON_BUN ? 'bun' : 'node'}`, () => {
     // Read-only after the last writer closed, so with no -wal on disk.
     expect(again.prepare('SELECT x FROM t').pluck().all()).toEqual([1, 2])
     again.close()
+  })
+})
+
+// Ratchet: on macOS, bun must never quietly run on the Apple system SQLite.
+describe.runIf(process.platform === 'darwin')('the upstream SQLite macOS bun loads', () => {
+  it('is built and current (scripts/build-sqlite-dylib.mjs, run by postinstall)', () => {
+    expect(stampIsCurrent(), `run: bun scripts/build-sqlite-dylib.mjs (wants SQLite ${SQLITE_VERSION} at ${DYLIB})`).toBe(true)
+    expect(builtSqliteLibrary()).toBe(DYLIB)
+  })
+
+  it.runIf(ON_BUN && process.env.WALNUT_SQLITE_LIBRARY !== 'system')('is what this bun process runs on', () => {
+    expect(sqliteLibraryProblem()).toBeNull()
+    expect(db.prepare('SELECT sqlite_version()').pluck().get()).toBe(process.env.WALNUT_SQLITE_LIBRARY ? expect.any(String) : SQLITE_VERSION)
+    const opts = db.prepare('SELECT compile_options FROM pragma_compile_options').pluck().all()
+    expect(opts).toEqual(expect.arrayContaining(['DEFAULT_FOREIGN_KEYS', 'DEFAULT_CACHE_SIZE=-16000', 'DQS=0', 'ENABLE_FTS5']))
+  })
+
+  it('is found from a bundle that inlined src/lib/sqlite.ts, and null when it is not built', () => {
+    const pkg = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-sqlite-dylib-'))
+    try {
+      expect(builtSqliteLibrary(path.join(pkg, 'dist', 'web', 'server.js'))).toBeNull()
+      const lib = path.join(pkg, 'vendor', 'sqlite', 'darwin', 'libsqlite3.dylib')
+      fs.mkdirSync(path.dirname(lib), { recursive: true })
+      fs.writeFileSync(lib, '')
+      for (const bundle of ['dist/cli.js', 'dist/web/server.js', 'dist/integrations/mail/index.js', 'src/lib/sqlite.ts']) {
+        expect(builtSqliteLibrary(path.join(pkg, bundle)), bundle).toBe(lib)
+      }
+    } finally {
+      fs.rmSync(pkg, { recursive: true, force: true })
+    }
   })
 })
 
