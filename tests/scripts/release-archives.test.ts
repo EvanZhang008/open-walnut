@@ -315,6 +315,8 @@ describe('the archive workflows', () => {
     expect(brew.needs).toEqual(['files', 'publish'])
     expect(brew.if).toBe("${{ !cancelled() && (needs.files.outputs.has_files == 'true' || needs.publish.result == 'success') }}")
     expect(brew.steps.map((s) => s.run ?? '').join('\n')).toMatch(/brew install walnut-release\/test\/open-walnut[\s\S]*brew test[\s\S]*gh release upload "v\$VERSION" "\$RUNNER_TEMP\/open-walnut.rb"/)
+    // Both commands answer from the installed keg, not only `walnut` (a formula once linked no `open-walnut`).
+    expect(brew.steps.map((s) => s.run ?? '').join('\n')).toContain('for name in walnut open-walnut; do\n  "$(brew --prefix)/bin/$name" --version')
   })
 
   it('asks the release whether it has the compiled files; the formula and the app follow them, not the archives', () => {

@@ -94,8 +94,11 @@ ${platformBlocks(shas, (target) => `${baseUrl}/v${version}/${assetName(version, 
   def install
     libexec.install Dir["walnut-*.gz"].first => "walnut.gz"
     # Scripts, not links: the cleaner drops a link whose target is not there yet.
+    # write_exec_script names each script after its target (bin/walnut); the
+    # second name is written by write_env_script, which writes the path it is
+    # called on. On bin/"open-walnut", write_exec_script makes a directory.
     bin.write_exec_script libexec/"walnut"
-    (bin/"open-walnut").write_exec_script libexec/"walnut"
+    (bin/"open-walnut").write_env_script libexec/"walnut", {}
   end
 
   # After Homebrew's linkage pass over the keg, which the file must skip. Once

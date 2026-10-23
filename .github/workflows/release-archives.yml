@@ -250,8 +250,11 @@ jobs:
           mkdir -p "$(brew --repository walnut-release/test)/Formula"
           cp "$RUNNER_TEMP/open-walnut.rb" "$(brew --repository walnut-release/test)/Formula/open-walnut.rb"
           brew install walnut-release/test/open-walnut
-          "$(brew --prefix)/bin/walnut" --version | tee "$RUNNER_TEMP/version.txt"
-          grep -q "^$VERSION " "$RUNNER_TEMP/version.txt" || { echo "::error::Homebrew's walnut is not $VERSION"; exit 1; }
+          # Both names the npm package gives it: a formula once linked only `walnut`.
+          for name in walnut open-walnut; do
+            "$(brew --prefix)/bin/$name" --version | tee "$RUNNER_TEMP/version.txt"
+            grep -q "^$VERSION " "$RUNNER_TEMP/version.txt" || { echo "::error::Homebrew's $name is not $VERSION"; exit 1; }
+          done
           brew test walnut-release/test/open-walnut
       - name: Attach it to the release
         run: gh release upload "v$VERSION" "$RUNNER_TEMP/open-walnut.rb" --clobber

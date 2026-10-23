@@ -209,7 +209,10 @@ describe('the Homebrew formula over the files', () => {
     expect(rb).toContain('libexec.install Dir["walnut-*.gz"].first => "walnut.gz"')
     expect(rb).toContain('install_gzipped_executable "walnut.gz", "walnut", source_base: :libexec, target_base: :libexec')
     expect(rb).toContain('bin.write_exec_script libexec/"walnut"')
-    expect(rb).toContain('(bin/"open-walnut").write_exec_script libexec/"walnut"')
+    // write_exec_script writes one script per target INTO the path it is called on, so on
+    // bin/"open-walnut" it makes a directory, which brew does not link: the command was gone.
+    expect(rb).toContain('(bin/"open-walnut").write_env_script libexec/"walnut", {}')
+    expect(rb).not.toMatch(/\(bin\/"[^"]+"\)\.write_exec_script/)
     expect(rb).toContain('Update it with: brew upgrade open-walnut')
     expect(rb).toContain('assert_match version.to_s, shell_output("#{bin}/walnut --version")')
     expect(rb).not.toMatch(/depends_on|app\/bin/)
