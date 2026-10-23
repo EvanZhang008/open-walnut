@@ -18,7 +18,8 @@ import { mergeNoteOffLoop, runWorker } from '../../../src/core/offline-merge/not
 import { mergeVersions } from '../../../src/lib/three-way-merge'
 import { withNoteId } from '../../../src/core/parse-frontmatter'
 import { startStallRecorder, stopStallRecorder } from '../../../src/core/stall-recorder'
-import { cpuCheckpoints } from '../../../src/core/stall-recorder-checkpoints'
+import { cpuCheckpoint, cpuCheckpoints } from '../../../src/core/stall-recorder-checkpoints'
+import { ON_BUN } from '../../../src/lib/runtime'
 import type { ConflictEntry } from '../../../src/core/offline-merge/conflict-log'
 
 const T0 = Date.parse('2026-10-17T10:00:00.000Z')
@@ -459,7 +460,8 @@ describe('merging off the loop', () => {
   async function loopCpu<T>(fn: () => Promise<T>): Promise<{ value: T; maxCpuMs: number; maxWallMs: number; checkpoints: number }> {
     await startStallRecorder({ force: true, dir: stallDir, profile: false, systemContext: false })
     // A 10 ms timer keeps the loop turning, so the end-of-iteration checkpoints run.
-    const tick = setInterval(() => undefined, 10)
+    // bun has none (stall-recorder-checkpoints.ts says why): there the timer takes one.
+    const tick = setInterval(() => { if (ON_BUN) cpuCheckpoint() }, 10)
     const from = monoMs()
     try {
       const value = await fn()
