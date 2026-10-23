@@ -1,7 +1,7 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Publish the build that now serves production into the checkout's own dist/.
 //
-//   node scripts/publish-serve-root-dist.mjs <from-dist> <to-dist>
+//   bun scripts/publish-serve-root-dist.mjs <from-dist> <to-dist>   (node works too)
 //
 // The `walnut` CLI on this machine is bin/open-walnut.js, which imports the
 // checkout's dist/cli-fast.js and runs the op registry IN PROCESS: every op's
@@ -25,9 +25,12 @@ import { pathToFileURL } from 'node:url'
 
 export const ENTRIES = ['cli.js', 'cli-fast.js']
 export const MIRRORED = ['web/static', 'data']
+/** Top-level dirs of a build that are not part of what the CLI runs: build-binary.mjs's staging (tens of MB). */
+export const NOT_PUBLISHED = ['binary-stage']
 
 function walk(root, rel = '', out = []) {
   for (const ent of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+    if (!rel && NOT_PUBLISHED.includes(ent.name)) continue
     const r = rel ? `${rel}/${ent.name}` : ent.name
     if (ent.isDirectory()) { out.push({ rel: r, kind: 'dir' }); walk(root, r, out) }
     else if (ent.isSymbolicLink()) out.push({ rel: r, kind: 'link' })

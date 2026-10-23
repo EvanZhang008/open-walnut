@@ -102,6 +102,18 @@ describe('publishDist', () => {
     expect(once.filter((f) => f.includes('.tmp'))).toEqual([])
   })
 
+  it('leaves build-binary staging out: it is not part of what the CLI runs', () => {
+    // The compiled-file deploy publishes the dist the file was built from, which
+    // also holds dist/binary-stage (the runtime tree, sidecars, the archive).
+    const { from, to } = fixture()
+    write(path.join(from, 'binary-stage', 'assets.wna'), 'archive')
+    write(path.join(from, 'binary-stage', 'root', 'dist', 'cli.js'), 'placeholder')
+    const { order } = publishDist(from, to)
+    expect(fs.existsSync(path.join(to, 'binary-stage'))).toBe(false)
+    expect(order.some((rel) => rel.startsWith('binary-stage'))).toBe(false)
+    expect(read(path.join(to, 'cli.js'))).toBe('new cli\n')
+  })
+
   it('creates dist when the checkout has none', () => {
     const { from, to } = fixture()
     fs.rmSync(to, { recursive: true, force: true })
@@ -133,13 +145,20 @@ describe('publishDist', () => {
 
 describe('dev-prod.sh publishes the serving build', () => {
   const at = (s: string) => DEV_PROD.indexOf(s)
-  const call = '"$NODE_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$STAGE_DIR/dist" "$SERVE_ROOT/dist"'
+  const call = '"$JS_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$publish_from" "$publish_to"'
 
-  it('only for a deploy from a clone, from the stage that passed every check, before the success stamp', () => {
+  it('only for a deploy from a clone, from the build that passed every check, before the success stamp', () => {
     expect(at(call)).toBeGreaterThan(0)
     const guard = DEV_PROD.lastIndexOf('if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then', at(call))
     expect(guard).toBeGreaterThan(0)
-    expect(at(call) - guard).toBeLessThan(200)
+    expect(at(call) - guard).toBeLessThan(700)
+    // The Node build publishes its staged dist; the compiled file the dist it was built from.
+    const pick = DEV_PROD.slice(guard, at(call))
+    expect(pick).toContain('publish_from="$STAGE_DIR/dist"')
+    expect(pick).toMatch(/if \[\[ "\$SERVER_KIND" == "file" \]\]; then publish_from="\$REPO_ROOT\/dist"; fi/)
+    // Into this checkout, except in a rehearsal, which writes only into its own dirs.
+    expect(pick).toContain('publish_to="$SERVE_ROOT/dist"')
+    expect(pick).toMatch(/if \[\[ "\$REHEARSAL" == "1" \]\]; then[\s\S]*publish_to="\$TMPDIR\/rehearsal-serve-root\/dist"/)
     expect(at(call)).toBeGreaterThan(at('if ! snapshot_lkg; then'))
     expect(at(call)).toBeGreaterThan(at('Live render FAILED'))
     expect(at(call)).toBeLessThan(at('date +%s > "$SUCCESS_STAMP"'))

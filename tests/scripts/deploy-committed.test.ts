@@ -110,6 +110,50 @@ describe('deploy-committed.sh', () => {
     expect(git(f.repo, 'worktree', 'list').split('\n')).toHaveLength(1)
   })
 
+  /**
+   * A stand-in for bun or node that records its argv and runs the snippet on
+   * this test's own runtime, read from stdin the way that runtime reads it.
+   */
+  function standIn(dir: string, name: string): string {
+    const bin = path.join(dir, name)
+    const runStdin = process.versions.bun ? `"${process.execPath}" run -` : `"${process.execPath}" -`
+    fs.writeFileSync(bin, [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> "${dir}/${name}.args"`,
+      // The wrapper must hand the script over stdin: `bun run -` or `node -`.
+      name === 'bun' ? '[ "$1" = run ] && [ "$2" = - ] || exit 9; shift 2' : '[ "$1" = - ] || exit 9; shift',
+      `exec ${runStdin} "$@"`,
+    ].join('\n') + '\n', { mode: 0o755 })
+    return bin
+  }
+
+  it('links the dependencies through bun run - (a bare `bun -` would run bun add)', () => {
+    const f = fixture()
+    const bin = path.join(path.dirname(f.repo), 'bin')
+    fs.mkdirSync(bin)
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_BUN: standIn(bin, 'bun') })
+    expect(r.stderr).toBe('')
+    expect(r.status).toBe(0)
+    const args = fs.readFileSync(path.join(bin, 'bun.args'), 'utf-8').trim()
+    expect(args).toBe(`run - ${f.repo}/node_modules ${r.report!.here}/node_modules ${r.report!.here}`)
+    expect(r.report!.dep).toBe(path.join(f.repo, 'node_modules', 'leftpad'))
+    expect(r.report!.ws_file).toBe('committed lib')
+  })
+
+  it('falls back to node - on a machine without bun', () => {
+    const f = fixture()
+    const bin = path.join(path.dirname(f.repo), 'bin')
+    fs.mkdirSync(bin)
+    standIn(bin, 'node')
+    const home = path.join(path.dirname(f.repo), 'home')
+    fs.mkdirSync(home)
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', PATH: `${bin}:/usr/bin:/bin`, HOME: home })
+    expect(r.stderr).toBe('')
+    expect(r.status).toBe(0)
+    expect(fs.readFileSync(path.join(bin, 'node.args'), 'utf-8').trim()).toMatch(/^- \//)
+    expect(r.report!.scoped_dep).toBe(path.join(f.repo, 'node_modules', '@acme', 'other'))
+  })
+
   it('deploys a named commit, and keeps the clone on request', () => {
     const f = fixture()
     const first = git(f.repo, 'rev-parse', 'HEAD')

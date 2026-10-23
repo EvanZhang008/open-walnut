@@ -96,6 +96,21 @@ describe('dev-prod.sh server log path', () => {
 // app bug). A background agent session can be niced, and it would then fail these
 // runs for a reason that has nothing to do with portability.
 const shellNice = Number(runBash('ps -o ni= -p $$').stdout.trim() || '0')
+
+/** The bun version package.json pins (packageManager), which the file build needs. */
+const BUN_PIN = /^bun@(\d+\.\d+\.\d+)/.exec(JSON.parse(fs.readFileSync(path.join(path.dirname(SCRIPT), '..', 'package.json'), 'utf-8')).packageManager ?? '')?.[1] ?? '1.0.0'
+
+/**
+ * A dir holding stand-ins for bun and node that only answer `--version`: the
+ * dry run asks nothing else, so the file path is exercised on any OS whether or
+ * not a real bun of the pinned version is installed.
+ */
+function standIns(bunVersion = BUN_PIN): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-tools-'))
+  fs.writeFileSync(path.join(dir, 'bun'), `#!/bin/sh\n[ "$1" = --version ] && echo ${bunVersion}\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(dir, 'node'), '#!/bin/sh\n[ "$1" = --version ] && echo v24.0.0\n', { mode: 0o755 })
+  return dir
+}
 // A host with no port probe at all is a legitimate script refusal, not a failure
 // to assert here (the "never falls open" test below covers that path directly).
 const hasProbe = runBash('command -v lsof || command -v ss || command -v fuser').status === 0
@@ -126,10 +141,47 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
       WALNUT_DEVPROD_PORT: String(await freePort()),
       TMPDIR: tmp,
       WALNUT_SERVER_LOG: path.join(tmp, 'server.log'),
+      PATH: `${standIns()}:${process.env.PATH ?? '/usr/bin:/bin'}`,
       ...env,
     }).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ')
     return { ...runBash(`${args} bash ${JSON.stringify(SCRIPT)}`), tmp }
   }
+
+  it('deploys the compiled file by default: this machine\'s target, the Linux files beside it', async () => {
+    const r = await dryRun()
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/would run the compiled file walnut-(darwin|linux)-(arm64|x64)(-musl)? \(bun /)
+    expect(r.stdout).toMatch(/with linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl beside it/)
+    const none = await dryRun({ WALNUT_DEVPROD_FILE_TARGETS: '' })
+    expect(none.stdout).not.toMatch(/beside it/)
+    const bad = await dryRun({ WALNUT_DEVPROD_FILE_TARGETS: 'linux-x64 plan9-mips' })
+    expect(bad.status).toBe(1)
+    expect(bad.stderr).toMatch(/unknown target 'plan9-mips'/)
+  })
+
+  it('WALNUT_DEVPROD_RUNTIME=node is the way back to the Node build, and nothing else is accepted', async () => {
+    const node = await dryRun({ WALNUT_DEVPROD_RUNTIME: 'node' })
+    expect(node.status, node.stderr).toBe(0)
+    expect(node.stdout).toMatch(/would run node .* with dist\/cli\.js \(WALNUT_DEVPROD_RUNTIME=node\)\./)
+    const other = await dryRun({ WALNUT_DEVPROD_RUNTIME: 'deno' })
+    expect(other.status).toBe(1)
+    expect(other.stderr).toMatch(/WALNUT_DEVPROD_RUNTIME='deno' is neither file/)
+    expect(other.stdout).not.toMatch(/every guard passed/)
+  })
+
+  // Every place find_bun looks besides PATH; a real bun there of the pinned
+  // version would (rightly) be picked, so the refusal case skips on such a box.
+  const fixedBunPlaces = ['/opt/homebrew/bin/bun', '/usr/local/bin/bun']
+  it.skipIf(fixedBunPlaces.some((p) => fs.existsSync(p)))('refuses, before any step, a machine whose bun is older than the pin', async () => {
+    const tools = standIns('0.0.1')
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-home-'))
+    const r = await dryRun({ PATH: `${tools}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: home })
+    expect(r.status).toBe(1)
+    expect(r.stderr).toMatch(new RegExp(`needs bun ${BUN_PIN.replace(/\./g, '\\.')} or newer`))
+    expect(r.stderr).toMatch(/Found only: 0\.0\.1 at /)
+    expect(r.stderr).toMatch(/WALNUT_DEVPROD_RUNTIME=node/)
+    expect(r.stdout).not.toMatch(/every guard passed/)
+  })
 
   it('passes every guard and stops before anything is deployed', async () => {
     const r = await dryRun()
@@ -181,11 +233,72 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     expect(script).not.toMatch(/ln -sfn "\$REPO_ROOT\/node_modules"/)
   })
 
-  it('honours the port override only in dry-run mode', () => {
+  it('honours the port override only in dry-run mode and in a guarded rehearsal', () => {
     // The override must never let a real deploy start a second server against the
-    // production data dir, so it is read inside the dry-run branch only.
+    // production data dir, so it is read inside the dry-run branch, and in the
+    // rehearsal branch only next to the refusals of the production data and daemon dirs.
     const decl = script.slice(0, script.indexOf('LOCK_DIR='))
     expect(decl).toMatch(/if \[\[ "\$DRY_RUN" == "1" \]\]; then\n\s*PORT="\$\{WALNUT_DEVPROD_PORT:-\$PORT\}"/)
+    const readers = decl.split('\n').filter((l) => l.includes('WALNUT_DEVPROD_PORT') && !/^\s*#/.test(l) && !/^\s*echo /.test(l))
+    expect(readers.map((l) => l.trim())).toEqual(['PORT="${WALNUT_DEVPROD_PORT:-$PORT}"', 'PORT="${WALNUT_DEVPROD_PORT:-}"'])
+    const rehearsal = decl.slice(decl.indexOf('if [[ "$REHEARSAL" == "1" ]]; then'))
+    for (const refusal of ['other than 3456', 'production data dir', 'production daemon dir', 'production server log', 'named open-walnut*', 'WALNUT_DEVPROD_LKG_DIR must be inside']) {
+      expect(rehearsal).toContain(refusal)
+    }
+    expect(rehearsal).toMatch(/LAUNCH_LABEL="com\.open-walnut\.dev-prod-rehearsal\.\$PORT"/)
+  })
+
+  describe('rehearsal guards (WALNUT_DEVPROD_REHEARSAL=1, checked in dry-run)', () => {
+    function rehearsalDirs() {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-rehearse-')))
+      const dirs = { root, scratch: path.join(root, 'scratch'), home: path.join(root, 'data'), daemon: path.join(root, 'daemon'), fakeHome: path.join(root, 'user') }
+      for (const d of [dirs.scratch, dirs.fakeHome]) fs.mkdirSync(d, { recursive: true })
+      return dirs
+    }
+    const rehearse = async (env: Record<string, string>) => dryRun({ WALNUT_DEVPROD_REHEARSAL: '1', ...env })
+
+    it('accepts private dirs and a private port, and keeps every deploy file in its scratch dir', async () => {
+      const d = rehearsalDirs()
+      const port = String(await freePort())
+      // No WALNUT_SERVER_LOG: a rehearsal's default log is in its scratch dir, never the production one.
+      const r = await rehearse({ WALNUT_DEVPROD_PORT: port, WALNUT_DEVPROD_REHEARSAL_DIR: d.scratch, OPEN_WALNUT_HOME: d.home, WALNUT_DAEMON_DIR: d.daemon, HOME: d.fakeHome, WALNUT_SERVER_LOG: '' })
+      expect(r.status, r.stderr).toBe(0)
+      expect(r.stdout).toContain(`Rehearsal: the real deploy path on :${port}`)
+      expect(r.stdout).toContain(`label com.open-walnut.dev-prod-rehearsal.${port}`)
+      expect(r.stdout).toMatch(new RegExp(`log: ${d.scratch}/open-walnut-launchd\\.log`))
+      expect(r.stdout).toMatch(/every guard passed/)
+      // The data dirs are made only once every check passed; a dry run leaves no lock or stamp.
+      expect(fs.existsSync(d.home) && fs.existsSync(d.daemon)).toBe(true)
+      expect(fs.readdirSync(d.scratch).filter((f) => f.startsWith('open-walnut-dev-prod'))).toEqual([])
+    })
+
+    it.each([
+      ['the production port', { WALNUT_DEVPROD_PORT: '3456' }, /other than 3456/],
+      ['no port', { WALNUT_DEVPROD_PORT: '' }, /other than 3456/],
+      ['no scratch dir', { WALNUT_DEVPROD_REHEARSAL_DIR: '' }, /WALNUT_DEVPROD_REHEARSAL_DIR must be an existing absolute directory/],
+      ['no data dir', { OPEN_WALNUT_HOME: '' }, /set OPEN_WALNUT_HOME and WALNUT_DAEMON_DIR/],
+      ['the production data dir', { OPEN_WALNUT_HOME: '<user>/.open-walnut' }, /is the production data dir/],
+      ['a dir inside the production data dir', { OPEN_WALNUT_HOME: '<user>/.open-walnut/rehearsal' }, /is the production data dir/],
+      ['a data dir named like an ephemeral one', { OPEN_WALNUT_HOME: '<root>/open-walnut-x' }, /named open-walnut\*/],
+      ['the production daemon dir', { WALNUT_DAEMON_DIR: '/tmp/open-walnut' }, /production daemon dir/],
+      ['the production server log', { WALNUT_SERVER_LOG: '/tmp/open-walnut-launchd.log' }, /production server log/],
+      ['a rollback snapshot outside its scratch dir', { WALNUT_DEVPROD_LKG_DIR: '<root>/lkg' }, /WALNUT_DEVPROD_LKG_DIR must be inside/],
+    ])('refuses %s', async (_what, override, why) => {
+      const d = rehearsalDirs()
+      fs.mkdirSync(path.join(d.fakeHome, '.open-walnut'), { recursive: true })
+      const env: Record<string, string> = {
+        WALNUT_DEVPROD_PORT: String(await freePort()), WALNUT_DEVPROD_REHEARSAL_DIR: d.scratch,
+        OPEN_WALNUT_HOME: d.home, WALNUT_DAEMON_DIR: d.daemon, HOME: d.fakeHome,
+      }
+      for (const [k, v] of Object.entries(override)) env[k] = v.replace('<user>', d.fakeHome).replace('<root>', d.root)
+      // The production daemon dir must never be created by a refused run.
+      const prodDaemonExisted = fs.existsSync('/tmp/open-walnut')
+      const r = await rehearse(env)
+      expect(r.status).toBe(1)
+      expect(r.stderr).toMatch(why)
+      expect(r.stdout).not.toMatch(/every guard passed/)
+      if (!prodDaemonExisted) expect(fs.existsSync('/tmp/open-walnut')).toBe(false)
+    })
   })
 })
 
