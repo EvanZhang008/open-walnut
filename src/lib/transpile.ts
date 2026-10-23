@@ -2,12 +2,13 @@
  * Bundling plugin TypeScript at runtime (src/core/integration-loader.ts): the one
  * place that compiles code while Walnut runs (docs/plan/walnut-single-binary.md).
  *
- * On bun the bundler is built in (`Bun.build`). Until no Node build of Walnut is
- * left, a process running on Node uses esbuild. Both bundle the plugin into one
- * ES module, keep every npm package an import resolved at runtime, and let the
+ * Walnut runs only on bun, whose bundler is built in (`Bun.build`): no esbuild,
+ * which the compiled file does not carry. It bundles the plugin into one ES
+ * module, keeps every npm package an import resolved at runtime, and lets the
  * caller place the plugin's parent-relative imports (`../../core/x.js`).
- * A failure throws an Error whose lines read as esbuild's do
- * (`<file>:<line>:<column>: ERROR: <text>`), so callers read one shape.
+ * A failure throws an Error whose lines read
+ * `<file>:<line>:<column>: ERROR: <text>` (the shape esbuild printed, which
+ * callers and plugin authors read).
  */
 
 import fs from 'node:fs/promises'
@@ -19,40 +20,10 @@ export interface BundleRequest {
   outfile: string
   /** Prepended to the output. */
   banner: string
-  /** Where bare package imports resolve (esbuild's nodePaths; bun resolves them at runtime). */
-  nodePaths: string[]
   /** A file for a parent-relative import (`../`), or undefined to resolve it the usual way. */
   resolveParent(specifier: string, importer: string): string | undefined
 }
 
-/** Bundle `entry` into the ES module `outfile`. */
-export async function bundleEsm(req: BundleRequest): Promise<void> {
-  if (ON_BUN) return bundleWithBun(req)
-  const { build } = await import('esbuild')
-  await build({
-    entryPoints: [req.entry],
-    outfile: req.outfile,
-    bundle: true,
-    format: 'esm',
-    platform: 'node',
-    target: 'node22',
-    packages: 'external',
-    nodePaths: req.nodePaths,
-    banner: { js: req.banner },
-    logLevel: 'warning',
-    plugins: [{
-      name: 'rebase-open-walnut-imports',
-      setup(b) {
-        b.onResolve({ filter: /^\.\.\// }, (args) => {
-          const file = req.resolveParent(args.path, args.importer)
-          return file ? { path: file } : undefined
-        })
-      },
-    }],
-  })
-}
-
-// ── bun ─────────────────────────────────────────────────────────────────────
 
 interface BunBuildLog {
   message: string
@@ -82,7 +53,9 @@ interface BunBuildConfig {
   plugins: Array<{ name: string; setup(builder: BunBuildPluginBuilder): void }>
 }
 
-async function bundleWithBun(req: BundleRequest): Promise<void> {
+/** Bundle `entry` into the ES module `outfile`. Throws on a runtime without Bun.build (Node). */
+export async function bundleEsm(req: BundleRequest): Promise<void> {
+  if (!ON_BUN) throw new Error(`bundling a plugin needs bun's bundler, and this process runs on Node ${process.version}`)
   const result = await bunGlobal<{ build(config: BunBuildConfig): Promise<BunBuildOutput> }>().build({
     entrypoints: [req.entry],
     target: 'bun',

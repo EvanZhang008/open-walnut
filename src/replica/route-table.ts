@@ -121,7 +121,7 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'GET', pattern: '/api/usage/sessions/:sid', away: 'needs-leader', why: 'usage_needs_mac' },
   // This server's own health.
   { method: 'GET', pattern: '/api/health', cls: 'local' },
-  // The terminal is a /ws RPC; node-pty is not on hosts (section 3).
+  // The terminal is a /ws RPC the Mac serves (section 3).
   // Plugin routes are the leader's by prefix (their credentials stay on the Mac;
   // plugins do not load on a replica, so even their reads need it).
   { method: '*', pattern: '/api/plugins/*', cls: 'leader', away: 'needs-leader', why: 'plugins_need_mac' },

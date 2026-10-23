@@ -345,9 +345,8 @@ export function terminalEnv(base: NodeJS.ProcessEnv = process.env): Record<strin
 
 /**
  * Spawn a terminal pty for a session record. Local → dtach; remote → ssh→dtach.
- * The pty is loaded lazily so a native-binary load failure (node-pty on Node)
- * can be caught by the caller and degrade gracefully (terminal disabled, server
- * stays up).
+ * The pty is loaded lazily so a runtime without one can be caught by the
+ * caller and degrade gracefully (terminal disabled, server stays up).
  *
  * `persistent: true` assumes dtach is already provisioned on the target (the
  * RPC layer runs the probe first). `persistent: false` spawns a plain login

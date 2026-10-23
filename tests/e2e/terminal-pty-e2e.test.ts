@@ -1,8 +1,7 @@
 /**
  * The in-app terminal through a real server and a real pty: no stub between the
- * `/ws` RPC and the shell. Runs on both runtimes, so it proves src/lib/pty.ts on
- * each (node-pty on Node, the built-in terminal on bun, where node-pty's output
- * never arrives).
+ * `/ws` RPC and the shell. It proves src/lib/pty.ts over bun's built-in terminal
+ * (node-pty, which the terminal used on Node, never delivers output on bun).
  *
  *   ws terminal:open -> register -> dtach check (local: dtach if it can be had,
  *   else a plain shell) -> terminal-manager -> spawn -> loadPty().spawn

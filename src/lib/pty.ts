@@ -3,19 +3,19 @@
  * (docs/plan/walnut-single-binary.md). The in-app terminal (src/web/terminal/)
  * is its only user.
  *
- * On bun the pty is built in (`Bun.spawn` with a `terminal`). node-pty loads on
- * bun but its output never arrives (bun 1.4.4: no data event at all, then
- * `ioctl(2) failed, EBADF` on resize), so bun never loads it. Until no Node build
- * of Walnut is left, a process running on Node keeps node-pty.
+ * Walnut runs only on bun, whose pty is built in (`Bun.spawn` with a
+ * `terminal`). node-pty, which the terminal used on Node, loads on bun but its
+ * output never arrives (bun 1.4.4: no data event at all, then
+ * `ioctl(2) failed, EBADF` on resize), so it is not a dependency at all.
  *
- * What the bun side does to behave like node-pty:
+ * What this does to behave as the terminal expects (node-pty's contract):
  *  - output is decoded as a UTF-8 stream, so a character split across two reads
  *    stays whole;
  *  - output that arrives before the first `onData` listener is kept for it;
  *  - the exit is reported after the pty's last output (its EOF, at most
  *    EOF_WAIT_MS after the process ended), as `{ exitCode, signal }` with the
  *    signal as a number (0 when none) and exitCode 0 for a signal death;
- *  - the env is set up as node-pty does (PWD, TERM from `name`), and `kill()`
+ *  - the env is set up as node-pty did (PWD, TERM from `name`), and `kill()`
  *    sends SIGHUP by default.
  */
 
@@ -33,7 +33,7 @@ export interface Pty {
   onExit(listener: (e: PtyExit) => void): void
   write(data: string): void
   resize(cols: number, rows: number): void
-  /** Signal the process (SIGHUP by default, as node-pty). */
+  /** Signal the process (SIGHUP by default, as node-pty did). */
   kill(signal?: string): void
 }
 
@@ -51,15 +51,13 @@ export interface PtyModule {
 }
 
 /**
- * The pty implementation for this runtime. On Node this imports node-pty, which
- * throws when its native binary is missing: callers treat that as "no terminal".
+ * The pty. It throws on a runtime without one (Node): callers treat that as
+ * "no terminal", and the server still starts.
  */
 export async function loadPty(): Promise<PtyModule> {
-  if (ON_BUN) return { spawn: spawnBun }
-  return (await import('@homebridge/node-pty-prebuilt-multiarch')) as unknown as PtyModule
+  if (!ON_BUN) throw new Error(`the terminal needs bun's built-in pty, and this process runs on Node ${process.version}`)
+  return { spawn: spawnBun }
 }
-
-// ── bun ─────────────────────────────────────────────────────────────────────
 
 interface BunTerminal {
   write(data: string): number
@@ -90,7 +88,7 @@ interface BunSpawnOptions {
 /** How long an exit waits for the pty's EOF, when a process still holds the pty open. */
 const EOF_WAIT_MS = 250
 
-/** Dropped from an inherited env, as node-pty does (tmux, screen, a fixed size). */
+/** Dropped from an inherited env, as node-pty did (tmux, screen, a fixed size). */
 const SANITIZED_ENV = ['TMUX', 'TMUX_PANE', 'STY', 'WINDOW', 'WINDOWID', 'TERMCAP', 'COLUMNS', 'LINES']
 
 function spawnBun(file: string, args: string[], options: PtySpawnOptions): Pty {
@@ -98,7 +96,7 @@ function spawnBun(file: string, args: string[], options: PtySpawnOptions): Pty {
   for (const [key, value] of Object.entries(options.env ?? process.env)) {
     if (value !== undefined) env[key] = value
   }
-  // As node-pty: the server's own terminal variables never reach a shell that
+  // As node-pty did: the server's own terminal variables never reach a shell that
   // inherits its whole env, PWD names the start dir (a shell trusts PWD over
   // getcwd, which would answer macOS's /private alias of a temp dir), TERM the pty.
   if (!options.env) for (const key of SANITIZED_ENV) delete env[key]

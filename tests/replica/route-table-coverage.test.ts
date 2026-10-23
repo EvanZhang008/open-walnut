@@ -119,7 +119,7 @@ describe('the WS RPC table against the real handler', () => {
   })
 
   it('every name in the table is a registered method (no stale row)', () => {
-    // The terminal registers only where node-pty loads; its rows stay for the hosts where it does not.
+    // The terminal registers only where a pty loads; its rows stay for the runtimes where none does.
     const optional = (m: string) => m.startsWith('terminal:')
     expect(Object.keys(WS_RPC_TABLE).filter((m) => !rpcMethods.includes(m) && !optional(m)).sort()).toEqual([])
   })

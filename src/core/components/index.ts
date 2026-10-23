@@ -35,7 +35,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createSubsystemLogger } from '../../logging/index.js';
-import { singleFile } from '../../lib/single-file.js';
+import { runsCompiledFile } from '../../lib/runtime.js';
 import { COMPONENTS } from './catalog.js';
 import { findUsable, installComponent, otherVersions, pruneOld, type InstalledComponent, type InstallOptions } from './install.js';
 import { acquireLock } from './lock.js';
@@ -100,20 +100,14 @@ let tuning: ComponentTuning = {};
 /** This process installs nothing (`walnut __selftest`): it reports what is on disk. */
 let installsHeld = false;
 
-const inBunfs = (p: string | undefined) => !!p && (p.includes('/$bunfs/') || p.includes('~BUN'));
-
 /**
- * True inside the compiled Walnut file (src/lib/single-file.ts; its entry in
- * bun's virtual filesystem when another build compiles this code). Its
- * import.meta.url points at the unpacked runtime tree on disk, so it does not
- * tell. Nothing is taken from node_modules there: the file carries none of these
+ * True inside the compiled Walnut file (runsCompiledFile, src/lib/runtime.ts).
+ * Nothing is taken from node_modules there: the file carries none of these
  * packages, and a resolver walking up from the runtime tree or the current
  * directory would find someone else's copy.
  */
 export function isCompiledBinary(): boolean {
-  if (singleFile()) return true;
-  const main = (globalThis as { Bun?: { main?: string } }).Bun?.main;
-  return inBunfs(main) || inBunfs(process.argv[1]);
+  return runsCompiledFile();
 }
 
 const selfRequire = createRequire(import.meta.url);

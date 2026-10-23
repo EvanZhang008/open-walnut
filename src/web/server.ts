@@ -2707,7 +2707,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   registerChatRpc()
   registerSessionChatRpc()
 
-  // -- Embedded terminal (xterm.js + node-pty over dtach) --
+  // -- Embedded terminal (xterm.js + bun's pty over dtach) --
   {
     const { registerTerminalRpc } = await import('./terminal/register.js')
     const { onClientDisconnect } = await import('./ws/handler.js')

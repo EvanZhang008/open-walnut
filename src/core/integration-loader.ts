@@ -26,6 +26,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
 import { BUILTIN_HOST_MODULES } from '../integrations/host-modules.js';
 import { bundleEsm } from '../lib/transpile.js';
+import { bunGlobal } from '../lib/runtime.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import { WALNUT_HOME, IS_EPHEMERAL } from '../constants.js';
 import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
@@ -706,16 +707,17 @@ async function discoverManagedPlugin(
 // External plugins ship as .ts source with relative imports that reference the
 // open-walnut src/ tree (e.g. '../../core/config-manager.js'). These paths only
 // resolve correctly when the plugin is inside src/integrations/. At runtime,
-// plugins live in ~/.open-walnut/plugins/ so the paths break. We use esbuild to
-// bundle the plugin on-the-fly, rebasing parent imports to the real src/ tree.
+// plugins live in ~/.open-walnut/plugins/ so the paths break. bun's bundler
+// (src/lib/transpile.ts) bundles the plugin on-the-fly, rebasing parent imports
+// to the real src/ tree.
 
 type BundleOutcome = { outfile: string; error?: undefined } | { outfile?: undefined; error: string };
 
 /**
  * Where on-the-fly plugin bundles are written. Normally INSIDE the running package
- * (`<root>/.plugin-cache`): Node resolves a bundle's externals ('better-sqlite3', ...)
- * by walking up from the bundle FILE to a node_modules, and esbuild's `nodePaths` only
- * affects build time, so the file's on-disk location matters (os.tmpdir() fails).
+ * (`<root>/.plugin-cache`): the runtime resolves a bundle's externals (every npm
+ * package it imports) by walking up from the bundle FILE to a node_modules, so the
+ * file's on-disk location matters (os.tmpdir() fails).
  *
  * A package this user cannot write gets a data-dir location instead, whose
  * `node_modules` links to the package's own (one dir per package root, so two builds
@@ -800,13 +802,12 @@ async function bundleExternalPlugin(
     // The bundle exists only to rebase the plugin's own parent-directory imports
     // (../../core/, ../../utils/, etc.) onto walnut's src/ tree; every npm package
     // stays an import resolved at runtime from walnut's node_modules (listing them
-    // was whack-a-mole: better-sqlite3, then node-pty broke it). src/, not dist/:
+    // was whack-a-mole: one native module, then the next, broke it). src/, not dist/:
     // tsup bundles everything, so dist/ lacks individual module files.
     const rebaseDir = tree.srcIntegrationsDir ?? BUILTIN_DIR;
     await bundleEsm({
       entry: entryFile,
       outfile,
-      nodePaths: [path.join(tree.nodeModulesRoot, 'node_modules')],
       banner: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);',
       resolveParent: (specifier, importer) => {
         // Only rebase imports originating from the plugin directory itself.
@@ -1593,18 +1594,13 @@ async function prepareGeneration(
 }
 
 /**
- * Parse a plugin web entry as an ES module before serving it. On bun this is
- * bun's own parser: the compiled walnut file carries no esbuild, and without a
- * check that works there every web plugin's App was dropped.
+ * Parse a plugin web entry as an ES module before serving it, with bun's own
+ * parser (the compiled walnut file carries no esbuild; without a check that
+ * works there every web plugin's App was dropped).
  */
 async function checkWebEntrySyntax(code: string): Promise<void> {
-  const bun = (globalThis as { Bun?: { Transpiler: new (options: { loader: 'js' }) => { scan(code: string): unknown } } }).Bun;
-  if (bun) {
-    new bun.Transpiler({ loader: 'js' }).scan(code);
-    return;
-  }
-  const { transform } = await import('esbuild');
-  await transform(code, { loader: 'js', format: 'esm', logLevel: 'silent' });
+  const { Transpiler } = bunGlobal<{ Transpiler: new (options: { loader: 'js' }) => { scan(code: string): unknown } }>();
+  new Transpiler({ loader: 'js' }).scan(code);
 }
 
 function preflightReload(

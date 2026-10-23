@@ -13,8 +13,8 @@
  * without gcc with no terminal at all; a LOUD fallback keeps the no-silent-loss
  * intent. ssh failures stay blocking: nothing can run there. See dtach-check.ts.
  *
- * On Node the pty is node-pty, a native binary: if it fails to load, terminal
- * support is disabled gracefully (the server still boots). bun has one built in.
+ * The pty is bun's built-in one (src/lib/pty.ts): where it cannot load, terminal
+ * support is disabled gracefully (the server still boots).
  */
 
 import type { WebSocket } from '#ws'
@@ -53,7 +53,7 @@ function openPayload(r: { terminalId: string; cols: number; rows: number; mode: 
 
 /**
  * Register terminal RPC. Returns true if the pty loaded and methods were
- * registered; false if the native binary is unavailable (feature disabled).
+ * registered; false if there is no pty here (feature disabled).
  */
 export async function registerTerminalRpc(): Promise<boolean> {
   try {

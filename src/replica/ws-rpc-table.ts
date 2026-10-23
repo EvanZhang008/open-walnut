@@ -38,7 +38,7 @@ export const WS_RPC_TABLE: Readonly<Record<string, RpcRow>> = {
   'session:edit-queued': { kind: 'write', away: 'needs-leader', why: 'session_writes_need_mac' },
   'session:delete-queued': { kind: 'write', away: 'needs-leader', why: 'session_writes_need_mac' },
   'session:team-send': { kind: 'write', away: 'needs-leader', why: 'session_writes_need_mac' },
-  // The terminal: node-pty is not installed on hosts (install.ts --omit=optional).
+  // The terminal: the Mac serves it, a replica answers needs-leader.
   'terminal:open': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },
   'terminal:attach': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },
   'terminal:input': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },

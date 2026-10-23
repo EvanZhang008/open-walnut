@@ -308,9 +308,11 @@ let cachedNodeRuntime: string | null | undefined
  * wrong whenever the owner is the bun-compiled daemon: bun serves code-server's
  * static HTML fine but its node-compat layer breaks the workbench's WebSocket
  * path (ERR_STREAM_DESTROYED, missing net APIs) — healthz 200, blank editor.
+ * code-server is a third-party Node program, so it keeps a real Node while
+ * Walnut itself runs only on bun: the release it installs carries one.
  * Candidates, first that verifiably runs as node wins:
  *  1. code-server's own bundled lib/node (version-matched; dies on old-glibc hosts)
- *  2. process.execPath when the owner itself IS node (local Mac server)
+ *  2. process.execPath when the owner itself IS node (a daemon from source on a host with Node)
  *  3. `node` from PATH and well-known user install locations
  */
 async function resolveNodeRuntime(entry: string): Promise<string | null> {

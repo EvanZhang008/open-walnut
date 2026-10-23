@@ -67,7 +67,7 @@ export class TerminalReaper {
   /**
    * One reap pass: ① recheck active terminals, then ② orphan sweep.
    * Returns counts for tests/diagnostics. Best-effort — terminal feature may be
-   * disabled (node-pty missing), in which case the imports still resolve but
+   * disabled (no pty here), in which case the imports still resolve but
    * there are simply no active terminals and the orphan sweep finds nothing.
    */
   async reap(): Promise<{ rechecked: number; reapedActive: number }> {
