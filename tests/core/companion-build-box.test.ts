@@ -1,7 +1,7 @@
 /**
  * The companion's side of /bridge/build (src/core/companion-build/box.ts) on a
- * real tree in a temp root: chunked uploads, the real host install script (real
- * npm next to this Node, an empty dependency set, so nothing is fetched), the
+ * real tree in a temp root: chunked uploads, the real host install script (the
+ * bun this runs on, an empty dependency set, so nothing is fetched), the
  * real smoke boot of a tiny fake build, and the trial confirm. The box's free
  * disk and its restart are the only hooks.
  *
@@ -156,12 +156,16 @@ afterEach(() => {
 })
 
 describe('the install environment', () => {
-  it('carries what npm needs and none of the box secrets', () => {
+  it('carries what bun\'s install needs and none of the box secrets', () => {
     const env = installEnv({
       PATH: process.env.PATH, HOME: '/var/lib/walnut', LANG: 'C.UTF-8', HTTPS_PROXY: 'http://proxy:3128', npm_config_registry: 'https://registry.example',
+      BUN_INSTALL_CACHE_DIR: '/var/cache/bun', BUN_CONFIG_REGISTRY: 'https://registry.example',
       AWS_BEARER_TOKEN_BEDROCK: 'planted', ANTHROPIC_API_KEY: 'planted', WALNUT_COMPANION_BUILD: 'x', OPEN_WALNUT_HOME: '/data', WALNUT_SETUP_TOKEN_FILE: '/etc/t',
     })
-    expect(env).toEqual({ PATH: process.env.PATH, HOME: '/var/lib/walnut', LANG: 'C.UTF-8', HTTPS_PROXY: 'http://proxy:3128', npm_config_registry: 'https://registry.example' })
+    expect(env).toEqual({
+      PATH: process.env.PATH, HOME: '/var/lib/walnut', LANG: 'C.UTF-8', HTTPS_PROXY: 'http://proxy:3128', npm_config_registry: 'https://registry.example',
+      BUN_INSTALL_CACHE_DIR: '/var/cache/bun', BUN_CONFIG_REGISTRY: 'https://registry.example',
+    })
   })
 })
 
@@ -378,6 +382,24 @@ describe('install and activate on a real tree', () => {
     expect(await startActivate({ id: '../x' })).toMatchObject({ ok: false, error: 'bad_request' })
     expect(await startInstall(installReq('nope'))).toMatchObject({ ok: false, error: 'no_package' })
     expect(await startInstall({ id: 'x' })).toMatchObject({ ok: false, error: 'bad_request' })
+  })
+
+  it('a box running the compiled file installs with it as bun, and from source with this bun', async () => {
+    await install('s1')
+    const fromSource = fs.readFileSync(path.join(R, 'incoming', 's1.install.sh'), 'utf8')
+    expect(fromSource).toContain(`BUN='${process.execPath}'`)
+    expect(fromSource).toContain('unset BUN_BE_BUN')
+    const { setSingleFile } = await import('../../src/lib/single-file.js')
+    setSingleFile({ root: '/rt', daemonVersion: 'd', modules: {} })
+    try {
+      // bun itself ignores BUN_BE_BUN, so the install still runs here.
+      await install('s2')
+    } finally {
+      delete (globalThis as Record<string, unknown>).__WALNUT_SINGLE_FILE__
+    }
+    const compiled = fs.readFileSync(path.join(R, 'incoming', 's2.install.sh'), 'utf8')
+    expect(compiled).toContain(`BUN='${process.execPath}'`)
+    expect(compiled).toContain('export BUN_BE_BUN=1')
   })
 
   it('the current and the trial build are never pruned', async () => {

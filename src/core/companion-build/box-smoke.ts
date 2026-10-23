@@ -1,9 +1,9 @@
 /**
  * One isolated boot of a build before the companion switches to it: the
- * dev-prod.sh smoke recipe (scripts/dev-prod.sh, "Pre-kill smoke boot") in
- * Node. A probe port, a temporary home and daemon dir, ready when
- * GET /api/v1/instance answers 200; then the server and the daemon it started
- * are stopped and the temporary dir removed.
+ * dev-prod.sh smoke recipe (scripts/dev-prod.sh, "Pre-kill smoke boot"), the
+ * build run by the box's own bun. A probe port, a temporary home and daemon
+ * dir, ready when GET /api/v1/instance answers 200; then the server and the
+ * daemon it started are stopped and the temporary dir removed.
  *
  * The temporary dir is `walnut-smoke-XXXX`, never `open-walnut-*`: a home
  * under {tmpdir}/open-walnut-* is reverted to ~/.open-walnut for a process that
@@ -15,6 +15,7 @@ import fsp from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { bunCommand } from '../../lib/runtime.js'
 
 /** Variables that would point the smoke server at the live server's state, or make it a test. */
 const DROP_ENV = new Set(['VITEST', 'OPEN_WALNUT_EPHEMERAL', 'WALNUT_STREAMS_DIR', 'WALNUT_GIT_HUB_DIR', 'WALNUT_SETUP_TOKEN_FILE', 'WALNUT_SETUP_TOKEN'])
@@ -148,9 +149,11 @@ export async function smokeBoot(opts: { cli: string; cwd: string; logFile: strin
     const port = await freePort()
     const out = await fsp.open(opts.logFile, 'w')
     try {
-      child = spawn(process.execPath, [opts.cli, 'web', '--port', String(port)], {
+      // The box's own bun runs the candidate (a compiled walnut file acts as bun for a script outside it).
+      const bun = bunCommand(smokeEnv(opts.env ?? process.env, tmp))
+      child = spawn(bun.command, [opts.cli, 'web', '--port', String(port)], {
         cwd: opts.cwd,
-        env: smokeEnv(opts.env ?? process.env, tmp),
+        env: bun.env,
         stdio: ['ignore', out.fd, out.fd],
       })
     } finally {

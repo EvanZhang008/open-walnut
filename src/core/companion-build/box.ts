@@ -18,6 +18,7 @@ import { execFile, spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { getBuildInfo } from '../../lib/build-info.js'
+import { runsCompiledFile } from '../../lib/runtime.js'
 import { createSubsystemLogger } from '../../logging/index.js'
 import { installScript, parseInstallState, stateScript, type InstallState } from '../host-server/install.js'
 import { dirs, errText, exists, knobMs, readJson, readLine, rmFile, sha256File, sizeOf, writeAtomic, type Dirs } from './box-files.js'
@@ -272,11 +273,12 @@ async function resetUploads(d: Dirs, id: string): Promise<void> {
 // ── POST /bridge/build/install ─────────────────────────────────────────────
 
 /**
- * The install's environment: what npm needs and nothing else. The unit gives the
- * server the box's secrets (its EnvironmentFile), and the dependency install runs
- * the lifecycle scripts of every package it fetches.
+ * The install's environment: what bun's install needs (it reads npm's registry
+ * settings too) and nothing else. The unit gives the server the box's secrets
+ * (its EnvironmentFile), and the dependency install runs the lifecycle scripts
+ * of the packages the build trusts.
  */
-const INSTALL_ENV = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_[A-Z]+|TMPDIR|TZ|(HTTPS?|NO)_PROXY|(https?|no)_proxy|npm_config_[A-Za-z_]+|NPM_CONFIG_[A-Z_]+)$/
+const INSTALL_ENV = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_[A-Z]+|TMPDIR|TZ|(HTTPS?|NO)_PROXY|(https?|no)_proxy|npm_config_[A-Za-z_]+|NPM_CONFIG_[A-Z_]+|BUN_INSTALL[A-Z_]*|BUN_CONFIG_[A-Z_]+)$/
 export function installEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) if (v !== undefined && INSTALL_ENV.test(k)) env[k] = v
@@ -310,7 +312,7 @@ async function startInstallLocked(d: Dirs, req: InstallRequest): Promise<StepRep
   try {
     script = installScript({
       id: req.id, depsHash: req.depsHash, dependencies: req.dependencies, optionalDependencies: req.optionalDependencies,
-      appPackageJson: req.appPackageJson, node: process.execPath, buildEnv: {}, root: d.R, keep,
+      appPackageJson: req.appPackageJson, bun: { command: process.execPath, asBun: runsCompiledFile() }, buildEnv: {}, root: d.R, keep,
     })
   } catch (err) {
     return { ok: false, error: 'refused', message: errText(err) }
@@ -318,7 +320,7 @@ async function startInstallLocked(d: Dirs, req: InstallRequest): Promise<StepRep
   const scriptFile = d.in(req.id, 'install.sh')
   await fsp.writeFile(scriptFile, script)
   await Promise.all([rmFile(d.in(req.id, 'failed')), rmFile(d.in(req.id, 'pid'))])
-  // Detached and niced, its output in the install log: launchScript in install.ts, from Node.
+  // Detached and niced, its output in the install log: launchScript in install.ts, from this server.
   const out = await fsp.open(d.in(req.id, 'install.log'), 'w')
   let pid: number | undefined
   try {

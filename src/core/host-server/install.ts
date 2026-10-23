@@ -12,10 +12,11 @@
  *     data/                      the server's own data dir (the file unpacks its runtime tree here)
  *     incoming/                  uploads, install logs, failure notes
  *
- * The cloud companion still installs a Node build with its npm dependencies in
- * the same layout (installScript, run by the box itself: companion-build/box.ts):
+ * The cloud companion still installs the Mac's dist build with its dependencies
+ * in the same layout (installScript, run by the box itself: companion-build/box.ts),
+ * both by the bun the box runs on:
  *
- *     deps/<hash>/node_modules   npm install of the build's dependencies, once per set
+ *     deps/<hash>/node_modules   bun install of the build's dependencies, once per set
  *     app/<id>/dist              the build; node_modules links to its deps
  *
  * The install runs detached on the host and the Mac polls its state. Everything
@@ -38,15 +39,19 @@ export function checkHostRoot(root: string): string {
   }
   return root.replace(/\/+$/, '')
 }
-/** The cloud companion's install of a Node build (companion-build/box.ts). */
+/** The cloud companion's install of a dist build (companion-build/box.ts). */
 export interface InstallPlan {
   id: string
   depsHash: string
   dependencies: Record<string, string>
   appPackageJson: string
-  /** Absolute path of the Node that runs the build (the box's own). */
-  node: string
-  /** Extra environment for the dependency install (CC, CXX for a native module). */
+  /**
+   * The bun that installs and runs the build (the box's own: bunCommand,
+   * src/lib/runtime.ts). `asBun`: it is a compiled walnut file, which acts as
+   * bun with BUN_BE_BUN=1.
+   */
+  bun: { command: string; asBun: boolean }
+  /** Extra environment for the dependency install. */
   buildEnv: Record<string, string>
   /** The root on the host (default HOST_ROOT). */
   root?: string
@@ -66,41 +71,48 @@ function heredoc(file: string, body: string): string {
   return `cat > ${file} <<'WALNUT_EOF'\n${body}\nWALNUT_EOF`
 }
 
-/** The script the companion box runs (detached) to install one Node build. */
+/** The packages whose install scripts the build's own package.json trusts (bun runs only those). */
+function trustedOf(appPackageJson: string): string[] | null {
+  try {
+    const trusted = (JSON.parse(appPackageJson) as { trustedDependencies?: unknown }).trustedDependencies
+    return Array.isArray(trusted) && trusted.every((t) => typeof t === 'string') ? trusted as string[] : null
+  } catch {
+    return null
+  }
+}
+
+/** The script the companion box runs (detached) to install one dist build. */
 export function installScript(plan: InstallPlan): string {
   for (const k of Object.keys(plan.buildEnv)) if (!ENV_KEY.test(k)) throw new Error(`build_env.${k} is not an environment variable name`)
   const keep = [...new Set(plan.keep ?? [])].filter((k) => k !== plan.id)
   for (const k of keep) if (!validBuildId(k)) throw new Error(`keep has a bad build id: ${JSON.stringify(k)}`)
   const optional = plan.optionalDependencies
+  const trusted = trustedOf(plan.appPackageJson)
   const depsJson = JSON.stringify({
     name: 'open-walnut-host-deps', private: true, dependencies: plan.dependencies,
     ...(optional ? { optionalDependencies: optional } : {}),
+    // bun runs a dependency's install script only when trusted: the same ones the Mac's tree trusts.
+    ...(trusted ? { trustedDependencies: trusted } : {}),
   }, null, 2)
-  const omit = optional ? '--omit=dev' : '--omit=optional --omit=dev'
+  const omit = optional ? '--production' : '--production --omit=optional'
   return [
     'set -u',
     `ROOT="${checkHostRoot(plan.root ?? HOST_ROOT)}"`,
     `ID=${shq(plan.id)}`,
     `DEPS=${shq(plan.depsHash)}`,
-    `NODE=${shq(plan.node)}`,
+    `BUN=${shq(plan.bun.command)}`,
+    // A compiled walnut file is bun only when told so; a real bun ignores the variable.
+    plan.bun.asBun ? 'export BUN_BE_BUN=1' : 'unset BUN_BE_BUN',
     'APP="$ROOT/app/$ID"',
     'DEPDIR="$ROOT/deps/$DEPS"',
     'IN="$ROOT/incoming"',
     'fail() { printf "%s\\n" "$1" > "$IN/$ID.failed"; exit 1; }',
     'rm -f "$IN/$ID.failed"',
-    'NODE_DIR=$(dirname "$NODE")',
-    'export PATH="$NODE_DIR:$PATH"',
-    'NPM="$NODE_DIR/npm"; [ -x "$NPM" ] || NPM=npm',
-    // A newer compiler for native modules: the settings first, else a gcc10 an
-    // older Linux ships next to its default gcc.
     ...Object.entries(plan.buildEnv).map(([k, v]) => `export ${k}=${shq(v)}`),
-    ...(plan.buildEnv.CC || plan.buildEnv.CXX ? [] : [
-      'if command -v gcc10-cc >/dev/null 2>&1 && command -v gcc10-c++ >/dev/null 2>&1; then export CC=gcc10-cc CXX=gcc10-c++; fi',
-    ]),
     'if [ ! -f "$DEPDIR/.ready" ]; then',
     '  rm -rf "$DEPDIR.partial" && mkdir -p "$DEPDIR.partial" || fail "cannot create $DEPDIR"',
     `  ${heredoc('"$DEPDIR.partial/package.json"', depsJson)}`,
-    `  (cd "$DEPDIR.partial" && "$NPM" install --no-audit --no-fund ${omit} --loglevel=error) || fail "npm install of its dependencies failed: see $IN/$ID.install.log on the host"`,
+    `  (cd "$DEPDIR.partial" && "$BUN" install ${omit} --linker=hoisted --no-progress) || fail "bun install of its dependencies failed: see $IN/$ID.install.log on the host"`,
     '  rm -rf "$DEPDIR" && mv "$DEPDIR.partial" "$DEPDIR" && touch "$DEPDIR/.ready" || fail "cannot move the dependencies in place"',
     'fi',
     'rm -rf "$APP.partial" && mkdir -p "$APP.partial" || fail "cannot create $APP"',
@@ -108,7 +120,7 @@ export function installScript(plan: InstallPlan): string {
     heredoc('"$APP.partial/package.json"', plan.appPackageJson),
     'ln -s "../../deps/$DEPS/node_modules" "$APP.partial/node_modules" || fail "cannot link the dependencies"',
     'mkdir -p "$ROOT/data"',
-    'OPEN_WALNUT_HOME="$ROOT/data" "$NODE" "$APP.partial/dist/cli.js" --version > "$IN/$ID.version" 2>&1 || fail "the build does not start with $NODE: $(tail -n 3 "$IN/$ID.version" | tr "\\n" " ")"',
+    'OPEN_WALNUT_HOME="$ROOT/data" "$BUN" "$APP.partial/dist/cli.js" --version > "$IN/$ID.version" 2>&1 || fail "the build does not start with $BUN: $(tail -n 3 "$IN/$ID.version" | tr "\\n" " ")"',
     'rm -rf "$APP" && mv "$APP.partial" "$APP" && touch "$APP/.ready" || fail "cannot move the build in place"',
     'rm -f "$IN/$ID.tgz"',
     ...pruneLines(keep),

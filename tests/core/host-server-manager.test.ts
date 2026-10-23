@@ -659,6 +659,27 @@ describe('host server manager: which program (WP2)', () => {
     expect(spec.env).toMatchObject({ OPEN_WALNUT_HOME: '/srv/marina-host/data', WALNUT_DAEMON_DIR: '/srv/marina-host/run' })
   })
 
+  it('a local app dir from the compiled file: the file runs the dist build as bun (BUN_BE_BUN=1), its port probe too', async () => {
+    settings = { ...settings, program: 'replica' }
+    const { setSingleFile } = await import('../../src/lib/single-file.js')
+    setSingleFile({ root: '/rt', daemonVersion: 'd', modules: {} })
+    try {
+      const m = createHostServerManager(deps({ hostRoot: '/srv/marina-host', appDir: '/work/walnut-tree' }))
+      const host = fakeHost()
+      host.caps.add('replica-host-v1')
+      const scripts: string[] = []
+      const run = host.runRemoteScript.bind(host)
+      host.runRemoteScript = async (script, timeoutMs) => { scripts.push(script); return run(script, timeoutMs) }
+      await m.connected(host)
+      expect(scripts.some((script) => script.startsWith(`BUN_BE_BUN=1 '${process.execPath}' -e `))).toBe(true)
+      const spec = host.specs[0]!
+      expect(spec).toMatchObject({ command: process.execPath, args: ['/work/walnut-tree/dist/cli.js', 'web', '--replica'] })
+      expect(spec.env).toMatchObject({ BUN_BE_BUN: '1', OPEN_WALNUT_HOME: '/srv/marina-host/data' })
+    } finally {
+      delete (globalThis as Record<string, unknown>).__WALNUT_SINGLE_FILE__
+    }
+  })
+
   it('another root takes the file and the install too', async () => {
     const m = createHostServerManager(deps({ hostRoot: '/srv/marina-host' }))
     const host = fakeHost()

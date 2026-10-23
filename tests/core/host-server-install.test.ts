@@ -3,7 +3,7 @@
  * in a temp HOME. A host server: a stand-in walnut file (a sh script that answers
  * `--version` the way the compiled file does), gzipped as the Mac uploads it. The
  * real compiled file goes through the same script in host-server-file-e2e.test.ts.
- * The companion's Node install: a fake build tarball, a fake Node and npm.
+ * The companion's dist install: a fake build tarball, a bun whose `install` is faked.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
@@ -37,36 +37,42 @@ function makeBuild(id: string, cliBody = 'console.log("0.0.1")'): void {
 function plan(id: string, over: Partial<Parameters<typeof installScript>[0]> = {}) {
   return {
     id, depsHash: 'deps01', dependencies: { ws: '^8.19.0' },
-    appPackageJson: JSON.stringify({ name: 'open-walnut', version: '0.0.1', private: true, type: 'module' }),
-    node: path.join(bin, 'node'), buildEnv: {}, ...over,
+    appPackageJson: JSON.stringify({ name: 'open-walnut', version: '0.0.1', private: true, type: 'module', trustedDependencies: ['sharp'] }),
+    bun: { command: path.join(bin, 'bun'), asBun: false }, buildEnv: {}, ...over,
   }
+}
+
+/** A bun whose `install` writes a marker module (its argv, the env it saw); anything else is the real bun. */
+function fakeBun(install = 'mkdir -p node_modules/ws && echo "BUN_BE_BUN=${BUN_BE_BUN:-} CC=${CC:-}" > node_modules/ws/env.txt && echo "bun $*" > node_modules/ws/args.txt'): void {
+  fs.writeFileSync(path.join(bin, 'bun'), `#!/bin/sh\nif [ "$1" = install ]; then ${install}; exit $?; fi\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 })
 }
 
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'hsi-home-'))
   bin = path.join(home, 'bin')
   fs.mkdirSync(bin)
-  // node runs the real one; npm writes a marker module and the env it saw.
-  fs.writeFileSync(path.join(bin, 'node'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 })
-  fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nmkdir -p node_modules/ws && echo "CC=${CC:-} CXX=${CXX:-}" > node_modules/ws/env.txt && echo "npm $*" > node_modules/ws/args.txt\n', { mode: 0o755 })
+  fakeBun()
 })
 
 afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true })
 })
 
-describe('the companion\'s install script (a Node build and its npm dependencies)', () => {
+describe('the companion\'s install script (a dist build and its dependencies, by bun)', () => {
   it('installs the dependencies once, the build beside them, and marks both ready', () => {
     makeBuild('b1')
-    fs.writeFileSync(path.join(home, 'install.sh'), installScript(plan('b1', { buildEnv: { CC: 'cc-x', CXX: 'cxx-x' } })))
+    fs.writeFileSync(path.join(home, 'install.sh'), installScript(plan('b1', { buildEnv: { CC: 'cc-x' } })))
     const r = sh(`sh "$HOME/install.sh"`)
     expect(r.out).toContain('installed')
     const root = path.join(home, '.open-walnut-host')
     expect(fs.existsSync(path.join(root, 'app', 'b1', '.ready'))).toBe(true)
     expect(fs.existsSync(path.join(root, 'deps', 'deps01', '.ready'))).toBe(true)
-    expect(JSON.parse(fs.readFileSync(path.join(root, 'deps', 'deps01', 'package.json'), 'utf8')).dependencies).toEqual({ ws: '^8.19.0' })
-    expect(fs.readFileSync(path.join(root, 'deps', 'deps01', 'node_modules', 'ws', 'env.txt'), 'utf8').trim()).toBe('CC=cc-x CXX=cxx-x')
-    expect(fs.readFileSync(path.join(root, 'deps', 'deps01', 'node_modules', 'ws', 'args.txt'), 'utf8')).toContain('install --no-audit --no-fund --omit=optional --omit=dev')
+    const deps = JSON.parse(fs.readFileSync(path.join(root, 'deps', 'deps01', 'package.json'), 'utf8'))
+    expect(deps.dependencies).toEqual({ ws: '^8.19.0' })
+    // The build's own trusted list: bun runs only those packages' install scripts.
+    expect(deps.trustedDependencies).toEqual(['sharp'])
+    expect(fs.readFileSync(path.join(root, 'deps', 'deps01', 'node_modules', 'ws', 'env.txt'), 'utf8').trim()).toBe('BUN_BE_BUN= CC=cc-x')
+    expect(fs.readFileSync(path.join(root, 'deps', 'deps01', 'node_modules', 'ws', 'args.txt'), 'utf8')).toContain('bun install --production --omit=optional --linker=hoisted')
     // The build links its dependencies and is a module package.
     expect(fs.readlinkSync(path.join(root, 'app', 'b1', 'node_modules'))).toBe('../../deps/deps01/node_modules')
     expect(fs.existsSync(path.join(root, 'app', 'b1', 'node_modules', 'ws', 'env.txt'))).toBe(true)
@@ -94,12 +100,12 @@ describe('the companion\'s install script (a Node build and its npm dependencies
     expect(sh(`sh "$HOME/bad.sh"`).code).toBe(1)
     const st = parseInstallState(sh(stateScript('bad')).out)
     expect(st.state).toBe('failed')
-    expect(st.state === 'failed' && st.message).toMatch(/the build does not start with .*node: SyntaxError: boom/)
+    expect(st.state === 'failed' && st.message).toMatch(/the build does not start with .*bin\/bun: SyntaxError: boom/)
     expect(fs.existsSync(path.join(home, '.open-walnut-host', 'app', 'bad'))).toBe(false)
   })
 
   it('a failing dependency install names the log', () => {
-    fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\necho "gyp ERR! compiler too old" >&2; exit 1\n', { mode: 0o755 })
+    fakeBun('echo "error: ws@^8.19.0 failed to resolve" >&2; false')
     makeBuild('b1')
     fs.writeFileSync(path.join(home, '.open-walnut-host', 'incoming', 'b1.install.sh'), installScript(plan('b1')))
     expect(sh(launchScript('b1')).out).toContain('launched')
@@ -110,29 +116,36 @@ describe('the companion\'s install script (a Node build and its npm dependencies
     }
     expect(st.state).toBe('failed')
     if (st.state !== 'failed') return
-    expect(st.message).toMatch(/npm install of its dependencies failed: see .*b1\.install\.log/)
-    expect(st.logTail).toContain('gyp ERR! compiler too old')
+    expect(st.message).toMatch(/bun install of its dependencies failed: see .*b1\.install\.log/)
+    expect(st.logTail).toContain('error: ws@^8.19.0 failed to resolve')
   })
 
   it('refuses a build env name that is not one', () => {
     expect(() => installScript(plan('b1', { buildEnv: { 'CC; rm -rf /': 'x' } }))).toThrow(/not an environment variable name/)
   })
 
-  it('a host plan (no keep, no optional dependencies) is byte for byte the script it was before both existed', () => {
-    const hostPlan = {
-      id: 'b1', depsHash: 'deps01', dependencies: { ws: '^8.19.0' },
-      appPackageJson: JSON.stringify({ name: 'open-walnut', version: '0.0.1', private: true, type: 'module' }),
-      node: '/opt/node/bin/node', buildEnv: {}, root: '/srv/walnut-host',
-    }
-    const text = installScript(hostPlan)
-    // sha256 of the text before `keep` and `optionalDependencies` were added (5408d5875).
-    expect(crypto.createHash('sha256').update(text).digest('hex')).toBe('b4b9e4632209b5736f518ba10edb22c0d0c89ed66bb092551e24026dfcbc006c')
-    expect(installScript({ ...hostPlan, keep: [] })).toBe(text)
-    expect(text).toContain('--omit=optional --omit=dev')
+  it('needs no Node and no npm: bun installs and runs the build, and an empty keep is no keep', () => {
+    const p = { ...plan('b1'), bun: { command: '/opt/bun/bin/bun', asBun: false }, root: '/srv/walnut-host' }
+    const text = installScript(p)
+    expect(installScript({ ...p, keep: [] })).toBe(text)
+    expect(text).not.toMatch(/\bnpm\b|\bnode\b|NODE|gcc/)
+    expect(text).toContain("BUN='/opt/bun/bin/bun'")
+    expect(text).toContain('"$BUN" install --production --omit=optional --linker=hoisted')
+    expect(text).toContain('"$BUN" "$APP.partial/dist/cli.js" --version')
+    expect(text).toContain('unset BUN_BE_BUN')
     expect(text).not.toContain('optionalDependencies')
   })
 
-  it('with optional dependencies, npm installs them (no --omit=optional) and the deps package names them', () => {
+  it('a box running the compiled file uses it as bun (BUN_BE_BUN=1) for the install and the first start', () => {
+    makeBuild('b1', 'console.log("BUN_BE_BUN=" + (process.env.BUN_BE_BUN ?? ""))')
+    fs.writeFileSync(path.join(home, 'b1.sh'), installScript(plan('b1', { bun: { command: path.join(bin, 'bun'), asBun: true } })))
+    expect(sh(`sh "$HOME/b1.sh"`).out).toContain('installed')
+    const root = path.join(home, '.open-walnut-host')
+    expect(fs.readFileSync(path.join(root, 'deps', 'deps01', 'node_modules', 'ws', 'env.txt'), 'utf8')).toContain('BUN_BE_BUN=1')
+    expect(fs.readFileSync(path.join(root, 'incoming', 'b1.version'), 'utf8').trim()).toBe('BUN_BE_BUN=1')
+  })
+
+  it('with optional dependencies, bun installs them (no --omit=optional) and the deps package names them', () => {
     makeBuild('b1')
     fs.writeFileSync(path.join(home, 'b1.sh'), installScript(plan('b1', { optionalDependencies: { fsevents: '^2.3.3' } })))
     expect(sh(`sh "$HOME/b1.sh"`).out).toContain('installed')
@@ -141,7 +154,7 @@ describe('the companion\'s install script (a Node build and its npm dependencies
     expect(pkg.dependencies).toEqual({ ws: '^8.19.0' })
     expect(pkg.optionalDependencies).toEqual({ fsevents: '^2.3.3' })
     const args = fs.readFileSync(path.join(deps, 'node_modules', 'ws', 'args.txt'), 'utf8')
-    expect(args).toContain('install --no-audit --no-fund --omit=dev')
+    expect(args).toContain('bun install --production --linker=hoisted')
     expect(args).not.toContain('--omit=optional')
   })
 
