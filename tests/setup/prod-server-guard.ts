@@ -24,9 +24,11 @@
  * ---
  * Every in-process TCP or unix-socket client (fetch/undici, http, https, ws,
  * net) ends in net.Socket.prototype.connect, so that one method is wrapped. On
- * bun, fetch is native and never reaches net.Socket (http, ws and net still
- * do), so there fetch itself is wrapped as well; `Bun.fetch` is a read-only
- * property and cannot be, and no Walnut code calls it. A
+ * bun three clients are native and never reach net.Socket: fetch, the global
+ * WebSocket, and the WebSocket a bare `ws` import gives (bun answers that import
+ * with its own client; Walnut's code imports `#ws`, the npm package, which does
+ * reach it). There each is wrapped as well; `Bun.fetch` is a read-only property
+ * and cannot be, and no Walnut code calls it. A
  * connect to port 3456 on this machine (loopback, a local interface address or
  * the host name), or to a unix socket in the production runtime dir (where the
  * live daemon's agent gateway listens), never opens: the socket fails the way a
@@ -48,7 +50,7 @@
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, afterEach, beforeAll, expect } from 'vitest'
+import { afterAll, afterEach, beforeAll, expect, vi } from 'vitest'
 
 /** The production server's port (scripts/dev-prod.sh). */
 export const PROD_SERVER_PORT = 3456
@@ -223,11 +225,35 @@ function installFetchGuard(): void {
   globalThis.fetch = Object.assign(guardedFetch, original) as typeof fetch
 }
 
-/** Wrap Socket#connect (and, on bun, fetch) once per worker. */
+/**
+ * bun only: a WebSocket class whose construction refuses a guarded target first.
+ * A Proxy, so instances, `instanceof`, the statics (OPEN, CLOSED) and the class's
+ * name stay the original's. A refusal throws from the constructor, the way an
+ * invalid URL does.
+ */
+export function guardedWebSocketClass<T extends abstract new (...args: never[]) => unknown>(Original: T): T {
+  return new Proxy(Original, {
+    construct(target, args: unknown[], newTarget) {
+      const where = fetchTarget(args[0])
+      const message = where && refusal(where)
+      if (message) throw Object.assign(new Error(message), { code: 'ERR_TEST_PROD_SERVER' })
+      return Reflect.construct(target, args, newTarget) as object
+    },
+  })
+}
+
+/** bun only: the global WebSocket, once per worker. */
+function installWebSocketGuard(): void {
+  if (typeof process.versions.bun !== 'string' || typeof globalThis.WebSocket !== 'function') return
+  globalThis.WebSocket = guardedWebSocketClass(globalThis.WebSocket)
+}
+
+/** Wrap Socket#connect (and, on bun, fetch and the global WebSocket) once per worker. */
 export function installProdServerGuard(): void {
   if (guardState.installed) return
   guardState.installed = true
   installFetchGuard()
+  installWebSocketGuard()
   const original = net.Socket.prototype.connect as (this: net.Socket, ...args: unknown[]) => net.Socket
   const guarded = function (this: net.Socket, ...args: unknown[]): net.Socket {
     const message = refusal(connectTarget(args))
@@ -255,6 +281,15 @@ export function failOnViolations(when: string): void {
 }
 
 installProdServerGuard()
+// bun only: a bare `ws` import is bun's own client. Mocked in every test file
+// (mocks are per file), with the same module and its WebSocket guarded.
+if (typeof process.versions.bun === 'string') {
+  vi.doMock('ws', async (importOriginal: () => Promise<Record<string, unknown>>) => {
+    const mod = await importOriginal()
+    const Guarded = guardedWebSocketClass(mod.WebSocket as new (...args: never[]) => unknown)
+    return { ...mod, WebSocket: Guarded, default: mod.default === mod.WebSocket ? Guarded : mod.default }
+  })
+}
 beforeAll(() => failOnViolations('before this file started (left over from an earlier file in this worker)'))
 afterEach(() => failOnViolations('during this test'))
 afterAll(() => failOnViolations('in this file\'s hooks'))

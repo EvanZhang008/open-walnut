@@ -236,6 +236,38 @@ describe('the installed guard, on a scratch port', () => {
     }
   })
 
+  it('refuses a WebSocket before it opens on bun: the global one, and the one a bare ws import gives', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const target = await countingServer()
+    try {
+      guardState.ports.add(target.port)
+      scratchPorts.push(target.port)
+      const url = `ws://127.0.0.1:${target.port}/ws`
+      const { default: WS, WebSocket: NamedWS } = await import('ws')
+      for (const open of [() => new globalThis.WebSocket(url), () => new WS(url), () => new NamedWS(url)]) {
+        // On bun each is native and refuses in its constructor; Node's go through Socket#connect.
+        const err = (() => { try { open(); return null } catch (e) { return e as NodeJS.ErrnoException } })()
+        expect(err?.code).toBe('ERR_TEST_PROD_SERVER')
+      }
+      expect(target.accepted(), 'no connection reached the server').toBe(0)
+      expect(guardState.violations).toHaveLength(3)
+
+      // To everything else the guarded classes are the originals, and they still connect.
+      guardState.ports.delete(target.port)
+      expect(WS.name).toBe('WebSocket')
+      expect(WS.OPEN).toBe(1)
+      const socket = new WS(url)
+      expect(socket).toBeInstanceOf(WS)
+      expect(socket).toBeInstanceOf(NamedWS)
+      await new Promise<void>((resolve) => { socket.on('error', () => resolve()); socket.on('unexpected-response', () => resolve()); socket.on('open', () => resolve()) })
+      socket.terminate()
+      expect(target.accepted()).toBe(1)
+    } finally {
+      guardState.violations.splice(0)
+      await target.close()
+    }
+  })
+
   it('still fails the connect when the test runs fake timers', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const target = await countingServer()
