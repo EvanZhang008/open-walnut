@@ -6,6 +6,16 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-10-23
+
+### Added
+
+- The companion keeps copies of requests, routines, favorites and personas
+
+### Fixed
+
+- A queued write waits out another process's journal lock instead of failing
+
 ## [0.6.16] - 2026-10-22
 
 ### Added
