@@ -117,7 +117,7 @@ describe('tarball wiring', () => {
 
   it('check-publish requires the host prebuilt where a compiler works and checks it is packed and fresh', () => {
     const gate = read(path.join(root, 'scripts/check-publish.mjs'));
-    expect(pkg.scripts.prepublishOnly).toContain('node scripts/check-publish.mjs');
+    expect(pkg.scripts.prepublishOnly).toContain('bun scripts/check-publish.mjs');
     expect(gate).toMatch(/if \(hostDtach && compilerWorks\(\)\) \{\n\s+required\.push\(`dist\/daemon-binaries\/\$\{hostDtach\}`/);
     expect(gate).toContain("'--print-hash'");
     expect(gate).toMatch(/\.\.\.dtachFiles\.flatMap/); // every built dtach must be in the pack list
