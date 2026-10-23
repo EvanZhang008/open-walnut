@@ -29,9 +29,9 @@ setup refuses that run, as it refuses a bun older than 1.4.4
 `tests/helpers/bun-runtime.ts`; never `node`, `tsx` or `npx`. Only the Playwright
 runner stays on Node; the fixture servers it starts run on bun.
 
-**`bun run test:baseline` is how you judge a change.** The suite carries **118
-pre-existing failures on `main`** (recorded in `tests/setup/known-failures.json`,
-measured in a clean clone of `844dc84`). The baseline gate ignores those and fails
+**`bun run test:baseline` is how you judge a change.** The quick tier carries **one
+known failure** (recorded in `tests/setup/known-failures.json` with its cause, the
+same on bun 1.4.4 as it was on Node; re-recorded on bun 2026-10-23). The baseline gate ignores it and fails
 only on failures absent from the list, so you get a yes/no answer instead of
 eyeballing an aggregate. Fixed some? `bun run test:baseline:record`.
 
@@ -121,7 +121,8 @@ which is a perf artifact, not a correctness one.
 ### Known pre-existing failures (NOT regressions — don't chase these)
 
 **These are now enumerated machine-readably in `tests/setup/known-failures.json`
-(118 entries, measured 2026-07-25 in a clean clone of `844dc84`), so prefer
+(118 entries when it was first measured on 2026-07-25; one since `d0ae758b2` fixed the
+rest at the root, and still one on bun), so prefer
 `bun run test:baseline` over the manual HEAD-baseline dance below**: it does the
 same comparison automatically and exits non-zero only on genuinely new failures.
 The prose below explains *why* the big clusters fail.
