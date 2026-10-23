@@ -483,6 +483,18 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
     expect(await printed(newest.home)).toBe('0.6.9 (archive)')
   })
 
+  it('a newest release from before the compiled file is found from its checksums alone, with no release list', async () => {
+    // The release rehearsal's local server answers no API: the newest SHA256SUMS
+    // names only this machine's Node archive, and that is the release to install.
+    await releaseArchive('0.6.9')
+    fs.rmSync(path.join(releases, 'api.json'), { force: true })
+    fs.writeFileSync(path.join(releases, 'latest'), '0.6.9\n')
+    const r = await install(freshHome())
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain(`Downloading open-walnut-0.6.9-${HOST}.tar.gz...`)
+    expect(await printed(r.home)).toBe('0.6.9 (archive)')
+  })
+
   it('moves an archive install to the file: the archive stays as the version before, then goes', async () => {
     const home = freshHome()
     await releaseArchive('0.6.9')
