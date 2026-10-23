@@ -48,6 +48,7 @@ import { classifySessionHostStart } from './session-host-core.js'
 import { QOS_CLAMP_ENV, withUtilityQosClamp } from '../lib/background-qos.js'
 import { isHostReplica } from '../core/server-role.js'
 import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
+import { singleFile } from '../lib/single-file.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
@@ -58,6 +59,11 @@ const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
 const BUSY_DAEMON_HELLO_MS = 15_000
 /** The longer wait for a port file while the Walnut Sessions host is still running (classifySessionHostStart). */
 const SESSION_HOST_LATE_START_MS = 20_000
+
+/** True when `binaryPath` is the compiled Walnut file this process runs from. */
+function isCompiledSelf(binaryPath: string): boolean {
+  return singleFile() !== null && binaryPath === process.execPath
+}
 
 export function getLocalDaemonBinaryName(
   platform: string = process.platform,
@@ -914,9 +920,12 @@ export class LocalDaemon {
     // Source-fallback daemons are plain .cjs scripts (no compiled binary in
     // published npm installs) — run them under the current Node runtime.
     const isSourceScript = binaryPath.endsWith('.cjs') || binaryPath.endsWith('.js')
-    const [cmd, args] = isSourceScript
-      ? [process.execPath, [binaryPath, '--start']]
-      : [binaryPath, ['--start']]
+    // The compiled Walnut file is its own daemon (src/binary/main.ts).
+    const [cmd, args] = isCompiledSelf(binaryPath)
+      ? [process.execPath, ['__daemon', '--start']]
+      : isSourceScript
+        ? [process.execPath, [binaryPath, '--start']]
+        : [binaryPath, ['--start']]
 
     // macOS execution identity. Without this the daemon inherits OUR responsible
     // process — the node running this server — so every file the CLI and its tools
@@ -1100,6 +1109,9 @@ export class LocalDaemon {
 
   private findDaemonBinary(): string {
     if (this.overrideBinaryPath) return this.overrideBinaryPath
+    // The compiled Walnut file carries the full daemon (`walnut __daemon`), so it
+    // never needs a separate binary or the source fallback.
+    if (singleFile()) return process.execPath
     // DAEMON_BINARIES_DIR is the canonical build output location
     const hit = pickDaemonBinary(
       [DAEMON_BINARIES_DIR, path.join(__dirname, '..', '..', 'dist', 'daemon-binaries')],
@@ -1154,6 +1166,7 @@ export class LocalDaemon {
   }
 
   private readBinaryVersion(binaryPath: string): string | null {
+    if (isCompiledSelf(binaryPath)) return singleFile()!.daemonVersion
     try {
       return fs.readFileSync(`${binaryPath}.version`, 'utf-8').trim()
     } catch {

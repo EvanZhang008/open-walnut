@@ -186,9 +186,14 @@ HASH=$(
   done | $HASHER | cut -c1-12
 )
 VERSION="walnut-daemon-${HASH}"
-OUTDIR="dist/daemon-binaries"
+# WALNUT_DAEMON_SIDECARS_ONLY=1 builds only the JS artifacts below (sidecars, ACP
+# worker, pi-acp) into WALNUT_DAEMON_OUTDIR, without the three compiled daemons or
+# dtach: the compiled Walnut file runs its own daemon (scripts/build-binary.mjs).
+OUTDIR="${WALNUT_DAEMON_OUTDIR:-dist/daemon-binaries}"
+SIDECARS_ONLY="${WALNUT_DAEMON_SIDECARS_ONLY:-0}"
 mkdir -p "$OUTDIR"
 
+if [ "$SIDECARS_ONLY" != 1 ]; then
 echo "Building daemon binaries (version: $VERSION)..."
 
 "$BUN" build --compile --target=bun-linux-x64 --minify \
@@ -208,6 +213,7 @@ echo "$VERSION" > "$OUTDIR/daemon-linux-arm64.version"
   --outfile "$OUTDIR/daemon-darwin-arm64" \
   src/providers/daemon-standalone.ts
 echo "$VERSION" > "$OUTDIR/daemon-darwin-arm64.version"
+fi
 
 # ACP worker artifact — a plain JS bundle (NOT bun-compiled): the daemon spawns
 # it with the system `node`, and one bundle serves every platform. The ACP SDK
@@ -298,6 +304,12 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/daemon-service-cli.cjs" \
   src/providers/daemon-service-cli.ts
+
+if [ "$SIDECARS_ONLY" = 1 ]; then
+  echo "$VERSION" > "$OUTDIR/daemon.version"
+  echo "Done. Daemon sidecars (version: $VERSION) in $OUTDIR"
+  exit 0
+fi
 
 # Prebuilt dtach for the session terminal, so a Mac without the Command Line Tools
 # still gets a persistent shell (the tarball ships it; the big daemon binaries it

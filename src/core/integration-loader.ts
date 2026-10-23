@@ -1592,8 +1592,7 @@ async function prepareGeneration(
         id: manifest.id, name: manifest.name, version: manifest.version,
         apiVersion: 1, webEntry: manifest.web, pluginDir: artifactDir,
       } as RegisteredPlugin);
-      const { transform } = await import('esbuild');
-      await transform(web.content.toString('utf8'), { loader: 'js', format: 'esm', logLevel: 'silent' });
+      await checkWebEntrySyntax(web.content.toString('utf8'));
     }
   } catch (error) {
     if (strictWeb) {
@@ -1604,6 +1603,21 @@ async function prepareGeneration(
     webError = error instanceof Error ? error.message : String(error);
   }
   return { manifest, module, config, web, webError };
+}
+
+/**
+ * Parse a plugin web entry as an ES module before serving it. On bun this is
+ * bun's own parser: the compiled walnut file carries no esbuild, and without a
+ * check that works there every web plugin's App was dropped.
+ */
+async function checkWebEntrySyntax(code: string): Promise<void> {
+  const bun = (globalThis as { Bun?: { Transpiler: new (options: { loader: 'js' }) => { scan(code: string): unknown } } }).Bun;
+  if (bun) {
+    new bun.Transpiler({ loader: 'js' }).scan(code);
+    return;
+  }
+  const { transform } = await import('esbuild');
+  await transform(code, { loader: 'js', format: 'esm', logLevel: 'silent' });
 }
 
 function preflightReload(

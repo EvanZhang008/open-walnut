@@ -4841,6 +4841,7 @@ const LEGACY_WN_SHIM_MARKERS = ['walnut-wn-shim v1']
 // PATH order — so this shim first scans PATH (minus its own dir) for another
 // walnut and execs it, and only then falls back to the daemon's gateway shim.
 const USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1'
+const USER_WALNUT_SHIM_MAX_BYTES = 16 * 1024
 
 function userWalnutShimText(): string {
   return '#!/bin/sh\n'
@@ -4909,6 +4910,9 @@ function installUserWalnutShim() {
       }
       const target = path.join(dir, 'walnut')
       if (fs.existsSync(target)) {
+        // Our shim is a short script. A big file is a real walnut (the compiled
+        // Walnut file carries this marker in its own code): never read or replace it.
+        if (fs.statSync(target).size > USER_WALNUT_SHIM_MAX_BYTES) continue
         const existing = fs.readFileSync(target, 'utf-8')
         if (!existing.includes(USER_WALNUT_SHIM_MARKER)) continue // someone else's binary — leave it
         if (existing === text) { installed.push(target); continue }

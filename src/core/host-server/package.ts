@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { WALNUT_HOME } from '../../constants.js'
 import { findBuildInfoFile, readBuildInfoFile } from '../../lib/build-info.js'
 import { buildIdOf } from '../companion-build/wire.js'
+import { singleFile } from '../../lib/single-file.js'
 
 export interface HostAppPackage {
   /** Names this build on the host: version, commit, and a mark for a dirty tree. */
@@ -58,11 +59,19 @@ function sha(text: string): string {
 
 /** The dist this server runs from, and the package root above it. */
 export function runningDist(start = path.dirname(fileURLToPath(import.meta.url))): { distDir: string; root: string } | null {
+  // The compiled file's unpacked tree has a build-info but no code to install on a host.
+  if (singleFile()) return null
   const file = findBuildInfoFile(start)
   if (!file) return null
   const distDir = path.dirname(file)
   const root = path.dirname(distDir)
   return fs.existsSync(path.join(root, 'package.json')) ? { distDir, root } : null
+}
+
+function noBuildMessage(where: string): string {
+  return singleFile()
+    ? `This is the compiled walnut file, which cannot install Walnut on ${where} yet: run a Node build of Walnut for that.`
+    : `This server is not running from a build, so there is nothing to install on ${where} (run \`npm run build\`).`
 }
 
 function tar(args: string[], cwd: string): Promise<void> {
@@ -149,7 +158,7 @@ async function cachedOrPacked(file: string, stage: (work: string) => Promise<str
 }
 
 export async function buildHostAppPackage(dist = runningDist()): Promise<HostAppPackage> {
-  if (!dist) throw new Error('This server is not running from a build, so there is nothing to install on a host (run `npm run build`).')
+  if (!dist) throw new Error(noBuildMessage('a host'))
   const facts = await readBuild(dist)
   const tgz = await cachedOrPacked(`${facts.id}.tgz`, async (work) => {
     await fs.promises.symlink(dist.distDir, path.join(work, 'package', 'dist'))
@@ -174,7 +183,7 @@ export async function buildCompanionAppPackage(
   const { platform, arch } = target
   if (platform !== 'linux' && platform !== 'darwin') throw new Error(`The cloud companion runs on ${platform}; this Mac only builds for linux or darwin.`)
   if (arch !== 'x64' && arch !== 'arm64') throw new Error(`The cloud companion runs on ${arch}; this Mac only builds for x64 or arm64.`)
-  if (!dist) throw new Error('This server is not running from a build, so there is nothing to install on the companion (run `npm run build`).')
+  if (!dist) throw new Error(noBuildMessage('the companion'))
   const binDir = path.join(dist.distDir, 'daemon-binaries')
   const daemon = `daemon-${platform}-${arch}`
   try {

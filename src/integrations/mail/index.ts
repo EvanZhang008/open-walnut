@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { PluginLifecycleChangedEvent } from '../../core/event-types.js'
@@ -77,12 +78,20 @@ const CONTEXT_NAMES = 3
  * tools so it comes and goes with them. A zero-account install is byte-identical again, skill
  * index included.
  *
- * Resolved from this module's own location because the two layouts differ and both are real:
- * `src/integrations/mail/index.ts` when the server runs from source (every test does), and
- * `dist/integrations/mail/index.js` for a built one. `import.meta.url` is right in both without
- * either being spelled out, which is why it is not derived from cwd or from the manifest path.
+ * Resolved from this module's own location because the layouts differ and all are real:
+ * `src/integrations/mail/` when the server runs from source (every test does). A build loads
+ * mail through the host bundle (src/integrations/host-modules.ts), so `import.meta.url` is
+ * dist/cli.js or dist/web/server.js there (the compiled file defines it the same way), and the
+ * directory is the build's `dist/integrations/mail/agent-skills`, found by walking up.
  */
-const SKILL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent-skills')
+const SKILL_DIR = (() => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const candidates = [path.join(here, 'agent-skills')]
+  for (let dir = here, i = 0; i < 4; i++, dir = path.dirname(dir)) {
+    candidates.push(path.join(dir, 'integrations', 'mail', 'agent-skills'))
+  }
+  return candidates.find((c) => fs.existsSync(c)) ?? candidates[0]!
+})()
 
 /** Test seam: the registration is inside a private closure, and the path has to be assertable. */
 export function mailSkillDirForTesting(): string {

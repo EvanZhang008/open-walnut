@@ -93,5 +93,5 @@ export async function buildPiAcp(outdir) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await buildPiAcp(resolve(dirname(fileURLToPath(import.meta.url)), '../dist/daemon-binaries'));
+  await buildPiAcp(process.env.WALNUT_DAEMON_OUTDIR ? resolve(process.env.WALNUT_DAEMON_OUTDIR) : resolve(dirname(fileURLToPath(import.meta.url)), '../dist/daemon-binaries'));
 }
