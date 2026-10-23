@@ -496,6 +496,24 @@ describe('dev-prod.sh listener detection', () => {
     expect(snippet).toMatch(/^\s*fuser\)/m)
   })
 
+  // Over ssh TMPDIR is often unset; /tmp may be swept by a periodic cleaner that
+  // would take a live stage with it. On macOS the per-user temp dir stands in.
+  it('falls back to the per-user temp dir on macOS, /tmp elsewhere, when TMPDIR is unset', () => {
+    const start = script.indexOf('default_tmpdir() {')
+    const end = script.indexOf('export TMPDIR\n', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const snippet = script.slice(start, end + 'export TMPDIR\n'.length)
+    const run = (tmp: string | null) => execFileSync('/usr/bin/env', [...(tmp === null ? ['-u', 'TMPDIR'] : [`TMPDIR=${tmp}`]), 'bash', '-c', `set -euo pipefail\n${snippet}\nprintf '%s' "$TMPDIR"`], { encoding: 'utf-8' })
+    const expected = process.platform === 'darwin'
+      ? execFileSync('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf-8' }).trim().replace(/\/$/, '')
+      : '/tmp'
+    expect(run(null)).toBe(expected)
+    expect(run('')).toBe(expected)
+    // A TMPDIR the caller set always wins.
+    expect(run('/some/where')).toBe('/some/where')
+  })
+
   it('never falls open: no probe at all is a hard failure', () => {
     const snippet = listenerPidsSnippet()
     // Empty PATH → command -v finds nothing → the script must refuse, not
