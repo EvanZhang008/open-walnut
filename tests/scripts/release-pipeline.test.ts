@@ -461,7 +461,7 @@ describe('release.yml', () => {
     { build: 'promote-build', files: 'promote-files', publish: 'promote', version: '"$VERSION"', versionOut: '${{ needs.promote-plan.outputs.version }}', ref: '${{ needs.promote-plan.outputs.sha }}' },
   ] as const
   // Builds run on macOS: codesign signs the darwin files, and only a Mac builds the SQLite they carry.
-  const BUILD_RUNNER = 'macos-15'
+  const BUILD_RUNNER = 'macos-26'
 
   it('runs on release tags, a schedule and by hand, and every check asks for both channels', () => {
     expect(doc.on.push).toEqual({ tags: ['v*.*.*'] })

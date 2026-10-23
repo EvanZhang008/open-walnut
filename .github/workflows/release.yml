@@ -123,7 +123,7 @@ jobs:
     name: Build stable (${{ github.ref_name }})
     if: startsWith(github.ref, 'refs/tags/v')
     # macOS: it signs the darwin files and builds the SQLite they carry.
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: read
@@ -263,7 +263,7 @@ jobs:
     name: Build the nightly from main
     if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
     # macOS: it signs the darwin files and builds the SQLite they carry.
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: read
@@ -484,7 +484,7 @@ jobs:
     needs: promote-plan
     if: needs.promote-plan.outputs.publish == 'true'
     # macOS: it signs the darwin files and builds the SQLite they carry.
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: read
