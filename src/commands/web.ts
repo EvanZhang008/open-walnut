@@ -34,8 +34,12 @@ export const SHUTDOWN_BAIL_MS = 7_000
 /** How often to check for idle timeout (milliseconds). */
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000
 
-/** Max time to wait for the child server to write ephemeral.json. */
-const POLL_TIMEOUT_MS = 15_000
+/**
+ * Max time to wait for the child server to write ephemeral.json. A child that dies is caught at
+ * once (earlyDeathPromise), so this only bounds a slow but healthy start: on a loaded machine a
+ * cold boot takes well over 15s, and killing it then wasted the whole snapshot copy.
+ */
+const POLL_TIMEOUT_MS = 90_000
 
 /** Poll interval when waiting for ephemeral.json. */
 const POLL_INTERVAL_MS = 200

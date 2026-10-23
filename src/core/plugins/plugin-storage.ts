@@ -46,6 +46,27 @@ parentPort.on('message', ({ id, method, args }) => {
       })
       apply()
       value = pending.length ? pending[pending.length - 1].version : current
+    } else if (method === 'batch') {
+      // One message, one transaction: no other request of this plugin can land in the middle.
+      let failedAt = -1
+      const apply = db.transaction((statements) => {
+        const results = []
+        for (let index = 0; index < statements.length; index++) {
+          failedAt = index
+          const result = invoke(db.prepare(statements[index].sql), 'run', statements[index].params)
+          results.push({ changes: result.changes, lastInsertRowid: result.lastInsertRowid })
+        }
+        failedAt = -1
+        return results
+      })
+      try {
+        value = apply(args.statements)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(failedAt >= 0
+          ? 'Plugin database batch failed at statement ' + failedAt + ', nothing was written: ' + message
+          : 'Plugin database batch failed, nothing was written: ' + message)
+      }
     } else if (method === 'close') {
       db.close()
     } else {
@@ -114,13 +135,30 @@ export class PluginDatabaseClient implements Disposable {
   }
 
   migrate(migrations: Array<{ version: number; sql: string }>): Promise<number> {
+    // A bad list is a rejected promise like every other failure here, never a synchronous throw.
     const versions = new Set<number>()
     for (const migration of migrations) {
-      if (!Number.isInteger(migration.version) || migration.version < 1) throw new Error('Migration versions must be positive integers')
-      if (versions.has(migration.version)) throw new Error(`Duplicate migration version ${migration.version}`)
+      if (!Number.isInteger(migration.version) || migration.version < 1) return Promise.reject(new Error('Migration versions must be positive integers'))
+      if (versions.has(migration.version)) return Promise.reject(new Error(`Duplicate migration version ${migration.version}`))
       versions.add(migration.version)
     }
     return this.request('migrate', { migrations }) as Promise<number>
+  }
+
+  /** Runs every statement with `run`, in order, in one transaction: all of them commit or none does. */
+  batch(statements: Array<{ sql: string; params?: unknown }>): Promise<Array<{ changes: number; lastInsertRowid: number | bigint }>> {
+    if (!Array.isArray(statements)) {
+      return Promise.reject(new TypeError('Plugin database batch takes an array of { sql, params } statements'))
+    }
+    const copies: Array<{ sql: string; params?: unknown }> = []
+    for (const [index, statement] of statements.entries()) {
+      if (!statement || typeof statement !== 'object' || typeof (statement as { sql?: unknown }).sql !== 'string') {
+        return Promise.reject(new TypeError(`Plugin database batch statement ${index} must be an object with a string sql`))
+      }
+      // Only the two fields cross to the worker, so an extra property can never fail the structured clone.
+      copies.push({ sql: statement.sql, params: statement.params })
+    }
+    return this.request('batch', { statements: copies }) as Promise<Array<{ changes: number; lastInsertRowid: number | bigint }>>
   }
 
   async dispose(): Promise<void> {
@@ -154,6 +192,12 @@ export class PluginDatabaseClient implements Disposable {
       } catch (error) {
         clearTimeout(timer)
         this.pending.delete(id)
+        // Parameters that cannot be copied to the worker (a function, a symbol) fail this one
+        // call. The worker is fine, so the plugin's later calls must keep working.
+        if ((error as { name?: unknown } | null)?.name === 'DataCloneError') {
+          reject(new TypeError(`Plugin database ${method} got parameters that cannot be sent to the database worker: ${(error as Error).message}`))
+          return
+        }
         this.dead = true
         reject(error instanceof Error ? error : new Error(String(error)))
       }

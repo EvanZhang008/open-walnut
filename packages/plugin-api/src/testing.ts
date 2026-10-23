@@ -7,6 +7,7 @@ import type {
   PluginNotice,
   PluginNotifyInput,
   PluginOpDefinition,
+  PluginDatabase,
   QuietHold,
   QuietState,
   ServiceApi,
@@ -25,6 +26,7 @@ import type {
   TaskFilingResult,
   WalnutServerApi,
 } from './server.js'
+import { createFakeDatabase } from './testing-database.js'
 
 /** Walnut's importer tag and project names, restated so a fake behaves like the host. */
 const FAKE_IMPORT_TAG = 'walnut:external-sessions'
@@ -170,6 +172,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const emitted: PluginEvent[] = []
   const registeredOps: PluginOpDefinition[] = []
   const services = new Map<string, ServiceApi>()
+  let database: PluginDatabase | undefined
   const letters: LetterState[] = []
   const statusItems = new Map<string, StatusItemState>()
   const hostList: HostInfo[] = [{ alias: '__local__', local: true, enabled: true }, ...(options.hosts ?? []).map((host) => structuredClone(host))]
@@ -771,16 +774,10 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       async writeText(name, value) { files.set(name, value) },
       async delete(name) { files.delete(name) },
       async list(prefix = '') { return [...files.keys()].filter((name) => name.startsWith(prefix)) },
+      // A real in-memory SQLite, one per fake, opened on first use (see testing-database.ts).
       get database() {
-        return {
-          async exec() { return undefined },
-          async run() { return { changes: 0, lastInsertRowid: 0 } },
-          async get() { return undefined },
-          async all() { return [] },
-          async migrate(migrations: Array<{ version: number }>) {
-            return migrations.reduce((latest, migration) => Math.max(latest, migration.version), 0)
-          },
-        }
+        database ??= createFakeDatabase()
+        return database
       },
     },
     secrets: {

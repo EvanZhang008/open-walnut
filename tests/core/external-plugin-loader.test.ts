@@ -521,6 +521,30 @@ export default function register(api) {
     expect(await readActivationCount('native-reenable')).toBe(2);
   });
 
+  it('hot reloads a plugin whose only addons belong to dev dependencies', async () => {
+    const dir = path.join(tmpDir, 'plugins', 'dev-addon-reload');
+    await writeCountingUnifiedPlugin(dir, 'dev-addon-reload');
+    // A linked dev plugin with its test runner installed: rollup's binary and fsevents are dev-only.
+    await fsp.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'dev-addon-reload', devDependencies: { vitest: '*' } }));
+    for (const [name, file] of [['@rollup/rollup-darwin-arm64', 'rollup.darwin-arm64.node'], ['fsevents', 'fsevents.node']]) {
+      await fsp.mkdir(path.join(dir, 'node_modules', name), { recursive: true });
+      await fsp.writeFile(path.join(dir, 'node_modules', name, 'package.json'), JSON.stringify({ name }));
+      await fsp.writeFile(path.join(dir, 'node_modules', name, file), 'not a real addon');
+    }
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    expect(await readActivationCount('dev-addon-reload')).toBe(1);
+
+    await fsp.writeFile(path.join(dir, 'dist/server.mjs'), `
+export async function activate(walnut) {
+  await walnut.storage.updateJson('activations.json', { count: 0 }, (current) => ({ count: current.count + 10 }));
+}
+`);
+    expect((await reloadLoadedPlugin(registry, 'dev-addon-reload')).state).toBe('active');
+    // The replacement code ran: the reload swapped generations instead of asking for a restart.
+    expect(await readActivationCount('dev-addon-reload')).toBe(11);
+  });
+
   it('reloads relative JavaScript imports instead of retaining Node module cache entries', async () => {
     const dir = path.join(tmpDir, 'plugins', 'relative-code');
     await writeCountingUnifiedPlugin(dir, 'relative-code');

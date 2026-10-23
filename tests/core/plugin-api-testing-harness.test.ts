@@ -6,7 +6,7 @@
  * points at `dist/`, which is only rebuilt by `npm run build:plugins`, so a test
  * going through the package name would grade a stale build.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { WalnutServerApi } from '../../packages/plugin-api/src/server.js'
 import { createFakeWalnut } from '../../packages/plugin-api/src/testing.js'
 
@@ -159,5 +159,138 @@ describe('createFakeWalnut tasks.fileIntoProject pin tiers', () => {
     expect(task?.pinned).toBe(true)
     expect(task?.focusTier).toBe('wait')
     await expect(fake.api.tasks.fileIntoProject('Work', [{ id: 't1', pinTier: 'icebox' }])).rejects.toThrow(/unknown pin tier/)
+  })
+})
+
+describe('createFakeWalnut storage.database', () => {
+  it('is one database per fake, the same object on every access', async () => {
+    const fake = createFakeWalnut()
+    const first = fake.api.storage.database
+    expect(fake.api.storage.database).toBe(first)
+
+    await first.exec('CREATE TABLE seen (id INTEGER PRIMARY KEY)')
+    await fake.api.storage.database.run('INSERT INTO seen DEFAULT VALUES')
+    expect(await first.get('SELECT COUNT(*) AS n FROM seen')).toEqual({ n: 1 })
+  })
+
+  it('keeps two fakes apart', async () => {
+    const one = createFakeWalnut().api.storage.database
+    const two = createFakeWalnut().api.storage.database
+    await one.exec('CREATE TABLE only_here (id INTEGER PRIMARY KEY)')
+
+    await expect(two.get('SELECT * FROM only_here')).rejects.toThrow('no such table: only_here')
+    expect(await one.all('SELECT * FROM only_here')).toEqual([])
+  })
+
+  it('round trips rows as plain objects', async () => {
+    const db = createFakeWalnut().api.storage.database
+    await db.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body BLOB, score REAL, missing TEXT)')
+    // Unicode title as escapes: CJK text and an astral emoji survive the round trip.
+    const title = '\u4f60\u597d \u{1F600}'
+
+    expect(await db.run('INSERT INTO notes (title, body, score) VALUES (?, ?, ?)', [title, new Uint8Array([1, 2, 3]), 1.5]))
+      .toEqual({ changes: 1, lastInsertRowid: 1 })
+    expect(await db.run('INSERT INTO notes (title) VALUES (?)', ['second'])).toEqual({ changes: 1, lastInsertRowid: 2 })
+    // A statement that changes nothing reports 0, not the previous write's count.
+    expect(await db.run('CREATE INDEX notes_title ON notes (title)')).toEqual({ changes: 0, lastInsertRowid: 2 })
+
+    const row = await db.get('SELECT * FROM notes WHERE id = ?', [1])
+    expect(row).toEqual({ id: 1, title, body: new Uint8Array([1, 2, 3]), score: 1.5, missing: null })
+    expect(Object.getPrototypeOf(row)).toBe(Object.prototype)
+    expect(await db.get('SELECT * FROM notes WHERE id = ?', [99])).toBeUndefined()
+    expect(await db.all<{ title: string }>('SELECT title FROM notes ORDER BY id')).toEqual([{ title }, { title: 'second' }])
+    await expect(db.all('INSERT INTO notes (title) VALUES (1)')).rejects.toThrow('This statement does not return data. Use run() instead')
+  })
+
+  it('binds bare named keys and positional arrays the way the host does', async () => {
+    const db = createFakeWalnut().api.storage.database
+    await db.exec('CREATE TABLE pairs (id INTEGER PRIMARY KEY, a TEXT, b TEXT)')
+
+    await db.run('INSERT INTO pairs (a, b) VALUES (:a, @b)', { a: 'colon', b: 'at' })
+    await db.run('INSERT INTO pairs (a, b) VALUES ($a, $a)', { a: 'dollar', unused: 'ignored' })
+    await db.run('INSERT INTO pairs (a, b) VALUES (?, ?)', ['first', 'second'])
+    await db.run("INSERT INTO pairs (a, b) VALUES ('12:30 ? @x', :b)", { b: 'literal' })
+    expect(await db.all('SELECT a, b FROM pairs ORDER BY id')).toEqual([
+      { a: 'colon', b: 'at' },
+      { a: 'dollar', b: 'dollar' },
+      { a: 'first', b: 'second' },
+      { a: '12:30 ? @x', b: 'literal' },
+    ])
+
+    // The host refuses these, so the fake does too, with the host's words.
+    await expect(db.run('INSERT INTO pairs (a) VALUES (:a)', {})).rejects.toThrow('Missing named parameter "a"')
+    await expect(db.run('INSERT INTO pairs (a) VALUES (:a)', { ':a': 'prefixed' })).rejects.toThrow('Missing named parameter "a"')
+    await expect(db.run('INSERT INTO pairs (a) VALUES (:a)')).rejects.toThrow('Missing named parameters')
+    await expect(db.run('INSERT INTO pairs (a, b) VALUES (?, ?)', ['only one'])).rejects.toThrow('Too few parameter values were provided')
+    await expect(db.run('INSERT INTO pairs (a) VALUES (?)', ['one', 'two'])).rejects.toThrow('Too many parameter values were provided')
+    await expect(db.run('INSERT INTO pairs (a) VALUES (?)', [true as never])).rejects.toThrow('SQLite3 can only bind numbers, strings, bigints, buffers, and null')
+    await expect(db.run('SELECT 1; SELECT 2')).rejects.toThrow('The supplied SQL string contains more than one statement')
+    expect(await db.get('SELECT COUNT(*) AS n FROM pairs')).toEqual({ n: 4 })
+  })
+
+  it('migrates each version once, in ascending order, inside one transaction', async () => {
+    const db = createFakeWalnut().api.storage.database
+    const migrations = [
+      { version: 2, sql: 'ALTER TABLE items ADD COLUMN note TEXT' },
+      { version: 1, sql: 'CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL)' },
+    ]
+
+    expect(await db.migrate(migrations)).toBe(2)
+    // Applied versions never run again: re-running v1 would fail on the existing table.
+    expect(await db.migrate(migrations)).toBe(2)
+    expect(await db.migrate([])).toBe(2)
+    expect(await db.all('SELECT version FROM _walnut_plugin_migrations ORDER BY version')).toEqual([{ version: 1 }, { version: 2 }])
+    await db.run('INSERT INTO items (value, note) VALUES (?, ?)', ['v', 'n'])
+
+    await expect(db.migrate([
+      { version: 3, sql: 'CREATE TABLE more (id INTEGER)' },
+      { version: 4, sql: 'NOT SQL' },
+    ])).rejects.toThrow('syntax error')
+    expect(await db.get("SELECT name FROM sqlite_master WHERE name = 'more'")).toBeUndefined()
+    expect(await db.get('SELECT MAX(version) AS version FROM _walnut_plugin_migrations')).toEqual({ version: 2 })
+
+    await expect(db.migrate([{ version: 0, sql: 'SELECT 1' }])).rejects.toThrow('Migration versions must be positive integers')
+    await expect(db.migrate([{ version: 5, sql: 'SELECT 1' }, { version: 5, sql: 'SELECT 1' }])).rejects.toThrow('Duplicate migration version 5')
+  })
+
+  it('commits a batch, or rolls all of it back naming the failing statement', async () => {
+    const db = createFakeWalnut().api.storage.database
+    await db.exec('CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE)')
+    await db.exec('CREATE TABLE tags (id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL, tag TEXT NOT NULL)')
+    const values = async () => (await db.all<{ value: string }>('SELECT value FROM items ORDER BY id')).map((row) => row.value)
+
+    expect(await db.batch([
+      { sql: 'INSERT INTO items (value) VALUES (?)', params: ['parent'] },
+      { sql: 'INSERT INTO tags (item_id, tag) VALUES (last_insert_rowid(), :tag)', params: { tag: 'first' } },
+    ])).toEqual([{ changes: 1, lastInsertRowid: 1 }, { changes: 1, lastInsertRowid: 1 }])
+    expect(await db.get('SELECT items.value, tags.tag FROM tags JOIN items ON items.id = tags.item_id')).toEqual({ value: 'parent', tag: 'first' })
+
+    await expect(db.batch([
+      { sql: 'INSERT INTO items (value) VALUES (?)', params: ['kept out'] },
+      { sql: 'INSERT INTO items (value) VALUES (?)', params: ['parent'] },
+    ])).rejects.toThrow('Plugin database batch failed at statement 1, nothing was written: UNIQUE constraint failed: items.value')
+    expect(await values()).toEqual(['parent'])
+
+    expect(await db.batch([])).toEqual([])
+    await expect(db.batch('INSERT' as never)).rejects.toThrow('Plugin database batch takes an array of { sql, params } statements')
+    await expect(db.batch([{ sql: 'SELECT 1' }, { params: [] } as never])).rejects.toThrow('Plugin database batch statement 1 must be an object with a string sql')
+  })
+
+  it('rejects every call with the Node version it needs when node:sqlite is missing', async () => {
+    const original = process.getBuiltinModule.bind(process)
+    const lookup = vi.spyOn(process, 'getBuiltinModule').mockImplementation(((id: string) =>
+      id === 'node:sqlite' ? undefined : original(id)) as typeof process.getBuiltinModule)
+    try {
+      const fake = createFakeWalnut()
+      // Reaching the property never throws; only the calls refuse.
+      const db = fake.api.storage.database
+      await expect(db.exec('SELECT 1')).rejects.toThrow(/needs node:sqlite, built into Node\.js 22\.13 or later.*Node\.js \d+\.\d+\.\d+ does not provide it/)
+      await expect(db.get('SELECT 1')).rejects.toThrow('Node.js 22.13 or later')
+      // The rest of the fake keeps working.
+      await fake.api.storage.writeJson('state.json', { ok: true })
+      expect(await fake.api.storage.readJson('state.json', { ok: false })).toEqual({ ok: true })
+    } finally {
+      lookup.mockRestore()
+    }
   })
 })

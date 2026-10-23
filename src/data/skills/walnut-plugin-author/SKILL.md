@@ -87,6 +87,7 @@ Bridge the App to the server with one `registry.wsMethod` that takes a named act
 - Keep request and response bodies bounded.
 - Never block the event loop. No synchronous filesystem, process, database, or multi-megabyte parse work in the server entry. Trusted code shares one process with every route, so one blocking call freezes the whole console.
 - Store state through `walnut.storage`. Store credentials only through `walnut.secrets`.
+- Writes that must land together go in one `walnut.storage.database.batch([{ sql, params }, ...])`: one transaction, rolled back whole when any statement fails, and none of the plugin's other calls lands in between. Never send `BEGIN` and `COMMIT` as separate calls.
 - Never put a credential in source, `manifest.json`, synced config, logs, notifications, examples, task fields, or a receipt returned to the browser. Report secret key names and existence, never values.
 
 ## 6. Keep ownership and cleanup correct
@@ -115,7 +116,7 @@ Never report a plugin as working on the strength of a successful reload call. A 
 
 For UI, drive real clicks. Cover the App's main path, a deep link straight into a subpath, a badge update, the error boundary, disable cleanup, and two instances of any stateful View. Use an isolated Walnut server and point the CLI at it with `OPEN_WALNUT_API_URL`. Never test against the user's production server on port 3456.
 
-`@open-walnut/plugin-api/testing` exports `createFakeWalnut()` for handler-level tests with no running Walnut.
+`@open-walnut/plugin-api/testing` exports `createFakeWalnut()` for handler-level tests with no running Walnut. Its `storage.database` is a real in-memory SQLite that binds and refuses like Walnut's (it needs Node.js 22.13 or later), so test database code against it instead of stubbing it.
 
 ## 8. Security review, then publish-check
 

@@ -633,8 +633,16 @@ export async function activate(walnut: WalnutServerApi) {
 
   await walnut.storage.database.migrate([
     { version: 1, sql: 'CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY, at TEXT NOT NULL)' },
+    { version: 2, sql: 'CREATE TABLE IF NOT EXISTS run_notes (run_id INTEGER NOT NULL, note TEXT NOT NULL)' },
   ])
   await walnut.storage.database.run('INSERT INTO runs (at) VALUES (:at)', { at: new Date().toISOString() })
+
+  // Both rows or neither: one transaction, and no other call of this plugin lands in between.
+  const [run] = await walnut.storage.database.batch([
+    { sql: 'INSERT INTO runs (at) VALUES (:at)', params: { at: new Date().toISOString() } },
+    { sql: 'INSERT INTO run_notes (run_id, note) VALUES (last_insert_rowid(), ?)', params: ['activated'] },
+  ])
+  walnut.log.debug('recorded run', { id: Number(run.lastInsertRowid) })
 
   const token = await walnut.secrets.get('api-token')
   if (!token) walnut.log.warn('no api token yet', { keys: await walnut.secrets.keys() })
@@ -644,7 +652,7 @@ export async function activate(walnut: WalnutServerApi) {
 }
 ```
 
-Plugin files live under `~/.open-walnut/plugin-data/<id>/`. That directory is machine-local and excluded from git sync. File methods reject traversal and write atomically. The private database runs in a worker, so a synchronous native SQLite call cannot block Walnut's event loop. When the file does not exist yet, `readJson` and `updateJson` hand back a copy of the fallback you passed, so mutating what you read is safe even if that fallback is a shared constant.
+Plugin files live under `~/.open-walnut/plugin-data/<id>/`. That directory is machine-local and excluded from git sync. File methods reject traversal and write atomically. The private database runs in a worker, so a synchronous native SQLite call cannot block Walnut's event loop. Each `run` is its own request, so writes that must land together go through `batch`: it runs every statement with `run`, in order, inside one transaction, and answers one `{ changes, lastInsertRowid }` per statement. Any failure rolls the whole batch back and rejects with an error naming the zero-based index of the failing statement (`Plugin database batch failed at statement 1, nothing was written: ...`). Your other database calls queue behind a pending batch, never inside it. A later statement reads an earlier insert's id with SQLite's `last_insert_rowid()`, and an empty array answers `[]`. Do not send `BEGIN` and `COMMIT` as separate calls: another of your calls can land between them. Like every database call, a batch is answered within 30 seconds; one that runs longer rejects, though the worker may still finish and commit it. An older Walnut has no `batch`: when your `engines.walnut` range admits one, check `typeof walnut.storage.database.batch === 'function'` first. When the file does not exist yet, `readJson` and `updateJson` hand back a copy of the fallback you passed, so mutating what you read is safe even if that fallback is a shared constant.
 
 Credentials belong in `walnut.secrets`, never in `walnut.storage`, `manifest.json`, source code, synced config, logs, notifications, or task fields. Report key names when you need to show state, never values.
 
@@ -933,6 +941,8 @@ Set `WALNUT_PLUGIN_SAFE_MODE=1` or start Walnut with `--plugin-safe-mode` to dis
 
 Server builds bundle ordinary npm dependencies and leave Node built-ins external, so a native dependency needs your own testing. Web builds are single-file ESM and keep React external through the host shims.
 
+A reload swaps in a fresh copy of the plugin directory, but a native addon (`.node`) cannot be unloaded from a running process. So when the plugin's runtime code can load one, Walnut loads the plugin in place and every later reload asks for a restart. An addon counts when it is the plugin's own file outside `node_modules`, or when it sits in a package that `dependencies`, `optionalDependencies` or `peerDependencies` reach, directly or through other packages. Addons that only `devDependencies` bring in (a test runner's bundler binary, a file watcher) do not count: Plugin Store installs leave dev packages out, and a linked plugin with its dev tools installed still hot reloads. Without a readable `package.json` every addon counts.
+
 `OPEN_WALNUT_API_URL` points the CLI at a local Walnut other than `http://127.0.0.1:3456`, which is what you want against an isolated test server. The CLI does not carry a remote authentication credential, so an authenticated remote deployment rejects these management calls. Every call is bounded, and a miss is reported as `offline` rather than hanging your terminal.
 
 ### What the dev loop prints
@@ -955,6 +965,8 @@ npx walnut-plugin publish-check
 ```
 
 `@open-walnut/plugin-api/testing` exports `createFakeWalnut()`, which builds a server API backed by in-memory tasks, config, storage, and secrets, and records the notices, errors, and events your plugin produced. Use it to test `activate` and your handlers without a running Walnut.
+
+Its `storage.database` is a real in-memory SQLite, one per fake, so database code runs for real in a unit test: `exec`, `run`, `get`, `all`, `migrate` and `batch` answer as Walnut's do, with the same parameter binding (bare keys for `:name`, `@name` and `$name`, arrays for `?`), the same refusals, the same migrations table and the same batch rollback. It uses Node's built-in `node:sqlite`, which needs Node.js 22.13 or later (23.4 or later on the 23 line) with no flag; on an older Node every database call rejects with a message saying so, and the rest of the fake still works.
 
 Test disposal as carefully as activation. Reload the plugin at least three times and assert that routes, Tools, timers, event listeners, Hooks, Commands, Skills, Agents, Providers, RPC methods, Apps, and Settings sections each end at a count of one.
 

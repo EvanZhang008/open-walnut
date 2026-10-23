@@ -96,6 +96,130 @@ describe('PluginStorage', () => {
   })
 })
 
+describe('PluginDatabaseClient bad input', () => {
+  it('a parameter the worker cannot receive fails that call only; the database keeps working', async () => {
+    const db = storage.database
+    await db.exec('CREATE TABLE t (v TEXT)')
+    await expect(db.run('INSERT INTO t (v) VALUES (?)', [() => 'not data'])).rejects.toThrow(/cannot be sent to the database worker/)
+    await expect(db.batch([{ sql: 'INSERT INTO t (v) VALUES (?)', params: [Symbol('x')] as never }])).rejects.toThrow(/cannot be sent/)
+    await db.run('INSERT INTO t (v) VALUES (?)', ['still here'])
+    expect(await db.all('SELECT v FROM t')).toEqual([{ v: 'still here' }])
+  })
+
+  it('a bad migration list rejects instead of throwing', async () => {
+    const db = storage.database
+    let thrown: unknown = null
+    let pending: Promise<number> | undefined
+    try {
+      pending = db.migrate([{ version: 0, sql: 'SELECT 1' }])
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeNull()
+    await expect(pending).rejects.toThrow('Migration versions must be positive integers')
+    await expect(db.migrate([{ version: 1, sql: 'SELECT 1' }, { version: 1, sql: 'SELECT 2' }])).rejects.toThrow('Duplicate migration version 1')
+  })
+})
+
+describe('PluginDatabaseClient.batch', () => {
+  const insert = (value: string) => ({ sql: 'INSERT INTO items(value) VALUES (?)', params: [value] })
+  const values = async () => (await storage.database.all<{ value: string }>('SELECT value FROM items ORDER BY id')).map((row) => row.value)
+
+  beforeEach(async () => {
+    await storage.database.exec('CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE)')
+  })
+
+  it('commits every statement in order and answers one result each', async () => {
+    const results = await storage.database.batch([
+      insert('a'),
+      { sql: 'INSERT INTO items(value) VALUES (:value)', params: { value: 'b' } },
+      { sql: "UPDATE items SET value = value || '!'" },
+    ])
+
+    expect(results).toEqual([
+      { changes: 1, lastInsertRowid: 1 },
+      { changes: 1, lastInsertRowid: 2 },
+      { changes: 2, lastInsertRowid: 2 },
+    ])
+    expect(await values()).toEqual(['a!', 'b!'])
+  })
+
+  it('rolls the whole batch back when one statement fails and names its index', async () => {
+    await expect(storage.database.batch([insert('a'), insert('a'), insert('c')]))
+      .rejects.toThrow('Plugin database batch failed at statement 1, nothing was written: UNIQUE constraint failed: items.value')
+    expect(await values()).toEqual([])
+
+    // A binding error and a statement that does not compile name their index the same way.
+    await expect(storage.database.batch([{ sql: 'INSERT INTO items(value) VALUES (:value)', params: {} }]))
+      .rejects.toThrow('batch failed at statement 0, nothing was written: Missing named parameter "value"')
+    await expect(storage.database.batch([insert('x'), insert('y'), { sql: 'INSERT INTO nowhere VALUES (1)' }]))
+      .rejects.toThrow('batch failed at statement 2, nothing was written: no such table: nowhere')
+    expect(await values()).toEqual([])
+
+    // The database stays usable after a rollback.
+    await storage.database.batch([insert('after')])
+    expect(await values()).toEqual(['after'])
+  })
+
+  it('lets a later statement use the row id an earlier one created', async () => {
+    await storage.database.exec('CREATE TABLE tags (id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL, tag TEXT NOT NULL)')
+    await storage.database.run('INSERT INTO items(value) VALUES (?)', ['existing'])
+
+    const results = await storage.database.batch([
+      insert('parent'),
+      { sql: 'INSERT INTO tags(item_id, tag) VALUES (last_insert_rowid(), ?)', params: ['first'] },
+      { sql: "INSERT INTO tags(item_id, tag) VALUES ((SELECT id FROM items WHERE value = 'parent'), :tag)", params: { tag: 'second' } },
+    ])
+
+    expect(results.map((result) => result.lastInsertRowid)).toEqual([2, 1, 2])
+    expect(await storage.database.all('SELECT items.value, tags.tag FROM tags JOIN items ON items.id = tags.item_id ORDER BY tags.id'))
+      .toEqual([{ value: 'parent', tag: 'first' }, { value: 'parent', tag: 'second' }])
+  })
+
+  it('answers [] for an empty batch', async () => {
+    expect(await storage.database.batch([])).toEqual([])
+    expect(await values()).toEqual([])
+  })
+
+  it('rejects malformed input before anything runs', async () => {
+    const database = storage.database
+    await expect(database.batch('INSERT INTO items(value) VALUES (1)' as never)).rejects.toThrow('Plugin database batch takes an array of { sql, params } statements')
+    await expect(database.batch([insert('a'), { params: ['b'] } as never])).rejects.toThrow('Plugin database batch statement 1 must be an object with a string sql')
+    await expect(database.batch([null as never])).rejects.toThrow('Plugin database batch statement 0 must be an object with a string sql')
+    await expect(database.batch([{ sql: 42 } as never])).rejects.toThrow('Plugin database batch statement 0 must be an object with a string sql')
+    expect(await values()).toEqual([])
+
+    // Only sql and params cross to the worker: an extra property never breaks the batch.
+    expect(await database.batch([{ ...insert('a'), describe: () => 'not cloneable' } as never])).toHaveLength(1)
+    expect(await values()).toEqual(['a'])
+  })
+
+  it('applies a run() issued while a batch is pending before or after it, never inside it', async () => {
+    const failing = [...Array.from({ length: 500 }, (_, index) => insert(`bulk-${index}`)), insert('bulk-0')]
+    const before = storage.database.run('INSERT INTO items(value) VALUES (?)', ['before'])
+    const rolledBack = storage.database.batch(failing)
+    const during = storage.database.run('INSERT INTO items(value) VALUES (?)', ['during'])
+
+    await expect(rolledBack).rejects.toThrow('batch failed at statement 500')
+    await before
+    await during
+    expect(await values()).toEqual(['before', 'during'])
+
+    const committed = storage.database.batch([insert('one'), insert('two')])
+    const next = storage.database.run('INSERT INTO items(value) VALUES (?)', ['next'])
+    const [batchResults, nextResult] = await Promise.all([committed, next])
+    // Both batch rows got their ids before the concurrent insert: it ran after the commit.
+    expect(nextResult.lastInsertRowid).toBe(Number(batchResults[1].lastInsertRowid) + 1)
+    expect(await values()).toEqual(['before', 'during', 'one', 'two', 'next'])
+  })
+
+  it('rejects once the storage is closed', async () => {
+    const database = storage.database
+    await storage.dispose()
+    await expect(database.batch([insert('a')])).rejects.toThrow('Plugin database is closed')
+  })
+})
+
 describe('PluginSecretStore', () => {
   it('stores secrets outside sync with mode 0600', async () => {
     const secrets = new PluginSecretStore('sample')

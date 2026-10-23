@@ -766,12 +766,25 @@ export interface SqlRunResult {
   lastInsertRowid: number | bigint
 }
 
+export interface SqlStatement {
+  sql: string
+  params?: SqlParams
+}
+
 export interface PluginDatabase {
   exec(sql: string): Promise<void>
   run(sql: string, params?: SqlParams): Promise<SqlRunResult>
   get<T extends Record<string, unknown> = Record<string, unknown>>(sql: string, params?: SqlParams): Promise<T | undefined>
   all<T extends Record<string, unknown> = Record<string, unknown>>(sql: string, params?: SqlParams): Promise<T[]>
   migrate(migrations: Array<{ version: number; sql: string }>): Promise<number>
+  /**
+   * Runs every statement with `run`, in order, inside ONE transaction, and answers one
+   * result per statement. Any failure rolls the whole batch back and rejects with an
+   * error naming the zero-based index of the failing statement. No other call of this
+   * plugin runs in the middle of a batch. A later statement may read an earlier one's
+   * row id with SQLite's `last_insert_rowid()`. An empty array answers `[]`.
+   */
+  batch(statements: SqlStatement[]): Promise<SqlRunResult[]>
 }
 
 export interface StorageService {

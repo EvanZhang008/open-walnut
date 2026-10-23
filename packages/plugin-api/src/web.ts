@@ -132,6 +132,12 @@ export interface TerminalViewProps {
   host?: string
 }
 
+/**
+ * A session's full panel (history, composer, model and mode), drawn inside your App. It is
+ * an embedded panel, not a home column: closing it, or closing it after a crash, only calls
+ * `onClose` and never touches the person's session columns. Column lock does not apply here,
+ * so `locked` and `onToggleLock` are accepted for compatibility and draw no lock control.
+ */
 export interface SessionViewProps {
   sessionId: string
   onClose(): void

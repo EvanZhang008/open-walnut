@@ -50,8 +50,11 @@ function TerminalView({ sessionId, label, host }: TerminalViewProps) {
 function SessionView({ sessionId, onClose, locked, onToggleLock }: SessionViewProps) {
   return (
     <div className="plugin-session-view">
+      {/* A plugin App hosts this panel inside its own screen, never as a home column. Without
+          `embedded`, the crash fallback's Close also wiped the user's saved column layout. */}
       <SessionPanel
         sessionId={sessionId}
+        embedded
         onClose={() => onClose()}
         locked={locked}
         onToggleLock={onToggleLock ? () => onToggleLock() : undefined}
