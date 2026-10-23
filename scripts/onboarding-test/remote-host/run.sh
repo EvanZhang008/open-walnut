@@ -25,8 +25,8 @@
 #   scripts/onboarding-test/remote-host/run.sh --keep   # leave the container up
 #   scripts/onboarding-test/remote-host/run.sh --help
 #
-# Needs: docker (daemon running), ssh, ssh-keygen, and `npm install` done in
-# the repo. `npm run build:daemon` first gives the daemon its optional sidecars.
+# Needs: docker (daemon running), ssh, ssh-keygen, bun, and `bun install` done in
+# the repo. `bun run build:daemon` first gives the daemon its optional sidecars.
 # Bash 3.2 safe: this also runs from a stock macOS shell.
 
 KEEP=0
@@ -64,10 +64,11 @@ NETWORK_PATTERN='Could not resolve|Temporary failure (in name )?resolv|no such h
 for tool in ssh ssh-keygen; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed; the test drives Walnut's real ssh path"
 done
-VITEST="$REPO/node_modules/.bin/vitest"
-[ -x "$VITEST" ] || die "vitest is missing; run 'npm install' in $REPO first"
+# The test tiers run on bun (`bun --bun vitest`); vitest refuses Node.
+command -v bun >/dev/null 2>&1 || die "bun is not installed; the test runs on it (https://bun.sh)"
+[ -x "$REPO/node_modules/.bin/vitest" ] || die "vitest is missing; run 'bun install' in $REPO first"
 if [ ! -f "$REPO/dist/daemon-binaries/changes-core.cjs" ]; then
-  echo "remote-host: warning: dist/daemon-binaries has no sidecars; run 'npm run build:daemon' for full daemon parity" >&2
+  echo "remote-host: warning: dist/daemon-binaries has no sidecars; run 'bun run build:daemon' for full daemon parity" >&2
 fi
 
 # Short path on purpose: ssh ControlMaster sockets live under here and a unix
@@ -173,7 +174,7 @@ mkdir -p "$OPEN_WALNUT_HOME" "$WALNUT_DAEMON_DIR"
 
 cd "$REPO"
 set +e
-"$VITEST" run --config vitest.live.config.ts tests/live/remote-host-onboarding.live.test.ts
+bun --bun vitest run --config vitest.live.config.ts tests/live/remote-host-onboarding.live.test.ts
 test_status=$?
 set -e
 

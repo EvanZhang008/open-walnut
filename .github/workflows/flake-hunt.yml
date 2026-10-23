@@ -38,7 +38,7 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    # A setup step that breaks (npm, a runner) is not this commit's fault either.
+    # A setup step that breaks (an install, a runner) is not this commit's fault either.
     continue-on-error: true
     strategy:
       fail-fast: false
@@ -62,17 +62,16 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.workflow_run.head_sha || inputs.sha || github.sha }}
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
+      # As in CI: bun alone, the image's Node taken off PATH.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
       - run: bun install --frozen-lockfile
       - if: matrix.build == 'plugins'
-        run: npm run build:plugins
+        run: bun run build:plugins
       - if: matrix.build == 'all'
-        run: npm run build
+        run: bun run build
       - name: ${{ matrix.leg }} tests, again
         id: tests
         continue-on-error: true
@@ -88,12 +87,12 @@ jobs:
             export GIT_AUTHOR_NAME="Open Walnut CI" GIT_AUTHOR_EMAIL=open-walnut@localhost
             export GIT_COMMITTER_NAME="Open Walnut CI" GIT_COMMITTER_EMAIL=open-walnut@localhost
           fi
-          node scripts/test-baseline.mjs check ${{ matrix.args }}
+          bun scripts/test-baseline.mjs check ${{ matrix.args }}
       - name: Report what the rerun found
         if: always()
         env:
           WALNUT_BASELINE_FILE: ${{ matrix.baseline || format('{0}/no-known-failures.json', runner.temp) }}
           WALNUT_BASELINE_RUN_OUT: ${{ runner.temp }}/flake-hunt-run.json
         run: >-
-          node scripts/flake-report.mjs --label "${{ matrix.leg }}" --outcome "${{ steps.tests.outcome }}"
+          bun scripts/flake-report.mjs --label "${{ matrix.leg }}" --outcome "${{ steps.tests.outcome }}"
           --run "$WALNUT_BASELINE_RUN_OUT" --baseline "$WALNUT_BASELINE_FILE"

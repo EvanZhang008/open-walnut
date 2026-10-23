@@ -29,24 +29,38 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      # Bun installs the dependencies (bun.lock, at the version package.json pins
+      # as packageManager), type-checks and builds. No Node: the image's own goes
+      # first (scripts/ci-remove-node.sh), so a step that still needs one fails.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run build
+
+  # The two parts of the pipeline that run on Node, both blocking (CI OK needs
+  # this job). The Playwright runner: it loads every spec before it runs one, so
+  # a single bad import fails the whole browser suite with 0 tests; listing is
+  # that load step alone (~20s, no browser, no server). And the plugin packages,
+  # checked the way an outside plugin author uses them: packed and installed
+  # with npm, scaffolded, built and tested on Node (scripts/check-plugin-packages.mjs).
+  node-side:
+    name: Node side (browser specs load, plugin packages)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      # Bun installs the dependencies (bun.lock, at the version package.json pins
-      # as packageManager), and the build compiles the remote-session daemon with it
-      # (scripts/build-daemon.sh). Node stays: the later steps still run on it.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
-      - run: npm run lint
-      # Playwright loads every spec before it runs one: a single bad import fails
-      # the whole browser suite with 0 tests. Listing is that load step alone
-      # (~20s, no browser, no server), so it blocks here.
       - name: browser specs load
-        run: npx playwright test --list --project=chromium > /dev/null
-      - run: npm run build
-      - run: npm run test:plugin-packages
+        run: bun x playwright test --list --project=chromium > /dev/null
+      - run: bun run test:plugin-packages
 
   # ── Gate 2: the test tiers that are genuinely green, so they can BLOCK ──────
   #
@@ -75,26 +89,25 @@ jobs:
           # tier took 25 minutes and was the longest blocking job, so it runs
           # in three legs; each must report every file of its slice.
           - tier: quick 1/3
-            cmd: npm run test:baseline -- --maxWorkers=1 --shard=1/3
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=1/3
           - tier: quick 2/3
-            cmd: npm run test:baseline -- --maxWorkers=1 --shard=2/3
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=2/3
           - tier: quick 3/3
-            cmd: npm run test:baseline -- --maxWorkers=1 --shard=3/3
-          # 158 tests, ~10s, baseline ZERO. Plain pass/fail is correct here.
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=3/3
+          # 533 tests, ~10s, baseline ZERO. Plain pass/fail is correct here.
           - tier: frontend
-            cmd: npm run test:frontend:ci
+            cmd: bun run test:frontend:ci
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
+      # The tiers run on bun (`bun --bun vitest`), with no Node on the runner.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
       - run: bun install --frozen-lockfile
       # Workspace packages are consumed from their dist/ (demo-plugin-lifecycle loads
       # @open-walnut/plugin-api/dist/react.js); a fresh clone has not built them.
-      - run: npm run build:plugins
+      - run: bun run build:plugins
       - name: ${{ matrix.tier }} tests
         run: ${{ matrix.cmd }}
 
@@ -109,14 +122,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
       - run: bun install --frozen-lockfile
-      - run: npm run build
+      - run: bun run build
       - name: slow tests
         env:
           WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-slow
@@ -124,7 +135,7 @@ jobs:
           GIT_AUTHOR_EMAIL: open-walnut@localhost
           GIT_COMMITTER_NAME: Open Walnut CI
           GIT_COMMITTER_EMAIL: open-walnut@localhost
-        run: npm run test:slow -- --maxWorkers=1 --retry=2
+        run: bun run test:slow -- --maxWorkers=1 --retry=2
 
   # ── Gate 4: the e2e tier ────────────────────────────────────────────────────
   # 134 files that start real servers, daemons, git and mock CLIs, judged against
@@ -143,15 +154,13 @@ jobs:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
       - run: bun install --frozen-lockfile
       # The tier spawns the session daemon, which the build produces.
-      - run: npm run build
+      - run: bun run build
       - name: e2e tests
         env:
           WALNUT_BASELINE_CONFIG: vitest.e2e.config.ts
@@ -167,7 +176,7 @@ jobs:
           GIT_AUTHOR_EMAIL: open-walnut@localhost
           GIT_COMMITTER_NAME: Open Walnut CI
           GIT_COMMITTER_EMAIL: open-walnut@localhost
-        run: node scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4
+        run: bun scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4
       - name: Upload this leg's failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -317,14 +326,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
+      # The Walnut side runs on bun alone (the live test through `bun --bun vitest`).
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
       - run: bun install --frozen-lockfile
-      - run: npm run build:daemon
+      - run: bun run build:daemon
         env:
           WALNUT_REQUIRE_BUN: '1'
       # One retry: this job pulls the base image from Docker Hub and the remote
@@ -471,8 +479,10 @@ jobs:
 
   # ── Informational: the browser suite ────────────────────────────────────────
   # The Playwright specs drive the real SPA against a fixture server with a mock
-  # CLI (tests/e2e/browser/). Four shards, retries on (playwright.config.ts under
+  # CLI (tests/e2e/browser/). Eight shards, retries on (playwright.config.ts under
   # CI). Reported, not judged, until a recorded baseline lets new failures block.
+  # The runner is the one part of the pipeline on Node; every server it starts
+  # runs on bun (tests/helpers/bun-runtime.ts).
   browser:
     name: Report (browser ${{ matrix.shard }}/8)
     runs-on: ubuntu-24.04
@@ -496,10 +506,10 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
-      - run: npm run build && (cd web && npx vite build)
+      - run: bun run build && (cd web && bun x vite build)
       # WebKit too: the *.webkit.spec.ts specs launch it themselves (the Mac app
       # is WebKit), and without it each one failed at launch (98 tests, 2026-10-23).
-      - run: npx playwright install --with-deps chromium webkit
+      - run: bun x playwright install --with-deps chromium webkit
       - name: browser tests
         id: report
         continue-on-error: true
@@ -517,13 +527,13 @@ jobs:
           budget=$(( left < 2700 ? left : 2700 ))
           [ "$budget" -ge 60 ] || budget=60
           echo "test budget: ${budget}s"
-          npx playwright test --project=chromium --shard=${{ matrix.shard }}/8 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
+          bun x playwright test --project=chromium --shard=${{ matrix.shard }}/8 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
       - name: Summarize
         if: always()
         run: |
           f="$RUNNER_TEMP/browser-${{ matrix.shard }}.json"
           [ -f "$f" ] || { echo "no report" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
-          node scripts/playwright-summary.mjs "$f" >> "$GITHUB_STEP_SUMMARY"
+          bun scripts/playwright-summary.mjs "$f" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4
@@ -542,7 +552,7 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-24.04
-    needs: [build, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, archive-targets]
+    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, archive-targets]
     # Runs whatever the gates concluded, EXCEPT on a run a newer push cancelled:
     # there it judged cancelled legs and turned the superseded run red (6 of the
     # 9 red runs on main from 2026-10-02 to 10-04). A job that hits its timeout
@@ -552,6 +562,7 @@ jobs:
       - name: Check gate results
         run: |
           echo "build:      ${{ needs.build.result }}"
+          echo "node-side:  ${{ needs.node-side.result }}"
           echo "test:       ${{ needs.test.result }}"
           echo "test-heavy: ${{ needs.test-heavy.result }}"
           echo "test-e2e:   ${{ needs.test-e2e.result }}"
@@ -563,6 +574,7 @@ jobs:
           # None of these jobs uses continue-on-error, so the values are unambiguous.
           failed=0
           [ "${{ needs.build.result }}" = "success" ] || { echo "::error::build failed"; failed=1; }
+          [ "${{ needs.node-side.result }}" = "success" ] || { echo "::error::a browser spec failed to load, or the plugin package check failed"; failed=1; }
           [ "${{ needs.test.result }}" = "success" ] || { echo "::error::a blocking test tier failed"; failed=1; }
           [ "${{ needs.test-heavy.result }}" = "success" ] || { echo "::error::the slow tier failed"; failed=1; }
           [ "${{ needs.test-e2e.result }}" = "success" ] || { echo "::error::the e2e tier failed: a failure not in tests/setup/known-failures-e2e.json, or a run that crashed"; failed=1; }

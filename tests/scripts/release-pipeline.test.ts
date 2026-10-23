@@ -839,7 +839,7 @@ describe('ci.yml', () => {
   const gate = doc.jobs['ci-ok']!
 
   it('CI OK, the check both channels publish by, waits on the rehearsal, the slow tier and e2e', () => {
-    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'test', 'test-heavy', 'test-e2e', 'onboarding', 'remote-host', 'rehearsal']))
+    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'node-side', 'test', 'test-heavy', 'test-e2e', 'onboarding', 'remote-host', 'rehearsal']))
     // The informational browser suite stays out of the gate.
     expect(gate.needs).not.toContain('browser')
     const check = gate.steps.map((s) => s.run ?? '').join('\n')
@@ -868,16 +868,16 @@ describe('ci.yml', () => {
 
   it('the quick tier blocks in three serial legs that cover it once', () => {
     const legs = (doc.jobs.test!.strategy!.matrix.include as Array<{ tier: string; cmd: string }>).filter((l) => l.tier.startsWith('quick'))
-    expect(legs.map((l) => l.cmd)).toEqual([1, 2, 3].map((i) => `npm run test:baseline -- --maxWorkers=1 --shard=${i}/3`))
+    expect(legs.map((l) => l.cmd)).toEqual([1, 2, 3].map((i) => `bun run test:baseline -- --maxWorkers=1 --shard=${i}/3`))
     expect(doc.jobs.test!.steps.some((s) => s['continue-on-error'])).toBe(false)
   })
 
   it('the slow and e2e tiers block, with retries for runner flakes', () => {
-    expect(runs('test-heavy')).toContain('npm run test:slow -- --maxWorkers=1 --retry=2')
+    expect(runs('test-heavy')).toContain('bun run test:slow -- --maxWorkers=1 --retry=2')
     expect(doc.jobs['test-heavy']!.steps.some((s) => s['continue-on-error'])).toBe(false)
     // e2e: four shards, each judged against the committed baseline, never tolerated.
     expect(doc.jobs['test-e2e']!.strategy!.matrix.shard).toEqual([1, 2, 3, 4])
-    expect(runs('test-e2e')).toContain('node scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4')
+    expect(runs('test-e2e')).toContain('bun scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4')
     expect(doc.jobs['test-e2e']!.steps.some((s) => s['continue-on-error'])).toBe(false)
     const e2e = doc.jobs['test-e2e']!.steps.find((s) => s.run?.includes('test-baseline.mjs')) as { env?: Record<string, string> }
     expect(e2e.env).toMatchObject({
@@ -892,7 +892,8 @@ describe('ci.yml', () => {
 
   it('the browser suite runs in shards and reports through the tested summary script', () => {
     expect(doc.jobs.browser!.strategy!.matrix.shard).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
-    expect(runs('browser')).toContain('npx playwright test --project=chromium --shard=${{ matrix.shard }}/8')
+    // `bun x` starts the runner on the job's Node (playwright's own shebang); its servers run on bun.
+    expect(runs('browser')).toContain('bun x playwright test --project=chromium --shard=${{ matrix.shard }}/8')
     // The run ends itself before the job timeout, so its report is always uploaded.
     // Its budget is counted from the job's first step (2026-10-23: a 14 min browser
     // install left a fixed 45 min run still going when the job's 60 ran out).
@@ -906,13 +907,13 @@ describe('ci.yml', () => {
     const cap = Number(/budget=\$\(\( left < (\d+) \? left : \1 \)\)/.exec(test)?.[1])
     expect(cap * 1000).toBeLessThan((jobMin - 10) * 60_000)
     // Every engine a spec launches is installed: *.webkit.spec.ts specs launch WebKit.
-    expect(test).toContain('npx playwright install --with-deps chromium webkit')
-    expect(test).toContain('node scripts/playwright-summary.mjs')
+    expect(test).toContain('bun x playwright install --with-deps chromium webkit')
+    expect(test).toContain('bun scripts/playwright-summary.mjs')
   })
 
   it('the browser budget never runs the tests past the job timeout, however long the setup took', () => {
     const test = runs('browser')
-    const script = test.slice(test.indexOf('left=$(('), test.indexOf('npx playwright test --project'))
+    const script = test.slice(test.indexOf('left=$(('), test.indexOf('bun x playwright test --project'))
     const jobMin = (doc.jobs.browser as unknown as { 'timeout-minutes': number })['timeout-minutes']
     for (const setupSecs of [60, 840, 2900, 3500]) {
       const now = 1_800_000_000
@@ -924,13 +925,23 @@ describe('ci.yml', () => {
     }
   })
 
-  it('a browser spec that fails to load blocks in Lint & build, before any shard runs', () => {
+  it('a browser spec that fails to load blocks, in the Node side job, before any shard runs', () => {
     // 2026-10-02: one missing export made every shard run 0 tests, and the report-only
-    // shards stayed green.
-    const steps = doc.jobs.build!.steps
-    const list = steps.findIndex((s) => (s.run ?? '').includes('npx playwright test --list --project=chromium'))
+    // shards stayed green. The Playwright runner needs Node, so the load check runs in
+    // the one blocking job that keeps it, not in the Node-free Lint & build.
+    const steps = doc.jobs['node-side']!.steps as Array<{ run?: string; uses?: string; 'continue-on-error'?: boolean }>
+    const list = steps.findIndex((s) => (s.run ?? '').includes('bun x playwright test --list --project=chromium'))
     expect(list).toBeGreaterThan(steps.findIndex((s) => s.run === 'bun install --frozen-lockfile'))
+    expect(steps.findIndex((s) => s.uses?.startsWith('actions/setup-node'))).toBeGreaterThan(-1)
     expect(steps[list]!['continue-on-error']).toBeUndefined()
-    expect(gate.needs).toContain('build')
+    expect(gate.needs).toContain('node-side')
+  })
+
+  it('the plugin packages are checked as an outside author uses them, on Node, and block', () => {
+    // npm pack, npm install, the scaffold's `npm run plugin:test`: a plugin author's
+    // toolchain (packages/plugin-cli), so it runs where Node and npm are.
+    expect(runs('node-side')).toContain('bun run test:plugin-packages')
+    expect(runs('build')).not.toContain('test:plugin-packages')
+    expect((doc.jobs['node-side']!.steps as Array<{ 'continue-on-error'?: boolean }>).some((s) => s['continue-on-error'])).toBe(false)
   })
 })

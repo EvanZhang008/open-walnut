@@ -145,16 +145,16 @@ describe('flake-hunt.yml', () => {
 
   it('reruns every blocking leg CI has, with CI\'s own arguments', () => {
     const quickCmds = ci.jobs.test!.strategy!.matrix.include!.filter((l) => l.tier.startsWith('quick')).map((l) => l.cmd)
-    expect(legs.filter((l) => l.leg.startsWith('quick')).map((l) => `npm run test:baseline -- ${l.args}`)).toEqual(quickCmds)
+    expect(legs.filter((l) => l.leg.startsWith('quick')).map((l) => `bun run test:baseline -- ${l.args}`)).toEqual(quickCmds)
     const e2eRun = ci.jobs['test-e2e']!.steps.map((s) => s.run ?? '').find((r) => r.includes('test-baseline.mjs'))!
     for (const shard of ci.jobs['test-e2e']!.strategy!.matrix.shard!) {
       const leg = legs.find((l) => l.leg === `e2e ${shard}/4`)!
-      expect(e2eRun.replace('${{ matrix.shard }}', String(shard))).toBe(`node scripts/test-baseline.mjs check ${leg.args}`)
+      expect(e2eRun.replace('${{ matrix.shard }}', String(shard))).toBe(`bun scripts/test-baseline.mjs check ${leg.args}`)
       expect(leg.baseline).toBe('tests/setup/known-failures-e2e.json')
     }
     const slowRun = ci.jobs['test-heavy']!.steps.map((s) => s.run ?? '').find((r) => r.includes('test:slow'))!
     const slow = legs.find((l) => l.leg === 'slow')!
-    expect(slowRun).toBe(`npm run test:slow -- ${slow.args}`)
+    expect(slowRun).toBe(`bun run test:slow -- ${slow.args}`)
     expect(slow.config).toBe('vitest.slow.config.ts')
   })
 
@@ -162,7 +162,7 @@ describe('flake-hunt.yml', () => {
     expect(job['continue-on-error']).toBe(true)
     const tests = job.steps.find((s) => s.id === 'tests')!
     expect(tests['continue-on-error']).toBe(true)
-    expect(tests.run).toContain('node scripts/test-baseline.mjs check ${{ matrix.args }}')
+    expect(tests.run).toContain('bun scripts/test-baseline.mjs check ${{ matrix.args }}')
     const reportStep = job.steps.find((s) => s.run?.includes('scripts/flake-report.mjs'))!
     expect(reportStep.if).toBe('always()')
     expect(reportStep.run).toContain('--outcome "${{ steps.tests.outcome }}"')
