@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
+import { runtimeDeps } from './tests/setup/runtime-deps';
 
 // LIVE tests — real credentials / real binaries / real remote hosts.
 // Gated per-file by env vars (WALNUT_LIVE_TEST / WALNUT_LIVE_CODEX / …);
@@ -11,7 +12,7 @@ export default defineConfig({
     environment: 'node',
     globalSetup: ['tests/setup/global-setup.ts'],
     // Per-worker parent-liveness watchdog — see vitest.config.ts.
-    setupFiles: ['tests/setup/prod-server-guard.ts', 'tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts'],
+    setupFiles: ['tests/setup/prod-server-guard.ts', 'tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts', 'tests/setup/bun-vi-mock.ts'],
     include: ['tests/**/*.live.test.ts'],
     // Live tests run the real CLI on purpose; every other tier is held to the
     // mock (src/core/test-claude-guard.ts).
@@ -20,6 +21,8 @@ export default defineConfig({
     env: { WALNUT_TEST_REAL_CLAUDE: '1', WALNUT_SEARCH_V2_SEMANTIC: '0' },
     testTimeout: 300_000,
     hookTimeout: 120_000,
+    // Module interop on bun: see tests/setup/runtime-deps.ts.
+    deps: runtimeDeps(),
     pool: 'forks',
     poolOptions: {
       forks: {

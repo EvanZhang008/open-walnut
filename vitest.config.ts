@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
+import { runtimeDeps } from './tests/setup/runtime-deps';
 
 export default defineConfig({
   // Same aliases as vitest.quick.config.ts: '@open-walnut/*' are alias-only
@@ -52,12 +53,16 @@ export default defineConfig({
       'tests/setup/tmp-reaper.ts',
       'tests/setup/temp-tree-rm.ts',
       'tests/setup/worker-watchdog.ts',
+      // vi.mock of a relative path on bun: see the file.
+      'tests/setup/bun-vi-mock.ts',
     ],
     include: ['tests/**/*.test.ts'],
     // notes-roundtrip runs under its own DOM-shimmed config (its deps live in
     // web/node_modules); exclude it from the node-env base/coverage runs so it
     // can't fail to resolve @tiptap/* here.
     exclude: ['tests/e2e/**/*.test.ts', 'tests/commands/**/*.test.ts', 'tests/web/notes-roundtrip/**', '**/*.live.test.ts'],
+    // Module interop on bun: see tests/setup/runtime-deps.ts.
+    deps: runtimeDeps(),
     pool: 'forks',
     // Machine-wide budget — see tests/setup/worker-budget.ts for the crash
     // rationale. Inherited by unit/integration via mergeConfig.
