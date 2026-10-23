@@ -3,9 +3,19 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { realNodeOnPath, withNodeFirst } from './outside-node.mjs'
 
 const repoRoot = path.resolve(import.meta.dirname, '..')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+// An outside plugin author's toolchain is npm on Node: the scaffold, the import
+// probe and every npm step (and the scripts npm runs) get the real Node, also
+// when this script itself runs on bun.
+const node = process.versions.bun ? realNodeOnPath() : process.execPath
+if (!node) {
+  process.stderr.write('check-plugin-packages: no Node on PATH. The plugin packages are checked as an outside author uses them, with npm on Node: install Node.\n')
+  process.exit(1)
+}
+const env = withNodeFirst(process.env, node)
 const packageDirs = {
   api: path.join(repoRoot, 'packages', 'plugin-api'),
   cli: path.join(repoRoot, 'packages', 'plugin-cli'),
@@ -14,6 +24,7 @@ const packageDirs = {
 function run(args, cwd, capture = false) {
   const result = spawnSync(npm, args, {
     cwd,
+    env,
     encoding: 'utf8',
     stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     timeout: 300_000,
@@ -86,7 +97,7 @@ async function main() {
       'dist',
       'cli.js',
     )
-    const scaffold = spawnSync(process.execPath, [
+    const scaffold = spawnSync(node, [
       cliEntry,
       'new',
       'packed-consumer',
@@ -94,7 +105,7 @@ async function main() {
       pluginDir,
       '--template',
       'both',
-    ], { cwd: scratch, encoding: 'utf8', stdio: 'inherit', timeout: 60_000 })
+    ], { cwd: scratch, env, encoding: 'utf8', stdio: 'inherit', timeout: 60_000 })
     if (scaffold.error) throw scaffold.error
     if (scaffold.status !== 0) throw new Error(`packed walnut-plugin new failed (${scaffold.status})`)
 
@@ -121,13 +132,13 @@ export type PublicContractTypes = Disposable | WalnutTask | WalnutTaskSummary | 
       apiTarball,
       cliTarball,
     ], pluginDir)
-    const runtimeProbe = spawnSync(process.execPath, [
+    const runtimeProbe = spawnSync(node, [
       '--input-type=module',
       '--eval',
       `import { WalnutPluginError } from '@open-walnut/plugin-api/server'
 const error = new WalnutPluginError({ code: 'probe', message: 'runtime export' })
 if (!(error instanceof Error) || error.code !== 'probe') process.exit(1)`,
-    ], { cwd: pluginDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
+    ], { cwd: pluginDir, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
     if (runtimeProbe.error) throw runtimeProbe.error
     assert(runtimeProbe.status === 0, `Plugin API runtime import failed: ${runtimeProbe.stderr || runtimeProbe.stdout}`)
     run(['run', 'test'], pluginDir)

@@ -944,4 +944,9 @@ describe('ci.yml', () => {
     expect(runs('build')).not.toContain('test:plugin-packages')
     expect((doc.jobs['node-side']!.steps as Array<{ 'continue-on-error'?: boolean }>).some((s) => s['continue-on-error'])).toBe(false)
   })
+
+  it('the npm channel runs where Node and npm are, and blocks', () => {
+    // The Node-free jobs skip the npm tests; a user's npm is checked here.
+    expect(runs('node-side')).toContain('bun run test:npm-channel')
+  })
 })

@@ -26,6 +26,7 @@ import { carryRelease, fileTarget, isMachOHeader, machOArch } from '../../script
 import zlib from 'node:zlib'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
+import { npmEnv, npmOnPath } from '../helpers/npm-on-path.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'release-archives-test-')))
@@ -83,13 +84,15 @@ describe('build.mjs', () => {
     expect(updaterKnowsArchive(old)).toBe(false)
   })
 
-  it('--check says whether the package npm would serve can have an archive, without building one', () => {
+  // It packs with a user's npm: skipped where there is none (the Node-free CI jobs), run in node-side (test:npm-channel).
+  it.skipIf(!npmOnPath())('--check says whether the package npm would serve can have an archive, without building one', () => {
+    const env = npmEnv()
     const check = (marker: boolean) => {
       const pkg = path.join(tmp, `check-${marker}`)
       touch(path.join(pkg, 'package.json'), JSON.stringify({ name: 'open-walnut', version: marker ? '0.7.0' : '0.6.2' }))
       touch(path.join(pkg, 'dist/cli.js'), marker ? `const m = "${RUNTIME_MARKER}"` : '')
-      const tgz = execFileSync('npm', ['pack', '--silent', '--pack-destination', tmp], { cwd: pkg, encoding: 'utf8' }).trim().split('\n').pop()!
-      return execFileSync(process.execPath, [path.join(ROOT, 'scripts/runtime-bundle/build.mjs'), '--check', '--spec', path.join(tmp, tgz)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      const tgz = execFileSync('npm', ['pack', '--silent', '--pack-destination', tmp], { cwd: pkg, env, encoding: 'utf8' }).trim().split('\n').pop()!
+      return execFileSync(process.execPath, [path.join(ROOT, 'scripts/runtime-bundle/build.mjs'), '--check', '--spec', path.join(tmp, tgz)], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
     }
     expect(check(true)).toBe('supported=true\n')
     expect(check(false)).toBe('supported=false\n')

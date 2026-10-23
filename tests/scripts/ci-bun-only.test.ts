@@ -32,7 +32,7 @@ const NODE_FREE: Record<string, string[]> = {
 /** Jobs that keep Node, each for a reason. */
 const KEEPS_NODE: Record<string, Record<string, string>> = {
   'ci.yml': {
-    'node-side': 'the Playwright runner (spec load) and a plugin author\'s npm toolchain',
+    'node-side': 'the Playwright runner (spec load), a plugin author\'s npm toolchain, the npm channel',
     browser: 'the Playwright runner',
     onboarding: 'the npm channel: a user installs with npm on their own Node',
     rehearsal: 'the npm channel: the release package installed with npm 12',
@@ -42,8 +42,26 @@ const KEEPS_NODE: Record<string, Record<string, string>> = {
 /** Jobs that start no runtime at all. */
 const NO_RUNTIME: Record<string, string[]> = { 'ci.yml': ['ci-ok'] }
 
-/** A run line that starts Node or one of its tools as a command. */
-const NODE_COMMAND = /(^|[\s;&|(])(node|npm|npx|tsx|corepack)(\s|$)/
+/**
+ * A run line that starts Node or one of its tools as a command: after a separator,
+ * a quote or a backtick, or by a path (`./node_modules/.bin/tsx`, `/usr/bin/node`).
+ */
+const NODE_COMMAND = /(^|[\s;&|(`'"/])(node|npm|npx|tsx|corepack)(?=[\s`'";&|)]|$)/
+/** One command of a package script: its parts between &&, ||, ; and |. */
+const commandsOf = (script: string) => script.split(/&&|\|\||;|\|/).map((p) => p.trim()).filter(Boolean)
+const SCRIPTS = (JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> }).scripts
+/** The package scripts a job's run lines reach through `bun run <name>`, and the ones those reach. */
+function scriptsReached(texts: string[]): string[] {
+  const seen = new Set<string>()
+  const todo = texts.flatMap((t) => [...t.matchAll(/\bbun run ([\w:.-]+)/g)].map((m) => m[1]!))
+  while (todo.length) {
+    const name = todo.pop()!
+    if (seen.has(name) || !(name in SCRIPTS)) continue
+    seen.add(name)
+    todo.push(...[...SCRIPTS[name]!.matchAll(/\bbun run ([\w:.-]+)/g)].map((m) => m[1]!))
+  }
+  return [...seen].sort()
+}
 
 describe('CI jobs that build or test run on bun alone', () => {
   for (const [file, jobs] of Object.entries(NODE_FREE)) {
@@ -63,15 +81,21 @@ describe('CI jobs that build or test run on bun alone', () => {
         expect(remove, name).toBeGreaterThan(bun)
         expect(install, name).toBeGreaterThan(remove)
       })
+      const job = doc.jobs[name]!
+      // `run: ${{ matrix.cmd }}`: the command lives in the matrix.
+      const matrixValues = (job.strategy?.matrix?.include ?? []).flatMap((leg) => Object.values(leg).filter((v): v is string => typeof v === 'string'))
+      const texts = [...(job.steps ?? []).map((s) => s.run ?? ''), ...matrixValues]
       it(`${file} ${name}: no step (nor a matrix value a step runs) starts node, npm, npx, tsx or corepack`, () => {
-        const job = doc.jobs[name]!
-        // `run: ${{ matrix.cmd }}`: the command lives in the matrix.
-        const matrixValues = (job.strategy?.matrix?.include ?? []).flatMap((leg) => Object.values(leg).filter((v): v is string => typeof v === 'string'))
-        for (const text of [...(job.steps ?? []).map((s) => s.run ?? ''), ...matrixValues]) {
+        for (const text of texts) {
           for (const line of text.split('\n')) {
             if (line.trim().startsWith('#')) continue
             expect(line, `${name}: ${line}`).not.toMatch(NODE_COMMAND)
           }
+        }
+      })
+      it(`${file} ${name}: nor does any package script it runs, or one those run`, () => {
+        for (const script of scriptsReached(texts)) {
+          for (const part of commandsOf(SCRIPTS[script]!)) expect(part, `${name} runs \`bun run ${script}\`: ${part}`).not.toMatch(NODE_COMMAND)
         }
       })
     }
@@ -88,16 +112,15 @@ describe('CI jobs that build or test run on bun alone', () => {
 })
 
 describe('package test scripts start bun, never Node', () => {
-  const scripts = (JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> }).scripts
-  const testScripts = Object.entries(scripts).filter(([k]) => /^(test|docs:check|search:)/.test(k))
+  const testScripts = Object.entries(SCRIPTS).filter(([k]) => /^(test|docs:check|search:)/.test(k))
 
   it('finds them', () => {
     expect(testScripts.map(([k]) => k)).toEqual(expect.arrayContaining(['test', 'test:quick', 'test:slow', 'test:e2e', 'test:baseline', 'test:frontend:ci']))
   })
 
   it.each(testScripts)('%s', (_name, cmd) => {
-    for (const part of cmd.split('&&').map((p) => p.trim())) {
-      expect(part).not.toMatch(/^(\w+=\S+\s+)*(node|npm|npx|tsx)\s/)
+    for (const part of commandsOf(cmd)) {
+      expect(part).not.toMatch(NODE_COMMAND)
       // vitest itself on bun: `bun --bun vitest` (bare name). `bun x vitest` and
       // `npx vitest` start it on Node, and `bun --bun ./node_modules/.bin/vitest`
       // leaves the children it starts on the Node on PATH.
@@ -106,10 +129,36 @@ describe('package test scripts start bun, never Node', () => {
   })
 })
 
+/** Test files that run npm: by name in a spawn, `command -v npm`, or npm-packages.mjs's packPackages. */
+const RUNS_NPM = /\b(spawn|spawnSync|execFile|execFileSync|exec|execSync)\(\s*['"`](npm|npx)['"`]|\)\(\s*['"`](npm|npx)['"`]|command -v (npm|npx)\b|\bpackPackages\(/
+const walkTests = (dir: string): string[] => fs.readdirSync(path.join(REPO, dir), { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? walkTests(path.join(dir, e.name)) : /\.test\.tsx?$/.test(e.name) ? [path.join(dir, e.name).split(path.sep).join('/')] : [])
+let sources: Map<string, string> | null = null
+/** Every test file but this one, with its text (read once). */
+function testSources(): Map<string, string> {
+  sources ??= new Map(walkTests('tests').filter((f) => f !== 'tests/scripts/ci-bun-only.test.ts').map((f) => [f, fs.readFileSync(path.join(REPO, f), 'utf8')]))
+  return sources
+}
+const vitestPartsOf = (script: string) => commandsOf(script).filter((p) => /\bbun --bun vitest\b/.test(p))
+
 describe('the npm tests: skipped where there is no npm, required where CI runs them', () => {
-  it('the node-side job\'s script requires npm, so its npm tests can never skip there', () => {
-    const scripts = (JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> }).scripts
-    expect(scripts['test:plugin-packages']).toContain('WALNUT_REQUIRE_NPM=1 bun --bun vitest run')
+  const NPM_SCRIPTS = ['test:plugin-packages', 'test:npm-channel']
+
+  it('the node-side job\'s scripts require npm, so their npm tests can never skip there', () => {
+    for (const name of NPM_SCRIPTS) {
+      expect(vitestPartsOf(SCRIPTS[name]!).length, name).toBeGreaterThan(0)
+      for (const part of vitestPartsOf(SCRIPTS[name]!)) expect(part, name).toMatch(/^WALNUT_REQUIRE_NPM=1 bun --bun vitest run /)
+    }
+  })
+
+  it('every test file that runs npm skips without it (npm-on-path.ts) and runs in a node-side script', () => {
+    const users = [...testSources()].filter(([, text]) => RUNS_NPM.test(text))
+    expect(users.length).toBeGreaterThan(3)
+    const listed = NPM_SCRIPTS.map((n) => SCRIPTS[n]!).join(' ')
+    for (const [f, text] of users) {
+      expect(text, `${f} runs npm: gate it with npmOnPath() or userNode() from tests/helpers/npm-on-path.ts`).toMatch(/from '\.\.\/helpers\/npm-on-path\.js'/)
+      expect(listed, `${f} runs npm: list it in ${NPM_SCRIPTS.join(' or ')}, which node-side runs`).toContain(f)
+    }
   })
 
   it('npmOnPath: an executable npm on PATH, none, and none while required', () => {

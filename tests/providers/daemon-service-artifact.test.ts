@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { npmEnv, npmOnPath } from '../helpers/npm-on-path.js'
 import {
   DaemonArtifactError,
   daemonArtifactExecutable,
@@ -84,7 +85,8 @@ async function refuses(run: () => Promise<unknown>, code: DaemonArtifactErrorCod
 }
 
 describe('stageDaemonServiceArtifact', () => {
-  it('packs the source daemon sidecars without shipping standalone binaries', async () => {
+  // npm's own file list: skipped where there is no npm (the Node-free CI jobs), run in node-side (test:npm-channel).
+  it.skipIf(!npmOnPath())('packs the source daemon sidecars without shipping standalone binaries', async () => {
     const root = await tempHome()
     const pkg = JSON.parse(await fs.readFile(path.resolve('package.json'), 'utf8'))
     await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'walnut-pack-fixture', version: '1.0.0', files: pkg.files }))
@@ -94,7 +96,7 @@ describe('stageDaemonServiceArtifact', () => {
     const binaries = ['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-linux-x64.version', 'daemon-linux-x64.gz']
     for (const name of [...sidecars, ...binaries]) await fs.writeFile(path.join(dir, name), 'fixture')
     const { stdout } = await promisify(execFile)('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-      cwd: root, timeout: 15_000, maxBuffer: 128 * 1024,
+      cwd: root, env: npmEnv(), timeout: 15_000, maxBuffer: 128 * 1024,
     })
     const files = JSON.parse(stdout)[0].files.map((file: { path: string }) => file.path)
     for (const name of sidecars) expect(files).toContain(`dist/daemon-binaries/${name}`)

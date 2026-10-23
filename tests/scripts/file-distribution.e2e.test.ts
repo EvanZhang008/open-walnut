@@ -32,6 +32,7 @@ import { startRegistry } from '../../scripts/release-rehearsal/registry.mjs'
 import { serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { IsolatedWalnut } from '../../scripts/release-rehearsal/walnut.mjs'
 import { hostTarget, realWalnutFiles } from '../helpers/real-walnut.js'
+import { realNodeOnPath, userNode } from '../helpers/npm-on-path.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const OLD = '0.9.1'
@@ -39,6 +40,12 @@ const NEW = '0.9.2'
 /** A release whose file answers --version and then cannot start a server. */
 const BROKEN = '0.9.3'
 const HOST = hostTarget()
+/**
+ * Every case installs or updates from the npm tarballs (`npm pack`), and the npm
+ * case runs a user's npm on their Node: skipped where there is none (the Node-free
+ * CI jobs), run in node-side (`bun run test:npm-channel`).
+ */
+const NODE = userNode()
 let work = ''
 let bareDir = ''
 let releases: { url: string; close: () => Promise<void> }
@@ -94,6 +101,7 @@ const versionOf = (bin: string, env: Record<string, string>) => execFileSync(bin
 const serverLog = (w: IsolatedWalnut) => (fs.existsSync(w.logFile) ? fs.readFileSync(w.logFile, 'utf8') : '')
 
 beforeAll(async () => {
+  if (!NODE) return
   work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'file-distribution-')))
   bareDir = systemPathWithoutNode(path.join(work, 'system-bin'))
   for (const name of ['bun', 'bunx']) fs.rmSync(path.join(bareDir, name), { force: true })
@@ -123,7 +131,7 @@ afterAll(async () => {
   if (work) fs.rmSync(work, { recursive: true, force: true })
 }, 120_000)
 
-describe('the compiled file, from every way it arrives', () => {
+describe.skipIf(!NODE)('the compiled file, from every way it arrives', () => {
   const printsVersion = (v: string) => new RegExp(`^${v.replace(/\./g, '\\.')} \\(`)
 
   it('install.sh installs this machine\'s file from the release; it serves, knows it is a binary install, and marks its version while it runs', async () => {
@@ -233,8 +241,9 @@ describe('the compiled file, from every way it arrives', () => {
   it('`npm install -g open-walnut` installs only this machine\'s platform package, runs it, and updates through npm', async () => {
     const npm = execFileSync('/bin/sh', ['-c', 'command -v npm'], { encoding: 'utf8' }).trim()
     // The launcher package is a Node script: npm's bin shim starts it on the first
-    // node on PATH, which is not this process when vitest runs on bun.
-    const node = fs.realpathSync(execFileSync('/bin/sh', ['-c', 'command -v node'], { encoding: 'utf8', env: { ...process.env, PATH: [path.dirname(npm), process.env.PATH].join(path.delimiter) } }).trim())
+    // node on PATH (npm's own directory first), which is not this process when
+    // vitest runs on bun. That node is a real Node, never bun's shim (as NODE).
+    const node = realNodeOnPath({ PATH: [path.dirname(npm), process.env.PATH].join(path.delimiter) }) ?? NODE!
     const w = isolated('npm', [path.dirname(npm), path.dirname(node)])
     w.env.PATH = [path.join(w.prefix, 'bin'), w.env.PATH].join(path.delimiter)
     Object.assign(w.env, { npm_config_registry: `${registry.url}/`, npm_config_cache: path.join(work, 'npm-cache') })

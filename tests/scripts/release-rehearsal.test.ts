@@ -23,6 +23,7 @@ import { buildPackument, distOf, readPackedManifest, startRegistry } from '../..
 import { compareVersions as scriptCompare } from '../../scripts/release-rehearsal/version-order.mjs'
 import { IsolatedWalnut, MOCK_CLAUDE } from '../../scripts/release-rehearsal/walnut.mjs'
 import { compareVersions } from '../../src/core/self-update/version-compare.js'
+import { npmEnv, npmOnPath } from '../helpers/npm-on-path.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rehearsal-test-')))
@@ -60,11 +61,12 @@ describe('registry', () => {
     expect(() => buildPackument({ tarballs: [{ file: A }], distTags: { latest: '9.9.9' }, baseUrl: 'http://r' })).toThrow('not served')
   })
 
-  it('real npm installs from it, the update check reads its dist-tags, and nothing else of open-walnut exists', async () => {
+  // npm is a user's tool: skipped where there is none (the Node-free CI jobs), run in node-side (test:npm-channel).
+  it.skipIf(!npmOnPath())('real npm installs from it, the update check reads its dist-tags, and nothing else of open-walnut exists', async () => {
     const registry = await startRegistry({ tarballs: [{ file: A }, { file: B }], distTags: { latest: '1.1.0' }, upstream: 'http://127.0.0.1:9' })
     try {
       const prefix = path.join(tmp, 'prefix')
-      const env = { ...process.env, npm_config_prefix: prefix, npm_config_registry: `${registry.url}/`, npm_config_cache: path.join(tmp, 'cache'), npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
+      const env = { ...npmEnv(), npm_config_prefix: prefix, npm_config_registry: `${registry.url}/`, npm_config_cache: path.join(tmp, 'cache'), npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
       // Async: the registry answers from this same event loop, so a sync spawn would deadlock.
       const install = await new Promise<number>((resolve) => {
         const child = spawn('npm', ['install', '-g', 'open-walnut@1.0.0'], { env, stdio: 'ignore' })
