@@ -13,19 +13,91 @@ export function runtimeDirname(source, rel) {
   return `var __walnut_dirname = ${dir};\n${source.replace(/\b__dirname\b/g, '__walnut_dirname')}`
 }
 
+function readdirOrNone(dir) {
+  try { return fs.readdirSync(dir) } catch { return [] }
+}
+
+function isDir(p) {
+  try { return fs.statSync(p).isDirectory() } catch { return false }
+}
+
 /**
- * The dir of a package module inside the runtime tree, `node_modules/<pkg>/<sub>`,
- * from the LAST node_modules of its path; null outside node_modules. Read from the
- * path, never relative to the repo: a build whose node_modules entries are links
- * (scripts/deploy-committed.sh, src/core/host-server/host-file-build.ts) resolves
- * modules to the linked checkout, outside the repo, and a repo-relative path then
- * names that checkout (`../../walnut/node_modules/...`, the builder's home inside).
+ * Where the modules of `repo` resolve to, each mapped back to its place in the
+ * runtime tree: `<repo>/node_modules` itself, and every top-level entry that is a
+ * link, since a deploy clone (scripts/deploy-committed.sh,
+ * src/core/host-server/host-file-build.ts) links each one to the checkout's and
+ * bun hands the build the link's target. Longest first.
  */
-export function treeDirOf(file) {
-  const parts = path.dirname(file).split(/[\\/]+/)
-  const at = parts.lastIndexOf('node_modules')
-  if (at === -1 || at === parts.length - 1) return null
-  return parts.slice(at).join('/')
+export function moduleRoots(repo) {
+  const nm = path.join(repo, 'node_modules')
+  const out = []
+  const add = (dir, rel) => { try { out.push({ real: fs.realpathSync(dir), rel }) } catch { /* gone */ } }
+  add(nm, 'node_modules')
+  const linked = (dir, rel) => { try { if (fs.lstatSync(dir).isSymbolicLink()) add(dir, rel) } catch { /* gone */ } }
+  for (const e of readdirOrNone(nm)) {
+    if (e.startsWith('@')) {
+      linked(path.join(nm, e), `node_modules/${e}`)
+      for (const sub of readdirOrNone(path.join(nm, e))) linked(path.join(nm, e, sub), `node_modules/${e}/${sub}`)
+    } else {
+      linked(path.join(nm, e), `node_modules/${e}`)
+    }
+  }
+  return out.sort((a, b) => b.real.length - a.real.length)
+}
+
+/**
+ * The dir of a package module inside the runtime tree, with every node_modules on
+ * its way (`node_modules/b/node_modules/c/lib`), so a nested copy of a package
+ * keeps its own files; null outside node_modules. Taken against `roots`
+ * (moduleRoots): a module bun resolved through a linked entry lives outside the
+ * repo, and a repo-relative path then named the checkout it links to (with the
+ * builder's home in it). Without a matching root, the path from its FIRST
+ * node_modules segment.
+ */
+export function treeDirOf(file, roots = []) {
+  const dir = path.dirname(file)
+  let parts = null
+  for (const r of roots) {
+    if (dir === r.real || dir.startsWith(r.real + path.sep)) {
+      parts = [...r.rel.split('/'), ...path.relative(r.real, dir).split(path.sep).filter(Boolean)]
+      break
+    }
+  }
+  if (!parts) {
+    const all = dir.split(/[\\/]+/)
+    const at = all.indexOf('node_modules')
+    if (at === -1) return null
+    parts = all.slice(at)
+  }
+  return parts.length > 1 ? parts.join('/') : null
+}
+
+/**
+ * Every installed copy of package `name` under `<repo>/node_modules`, as its path
+ * in the runtime tree (`node_modules/name`, `node_modules/b/node_modules/name`),
+ * so a file it reads through __dirname is copied beside each copy and a nested
+ * one of another version never reads the top-level copy's file.
+ */
+export function packageCopies(repo, name) {
+  const found = []
+  const seen = new Set()
+  const walk = (nmDir, rel) => {
+    let real
+    try { real = fs.realpathSync(nmDir) } catch { return }
+    if (seen.has(real)) return
+    seen.add(real)
+    if (fs.existsSync(path.join(nmDir, name, 'package.json'))) found.push(`${rel}/${name}`)
+    for (const e of readdirOrNone(nmDir)) {
+      if (e.startsWith('.')) continue
+      const pkgs = e.startsWith('@') ? readdirOrNone(path.join(nmDir, e)).map((sub) => `${e}/${sub}`) : [e]
+      for (const pkg of pkgs) {
+        const sub = path.join(nmDir, pkg, 'node_modules')
+        if (isDir(sub)) walk(sub, `${rel}/${pkg}/node_modules`)
+      }
+    }
+  }
+  walk(path.join(repo, 'node_modules'), 'node_modules')
+  return found.sort()
 }
 
 /**

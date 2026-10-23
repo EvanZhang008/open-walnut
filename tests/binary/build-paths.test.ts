@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 // @ts-expect-error: a .mjs build script without types
-import { assertNoBuildPaths, runtimeDirname, treeDirOf } from '../../scripts/binary-build-checks.mjs'
+import { assertNoBuildPaths, moduleRoots, packageCopies, runtimeDirname, treeDirOf } from '../../scripts/binary-build-checks.mjs'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -58,8 +58,30 @@ describe('treeDirOf', () => {
     expect(treeDirOf('/Users/acme/src/walnut/node_modules/tiktoken/lite/tiktoken.cjs')).toBe('node_modules/tiktoken/lite')
     expect(treeDirOf('/tmp/open-walnut-build.abc/node_modules/pino/lib/tools.js')).toBe('node_modules/pino/lib')
     expect(treeDirOf('/x/node_modules/@scope/pkg/dist/a.js')).toBe('node_modules/@scope/pkg/dist')
-    // A nested copy: the dir of the package the module belongs to.
-    expect(treeDirOf('/x/node_modules/pino/node_modules/thread-stream/index.js')).toBe('node_modules/thread-stream')
+    // A nested copy keeps every node_modules on its way, so it reads its own files.
+    expect(treeDirOf('/x/node_modules/pino/node_modules/thread-stream/index.js')).toBe('node_modules/pino/node_modules/thread-stream')
+  })
+
+  it('maps a module bun resolved through a linked entry, nested copies included, back to its place in the tree', () => {
+    // The deploy clone layout: each top-level entry links to the checkout's own.
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'build-paths-links-')))
+    dirs.push(base)
+    const checkout = path.join(base, 'node_modules', 'checkout')
+    const clone = path.join(base, 'clone')
+    for (const rel of ['node_modules/tiktoken/lite', 'node_modules/b/node_modules/tiktoken/lite', 'node_modules/@s/p/dist']) {
+      fs.mkdirSync(path.join(checkout, rel), { recursive: true })
+    }
+    fs.mkdirSync(path.join(clone, 'node_modules', '@s'), { recursive: true })
+    for (const e of ['tiktoken', 'b']) fs.symlinkSync(path.join(checkout, 'node_modules', e), path.join(clone, 'node_modules', e))
+    fs.symlinkSync(path.join(checkout, 'node_modules', '@s', 'p'), path.join(clone, 'node_modules', '@s', 'p'))
+    const roots = moduleRoots(clone)
+    const real = (rel: string) => fs.realpathSync(path.join(clone, rel))
+    expect(treeDirOf(path.join(real('node_modules/tiktoken/lite'), 'tiktoken.cjs'), roots)).toBe('node_modules/tiktoken/lite')
+    expect(treeDirOf(path.join(real('node_modules/b/node_modules/tiktoken/lite'), 'tiktoken.cjs'), roots)).toBe('node_modules/b/node_modules/tiktoken/lite')
+    expect(treeDirOf(path.join(real('node_modules/@s/p/dist'), 'a.js'), roots)).toBe('node_modules/@s/p/dist')
+    // Its checkout path holds a node_modules of its own: the first-segment fallback
+    // would have named node_modules/checkout/... here.
+    expect(real('node_modules/tiktoken/lite')).toContain('/node_modules/checkout/')
   })
 
   it('never yields a path of the build machine', () => {
@@ -72,6 +94,32 @@ describe('treeDirOf', () => {
   it('answers null outside node_modules', () => {
     expect(treeDirOf('/repo/src/a.js')).toBeNull()
     expect(treeDirOf('/repo/node_modules/a.js')).toBeNull()
+  })
+})
+
+describe('packageCopies', () => {
+  it('finds every installed copy of a package, nested ones of another version too', () => {
+    // A nested tiktoken of another version must get its own wasm, not silently load the top-level one.
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'build-paths-copies-')))
+    dirs.push(repo)
+    const pkg = (rel: string, version: string) => {
+      fs.mkdirSync(path.join(repo, rel, 'lite'), { recursive: true })
+      fs.writeFileSync(path.join(repo, rel, 'package.json'), JSON.stringify({ name: 'tiktoken', version }))
+    }
+    pkg('node_modules/tiktoken', '1.0.0')
+    pkg('node_modules/b/node_modules/tiktoken', '0.9.0')
+    pkg('node_modules/@s/c/node_modules/d/node_modules/tiktoken', '0.8.0')
+    fs.mkdirSync(path.join(repo, 'node_modules', 'other', 'lite'), { recursive: true })
+    expect(packageCopies(repo, 'tiktoken')).toEqual([
+      'node_modules/@s/c/node_modules/d/node_modules/tiktoken',
+      'node_modules/b/node_modules/tiktoken',
+      'node_modules/tiktoken',
+    ])
+    // Each copy's tree path is the dir treeDirOf gives its modules.
+    const roots = moduleRoots(repo)
+    for (const copy of packageCopies(repo, 'tiktoken')) {
+      expect(treeDirOf(path.join(repo, copy, 'lite', 'tiktoken.cjs'), roots)).toBe(`${copy}/lite`)
+    }
   })
 })
 

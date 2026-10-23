@@ -33,7 +33,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
-import { assertNoBuildPaths, runtimeDirname, treeDirOf } from './binary-build-checks.mjs'
+import { assertNoBuildPaths, moduleRoots, packageCopies, runtimeDirname, treeDirOf } from './binary-build-checks.mjs'
 import { writeBuildInfo } from './build-info.mjs'
 
 if (typeof Bun === 'undefined') {
@@ -248,11 +248,15 @@ async function stageTree(root, { version, sidecars, sqliteDylib }) {
     fs.copyFileSync(sqliteDylib, to)
   }
 
+  // Beside every installed copy (a nested one of another version keeps its own),
+  // at the path runtimeDirnamePlugin gives that copy's modules (treeDirOf).
   for (const [name, files] of Object.entries(DIRNAME_PACKAGES)) {
-    for (const rel of files) {
-      const to = path.join(root, 'node_modules', name, rel)
-      fs.mkdirSync(path.dirname(to), { recursive: true })
-      fs.copyFileSync(path.join(repo, 'node_modules', name, rel), to)
+    for (const copy of packageCopies(repo, name)) {
+      for (const rel of files) {
+        const to = path.join(root, copy, rel)
+        fs.mkdirSync(path.dirname(to), { recursive: true })
+        fs.copyFileSync(path.join(repo, copy, rel), to)
+      }
     }
   }
 }
@@ -285,13 +289,14 @@ function packTree(root) {
 function runtimeDirnamePlugin() {
   const names = Object.keys(DIRNAME_PACKAGES).map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
   const filter = new RegExp(`[\\\\/]node_modules[\\\\/](${names.join('|')})[\\\\/].*\\.c?js$`)
+  const roots = moduleRoots(repo)
   return {
     name: 'walnut-runtime-dirname',
     setup(build) {
       build.onLoad({ filter }, (args) => ({
         loader: 'js',
         // The filter only takes files under node_modules, so treeDirOf always answers.
-        contents: runtimeDirname(fs.readFileSync(args.path, 'utf8'), treeDirOf(args.path)),
+        contents: runtimeDirname(fs.readFileSync(args.path, 'utf8'), treeDirOf(args.path, roots)),
       }))
     },
   }
