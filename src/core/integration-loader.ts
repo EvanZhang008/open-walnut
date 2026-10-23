@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
 import { BUILTIN_HOST_MODULES } from '../integrations/host-modules.js';
+import { bundleEsm } from '../lib/transpile.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import { WALNUT_HOME, IS_EPHEMERAL } from '../constants.js';
 import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
@@ -789,67 +790,52 @@ async function bundleExternalPlugin(
   entryFile: string,
 ): Promise<BundleOutcome> {
   try {
-    const { build } = await import('esbuild');
     const pluginName = path.basename(pluginDir);
     const tree = resolvePluginSourceTree(RUNNING_PACKAGE_ROOT);
 
     const cacheDir = await resolvePluginBundleDir(tree.nodeModulesRoot);
     const outfile = path.join(cacheDir, `${pluginName}-${randomUUID()}.mjs`);
 
-    await build({
-      entryPoints: [entryFile],
+    // The bundle exists only to rebase the plugin's own parent-directory imports
+    // (../../core/, ../../utils/, etc.) onto walnut's src/ tree; every npm package
+    // stays an import resolved at runtime from walnut's node_modules (listing them
+    // was whack-a-mole: better-sqlite3, then node-pty broke it). src/, not dist/:
+    // tsup bundles everything, so dist/ lacks individual module files.
+    const rebaseDir = tree.srcIntegrationsDir ?? BUILTIN_DIR;
+    await bundleEsm({
+      entry: entryFile,
       outfile,
-      bundle: true,
-      format: 'esm',
-      platform: 'node',
-      target: 'node22',
-      // Mark ALL npm packages external — we only bundle to rebase the plugin's
-      // own relative imports onto walnut's src/ tree; npm packages (native ones
-      // like better-sqlite3 / node-pty included) resolve at runtime from
-      // walnut's node_modules. Listing packages individually was whack-a-mole:
-      // any new transitively-reached native dep broke the bundle (better-sqlite3,
-      // then node-pty). `packages: 'external'` kills that whole class.
-      packages: 'external',
       nodePaths: [path.join(tree.nodeModulesRoot, 'node_modules')],
-      banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' },
-      logLevel: 'warning',
-      plugins: [{
-        name: 'rebase-open-walnut-imports',
-        setup(b) {
-          // Rebase parent-directory imports (../../core/, ../../utils/, etc.)
-          // to the open-walnut src/ tree so they resolve correctly.
-          // Use src/ (not dist/) because tsup bundles everything — dist/ lacks individual module files.
-          const rebaseDir = tree.srcIntegrationsDir ?? BUILTIN_DIR;
-          b.onResolve({ filter: /^\.\.\// }, (args) => {
-            // Only rebase imports originating from the plugin directory itself.
-            // Once resolved into the open-walnut src/ tree, let esbuild handle natively.
-            if (!args.importer.startsWith(pluginDir + '/')) return undefined;
-            const subPath = path.relative(pluginDir, args.importer);
-            const assumedImporter = path.join(rebaseDir, pluginName, subPath);
-            const resolved = path.resolve(path.dirname(assumedImporter), args.path);
-            // Try .ts extension (esbuild resolves .js → .ts naturally in the src tree)
-            for (const candidate of [
-              resolved.replace(/\.js$/, '.ts'),
-              resolved,
-              path.join(resolved.replace(/\.js$/, ''), 'index.ts'),
-            ]) {
-              try { if (fs.statSync(candidate).isFile()) return { path: candidate }; } catch { /* expected: candidate doesn't exist */ }
-            }
-            return undefined;
-          });
-        },
-      }],
+      banner: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);',
+      resolveParent: (specifier, importer) => {
+        // Only rebase imports originating from the plugin directory itself.
+        // Once resolved into the open-walnut src/ tree, the bundler resolves natively.
+        if (!importer.startsWith(pluginDir + '/')) return undefined;
+        const subPath = path.relative(pluginDir, importer);
+        const assumedImporter = path.join(rebaseDir, pluginName, subPath);
+        const resolved = path.resolve(path.dirname(assumedImporter), specifier);
+        // Try .ts extension (the bundler resolves .js → .ts naturally in the src tree)
+        for (const candidate of [
+          resolved.replace(/\.js$/, '.ts'),
+          resolved,
+          path.join(resolved.replace(/\.js$/, ''), 'index.ts'),
+        ]) {
+          try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* expected: candidate doesn't exist */ }
+        }
+        return undefined;
+      },
     });
 
     return { outfile };
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
-    // esbuild's message is "Build failed with N errors:" followed by one line per error;
-    // the first error line is the one that explains the failure, and "Could not resolve
-    // '../../core/x.js'" additionally means no source checkout is reachable from here.
+    // The bundler's message is "Build failed with N errors:" followed by one line per
+    // error (src/lib/transpile.ts); the first error line is the one that explains the
+    // failure, and "Could not resolve '../../core/x.js'" (bun adds a colon) additionally
+    // means no source checkout is reachable from here.
     const firstError = raw.split('\n').map(l => l.trim()).find(l => l.includes('ERROR:')) ?? raw.split('\n')[0];
     const tree = resolvePluginSourceTree(RUNNING_PACKAGE_ROOT);
-    const hint = !tree.srcIntegrationsDir && /Could not resolve "\.\./.test(raw)
+    const hint = !tree.srcIntegrationsDir && /Could not resolve:? "\.\./.test(raw)
       ? ' (this plugin imports Walnut source modules, but no source checkout is reachable from the running package)'
       : '';
     const error = `${firstError}${hint}`;
