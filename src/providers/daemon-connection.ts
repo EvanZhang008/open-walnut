@@ -60,6 +60,7 @@ import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
 import { classifyHostConnectError, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
+import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
 import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
   buildLiveDaemonScanScript, liveDaemonScanFoundNone, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
@@ -615,6 +616,8 @@ export class DaemonConnection {
   private _controlPath: string | null = null
   /** ControlMaster SSH process — kept alive for the lifetime of this DaemonConnection. */
   private _controlMaster: ChildProcess | null = null
+  /** pipeChunked's retry backoff per attempt and its pause between chunks. Only tests shorten them. */
+  private chunkPacing: { backoffMs: readonly number[]; gapMs: number } = { backoffMs: [3_000, 5_000, 10_000, 15_000, 20_000], gapMs: 250 }
   /** Tracks whether the last deploy used source (not binary) — affects startDaemon() command. */
   private _deployedViaSource = false
   /** Resolved path to bun on the remote host, or null if unavailable / not yet probed. */
@@ -2154,15 +2157,24 @@ export class DaemonConnection {
   /**
    * Put `data` at `remotePath` on the host, checked by size and sha256: one SSH
    * stream first, 256 KB chunks when a proxy kills it (the daemon binary's path).
+   * A file the host already has (same sha and size) is not sent again
+   * (`skipped`), and the chunks of a cut attempt stay on the host, keyed by the
+   * sha, so the next attempt sends only the missing ones (upload-resume.ts).
+   * `opts.sha256` is the caller's sha256 of `data` in hex, when it has one.
    */
-  async uploadFile(remotePath: string, data: Buffer): Promise<void> {
+  async uploadFile(remotePath: string, data: Buffer, opts: { sha256?: string } = {}): Promise<{ skipped: boolean }> {
     if (this.isCloudTunnel) throw new Error('Cloud is reached through the cloud companion, not SSH')
-    const dir = remotePath.slice(0, remotePath.lastIndexOf('/')) || '.'
-    await this.sshExec(`mkdir -p ${shq(dir)}`, 10_000)
-    const sha = crypto.createHash('sha256').update(data).digest('hex')
-    if (await this.pipeSingleStream(data, remotePath, sha)) return
+    const sha = (opts.sha256 ?? await sha256Hex(data)).toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(sha)) throw new Error('uploadFile: sha256 must be 64 hex characters')
+    const there = parseUploadPrecheck(await this.sshExec(uploadPrecheckScript(remotePath, sha), 60_000))
+    if (there && there.sha === sha && there.size === data.length) {
+      log.session.info('DaemonConnection: upload skipped, the host already has the file', { host: this.hostKey, bytes: data.length, remotePath })
+      return { skipped: true }
+    }
+    if (await this.pipeSingleStream(data, remotePath, sha)) return { skipped: false }
     log.session.warn('DaemonConnection: single-stream upload failed, falling back to chunked', { host: this.hostKey, bytes: data.length, remotePath })
-    await this.pipeChunked(data, remotePath, `${remotePath}.chunks`, 'upload')
+    await this.pipeChunked(data, remotePath, `${remotePath}.chunks-${sha.slice(0, 16)}`, 'upload', { resume: { sha256: sha } })
+    return { skipped: false }
   }
 
   /**
@@ -2266,7 +2278,7 @@ export class DaemonConnection {
       hasCapability: (cap: string) => conn.hasCapability(cap),
       send: (cmd: string, params?: Record<string, unknown>, timeoutMs?: number) => conn.send(cmd, params, timeoutMs),
       runRemoteScript: (script: string, timeoutMs?: number) => conn.runRemoteScript(script, timeoutMs),
-      uploadFile: (remotePath: string, data: Buffer) => conn.uploadFile(remotePath, data),
+      uploadFile: (remotePath: string, data: Buffer, opts?: { sha256?: string }) => conn.uploadFile(remotePath, data, opts),
       openStream: (to: 'follower', purpose?: string) => conn.openStream(to, purpose),
       keepStreamLane: (on: boolean) => conn.keepStreamLane(on),
     }
@@ -2542,8 +2554,9 @@ export class DaemonConnection {
       ...this.freshSshArgs,
       this.sshHostString,
       // `sh -c` + markers (remote-sh.ts): the login shell may be csh, and an rc
-      // banner on stdout must not read as the checksum.
-      markedUploadCommand(remotePath, data.length, `sha256sum ${q} | awk '{print $1}' && wc -c < ${q}`),
+      // banner on stdout must not read as the checksum. The sha comes from
+      // `sha256sum`, else `shasum -a 256` (macOS has no sha256sum).
+      markedUploadCommand(remotePath, data.length, `${remoteSha256Command(remotePath)} && wc -c < ${q}`),
     ]
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
     proc.stdin!.on('error', () => {})
@@ -3782,8 +3795,17 @@ export class DaemonConnection {
    * connection, then join them and check the size: the path that survives an SSH
    * proxy that kills large transfers (see deployBinary). Throws when the proxy
    * keeps killing chunks.
+   *
+   * `resume` (uploadFile): `chunkDir` is keyed by the sha and kept across
+   * attempts, so only the chunks it lacks (or holds at the wrong size) are sent;
+   * the failure cap grows with the chunk count, and the joined file is checked by
+   * sha too when the host can compute one. Without it (the daemon deploy) every
+   * attempt starts from an empty dir with a cap of 30.
    */
-  private async pipeChunked(data: Buffer, remotePath: string, chunkDir: string, what: string): Promise<{ chunks: number; totalFailures: number }> {
+  private async pipeChunked(
+    data: Buffer, remotePath: string, chunkDir: string, what: string,
+    opts: { resume?: { sha256: string } } = {},
+  ): Promise<{ chunks: number; totalFailures: number; sent: number }> {
     // 256KB — deep under the corporate proxy’s ~5MB kill threshold AND any per-connection
     // byte-rate throttling. Larger chunks (1MB) were the main failure mode
     // pre-2026-05-05: corp proxies would kill ~half the chunks on a ~40MB
@@ -3796,9 +3818,16 @@ export class DaemonConnection {
     // confirming 256KB survives reliably across proxy variants.
     const CHUNK_SIZE = 262_144
     const totalChunks = Math.ceil(data.length / CHUNK_SIZE)
+    const resume = opts.resume
 
-    // Clean any partial previous transfer
-    await this.sshExec(`rm -rf ${shq(chunkDir)} && mkdir -p ${shq(chunkDir)}`, 5_000).catch(() => {})
+    // What an earlier attempt left (resume; no answer = nothing), else clean any partial previous transfer.
+    let have = new Map<number, number>()
+    if (resume) {
+      have = parseChunkList(await this.sshExec(chunkListScript(remotePath, chunkDir), 30_000).catch(() => ''))
+      if (have.size > 0) log.session.info('DaemonConnection: resuming a chunked upload', { host: this.hostKey, what, onHost: have.size, totalChunks })
+    } else {
+      await this.sshExec(`rm -rf ${shq(chunkDir)} && mkdir -p ${shq(chunkDir)}`, 5_000).catch(() => {})
+    }
 
     // Per-chunk retry budget: proxy kills are transient. 5 attempts per
     // chunk with exponential backoff (3s → 5s → 10s → 15s → 20s) gives
@@ -3813,10 +3842,14 @@ export class DaemonConnection {
     // proxy transient kills on 40MB deploys during the 2026-05-05 incident.
     // Tune downward only with data; the cost of failing the deploy is
     // ~30min of blocked remote sessions until the user notices.
+    //
+    // A resumed upload (uploadFile) may be 240 chunks: there the cap is one
+    // failure in four chunks, at least 30 (resumeFailureCap).
     const MAX_CHUNK_RETRIES = 5
-    const BACKOFF_MS = [3_000, 5_000, 10_000, 15_000, 20_000]
-    const MAX_TOTAL_FAILURES = 30
+    const BACKOFF_MS = this.chunkPacing.backoffMs
+    const MAX_TOTAL_FAILURES = resume ? resumeFailureCap(totalChunks) : 30
     let totalFailures = 0
+    let sent = 0
 
     for (let i = 0; i < totalChunks; i++) {
       // Abort fast if the connection was torn down mid-deploy — user should
@@ -3825,6 +3858,9 @@ export class DaemonConnection {
 
       const offset = i * CHUNK_SIZE
       const chunk = data.subarray(offset, offset + CHUNK_SIZE)
+      // On the host at full size already (resume): written and size-checked by an earlier attempt.
+      if (have.get(i) === chunk.length) continue
+      sent++
 
       let chunkAttempt = 0
       // Each chunk writes to its own file (overwrite) — retries are safe
@@ -3869,7 +3905,7 @@ export class DaemonConnection {
       // 250ms (vs old 1000ms) because 256KB chunks = 4x as many chunks;
       // keep total deploy wall-clock roughly constant.
       if (i < totalChunks - 1) {
-        await new Promise(r => setTimeout(r, 250))
+        await new Promise(r => setTimeout(r, this.chunkPacing.gapMs))
       }
     }
 
@@ -3882,8 +3918,20 @@ export class DaemonConnection {
       await this.sshExec(`rm -rf ${shq(chunkDir)} ${shq(remotePath)}`, 5_000).catch(() => {})
       throw new Error(`${what} size mismatch: remote=${remoteSize} local=${data.length}`)
     }
+    // Chunks kept from an earlier attempt are checked by size only, so the joined
+    // file is checked by sha as well (an empty answer: the host has no sha tool).
+    if (resume) {
+      const remoteSha = (await this.sshExec(remoteSha256Command(remotePath), 60_000)).trim()
+      if (remoteSha && remoteSha !== resume.sha256) {
+        await this.sshExec(`rm -rf ${shq(chunkDir)} ${shq(remotePath)}`, 5_000).catch(() => {})
+        throw new Error(`${what} sha256 mismatch: remote=${remoteSha.slice(0, 12)} local=${resume.sha256.slice(0, 12)}`)
+      }
+      log.session.info('DaemonConnection: chunked upload joined', {
+        host: this.hostKey, what, totalChunks, sent, keptFromEarlier: totalChunks - sent, totalFailures, shaChecked: !!remoteSha,
+      })
+    }
     await this.sshExec(`rm -rf ${shq(chunkDir)}`, 5_000).catch(() => {})
-    return { chunks: totalChunks, totalFailures }
+    return { chunks: totalChunks, totalFailures, sent }
   }
 
   /**

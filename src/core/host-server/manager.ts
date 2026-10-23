@@ -55,7 +55,8 @@ export interface HostServerHost {
   hasCapability(cap: string): boolean
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
   runRemoteScript(script: string, timeoutMs?: number): Promise<string>
-  uploadFile(remotePath: string, data: Buffer): Promise<void>
+  /** `sha256` of `data`: a file already there with it is not sent again (DaemonConnection.uploadFile). */
+  uploadFile(remotePath: string, data: Buffer, opts?: { sha256?: string }): Promise<unknown>
   /** A byte stream to the server on that host that follows this Walnut, through its daemon. */
   openStream(to: 'follower', purpose?: string): Promise<Duplex>
   /** Carry those streams on a link of their own while the server runs (providers/stream-lane.ts). */
