@@ -4,7 +4,15 @@ name: Binary matrix
 # old and new Linux (glibc from 2.17, musl), x64 and arm64, macOS on both chips,
 # and an old kernel. Each row runs the same rehearsal (scripts/release-rehearsal/
 # binary.mjs) with nothing installed but the file: no Node, no bun. The release
-# publishes only a build whose every row passed (release.yml calls this).
+# publishes only a commit whose push run here passed, every row (scripts/ci-gate.mjs).
+#
+# A release also calls this with the files it is about to publish (release.yml,
+# jobs `*-files`): `files` names its artifact (walnut-<version>-<target>.gz and
+# SHA256SUMS, scripts/release-files.mjs), built at the release's version. Then
+# nothing is built here: each row unpacks its own target from those very bytes,
+# checked by both of its SHA256SUMS lines (scripts/release-unpack.sh), and
+# rehearses it with the scripts of the commit it was built from (`ref`) and
+# package.json saying `version`, the version the file reports.
 
 on:
   push:
@@ -13,16 +21,35 @@ on:
     branches: [main]
   workflow_dispatch:
   workflow_call:
+    inputs:
+      files:
+        description: "An artifact of the calling run holding a release's assets: run these files instead of building"
+        type: string
+        default: ''
+      version:
+        description: 'The version those files report'
+        type: string
+        default: ''
+      ref:
+        description: 'The commit they were built from'
+        type: string
+        default: ''
 
+# A release's call runs inside the release's run, on its ref (main for a nightly
+# or a promote): with the push runs' group it would cancel main's push run, or
+# be cancelled by the next one. So a call gets a group of its own and is never
+# cancelled; a push supersedes the run before it on the same ref.
 concurrency:
-  group: binary-matrix-${{ github.ref }}
-  cancel-in-progress: true
+  group: binary-matrix-${{ inputs.files != '' && format('{0}-{1}', github.run_id, inputs.files) || github.ref }}
+  cancel-in-progress: ${{ inputs.files == '' }}
 
 # Runner images are pinned, as in ci.yml.
 jobs:
   build:
     name: Build the files
+    if: inputs.files == ''
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
@@ -49,7 +76,13 @@ jobs:
   linux:
     name: ${{ matrix.image }} (${{ matrix.file }})
     needs: build
+    # A release's files skip the build; a failed build runs nothing.
+    if: ${{ !cancelled() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.files != '')) }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      FILE: ${{ matrix.file }}
     strategy:
       fail-fast: false
       matrix:
@@ -70,17 +103,42 @@ jobs:
           - { runner: ubuntu-24.04-arm, file: walnut-linux-arm64-musl, image: 'alpine:latest' }
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
+        if: inputs.files == ''
         with:
           name: walnut-files
           path: dist-bin
-      - run: chmod +x dist-bin/walnut-*
+      - if: inputs.files == ''
+        run: chmod +x dist-bin/walnut-*
+      # A release's files: this row's target out of the very .gz the release
+      # publishes, and package.json at the version the file reports.
+      - uses: actions/download-artifact@v4
+        if: inputs.files != ''
+        with:
+          name: ${{ inputs.files }}
+          path: ${{ runner.temp }}/release
+      - uses: actions/setup-node@v5
+        if: inputs.files != ''
+        with:
+          node-version: 22
+      - name: This row's file from the release's assets
+        if: inputs.files != ''
+        run: |
+          sh scripts/release-unpack.sh "$RUNNER_TEMP/release" "$VERSION" dist-bin "${FILE#walnut-}"
+          node scripts/release-files.mjs stamp "$VERSION"
       - run: sh scripts/binary-matrix.sh "dist-bin/${{ matrix.file }}" "${{ matrix.image }}"
 
   macos:
     name: ${{ matrix.runner }} (${{ matrix.file }})
     needs: build
+    if: ${{ !cancelled() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.files != '')) }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      FILE: ${{ matrix.file }}
     strategy:
       fail-fast: false
       matrix:
@@ -90,11 +148,29 @@ jobs:
           - { runner: macos-26-intel, file: walnut-darwin-x64 }
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
+        if: inputs.files == ''
         with:
           name: walnut-files
           path: dist-bin
-      - run: chmod +x dist-bin/walnut-*
+      - if: inputs.files == ''
+        run: chmod +x dist-bin/walnut-*
+      - uses: actions/download-artifact@v4
+        if: inputs.files != ''
+        with:
+          name: ${{ inputs.files }}
+          path: ${{ runner.temp }}/release
+      - uses: actions/setup-node@v5
+        if: inputs.files != ''
+        with:
+          node-version: 22
+      - name: This row's file from the release's assets
+        if: inputs.files != ''
+        run: |
+          sh scripts/release-unpack.sh "$RUNNER_TEMP/release" "$VERSION" dist-bin "${FILE#walnut-}"
+          node scripts/release-files.mjs stamp "$VERSION"
       # An invalid signature may run today and be refused by a later macOS: judge it here.
       - run: codesign --verify --verbose "dist-bin/${{ matrix.file }}"
       - name: rehearse
@@ -107,13 +183,34 @@ jobs:
   old-kernel:
     name: centos 7 VM (kernel 3.10)
     needs: build
+    if: ${{ !cancelled() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.files != '')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    env:
+      VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
+        if: inputs.files == ''
         with:
           name: walnut-files
           path: dist-bin
-      - run: chmod +x dist-bin/walnut-*
+      - if: inputs.files == ''
+        run: chmod +x dist-bin/walnut-*
+      - uses: actions/download-artifact@v4
+        if: inputs.files != ''
+        with:
+          name: ${{ inputs.files }}
+          path: ${{ runner.temp }}/release
+      - uses: actions/setup-node@v5
+        if: inputs.files != ''
+        with:
+          node-version: 22
+      - name: The linux-x64 file from the release's assets
+        if: inputs.files != ''
+        run: |
+          sh scripts/release-unpack.sh "$RUNNER_TEMP/release" "$VERSION" dist-bin linux-x64
+          node scripts/release-files.mjs stamp "$VERSION"
       - run: sh scripts/binary-old-kernel.sh dist-bin/walnut-linux-x64

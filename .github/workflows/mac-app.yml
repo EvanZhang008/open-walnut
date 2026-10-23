@@ -4,11 +4,13 @@ name: Mac app
 # Apple, stapled, in one DMG per Mac architecture attached to the release:
 # Walnut-arm64.dmg (Apple silicon) and Walnut-x64.dmg (Intel), the install that
 # is one click (releases/latest/download/Walnut-<arch>.dmg), with the Homebrew
-# cask that picks one (walnut.rb). Each app carries the release's
-# self-contained archive for its architecture (scripts/desktop-carry-release.mjs),
-# so its first launch installs Walnut with no network, with the install.sh it
-# carries (desktop/BundledRuntime.swift). So release-archives.yml calls this
-# once the archives are attached, and each app must start and serve the console
+# cask that picks one (walnut.rb). Each app carries the release's compiled
+# Walnut for its architecture (walnut-<version>-darwin-<arch>, signed with the
+# app's identity; scripts/desktop-carry-release.mjs), so its first launch
+# installs Walnut with no network, with the install.sh it carries
+# (desktop/BundledRuntime.swift); an app from before the compiled file carried
+# that release's Node archive. release-archives.yml calls this once the files
+# are attached, and each app must start and serve the console
 # (scripts/desktop-smoke.mjs) before it is attached: the Apple silicon one from
 # what it carries, the Intel one (on this Apple silicon runner) by downloading
 # the arm64 build, as it does on such a Mac.
@@ -24,7 +26,8 @@ name: Mac app
 # never attached: an app that is not notarized does not open from a browser
 # download on macOS 15 and later.
 #
-# By hand: dispatch with a released version that has its archives. To try the
+# By hand: dispatch with a released version that has its files (or, from before
+# them, its archives). To try the
 # app of a later commit on a released Walnut before any release carries it,
 # also give `app_ref`: it is built, signed, notarized and launched the same
 # way, and never attached.
@@ -44,7 +47,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'A released stable version (x.y.z) whose archives are attached'
+        description: 'A released stable version (x.y.z) whose files (or archives) are attached'
         required: true
         type: string
       attach:
@@ -115,12 +118,19 @@ jobs:
       - name: The app's pure-logic tests
         if: steps.shape.outputs.app == 'true'
         run: bash scripts/test-desktop.sh
-      - name: The release's archive for ${{ matrix.arch }} and its checksums
+      # The tag's own build-release.sh carries what its release has: the compiled
+      # file, or (a release from before it) the Node archive.
+      - name: The release's Walnut for ${{ matrix.arch }} and its checksums
         if: steps.shape.outputs.app == 'true'
         run: |
-          gh release download "v$VERSION" --dir "$RUNNER_TEMP/release" --clobber \
-            --pattern "open-walnut-$VERSION-darwin-$ARCH.tar.gz" --pattern SHA256SUMS
-          echo "WALNUT_APP_RUNTIME=$RUNNER_TEMP/release/open-walnut-$VERSION-darwin-$ARCH.tar.gz" >> "$GITHUB_ENV"
+          gh release download "v$VERSION" --dir "$RUNNER_TEMP/release" --clobber --pattern SHA256SUMS
+          if grep -q " walnut-$VERSION-darwin-$ARCH\.gz\$" "$RUNNER_TEMP/release/SHA256SUMS"; then
+            carried="walnut-$VERSION-darwin-$ARCH.gz"
+          else
+            carried="open-walnut-$VERSION-darwin-$ARCH.tar.gz"
+          fi
+          gh release download "v$VERSION" --dir "$RUNNER_TEMP/release" --clobber --pattern "$carried"
+          echo "WALNUT_APP_RUNTIME=$RUNNER_TEMP/release/$carried" >> "$GITHUB_ENV"
           echo "WALNUT_APP_RUNTIME_SUMS=$RUNNER_TEMP/release/SHA256SUMS" >> "$GITHUB_ENV"
       - name: Signing identity and notary key, from the release environment
         id: signing
@@ -250,6 +260,7 @@ jobs:
           spctl -a -vv "$RUNNER_TEMP/brew-apps/Walnut.app" 2>&1 | tee "$RUNNER_TEMP/cask-assess.txt"
           grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/cask-assess.txt" || { echo "::error::the cask's Walnut.app is not a notarized Developer ID app"; exit 1; }
           # This runner is Apple silicon: brew took the arm64 DMG, which carries the arm64 build.
-          ls "$RUNNER_TEMP/brew-apps/Walnut.app/Contents/Resources/release/v$VERSION/open-walnut-$VERSION-darwin-arm64.tar.gz"
+          ls "$RUNNER_TEMP/brew-apps/Walnut.app/Contents/Resources/release/v$VERSION/walnut-$VERSION-darwin-arm64" \
+            || ls "$RUNNER_TEMP/brew-apps/Walnut.app/Contents/Resources/release/v$VERSION/open-walnut-$VERSION-darwin-arm64.tar.gz"
           brew uninstall --cask walnut-release/cask/walnut
           gh release upload "v$VERSION" "$RUNNER_TEMP/walnut.rb" --clobber

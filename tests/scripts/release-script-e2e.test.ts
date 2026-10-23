@@ -41,7 +41,8 @@ function git(...args: string[]): string {
 }
 
 /**
- * `ci` is what the fake gh reports for any commit: green | red | pending | none | broken.
+ * `ci` is what the fake gh reports for any commit: green | red | pending | none | broken,
+ * for CI and the binary matrix alike; `ci:matrix` (`green:red`) tells them apart.
  * Async, so a slow run (git under load) never blocks the vitest worker.
  */
 function release(ci: string, ...args: string[]): Promise<{ code: number; out: string }> {
@@ -58,8 +59,9 @@ function release(ci: string, ...args: string[]): Promise<{ code: number; out: st
 }
 
 const FAKE_GH = `#!/usr/bin/env node
-const ci = process.env.FAKE_GH_CI
 const endpoint = process.argv[3] || ''
+const [ciVerdict, matrixVerdict = ciVerdict] = process.env.FAKE_GH_CI.split(':')
+const ci = endpoint.includes('binary-matrix.yml') ? matrixVerdict : ciVerdict
 if (ci === 'broken') { process.stderr.write('gh: not logged in\\n'); process.exit(4) }
 const out = (o) => process.stdout.write(JSON.stringify(o))
 if (endpoint.includes('/jobs')) out({ jobs: [{ name: 'CI OK', conclusion: ci === 'green' ? 'success' : 'failure' }] })
@@ -137,12 +139,15 @@ describe('npm run release in a shared, dirty worktree', { timeout: 120_000 }, ()
     expect(again.out).toContain('is empty')
   })
 
-  it('stops on CI that failed, is still running, or never ran, and changes nothing', async () => {
+  it('stops on CI or the binary matrix that failed, is still running, or never ran, and changes nothing', async () => {
     const head = git('rev-parse', 'HEAD')
     const cases: Array<[string, string]> = [
       ['red', 'CI did not pass'],
       ['pending', 'CI is still running'],
       ['none', 'no CI run found'],
+      // CI passed and the compiled file did not, on some system it claims.
+      ['green:red', 'the binary matrix did not pass'],
+      ['green:pending', 'the binary matrix is still running'],
     ]
     for (const [ci, message] of cases) {
       const r = await release(ci, 'patch')

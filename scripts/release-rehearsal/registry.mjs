@@ -1,7 +1,9 @@
 /**
- * A local npm registry for release rehearsals: it serves chosen open-walnut
- * tarballs under chosen dist-tags and passes every other request through to the
- * real registry, so `npm install open-walnut` and the updater's dist-tags check
+ * A local npm registry for release rehearsals: it serves chosen tarballs (the
+ * open-walnut launcher and its @open-walnut/<target> platform packages, or any
+ * open-walnut build) under chosen dist-tags and passes every other request
+ * through to the real registry, so `npm install open-walnut`, the updater's
+ * dist-tags check and the compiled file's own download (binary-install.ts)
  * behave exactly as they do against npm, but nothing is ever published.
  */
 import { execFileSync } from 'node:child_process'
@@ -27,24 +29,31 @@ export function distOf(file, url) {
   }
 }
 
+/** The tarball file name npm gives a package: its name without the scope. */
+const tarballName = (name, version) => `${name.split('/').pop()}-${version}.tgz`
+
 /**
- * The registry document for open-walnut: one version per tarball, the given
- * dist-tags (each must name a served version), and publish times in order.
+ * The registry document for one package (open-walnut unless `name` says
+ * otherwise): one version per tarball of that name, the given dist-tags (each
+ * must name a served version), and publish times in order.
  */
-export function buildPackument({ tarballs, distTags, baseUrl, now = new Date() }) {
+export function buildPackument({ tarballs, distTags, baseUrl, now = new Date(), name = PACKAGE }) {
   const versions = {}
   const time = {}
-  tarballs.forEach(({ file }, i) => {
-    const manifest = readPackedManifest(file)
-    if (manifest.name !== PACKAGE) throw new Error(`${file} is ${manifest.name}, not ${PACKAGE}`)
+  const mine = tarballs.map(({ file }) => ({ file, manifest: readPackedManifest(file) }))
+  if (name === PACKAGE) {
+    for (const { file, manifest } of mine) if (manifest.name !== PACKAGE && !manifest.name.startsWith('@')) throw new Error(`${file} is ${manifest.name}, not ${PACKAGE}`)
+  }
+  const own = mine.filter(({ manifest }) => manifest.name === name)
+  own.forEach(({ file, manifest }, i) => {
     const v = manifest.version
-    versions[v] = { ...manifest, _id: `${PACKAGE}@${v}`, dist: distOf(file, `${baseUrl}/${PACKAGE}/-/${PACKAGE}-${v}.tgz`) }
-    time[v] = new Date(now.getTime() - (tarballs.length - i) * 60_000).toISOString()
+    versions[v] = { ...manifest, _id: `${name}@${v}`, dist: distOf(file, `${baseUrl}/${name}/-/${tarballName(name, v)}`) }
+    time[v] = new Date(now.getTime() - (own.length - i) * 60_000).toISOString()
   })
   for (const [tag, v] of Object.entries(distTags)) {
     if (!versions[v]) throw new Error(`dist-tag ${tag} names ${v}, which is not served`)
   }
-  return { name: PACKAGE, 'dist-tags': { ...distTags }, versions, time }
+  return { name, 'dist-tags': { ...distTags }, versions, time }
 }
 
 // Hop-by-hop and body-encoding headers must not be copied from a decoded fetch body.
@@ -67,49 +76,65 @@ async function passThrough(req, res, upstream) {
 }
 
 /**
- * Start the registry on a free loopback port. `tarballs` is [{ file }] (each a
- * packed open-walnut), `distTags` maps tag -> version. Returns its URL, the hits
- * it answered itself (so a test can prove the updater asked it), and close().
+ * Start the registry on a free loopback port. `tarballs` is [{ file }] (packed
+ * packages: open-walnut, and any other names, such as its platform packages),
+ * `distTags` maps tag -> version for open-walnut; every other package's
+ * `latest` is its last tarball. Returns its URL, the hits it answered itself
+ * (so a test can prove the updater asked it), and close().
  */
 export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM }) {
+  const names = [...new Set(tarballs.map(({ file }) => readPackedManifest(file).name))]
+  if (!names.includes(PACKAGE)) names.push(PACKAGE)
   const files = new Map()
-  for (const { file } of tarballs) files.set(`${PACKAGE}-${readPackedManifest(file).version}.tgz`, file)
+  for (const { file } of tarballs) {
+    const m = readPackedManifest(file)
+    files.set(`${m.name}/-/${tarballName(m.name, m.version)}`, file)
+  }
   const hits = []
-  let packument = null
+  let packuments = null
+  const build = (url, tags) => {
+    const out = {}
+    for (const name of names) {
+      const own = tarballs.filter(({ file }) => readPackedManifest(file).name === name)
+      const last = own.length ? readPackedManifest(own[own.length - 1].file).version : null
+      out[name] = buildPackument({ tarballs, distTags: name === PACKAGE ? tags : (last ? { latest: last } : {}), baseUrl: url, name })
+    }
+    return out
+  }
+  const json = (res, body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
   const server = http.createServer((req, res) => {
-    const pathname = new URL(req.url, 'http://x').pathname
-    if (pathname === `/${PACKAGE}`) {
+    // npm asks for a scoped package as /@scope%2fname.
+    const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname)
+    const tagsOf = /^\/-\/package\/(.+)\/dist-tags$/.exec(pathname)
+    if (tagsOf && packuments[tagsOf[1]]) {
       hits.push(pathname)
-      res.writeHead(200, { 'content-type': 'application/json' })
-      return res.end(JSON.stringify(packument))
+      return json(res, packuments[tagsOf[1]]['dist-tags'])
     }
-    if (pathname === `/-/package/${PACKAGE}/dist-tags`) {
-      hits.push(pathname)
-      res.writeHead(200, { 'content-type': 'application/json' })
-      return res.end(JSON.stringify(packument['dist-tags']))
-    }
-    const tgz = pathname.startsWith(`/${PACKAGE}/-/`) ? files.get(pathname.slice(`/${PACKAGE}/-/`.length)) : null
+    const name = names.find((n) => pathname === `/${n}` || pathname.startsWith(`/${n}/`))
+    if (!name) return void passThrough(req, res, upstream)
+    const rest = pathname.slice(name.length + 1)
+    if (rest === '') { hits.push(pathname); return json(res, packuments[name]) }
+    const tgz = files.get(`${name}${rest}`)
     if (tgz) {
       hits.push(pathname)
       const bytes = fs.readFileSync(tgz)
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': bytes.length })
       return res.end(bytes)
     }
-    if (pathname.startsWith(`/${PACKAGE}/`)) {
-      res.writeHead(404, { 'content-type': 'application/json' })
-      return res.end('{"error":"not found"}')
-    }
-    void passThrough(req, res, upstream)
+    // One version's document: /<name>/<version> (what the compiled file's update reads).
+    const doc = packuments[name].versions[rest.slice(1)]
+    if (doc) { hits.push(pathname); return json(res, doc) }
+    return json(res, { error: 'not found' }, 404)
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const url = `http://127.0.0.1:${server.address().port}`
-  packument = buildPackument({ tarballs, distTags, baseUrl: url })
+  packuments = build(url, distTags)
   return {
     url,
     hits,
     distTagsUrl: `${url}/-/package/${PACKAGE}/dist-tags`,
-    /** Move the dist-tags (a release published while an install runs). */
-    setDistTags: (tags) => { packument = buildPackument({ tarballs, distTags: tags, baseUrl: url }) },
+    /** Move open-walnut's dist-tags (a release published while an install runs). */
+    setDistTags: (tags) => { packuments = build(url, tags) },
     close: () => new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections() }),
   }
 }

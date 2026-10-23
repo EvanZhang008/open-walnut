@@ -54,9 +54,11 @@ struct AppLinkTests {
         if case .leave = T.linkStep(existing: .linkTo("/usr/local/lib/node_modules/open-walnut/bin/walnut.js", targetExists: true), target: target, linkPath: lp, shellWalnut: lp) {} else { preconditionFailure("a working foreign link must be left") }
         if case .leave = T.linkStep(existing: .otherFile, target: target, linkPath: lp, shellWalnut: lp) {} else { preconditionFailure("a file must be left") }
 
-        precondition(T.target(runtimeAppDir: "/r/app", sourceDir: "/src") == "/r/app/bin/walnut")
-        precondition(T.target(runtimeAppDir: nil, sourceDir: "/src") == "/src/bin/open-walnut.js")
-        precondition(T.target(runtimeAppDir: nil, sourceDir: nil) == nil)
+        let rt = BundledRuntime(installDir: "/r")
+        precondition(T.target(runtimeCommand: rt.command(layout: .file(version: "0.7.0")), sourceDir: "/src") == "/r/bin/walnut")
+        precondition(T.target(runtimeCommand: rt.command(layout: .archive), sourceDir: "/src") == "/r/app/bin/walnut")
+        precondition(T.target(runtimeCommand: nil, sourceDir: "/src") == "/src/bin/open-walnut.js")
+        precondition(T.target(runtimeCommand: nil, sourceDir: nil) == nil)
 
         // MARK: profile and PATH
         precondition(T.profileFile(shell: "/bin/zsh", home: "/h") == "/h/.zprofile")

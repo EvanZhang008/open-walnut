@@ -1,0 +1,256 @@
+/**
+ * What a release publishes of the compiled file, short of publishing it: the
+ * GitHub Release assets (scripts/release-files.mjs), the npm launcher and
+ * platform packages (scripts/npm-packages.mjs, scripts/npm-launcher/launch.js),
+ * the Homebrew formula over the assets (scripts/homebrew/formula.mjs), and the
+ * upload order (scripts/release-attach.sh). Stand-in files (small scripts) take
+ * the place of the compiled ones; tests/scripts/file-distribution.e2e.test.ts
+ * installs real compiled files through all of these.
+ */
+import { execFileSync, spawnSync } from 'node:child_process'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import zlib from 'node:zlib'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { TARGETS, assetName, builtName, fileName, filesIn, writeAssets } from '../../scripts/release-files.mjs'
+import { LAUNCHER, buildPackages, launcherManifest, platformManifest, publishOrder, publishPackages } from '../../scripts/npm-packages.mjs'
+import { candidateTargets, hasMuslCxxRuntime } from '../../scripts/npm-launcher/launch.js'
+import { formula } from '../../scripts/homebrew/formula.mjs'
+import { hostTarget } from '../../scripts/release-build.mjs'
+import { guardedPath } from '../setup/exec-guard.js'
+
+const ROOT = path.resolve(__dirname, '../..')
+const VERSION = '0.7.0'
+const HEAD = 'a'.repeat(40)
+let tmp = ''
+let files = ''
+let assets = ''
+const sha256 = (file: string) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+
+beforeAll(async () => {
+  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'release-files-')))
+  files = path.join(tmp, 'dist-bin')
+  fs.mkdirSync(files)
+  for (const { target } of TARGETS) fs.writeFileSync(path.join(files, builtName(target)), `#!/bin/sh\necho '${VERSION} (${target})'\n`, { mode: 0o755 })
+  assets = path.join(tmp, 'assets')
+  await writeAssets({ files, version: VERSION, out: assets })
+})
+afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
+
+describe('release-files.mjs', () => {
+  it('ships six targets: macOS and glibc and musl Linux, on arm64 and x64', () => {
+    expect(TARGETS.map((t) => t.target).sort()).toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-arm64-musl', 'linux-x64', 'linux-x64-musl'])
+    for (const t of TARGETS) expect(Boolean(t.libc), t.target).toBe(t.os === 'linux')
+  })
+
+  it('writes each file gzipped as walnut-<version>-<target>.gz, and SHA256SUMS for the .gz and the plain file', () => {
+    expect(fs.readdirSync(assets).sort()).toEqual(['SHA256SUMS', ...TARGETS.map((t) => assetName(VERSION, t.target))].sort())
+    const sums = fs.readFileSync(path.join(assets, 'SHA256SUMS'), 'utf8')
+    for (const { target } of TARGETS) {
+      const gz = path.join(assets, assetName(VERSION, target))
+      const plain = zlib.gunzipSync(fs.readFileSync(gz))
+      expect(plain.equals(fs.readFileSync(path.join(files, builtName(target)))), target).toBe(true)
+      expect(sums).toContain(`${sha256(gz)}  walnut-${VERSION}-${target}.gz\n`)
+      expect(sums).toContain(`${crypto.createHash('sha256').update(plain).digest('hex')}  ${fileName(VERSION, target)}\n`)
+    }
+    // sha256sum's format: two spaces, and every line one file.
+    expect(sums.trim().split('\n')).toHaveLength(TARGETS.length * 2)
+  })
+
+  it('reads one version\'s files back out of SHA256SUMS, whatever else it lists', () => {
+    const sums = `${fs.readFileSync(path.join(assets, 'SHA256SUMS'), 'utf8')}${'e'.repeat(64)}  open-walnut-${VERSION}-linux-x64.tar.gz\n${'d'.repeat(64)}  walnut-0.6.9-linux-x64.gz\n`
+    const parsed = filesIn(sums, VERSION)
+    expect(Object.keys(parsed).sort()).toEqual(TARGETS.map((t) => t.target).sort())
+    expect(parsed['linux-x64'].gz).toBe(sha256(path.join(assets, assetName(VERSION, 'linux-x64'))))
+    expect(filesIn(sums, '0.6.9')).toEqual({ 'linux-x64': { gz: 'd'.repeat(64) } })
+  })
+
+  it('refuses a dist-bin with a target missing, and what is not a version', async () => {
+    const partial = path.join(tmp, 'partial')
+    fs.mkdirSync(partial)
+    fs.copyFileSync(path.join(files, builtName('linux-x64')), path.join(partial, builtName('linux-x64')))
+    await expect(writeAssets({ files: partial, version: VERSION, out: path.join(tmp, 'no') })).rejects.toThrow(/has no walnut-darwin-arm64/)
+    await expect(writeAssets({ files, version: 'v0.7.0', out: path.join(tmp, 'no') })).rejects.toThrow(/not a version/)
+    expect(fs.existsSync(path.join(tmp, 'no'))).toBe(false)
+  })
+})
+
+describe('npm-packages.mjs', () => {
+  let out = ''
+  beforeAll(() => {
+    out = path.join(tmp, 'npm')
+    buildPackages({ files, version: VERSION, out, gitHead: HEAD })
+  })
+  const manifest = (dir: string) => JSON.parse(fs.readFileSync(path.join(out, dir, 'package.json'), 'utf8'))
+
+  it('one package per target that npm installs only where its os, cpu and libc match', () => {
+    const repo = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+    for (const t of TARGETS) {
+      const m = manifest(`@open-walnut/${t.target}`)
+      expect(m).toMatchObject({ name: `@open-walnut/${t.target}`, version: VERSION, os: [t.os], cpu: [t.cpu], files: ['walnut'], gitHead: HEAD, license: repo.license })
+      expect(m.libc).toEqual(t.libc ? [t.libc] : undefined)
+      // No scripts, no bin: the launcher runs it, npm never does.
+      expect(m.scripts).toBeUndefined()
+      expect(m.bin).toBeUndefined()
+      const file = path.join(out, '@open-walnut', t.target, 'walnut')
+      expect(fs.statSync(file).mode & 0o111, t.target).not.toBe(0)
+      expect(fs.readFileSync(file).equals(fs.readFileSync(path.join(files, builtName(t.target))))).toBe(true)
+      expect(platformManifest(t, VERSION, repo).repository).toEqual(repo.repository)
+    }
+  })
+
+  it('the launcher names every platform package at its own version, and keeps the commands and the old entry', () => {
+    const m = manifest(LAUNCHER)
+    expect(m).toMatchObject({ name: 'open-walnut', version: VERSION, gitHead: HEAD, bin: { 'open-walnut': 'bin/open-walnut.js', walnut: 'bin/open-walnut.js' } })
+    expect(m.optionalDependencies).toEqual(Object.fromEntries(TARGETS.map((t) => [`@open-walnut/${t.target}`, VERSION])))
+    // Nothing for npm to run at install, and nothing else to fetch.
+    expect(m.scripts).toBeUndefined()
+    expect(m.dependencies).toBeUndefined()
+    expect(launcherManifest(VERSION, JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))).main).toBe('./dist/cli.js')
+    for (const f of ['bin/open-walnut.js', 'dist/cli.js', 'lib/launch.js', 'README.md', 'LICENSE']) expect(fs.existsSync(path.join(out, LAUNCHER, f)), f).toBe(true)
+    expect(fs.readFileSync(path.join(out, LAUNCHER, 'lib/launch.js'), 'utf8')).toBe(fs.readFileSync(path.join(ROOT, 'scripts/npm-launcher/launch.js'), 'utf8'))
+  })
+
+  it('refuses a gitHead that is not a commit', () => {
+    expect(() => buildPackages({ files, version: VERSION, out: path.join(tmp, 'bad'), gitHead: 'main' })).toThrow(/not a commit sha/)
+  })
+
+  it('publishes the platform packages first and the launcher last, each under the tag, with provenance', () => {
+    const order = publishOrder(out)
+    expect(order.at(-1)).toBe(path.join(out, LAUNCHER))
+    expect(order.slice(0, -1).map((p) => path.basename(p)).sort()).toEqual(TARGETS.map((t) => t.target).sort())
+    const calls: string[][] = []
+    const lines: string[] = []
+    publishPackages({ dir: out, tag: 'nightly', provenance: true, dryRun: true, log: (l) => lines.push(l), run: ((_cmd: string, args: string[]) => { calls.push(args); return { status: 0, stdout: '', stderr: '' } }) as never })
+    expect(calls.map((a) => a[1])).toEqual(order)
+    for (const a of calls) expect(a).toEqual(expect.arrayContaining(['publish', '--tag', 'nightly', '--access', 'public', '--provenance', '--dry-run']))
+    expect(lines.at(-1)).toBe(`would publish open-walnut@${VERSION} (nightly)`)
+  })
+
+  it('a version npm says it already holds counts as published; any other refusal stops before the launcher', () => {
+    const seen: string[] = []
+    const taken = ((_cmd: string, args: string[]) => {
+      seen.push(path.basename(args[1]))
+      return { status: 1, stdout: '', stderr: `npm error 403 You cannot publish over the previously published versions: ${VERSION}.` }
+    }) as never
+    expect(() => publishPackages({ dir: out, tag: 'latest', dryRun: true, run: taken, log: () => {} })).not.toThrow()
+    expect(seen).toHaveLength(TARGETS.length + 1)
+    seen.length = 0
+    const broken = ((_cmd: string, args: string[]) => { seen.push(path.basename(args[1])); return { status: 1, stdout: '', stderr: 'npm error 500 Internal Server Error' } }) as never
+    expect(() => publishPackages({ dir: out, tag: 'latest', dryRun: true, run: broken, log: () => {} })).toThrow(/exited 1/)
+    expect(seen).toHaveLength(1)
+    expect(seen).not.toContain(LAUNCHER)
+    expect(() => publishPackages({ dir: out, tag: '', dryRun: true, run: broken })).toThrow(/needs --tag/)
+  })
+})
+
+describe('the launcher', () => {
+  it('looks for this machine\'s package, the other libc as a fallback on Linux, and none elsewhere', () => {
+    expect(candidateTargets('darwin', 'arm64', false)).toEqual(['darwin-arm64'])
+    expect(candidateTargets('darwin', 'x64', false)).toEqual(['darwin-x64'])
+    expect(candidateTargets('linux', 'x64', false)).toEqual(['linux-x64', 'linux-x64-musl'])
+    expect(candidateTargets('linux', 'arm64', true)).toEqual(['linux-arm64-musl', 'linux-arm64'])
+    expect(candidateTargets('win32', 'x64', false)).toEqual([])
+    expect(candidateTargets('linux', 'ia32', false)).toEqual([])
+  })
+
+  it('on musl, knows whether the C++ runtime the musl build links is there (to name it when the file cannot start)', () => {
+    const alpine = new Set(['/usr/lib/libstdc++.so.6', '/usr/lib/libgcc_s.so.1'])
+    expect(hasMuslCxxRuntime((p: string) => alpine.has(p))).toBe(true)
+    expect(hasMuslCxxRuntime((p: string) => p === '/usr/lib/libgcc_s.so.1')).toBe(false)
+    expect(hasMuslCxxRuntime(() => false)).toBe(false)
+  })
+
+  it('release-build.mjs checks the file of the runner it builds on', () => {
+    expect(hostTarget('linux', 'x64')).toBe('linux-x64')
+    expect(hostTarget('darwin', 'arm64')).toBe('darwin-arm64')
+    expect(hostTarget('win32', 'x64')).toBeNull()
+  })
+})
+
+describe('the Homebrew formula over the files', () => {
+  const urls = (rb: string) => [...rb.matchAll(/url "([^"]+)", using: :nounzip\n\s+sha256 "([0-9a-f]{64})"/g)].map((m) => ({ url: m[1]!, sha: m[2]! }))
+
+  it('installs the release\'s .gz for each Mac and glibc Linux, each checked against the asset itself', () => {
+    const rb = formula({ version: VERSION, sums: fs.readFileSync(path.join(assets, 'SHA256SUMS'), 'utf8') })
+    const listed = urls(rb)
+    expect(listed.map((u) => path.basename(u.url))).toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((t) => assetName(VERSION, t)))
+    for (const { url, sha } of listed) {
+      expect(url).toBe(`https://github.com/EvanZhang008/open-walnut/releases/download/v${VERSION}/${path.basename(url)}`)
+      // The checksum is the uploaded asset's, not the plain file's inside it.
+      expect(sha).toBe(sha256(path.join(assets, path.basename(url))))
+    }
+    expect(rb).not.toContain('musl')
+    expect(rb).toMatch(/on_macos do\n {4}on_arm do\n {6}url "[^"]+darwin-arm64\.gz"/)
+    expect(rb).toMatch(/on_linux do\n {4}on_arm do\n {6}url "[^"]+linux-arm64\.gz"[\s\S]*?on_intel do\n {6}url "[^"]+linux-x64\.gz"/)
+    // Unpacked only after Homebrew's linkage pass, which must not touch the file.
+    expect(rb).toContain('libexec.install Dir["walnut-*.gz"].first => "walnut.gz"')
+    expect(rb).toContain('install_gzipped_executable "walnut.gz", "walnut", source_base: :libexec, target_base: :libexec')
+    expect(rb).toContain('bin.write_exec_script libexec/"walnut"')
+    expect(rb).toContain('(bin/"open-walnut").write_exec_script libexec/"walnut"')
+    expect(rb).toContain('Update it with: brew upgrade open-walnut')
+    expect(rb).toContain('assert_match version.to_s, shell_output("#{bin}/walnut --version")')
+    expect(rb).not.toMatch(/depends_on|app\/bin/)
+  })
+
+  it('takes the files over the archives when a release has both, the archives when it has only those', () => {
+    const both = `${fs.readFileSync(path.join(assets, 'SHA256SUMS'), 'utf8')}${'e'.repeat(64)}  open-walnut-${VERSION}-linux-x64.tar.gz\n`
+    expect(formula({ version: VERSION, sums: both })).not.toContain('.tar.gz')
+    const old = formula({ version: VERSION, sums: `${'e'.repeat(64)}  open-walnut-${VERSION}-linux-x64.tar.gz\n` })
+    expect(old).toContain(`open-walnut-${VERSION}-linux-x64.tar.gz", using: :nounzip`)
+    expect(old).toContain('libexec/"app/bin/walnut"')
+    expect(() => formula({ version: '0.8.0', sums: both })).toThrow(/lists no file or archive of 0\.8\.0/)
+  })
+
+  it('is Ruby that parses', () => {
+    const rb = path.join(tmp, 'open-walnut.rb')
+    fs.writeFileSync(rb, formula({ version: VERSION, sums: fs.readFileSync(path.join(assets, 'SHA256SUMS'), 'utf8') }))
+    expect(execFileSync('ruby', ['-c', rb], { encoding: 'utf8' })).toContain('Syntax OK')
+  })
+})
+
+describe('release-attach.sh', () => {
+  /**
+   * A `gh` that answers `release view` with `assets` (or, with `viewFails`, fails
+   * as an outage does, printing nothing) and logs every upload.
+   */
+  function fakeGh(assetsOnRelease: string[], { viewFails = false } = {}): { bin: string; log: string } {
+    const dir = fs.mkdtempSync(path.join(tmp, 'gh-'))
+    const log = path.join(dir, 'log')
+    fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh
+if [ "$1 $2" = "release view" ]; then
+  ${viewFails ? 'echo "HTTP 502: Bad Gateway" >&2; exit 1' : `printf '%s\\n' ${assetsOnRelease.map((a) => `'${a}'`).join(' ')}; exit 0`}
+fi
+if [ "$1 $2" = "release upload" ]; then shift 3; for f in "$@"; do [ "$f" = --clobber ] || basename "$f" >> "${log}"; done; exit 0; fi
+exit 1
+`, { mode: 0o755 })
+    return { bin: dir, log }
+  }
+  const attach = (gh: { bin: string }) => execFileSync('/bin/sh', [path.join(ROOT, 'scripts/release-attach.sh'), `v${VERSION}`, assets], { encoding: 'utf8', env: { PATH: guardedPath([gh.bin], '/usr/bin:/bin') } })
+
+  it('stops, uploading nothing, when GitHub cannot list the release\'s assets', () => {
+    // Without pipefail, `gh release view | grep -qx SHA256SUMS` read an outage as
+    // "no SHA256SUMS yet" and uploaded rebuilt bytes over a finished release.
+    const gh = fakeGh([], { viewFails: true })
+    const r = spawnSync('/bin/sh', [path.join(ROOT, 'scripts/release-attach.sh'), `v${VERSION}`, assets], { encoding: 'utf8', env: { PATH: guardedPath([gh.bin], '/usr/bin:/bin') } })
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain(`could not list v${VERSION}'s assets; nothing uploaded`)
+    expect(fs.existsSync(gh.log)).toBe(false)
+  })
+
+  it('uploads every .gz and install.sh, then SHA256SUMS last', () => {
+    const gh = fakeGh(['open-walnut.rb'])
+    expect(attach(gh)).toContain(`attached ${TARGETS.length} files, install.sh and SHA256SUMS to v${VERSION}`)
+    const uploaded = fs.readFileSync(gh.log, 'utf8').trim().split('\n')
+    expect(uploaded.at(-1)).toBe('SHA256SUMS')
+    expect(uploaded.slice(0, -1).sort()).toEqual([...TARGETS.map((t) => assetName(VERSION, t.target)), 'install.sh'].sort())
+  })
+
+  it('a release that has SHA256SUMS already has its files: nothing is uploaded again', () => {
+    const gh = fakeGh(['SHA256SUMS', assetName(VERSION, 'linux-x64')])
+    expect(attach(gh)).toContain(`v${VERSION} already has its files`)
+    expect(fs.existsSync(gh.log)).toBe(false)
+  })
+})

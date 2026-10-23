@@ -23,11 +23,11 @@ struct CommandLineTool {
     var binDir: String { BundledRuntime.binDir(home: home) }
     var linkPath: String { binDir + "/" + CommandLineTool.commandName }
 
-    /// The `walnut` of the Walnut this app runs: the runtime's launcher, or a
-    /// source checkout's own bin script (which needs the user's Node, as a
-    /// checkout always does).
-    static func target(runtimeAppDir: String?, sourceDir: String?) -> String? {
-        if let appDir = runtimeAppDir { return appDir + "/bin/walnut" }
+    /// The `walnut` of the Walnut this app runs: the runtime's command
+    /// (BundledRuntime.command), or a source checkout's own bin script (which
+    /// needs the user's Node, as a checkout always does).
+    static func target(runtimeCommand: String?, sourceDir: String?) -> String? {
+        if let command = runtimeCommand { return command }
         if let source = sourceDir { return source + "/bin/open-walnut.js" }
         return nil
     }

@@ -10,12 +10,13 @@ name: Release
 #            tagged `vX.Y.Z`, a GitHub Release with its notes, then a
 #            `release: X.Y.Z` commit on main rolls CHANGELOG and package.json
 #            (scripts/stable-promote.mjs). By hand, a `vX.Y.Z` tag cut with
-#            `npm run release -- patch|minor|major` publishes through job `stable`.
-#            Either way the release then gets its self-contained archives, the
-#            Homebrew formula and install.sh (release-archives.yml).
+#            `npm run release -- patch|minor|major` publishes through jobs `stable-*`.
+#            Either way its GitHub Release holds the compiled files and install.sh,
+#            and then gets the Homebrew formula, the Mac app and (for two more
+#            releases) the old Node archives (release-archives.yml).
 #   nightly  about every six hours (checked when CI finishes on main and on the
 #            schedule; and by hand): the newest commit on main that CI passed,
-#            when it is not the last nightly. Published as
+#            when it is not the last nightly (jobs `nightly-*`). Published as
 #            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`. Nothing is
 #            committed: the version lives in the registry, not in package.json,
 #            and so does the record of its commit (the version's `gitHead`).
@@ -29,13 +30,33 @@ name: Release
 # stable tag goes on the released commit or, when main's workflows moved on, on a
 # child of it that carries main's workflows (job `promote`).
 #
-# Both channels publish only commits CI passed (scripts/ci-gate.mjs reads the CI
-# workflow's `CI OK` job), because every npm install updates itself on restart.
-# The nightly does not rerun the tests: CI already ran them on that exact commit.
+# Both channels publish only commits CI and the binary matrix passed
+# (scripts/ci-gate.mjs reads the CI workflow's `CI OK` job and the run of
+# binary-matrix.yml), because every install updates itself on restart. The
+# nightly does not rerun the tests: CI already ran them on that exact commit.
+#
+# What a version is: the compiled Walnut, one file per target, built here with
+# bun from the released commit at the released version (scripts/release-build.mjs;
+# every target from one Linux runner, as the binary matrix builds them). Each
+# channel builds once (jobs `*-build`), runs those very files on every system the
+# binary matrix covers, reporting the released version (`*-files`, which call
+# binary-matrix.yml with them), and publishes the same bytes: the publishing job
+# builds nothing, it unpacks the build's .gz files, each checked by both of its
+# SHA256SUMS lines (scripts/release-unpack.sh). npm gets
+# a package per target, `@open-walnut/<target>`, and then `open-walnut`, the
+# launcher that names them (scripts/npm-packages.mjs): platform packages first,
+# so a version the update check sees always has its files. A stable's GitHub
+# Release opens as a draft, gets the files gzipped, SHA256SUMS and install.sh
+# (scripts/release-attach.sh), and only then goes public: install.sh, the formula
+# and the Mac app read releases/latest/download, which pointed at a release
+# without its files for minutes when it went public first. A nightly has no
+# GitHub Release; it is on npm only.
 #
 # Authentication is npm trusted publishing (OIDC): no token is stored anywhere.
-# One-time setup on npmjs.com, package open-walnut > Settings > Trusted publisher:
-# GitHub Actions, owner EvanZhang008, repository open-walnut, workflow release.yml.
+# One-time setup on npmjs.com, for open-walnut and for each @open-walnut/<target>
+# package (docs/reference/releasing.md, "npm packages"), Settings > Trusted
+# publisher: GitHub Actions, owner EvanZhang008, repository open-walnut,
+# workflow release.yml.
 # `--provenance` attaches the build attestation npm shows on the package page.
 # Trusted publishing needs npm 11.5.1 or newer, so the job updates npm first. It
 # pins the major: npm 12 changed install defaults (tarball URL dependencies and
@@ -74,14 +95,16 @@ on:
         type: boolean
         default: false
       dry_run:
-        description: 'stable: plan and smoke-test the newest nightly now (no 24h soak), publish nothing'
+        description: 'stable: plan, build and smoke-test the newest nightly now (no 24h soak) and run its files on every system, publish nothing'
         type: boolean
         default: false
 
 # One queue per publishing job, not per run: a run checks both channels, and a
 # nightly must never wait behind a stable release (or the reverse). A running
 # publisher is never cancelled; a newer pending job replaces an older pending one,
-# which asks the same question later. The planning jobs only read.
+# which asks the same question later. The planning, build and matrix jobs only
+# read, so two runs may build the same nightly; its publishing job asks again,
+# right before it publishes, whether it is still the next one.
 
 permissions:
   contents: write
@@ -95,8 +118,76 @@ env:
   HUSKY: '0'
 
 jobs:
+  # Stable by hand: a vX.Y.Z tag. Build it, run its files everywhere, publish them.
+  stable-build:
+    name: Build stable (${{ github.ref_name }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      files: release-files-stable
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: The tag names the version package.json carries
+        id: tag
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME but package.json is $version (cut releases with: npm run release -- <bump>)" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # A release commit only rolls the version and CHANGELOG, so its parent's CI
+      # result is the one that counts; any other tagged commit needs its own.
+      - name: CI and the binary matrix passed on the released code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/ci-gate.mjs release HEAD
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      # The darwin-x64 file needs an ad-hoc signature, made off macOS by rcodesign.
+      - run: sh scripts/install-rcodesign.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: npm run lint
+      - name: Build the compiled files and their release assets
+        run: node scripts/release-build.mjs --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/release"
+      # What jobs `stable-files` run and `stable` publishes: the .gz files and SHA256SUMS.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files-stable
+          path: ${{ runner.temp }}/release/assets
+          if-no-files-found: error
+          # Already gzip.
+          compression-level: 0
+          # As long as GitHub lets a run be re-run, so "Re-run failed jobs" can finish a publish.
+          retention-days: 30
+          overwrite: true
+
+  stable-files:
+    name: The stable's files on every system
+    needs: stable-build
+    permissions:
+      contents: read
+    uses: ./.github/workflows/binary-matrix.yml
+    with:
+      files: ${{ needs.stable-build.outputs.files }}
+      version: ${{ needs.stable-build.outputs.version }}
+      ref: ${{ github.sha }}
+
   stable:
     name: Publish stable (${{ github.ref_name }})
+    needs: [stable-build, stable-files]
     if: startsWith(github.ref, 'refs/tags/v')
     # Its own queue per tag: a pending tag publish is never replaced by another job.
     concurrency:
@@ -109,56 +200,79 @@ jobs:
       contents: write
       id-token: write
       actions: write
+    env:
+      VERSION: ${{ needs.stable-build.outputs.version }}
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 2
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: The tag names the version package.json carries
+      - run: npm install -g npm@12
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.stable-build.outputs.files }}
+          path: ${{ runner.temp }}/release/assets
+      - name: The npm packages, of the very files the binary matrix ran
         run: |
-          version="$(node -p "require('./package.json').version")"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME but package.json is $version (cut releases with: npm run release -- <bump>)" >&2
-            exit 1
-          fi
-      # A release commit only rolls the version and CHANGELOG, so its parent's CI
-      # result is the one that counts; any other tagged commit needs its own.
-      - name: CI passed on the released code
+          sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"
+          node scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$GITHUB_SHA"
+      - name: Publish to npm (the platform packages, then open-walnut)
+        run: node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance
+      - name: Draft the GitHub Release with this version's CHANGELOG section
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: node scripts/ci-gate.mjs release HEAD
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
-      - run: npm install -g npm@12
-      - run: bun install --frozen-lockfile
-      - run: npm run lint
-      # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs
-      # against the tarball before anything leaves the runner.
-      - run: npm publish --provenance --access public
-      - name: GitHub Release with this version's CHANGELOG section
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          node scripts/release-notes.mjs "$version" > release-notes.md
-          gh release create "${GITHUB_REF_NAME}" --title "Open Walnut ${version}" --notes-file release-notes.md
-      - name: Build its self-contained archives (release-archives.yml)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "the $TAG GitHub Release already exists"
+          else
+            node scripts/release-notes.mjs "$VERSION" > release-notes.md
+            gh release create "$TAG" --draft --title "Open Walnut $VERSION" --notes-file release-notes.md
+          fi
+      - name: Attach its files to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run release-archives.yml --ref main -f version="${GITHUB_REF_NAME#v}"
+          GH_REPO: ${{ github.repository }}
+        run: sh scripts/release-attach.sh "$TAG" "$RUNNER_TEMP/release/assets"
+      - name: Publish the GitHub Release, now that it holds its files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # install.sh, the formula and the Mac app read releases/latest/download: a
+          # release goes public only with its files on it. An earlier attempt may
+          # have published it already; then it is left as it is.
+          draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [ "$draft" != true ]; then
+            echo "the $TAG GitHub Release is already published"
+            exit 0
+          fi
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          if ! printf '%s\n' "$assets" | grep -qx SHA256SUMS; then
+            echo "::error::$TAG has no SHA256SUMS, so not all of its files are up: it stays a draft"
+            exit 1
+          fi
+          gh release edit "$TAG" --draft=false --latest
+          echo "published the $TAG GitHub Release"
+      - name: Its Homebrew formula, Mac app and Node archives (release-archives.yml)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-archives.yml --ref main -f version="$VERSION"
 
-  nightly:
-    name: Publish nightly from main
+  nightly-build:
+    name: Build the nightly from main
     if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
-    concurrency:
-      group: release-nightly
-      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      publish: ${{ steps.pick.outputs.publish }}
+      sha: ${{ steps.pick.outputs.sha }}
+      version: ${{ steps.build.outputs.version }}
+      files: release-files-nightly
     steps:
       - uses: actions/checkout@v5
         with:
@@ -187,11 +301,12 @@ jobs:
           if [ -z "$green" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "no recent commit on main passed CI; nothing to publish"
-          elif ! git cat-file -e "$green:scripts/nightly-version.mjs" 2>/dev/null; then
+          elif ! git cat-file -e "$green:scripts/release-build.mjs" 2>/dev/null || ! git cat-file -e "$green:scripts/release-unpack.sh" 2>/dev/null; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            # Only a lookup that went wrong lands here: every commit since 2026-09-30 has the
-            # pipeline. Loud, so a run that keeps choosing it shows on the run's page.
-            echo "::warning::the newest green commit found is $green, which predates the nightly pipeline; nothing published (last nightly $last)"
+            # A commit from before this release pipeline (its build, and the unpack
+            # the matrix and the publish run from its tree) has nothing these jobs can
+            # build. Loud, so a run that keeps choosing one shows on the run's page.
+            echo "::warning::the newest green commit found is $green, which predates the compiled file's release build; nothing published (last nightly $last)"
           elif [ "$last" = "$green" ] && [ "${{ inputs.force }}" != "true" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "that commit is already the last nightly; nothing to publish"
@@ -206,52 +321,125 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "sha=$green" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-node@v5
-        if: steps.pick.outputs.publish == 'true'
-        with:
-          node-version: 22
       - uses: oven-sh/setup-bun@v2
         if: steps.pick.outputs.publish == 'true'
         with:
           bun-version: 1.4.4
       - if: steps.pick.outputs.publish == 'true'
-        run: npm install -g npm@12
-      - if: steps.pick.outputs.publish == 'true'
         run: bun install --frozen-lockfile
-      # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.
-      - name: Version this nightly and publish it
+      # The darwin-x64 file needs an ad-hoc signature, made off macOS by rcodesign.
+      - if: steps.pick.outputs.publish == 'true'
+        run: sh scripts/install-rcodesign.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Version this nightly and build it
         if: steps.pick.outputs.publish == 'true'
-        id: publish
-        env:
-          # The version stamp below is the only edit; the build must not call itself dirty.
-          WALNUT_VERSION_STAMPED: '1'
+        id: build
         run: |
           WALNUT_LATEST_STABLE="$(npm view open-walnut@latest version 2>/dev/null || true)"
           export WALNUT_LATEST_STABLE
           version="$(node scripts/nightly-version.mjs)"
-          echo "publishing open-walnut@$version from ${{ steps.pick.outputs.sha }}"
-          npm version "$version" --no-git-tag-version
-          npm publish --tag nightly --provenance --access public
+          echo "building open-walnut@$version from ${{ steps.pick.outputs.sha }}"
+          node scripts/release-build.mjs --version "$version" --out "$RUNNER_TEMP/release"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      # What jobs `nightly-files` run and `nightly` publishes.
+      - uses: actions/upload-artifact@v4
+        if: steps.pick.outputs.publish == 'true'
+        with:
+          name: release-files-nightly
+          path: ${{ runner.temp }}/release/assets
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  nightly-files:
+    name: The nightly's files on every system
+    needs: nightly-build
+    if: needs.nightly-build.outputs.publish == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/binary-matrix.yml
+    with:
+      files: ${{ needs.nightly-build.outputs.files }}
+      version: ${{ needs.nightly-build.outputs.version }}
+      ref: ${{ needs.nightly-build.outputs.sha }}
+
+  nightly:
+    name: Publish nightly from main
+    needs: [nightly-build, nightly-files]
+    if: needs.nightly-build.outputs.publish == 'true'
+    concurrency:
+      group: release-nightly
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SHA: ${{ needs.nightly-build.outputs.sha }}
+      VERSION: ${{ needs.nightly-build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.nightly-build.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # The pick ran before the build and the matrix; a run ahead in this queue may
+      # have published since. So the pick's own rule, again, right before publishing:
+      # never the same commit twice, never a commit older than the last nightly.
+      - name: Still the next nightly
+        id: recheck
+        run: |
+          last="$(node scripts/nightly-version.mjs last)"
+          [ -n "$last" ] || last=none
+          echo "last nightly: $last"
+          echo "this build:   $SHA ($VERSION)"
+          if [ "$last" = "$SHA" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "that commit became the last nightly while this run built it; nothing to publish"
+          elif [ "${{ inputs.force }}" != "true" ] && [ "$last" != "none" ] && ! git merge-base --is-ancestor "$last" "$SHA"; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::$SHA does not descend from the last nightly ($last), published while this run built it; nothing published"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.recheck.outputs.publish == 'true'
+        run: npm install -g npm@12
+      - uses: actions/download-artifact@v4
+        if: steps.recheck.outputs.publish == 'true'
+        with:
+          name: ${{ needs.nightly-build.outputs.files }}
+          path: ${{ runner.temp }}/release/assets
+      - name: The npm packages, of the very files the binary matrix ran
+        if: steps.recheck.outputs.publish == 'true'
+        run: |
+          sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"
+          node scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$SHA"
+      # The platform packages first, open-walnut last (npm-packages.mjs): its nightly
+      # dist-tag is what the update check reads.
+      - name: Publish it as nightly (the platform packages, then open-walnut)
+        if: steps.recheck.outputs.publish == 'true'
+        run: node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag nightly --provenance
       # The next run learns the last nightly from npm, and npm serves a version it
       # accepted only minutes later; this job's queue holds the next run's until
       # this step ends, so it never sees the nightly before this one.
       - name: Wait until npm serves it
-        if: steps.pick.outputs.publish == 'true'
-        run: node scripts/nightly-version.mjs wait "${{ steps.publish.outputs.version }}"
-      - if: steps.pick.outputs.publish == 'true'
-        run: echo "published open-walnut@${{ steps.publish.outputs.version }} (dist-tag nightly) from ${{ steps.pick.outputs.sha }}"
+        if: steps.recheck.outputs.publish == 'true'
+        run: node scripts/nightly-version.mjs wait "$VERSION"
+      - if: steps.recheck.outputs.publish == 'true'
+        run: echo "published open-walnut@$VERSION (dist-tag nightly) from $SHA"
 
-  # Automatic stable: plan, then a fresh-machine install of the soaked nightly, then
-  # publish. A red smoke stops the release (GitHub mails the failed run): nothing
-  # ships that a fresh install could not start.
+  # Automatic stable: plan, then build the soaked nightly's commit at the stable
+  # version and run those files everywhere, while a fresh-machine install of the
+  # nightly itself runs beside it, then publish. A red matrix or smoke stops the
+  # release (GitHub mails the failed run): nothing ships that a fresh install
+  # could not start.
   promote-plan:
     name: Pick the nightly to promote
     if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
-      publish: ${{ steps.plan.outputs.publish }}
+      publish: ${{ steps.plan.outputs.publish == 'true' && steps.files.outputs.publish == 'true' }}
       sha: ${{ steps.plan.outputs.sha }}
       version: ${{ steps.plan.outputs.version }}
       nightly: ${{ steps.plan.outputs.nightly }}
@@ -269,13 +457,79 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         # By hand means now: no one-a-day gap. A dry run takes the newest nightly, soaked
-        # or not, so the smoke can be tried on demand; it never reaches job `promote`.
+        # or not, so the build, the matrix and the smoke can be tried on demand; it
+        # never reaches job `promote`.
         run: node scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" ${{ github.event_name == 'workflow_dispatch' && '--min-gap-hours 0' || '' }} ${{ inputs.dry_run && '--soak-hours 0' || '' }} >> "$GITHUB_OUTPUT"
-      - if: steps.plan.outputs.publish == 'true'
+      # Job `promote-build` builds the compiled file from the nightly's commit, and the
+      # matrix and the publish unpack it with that commit's scripts; a nightly from
+      # before them has nothing to build, so the stable waits for one that has.
+      - name: The nightly's commit builds the compiled file
+        id: files
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          SHA: ${{ steps.plan.outputs.sha }}
+        run: |
+          if git cat-file -e "$SHA:scripts/release-build.mjs" 2>/dev/null && git cat-file -e "$SHA:scripts/release-unpack.sh" 2>/dev/null; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::the soaked nightly ($SHA) predates the compiled file's release build; the stable waits for a nightly that has it"
+          fi
+      - if: steps.files.outputs.publish == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: release-notes
           path: ${{ runner.temp }}/notes.md
+          overwrite: true
+
+  promote-build:
+    name: Build ${{ needs.promote-plan.outputs.version }} from ${{ needs.promote-plan.outputs.nightly }}
+    needs: promote-plan
+    if: needs.promote-plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      files: release-files-promote
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.promote-plan.outputs.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      # The darwin-x64 file needs an ad-hoc signature, made off macOS by rcodesign.
+      - run: sh scripts/install-rcodesign.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build the compiled files at this version
+        env:
+          VERSION: ${{ needs.promote-plan.outputs.version }}
+        run: node scripts/release-build.mjs --version "$VERSION" --out "$RUNNER_TEMP/release"
+      # What jobs `promote-files` run and `promote` publishes.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files-promote
+          path: ${{ runner.temp }}/release/assets
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+          overwrite: true
+
+  promote-files:
+    name: The files of ${{ needs.promote-plan.outputs.version }} on every system
+    needs: [promote-plan, promote-build]
+    if: needs.promote-plan.outputs.publish == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/binary-matrix.yml
+    with:
+      files: ${{ needs.promote-build.outputs.files }}
+      version: ${{ needs.promote-plan.outputs.version }}
+      ref: ${{ needs.promote-plan.outputs.sha }}
 
   promote-smoke:
     name: ${{ needs.promote-plan.outputs.nightly }} installs and starts (${{ matrix.os }})
@@ -330,9 +584,10 @@ jobs:
           [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
           exit 1
 
+
   promote:
     name: Promote ${{ needs.promote-plan.outputs.nightly }} to ${{ needs.promote-plan.outputs.version }}
-    needs: [promote-plan, promote-smoke]
+    needs: [promote-plan, promote-build, promote-files, promote-smoke]
     if: needs.promote-plan.outputs.publish == 'true' && !inputs.dry_run
     # Two runs can plan the same release; the second waits here, then finds every
     # step done (each one skips what is already out) and changes nothing.
@@ -355,44 +610,35 @@ jobs:
         with:
           name: release-notes
           path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.promote-build.outputs.files }}
+          path: ${{ runner.temp }}/release/assets
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
       - run: npm install -g npm@12
-      - run: bun install --frozen-lockfile
       # Every step below skips what an earlier attempt already did, so "Re-run failed
       # jobs" finishes a release that stopped halfway (npm refuses a version twice,
       # and the next plan sees the version out and would never come back for the
       # tag, the GitHub Release or main). tests/scripts/release-promote-steps.test.ts
-      # runs these three scripts against a scratch repository.
-      # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.
-      # npm holds a version it accepted for minutes before it serves it, so the
-      # check below misses a publish still in that state: one this job made before
-      # it stopped, or (before the wait step below) one the run ahead in the queue
-      # made. 2026-10-09: two runs planned 0.6.7 two minutes apart and the second
-      # got 409 "Cannot publish over previously staged version". npm's refusal of
-      # this very version is its word that the version is taken; the tag step still
-      # requires the tag on this release's commit.
-      - name: Version it and publish it as latest
+      # runs these scripts against a scratch repository.
+      - name: The npm packages, of the very files the binary matrix ran
         env:
-          WALNUT_VERSION_STAMPED: '1'
           VERSION: ${{ needs.promote-plan.outputs.version }}
+          SHA: ${{ needs.promote-plan.outputs.sha }}
         run: |
-          if curl -fsS -o /dev/null --max-time 30 -H 'cache-control: no-cache' "https://registry.npmjs.org/open-walnut/$VERSION"; then
-            echo "open-walnut@$VERSION is already on npm; not publishing it again"
-          else
-            npm version "$VERSION" --no-git-tag-version
-            if ! npm publish --provenance --access public 2>&1 | tee "$RUNNER_TEMP/npm-publish.log"; then
-              if grep -qiF -e "previously staged version \"$VERSION\"" -e "previously published versions: $VERSION" "$RUNNER_TEMP/npm-publish.log"; then
-                echo "npm already holds open-walnut@$VERSION (published, or still being processed); not publishing it again"
-              else
-                exit 1
-              fi
-            fi
-          fi
+          sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"
+          node scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$SHA"
+      # npm-packages.mjs skips each package npm already has. npm holds a version it
+      # accepted for minutes before it serves it, so that check misses a publish still
+      # in that state: one this job made before it stopped, or (before the wait step
+      # below) one the run ahead in the queue made. 2026-10-09: two runs planned 0.6.7
+      # two minutes apart and the second got 409 "Cannot publish over previously staged
+      # version". npm's refusal of this very version is its word that the version is
+      # taken; the tag step still requires the tag on this release's commit.
+      - name: Publish it as latest (the platform packages, then open-walnut)
+        run: node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance
       # The run queued behind this job asks npm, with the check above, whether the
       # version is out, so this job ends only once that check would say yes.
       - name: Wait until npm serves it
@@ -407,8 +653,9 @@ jobs:
           done
           echo "::error::npm did not serve open-walnut@$VERSION within 30 minutes"; exit 1
       # Pushed with the job's token, so neither the tag nor the commit below starts a
-      # workflow: the tag cannot publish a second time through job `stable`.
-      - name: Tag it and open the GitHub Release
+      # workflow: the tag cannot publish a second time through job `stable`. The
+      # GitHub Release opens as a draft: it goes public once its files are on it.
+      - name: Tag it and draft the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.promote-plan.outputs.version }}
@@ -450,8 +697,35 @@ jobs:
           if gh release view "v$VERSION" > /dev/null 2>&1; then
             echo "the v$VERSION GitHub Release already exists"
           else
-            gh release create "v$VERSION" --title "Open Walnut $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release create "v$VERSION" --draft --title "Open Walnut $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
           fi
+      - name: Attach its files to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.promote-plan.outputs.version }}
+        run: sh scripts/release-attach.sh "$TAG" "$RUNNER_TEMP/release/assets"
+      - name: Publish the GitHub Release, now that it holds its files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.promote-plan.outputs.version }}
+        run: |
+          # install.sh, the formula and the Mac app read releases/latest/download: a
+          # release goes public only with its files on it. An earlier attempt may
+          # have published it already; then it is left as it is.
+          draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [ "$draft" != true ]; then
+            echo "the $TAG GitHub Release is already published"
+            exit 0
+          fi
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          if ! printf '%s\n' "$assets" | grep -qx SHA256SUMS; then
+            echo "::error::$TAG has no SHA256SUMS, so not all of its files are up: it stays a draft"
+            exit 1
+          fi
+          gh release edit "$TAG" --draft=false --latest
+          echo "published the $TAG GitHub Release"
       # The package is out; this only keeps main's CHANGELOG and version in step. A
       # failure here is red, not a warning: left alone, the next stable's notes would
       # repeat this one's.
@@ -459,7 +733,6 @@ jobs:
         env:
           VERSION: ${{ needs.promote-plan.outputs.version }}
         run: |
-          git checkout --quiet -- .
           for attempt in 1 2 3 4 5; do
             git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
             git checkout --quiet -B main origin/main
@@ -472,15 +745,17 @@ jobs:
           done
           echo "::error::open-walnut@$VERSION is published, but main's CHANGELOG and package.json were not rolled"
           exit 1
-      # Last, so a failure here never holds up main's roll. A re-run starts it only
-      # while the release has no SHA256SUMS (release-archives.yml uploads it last).
-      - name: Build its self-contained archives (release-archives.yml)
+      # Last, so a failure here never holds up main's roll, and after the release is
+      # public: every job it starts reads the release's files. A re-run starts it only
+      # while the release has no formula (release-archives.yml attaches it).
+      - name: Its Homebrew formula, Mac app and Node archives (release-archives.yml)
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.promote-plan.outputs.version }}
         run: |
-          if gh release view "v$VERSION" --json assets --jq '.assets[].name' | grep -qx SHA256SUMS; then
-            echo "v$VERSION already has its archives"
+          assets="$(gh release view "v$VERSION" --json assets --jq '.assets[].name')"
+          if printf '%s\n' "$assets" | grep -qx open-walnut.rb; then
+            echo "v$VERSION already has its formula"
           else
             gh workflow run release-archives.yml --ref main -f version="$VERSION"
             echo "started release-archives.yml for $VERSION"

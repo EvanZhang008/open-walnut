@@ -151,9 +151,15 @@ export function shipsNativeBinary(modules, mod, { platform, arch }) {
 /**
  * Does this package's updater know the archive? One that does not would update
  * an archive with whatever `npm` is first on PATH, into that npm's own prefix,
- * and leave the archive behind on the old version forever.
+ * and leave the archive behind on the old version forever. The launcher package
+ * (scripts/npm-packages.mjs) runs the compiled file, whose updater always knows
+ * it: its archive is this Node, the launcher and this platform's file.
  */
 export function updaterKnowsArchive(pkgRoot) {
+  try {
+    const { optionalDependencies } = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'))
+    if (Object.keys(optionalDependencies ?? {}).some((name) => name.startsWith('@open-walnut/'))) return true
+  } catch { /* no manifest: look for the marker */ }
   const stack = [path.join(pkgRoot, 'dist')]
   while (stack.length) {
     const dir = stack.pop()
