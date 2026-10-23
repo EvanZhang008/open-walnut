@@ -143,7 +143,13 @@ bun run build:binary   # the file for this machine; any other target too
 - The binary tier boots the compiled file as a real server and runs the
   black-box suites against it (Playwright, the live tiers).
 - Production on the Mac runs the file (`scripts/deploy-committed.sh` builds
-  it, smoke-boots it, keeps the last good one for rollback).
+  it, smoke-boots it, keeps the last good one for rollback). One build-binary
+  run makes the Mac's file and the four Linux files, staged side by side
+  (`<stage>/dist-bin/walnut-<target>`) so a host server takes the same commit's
+  file; the runtime tree is unpacked into `<stage>/runtime/`, not the data home.
+  `WALNUT_DEVPROD_RUNTIME=node` deploys the Node build for one release, as the
+  way back from a bad file. `WALNUT_DEVPROD_REHEARSAL=1` runs the whole deploy
+  on a private port and data dir (AGENTS.md, "Production Server Safety").
 - `npm install -g open-walnut` keeps working for people who use npm: the
   package becomes a small launcher whose optional dependencies are one package
   per platform holding the file (the way esbuild and the Codex CLI ship).
