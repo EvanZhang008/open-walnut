@@ -161,8 +161,9 @@ describe('terminalEnv', () => {
   it('drops the compiled server stage runtime dir and keeps the rest', () => {
     // A `walnut` run in the shell would otherwise unpack into a deploy stage
     // that a later deploy deletes (scripts/dev-prod.sh).
-    const env = terminalEnv({ PATH: '/usr/bin', HOME: '/home/acme', WALNUT_RUNTIME_DIR: '/tmp/open-walnut-stage.1.2/runtime' })
+    const userPath = '/usr/bin'
+    const env = terminalEnv({ PATH: userPath, HOME: '/home/acme', WALNUT_RUNTIME_DIR: '/tmp/open-walnut-stage.1.2/runtime' })
     expect(env.WALNUT_RUNTIME_DIR).toBeUndefined()
-    expect(env).toMatchObject({ PATH: '/usr/bin', HOME: '/home/acme', TERM: 'xterm-256color' })
+    expect(env).toMatchObject({ PATH: userPath, HOME: '/home/acme', TERM: 'xterm-256color' })
   })
 })
