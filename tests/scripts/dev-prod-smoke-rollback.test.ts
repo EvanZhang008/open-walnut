@@ -208,13 +208,18 @@ describe('dev-prod.sh last-known-good rollback', () => {
 describe('the rollback snapshot survives a reboot', () => {
   const script = fs.readFileSync(path.resolve(__dirname, '../../scripts/dev-prod.sh'), 'utf-8')
   it('lives off the temp dir by default, is booted from a staged temp copy, and the old temp one is still read', () => {
-    expect(script).toMatch(/^LKG_DIR="\$\{WALNUT_DEVPROD_LKG_DIR:-\$\{XDG_STATE_HOME:-\$HOME\/\.local\/state\}\/open-walnut\/open-walnut-lkg\}"$/m)
+    expect(script).toMatch(/^ {2}LKG_DIR="\$\{WALNUT_DEVPROD_LKG_DIR:-\$\{XDG_STATE_HOME:-\$HOME\/\.local\/state\}\/open-walnut\/open-walnut-lkg\}"$/m)
+    // A rehearsal keeps its own in its state dir, never production's.
+    expect(script).toMatch(/if \[\[ "\$REHEARSAL" == "1" \]\]; then\n {2}LKG_DIR="\$TMPDIR\/open-walnut-lkg"/)
     const fn = script.slice(script.indexOf('rollback_to_lkg() {'))
-    expect(fn).toMatch(/local rb="\$STAGE_ROOT\/open-walnut-stage\.\$\(date \+%s\)\.\$\$\.lkg"/)
     expect(fn).toMatch(/lkg="\$LKG_LEGACY_DIR"/)
+    // Whichever snapshot is read (new or legacy) is staged before it boots.
+    expect(fn).toMatch(/stage_lkg_for_rollback "\$lkg_kind" "\$lkg"/)
+    const stage = script.slice(script.indexOf('stage_lkg_for_rollback() {'))
+    expect(stage).toMatch(/dir="\$STAGE_ROOT\/open-walnut-stage\.rollback\.\$\(date \+%s\)\.\$\$"/)
     // A compiled-file snapshot is staged the same way, its runtime tree with it.
-    expect(fn).toMatch(/clone_copy "\$lkg\/dist-bin" "\$rb\/dist-bin"/)
-    expect(fn).toMatch(/clone_copy "\$lkg\/runtime" "\$rb\/runtime"/)
+    expect(stage).toMatch(/clone_copy "\$src\/dist-bin" "\$dir\/dist-bin"/)
+    expect(stage).toMatch(/clone_copy "\$src\/runtime" "\$dir\/runtime"/)
     // The stray-server sweep still recognises both launch shapes.
     expect(script).toContain('*"open-walnut-stage."*"/dist/cli.js"*')
     expect(script).toContain('*"open-walnut-lkg/dist/cli.js"*')

@@ -57,6 +57,104 @@ async function runFrom(file: string, args: string[]): Promise<ChildProcess> {
   throw new Error(`${file} never showed up in ps`)
 }
 
+describe('dir_has_live_process (the LKG, whose name is not unique)', () => {
+  it('finds a process running from exactly this directory, however the path is spelled', async () => {
+    const root = tmp()
+    const lkg = path.join(root, 'T', 'open-walnut-lkg')
+    const other = path.join(root, 'rehearsal-state', 'open-walnut-lkg')
+    fs.mkdirSync(lkg, { recursive: true })
+    await runFrom(program(path.join(other, 'dist-bin', 'walnut-x')), ['web', '--port', '1'])
+    const check = (dir: string) => bash(`${fn('dir_has_live_process')}\ndir_has_live_process '${dir}' || echo none`).stdout.trim()
+    // A process from another dir of the same name is not this one's.
+    expect(check(lkg)).toBe('none')
+    const p = await runFrom(program(path.join(lkg, 'dist-bin', 'walnut-x')), ['__daemon', '--start'])
+    expect(check(lkg)).toBe(String(p.pid))
+    expect(check(`${lkg}/`)).toBe(String(p.pid))
+    expect(check(lkg.replace('/T/', '/T//'))).toBe(String(p.pid))
+  })
+})
+
+describe('snapshot_lkg', () => {
+  function harness(root: string, lkg: string): string {
+    const stage = path.join(root, 'open-walnut-stage.9.9')
+    fs.mkdirSync(path.join(stage, 'dist-bin'), { recursive: true })
+    fs.writeFileSync(path.join(stage, 'dist-bin', 'walnut-x'), 'new build')
+    fs.mkdirSync(path.join(stage, 'runtime', 'id-new'), { recursive: true })
+    return [fn('clone_copy'), fn('dir_has_live_process'), fn('snapshot_lkg'),
+      `STAGE_DIR='${stage}'`, `LKG_DIR='${lkg}'`, 'SERVER_KIND=file', `SERVE_ROOT='${root}'`, `REPO_ROOT='${root}'`,
+      'snapshot_lkg'].join('\n')
+  }
+
+  it('never replaces an LKG that a process still runs from, and replaces it once nothing does', async () => {
+    // 2026-10-23 review: a daemon respawned from a rollback server's LKG path
+    // survived the next deploy, whose snapshot deleted its executable and tree.
+    const root = tmp()
+    const lkg = path.join(root, 'open-walnut-lkg')
+    const live = program(path.join(lkg, 'dist-bin', 'walnut-x'))
+    fs.mkdirSync(path.join(lkg, 'runtime', 'id-old'), { recursive: true })
+    const p = await runFrom(live, ['__daemon', '--start'])
+    const kept = bash(harness(root, lkg))
+    expect(kept.status, kept.stderr).toBe(0)
+    expect(kept.stderr).toMatch(new RegExp(`Keeping the last-known-good build at ${lkg}: process ${p.pid} still runs from it`))
+    expect(fs.existsSync(path.join(lkg, 'runtime', 'id-old'))).toBe(true)
+    expect(fs.readFileSync(live, 'utf-8')).toContain('sleep 60')
+
+    p.kill('SIGKILL')
+    await new Promise((r) => p.once('exit', r))
+    const replaced = bash(harness(root, lkg))
+    expect(replaced.status, replaced.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(lkg, 'dist-bin', 'walnut-x'), 'utf-8')).toBe('new build')
+    expect(fs.existsSync(path.join(lkg, 'runtime', 'id-new'))).toBe(true)
+    expect(fs.existsSync(path.join(lkg, 'runtime', 'id-old'))).toBe(false)
+    expect(fs.readFileSync(path.join(lkg, '.walnut-source-root'), 'utf-8').trim()).toBe(root)
+  })
+})
+
+describe('rollback_to_lkg', () => {
+  function harness(root: string, lkg: string): string {
+    return [fn('clone_copy'), fn('lkg_has_build'), fn('stage_lkg_for_rollback'), fn('rollback_to_lkg'),
+      'launch_server() { printf "LAUNCH %s %s\\n" "$1" "$2"; }',
+      'wait_for_config_ready() { return 0; }',
+      `STAGE_ROOT='${root}'`, `LKG_DIR='${lkg}'`, `SERVE_ROOT='${root}/serve'`, 'MACHINE_TARGET=darwin-arm64',
+      'NODE_BIN=/usr/bin/true', 'PORT=1', 'rollback_to_lkg'].join('\n')
+  }
+
+  it('starts the compiled file from a stage cloned from the LKG, never from the LKG itself', () => {
+    const root = tmp()
+    const lkg = path.join(root, 'open-walnut-lkg')
+    program(path.join(lkg, 'dist-bin', 'walnut-darwin-arm64'))
+    program(path.join(lkg, 'dist-bin', 'walnut-linux-x64'))
+    fs.mkdirSync(path.join(lkg, 'runtime', 'id-1', 'dist'), { recursive: true })
+    const r = bash(harness(root, lkg))
+    expect(r.status, r.stderr).toBe(0)
+    const m = /^LAUNCH file (.+)$/m.exec(r.stdout)
+    expect(m, r.stdout + r.stderr).not.toBeNull()
+    const launched = m![1]
+    expect(launched.startsWith(`${root}/open-walnut-stage.rollback.`)).toBe(true)
+    expect(launched.endsWith('/dist-bin/walnut-darwin-arm64')).toBe(true)
+    const stage = path.dirname(path.dirname(launched))
+    // The stage carries what the server reads: its runtime tree, its siblings, the checkout marker.
+    expect(fs.existsSync(path.join(stage, 'runtime', 'id-1', 'dist'))).toBe(true)
+    expect(fs.existsSync(path.join(stage, 'dist-bin', 'walnut-linux-x64'))).toBe(true)
+    expect(fs.readFileSync(path.join(stage, '.walnut-source-root'), 'utf-8').trim()).toBe(`${root}/serve`)
+  })
+
+  it('starts a Node LKG from a stage too, with its package.json and the serve root dependencies', () => {
+    const root = tmp()
+    const lkg = path.join(root, 'open-walnut-lkg')
+    fs.mkdirSync(path.join(lkg, 'dist'), { recursive: true })
+    fs.writeFileSync(path.join(lkg, 'dist', 'cli.js'), '// cli')
+    fs.writeFileSync(path.join(lkg, 'package.json'), '{"version":"1.2.3"}')
+    const r = bash(harness(root, lkg))
+    expect(r.status, r.stderr).toBe(0)
+    const launched = /^LAUNCH node (.+)$/m.exec(r.stdout)![1]
+    expect(launched.startsWith(`${root}/open-walnut-stage.rollback.`)).toBe(true)
+    const stage = path.dirname(path.dirname(launched))
+    expect(fs.readFileSync(path.join(stage, 'package.json'), 'utf-8')).toContain('1.2.3')
+    expect(fs.readlinkSync(path.join(stage, 'node_modules'))).toBe(`${root}/serve/node_modules`)
+  })
+})
+
 describe('the stray sweep in a rehearsal', () => {
   it('reaps only a server on its port that runs from one of its own stages', async () => {
     // 2026-10-23 review: the sweep reaped any server whose command line named the
