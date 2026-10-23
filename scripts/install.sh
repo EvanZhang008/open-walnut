@@ -155,6 +155,10 @@ pick_version() {
   # The newest release's checksums name its files, and so its version.
   if fetch "${base_url%/download}/latest/download/SHA256SUMS" "$staging/SHA256SUMS"; then
     version="$(sed -n "s/^[0-9a-f]\{64\}[ *]\{1,2\}walnut-\([0-9][0-9A-Za-z.-]*\)-${target}\.gz\$/\1/p" "$staging/SHA256SUMS" | head -n 1)"
+    # The newest release is from before the compiled file: its Node archive for this machine.
+    if [ -z "$version" ] && [ -n "$legacy_target" ]; then
+      version="$(sed -n "s/^[0-9a-f]\{64\}[ *]\{1,2\}open-walnut-\([0-9][0-9A-Za-z.-]*\)-${legacy_target}\.tar\.gz\$/\1/p" "$staging/SHA256SUMS" | head -n 1)"
+    fi
   fi
   # A release's files go up as it is published, SHA256SUMS last: until then (or when
   # this target's build is missing) the newest release that has both, or an older
