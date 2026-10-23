@@ -34,7 +34,7 @@ export interface PriceSnapshot {
 }
 
 /** First-party API providers: their rows are the list prices the engines' models are sold at. */
-const FIRST_PARTY = new Set(['anthropic', 'openai', 'gemini', 'xai', 'mistral', 'deepseek', 'zai', 'moonshot']);
+const FIRST_PARTY = new Set(['anthropic', 'openai', 'gemini', 'xai', 'mistral', 'deepseek', 'zai', 'moonshot', 'dashscope']);
 const CHAT_MODES = new Set(['chat', 'responses', undefined]);
 
 function perMillion(value: unknown): number | undefined {

@@ -614,6 +614,29 @@ export function ModelPicker({
   // (family switch keeps the current effort when offered). The grouping
   // itself is pure and lives in ./acp-model-id (unit-tested directly).
   const acpGroups = React.useMemo(() => groupAcpModels(acpModels ?? []), [acpModels]);
+  // The rows the cost block's "same usage on other models" prices. The Default row goes
+  // last so a model's own name labels it, not "Default (…)".
+  const claudeCompareModels = React.useMemo(() => models
+    .filter((m) => !m.disabled)
+    .map((m) => ({ id: m.resolvedModel ?? m.value, label: catalogRowLabel(m), isDefault: m.value === 'default' }))
+    .sort((a, b) => Number(a.isDefault) - Number(b.isDefault))
+    .map(({ id, label }) => ({ id, label })), [models]);
+  // One row per model family: an effort variant (`…/high`, `…[high]`) prices like its family, and a
+  // bracket id (`["provider","model"]`) names its model in the second half.
+  const acpCompareModels = React.useMemo(() => {
+    const seen = new Set<string>();
+    const out: { id: string; label: string }[] = [];
+    for (const m of acpModels ?? []) {
+      let id = parseAcpModelId(m.modelId).familyId;
+      if (id.startsWith('[')) {
+        try { const parts: unknown = JSON.parse(id); if (Array.isArray(parts) && typeof parts[1] === 'string') id = parts[1]; } catch { /* not JSON */ }
+      }
+      if (!id || id.includes(',') || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, label: shortAcpModelName(id) || m.name });
+    }
+    return out;
+  }, [acpModels]);
   const acpCatalogFamilyLabel = React.useCallback(
     (familyId: string) => acpGroups.flatMap((g) => g.families).find((f) => f.familyId === familyId)?.label,
     [acpGroups],
@@ -751,7 +774,7 @@ export function ModelPicker({
         </div>
       )}
       {sessionId && renderedSpeedReadout}
-      {sessionId && <SessionCostBlock sessionId={sessionId} />}
+      {sessionId && <SessionCostBlock sessionId={sessionId} compareModels={acpCompareModels} />}
       {sessionId && acpContext && acpContext.used > 0 && (
         <div className="model-picker-details" data-testid="picker-acp-context">
           <div className="model-picker-details-block">
@@ -1042,7 +1065,7 @@ export function ModelPicker({
       {sessionId && renderedSpeedReadout}
 
       {/* What the session cost, priced per request (SessionCostBlock). */}
-      {sessionId && <SessionCostBlock sessionId={sessionId} liveApiMs={details?.usage?.total_api_duration_ms ?? null} />}
+      {sessionId && <SessionCostBlock sessionId={sessionId} liveApiMs={details?.usage?.total_api_duration_ms ?? null} compareModels={claudeCompareModels} />}
 
       {/* Live details — collapsed by default. Everything here is the CLI's OWN
           accounting pulled on expand: context breakdown (same source as the

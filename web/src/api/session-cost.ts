@@ -73,3 +73,32 @@ export function fetchSessionCost(sessionId: string, signal?: AbortSignal): Promi
   // The server answers within its own 25s deadline; leave room for the response.
   return apiGet(`/api/sessions/${encodeURIComponent(sessionId)}/cost`, undefined, { timeoutMs: 35_000, priority: 'low', signal });
 }
+
+/** The same usage priced at another model's list price. */
+export interface SessionCostComparisonRow {
+  id: string;
+  key: string;
+  label?: string;
+  group: 'walnut' | 'popular';
+  costUsd: number;
+  longResponses: number;
+  rates: { input: number; output: number; cacheRead: number; cacheWrite: number; threshold?: number };
+  assumptions: string[];
+  current: boolean;
+  priceSource: { kind: 'override' | 'litellm' | 'builtin'; key: string };
+}
+
+export interface SessionCostComparison {
+  sessionId: string;
+  status: 'ok' | 'pending' | 'unavailable' | 'empty';
+  reason?: string;
+  responses: number;
+  rows: SessionCostComparisonRow[];
+  unknown: string[];
+}
+
+/** What this session's usage would cost on each model (the picker's, plus popular ones). */
+export function fetchSessionCostComparison(sessionId: string, models: string[], signal?: AbortSignal): Promise<SessionCostComparison> {
+  const q = models.length ? `?models=${encodeURIComponent(models.join(','))}` : '';
+  return apiGet(`/api/sessions/${encodeURIComponent(sessionId)}/cost/compare${q}`, undefined, { timeoutMs: 35_000, priority: 'low', signal });
+}

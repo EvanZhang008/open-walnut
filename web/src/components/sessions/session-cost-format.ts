@@ -1,6 +1,6 @@
 /** Pure formatting for the picker's cost block (SessionCostBlock). */
 import { formatModelName } from '@/utils/model-name';
-import type { SessionCost, SessionCostLine, SessionCostModel, SessionCostRates, SessionCostTier } from '@/api/session-cost';
+import type { SessionCost, SessionCostComparisonRow, SessionCostLine, SessionCostModel, SessionCostRates, SessionCostTier } from '@/api/session-cost';
 
 /** $29.19, $0.42, $0.0031 (small amounts keep two significant digits). */
 export function fmtUsd(n: number): string {
@@ -123,4 +123,24 @@ export function costTimes(cost: SessionCost, liveApiMs?: number | null): string 
 
 export function engineName(engine: string): string {
   return engine === 'claude' ? 'Claude Code' : engine === 'codex' ? 'Codex' : engine === 'opencode' ? 'OpenCode' : engine;
+}
+
+/** "0.3x", "2.1x", "same": a model's cost against what the session cost. */
+export function fmtRatio(costUsd: number, actualUsd: number | null): string {
+  if (!actualUsd || actualUsd <= 0) return '';
+  const r = costUsd / actualUsd;
+  if (Math.abs(r - 1) < 0.005) return 'same';
+  return r >= 10 ? `${r.toFixed(0)}x` : r >= 0.1 ? `${r.toFixed(r < 1 ? 2 : 1)}x` : `${r.toPrecision(1)}x`;
+}
+
+/** A comparison row's name: the picker's own label for its id, else the server's, else a readable key. */
+export function comparisonLabel(row: SessionCostComparisonRow, labels: Map<string, string>): string {
+  return labels.get(row.id) ?? row.label ?? costModelLabel(row.key);
+}
+
+/** "$2 in · $10 out · $0.1 cache read · $2.5 cache write", plus the tier threshold when there is one. */
+export function comparisonRates(row: SessionCostComparisonRow): string {
+  const r = row.rates;
+  const base = `${fmtRate(r.input)} in · ${fmtRate(r.output)} out · ${fmtRate(r.cacheRead)} cache read · ${fmtRate(r.cacheWrite)} cache write`;
+  return r.threshold ? `${base} per 1M; higher prices over ${fmtTokenCount(r.threshold)} (${row.longResponses} requests)` : `${base} per 1M`;
 }

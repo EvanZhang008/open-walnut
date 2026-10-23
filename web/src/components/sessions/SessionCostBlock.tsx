@@ -5,21 +5,118 @@
  * rates it was priced at and where those rates came from.
  */
 import React from 'react';
-import { fetchSessionCost, type SessionCost, type SessionCostModel } from '@/api/session-cost';
+import { fetchSessionCost, fetchSessionCostComparison, type SessionCost, type SessionCostComparison, type SessionCostModel } from '@/api/session-cost';
 import { log } from '@/utils/log';
 import {
   cacheWriteTokens, costHeadline, costLineLabel, costModelLabel, costTimes, engineName, fmtCost, fmtPriceSource, fmtRate,
-  fmtRates, fmtTokenCount, fmtUsd, tierLabel, visibleLines,
+  fmtRates, fmtTokenCount, fmtUsd, tierLabel, visibleLines, comparisonLabel, comparisonRates, fmtRatio,
 } from './session-cost-format';
 import '@/styles/session-cost.css';
 
 const PENDING_RETRIES = 20;
 const PENDING_RETRY_MS = 2_000;
 
+export interface CompareModel { id: string; label: string }
+
 interface Props {
   sessionId: string;
   /** The live CLI's own model time, when the picker already pulled it. */
   liveApiMs?: number | null;
+  /** The models the picker offers, for "same usage on other models". */
+  compareModels?: CompareModel[];
+}
+
+const COMPARE_RETRIES = PENDING_RETRIES;
+
+/** The session's usage priced at other models' list prices; asked for only once opened. */
+function CostComparison({ sessionId, models, actualUsd }: { sessionId: string; models: CompareModel[]; actualUsd: number | null }) {
+  const [open, setOpen] = React.useState(false);
+  const [data, setData] = React.useState<SessionCostComparison | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [gaveUp, setGaveUp] = React.useState(false);
+  const ids = models.map((m) => m.id).join(',');
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const abort = new AbortController();
+    setData(null);
+    setError(null);
+    setGaveUp(false);
+    const load = (attempt: number) => {
+      fetchSessionCostComparison(sessionId, ids ? ids.split(',') : [], abort.signal)
+        .then((c) => {
+          if (cancelled) return;
+          setData(c);
+          if (c.status !== 'pending') return;
+          if (attempt < COMPARE_RETRIES) timer = setTimeout(() => load(attempt + 1), PENDING_RETRY_MS);
+          else setGaveUp(true);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          log.warn('session-cost', 'cost comparison fetch failed', { sessionId, error: String(err) });
+          setError('could not be read');
+        });
+    };
+    load(0);
+    return () => { cancelled = true; clearTimeout(timer); abort.abort(); };
+  }, [open, sessionId, ids]);
+
+  // The first row naming an id labels it (the picker lists its Default row last).
+  const labels = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of models) if (!map.has(m.id)) map.set(m.id, m.label);
+    return map;
+  }, [models]);
+  const groups = [
+    { group: 'walnut' as const, title: 'In Walnut' },
+    { group: 'popular' as const, title: 'Popular, not in Walnut' },
+  ];
+  return (
+    <div className="session-cost-compare" data-testid="session-cost-compare">
+      <button type="button" className="session-cost-compare-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        {open ? '▾' : '▸'} Same usage on other models
+      </button>
+      {open && (
+        <div className="session-cost-compare-body" data-status={data?.status ?? (error ? 'error' : 'loading')}>
+          {error ? <div className="session-cost-warn">The comparison {error}.</div>
+            : !data ? <div className="session-cost-muted">Pricing every model…</div>
+            : data.status === 'pending' ? <div className="session-cost-muted">{gaveUp ? 'The transcript is still being read; open this again in a minute.' : 'Reading the transcript…'}</div>
+            : data.status !== 'ok' ? <div className="session-cost-muted">{data.reason ?? 'Nothing to compare yet.'}</div>
+            : (
+              <>
+                <table className="session-cost-table session-cost-compare-table" data-testid="session-cost-compare-table">
+                  <thead>
+                    <tr><th scope="col">Model</th><th scope="col">Cost</th><th scope="col">vs this session</th></tr>
+                  </thead>
+                  {groups.map(({ group, title }) => {
+                    const rows = data.rows.filter((r) => r.group === group);
+                    if (rows.length === 0) return null;
+                    return (
+                      <tbody key={group} data-group={group}>
+                        <tr className="session-cost-tier"><th scope="rowgroup" colSpan={3}>{title}</th></tr>
+                        {rows.map((r) => (
+                          <tr key={r.key} data-key={r.key} className={r.current ? 'is-current' : undefined}
+                            title={[comparisonRates(r), ...r.assumptions].join('\n')}>
+                            <th scope="row">{comparisonLabel(r, labels)}{r.current ? ' · used in this session' : ''}</th>
+                            <td>{fmtCost(r.costUsd)}</td>
+                            <td>{fmtRatio(r.costUsd, actualUsd)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    );
+                  })}
+                </table>
+                <div className="session-cost-muted">
+                  The same {data.responses.toLocaleString('en-US')} requests priced at each model&apos;s list price and prompt
+                  tiers. Other models tokenize and cache differently, so read this as a guide. Hover a model for its prices.
+                </div>
+              </>
+            )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Tokens × price per million = cost, one block per prompt tier, and the model's total. */
@@ -93,7 +190,7 @@ function ModelRow({ m }: { m: SessionCostModel }) {
   );
 }
 
-export function SessionCostBlock({ sessionId, liveApiMs }: Props) {
+export function SessionCostBlock({ sessionId, liveApiMs, compareModels }: Props) {
   const [cost, setCost] = React.useState<SessionCost | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [open, setOpen] = React.useState(false);
@@ -160,6 +257,7 @@ export function SessionCostBlock({ sessionId, liveApiMs }: Props) {
               ? ` ${engineName(cost.engine)}'s own estimate, from its built-in prices: ${fmtUsd(cost.engineCostUsd)}.`
               : ''}
           </div>
+          <CostComparison sessionId={sessionId} models={compareModels ?? []} actualUsd={cost.status === 'priced' ? cost.totalUsd : null} />
         </div>
       )}
     </div>
