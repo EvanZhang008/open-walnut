@@ -441,7 +441,7 @@ describe('release.yml', () => {
   type Step = { run?: string; name?: string; if?: string; id?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string> }
   type Job = {
     if?: string; needs?: string | string[]; uses?: string; with?: Record<string, string>; env?: Record<string, string>
-    outputs?: Record<string, string>; permissions?: Record<string, string>; steps: Step[]
+    outputs?: Record<string, string>; permissions?: Record<string, string>; steps: Step[]; 'runs-on'?: string
   }
   const doc = parseYaml(text) as {
     on: Record<string, unknown>
@@ -460,7 +460,8 @@ describe('release.yml', () => {
     { build: 'nightly-build', files: 'nightly-files', publish: 'nightly', version: '"$version"', versionOut: '${{ needs.nightly-build.outputs.version }}', ref: '${{ needs.nightly-build.outputs.sha }}' },
     { build: 'promote-build', files: 'promote-files', publish: 'promote', version: '"$VERSION"', versionOut: '${{ needs.promote-plan.outputs.version }}', ref: '${{ needs.promote-plan.outputs.sha }}' },
   ] as const
-  const RCODESIGN = 'sh scripts/install-rcodesign.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"'
+  // Builds run on macOS: codesign signs the darwin files, and only a Mac builds the SQLite they carry.
+  const BUILD_RUNNER = 'macos-15'
 
   it('runs on release tags, a schedule and by hand, and every check asks for both channels', () => {
     expect(doc.on.push).toEqual({ tags: ['v*.*.*'] })
@@ -507,7 +508,7 @@ describe('release.yml', () => {
     for (const job of ['stable-build', 'nightly-build', 'promote-build']) expect(doc.jobs[job]!.permissions?.contents, job).toBe('read')
   })
 
-  it('each channel builds its files once, with the pinned bun and rcodesign, at the version it publishes, and uploads them', () => {
+  it('each channel builds its files once, on macOS with the pinned bun, at the version it publishes, and uploads them', () => {
     const names = new Set<string>()
     for (const { build, version } of CHANNELS) {
       const job = doc.jobs[build]!
@@ -516,10 +517,9 @@ describe('release.yml', () => {
       expect(runs(build), build).not.toContain('npm ci')
       const install = stepIndex(build, 'bun install --frozen-lockfile')
       const made = stepIndex(build, `node scripts/release-build.mjs --version ${version} --out "$RUNNER_TEMP/release"`)
-      // build-binary.mjs refuses to build darwin-x64 off macOS without rcodesign.
+      expect(job['runs-on'], build).toBe(BUILD_RUNNER)
       expect(install, build).toBeGreaterThan(-1)
-      expect(job.steps[install + 1]!.run, build).toBe(RCODESIGN)
-      expect(made, build).toBeGreaterThan(install + 1)
+      expect(made, build).toBeGreaterThan(install)
       const upload = job.steps.findIndex((s) => s.uses?.startsWith('actions/upload-artifact'))
       expect(upload, build).toBeGreaterThan(made)
       const w = job.steps[upload]!.with!
@@ -535,18 +535,17 @@ describe('release.yml', () => {
     expect(names.size).toBe(CHANNELS.length)
   })
 
-  it('rcodesign is on PATH before every release build, here and in the binary matrix', () => {
+  it('every job that builds the files runs on macOS, here and in the binary matrix', () => {
+    // build-binary.mjs builds the darwin files' SQLite with clang and refuses to off macOS.
     for (const [name, job] of Object.entries(doc.jobs)) {
       const build = job.steps?.findIndex((s) => (s.run ?? '').includes('node scripts/release-build.mjs')) ?? -1
       if (build < 0) continue
-      const sign = job.steps.findIndex((s) => s.run === RCODESIGN)
-      expect(sign, name).toBeGreaterThan(-1)
-      expect(sign, name).toBeLessThan(build)
+      expect(job['runs-on'], name).toBe(BUILD_RUNNER)
     }
-    const steps = matrix.jobs.build!.steps
-    const sign = steps.findIndex((s) => s.run === RCODESIGN)
-    expect(sign).toBe(steps.findIndex((s) => s.run === 'bun install --frozen-lockfile') + 1)
-    expect(sign).toBeLessThan(steps.findIndex((s) => (s.run ?? '').includes('scripts/build-binary.mjs --all')))
+    const build = matrix.jobs.build!
+    expect(build['runs-on']).toBe(BUILD_RUNNER)
+    expect(build.steps.findIndex((s) => (s.run ?? '').includes('scripts/build-binary.mjs --all'))).toBeGreaterThan(-1)
+    expect(text).not.toContain('rcodesign')
   })
 
   it('what each channel publishes is the files its binary matrix ran: unpacked, checked and packed, never rebuilt', () => {

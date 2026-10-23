@@ -31,7 +31,10 @@ export async function runSelftest(): Promise<number> {
     },
     {
       name: 'sqlite', required: true, run: async () => {
-        const { default: Database, sqliteLibrary } = await import('../lib/sqlite.js')
+        const { default: Database, sqliteLibrary, sqliteLibraryProblem } = await import('../lib/sqlite.js')
+        // On macOS the file carries its own upstream SQLite; Apple's build is the fallback that misbehaves.
+        const problem = sqliteLibraryProblem()
+        if (problem) throw new Error(problem)
         const db = new Database(path.join(tmp, 'check.db'))
         db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)')
         db.prepare('INSERT INTO t (v) VALUES (?)').run('caf\u00e9')
