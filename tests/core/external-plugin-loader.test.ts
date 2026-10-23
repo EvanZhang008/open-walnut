@@ -23,15 +23,16 @@ let tmpDir: string;
 vi.mock('../../src/constants.js', () => createMockConstants('ext-loader-test'));
 
 const esbuildControl = vi.hoisted(() => ({ delayMs: 0 }));
-vi.mock('esbuild', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('esbuild')>();
+// The bundler of this runtime (esbuild on Node, Bun.build on bun), slowed on demand.
+vi.mock('../../src/lib/transpile.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/lib/transpile.js')>();
   return {
     ...actual,
-    async build(...args: Parameters<typeof actual.build>) {
+    async bundleEsm(...args: Parameters<typeof actual.bundleEsm>) {
       if (esbuildControl.delayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, esbuildControl.delayMs));
       }
-      return actual.build(...args);
+      return actual.bundleEsm(...args);
     },
   };
 });
@@ -1304,18 +1305,28 @@ describe('plugin load order', () => {
     await load(registry);
 
     // Discovery order is readdir order, which is not alphabetical on every
-    // filesystem, so the expectation is derived from the same reads the loader
-    // does. Ids come from each manifest, never from the directory name.
+    // filesystem (Node sorts it, bun does not), so the expectation is derived from
+    // the same reads the loader does. A plugin still loads after the plugins it
+    // depends on (mail-imap after mail). Ids come from each manifest, never from
+    // the directory name.
     const builtinDir = path.join(import.meta.dirname, '..', '..', 'src', 'integrations');
-    const builtinIds: string[] = [];
+    const builtins: { id: string; deps: string[] }[] = [];
     for (const entry of await fsp.readdir(builtinDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const manifest = await fsp.readFile(path.join(builtinDir, entry.name, 'manifest.json'), 'utf8').then(
-        (text) => JSON.parse(text) as { id?: string },
+        (text) => JSON.parse(text) as { id?: string; dependencies?: Record<string, string> },
         () => null,
       );
-      if (manifest?.id) builtinIds.push(manifest.id);
+      if (manifest?.id) builtins.push({ id: manifest.id, deps: Object.keys(manifest.dependencies ?? {}) });
     }
+    const builtinIds: string[] = [];
+    const place = (id: string): void => {
+      const plugin = builtins.find((b) => b.id === id);
+      if (!plugin || builtinIds.includes(id)) return;
+      for (const dep of plugin.deps) place(dep);
+      builtinIds.push(id);
+    };
+    for (const plugin of builtins) place(plugin.id);
     const externalIds = (await fsp.readdir(path.join(tmpDir, 'plugins'), { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
