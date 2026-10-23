@@ -6,14 +6,18 @@
  * every connect to that host's daemon (after `leader.configure`, so the daemon
  * knows which Walnut speaks) and after a settings change:
  *
- *   1. a Node that runs there (the setting, else the one the host's preflight found)
- *   2. this Mac's build installed there (core/host-server/install.ts)
- *   3. its port (kept in the data dir, so the tunnel's target stays put)
- *   4. this Mac's tunnel port held open: the door the host server's streams
+ *   1. this Mac's build installed there as the compiled walnut file for the
+ *      host's system (host-target.ts probes it, host-file.ts builds or
+ *      downloads the file here, install.ts installs it): the host needs nothing
+ *      installed, no Node, no npm, no compiler, no network
+ *   2. its port (kept in the data dir, so the tunnel's target stays put), asked
+ *      of the installed file itself
+ *   3. this Mac's tunnel port held open: the door the host server's streams
  *      come in by (the daemon passes them from its link to ours)
- *   5. `server.configure` on the daemon, with the server's tunnel in its
- *      settings; the daemon keeps it running
- *   6. its first report, through the daemon (`server.status`)
+ *   4. `server.configure` on the daemon (`<app>/walnut host-server`, or
+ *      `web --replica`), with the server's tunnel in its settings; the daemon
+ *      keeps it running
+ *   5. its first report, through the daemon (`server.status`)
  *
  * Which program: a daemon with `replica-host-v1` runs the full server program as a
  * follower (`web --replica`, docs/plan/walnut-replica-servers-impl.md WP2, the
@@ -37,11 +41,12 @@ import { log } from '../../logging/index.js'
 import type { HostServerStatus } from '../../providers/host-server-core.js'
 import { getExposeProvider } from '../expose/registry.js'
 import type { ExposeProviderDefinition, ExposeStatus } from '../expose/types.js'
+import type { HostFileSource } from './host-file.js'
+import { parseHostTarget, targetProbeScript } from './host-target.js'
 import {
-  checkHostRoot, freePortsScript, HOST_ROOT, installScript, launchScript, MIN_NODE_MAJOR, nodeCheckScript, nodeMajor,
-  parseFreePorts, parseInstallState, stateScript, type InstallState,
+  checkHostRoot, fileInstallScript, freePortsScript, HOST_ROOT, launchScript, parseFreePorts, parseInstallState, stateScript,
+  type InstallState,
 } from './install.js'
-import type { HostAppPackage } from './package.js'
 
 /** What the manager needs of a host's daemon connection (DaemonConnection has it). */
 export interface HostServerHost {
@@ -59,8 +64,6 @@ export interface HostServerHost {
 
 export interface HostServerSettings {
   enabled: boolean
-  node?: string
-  buildEnv: Record<string, string>
   expose: {
     enabled: boolean; provider: string | null; options: Record<string, string>
     /** Why the host's own tunnel does not run although it is on (it would take this computer's address). */
@@ -126,7 +129,8 @@ export interface ManagerDeps {
   /** This Mac's tunnel port, held open: host servers' streams come in by it. */
   holdTunnelPort(holder: string): Promise<number>
   releaseTunnelPort(holder: string): Promise<void>
-  buildPackage(): Promise<HostAppPackage>
+  /** This Mac's build as the walnut file for a host's target (host-file.ts). */
+  hostFile: HostFileSource
   stateFile: string
   now(): number
   /** Copies for the follower (core/replication/replica-targets.ts); `ready` once its server answers. */
@@ -144,11 +148,20 @@ export interface ManagerDeps {
   firstReportMs?: number
   /** The root on the host (WALNUT_HOST_SERVER_ROOT; default HOST_ROOT). */
   hostRoot?: string
-  /** Tests only (WALNUT_HOST_SERVER_APP_DIR): run this app dir on the host instead of installing a build. */
+  /**
+   * Tests only (WALNUT_HOST_SERVER_APP_DIR): run `<appCommand> <appDir>/dist/cli.js`
+   * on the host instead of installing the file. Meant for a "host" that is this
+   * machine, so appCommand defaults to this process's runtime.
+   */
   appDir?: string
+  appCommand?: string
 }
 
-const INSTALL_TIMEOUT_MS = 20 * 60_000
+/** How the host runs Walnut: `<command> ...prefix <subcommand>`; `asBun` when the command is the walnut file. */
+interface HostProgram { command: string; prefix: string[]; asBun: boolean }
+
+/** Unpack, check and try the file once: seconds, minutes on a slow disk. */
+const INSTALL_TIMEOUT_MS = 5 * 60_000
 const FIRST_REPORT_MS = 60_000
 /** A report older than this says the server is not answering its daemon. */
 const REPORT_STALE_MS = 20_000
@@ -192,7 +205,7 @@ export function createHostServerManager(deps: ManagerDeps) {
   /** The program each host's daemon was told to run. */
   const asked = new Map<string, 'replica' | 'host-server'>()
   /**
-   * The node and app entry last configured per host (WP12: the walnut MCP mount of a session
+   * The program last configured per host (WP12: the walnut MCP mount of a session
    * there). Kept across a disconnect, unlike `links`: the drain that adopts a host's away ask
    * runs on the reconnect, before this host's reconcile has configured it again.
    */
@@ -235,12 +248,12 @@ export function createHostServerManager(deps: ManagerDeps) {
     fs.renameSync(tmp, deps.stateFile)
   }
 
-  async function portsFor(host: HostServerHost, node: string): Promise<PortsRecord> {
+  async function portsFor(host: HostServerHost, program: HostProgram): Promise<PortsRecord> {
     const all = readPorts()
     const kept = all[host.hostKey]
     if (kept && Number.isInteger(kept.publicPort)) return kept
     const candidates = Array.from({ length: 8 }, () => PORT_BASE + crypto.randomInt(PORT_SPAN))
-    const free = [...parseFreePorts(await host.runRemoteScript(freePortsScript(node, candidates), 20_000))]
+    const free = [...parseFreePorts(await host.runRemoteScript(freePortsScript(program, candidates), 20_000))]
     if (free.length < 1) throw new Error('could not find a free port on the host')
     const rec: PortsRecord = { publicPort: free[0]! }
     all[host.hostKey] = rec
@@ -248,62 +261,46 @@ export function createHostServerManager(deps: ManagerDeps) {
     return rec
   }
 
-  async function resolveNode(host: HostServerHost, settings: HostServerSettings): Promise<string> {
-    let node = settings.node?.trim()
-    if (!node) {
-      const pre = await host.send('host.preflight', {}, 30_000).catch(() => null) as { result?: { nodeDir?: string }; nodeDir?: string } | null
-      const dir = pre?.result?.nodeDir ?? pre?.nodeDir
-      if (dir) node = `${dir}/node`
-    }
-    if (!node) node = 'node'
-    const line = await host.runRemoteScript(nodeCheckScript(node), 15_000).catch((err: Error) => err.message)
-    const major = nodeMajor(line)
-    if (major === null || major < MIN_NODE_MAJOR) {
-      throw new Error(`a host server needs Node ${MIN_NODE_MAJOR} or newer on the host; ${node} answered "${line.trim().slice(0, 120)}". Set hosts.${host.hostKey}.server.node to one that runs there.`)
-    }
-    if (!node.startsWith('/')) {
-      const abs = (await host.runRemoteScript(`command -v ${node}`, 10_000)).trim()
-      if (!abs.startsWith('/')) throw new Error(`cannot find ${node} on the host`)
-      node = abs
-    }
-    return node
-  }
-
-  async function ensureInstalled(host: HostServerHost, node: string, settings: HostServerSettings): Promise<{ appDir: string; dataDir: string; logFile: string; runDir: string; pkg: HostAppPackage }> {
+  async function ensureInstalled(host: HostServerHost): Promise<{ program: HostProgram; dataDir: string; logFile: string; runDir: string }> {
     const rootSpec = checkHostRoot(deps.hostRoot ?? HOST_ROOT)
     const remoteHome = rootSpec.startsWith('$HOME') ? (await host.runRemoteScript('printf %s "$HOME"', 10_000)).trim() : ''
     if (rootSpec.startsWith('$HOME') && !remoteHome.startsWith('/')) throw new Error('the host did not say where its home is')
     const root = rootSpec.replace('$HOME', remoteHome)
+    const dirs = { dataDir: `${root}/data`, logFile: `${root}/logs/server.log`, runDir: `${root}/run` }
     if (deps.appDir) {
       // Tests: a local tree stands in for an installed build.
       if (!deps.appDir.startsWith('/')) throw new Error('WALNUT_HOST_SERVER_APP_DIR must be an absolute path')
-      const pkg = { id: 'local-app', version: 'local', dependencies: {}, depsHash: 'local', appPackageJson: '{}', tgz: Buffer.alloc(0) }
-      set(host.hostKey, { build: pkg.id, install: { state: 'ready' } })
-      return { appDir: deps.appDir, dataDir: `${root}/data`, logFile: `${root}/logs/server.log`, runDir: `${root}/run`, pkg }
+      set(host.hostKey, { build: 'local-app', install: { state: 'ready' } })
+      return { program: { command: deps.appCommand ?? process.execPath, prefix: [`${deps.appDir}/dist/cli.js`], asBun: false }, ...dirs }
     }
-    const pkg = await deps.buildPackage()
-    const paths = { appDir: `${root}/app/${pkg.id}`, dataDir: `${root}/data`, logFile: `${root}/logs/server.log`, runDir: `${root}/run`, pkg }
-    set(host.hostKey, { build: pkg.id })
-    let state = parseInstallState(await host.runRemoteScript(stateScript(pkg.id, rootSpec), 15_000))
-    if (state.state === 'ready') { set(host.hostKey, { install: state }); return paths }
+    const { id } = await deps.hostFile.buildId()
+    const installed = { program: { command: `${root}/app/${id}/walnut`, prefix: [], asBun: true }, ...dirs }
+    set(host.hostKey, { build: id })
+    let state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
+    if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
     if (state.state !== 'running') {
-      set(host.hostKey, { phase: 'installing', message: `Installing Walnut ${pkg.id} on the host.`, install: { state: 'running' } })
-      await host.uploadFile(`${root}/incoming/${pkg.id}.tgz`, pkg.tgz)
-      const script = installScript({ id: pkg.id, depsHash: pkg.depsHash, dependencies: pkg.dependencies, appPackageJson: pkg.appPackageJson, node, buildEnv: settings.buildEnv, ...(deps.hostRoot ? { root: rootSpec } : {}) })
-      await host.uploadFile(`${root}/incoming/${pkg.id}.install.sh`, Buffer.from(script))
-      await host.runRemoteScript(launchScript(pkg.id, rootSpec), 15_000)
+      const target = parseHostTarget(await host.runRemoteScript(targetProbeScript(), 15_000))
+      set(host.hostKey, { phase: 'installing', message: `Getting Walnut ${id} for ${target.target}.`, install: { state: 'running' } })
+      const file = await deps.hostFile.file(target.target, (message) => set(host.hostKey, { message }))
+      set(host.hostKey, { message: `Sending Walnut ${id} for ${target.target} to the host (${Math.max(1, Math.round(file.gz.length / 2 ** 20))} MB).` })
+      // The daemon deploy's path: one SSH stream, small chunks over their own connections when a proxy kills it.
+      await host.uploadFile(`${root}/incoming/${id}.gz`, file.gz)
+      const script = fileInstallScript({ id, version: file.version, sha256: file.sha256, host: target.describe, ...(deps.hostRoot ? { root: rootSpec } : {}) })
+      await host.uploadFile(`${root}/incoming/${id}.install.sh`, Buffer.from(script))
+      await host.runRemoteScript(launchScript(id, rootSpec), 15_000)
+      set(host.hostKey, { message: `Installing Walnut ${id} on the host.` })
     } else {
-      set(host.hostKey, { phase: 'installing', message: `Installing Walnut ${pkg.id} on the host.`, install: state })
+      set(host.hostKey, { phase: 'installing', message: `Installing Walnut ${id} on the host.`, install: state })
     }
     const until = deps.now() + INSTALL_TIMEOUT_MS
     for (;;) {
-      await new Promise((r) => setTimeout(r, deps.installPollMs ?? 5_000))
+      await new Promise((r) => setTimeout(r, deps.installPollMs ?? 2_000))
       if (!host.connected) throw new Error('the host went away during the install')
-      state = parseInstallState(await host.runRemoteScript(stateScript(pkg.id, rootSpec), 15_000))
-      if (state.state === 'ready') { set(host.hostKey, { install: state }); return paths }
+      state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
+      if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
       if (state.state === 'failed') { set(host.hostKey, { install: state }); throw new Error(`the install on the host failed: ${state.message}`) }
-      if (state.state === 'absent') throw new Error('the install on the host stopped without a word (see ~/.open-walnut-host/incoming on the host)')
-      if (deps.now() > until) throw new Error('the install on the host took more than 20 minutes')
+      if (state.state === 'absent') throw new Error(`the install on the host stopped without a word (see ${root}/incoming on the host)`)
+      if (deps.now() > until) throw new Error('the install on the host took more than 5 minutes')
     }
   }
 
@@ -372,14 +369,14 @@ export function createHostServerManager(deps: ManagerDeps) {
     }
     set(hostKey, { enabled: true, phase: 'checking', message: 'Checking the host.' })
     try {
-      const node = await resolveNode(host, settings!)
-      const install = await ensureInstalled(host, node, settings!)
-      const rec = await portsFor(host, node)
+      const install = await ensureInstalled(host)
+      const rec = await portsFor(host, install.program)
       set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: rec.publicPort })
       // The door its streams come in by (the tunnel port trusts nothing on loopback).
       await deps.holdTunnelPort(`host-server:${hostKey}`)
       host.keepStreamLane?.(true)
-      const hostServerArgs = [`${install.appDir}/dist/cli.js`, 'host-server']
+      const { command, prefix } = install.program
+      const hostServerArgs = [...prefix, 'host-server']
       const hostServerEnv: Record<string, string> = {
         OPEN_WALNUT_HOME: install.dataDir,
         // Its own run dir (logs, scratch): never the host daemon's /tmp/open-walnut.
@@ -396,7 +393,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       const replica = settings!.program !== 'host-server' && host.hasCapability('replica-host-v1')
       const run = replica
         ? {
-            args: [`${install.appDir}/dist/cli.js`, 'web', '--replica'],
+            args: [...prefix, 'web', '--replica'],
             // Its own run dir (hostServerEnv): a replica never writes the daemon's dir or /tmp/open-walnut.
             // WALNUT_HOST_KEY: this Mac's name for the host, the `host` of the sessions that run there:
             // the replica reads them and their files itself (replica/self-host.ts, WP6), and the
@@ -411,7 +408,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       }
       const spec = {
         v: 1, home: deps.home, walnutId: await deps.walnutId(),
-        command: node,
+        command,
         args: run.args,
         cwd: install.dataDir,
         env: run.env,
@@ -424,7 +421,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       const reply = await host.send('server.configure', { home: deps.home, spec }, 15_000)
       if (reply.ok !== true) throw new Error(`the host's daemon refused the server: ${String(reply.error ?? '')}`)
       asked.set(hostKey, replica ? 'replica' : 'host-server')
-      configured.set(hostKey, { command: node, args: [...run.args] })
+      configured.set(hostKey, { command, args: [...run.args] })
       set(hostKey, { daemon: reply.status as HostServerStatus, program: programOf(hostKey, reply.status as HostServerStatus) })
       const link = links.get(hostKey) ?? {}
       link.spec = spec
@@ -511,7 +508,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     reconcile,
     views: (): HostServerView[] => [...views.values()].map((v) => ({ ...v })),
     /**
-     * The program this Mac configured on a host (its node and `<appDir>/dist/cli.js`), or
+     * The program this Mac configured on a host (the walnut file there and its arguments), or
      * null: the walnut MCP mount of a session that runs there (WP12), so a cold resume on
      * the host never mounts this Mac's execPath.
      */

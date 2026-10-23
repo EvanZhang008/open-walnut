@@ -15,9 +15,10 @@
  *     it its copies (tasks, sessions, boards, requests, inbox, devices, and WP5's
  *     routines, conversation lists, config and prefs)
  *
- * The manager's two host probes (`node -v`, free ports) run on this machine: the
- * test transport IS this machine, so the Mac boot script routes `runRemoteScript`
- * for devbox to a local sh, and refuses any other script. Every `ssh` on any PATH
+ * The manager's one host probe here (free ports, asked of the app dir's runtime:
+ * WALNUT_HOST_SERVER_APP_DIR installs nothing, so there is no target probe) runs
+ * on this machine: the test transport IS this machine, so the Mac boot script
+ * routes `runRemoteScript` for devbox to a local sh, and refuses any other script. Every `ssh` on any PATH
  * here is a stand-in that refuses at once, every HOME is a throwaway, and the
  * host's name is `devbox.invalid` (never resolvable).
  *
@@ -210,7 +211,7 @@ export function writeStubBin(bin: string): void {
 
 /**
  * The app dir the Mac's manager runs on the host (WALNUT_HOST_SERVER_APP_DIR):
- * `node <app>/dist/cli.js web --replica`. `source`: a dist/cli.js that runs this
+ * `<this runtime> <app>/dist/cli.js web --replica` (the manager's appCommand default). `source`: a dist/cli.js that runs this
  * tree's CLI under tsx, the way an install runs its built dist/cli.js. `built`:
  * <app>/dist is this tree's real build (a link to ROOT/dist; node runs it from
  * there, so it finds its own web/static), and the command line still names <app>.
@@ -383,7 +384,6 @@ function macConfig(): string {
     '    server_program: replica',
     '    server:',
     '      enabled: true',
-    `      node: ${JSON.stringify(process.execPath)}`,
     'favorites:',
     '  projects:', ...MAC_FAVORITES.projects.map((x) => `    - ${JSON.stringify(x)}`),
     '  notes:', ...MAC_FAVORITES.notes.map((x) => `    - ${JSON.stringify(x)}`),
@@ -399,8 +399,8 @@ const c = await import(${src('src/constants.ts')})
 if (c.WALNUT_HOME !== ${JSON.stringify(o.macData)} || c.CLOUD_MODE) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
 const dcm = await import(${src('src/providers/daemon-connection.ts')})
 const { execFile } = await import('node:child_process')
-// The test transport is this machine: the manager's two host probes (node -v,
-// free ports) run in a local sh. Anything else meant for devbox is refused.
+// The test transport is this machine: the manager's host probe (free ports, asked
+// of this runtime) runs in a local sh. Anything else meant for devbox is refused.
 const original = dcm.DaemonConnection.prototype.runRemoteScript
 const nodeQ = "'" + process.execPath + "' "
 dcm.DaemonConnection.prototype.runRemoteScript = function (script, timeoutMs = 30000) {

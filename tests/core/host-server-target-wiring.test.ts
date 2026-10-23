@@ -32,7 +32,6 @@ const host: HostServerHost = {
   connected: true,
   hasCapability: (cap) => ['host-server-v1', 'follower-v1', 'stream-relay-v1'].includes(cap),
   async send(cmd, params) {
-    if (cmd === 'host.preflight') return { ok: true, result: { nodeDir: '/opt/node24/bin' } }
     if (cmd === 'server.configure') {
       daemon.running = !!params?.spec
       return { ok: true, status: { state: daemon.running ? 'running' : 'off', since: 0, restarts: 0 } }
@@ -44,7 +43,6 @@ const host: HostServerHost = {
     return { ok: false, error: 'unknown' }
   },
   async runRemoteScript(script) {
-    if (script.includes(' -v 2>&1')) return 'v24.3.0'
     if (script === 'printf %s "$HOME"') return '/home/me'
     if (script.includes('require("net")')) return script.split(' ').filter((w) => /^\d{5}$/.test(w)).map((p) => `${p}:free`).join('\n')
     throw new Error('unexpected script: ' + script.slice(0, 80))

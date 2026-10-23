@@ -1,20 +1,15 @@
 /**
- * The build a host server runs: this Mac's own dist, packed for the host
- * (docs/plan/walnut-servers-everywhere.md, "Lifecycle"). The host installs its
+ * The build the cloud companion runs: this Mac's own dist, packed for the box
+ * (docs/plan/walnut-companion-unified-replica.md, stage 1). The box installs its
  * npm dependencies itself (they are native to its system), once per set of
- * dependencies; the build itself is this tarball.
+ * dependencies; the build itself is this tarball plus the session daemon for the
+ * box's own platform, since it starts session daemons:
  *
- *   <id>.tgz  package/dist/**  without source maps, precompressed copies and
- *             the daemon binaries (a host server never starts a daemon)
+ *   <id>-companion-<platform>-<arch>.tgz  package/dist/** without source maps,
+ *             precompressed copies and other platforms' daemon binaries
  *
- * The cloud companion gets the same build plus the session daemon for its own
- * platform, since it starts session daemons (docs/plan/walnut-companion-unified-replica.md,
- * stage 1):
- *
- *   <id>-companion-<platform>-<arch>.tgz  the host package plus
- *             package/dist/daemon-binaries without other platforms' binaries
- *
- * Built once per build id and kept in the data dir's cache.
+ * Built once per build id and kept in the data dir's cache. A host server runs
+ * the compiled walnut file instead (host-file.ts); it gets no package.
  */
 
 import { execFile } from 'node:child_process'
@@ -24,18 +19,19 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WALNUT_HOME } from '../../constants.js'
-import { findBuildInfoFile, readBuildInfoFile } from '../../lib/build-info.js'
+import { findBuildInfoFile, readBuildInfoFile, type BuildInfo } from '../../lib/build-info.js'
 import { buildIdOf } from '../companion-build/wire.js'
 import { singleFile } from '../../lib/single-file.js'
 
+/** What every app package of this build carries. */
 export interface HostAppPackage {
-  /** Names this build on the host: version, commit, and a mark for a dirty tree. */
+  /** Names this build: version, commit, and a mark for a dirty tree. */
   id: string
   version: string
   /** The npm dependencies this build needs, and their hash (one install per hash). */
   dependencies: Record<string, string>
   depsHash: string
-  /** The `package.json` the build's directory gets on the host. */
+  /** The `package.json` the build's directory gets on the box. */
   appPackageJson: string
   tgz: Buffer
 }
@@ -48,7 +44,7 @@ export interface CompanionAppPackage extends HostAppPackage {
 }
 
 
-/** Keep the newest few packages of each family (host, companion). */
+/** Keep the newest few packages of each family (the host family is from before host servers ran the file). */
 const KEEP_PER_FAMILY = 3
 /** The clock a dirty build without a build time is marked with: one id per process, not per call. */
 const PROCESS_STARTED = Date.now()
@@ -59,7 +55,7 @@ function sha(text: string): string {
 
 /** The dist this server runs from, and the package root above it. */
 export function runningDist(start = path.dirname(fileURLToPath(import.meta.url))): { distDir: string; root: string } | null {
-  // The compiled file's unpacked tree has a build-info but no code to install on a host.
+  // The compiled file's unpacked tree has a build-info but no code to install on a box.
   if (singleFile()) return null
   const file = findBuildInfoFile(start)
   if (!file) return null
@@ -86,6 +82,7 @@ function tar(args: string[], cwd: string): Promise<void> {
 interface BuildFacts {
   id: string
   version: string
+  info: BuildInfo
   dependencies: Record<string, string>
   optionalDependencies: Record<string, string>
   depsHash: string
@@ -101,6 +98,7 @@ async function readBuild(dist: { distDir: string; root: string }): Promise<Build
   return {
     id: buildIdOf(info, PROCESS_STARTED),
     version: info.version,
+    info,
     dependencies,
     optionalDependencies: pkg.optionalDependencies ?? {},
     depsHash: sha(JSON.stringify(Object.entries(dependencies).sort())).slice(0, 16),
@@ -108,10 +106,16 @@ async function readBuild(dist: { distDir: string; root: string }): Promise<Build
   }
 }
 
-/** The id this server's own build has (what buildHostAppPackage would name it), or null when not running from a build. */
+/** The id this server's own build has (what the packages are named), or null when not running from a build. */
 export async function runningBuildId(dist = runningDist()): Promise<string | null> {
   if (!dist) return null
   return (await readBuild(dist)).id
+}
+
+/** The id and build info of a dist (its package.json and build-info.json). */
+export async function readRunningBuild(dist: { distDir: string; root: string }): Promise<{ id: string; info: BuildInfo }> {
+  const { id, info } = await readBuild(dist)
+  return { id, info }
 }
 
 const cacheDir = (): string => path.join(WALNUT_HOME, 'cache', 'host-server')
@@ -155,16 +159,6 @@ async function cachedOrPacked(file: string, stage: (work: string) => Promise<str
   } finally {
     await fs.promises.rm(work, { recursive: true, force: true })
   }
-}
-
-export async function buildHostAppPackage(dist = runningDist()): Promise<HostAppPackage> {
-  if (!dist) throw new Error(noBuildMessage('a host'))
-  const facts = await readBuild(dist)
-  const tgz = await cachedOrPacked(`${facts.id}.tgz`, async (work) => {
-    await fs.promises.symlink(dist.distDir, path.join(work, 'package', 'dist'))
-    return ['--exclude=package/dist/daemon-binaries']
-  })
-  return { id: facts.id, version: facts.version, dependencies: facts.dependencies, depsHash: facts.depsHash, appPackageJson: facts.appPackageJson, tgz }
 }
 
 /** A file in dist/daemon-binaries built for one platform: `daemon-linux-arm64`, `dtach-darwin-x64.source-hash`. */

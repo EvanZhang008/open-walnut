@@ -9,19 +9,20 @@ import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
 import { createHostServerManager, type HostServerHost, type HostServerManager, type HostServerSettings } from './manager.js'
-import { buildHostAppPackage, type HostAppPackage } from './package.js'
+import { createHostFileSource, type HostFileSource } from './host-file.js'
 import { getExposeProvider, onExposeProvidersChanged, type CommandProviderConfig } from '../expose/registry.js'
 import { exposePlacement, type PlacementHost } from '../expose/placement.js'
 import type { ExposeProviderDefinition } from '../expose/types.js'
 
 let manager: HostServerManager | null = null
 let unsubscribe: (() => void) | null = null
-let packageCache: { at: number; pkg: HostAppPackage } | null = null
+let fileSource: HostFileSource | null = null
 
 /** The settings of one host's server, defaults filled in. */
 export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostServerSettings {
+  // `node` and `build_env` of older configs are not read: the host runs the compiled walnut file.
   const s = (raw && typeof raw === 'object' ? raw : {}) as {
-    enabled?: unknown; node?: unknown; build_env?: unknown
+    enabled?: unknown
     expose?: { enabled?: unknown; provider?: unknown; options?: unknown }
     copies?: unknown
     ask_bypass?: unknown
@@ -30,18 +31,12 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostSer
   for (const [k, v] of Object.entries(s.copies && typeof s.copies === 'object' ? s.copies : {})) {
     if (typeof v === 'boolean') copies[k] = v
   }
-  const buildEnv: Record<string, string> = {}
-  for (const [k, v] of Object.entries(s.build_env && typeof s.build_env === 'object' ? s.build_env : {})) {
-    if (typeof v === 'string') buildEnv[k] = v
-  }
   const options: Record<string, string> = {}
   for (const [k, v] of Object.entries(s.expose?.options && typeof s.expose.options === 'object' ? s.expose.options : {})) {
     if (typeof v === 'string') options[k] = v
   }
   return {
     enabled: s.enabled === true,
-    ...(typeof s.node === 'string' && s.node.trim() ? { node: s.node.trim() } : {}),
-    buildEnv,
     expose: {
       enabled: s.expose?.enabled === true,
       provider: typeof s.expose?.provider === 'string' && s.expose.provider ? s.expose.provider : null,
@@ -128,13 +123,7 @@ export function getHostServerManager(): HostServerManager | null {
       const { getExposeRuntime } = await import('../../web/expose-runtime.js')
       await getExposeRuntime()?.releaseTunnelPort(holder)
     },
-    buildPackage: async () => {
-      // A deploy replaces the dist this process runs from only by restarting it.
-      if (packageCache) return packageCache.pkg
-      const pkg = await buildHostAppPackage()
-      packageCache = { at: Date.now(), pkg }
-      return pkg
-    },
+    hostFile: (fileSource ??= createHostFileSource({ cacheDir: path.join(WALNUT_HOME, 'cache', 'host-server') })),
     stateFile: path.join(WALNUT_HOME, 'host-servers.json'),
     now: Date.now,
     // Test and safety knobs (docs/plan/walnut-replica-servers-impl.md, WP2): another root
@@ -218,7 +207,7 @@ export function _resetHostServerManagerForTesting(): void {
   unsubscribe?.()
   manager = null
   unsubscribe = null
-  packageCache = null
+  fileSource = null
 }
 
 /** The host servers' views without making the manager (GET /api/replicas/status, WP14). */
