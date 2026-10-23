@@ -10,6 +10,9 @@
  * its named exports, so the interop is turned off and the code under test sees
  * exactly what the bun runtime gives it.
  */
+import fs from 'node:fs'
+import { builtSqliteLibrary } from '../../src/lib/sqlite'
+
 /**
  * The oldest bun a vitest run is trusted on. With the forks pool, bun 1.3.9 ends
  * a run after its first file whenever a worker is reused, with no summary and
@@ -43,9 +46,34 @@ export function testRuntimeProblem(versions: NodeJS.ProcessVersions & { bun?: st
   return null
 }
 
-/** Throws when the tiers must not run here (testRuntimeProblem). */
+/**
+ * Why SQLite in this run would not be Walnut's, or null. On macOS bun:sqlite
+ * loads the Apple build unless src/lib/sqlite.ts finds the upstream one that
+ * scripts/build-sqlite-dylib.mjs compiles (bun install's postinstall runs it).
+ * The Apple build fails every query on a database whose file was deleted while
+ * open, which every test that resets its home between cases does: a checkout
+ * without the dylib failed 876 quick-tier tests with "disk I/O error".
+ * WALNUT_SQLITE_LIBRARY=system keeps the Apple build on purpose; a path there
+ * must name a file, as src/lib/sqlite.ts requires.
+ */
+export function testSqliteProblem(
+  platform: string = process.platform,
+  built: string | null = builtSqliteLibrary(),
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (file: string) => boolean = fs.existsSync,
+): string | null {
+  if (platform !== 'darwin') return null
+  const wanted = env.WALNUT_SQLITE_LIBRARY
+  if (wanted === 'system') return null
+  if (wanted) return exists(wanted) ? null : `WALNUT_SQLITE_LIBRARY names no file (${wanted}): set it to a built libsqlite3.dylib, or unset it`
+  if (built) return null
+  return 'the upstream SQLite is not built: run `bun scripts/build-sqlite-dylib.mjs` (bun install runs it). ' +
+    'Without it bun:sqlite loads the macOS system build, and every test that deletes an open database fails with "disk I/O error"'
+}
+
+/** Throws when the tiers must not run here (testRuntimeProblem, testSqliteProblem). */
 export function assertTestRuntime(): void {
-  const problem = testRuntimeProblem()
+  const problem = testRuntimeProblem() ?? testSqliteProblem()
   if (problem) throw new Error(problem)
 }
 
