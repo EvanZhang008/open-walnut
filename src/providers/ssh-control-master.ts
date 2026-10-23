@@ -39,8 +39,14 @@ export const MASTER_START_TIMEOUT_MS = 15_000
 /** How long an unused master lives on, which is what carries it across a restart. */
 export const MASTER_PERSIST_SECS = 300
 
-/** Room left in a unix socket path (sun_path is 104 bytes on macOS, NUL included). */
-const MAX_SOCKET_PATH = 100
+/**
+ * The longest ControlPath a master can listen on. sun_path is 104 bytes on macOS,
+ * NUL included, and `ssh -M` first binds `<ControlPath>.<16 random chars>` and then
+ * renames it into place (OpenSSH mux.c), so 17 more must fit: 103 - 17. A path of
+ * 87 fails with `unix_listener: path ... too long for Unix domain socket`, and the
+ * host then runs without a master (found by the fleet, tests/fleet/).
+ */
+export const MAX_SOCKET_PATH = 86
 
 export interface MasterTarget {
   /** The host alias (`clouddev`): readable part of the socket name only. */
