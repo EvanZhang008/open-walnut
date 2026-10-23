@@ -11,7 +11,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { readBunLock, splitSpec } from '../helpers/bun-lock.js'
-import { applySdkPatch, installerOf, isDevCheckout, npmWebInstallArgs, sdkPatchOf, webInstallCommand } from '../../scripts/postinstall.mjs'
+import { applySdkPatch, buildSqliteDylib, installerOf, isDevCheckout, npmWebInstallArgs, sdkPatchOf, webInstallCommand } from '../../scripts/postinstall.mjs'
 
 const REPO = path.resolve(__dirname, '../..')
 const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as {
@@ -121,6 +121,22 @@ describe('postinstall', () => {
   it('tells a checkout from an installed package', () => {
     expect(isDevCheckout(REPO)).toBe(true)
     expect(isDevCheckout(tmp)).toBe(false)
+  })
+
+  it('builds the macOS SQLite in a checkout, and only warns when that fails', () => {
+    const runs: string[] = []
+    const warns: string[] = []
+    const run = (status: number | null, error?: Error) => (file: string) => { runs.push(file); if (error) throw error; return { status } }
+    expect(buildSqliteDylib(REPO, { platform: 'linux', run: run(0), warn: (m: string) => warns.push(m) })).toBe('skipped')
+    expect(runs).toEqual([])
+    expect(buildSqliteDylib(REPO, { platform: 'darwin', run: run(0), warn: (m: string) => warns.push(m) })).toBe('ok')
+    expect(runs).toEqual([path.join(REPO, 'scripts', 'build-sqlite-dylib.mjs')])
+    expect(warns).toEqual([])
+    expect(buildSqliteDylib(REPO, { platform: 'darwin', run: run(1), warn: (m: string) => warns.push(m) })).toBe('failed')
+    expect(buildSqliteDylib(REPO, { platform: 'darwin', run: run(null, new Error('spawn failed')), warn: (m: string) => warns.push(m) })).toBe('failed')
+    expect(warns).toHaveLength(2)
+    expect(warns[0]).toContain('bun scripts/build-sqlite-dylib.mjs')
+    expect(buildSqliteDylib(tmp, { platform: 'darwin', run: run(0) })).toBe('skipped')
   })
 
   it('reads the installer from the user agent', () => {

@@ -1257,6 +1257,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.warn('Claude Code CLI not found — sessions will not work')
   }
   {
+    // macOS bun on the Apple system SQLite: databases misbehave (src/lib/sqlite.ts).
+    const { sqliteLibraryProblem } = await import('../lib/sqlite.js')
+    const problem = sqliteLibraryProblem()
+    if (problem) log.web.error(`SQLite: ${problem}`)
+  }
+  {
     const cred = await resolveCredentialHealth()
     applyCredentialHealth(cred)
     if (!systemHealth.hasReadyProvider) {

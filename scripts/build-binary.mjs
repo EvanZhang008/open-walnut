@@ -19,7 +19,8 @@
  *
  * What stays out (NOT_IN_FILE): sharp, the embedding runtime
  * (@huggingface/transformers, onnxruntime-*), the macOS audio capture module,
- * node-pty, esbuild, the Claude agent SDK and the Codex binary. Each load site
+ * node-pty, esbuild, the Claude agent SDK, the Codex binary and better-sqlite3
+ * (SQLite is bun:sqlite through src/lib/sqlite.ts). Each load site
  * already degrades when its module is missing; the big ones become downloaded
  * components (src/core/components/).
  *
@@ -72,6 +73,9 @@ export const NOT_IN_FILE = [
   'esbuild',
   '@anthropic-ai/claude-agent-sdk',
   '@openai/codex',
+  // Cannot load on bun; src/lib/sqlite.ts names it only on its Node branch, a
+  // runtime require the bundler leaves alone, so a stray import fails clearly.
+  'better-sqlite3',
 ]
 
 /**
@@ -204,12 +208,6 @@ async function stageTree(root, { version, sidecars }) {
   //  - `diff` for the offline-merge workers (they require it by resolved path);
   //  - the Codex ACP adapter, started as `<file> <its path>` (src/providers/acp-session.ts).
   await bundleTo(path.join(dist, 'lib/sqlite.js'), path.join(repo, 'src/lib/sqlite.ts'))
-  // Temporary, like sqliteMapPlugin: plugin-storage.ts still resolves the name
-  // 'better-sqlite3' at runtime, so a package of that name hands it src/lib/sqlite.ts.
-  const sqliteShim = path.join(root, 'node_modules/better-sqlite3')
-  fs.mkdirSync(sqliteShim, { recursive: true })
-  fs.writeFileSync(path.join(sqliteShim, 'package.json'), JSON.stringify({ name: 'better-sqlite3', private: true, main: 'index.cjs' }) + '\n')
-  fs.writeFileSync(path.join(sqliteShim, 'index.cjs'), "module.exports = require('../../dist/lib/sqlite.js').default\n")
   const diffDir = path.join(root, 'node_modules/diff')
   await bundleTo(path.join(diffDir, 'index.cjs'), path.join(repo, 'node_modules/diff/libcjs/index.js'), { format: 'cjs', target: 'node' })
   fs.writeFileSync(path.join(diffDir, 'package.json'), JSON.stringify({ name: 'diff', version: JSON.parse(fs.readFileSync(path.join(repo, 'node_modules/diff/package.json'), 'utf8')).version, main: 'index.cjs' }) + '\n')
@@ -252,17 +250,6 @@ function packTree(root) {
 }
 
 // ── The compile ─────────────────────────────────────────────────────────────
-
-/** Temporary: until every module imports src/lib/sqlite.ts, map the bare better-sqlite3 specifier to it. */
-function sqliteMapPlugin() {
-  const sqliteModule = path.join(repo, 'src/lib/sqlite.ts')
-  return {
-    name: 'walnut-better-sqlite3-to-lib-sqlite',
-    setup(build) {
-      build.onResolve({ filter: /^better-sqlite3$/ }, (args) => (args.importer === sqliteModule ? { path: 'better-sqlite3', external: true } : { path: sqliteModule }))
-    },
-  }
-}
 
 /** `__dirname` in DIRNAME_PACKAGES becomes the package's directory in the runtime tree (src/lib/single-file.ts). */
 function runtimeDirnamePlugin() {
@@ -348,7 +335,7 @@ function buildOptions({ version, archivePath, id, daemonVersion, sourcemap }) {
       'import.meta.url': 'globalThis.__WALNUT_BUNDLE_URL__',
       'process.env.DAEMON_VERSION': JSON.stringify(daemonVersion),
     },
-    plugins: [sqliteMapPlugin(), notInFilePlugin(NOT_IN_FILE), runtimeDirnamePlugin(), assetsPlugin({ archivePath, id, daemonVersion })],
+    plugins: [notInFilePlugin(NOT_IN_FILE), runtimeDirnamePlugin(), assetsPlugin({ archivePath, id, daemonVersion })],
     throw: false,
   }
 }
