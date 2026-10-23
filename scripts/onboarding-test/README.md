@@ -1,6 +1,6 @@
 # Fresh-machine onboarding test
 
-This harness answers one question: if somebody who has never seen Walnut follows the README on a machine that has never seen Walnut, what actually happens? It provisions a throwaway machine, does exactly what the README says (`git clone`, `npm install`, `npm start`, and separately `npm install -g open-walnut`), times every step, screenshots the first-run page, writes down each place a brand-new user would have had to stop and figure something out, and then destroys the machine. It never repairs the product on the way: `probe.sh` only reports.
+This harness answers one question: if somebody who has never seen Walnut follows the README on a machine that has never seen Walnut, what actually happens? It provisions a throwaway machine, does exactly what the README says (`git clone`, `bun install`, `bun run start`, and separately `npm install -g open-walnut`), times every step, screenshots the first-run page, writes down each place a brand-new user would have had to stop and figure something out, and then destroys the machine. It never repairs the product on the way: `probe.sh` only reports.
 
 ## The targets
 
@@ -9,7 +9,7 @@ This harness answers one question: if somebody who has never seen Walnut follows
 | `mac-vm` | free | about 2 minutes | highest for a Mac user: stock macOS with no Homebrew, no Xcode Command Line Tools, no git, no node | Apple Silicon, `brew install cirruslabs/cli/tart sshpass`, and `tart pull ghcr.io/cirruslabs/macos-sequoia-vanilla:latest` (about 24 GB, once) |
 | `linux` | EC2 t3.large, about USD 0.08 per hour | about 2 minutes, plus a minute for the SSM agent to register | a clean server distro (`al2023`, `al2023-arm` or `ubuntu`), reached only through SSM: no ingress, no SSH key, no public endpoint | `awscli` plus `session-manager-plugin`, and credentials for an account you are happy to spend in |
 | `mac-ec2` | a mac2.metal is sold as a whole physical host and bills a 24 hour minimum, about USD 16 | 5 to 15 minutes before SSM answers | real Apple hardware, so the closest thing to a new laptop that is not on your desk | account eligibility for Mac hosts; without it `AllocateHosts` fails with `UnsupportedHostConfiguration`, which a support case unlocks |
-| `remote-host` | free (a local container, or the CI job `remote-host`) | about 1 minute to build and start, plus a minute for Walnut's own Bun install on the box | the second machine: a Linux dev box with no C compiler, no node, an npm-built `claude` and `~/workplace` symlinked to `/workplace`, reached over real ssh | Docker with a running daemon; `npm install`, and `npm run build:daemon` for the daemon sidecars |
+| `remote-host` | free (a local container, or the CI job `remote-host`) | about 1 minute to build and start, plus a minute for Walnut's own Bun install on the box | the second machine: a Linux dev box with no C compiler, no node, an npm-built `claude` and `~/workplace` symlinked to `/workplace`, reached over real ssh | Docker with a running daemon; `bun install`, and `bun run build:daemon` for the daemon sidecars |
 
 `mac-vm` is the one to reach for by default: it is free, it is the fastest, and a vanilla image is genuinely bare. Use `linux` when the question is about a server install, and `mac-ec2` only when the Mac VM cannot answer the question, because the 24 hour charge starts the moment the host is allocated.
 
@@ -59,7 +59,7 @@ Everything for one run lands in `/tmp/walnut-onboarding-test/<run-id>/`:
 
 ## The `--record` video
 
-`--record` re-runs the same invocation under `asciinema`, so the provisioning narration and the probe's own output land in one `terminal.cast`. `render-video.sh` then turns that into `terminal.mp4` with `agg` and `ffmpeg`, clipping idle stretches to 2 seconds so a 10 minute `npm install` reads as a short story. The browser clips come from `capture.mjs`, which drives the first-run page with Playwright at a slower pace and records `browser-<path>.mp4`. All the pieces are normalised to 1280x800 at 30 fps and concatenated into `onboarding-<target>.mp4`. Needs `asciinema`, `agg` and `ffmpeg`; if `agg` or `ffmpeg` is missing the run keeps the `.cast` and says so instead of failing.
+`--record` re-runs the same invocation under `asciinema`, so the provisioning narration and the probe's own output land in one `terminal.cast`. `render-video.sh` then turns that into `terminal.mp4` with `agg` and `ffmpeg`, clipping idle stretches to 2 seconds so a 10 minute install reads as a short story. The browser clips come from `capture.mjs`, which drives the first-run page with Playwright at a slower pace and records `browser-<path>.mp4`. All the pieces are normalised to 1280x800 at 30 fps and concatenated into `onboarding-<target>.mp4`. Needs `asciinema`, `agg` and `ffmpeg`; if `agg` or `ffmpeg` is missing the run keeps the `.cast` and says so instead of failing.
 
 ## Cleanup guarantees
 

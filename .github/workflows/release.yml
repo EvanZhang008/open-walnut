@@ -89,7 +89,7 @@ permissions:
   actions: read
 
 env:
-  # `npm ci` runs `prepare`, which wires the repo's git hooks, and job `promote`
+  # `bun install` runs `prepare`, which wires the repo's git hooks, and job `promote`
   # pushes (the release tag and commit): the pre-push hook then
   # type-checked for 50s before a tag moved. Those hooks are for people.
   HUSKY: '0'
@@ -116,7 +116,6 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - name: The tag names the version package.json carries
         run: |
           version="$(node -p "require('./package.json').version")"
@@ -133,9 +132,9 @@ jobs:
         run: node scripts/ci-gate.mjs release HEAD
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.4
       - run: npm install -g npm@12
-      - run: npm ci
+      - run: bun install --frozen-lockfile
       - run: npm run lint
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs
       # against the tarball before anything leaves the runner.
@@ -211,15 +210,14 @@ jobs:
         if: steps.pick.outputs.publish == 'true'
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         if: steps.pick.outputs.publish == 'true'
         with:
-          bun-version: latest
+          bun-version: 1.4.4
       - if: steps.pick.outputs.publish == 'true'
         run: npm install -g npm@12
       - if: steps.pick.outputs.publish == 'true'
-        run: npm ci
+        run: bun install --frozen-lockfile
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.
       - name: Version this nightly and publish it
         if: steps.pick.outputs.publish == 'true'
@@ -360,12 +358,11 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.4
       - run: npm install -g npm@12
-      - run: npm ci
+      - run: bun install --frozen-lockfile
       # Every step below skips what an earlier attempt already did, so "Re-run failed
       # jobs" finishes a release that stopped halfway (npm refuses a version twice,
       # and the next plan sees the version out and would never come back for the

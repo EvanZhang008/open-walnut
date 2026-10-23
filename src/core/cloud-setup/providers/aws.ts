@@ -30,10 +30,24 @@ const execFileAsync = promisify(execFile)
 
 const STACK_NAME = 'WalnutCloudStack'
 const IDENTITY_TIMEOUT_MS = 8_000
-/** `npm ci` in infra/ pulls the whole CDK library — slow but bounded. */
-const NPM_CI_TIMEOUT_MS = 10 * 60_000
+/** `bun install` in infra/ pulls the whole CDK library: slow but bounded. */
+const INSTALL_TIMEOUT_MS = 10 * 60_000
 const DEPLOY_TIMEOUT_MS = 30 * 60_000
 const BOOTSTRAP_TIMEOUT_MS = 10 * 60_000
+
+/**
+ * The Bun that installs infra/ (a checkout installs with Bun; infra/bun.lock pins
+ * the CDK). PATH first, then where Bun's installer and Homebrew put it, because a
+ * server started from a thin PATH (launchd) still has it there.
+ */
+function bunCommand(): string {
+  const dirs = [...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean), path.join(os.homedir(), '.bun', 'bin'), '/opt/homebrew/bin', '/usr/local/bin']
+  for (const dir of dirs) {
+    const candidate = path.join(dir, process.platform === 'win32' ? 'bun.exe' : 'bun')
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return 'bun'
+}
 
 /**
  * Locate infra/ inside the operator's source checkout. WALNUT_INSTALL_DIR is
@@ -269,13 +283,13 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   }
   const cwd = infraDir()
 
-  // The CDK app is a normal npm project inside the checkout — a fresh clone has
+  // The CDK app is a normal package inside the checkout: a fresh clone has
   // no node_modules, and `npx cdk` would then resolve to a download prompt.
   if (!fs.existsSync(path.join(cwd, 'node_modules', 'aws-cdk-lib'))) {
     onLog('infra/node_modules is missing — installing CDK dependencies (this takes a few minutes)')
-    // No AWS call here — npm only fetches packages — so the ambient env is right.
-    const install = await runStreaming('npm', ['ci'], cwd, onLog, NPM_CI_TIMEOUT_MS, process.env, params.signal)
-    if (install.code !== 0) throw new Error(`npm ci failed in infra/ (exit ${install.code})`)
+    // No AWS call here (the install only fetches packages), so the ambient env is right.
+    const install = await runStreaming(bunCommand(), ['install', '--frozen-lockfile'], cwd, onLog, INSTALL_TIMEOUT_MS, process.env, params.signal)
+    if (install.code !== 0) throw new Error(`bun install failed in infra/ (exit ${install.code})`)
   }
 
   const outputsFile = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-cdk-')), 'outputs.json')
@@ -348,7 +362,7 @@ function instructions(params: InstructionsParams): DriverInstructions {
   return {
     steps: [
       `Make sure the aws CLI is signed in${region}: \`aws sts get-caller-identity\` must succeed.`,
-      'From a Walnut source checkout: `cd infra && npm ci`.',
+      'From a Walnut source checkout: `cd infra && bun install --frozen-lockfile`.',
       'First time in this account/region only: `npx cdk bootstrap`.',
       `Deploy: \`npx cdk deploy ${STACK_NAME} --require-approval never ${contextFlag}\`.`,
       dnsStep,

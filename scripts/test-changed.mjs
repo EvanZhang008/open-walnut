@@ -73,7 +73,7 @@ const RULES = [
   { re: /^tsup\.config\.ts$|^tsconfig.*\.json$/, tiers: ['quick'], why: 'build/type config' },
   { re: /^web\/src\//, tiers: ['web'], why: 'frontend — covered by the web-rooted configs + Playwright' },
   { re: /^scripts\//, tiers: ['quick'], why: 'scripts are exercised by unit-level tests' },
-  { re: /^package(-lock)?\.json$/, tiers: ['quick', 'slow', 'web'], why: 'dependency change — anything can break' },
+  { re: /^package(-lock)?\.json$|^bun\.lock$|^bunfig\.toml$|^patches\//, tiers: ['quick', 'slow', 'web'], why: 'dependency change — anything can break' },
   { re: /^(docs|site|ios-native|infra|\.github)\//, tiers: [], why: 'no vitest coverage' },
   { re: /\.(md|svg|png|jpg|gif|mp4|plist|yml|yaml)$/, tiers: [], why: 'non-code' },
 ];

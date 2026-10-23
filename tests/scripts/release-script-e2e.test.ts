@@ -68,6 +68,7 @@ else out({ workflow_runs: [{ id: 1, head_sha: 'x', created_at: '2026-10-01T00:00
   status: ci === 'pending' ? 'in_progress' : 'completed', conclusion: ci === 'pending' ? null : (ci === 'green' ? 'success' : 'failure') }] })
 `
 
+const BUN_LOCK = '{\n  "lockfileVersion": 1,\n  "workspaces": {\n    "": {\n      "name": "open-walnut",\n    },\n  },\n  "packages": {},\n}\n'
 const CHANGELOG = '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- A thing.\n\n## [0.5.1] - 2026-09-28\n\n- Old.\n'
 
 beforeEach(() => {
@@ -81,8 +82,8 @@ beforeEach(() => {
   for (const f of ['release.mjs', 'ci-gate.mjs']) fs.copyFileSync(path.join(REPO, 'scripts', f), path.join(work, 'scripts', f))
   const pkg = { name: 'open-walnut', version: '0.5.1', scripts: { release: 'node scripts/release.mjs' } }
   fs.writeFileSync(path.join(work, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`)
-  const lock = { name: 'open-walnut', version: '0.5.1', lockfileVersion: 3, requires: true, packages: { '': { name: 'open-walnut', version: '0.5.1' } } }
-  fs.writeFileSync(path.join(work, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`)
+  // bun.lock carries no version of its own, so a release leaves it byte for byte.
+  fs.writeFileSync(path.join(work, 'bun.lock'), BUN_LOCK)
   fs.writeFileSync(path.join(work, 'CHANGELOG.md'), CHANGELOG)
   fs.writeFileSync(path.join(work, 'notes.txt'), 'committed\n')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { env: cleanEnv() })
@@ -110,13 +111,13 @@ describe('npm run release in a shared, dirty worktree', { timeout: 120_000 }, ()
 
     expect(git('log', '-1', '--format=%s')).toBe('release: 0.5.2')
     expect(git('rev-parse', 'HEAD^')).toBe(head)
-    expect(git('show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual(['CHANGELOG.md', 'package-lock.json', 'package.json'])
+    expect(git('show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual(['CHANGELOG.md', 'package.json'])
     expect(git('rev-parse', 'v0.5.2^{commit}')).toBe(git('rev-parse', 'HEAD'))
     expect(git('cat-file', '-t', 'v0.5.2')).toBe('tag')
 
     const pkg = JSON.parse(fs.readFileSync(path.join(work, 'package.json'), 'utf8'))
-    const lock = JSON.parse(fs.readFileSync(path.join(work, 'package-lock.json'), 'utf8'))
-    expect([pkg.version, lock.version, lock.packages[''].version]).toEqual(['0.5.2', '0.5.2', '0.5.2'])
+    expect(pkg.version).toBe('0.5.2')
+    expect(fs.readFileSync(path.join(work, 'bun.lock'), 'utf8')).toBe(BUN_LOCK)
     const changelog = fs.readFileSync(path.join(work, 'CHANGELOG.md'), 'utf8')
     expect(changelog).toMatch(/## \[Unreleased\]\n\n## \[0\.5\.2\] - \d{4}-\d{2}-\d{2}\n\n### Added\n\n- A thing\./)
 

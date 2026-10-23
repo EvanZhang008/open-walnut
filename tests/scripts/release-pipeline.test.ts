@@ -275,7 +275,7 @@ describe('setManifestVersion', () => {
   })
 
   it('the repository manifests are in that layout', () => {
-    for (const f of ['package.json', 'package-lock.json']) {
+    for (const f of ['package.json']) {
       const text = fs.readFileSync(path.resolve(__dirname, '../..', f), 'utf8')
       expect(() => setManifestVersion(text, '9.9.9')).not.toThrow()
     }
@@ -308,7 +308,9 @@ describe('ci-gate', () => {
   })
 
   it('a release commit (only the release files) is judged by its parent', () => {
-    expect(releaseGateRev(['package.json', 'package-lock.json', 'CHANGELOG.md'])).toBe('parent')
+    expect(releaseGateRev(['package.json', 'CHANGELOG.md'])).toBe('parent')
+    // A dependency change is code: bun.lock is not a release file.
+    expect(releaseGateRev(['package.json', 'bun.lock'])).toBe('self')
     expect(releaseGateRev(['CHANGELOG.md'])).toBe('parent')
     expect(releaseGateRev(['package.json', 'src/cli.ts'])).toBe('self')
     expect(releaseGateRev([])).toBe('self')
@@ -545,7 +547,7 @@ describe('release.yml', () => {
     const publish = stepIndex('promote', 'npm publish --provenance --access public')
     const tag = stepIndex('promote', 'git tag -f -a "v$VERSION"')
     const roll = stepIndex('promote', 'node scripts/stable-promote.mjs roll')
-    expect(publish).toBeGreaterThan(stepIndex('promote', 'npm ci'))
+    expect(publish).toBeGreaterThan(stepIndex('promote', 'bun install --frozen-lockfile'))
     expect(tag).toBeGreaterThan(publish)
     expect(roll).toBeGreaterThan(tag)
     expect(jobs.promote!.steps[publish]!.env?.WALNUT_VERSION_STAMPED).toBe('1')
@@ -644,7 +646,7 @@ describe('ci.yml', () => {
     // shards stayed green.
     const steps = doc.jobs.build!.steps
     const list = steps.findIndex((s) => (s.run ?? '').includes('npx playwright test --list --project=chromium'))
-    expect(list).toBeGreaterThan(steps.findIndex((s) => s.run === 'npm ci'))
+    expect(list).toBeGreaterThan(steps.findIndex((s) => s.run === 'bun install --frozen-lockfile'))
     expect(steps[list]!['continue-on-error']).toBeUndefined()
     expect(gate.needs).toContain('build')
   })

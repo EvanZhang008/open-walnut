@@ -24,22 +24,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
+# A checkout installs with Bun, at the version package.json pins (packageManager).
+COPY --from=oven/bun:1.4.4 /usr/local/bin/bun /usr/local/bin/bun
+
 # Run as a non-root user with a fresh, empty HOME → fresh ~/.claude + ~/.open-walnut.
 RUN useradd -m -u 10001 walnut
 USER walnut
 WORKDIR /home/walnut/app
 
-# Install backend deps first (layer cache). Copy package manifests only.
-COPY --chown=walnut:walnut package.json package-lock.json* ./
-COPY --chown=walnut:walnut web/package.json web/package-lock.json* ./web/
-# postinstall runs patch-package + (cd web && npm install); needs the patches/ + scripts/.
+# Install backend deps first (layer cache). Copy package manifests and lockfiles only.
+COPY --chown=walnut:walnut package.json bun.lock bunfig.toml ./
+COPY --chown=walnut:walnut packages/plugin-api/package.json ./packages/plugin-api/
+COPY --chown=walnut:walnut packages/plugin-cli/package.json ./packages/plugin-cli/
+COPY --chown=walnut:walnut web/package.json web/bun.lock ./web/
+# Bun applies patches/; postinstall needs scripts/. With src/ not copied yet the
+# postinstall takes the installed-package route, so web/ is installed here.
 COPY --chown=walnut:walnut patches ./patches
 COPY --chown=walnut:walnut scripts ./scripts
-RUN npm install
+RUN bun install --frozen-lockfile && cd web && bun install --frozen-lockfile
 
 # Copy the rest of the source and build (server → dist/, SPA → web/dist/).
 COPY --chown=walnut:walnut . .
-RUN npm run web:build
+RUN bun run web:build
 
 # Clean-room runtime env:
 #  - empty HOME means ~/.claude and ~/.aws don't exist → resolver finds nothing → onboarding fires

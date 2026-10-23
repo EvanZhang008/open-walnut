@@ -7,24 +7,28 @@ Thanks for your interest in contributing! Here's how to get started.
 ```bash
 git clone https://github.com/EvanZhang008/open-walnut.git
 cd open-walnut
-npm install          # installs backend + frontend dependencies
-npm run dev          # backend watch mode
-cd web && npx vite   # frontend HMR on http://localhost:5173
+bun install            # installs backend + frontend dependencies (bun.lock, web/bun.lock)
+bun run dev            # backend watch mode
+cd web && bun x vite   # frontend HMR on http://localhost:5173
 ```
 
 The Vite dev server proxies `/api` and `/ws` to `localhost:3456`.
 
 ### Prerequisites
 
-- Node.js >= 22
-- npm
+- Node.js >= 22 (the server and the tests run on it)
+- [Bun](https://bun.sh) >= 1.4.4 (installs the dependencies; `package.json` pins the version as `packageManager`)
+
+A dependency change is a `package.json` edit plus the `bun.lock` that `bun install`
+writes for it; commit both. Patches to dependencies live in `patches/` and are made
+with `bun patch <package>` (Bun applies them on every install).
 
 ## Running Tests
 
 ```bash
-npm test              # unit + integration + e2e (parallel)
-npm run lint          # TypeScript type check
-npm run test:all      # lint + all tests + Playwright browser tests
+bun run test          # unit + integration + e2e (parallel)
+bun run lint          # TypeScript type check
+bun run test:all      # lint + all tests + Playwright browser tests
 ```
 
 ## Making Changes

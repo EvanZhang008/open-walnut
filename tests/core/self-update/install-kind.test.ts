@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
+import { readBunLock, runtimeClosure, splitSpec } from '../../helpers/bun-lock.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-install-kind'))
 
@@ -115,26 +116,35 @@ describe('detectInstall', () => {
   })
 })
 
-// npm 12 runs no dependency install script that is not allowed. A dependency
-// whose script fetches its binary (better-sqlite3, node-pty) then installs
-// without it, and Walnut cannot open its database: every such dependency must be
-// allowed in package.json (a checkout, `npm rebuild` in the package) and named
-// by the global install the updater runs.
+// npm 12 runs no dependency install script that is not allowed, and neither
+// does Bun. A dependency whose script fetches its binary (better-sqlite3,
+// node-pty) then installs without it, and Walnut cannot open its database: every
+// such dependency must be allowed in package.json (`allowScripts` for npm: the
+// published package, `npm rebuild` in it; `trustedDependencies` for Bun: a
+// checkout) and named by the global install the updater runs.
 describe('install scripts a working install needs', () => {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
-  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { allowScripts?: Record<string, boolean> }
-  const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8')) as {
-    packages: Record<string, { hasInstallScript?: boolean; dev?: boolean }>
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as {
+    allowScripts?: Record<string, boolean>
+    trustedDependencies?: string[]
   }
+  const lock = readBunLock(path.join(root, 'bun.lock'))
   const allowed = Object.entries(pkg.allowScripts ?? {}).filter(([, v]) => v === true).map(([k]) => k)
 
   it('package.json allows every runtime dependency that has an install script', () => {
     const needed = new Set<string>()
-    for (const [key, meta] of Object.entries(lock.packages)) {
-      if (!key || !meta.hasInstallScript || meta.dev) continue
-      needed.add(key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length))
+    for (const key of runtimeClosure(lock)) {
+      const [spec, , meta] = lock.packages[key]!
+      if (meta?.hasInstallScript) needed.add(splitSpec(spec)[0])
     }
+    // The closure is real: it reaches the native modules a server needs.
+    expect(needed).toContain('better-sqlite3')
+    expect(needed).toContain('@homebridge/node-pty-prebuilt-multiarch')
     expect([...needed].filter((name) => !(name in (pkg.allowScripts ?? {}))).sort()).toEqual([])
+  })
+
+  it('Bun trusts exactly the packages npm is allowed to run scripts for', () => {
+    expect([...(pkg.trustedDependencies ?? [])].sort()).toEqual([...allowed].sort())
   })
 
   it('the updater names this package and exactly the allowed ones', () => {

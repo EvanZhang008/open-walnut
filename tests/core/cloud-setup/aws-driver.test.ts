@@ -277,7 +277,7 @@ describe('awsDriver.createVM', () => {
     stackOutputs = { InstanceId: 'i-0abc', ElasticIp: '203.0.113.77', Domain: 'wn.example.com' }
     installDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-aws-driver-'))
     // Minimal fake checkout: infra/cdk.json + a node_modules marker so the
-    // driver skips its `npm ci` step.
+    // driver skips its install step.
     await fsp.mkdir(path.join(installDir, 'infra', 'node_modules', 'aws-cdk-lib'), { recursive: true })
     await fsp.writeFile(path.join(installDir, 'infra', 'cdk.json'), '{}', 'utf-8')
   })

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Cut a stable release: `npm run release -- patch|minor|major|<x.y.z>`.
+ * Cut a stable release: `bun run release -- patch|minor|major|<x.y.z>`.
  *
  * One command, one commit, one tag; the publish itself happens in GitHub
  * Actions (.github/workflows/release.yml) when the tag arrives, through npm
@@ -12,14 +12,15 @@
  *      a point on main that others can check out, never a local pile;
  *   2. CI passed on that commit (scripts/ci-gate.mjs; the workflow checks again):
  *      every npm install updates itself on restart, so a release is cut from green;
- *   3. package.json, package-lock.json and CHANGELOG.md have no uncommitted edits.
+ *   3. package.json and CHANGELOG.md have no uncommitted edits (bun.lock holds no
+ *      version, so a release leaves it alone).
  *      Other uncommitted work in the tree is fine and stays exactly as it is: the
- *      release commit is built from HEAD plus those three files only, and CI
+ *      release commit is built from HEAD plus those two files only, and CI
  *      publishes from a clean checkout of the tag, never from this tree;
  *   4. CHANGELOG.md has an `## [Unreleased]` section with content: that becomes
  *      `## [x.y.z] - YYYY-MM-DD`, and a fresh empty Unreleased goes above it.
  *
- * Then: commit `release: x.y.z` (HEAD's tree + the three files, through a private
+ * Then: commit `release: x.y.z` (HEAD's tree + the two files, through a private
  * index, so whatever else is staged stays staged and out of the commit), tag
  * `vx.y.z` (annotated), push both atomically.
  *
@@ -83,13 +84,13 @@ export function rollChangelog(text, version, date) {
 }
 
 /**
- * Set the version in package.json or package-lock.json text (the lock's root
- * package too). Only for files in npm's own layout (2-space JSON + newline), so
- * the diff is the version lines and nothing else.
+ * Set the version in package.json text (an npm package-lock's root package too,
+ * for a tree that still has one). Only for files in npm's own layout (2-space
+ * JSON + newline), so the diff is the version lines and nothing else.
  */
 export function setManifestVersion(text, version) {
   const data = JSON.parse(text)
-  if (`${JSON.stringify(data, null, 2)}\n` !== text) throw new Error('not in npm\'s JSON layout (run npm install to normalize it)')
+  if (`${JSON.stringify(data, null, 2)}\n` !== text) throw new Error('not in npm\'s JSON layout (2-space indent and a final newline)')
   data.version = version
   if (data.packages?.['']) data.packages[''].version = version
   return `${JSON.stringify(data, null, 2)}\n`
@@ -140,7 +141,7 @@ function checkCi(sha) {
 }
 
 function main() {
-  if (!bump) fail('usage: npm run release -- patch|minor|major|<x.y.z> [--dry-run] [--no-push]')
+  if (!bump) fail('usage: bun run release -- patch|minor|major|<x.y.z> [--dry-run] [--no-push]')
   const pkgPath = path.join(root, 'package.json')
   const pkgText = fs.readFileSync(pkgPath, 'utf8')
   const pkg = JSON.parse(pkgText)
@@ -164,7 +165,6 @@ function main() {
   try {
     files['CHANGELOG.md'] = rollChangelog(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), version, date)
     files['package.json'] = setManifestVersion(pkgText, version)
-    files['package-lock.json'] = setManifestVersion(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'), version)
   } catch (e) { fail(e.message) }
 
   process.stdout.write(`release: ${pkg.version} -> ${version} (${date})${dryRun ? ' [dry run]' : ''}\n`)
@@ -177,7 +177,7 @@ function main() {
 
   let commit
   try { commit = commitFiles(files, `release: ${version}`, head) } catch (e) { fail(e.message) }
-  // main now points at the release commit; bring the three files (and only them)
+  // main now points at the release commit; bring the two files (and only them)
   // in the worktree and the shared index up to it.
   for (const [file, content] of Object.entries(files)) fs.writeFileSync(path.join(root, file), content)
   git(['reset', '--quiet', '--', ...RELEASE_FILES])

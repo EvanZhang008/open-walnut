@@ -20,8 +20,11 @@ import { fileURLToPath } from 'node:url'
 
 export const CI_WORKFLOW = 'ci.yml'
 export const GATE_JOB = 'CI OK'
-/** What `npm run release` changes; a commit touching only these carries its parent's CI result. */
-export const RELEASE_FILES = ['package.json', 'package-lock.json', 'CHANGELOG.md']
+/**
+ * What `bun run release` changes; a commit touching only these carries its parent's CI result.
+ * bun.lock holds no version of its own, so a release never touches it.
+ */
+export const RELEASE_FILES = ['package.json', 'CHANGELOG.md']
 
 /**
  * The verdict for one commit from its CI runs (newest first or not; sorted here)

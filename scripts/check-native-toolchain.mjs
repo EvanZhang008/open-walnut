@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Runs as `prestart`, right after the Node-version check. Also usable by hand:
-// `node scripts/check-native-toolchain.mjs` after a failed `npm install`.
+// `node scripts/check-native-toolchain.mjs` after a failed `bun install`.
 //
 // Walnut has one native module it cannot do without: better-sqlite3. On Linux its
 // prebuilt binary needs glibc 2.29+. Any distro from the last few years has that and
@@ -96,7 +96,7 @@ if (!oldGlibc) {
     `  ${loadError && loadError.message ? loadError.message.split('\n')[0] : 'module not found'}`,
     ``,
     `  This machine (glibc ${glibc || 'unknown'}) can use the prebuilt binary, so no compiler is needed.`,
-    `  Run \`npm install\` again and read its output; a network block on github.com (where the`,
+    `  Run \`bun install\` again and read its output; a network block on github.com (where the`,
     `  prebuilt is downloaded from) is the usual cause.`,
     ``,
   );
@@ -135,7 +135,7 @@ if (!oldGlibc) {
   }
   lines.push(`  Fix, then install again:`, ``);
   for (const i of installs) lines.push(`    ${i}`);
-  lines.push(`    ${env.length ? env.join(' ') + ' ' : ''}npm install`, ``);
+  lines.push(`    ${env.length ? env.join(' ') + ' ' : ''}bun install`, ``);
   lines.push(
     `  Distros with glibc 2.29+ (AL2023, Ubuntu 22.04+, Debian 12+) install with no compiler at all.`,
     `  sharp (image compression) is optional and is skipped on this machine either way.`,

@@ -76,7 +76,7 @@ json_str() {  # escape a string for JSON; ANSI colour codes and other control by
 }
 
 # PIDs listening on a TCP port: the servers we start are grandchildren of the recorded
-# `npm start`, so a TERM to npm alone would leave them running under --keep.
+# `bun run start`, so a TERM to bun alone would leave them running under --keep.
 listeners_on_port() {
   if have lsof; then lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null
   elif have ss; then ss -Hltnp "sport = :$1" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p'
@@ -251,7 +251,25 @@ else
 fi
 have node || { say "${R}cannot continue without node${O}"; exit 1; }
 
-# ── README path: git clone → npm install → npm start ──────────────────────────
+# ── 3. Bun, for the checkout route (README: `curl -fsSL https://bun.sh/install | bash`) ──
+if want_path readme; then
+  step_begin "prereq:bun"
+  if have bun; then
+    step_end ok "already present: $(ver bun --version)"
+  else
+    say "  README says a checkout installs with Bun; using the installer it gives"
+    cmd "curl -fsSL https://bun.sh/install | bash"
+    run_logged bash -c 'curl -fsSL https://bun.sh/install | bash'
+    export PATH="$HOME/.bun/bin:$PATH"; hash -r 2>/dev/null || true
+    if have bun; then
+      step_end ok "installed $(ver bun --version)" "Bun is not preinstalled. The README's Requirements gives the installer line; this is the time it costs."
+    else
+      tail_log 5; step_end fail "bun not available after its installer: $(first_error_line)" "Installing Bun failed following the README."
+    fi
+  fi
+fi
+
+# ── README path: git clone → bun install → bun run start ──────────────────────
 README_DIR="$OUT/open-walnut"
 if want_path readme; then
   step_begin "readme:git-clone"
@@ -273,42 +291,42 @@ if want_path readme; then
   fi
 
   if [ -d "$README_DIR" ]; then
-    step_begin "readme:npm-install"
-    cmd "cd open-walnut && npm install"
-    if (cd "$README_DIR" && run_logged npm install); then
-      warns=$(grep -c -E '^npm (warn|WARN)' "$STEP_LOG" || true)
-      step_end ok "ok; $warns npm warnings; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
+    step_begin "readme:bun-install"
+    cmd "cd open-walnut && bun install"
+    if (cd "$README_DIR" && run_logged bun install); then
+      warns=$(grep -c -E '^warn:' "$STEP_LOG" || true)
+      step_end ok "ok; $warns bun warnings; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
     elif [ -f "$README_DIR/scripts/check-native-toolchain.mjs" ] && ! (cd "$README_DIR" && node scripts/check-native-toolchain.mjs >> "$STEP_LOG" 2>&1) && grep -q "Fix, then install again" "$STEP_LOG"; then
-      # The native build failed and Walnut's own check (what `npm start` would run next)
-      # printed the recipe. A user would paste it; do the same, and record whether the
-      # printed advice actually works. The env it names stays exported for the npm route.
-      # Every indented line between the header and the final `npm install` is one command
+      # The native build failed and Walnut's own check (what `bun run start` would run
+      # next) printed the recipe. A user would paste it; do the same, and record whether
+      # the printed advice actually works. The env it names stays exported for the npm route.
+      # Every indented line between the header and the final `bun install` is one command
       # to run as printed (sudo installs, the uv bootstrap, ...); the last line's prefix is
       # the env the rebuilt install needs, kept for the rest of the run.
-      fix_installs=$(sed -n '/Fix, then install again/,/npm install$/p' "$STEP_LOG" | grep -E '^\s+\S' | grep -vE 'npm install$|^\s+#' | sed 's/^ *//')
-      fix_npm=$(sed -n '/Fix, then install again/,/npm install$/p' "$STEP_LOG" | grep -E 'npm install$' | tail -1 | sed 's/^ *//')
-      tail_log 14; step_end fail "native build failed (glibc $(glibc_version)); Walnut's check printed the recipe, following it" "This OS has glibc $(glibc_version): prebuilt native modules need 2.29+, so better-sqlite3 compiles and needs Python 3.8+ and GCC 10+, which the stock toolchain lacks. 'npm install' fails in node-gyp; Walnut's check explains and prints the commands."
-      step_begin "readme:npm-install-fix"
+      fix_installs=$(sed -n '/Fix, then install again/,/bun install$/p' "$STEP_LOG" | grep -E '^\s+\S' | grep -vE 'bun install$|^\s+#' | sed 's/^ *//')
+      fix_install=$(sed -n '/Fix, then install again/,/bun install$/p' "$STEP_LOG" | grep -E 'bun install$' | tail -1 | sed 's/^ *//')
+      tail_log 14; step_end fail "native build failed (glibc $(glibc_version)); Walnut's check printed the recipe, following it" "This OS has glibc $(glibc_version): prebuilt native modules need 2.29+, so better-sqlite3 compiles and needs Python 3.8+ and GCC 10+, which the stock toolchain lacks. 'bun install' fails in node-gyp; Walnut's check explains and prints the commands."
+      step_begin "readme:bun-install-fix"
       while IFS= read -r line; do [ -n "$line" ] && { cmd "$line"; run_logged bash -c "$line"; }; done <<< "$fix_installs"
-      fix_env=$(printf '%s' "$fix_npm" | sed 's/ *npm install$//')
+      fix_env=$(printf '%s' "$fix_install" | sed 's/ *bun install$//')
       [ -n "$fix_env" ] && { say "  exporting for the rest of the run: $fix_env"; eval "export $fix_env"; }
-      cmd "$fix_npm"
-      if [ -n "$fix_npm" ] && (cd "$README_DIR" && run_logged npm install); then
+      cmd "$fix_install"
+      if [ -n "$fix_install" ] && (cd "$README_DIR" && run_logged bun install); then
         step_end ok "the printed recipe worked; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
       else
         tail_log 12; step_end fail "the printed recipe did not work: $(first_error_line)" "The toolchain check's own advice failed on this OS: $(first_error_line)"
       fi
     else
-      tail_log 8; step_end fail "npm install failed: $(first_error_line)" "'npm install' fails on a fresh machine: $(first_error_line)"
+      tail_log 8; step_end fail "bun install failed: $(first_error_line)" "'bun install' fails on a fresh machine: $(first_error_line)"
     fi
 
-    step_begin "readme:npm-start"
+    step_begin "readme:start"
     if port_in_use "$README_PORT"; then
       step_end fail "port $README_PORT already has a listener; this is not a fresh machine" "Something already listens on $README_PORT here, so the probe cannot tell its own server from it. Run the probe on a fresh machine."
       START_PID=""
     else
-    cmd "npm start"
-    ( cd "$README_DIR" && exec npm start ) >> "$STEP_LOG" 2>&1 &
+    cmd "bun run start"
+    ( cd "$README_DIR" && exec bun run start ) >> "$STEP_LOG" 2>&1 &
     START_PID=$!
     echo "$START_PID" >> "$PIDS"
     fi
@@ -323,9 +341,9 @@ if want_path readme; then
       rc=$?
       tail_log 8
       if [ "$rc" = 1 ]; then
-        step_end fail "npm start exited before the server came up: $(first_error_line)" "'npm start' on a fresh machine fails: $(first_error_line). A user following the README stops here."
+        step_end fail "bun run start exited before the server came up: $(first_error_line)" "'bun run start' on a fresh machine fails: $(first_error_line). A user following the README stops here."
       else
-        step_end fail "server not ready after ${READY_TIMEOUT}s" "'npm start' did not serve within ${READY_TIMEOUT}s on this machine."
+        step_end fail "server not ready after ${READY_TIMEOUT}s" "'bun run start' did not serve within ${READY_TIMEOUT}s on this machine."
       fi
       step_begin "readme:first-run"; step_end skip "server never came up"
     fi
