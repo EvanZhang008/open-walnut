@@ -32,6 +32,20 @@ fi
 SERVER_LOG="${WALNUT_SERVER_LOG:-/tmp/open-walnut-launchd.log}"
 LAUNCH_LABEL=com.open-walnut.dev-prod
 
+# ── Temp dir ────────────────────────────────────────────────────────────────
+# The stages, the LKG, the lock and the stamps live in TMPDIR. A deploy over ssh
+# often has none, and /tmp may be swept by a periodic cleaner that would take a
+# live stage with it, so on macOS the per-user temp dir (what a GUI login sets
+# TMPDIR to) stands in. Elsewhere /tmp stays the fallback.
+default_tmpdir() {
+  local d=""
+  if [[ "$(uname -s)" == "Darwin" ]]; then d="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"; fi
+  d="${d%/}"
+  if [[ -n "$d" && -d "$d" ]]; then printf '%s' "$d"; else printf '/tmp'; fi
+}
+if [[ -z "${TMPDIR:-}" ]]; then TMPDIR="$(default_tmpdir)"; fi
+export TMPDIR
+
 # ── Rehearsal: the whole real deploy, away from production ──────────────────
 # WALNUT_DEVPROD_REHEARSAL=1 runs every step for real (build, smoke, kill and
 # launch, readiness, last-known-good, rollback) on a private port, data dir,
