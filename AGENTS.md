@@ -43,6 +43,21 @@ happens on request.
 
 No company-internal names, personal info, internal URLs, credentials, or internal processes. Generic descriptions only. Internal plugins go in `~/.open-walnut/plugins/` (never committed). **When in doubt, leave it out.**
 
+## Existing users keep working and keep upgrading
+
+Every change reaches people who already run an older Walnut. Before it lands, make sure:
+
+- **It still works for them.** Data an older version wrote opens and reads the same, and a
+  host, daemon, phone app or companion still on the older version keeps working with it.
+- **They can upgrade.** The updater their OLD version already has (npm, the install script,
+  Homebrew, the Mac app) takes them to the new one with no manual step.
+- **They can go back.** The previous release still starts on data the new one wrote, or
+  refuses with a clear message; it never corrupts it.
+
+Prove it against the real published release, not only the new code
+(`scripts/release-rehearsal/`). Keep the way across simple: one obvious path per install
+kind, not a pile of special cases.
+
 ## Multi-Agent Safety
 
 - **NEVER** delete/revert other agents' changes or switch branches unless asked
