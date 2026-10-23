@@ -13,7 +13,10 @@
  * Expand (the header's ⤢) makes the card bigger where it is, for a long answer:
  * the same top below its passage, wider and taller as far as the owner's
  * `style.grown` reaches. Esc or the button again brings it back to its size;
- * × still closes it.
+ * × still closes it. An answer that is more than prose (a table, a diagram, a
+ * model-drawn HTML box) opens expanded by itself, also when it arrives while the
+ * card is open; once the reader sizes the card themselves, that choice holds for
+ * this question.
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { CardGrown } from '@/utils/thread-card';
@@ -25,6 +28,23 @@ import '@/styles/thread-card.css';
 
 /** The grow animation (`.thread-card.is-sizing` in thread-card.css). */
 const GROW_MS = 160;
+
+/** Content that does not read at the card's resting width. */
+const WIDE_CONTENT = '.markdown-body table, .markdown-body svg, .markdown-body iframe, iframe.rich-island, .markdown-body [style]';
+/** Smaller than this, an <svg> is an icon (a pill, a button), not a diagram. */
+const DIAGRAM_MIN_PX = 96;
+
+export function hasWideContent(body: HTMLElement): boolean {
+  for (const el of body.querySelectorAll<HTMLElement | SVGElement>(WIDE_CONTENT)) {
+    if (el.closest('a, button')) continue;
+    if (el.tagName.toLowerCase() === 'svg') {
+      const r = el.getBoundingClientRect();
+      if (r.width < DIAGRAM_MIN_PX && r.height < DIAGRAM_MIN_PX) continue;
+    }
+    return true;
+  }
+  return false;
+}
 
 export const CARD_ASK_PLACEHOLDER = 'Ask about this passage…';
 export const cardFollowUpPlaceholder = (title: string): string => {
@@ -70,22 +90,31 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const initialRef = useRef(p.initialText);
   initialRef.current = p.initialText;
   const [expanded, setExpanded] = useState(false);
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const autoGrowRef = useRef<(glide: boolean) => void>(() => {});
+  /** The reader pressed ⤢ or Esc on this question: no more automatic sizing. */
+  const userSized = useRef(false);
 
   // A new question (or a draft) opens with the composer ready; the body starts
   // at its newest turn, where the answer is.
-  useEffect(() => {
+  // Before the first paint, so a card whose answer holds a table opens expanded
+  // instead of gliding there from small (autoGrow below).
+  useLayoutEffect(() => {
     setText(p.draft ? initialRef.current ?? '' : '');
     setExpanded(false);
+    userSized.current = false;
     const body = bodyRef.current;
     if (body) body.scrollTop = body.scrollHeight;
     if (p.draft || p.canAsk) boxRef.current?.focus({ preventScroll: true });
+    autoGrowRef.current(false);
   }, [p.threadKey, p.draft, p.canAsk]);
 
   const onTextChange = p.onTextChange;
   useEffect(() => { onTextChange?.(text); }, [text, onTextChange]);
 
   const [sizing, setSizing] = useState(false);
-  const toggleExpanded = useCallback(() => { setSizing(true); setExpanded((v) => !v); }, []);
+  const toggleExpanded = useCallback(() => { userSized.current = true; setSizing(true); setExpanded((v) => !v); }, []);
   // The box keeps the keyboard across a size change; once the glide is over, a
   // card grown below the fold is scrolled whole into view.
   const firstRender = useRef(true);
@@ -143,7 +172,34 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   // Worth a button only when expanding gains real room.
   const canGrow = !!g && (g.width > p.style.width + 24 || g.maxHeight > p.style.maxHeight + 24);
   const grown = expanded && canGrow && g ? g : null;
-  const onEscape = () => { if (grown) setExpanded(false); else p.onClose(); };
+
+  // A table or a diagram in the answer opens the card expanded: on open before
+  // the first paint (no glide from small), and later with the glide when one
+  // streams in. Checked again on every change of the body's content.
+  const autoGrow = useCallback((glide: boolean) => {
+    const body = bodyRef.current;
+    if (!body || userSized.current || !canGrow) return;
+    if (!hasWideContent(body)) return;
+    if (glide && !expandedRef.current) setSizing(true);
+    setExpanded(true);
+  }, [canGrow]);
+  autoGrowRef.current = autoGrow;
+  // The resting width can change under an open card (the panel resized): a
+  // card that could not grow before may now.
+  useLayoutEffect(() => { autoGrow(false); }, [autoGrow]);
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || typeof MutationObserver === 'undefined') return;
+    let raf = 0;
+    const mo = new MutationObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => autoGrow(true));
+    });
+    mo.observe(body, { childList: true, subtree: true });
+    return () => { cancelAnimationFrame(raf); mo.disconnect(); };
+  }, [p.threadKey, p.draft, autoGrow]);
+
+  const onEscape = () => { if (grown) { userSized.current = true; setExpanded(false); } else p.onClose(); };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); return; }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
