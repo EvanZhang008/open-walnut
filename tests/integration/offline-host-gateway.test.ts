@@ -293,12 +293,13 @@ describe.each(twins)('offline host on the real %s daemon', (twin) => {
     const errs = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as typeof process.stderr.write)
     try {
       const { runTools } = await import('../../src/commands/tools.js')
-      process.exitCode = undefined
+      // 0, not undefined: on bun `process.exitCode = undefined` keeps the old code.
+      process.exitCode = 0
       await runTools(['call', 'task_get', JSON.stringify({ id: TASK_B })], {})
       expect(process.exitCode ?? 0).toBe(0)
     } finally {
       write.mockRestore(); errs.mockRestore()
-      process.exitCode = undefined
+      process.exitCode = 0
       for (const [k, v] of [['OPEN_WALNUT_API_URL', saved.url], ['WALNUT_AGENT_SOCKET', saved.sock], ['WALNUT_SESSION_ID', saved.sid]] as const) {
         if (v === undefined) delete process.env[k]
         else process.env[k] = v
@@ -540,12 +541,12 @@ describe.each(twins)('same-host messages while the server answers, on the real %
     const errLogs = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errOut += a.map(String).join(' ') + '\n' })
     try {
       const { runTools } = await import('../../src/commands/tools.js')
-      process.exitCode = undefined
+      process.exitCode = 0
       await runTools(['call', 'task_send', JSON.stringify({ to: TASK_B, text: 'From the installed CLI', expect_reply: false })], {})
       expect(process.exitCode ?? 0, errOut).toBe(0)
     } finally {
       write.mockRestore(); errs.mockRestore(); logs.mockRestore(); errLogs.mockRestore()
-      process.exitCode = undefined
+      process.exitCode = 0
       for (const [k, v] of [['OPEN_WALNUT_API_URL', saved.url], ['WALNUT_AGENT_SOCKET', saved.sock], ['WALNUT_SESSION_ID', saved.sid]] as const) {
         if (v === undefined) delete process.env[k]
         else process.env[k] = v

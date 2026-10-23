@@ -137,7 +137,8 @@ beforeEach(async () => {
   _resetDeviceTwinsForTesting()
   out = []
   exitBefore = process.exitCode
-  process.exitCode = undefined
+  // 0, not undefined: on bun `process.exitCode = undefined` keeps the old code.
+  process.exitCode = 0
   vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
   vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
 })
@@ -149,7 +150,7 @@ afterEach(async () => {
   setSelfApiRoot(null)
   _resetDeviceTwinsForTesting()
   box.cloud = true
-  process.exitCode = exitBefore
+  process.exitCode = exitBefore ?? 0
 })
 
 describe('a drain while a revoke is between its queue writes and auth.json', () => {

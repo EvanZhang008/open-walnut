@@ -76,7 +76,8 @@ afterAll(async () => {
 beforeEach(() => {
   logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-  process.exitCode = undefined;
+  // 0, not undefined: on bun `process.exitCode = undefined` keeps the old code.
+  process.exitCode = 0;
   delete process.env.WALNUT_CLI_DIRECT;
   delete process.env.WALNUT_SESSION_ID;
 });
@@ -84,7 +85,7 @@ beforeEach(() => {
 afterEach(() => {
   logSpy.mockRestore();
   errSpy.mockRestore();
-  process.exitCode = undefined;
+  process.exitCode = 0;
   delete process.env.WALNUT_CLI_DIRECT;
   delete process.env.WALNUT_SESSION_ID;
 });
@@ -94,7 +95,7 @@ describe('open-walnut add → POST /api/v1/tasks', () => {
     const { runAdd } = await import('../../src/commands/add.js');
     await runAdd('Water the fig tree', {}, {});
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode ?? 0).toBe(0);
     const out = stdout();
     expect(out).toContain('Created task');
     expect(out).toContain('Water the fig tree');
@@ -166,7 +167,7 @@ describe('open-walnut tasks → GET /api/v1/tasks', () => {
 
     await runTasks({}, {});
     expect(stdout()).toContain('Human row task');
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode ?? 0).toBe(0);
   });
 });
 
@@ -182,7 +183,7 @@ describe('open-walnut done → POST /api/v1/tasks/:id/complete', () => {
     // so trimming only the last char keeps it unique within this file's store.
     await runDone(id.slice(0, -1), {});
     expect(stderr()).toBe('');
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode ?? 0).toBe(0);
     const out = stdout();
     expect(out).toContain('Completed');
     expect(out).toContain(`<task-ref id="${id}" label="Finish the audit"/>`);
@@ -238,7 +239,7 @@ describe('open-walnut done → POST /api/v1/tasks/:id/complete', () => {
     await runDone(id, { json: true });
 
     expect(stderr()).toBe('');
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode ?? 0).toBe(0);
     expect(jsonOut<{ status: string }>().status).toBe('completed');
     const { task } = await api<{ task: { status: string; phase: string } }>(`/api/v1/tasks/${id}`);
     expect(task.status).toBe('done');
@@ -263,7 +264,7 @@ describe('open-walnut recall → GET /api/v1/search', () => {
     await runRecall('pomegranate', { json: true });
     const results = jsonOut<Array<{ type: string; title: string }>>();
     expect(Array.isArray(results)).toBe(true);
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode ?? 0).toBe(0);
   });
 });
 
@@ -289,7 +290,7 @@ describe('open-walnut sessions → GET /api/v1/sessions', () => {
     const { runSessions } = await import('../../src/commands/sessions.js');
     await runSessions({ json: true });
     expect(Array.isArray(jsonOut<unknown[]>())).toBe(true);
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode ?? 0).toBe(0);
   });
 });
 
@@ -353,7 +354,7 @@ describe('WALNUT_CLI_DIRECT=1 escape hatch', () => {
     try {
       const { runAdd } = await import('../../src/commands/add.js');
       await runAdd('Direct path task', {}, { json: true });
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode ?? 0).toBe(0);
       const payload = jsonOut<{ id: string; status: string; ref: string }>();
       expect(payload.status).toBe('created');
       expect(payload.ref).toBe(`<task-ref id="${payload.id}" label="Direct path task"/>`);

@@ -96,14 +96,15 @@ beforeEach(async () => {
   vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
   vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
   exitCodeBefore = process.exitCode
-  process.exitCode = undefined
+  // 0, not undefined: on bun `process.exitCode = undefined` keeps the old code.
+  process.exitCode = 0
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
   setSelfApiRoot(null)
   _resetDeviceTwinsForTesting()
-  process.exitCode = exitCodeBefore
+  process.exitCode = exitCodeBefore ?? 0
 })
 
 describe('walnut device revoke on the companion', () => {
@@ -115,7 +116,7 @@ describe('walnut device revoke on the companion', () => {
     expect(out.join('\n')).toContain('The primary could not be reached from here to remove its push rows there.')
     expect(out.join('\n')).toContain('Its copy on the other box could not be removed from here.')
     expect(out.join('\n')).not.toMatch(/on this machine/)
-    expect(process.exitCode).toBeUndefined()
+    expect(process.exitCode ?? 0).toBe(0)
     // The two parts run side by side, so neither order is promised.
     const byAction = (a: unknown[], b: unknown[]) => String(a[0]).localeCompare(String(b[0]))
     expect(relayed().sort(byAction)).toEqual([
@@ -176,7 +177,7 @@ describe('walnut device revoke on the companion', () => {
 
   it('revoking the Mac itself queues nothing: a Mac registers no pushes and its pairing is never copied', async () => {
     await runDeviceRevoke('mac-primary', {} as never)
-    expect(process.exitCode).toBeUndefined()
+    expect(process.exitCode ?? 0).toBe(0)
     expect(relayed()).toEqual([])
     expect(await queuedRevokeSteps()).toEqual([])
   })

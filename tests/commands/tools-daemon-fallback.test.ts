@@ -65,7 +65,8 @@ beforeEach(() => {
   answerFor = null
   out = ''
   err = ''
-  process.exitCode = undefined
+  // 0, not undefined: on bun `process.exitCode = undefined` keeps the old code.
+  process.exitCode = 0
   vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array, ...rest: unknown[]) => {
     out += String(chunk)
     const cb = rest.find((r) => typeof r === 'function') as (() => void) | undefined
@@ -83,7 +84,7 @@ afterEach(() => {
     if (v === undefined) delete process.env[k]
     else process.env[k] = v
   }
-  process.exitCode = undefined
+  process.exitCode = 0
 })
 
 describe('walnut tools call with the server down', () => {

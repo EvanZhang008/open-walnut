@@ -73,7 +73,8 @@ beforeEach(() => {
   out = []
   err = []
   status = 200
-  process.exitCode = undefined
+  // 0, not undefined: on bun `process.exitCode = undefined` keeps the old code.
+  process.exitCode = 0
   collectDiagnostics.mockReset().mockResolvedValue(LOCAL_REPORT)
   killLeftoverProbes.calls = 0
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => { out.push(String(chunk)); return true })
@@ -101,7 +102,7 @@ describe('runDoctor', () => {
     expect(out.join('')).toBe('Open Walnut doctor (server, 2026-09-24T12:00:00.000Z)\nbuild      0.4.5\n')
     expect(err).toEqual([])
     expect(collectDiagnostics).not.toHaveBeenCalled()
-    expect(process.exitCode).toBeUndefined()
+    expect(process.exitCode ?? 0).toBe(0)
   })
 
   it('maps --no-redact, --hosts and --json to the query', async () => {
@@ -119,7 +120,7 @@ describe('runDoctor', () => {
     expect(text).toContain('server     not running (collected by the CLI)')
     expect(text).toContain('/Users/\u2026/.local/bin/claude')
     expect(text).not.toContain('alice')
-    expect(process.exitCode).toBeUndefined()
+    expect(process.exitCode ?? 0).toBe(0)
     // Review round 1, item 14: no probe child outlives the report.
     expect(killLeftoverProbes.calls).toBe(1)
   })

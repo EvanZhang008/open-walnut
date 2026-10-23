@@ -83,12 +83,13 @@ beforeEach(async () => {
   vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
   vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
   exitCodeBefore = process.exitCode
-  process.exitCode = undefined
+  // 0, not undefined: on bun `process.exitCode = undefined` keeps the old code.
+  process.exitCode = 0
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
-  process.exitCode = exitCodeBefore
+  process.exitCode = exitCodeBefore ?? 0
 })
 
 describe('walnut device revoke <name>', () => {
@@ -97,7 +98,7 @@ describe('walnut device revoke <name>', () => {
     const phoneHash = await hashOf('acme-phone')
     await runDeviceRevoke('acme-phone', {} as never)
     expect(out.join('\n')).toContain('Device "acme-phone" revoked.')
-    expect(process.exitCode).toBeUndefined()
+    expect(process.exitCode ?? 0).toBe(0)
     expect(await rowNames()).toEqual(['acme-tablet'])
     expect((await listDeviceRecords()).map((d) => d.name)).toEqual(['acme-tablet'])
     // The CLI process has no timer that outlives it: one awaited try.
@@ -125,7 +126,7 @@ describe('walnut device revoke <name>', () => {
     const phoneHash = await hashOf('acme-phone')
     twins.removeTwinOnce.mockResolvedValueOnce(false)
     await runDeviceRevoke('acme-phone', {} as never)
-    expect(process.exitCode).toBeUndefined() // queued is not a failure: the server finishes it
+    expect(process.exitCode ?? 0).toBe(0) // queued is not a failure: the server finishes it
     expect(out.join('\n')).toMatch(/server finishes the rest/)
     expect(await rowNames()).toEqual(['acme-tablet']) // the rows here never wait
     expect(await queuedRevokeSteps()).toEqual([{ step: 'twin', tokenHash: phoneHash }])
@@ -316,7 +317,7 @@ describe('walnut device revoke says which part is left', () => {
     expect(text).toContain('Its push rows on this machine could not be removed yet')
     expect(text).not.toMatch(/could not be reached/)
     expect(text).toMatch(/server finishes the rest/)
-    expect(process.exitCode).toBeUndefined()
+    expect(process.exitCode ?? 0).toBe(0)
     expect(await queuedRevokeSteps()).toEqual([expect.objectContaining({ step: 'push', name: 'acme-phone' })])
     // The server's drain, once the disk takes writes again.
     fail.mockRestore()
