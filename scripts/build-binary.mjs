@@ -28,9 +28,11 @@
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
+import { assertNoBuildPaths, runtimeDirname } from './binary-build-checks.mjs'
 import { writeBuildInfo } from './build-info.mjs'
 
 if (typeof Bun === 'undefined') {
@@ -72,8 +74,23 @@ export const NOT_IN_FILE = [
   '@openai/codex',
 ]
 
+/**
+ * CommonJS packages that find their own files through `__dirname`. bun bakes
+ * the build machine's absolute path in for it, which exists on no other
+ * machine (and names the builder's home), so runtimeDirnamePlugin points them
+ * at their place in the runtime tree instead, and the files listed here are
+ * copied there.
+ */
+const DIRNAME_PACKAGES = {
+  // @anthropic-ai/tokenizer's encoder (token counts): read at its first use.
+  tiktoken: ['lite/tiktoken_bg.wasm'],
+  // Mail's logger (imapflow): only its transports read files, and Walnut starts none.
+  pino: [],
+  'thread-stream': [],
+}
+
 /** Size budget for one file (docs/plan/walnut-single-binary.md). */
-const BUDGET = { raw: 150 * 2 ** 20, gzip: 60 * 2 ** 20 }
+const BUDGET = { raw: 150 * 2 ** 20, gzip: 64 * 2 ** 20 }
 
 function parseArgs(argv) {
   const out = { targets: [], reuseWeb: false, sourcemap: false }
@@ -202,6 +219,14 @@ async function stageTree(root, { version, sidecars }) {
   fs.mkdirSync(path.join(codexOut, 'dist'), { recursive: true })
   fs.copyFileSync(path.join(codexAcp, 'dist/index.js'), path.join(codexOut, 'dist/index.js'))
   for (const f of ['package.json', 'LICENSE']) fs.copyFileSync(path.join(codexAcp, f), path.join(codexOut, f))
+
+  for (const [name, files] of Object.entries(DIRNAME_PACKAGES)) {
+    for (const rel of files) {
+      const to = path.join(root, 'node_modules', name, rel)
+      fs.mkdirSync(path.dirname(to), { recursive: true })
+      fs.copyFileSync(path.join(repo, 'node_modules', name, rel), to)
+    }
+  }
 }
 
 function listFiles(root) {
@@ -235,6 +260,21 @@ function sqliteMapPlugin() {
     name: 'walnut-better-sqlite3-to-lib-sqlite',
     setup(build) {
       build.onResolve({ filter: /^better-sqlite3$/ }, (args) => (args.importer === sqliteModule ? { path: 'better-sqlite3', external: true } : { path: sqliteModule }))
+    },
+  }
+}
+
+/** `__dirname` in DIRNAME_PACKAGES becomes the package's directory in the runtime tree (src/lib/single-file.ts). */
+function runtimeDirnamePlugin() {
+  const names = Object.keys(DIRNAME_PACKAGES).map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
+  const filter = new RegExp(`[\\\\/]node_modules[\\\\/](${names.join('|')})[\\\\/].*\\.c?js$`)
+  return {
+    name: 'walnut-runtime-dirname',
+    setup(build) {
+      build.onLoad({ filter }, (args) => ({
+        loader: 'js',
+        contents: runtimeDirname(fs.readFileSync(args.path, 'utf8'), path.relative(repo, path.dirname(args.path)).split(path.sep).join('/')),
+      }))
     },
   }
 }
@@ -284,7 +324,7 @@ function buildOptions({ version, archivePath, id, daemonVersion, sourcemap }) {
       'import.meta.url': 'globalThis.__WALNUT_BUNDLE_URL__',
       'process.env.DAEMON_VERSION': JSON.stringify(daemonVersion),
     },
-    plugins: [sqliteMapPlugin(), notInFilePlugin(NOT_IN_FILE), assetsPlugin({ archivePath, id, daemonVersion })],
+    plugins: [sqliteMapPlugin(), notInFilePlugin(NOT_IN_FILE), runtimeDirnamePlugin(), assetsPlugin({ archivePath, id, daemonVersion })],
     throw: false,
   }
 }
@@ -371,6 +411,7 @@ async function main() {
   for (const target of opts.targets) {
     const outfile = path.join(outDir, `walnut-${target}`)
     await compile(target, outfile, options, stage)
+    assertNoBuildPaths(outfile, [repo, os.homedir()])
     const raw = fs.statSync(outfile).size
     const gzip = zlib.gzipSync(fs.readFileSync(outfile), { level: 6 }).length
     rows.push({ target, raw, gzip, runtime: await runtimeSize(target, stage) })

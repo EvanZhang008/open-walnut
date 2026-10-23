@@ -6,8 +6,9 @@
  * (`BUN_BE_BUN=1 walnut scripts/release-rehearsal/run.mjs --binary walnut`), so a
  * machine needs no Node and no bun for the rehearsal either.
  *
- *   binary          `walnut --version` names the version, and the file runs a
- *                   script as bun (what plugin installs use).
+ *   binary          `walnut --version` names the version, `walnut __selftest`
+ *                   passes (the file's own parts, src/binary/selftest.ts), and
+ *                   the file runs a script as bun (what plugin installs use).
  *   binary-serve    with no node, npm or bun on PATH: health with `claude` found,
  *                   the SPA, /api/v1/status.
  *   binary-task     a task is created and listed (SQLite inside the file).
@@ -16,7 +17,7 @@
  *   binary-restart  after the server restarts, the task and the history are
  *                   there and a third message is answered.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -49,7 +50,13 @@ export async function rehearseBinary({ work, binary, scenario, walnuts }) {
       env: { ...w.env, BUN_BE_BUN: '1' }, encoding: 'utf8', timeout: 60_000,
     }).trim()
     if (asBun !== 'string') throw new Error(`BUN_BE_BUN=1 ${path.basename(binary)} -e printed "${asBun}"`)
-    return printed
+    const selftest = spawnSync(binary, ['__selftest'], { env: w.env, encoding: 'utf8', timeout: 120_000 })
+    const checks = selftest.stdout.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l))
+    if (selftest.status !== 0) {
+      const failed = checks.filter((c) => !c.ok).map((c) => `${c.check}: ${c.error ?? c.detail}`).join('; ')
+      throw new Error(`__selftest exited ${selftest.status}: ${failed || selftest.stderr.slice(-400)}`)
+    }
+    return `${printed}; selftest ${checks.filter((c) => c.ok).length}/${checks.length}`
   })
   const served = ok && await scenario('binary-serve', async () => {
     const health = await w.start()
