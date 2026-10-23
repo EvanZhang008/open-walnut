@@ -77,11 +77,20 @@ export function pruneRuntimes(parent: string, keepId: string, now = Date.now()):
   } catch { /* hygiene only */ }
 }
 
-/** Make sure this build's tree exists; returns its root. Falls back to the temp dir when the data home is not writable. */
+/**
+ * Make sure this build's tree exists; returns its root. Falls back to the temp dir when the data home is not writable.
+ *
+ * WALNUT_RUNTIME_DIR names the PARENT of the per-build trees, never one tree: a
+ * production deploy keeps its server's tree inside its stage dir (scripts/dev-prod.sh),
+ * and every child the server starts inherits the variable. A different build
+ * started from one of those children (another compiled file run from a session)
+ * then unpacks beside it, instead of replacing the tree a running server serves
+ * its web app from. Nothing is pruned there: the dir's owner removes it whole.
+ */
 export function ensureRuntime(archivePath: string, id: string): string {
   const override = process.env.WALNUT_RUNTIME_DIR
   const roots = override
-    ? [path.resolve(override)]
+    ? [path.join(path.resolve(override), id)]
     : [path.join(defaultParent(), id), path.join(os.tmpdir(), `open-walnut-runtime-${os.userInfo().uid}`, id)]
   let lastError: unknown = null
   for (const root of roots) {

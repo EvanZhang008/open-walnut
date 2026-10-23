@@ -64,8 +64,9 @@ describe('runtime tree', () => {
     const archiveFile = path.join(dir, 'assets.wna')
     fs.writeFileSync(archiveFile, archive())
     const saved = process.env.WALNUT_RUNTIME_DIR
-    const root = path.join(dir, 'override')
-    process.env.WALNUT_RUNTIME_DIR = root
+    // The variable names the parent; each build gets its own tree under it.
+    const root = path.join(dir, 'override', 'id-1')
+    process.env.WALNUT_RUNTIME_DIR = path.join(dir, 'override')
     try {
       // A leftover without the marker (a crashed unpack under the final name).
       fs.mkdirSync(path.join(root, 'dist'), { recursive: true })
@@ -77,6 +78,29 @@ describe('runtime tree', () => {
       fs.writeFileSync(path.join(root, 'dist', 'mine.txt'), 'kept')
       expect(ensureRuntime(archiveFile, 'id-1')).toBe(root)
       expect(fs.readFileSync(path.join(root, 'dist', 'mine.txt'), 'utf8')).toBe('kept')
+    } finally {
+      if (saved === undefined) delete process.env.WALNUT_RUNTIME_DIR
+      else process.env.WALNUT_RUNTIME_DIR = saved
+    }
+  })
+
+  it('another build under the same WALNUT_RUNTIME_DIR unpacks beside a tree, never over it, and prunes nothing', () => {
+    // A deployed server's children inherit the variable. A different compiled file
+    // started from one of them must leave the tree the server serves from alone.
+    const archiveFile = path.join(dir, 'assets.wna')
+    fs.writeFileSync(archiveFile, archive())
+    const saved = process.env.WALNUT_RUNTIME_DIR
+    const parent = path.join(dir, 'stage', 'runtime')
+    process.env.WALNUT_RUNTIME_DIR = parent
+    try {
+      const serving = ensureRuntime(archiveFile, '1.0.0-aaaaaaaaaaaa')
+      fs.writeFileSync(path.join(serving, 'dist', 'in-use.txt'), 'served')
+      for (const id of ['1.0.0-bbbbbbbbbbbb', '1.0.0-cccccccccccc', '1.0.0-dddddddddddd']) {
+        expect(ensureRuntime(archiveFile, id)).toBe(path.join(parent, id))
+      }
+      expect(fs.readFileSync(path.join(serving, 'dist', 'in-use.txt'), 'utf8')).toBe('served')
+      expect(fs.readFileSync(path.join(serving, RUNTIME_MARKER), 'utf8').trim()).toBe('1.0.0-aaaaaaaaaaaa')
+      expect(fs.readdirSync(parent).sort()).toEqual(['1.0.0-aaaaaaaaaaaa', '1.0.0-bbbbbbbbbbbb', '1.0.0-cccccccccccc', '1.0.0-dddddddddddd'])
     } finally {
       if (saved === undefined) delete process.env.WALNUT_RUNTIME_DIR
       else process.env.WALNUT_RUNTIME_DIR = saved

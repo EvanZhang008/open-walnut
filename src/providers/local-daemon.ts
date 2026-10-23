@@ -895,6 +895,13 @@ export class LocalDaemon {
     delete env.VITEST_WORKER_ID
     delete env.VITEST_POOL_ID
     delete env.OPEN_WALNUT_HOME
+    // The compiled file is its own daemon (`__daemon`), and it unpacks its runtime
+    // tree before anything else runs. With OPEN_WALNUT_HOME gone it would unpack
+    // into the REAL data home and prune other builds' trees there, even when this
+    // server is a smoke boot or a test server. Hand it the tree this server runs
+    // from (the same build, so the same files; runtime-tree.ts ensureRuntime).
+    const compiled = singleFile()
+    if (compiled) env.WALNUT_RUNTIME_DIR = path.dirname(compiled.root)
     // Legacy ephemeral marker: nothing reads it anymore (IS_EPHEMERAL is argv-based
     // now), but stale builds running inside daemon-spawned CLIs might — scrub it so
     // the daemon can never become a carrier again (incident 2026-07-14).

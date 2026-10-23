@@ -10,7 +10,7 @@
  *
  *   <OPEN_WALNUT_HOME or ~/.open-walnut>/local/runtime/<version>-<hash>/
  *
- * (`local/` never syncs; WALNUT_RUNTIME_DIR overrides the whole path), laid out
+ * (`local/` never syncs; WALNUT_RUNTIME_DIR replaces `.../local/runtime`), laid out
  * like an installed package: package.json, dist/data, dist/web/static, ... The
  * build defines `import.meta.url` as `globalThis.__WALNUT_BUNDLE_URL__`, set
  * here to `<root>/dist/cli.js`, which is where a tsup build would put the code,
