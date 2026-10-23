@@ -82,15 +82,15 @@ function npmNameOf(spec: string): string {
   return at < 0 ? spec : spec.slice(0, at);
 }
 
-const fakeNpmRunner: NpmRunner = async (args) => {
+const fakeNpmRunner: NpmRunner = async (args, opts) => {
   npmCalls.push([...args]);
-  const isView = args[0] === 'view';
-  const spec = isView ? args[args.indexOf('--') + 1] : args[args.length - 1];
+  const isInfo = args[0] === 'info';
+  const spec = isInfo ? args[args.indexOf('--') + 1] : args[args.length - 1];
   const name = npmNameOf(spec);
   const pkg = npmRegistry[name];
   if (!pkg) throw new Error(`404 Not Found - ${name}`);
 
-  if (isView) {
+  if (isInfo) {
     return {
       stdout: JSON.stringify({
         name,
@@ -102,7 +102,8 @@ const fakeNpmRunner: NpmRunner = async (args) => {
     };
   }
 
-  const prefix = args[args.indexOf('--prefix') + 1];
+  // `bun add` into its cwd (the staging dir), hoisted, with a bun.lock receipt.
+  const prefix = opts.cwd;
   const target = path.join(prefix, 'node_modules', ...name.split('/'));
   await fsp.mkdir(target, { recursive: true });
   await fsp.writeFile(path.join(target, 'package.json'), JSON.stringify({ name, version: pkg.version }));
@@ -111,18 +112,13 @@ const fakeNpmRunner: NpmRunner = async (args) => {
     await fsp.mkdir(path.dirname(abs), { recursive: true });
     await fsp.writeFile(abs, content);
   }
-  const rootKey = path.relative(prefix, target).replaceAll(path.sep, '/');
-  await fsp.writeFile(path.join(prefix, 'node_modules', '.package-lock.json'), JSON.stringify({
-    lockfileVersion: 3,
+  await fsp.writeFile(path.join(prefix, 'bun.lock'), JSON.stringify({
+    lockfileVersion: 2,
     packages: {
-      [rootKey]: {
-        version: pkg.version,
-        resolved: `https://registry.example/${name}.tgz`,
-        integrity: pkg.receiptIntegrity ?? pkg.integrity ?? 'sha512-FAKE==',
-      },
+      [name]: [`${name}@${pkg.version}`, '', {}, pkg.receiptIntegrity ?? pkg.integrity ?? 'sha512-FAKE=='],
     },
   }));
-  return { stdout: 'added 1 package', stderr: '' };
+  return { stdout: 'installed', stderr: '' };
 };
 
 beforeEach(async () => {
@@ -479,8 +475,8 @@ describe('npm source lifecycle', () => {
       { type: 'npm', spec: 'walnut-plugin-demo@latest', enabled: true },
     ]);
 
-    // Lifecycle scripts are never run, and the pinned version is what npm gets.
-    const install = npmCalls.find(c => c[0] === 'install')!;
+    // Lifecycle scripts are never run, and the pinned version is what bun gets.
+    const install = npmCalls.find(c => c[0] === 'add')!;
     expect(install).toContain('--ignore-scripts');
     expect(install[install.length - 1]).toBe('walnut-plugin-demo@1.2.0');
 
@@ -610,7 +606,7 @@ describe('npm source lifecycle', () => {
     expect(result).toMatchObject({ updated: false, resolved: 'walnut-plugin-same@1.0.0' });
     expect(result.error).toBeUndefined();
     // Only the resolve ran — no download, no swap.
-    expect(npmCalls.map(c => c[0])).toEqual(['view']);
+    expect(npmCalls.map(c => c[0])).toEqual(['info']);
     expect(await checkSource('npm-walnut-plugin-same')).toMatchObject({ behind: 0, updateAvailable: false });
   });
 

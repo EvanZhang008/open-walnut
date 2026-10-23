@@ -2,14 +2,19 @@
  * npm-registry installs for the Plugin Store.
  *
  * The git path (plugin-sources.ts) clones a repo; this path fetches a published
- * package. Same trust model — a plugin runs in-process with full privileges, so
- * ADDING the source is the consent step — but the supply chain is different and
- * gets its own rules:
+ * package from the npm registry. Same trust model (a plugin runs in-process
+ * with full privileges, so ADDING the source is the consent step), but the
+ * supply chain is different and gets its own rules:
  *
+ * - **bun's package manager, never npm.** The running bun does the registry
+ *   work (`bun info`, `bun add`): the bun binary from source, the compiled
+ *   walnut file acting as bun inside it (bunCommand, src/lib/runtime.ts). A
+ *   machine needs no Node and no npm for a plugin, and it reads the same
+ *   registry config npm would (.npmrc, bunfig.toml).
  * - **Registry package specs only.** `name`, `name@1.2.3`, `name@tag`,
- *   `@scope/name[@…]`. Anything that could make npm fetch from somewhere else or
+ *   `@scope/name[@…]`. Anything that could make bun fetch from somewhere else or
  *   read the local filesystem (a URL, `git+…`, `file:`, `npm:` alias, a path) is
- *   rejected before npm ever sees it, as is a leading dash (argument injection)
+ *   rejected before bun ever sees it, as is a leading dash (argument injection)
  *   and any whitespace/control character. Ranges are rejected too: a `^1.0.0`
  *   source would silently change code under the user on the next install, and
  *   this store never auto-updates.
@@ -19,11 +24,15 @@
  * - **No lifecycle scripts, ever.** `--ignore-scripts` is not a preference: an
  *   `install` script would run arbitrary code at ADD time, before the user has
  *   seen what the manifest declares.
- * - **Resolve, install, then verify the receipt.** `npm view` pins an exact
- *   version. After install, Walnut reads npm's own hidden lockfile for the actual
- *   tarball origin and integrity npm verified. The receipt must match the earlier
- *   resolution, and every installed dependency must live below the Plugin root so
- *   it survives the final rename. The receipt integrity is what state persists.
+ * - **Resolve, install, then verify the receipt.** `bun info` pins an exact
+ *   version. After the install, Walnut reads the bun.lock it wrote for the
+ *   integrity bun verified and the registry it fetched from. The receipt must
+ *   match the earlier resolution; its integrity is what state persists.
+ * - **Every dependency below the Plugin root.** bun installs one flat tree (no
+ *   nested strategy), so Walnut moves the package's dependencies into its own
+ *   node_modules before the final rename, where the plugin and each dependency
+ *   still resolve what they did. A tree that needs two versions of one package
+ *   at that level is refused.
  * - **Stage, verify, then rename.** The package is installed into a 0700 temp dir
  *   on the same filesystem, verified (real directories, no symlinks, package.json
  *   matches what the registry promised, a valid root manifest.json), and only then
@@ -37,6 +46,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createSubsystemLogger } from '../logging/index.js';
+import { bunCommand } from '../lib/runtime.js';
 import { safeKillProcessGroup } from './process-group-kill.js';
 
 const log = createSubsystemLogger('plugin-sources');
@@ -68,7 +78,7 @@ export interface ParsedNpmSpec {
   name: string;
   /** Exact version or dist-tag the user asked for; absent means `latest`. */
   requested?: string;
-  /** Normalized spec (trimmed) — safe to hand to npm as a positional argument. */
+  /** Normalized spec (trimmed): safe to hand to bun as a positional argument. */
   spec: string;
 }
 
@@ -170,16 +180,19 @@ export interface NpmRunResult {
   stderr: string;
 }
 
+/** Runs one bun package-manager command (`info`, `add`): argv after `bun`. */
 export type NpmRunner = (args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<NpmRunResult>;
 
 /**
- * Default runner: argv-only spawn in its own process group. npm can launch
- * fetchers and lifecycle helpers, so timeout must reap the whole tree.
+ * Default runner: the running bun (bunCommand), argv-only, in its own process
+ * group. The install can start helpers, so a timeout must reap the whole tree.
  */
 const defaultRunner: NpmRunner = (args, opts) =>
   new Promise((resolve, reject) => {
-    const child = spawn('npm', args, {
+    const bun = bunCommand();
+    const child = spawn(bun.command, args, {
       cwd: opts.cwd,
+      env: bun.env,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -233,7 +246,7 @@ const defaultRunner: NpmRunner = (args, opts) =>
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
       const detail = sanitizeNpmOutput(error.message);
-      reject(new Error(detail ? `npm ${args[0]} failed: ${detail}` : `npm ${args[0]} failed`));
+      reject(new Error(detail ? `bun ${args[0]} failed: ${detail}` : `bun ${args[0]} failed`));
     });
     child.once('close', (code) => {
       if (settled) return;
@@ -241,16 +254,16 @@ const defaultRunner: NpmRunner = (args, opts) =>
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
       if (timedOut) {
-        reject(new Error(`npm ${args[0]} timed out after ${opts.timeoutMs}ms`));
+        reject(new Error(`bun ${args[0]} timed out after ${opts.timeoutMs}ms`));
         return;
       }
       if (outputExceeded) {
-        reject(new Error(`npm ${args[0]} failed: output exceeded ${outputLimit} bytes`));
+        reject(new Error(`bun ${args[0]} failed: output exceeded ${outputLimit} bytes`));
         return;
       }
       if (code !== 0) {
         const detail = sanitizeNpmOutput(stderr || stdout || `exit ${code ?? 'unknown'}`);
-        reject(new Error(detail ? `npm ${args[0]} failed: ${detail}` : `npm ${args[0]} failed`));
+        reject(new Error(detail ? `bun ${args[0]} failed: ${detail}` : `bun ${args[0]} failed`));
         return;
       }
       resolve({ stdout, stderr });
@@ -265,9 +278,9 @@ export function setNpmRunner(runner: NpmRunner | null): void {
 }
 
 /**
- * Bound npm's chatter and mask anything credential-shaped. A registry spec
- * cannot carry credentials, but a user's ~/.npmrc can, and npm occasionally
- * echoes config lines back on error.
+ * Bound the package manager's chatter and mask anything credential-shaped. A
+ * registry spec cannot carry credentials, but a user's ~/.npmrc can, and a
+ * package manager occasionally echoes config lines back on error.
  */
 export function sanitizeNpmOutput(raw: string): string {
   return String(raw ?? '')
@@ -307,8 +320,8 @@ function secureTarballUrl(value: string, label: string): URL {
 }
 
 function pickField(data: Record<string, unknown>, dotted: string): string | undefined {
-  // npm prints dotted field requests as flat keys ("dist.integrity"), but keep
-  // the nested read as a fallback so a future npm shape change degrades quietly.
+  // `bun info` prints dotted field requests as flat keys ("dist.integrity"), as
+  // npm view does; the nested read is a fallback, so a shape change degrades quietly.
   const flat = data[dotted];
   if (typeof flat === 'string') return flat;
   const [head, tail] = dotted.split('.');
@@ -330,7 +343,7 @@ export async function resolveNpmSpec(raw: string, opts: { cwd?: string } = {}): 
 
   const cwd = opts.cwd ?? process.cwd();
   const { stdout } = await activeRunner(
-    ['view', '--json', '--', parsed.spec, 'name', 'version', 'dist.integrity', 'dist.tarball'],
+    ['info', '--json', '--', parsed.spec, 'name', 'version', 'dist.integrity', 'dist.tarball'],
     { cwd, timeoutMs: VIEW_TIMEOUT },
   );
 
@@ -439,95 +452,120 @@ async function assertInside(child: string, parent: string, label: string): Promi
   }
 }
 
-interface HiddenLockEntry {
-  version?: unknown;
-  resolved?: unknown;
-  integrity?: unknown;
-  link?: unknown;
-  inBundle?: unknown;
-}
-
-interface HiddenLock {
-  lockfileVersion?: unknown;
-  packages?: unknown;
-}
-
 interface VerifiedNpmPackage extends ResolvedNpmPackage {
   integrity: string;
 }
 
-async function verifyInstallReceipt(
-  stagingDir: string,
-  packageRoot: string,
-  resolved: ResolvedNpmPackage,
-): Promise<VerifiedNpmPackage> {
-  const lockPath = path.join(stagingDir, 'node_modules', '.package-lock.json');
-  let lock: HiddenLock;
-  try {
-    lock = JSON.parse(await fsp.readFile(lockPath, 'utf8')) as HiddenLock;
-  } catch (error) {
-    throw new Error(`npm install did not produce a readable hidden lockfile receipt: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if ((lock.lockfileVersion !== 2 && lock.lockfileVersion !== 3)
-    || !lock.packages || typeof lock.packages !== 'object' || Array.isArray(lock.packages)) {
-    throw new Error('npm install produced an unsupported hidden lockfile receipt.');
-  }
-
-  const packageReal = await fsp.realpath(packageRoot);
-  const outside: string[] = [];
-  const rootEntries: HiddenLockEntry[] = [];
-  for (const [key, rawEntry] of Object.entries(lock.packages as Record<string, unknown>)) {
-    if (!key) continue;
-    if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) {
-      throw new Error(`npm install receipt has an invalid entry for ${JSON.stringify(key)}.`);
-    }
-    const entryPath = path.resolve(stagingDir, key);
-    let entryReal: string;
-    try {
-      entryReal = await fsp.realpath(entryPath);
-    } catch {
-      throw new Error(`npm install receipt references a missing path: ${key}.`);
-    }
-    if (entryReal === packageReal) {
-      rootEntries.push(rawEntry as HiddenLockEntry);
+/**
+ * bun.lock is JSON with trailing commas (bun's own text lockfile). Drop each
+ * comma that only a closing bracket follows, outside strings, then parse.
+ */
+export function parseBunLock(text: string): unknown {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      out += c;
+      if (c === '\\') { out += text[++i] ?? ''; continue; }
+      if (c === '"') inString = false;
       continue;
     }
-    const relative = path.relative(packageReal, entryReal);
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) outside.push(key);
+    if (c === '"') { inString = true; out += c; continue; }
+    if (c === ',') {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j])) j++;
+      if (text[j] === '}' || text[j] === ']') continue;
+    }
+    out += c;
   }
-  if (outside.length > 0) {
-    throw new Error(`npm installed dependencies outside the Plugin package; they would be lost after placement: ${outside.slice(0, 5).join(', ')}`);
-  }
-  if (rootEntries.length !== 1) {
-    throw new Error(`npm install receipt has ${rootEntries.length} entries for the Plugin package root; expected exactly one.`);
-  }
+  return JSON.parse(out);
+}
 
-  const receipt = rootEntries[0];
-  if (receipt.link === true || receipt.inBundle === true) {
-    throw new Error('npm install receipt describes the Plugin package as a link or bundled dependency.');
+/**
+ * The receipt: the bun.lock `bun add` wrote in the staging dir. Its entry for
+ * the package (`[ident, url, meta, integrity]`) names the exact version, the
+ * tarball it came from ("" for the configured registry's own URL), and the
+ * integrity bun checked the tarball against.
+ */
+async function verifyInstallReceipt(stagingDir: string, resolved: ResolvedNpmPackage): Promise<VerifiedNpmPackage> {
+  const lockPath = path.join(stagingDir, 'bun.lock');
+  let lock: { lockfileVersion?: unknown; packages?: unknown };
+  try {
+    lock = parseBunLock(await fsp.readFile(lockPath, 'utf8')) as typeof lock;
+  } catch (error) {
+    throw new Error(`bun add did not produce a readable bun.lock receipt: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (receipt.version !== resolved.version) {
-    throw new Error(`npm install receipt version is ${String(receipt.version)}, expected ${resolved.version}.`);
+  if (typeof lock.lockfileVersion !== 'number' || !lock.packages || typeof lock.packages !== 'object' || Array.isArray(lock.packages)) {
+    throw new Error('bun add produced an unsupported bun.lock receipt.');
   }
-  if (typeof receipt.integrity !== 'string' || !isValidIntegrity(receipt.integrity)) {
-    throw new Error('npm install receipt is missing a valid integrity value.');
+  // The top-level key is the package's name; a nested copy would be `<parent>/<name>`.
+  const entry = (lock.packages as Record<string, unknown>)[resolved.name];
+  if (!Array.isArray(entry)) {
+    throw new Error(`bun.lock receipt has no entry for the Plugin package ${resolved.name}.`);
   }
-  if (typeof receipt.resolved !== 'string') {
-    throw new Error('npm install receipt is missing a tarball URL.');
+  const [ident, tarball, , integrity] = entry as unknown[];
+  if (ident !== `${resolved.name}@${resolved.version}`) {
+    throw new Error(`bun.lock receipt names ${String(ident)}, expected ${resolved.resolved}.`);
+  }
+  if (typeof tarball !== 'string') {
+    throw new Error('bun.lock receipt describes the Plugin package as something other than a registry tarball.');
+  }
+  if (typeof integrity !== 'string' || !isValidIntegrity(integrity)) {
+    throw new Error('bun.lock receipt is missing a valid integrity value.');
   }
   const advertisedUrl = secureTarballUrl(resolved.tarball, 'Registry tarball');
-  const installedUrl = secureTarballUrl(receipt.resolved, 'Installed tarball');
-  if (advertisedUrl.origin !== installedUrl.origin) {
-    throw new Error('npm installed the Plugin from a different tarball origin than the registry advertised.');
+  // "": the tarball at the configured registry's own URL, the registry `bun info` asked.
+  if (tarball !== '') {
+    const installedUrl = secureTarballUrl(tarball, 'Installed tarball');
+    if (advertisedUrl.origin !== installedUrl.origin) {
+      throw new Error('bun installed the Plugin from a different tarball origin than the registry advertised.');
+    }
   }
-  const integrity = receipt.integrity.trim();
-  if (resolved.integrity && resolved.integrity.trim() !== integrity) {
-    throw new Error('npm install integrity does not match the registry resolution.');
+  const verified = integrity.trim();
+  if (resolved.integrity && resolved.integrity.trim() !== verified) {
+    throw new Error('bun install integrity does not match the registry resolution.');
   }
-  if (integrity.split(/\s+/).some((token) => token.toLowerCase().startsWith('sha1-'))) {
+  if (verified.split(/\s+/).some((token) => token.toLowerCase().startsWith('sha1-'))) {
     log.warn('npm Plugin installed with legacy sha1 integrity', { resolved: resolved.resolved });
   }
-  return { ...resolved, integrity, tarball: receipt.resolved };
+  return { ...resolved, integrity: verified, tarball: tarball || resolved.tarball };
+}
+
+/**
+ * Move every package `bun add` installed beside the plugin (one flat tree) into
+ * the plugin's own node_modules, so the dependencies ride the final rename. Each
+ * still resolves what it did: a package at <staging>/node_modules/x walked up to
+ * <staging>/node_modules, and now walks up to <plugin>/node_modules, which holds
+ * the same set. A name already there (the plugin's own copy of another version)
+ * cannot hold both: refused. Real directories only.
+ */
+async function placeDependencies(stagingDir: string, packageRoot: string, name: string): Promise<void> {
+  const modules = path.join(stagingDir, 'node_modules');
+  const own = path.join(packageRoot, 'node_modules');
+  const moves: Array<{ from: string; rel: string }> = [];
+  for (const entry of await fsp.readdir(modules)) {
+    // .bin holds links to bins; bun keeps its own bookkeeping under dot names too.
+    if (entry.startsWith('.')) continue;
+    const from = path.join(modules, entry);
+    if (entry.startsWith('@')) {
+      await assertRealDirectory(from, `installed scope "${entry}"`);
+      for (const sub of await fsp.readdir(from)) {
+        if (`${entry}/${sub}` !== name) moves.push({ from: path.join(from, sub), rel: `${entry}/${sub}` });
+      }
+    } else if (entry !== name) {
+      moves.push({ from, rel: entry });
+    }
+  }
+  for (const { from, rel } of moves) {
+    await assertRealDirectory(from, `installed dependency "${rel}"`);
+    const to = path.join(own, ...rel.split('/'));
+    if (await pathExists(to)) {
+      throw new Error(`${name} needs two versions of ${rel} beside it, which one Plugin directory cannot hold.`);
+    }
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.rename(from, to);
+  }
 }
 
 /** Install into a fresh 0700 staging dir and verify everything before anyone sees it. */
@@ -552,7 +590,8 @@ async function stagePackage(
   const stagingDir = await fsp.realpath(stagingPath);
 
   try {
-    // An own package.json stops npm from walking up and reading ancestor project config.
+    // An own package.json makes the staging dir the project bun installs into,
+    // never an ancestor project.
     await writeScopePackageJson(stagingDir);
     const resolved = preResolved ?? await resolveNpmSpec(spec, { cwd: stagingDir });
     if (resolved.name !== parsed.name) {
@@ -560,14 +599,15 @@ async function stagePackage(
     }
 
     await activeRunner([
-      'install',
+      'add',
       '--ignore-scripts',      // no package lifecycle code, ever
       '--omit=dev',
-      '--no-audit',
-      '--no-fund',
-      '--package-lock=false',
-      '--install-strategy=nested', // deps live under the package → they ride the rename
-      '--prefix', stagingDir,
+      '--exact',
+      '--linker=hoisted',      // one flat tree under the staging dir; placeDependencies nests it
+      '--backend=copyfile',    // real files, never links into bun's cache
+      '--save-text-lockfile',  // bun.lock: the receipt
+      '--no-progress',
+      '--no-summary',
       '--',
       resolved.resolved,       // exact name@version, never the tag
     ], { cwd: stagingDir, timeoutMs: INSTALL_TIMEOUT });
@@ -593,7 +633,8 @@ async function stagePackage(
     if (pkg.name !== resolved.name || pkg.version !== resolved.version) {
       throw new Error(`Installed package is ${String(pkg.name)}@${String(pkg.version)}, expected ${resolved.resolved}.`);
     }
-    const verified = await verifyInstallReceipt(stagingDir, packageRoot, resolved);
+    const verified = await verifyInstallReceipt(stagingDir, resolved);
+    await placeDependencies(stagingDir, packageRoot, resolved.name);
 
     // A Walnut plugin is a manifest at the package root. Without it the install
     // would land a directory the loader silently ignores.

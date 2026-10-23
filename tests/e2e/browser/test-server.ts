@@ -4266,8 +4266,8 @@ if (process.env.PW_NATIVE_PLUGIN_FIXTURE === '1') {
   const npmIntegrity = 'sha512-BROWSER=='
   const npmTarball = `https://registry.example/${npmName}.tgz`
   const { setNpmRunner } = await import('../../../src/core/plugin-npm-install.js')
-  setNpmRunner(async (args) => {
-    if (args[0] === 'view') {
+  setNpmRunner(async (args, opts) => {
+    if (args[0] === 'info') {
       return {
         stdout: JSON.stringify({
           name: npmName,
@@ -4278,8 +4278,9 @@ if (process.env.PW_NATIVE_PLUGIN_FIXTURE === '1') {
         stderr: '',
       }
     }
-    if (args[0] !== 'install') throw new Error(`Unexpected fixture npm command: ${args[0]}`)
-    const prefix = args[args.indexOf('--prefix') + 1]
+    if (args[0] !== 'add') throw new Error(`Unexpected fixture bun command: ${args[0]}`)
+    // `bun add` installs into its cwd, the staging dir, and writes a bun.lock receipt.
+    const prefix = opts.cwd
     const packageRoot = path.join(prefix, 'node_modules', npmName)
     await fs.mkdir(packageRoot, { recursive: true })
     await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: npmName, version: npmVersion }))
@@ -4300,14 +4301,11 @@ export function activate(walnut) {
   })
 }
 `)
-    const key = path.relative(prefix, packageRoot).replaceAll(path.sep, '/')
-    await fs.writeFile(path.join(prefix, 'node_modules', '.package-lock.json'), JSON.stringify({
-      lockfileVersion: 3,
-      packages: {
-        [key]: { version: npmVersion, resolved: npmTarball, integrity: npmIntegrity },
-      },
+    await fs.writeFile(path.join(prefix, 'bun.lock'), JSON.stringify({
+      lockfileVersion: 2,
+      packages: { [npmName]: [`${npmName}@${npmVersion}`, npmTarball, {}, npmIntegrity] },
     }))
-    return { stdout: 'added 1 package', stderr: '' }
+    return { stdout: 'installed', stderr: '' }
   })
 
   // Linked plugin fixture: ONE private checkout (`linked-work`, tracking the bare

@@ -1,10 +1,11 @@
 /**
  * Unit tests for the npm plugin installer — src/core/plugin-npm-install.ts.
  *
- * Zero network: every `npm` invocation goes through the injected runner seam, so
- * the tests assert the exact argv Walnut would hand to npm (notably
- * `--ignore-scripts`) and then materialize a fake install tree on disk to
- * exercise the verification + atomic-placement path for real.
+ * Zero network: every bun package-manager call (`bun info`, `bun add`) goes
+ * through the injected runner seam, so the tests assert the exact argv Walnut
+ * would hand to bun (notably `--ignore-scripts`) and then materialize the tree
+ * and bun.lock a hoisted `bun add` leaves, to exercise the verification,
+ * dependency placement and atomic-placement path for real.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
@@ -12,7 +13,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {
-  parseNpmSpec, isValidNpmSpec, slugForNpmPackage, sanitizeNpmOutput,
+  parseNpmSpec, isValidNpmSpec, slugForNpmPackage, sanitizeNpmOutput, parseBunLock,
   resolveNpmSpec, installNpmPlugin, replaceNpmPlugin, setNpmRunner,
   type NpmRunner,
 } from '../../src/core/plugin-npm-install.js';
@@ -34,13 +35,18 @@ interface FakePackage {
   packageJsonName?: string;
   packageJsonVersion?: string;
   receiptIntegrity?: string;
+  /** The receipt's tarball field ("" = the configured registry's own URL). */
   receiptResolved?: string;
+  /** The receipt's ident (default `name@version`). */
+  receiptIdent?: string;
   omitReceipt?: boolean;
   omitReceiptRoot?: boolean;
-  receiptRootKey?: string;
-  receiptLink?: boolean;
-  receiptInBundle?: boolean;
-  hoistedDependency?: boolean;
+  /** The receipt entry in the shape bun writes for a non-registry source: no tarball field. */
+  receiptNotRegistry?: boolean;
+  /** Extra dependencies bun hoisted beside the plugin (name -> files). */
+  hoisted?: Record<string, Record<string, string>>;
+  /** Dependencies bun nested inside the plugin itself (a version clash with a hoisted one). */
+  nested?: Record<string, Record<string, string>>;
 }
 
 let registryFixtures: Record<string, FakePackage> = {};
@@ -55,14 +61,23 @@ function nameOf(spec: string): string {
   return at < 0 ? spec : spec.slice(0, at);
 }
 
-const fakeRunner: NpmRunner = async (args) => {
+async function writeTree(dir: string, files: Record<string, string>): Promise<void> {
+  await fsp.mkdir(dir, { recursive: true });
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(dir, rel);
+    await fsp.mkdir(path.dirname(abs), { recursive: true });
+    await fsp.writeFile(abs, content);
+  }
+}
+
+const fakeRunner: NpmRunner = async (args, opts) => {
   npmCalls.push([...args]);
 
-  if (args[0] === 'view') {
+  if (args[0] === 'info') {
     const spec = args[args.indexOf('--') + 1];
     const name = nameOf(spec);
     const pkg = registryFixtures[name];
-    if (!pkg) throw new Error(`404 Not Found - GET https://registry.example/${name}`);
+    if (!pkg) throw new Error(`404 Not Found: https://registry.example/${name}`);
     return {
       stdout: JSON.stringify({
         name,
@@ -74,8 +89,9 @@ const fakeRunner: NpmRunner = async (args) => {
     };
   }
 
-  if (args[0] === 'install') {
-    const prefix = args[args.indexOf('--prefix') + 1];
+  if (args[0] === 'add') {
+    // `bun add` installs into its cwd: the staging dir with its own package.json.
+    const prefix = opts.cwd;
     const spec = args[args.length - 1];
     const name = nameOf(spec);
     const pkg = registryFixtures[name];
@@ -94,62 +110,41 @@ const fakeRunner: NpmRunner = async (args) => {
     if (pkg.symlinkTo) {
       await fsp.mkdir(pkg.symlinkTo, { recursive: true });
       await fsp.symlink(pkg.symlinkTo, target, 'dir');
-      return { stdout: 'added 1 package', stderr: '' };
+      return { stdout: 'installed 1 package', stderr: '' };
     }
     if (pkg.asFile) {
       await fsp.writeFile(target, 'not a directory');
-      return { stdout: 'added 1 package', stderr: '' };
+      return { stdout: 'installed 1 package', stderr: '' };
     }
 
-    await fsp.mkdir(target, { recursive: true });
-    await fsp.writeFile(
-      path.join(target, 'package.json'),
-      JSON.stringify({ name: pkg.packageJsonName ?? name, version: pkg.packageJsonVersion ?? pkg.version }),
-    );
-    for (const [rel, content] of Object.entries(pkg.files ?? {})) {
-      const abs = path.join(target, rel);
-      await fsp.mkdir(path.dirname(abs), { recursive: true });
-      await fsp.writeFile(abs, content);
-    }
-    // Nested install strategy: a dependency lives inside the package.
-    const nestedDependency = path.join(target, 'node_modules', 'left-pad');
-    await fsp.mkdir(nestedDependency, { recursive: true });
-    await fsp.writeFile(path.join(nestedDependency, 'index.js'), '// dep');
-    const packages: Record<string, Record<string, unknown>> = {};
-    const rootKey = pkg.receiptRootKey ?? path.relative(prefix, target).replaceAll(path.sep, '/');
+    await writeTree(target, {
+      'package.json': JSON.stringify({ name: pkg.packageJsonName ?? name, version: pkg.packageJsonVersion ?? pkg.version }),
+      ...pkg.files,
+    });
+    // bun's hoisted layout: the plugin's dependencies sit beside it, links to bins in .bin.
+    const hoisted = pkg.hoisted ?? { 'left-pad': { 'index.js': '// dep' } };
+    for (const [dep, files] of Object.entries(hoisted)) await writeTree(path.join(modulesDir, ...dep.split('/')), files);
+    await fsp.mkdir(path.join(modulesDir, '.bin'), { recursive: true });
+    for (const [dep, files] of Object.entries(pkg.nested ?? {})) await writeTree(path.join(target, 'node_modules', dep), files);
+
+    const packages: Record<string, unknown[]> = {};
     if (!pkg.omitReceiptRoot) {
-      packages[rootKey] = {
-        version: pkg.version,
-        resolved: pkg.receiptResolved ?? `https://registry.example/${name}/-/${name}-${pkg.version}.tgz`,
-        integrity: pkg.receiptIntegrity ?? pkg.integrity ?? 'sha512-FAKE==',
-        ...(pkg.receiptLink ? { link: true } : {}),
-        ...(pkg.receiptInBundle ? { inBundle: true } : {}),
-      };
+      const ident = pkg.receiptIdent ?? `${name}@${pkg.version}`;
+      const integrity = pkg.receiptIntegrity ?? pkg.integrity ?? 'sha512-FAKE==';
+      packages[name] = pkg.receiptNotRegistry
+        ? [ident, {}, integrity]
+        : [ident, pkg.receiptResolved ?? '', {}, integrity];
     }
-    packages[path.relative(prefix, nestedDependency).replaceAll(path.sep, '/')] = {
-      version: '1.0.0',
-      resolved: 'https://registry.example/left-pad/-/left-pad-1.0.0.tgz',
-      integrity: 'sha512-LEFTPAD==',
-    };
-    if (pkg.hoistedDependency) {
-      const hoisted = path.join(modulesDir, 'hoisted-dep');
-      await fsp.mkdir(hoisted, { recursive: true });
-      packages[path.relative(prefix, hoisted).replaceAll(path.sep, '/')] = {
-        version: '1.0.0',
-        resolved: 'https://registry.example/hoisted-dep/-/hoisted-dep-1.0.0.tgz',
-        integrity: 'sha512-HOISTED==',
-      };
-    }
+    for (const dep of Object.keys(hoisted)) packages[dep] = [`${dep}@1.0.0`, '', {}, 'sha512-LEFTPAD=='];
     if (!pkg.omitReceipt) {
-      await fsp.writeFile(path.join(modulesDir, '.package-lock.json'), JSON.stringify({
-        lockfileVersion: 3,
-        packages,
-      }));
+      // As bun writes it: trailing commas.
+      const body = Object.entries(packages).map(([k, v]) => `    ${JSON.stringify(k)}: ${JSON.stringify(v)},`).join('\n\n');
+      await fsp.writeFile(path.join(prefix, 'bun.lock'), `{\n  "lockfileVersion": 2,\n  "configVersion": 1,\n  "packages": {\n${body}\n  }\n}\n`);
     }
-    return { stdout: 'added 2 packages', stderr: '' };
+    return { stdout: 'installed', stderr: '' };
   }
 
-  throw new Error(`unexpected npm command: ${args[0]}`);
+  throw new Error(`unexpected bun command: ${args[0]}`);
 };
 
 beforeEach(async () => {
@@ -281,7 +276,7 @@ describe('resolveNpmSpec', () => {
     const resolved = await resolveNpmSpec('walnut-plugin@latest', { cwd: tmpRoot });
     expect(resolved).toMatchObject({ name: 'walnut-plugin', version: '2.3.4', resolved: 'walnut-plugin@2.3.4', integrity: 'sha512-AAAA==' });
     expect(npmCalls[0]).toEqual([
-      'view', '--json', '--', 'walnut-plugin@latest', 'name', 'version', 'dist.integrity', 'dist.tarball',
+      'info', '--json', '--', 'walnut-plugin@latest', 'name', 'version', 'dist.integrity', 'dist.tarball',
     ]);
   });
 
@@ -315,7 +310,7 @@ describe('resolveNpmSpec', () => {
     await expect(resolveNpmSpec('walnut-plugin', { cwd: tmpRoot })).rejects.toThrow('malformed integrity');
   });
 
-  it('rejects an invalid spec before spawning npm', async () => {
+  it('rejects an invalid spec before spawning bun', async () => {
     await expect(resolveNpmSpec('--registry=http://evil.test', { cwd: tmpRoot }))
       .rejects.toThrow('Invalid npm package spec');
     expect(npmCalls).toHaveLength(0);
@@ -342,25 +337,26 @@ describe('installNpmPlugin', () => {
     expect(result).toMatchObject({
       name: 'walnut-plugin', version: '1.4.0', resolved: 'walnut-plugin@1.4.0', integrity: 'sha512-BBBB==',
     });
-    const install = npmCalls.find(c => c[0] === 'install')!;
+    const install = npmCalls.find(c => c[0] === 'add')!;
     expect(install).toContain('--ignore-scripts');
     expect(install).toContain('--omit=dev');
-    expect(install).toContain('--no-audit');
-    expect(install).toContain('--no-fund');
-    expect(install).toContain('--package-lock=false');
-    expect(install).toContain('--install-strategy=nested');
-    // The tag is resolved once; npm only ever sees the pinned version, after `--`.
+    expect(install).toContain('--exact');
+    expect(install).toContain('--linker=hoisted');
+    expect(install).toContain('--backend=copyfile');
+    expect(install).toContain('--save-text-lockfile');
+    // The tag is resolved once; bun only ever sees the pinned version, after `--`.
     expect(install[install.length - 1]).toBe('walnut-plugin@1.4.0');
     expect(install[install.length - 2]).toBe('--');
     expect(install).not.toContain('walnut-plugin@latest');
 
-    // Package landed at the final path with its nested dependency.
+    // Package landed at the final path, its dependency moved under it from beside it.
     expect(fs.existsSync(path.join(finalDir(), 'manifest.json'))).toBe(true);
     expect(fs.existsSync(path.join(finalDir(), 'node_modules', 'left-pad', 'index.js'))).toBe(true);
+    expect(fs.existsSync(path.join(finalDir(), 'node_modules', '.bin'))).toBe(false);
     expect(await leftoverTempDirs()).toEqual([]);
   });
 
-  it('persists integrity from npm installed-tree receipt', async () => {
+  it('persists integrity from the bun.lock receipt', async () => {
     registryFixtures['walnut-plugin'] = {
       version: '1.0.0',
       receiptIntegrity: 'sha512-RECEIPT==',
@@ -386,29 +382,71 @@ describe('installNpmPlugin', () => {
     expect(await leftoverTempDirs()).toEqual([]);
   });
 
-  it('fails closed when npm omits or corrupts the hidden lock receipt', async () => {
+  it('fails closed when bun omits or corrupts the bun.lock receipt', async () => {
     registryFixtures['walnut-plugin'] = {
       version: '1.0.0', omitReceipt: true, files: { 'manifest.json': MANIFEST('p') },
     };
     await expect(installNpmPlugin({
       spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
-    })).rejects.toThrow('did not produce a readable hidden lockfile receipt');
+    })).rejects.toThrow('did not produce a readable bun.lock receipt');
 
     registryFixtures['walnut-plugin'] = {
       version: '1.0.0', omitReceiptRoot: true, files: { 'manifest.json': MANIFEST('p') },
     };
     await expect(installNpmPlugin({
       spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
-    })).rejects.toThrow('0 entries for the Plugin package root');
+    })).rejects.toThrow('has no entry for the Plugin package walnut-plugin');
+    expect(fs.existsSync(finalDir())).toBe(false);
+    expect(await leftoverTempDirs()).toEqual([]);
   });
 
-  it('rejects hoisted dependencies that would be lost after placement', async () => {
+  it('moves every hoisted dependency under the plugin, scoped ones and their own nested copies too', async () => {
     registryFixtures['walnut-plugin'] = {
-      version: '1.0.0', hoistedDependency: true, files: { 'manifest.json': MANIFEST('p') },
+      version: '1.0.0',
+      files: { 'manifest.json': MANIFEST('p') },
+      hoisted: {
+        'left-pad': { 'index.js': '// left-pad' },
+        '@acme/util': { 'index.js': '// util' },
+        // Another version of ms, nested by bun under the dependency that needs it.
+        debug: { 'index.js': '// debug', 'node_modules/ms/index.js': '// ms 2.0.0' },
+        ms: { 'index.js': '// ms 2.1.3' },
+      },
+    };
+    await installNpmPlugin({ spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot() });
+    const own = path.join(finalDir(), 'node_modules');
+    expect(fs.readFileSync(path.join(own, '@acme', 'util', 'index.js'), 'utf8')).toBe('// util');
+    expect(fs.readFileSync(path.join(own, 'ms', 'index.js'), 'utf8')).toBe('// ms 2.1.3');
+    expect(fs.readFileSync(path.join(own, 'debug', 'node_modules', 'ms', 'index.js'), 'utf8')).toBe('// ms 2.0.0');
+    expect(fs.readdirSync(own).sort()).toEqual(['@acme', 'debug', 'left-pad', 'ms']);
+  });
+
+  it('refuses a tree that needs two versions of one package beside the plugin', async () => {
+    registryFixtures['walnut-plugin'] = {
+      version: '1.0.0',
+      files: { 'manifest.json': MANIFEST('p') },
+      hoisted: { ms: { 'index.js': '// ms 2.0.0, for a dependency' } },
+      nested: { ms: { 'index.js': '// ms 2.1.3, the plugin\'s own' } },
     };
     await expect(installNpmPlugin({
       spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
-    })).rejects.toThrow(/dependencies outside the Plugin package.*hoisted-dep/);
+    })).rejects.toThrow('walnut-plugin needs two versions of ms beside it');
+    expect(fs.existsSync(finalDir())).toBe(false);
+    expect(await leftoverTempDirs()).toEqual([]);
+  });
+
+  it('refuses a hoisted dependency that is a symlink', async () => {
+    const outside = path.join(tmpRoot, 'outside-dep');
+    await fsp.mkdir(outside, { recursive: true });
+    registryFixtures['walnut-plugin'] = { version: '1.0.0', files: { 'manifest.json': MANIFEST('p') }, hoisted: {} };
+    setNpmRunner(async (args, opts) => {
+      const out = await fakeRunner(args, opts);
+      if (args[0] === 'add') await fsp.symlink(outside, path.join(opts.cwd, 'node_modules', 'linked-dep'), 'dir');
+      return out;
+    });
+    await expect(installNpmPlugin({
+      spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
+    })).rejects.toThrow('installed dependency "linked-dep" is a symlink');
+    expect(fs.existsSync(outside)).toBe(true);
   });
 
   it('rejects a receipt from a different or insecure tarball origin', async () => {
@@ -431,28 +469,30 @@ describe('installNpmPlugin', () => {
     })).rejects.toThrow('must be an HTTPS URL');
   });
 
+  it('accepts a receipt naming the registry tarball by its full URL', async () => {
+    registryFixtures['walnut-plugin'] = {
+      version: '1.0.0',
+      receiptResolved: 'https://registry.example/walnut-plugin/-/walnut-plugin-1.0.0.tgz',
+      files: { 'manifest.json': MANIFEST('p') },
+    };
+    await expect(installNpmPlugin({
+      spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
+    })).resolves.toMatchObject({ tarball: 'https://registry.example/walnut-plugin/-/walnut-plugin-1.0.0.tgz' });
+  });
+
   it.each([
-    ['link', { receiptLink: true }],
-    ['bundled dependency', { receiptInBundle: true }],
-  ])('rejects a root receipt described as %s', async (_label, flags) => {
+    ['another version', { receiptIdent: 'walnut-plugin@9.9.9' }, 'expected walnut-plugin@1.0.0'],
+    ['a source that is not a registry tarball', { receiptNotRegistry: true }, 'something other than a registry tarball'],
+  ])('rejects a receipt for %s', async (_label, flags, message) => {
     registryFixtures['walnut-plugin'] = {
       version: '1.0.0', ...flags, files: { 'manifest.json': MANIFEST('p') },
     };
     await expect(installNpmPlugin({
       spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
-    })).rejects.toThrow('link or bundled dependency');
+    })).rejects.toThrow(message);
   });
 
-  it('matches receipt keys by resolved path and supports scoped packages', async () => {
-    registryFixtures['walnut-plugin'] = {
-      version: '1.0.0',
-      receiptRootKey: 'node_modules/../node_modules/walnut-plugin',
-      files: { 'manifest.json': MANIFEST('p') },
-    };
-    await expect(installNpmPlugin({
-      spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot(),
-    })).resolves.toMatchObject({ name: 'walnut-plugin' });
-
+  it('supports scoped packages', async () => {
     registryFixtures['@acme/walnut-plugin'] = {
       version: '1.0.0', files: { 'manifest.json': MANIFEST('scoped') },
     };
@@ -470,6 +510,7 @@ describe('installNpmPlugin', () => {
       files: {
         'manifest.json': MANIFEST('p'),
         'package-lock.json': JSON.stringify({ integrity: 'sha512-FAKE==' }),
+        'bun.lock': JSON.stringify({ lockfileVersion: 2, packages: { 'walnut-plugin': ['walnut-plugin@1.0.0', '', {}, 'sha512-FAKE=='] } }),
       },
     };
     await expect(installNpmPlugin({
@@ -481,7 +522,7 @@ describe('installNpmPlugin', () => {
     registryFixtures['walnut-plugin'] = { version: '1.0.0', files: { 'manifest.json': MANIFEST('p') } };
     let stagingMode = -1;
     const spy: NpmRunner = async (args, opts) => {
-      if (args[0] === 'install') stagingMode = fs.statSync(opts.cwd).mode & 0o777;
+      if (args[0] === 'add') stagingMode = fs.statSync(opts.cwd).mode & 0o777;
       return fakeRunner(args, opts);
     };
     setNpmRunner(spy);
@@ -554,8 +595,8 @@ describe('installNpmPlugin', () => {
     registryFixtures['@acme/walnut-plugin'] = { version: '1.0.0', files: { 'manifest.json': MANIFEST('p') } };
     const scopeTarget = path.join(tmpRoot, 'outside-scope');
     const spy: NpmRunner = async (args, opts) => {
-      if (args[0] !== 'install') return fakeRunner(args, opts);
-      const prefix = args[args.indexOf('--prefix') + 1];
+      if (args[0] !== 'add') return fakeRunner(args, opts);
+      const prefix = opts.cwd;
       await fsp.mkdir(path.join(scopeTarget, 'walnut-plugin'), { recursive: true });
       await fsp.writeFile(path.join(scopeTarget, 'walnut-plugin', 'manifest.json'), MANIFEST('p'));
       await fsp.mkdir(path.join(prefix, 'node_modules'), { recursive: true });
@@ -641,11 +682,9 @@ describe('replaceNpmPlugin', () => {
 
     registryFixtures['walnut-plugin'] = { version: '2.0.0', files: { 'manifest.json': MANIFEST('p'), 'v.txt': 'new' } };
     const realRename = fsp.rename;
-    let calls = 0;
     vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
-      calls += 1;
-      // 1st = finalDir → backup (must succeed), 2nd = staged → finalDir (fail).
-      if (calls === 2) throw new Error('simulated rename failure');
+      // finalDir → backup succeeds; the staged package → finalDir fails.
+      if (String(to) === finalDir() && !String(from).includes('.backup-')) throw new Error('simulated rename failure');
       return realRename(from, to);
     });
 
@@ -663,11 +702,9 @@ describe('replaceNpmPlugin', () => {
 
     registryFixtures['walnut-plugin'] = { version: '2.0.0', files: { 'manifest.json': MANIFEST('p'), 'v.txt': 'new' } };
     const realRename = fsp.rename;
-    let calls = 0;
     vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
-      calls += 1;
-      if (calls === 2) throw new Error('swap failed');
-      if (calls === 3) throw new Error('restore failed');
+      if (String(to) === finalDir() && !String(from).includes('.backup-')) throw new Error('swap failed');
+      if (String(to) === finalDir()) throw new Error('restore failed');
       return realRename(from, to);
     });
 
@@ -687,5 +724,14 @@ describe('replaceNpmPlugin', () => {
     expect(backups).toHaveLength(1);
     expect(backups[0]).toMatch(/^\.backup-/);
     expect(await fsp.readFile(path.join(stagingRoot(), backups[0], 'v.txt'), 'utf8')).toBe('old');
+  });
+});
+
+describe('parseBunLock', () => {
+  it('reads bun.lock, trailing commas and all, and keeps commas inside strings', () => {
+    const text = '{\n  "lockfileVersion": 2,\n  "packages": {\n    "a": ["a@1.0.0", "", { "x": "y,}" }, "sha512-A=="],\n  },\n}\n';
+    expect(parseBunLock(text)).toEqual({ lockfileVersion: 2, packages: { a: ['a@1.0.0', '', { x: 'y,}' }, 'sha512-A=='] } });
+    expect(parseBunLock('{"s": "a \\" ,]"}')).toEqual({ s: 'a " ,]' });
+    expect(() => parseBunLock('{ nope')).toThrow();
   });
 });
