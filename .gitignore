@@ -115,3 +115,6 @@ package-lock.json
 
 # Component archives (scripts/components/build.ts)
 dist-components/
+
+# Upstream SQLite for macOS bun, built by scripts/build-sqlite-dylib.mjs
+vendor/sqlite/

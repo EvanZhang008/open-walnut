@@ -17,9 +17,18 @@
  *  - close() keeps the connection open while a prepared statement is alive:
  *    close() finalizes them, and a statement used after close throws as in
  *    better-sqlite3;
- *  - on macOS it is the system SQLite, which keeps -wal and -shm after the
- *    last close (turned off per connection) and opens a WAL database read-only
- *    only when its -wal exists (created first, as better-sqlite3's SQLite does).
+ *  - on macOS bun loads the system SQLite, an Apple build. It fails every query
+ *    on a database whose file was deleted or replaced while open
+ *    (SQLITE_IOERR_VNODE, where better-sqlite3 carries on), keeps -wal and -shm
+ *    after the last close, and refuses a read-only open of a WAL database with
+ *    no -wal. So on macOS Walnut loads the upstream SQLite that
+ *    scripts/build-sqlite-dylib.mjs compiles with better-sqlite3's options
+ *    (vendor/sqlite/darwin/, or WALNUT_SQLITE_LIBRARY). Without it the server
+ *    logs sqliteLibraryProblem(), the last two quirks are handled here
+ *    (persistent WAL off per connection, the -wal created before a read-only
+ *    open) and the first one stays;
+ *  - better-sqlite3's compile options (foreign keys on, a 16 MB page cache) are
+ *    set per connection on a library without them (bun's own on Linux).
  *
  * Left as is: a whole JS number binds as INTEGER on bun and as REAL in
  * better-sqlite3. Same value in INTEGER and REAL columns and in comparisons;
@@ -146,13 +155,92 @@ interface BunDatabase {
   filename: string
 }
 
-type BunDatabaseClass = new (filename: string, options?: Record<string, boolean>) => BunDatabase
+type BunDatabaseClass = (new (filename: string, options?: Record<string, boolean>) => BunDatabase) & {
+  setCustomSQLite(path: string): boolean
+}
 interface BunSqlite { Database: BunDatabaseClass; constants: Record<string, number> }
 
+/** Where scripts/build-sqlite-dylib.mjs puts the upstream SQLite, under the package root. */
+const BUILT_SQLITE = path.join('vendor', 'sqlite', 'darwin', 'libsqlite3.dylib')
+
+/** The built upstream SQLite, found from this file or from the bundle that inlined it. */
+export function builtSqliteLibrary(here: string = fileURLToPath(import.meta.url)): string | null {
+  let dir = path.dirname(here)
+  for (let i = 0; i < 5; i++) {
+    const candidate = path.join(dir, BUILT_SQLITE)
+    if (fs.existsSync(candidate)) return candidate
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
 let bunModule: BunSqlite | null = null
+let library = 'better-sqlite3'
+let libraryProblem: string | null = null
 function bunSqlite(): BunSqlite {
-  bunModule ??= require('bun:sqlite') as BunSqlite
+  if (bunModule) return bunModule
+  bunModule = require('bun:sqlite') as BunSqlite
+  library = 'bun'
+  if (process.platform === 'darwin') {
+    library = 'system'
+    // WALNUT_SQLITE_LIBRARY names the library (the compiled file ships one);
+    // `system` keeps the Apple build on purpose.
+    const wanted = process.env.WALNUT_SQLITE_LIBRARY
+    if (wanted !== 'system') {
+      const custom = wanted || builtSqliteLibrary()
+      if (custom && fs.existsSync(custom)) {
+        try {
+          bunModule.Database.setCustomSQLite(custom)
+        } catch {
+          // Loaded already in this process (a worker thread after its parent),
+          // and by this same code, so with this same library.
+        }
+        library = custom
+      } else {
+        libraryProblem = wanted
+          ? `WALNUT_SQLITE_LIBRARY names no file (${wanted}): SQLite is the macOS system build, which behaves unlike Walnut's`
+          : 'the upstream SQLite is not built (run `bun scripts/build-sqlite-dylib.mjs`): SQLite is the macOS system build, which behaves unlike Walnut\'s'
+      }
+    }
+  }
   return bunModule
+}
+
+/**
+ * Which SQLite this process opens databases with: 'better-sqlite3' on Node;
+ * on bun, the library file it loaded on macOS, 'system' for the Apple build
+ * there, or 'bun' for the one bun carries elsewhere.
+ */
+export function sqliteLibrary(): string {
+  if (ON_BUN) bunSqlite()
+  return library
+}
+
+/** Why this process runs on the macOS system SQLite without being asked to, or null. */
+export function sqliteLibraryProblem(): string | null {
+  if (ON_BUN) bunSqlite()
+  return libraryProblem
+}
+
+/**
+ * better-sqlite3 compiles its SQLite with foreign keys on and a 16 MB page
+ * cache; so does the built dylib. Another library (bun's own on Linux, the
+ * macOS system one) gets both per connection. Read once per process.
+ */
+let compiledDefaults: boolean | null = null
+function hasCompiledDefaults(db: BunDatabase): boolean {
+  if (compiledDefaults === null) {
+    const stmt = db.prepare('SELECT compile_options FROM pragma_compile_options')
+    try {
+      const opts = new Set(stmt.values().map((r) => String(r[0])))
+      compiledDefaults = opts.has('DEFAULT_FOREIGN_KEYS') && opts.has('DEFAULT_CACHE_SIZE=-16000')
+    } finally {
+      stmt.finalize()
+    }
+  }
+  return compiledDefaults
 }
 
 /** A BLOB comes back as a Buffer over the same bytes, as better-sqlite3 gives it. */
@@ -297,6 +385,7 @@ class SqliteDatabase {
     this.db = new bun.Database(filename, flags)
     const timeout = options.timeout ?? 5000
     this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeout))}`)
+    if (!hasCompiledDefaults(this.db)) this.db.exec('PRAGMA foreign_keys = ON; PRAGMA cache_size = -16000')
     // On macOS bun uses the system SQLite, which keeps a WAL database's -wal and
     // -shm files after the last connection closes; better-sqlite3's SQLite removes them.
     const persistWal = bun.constants.SQLITE_FCNTL_PERSIST_WAL
