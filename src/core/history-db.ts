@@ -21,7 +21,7 @@
  * CJK: the trigram tokenizer needs 3+ chars per term; 2-char CJK queries
  * (e.g. 放弃) fall back to a LIKE scan — verified behavior, not a guess.
  */
-import Database, { type Database as DatabaseType } from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../lib/sqlite.js';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';

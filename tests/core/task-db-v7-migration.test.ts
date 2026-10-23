@@ -31,7 +31,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import Database from 'better-sqlite3';
+import Database from '../../src/lib/sqlite.js';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-db-v7'));

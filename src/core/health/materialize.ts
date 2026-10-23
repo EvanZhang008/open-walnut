@@ -12,7 +12,7 @@
  * the next call, not a recompute and a tick each time.
  */
 
-import type { Database as DatabaseType } from 'better-sqlite3'
+import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { log } from '../../logging/index.js'
 import { DAY_BUCKET_METRICS, DAY_RAW_TYPES } from './catalog.js'
 import { getHealthDb, getMetaJson, materializedRev } from './db.js'

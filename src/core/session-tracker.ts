@@ -1682,7 +1682,7 @@ export async function acceptAcpPrompt(
  * Single-row INSERT OR REPLACE for a SessionRecord. Used by the SQLite fast
  * paths — mapping via sessionToRow, spill-field preservation, one transaction.
  */
-function writeSessionRowSqlite(db: import('better-sqlite3').Database, session: SessionRecord): void {
+function writeSessionRowSqlite(db: import('../lib/sqlite.js').Database, session: SessionRecord): void {
   const insertCols = [...SESSION_COLUMNS, 'payload'];
   const insertSql =
     'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
@@ -1697,7 +1697,7 @@ function writeSessionRowSqlite(db: import('better-sqlite3').Database, session: S
 }
 
 /** The one DELETE for a session row: the lock patches the cache from what it notes. */
-function deleteSessionRowSqlite(db: import('better-sqlite3').Database, claudeSessionId: string): void {
+function deleteSessionRowSqlite(db: import('../lib/sqlite.js').Database, claudeSessionId: string): void {
   db.prepare('DELETE FROM sessions WHERE claude_session_id = ?').run(claudeSessionId);
   noteSessionRowTouched(claudeSessionId);
 }

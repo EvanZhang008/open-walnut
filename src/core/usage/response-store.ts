@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../../lib/sqlite.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,7 +29,7 @@ interface StoredResponse {
 }
 
 export class ResponseUsageStore {
-  private db: Database.Database;
+  private db: DatabaseType;
   /** Per-day sums every Usage & Costs read goes through (cost-rollup.ts). */
   readonly rollup: CostRollup;
   readonly timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;

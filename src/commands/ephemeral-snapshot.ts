@@ -13,7 +13,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import Database from 'better-sqlite3'
+import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
 import yaml from 'js-yaml'
 
 /**
@@ -132,7 +132,7 @@ export function snapshotStoreDatabases(home: string, dest: string, stores: reado
     const src = path.join(home, rel)
     if (!fs.existsSync(src)) continue
     const out = path.join(dest, rel)
-    let db: Database.Database | null = null
+    let db: DatabaseType | null = null
     try {
       fs.mkdirSync(path.dirname(out), { recursive: true })
       fs.rmSync(out, { force: true })

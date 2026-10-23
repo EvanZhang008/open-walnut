@@ -21,7 +21,7 @@
  * splits the task again (split-multi-session-tasks.ts). Files that carry the
  * triggers from an earlier build lose them on the next open.
  */
-import type { Database as DatabaseType } from 'better-sqlite3';
+import type { Database as DatabaseType } from '../../lib/sqlite.js';
 import type { SessionRecord } from '../types.js';
 
 export const ONE_SESSION_PER_TASK_TRIGGERS = ['sessions_one_per_task_insert', 'sessions_one_per_task_update'] as const;

@@ -55,12 +55,12 @@
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
-import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { buildSync } from 'esbuild'
+import Database from '../../src/lib/sqlite.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
@@ -734,7 +734,6 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       // The replica's own copy of the task rows (what it answers away): each row's id, title and phase, read only.
       let list: Array<{ id?: string; title?: string; phase?: string }> = []
       try {
-        const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { all(): unknown[] }; close(): void }
         const db = new Database(path.join(replicaData, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
         try { list = db.prepare('SELECT id, title, phase FROM tasks').all() as typeof list } finally { db.close() }
       } catch { /* none yet */ }

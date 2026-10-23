@@ -14,8 +14,8 @@
  * with no reload, the Mac's store has the task complete and the mark goes. The full matrix (both engines, both viewports,
  * sessions, notes, the inbox) is replica-away-read.spec.ts on replica.config.ts.
  */
-import { createRequire } from 'node:module'
 import path from 'node:path'
+import Database from '../../../src/lib/sqlite.js'
 import { test, expect, type Page } from '@playwright/test'
 import { startReplicaCluster, WINDOWS, type ReplicaCluster } from '../../helpers/replica-cluster.js'
 import { startFakeTunnel, type FakeTunnel } from './replica-tunnel.js'
@@ -31,7 +31,6 @@ const AWAY_SYNC = 'Syncs when your Mac is back'
 
 /** A task's phase in the Mac's own store on disk (read only). */
 function macPhase(c: ReplicaCluster, id: string): string | null {
-  const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { get(id: string): unknown }; close(): void }
   const db = new Database(path.join(c.macData, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
   try { return ((db.prepare('SELECT phase FROM tasks WHERE id = ?').get(id) as { phase?: string } | undefined)?.phase) ?? null } finally { db.close() }
 }

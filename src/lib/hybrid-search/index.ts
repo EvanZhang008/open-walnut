@@ -3,9 +3,10 @@
  * over SQLite FTS5 with an identifier-aware tokenizer.
  *
  * This directory is written as a standalone library: no imports outside
- * `node:*`, `better-sqlite3`, `@huggingface/transformers` and sibling files
- * (enforced by tests/lib/hybrid-search-boundary.test.ts). Publishing it later
- * is: copy the directory, add a package.json.
+ * `node:*`, `../sqlite.js` (the SQLite module, on Node and on bun),
+ * `@huggingface/transformers` and sibling files (enforced by
+ * tests/lib/hybrid-search-boundary.test.ts). Publishing it later is: copy the
+ * directory and ../sqlite.ts, add a package.json.
  *
  * Usage:
  *   const index = createSearchIndex({ dbPath: '/path/search.sqlite' });

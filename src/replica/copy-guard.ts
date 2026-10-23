@@ -11,7 +11,7 @@
  * untouched: the companion's task store takes its own writes on purpose.
  */
 
-import Database, { type Database as DatabaseType } from 'better-sqlite3'
+import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
 import { isHostReplica } from '../core/server-role.js'
 import { log } from '../logging/index.js'
 

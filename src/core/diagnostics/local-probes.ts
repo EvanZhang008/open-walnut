@@ -24,7 +24,6 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile, type ChildProcess } from 'node:child_process'
-import { createRequire } from 'node:module'
 import {
   buildDaemonPath,
   createHostRuntime,
@@ -177,13 +176,9 @@ export async function readOnlyLocalDtach(tmpDir: string, pathStr: string, home: 
   return onPath ? { found: true, path: onPath, source: 'system' } : { found: false, path: null, source: null }
 }
 
-/** Open an in-memory database: proves the native addon loads under this node. */
+/** Open an in-memory database: proves SQLite loads under this runtime (the native addon on Node). */
 export async function probeSqlite(): Promise<{ ok: boolean; version?: string }> {
-  const req = createRequire(import.meta.url)
-  const Database = req('better-sqlite3') as new (p: string) => {
-    prepare(sql: string): { get(): unknown }
-    close(): void
-  }
+  const { default: Database } = await import('../../lib/sqlite.js')
   const db = new Database(':memory:')
   try {
     const row = db.prepare('select sqlite_version() as v').get() as { v?: unknown } | undefined

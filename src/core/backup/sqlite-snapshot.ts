@@ -9,7 +9,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database from '../../lib/sqlite.js';
 import { log } from '../../logging/index.js';
 import { findCanonicalSqlite, SQLITE_SNAPSHOT_PREFIX } from './scan.js';
 import type { ManifestEntry } from './types.js';

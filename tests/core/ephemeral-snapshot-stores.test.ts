@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import Database from 'better-sqlite3'
+import Database, { type Database as DatabaseType } from '../../src/lib/sqlite.js'
 import { copyDataSnapshot, snapshotStoreDatabases } from '../../src/commands/ephemeral-snapshot.js'
 
 let root: string
@@ -28,7 +28,7 @@ afterEach(() => {
 })
 
 /** A live WAL store holding rows that have not been checkpointed yet. */
-function liveStore(rel: string, rows: string[]): Database.Database {
+function liveStore(rel: string, rows: string[]): DatabaseType {
   const db = new Database(path.join(home, rel))
   db.pragma('journal_mode = WAL')
   db.pragma('wal_autocheckpoint = 0')

@@ -43,6 +43,9 @@ export default defineConfig({
     'src/session-server/index.ts',
     'src/workers/git-compaction-worker.ts',
     'src/lib/hybrid-search/embed-worker.ts',
+    // dist/lib/sqlite.js: what a worker thread loads to open SQLite on bun
+    // (sqliteModuleFile in src/lib/sqlite.ts; the plugin database worker).
+    'src/lib/sqlite.ts',
     ...pluginEntries,
   ],
   format: ['esm'],
@@ -58,5 +61,6 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: false,
-  external: ['better-sqlite3', 'sharp', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@huggingface/transformers'],
+  // 'bun:sqlite' only exists on bun; src/lib/sqlite.ts loads it at runtime there.
+  external: ['better-sqlite3', 'bun:sqlite', 'sharp', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@huggingface/transformers'],
 });

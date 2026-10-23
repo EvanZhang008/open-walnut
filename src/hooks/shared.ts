@@ -3,12 +3,13 @@ import path from 'node:path';
 import { CLAUDE_HOME, SESSIONS_DIR, TASKS_DIR, HOOK_LOG_FILE } from '../constants.js';
 import type { SessionSummary } from '../core/types.js';
 import { log } from '../logging/index.js';
+import Database from '../lib/sqlite.js';
 
 // Local TASK_DB_PATH copy (kept in sync with src/core/task-db.ts): hooks are
-// bundled as standalone scripts with `better-sqlite3` listed in tsup's
-// `external` array, so they load it via runtime `require()`. If better-sqlite3
-// is removed from the externals list, hook bundles will try to inline the
-// native addon and fail at load time.
+// bundled as standalone scripts, so they open the database through
+// src/lib/sqlite.ts (bundled in) rather than the server's task-db singleton.
+// `better-sqlite3` stays in tsup's `external` array; if it is removed, hook
+// bundles will try to inline the native addon and fail at load time.
 const TASK_DB_PATH = path.join(TASKS_DIR, 'tasks.sqlite');
 
 /**
@@ -122,9 +123,6 @@ ${nextStepsSection}
  */
 export function updateTaskFromSession(taskId: string, summary: SessionSummary): void {
   try {
-    // Lazy require so the TS type system doesn't fight the `external` bundle flag.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require('better-sqlite3') as typeof import('better-sqlite3');
     if (!fs.existsSync(TASK_DB_PATH)) return;
 
     const db = new Database(TASK_DB_PATH);
@@ -307,8 +305,6 @@ export function formatDailyLogEntry(
 export function deriveProjectPath(taskId: string): string | null {
   try {
     if (!fs.existsSync(TASK_DB_PATH)) return null;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require('better-sqlite3') as typeof import('better-sqlite3');
     const db = new Database(TASK_DB_PATH, { readonly: true, fileMustExist: true });
     try {
       const escaped = taskId.replace(/[\\%_]/g, (ch) => '\\' + ch);

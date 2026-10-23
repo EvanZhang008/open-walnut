@@ -249,7 +249,7 @@ function boundRow(fingerprint: RowFingerprint): Record<string, unknown> {
   return bound;
 }
 
-type SqliteHandle = Pick<import('better-sqlite3').Database, 'pragma'>;
+type SqliteHandle = Pick<import('../lib/sqlite.js').Database, 'pragma'>;
 
 function readDataVersion(handle: SqliteHandle): number | null {
   try {
@@ -8685,7 +8685,7 @@ export async function deleteTasksBulk(ids: string[]): Promise<{ deleted: Task[] 
 
 /** Prepared-statement cache, keyed on `${source}|${jsonPath}` so multiple
  *  plugins (and multiple paths per plugin) share one cache without colliding. */
-const findByExtIdStmts: Map<string, ReturnType<import('better-sqlite3').Database['prepare']>> = new Map();
+const findByExtIdStmts: Map<string, ReturnType<import('../lib/sqlite.js').Database['prepare']>> = new Map();
 /** The handle every cached statement above was prepared against. A prepared
  *  statement dies with its connection, so a cache that outlives a reopen hands
  *  back statements that throw "The database connection is not open" forever —

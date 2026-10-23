@@ -8,6 +8,7 @@ import {
 import { appendDailyLog } from '../core/daily-log.js';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
+import Database from '../lib/sqlite.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -49,8 +50,6 @@ function updateSessionLastActive(sessionId: string): void {
   try {
     if (!sessionId) return;
     if (!fs.existsSync(SESSION_DB_PATH)) return;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require('better-sqlite3') as typeof import('better-sqlite3');
     const db = new Database(SESSION_DB_PATH);
     try {
       db.pragma('journal_mode = WAL');

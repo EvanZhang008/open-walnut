@@ -10,7 +10,7 @@
  * backup (EXCLUDED_DIRS): the visits never leave this machine.
  */
 
-import Database, { type Database as DatabaseType } from 'better-sqlite3'
+import Database, { type Database as DatabaseType } from '../../lib/sqlite.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'

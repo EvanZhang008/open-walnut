@@ -123,7 +123,7 @@ describe('schema v3→v4 migration', () => {
   it('adds the start_date column to a real v3 database and keeps data intact', async () => {
     // Build a genuine v3 DB: tasks table WITHOUT start_date + user_version=3,
     // then let the normal open path run the ALTER TABLE branch.
-    const { default: Database } = await import('better-sqlite3');
+    const { default: Database } = await import('../../src/lib/sqlite.js');
     const { TASK_DB_PATH } = await import('../../src/core/task-db.js');
     const fsSync = await import('node:fs');
     const pathMod = await import('node:path');

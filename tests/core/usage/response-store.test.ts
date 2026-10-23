@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import Database from 'better-sqlite3';
+import Database from '../../../src/lib/sqlite.js';
 import { ResponseUsageStore, type UsageEvidence } from '../../../src/core/usage/response-store.js';
 import { reconcileUsage, type ProxyUsageRecord } from '../../../src/providers/usage-reconcile-core.js';
 import type { CanonicalUsageRecord } from '../../../src/providers/usage-scan-core.js';

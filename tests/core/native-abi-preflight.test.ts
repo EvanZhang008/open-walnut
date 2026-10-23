@@ -81,6 +81,9 @@ function abiError(): Error {
   )
 }
 
+// The Node path, pinned so it runs the same on either runtime the suite runs on.
+const ON_NODE = { onBun: false }
+
 async function loadSubject() {
   vi.resetModules()
   return await import('../../src/core/native-abi-preflight.js')
@@ -95,9 +98,26 @@ describe('native ABI preflight', () => {
     requireState.calls = 0
   })
 
+  it('on bun there is no native SQLite module: nothing is loaded, rebuilt, logged or printed', async () => {
+    requireState.failures = [abiError()]
+    const printed: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
+      printed.push(a.map(String).join(' '))
+    })
+    const { ensureNativeModulesLoadable } = await loadSubject()
+    const ok = ensureNativeModulesLoadable({ onBun: true })
+    spy.mockRestore()
+
+    expect(ok).toBe(true)
+    expect(requireState.calls).toBe(0)
+    expect(spawnCalls).toHaveLength(0)
+    expect(logged).toEqual([])
+    expect(printed).toEqual([])
+  })
+
   it('returns true and never shells out when the module already loads', async () => {
     const { ensureNativeModulesLoadable } = await loadSubject()
-    expect(ensureNativeModulesLoadable()).toBe(true)
+    expect(ensureNativeModulesLoadable(ON_NODE)).toBe(true)
     expect(spawnCalls).toHaveLength(0)
   })
 
@@ -105,7 +125,7 @@ describe('native ABI preflight', () => {
     requireState.failures = [abiError()]  // first load fails, post-rebuild load succeeds
     const { ensureNativeModulesLoadable } = await loadSubject()
 
-    expect(ensureNativeModulesLoadable()).toBe(true)
+    expect(ensureNativeModulesLoadable(ON_NODE)).toBe(true)
     expect(spawnCalls).toHaveLength(1)
     expect(spawnCalls[0].cmd).toBe('npm')
     expect(spawnCalls[0].args).toEqual(['rebuild', 'better-sqlite3'])
@@ -115,7 +135,7 @@ describe('native ABI preflight', () => {
     requireState.failures = [new Error('SQLITE_CANTOPEN: unable to open database file')]
     const { ensureNativeModulesLoadable } = await loadSubject()
 
-    expect(ensureNativeModulesLoadable()).toBe(false)
+    expect(ensureNativeModulesLoadable(ON_NODE)).toBe(false)
     expect(spawnCalls).toHaveLength(0)
     expect(logged.some(l => l.level === 'error' && /not an ABI mismatch/.test(l.msg))).toBe(true)
   })
@@ -125,7 +145,7 @@ describe('native ABI preflight', () => {
     spawnState.status = 1
     const { ensureNativeModulesLoadable } = await loadSubject()
 
-    expect(() => ensureNativeModulesLoadable()).not.toThrow()
+    expect(() => ensureNativeModulesLoadable(ON_NODE)).not.toThrow()
     expect(spawnCalls).toHaveLength(1)
     expect(logged.some(l => l.level === 'error' && /rebuild failed/.test(l.msg))).toBe(true)
   })
@@ -135,7 +155,7 @@ describe('native ABI preflight', () => {
     requireState.failures = [abiError(), abiError()]
     const { ensureNativeModulesLoadable } = await loadSubject()
 
-    expect(ensureNativeModulesLoadable()).toBe(false)
+    expect(ensureNativeModulesLoadable(ON_NODE)).toBe(false)
     expect(logged.some(l => l.level === 'error' && /still fails to load/.test(l.msg))).toBe(true)
   })
 
@@ -145,7 +165,7 @@ describe('native ABI preflight', () => {
     requireState.failures = [new Error('Could not locate the bindings file. Tried:\n → /repo/node_modules/better-sqlite3/build/better_sqlite3.node')]
     const { ensureNativeModulesLoadable } = await loadSubject()
 
-    expect(ensureNativeModulesLoadable()).toBe(true)
+    expect(ensureNativeModulesLoadable(ON_NODE)).toBe(true)
     expect(spawnCalls).toEqual([{ cmd: 'npm', args: ['rebuild'] }])
     expect(logged.some(l => l.level === 'warn' && /never built/.test(l.msg))).toBe(true)
   })
@@ -158,7 +178,7 @@ describe('native ABI preflight', () => {
       printed.push(a.map(String).join(' '))
     })
     const { ensureNativeModulesLoadable } = await loadSubject()
-    const ok = ensureNativeModulesLoadable()
+    const ok = ensureNativeModulesLoadable(ON_NODE)
     spy.mockRestore()
 
     expect(ok).toBe(false)
@@ -174,7 +194,7 @@ describe('native ABI preflight', () => {
     })
 
     const { ensureNativeModulesLoadable } = await loadSubject()
-    ensureNativeModulesLoadable()
+    ensureNativeModulesLoadable(ON_NODE)
     spy.mockRestore()
 
     // Keep in sync with REBUILD_MARKER in desktop/main.swift.

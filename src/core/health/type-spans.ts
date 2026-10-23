@@ -8,7 +8,7 @@
  * why status carries no per-type row count.
  */
 
-import type { Database as DatabaseType } from 'better-sqlite3'
+import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { genericTypeSql } from './catalog.js'
 
 export interface Span { lo: number | null; hi: number | null }

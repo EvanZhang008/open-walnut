@@ -8,7 +8,7 @@
  * data dir, a copy: its shared handle reads only, the apply connection writes.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import Database from 'better-sqlite3'
+import Database from '../../src/lib/sqlite.js'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
