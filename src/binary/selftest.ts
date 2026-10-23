@@ -31,14 +31,14 @@ export async function runSelftest(): Promise<number> {
     },
     {
       name: 'sqlite', required: true, run: async () => {
-        const { default: Database } = await import('../lib/sqlite.js')
+        const { default: Database, sqliteLibrary } = await import('../lib/sqlite.js')
         const db = new Database(path.join(tmp, 'check.db'))
         db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)')
         db.prepare('INSERT INTO t (v) VALUES (?)').run('caf\u00e9')
         const row = db.prepare('SELECT v FROM t').get() as { v: string } | undefined
         db.close()
         if (row?.v !== 'caf\u00e9') throw new Error(`read back ${JSON.stringify(row)}`)
-        return 'bun:sqlite'
+        return `bun:sqlite, ${sqliteLibrary()}`
       },
     },
     {

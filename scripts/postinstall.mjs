@@ -10,6 +10,9 @@
  *   it still works, with a warning: npm reads no bun.lock and applies no patch,
  *   so this applies the SDK patch the way the published chain does and installs
  *   web/ with npm too. The versions are then npm's own picks, not bun.lock's.
+ *   On macOS, either way, it also builds the upstream SQLite that bun loads
+ *   there (scripts/build-sqlite-dylib.mjs; skipped when current). Fail-open:
+ *   no network or no clang warns and leaves the install alone.
  *
  * PUBLISHED PACKAGE (npm install open-walnut / npx open-walnut):
  *   No package manager applies a dependency's own patches, and with npm hoisting
@@ -122,12 +125,39 @@ export function applySdkPatch(root, { warn = (m) => console.warn(`open-walnut po
   return 'patched';
 }
 
+/**
+ * Build the upstream SQLite macOS bun loads (src/lib/sqlite.ts). Returns
+ * 'skipped' off macOS, 'ok', or 'failed' after a warning; never throws.
+ */
+export function buildSqliteDylib(root, {
+  platform = process.platform,
+  run = (file) => spawnSync(process.execPath, [file], { stdio: 'inherit', cwd: root }),
+  warn = (m) => console.warn(`open-walnut postinstall: ${m}`),
+} = {}) {
+  if (platform !== 'darwin') return 'skipped';
+  const script = join(root, 'scripts', 'build-sqlite-dylib.mjs');
+  if (!existsSync(script)) return 'skipped';
+  let res;
+  try {
+    res = run(script);
+  } catch (err) {
+    res = { error: err };
+  }
+  if (!res?.error && res?.status === 0) return 'ok';
+  warn(
+    'the upstream SQLite for macOS bun was not built, so bun falls back to the system SQLite '
+    + '(the SQLite tests fail until it is built). Run: bun scripts/build-sqlite-dylib.mjs',
+  );
+  return 'failed';
+}
+
 function main() {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
   if (isDevCheckout(root)) {
     // ── Dev chain (strict) ──
     const installer = installerOf();
+    buildSqliteDylib(root);
     if (installer === 'bun') {
       const { cmd, args } = webInstallCommand();
       const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: join(root, 'web') });
