@@ -11,12 +11,19 @@
  *    that hands it over, under the lock that also marks a due job running, so a
  *    run the timer already started is never handed over and a handed routine is
  *    never started here;
- *  - it takes the clock back only from that daemon's configure reply (`released`,
- *    or a set that no longer holds it), from where the daemon stood, so a slot the
- *    daemon ran is never run here and one it did not run is;
- *  - a push the daemon refused hands nothing over, so the routines it would have
- *    handed come straight back;
- *  - a paused clock keeps its host and runs nowhere; Resume starts it over there.
+ *  - it takes the clock back from that daemon's configure reply (`released`, or a
+ *    set that no longer holds it), from where the daemon stood: the server owns
+ *    the slots from the daemon's next one, and the runs the daemon made before it
+ *    still come as fires (the daemon keeps them until each is acked), which
+ *    clock-fire.ts records or runs once (`state.clockReturned` says whose slots
+ *    those were);
+ *  - a push the daemon refused, or a def it refused alone, hands nothing over, so
+ *    those routines come straight back;
+ *  - a clock on a host that is not connected comes back without a reply only when
+ *    the routine no longer belongs there (takeBackStranded); a run the host made
+ *    meanwhile is matched by its slot when it arrives;
+ *  - a paused clock keeps its host and runs nowhere; Resume starts it over there;
+ *  - a config that could not be read names no hosts: that takes nothing back.
  *
  * Between the two owners nobody ticks: a slot that falls in that gap is a past
  * `nextRunAtMs` when the server takes the clock back, and the timer runs it at
@@ -47,8 +54,11 @@ export interface PlaceClocksOptions {
   wanted: ReadonlySet<string>;
   /** False: this host's daemon cannot hold a clock (or has not said it can): hand nothing over. */
   handover: boolean;
-  /** Hosts in the config. A clock held by a host no longer there comes back to the server. */
-  knownHosts: ReadonlySet<string>;
+  /**
+   * Hosts in the config. A clock held by a host no longer there comes back to the
+   * server. null: the config could not be read, so no host counts as removed.
+   */
+  knownHosts: ReadonlySet<string> | null;
   /** Re-checked under the lock: the routine may have changed since `wanted` was computed. */
   eligible: (job: CronJob) => boolean;
 }
@@ -57,6 +67,8 @@ export interface PlaceClocksOptions {
 export interface ClockReply {
   clocks?: ClockReport[];
   released?: ClockReport[];
+  /** Defs it could not take: the rest of the set was armed without them. */
+  refused?: Array<{ id?: string; error: string }>;
 }
 
 /**
@@ -75,16 +87,20 @@ export function handoverFromMs(state: CronServiceState, job: CronJob, nowMs: num
 }
 
 /**
- * Give the clock back to this server's timer, at `nextRunAtMs`. A slot already
- * past is one nobody ran (a run the daemon gave back, or one that fell between
- * the two owners): it stays due until the timer runs it.
+ * Give the clock back to this server's timer, at `nextRunAtMs`: the slot the
+ * daemon had not run (a past one stays due until the timer runs it; the
+ * recompute never moves an unrun slot). The slots before it were the daemon's,
+ * and the runs it made of them arrive as fires (clockReturned).
  */
-function takeBack(job: CronJob, nextRunAtMs: number | undefined, nowMs: number): void {
+function takeBack(job: CronJob, host: string, nextRunAtMs: number | undefined, armed = true): void {
+  const mark = job.state.clockFromMs;
   delete job.state.clockHost;
   delete job.state.clockFromMs;
   job.state.nextRunAtMs = job.enabled ? nextRunAtMs : undefined;
-  if (job.enabled && typeof nextRunAtMs === 'number' && nextRunAtMs <= nowMs) job.state.clockCatchUpAtMs = nextRunAtMs;
-  else delete job.state.clockCatchUpAtMs;
+  // A handover the daemon never armed made no runs: an earlier one's record stays.
+  if (armed && typeof mark === 'number') {
+    job.state.clockReturned = { host, fromMs: mark, ...(typeof nextRunAtMs === 'number' ? { beforeMs: nextRunAtMs } : {}) };
+  }
 }
 
 /**
@@ -100,9 +116,9 @@ export async function placeClocks(state: CronServiceState, host: string, opts: P
     for (const job of state.store?.jobs ?? []) {
       if (!job.state) job.state = {};
       const holder = job.state.clockHost;
-      if (holder !== undefined && !opts.knownHosts.has(holder)) {
+      if (holder !== undefined && opts.knownHosts && !opts.knownHosts.has(holder)) {
         // The host is gone from the config: nobody will ever answer for it.
-        takeBack(job, job.state.nextRunAtMs ?? scheduleNextRunAtMs(job, now), now);
+        takeBack(job, holder, job.state.nextRunAtMs ?? scheduleNextRunAtMs(job, now));
         out.released.push(job.id);
         changed = true;
         state.deps.log.info('clock routine taken back: its host is no longer configured', { jobId: job.id, host: holder });
@@ -124,7 +140,6 @@ export async function placeClocks(state: CronServiceState, host: string, opts: P
       job.state.clockHost = host;
       job.state.clockFromMs = fromMs;
       job.state.nextRunAtMs = fromMs;
-      delete job.state.clockCatchUpAtMs;
       out.handed.push(job.id);
       out.owned.push(job);
       changed = true;
@@ -144,10 +159,9 @@ export async function placeClocks(state: CronServiceState, host: string, opts: P
 
 /**
  * The daemon accepted the push: record where each clock it holds stands, and take
- * back every running clock of this host it does not hold. `released` says where a given-back
- * clock stood; a clock the server started over since (an edit, a resume) starts
- * from its own new slot instead, and a run the daemon gave back with it is that
- * old clock's.
+ * back every running clock of this host it does not hold (a def it refused
+ * included). `released` says where a given-back clock stood; a clock the server
+ * started over since (an edit, a resume) starts from its own new slot instead.
  */
 export async function settleClocks(state: CronServiceState, host: string, reply: ClockReply): Promise<string[]> {
   return await locked(state, async () => {
@@ -155,6 +169,7 @@ export async function settleClocks(state: CronServiceState, host: string, reply:
     const now = state.deps.nowMs();
     const held = new Map((Array.isArray(reply.clocks) ? reply.clocks : []).map((c) => [c.id, c]));
     const gaveBack = new Map((Array.isArray(reply.released) ? reply.released : []).map((c) => [c.id, c]));
+    const refused = new Map((Array.isArray(reply.refused) ? reply.refused : []).filter((r) => typeof r?.id === 'string').map((r) => [r.id!, r.error]));
     const takenBack: string[] = [];
     let changed = false;
     for (const job of state.store?.jobs ?? []) {
@@ -174,20 +189,17 @@ export async function settleClocks(state: CronServiceState, host: string, reply:
       // stays on its task, and Resume starts it over there (restartHostClock).
       if (!job.enabled) continue;
       const r = gaveBack.get(job.id);
-      let next: number | undefined;
-      if (r && r.fromMs === mark) {
-        next = r.nextRunAtMs;
-        if (typeof r.owedSlotMs === 'number') next = next === undefined ? r.owedSlotMs : Math.min(next, r.owedSlotMs);
-      } else {
-        next = typeof job.state.nextRunAtMs === 'number' ? job.state.nextRunAtMs : scheduleNextRunAtMs(job, now);
-      }
-      takeBack(job, next, now);
+      const next = r && r.fromMs === mark
+        ? r.nextRunAtMs
+        : typeof job.state.nextRunAtMs === 'number' ? job.state.nextRunAtMs : scheduleNextRunAtMs(job, now);
+      takeBack(job, host, next, !!r || !refused.has(job.id));
       takenBack.push(job.id);
       changed = true;
       state.deps.log.info('clock routine taken back from its host', {
         jobId: job.id, host, nextRunAtMs: job.state.nextRunAtMs ?? null,
-        ...(r?.owedSlotMs !== undefined ? { owedSlotMs: r.owedSlotMs } : {}),
-        reported: r ? (r.fromMs === mark ? 'released' : 'released-older') : 'absent',
+        ...(r?.pending ? { pending: r.pending } : {}),
+        reported: r ? (r.fromMs === mark ? 'released' : 'released-older') : refused.has(job.id) ? 'refused' : 'absent',
+        ...(refused.has(job.id) ? { error: refused.get(job.id) } : {}),
       });
     }
     if (changed) {
@@ -206,11 +218,10 @@ export async function revertClocks(state: CronServiceState, host: string, handed
   if (handed.length === 0) return;
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    const now = state.deps.nowMs();
     let changed = false;
     for (const job of state.store?.jobs ?? []) {
       if (!handed.includes(job.id) || job.state?.clockHost !== host) continue;
-      takeBack(job, job.state.nextRunAtMs, now);
+      takeBack(job, host, job.state.nextRunAtMs, false);
       changed = true;
       state.deps.log.warn('clock routine handover refused by its host; the server keeps it', { jobId: job.id, host });
     }
@@ -221,21 +232,60 @@ export async function revertClocks(state: CronServiceState, host: string, handed
   });
 }
 
-/** Clocks held by hosts no longer in the config come back (boot, before any host answers). */
-export async function releaseOrphanClocks(state: CronServiceState, knownHosts: ReadonlySet<string>): Promise<string[]> {
+/**
+ * Clocks held by hosts no longer in the config come back (boot, before any host
+ * answers). null: the config could not be read, which says nothing about hosts.
+ */
+export async function releaseOrphanClocks(state: CronServiceState, knownHosts: ReadonlySet<string> | null): Promise<string[]> {
+  if (!knownHosts) {
+    state.deps.log.warn('clock routines: hosts unknown (config unreadable), no clock taken back');
+    return [];
+  }
   return await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     const now = state.deps.nowMs();
     const out: string[] = [];
     for (const job of state.store?.jobs ?? []) {
       if (!job.state || !isClockOwned(job) || knownHosts.has(job.state.clockHost!)) continue;
-      state.deps.log.info('clock routine taken back: its host is no longer configured', { jobId: job.id, host: job.state.clockHost });
-      takeBack(job, job.state.nextRunAtMs ?? scheduleNextRunAtMs(job, now), now);
+      const host = job.state.clockHost!;
+      state.deps.log.info('clock routine taken back: its host is no longer configured', { jobId: job.id, host });
+      takeBack(job, host, job.state.nextRunAtMs ?? scheduleNextRunAtMs(job, now));
       out.push(job.id);
     }
     if (out.length > 0) {
       await persist(state);
       armTimer(state);
+    }
+    return out;
+  });
+}
+
+/**
+ * Clocks a host holds that no longer belong there, while that host is not
+ * connected to answer for them (the routines layer decided: clock-placement.ts).
+ * The server runs them from the slot the host last reported; the host gives them
+ * back when it reconnects, and a run it made meanwhile is matched by its slot
+ * (clock-fire.ts): one the server ran too is not run again.
+ */
+export async function takeBackStranded(state: CronServiceState, host: string, ids: readonly string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  return await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const now = state.deps.nowMs();
+    const out: string[] = [];
+    for (const job of state.store?.jobs ?? []) {
+      if (!ids.includes(job.id) || job.state?.clockHost !== host || !job.enabled) continue;
+      takeBack(job, host, job.state.nextRunAtMs ?? scheduleNextRunAtMs(job, now));
+      out.push(job.id);
+      state.deps.log.info('clock routine taken back: it left its unreachable host', { jobId: job.id, host, nextRunAtMs: job.state.nextRunAtMs ?? null });
+    }
+    if (out.length > 0) {
+      await persist(state);
+      armTimer(state);
+      for (const id of out) {
+        const job = state.store?.jobs.find((j) => j.id === id);
+        emit(state, { jobId: id, action: 'updated', nextRunAtMs: job?.state.nextRunAtMs });
+      }
     }
     return out;
   });

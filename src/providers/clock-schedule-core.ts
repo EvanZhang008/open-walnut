@@ -55,7 +55,8 @@ export interface ClockSchedule {
    * The slot after a run at `runAtMs`, strictly later than it. undefined: none
    * (an `at` ran, a pattern with no later slot). A slot inside the hour a
    * daylight saving change repeats is looked for past that hour, so a clock never
-   * stops there (the server simply asks again a minute later).
+   * stops there; the server's timer looks the same way (cron/jobs.ts
+   * scheduleNextRunAtMs), so a routine runs alike wherever its clock is.
    */
   afterRun(schedule: ClockScheduleSpec, runAtMs: number, defaultTz?: string): number | undefined;
   /** Whether nextRunAtMs and afterRun answer for this schedule. */

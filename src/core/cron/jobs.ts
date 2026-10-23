@@ -117,10 +117,48 @@ export function scheduleNextRunAtMs(job: CronJob, nowMs: number): number | undef
       return undefined;
     }
     const atMs = new Date(job.schedule.at).getTime();
-    return Number.isFinite(atMs) ? atMs : undefined;
+    if (!Number.isFinite(atMs)) return undefined;
+    // Its slot was a host's (the clock came back after that host held it): the
+    // run is that host's, and its report is on the way, so the server never runs it.
+    const back = job.state.clockReturned;
+    if (back && (back.beforeMs === undefined || atMs < back.beforeMs)) return undefined;
+    return atMs;
   }
 
-  return computeNextRunAtMs(job.schedule, nowMs);
+  return cronNextRunAtMs(job.schedule, nowMs);
+}
+
+/**
+ * A cron slot at or after `nowMs`. Inside the hour a daylight saving change
+ * repeats, a pattern finer than an hour has none (the schedule math answers
+ * nothing there), so the search starts again an hour later, as a host's clock
+ * does after a run (clock-schedule-core.ts `afterRun`): the routine runs the
+ * same wherever its clock is, and never stops in that hour.
+ */
+function cronNextRunAtMs(schedule: CronJob['schedule'], nowMs: number): number | undefined {
+  let from = nowMs;
+  for (let tries = 0; tries < 4; tries++) {
+    const next = computeNextRunAtMs(schedule, from);
+    if (next !== undefined) return next;
+    from += 3_600_000;
+  }
+  return undefined;
+}
+
+/**
+ * A slot this server's timer still has to run: due, never run (by the job's
+ * record or by this process's replay guard), and on this server's clock. Only a
+ * run (applyJobResult) or the boot catch-up moves it on, so a reader that
+ * recomputes (a list, a status, an edit of another routine) never skips it.
+ */
+function dueSlotUnrun(state: CronServiceState, job: CronJob, nowMs: number): boolean {
+  const next = job.state.nextRunAtMs;
+  if (typeof next !== 'number' || nowMs < next) return false;
+  if (clockOnDaemon(job) || cloudModeSkipsJob(job)) return false;
+  const last = job.state.lastRunAtMs;
+  if (typeof last === 'number' && last >= next) return false;
+  const guard = state.replayGuard?.get(job.id);
+  return guard === undefined || (guard !== null && guard <= next);
 }
 
 export function recomputeNextRuns(state: CronServiceState): boolean {
@@ -138,10 +176,6 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
         job.state.nextRunAtMs = undefined;
         changed = true;
       }
-      if (job.state.clockCatchUpAtMs !== undefined) {
-        delete job.state.clockCatchUpAtMs;
-        changed = true;
-      }
       if (job.state.runningAtMs !== undefined) {
         job.state.runningAtMs = undefined;
         changed = true;
@@ -155,10 +189,9 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
       job.state.runningAtMs = undefined;
       changed = true;
     }
-    // Only recompute if missing or past-due
+    // Only recompute if missing or past-due, and never over a slot still to run.
     const nextRun = job.state.nextRunAtMs;
-    // A slot a host's daemon gave back unrun stays due until the timer runs it.
-    if (typeof nextRun === 'number' && nextRun === job.state.clockCatchUpAtMs) continue;
+    if (dueSlotUnrun(state, job, now)) continue;
     if (nextRun === undefined || now >= nextRun) {
       const newNext = computeJobNextRunAtMs(job, now);
       if (job.state.nextRunAtMs !== newNext) {
@@ -170,21 +203,36 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
   return changed;
 }
 
+/**
+ * When the timer must look next: the earliest moment findDueJobs would take a
+ * job, never a slot it refuses (that wakes the timer at once, again and again).
+ */
 export function nextWakeAtMs(state: CronServiceState): number | undefined {
-  const jobs = state.store?.jobs ?? [];
+  let min: number | undefined;
+  for (const j of state.store?.jobs ?? []) {
+    const at = wakeAtMsOf(state, j);
+    if (at !== undefined && (min === undefined || at < min)) min = at;
+  }
+  return min;
+}
+
+function wakeAtMsOf(state: CronServiceState, j: CronJob): number | undefined {
   // Cloud-skipped jobs must not drive the timer: a pending one-shot 'at' job
   // keeps its past-due nextRunAtMs until it actually runs (on the primary box),
   // so including it here would re-arm the timer with delay 0 in a tight loop.
   // Check jobs are excluded for the same reason cloud-skipped ones are: their
   // nextRunAtMs is a daemon REPORT, routinely already in the past, and the timer
   // would then re-arm with delay 0 forever over a job it must never run.
-  const enabled = jobs.filter((j) =>
-    j.enabled && typeof j.state.nextRunAtMs === 'number' && !clockOnDaemon(j) && !cloudModeSkipsJob(j));
-  if (enabled.length === 0) return undefined;
-  return enabled.reduce(
-    (min, j) => Math.min(min, j.state.nextRunAtMs as number),
-    enabled[0].state.nextRunAtMs as number,
-  );
+  if (!j.enabled || !j.state || clockOnDaemon(j) || cloudModeSkipsJob(j)) return undefined;
+  // A run in flight re-arms the timer when it ends; a marker left by a run that
+  // never ended is cleared by the recompute once it is stuck.
+  if (typeof j.state.runningAtMs === 'number') return j.state.runningAtMs + STUCK_RUN_MS;
+  const next = j.state.nextRunAtMs;
+  if (typeof next !== 'number') return undefined;
+  // The replay guard says this process ran the slot: not before the guard's slot.
+  const guard = state.replayGuard?.get(j.id);
+  if (guard === null) return undefined;
+  return typeof guard === 'number' && guard > next ? guard : next;
 }
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {

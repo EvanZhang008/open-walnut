@@ -14,7 +14,11 @@
  *    schedule only croner reads (clock-schedule-core.ts `supports`).
  *
  * This file decides which routines belong to which host; the handover itself
- * (who ticks, never twice) is cron/clock-handover.ts.
+ * (who ticks, never twice) is cron/clock-handover.ts. Three guards keep a clock
+ * from moving on bad information: a config that could not be read names no
+ * hosts, so nothing moves; a def a daemon refused is not handed to it again
+ * until the def or the connection changes; and a clock on a host that is not
+ * connected comes back only when the routine plainly no longer belongs there.
  */
 
 import { WALNUT_HOME } from '../../constants.js';
@@ -59,18 +63,25 @@ export function clockCandidate(job: CronJob): boolean {
 }
 
 export interface PlacementDeps {
-  /** The configured remote hosts (config.hosts keys). */
-  hosts(): Promise<Set<string>>;
+  /** The configured remote hosts (config.hosts keys); null when config.yaml could not be read. */
+  hosts(): Promise<Set<string> | null>;
   getTask(taskId: string): Promise<{ id: string; phase?: string; transferred_to?: string } | null>;
   sessionsForTask(taskId: string): Promise<DeliverySessionCandidate[]>;
+  /** Whether that host's daemon is connected now. */
+  connected?(host: string): Promise<boolean>;
 }
 
 export function defaultPlacementDeps(): PlacementDeps {
   return {
     async hosts() {
-      const { getConfig } = await import('../config-manager.js');
+      const { getConfig, isFallbackConfig } = await import('../config-manager.js');
       const config = await getConfig();
+      if (isFallbackConfig(config)) return null;
       return new Set(Object.keys(config.hosts ?? {}).filter((h) => h && h !== '__local__'));
+    },
+    async connected(host) {
+      const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
+      return getConnectedDaemonConnection(host) !== null;
     },
     async getTask(taskId) {
       const { getTask } = await import('../task-manager.js');
@@ -117,28 +128,47 @@ export async function workHostOf(
   return host && hosts.has(host) ? { host, taskId } : null;
 }
 
-/** One clock routine as a host's daemon arms it. */
+/**
+ * One clock routine as a host's daemon arms it. `notBeforeMs` is its last run:
+ * the daemon runs no slot at or before it, also one this server (or an older
+ * Mac that did not know the clock had moved) already ran.
+ */
 export function clockDefOf(job: CronJob, taskId: string | undefined, home: string = WALNUT_HOME): TriggerDef | null {
   const wire = wireScheduleOf(job);
   const fromMs = job.state.clockFromMs;
   if (!wire || typeof fromMs !== 'number') return null;
   const deliver = deliverSpecOf(job, home);
+  const last = job.state.lastRunAtMs;
   return {
     id: job.id,
     name: job.name,
     everyMs: wire.kind === 'every' ? wire.everyMs : 0,
-    clock: { schedule: wire, fromMs },
+    clock: { schedule: wire, fromMs, ...(typeof last === 'number' && Number.isFinite(last) ? { notBeforeMs: last } : {}) },
     ...(deliver ? { deliver: { ...deliver, taskId: taskId ?? deliver.taskId } } : {}),
   };
 }
 
+/** What a refusal is about: the def as the daemon read it, minus where the clock stands. */
+function refusalKeyOf(job: CronJob, taskId: string | undefined): string {
+  const deliver = deliverSpecOf(job);
+  return JSON.stringify([job.name, wireScheduleOf(job), deliver ? { ...deliver, taskId: taskId ?? deliver.taskId } : null]);
+}
+
+/**
+ * Clock defs a host's daemon refused, by host then routine: the refusal key of
+ * each. Such a routine stays on the server instead of being handed over (and
+ * refused) on every push, until its def changes or the host connects anew.
+ */
+const refusedClocks = new Map<string, Map<string, string>>();
+
 /** The cron service half placement needs (cron/service.ts). */
 export interface ClockService {
   placeClocks: (host: string, opts: {
-    wanted: ReadonlySet<string>; handover: boolean; knownHosts: ReadonlySet<string>; eligible: (job: CronJob) => boolean;
+    wanted: ReadonlySet<string>; handover: boolean; knownHosts: ReadonlySet<string> | null; eligible: (job: CronJob) => boolean;
   }) => Promise<{ owned: CronJob[]; handed: string[] }>;
   settleClocks: (host: string, reply: ClockReply) => Promise<string[]>;
   revertClocks: (host: string, handed: readonly string[]) => Promise<void>;
+  takeBackStranded?: (host: string, ids: readonly string[]) => Promise<string[]>;
 }
 
 /** The clock defs for one host's push, and what to do with the daemon's answer to it. */
@@ -155,11 +185,24 @@ export async function placeClocksForHost(
   jobs: CronJob[],
   capability: ClockCapability,
   deps: PlacementDeps = defaultPlacementDeps(),
+  opts: { fresh?: boolean } = {},
 ): Promise<HostClocks> {
   const hosts = await deps.hosts();
+  // A daemon met anew (a restart, an upgrade) is asked again about what it refused.
+  if (opts.fresh) refusedClocks.delete(host);
+  const refusedHere = refusedClocks.get(host);
   const wanted = new Set<string>();
   const taskOf = new Map<string, string>();
-  if (host !== '__local__' && hosts.has(host)) {
+  if (!hosts) {
+    // The config could not be read: every clock stays where it is, and none moves.
+    for (const job of jobs) {
+      if (job.state?.clockHost !== host) continue;
+      wanted.add(job.id);
+      const work = await workHostOf(job, deps, new Set([host]), host).catch(() => null);
+      if (work?.taskId) taskOf.set(job.id, work.taskId);
+    }
+    log.cron.warn('clock placement: hosts unknown (config unreadable), clocks stay where they are', { host });
+  } else if (host !== '__local__' && hosts.has(host)) {
     for (const job of jobs) {
       if (!clockCandidate(job)) continue;
       // Held by another host: it moves only after that host gives it back.
@@ -168,11 +211,12 @@ export async function placeClocksForHost(
       // The task a transfer moved the work to is watched too: its session starts later.
       if (work?.taskId) watchedTasks.add(work.taskId);
       if (work?.host !== host) continue;
+      if (!job.state?.clockHost && refusedHere?.get(job.id) === refusalKeyOf(job, work.taskId)) continue;
       wanted.add(job.id);
       if (work.taskId) taskOf.set(job.id, work.taskId);
     }
   }
-  const placed = await service.placeClocks(host, { wanted, handover: capability === 'yes', knownHosts: hosts, eligible: clockCandidate });
+  const placed = await service.placeClocks(host, { wanted, handover: capability === 'yes' && hosts !== null, knownHosts: hosts, eligible: clockCandidate });
   // A daemon that has not said it holds clocks gets none: an older one refuses
   // the whole set over a def it cannot read.
   const defs = capability === 'yes'
@@ -183,10 +227,13 @@ export async function placeClocksForHost(
     defs,
     handed,
     applied: async (reply) => {
+      const refused = Array.isArray(reply.refused) ? reply.refused as NonNullable<ClockReply['refused']> : [];
       const clockReply: ClockReply = {
         ...(Array.isArray(reply.clocks) ? { clocks: reply.clocks as ClockReply['clocks'] } : {}),
         ...(Array.isArray(reply.released) ? { released: reply.released as ClockReply['released'] } : {}),
+        ...(refused.length ? { refused } : {}),
       };
+      rememberRefused(host, placed.owned, taskOf, refused);
       const back = await service.settleClocks(host, clockReply);
       if (back.length > 0) log.cron.info('clock routines back on the server timer', { host, jobIds: back });
     },
@@ -194,6 +241,81 @@ export async function placeClocksForHost(
       await service.revertClocks(host, handed);
     },
   };
+}
+
+/** Remember the clock defs a daemon refused, so the next push does not hand them over again. */
+function rememberRefused(
+  host: string,
+  sent: readonly CronJob[],
+  taskOf: ReadonlyMap<string, string>,
+  refused: ReadonlyArray<{ id?: string; error: string }>,
+): void {
+  for (const r of refused) {
+    const job = sent.find((j) => j.id === r.id);
+    if (!job) {
+      if (r.id) log.cron.warn('trigger def refused by its host', { host, jobId: r.id, error: r.error });
+      continue;
+    }
+    let byJob = refusedClocks.get(host);
+    if (!byJob) refusedClocks.set(host, byJob = new Map());
+    byJob.set(job.id, refusalKeyOf(job, taskOf.get(job.id)));
+    log.cron.warn('clock routine refused by its host: it stays on the server', { host, jobId: job.id, error: r.error });
+  }
+}
+
+/**
+ * Whether a routine still belongs to `host`, judged without asking that host
+ * (it is not connected). `unknown` keeps the clock where it is: a session that
+ * reads as gone because its host is unreachable says nothing about the routine.
+ */
+export async function belongsOn(
+  job: CronJob,
+  host: string,
+  deps: PlacementDeps,
+  hosts: ReadonlySet<string>,
+): Promise<'yes' | 'no' | 'unknown'> {
+  // A paused clock keeps its host (clock-handover.ts).
+  if (!job.enabled) return 'yes';
+  if (!clockCandidate(job)) return 'no';
+  const config = (job.executor?.config ?? {}) as Record<string, unknown>;
+  if (job.executor?.type === 'claude-code') return typeof config.host === 'string' && config.host.trim() === host ? 'yes' : 'no';
+  let taskId = typeof config.target === 'string' ? config.target.trim() : '';
+  let task = taskId ? await deps.getTask(taskId) : null;
+  for (let hop = 0; hop < 8 && task?.phase === 'COMPLETE' && task.transferred_to; hop++) {
+    taskId = task.transferred_to;
+    task = await deps.getTask(taskId);
+  }
+  if (!task || task.phase === 'COMPLETE') return 'no';
+  const picked = pickDeliverySession(await deps.sessionsForTask(taskId));
+  if (!picked) return 'unknown';
+  const at = picked.host || '__local__';
+  return at === host ? 'yes' : (at === '__local__' || hosts.has(at)) ? 'no' : 'unknown';
+}
+
+/**
+ * The clocks on hosts that are not connected which no longer belong there come
+ * back to the server's timer (clock-handover.ts takeBackStranded). A connected
+ * host gives its clocks back itself, through the push.
+ */
+export async function takeBackStrandedClocks(
+  service: ClockService,
+  jobs: CronJob[],
+  deps: PlacementDeps = defaultPlacementDeps(),
+): Promise<string[]> {
+  if (!service.takeBackStranded) return [];
+  const hosts = await deps.hosts();
+  if (!hosts) return [];
+  const byHost = new Map<string, string[]>();
+  for (const job of jobs) {
+    const holder = job.state?.clockHost;
+    if (!holder || !hosts.has(holder)) continue;
+    if (await deps.connected?.(holder).catch(() => true) ?? true) continue;
+    if ((await belongsOn(job, holder, deps, hosts).catch(() => 'unknown' as const)) !== 'no') continue;
+    byHost.set(holder, [...(byHost.get(holder) ?? []), job.id]);
+  }
+  const out: string[] = [];
+  for (const [host, ids] of byHost) out.push(...await service.takeBackStranded(host, ids));
+  return out;
 }
 
 // ── keep placement fresh: a routine's session can appear on a host later ──
@@ -212,8 +334,17 @@ export function scheduleClockPlacement(): void {
     void import('../../providers/daemon-connection.js')
       .then(({ pushTriggersToAllHosts }) => pushTriggersToAllHosts())
       .catch((err) => log.cron.warn('clock placement: re-push failed', { error: err instanceof Error ? err.message : String(err) }));
+    void strandedSweep().catch((err) => log.cron.warn('clock placement: stranded sweep failed', { error: err instanceof Error ? err.message : String(err) }));
   }, REPLACE_DEBOUNCE_MS);
   timer.unref?.();
+}
+
+async function strandedSweep(): Promise<void> {
+  const { getCronService } = await import('../../web/routes/cron.js');
+  const service = getCronService();
+  if (!service) return;
+  const back = await takeBackStrandedClocks(service, await service.list({ includeDisabled: true, recompute: false }));
+  if (back.length > 0) log.cron.info('clock routines back on the server timer: they left their unreachable host', { jobIds: back });
 }
 
 /** Remember which tasks matter, so the bus watch can ignore every other task. */
@@ -253,4 +384,5 @@ export function _resetClockPlacementForTest(): void {
   if (timer) clearTimeout(timer);
   timer = null;
   watchedTasks = new Set();
+  refusedClocks.clear();
 }

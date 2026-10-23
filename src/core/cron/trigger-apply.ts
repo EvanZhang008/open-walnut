@@ -11,12 +11,12 @@
  * decides bookkeeping — dedup, history, error counting, next check time.
  */
 
-import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../providers/trigger-check-core.js';
+import { MAX_CONSECUTIVE_CHECK_ERRORS, isHostDelivery } from '../../providers/trigger-check-core.js';
 import type { TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
 import type { CronJob, CronServiceState } from './types.js';
 import { ensureLoaded, persist } from './store.js';
 import { applyJobResult, emit, locked } from './timer.js';
-import { isClockOwned } from './jobs.js';
+import { applyClockRun, clockTenureOf, owedClockVerdict, settleClockNext } from './clock-fire.js';
 import {
   appendAudit, auditDelivery, auditWarnings, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
   TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
@@ -105,6 +105,18 @@ export interface TriggerFiredApplied {
   seq?: number;
   /** The check worked after a run of failures the user was told about. */
   recovered?: boolean;
+  /**
+   * Clock runs nobody took that are not the server's to run (clock-fire.ts):
+   * recorded as seen and safe to ack, nothing ran for them.
+   */
+  supersededSeqs?: number[];
+  /** Clock runs not decidable now: never acked, the daemon's replay brings them back. */
+  heldSeqs?: number[];
+}
+
+export interface ApplyFiredOptions {
+  /** The host whose daemon sent the fires: a clock run counts only under that host's clock. */
+  fromHost?: string;
 }
 
 /**
@@ -347,6 +359,7 @@ export async function applyTriggerFired(
   state: CronServiceState,
   events: TriggerFiredEvent | readonly TriggerFiredEvent[],
   deliver: (job: CronJob, fires: TriggerFiredEvent[], at: { startedAtMs: number }) => Promise<DeliverResult>,
+  opts: ApplyFiredOptions = {},
 ): Promise<TriggerFiredApplied> {
   const batch = (Array.isArray(events) ? [...events] : [events as TriggerFiredEvent]).sort((a, b) => a.seq - b.seq);
   const head = batch[0];
@@ -361,25 +374,44 @@ export async function applyTriggerFired(
     if (!job || (!job.check && !head.clock)) return { found: false as const };
     if (!job.state) job.state = {};
     const jobState = job.state;
-    const fresh = batch.filter((e) => !isDuplicateFire(jobState, e));
+    let fresh = batch.filter((e) => !isDuplicateFire(jobState, e));
     const duplicateSeqs = batch.filter((e) => !fresh.includes(e)).map((e) => e.seq);
-    if (fresh.length === 0) return { duplicate: true as const, job, duplicateSeqs };
+    // A clock run nobody took is run here only when it is this server's to run.
+    const supersededSeqs: number[] = [];
+    const heldSeqs: number[] = [];
+    if (!job.check && head.clock) {
+      fresh = fresh.filter((e) => {
+        if (isHostDelivery(e.host)) return true;
+        const verdict = owedClockVerdict(job, e, opts.fromHost);
+        if (verdict.kind === 'run') return true;
+        if (verdict.kind === 'held') heldSeqs.push(e.seq);
+        else { supersededSeqs.push(e.seq); recordFireSeq(jobState, e); }
+        state.deps.log.info('clock run not run here', { jobId: job.id, seq: e.seq, verdict: verdict.kind, reason: verdict.reason });
+        return false;
+      });
+      if (supersededSeqs.length > 0) await persist(state);
+    }
+    const passed = { duplicateSeqs, supersededSeqs, heldSeqs };
+    if (fresh.length === 0) return { duplicate: true as const, job, ...passed };
     job.state.runningAtMs = state.deps.nowMs();
     job.state.lastError = undefined;
     await persist(state);
     emit(state, { jobId: job.id, action: 'started', runAtMs: newestAt(fresh, state.deps.nowMs()) });
-    return { job, fresh, duplicateSeqs };
+    return { job, fresh, ...passed };
   });
 
   if ('found' in phase1) return { found: false, duplicate: false, delivered: false, retry: false };
+  const { duplicateSeqs, supersededSeqs, heldSeqs } = phase1;
+  const skipped = {
+    duplicateSeqs,
+    ...(supersededSeqs.length ? { supersededSeqs } : {}),
+    ...(heldSeqs.length ? { heldSeqs } : {}),
+  };
   if ('duplicate' in phase1) {
-    return {
-      found: true, duplicate: true, delivered: false, retry: false, jobName: phase1.job.name,
-      duplicateSeqs: phase1.duplicateSeqs,
-    };
+    return { found: true, duplicate: true, delivered: false, retry: false, jobName: phase1.job.name, ...skipped };
   }
 
-  const { job, fresh, duplicateSeqs } = phase1;
+  const { job, fresh } = phase1;
   const identity = fresh[0];
   const startedAt = newestAt(fresh, state.deps.nowMs());
   const firstAtMs = Math.min(...fresh.map((e) => (Number.isFinite(e.atMs) ? e.atMs : startedAt)));
@@ -424,8 +456,10 @@ export async function applyTriggerFired(
       : result.error;
 
     const clockRun = !!head.clock && !target.check;
+    // Read after the delivery: the clock may have changed hands meanwhile.
+    const tenure = clockTenureOf(target, identity, opts.fromHost);
     const shouldDelete = clockRun
-      ? applyClockRun(target, { status: result.status, error, startedAt, endedAt })
+      ? applyClockRun(target, { status: result.status, error, startedAt, endedAt, retry, tenure })
       : applyJobResult(state, target, {
         status: result.status,
         error,
@@ -511,11 +545,15 @@ export async function applyTriggerFired(
         ? { ...chain, seq: Math.min(...open), seqs: open }
         : undefined;
     }
-    // The daemon's next slot, while it holds the clock. A clock the server took
-    // back keeps the server's own next run (a slot it still has to catch up).
-    if (!clockRun || isClockOwned(target)) {
-      const nextRun = Math.max(...batch.map((e) => (Number.isFinite(e.nextRunAtMs) ? e.nextRunAtMs : Number.NEGATIVE_INFINITY)));
+    // The daemon's next check. A clock routine's next slot is its owner's
+    // (clock-fire.ts): the host's report while it holds the clock, else the
+    // server's own, moved past a slot this run covered.
+    const nextRun = Math.max(...batch.map((e) => (Number.isFinite(e.nextRunAtMs) ? e.nextRunAtMs : Number.NEGATIVE_INFINITY)));
+    if (!clockRun) {
       target.state.nextRunAtMs = target.enabled && Number.isFinite(nextRun) ? nextRun : undefined;
+    } else if (!retry && !shouldDelete) {
+      const ranAtMs = Number.isFinite(result.deliveredAtMs) ? result.deliveredAtMs! : endedAt;
+      settleClockNext(state, target, { tenure, reportedNext: Number.isFinite(nextRun) ? nextRun : undefined, ranAtMs });
     }
     if (shouldDelete && state.store) {
       state.store.jobs = state.store.jobs.filter((j) => j.id !== target.id);
@@ -542,38 +580,11 @@ export async function applyTriggerFired(
       status: result.status,
       ...(error ? { error } : {}),
       ...(result.summary ? { summary: result.summary } : {}),
-      duplicateSeqs,
+      ...skipped,
       seq: identity.seq,
       ...(recovered ? { recovered } : {}),
     };
   });
-}
-
-/**
- * A clock routine's run, recorded the way the timer records one (applyJobResult)
- * minus everything about the next slot: the daemon that ran it owns that, and a
- * server that took the clock back keeps its own. A one-shot is spent either way.
- * Returns true when the routine should be deleted (a one-shot that ran).
- */
-function applyClockRun(
-  job: CronJob,
-  r: { status: 'ok' | 'error'; error?: string; startedAt: number; endedAt: number },
-): boolean {
-  job.state.runningAtMs = undefined;
-  job.state.lastRunAtMs = r.startedAt;
-  job.state.lastStatus = r.status;
-  job.state.lastDurationMs = Math.max(0, r.endedAt - r.startedAt);
-  job.state.lastError = r.error;
-  job.state.consecutiveErrors = r.status === 'error' ? (job.state.consecutiveErrors ?? 0) + 1 : 0;
-  job.updatedAtMs = r.endedAt;
-  if (job.schedule.kind !== 'at') return false;
-  if (r.status === 'ok' && job.deleteAfterRun === true) return true;
-  job.enabled = false;
-  job.state.nextRunAtMs = undefined;
-  // Its one run is over: no clock holds it anywhere now.
-  delete job.state.clockHost;
-  delete job.state.clockFromMs;
-  return false;
 }
 
 /** The newest fire's time: a batch is dated by the moment its backlog ends. */

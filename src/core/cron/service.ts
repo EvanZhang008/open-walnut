@@ -18,13 +18,14 @@ import * as ops from './ops.js';
 import {
   applyTriggerChecked,
   applyTriggerFired,
+  type ApplyFiredOptions,
   type DeliverResult,
   type TriggerCheckedApplied,
   type TriggerFiredApplied,
 } from './trigger-apply.js';
 import type { TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
 import {
-  placeClocks, releaseOrphanClocks, revertClocks, settleClocks,
+  placeClocks, releaseOrphanClocks, revertClocks, settleClocks, takeBackStranded,
   type ClockPlacement, type ClockReply, type PlaceClocksOptions,
 } from './clock-handover.js';
 
@@ -115,8 +116,9 @@ export class CronService {
   async applyTriggerFired(
     events: TriggerFiredEvent | readonly TriggerFiredEvent[],
     deliver: (job: CronJob, fires: TriggerFiredEvent[], at: { startedAtMs: number }) => Promise<DeliverResult>,
+    opts: ApplyFiredOptions = {},
   ): Promise<TriggerFiredApplied> {
-    return await applyTriggerFired(this.state, events, deliver);
+    return await applyTriggerFired(this.state, events, deliver, opts);
   }
 
   /**
@@ -135,8 +137,12 @@ export class CronService {
     await revertClocks(this.state, host, handed);
   }
 
-  async releaseOrphanClocks(knownHosts: ReadonlySet<string>): Promise<string[]> {
+  async releaseOrphanClocks(knownHosts: ReadonlySet<string> | null): Promise<string[]> {
     return await releaseOrphanClocks(this.state, knownHosts);
+  }
+
+  async takeBackStranded(host: string, ids: readonly string[]): Promise<string[]> {
+    return await takeBackStranded(this.state, host, ids);
   }
 
   /**

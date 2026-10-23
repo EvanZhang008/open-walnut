@@ -14,9 +14,10 @@ import type { TriggerEvent } from '../../providers/trigger-check-core.js';
 /**
  * Compile the armed set for one host. null = the engine is not running (do not
  * push). `clock`: whether that daemon said it holds clock routines
- * (clock-routine-v1); the result's `applied` / `rejected` take the daemon's answer.
+ * (clock-routine-v1); `fresh`: the first push on this connection. The result's
+ * `applied` / `rejected` take the daemon's answer.
  */
-export type TriggerPayloadProvider = (host: string, opts?: { clock?: 'yes' | 'no' | 'unknown' }) => Promise<{
+export type TriggerPayloadProvider = (host: string, opts?: { clock?: 'yes' | 'no' | 'unknown'; fresh?: boolean }) => Promise<{
   payload: { version: 1; triggers: unknown[] };
   hash: string;
   applied?: (reply: Record<string, unknown>) => Promise<void>;

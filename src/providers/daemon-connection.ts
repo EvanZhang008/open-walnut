@@ -1120,7 +1120,7 @@ export class DaemonConnection {
           if (!provider) return
           // Clock routines go only to a daemon that said it holds them (clock-routine-v1).
           const clock = !this.capabilitiesKnown ? 'unknown' : this.hasCapability('clock-routine-v1') ? 'yes' : 'no'
-          const compiled = await provider(this.hostKey, { clock })
+          const compiled = await provider(this.hostKey, { clock, fresh: this.lastTriggersPushHash === null })
           if (!compiled) return
           if (compiled.hash === this.lastTriggersPushHash) continue
           const reply = await this.send('triggers.configure', {

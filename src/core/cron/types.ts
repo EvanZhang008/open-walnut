@@ -106,6 +106,8 @@ export type TriggerAuditEntry = {
   injected?: { chars: number; preview: string };
   /** What the daemon repaired in what the check printed (an over-long id, a dropped item). */
   warnings?: string[];
+  /** A run someone asked for (Run now), not one the schedule made. */
+  manual?: true;
 };
 
 /** The daemon's last report about a check, for the card and the error counter. */
@@ -300,11 +302,13 @@ export type CronJobState = {
    */
   clockFromMs?: number;
   /**
-   * A slot a host's daemon gave back unrun (its clock came back to this server):
-   * it stays due until the timer runs it, instead of being skipped as a stale
-   * past slot by the next recompute.
+   * The last clock a host's daemon held, after it came back to this server. That
+   * daemon still sends the runs it made under it (`fromMs`) until each is
+   * recorded: slots before `beforeMs` were its own (absent: all of them, a one-shot
+   * that ran), and the server's timer owns the rest. Kept until the next takeback,
+   * or an edit or a resume starts the schedule over.
    */
-  clockCatchUpAtMs?: number;
+  clockReturned?: { host: string; fromMs: number; beforeMs?: number };
 };
 
 // ── The job itself ──

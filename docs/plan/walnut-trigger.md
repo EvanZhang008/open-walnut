@@ -88,13 +88,13 @@ The message is one envelope v2 tag, `<walnut-message kind="trigger" from="Trigge
 
 | Direction | Message | Purpose |
 |---|---|---|
-| server → daemon | `triggers.configure {config: {version: 1, triggers: [{id, name, everyMs, check: {run, cwd, timeoutSeconds}, limits: {maxFiresPerDay}, deliver?: {home, taskId, prompt}}]}}` | The authoritative set for that host. Sent on daemon connect and after every routine mutation that touches a check job on that host; hash-skipped when nothing changed (the `hooks.configure` precedent). A trigger missing from the set is disarmed but its state file is kept (pruned by age after 30 days), so disable then enable, or a foreign empty push, does not lose `seen`, the cursor, or unacked fires. |
+| server → daemon | `triggers.configure {config: {version: 1, triggers: [{id, name, everyMs, check: {run, cwd, timeoutSeconds}, limits: {maxFiresPerDay}, deliver?: {home, taskId, prompt}}]}}` | The authoritative set for that host. Sent on daemon connect and after every routine mutation that touches a check job on that host; hash-skipped when nothing changed (the `hooks.configure` precedent). A trigger missing from the set is disarmed but its state file is kept (pruned by age after 30 days), so disable then enable, or a foreign empty push, does not lose `seen`, the cursor, or unacked fires. A def the daemon cannot take is refused alone: the reply is `{applied, changed, count, clocks, released, refused?: [{id?, error}]}` and the rest of the set is armed. |
 | server → daemon | `triggers.test {check, triggerId?}` | Run once with no state read or write; returns `{ok, exitCode, durationMs, stdoutTail, stderrTail, parsed, wouldFire, newItemCount}`. Backs `trigger_test` and the form's Test button. |
 | server → daemon | `triggers.run {triggerId}` | Start one armed trigger's check now, through the normal path (state, dedup, events); answers `{ran, started}` at once and the outcome arrives as an event. Backs "Run now". |
 | server → daemon | `triggers.ack {triggerId, seq}` | The fire was processed; the daemon drops it from `pendingFires`. Withheld for a fire whose delivery failed transiently (the daemon then replays it) and for a fire whose routine this server never pushed (it may be another server's). |
 | server → daemon | `triggers.claim {triggerId, epoch?, seqs}` | Sent the moment a fire arrives (capability `trigger-claim-v1`). Answers `{claimed, unknown, host, busy, foreign?}`: a claimed or unknown seq is this server's to deliver; a `host` seq was already delivered by the host (record it); `busy` is being written by the host right now and `foreign` means another Walnut's socket asked, so the server neither delivers nor acks and the replay asks again. A claim that gets no answer is treated the same way, never as permission. |
 | daemon → server | `trigger.checked {id, atMs, outcome: "quiet" \| "error", reason?, error?, durationMs, nextRunAtMs, consecutiveErrors}` | History, the card's "checked 3m ago, quiet", consecutive-error counting. `reason` is `fire-false`, `all-seen`, or `rate-limited`. |
-| daemon → server | `trigger.fired {id, epoch, seq, atMs, items, input?, itemsTruncated?, durationMs, nextRunAtMs, host?, replay?}` | The fire, sent to every trusted client. `host: {atMs, sessionId, messageId, seqs}` marks a fire the host delivered itself (below). At-least-once: persisted in the daemon's `pendingFires` until acked, replayed after `triggers.configure` and about once a minute while unacked. The server dedups on `(id, epoch, seq)`; `epoch` is minted with the state file, so a daemon whose counter restarted (the file was recreated) does not have its next fires swallowed as replays. |
+| daemon → server | `trigger.fired {id, epoch, seq, atMs, items, input?, itemsTruncated?, durationMs, nextRunAtMs?, host?, clock?, replay?}` | The fire, sent to every trusted client. `host: {atMs, sessionId, messageId, seqs}` marks a fire the host delivered itself (below). At-least-once: persisted in the daemon's `pendingFires` until acked, replayed after `triggers.configure` and about once a minute while unacked. The server dedups on `(id, epoch, seq)`; `epoch` is minted with the state file, so a daemon whose counter restarted (the file was recreated) does not have its next fires swallowed as replays. |
 
 The trigger id rides `triggerId`, never `id`: a daemon frame is `{id, cmd, ...params}` where `id` is the RPC correlation slot, so a trigger id sent as `id` overwrites it and the reply can never be matched.
 
@@ -196,7 +196,7 @@ a delivery would pick. A new session, a task change and a routine edit place it 
 (3 s debounce, one push per host).
 
 The clock is a def in the same `triggers.configure` set, with no `check` and
-`clock: {schedule, fromMs}`. Both twins tick it with the schedule core the server uses
+`clock: {schedule, fromMs, notBeforeMs?}`. Both twins tick it with the schedule core the server uses
 (`src/providers/clock-schedule-core.ts`: croner's matching and time zones, no
 dependency; parity tested against croner on random patterns and the DST edges). A run
 is a fire carrying `clock: {slotMs, fromMs}`, so it reuses everything a fire has:
@@ -205,27 +205,70 @@ grace, the ack and the fire log. Missed slots give one run for all of them, the
 timer's catch-up rule; while one run is owed, a later slot only moves the clock on.
 
 A slot never runs twice across a handover, in either direction
-(`src/core/cron/clock-handover.ts`):
+(`src/core/cron/clock-handover.ts`, `src/core/cron/clock-fire.ts`):
 
 - Server to host: under the cron lock, BEFORE the push, the server sets
   `state.clockHost` and `clockFromMs` (the first slot it has not run); its timer never
   runs the routine after that. A routine the timer is running is handed over on a
-  later push. A refused push hands nothing over.
-- Host to server: the server takes a clock back only from the daemon's configure reply
-  (`released`, where `owedSlotMs` is the oldest run nobody took, which the daemon
-  drops; a reply that no longer holds it; an old daemon's reply), or when the host is
-  gone from the config. A slot already past stays due (`clockCatchUpAtMs`) and the
-  server's timer runs it once.
+  later push. The def also carries `notBeforeMs`, the routine's last run: the daemon
+  runs no slot at or before it (a Run now on the server, an older Mac that ran the
+  routine itself without knowing the clock had moved).
+- A refused push hands nothing over. A def the daemon cannot take is refused alone
+  (`refused` in the configure reply; the rest of the set is armed): that routine comes
+  back to the server, and placement does not hand it to that host again until its def
+  changes or the host connects anew, so the push never loops.
+- Host to server: the server takes a clock back from the daemon's configure reply
+  (`released`; a reply that no longer holds it; an old daemon's reply), when the host
+  is gone from the config, or when the host is not connected and the routine plainly
+  no longer belongs there (below). It takes the daemon's next slot (a past one stays
+  due; no recompute moves an unrun slot) and records the clock that came back in
+  `state.clockReturned` (`{host, fromMs, beforeMs}`: slots before `beforeMs` were
+  the host's).
+- A released clock's daemon keeps every fire the server has not acked (its draining
+  set, kept in `triggers.json` across a restart), and goes on replaying them, answering
+  claims and acks, and delivering them on the host after the grace, but runs no slot.
+  `released` says how many (`pending`). So every run the host made reaches the server:
+  one it delivered is recorded (history, last run, a one-shot done, a parked task
+  woken); one nobody took is run once by the server when it was the host's slot; a
+  claim whose answer was lost is asked again on the replay.
+- What the server does with a host's run nobody took (`owedClockVerdict`): a paused
+  routine runs nothing; a routine that ran at or after that slot (Run now, its own
+  timer) has it covered; a run made under the current handover or under the clock that
+  came back before `beforeMs` is run; anything else is acked and not run (a slot the
+  server's timer owns, a handover the schedule started over since, another host).
+  While the routine is running on the server the run waits for its replay. A run the
+  host delivered that covers the server's due slot moves that slot on.
 - A new `fromMs` (a handover, a schedule edit, a resume) starts the daemon's clock over
-  and drops the runs nobody took under the old one. A claim of a clock run the daemon
-  no longer holds is `wait`: the server never delivers it from the fire.
-- Pause keeps the clock's host: the daemon disarms it and nothing runs. Resume starts
-  it over there from its next slot, or on the server when its work moved.
-- Run now stays on the server: it is an explicit run, not a slot.
+  and drops the runs nobody took under the old one (a released clock's are kept: the
+  server still records them).
+- A clock on a host that is not connected (`takeBackStrandedClocks`, after each
+  placement round): it comes back when the routine stopped qualifying (now
+  main-agent, a cron only croner reads, a check or a wake added), its `claude-code`
+  host changed, its task is complete, or the task's live session is now on the Mac or
+  another host. A session that only reads as unreachable keeps the clock where it is.
+  The host gives the clock back when it reconnects, and its runs of that time are
+  matched by their slot as above.
+- A config that could not be read (`isFallbackConfig`) names no hosts: no clock moves
+  and none comes back, at boot or at a push.
+- Pause keeps the clock's host: the push goes out at once and the daemon disarms it;
+  a run it still holds is acked and not run. Resume starts it over there from its next
+  slot, or on the server when its work moved. An edit and a delete push at once too.
+- Run now stays on the server: it is an explicit run, not a slot. It leaves a History
+  row (`manual`), as every run of a session routine on the server's timer does.
+
+The server's timer keeps the same rules: a recompute never moves an enabled routine's
+due slot that has not run (only a run or the boot catch-up does), the timer never
+wakes for a slot it would refuse (the replay guard's slot, a run in flight), and
+inside the hour a fall daylight saving change repeats it looks for the next slot an
+hour later, as the daemon's `afterRun` does, so a routine finer than an hour never
+stops there.
 
 UI: the Routines card shows `clock @ <host>` under the timing, the label a trigger
-uses for its check's host; the task's TRIGGER pill lists the routine with the same
-label, `Run now`, and no last check.
+uses for its check's host; for a `claude-code` routine the hover says a run that comes
+due while the Mac sleeps waits on the host, and a slot that has passed reads "Due 2h
+ago: waiting on <host> for this Mac to start it". The task's TRIGGER pill lists every
+session routine on the task wherever its clock is (with the host label when it is on
+a host), `Run now`, and its History; the replica copy carries `clockHost`.
 
 ## Boundaries (not in this slice)
 

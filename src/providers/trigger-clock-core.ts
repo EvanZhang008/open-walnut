@@ -11,6 +11,13 @@
  * daemon owns. The server mints a new one each time it starts the clock over (a
  * handover, a schedule edit, a resume); the same value means "keep your own
  * place", which is what lets a daemon restart catch up once on a slot it missed.
+ * `notBeforeMs` is the routine's last run as the server knows it: no slot at or
+ * before it runs here (a server that ran the routine itself meanwhile, an older
+ * Mac that did not know the clock had moved).
+ *
+ * A released clock keeps every fire nobody acked and goes on replaying them (the
+ * daemon's draining set) until the server has recorded each one: a run the host
+ * delivered is the routine's history, and one nobody took is the server's to run.
  *
  * Pure, and importing only the schedule core: the standalone twin imports it, the
  * source twin gets it through the trigger-check-core.cjs sidecar. The next slot
@@ -29,6 +36,7 @@ const schedules = createClockSchedule();
 export interface TriggerClockSpec {
   schedule: ClockScheduleSpec;
   fromMs: number;
+  notBeforeMs?: number;
 }
 
 /** What the state file keeps of a clock: the handover it runs under and its next slot (none: an `at` that ran). */
@@ -42,11 +50,8 @@ export interface ClockReport {
   id: string;
   fromMs: number;
   nextRunAtMs?: number;
-  /**
-   * Released only: the oldest slot of a run this daemon had queued but nobody had
-   * taken yet. The daemon drops that run and the server runs it instead.
-   */
-  owedSlotMs?: number;
+  /** Released only: fires still to be acked, which the daemon keeps replaying until they are. */
+  pending?: number;
 }
 
 export function validateClockSpec(raw: unknown): { ok: true; spec: TriggerClockSpec } | { ok: false; error: string } {
@@ -63,43 +68,37 @@ export function validateClockSpec(raw: unknown): { ok: true; spec: TriggerClockS
     : s.kind === 'every'
       ? { kind: 'every', everyMs: Math.floor(s.everyMs as number), anchorMs: Math.floor(s.anchorMs as number) }
       : { kind: 'cron', expr: String(s.expr), tz: String(s.tz).trim() };
-  return { ok: true, spec: { schedule, fromMs: Math.floor(r.fromMs) } };
+  if (r.notBeforeMs !== undefined && (typeof r.notBeforeMs !== 'number' || !Number.isFinite(r.notBeforeMs))) {
+    return { ok: false, error: 'clock.notBeforeMs must be a number' };
+  }
+  return {
+    ok: true,
+    spec: { schedule, fromMs: Math.floor(r.fromMs), ...(typeof r.notBeforeMs === 'number' ? { notBeforeMs: Math.floor(r.notBeforeMs) } : {}) },
+  };
 }
 
 /** The stable text of a clock for the set's hash. */
 export function clockSpecKey(spec: TriggerClockSpec): string {
-  return JSON.stringify([spec.schedule.kind, spec.schedule, spec.fromMs]);
+  return JSON.stringify([spec.schedule.kind, spec.schedule, spec.fromMs, spec.notBeforeMs ?? null]);
 }
 
-/** The clock to run when a def is armed: the one on file under the same handover, else a fresh start at `fromMs`. */
+/**
+ * The clock to run when a def is armed: the one on file under the same handover,
+ * else a fresh start at `fromMs`; either way past `notBeforeMs`. Returns `prev`
+ * itself when nothing changed.
+ */
 export function clockStateOnArm(spec: TriggerClockSpec, prev: ClockHostState | undefined): ClockHostState {
-  if (prev && prev.fromMs === spec.fromMs) return prev;
-  return { fromMs: spec.fromMs, nextRunAtMs: spec.fromMs };
+  const base = prev && prev.fromMs === spec.fromMs ? prev : { fromMs: spec.fromMs, nextRunAtMs: spec.fromMs };
+  const floor = spec.notBeforeMs;
+  if (floor === undefined || base.nextRunAtMs === undefined || base.nextRunAtMs > floor) return base;
+  // The routine ran at or after this slot: the next one after that run is the clock's.
+  const next = schedules.afterRun(spec.schedule, floor);
+  return { fromMs: base.fromMs, ...(next !== undefined ? { nextRunAtMs: next } : {}) };
 }
 
 /** A run nobody has taken: no server claimed it and the host did not deliver it. */
 function owed(f: PendingFire): boolean {
   return !!f.clock && !f.host && f.claimedAt === undefined;
-}
-
-/**
- * The daemon gives a clock back (configure's `released`): every run it queued
- * that nobody took goes with it, and the oldest slot among them is reported so
- * the server runs it once. A run the host is delivering right now (`inFlight`)
- * stays: its outcome is recorded here. Returns that slot, or undefined.
- */
-export function releaseClockFires(
-  state: { pendingFires: PendingFire[] },
-  inFlight: ReadonlySet<number> = new Set(),
-): number | undefined {
-  let oldest: number | undefined;
-  state.pendingFires = state.pendingFires.filter((f) => {
-    if (!owed(f) || inFlight.has(f.seq)) return true;
-    const slot = f.clock!.slotMs;
-    oldest = oldest === undefined ? slot : Math.min(oldest, slot);
-    return false;
-  });
-  return oldest;
 }
 
 /**

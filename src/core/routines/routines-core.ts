@@ -209,8 +209,17 @@ function pushTriggersFor(hosts: Array<string | undefined | null>): void {
 
 /** The stored job, or null. Used to learn a trigger's OLD host before a mutation. */
 async function findJob(service: CronService, id: string): Promise<CronJob | null> {
-  const jobs = await service.list({ includeDisabled: true });
+  const jobs = await service.list({ includeDisabled: true, recompute: false });
   return jobs.find((j) => j.id === id) ?? null;
+}
+
+/**
+ * The host whose daemon holds a routine's clock (clock-routine-v1): an edit, a
+ * pause or a delete reaches it at once, as a server-timer routine stops at once,
+ * not after the placement debounce.
+ */
+function clockHostOf(job: CronJob | null | undefined): string | undefined {
+  return job?.state?.clockHost || undefined;
 }
 
 /**
@@ -290,7 +299,7 @@ export async function patchRoutine(id: string, body: unknown, origin?: string): 
   try {
     const job = await service.update(id, patch);
     log.web.info('routine updated via shared core', { jobId: id });
-    pushTriggersFor([before?.check?.host, job.check?.host]);
+    pushTriggersFor([before?.check?.host, job.check?.host, clockHostOf(before), clockHostOf(job)]);
     return { job };
   } catch (err) {
     mapCronError(err);
@@ -312,7 +321,7 @@ export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed:
   // A set that no longer names the id is what tells the daemon to stop the
   // timer. Its state file stays (a disable must survive a re-enable) and is
   // pruned by age once nothing re-arms it.
-  pushTriggersFor([before?.check?.host]);
+  pushTriggersFor([before?.check?.host, clockHostOf(before)]);
   return result;
 }
 
@@ -324,7 +333,8 @@ export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
     const job = await service.toggle(id);
     // The enable toggle IS the kill switch for a trigger: a disabled job is
     // absent from the compiled set, so this push is what stops the polling.
-    pushTriggersFor([job.check?.host]);
+    // A paused clock keeps its host, which takes it off its clock now.
+    pushTriggersFor([job.check?.host, clockHostOf(job)]);
     return { job };
   } catch (err) {
     mapCronError(err);

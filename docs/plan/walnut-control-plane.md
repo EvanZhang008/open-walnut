@@ -170,7 +170,11 @@ then moves to that host's daemon, which fires on the schedule while the Mac slee
 delivers a session routine's run into the session there (docs/plan/walnut-trigger.md
 "Clock routines"). Everything else, and every routine of the Mac's own, stays on the
 server's timer. The Mac decides where each clock lives and hands it over or takes it
-back only through the daemon's own reply, so no slot runs on both sides.
+back through the daemon's own reply, so no slot runs on both sides; a host that is not
+connected loses a clock only when the routine plainly no longer belongs there, and a
+config that could not be read moves none. A daemon keeps the runs of a clock it gave
+back until the Mac has recorded each one, so a run made on the host while the Mac slept
+is never lost and never run again.
 
 ## The companion's copy of the tasks
 

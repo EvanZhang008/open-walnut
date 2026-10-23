@@ -143,6 +143,7 @@ import {
   triggerStateFileName,
   triggersSetHash,
   validateTriggerDef,
+  validateTriggerSet,
   CHECK_ERROR_BACKOFF_MS,
   HOST_DELIVERY_GRACE_MS,
   HOST_DELIVERY_RETRY_MS,
@@ -157,7 +158,7 @@ import {
   type TriggersTestResult,
 } from './trigger-check-core.js'
 import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-core.js'
-import { clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, releaseClockFires, type ClockReport } from './trigger-clock-core.js'
+import { clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
@@ -5321,6 +5322,24 @@ interface ArmedTrigger {
 
 const armedTriggers = new Map<string, ArmedTrigger>()
 /**
+ * Clocks the server took back while fires of theirs were still unacked. No slot
+ * runs, but each fire keeps replaying, answers claims and acks, and may still be
+ * delivered here, until the server has recorded it: a run the host delivered is
+ * the routine's history, one nobody took is the server's to run. triggers.json
+ * keeps them, so a restart goes on replaying. Mirror daemon-source.ts.
+ */
+const drainingTriggers = new Map<string, ArmedTrigger>()
+
+/** The armed or draining entry of a trigger: what replays, claims, acks and host deliveries act on. */
+function heldTrigger(id: string): ArmedTrigger | undefined {
+  return armedTriggers.get(id) ?? drainingTriggers.get(id)
+}
+
+/** Every entry whose fires still go to the server. */
+function fireHolders(): ArmedTrigger[] {
+  return [...armedTriggers.values(), ...drainingTriggers.values()]
+}
+/**
  * Seqs this host is writing into a session right now, by trigger id (claims
  * answer `busy`). Keyed by id, not held on the entry: a configure that re-arms
  * the trigger mid-write must not make its fires claimable.
@@ -5349,9 +5368,9 @@ function hostDeliveryGraceMs(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.max(500, raw) : HOST_DELIVERY_GRACE_MS
 }
 
-function newArmedTrigger(def: TriggerDef, state: TriggerHostState, nextRunAtMs: number, now: number): ArmedTrigger {
+function newArmedTrigger(def: TriggerDef, state: TriggerHostState, nextRunAtMs: number, now: number, keepFires = false): ArmedTrigger {
   const entry: ArmedTrigger = { def, state, nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now }
-  if (def.clock) armClock(entry, now, nextRunAtMs - now)
+  if (def.clock) armClock(entry, now, nextRunAtMs - now, keepFires)
   return entry
 }
 
@@ -5364,17 +5383,25 @@ function newArmedTrigger(def: TriggerDef, state: TriggerHostState, nextRunAtMs: 
 // daemon-source.ts.
 const clockSchedule = createClockSchedule()
 
-/** Arm a clock def on `entry`: its place under the same handover, else a fresh start at the def's slot. */
-function armClock(entry: ArmedTrigger, now: number, delayMs: number): void {
+/**
+ * Arm a clock def on `entry`: its place under the same handover, else a fresh start
+ * at the def's slot, and never at a slot the routine already ran (notBeforeMs).
+ * `keepFires`: the fires are a released clock's, which the server still records.
+ */
+function armClock(entry: ArmedTrigger, now: number, delayMs: number, keepFires = false): void {
   const spec = entry.def.clock!
   const prev = entry.state.clock
   const clock = clockStateOnArm(spec, prev)
   if (clock !== prev) {
     entry.state.clock = clock
     // A new handover: runs nobody took under an older one are not this clock's.
-    dropStaleClockFires(entry.state, spec.fromMs)
+    if (!keepFires) dropStaleClockFires(entry.state, spec.fromMs)
     persistTriggerState(entry.def.id, entry.state)
-    logMsg('info', 'clock routine armed', { id: entry.def.id, fromMs: spec.fromMs, nextRunAtMs: clock.nextRunAtMs, handover: prev ? 'new' : 'first' })
+    logMsg('info', 'clock routine armed', {
+      id: entry.def.id, fromMs: spec.fromMs, nextRunAtMs: clock.nextRunAtMs,
+      handover: !prev ? 'first' : prev.fromMs === spec.fromMs ? 'past-last-run' : 'new',
+      ...(spec.notBeforeMs !== undefined ? { notBeforeMs: spec.notBeforeMs } : {}),
+    })
   }
   entry.nextRunAtMs = clockDueMs(clock, now, Math.max(0, delayMs))
 }
@@ -5469,7 +5496,7 @@ function persistTriggerState(id: string, state: TriggerHostState): void {
 function pruneTriggerStateFiles(nowMs: number): void {
   let names: string[]
   try { names = fs.readdirSync(TRIGGER_STATE_DIR) } catch { return }
-  const armedFiles = new Set([...armedTriggers.keys()].map((tid) => triggerStateFileName(tid)))
+  const armedFiles = new Set([...armedTriggers.keys(), ...drainingTriggers.keys()].map((tid) => triggerStateFileName(tid)))
   for (const name of names) {
     if (!name.endsWith('.json') || armedFiles.has(name)) continue
     const file = path.join(TRIGGER_STATE_DIR, name)
@@ -5484,7 +5511,8 @@ function pruneTriggerStateFiles(nowMs: number): void {
 function persistTriggersFile(defs: TriggerDef[]): void {
   const tmp = TRIGGERS_FILE + '.tmp'
   try {
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, triggers: defs }), { mode: 0o600 })
+    const draining = [...drainingTriggers.values()].map((e) => e.def)
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, triggers: defs, ...(draining.length ? { draining } : {}) }), { mode: 0o600 })
     fs.renameSync(tmp, TRIGGERS_FILE)
   } catch (err) {
     logMsg('warn', 'triggers persist failed (in-memory only)', { error: (err as Error).message })
@@ -5495,7 +5523,7 @@ function persistTriggersFile(defs: TriggerDef[]): void {
 function loadTriggersAtBoot(): void {
   let raw: unknown
   try { raw = JSON.parse(fs.readFileSync(TRIGGERS_FILE, 'utf-8')) } catch { return }
-  const file = raw as { version?: unknown; triggers?: unknown }
+  const file = raw as { version?: unknown; triggers?: unknown; draining?: unknown }
   if (!file || file.version !== 1 || !Array.isArray(file.triggers)) {
     logMsg('warn', 'triggers file ignored: unexpected shape', { file: TRIGGERS_FILE })
     return
@@ -5515,10 +5543,17 @@ function loadTriggersAtBoot(): void {
   for (const def of effectiveTriggerDefs(defs)) {
     armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now))
   }
+  // Released clocks with fires still unacked go on replaying them.
+  for (const raw of Array.isArray(file.draining) ? file.draining : []) {
+    const parsed = validateTriggerDef(raw)
+    if (!parsed.ok || armedTriggers.has(parsed.def.id)) continue
+    const state = readTriggerState(parsed.def.id, now)
+    if (state.pendingFires.length > 0) drainingTriggers.set(parsed.def.id, drainingEntry(parsed.def, state, now))
+  }
   armedTriggersHash = triggersSetHash(defs)
   try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }) } catch {}
   pruneTriggerStateFiles(now)
-  logMsg('info', 'triggers loaded from disk', { count: defs.length, hash: armedTriggersHash })
+  logMsg('info', 'triggers loaded from disk', { count: defs.length, draining: drainingTriggers.size, hash: armedTriggersHash })
 }
 
 /**
@@ -5545,11 +5580,14 @@ function sendTriggerEvent(ev: 'trigger.fired' | 'trigger.checked', fields: Recor
  * unmarked on purpose: it must go out as soon as a trusted client appears.
  */
 function sendTriggerFire(entry: ArmedTrigger, fire: PendingFire, replay: boolean): boolean {
+  // A clock reports its next slot while it holds it; a draining one holds none.
+  const next = !entry.def.clock ? entry.nextRunAtMs
+    : armedTriggers.get(entry.def.id) === entry ? entry.state.clock?.nextRunAtMs : undefined
   const delivered = sendTriggerEvent('trigger.fired', {
     id: entry.def.id, epoch: entry.state.epoch, seq: fire.seq, atMs: fire.atMs, items: fire.items,
     ...(fire.input !== undefined ? { input: fire.input } : {}),
     ...(fire.itemsTruncated ? { itemsTruncated: true } : {}),
-    durationMs: fire.durationMs, nextRunAtMs: entry.nextRunAtMs,
+    durationMs: fire.durationMs, ...(next !== undefined ? { nextRunAtMs: next } : {}),
     ...(fire.host ? { host: fire.host } : {}),
     ...(fire.warnings?.length ? { warnings: fire.warnings } : {}),
     ...(fire.clock ? { clock: fire.clock } : {}),
@@ -5644,7 +5682,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
  */
 function replayPendingFires(now: number): void {
   const interval = triggerReplayMs()
-  for (const entry of armedTriggers.values()) {
+  for (const entry of fireHolders()) {
     // Marks for acked (or trimmed) fires would otherwise pile up for the
     // daemon's life; pendingFires is the authority on what is still owed.
     if (entry.fireSentAt.size > entry.state.pendingFires.length) {
@@ -5668,7 +5706,7 @@ function replayPendingFires(now: number): void {
  */
 function deliverUnclaimedFires(now: number): void {
   const grace = hostDeliveryGraceMs()
-  for (const entry of armedTriggers.values()) {
+  for (const entry of fireHolders()) {
     const spec = entry.def.deliver
     const id = entry.def.id
     if (!spec || hostDeliveriesInFlight.has(id)) continue
@@ -5683,8 +5721,8 @@ function deliverUnclaimedFires(now: number): void {
     hostDeliveriesInFlight.set(id, new Set(seqs))
     void offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then((r) => {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
-      // re-armed it (a fresh state object read from disk) or disarmed it.
-      const current = armedTriggers.get(id)
+      // re-armed it, released it into the draining set, or disarmed it.
+      const current = heldTrigger(id)
       const state = current ? current.state : readTriggerState(id, Date.now())
       if (state.epoch !== epoch) {
         logMsg('warn', 'trigger host delivery outcome dropped: state file started over', { id, seqs, delivered: r.ok })
@@ -5751,11 +5789,13 @@ function effectiveTriggerDefs(defs: TriggerDef[]): TriggerDef[] {
 function armTriggerSet(defs: TriggerDef[], now: number): ClockReport[] {
   const ids = new Set(defs.map((def) => def.id))
   const released: ClockReport[] = []
+  const drainingBefore = drainingTriggers.size
   for (const [tid, entry] of armedTriggers) {
     if (ids.has(tid)) continue
     armedTriggers.delete(tid)
     if (entry.def.clock) released.push(releaseClock(tid, entry))
   }
+  let drainingChanged = drainingTriggers.size !== drainingBefore
   for (const def of defs) {
     const existing = armedTriggers.get(def.id)
     // A trigger that stays keeps its state file, its cursor and its schedule;
@@ -5766,9 +5806,18 @@ function armTriggerSet(defs: TriggerDef[], now: number): ClockReport[] {
       if (def.clock) armClock(existing, now, TRIGGER_FIRST_RUN_DELAY_MS)
       continue
     }
-    armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now))
+    // Handed back before its fires drained: those fires stay with it.
+    const draining = drainingTriggers.get(def.id)
+    if (draining) { drainingTriggers.delete(def.id); drainingChanged = true }
+    armedTriggers.set(def.id, newArmedTrigger(def, draining ? draining.state : readTriggerState(def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining))
   }
+  if (drainingChanged) persistTriggersFile(configuredTriggerDefs)
   return released
+}
+
+/** A released clock that still has fires to replay: no slot runs. */
+function drainingEntry(def: TriggerDef, state: TriggerHostState, now: number): ArmedTrigger {
+  return { def, state, nextRunAtMs: Number.POSITIVE_INFINITY, running: false, fireSentAt: new Map(), armedAtMs: now }
 }
 
 /** Where a clock stands, for the configure reply. */
@@ -5786,14 +5835,17 @@ function clockReports(): ClockReport[] {
 }
 
 /**
- * The server took this clock back: say where it stood, and hand over the run it
- * had queued that nobody took (the server runs it, so it must not stay here).
+ * The server took this clock back: say where it stood. Its fires nobody acked
+ * stay (the draining set) and go on replaying until the server has recorded each.
  */
 function releaseClock(tid: string, entry: ArmedTrigger): ClockReport {
-  const owedSlotMs = releaseClockFires(entry.state, hostDeliveriesInFlight.get(tid) ?? new Set<number>())
-  if (owedSlotMs !== undefined) persistTriggerState(tid, entry.state)
-  logMsg('info', 'clock routine released', { id: tid, ...(owedSlotMs !== undefined ? { owedSlotMs } : {}) })
-  return { ...clockReportOf(tid, entry), ...(owedSlotMs !== undefined ? { owedSlotMs } : {}) }
+  const pending = entry.state.pendingFires.length
+  if (pending > 0) {
+    entry.nextRunAtMs = Number.POSITIVE_INFINITY
+    drainingTriggers.set(tid, entry)
+  }
+  logMsg('info', 'clock routine released', { id: tid, pending })
+  return { ...clockReportOf(tid, entry), ...(pending > 0 ? { pending } : {}) }
 }
 
 /** A session paused, resumed or deleted a trigger here: arm by it now. */
@@ -5811,17 +5863,9 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   if (!payload || typeof payload !== 'object' || payload.version !== 1 || !Array.isArray(payload.triggers)) {
     return sendError(ws, id, 'triggers.configure: invalid config: version must be 1 with a triggers array')
   }
-  const defs: TriggerDef[] = []
-  const seenIds = new Set<string>()
-  for (const raw of payload.triggers) {
-    const parsed = validateTriggerDef(raw)
-    if (!parsed.ok) return sendError(ws, id, 'triggers.configure: invalid config: ' + parsed.error)
-    if (seenIds.has(parsed.def.id)) {
-      return sendError(ws, id, 'triggers.configure: invalid config: duplicate trigger id ' + parsed.def.id)
-    }
-    seenIds.add(parsed.def.id)
-    defs.push(parsed.def)
-  }
+  // A def this daemon cannot take is refused alone; the rest of the set is armed.
+  const { defs, refused } = validateTriggerSet(payload.triggers)
+  if (refused.length) logMsg('warn', 'triggers refused', { refused })
 
   const now = Date.now()
   const hash = triggersSetHash(defs)
@@ -5832,13 +5876,13 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   armedTriggersHash = hash
   pruneTriggerStateFiles(now)
   const clocks = clockReports()
-  logMsg('info', 'triggers configured', { hash, count: defs.length, changed, clocks: clocks.length, released: released.map((r) => r.id) })
-  sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released })
+  logMsg('info', 'triggers configured', { hash, count: defs.length, changed, clocks: clocks.length, released: released.map((r) => r.id), draining: drainingTriggers.size })
+  sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released, ...(refused.length ? { refused } : {}) })
 
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server
   // dedups on (id, epoch, seq).
-  for (const entry of armedTriggers.values()) {
+  for (const entry of fireHolders()) {
     for (const fire of entry.state.pendingFires) sendTriggerFire(entry, fire, true)
   }
 }
@@ -5937,7 +5981,7 @@ function cmdTriggersRun(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 function cmdTriggersClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const tid = triggerIdOf(cmd)
   const seqs = Array.isArray(cmd.seqs) ? (cmd.seqs as unknown[]).filter((s): s is number => typeof s === 'number' && Number.isFinite(s)) : []
-  const entry = tid ? armedTriggers.get(tid) : undefined
+  const entry = tid ? heldTrigger(tid) : undefined
   const inFlight = hostDeliveriesInFlight.get(tid) ?? new Set<number>()
   const empty = { claimed: [] as number[], unknown: [] as number[], host: [], busy: [] as number[] }
   if (!entry || (typeof cmd.epoch === 'string' && cmd.epoch !== entry.state.epoch)) {
@@ -5956,12 +6000,18 @@ function cmdTriggersClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
 function cmdTriggersAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const tid = triggerIdOf(cmd)
   const seq = typeof cmd.seq === 'number' ? cmd.seq : NaN
-  const entry = tid ? armedTriggers.get(tid) : undefined
+  const entry = tid ? heldTrigger(tid) : undefined
   if (!entry || !Number.isFinite(seq)) return sendOk(ws, id, { acked: false })
   const acked = ackFire(entry.state, seq)
   if (acked) {
     entry.fireSentAt.delete(seq)
     persistTriggerState(tid, entry.state)
+    // The last fire of a released clock is recorded: nothing of it is left here.
+    if (drainingTriggers.get(tid) === entry && entry.state.pendingFires.length === 0) {
+      drainingTriggers.delete(tid)
+      persistTriggersFile(configuredTriggerDefs)
+      logMsg('info', 'clock routine drained', { id: tid })
+    }
   }
   return sendOk(ws, id, { acked })
 }

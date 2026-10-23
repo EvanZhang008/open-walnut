@@ -1,14 +1,16 @@
 /**
  * A clock routine in a daemon's trigger table (src/providers/trigger-clock-core.ts,
- * clock-routine-v1): the def's validation, the handover mark, the catch-up rule
- * (one run for every slot missed) and what a release hands back.
+ * clock-routine-v1): the def's validation, the handover mark and the last-run
+ * floor, the catch-up rule (one run for every slot missed), and a whole pushed
+ * set where one bad def is refused alone.
  */
 import { describe, expect, it } from 'vitest'
 import {
-  clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, releaseClockFires, validateClockSpec,
+  clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, validateClockSpec,
 } from '../../src/providers/trigger-clock-core.js'
 import {
-  applyClockFire, claimFires, emptyHostState, triggersSetHash, validateTriggerDef, type PendingFire, type TriggerDef,
+  applyClockFire, claimFires, emptyHostState, triggersSetHash, validateTriggerDef, validateTriggerSet,
+  type PendingFire, type TriggerDef,
 } from '../../src/providers/trigger-check-core.js'
 
 const HOUR = 3_600_000
@@ -29,6 +31,16 @@ describe('validating a clock def', () => {
     expect(validateClockSpec({ schedule: { kind: 'every', everyMs: HOUR }, fromMs: 5 })).toMatchObject({ ok: false })
     expect(validateClockSpec({ schedule: { kind: 'cron', expr: '0 9 * * 1#2', tz: 'UTC' }, fromMs: 5 })).toMatchObject({ ok: false })
     expect(validateClockSpec({ schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' } })).toMatchObject({ ok: false })
+    expect(validateClockSpec({ schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' }, fromMs: 5, notBeforeMs: 'x' })).toMatchObject({ ok: false })
+  })
+
+  it('keeps the last-run floor, and the set hash moves with it', () => {
+    const v = validateClockSpec({ schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' }, fromMs: 5, notBeforeMs: 7.6 })
+    expect(v).toMatchObject({ ok: true, spec: { fromMs: 5, notBeforeMs: 7 } })
+    const a = validateTriggerDef(cronDef(10))
+    const b = validateTriggerDef({ ...cronDef(10), clock: { ...(cronDef(10).clock as object), notBeforeMs: 9 } })
+    if (!a.ok || !b.ok) throw new Error('defs did not validate')
+    expect(triggersSetHash([a.def])).not.toBe(triggersSetHash([b.def]))
   })
 
   it('a trigger def carries a check or a clock, never both, and keeps its delivery', () => {
@@ -60,6 +72,21 @@ describe('the handover mark', () => {
     expect(clockStateOnArm({ schedule: { kind: 'at', at: 'x' }, fromMs: 200 }, undefined)).toEqual({ fromMs: 200, nextRunAtMs: 200 })
   })
 
+  it('never runs a slot at or before the routine’s last run, wherever that run happened', () => {
+    const hourly = { kind: 'every' as const, everyMs: HOUR, anchorMs: 0 }
+    // An older Mac ran the routine itself at 5.5h while the daemon kept its place at 3h.
+    const prev = { fromMs: HOUR, nextRunAtMs: 3 * HOUR }
+    expect(clockStateOnArm({ schedule: hourly, fromMs: HOUR, notBeforeMs: 5.5 * HOUR }, prev)).toEqual({ fromMs: HOUR, nextRunAtMs: 6 * HOUR })
+    // A run exactly on the slot covers it.
+    expect(clockStateOnArm({ schedule: hourly, fromMs: HOUR, notBeforeMs: 3 * HOUR }, prev)).toEqual({ fromMs: HOUR, nextRunAtMs: 4 * HOUR })
+    // A floor behind the place changes nothing (the same object comes back).
+    expect(clockStateOnArm({ schedule: hourly, fromMs: HOUR, notBeforeMs: 2 * HOUR }, prev)).toBe(prev)
+    // A new handover starts past it too, and a one-shot that ran has no slot left.
+    expect(clockStateOnArm({ schedule: hourly, fromMs: 2 * HOUR, notBeforeMs: 2.5 * HOUR }, prev)).toEqual({ fromMs: 2 * HOUR, nextRunAtMs: 3 * HOUR })
+    const at = { kind: 'at' as const, at: new Date(4 * HOUR).toISOString() }
+    expect(clockStateOnArm({ schedule: at, fromMs: 4 * HOUR, notBeforeMs: 4 * HOUR + 1 }, undefined)).toEqual({ fromMs: 4 * HOUR })
+  })
+
   it('a past slot (a catch-up) waits the first-run delay; a future one waits for itself; none never runs', () => {
     expect(clockDueMs({ fromMs: 0, nextRunAtMs: 50 }, 1_000, 5_000)).toBe(6_000)
     expect(clockDueMs({ fromMs: 0, nextRunAtMs: 90_000 }, 1_000, 5_000)).toBe(90_000)
@@ -87,13 +114,6 @@ describe('owed runs', () => {
     expect(state.lastFireAtMs).toBe(5_000)
   })
 
-  it('a release hands back the owed runs (the oldest slot) and keeps what someone took or is delivering', () => {
-    const state = { pendingFires: [fire(1, 100), fire(2, 50), fire(3, 30, { claimedAt: 31 }), fire(4, 20)] }
-    expect(releaseClockFires(state, new Set([4]))).toBe(50)
-    expect(state.pendingFires.map((f) => f.seq)).toEqual([3, 4])
-    expect(releaseClockFires({ pendingFires: [fire(5, 9, { claimedAt: 1 })] })).toBeUndefined()
-  })
-
   it('a new handover drops the runs nobody took under an older one', () => {
     const state = { pendingFires: [fire(1, 10), { ...fire(2, 20), clock: { slotMs: 20, fromMs: 7 } }, fire(3, 30, { claimedAt: 31 })] }
     expect(dropStaleClockFires(state, 7)).toBe(true)
@@ -107,5 +127,19 @@ describe('owed runs', () => {
     const { reply } = claimFires(state, [1], 6_000)
     expect(reply.claimed).toEqual([1])
     expect(clockFireOwed(state.pendingFires)).toBe(false)
+  })
+})
+
+describe('a pushed set', () => {
+  it('refuses a bad def alone and arms the rest, a repeated id keeping its first def', () => {
+    const good = cronDef(10)
+    const other = { ...cronDef(20), id: 'r2' }
+    const bad = { ...cronDef(30), id: 'r3', clock: { schedule: { kind: 'cron', expr: '0 9 * * 1#2', tz: 'UTC' }, fromMs: 30 } }
+    const { defs, refused } = validateTriggerSet([good, bad, { id: 7 }, other, { ...cronDef(40) }])
+    expect(defs.map((d) => [d.id, d.clock?.fromMs])).toEqual([['r1', 10], ['r2', 20]])
+    expect(refused).toHaveLength(3)
+    expect(refused[0]).toMatchObject({ id: 'r3' })
+    expect(refused[1].id).toBeUndefined()
+    expect(refused[2]).toEqual({ id: 'r1', error: 'duplicate trigger id r1' })
   })
 })

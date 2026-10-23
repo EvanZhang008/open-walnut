@@ -146,6 +146,8 @@ export const SLOW_TEST_FILES = [
   'tests/core/companion-build-box.test.ts',
   'tests/web/routes/bridge-build.test.ts', // ~3s: one real install through the route
   'tests/web/routes/bridge-build-cloud.test.ts', // ~3s: the real CLOUD_MODE startServer
+  // 20k+ croner next-run comparisons against the shared schedule core (croner's own cost).
+  'tests/core/cron/schedule-equiv.test.ts', // ~11s
 ] as const
 
 /**

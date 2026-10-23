@@ -198,8 +198,8 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     if (scheduleChanged || enabledChanged) {
       // Deliberate user edit — the old slot's replay guard no longer applies.
       replayGuardOf(state).delete(id);
-      delete job.state.clockCatchUpAtMs;
       if (job.enabled) {
+        if (scheduleChanged || !wasEnabled) startScheduleOver(job);
         job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
         restartHostClock(job, now);
       } else {
@@ -433,9 +433,9 @@ export async function toggle(state: CronServiceState, id: string) {
     markSwitched(job, now);
     // Deliberate user edit — drop the replay guard so re-enabling schedules fresh.
     replayGuardOf(state).delete(id);
-    delete job.state.clockCatchUpAtMs;
 
     if (job.enabled) {
+      startScheduleOver(job);
       job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
       restartHostClock(job, now);
     } else {
@@ -452,6 +452,15 @@ export async function toggle(state: CronServiceState, id: string) {
     });
     return job;
   });
+}
+
+/**
+ * A schedule edit or a resume starts the schedule over: runs a host made under a
+ * clock that came back before it are history, no longer slots of this schedule
+ * (clock-fire.ts records them and runs none).
+ */
+function startScheduleOver(job: CronJob): void {
+  delete job.state.clockReturned;
 }
 
 /**

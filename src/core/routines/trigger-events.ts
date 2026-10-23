@@ -205,7 +205,7 @@ async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Pro
       delivered: { sessionId: h.sessionId, text },
       deliveredAtMs: h.atMs,
     };
-  });
+  }, { fromHost: host });
   log.cron.info('trigger fire recorded: delivered on host', {
     host, jobId: head.id, epoch: head.epoch, seqs, sessionId: h.sessionId, messageId: h.messageId,
     deliveredAt: new Date(h.atMs).toISOString(), found: applied.found, duplicate: applied.duplicate,
@@ -290,13 +290,17 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
       : buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: at.startedAtMs });
     const { runExecutor } = await import('./registry.js');
     return await runExecutor(job, job.executor, message);
-  });
+  }, { fromHost: host });
+  // A clock run left for the daemon's replay is never acked (clock-fire.ts `held`).
+  const held = new Set(applied.heldSeqs ?? []);
 
   log.cron.info('trigger fired', {
     host, jobId: head.id, epoch: head.epoch, seq: applied.seq ?? Math.min(...seqs),
     ...(batch.length > 1 ? { seqs, coalesced: batch.length } : {}),
     items: batch.reduce((n, e) => n + (e.items?.length ?? 0), 0),
     found: applied.found, duplicate: applied.duplicate, delivered: applied.delivered, retry: applied.retry,
+    ...(applied.supersededSeqs?.length ? { superseded: applied.supersededSeqs } : {}),
+    ...(held.size ? { held: [...held] } : {}),
     ...(applied.error ? { error: applied.error } : {}),
   });
 
@@ -315,7 +319,7 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     log.cron.warn('trigger delivery failed transiently; the daemon will replay it', {
       host, jobId: head.id, seqs, error: applied.error,
     });
-    await ackFires(host, head.id, applied.duplicateSeqs ?? []);
+    await ackFires(host, head.id, [...(applied.duplicateSeqs ?? []), ...(applied.supersededSeqs ?? [])]);
     return;
   }
   // A one-shot that ran is off (or gone): the next push takes it off the host's clock.
@@ -331,7 +335,7 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
       dedupKey: `trigger-delivery:${head.id}:${head.epoch ?? ''}:${applied.seq ?? Math.min(...seqs)}`,
     });
   }
-  await ackFires(host, head.id, seqs);
+  await ackFires(host, head.id, seqs.filter((seq) => !held.has(seq)));
 }
 
 async function ackFires(host: string, id: string, seqs: readonly number[]): Promise<void> {

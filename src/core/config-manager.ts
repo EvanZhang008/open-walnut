@@ -322,6 +322,18 @@ export function normalizeReadConfig(config: Config): Config {
   return config;
 }
 
+/** Configs getConfig made up because config.yaml could not be read. */
+const fallbackConfigs = new WeakSet<object>();
+
+/**
+ * True for the defaults getConfig answers with when config.yaml could not be
+ * read: its empty `hosts` says nothing about which hosts exist, so a caller that
+ * acts on a host being gone must not act on it.
+ */
+export function isFallbackConfig(config: object): boolean {
+  return fallbackConfigs.has(config);
+}
+
 /**
  * Read config.yaml. Returns default config if file doesn't exist.
  * Also merges auto-discovered SSH hosts.
@@ -355,10 +367,12 @@ export async function getConfig(): Promise<Config> {
     // as an unrelated outage: on 2026-08-28 06:03 a lost `agent:` section sent one
     // turn at credentials this box does not keep, and the phone reported "Could
     // not load credentials from any providers".
-    return {
+    const fallback: Config = {
       ...DEFAULT_CONFIG,
       agent: { ...DEFAULT_CONFIG.agent, available_models: defaultModels, main_model: defaultModels[0] },
     };
+    fallbackConfigs.add(fallback);
+    return fallback;
   }
 }
 

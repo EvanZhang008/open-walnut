@@ -5,8 +5,11 @@
  *
  * What it pins: the catch-up rule (one run for every slot missed), delivery into
  * a same-host session in the scheduled envelope, no second run while one is owed,
- * a restart that neither repeats nor loses a run, and a release that hands an
- * owed run back so the server runs it instead (never both).
+ * a restart that neither repeats nor loses a run, and a release that keeps every
+ * run the server has not recorded (the one the host delivered, the one nobody
+ * took, one claimed whose answer was lost) and replays it until it is acked, a
+ * restart included. One def the daemon cannot take is refused alone, and a clock
+ * never runs a slot at or before the routine's last run.
  *
  * What's real: the daemon process (source twin under node with its trigger
  * sidecar bundled into its dir; standalone twin under bun), the state files, a
@@ -189,6 +192,10 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     try { return fs.readFileSync(inbox, 'utf8').trim().split('\n').filter(Boolean).map((l) => String(JSON.parse(l).content)) } catch { return [] }
   }
   const scheduled = (name: string) => delivered().filter((c) => c.includes('<walnut-message kind="trigger"') && c.includes(`from="Trigger: ${name}"`))
+  const triggersFile = () => JSON.parse(fs.readFileSync(path.join(d.dir, 'triggers.json'), 'utf8')) as {
+    triggers: Array<{ id: string }>
+    draining?: Array<{ id: string }>
+  }
   const stateOf = (id: string) => JSON.parse(fs.readFileSync(path.join(d.dir, 'trigger-state', `${id}.json`), 'utf8')) as {
     pendingFires: Array<Record<string, unknown> & { seq: number; clock?: { slotMs: number; fromMs: number } }>
     clock?: { fromMs: number; nextRunAtMs?: number }
@@ -242,20 +249,41 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     expect(st.pendingFires[0]).toMatchObject({ seq: 1, items: [], clock: { slotMs: digestFrom, fromMs: digestFrom }, host: { sessionId: SID, seqs: [1] } })
   })
 
-  it('the returning server gets the run with its host delivery, and the same handover keeps its place', async () => {
+  it('a returning server that takes the clock back still gets the run the host delivered, until it acks it', async () => {
     const server = await FakeServer.connect(d.port)
-    const reply = await configure(server, [digestDef()])
-    expect(reply.clocks).toEqual([{ id: DIGEST, fromMs: digestFrom, nextRunAtMs: anchor + 4 * HOUR }])
-    expect(reply.released).toEqual([])
+    // The routine no longer belongs here: the push leaves it out.
+    const reply = await configure(server, [])
+    expect(reply.clocks).toEqual([])
+    expect(reply.released).toEqual([{ id: DIGEST, fromMs: digestFrom, nextRunAtMs: anchor + 4 * HOUR, pending: 1 }])
     await waitFor(() => server.fires(DIGEST).length > 0, 10_000, 'the replay')
-    expect(server.fires(DIGEST)[0]).toMatchObject({ seq: 1, clock: { slotMs: digestFrom }, host: { sessionId: SID }, nextRunAtMs: anchor + 4 * HOUR })
+    const replay = server.fires(DIGEST)[0]
+    expect(replay).toMatchObject({ seq: 1, clock: { slotMs: digestFrom, fromMs: digestFrom }, host: { sessionId: SID } })
+    // A released clock holds no slot to report.
+    expect(replay.nextRunAtMs).toBeUndefined()
+    expect(triggersFile().draining?.map((t) => t.id)).toEqual([DIGEST])
     expect(data(await server.cmd({ cmd: 'triggers.ack', triggerId: DIGEST, seq: 1 })).acked).toBe(true)
     expect(stateOf(DIGEST).pendingFires).toEqual([])
+    expect(triggersFile().draining).toBeUndefined()
+    // Handed again under the same mark, it keeps its place.
+    const again = await configure(server, [digestDef()])
+    expect(again.clocks).toEqual([{ id: DIGEST, fromMs: digestFrom, nextRunAtMs: anchor + 4 * HOUR }])
     await server.close()
     expect(scheduled('Daily digest')).toHaveLength(1)
   })
 
-  it('while a run nobody took is owed, later slots add no second run; a release hands it back', async () => {
+  it('refuses a def it cannot take alone, and runs no slot at or before the routine’s last run', async () => {
+    const server = await FakeServer.connect(d.port)
+    const bad = { id: 'mclockx0-d4d4', name: 'Bad', clock: { schedule: { kind: 'cron', expr: '0 9 * * 1#2', tz: 'UTC' }, fromMs: digestFrom } }
+    // The routine ran at 4.5h elsewhere (an older Mac, Run now on the server): 4h is spent.
+    const floored = { ...digestDef(), clock: { ...digestDef().clock, notBeforeMs: anchor + 4.5 * HOUR } }
+    const reply = await configure(server, [floored, bad])
+    expect(reply.refused).toEqual([{ id: bad.id, error: expect.any(String) }])
+    expect(reply.clocks).toEqual([{ id: DIGEST, fromMs: digestFrom, nextRunAtMs: anchor + 5 * HOUR }])
+    expect(triggersFile().triggers.map((t) => t.id)).toEqual([DIGEST])
+    await server.close()
+  })
+
+  it('while a run nobody took is owed, later slots add no second run; a release keeps it, claimed or not, until acked', async () => {
     const server = await FakeServer.connect(d.port)
     const from = T0 - 60_000 + 4_000
     await configure(server, [digestDef(), owedDef(from)])
@@ -270,16 +298,22 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     // The clock moved on past those slots (to within a tick of now).
     expect(st.clock!.nextRunAtMs!).toBeGreaterThan(from + 3 * 4_000)
     expect(st.clock!.nextRunAtMs!).toBeGreaterThan(Date.now() - 6_000)
-    // The server takes the clock back: the run comes with it, and the daemon forgets it.
+    // A claim whose answer the server never got.
+    const epoch = String(server.fires(OWED)[0].epoch)
+    expect(data(await server.cmd({ cmd: 'triggers.claim', triggerId: OWED, epoch, seqs: [1] }))).toMatchObject({ claimed: [1] })
+    // The server takes the clock back: the run stays with the daemon and replays.
     const reply = await configure(server, [digestDef()])
     const released = reply.released as Array<Record<string, unknown>>
     expect(released).toHaveLength(1)
-    expect(released[0]).toMatchObject({ id: OWED, fromMs: from, owedSlotMs: from })
+    expect(released[0]).toMatchObject({ id: OWED, fromMs: from, pending: 1 })
+    await waitFor(() => server.fires(OWED).length > 1, 10_000, 'the replay after the release')
+    expect(server.fires(OWED)[1]).toMatchObject({ seq: 1, clock: { slotMs: from, fromMs: from }, replay: true })
+    expect(stateOf(OWED).pendingFires.map((f) => f.seq)).toEqual([1])
+    // The server asks again and gets it: the run is its own, once.
+    expect(data(await server.cmd({ cmd: 'triggers.claim', triggerId: OWED, epoch, seqs: [1] }))).toMatchObject({ claimed: [1] })
+    expect(data(await server.cmd({ cmd: 'triggers.ack', triggerId: OWED, seq: 1 })).acked).toBe(true)
     expect(stateOf(OWED).pendingFires).toEqual([])
-    // A claim the server sends late for that run finds nothing to take.
-    const epoch = String(server.fires(OWED)[0].epoch)
-    const claim = data(await server.cmd({ cmd: 'triggers.claim', triggerId: OWED, epoch, seqs: [1] }))
-    expect(claim).toMatchObject({ claimed: [], unknown: [1] })
+    expect(data(await server.cmd({ cmd: 'triggers.claim', triggerId: OWED, epoch, seqs: [1] }))).toMatchObject({ claimed: [], unknown: [1] })
     await server.close()
   })
 
@@ -332,4 +366,29 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     expect(stateOf(ONCE).seq).toBe(1)
     expect(stateOf(DIGEST).seq).toBe(digestSeq)
   }, 180_000)
+
+  it('a released clock’s run survives a restart and replays to the next server until acked', async () => {
+    let server = await FakeServer.connect(d.port)
+    const from = Date.now() - 2_000
+    await configure(server, [digestDef(), owedDef(from)])
+    await waitFor(() => { try { return stateOf(OWED).pendingFires.some((f) => f.clock?.fromMs === from) } catch { return false } }, 20_000, 'a run under the new mark')
+    const seq = stateOf(OWED).pendingFires.find((f) => f.clock?.fromMs === from)!.seq
+    const reply = await configure(server, [digestDef()])
+    expect((reply.released as Array<Record<string, unknown>>).find((r) => r.id === OWED)).toMatchObject({ id: OWED, pending: 1 })
+    await server.close()
+    await stopDaemon(d)
+    d = await spawnDaemon(twin, d.dir)
+    // The one-shot that ran after the last restart was never acked either: it drains too.
+    expect(triggersFile().draining?.map((t) => t.id).sort()).toEqual([ONCE, OWED].sort())
+    server = await FakeServer.connect(d.port)
+    await configure(server, [digestDef()])
+    await waitFor(() => server.fires(OWED).some((e) => e.seq === seq), 10_000, 'the replay after the restart')
+    await waitFor(() => server.fires(ONCE).length > 0, 10_000, 'the one-shot replay')
+    expect(data(await server.cmd({ cmd: 'triggers.ack', triggerId: OWED, seq })).acked).toBe(true)
+    expect(stateOf(OWED).pendingFires).toEqual([])
+    expect(triggersFile().draining?.map((t) => t.id)).toEqual([ONCE])
+    expect(data(await server.cmd({ cmd: 'triggers.ack', triggerId: ONCE, seq: 1 })).acked).toBe(true)
+    expect(triggersFile().draining).toBeUndefined()
+    await server.close()
+  }, 90_000)
 })

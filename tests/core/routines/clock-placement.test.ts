@@ -258,34 +258,46 @@ describe('daemon to server: the run happens once, on the server', () => {
     return { job, placed }
   }
 
-  it('a run the daemon gave back runs here once, and the slots it ran never do', async () => {
+  it('a run the daemon still holds runs here once when it arrives, and the slots it ran never do', async () => {
     const state = makeState()
     const { job, placed } = await handed(state)
     now.value = slot(3) + 10 * 60_000
-    // The daemon ran the 13:00 and 14:00 slots, queued 15:00, and nobody took it.
-    await placed.applied({ clocks: [], released: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(4), owedSlotMs: slot(3) }] })
-    // Read through the recomputing list first: the owed slot stays due.
+    // The daemon ran the 13:00 and 14:00 slots, queued 15:00, and nobody took it:
+    // it keeps that run (draining) and the server owns the slots from 16:00.
+    await placed.applied({ clocks: [], released: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(4), pending: 1 }] })
     const back = await jobOf(state, job.id)
     expect(back.state.clockHost).toBeUndefined()
-    expect(back.state.nextRunAtMs).toBe(slot(3))
-    expect(back.state.clockCatchUpAtMs).toBe(slot(3))
+    expect(back.state.nextRunAtMs).toBe(slot(4))
+    expect(back.state.clockReturned).toEqual({ host: HOST, fromMs: slot(1), beforeMs: slot(4) })
     await onTimer(state)
+    expect(runExecutor).not.toHaveBeenCalled()
+    // The held run replays: it is the server's to run, once.
+    const deliver = vi.fn().mockResolvedValue({ status: 'ok', summary: 'sent' })
+    const owed = { type: 'trigger.fired' as const, id: job.id, epoch: 'e1', seq: 3, atMs: slot(3), items: [], durationMs: 0, clock: { slotMs: slot(3), fromMs: slot(1) } }
+    expect(await applyTriggerFired(state, owed, deliver, { fromHost: HOST })).toMatchObject({ delivered: true })
+    expect(await applyTriggerFired(state, owed, deliver, { fromHost: HOST })).toMatchObject({ duplicate: true })
+    expect(deliver).toHaveBeenCalledTimes(1)
     await onTimer(state)
-    expect(runExecutor).toHaveBeenCalledTimes(1)
-    const after = await jobOf(state, job.id)
-    expect(after.state.nextRunAtMs).toBe(slot(4))
-    expect(after.state.clockCatchUpAtMs).toBeUndefined()
+    expect(runExecutor).not.toHaveBeenCalled()
+    expect((await jobOf(state, job.id)).state.nextRunAtMs).toBe(slot(4))
   })
 
-  it('a clock the server started over since (an edit) keeps the server’s new slot and drops the old owed run', async () => {
+  it('a clock the server started over since (an edit) keeps the server’s new slot and never runs the old owed run', async () => {
     const state = makeState()
     const { job } = await handed(state)
     await ops.update(state, job.id, { schedule: { kind: 'cron', expr: '30 * * * *', tz: 'UTC' } })
     const edited = await jobOf(state, job.id)
     expect(edited.state).toMatchObject({ clockHost: HOST, clockFromMs: BASE + 30 * 60_000, nextRunAtMs: BASE + 30 * 60_000 })
     const placed = await placeClocksForHost(serviceOf(state), HOST, await jobs(state), 'no', fakeDeps())
-    await placed.applied({ clocks: [], released: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(2), owedSlotMs: slot(1) - 1 }] })
+    await placed.applied({ clocks: [], released: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(2), pending: 1 }] })
     expect((await jobOf(state, job.id)).state.nextRunAtMs).toBe(BASE + 30 * 60_000)
+    // That run of the old schedule replays: superseded, acked, nothing runs.
+    const deliver = vi.fn()
+    const r = await applyTriggerFired(state, {
+      type: 'trigger.fired', id: job.id, epoch: 'e1', seq: 1, atMs: slot(1), items: [], durationMs: 0, clock: { slotMs: slot(1), fromMs: slot(1) },
+    }, deliver, { fromHost: HOST })
+    expect(r).toMatchObject({ found: true, duplicate: true, supersededSeqs: [1] })
+    expect(deliver).not.toHaveBeenCalled()
   })
 
   it('a reply that neither holds nor names the clock, or an old daemon’s reply, gives it back as the server knew it', async () => {
@@ -338,16 +350,16 @@ describe('a clock run the daemon reports', () => {
     expect(stored.state.checkLog).toBeUndefined()
   })
 
-  it('a late run after the server took the clock back is recorded and keeps the server’s own next run', async () => {
+  it('a late run after the server took the clock back runs once and keeps the server’s own next run', async () => {
     const state = makeState()
     const { id } = await ops.add(state, sessionRoutine())
     const placed = await placeClocksForHost(serviceOf(state), HOST, await jobs(state), 'yes', fakeDeps())
-    await placed.applied({ clocks: [], released: [{ id, fromMs: slot(1), nextRunAtMs: slot(3), owedSlotMs: slot(2) }] })
+    await placed.applied({ clocks: [], released: [{ id, fromMs: slot(1), nextRunAtMs: slot(3), pending: 1 }] })
     const deliver = vi.fn().mockResolvedValue({ status: 'ok' })
-    // The fire still carries the daemon's own next slot; the server keeps its owed one.
-    const r = await applyTriggerFired(state, fire(id, 1, slot(1), slot(5)), deliver)
-    expect(r.found).toBe(true)
-    expect((await jobOf(state, id)).state.nextRunAtMs).toBe(slot(2))
+    // The fire still carries a next slot; the server keeps its own.
+    const r = await applyTriggerFired(state, fire(id, 1, slot(1), slot(5)), deliver, { fromHost: HOST })
+    expect(r).toMatchObject({ found: true, delivered: true })
+    expect((await jobOf(state, id)).state.nextRunAtMs).toBe(slot(3))
   })
 
   it('a one-shot that ran on its host is deleted (deleteAfterRun) or switched off', async () => {
@@ -392,14 +404,21 @@ describe('edits and resumes start a host clock over', () => {
     const job = await ops.add(state, sessionRoutine())
     await placeClocksForHost(serviceOf(state), HOST, await jobs(state), 'yes', fakeDeps())
     await ops.toggle(state, job.id)
-    // The push after the pause leaves it out; the daemon disarms it and gives back the run it owed.
+    // The push after the pause leaves it out; the daemon disarms it and keeps the run it owed.
     const paused = await placeClocksForHost(serviceOf(state), HOST, await jobs(state), 'yes', fakeDeps())
     expect(paused.defs).toEqual([])
-    await paused.applied({ clocks: [], released: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(2), owedSlotMs: slot(1) }] })
+    await paused.applied({ clocks: [], released: [{ id: job.id, fromMs: slot(1), nextRunAtMs: slot(2), pending: 1 }] })
     const kept = await jobOf(state, job.id)
     expect(kept.enabled).toBe(false)
     expect(kept.state.clockHost).toBe(HOST)
     expect(kept.state.nextRunAtMs).toBeUndefined()
+    // That run replays while it is paused: nothing runs, and it is acked.
+    const deliver = vi.fn()
+    const owed = await applyTriggerFired(state, {
+      type: 'trigger.fired', id: job.id, epoch: 'e1', seq: 1, atMs: slot(1), items: [], durationMs: 0, clock: { slotMs: slot(1), fromMs: slot(1) },
+    }, deliver, { fromHost: HOST })
+    expect(owed.supersededSeqs).toEqual([1])
+    expect(deliver).not.toHaveBeenCalled()
     now.value = slot(3) + 1
     await onTimer(state)
     expect(runExecutor).not.toHaveBeenCalled()

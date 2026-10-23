@@ -323,7 +323,8 @@ export interface TriggerFiredEvent {
   input?: string;
   itemsTruncated?: boolean;
   durationMs: number;
-  nextRunAtMs: number;
+  /** The daemon's next check, or a clock's next slot while it holds the clock (absent for a released one). */
+  nextRunAtMs?: number;
   /** Set when the host already delivered this fire: record it, deliver nothing. */
   host?: HostDelivery;
   /** What the daemon repaired in the run that made this fire. */
@@ -1076,6 +1077,33 @@ export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } 
       ...(deliver ? { deliver } : {}),
     },
   };
+}
+
+/** A def of a pushed set the daemon could not take: the rest of the set is armed without it. */
+export interface RefusedTriggerDef {
+  id?: string;
+  error: string;
+}
+
+/**
+ * Every def of a pushed set, one by one: a def this daemon cannot take is refused
+ * alone (named in the configure reply), so one bad routine never keeps the rest
+ * of a host's triggers and clocks from landing. A repeated id keeps its first def.
+ */
+export function validateTriggerSet(raw: readonly unknown[]): { defs: TriggerDef[]; refused: RefusedTriggerDef[] } {
+  const defs: TriggerDef[] = [];
+  const refused: RefusedTriggerDef[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const id = entry && typeof entry === 'object' && typeof (entry as { id?: unknown }).id === 'string'
+      ? (entry as { id: string }).id : undefined;
+    const parsed = validateTriggerDef(entry);
+    if (!parsed.ok) { refused.push({ ...(id ? { id } : {}), error: parsed.error }); continue; }
+    if (seen.has(parsed.def.id)) { refused.push({ id: parsed.def.id, error: `duplicate trigger id ${parsed.def.id}` }); continue; }
+    seen.add(parsed.def.id);
+    defs.push(parsed.def);
+  }
+  return { defs, refused };
 }
 
 /** A clock routine's def: no check, and no fire budget (its schedule is its limit). */

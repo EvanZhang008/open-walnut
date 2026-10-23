@@ -169,6 +169,8 @@ export type JobRunOutcome = {
   dispatched?: string;
   /** The session the run landed in, when the executor named one. */
   sessionId?: string;
+  /** Run now: a person asked for this run, the schedule did not. */
+  manual?: boolean;
 };
 
 /**
@@ -183,8 +185,6 @@ export function applyJobResult(
   result: JobRunOutcome,
 ): boolean {
   job.state.runningAtMs = undefined;
-  // A slot a host's daemon gave back is spent by this run, whatever its outcome.
-  delete job.state.clockCatchUpAtMs;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
@@ -238,6 +238,8 @@ export function applyJobResult(
     }
   }
 
+  recordSessionRun(job, result);
+
   const shouldDelete =
     job.schedule.kind === 'at' && result.status === 'ok' && job.deleteAfterRun === true;
 
@@ -289,6 +291,37 @@ export function applyJobResult(
   }
 
   return shouldDelete;
+}
+
+/**
+ * A routine that runs in a task's session keeps one History row per run, the
+ * row a host's daemon leaves when the clock is there (clock-routine-v1): the
+ * task's badge reads the same list wherever the clock is, Run now included.
+ */
+function recordSessionRun(job: CronJob, result: JobRunOutcome): void {
+  if (job.executor?.type !== 'session' || job.wake || job.check || result.status === 'skipped') return;
+  job.state.fireLog = appendAudit(
+    job.state.fireLog,
+    {
+      ...wakeAuditEntry({
+        atMs: result.startedAt,
+        items: 0,
+        durationMs: job.state.lastDurationMs,
+        ...(result.error ? { error: result.error } : {}),
+        delivery: auditDelivery({
+          status: result.status === 'error' ? 'error' : 'ok',
+          retry: false,
+          ...(result.summary ? { summary: result.summary } : {}),
+          ...(result.error ? { error: result.error } : {}),
+          ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+        }),
+        ...(result.dispatched ? { injected: injectedPreview(result.dispatched) } : {}),
+      }),
+      ...(result.manual ? { manual: true as const } : {}),
+    },
+    TRIGGER_FIRE_LOG_MAX,
+  );
+  job.state.fireCount = (job.state.fireCount ?? job.state.lastFireSeq ?? 0) + 1;
 }
 
 /**
@@ -544,6 +577,7 @@ export async function executeJob(
       summary: coreResult.summary,
       dispatched: coreResult.dispatched,
       sessionId: coreResult.sessionId,
+      ...(options.forced ? { manual: true } : {}),
     });
 
     emit(state, {

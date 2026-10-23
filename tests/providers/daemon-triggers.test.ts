@@ -218,7 +218,7 @@ d('walnut-trigger on a real daemon', () => {
     expect(firedFor('t1').length, 'an acked fire must not be replayed').toBe(before)
   }, 30_000)
 
-  it('refuses the whole payload when one trigger is invalid, and keeps the armed set', async () => {
+  it('refuses one invalid trigger alone and arms the rest; a payload of the wrong shape is refused whole', async () => {
     const reply = await rpc({
       cmd: 'triggers.configure',
       config: {
@@ -229,8 +229,9 @@ d('walnut-trigger on a real daemon', () => {
         ],
       },
     })
-    expect(reply.ok).toBe(false)
-    expect(reply.error as string).toContain('triggers.configure: invalid config: ')
+    expect(reply.ok).toBe(true)
+    expect(reply).toMatchObject({ applied: true, count: 1 })
+    expect(reply.refused).toEqual([{ id: 'too-fast', error: expect.any(String) }])
     expect(fs.existsSync(path.join(STATE_DIR, 't1.json')), 't1 stayed armed').toBe(true)
     expect(await rpc({ cmd: 'triggers.configure', config: { version: 2, triggers: [] } }))
       .toMatchObject({ ok: false })

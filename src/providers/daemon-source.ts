@@ -6625,6 +6625,23 @@ var TRIGGER_STDOUT_TAIL = 2000;
 // this ceiling is the only thing between an impatient form and a fork bomb.
 var TRIGGER_TEST_MAX_CONCURRENT = 4;
 var armedTriggers = new Map();
+// Clocks the server took back while fires of theirs were still unacked. No slot
+// runs, but each fire keeps replaying, answers claims and acks, and may still be
+// delivered here, until the server has recorded it: a run the host delivered is
+// the routine's history, one nobody took is the server's to run. triggers.json
+// keeps them, so a restart goes on replaying. Mirror daemon-standalone.ts.
+var drainingTriggers = new Map();
+
+// The armed or draining entry of a trigger: what replays, claims, acks and host deliveries act on.
+function heldTrigger(id) {
+  return armedTriggers.get(id) || drainingTriggers.get(id);
+}
+
+// Every entry whose fires still go to the server.
+function fireHolders() {
+  return [...armedTriggers.values(), ...drainingTriggers.values()];
+}
+
 // Seqs this host is writing into a session right now, by trigger id (claims
 // answer busy). Keyed by id, not held on the entry: a configure that re-arms the
 // trigger mid-write must not make its fires claimable.
@@ -6655,9 +6672,9 @@ function hostDeliveryGraceMs() {
 // restarted daemon has no marks and re-sends every pending fire once, which is
 // exactly what at-least-once wants. armedAtMs: fires left from before this daemon
 // armed the trigger give the server a fresh grace before the host delivers them.
-function newArmedTrigger(def, state, nextRunAtMs, now) {
+function newArmedTrigger(def, state, nextRunAtMs, now, keepFires) {
   var entry = { def: def, state: state, nextRunAtMs: nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now };
-  if (def.clock) armClock(entry, now, nextRunAtMs - now);
+  if (def.clock) armClock(entry, now, nextRunAtMs - now, keepFires === true);
   return entry;
 }
 
@@ -6669,17 +6686,24 @@ function newArmedTrigger(def, state, nextRunAtMs, now) {
 // daemon's report that it disarmed it (configure's released). Mirror daemon-standalone.ts.
 var clockSchedule = (__CREATE_CLOCK_SCHEDULE__)();
 
-// Arm a clock def on entry: its place under the same handover, else a fresh start at the def's slot.
-function armClock(entry, now, delayMs) {
+// Arm a clock def on entry: its place under the same handover, else a fresh start
+// at the def's slot, and never at a slot the routine already ran (notBeforeMs).
+// keepFires: the fires are a released clock's, which the server still records.
+function armClock(entry, now, delayMs, keepFires) {
   var spec = entry.def.clock;
   var prev = entry.state.clock;
   var clock = triggerCheckCore.clockStateOnArm(spec, prev);
   if (clock !== prev) {
     entry.state.clock = clock;
     // A new handover: runs nobody took under an older one are not this clock's.
-    triggerCheckCore.dropStaleClockFires(entry.state, spec.fromMs);
+    if (!keepFires) triggerCheckCore.dropStaleClockFires(entry.state, spec.fromMs);
     persistTriggerState(entry.def.id, entry.state);
-    logMsg('info', 'clock routine armed', { id: entry.def.id, fromMs: spec.fromMs, nextRunAtMs: clock.nextRunAtMs, handover: prev ? 'new' : 'first' });
+    var armed = {
+      id: entry.def.id, fromMs: spec.fromMs, nextRunAtMs: clock.nextRunAtMs,
+      handover: !prev ? 'first' : prev.fromMs === spec.fromMs ? 'past-last-run' : 'new',
+    };
+    if (spec.notBeforeMs !== undefined) armed.notBeforeMs = spec.notBeforeMs;
+    logMsg('info', 'clock routine armed', armed);
   }
   entry.nextRunAtMs = triggerCheckCore.clockDueMs(clock, now, Math.max(0, delayMs));
 }
@@ -6722,17 +6746,23 @@ function clockReports() {
   return out;
 }
 
-// The server took this clock back: say where it stood, and hand over the run it
-// had queued that nobody took (the server runs it, so it must not stay here).
+// The server took this clock back: say where it stood. Its fires nobody acked
+// stay (the draining set) and go on replaying until the server has recorded each.
 function releaseClock(tid, entry) {
-  var owedSlotMs = triggerCheckCore.releaseClockFires(entry.state, hostDeliveriesInFlight.get(tid) || new Set());
-  if (owedSlotMs !== undefined) persistTriggerState(tid, entry.state);
-  var line = { id: tid };
-  if (owedSlotMs !== undefined) line.owedSlotMs = owedSlotMs;
-  logMsg('info', 'clock routine released', line);
+  var pending = entry.state.pendingFires.length;
+  if (pending > 0) {
+    entry.nextRunAtMs = Number.POSITIVE_INFINITY;
+    drainingTriggers.set(tid, entry);
+  }
+  logMsg('info', 'clock routine released', { id: tid, pending: pending });
   var report = clockReportOf(tid, entry);
-  if (owedSlotMs !== undefined) report.owedSlotMs = owedSlotMs;
+  if (pending > 0) report.pending = pending;
   return report;
+}
+
+// A released clock that still has fires to replay: no slot runs.
+function drainingEntry(def, state, now) {
+  return { def: def, state: state, nextRunAtMs: Number.POSITIVE_INFINITY, running: false, fireSentAt: new Map(), armedAtMs: now };
 }
 
 // Which trigger a command is about. The trigger id rides triggerId, never id:
@@ -6798,6 +6828,7 @@ function pruneTriggerStateFiles(nowMs) {
   try { names = fs.readdirSync(TRIGGER_STATE_DIR); } catch (err) { return; }
   var armedFiles = new Set();
   for (const tid of armedTriggers.keys()) armedFiles.add(triggerCheckCore.triggerStateFileName(tid));
+  for (const tid of drainingTriggers.keys()) armedFiles.add(triggerCheckCore.triggerStateFileName(tid));
   for (var i = 0; i < names.length; i++) {
     var name = names[i];
     if (name.slice(-5) !== '.json' || armedFiles.has(name)) continue;
@@ -6813,7 +6844,10 @@ function pruneTriggerStateFiles(nowMs) {
 function persistTriggersFile(defs) {
   var tmp = TRIGGERS_FILE + '.tmp';
   try {
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, triggers: defs }), { mode: 0o600 });
+    var file = { version: 1, triggers: defs };
+    var draining = [...drainingTriggers.values()].map(function (e) { return e.def; });
+    if (draining.length) file.draining = draining;
+    fs.writeFileSync(tmp, JSON.stringify(file), { mode: 0o600 });
     fs.renameSync(tmp, TRIGGERS_FILE);
   } catch (err) {
     logMsg('warn', 'triggers persist failed (in-memory only)', { error: err && err.message });
@@ -6845,10 +6879,18 @@ function loadTriggersAtBoot() {
   for (var d = 0; d < armedDefs.length; d++) {
     armedTriggers.set(armedDefs[d].id, newArmedTrigger(armedDefs[d], readTriggerState(armedDefs[d].id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now));
   }
+  // Released clocks with fires still unacked go on replaying them.
+  var drainingDefs = Array.isArray(raw.draining) ? raw.draining : [];
+  for (var r = 0; r < drainingDefs.length; r++) {
+    var held = triggerCheckCore.validateTriggerDef(drainingDefs[r]);
+    if (!held.ok || armedTriggers.has(held.def.id)) continue;
+    var heldState = readTriggerState(held.def.id, now);
+    if (heldState.pendingFires.length > 0) drainingTriggers.set(held.def.id, drainingEntry(held.def, heldState, now));
+  }
   armedTriggersHash = triggerCheckCore.triggersSetHash(defs);
   try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }); } catch {}
   pruneTriggerStateFiles(now);
-  logMsg('info', 'triggers loaded from disk', { count: defs.length, hash: armedTriggersHash });
+  logMsg('info', 'triggers loaded from disk', { count: defs.length, draining: drainingTriggers.size, hash: armedTriggersHash });
 }
 
 // Trigger events go to EVERY trusted client; the bridge never sees one. Fanning
@@ -6879,10 +6921,14 @@ function triggerCadenceMs(entry) {
 // the replay clock is marked in exactly one place. An undelivered fire is left
 // unmarked on purpose: it must go out as soon as a trusted client appears.
 function sendTriggerFire(entry, fire, replay) {
+  // A clock reports its next slot while it holds it; a draining one holds none.
+  var next = !entry.def.clock ? entry.nextRunAtMs
+    : armedTriggers.get(entry.def.id) === entry && entry.state.clock ? entry.state.clock.nextRunAtMs : undefined;
   var payload = {
     id: entry.def.id, epoch: entry.state.epoch, seq: fire.seq, atMs: fire.atMs, items: fire.items,
-    durationMs: fire.durationMs, nextRunAtMs: entry.nextRunAtMs,
+    durationMs: fire.durationMs,
   };
+  if (next !== undefined) payload.nextRunAtMs = next;
   if (fire.input !== undefined) payload.input = fire.input;
   if (fire.itemsTruncated) payload.itemsTruncated = true;
   if (fire.host) payload.host = fire.host;
@@ -6972,7 +7018,7 @@ async function runTrigger(entry) {
 function replayPendingFires(now) {
   if (!triggerCheckCore) return;
   var interval = triggerReplayMs();
-  for (const entry of armedTriggers.values()) {
+  for (const entry of fireHolders()) {
     // Marks for acked (or trimmed) fires would otherwise pile up for the daemon's
     // life; pendingFires is the authority on what is still owed.
     if (entry.fireSentAt.size > entry.state.pendingFires.length) {
@@ -6997,7 +7043,7 @@ function replayPendingFires(now) {
 function deliverUnclaimedFires(now) {
   if (!triggerCheckCore || typeof triggerCheckCore.buildTriggerMessage !== 'function') return;
   var grace = hostDeliveryGraceMs();
-  for (const entry of armedTriggers.values()) {
+  for (const entry of fireHolders()) {
     const spec = entry.def.deliver;
     const id = entry.def.id;
     if (!spec || hostDeliveriesInFlight.has(id)) continue;
@@ -7016,8 +7062,8 @@ function deliverUnclaimedFires(now) {
     hostDeliveriesInFlight.set(id, new Set(seqs));
     offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then(function (r) {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
-      // re-armed it (a fresh state object read from disk) or disarmed it.
-      var current = armedTriggers.get(id);
+      // re-armed it, released it into the draining set, or disarmed it.
+      var current = heldTrigger(id);
       var state = current ? current.state : readTriggerState(id, Date.now());
       if (state.epoch !== epoch) {
         logMsg('warn', 'trigger host delivery outcome dropped: state file started over', { id: id, seqs: seqs, delivered: r.ok });
@@ -7085,11 +7131,13 @@ function effectiveTriggerDefs(defs) {
 function armTriggerSet(defs, now) {
   var ids = new Set(defs.map(function (def) { return def.id; }));
   var released = [];
+  var drainingBefore = drainingTriggers.size;
   for (const [tid, entry] of [...armedTriggers]) {
     if (ids.has(tid)) continue;
     armedTriggers.delete(tid);
     if (entry.def.clock) released.push(releaseClock(tid, entry));
   }
+  var drainingChanged = drainingTriggers.size !== drainingBefore;
   for (var d = 0; d < defs.length; d++) {
     var existing = armedTriggers.get(defs[d].id);
     // A trigger that stays keeps its state file, its cursor and its schedule;
@@ -7100,8 +7148,12 @@ function armTriggerSet(defs, now) {
       if (defs[d].clock) armClock(existing, now, TRIGGER_FIRST_RUN_DELAY_MS);
       continue;
     }
-    armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], readTriggerState(defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now));
+    // Handed back before its fires drained: those fires stay with it.
+    var draining = drainingTriggers.get(defs[d].id);
+    if (draining) { drainingTriggers.delete(defs[d].id); drainingChanged = true; }
+    armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], draining ? draining.state : readTriggerState(defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining));
   }
+  if (drainingChanged) persistTriggersFile(configuredTriggerDefs);
   return released;
 }
 
@@ -7122,17 +7174,14 @@ async function configureTriggers(ws, id, cmd) {
   if (!payload || typeof payload !== 'object' || payload.version !== 1 || !Array.isArray(payload.triggers)) {
     return sendError(ws, id, 'triggers.configure: invalid config: version must be 1 with a triggers array');
   }
-  var defs = [];
-  var seenIds = new Set();
-  for (var i = 0; i < payload.triggers.length; i++) {
-    var parsed = triggerCheckCore.validateTriggerDef(payload.triggers[i]);
-    if (!parsed.ok) return sendError(ws, id, 'triggers.configure: invalid config: ' + parsed.error);
-    if (seenIds.has(parsed.def.id)) {
-      return sendError(ws, id, 'triggers.configure: invalid config: duplicate trigger id ' + parsed.def.id);
-    }
-    seenIds.add(parsed.def.id);
-    defs.push(parsed.def);
+  if (typeof triggerCheckCore.validateTriggerSet !== 'function') {
+    return sendError(ws, id, 'triggers.configure: trigger-check-core sidecar too old');
   }
+  // A def this daemon cannot take is refused alone; the rest of the set is armed.
+  var set = triggerCheckCore.validateTriggerSet(payload.triggers);
+  var defs = set.defs;
+  var refused = set.refused;
+  if (refused.length) logMsg('warn', 'triggers refused', { refused: refused });
 
   var now = Date.now();
   var hash = triggerCheckCore.triggersSetHash(defs);
@@ -7143,13 +7192,15 @@ async function configureTriggers(ws, id, cmd) {
   armedTriggersHash = hash;
   pruneTriggerStateFiles(now);
   var clocks = clockReports();
-  logMsg('info', 'triggers configured', { hash: hash, count: defs.length, changed: changed, clocks: clocks.length, released: released.map(function (r) { return r.id; }) });
-  sendOk(ws, id, { applied: true, changed: changed, count: defs.length, clocks: clocks, released: released });
+  logMsg('info', 'triggers configured', { hash: hash, count: defs.length, changed: changed, clocks: clocks.length, released: released.map(function (r) { return r.id; }), draining: drainingTriggers.size });
+  var reply = { applied: true, changed: changed, count: defs.length, clocks: clocks, released: released };
+  if (refused.length) reply.refused = refused;
+  sendOk(ws, id, reply);
 
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server
   // dedups on (id, epoch, seq).
-  for (const entry of armedTriggers.values()) {
+  for (const entry of fireHolders()) {
     for (var f = 0; f < entry.state.pendingFires.length; f++) {
       sendTriggerFire(entry, entry.state.pendingFires[f], true);
     }
@@ -7249,7 +7300,7 @@ function cmdTriggersClaim(ws, id, cmd) {
   }
   var tid = triggerIdOf(cmd);
   var seqs = Array.isArray(cmd.seqs) ? cmd.seqs.filter(function (s) { return typeof s === 'number' && Number.isFinite(s); }) : [];
-  var entry = tid ? armedTriggers.get(tid) : undefined;
+  var entry = tid ? heldTrigger(tid) : undefined;
   var inFlight = hostDeliveriesInFlight.get(tid) || new Set();
   if (!entry || (typeof cmd.epoch === 'string' && cmd.epoch !== entry.state.epoch)) {
     return sendOk(ws, id, {
@@ -7272,12 +7323,18 @@ function cmdTriggersAck(ws, id, cmd) {
   if (!triggerCheckCore) return sendError(ws, id, 'triggers unsupported: trigger-check-core sidecar not loaded');
   var tid = triggerIdOf(cmd);
   var seq = typeof cmd.seq === 'number' ? cmd.seq : NaN;
-  var entry = tid ? armedTriggers.get(tid) : undefined;
+  var entry = tid ? heldTrigger(tid) : undefined;
   if (!entry || !Number.isFinite(seq)) return sendOk(ws, id, { acked: false });
   var acked = triggerCheckCore.ackFire(entry.state, seq);
   if (acked) {
     entry.fireSentAt.delete(seq);
     persistTriggerState(tid, entry.state);
+    // The last fire of a released clock is recorded: nothing of it is left here.
+    if (drainingTriggers.get(tid) === entry && entry.state.pendingFires.length === 0) {
+      drainingTriggers.delete(tid);
+      persistTriggersFile(configuredTriggerDefs);
+      logMsg('info', 'clock routine drained', { id: tid });
+    }
   }
   return sendOk(ws, id, { acked: acked });
 }
