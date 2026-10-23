@@ -78,9 +78,9 @@ describe('dev-prod.sh names its launchd job to the server', () => {
     // One argv array (launchd_job_argv) feeds both the Interactive plist and the
     // `launchctl submit` fallback, so the label rides along on either path.
     const argv = script.slice(script.indexOf('launchd_job_argv() {'), script.indexOf('write_launchd_plist() {'))
-    expect(argv).toMatch(/WALNUT_LAUNCHD_LABEL="\$LAUNCH_LABEL"\n\s+"\$NODE_BIN" "\$1" web --port "\$PORT"\)/)
+    expect(argv).toMatch(/WALNUT_LAUNCHD_LABEL="\$LAUNCH_LABEL"\n\s+"\$\{server_argv\[@\]\}" web --port "\$PORT"\)/)
     const submit = fn('submit_launchd_job')
-    expect(submit).toMatch(/launchd_job_argv "\$1"/)
+    expect(submit).toMatch(/^\s+launchd_job_argv$/m)
     expect(submit).toMatch(/-- "\$\{launchd_argv\[@\]\}"/)
     expect(script.slice(script.indexOf('write_launchd_plist() {'), script.indexOf('bootstrap_interactive_job() {'))).toMatch(/for arg in "\$\{launchd_argv\[@\]\}"/)
   })

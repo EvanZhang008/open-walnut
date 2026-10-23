@@ -87,6 +87,33 @@ describe('stage reap guard', () => {
     fs.rmSync(tmp, { recursive: true, force: true })
   })
 
+  it('reports a stage the compiled file runs from (server or its local daemon)', () => {
+    // The file deploy runs <stage>/dist-bin/walnut-<target>, and its local daemon
+    // is the same file (`__daemon --start`): both read <stage>/runtime while they live.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-stage-guard-'))
+    const live = path.join(tmp, 'open-walnut-stage.file')
+    const idle = path.join(tmp, 'open-walnut-stage.idle')
+    fs.mkdirSync(path.join(live, 'dist-bin'), { recursive: true })
+    fs.mkdirSync(path.join(idle, 'dist-bin'), { recursive: true })
+    fs.writeFileSync(path.join(live, 'dist-bin', 'walnut-linux-x64'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 })
+    const out = execFileSync('bash', ['-c', `
+      set -uo pipefail
+      ${stageGuardSource()}
+      /bin/sh "$1"/dist-bin/walnut-linux-x64 __daemon --start >/dev/null 2>&1 &
+      probe_pid=$!
+      sleep 1
+      live_hit="$(stage_has_live_process "$1" || true)"
+      idle_hit="$(stage_has_live_process "$2" || true)"
+      kill "$probe_pid" 2>/dev/null || true
+      echo "live=[$live_hit] idle=[$idle_hit] probe=[$probe_pid]"
+    `, 'stage-guard', live, idle], { encoding: 'utf-8' }).trim()
+    const m = /live=\[(\d*)\] idle=\[(\d*)\] probe=\[(\d+)\]/.exec(out)
+    expect(m, `unexpected guard output: ${out}`).not.toBeNull()
+    expect(m![1], `a stage the file runs from must report its PID: ${out}`).toBe(m![3])
+    expect(m![2]).toBe('')
+    fs.rmSync(tmp, { recursive: true, force: true })
+  })
+
   it('the reap loop consults the guard and skips a stage in use', () => {
     const reap = script.indexOf('for old_stage in "$STAGE_ROOT"/open-walnut-stage.*')
     expect(reap).toBeGreaterThan(-1)

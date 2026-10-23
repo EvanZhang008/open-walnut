@@ -20,20 +20,33 @@ const SCRIPT = path.join(import.meta.dirname, '..', '..', 'scripts', 'dev-prod.s
 const script = fs.readFileSync(SCRIPT, 'utf-8')
 
 describe('dev-prod staged boot', () => {
-  it('never boots node from the repo dist path (scanner-stall class)', () => {
-    // Copying $REPO_ROOT/dist (staging, snapshots) and *matching* the path in
-    // the stray-zombie sweep are fine — only EXECUTING from it is the
-    // regression. Boot sites are launch_server calls and direct $NODE_BIN runs.
+  it('never boots from the repo dist or dist-bin path (scanner-stall class)', () => {
+    // Copying $REPO_ROOT/dist or dist-bin (staging, snapshots) and *matching* the
+    // path in the stray-zombie sweep are fine — only EXECUTING from it is the
+    // regression. Boot sites are launch_server calls, the server argv, the
+    // selftest and direct $NODE_BIN runs.
     expect(script).not.toMatch(/launch_server "\$REPO_ROOT/)
+    expect(script).not.toMatch(/launch_server \w+ "\$REPO_ROOT/)
     expect(script).not.toMatch(/"\$NODE_BIN" "\$REPO_ROOT\/dist\/cli\.js"/)
+    expect(script).not.toMatch(/^\s*"\$REPO_ROOT\/dist-bin\/walnut-[^"]*"\s+(web|__selftest)/m)
   })
 
-  it('stages the dist on the temp volume and boots from the stage', () => {
+  it('stages the build on the temp volume and boots from the stage', () => {
     expect(script).toContain('open-walnut-stage.')
     expect(script).toMatch(/CLI_JS="\$STAGE_DIR\/dist\/cli\.js"/)
-    // Both boots ride the staged path.
-    expect(script).toMatch(/launch_server "\$CLI_JS"/)
-    expect(script).toMatch(/"\$NODE_BIN" "\$CLI_JS" web --port "\$smoke_port"/)
+    expect(script).toMatch(/SERVER_FILE="\$STAGE_DIR\/dist-bin\/walnut-\$SELF_TARGET"/)
+    // The files are copied from the build into the stage, never run in place.
+    expect(script).toMatch(/clone_copy "\$src" "\$STAGE_DIR\/dist-bin\/walnut-\$t"/)
+    // Every boot rides the staged path: the server, the smoke boot, the selftest.
+    expect(script).toMatch(/launch_server "\$SERVER_KIND" "\$SERVER_PATH"/)
+    expect(script).toMatch(/SERVER_PATH="\$SERVER_FILE"/)
+    expect(script).toMatch(/SERVER_PATH="\$CLI_JS"/)
+    expect(script).toMatch(/smoke_argv=\(WALNUT_RUNTIME_DIR="\$SMOKE_TMP\/runtime" "\$SERVER_FILE"\)/)
+    expect(script).toMatch(/smoke_argv=\("\$NODE_BIN" "\$CLI_JS"\)/)
+    expect(script).toMatch(/"\$\{smoke_argv\[@\]\}" web --port "\$smoke_port"/)
+    expect(script).toMatch(/"\$SERVER_FILE" __selftest/)
+    // The file's runtime tree is unpacked into the stage, not the data home.
+    expect(script).toMatch(/WALNUT_RUNTIME_DIR="\$STAGE_DIR\/runtime"/)
   })
 
   it('staging failure aborts BEFORE the old server is killed', () => {
@@ -62,5 +75,8 @@ describe('dev-prod staged boot', () => {
 
   it('LKG snapshot is taken from the stage (byte-identical, scanner-exempt)', () => {
     expect(script).toMatch(/cp -Rc "\$STAGE_DIR\/dist" "\$LKG_DIR\.tmp\/dist"/)
+    // The compiled file: its dist-bin (siblings included) and the tree it unpacked.
+    expect(script).toMatch(/clone_copy "\$STAGE_DIR\/dist-bin" "\$LKG_DIR\.tmp\/dist-bin"/)
+    expect(script).toMatch(/clone_copy "\$STAGE_DIR\/runtime" "\$LKG_DIR\.tmp\/runtime"/)
   })
 })

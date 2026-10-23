@@ -35,12 +35,39 @@ describe('dev-prod.sh smoke boot ordering', () => {
 
   it('runs after the build and BEFORE the prod-server kill', () => {
     const dryRunExit = indexOfOrFail('nothing was deployed')
-    const build = indexOfOrFail('npm run web:build')
+    const build = indexOfOrFail('"$BUN_BIN" run web:build')
+    const fileBuild = indexOfOrFail('scripts/build-binary.mjs" "${args[@]}"')
+    const filesBuilt = indexOfOrFail('if build_files $FILE_TARGETS; then')
     const smoke = indexOfOrFail('Pre-kill smoke boot')
     const kill = indexOfOrFail('kill -15 $existing_pids')
     expect(smoke).toBeGreaterThan(dryRunExit) // dry run never reaches it
-    expect(smoke).toBeGreaterThan(build) // it must boot the FRESH dist
+    expect(build).toBeGreaterThan(dryRunExit)
+    expect(filesBuilt).toBeGreaterThan(build) // the file reuses the dist's web assets
+    expect(fileBuild).toBeLessThan(filesBuilt)
+    expect(smoke).toBeGreaterThan(filesBuilt) // it must boot the FRESH build
     expect(smoke).toBeLessThan(kill) // and fail before prod is touched
+  })
+
+  it('builds this machine\'s file and the Linux siblings in ONE build-binary run, reusing the dist\'s web assets', () => {
+    expect(script).toMatch(/local -a args=\(--reuse-web --target "\$SELF_TARGET"\)/)
+    expect(script).toMatch(/FILE_TARGETS="\$\{WALNUT_DEVPROD_FILE_TARGETS-linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl\}"/)
+    // A failed sibling never blocks the deploy; a failed file for this machine aborts it, pre-kill.
+    const retry = indexOfOrFail('building walnut-$SELF_TARGET alone')
+    const abort = indexOfOrFail('Building the compiled file failed: deploy aborted')
+    expect(abort).toBeLessThan(indexOfOrFail('kill -15 $existing_pids'))
+    expect(retry).toBeLessThan(abort)
+  })
+
+  it('self-tests the staged file before the smoke boot, and a failed selftest aborts pre-kill', () => {
+    const selftest = indexOfOrFail('"$SERVER_FILE" __selftest')
+    const failed = indexOfOrFail('Self-test FAILED')
+    const smoke = indexOfOrFail('Pre-kill smoke boot')
+    expect(selftest).toBeLessThan(smoke)
+    expect(script.slice(failed, smoke)).toMatch(/exit 1/)
+    // Isolated like the smoke boot: its own home and daemon dir.
+    const block = script.slice(script.lastIndexOf('SELFTEST_TMP="$(mktemp -d', selftest), selftest)
+    expect(block).toMatch(/OPEN_WALNUT_HOME="\$SELFTEST_TMP\/home"/)
+    expect(block).toMatch(/WALNUT_DAEMON_DIR="\$SELFTEST_TMP\/daemon"/)
   })
 
   it('aborts the deploy (prod untouched) when the smoke boot fails', () => {
@@ -54,11 +81,15 @@ describe('dev-prod.sh smoke boot ordering', () => {
 })
 
 describe('dev-prod.sh smoke boot isolation', () => {
-  it('overrides BOTH the data dir and the daemon dir to temp paths', () => {
+  it('overrides the data dir, the daemon dir and the runtime tree to temp paths', () => {
     // Without WALNUT_DAEMON_DIR the smoke server attaches to (or version-bump
     // restarts) the PRODUCTION local daemon.
     expect(script).toMatch(/OPEN_WALNUT_HOME="\$SMOKE_TMP\/home"/)
     expect(script).toMatch(/WALNUT_DAEMON_DIR="\$SMOKE_TMP\/daemon"/)
+    // The compiled file unpacks its tree into the smoke dir, not the stage the
+    // production server runs from, and an inherited value is dropped first.
+    expect(script).toMatch(/env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR/)
+    expect(script).toMatch(/WALNUT_RUNTIME_DIR="\$SMOKE_TMP\/runtime"/)
   })
 
   it('temp home is NOT named open-walnut-* (resolveOpenWalnutHome would silently revert it to prod data)', () => {
@@ -110,7 +141,11 @@ describe('dev-prod.sh last-known-good rollback', () => {
     // The readiness timeout was the only path that rolled back; the other two
     // post-kill exits left :3456 dark with no rollback at all.
     const fn = indexOfOrFail('rollback_to_lkg() {')
-    expect(script.slice(fn)).toMatch(/launch_server "\$from\/dist\/cli\.js"/)
+    const body = script.slice(fn, script.indexOf('\n}\n', fn))
+    // Whatever kind the last good build was: the compiled file or the Node dist.
+    expect(body).toMatch(/lkg_rel="dist-bin\/walnut-\$MACHINE_TARGET"/)
+    expect(body).toMatch(/lkg_rel="dist\/cli\.js"/)
+    expect(body).toMatch(/launch_server "\$lkg_kind" "\$from\/\$lkg_rel"/)
     for (const marker of [
       'Server process exited before becoming ready.',
       'deployment aborted.',
@@ -177,6 +212,9 @@ describe('the rollback snapshot survives a reboot', () => {
     const fn = script.slice(script.indexOf('rollback_to_lkg() {'))
     expect(fn).toMatch(/local rb="\$STAGE_ROOT\/open-walnut-stage\.\$\(date \+%s\)\.\$\$\.lkg"/)
     expect(fn).toMatch(/lkg="\$LKG_LEGACY_DIR"/)
+    // A compiled-file snapshot is staged the same way, its runtime tree with it.
+    expect(fn).toMatch(/clone_copy "\$lkg\/dist-bin" "\$rb\/dist-bin"/)
+    expect(fn).toMatch(/clone_copy "\$lkg\/runtime" "\$rb\/runtime"/)
     // The stray-server sweep still recognises both launch shapes.
     expect(script).toContain('*"open-walnut-stage."*"/dist/cli.js"*')
     expect(script).toContain('*"open-walnut-lkg/dist/cli.js"*')

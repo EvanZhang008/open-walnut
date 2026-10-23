@@ -13,7 +13,11 @@
 # this checkout's dependencies into it, and runs the CLONE's dev-prod.sh with
 # WALNUT_DEVPROD_SERVE_ROOT pointing back here, so the server still runs as this
 # checkout. Every guard of dev-prod.sh applies unchanged (type-check, smoke boot
-# before the kill, rollback, cooldown), and WALNUT_DEVPROD_* knobs pass through.
+# before the kill, rollback, cooldown), and WALNUT_DEVPROD_* knobs pass through:
+# by default the clone builds and serves the compiled walnut file for this
+# machine (plus the Linux files host servers take, from the same build), and
+# WALNUT_DEVPROD_RUNTIME=node deploys the Node build instead. The compiled files
+# are staged outside the clone, so removing it never touches the running server.
 # The clone is removed afterwards (WALNUT_DEPLOY_KEEP_BUILD=1 keeps it).
 set -euo pipefail
 
@@ -30,10 +34,20 @@ fi
 BRANCH="$(git -C "$SERVE_ROOT" rev-parse --abbrev-ref HEAD)"
 if [[ "$BRANCH" == "HEAD" ]]; then BRANCH=deploy; fi
 
-NODE_BIN="$(command -v node || true)"
-if [[ -z "$NODE_BIN" ]]; then
-  echo "node not found on PATH" >&2
-  exit 1
+# Runs the dependency-linking snippet below from stdin: bun (what the build
+# uses) as `bun run -`, else `node -`. A bare `bun -` is NOT stdin: bun reads it
+# as `bun add` and installs the arguments as packages.
+JS_RUN=()
+for cand in "${WALNUT_BUN:-}" "$(command -v bun || true)" "$HOME/.bun/bin/bun"; do
+  if [[ -n "$cand" && -x "$cand" ]]; then JS_RUN=("$cand" run -); break; fi
+done
+if (( ${#JS_RUN[@]} == 0 )); then
+  node_bin="$(command -v node || true)"
+  if [[ -z "$node_bin" ]]; then
+    echo "Neither bun nor node was found on PATH" >&2
+    exit 1
+  fi
+  JS_RUN=("$node_bin" -)
 fi
 
 BUILD="${TMPDIR:-/tmp}"
@@ -61,7 +75,7 @@ fi
 # Dependencies: every top-level entry of this checkout's node_modules is linked,
 # except the npm workspace packages, which must be the COMMITTED ones in the
 # clone (this checkout's links point at its own, possibly edited, packages/).
-"$NODE_BIN" - "$SERVE_ROOT/node_modules" "$BUILD/node_modules" "$BUILD" <<'JS'
+"${JS_RUN[@]}" "$SERVE_ROOT/node_modules" "$BUILD/node_modules" "$BUILD" <<'JS'
 const fs = require('fs')
 const path = require('path')
 const [src, dst, build] = process.argv.slice(2)

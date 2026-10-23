@@ -1,18 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# What runs: by default the compiled walnut file (`bun scripts/build-binary.mjs`,
+# docs/plan/walnut-single-binary.md), built for this machine plus the Linux
+# targets host servers take, staged on the temp volume and started as
+# `<stage>/dist-bin/walnut-<target> web --port 3456`; its runtime tree (the web
+# app, data files) is unpacked into `<stage>/runtime/`. WALNUT_DEVPROD_RUNTIME=node
+# deploys the Node build instead (`node <stage>/dist/cli.js web`), the way every
+# deploy did before; it stays for one release as the way back from a bad file.
+# The `bun run web:build` dist is built in both modes: the walnut CLI on this
+# machine runs the op registry from it (see the publish step at the end), and
+# the file reuses its web assets, so both name the same hashed bundles.
+
 # Dry run: execute every guard, then stop before the first mutating step (build,
 # server kill, launchd submit). CI runs this on Linux so a macOS-only assumption
 # in the deploy path fails a push instead of an actual deploy — the class of bug
-# behind issue #11. The port override is honoured ONLY in dry-run: a real deploy
-# on another port would put a second server on the production data dir, which is
-# a task-deletion shape here.
+# behind issue #11. The port override is honoured ONLY in dry-run and in a
+# rehearsal (below): a real deploy on another port would put a second server on
+# the production data dir, which is a task-deletion shape here.
 DRY_RUN="${WALNUT_DEVPROD_DRY_RUN:-0}"
+REHEARSAL="${WALNUT_DEVPROD_REHEARSAL:-0}"
 PORT=3456
 if [[ "$DRY_RUN" == "1" ]]; then
   PORT="${WALNUT_DEVPROD_PORT:-$PORT}"
 fi
-LOCK_DIR="${TMPDIR:-/tmp}/open-walnut-dev-prod.lock"
 # Plain /tmp, not /private/tmp: on macOS /tmp is a symlink to /private/tmp so this
 # is the same inode as before (existing log, existing fds, unchanged), while Linux
 # — where /private/tmp does not exist — can finally write it. The old hardcoded
@@ -20,6 +31,101 @@ LOCK_DIR="${TMPDIR:-/tmp}/open-walnut-dev-prod.lock"
 # its replacement, leaving prod down (issue #11, Unraid x64).
 SERVER_LOG="${WALNUT_SERVER_LOG:-/tmp/open-walnut-launchd.log}"
 LAUNCH_LABEL=com.open-walnut.dev-prod
+
+# ── Rehearsal: the whole real deploy, away from production ──────────────────
+# WALNUT_DEVPROD_REHEARSAL=1 runs every step for real (build, smoke, kill and
+# launch, readiness, last-known-good, rollback) on a private port, data dir,
+# daemon dir and temp dir, under its own launchd label, so the deploy path itself
+# can be proven end to end. It refuses :3456, the production data dir and the
+# production daemon dir, and everything it writes lives in the directories it is
+# given. Required:
+#   WALNUT_DEVPROD_PORT          the port (not 3456)
+#   WALNUT_DEVPROD_REHEARSAL_DIR an existing directory: becomes TMPDIR (lock,
+#                                stamps, stages, smoke, LKG, log)
+#   OPEN_WALNUT_HOME             the data dir (never ~/.open-walnut, never named open-walnut-*)
+#   WALNUT_DAEMON_DIR            the daemon dir (never /tmp/open-walnut)
+# Optional knobs for the failure paths: WALNUT_DEVPROD_REHEARSAL_FAIL_LAUNCH=1
+# starts the new server unable to serve the web app (the post-kill rollback to
+# the last-known-good build runs); WALNUT_DEVPROD_REHEARSAL_FAIL_SMOKE=1 makes
+# the smoke boot fail (nothing is killed).
+REHEARSAL_HOME=""
+REHEARSAL_DAEMON_DIR=""
+if [[ "$REHEARSAL" == "1" ]]; then
+  PORT="${WALNUT_DEVPROD_PORT:-}"
+  if [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( 10#$PORT < 1024 || 10#$PORT > 65535 )) || (( 10#$PORT == 3456 )); then
+    echo "Rehearsal refused: WALNUT_DEVPROD_PORT='$PORT' must be a port from 1024 to 65535 other than 3456." >&2
+    exit 1
+  fi
+  PORT=$(( 10#$PORT ))
+  rehearsal_dir="${WALNUT_DEVPROD_REHEARSAL_DIR:-}"
+  if [[ "$rehearsal_dir" != /* || ! -d "$rehearsal_dir" ]]; then
+    echo "Rehearsal refused: WALNUT_DEVPROD_REHEARSAL_DIR must be an existing absolute directory." >&2
+    exit 1
+  fi
+  # The physical path of a dir that need not exist yet (its parent must): every
+  # check runs on it BEFORE anything is created, so a refused run makes nothing.
+  canon_dir() {
+    if [[ -d "$1" ]]; then (cd "$1" && pwd -P); return; fi
+    local parent
+    parent="$(dirname "$1")"
+    [[ -d "$parent" ]] || return 1
+    printf '%s/%s' "$(cd "$parent" && pwd -P)" "$(basename "$1")"
+  }
+  REHEARSAL_HOME="${OPEN_WALNUT_HOME:-}"
+  REHEARSAL_DAEMON_DIR="${WALNUT_DAEMON_DIR:-}"
+  if [[ "$REHEARSAL_HOME" != /* || "$REHEARSAL_DAEMON_DIR" != /* ]]; then
+    echo "Rehearsal refused: set OPEN_WALNUT_HOME and WALNUT_DAEMON_DIR to absolute private paths." >&2
+    exit 1
+  fi
+  if ! REHEARSAL_HOME="$(canon_dir "$REHEARSAL_HOME")" || ! REHEARSAL_DAEMON_DIR="$(canon_dir "$REHEARSAL_DAEMON_DIR")"; then
+    echo "Rehearsal refused: the parents of OPEN_WALNUT_HOME and WALNUT_DAEMON_DIR must exist." >&2
+    exit 1
+  fi
+  prod_home="$(canon_dir "$HOME/.open-walnut" || printf '%s' "$HOME/.open-walnut")"
+  case "$REHEARSAL_HOME/" in
+    "$prod_home/"*)
+      echo "Rehearsal refused: OPEN_WALNUT_HOME is the production data dir (or inside it): $REHEARSAL_HOME" >&2
+      exit 1 ;;
+  esac
+  # resolveOpenWalnutHome() (src/constants.ts) reverts a temp-dir home named
+  # open-walnut-* to ~/.open-walnut for any process that is not an ephemeral child.
+  if [[ "$(basename "$REHEARSAL_HOME")" == open-walnut* ]]; then
+    echo "Rehearsal refused: a data dir named open-walnut* can be read as a leaked ephemeral dir and swapped for the production one." >&2
+    exit 1
+  fi
+  # /tmp is a symlink on macOS: compare with both spellings of the production dirs.
+  tmp_real="$(cd /tmp && pwd -P)"
+  for prod_daemon in /tmp/open-walnut "$tmp_real/open-walnut"; do
+    case "$REHEARSAL_DAEMON_DIR/" in
+      "$prod_daemon/"*)
+        echo "Rehearsal refused: WALNUT_DAEMON_DIR is the production daemon dir (or inside it)." >&2
+        exit 1 ;;
+    esac
+  done
+  TMPDIR="$(cd "$rehearsal_dir" && pwd -P)"
+  export TMPDIR
+  LAUNCH_LABEL="com.open-walnut.dev-prod-rehearsal.$PORT"
+  # Never the production server log.
+  SERVER_LOG="${WALNUT_SERVER_LOG:-$TMPDIR/open-walnut-launchd.log}"
+  if [[ "$SERVER_LOG" == /tmp/open-walnut-launchd.log* || "$SERVER_LOG" == "$tmp_real"/open-walnut-launchd.log* ]]; then
+    echo "Rehearsal refused: WALNUT_SERVER_LOG is the production server log." >&2
+    exit 1
+  fi
+  # The rollback snapshot is replaced whole on success: never production's.
+  if [[ -n "${WALNUT_DEVPROD_LKG_DIR:-}" ]]; then
+    rehearsal_lkg="$(canon_dir "$WALNUT_DEVPROD_LKG_DIR" || true)"
+    case "$rehearsal_lkg" in
+      "$TMPDIR"/*) ;;
+      *)
+        echo "Rehearsal refused: WALNUT_DEVPROD_LKG_DIR must be inside WALNUT_DEVPROD_REHEARSAL_DIR." >&2
+        exit 1 ;;
+    esac
+  fi
+  mkdir -p "$REHEARSAL_HOME" "$REHEARSAL_DAEMON_DIR"
+  echo "Rehearsal: the real deploy path on :$PORT (data $REHEARSAL_HOME, daemon $REHEARSAL_DAEMON_DIR, temp $TMPDIR, label $LAUNCH_LABEL)."
+fi
+
+LOCK_DIR="${TMPDIR:-/tmp}/open-walnut-dev-prod.lock"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # The checkout the server RUNS AS: its working directory, the node_modules the
 # staged dist resolves from, and the source repo it reports ("Fix Walnut" works
@@ -139,7 +245,148 @@ for extra_dir in "$HOME/.bun/bin" /opt/homebrew/bin /usr/local/bin "$HOME/.local
 done
 export PATH
 
-NODE_BIN="$(command -v node)"
+# ── Runtime and tools ───────────────────────────────────────────────────────
+# Decided before anything is touched, so a missing tool fails the deploy (and
+# the dry run) with the old server still serving.
+RUNTIME="${WALNUT_DEVPROD_RUNTIME:-file}"
+case "$RUNTIME" in
+  file|node) ;;
+  *)
+    echo "WALNUT_DEVPROD_RUNTIME='$RUNTIME' is neither file (the compiled walnut file) nor node." >&2
+    exit 1 ;;
+esac
+
+# `command -v` exits 1 when the tool is missing: `|| true` keeps `set -e` from
+# ending the script on a box without node, which file mode does not need.
+NODE_BIN="$(command -v node || true)"
+
+# The bun package.json pins (packageManager "bun@X.Y.Z"), or empty.
+bun_pin() {
+  sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' \
+    "$REPO_ROOT/package.json" 2>/dev/null | head -n 1
+  return 0
+}
+
+# True when version $1 is $2 or newer (both X.Y.Z).
+version_at_least() {
+  local IFS=. i
+  local -a a b
+  read -r -a a <<< "$1"
+  read -r -a b <<< "$2"
+  for i in 0 1 2; do
+    if (( 10#${a[i]:-0} != 10#${b[i]:-0} )); then
+      (( 10#${a[i]:-0} > 10#${b[i]:-0} ))
+      return
+    fi
+  done
+  return 0
+}
+
+# A bun of the pinned version or newer: $WALNUT_BUN, PATH, then the usual
+# install places (the same order as src/core/host-server/host-file-build.ts).
+# The compiled file carries the runtime of the bun that built it, so an older
+# bun would ship an older runtime than the code was written for. Sets BUN_BIN
+# and BUN_VERSION (empty when none fits) and BUN_SEEN (what else was found).
+find_bun() {
+  local pin cand v dir tried="|"
+  local -a cands=()
+  pin="$(bun_pin)"
+  BUN_BIN="" BUN_VERSION="" BUN_SEEN=""
+  if [[ -n "${WALNUT_BUN:-}" ]]; then cands+=("$WALNUT_BUN"); fi
+  local IFS=:
+  for dir in $PATH; do
+    if [[ -n "$dir" ]]; then cands+=("$dir/bun"); fi
+  done
+  unset IFS
+  cands+=("$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun)
+  for cand in "${cands[@]}"; do
+    [[ "$cand" == /* && -x "$cand" && ! -d "$cand" ]] || continue
+    [[ "$tried" != *"|$cand|"* ]] || continue
+    tried="$tried$cand|"
+    v="$("$cand" --version 2>/dev/null || true)"
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
+    v="${BASH_REMATCH[0]}"
+    if [[ -z "$pin" ]] || version_at_least "$v" "$pin"; then
+      BUN_BIN="$cand"
+      BUN_VERSION="$v"
+      return 0
+    fi
+    BUN_SEEN="${BUN_SEEN:+$BUN_SEEN, }$v at $cand"
+  done
+  return 0
+}
+
+# The release target of THIS machine (scripts/build-binary.mjs TARGETS), or
+# nothing when no compiled file is built for it. A shell under Rosetta reports
+# x86_64 on an arm64 Mac: the native file is the one to run there.
+self_target() {
+  local os arch out loader
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux) os=linux ;;
+    *) return 0 ;;
+  esac
+  case "$(uname -m)" in
+    arm64|aarch64) arch=arm64 ;;
+    x86_64|amd64) arch=x64 ;;
+    *) return 0 ;;
+  esac
+  if [[ "$os" == darwin && "$arch" == x64 && "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" == 1 ]]; then
+    arch=arm64
+  fi
+  if [[ "$os" == linux ]]; then
+    out="$(ldd --version 2>&1 || true)"
+    for loader in /lib/ld-musl-*; do
+      if [[ -e "$loader" ]]; then out="musl"; fi
+    done
+    if [[ "$out" == *musl* ]]; then
+      printf '%s-%s-musl' "$os" "$arch"
+      return 0
+    fi
+  fi
+  printf '%s-%s' "$os" "$arch"
+}
+
+find_bun
+# This machine's target, in both modes: a rollback can start a compiled file
+# left by an earlier file deploy even while this one deploys the Node build.
+MACHINE_TARGET="$(self_target)"
+SELF_TARGET=""
+if [[ "$RUNTIME" == "file" ]]; then
+  if [[ -z "$BUN_BIN" ]]; then
+    echo "Building the compiled walnut file needs bun $(bun_pin) or newer (package.json packageManager)." >&2
+    if [[ -n "$BUN_SEEN" ]]; then echo "Found only: $BUN_SEEN." >&2; fi
+    echo "Put a newer bun first on PATH or set WALNUT_BUN to it, or deploy the Node build: WALNUT_DEVPROD_RUNTIME=node." >&2
+    exit 1
+  fi
+  SELF_TARGET="$MACHINE_TARGET"
+  if [[ -z "$SELF_TARGET" ]]; then
+    echo "No compiled walnut file is built for $(uname -s) $(uname -m); deploy the Node build: WALNUT_DEVPROD_RUNTIME=node." >&2
+    exit 1
+  fi
+else
+  if [[ -z "$NODE_BIN" ]]; then
+    echo "WALNUT_DEVPROD_RUNTIME=node needs node on PATH." >&2
+    exit 1
+  fi
+fi
+# Runs the repo's own helper scripts (render check, publish): bun when there is
+# one (Playwright included), else node.
+JS_BIN="${BUN_BIN:-$NODE_BIN}"
+if [[ -z "$JS_BIN" ]]; then
+  echo "Need bun or node to run the deploy's helper scripts." >&2
+  exit 1
+fi
+# The extra targets built beside this machine's file, from the same build, for
+# host servers (src/core/host-server/). WALNUT_DEVPROD_FILE_TARGETS="" builds none.
+FILE_TARGETS="${WALNUT_DEVPROD_FILE_TARGETS-linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl}"
+if [[ "$RUNTIME" != "file" ]]; then FILE_TARGETS=""; fi
+for t in $FILE_TARGETS; do
+  if [[ ! "$t" =~ ^(darwin|linux)-(x64|arm64)(-musl)?$ ]]; then
+    echo "WALNUT_DEVPROD_FILE_TARGETS: unknown target '$t'." >&2
+    exit 1
+  fi
+done
 
 # `launchctl submit` jobs are implicitly KeepAlive: launchd re-runs them every
 # time they exit. This script is a ONE-SHOT deploy, so being submitted that way
@@ -297,6 +544,13 @@ drain_active_turns() {
   return 0
 }
 
+# What this deploy runs, in words, for the dry run and the log.
+if [[ "$RUNTIME" == "file" ]]; then
+  RUNTIME_DESC="the compiled file walnut-$SELF_TARGET (bun $BUN_VERSION at $BUN_BIN)"
+else
+  RUNTIME_DESC="node $NODE_BIN with dist/cli.js (WALNUT_DEVPROD_RUNTIME=node)"
+fi
+
 if [[ "$DRY_RUN" == "1" ]]; then
   # Exercise the drain end to end without ever waiting: a dry run deploys
   # nothing, so a zero budget still proves the probe + parse + both proceed
@@ -305,9 +559,11 @@ if [[ "$DRY_RUN" == "1" ]]; then
   DRAIN_SECS=0
   drain_active_turns
   echo "[dry-run] every guard passed on $(uname -s) (probe: $PORT_PROBE, log: $SERVER_LOG)."
+  echo "[dry-run] would run $RUNTIME_DESC${FILE_TARGETS:+, with $FILE_TARGETS beside it}."
   echo "[dry-run] stopping before build, server kill and launch — nothing was deployed."
   exit 0
 fi
+echo "Deploying $RUNTIME_DESC on :$PORT."
 
 # ── Type-check the SPA before building it ───────────────────────────────────
 # 2026-09-02: a deploy built the shared working tree while another agent was
@@ -318,12 +574,14 @@ fi
 # (`Cannot find name 'groupBy'`) in under a minute. A failure here is usually
 # someone else's unfinished edit: wait for them or coordinate, and only reach
 # for WALNUT_DEVPROD_SKIP_TSC=1 when the error is provably unrelated to `/`.
+# tsc runs on $JS_BIN (bun when there is one): its own `#!/usr/bin/env node`
+# line would need a node.
 if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]]; then
   WEB_TSC="$REPO_ROOT/web/node_modules/.bin/tsc"
   [[ -x "$WEB_TSC" ]] || WEB_TSC="$REPO_ROOT/node_modules/.bin/tsc"
   if [[ -x "$WEB_TSC" ]]; then
     echo "Type-checking web/ before the build (WALNUT_DEVPROD_SKIP_TSC=1 skips)."
-    if ! (cd "$REPO_ROOT/web" && "$WEB_TSC" --noEmit -p tsconfig.json); then
+    if ! (cd "$REPO_ROOT/web" && "$JS_BIN" "$WEB_TSC" --noEmit -p tsconfig.json); then
       echo "web/ type-check FAILED — deploy aborted, production server on :$PORT untouched." >&2
       echo "A half-edited component ships as a first-paint crash; fix (or wait for the" >&2
       echo "author of) the errors above, or WALNUT_DEVPROD_SKIP_TSC=1 if provably unrelated." >&2
@@ -334,9 +592,61 @@ if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]]; then
   fi
 fi
 
-npm run web:build
+# ── Build ───────────────────────────────────────────────────────────────────
+# The dist first (both modes): the server bundle, web assets, data files and
+# daemon binaries. Its bun goes first on PATH for the build only, so every
+# script under it (build-daemon.sh, bun run) uses the same bun.
+if [[ -n "$BUN_BIN" ]]; then
+  (cd "$REPO_ROOT" && PATH="$(dirname "$BUN_BIN"):$PATH" "$BUN_BIN" run web:build)
+else
+  (cd "$REPO_ROOT" && npm run web:build)
+fi
 
-# ── Stage the dist on the temp volume before ANY boot ───────────────────────
+# Then, in file mode, the compiled files from that dist's web assets
+# (--reuse-web: the file and the dist name the same hashed bundles, so the
+# web-asset mirror, src/web/static-mirror.ts, sees one build either way). This
+# machine's target and the Linux ones come from ONE build-binary run, so every
+# file names the same commit. A sibling is optional: when the run fails, this
+# machine's file alone is built again, and a deploy without it aborts.
+build_files() {
+  local -a args=(--reuse-web --target "$SELF_TARGET")
+  local t
+  for t in "$@"; do
+    if [[ "$t" != "$SELF_TARGET" ]]; then args+=(--target "$t"); fi
+  done
+  (cd "$REPO_ROOT" && PATH="$(dirname "$BUN_BIN"):$PATH" "$BUN_BIN" "$REPO_ROOT/scripts/build-binary.mjs" "${args[@]}")
+}
+BUILT_TARGETS=""
+build_marker=""
+SELFTEST_TMP=""
+# Scratch this deploy makes before the smoke boot; also removed on any exit.
+scratch_cleanup() {
+  if [[ -n "${build_marker:-}" ]]; then rm -f "$build_marker" 2>/dev/null || true; fi
+  if [[ -n "${SELFTEST_TMP:-}" ]]; then rm -rf "$SELFTEST_TMP" 2>/dev/null || true; fi
+}
+trap 'scratch_cleanup; release_lock' EXIT
+if [[ "$RUNTIME" == "file" ]]; then
+  build_marker="${TMPDIR:-/tmp}/open-walnut-dev-prod.build.$$"
+  : > "$build_marker"
+  # shellcheck disable=SC2086
+  if build_files $FILE_TARGETS; then
+    BUILT_TARGETS="$SELF_TARGET $FILE_TARGETS"
+  elif [[ -n "$FILE_TARGETS" ]]; then
+    echo "Building the files for $FILE_TARGETS failed; building walnut-$SELF_TARGET alone (host servers then fetch their own file)." >&2
+    if ! build_files; then
+      rm -f "$build_marker"
+      echo "Building the compiled file failed: deploy aborted, production server on :$PORT untouched." >&2
+      exit 1
+    fi
+    BUILT_TARGETS="$SELF_TARGET"
+  else
+    rm -f "$build_marker"
+    echo "Building the compiled file failed: deploy aborted, production server on :$PORT untouched." >&2
+    exit 1
+  fi
+fi
+
+# ── Stage the build on the temp volume before ANY boot ──────────────────────
 # 2026-08-27: four consecutive deploys burned their whole readiness window and
 # rolled back — a byte-identical cli.js booted in ~1s from the LKG copy under
 # /var/folders but produced not one log line in 6+ minutes when launched from
@@ -346,10 +656,20 @@ npm run web:build
 # busiest. The temp volume is outside the scan scope, so EVERY boot this
 # script performs (smoke AND prod) runs from a staged copy there, never from
 # the repo path. Staging itself is clonefile (metadata-only, no content
-# reads), so it cannot stall on the scanner either.
+# reads), so it cannot stall on the scanner either. The compiled file's
+# runtime tree is unpacked there too (<stage>/runtime), not into the data home.
 STAGE_ROOT="${TMPDIR:-/tmp}"
 STAGE_DIR="$STAGE_ROOT/open-walnut-stage.$(date +%s).$$"
 STAGE_IN_USE=0
+
+# Copy one file or tree: clonefile on macOS (APFS: metadata only), plain cp elsewhere.
+clone_copy() {
+  if [[ "$(uname -s)" == "Darwin" ]] && cp -Rc "$1" "$2" 2>/dev/null; then
+    return 0
+  fi
+  rm -rf "$2" 2>/dev/null || true
+  cp -R "$1" "$2"
+}
 
 stage_dist() {
   mkdir -p "$STAGE_DIR" || return 1
@@ -365,12 +685,37 @@ stage_dist() {
   # getVersion() walks UP from dist/cli.js for the nearest package.json; a stage
   # without one reports 0.0.0 and every version-gated builtin plugin turns off.
   cp "$REPO_ROOT/package.json" "$STAGE_DIR/package.json" || return 1
-  # WALNUT_INSTALL_DIR (constants.ts) walks the same way looking for a .git next
-  # to that package.json, which a stage never has: since staging landed, the
-  # server believed it was an npm install, so "Fix Walnut" hid and "Ask AI to
-  # fix" would have cloned upstream instead of repairing THIS checkout. The
-  # marker hands it the repo the stage was built from.
-  printf '%s\n' "$SERVE_ROOT" > "$STAGE_DIR/.walnut-source-root" || return 1
+  stage_source_root || return 1
+}
+
+# WALNUT_INSTALL_DIR (constants.ts) walks up from the bundle looking for a .git
+# next to a package.json, which a stage never has: since staging landed, the
+# server believed it was an npm install, so "Fix Walnut" hid and "Ask AI to
+# fix" would have cloned upstream instead of repairing THIS checkout. The
+# marker hands it the repo the stage was built from (the file's walk starts in
+# <stage>/runtime/<build>/dist and reaches the stage dir the same way).
+stage_source_root() {
+  printf '%s\n' "$SERVE_ROOT" > "$STAGE_DIR/.walnut-source-root"
+}
+
+# The compiled files this deploy built (only those newer than the build's
+# marker: a dist-bin/ of an earlier build may still hold other targets).
+stage_files() {
+  mkdir -p "$STAGE_DIR/dist-bin" || return 1
+  local t src
+  for t in $BUILT_TARGETS; do
+    src="$REPO_ROOT/dist-bin/walnut-$t"
+    if [[ ! -f "$src" || ! "$src" -nt "$build_marker" ]]; then
+      if [[ "$t" == "$SELF_TARGET" ]]; then
+        echo "The build left no fresh $src." >&2
+        return 1
+      fi
+      echo "Warning: no fresh walnut-$t from this build; it is not staged." >&2
+      continue
+    fi
+    clone_copy "$src" "$STAGE_DIR/dist-bin/walnut-$t" || return 1
+  done
+  stage_source_root || return 1
 }
 
 # A stage that never became the running server is trash on exit (smoke failure,
@@ -382,15 +727,76 @@ stage_cleanup() {
   fi
 }
 
-if ! stage_dist; then
+trap 'scratch_cleanup; stage_cleanup; release_lock' EXIT
+if [[ "$RUNTIME" == "file" ]]; then
+  staged_ok=1
+  stage_files || staged_ok=0
+else
+  staged_ok=1
+  stage_dist || staged_ok=0
+fi
+if (( ! staged_ok )); then
   # Pre-kill: the old server is still serving. A staging failure usually means
   # the disk is full — this deploy would only get worse past this point.
   rm -rf "$STAGE_DIR" 2>/dev/null || true
-  echo "Failed to stage dist at $STAGE_DIR (disk full?); deploy aborted, prod untouched." >&2
+  echo "Failed to stage the build at $STAGE_DIR (disk full?); deploy aborted, prod untouched." >&2
   exit 1
 fi
 CLI_JS="$STAGE_DIR/dist/cli.js"
-echo "Staged dist for boot: $CLI_JS"
+SERVER_FILE="$STAGE_DIR/dist-bin/walnut-$SELF_TARGET"
+if [[ "$RUNTIME" == "file" ]]; then
+  SERVER_KIND=file
+  SERVER_PATH="$SERVER_FILE"
+  echo "Staged the compiled files for boot: $(cd "$STAGE_DIR/dist-bin" && ls | tr '\n' ' ')in $STAGE_DIR/dist-bin"
+else
+  SERVER_KIND=node
+  SERVER_PATH="$CLI_JS"
+  echo "Staged dist for boot: $CLI_JS"
+fi
+
+# The server program for a build: the compiled file, whose runtime tree lives
+# in the runtime/ dir beside its dist-bin/ (WALNUT_RUNTIME_DIR names that
+# parent, src/binary/runtime-tree.ts), or node with the dist's cli.js. Sets the
+# global array server_argv; `web --port N` follows it, after `env` and its -u
+# options. A rehearsal adds its private data and daemon dirs.
+set_server_argv() {
+  case "$1" in
+    file) server_argv=(WALNUT_RUNTIME_DIR="$(dirname "$(dirname "$2")")/runtime" "$2") ;;
+    node) server_argv=("$NODE_BIN" "$2") ;;
+    *) echo "unknown server kind: $1" >&2; return 1 ;;
+  esac
+  if [[ "$REHEARSAL" == "1" ]]; then
+    server_argv=(OPEN_WALNUT_HOME="$REHEARSAL_HOME" WALNUT_DAEMON_DIR="$REHEARSAL_DAEMON_DIR" "${server_argv[@]}")
+  fi
+  if [[ "$REHEARSAL" == "1" && "${WALNUT_DEVPROD_REHEARSAL_FAIL_LAUNCH:-0}" == "1" && "${rehearsal_fail_armed:-0}" == "1" ]]; then
+    # The new server (the real build) answers /api/config but cannot serve the
+    # web app: its static root and the asset mirror point at nothing, so the
+    # check after readiness fails and the deploy rolls back to the LKG.
+    server_argv=(WALNUT_WEB_STATIC_DIR="$TMPDIR/rehearsal-no-static" WALNUT_WEB_STATIC_MIRROR="$TMPDIR/rehearsal-no-mirror/none" "${server_argv[@]}")
+  fi
+}
+
+# ── Self-test of the compiled file ──────────────────────────────────────────
+# `walnut __selftest` checks the parts of the file a server boot does not reach
+# on a fresh machine (SQLite on bun, the worker threads, the tokenizer, the
+# daemon source) and unpacks the runtime tree the server will run from, into
+# the stage, so the first boot does not write it. Isolated like the smoke boot.
+if [[ "$RUNTIME" == "file" && "${WALNUT_DEVPROD_SKIP_SELFTEST:-0}" != "1" ]]; then
+  SELFTEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/walnut-selftest.XXXXXX")"
+  mkdir -p "$SELFTEST_TMP/home" "$SELFTEST_TMP/daemon"
+  echo "Self-testing $SERVER_FILE."
+  if ! env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR \
+    OPEN_WALNUT_HOME="$SELFTEST_TMP/home" \
+    WALNUT_DAEMON_DIR="$SELFTEST_TMP/daemon" \
+    WALNUT_RUNTIME_DIR="$STAGE_DIR/runtime" \
+    "$SERVER_FILE" __selftest; then
+    rm -rf "$SELFTEST_TMP" "$STAGE_DIR" 2>/dev/null || true
+    echo "Self-test FAILED: the compiled file is broken; deploy aborted, production server on :$PORT untouched." >&2
+    exit 1
+  fi
+  rm -rf "$SELFTEST_TMP" 2>/dev/null || true
+  SELFTEST_TMP=""
+fi
 
 # ── Pre-kill smoke boot ─────────────────────────────────────────────────────
 # 2026-08-22/23 outages: a dist built from a broken working tree hangs in module
@@ -450,7 +856,7 @@ smoke_cleanup() {
   fi
   SMOKE_TMP=""
 }
-trap 'smoke_cleanup; stage_cleanup; release_lock' EXIT
+trap 'smoke_cleanup; scratch_cleanup; stage_cleanup; release_lock' EXIT
 
 # Distinct from listener_pids so that function's tested contract stays untouched.
 port_is_free() {
@@ -472,12 +878,23 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
     SMOKE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/walnut-smoke.XXXXXX")"
     mkdir -p "$SMOKE_TMP/home" "$SMOKE_TMP/daemon"
     : > "$SMOKE_LOG"
-    env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR \
+    # The smoke server's program: the staged build, the compiled file with its
+    # own runtime tree in the smoke dir (nothing it unpacks or writes reaches the
+    # stage the production server will run from).
+    if [[ "$SERVER_KIND" == "file" ]]; then
+      smoke_argv=(WALNUT_RUNTIME_DIR="$SMOKE_TMP/runtime" "$SERVER_FILE")
+    else
+      smoke_argv=("$NODE_BIN" "$CLI_JS")
+    fi
+    if [[ "$REHEARSAL" == "1" && "${WALNUT_DEVPROD_REHEARSAL_FAIL_SMOKE:-0}" == "1" ]]; then
+      smoke_argv=(/bin/sh -c 'echo "rehearsal: forced smoke failure" >&2; exit 3' rehearsal-smoke)
+    fi
+    env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR \
       OPEN_WALNUT_HOME="$SMOKE_TMP/home" \
       WALNUT_DAEMON_DIR="$SMOKE_TMP/daemon" \
       WALNUT_DISABLE_SEARCH=1 \
       WALNUT_DAEMON_HEARTBEAT_MS=2000 \
-      "$NODE_BIN" "$CLI_JS" web --port "$smoke_port" \
+      "${smoke_argv[@]}" web --port "$smoke_port" \
       >>"$SMOKE_LOG" 2>&1 &
     SMOKE_PID=$!
     smoke_ok=0
@@ -505,7 +922,7 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
     smoke_render_rc=0
     if [[ "$smoke_ok" == "1" && "${WALNUT_DEVPROD_SKIP_RENDER:-0}" != "1" ]]; then
       RENDER_SECS="${WALNUT_DEVPROD_RENDER_SECS:-60}"
-      "$NODE_BIN" "$REPO_ROOT/scripts/devprod-render-check.mjs" \
+      "$JS_BIN" "$REPO_ROOT/scripts/devprod-render-check.mjs" \
         "http://localhost:$smoke_port/" --timeout-ms "$(( RENDER_SECS * 1000 ))" \
         || smoke_render_rc=$?
       if [[ "$smoke_render_rc" == "2" && "${WALNUT_DEVPROD_RENDER_STRICT:-0}" != "1" ]]; then
@@ -515,18 +932,18 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
     fi
     smoke_cleanup
     if [[ "$smoke_ok" != "1" ]]; then
-      echo "Smoke boot FAILED: fresh dist did not serve /api/config within ${SMOKE_SECS}s." >&2
+      echo "Smoke boot FAILED: the fresh build did not serve /api/config within ${SMOKE_SECS}s." >&2
       echo "Production server on :$PORT was NOT touched. Smoke log tail ($SMOKE_LOG):" >&2
       tail -n 25 "$SMOKE_LOG" >&2 || true
       exit 1
     fi
     if [[ "$smoke_render_rc" != "0" ]]; then
-      echo "Smoke render FAILED: fresh dist serves /api/config but crashes on the first paint of /." >&2
+      echo "Smoke render FAILED: the fresh build serves /api/config but crashes on the first paint of /." >&2
       echo "Production server on :$PORT was NOT touched. Fix the render error above" >&2
       echo "(WALNUT_DEVPROD_SKIP_RENDER=1 skips this check for emergencies)." >&2
       exit 1
     fi
-    echo "Smoke boot OK: fresh dist binds, serves, and paints /."
+    echo "Smoke boot OK: the fresh build binds, serves, and paints /."
   fi
 fi
 
@@ -691,17 +1108,21 @@ fi
 # macOS ships bash 3.2 — no `mapfile`/`readarray`. Plain word-splitting on a
 # newline-separated pgrep result is the portable form.
 self_pid=$$
-stray_pids="$(pgrep -f 'dist/cli\.js web' 2>/dev/null || true)"
+stray_pids="$(pgrep -f 'dist/cli\.js web|dist-bin/walnut-[a-z0-9-]+ web' 2>/dev/null || true)"
 for spid in $stray_pids; do
   [[ -n "$spid" && "$spid" != "$self_pid" ]] || continue
   kill -0 "$spid" 2>/dev/null || continue
   cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
-  # Only OUR production server; never an ephemeral/test instance. Three launch
-  # shapes over time: repo dist (old deploys), staged dist (current deploys),
-  # LKG dist (rollback servers).
+  # Only OUR production server; never an ephemeral/test instance. The launch
+  # shapes over time: repo dist (old deploys), staged dist (Node deploys), LKG
+  # dist (Node rollback servers), and the compiled file staged, in its LKG, or
+  # in a checkout's dist-bin/. A daemon (`walnut-<target> __daemon`) never matches.
   if [[ "$cmd" != *"$REPO_ROOT/dist/cli.js"* && "$cmd" != *"$SERVE_ROOT/dist/cli.js"* \
      && "$cmd" != *"open-walnut-stage."*"/dist/cli.js"* \
-     && "$cmd" != *"open-walnut-lkg/dist/cli.js"* ]]; then
+     && "$cmd" != *"open-walnut-lkg/dist/cli.js"* \
+     && "$cmd" != *"$REPO_ROOT/dist-bin/walnut-"*" web"* && "$cmd" != *"$SERVE_ROOT/dist-bin/walnut-"*" web"* \
+     && "$cmd" != *"open-walnut-stage."*"/dist-bin/walnut-"*" web"* \
+     && "$cmd" != *"open-walnut-lkg/dist-bin/walnut-"*" web"* ]]; then
     continue
   fi
   # `[[ … ]] && continue` would return 1 when it does NOT match, and under
@@ -716,6 +1137,11 @@ for spid in $stray_pids; do
   # ephemeral server on :4105 mid-run, failing 10 scenarios on a dead server.
   port_arg="$(printf '%s' "$cmd" | sed -n 's/.*--port[= ]\([0-9][0-9]*\).*/\1/p')"
   if [[ -n "$port_arg" && "$port_arg" != "$PORT" ]]; then
+    continue
+  fi
+  # A rehearsal reaps only a server that names its own port: one with no --port
+  # serves :3456, which is production's.
+  if [[ "$REHEARSAL" == "1" && "$port_arg" != "$PORT" ]]; then
     continue
   fi
   echo "Reaping stray Walnut server PID $spid (never bound :$PORT): $cmd" >&2
@@ -760,17 +1186,20 @@ stage_has_live_process() {
     return 0
   fi
   local rc=0
-  pids="$(pgrep -f 'dist/cli\.js' 2>/dev/null)" || rc=$?
+  pids="$(pgrep -f 'dist/cli\.js|dist-bin/walnut-' 2>/dev/null)" || rc=$?
   # pgrep exit 1 means "matched nothing", which is a real answer. Anything else
   # (usage error, no permission, killed) means the probe failed and we know nothing.
   if (( rc > 1 )); then
     echo "unknown"
     return 0
   fi
+  # A Node server runs <stage>/dist/cli.js; the compiled file's server AND its
+  # local daemon run <stage>/dist-bin/walnut-<target>, and both read the
+  # runtime tree in <stage>/runtime for as long as they live.
   for spid in $pids; do
     [[ -n "$spid" ]] || continue
     cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
-    if [[ "$cmd" == *"$base/dist/cli.js"* ]]; then
+    if [[ "$cmd" == *"$base/dist/cli.js"* || "$cmd" == *"$base/dist-bin/walnut-"* ]]; then
       echo "$spid"
       return 0
     fi
@@ -841,7 +1270,10 @@ xml_escape() {
   printf '%s' "$s"
 }
 
-# The job's command line, shared by the plist and the submit fallback.
+# The job's command line, shared by the plist and the submit fallback: the
+# server program set_server_argv chose (the compiled file runs directly, no node).
+# WALNUT_RUNTIME_DIR is dropped first: a deploy started from inside a session of
+# the old server inherits that server's, which names the OLD stage.
 launchd_job_argv() {
   launchd_argv=(/bin/sh -c 'cd "$1" && shift && exec "$@"' open-walnut
     "$SERVE_ROOT" /usr/bin/env
@@ -849,9 +1281,10 @@ launchd_job_argv() {
     -u OPEN_WALNUT_HOME
     -u WALNUT_DAEMON_DIR
     -u VITEST
+    -u WALNUT_RUNTIME_DIR
     PATH="$PATH"
     WALNUT_LAUNCHD_LABEL="$LAUNCH_LABEL"
-    "$NODE_BIN" "$1" web --port "$PORT")
+    "${server_argv[@]}" web --port "$PORT")
 }
 
 write_launchd_plist() {
@@ -913,7 +1346,7 @@ submit_launchd_job() {
   # Callers hold use_launchd=1 (Darwin-only); the guard keeps the helper inert
   # if one is ever added on another path.
   [[ "$(uname -s)" == "Darwin" ]] || return 1
-  launchd_job_argv "$1"
+  launchd_job_argv
   bootstrap_interactive_job && return 0
   # A legacy submit lands in the caller's own domain, which launchd_domain
   # picked to match; launch_server checks it really did.
@@ -924,13 +1357,14 @@ submit_launchd_job() {
     -- "${launchd_argv[@]}"
 }
 
-# Launch a server for the given cli.js on :$PORT — launchd (KeepAlive, nice 0)
-# on macOS, nohup elsewhere. Sets the global `pid` on the nohup path.
+# Launch a server on :$PORT for a build: `launch_server file <walnut file>` or
+# `launch_server node <cli.js>`: launchd (KeepAlive, nice 0) on macOS, nohup
+# elsewhere. Sets the global `pid` on the nohup path.
 launch_server() {
-  local cli_js="$1"
+  set_server_argv "$1" "$2" || return 1
   pid=""
   if (( use_launchd )); then
-    if ! submit_launchd_job "$cli_js"; then
+    if ! submit_launchd_job; then
       # Still on the use_launchd path: degrade to nohup rather than abort.
       echo "launchd submit failed outright; falling back to nohup." >&2
       use_launchd=0
@@ -964,7 +1398,7 @@ launch_server() {
         # Still loaded after the wait: a resubmit of the label would fail too.
         remove_launchd_job || break
         sleep 1
-        if (( attempt == 2 )) || ! submit_launchd_job "$cli_js"; then
+        if (( attempt == 2 )) || ! submit_launchd_job; then
           break
         fi
       done
@@ -981,7 +1415,8 @@ launch_server() {
       -u OPEN_WALNUT_HOME \
       -u WALNUT_DAEMON_DIR \
       -u VITEST \
-      "$NODE_BIN" "$cli_js" web --port "$PORT" \
+      -u WALNUT_RUNTIME_DIR \
+      "${server_argv[@]}" web --port "$PORT" \
       </dev/null >>"$SERVER_LOG" 2>&1 &
     pid=$!
   fi
@@ -1004,26 +1439,38 @@ wait_for_config_ready() {
   return 1
 }
 
-# Best-effort dist snapshot for rollback. Clonefile (cp -c) is ~instant on
-# APFS; plain cp -R elsewhere. node_modules rides as a symlink to the repo's —
-# the bundle resolves native/spawned deps from there, same as a repo launch.
+# Best-effort snapshot of the build that just passed readiness, for rollback.
+# Clonefile (cp -c) is ~instant on APFS; plain cp -R elsewhere. Taken from the
+# STAGE, not the repo: it is the exact artifact that just passed readiness
+# (byte-identical by construction), and the temp volume is exempt from the
+# on-access scanners that stall /Users reads under load. One kind per snapshot:
+#   file  dist-bin/ (this machine's file and its siblings) + runtime/ (its tree)
+#   node  dist/ + a node_modules symlink to the serve root's (the bundle
+#         resolves native/spawned deps there, same as a repo launch) + package.json
 snapshot_lkg() {
   rm -rf "$LKG_DIR.tmp" 2>/dev/null || true
   mkdir -p "$LKG_DIR.tmp" || return 1
-  local copied=0
-  # Snapshot from the STAGE, not the repo: it is the exact artifact that just
-  # passed readiness (byte-identical by construction), and the temp volume is
-  # exempt from the on-access scanners that stall /Users reads under load.
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    if cp -Rc "$STAGE_DIR/dist" "$LKG_DIR.tmp/dist" 2>/dev/null; then copied=1; fi
+  if [[ "$SERVER_KIND" == "file" ]]; then
+    clone_copy "$STAGE_DIR/dist-bin" "$LKG_DIR.tmp/dist-bin" || return 1
+    # The tree the server unpacked; without it the LKG file unpacks its own at boot.
+    if [[ -d "$STAGE_DIR/runtime" ]]; then
+      clone_copy "$STAGE_DIR/runtime" "$LKG_DIR.tmp/runtime" || return 1
+    fi
+  else
+    local copied=0
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      if cp -Rc "$STAGE_DIR/dist" "$LKG_DIR.tmp/dist" 2>/dev/null; then copied=1; fi
+    fi
+    if (( ! copied )); then
+      rm -rf "$LKG_DIR.tmp/dist" 2>/dev/null || true
+      cp -R "$STAGE_DIR/dist" "$LKG_DIR.tmp/dist" || return 1
+    fi
+    ln -sfn "$SERVE_ROOT/node_modules" "$LKG_DIR.tmp/node_modules" || return 1
+    # Same reason as stage_dist: without a package.json the LKG boots as 0.0.0.
+    cp "$REPO_ROOT/package.json" "$LKG_DIR.tmp/package.json" || return 1
   fi
-  if (( ! copied )); then
-    rm -rf "$LKG_DIR.tmp/dist" 2>/dev/null || true
-    cp -R "$STAGE_DIR/dist" "$LKG_DIR.tmp/dist" || return 1
-  fi
-  ln -sfn "$SERVE_ROOT/node_modules" "$LKG_DIR.tmp/node_modules" || return 1
-  # Same reason as stage_dist: without a package.json the LKG boots as 0.0.0.
-  cp "$REPO_ROOT/package.json" "$LKG_DIR.tmp/package.json" || return 1
+  # A rollback server keeps "Fix Walnut" pointed at this checkout (stage_source_root).
+  printf '%s\n' "$SERVE_ROOT" > "$LKG_DIR.tmp/.walnut-source-root" || return 1
   rm -rf "$LKG_DIR" 2>/dev/null || true
   mv "$LKG_DIR.tmp" "$LKG_DIR" || return 1
 }
@@ -1034,7 +1481,9 @@ snapshot_lkg() {
 server_log_baseline="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
 
 STAGE_IN_USE=1
-launch_server "$CLI_JS"
+rehearsal_fail_armed=1
+launch_server "$SERVER_KIND" "$SERVER_PATH"
+rehearsal_fail_armed=0
 
 stop_new_server() {
   if (( use_launchd )); then
@@ -1055,36 +1504,55 @@ stop_new_server() {
 # still FAILS (callers exit 1); this only restores service with the last dist
 # that passed readiness. If the rollback server is slow, it is left running
 # (launchd KeepAlive / nohup) rather than killed — availability wins.
+# Does a snapshot dir hold a build this machine can roll back to?
+lkg_has_build() { [[ ( -n "$MACHINE_TARGET" && -x "$1/dist-bin/walnut-$MACHINE_TARGET" ) || -f "$1/dist/cli.js" ]]; }
 rollback_to_lkg() {
+  # Whatever kind the last good build was: a file deploy that fails right after
+  # a Node one rolls back to that Node build, and the other way round. The old
+  # temp location is read until the first snapshot lands in LKG_DIR.
   local lkg="$LKG_DIR"
-  if [[ ! -f "$lkg/dist/cli.js" && -z "${WALNUT_DEVPROD_LKG_DIR:-}" && -f "$LKG_LEGACY_DIR/dist/cli.js" ]]; then
+  if ! lkg_has_build "$lkg" && [[ -z "${WALNUT_DEVPROD_LKG_DIR:-}" ]] && lkg_has_build "$LKG_LEGACY_DIR"; then
     lkg="$LKG_LEGACY_DIR"
   fi
-  if [[ -f "$lkg/dist/cli.js" ]]; then
-    echo "Rolling back to last-known-good dist: $lkg/dist" >&2
+  local lkg_kind="" lkg_rel=""
+  if [[ -n "$MACHINE_TARGET" && -x "$lkg/dist-bin/walnut-$MACHINE_TARGET" ]]; then
+    lkg_kind=file
+    lkg_rel="dist-bin/walnut-$MACHINE_TARGET"
+  elif [[ -f "$lkg/dist/cli.js" ]]; then
+    lkg_kind=node
+    lkg_rel="dist/cli.js"
+    if [[ -z "$NODE_BIN" ]]; then
+      echo "The last-known-good build at $lkg is a Node build and this machine has no node; :$PORT is left unserved." >&2
+      return 0
+    fi
+  fi
+  if [[ -n "$lkg_kind" ]]; then
+    echo "Rolling back to the last-known-good build ($lkg_kind): $lkg/$lkg_rel" >&2
     # Boot from a staged copy on the temp volume (see STAGE_ROOT); the snapshot
     # itself stays put. A failed copy boots the snapshot where it is.
     local from="$lkg"
     local rb="$STAGE_ROOT/open-walnut-stage.$(date +%s).$$.lkg"
     if mkdir -p "$rb" 2>/dev/null; then
-      local staged=0
-      if [[ "$(uname -s)" == "Darwin" ]] && cp -Rc "$lkg/dist" "$rb/dist" 2>/dev/null; then staged=1; fi
-      if [[ "$staged" == 0 ]]; then
-        rm -rf "$rb/dist" 2>/dev/null || true
-        if cp -R "$lkg/dist" "$rb/dist" 2>/dev/null; then staged=1; fi
-      fi
-      if [[ "$staged" == 1 ]] && ln -sfn "$SERVE_ROOT/node_modules" "$rb/node_modules" && cp "$lkg/package.json" "$rb/package.json"; then
+      if [[ "$lkg_kind" == file ]]; then
+        # The file and its unpacked runtime tree (without it the file unpacks its own at boot).
+        if clone_copy "$lkg/dist-bin" "$rb/dist-bin" \
+          && { [[ ! -d "$lkg/runtime" ]] || clone_copy "$lkg/runtime" "$rb/runtime"; }; then
+          from="$rb"
+        fi
+      elif clone_copy "$lkg/dist" "$rb/dist" && ln -sfn "$SERVE_ROOT/node_modules" "$rb/node_modules" && cp "$lkg/package.json" "$rb/package.json"; then
         from="$rb"
       fi
+      # Keeps "Fix Walnut" pointed at this checkout, as from the snapshot itself.
+      [[ "$from" == "$rb" && -f "$lkg/.walnut-source-root" ]] && cp "$lkg/.walnut-source-root" "$rb/.walnut-source-root" 2>/dev/null
     fi
-    launch_server "$from/dist/cli.js"
+    launch_server "$lkg_kind" "$from/$lkg_rel"
     if wait_for_config_ready 90; then
       echo "Rollback server is serving on :$PORT (this deploy itself still failed)." >&2
     else
       echo "Rollback server not ready after 90s; left running in case it settles late." >&2
     fi
   else
-    echo "No last-known-good dist at $lkg; :$PORT is left unserved." >&2
+    echo "No last-known-good build at $lkg; :$PORT is left unserved." >&2
   fi
 }
 
@@ -1122,15 +1590,12 @@ for _ in $(seq 1 $(( READY_SECS * 2 ))); do
   config_json="$(curl --connect-timeout 1 --max-time 2 -sf \
     "http://localhost:$PORT/api/config" 2>/dev/null || true)"
   if [[ -n "$config_json" ]]; then
-    process_nice="$(printf '%s' "$config_json" | "$NODE_BIN" -e '
-      let input = "";
-      process.stdin.on("data", chunk => { input += chunk });
-      process.stdin.on("end", () => {
-        const value = JSON.parse(input).processNice;
-        if (!Number.isInteger(value)) process.exit(2);
-        process.stdout.write(String(value));
-      });
-    ' 2>/dev/null || true)"
+    # processNice is a top-level key after `config` (src/web/routes/config.ts);
+    # the greedy `.*` takes its LAST occurrence, so a config value spelling the
+    # key cannot stand in for it. No jq and no node: neither is guaranteed here.
+    process_nice="$(printf '%s' "$config_json" \
+      | sed -n 's/.*"processNice"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9][0-9]*\).*/\1/p' \
+      | head -n 1 || true)"
     if [[ "$process_nice" =~ ^-?[0-9]+$ ]] && (( process_nice > 0 )); then
       stop_new_server
       echo "New server inherited nice=$process_nice; deployment aborted." >&2
@@ -1190,7 +1655,11 @@ case "$index_html" in
   *"<script"*"assets/index-"*) ;;
   *)
     stop_new_server
-    echo "Server answers /api/config but cannot serve the web app from $STAGE_DIR/dist/web/static." >&2
+    if [[ "$SERVER_KIND" == "file" ]]; then
+      echo "Server answers /api/config but cannot serve the web app from its runtime tree under $STAGE_DIR/runtime." >&2
+    else
+      echo "Server answers /api/config but cannot serve the web app from $STAGE_DIR/dist/web/static." >&2
+    fi
     echo "First 200 bytes of GET /: ${index_html:0:200}" >&2
     rollback_to_lkg
     exit 1
@@ -1215,7 +1684,7 @@ esac
 live_render_rc=0
 if [[ "${WALNUT_DEVPROD_SKIP_RENDER:-0}" != "1" ]]; then
   RENDER_SECS="${WALNUT_DEVPROD_RENDER_SECS:-60}"
-  "$NODE_BIN" "$REPO_ROOT/scripts/devprod-render-check.mjs" \
+  "$JS_BIN" "$REPO_ROOT/scripts/devprod-render-check.mjs" \
     "http://localhost:$PORT/" --timeout-ms "$(( RENDER_SECS * 1000 ))" \
     || live_render_rc=$?
   if [[ "$live_render_rc" == "2" && "${WALNUT_DEVPROD_RENDER_STRICT:-0}" != "1" ]]; then
@@ -1237,14 +1706,26 @@ fi
 # The `walnut` CLI here runs $SERVE_ROOT/dist and its op registry in process, so
 # op descriptions, schemas and outcomes come from that bundle, not the server. A
 # deploy from a clean clone (deploy-committed.sh) never built there, and the CLI
-# kept the last working-tree build (2026-10-05). Publish the build now serving.
+# kept the last working-tree build (2026-10-05). Publish the build now serving:
+# its staged dist, or for the compiled file the dist of the same build it was
+# made from (the publish leaves build-binary's staging dir out).
 # Best effort: the server is up either way.
 if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then
-  if ! "$NODE_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$STAGE_DIR/dist" "$SERVE_ROOT/dist"; then
-    echo "Warning: could not publish the serving build to $SERVE_ROOT/dist; the walnut CLI there keeps its last build." >&2
+  publish_from="$STAGE_DIR/dist"
+  if [[ "$SERVER_KIND" == "file" ]]; then publish_from="$REPO_ROOT/dist"; fi
+  publish_to="$SERVE_ROOT/dist"
+  # A rehearsal writes only into its own dirs: the checkout's CLI keeps its build,
+  # and the publish goes to a stand-in checkout (the script wants a package.json).
+  if [[ "$REHEARSAL" == "1" ]]; then
+    mkdir -p "$TMPDIR/rehearsal-serve-root"
+    cp "$SERVE_ROOT/package.json" "$TMPDIR/rehearsal-serve-root/package.json" || true
+    publish_to="$TMPDIR/rehearsal-serve-root/dist"
+  fi
+  if ! "$JS_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$publish_from" "$publish_to"; then
+    echo "Warning: could not publish the serving build to $publish_to; the walnut CLI there keeps its last build." >&2
   fi
 fi
 
 pid="$(listener_pids | head -n 1)"
 date +%s > "$SUCCESS_STAMP"
-echo "Server ready (PID: $pid)"
+echo "Server ready (PID: $pid, $RUNTIME_DESC)"
