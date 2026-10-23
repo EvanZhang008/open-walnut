@@ -6422,6 +6422,11 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // And the service state dir: a daemon a CLI starts is isolated, and with this var
       // it could reach the service daemon's journals. Keep in sync with daemon-standalone.ts.
       WALNUT_DAEMON_STATE_DIR: undefined,
+      // And the compiled file's runtime dir (src/binary/runtime-tree.ts): it names the
+      // SERVING stage's runtime/, which a later deploy deletes. A walnut CLI the session runs
+      // would unpack there or, after that deploy, mkdir it back inside a dead stage; without
+      // it a compiled walnut uses its own default tree. Keep in sync with daemon-standalone.ts.
+      WALNUT_RUNTIME_DIR: undefined,
     },
   };
   let barrier = null;
