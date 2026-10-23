@@ -148,9 +148,10 @@ function ChatNotificationRow({ category, config, save }: { category: UiOnlyCateg
 }
 
 /**
- * Update on start (config `updates.auto`): only an npm install has anything to
- * install, so the row is absent on a source checkout, a replica and an unpacked
- * bundle, where the same words would promise something that never happens.
+ * Update on start (config `updates.auto`): only an npm install and the compiled
+ * file install.sh puts in place have anything to install, so the row is absent
+ * on a source checkout, a replica, a Homebrew keg and an unpacked bundle, where
+ * the same words would promise something that never happens.
  */
 function UpdateOnStartRow({ config, save }: { config: Config; save: ReturnType<typeof useSerialSave> }) {
   const { status } = useUpdateStatus(true);
@@ -160,11 +161,11 @@ function UpdateOnStartRow({ config, save }: { config: Config; save: ReturnType<t
     (v) => save((c) => ({ updates: { ...(c.updates ?? {}), auto: v } }), { rowKey }),
     { rowKey },
   );
-  if (status?.install.kind !== 'npm') return null;
+  if (status?.install.kind !== 'npm' && status?.install.kind !== 'binary') return null;
   return (
     <SettingsRow
       label="Install updates on start"
-      help="Installs a newer release from npm when open-walnut web starts."
+      help="Installs a newer release when open-walnut web starts."
       htmlFor="settings-updates-auto"
       error={setting.error}
       data-testid="settings-updates-auto-row"

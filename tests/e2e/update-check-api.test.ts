@@ -116,6 +116,26 @@ describe('update check API', () => {
     expect(r.data).toMatchObject({ latest: '0.5.1', available: false });
   }, 15_000);
 
+  it('says it installs updates on start only for the installs that do: npm and the file, never Homebrew', async () => {
+    const saved = process.env.WALNUT_NO_AUTO_UPDATE;
+    delete process.env.WALNUT_NO_AUTO_UPDATE;
+    try {
+      const kinds: Array<[InstallInfo, boolean]> = [
+        [NPM, true],
+        [{ kind: 'binary', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'walnut update' }, true],
+        [{ kind: 'other', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'brew upgrade open-walnut' }, false],
+      ];
+      for (const [install, auto] of kinds) {
+        setUpdateCheckerForTest(new UpdateChecker({ registryUrl, current: '0.5.1', currentKnown: true, install, env: {} }));
+        const r = await api('GET', '/api/system/update');
+        expect(r.data, install.kind).toMatchObject({ autoUpdate: auto, install: { kind: install.kind, updateCommand: install.updateCommand } });
+      }
+    } finally {
+      if (saved === undefined) delete process.env.WALNUT_NO_AUTO_UPDATE;
+      else process.env.WALNUT_NO_AUTO_UPDATE = saved;
+    }
+  });
+
   it('a disabled checker (opted out) answers at once from both routes', async () => {
     answer = '0.9.0';
     const hits = registryHits;

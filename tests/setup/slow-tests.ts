@@ -70,6 +70,7 @@ export const SLOW_TEST_FILES = [
   'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
   'tests/providers/daemon-connection-upload-fake-ssh.test.ts', // ~5s idle, ~20s at load 27: a stand-in ssh process per chunk, ~90 of them
   'tests/utils/file-lock-multiprocess.test.ts', // ~1.5s idle, 3s+ under load: four real locker processes
+  'tests/core/self-update/install-lock-multiprocess.test.ts', // updater processes and install.sh runs on one root
   'tests/integration/cloud-setup-e2e.test.ts', // real cloud-mode HTTP server + git sync
 
   // ── Real git subprocesses (repo creation, history rewrite, packing) ─────────
@@ -96,6 +97,8 @@ export const SLOW_TEST_FILES = [
   'tests/scripts/cloud-ensure-harness.test.ts', // ~75s: 67 tests, mostly real runs of the harness script and setup.sh blocks (bash + node) in a sandbox
   'tests/scripts/companion-launch.test.ts', // ~13s: the companion launcher as a real process, with trial deadlines and signal waits
   'tests/scripts/release-promote-steps.test.ts', // ~10-40s: the release job's steps against a bare origin, real git pushes
+  'tests/scripts/install-sh.test.ts', // ~40s: 20 cases of real install.sh runs against a local release server, under sh and dash
+  'tests/scripts/file-distribution.e2e.test.ts', // builds the real compiled file at two versions (minutes; cached by content), then install.sh, npm and self-update end to end
   'tests/scripts/test-baseline-shard-cut.test.ts', // ~5-15s: three real nested vitest runs, checking the gate's --shard cut
   'tests/lib/hybrid-search-embed-worker-process.test.ts', // ~5-15s: real node hosts and workers through tsx
   'tests/core/components/features.test.ts', // ~5-10s: packs the real component archives (gzip -9 of ~55 MB) and installs them

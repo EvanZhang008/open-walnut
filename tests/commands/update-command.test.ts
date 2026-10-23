@@ -125,7 +125,7 @@ describe('runUpdateWith', () => {
     const { d, out, run } = deps(NPM_NEWER, { serverRunning: async () => true })
     const code = await runUpdateWith({}, { json: false }, d)
     expect(code).toBe(0)
-    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW])
+    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW], undefined)
     expect(out[2]).toBe('Installed Open Walnut 0.6.0.')
     expect(out[3]).toContain('still runs 0.5.1 until it is restarted')
   })
@@ -186,5 +186,93 @@ describe('runUpdateWith', () => {
     expect(parsed.latest).toBe('0.6.0')
     expect(parsed.plan.install).toBeNull()
     expect(parsed.plan.lines).toHaveLength(2)
+  })
+})
+
+const ROOT = '/home/alice/.local/share/open-walnut'
+const FILE_NEWER: UpdateStatus = {
+  ...NPM_NEWER,
+  install: {
+    kind: 'binary', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'walnut update',
+    binary: { root: ROOT, target: 'darwin-arm64', version: '0.5.1' }, relaunch: [`${ROOT}/bin/walnut`],
+  },
+}
+
+describe('the compiled file', () => {
+  it('in install.sh\'s layout, updates itself into it; --check names `walnut update`', () => {
+    expect(planUpdate(FILE_NEWER, { check: false })).toMatchObject({
+      exitCode: 0, installFile: { install: FILE_NEWER.install.binary, version: '0.6.0' },
+      lines: [expect.stringContaining('0.5.1 → 0.6.0'), `Installing it into ${ROOT}...`],
+    })
+    expect(planUpdate(FILE_NEWER, { check: false }).install).toBeUndefined()
+    expect(planUpdate(FILE_NEWER, { check: true })).toMatchObject({ lines: [expect.any(String), 'Run: walnut update'] })
+    expect(planUpdate(FILE_NEWER, { check: true }).installFile).toBeUndefined()
+  })
+
+  it('in a Homebrew keg, names brew and runs nothing', () => {
+    const brew: UpdateStatus = { ...NPM_NEWER, install: { kind: 'other', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'brew upgrade open-walnut' } }
+    const plan = planUpdate(brew, { check: false })
+    expect(plan).toMatchObject({ exitCode: 0, lines: [expect.any(String), 'Update it with: brew upgrade open-walnut'] })
+    expect(plan.install).toBeUndefined()
+    expect(plan.installFile).toBeUndefined()
+  })
+
+  it('runs the file\'s own installer, and a failure leaves the version as it was', async () => {
+    const installFile = vi.fn(async () => {})
+    const ok = deps(FILE_NEWER, { installFile })
+    expect(await runUpdateWith({}, { json: false }, ok.d)).toBe(0)
+    expect(installFile).toHaveBeenCalledWith(FILE_NEWER.install.binary, '0.6.0', undefined)
+    expect(ok.run).not.toHaveBeenCalled()
+    expect(ok.out.at(-1)).toBe('Installed Open Walnut 0.6.0.')
+    const bad = deps(FILE_NEWER, { installFile: vi.fn(async () => { throw new Error('the registry answered HTTP 503') }) })
+    expect(await runUpdateWith({}, { json: false }, bad.d)).toBe(1)
+    expect(bad.err.at(-1)).toBe('Could not install 0.6.0: the registry answered HTTP 503. Open Walnut 0.5.1 is unchanged.')
+  })
+})
+
+describe('what a launcher runs on its own (--auto), and an install that did not take', () => {
+  it('--auto keeps updates.auto: false, and never asks the registry then', async () => {
+    const { d, out, checkNow, run } = deps(NPM_NEWER, { autoEnabled: async () => false })
+    expect(await runUpdateWith({ auto: true }, { json: false }, d)).toBe(0)
+    expect(out).toEqual(['Automatic updates are off here (updates.auto: false in config.yaml, or WALNUT_NO_AUTO_UPDATE).'])
+    expect(checkNow).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    // Asked for by a person, it installs.
+    const asked = deps(NPM_NEWER, { autoEnabled: async () => false })
+    expect(await runUpdateWith({}, { json: false }, asked.d)).toBe(0)
+    expect(asked.run).toHaveBeenCalled()
+  })
+
+  it('--auto leaves a version held back alone; a person installing it clears its mark', async () => {
+    const held = () => '0.6.0 did not start here before (x); it is skipped until a newer release is published'
+    const auto = deps(NPM_NEWER, { held, autoEnabled: async () => true })
+    expect(await runUpdateWith({ auto: true }, { json: false }, auto.d)).toBe(0)
+    expect(auto.out).toEqual([`Open Walnut 0.6.0 is published, but ${held()}.`])
+    expect(auto.run).not.toHaveBeenCalled()
+    const clearHeld = vi.fn()
+    const asked = deps(NPM_NEWER, { held, clearHeld })
+    expect(await runUpdateWith({}, { json: false }, asked.d)).toBe(0)
+    expect(clearHeld).toHaveBeenCalledWith(NPM_NEWER, '0.6.0')
+  })
+
+  it('an npm install whose launcher still does not start the new version puts the old one back: exit 1', async () => {
+    const versionOf = vi.fn(async () => '0.5.1 (old)')
+    const { d, err, run, out } = deps(NPM_NEWER, { versionOf })
+    expect(await runUpdateWith({}, { json: false }, d)).toBe(1)
+    expect(run.mock.calls.map((c) => (c as unknown[])[1])).toEqual([
+      ['install', '-g', 'open-walnut@0.6.0', ALLOW], ['install', '-g', 'open-walnut@0.6.0', ALLOW], ['install', '-g', 'open-walnut@0.5.1', ALLOW],
+    ])
+    expect(err.at(-1)).toBe('Open Walnut 0.6.0 did not install its file for this machine (it still starts 0.5.1 (old)); 0.5.1 is back.')
+    expect(out).not.toContain('Installed Open Walnut 0.6.0.')
+  })
+
+  it('a signal while the file installs ends the command with the shell\'s code for it, the version unchanged', async () => {
+    const controller = new AbortController()
+    const stop = { signal: controller.signal, received: () => 'SIGINT' as NodeJS.Signals, done: vi.fn() }
+    const installFile = vi.fn(async () => { controller.abort(new Error('stopped by SIGINT')); throw new Error('aborted') })
+    const { d, err } = deps(FILE_NEWER, { installFile, watch: () => stop })
+    expect(await runUpdateWith({}, { json: false }, d)).toBe(130)
+    expect(err.at(-1)).toBe('Stopped by SIGINT; Open Walnut 0.5.1 is unchanged.')
+    expect(stop.done).toHaveBeenCalled()
   })
 })

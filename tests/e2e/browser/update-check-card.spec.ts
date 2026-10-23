@@ -212,3 +212,35 @@ test('UC-9: the row is absent when Walnut runs from a source checkout (the fixtu
   await expect(page.getByTestId('settings-appearance-row')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('settings-updates-auto-row')).toHaveCount(0)
 })
+
+const BINARY_INSTALL = { kind: 'binary', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'walnut update' }
+const HOMEBREW_INSTALL = { kind: 'other', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'brew upgrade open-walnut' }
+
+test('UC-10: the installed file updates itself like npm (row shown, walnut update); Homebrew does not (no row, brew upgrade)', async ({ page }) => {
+  await routeUpdate(page, base({ install: BINARY_INSTALL, latest: '0.9.0', tags: { latest: '0.9.0', nightly: null }, available: true, autoUpdate: true }))
+  await loadApp(page, '/settings')
+  await page.getByTestId('settings-nav-general').click()
+  const row = page.getByTestId('settings-updates-auto-row')
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  await expect(row).toContainText('Installs a newer release when open-walnut web starts.')
+  await expect(row.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByTestId('settings-build-line-update')).toHaveAttribute('title', 'Update with: walnut update')
+  await row.screenshot({ path: `${SHOTS}/uc10-binary-row.png` })
+  const c = await openSystem(page)
+  await expect(c.getByTestId('nfc-update-command')).toHaveText('walnut update')
+  await expect(c.getByTestId('nfc-update-note')).toHaveText('Installs itself the next time open-walnut web starts, or run the command now')
+  await c.screenshot({ path: `${SHOTS}/uc10-binary-card.png` })
+})
+
+test('UC-10b: a Homebrew install shows brew upgrade and never claims to install itself', async ({ page }) => {
+  // The server says autoUpdate false for it (tests/e2e/update-check-api.test.ts); the card follows.
+  await routeUpdate(page, base({ install: HOMEBREW_INSTALL, latest: '0.9.0', tags: { latest: '0.9.0', nightly: null }, available: true, autoUpdate: false }))
+  await loadApp(page, '/settings')
+  await page.getByTestId('settings-nav-general').click()
+  await expect(page.getByTestId('settings-appearance-row')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('settings-updates-auto-row')).toHaveCount(0)
+  const c = await openSystem(page)
+  await expect(c.getByTestId('nfc-update-command')).toHaveText('brew upgrade open-walnut')
+  await expect(c.getByTestId('nfc-update-note')).toHaveText('Restart Walnut after installing')
+  await c.screenshot({ path: `${SHOTS}/uc10-homebrew-card.png` })
+})
