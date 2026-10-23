@@ -8,6 +8,7 @@ import { ON_BUN, sqliteModuleFile } from '../../lib/sqlite.js'
 import { readJsonFile, updateJsonFile, writeJsonFile } from '../../utils/fs.js'
 import type { Disposable } from './disposable.js'
 import { validatePluginId } from './ids.js'
+import { sortedByName } from '../../lib/dir-order.js'
 
 const DB_WORKER_SOURCE = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
@@ -306,7 +307,7 @@ export class PluginStorage implements Disposable {
     while (queue.length > 0 && output.length < 1_000) {
       const current = queue.shift()!
       let entries
-      try { entries = await fs.readdir(current, { withFileTypes: true }) }
+      try { entries = sortedByName(await fs.readdir(current, { withFileTypes: true })) }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
         throw error

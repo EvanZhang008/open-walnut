@@ -28,6 +28,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { execGitArgsGroup } from '../../integrations/git-sync.js'
+import { sortedByName } from '../../lib/dir-order.js'
 
 /** Cheap local plumbing (rev-parse, status). Bounded so a wedged git cannot pin a route. */
 const GIT_TIMEOUT = 10_000
@@ -263,7 +264,7 @@ export async function listLinkedCheckoutsDetailed(
   const skipped: string[] = []
   let entries: fs.Dirent[]
   try {
-    entries = await fsp.readdir(dir, { withFileTypes: true })
+    entries = sortedByName(await fsp.readdir(dir, { withFileTypes: true }))
   } catch {
     return { found, skipped }
   }

@@ -575,7 +575,8 @@ export async function resolveJsonlPathHostLocal(
   // Scan project dirs for <sid>.jsonl (hashed-cwd sessions / unknown cwd).
   const projectsDir = path.join(claudeHome, 'projects');
   let dirs: string[];
-  try { dirs = await fsp.readdir(projectsDir); } catch { return null; }
+  // Sorted: the first dir holding the sid wins, and bun lists in file system order.
+  try { dirs = (await fsp.readdir(projectsDir)).sort(); } catch { return null; }
   for (const d of dirs) {
     const candidate = path.join(projectsDir, d, `${sessionId}.jsonl`);
     try { await fsp.access(candidate); return candidate; } catch { /* keep scanning */ }

@@ -11,6 +11,7 @@ import { sttSpawnEnv } from './spawn-env.js';
 import {
   DEFAULT_MLX_MODEL, findPython3, findUv, getMlxVenvDir, getMlxVenvPython, isHfModelCached, parseVersion, pythonImportsMlxAudio,
 } from './setup-mlx.js';
+import { sortedNames } from '../../lib/dir-order.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -218,7 +219,7 @@ export async function findGgmlModels(): Promise<GgmlModel[]> {
 export async function findVadModel(): Promise<GgmlModel | null> {
   for (const dir of MODEL_SEARCH_DIRS) {
     try {
-      const entries = await readdir(dir);
+      const entries = sortedNames(await readdir(dir));
       for (const entry of entries) {
         if (!entry.includes('silero')) continue;
         const fullPath = join(dir, entry);

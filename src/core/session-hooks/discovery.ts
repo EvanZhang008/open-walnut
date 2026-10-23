@@ -10,6 +10,7 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import type { SessionHookDefinition, SessionHookPoint } from './types.js';
+import { sortedNames } from '../../lib/dir-order.js';
 
 const HOOKS_DIR = path.join(WALNUT_HOME, 'hooks');
 
@@ -40,7 +41,7 @@ export async function discoverFileHooks(): Promise<SessionHookDefinition[]> {
   const results: SessionHookDefinition[] = [];
 
   try {
-    const entries = fs.readdirSync(HOOKS_DIR);
+    const entries = sortedNames(fs.readdirSync(HOOKS_DIR));
     const mjsFiles = entries.filter(f => f.endsWith('.mjs'));
 
     for (const file of mjsFiles) {

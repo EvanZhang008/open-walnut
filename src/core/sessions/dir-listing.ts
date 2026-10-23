@@ -14,6 +14,7 @@
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { sortedByName } from '../../lib/dir-order.js'
 
 export const DIR_LIST_MAX_ENTRIES = 500
 
@@ -77,7 +78,7 @@ export async function listLocalDirs(dir: string, depth: number): Promise<DirList
       if (entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) break
       let dirents
       try {
-        dirents = await fsp.readdir(d, { withFileTypes: true })
+        dirents = sortedByName(await fsp.readdir(d, { withFileTypes: true }))
       } catch {
         continue // unreadable — skip subtree
       }

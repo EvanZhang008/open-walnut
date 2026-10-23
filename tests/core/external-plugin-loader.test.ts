@@ -67,6 +67,7 @@ import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js'
 import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
 import { readPluginWebModule } from '../../src/core/plugins/plugin-web-module.js';
 import { setErrorNotificationSink, type ErrorNotifyPayload } from '../../src/logging/subsystem.js';
+import { sortedByName } from '../../src/lib/dir-order.js';
 
 // ── Helpers ──
 
@@ -1416,14 +1417,14 @@ describe('plugin load order', () => {
     const registry = new IntegrationRegistry();
     await load(registry);
 
-    // Discovery order is readdir order, which is not alphabetical on every
-    // filesystem (Node sorts it, bun does not), so the expectation is derived from
-    // the same reads the loader does. A plugin still loads after the plugins it
-    // depends on (mail-imap after mail). Ids come from each manifest, never from
-    // the directory name.
+    // Discovery is by directory name, the order Node's readdir lists (the loader
+    // sorts, since bun lists in the file system's order), so the expectation is
+    // derived from the same reads, sorted. A plugin still loads after the plugins
+    // it depends on (mail-imap after mail). Ids come from each manifest, never
+    // from the directory name.
     const builtinDir = path.join(import.meta.dirname, '..', '..', 'src', 'integrations');
     const builtins: { id: string; deps: string[] }[] = [];
-    for (const entry of await fsp.readdir(builtinDir, { withFileTypes: true })) {
+    for (const entry of sortedByName(await fsp.readdir(builtinDir, { withFileTypes: true }))) {
       if (!entry.isDirectory()) continue;
       const manifest = await fsp.readFile(path.join(builtinDir, entry.name, 'manifest.json'), 'utf8').then(
         (text) => JSON.parse(text) as { id?: string; dependencies?: Record<string, string> },
@@ -1439,7 +1440,7 @@ describe('plugin load order', () => {
       builtinIds.push(id);
     };
     for (const plugin of builtins) place(plugin.id);
-    const externalIds = (await fsp.readdir(path.join(tmpDir, 'plugins'), { withFileTypes: true }))
+    const externalIds = sortedByName(await fsp.readdir(path.join(tmpDir, 'plugins'), { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
     const expected = ['local', ...builtinIds.filter((id) => id !== 'local'), ...externalIds];

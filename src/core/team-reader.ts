@@ -44,6 +44,7 @@ import path from 'node:path';
 import { CLAUDE_HOME } from '../constants.js';
 import { encodeProjectPath } from './session-file-reader.js';
 import { log } from '../logging/index.js';
+import { sortedNames } from '../lib/dir-order.js';
 
 // ── Types ──
 
@@ -218,7 +219,7 @@ function findInProcessTeammateJsonl(
 
   try {
     if (!fs.existsSync(subagentDir)) return null;
-    const files = fs.readdirSync(subagentDir)
+    const files = sortedNames(fs.readdirSync(subagentDir))
       .filter(f => f.startsWith('agent-') && f.endsWith('.jsonl'));
 
     for (const file of files) {
@@ -474,7 +475,7 @@ function buildSubagentIndex(
 
   try {
     if (!fs.existsSync(subagentDir)) return result;
-    const files = fs.readdirSync(subagentDir)
+    const files = sortedNames(fs.readdirSync(subagentDir))
       .filter(f => f.startsWith('agent-') && f.endsWith('.jsonl'));
 
     for (const file of files) {

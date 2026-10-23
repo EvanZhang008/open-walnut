@@ -24,6 +24,7 @@ import {
   expandDisabledSkillNames,
   LEGACY_SKILL_DIR_ALIASES,
 } from './skill-loader.js';
+import { sortedNames } from '../lib/dir-order.js';
 
 /** Where a skill's directory lives. One union, so the field and the resolver can't drift. */
 export type SkillSource = 'workspace' | 'walnut' | 'claude' | 'plugin';
@@ -429,7 +430,7 @@ export async function listReferences(requested: string): Promise<{ name: string;
   const refsDir = path.join(entry.dir, 'references');
   let entries: string[];
   try {
-    entries = await fsp.readdir(refsDir);
+    entries = sortedNames(await fsp.readdir(refsDir));
   } catch {
     return [];
   }

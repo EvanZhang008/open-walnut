@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { MEMORY_DIR, SESSIONS_DIR, PROJECTS_DIR } from '../constants.js';
+import { sortedByName } from '../lib/dir-order.js';
 
 export interface MemoryEntry {
   path: string;
@@ -78,7 +79,7 @@ function collectMarkdownFiles(dir: string, prefix: string): string[] {
   const results: string[] = [];
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = sortedByName(fs.readdirSync(dir, { withFileTypes: true }));
   } catch {
     return results;
   }

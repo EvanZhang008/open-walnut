@@ -12,6 +12,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CLAUDE_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
+import { sortedNames } from '../lib/dir-order.js';
 
 // ── Path helpers ──
 
@@ -154,7 +155,7 @@ export async function findLocalJsonlPath(sessionId: string, cwd?: string): Promi
 
   // Fallback: search all project directories
   try {
-    const dirs = await fsp.readdir(projectsDir);
+    const dirs = sortedNames(await fsp.readdir(projectsDir));
     for (const dir of dirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`);
       if (await fileExists(filePath)) return filePath;

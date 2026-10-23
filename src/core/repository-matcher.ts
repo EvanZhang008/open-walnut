@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { REPOSITORIES_DIR } from '../constants.js';
+import { sortedNames } from '../lib/dir-order.js';
 
 export interface RepoMatch {
   name: string;
@@ -33,7 +34,7 @@ export function findRepoByPath(cwd: string, host?: string): RepoMatch | undefine
   let bestLength = 0;
 
   try {
-    const files = fs.readdirSync(REPOSITORIES_DIR)
+    const files = sortedNames(fs.readdirSync(REPOSITORIES_DIR))
       .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
 
     for (const f of files) {
