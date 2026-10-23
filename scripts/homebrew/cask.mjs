@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The Homebrew cask for a release's Walnut.app (.github/workflows/mac-app.yml
  * attaches it to the release as walnut.rb, next to Walnut-arm64.dmg and
@@ -6,7 +6,7 @@
  *
  *   brew install --cask evanzhang008/tap/walnut
  *
- *   node scripts/homebrew/cask.mjs --version 0.7.0 --sha256-arm64 <sha> --sha256-x64 <sha> [--base-url <url>] > walnut.rb
+ *   bun scripts/homebrew/cask.mjs --version 0.7.0 --sha256-arm64 <sha> --sha256-x64 <sha> [--base-url <url>] > walnut.rb
  *
  * Homebrew picks the DMG for the Mac it runs on. The app carries that
  * release's Walnut for its architecture: its first launch installs it into

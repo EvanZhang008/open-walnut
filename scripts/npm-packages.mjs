@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * What `npm install -g open-walnut` installs: a small launcher package whose
  * optional dependencies are one package per platform, each holding that
@@ -6,9 +6,9 @@
  * the Codex CLI ship. npm installs only the platform package whose os, cpu and
  * libc match the machine; the launcher (scripts/npm-launcher/launch.js) runs it.
  *
- *   node scripts/npm-packages.mjs build --files dist-bin --version 0.7.0 --out <dir> [--git-head <sha>]
- *   node scripts/npm-packages.mjs pack --dir <dir> --out <tarballs>      (rehearsals)
- *   node scripts/npm-packages.mjs publish --dir <dir> --tag latest [--provenance] [--dry-run]
+ *   bun scripts/npm-packages.mjs build --files dist-bin --version 0.7.0 --out <dir> [--git-head <sha>]
+ *   bun scripts/npm-packages.mjs pack --dir <dir> --out <tarballs>      (rehearsals)
+ *   bun scripts/npm-packages.mjs publish --dir <dir> --tag latest [--provenance] [--dry-run]
  *
  * <dir> after build:
  *   @open-walnut/<target>/   package.json (os, cpu, libc), walnut, README.md, LICENSE

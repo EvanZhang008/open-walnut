@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Pack this checkout as open-walnut tarballs at chosen versions, for a release
  * rehearsal (scripts/release-rehearsal/run.mjs).
  *
- *   node scripts/release-rehearsal/pack.mjs --out <dir> --version 0.6.1 [--version 0.6.1-rehearsal.1 ...]
- *   node scripts/release-rehearsal/pack.mjs --out <dir> --rehearsal
+ *   bun scripts/release-rehearsal/pack.mjs --out <dir> --version 0.6.1 [--version 0.6.1-rehearsal.1 ...]
+ *   bun scripts/release-rehearsal/pack.mjs --out <dir> --rehearsal
  *
  * `--rehearsal` packs what run.mjs needs: the next patch of package.json (the
  * release candidate, "current") and a lower prerelease of the same code ("older",
@@ -12,7 +12,7 @@
  *
  * The version is baked into the bundles at build time (tsup `define`), so each
  * tarball is its own tsup build, not a renamed copy. Run it after the full
- * build (`npm run build` and the web build), which this does not repeat:
+ * build (`bun run build` and the web build), which this does not repeat:
  * prepublishOnly's tarball check (scripts/check-publish.mjs) runs on each one.
  *
  * It rewrites package.json and dist/, then puts the manifest back. That is why it refuses to run in a git clone outside CI:

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The Homebrew formula for a release (.github/workflows/release-archives.yml
  * attaches it to the release as open-walnut.rb; the tap EvanZhang008/homebrew-tap
@@ -6,7 +6,7 @@
  *
  *   brew install evanzhang008/tap/open-walnut
  *
- *   node scripts/homebrew/formula.mjs --version 0.7.0 --sums SHA256SUMS [--base-url <url>] > open-walnut.rb
+ *   bun scripts/homebrew/formula.mjs --version 0.7.0 --sums SHA256SUMS [--base-url <url>] > open-walnut.rb
  *
  * It installs the release's compiled file for the Mac or Linux it runs on
  * (walnut-<version>-<target>.gz, scripts/release-files.mjs), checked against the

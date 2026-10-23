@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Release rehearsal: install the package about to ship the way a user does and
  * make it work, on this machine, without publishing anything.
  *
- *   node scripts/release-rehearsal/run.mjs --current <B.tgz> [--older <A.tgz>] [--field latest] [--work <dir>] [--keep]
- *   node scripts/release-rehearsal/run.mjs --packs <dir>/packs.json --field latest --runtime   (pack.mjs --rehearsal wrote it)
- *   node scripts/release-rehearsal/run.mjs --archive <open-walnut-x-<platform>-<arch>.tar.gz>
+ *   bun scripts/release-rehearsal/run.mjs --current <B.tgz> [--older <A.tgz>] [--field latest] [--work <dir>] [--keep]
+ *   bun scripts/release-rehearsal/run.mjs --packs <dir>/packs.json --field latest --runtime   (pack.mjs --rehearsal wrote it)
+ *   bun scripts/release-rehearsal/run.mjs --archive <open-walnut-x-<platform>-<arch>.tar.gz>
  *   BUN_BE_BUN=1 <walnut file> scripts/release-rehearsal/run.mjs --binary <walnut file>   (binary.mjs)
  *
  * Scenarios (each isolated: own npm prefix, HOME, data, daemon; mock `claude`):

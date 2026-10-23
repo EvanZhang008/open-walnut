@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Automatic stable releases: every day the Release workflow promotes the newest
  * nightly that has been out for a day to `latest` (docs/reference/releasing.md).

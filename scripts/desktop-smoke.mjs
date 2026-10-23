@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * First launch of Walnut.app on a Mac that has never seen Walnut: with no click
  * (a first launch starts by itself, as a user's does), the app installs the
@@ -7,11 +7,11 @@
  * the app dies, the server goes with it (OPEN_WALNUT_EXIT_ON_ORPHAN), and a
  * second launch starts the installed copy again without downloading anything.
  *
- *   node scripts/desktop-smoke.mjs --app Walnut.app --version 0.7.0          (from the GitHub release)
- *   node scripts/desktop-smoke.mjs --app Walnut.app --release <dir> --version 0.7.0
+ *   bun scripts/desktop-smoke.mjs --app Walnut.app --version 0.7.0          (from the GitHub release)
+ *   bun scripts/desktop-smoke.mjs --app Walnut.app --release <dir> --version 0.7.0
  *                                  (from a local mirror: <dir>/v0.7.0/ holds the
  *                                  release's assets, as scripts/release-files.mjs writes them)
- *   node scripts/desktop-smoke.mjs --app Walnut.app                          (the release it carries)
+ *   bun scripts/desktop-smoke.mjs --app Walnut.app                          (the release it carries)
  *
  * The self-contained Walnut is the compiled file (versions/<v>/walnut); an app
  * built before it (mac-app.yml drives older release apps with this harness)

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The version a nightly publish gets: the next patch of package.json's version,
  * as a prerelease that sorts by day and then by run.
@@ -21,9 +21,9 @@
  * runs, so the newest green commit can still name the version before it, and a
  * nightly must never sort below the stable it follows.
  *
- *   node scripts/nightly-version.mjs due              ->  due=true|false: is a scheduled nightly due?
- *   node scripts/nightly-version.mjs last             ->  the commit the last nightly was built from
- *   node scripts/nightly-version.mjs wait <version>   ->  returns once npm serves <version> as `nightly`
+ *   bun scripts/nightly-version.mjs due              ->  due=true|false: is a scheduled nightly due?
+ *   bun scripts/nightly-version.mjs last             ->  the commit the last nightly was built from
+ *   bun scripts/nightly-version.mjs wait <version>   ->  returns once npm serves <version> as `nightly`
  *
  * The registry is the record of which commit the last nightly came from (the
  * `gitHead` npm stores with each version). A `nightly` git tag used to say it,

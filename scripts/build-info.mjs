@@ -14,10 +14,10 @@
  * WALNUT_VERSION_STAMPED=1, so those two files do not count either.
  *
  * tsup.config.ts calls writeBuildInfo() from onSuccess, after a build succeeds,
- * so `npm run build`, `web:build`, `prepublishOnly` and a bare `npx tsup` all
+ * so `bun run build`, `web:build`, `prepublishOnly` and a bare `bun x tsup` all
  * refresh it and a failed build keeps the old stamp. Missing git never fails a
  * build; it only yields nulls. Run directly to (re)write it:
- *   node scripts/build-info.mjs
+ *   bun scripts/build-info.mjs
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The Mac app's own update, end to end, on this Mac: an older Walnut.app finds a
  * newer one on a releases page, downloads it (the first try breaks off halfway
@@ -6,7 +6,7 @@
  * update" stops its server, quits, is swapped for the new app, and the new app
  * opens and serves the console again. T3 Code's flow (desktop/AppUpdater.swift).
  *
- *   node scripts/desktop-update-e2e.mjs --old <Walnut.app> --new <Walnut.app> --source <dir> [--work <dir>] [--keep] [--read-only-folder]
+ *   bun scripts/desktop-update-e2e.mjs --old <Walnut.app> --new <Walnut.app> --source <dir> [--work <dir>] [--keep] [--read-only-folder]
  *
  * Both apps must be signed with the same real identity (desktop/build.sh picks
  * one; WALNUT_APP_VERSION sets each one's version), since that is what the

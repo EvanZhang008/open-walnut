@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Put a release's compiled Walnut for one Mac architecture inside Walnut.app,
  * so its first launch installs it with no network (desktop/BundledRuntime.swift,
@@ -16,7 +16,7 @@
  * checksum of its own for it. desktop/build-release.sh runs this once it has its
  * signing identity, then signs the app (one app, and one DMG, per architecture).
  *
- *   node scripts/desktop-carry-release.mjs --app Walnut.app --file walnut-0.7.0-darwin-arm64.gz --sums SHA256SUMS \
+ *   bun scripts/desktop-carry-release.mjs --app Walnut.app --file walnut-0.7.0-darwin-arm64.gz --sums SHA256SUMS \
  *     [--sign "Developer ID Application: ..." [--keychain k] --entitlements desktop/walnut-file.entitlements]
  */
 import { execFileSync } from 'node:child_process'

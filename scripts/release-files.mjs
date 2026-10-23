@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The compiled Walnut files a release ships, one per target, as GitHub Release
  * assets: what install.sh, the Homebrew formula and the Mac app install.
  *
- *   node scripts/release-files.mjs assets --files dist-bin --version 0.7.0 --out <dir>
- *   node scripts/release-files.mjs stamp 0.7.0          (package.json's version, before a build)
+ *   bun scripts/release-files.mjs assets --files dist-bin --version 0.7.0 --out <dir>
+ *   bun scripts/release-files.mjs stamp 0.7.0          (package.json's version, before a build)
  *
  * `assets` reads dist-bin/walnut-<target> (scripts/build-binary.mjs) for every
  * target and writes, into <dir>:

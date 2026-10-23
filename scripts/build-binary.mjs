@@ -127,7 +127,7 @@ function buildWeb(reuse) {
   if (!fs.existsSync(index)) throw new Error('the web build left no dist/web/static/index.html')
 }
 
-/** The two first-party plugins a stock install ships (walnut-time, the plugin store), as `npm run build` makes them. */
+/** The two first-party plugins a stock install ships (walnut-time, the plugin store), as `bun run build` makes them. */
 function buildShippedPlugins() {
   run(process.execPath, ['scripts/ship-builtin-plugins.mjs'])
   run(process.execPath, ['scripts/ship-store-plugins.mjs'])

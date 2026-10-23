@@ -1,7 +1,7 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The notes of one release: its CHANGELOG.md section body, for the GitHub Release
- * the workflow opens after publishing. `node scripts/release-notes.mjs 0.6.0`.
+ * the workflow opens after publishing. `bun scripts/release-notes.mjs 0.6.0`.
  */
 import fs from 'node:fs'
 import path from 'node:path'

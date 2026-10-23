@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Pre-publish gate (runs from prepublishOnly, after the full build).
  *
@@ -52,7 +52,7 @@ if (hostDtach && compilerWorks()) {
 const missing = required.filter((rel) => !existsSync(join(root, rel)));
 if (missing.length) {
   console.error('check-publish: missing build artifacts:\n' + missing.map((m) => `  - ${m}`).join('\n'));
-  console.error('Run `npm run build && cd web && npx vite build` first.');
+  console.error('Run `bun run build && cd web && bun x vite build` first.');
   process.exit(1);
 }
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * npm serves a new version of a package before every dependency it names: a
  * family published together (the AWS SDK puts out hundreds of packages at once)
@@ -12,7 +12,7 @@
  * So an install that fails with npm's "No matching version found" runs again
  * after a wait; any other failure is the install's own and ends at once.
  *
- *   node scripts/npm-registry-lag.mjs <command> [args...]
+ *   bun scripts/npm-registry-lag.mjs <command> [args...]
  *     runs the command with its output passed through, and again after 1, 2 and
  *     4 minutes while npm names a version it does not serve yet.
  *

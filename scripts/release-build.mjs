@@ -1,9 +1,9 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Everything a release publishes, built from this checkout at one version (the
  * release jobs in .github/workflows/release.yml run it after `bun install`):
  *
- *   node scripts/release-build.mjs --version 0.7.0 --out <dir>
+ *   bun scripts/release-build.mjs --version 0.7.0 --out <dir>
  *
  *   1. stamps the version into package.json (the file reports what it says)
  *   2. compiles every target: `bun scripts/build-binary.mjs --all` -> dist-bin/

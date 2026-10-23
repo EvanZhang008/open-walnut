@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Cut a stable release: `bun run release -- patch|minor|major|<x.y.z>`.
  *

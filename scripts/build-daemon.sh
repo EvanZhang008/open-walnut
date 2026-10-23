@@ -4,7 +4,7 @@
 #
 # Usage:
 #   bash scripts/build-daemon.sh
-#   npm run build:daemon
+#   bun run build:daemon
 #
 # Output:
 #   dist/daemon-binaries/daemon-linux-x64
@@ -44,7 +44,7 @@ if [ -z "$BUN" ]; then
     exit 1
   fi
   echo "build-daemon.sh: skipping the daemon binaries. Walnut still runs: sessions deploy the daemon from source instead." >&2
-  echo "build-daemon.sh: install Bun (https://bun.sh) and re-run \`npm run build:daemon\` to get the faster prebuilt path." >&2
+  echo "build-daemon.sh: install Bun (https://bun.sh) and re-run \`bun run build:daemon\` to get the faster prebuilt path." >&2
   exit 0
 fi
 
