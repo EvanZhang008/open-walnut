@@ -22,6 +22,9 @@
  *              a network that changed under it): the remote sshd keeps the
  *              forwarded socket to the daemon for many minutes, so the daemon
  *              still counts a trusted client that will never answer.
+ * Apart from the mode, `capUpBytes(n)` closes any connection once it has carried
+ * more than n bytes toward the target (a proxy that kills large transfers, as some
+ * corporate SSH proxies do); `capUpBytes(null)` lifts it.
  * Leaving blackhole or drop-hold for pass closes what was held, the way a
  * recovered network ends the connections that died meanwhile. Leaving severed
  * for pass closes the NEAR ends only and keeps every far end open as an orphan
@@ -41,12 +44,16 @@ export interface SilentLinkProxy {
   accepted: () => number
   /** Far-end sockets a severed link left open after their near end went away. */
   orphans: () => number
+  /** Close every connection that has carried more than `bytes` toward the target (null: no cap). */
+  capUpBytes: (bytes: number | null) => void
+  /** Connections the cap closed so far. */
+  capped: () => number
   /** End every orphaned far end (the remote sshd finally timing them out). */
   closeOrphans: () => void
   close: () => Promise<void>
 }
 
-interface Pair { client: net.Socket; upstream: net.Socket | null; severed: boolean }
+interface Pair { client: net.Socket; upstream: net.Socket | null; severed: boolean; upBytes: number }
 
 const silent = (mode: LinkMode) => mode === 'blackhole' || mode === 'drop-hold' || mode === 'severed'
 
@@ -54,6 +61,8 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
   let mode: LinkMode = 'pass'
   let slow: SlowLink = { delayMs: 300, bytesPerSec: 64 * 1024 }
   let accepted = 0
+  let cap: number | null = null
+  let capped = 0
   const pairs = new Set<Pair>()
   const orphaned = new Set<net.Socket>()
 
@@ -117,7 +126,7 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
   const server = net.createServer((client) => {
     accepted++
     client.on('error', () => {})
-    const pair: Pair = { client, upstream: null, severed: false }
+    const pair: Pair = { client, upstream: null, severed: false, upBytes: 0 }
     pairs.add(pair)
     client.on('close', () => { pairs.delete(pair); orphan(pair) })
     if (silent(mode)) { client.on('data', () => {}); return }
@@ -127,7 +136,11 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
     up.on('close', () => client.destroy())
     const toUp = writer(up, 'up', client, pair)
     const toClient = writer(client, 'down', up, pair)
-    client.on('data', (b: Buffer) => toUp(b))
+    client.on('data', (b: Buffer) => {
+      pair.upBytes += b.length
+      if (cap !== null && pair.upBytes > cap) { capped++; client.destroy(); up.destroy(); return }
+      toUp(b)
+    })
     up.on('data', (b: Buffer) => toClient(b))
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -154,6 +167,8 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
     accepted: () => accepted,
     orphans: () => orphaned.size,
     closeOrphans,
+    capUpBytes: (bytes) => { cap = bytes },
+    capped: () => capped,
     close: async () => {
       dropAll()
       closeOrphans()
