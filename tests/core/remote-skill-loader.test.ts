@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { DaemonConnection } from '../../src/providers/daemon-connection.js';
+import { markLinkFailure } from '../../src/providers/link-failure.js';
 import {
   listRemoteSkills,
   listRemoteProjectCommands,
+  listRemoteProjectSkills,
 } from '../../src/core/remote-skill-loader.js';
 
 /**
@@ -136,5 +138,27 @@ describe('listRemoteProjectCommands', () => {
   it('returns empty when no commands dir', async () => {
     const cmds = await listRemoteProjectCommands(fakeConn({}, {}), '/workplace/proj');
     expect(cmds).toEqual([]);
+  });
+});
+
+describe('a failed link', () => {
+  // A read that failed because the link did (the pool tags those) fails the
+  // scan, so the palette says it is degraded; any other failure is "missing".
+  const failing = (tagged: boolean): DaemonConnection => ({
+    send: async () => {
+      const err = new Error('DaemonConnection not connected to box: the link stopped answering');
+      throw tagged ? markLinkFailure(err, 'lost') : err;
+    },
+  }) as unknown as DaemonConnection;
+
+  it('a lost link fails every remote listing instead of reading as empty', async () => {
+    await expect(listRemoteSkills(failing(true))).rejects.toThrow(/the link stopped answering/);
+    await expect(listRemoteProjectCommands(failing(true), '/workplace/proj')).rejects.toThrow(/the link stopped answering/);
+    await expect(listRemoteProjectSkills(failing(true), '/workplace/proj')).rejects.toThrow(/the link stopped answering/);
+  });
+
+  it('an error that is not the link still reads as missing', async () => {
+    expect(await listRemoteSkills(failing(false))).toEqual([]);
+    expect(await listRemoteProjectCommands(failing(false), '/workplace/proj')).toEqual([]);
   });
 });

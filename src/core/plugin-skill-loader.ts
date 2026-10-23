@@ -49,6 +49,7 @@ interface MarketplaceManifest {
  * Minimal filesystem surface the discovery algorithm needs. Implemented over
  * local `fs/promises` here, and over the daemon's fs.* protocol for remote hosts.
  * All methods are forgiving: read/list return null on any error (missing, perms).
+ * The remote one throws when the link itself failed, so the scan fails as a whole.
  */
 export interface SkillFs {
   /** Read a UTF-8 text file; null if missing/unreadable. */
