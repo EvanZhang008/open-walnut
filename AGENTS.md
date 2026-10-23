@@ -81,9 +81,10 @@ WALNUT_DEVPROD_DRY_RUN=1 WALNUT_DEVPROD_PORT=35999 TMPDIR=/tmp/dry bash scripts/
 # from production: its own port, data dir, daemon dir and launchd label, and a state
 # dir it makes, <dir>/rehearsal-state (lock, stamps, stages, LKG, log, the CLI publish
 # stand-in), with the build clone beside it in <dir>. It writes only into those dirs
-# (and the daemon's <daemon dir>-streams). Refuses :3456, :3457, a port served by
-# anything it did not start, ~/.open-walnut, /tmp/open-walnut, ~/.cache/open-walnut,
-# the production log and any WALNUT_DEVPROD_LKG_DIR.
+# (and the daemon's <daemon dir>-streams), except that its servers, like every Walnut
+# server, append their exit line to /tmp/open-walnut-exit.log. Refuses :3456, :3457,
+# a port served by anything it did not start, ~/.open-walnut, /tmp/open-walnut,
+# ~/.cache/open-walnut, the production log and any WALNUT_DEVPROD_LKG_DIR.
 # Clean up after: bootout com.open-walnut.dev-prod-rehearsal.<port>, then remove the dirs.
 WALNUT_DEVPROD_REHEARSAL=1 WALNUT_DEVPROD_PORT=35871 WALNUT_DEVPROD_REHEARSAL_DIR=/tmp/rh \
   OPEN_WALNUT_HOME=/tmp/rh/home WALNUT_DAEMON_DIR=/tmp/rh/daemon bash scripts/deploy-committed.sh
