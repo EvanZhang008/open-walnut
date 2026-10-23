@@ -11,7 +11,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { readBunLock, splitSpec } from '../helpers/bun-lock.js'
-import { applySdkPatch, buildSqliteDylib, installerOf, isDevCheckout, npmWebInstallArgs, sdkPatchOf, webInstallCommand } from '../../scripts/postinstall.mjs'
+import { applySdkPatch, buildSqliteDylib, installerOf, isDevCheckout, refusedInstaller, sdkPatchOf, webInstallCommand } from '../../scripts/postinstall.mjs'
 
 const REPO = path.resolve(__dirname, '../..')
 const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as {
@@ -154,9 +154,13 @@ describe('postinstall', () => {
     expect(webInstallCommand({ npm_execpath: '/usr/lib/node_modules/npm/bin/npm-cli.js' }).cmd).toBe('bun')
   })
 
-  it('under npm (the Mac app clones and runs npm), installs web/ with npm, letting npm 12 fetch the xlsx tarball', () => {
-    expect(npmWebInstallArgs({ npm_config_user_agent: 'npm/11.12.1 node/v25.9.0 darwin arm64' })).toEqual(['install'])
-    expect(npmWebInstallArgs({ npm_config_user_agent: 'npm/12.0.1 node/v25.9.0 darwin arm64' })).toEqual(['install', '--allow-remote=root'])
+  it('stops a checkout installed with anything but bun, and says to run bun install', () => {
+    expect(refusedInstaller('bun')).toBeNull()
+    // Run by hand (no user agent): it runs on bun, so it goes on.
+    expect(refusedInstaller('unknown')).toBeNull()
+    for (const installer of ['npm', 'pnpm', 'yarn']) {
+      expect(refusedInstaller(installer)).toMatch(new RegExp(`run \`bun install\`[\\s\\S]*${installer} cannot set it up`))
+    }
   })
 
   describe('published package: applies the SDK patch itself', () => {

@@ -1,17 +1,15 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Unified postinstall: routes between two very different install shapes.
  *
  * DEV CHECKOUT (git clone; web/ + src/ present), installed with Bun:
  *   Bun applies patches/ itself (package.json `patchedDependencies`), so this
  *   only installs web/, which has its own package.json and bun.lock.
- *   Strict: any failure fails the install.
- *   Installed with npm instead (the Mac app's "Set Up Now" clones and runs npm),
- *   it still works, with a warning: npm reads no bun.lock and applies no patch,
- *   so this applies the SDK patch the way the published chain does and installs
- *   web/ with npm too. The versions are then npm's own picks, not bun.lock's.
- *   On macOS, either way, it also builds the upstream SQLite that bun loads
- *   there (scripts/build-sqlite-dylib.mjs; skipped when current). Fail-open:
+ *   Strict: any failure fails the install. Installed with another tool (npm,
+ *   pnpm, yarn), it stops the install and says to use bun: Walnut runs only on
+ *   bun, and only bun reads bun.lock and applies the patches.
+ *   On macOS it also builds the upstream SQLite that bun loads there
+ *   (scripts/build-sqlite-dylib.mjs; skipped when current). Fail-open:
  *   no network or no clang warns and leaves the install alone.
  *
  * PUBLISHED PACKAGE (npm install open-walnut / npx open-walnut):
@@ -40,10 +38,14 @@ export function installerOf(env = process.env) {
   return /^([a-z]+)\//.exec(env.npm_config_user_agent ?? '')?.[1] ?? 'unknown';
 }
 
-/** npm 12 refuses web/'s tarball-URL dependency (xlsx) unless allowed. */
-export function npmWebInstallArgs(env = process.env) {
-  const npmMajor = Number(/\bnpm\/(\d+)\./.exec(env.npm_config_user_agent ?? '')?.[1] ?? 0);
-  return npmMajor >= 12 ? ['install', '--allow-remote=root'] : ['install'];
+/**
+ * Why a checkout's install must stop: it runs under a tool other than bun.
+ * Null under bun, and when the tool is unknown (this script run by hand, on bun).
+ */
+export function refusedInstaller(installer) {
+  if (installer === 'bun' || installer === 'unknown') return null;
+  return `open-walnut postinstall: this checkout installs with bun (https://bun.sh): run \`bun install\`.\n`
+    + `  ${installer} cannot set it up: Walnut runs only on bun, and only bun reads bun.lock and applies its patches.`;
 }
 
 /**
@@ -156,25 +158,14 @@ function main() {
 
   if (isDevCheckout(root)) {
     // ── Dev chain (strict) ──
-    const installer = installerOf();
+    const refusal = refusedInstaller(installerOf());
+    if (refusal) {
+      console.error(refusal);
+      process.exit(1);
+    }
     buildSqliteDylib(root);
-    if (installer === 'bun') {
-      const { cmd, args } = webInstallCommand();
-      const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: join(root, 'web') });
-      process.exit(res.status === 0 ? 0 : 1);
-    }
-    console.warn(
-      `open-walnut postinstall: this checkout installs with Bun (https://bun.sh): \`bun install\` gets the versions bun.lock pins.\n`
-      + `  ${installer} reads no bun.lock and applies no patch, so its versions are its own picks.`,
-    );
-    let patched;
-    try {
-      patched = applySdkPatch(root);
-    } catch (err) {
-      console.error(`open-walnut postinstall: SDK patch failed: ${err instanceof Error ? err.message : err}`);
-    }
-    if (patched !== 'patched' && patched !== 'already') process.exit(1);
-    const res = spawnSync('npm', npmWebInstallArgs(), { stdio: 'inherit', cwd: join(root, 'web') });
+    const { cmd, args } = webInstallCommand();
+    const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: join(root, 'web') });
     process.exit(res.status === 0 ? 0 : 1);
   }
 

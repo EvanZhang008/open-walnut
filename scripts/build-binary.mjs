@@ -19,10 +19,10 @@
  *
  * What stays out (NOT_IN_FILE): sharp, the embedding runtime
  * (@huggingface/transformers, onnxruntime-*), the macOS audio capture module,
- * node-pty, esbuild, the Claude agent SDK, the Codex binary and better-sqlite3
- * (SQLite is bun:sqlite through src/lib/sqlite.ts). Each load site
- * already degrades when its module is missing; the big ones become downloaded
- * components (src/core/components/).
+ * esbuild, the Claude agent SDK and the Codex binary. Each load site already
+ * degrades when its module is missing; the big ones become downloaded
+ * components (src/core/components/). SQLite is bun:sqlite (src/lib/sqlite.ts),
+ * the terminal bun's own pty (src/lib/pty.ts): no native module for either.
  *
  * `walnut __selftest` checks a built file's own parts without starting a server.
  */
@@ -69,13 +69,10 @@ export const NOT_IN_FILE = [
   'onnxruntime-web',
   'onnxruntime-common',
   'screencapturekit-audio-capture',
-  '@homebridge/node-pty-prebuilt-multiarch',
+  // A build tool (tsup, vite); Walnut bundles plugins with Bun.build (src/lib/transpile.ts).
   'esbuild',
   '@anthropic-ai/claude-agent-sdk',
   '@openai/codex',
-  // Cannot load on bun; src/lib/sqlite.ts names it only on its Node branch, a
-  // runtime require the bundler leaves alone, so a stray import fails clearly.
-  'better-sqlite3',
 ]
 
 /**

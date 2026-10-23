@@ -42,12 +42,10 @@
   },
   "main": "./dist/cli.js",
   "engines": {
-    "node": ">=22"
+    "bun": ">=1.4.4"
   },
   "packageManager": "bun@1.4.4",
   "allowScripts": {
-    "@homebridge/node-pty-prebuilt-multiarch": true,
-    "better-sqlite3": true,
     "esbuild": true,
     "onnxruntime-node": true,
     "protobufjs": true,
@@ -55,8 +53,6 @@
     "sharp": true
   },
   "trustedDependencies": [
-    "@homebridge/node-pty-prebuilt-multiarch",
-    "better-sqlite3",
     "esbuild",
     "onnxruntime-node",
     "protobufjs",
@@ -86,10 +82,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "postinstall": "node scripts/postinstall.mjs",
-    "prepublishOnly": "WALNUT_REQUIRE_BUN=1 bun run build && cd web && bun x vite build && cd .. && node scripts/check-publish.mjs",
-    "prestart": "node scripts/check-node.mjs && node scripts/check-native-toolchain.mjs",
-    "start": "bun run web:build && node dist/cli.js web --port 3456",
+    "postinstall": "bun scripts/postinstall.mjs",
+    "prepublishOnly": "WALNUT_REQUIRE_BUN=1 bun run build && cd web && bun x vite build && cd .. && bun scripts/check-publish.mjs",
+    "start": "bun run web:build && bun dist/cli.js web --port 3456",
     "build:plugins": "bun run --filter @open-walnut/plugin-api build && bun run --filter @open-walnut/plugin-cli build",
     "build": "bun run build:plugins && bash scripts/build-daemon.sh && tsup && rm -rf dist/data && cp -r src/data dist/ && for d in src/integrations/*/manifest.json; do t=\"dist/integrations/$(basename $(dirname $d))\"; mkdir -p \"$t\"; cp \"$d\" \"$t/\"; i=\"$(dirname $d)/icon.svg\"; rm -f \"$t/icon.svg\"; if [ -f \"$i\" ]; then cp \"$i\" \"$t/\"; fi; for sub in skills agent-skills; do s=\"$(dirname $d)/$sub\"; rm -rf \"$t/$sub\"; if [ -d \"$s\" ]; then cp -r \"$s\" \"$t/\"; fi; done; done && node scripts/ship-builtin-plugins.mjs && node scripts/ship-store-plugins.mjs",
     "docs:check": "node scripts/generate-ops-docs.mjs --check --repo-only && node scripts/check-plugin-doc-snippets.mjs",
@@ -147,14 +142,12 @@
     "@mozilla/readability": "^0.6.0",
     "@slack/web-api": "^7.14.0",
     "@tiptap/extension-image": "^3.20.1",
-    "better-sqlite3": "^12.6.2",
     "chalk": "^5.4.1",
     "commander": "^14.0.0",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
     "croner": "^10.0.1",
     "diff": "^9.0.0",
-    "esbuild": "^0.27.3",
     "express": "^5.2.1",
     "image-size": "^2.0.2",
     "imapflow": "^1.7.8",
@@ -169,14 +162,12 @@
     "zod": "^4.3.6"
   },
   "optionalDependencies": {
-    "@homebridge/node-pty-prebuilt-multiarch": "^0.12.0",
     "@huggingface/transformers": "^4.2.0",
     "screencapturekit-audio-capture": "^1.3.6",
     "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -189,6 +180,7 @@
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^3.1.0",
     "concurrently": "^9.2.1",
+    "esbuild": "^0.27.3",
     "husky": "^9.1.7",
     "pi-acp": "0.0.33",
     "supertest": "^7.2.2",
