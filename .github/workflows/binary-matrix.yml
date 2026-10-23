@@ -1,0 +1,115 @@
+name: Binary matrix
+
+# The compiled Walnut file (scripts/build-binary.mjs) on every system it claims:
+# old and new Linux (glibc from 2.17, musl), x64 and arm64, macOS on both chips,
+# and an old kernel. Each row runs the same rehearsal (scripts/release-rehearsal/
+# binary.mjs) with nothing installed but the file: no Node, no bun. The release
+# publishes only a build whose every row passed (release.yml calls this).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: binary-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+# Runner images are pinned, as in ci.yml.
+jobs:
+  build:
+    name: Build the files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      # Every target from one machine: bun cross-compiles.
+      - run: bun scripts/build-binary.mjs --all
+      - name: sizes
+        run: |
+          for f in dist-bin/walnut-*; do
+            printf '%s %s MB, %s MB gzip\n' "$(basename "$f")" "$(( $(wc -c < "$f") / 1048576 ))" "$(( $(gzip -c "$f" | wc -c) / 1048576 ))"
+          done | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: walnut-files
+          path: dist-bin/walnut-*
+          retention-days: 7
+
+  # Linux images through docker on the runner: a `container:` job would need the
+  # runner's own Node inside the image, which an old glibc cannot run.
+  linux:
+    name: ${{ matrix.image }} (${{ matrix.file }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'centos:7' }              # glibc 2.17
+          - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'opensuse/leap:15.2' }    # glibc 2.26
+          - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'ubuntu:18.04' }          # glibc 2.27
+          - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'debian:10' }             # glibc 2.28
+          - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'ubuntu:20.04' }
+          - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'ubuntu:22.04' }
+          - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'ubuntu:24.04' }
+          - { runner: ubuntu-24.04, file: walnut-linux-x64, image: 'fedora:latest' }
+          - { runner: ubuntu-24.04, file: walnut-linux-x64-musl, image: 'alpine:3.18' }
+          - { runner: ubuntu-24.04, file: walnut-linux-x64-musl, image: 'alpine:latest' }
+          - { runner: ubuntu-24.04-arm, file: walnut-linux-arm64, image: 'ubuntu:20.04' }
+          - { runner: ubuntu-24.04-arm, file: walnut-linux-arm64, image: 'debian:12' }
+          - { runner: ubuntu-24.04-arm, file: walnut-linux-arm64, image: 'ubuntu:24.04' }
+          - { runner: ubuntu-24.04-arm, file: walnut-linux-arm64-musl, image: 'alpine:latest' }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: walnut-files
+          path: dist-bin
+      - run: chmod +x dist-bin/walnut-*
+      - run: sh scripts/binary-matrix.sh "dist-bin/${{ matrix.file }}" "${{ matrix.image }}"
+
+  macos:
+    name: ${{ matrix.runner }} (${{ matrix.file }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14, file: walnut-darwin-arm64 }
+          - { runner: macos-26, file: walnut-darwin-arm64 }
+          - { runner: macos-26-intel, file: walnut-darwin-x64 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: walnut-files
+          path: dist-bin
+      - run: chmod +x dist-bin/walnut-*
+      - name: rehearse
+        env:
+          BUN_BE_BUN: '1'
+        run: ./dist-bin/${{ matrix.file }} scripts/release-rehearsal/run.mjs --binary ./dist-bin/${{ matrix.file }} --work "$RUNNER_TEMP/rehearsal"
+
+  # Containers share the runner's kernel, so an old kernel needs a VM: CentOS 7's
+  # own 3.10 kernel, booted under QEMU (KVM when the runner exposes it).
+  old-kernel:
+    name: centos 7 VM (kernel 3.10)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: walnut-files
+          path: dist-bin
+      - run: chmod +x dist-bin/walnut-*
+      - run: sh scripts/binary-old-kernel.sh dist-bin/walnut-linux-x64
