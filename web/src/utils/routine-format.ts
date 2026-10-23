@@ -157,12 +157,30 @@ export function describeLastCheck(last: RoutineLastCheck | undefined, nowMs = Da
   return last.reason === 'rate-limited' ? `held by the fire budget, ${ago}` : `quiet, ${ago}`;
 }
 
+/** Where a daemon runs something: the host's name, or "local" for this machine. */
+export function hostLabel(host: string | undefined): string {
+  return host && host !== '__local__' ? host : 'local';
+}
+
 /** The check command as a one-line label: "$ gh pr view … @ clouddev". */
 export function describeCheck(check: RoutineCheck): string {
   const run = check.run.replace(/\s+/g, ' ').trim();
   const short = run.length > 60 ? `${run.slice(0, 60)}…` : run;
-  const host = check.host && check.host !== '__local__' ? check.host : 'local';
-  return `$ ${short} @ ${host}`;
+  return `$ ${short} @ ${hostLabel(check.host)}`;
+}
+
+/**
+ * A clock routine's host, labelled like a check's (clock-routine-v1): "clock @
+ * clouddev". Null for a routine whose clock is on this server's timer.
+ */
+export function describeClockHost(state: RoutineState | undefined): string | null {
+  const host = state?.clockHost;
+  return host ? `clock @ ${hostLabel(host)}` : null;
+}
+
+/** The hover text that goes with describeClockHost. */
+export function clockHostTitle(host: string): string {
+  return `Its clock runs on ${hostLabel(host)}, where its work runs, so it fires while this Mac sleeps.`;
 }
 
 /** Badge text: "Claude Code @ clouddev" / "Home Chat" / "Walnut Agent". */

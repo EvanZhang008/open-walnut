@@ -28,8 +28,8 @@ import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
-  auditClock, auditHistory, describeAuditEntry, describeCheck, describeFireTally, describeLastCheck,
-  describeNextRun, describeSchedule, describeTriggerOff, triggerRunState,
+  auditClock, auditHistory, clockHostTitle, describeAuditEntry, describeCheck, describeClockHost, describeFireTally,
+  describeLastCheck, describeNextRun, describeSchedule, describeTriggerOff, triggerRunState,
 } from '@/utils/routine-format';
 import { TRIGGER_STOP_AFTER_ERRORS } from '../../../../src/core/cron/trigger-run-state';
 import '@/styles/trigger-state.css';
@@ -60,7 +60,9 @@ export function triggerPillTitle(routines: readonly Routine[], nowMs = Date.now(
   return routines
     .map((r) => {
       const off = describeTriggerOff(r, nowMs);
-      return `${r.name}${off ? ` (${off.toLowerCase()})` : ''}: ${r.description ? `${r.description.replace(/\s+/g, ' ')} · ` : ''}${describeSchedule(r.schedule)}, ${r.check ? describeCheck(r.check) : ''}, ${describeFireTally(r.state, nowMs)}, last check ${describeLastCheck(r.state.lastCheck, nowMs)}`;
+      const where = r.check ? describeCheck(r.check) : describeClockHost(r.state) ?? '';
+      const last = r.check ? `, last check ${describeLastCheck(r.state.lastCheck, nowMs)}` : '';
+      return `${r.name}${off ? ` (${off.toLowerCase()})` : ''}: ${r.description ? `${r.description.replace(/\s+/g, ' ')} · ` : ''}${describeSchedule(r.schedule)}, ${where}, ${describeFireTally(r.state, nowMs)}${last}`;
     })
     .join('\n');
 }
@@ -151,6 +153,8 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
   // the clock), and fireLog is the fire-only memory that survives a burst of quiet
   // checks; auditHistory merges them so one fire is one row.
   const history = auditHistory(routine.state);
+  // A clock routine (clock-routine-v1) runs on its schedule, not on a check.
+  const clock = !routine.check ? describeClockHost(routine.state) : null;
 
   // Delete needs no close step: the store drops the routine from the task's list
   // at once, and the pill closes itself when none is left. Pause keeps the row.
@@ -184,21 +188,28 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
         <p className="routine-description trigger-jobs-description" title={routine.description}>{routine.description}</p>
       )}
       {routine.check && <code className="trigger-jobs-run" title={routine.check.run}>{describeCheck(routine.check)}</code>}
+      {clock && routine.state.clockHost && (
+        <code className="trigger-jobs-run" title={clockHostTitle(routine.state.clockHost)} data-testid="trigger-jobs-clock">{clock}</code>
+      )}
       {/* The one line that answers "does this actually work": how many times it
           has fired, and when — not just what the newest check decided. */}
       <div className="trigger-jobs-tally" data-fired={fireCount > 0 ? 'true' : 'false'}>
         {describeFireTally(routine.state)}
         {nextRun ? ` · ${nextRun.toLowerCase()}` : ''}
       </div>
-      <div className="trigger-jobs-last" data-outcome={routine.state.lastCheck?.outcome ?? 'none'}>
-        last check: {describeLastCheck(routine.state.lastCheck)}
-      </div>
+      {!clock && (
+        <div className="trigger-jobs-last" data-outcome={routine.state.lastCheck?.outcome ?? 'none'}>
+          last check: {describeLastCheck(routine.state.lastCheck)}
+        </div>
+      )}
       {/* What switching it back on will do, said before the user presses it. */}
       {off && (
         <div className="trigger-jobs-off" data-state={run} data-testid="trigger-jobs-off">
           {run === 'stopped'
             ? `${off}. Fix the check first: Resume starts the count over, and ${TRIGGER_STOP_AFTER_ERRORS} failures in a row stop it again.`
-            : `${off}: not checking. On Resume, anything that appeared meanwhile arrives once, as one fire.`}
+            : clock
+              ? `${off}: not running. On Resume, it runs again from its next slot.`
+              : `${off}: not checking. On Resume, anything that appeared meanwhile arrives once, as one fire.`}
         </div>
       )}
       {error && <div className="trigger-jobs-error" role="alert">{error}</div>}
@@ -215,7 +226,7 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
         ) : (
           <>
             <button type="button" disabled={busy !== null} onClick={() => void act('run', () => runRoutineNow(routine.id))}>
-              {busy === 'run' ? 'Running…' : 'Run check now'}
+              {busy === 'run' ? 'Running…' : clock ? 'Run now' : 'Run check now'}
             </button>
             <button type="button" disabled={busy !== null} onClick={() => void act('pause', () => setRoutineEnabled(routine.id, false))}>
               {busy === 'pause' ? 'Pausing…' : 'Pause'}
@@ -239,7 +250,7 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
       {prompt && (
         <div className="trigger-jobs-fold">
           <button type="button" className="trigger-jobs-fold-toggle" aria-expanded={showPrompt} onClick={() => setShowPrompt((v) => !v)}>
-            <span>What it injects when it fires</span>
+            <span>{clock ? 'What it injects when it runs' : 'What it injects when it fires'}</span>
             <span className={`trigger-audit-chevron${showPrompt ? ' open' : ''}`}>›</span>
           </button>
           {showPrompt && <pre className="trigger-audit-injected">{prompt}</pre>}
@@ -261,8 +272,8 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
               existed, which is the opposite of the truth. */}
           <span>
             {history.length
-              ? `History (${history.length} recorded ${history.length === 1 ? 'check' : 'checks'})`
-              : 'No checks recorded yet'}
+              ? `History (${history.length} recorded ${clock ? (history.length === 1 ? 'run' : 'runs') : (history.length === 1 ? 'check' : 'checks')})`
+              : clock ? 'No runs recorded yet' : 'No checks recorded yet'}
           </span>
           {history.length > 0 && <span className={`trigger-audit-chevron${showHistory ? ' open' : ''}`}>›</span>}
         </button>
@@ -397,7 +408,9 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
                 ))}
               </ul>
               <div className="trigger-jobs-foot">
-                The check runs on the daemon; a fire is delivered into this task&apos;s session.
+                {triggers.every((r) => !r.check)
+                  ? <>The clock runs on the host&apos;s daemon; each run is delivered into this task&apos;s session.</>
+                  : <>The check runs on the daemon; a fire is delivered into this task&apos;s session.</>}
               </div>
             </div>,
             document.body,

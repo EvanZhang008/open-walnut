@@ -162,6 +162,16 @@ the rows of the sessions that run on the host, so its own sessions stay listed
 purge. The cloud companion's host row (`__cloudbox__`) follows `cloud_bridge.keep`,
 and no host may take the alias `companion`.
 
+## A routine runs where its work runs
+
+A scheduled routine is host work when its work runs on a host: a `session` routine
+whose task's session is there, a `claude-code` routine whose `host` is there. Its clock
+then moves to that host's daemon, which fires on the schedule while the Mac sleeps and
+delivers a session routine's run into the session there (docs/plan/walnut-trigger.md
+"Clock routines"). Everything else, and every routine of the Mac's own, stays on the
+server's timer. The Mac decides where each clock lives and hands it over or takes it
+back only through the daemon's own reply, so no slot runs on both sides.
+
 ## The companion's copy of the tasks
 
 The companion keeps an exact copy of the Mac's task store: every task with
@@ -618,6 +628,8 @@ Auto asks for.
   Messages between a host's sessions already are (docs/plan/daemon-first-hosts.md
   "Same-host messages while the server answers").
 - A daemon as a leader (a host that reaches every other host).
+- A `claude-code` routine's session started on its host while the Mac is away: its
+  clock is on the host, but the run waits there until the Mac answers.
 - Answers the companion gives alone while the Mac is away for what only the Mac
   holds today (usage): a copy of that store. Of the session controls, a
   restart, a retry and a fork still need the Mac (they spawn a CLI).

@@ -40,7 +40,7 @@ import type {
 } from '../../providers/trigger-check-core.js';
 import { log } from '../../logging/index.js';
 import type { CronJob } from '../cron/types.js';
-import { buildTriggerMessage } from './trigger-envelope.js';
+import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope.js';
 import { findTriggerDaemon } from './trigger-daemon.js';
 import { promptOf } from './trigger-push.js';
 
@@ -192,7 +192,9 @@ async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Pro
     return;
   }
   const applied = await service.applyTriggerFired(group, async (job, fresh) => {
-    const text = buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: h.atMs });
+    const text = head.clock
+      ? scheduledText(job, fresh, h.atMs)
+      : buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: h.atMs });
     await wakeParkedTarget(job, h);
     return {
       status: 'ok' as const,
@@ -213,6 +215,20 @@ async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Pro
     return;
   }
   await ackFires(host, head.id, seqs);
+  if (head.clock) await pushTriggers(host);
+}
+
+/**
+ * A clock routine's run (clock-routine-v1) as its session reads it: the scheduled
+ * envelope a server-timed run gets, with the slot it stands for, so a run that
+ * waited says how late it is. The host builds the same text for its own delivery.
+ */
+function scheduledText(job: CronJob, fires: readonly TriggerFiredEvent[], deliveredAtMs: number): string {
+  const slots = fires.map((f) => f.clock?.slotMs ?? f.atMs).filter((t) => Number.isFinite(t));
+  return buildScheduledMessage(job.name, promptOf(job), {
+    ...(slots.length ? { dueAtMs: Math.min(...slots) } : {}),
+    deliveredAtMs,
+  });
 }
 
 async function sessionLabel(sessionId: string): Promise<string> {
@@ -267,7 +283,11 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
 
   const applied = await service.applyTriggerFired(batch, async (job, fresh, at) => {
     if (!job.executor) return { status: 'error' as const, error: 'routine has no executor to deliver to' };
-    const message = buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: at.startedAtMs });
+    // A clock routine's run is the routine's own run: the session executor gets
+    // its scheduled envelope, any other executor its instructions, as from the timer.
+    const message = head.clock
+      ? (job.executor.type === 'session' ? scheduledText(job, fresh, at.startedAtMs) : promptOf(job))
+      : buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: at.startedAtMs });
     const { runExecutor } = await import('./registry.js');
     return await runExecutor(job, job.executor, message);
   });
@@ -298,6 +318,8 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     await ackFires(host, head.id, applied.duplicateSeqs ?? []);
     return;
   }
+  // A one-shot that ran is off (or gone): the next push takes it off the host's clock.
+  if (head.clock) await pushTriggers(host);
   if (applied.recovered) {
     const { dismissFailingNotice } = await import('./trigger-health.js');
     await dismissFailingNotice(head.id);
@@ -377,7 +399,7 @@ export type FireVerdict =
   | { kind: 'wait'; reason: string };
 
 /** One claim RPC per trigger per burst: a reconnect replays up to 50 fires at once. */
-const claimBatches = new Map<string, { host: string; id: string; epoch?: string; waiters: Array<{ seq: number; resolve: (v: FireVerdict) => void }> }>();
+const claimBatches = new Map<string, { host: string; id: string; epoch?: string; clock?: boolean; waiters: Array<{ seq: number; resolve: (v: FireVerdict) => void }> }>();
 
 function claimFire(host: string, event: TriggerFiredEvent): Promise<FireVerdict> {
   if (isHostDelivery(event.host)) return Promise.resolve({ kind: 'host', host: event.host });
@@ -385,13 +407,16 @@ function claimFire(host: string, event: TriggerFiredEvent): Promise<FireVerdict>
   return new Promise((resolve) => {
     let batch = claimBatches.get(key);
     if (!batch) {
-      const created = { host, id: event.id, ...(event.epoch ? { epoch: event.epoch } : {}), waiters: [] as Array<{ seq: number; resolve: (v: FireVerdict) => void }> };
+      const created = {
+        host, id: event.id, ...(event.epoch ? { epoch: event.epoch } : {}), ...(event.clock ? { clock: true } : {}),
+        waiters: [] as Array<{ seq: number; resolve: (v: FireVerdict) => void }>,
+      };
       claimBatches.set(key, created);
       batch = created;
       setTimeout(() => {
         claimBatches.delete(key);
         // Every waiter is resolved, whatever happens: a lane awaits these verdicts.
-        void claimSeqs(created.host, created.id, created.epoch, created.waiters.map((w) => w.seq))
+        void claimSeqs(created.host, created.id, created.epoch, created.waiters.map((w) => w.seq), { clock: created.clock === true })
           .catch(() => new Map<number, FireVerdict>())
           .then((verdicts) => {
             for (const w of created.waiters) w.resolve(verdicts.get(w.seq) ?? { kind: 'wait', reason: 'no verdict for this seq' });
@@ -402,8 +427,19 @@ function claimFire(host: string, event: TriggerFiredEvent): Promise<FireVerdict>
   });
 }
 
-/** Ask the daemon for these fires. Never throws; no answer is `wait`, never `server`. */
-export async function claimSeqs(host: string, id: string, epoch: string | undefined, seqs: readonly number[]): Promise<Map<number, FireVerdict>> {
+/**
+ * Ask the daemon for these fires. Never throws; no answer is `wait`, never `server`.
+ * `clock`: the fires are a clock routine's runs. One the daemon no longer holds
+ * was given back with its clock (the server runs that slot from its own timer)
+ * or acked already, so it is never delivered here.
+ */
+export async function claimSeqs(
+  host: string,
+  id: string,
+  epoch: string | undefined,
+  seqs: readonly number[],
+  opts: { clock?: boolean } = {},
+): Promise<Map<number, FireVerdict>> {
   const out = new Map<number, FireVerdict>();
   const all = (v: FireVerdict) => { for (const seq of seqs) out.set(seq, v); return out; };
   let conn: Awaited<ReturnType<typeof findTriggerDaemon>> = null;
@@ -427,7 +463,10 @@ export async function claimSeqs(host: string, id: string, epoch: string | undefi
   }
   const r = reply as unknown as Partial<TriggerClaimReply>;
   if (r.foreign) return all({ kind: 'wait', reason: 'the trigger belongs to another Walnut' });
-  for (const seq of [...(r.claimed ?? []), ...(r.unknown ?? [])]) out.set(seq, { kind: 'server' });
+  for (const seq of r.claimed ?? []) out.set(seq, { kind: 'server' });
+  for (const seq of r.unknown ?? []) {
+    out.set(seq, opts.clock ? { kind: 'wait', reason: 'the host no longer holds this clock run' } : { kind: 'server' });
+  }
   for (const seq of r.busy ?? []) out.set(seq, { kind: 'wait', reason: 'the host is delivering it right now' });
   for (const entry of r.host ?? []) {
     if (entry && isHostDelivery(entry.host)) out.set(entry.seq, { kind: 'host', host: entry.host });

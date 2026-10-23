@@ -9,12 +9,15 @@ import type { CronJob, CronJobCreate, CronJobPatch, CronServiceState, CronStatus
 import { mergeRunOutcome, TRIGGER_FIRE_LOG_MAX } from './trigger-audit.js';
 import {
   applyJobPatch,
+  clockOnDaemon,
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  isClockOwned,
   isJobDue,
   nextWakeAtMs,
   recomputeNextRuns,
+  scheduleNextRunAtMs,
 } from './jobs.js';
 import { ensureLoaded, persist, warnIfDisabled } from './store.js';
 import { armTimer, emit, executeJob, findMissedJobs, locked, replayGuardOf, stopTimer } from './timer.js';
@@ -109,11 +112,13 @@ export async function status(state: CronServiceState): Promise<CronStatusSummary
   });
 }
 
-export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
+export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean; recompute?: boolean }) {
   return await locked(state, async () => {
     // forceReload: recomputeNextRuns below may persist — never from a stale snapshot.
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    if (state.store) {
+    // recompute:false reads as stored: a reader that compiles a push must not move
+    // a slot that is due right now past the timer that is about to run it.
+    if (state.store && opts?.recompute !== false) {
       const changed = recomputeNextRuns(state);
       if (changed) await persist(state);
     }
@@ -187,14 +192,16 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     const scheduleChanged = patch.schedule !== undefined;
     // A trigger's next run is the daemon's report; an `enabled` it already had
     // (a stale Resume, a repeated Pause) must not replace it with a server guess.
-    const enabledChanged = patch.enabled !== undefined && (job.enabled !== wasEnabled || !job.check);
+    const enabledChanged = patch.enabled !== undefined && (job.enabled !== wasEnabled || !clockOnDaemon(job));
 
     job.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
       // Deliberate user edit — the old slot's replay guard no longer applies.
       replayGuardOf(state).delete(id);
+      delete job.state.clockCatchUpAtMs;
       if (job.enabled) {
         job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+        restartHostClock(job, now);
       } else {
         job.state.nextRunAtMs = undefined;
         job.state.runningAtMs = undefined;
@@ -426,9 +433,11 @@ export async function toggle(state: CronServiceState, id: string) {
     markSwitched(job, now);
     // Deliberate user edit — drop the replay guard so re-enabling schedules fresh.
     replayGuardOf(state).delete(id);
+    delete job.state.clockCatchUpAtMs;
 
     if (job.enabled) {
       job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+      restartHostClock(job, now);
     } else {
       job.state.nextRunAtMs = undefined;
       job.state.runningAtMs = undefined;
@@ -443,4 +452,17 @@ export async function toggle(state: CronServiceState, id: string) {
     });
     return job;
   });
+}
+
+/**
+ * A schedule edit or a resume starts a host's clock over (clock-routine-v1): a new
+ * first slot, which the next push hands that daemon. The daemon drops a run it
+ * still owed under the old one, as the server's own timer forgets a missed slot
+ * when the schedule changes.
+ */
+function restartHostClock(job: CronJob, now: number): void {
+  if (!isClockOwned(job)) return;
+  const next = scheduleNextRunAtMs(job, now);
+  job.state.nextRunAtMs = next;
+  if (next !== undefined) job.state.clockFromMs = next;
 }

@@ -43,7 +43,7 @@ export function cloudModeSkipsJob(job: CronJob, cloudMode: boolean = isCompanion
   );
 }
 
-function resolveEveryAnchorMs(schedule: { everyMs: number; anchorMs?: number }, fallbackMs: number): number {
+export function resolveEveryAnchorMs(schedule: { everyMs: number; anchorMs?: number }, fallbackMs: number): number {
   const raw = schedule.anchorMs;
   if (typeof raw === 'number' && Number.isFinite(raw)) {
     return Math.max(0, Math.floor(raw));
@@ -79,14 +79,33 @@ export function findJobOrThrow(state: CronServiceState, id: string): CronJob {
   return job;
 }
 
+/**
+ * The routine's clock is on a host's daemon (clock-routine-v1): the server's
+ * timer never ticks it, and its next run is that daemon's report.
+ */
+export function isClockOwned(job: Pick<CronJob, 'state'>): boolean {
+  return typeof job.state?.clockHost === 'string' && job.state.clockHost.length > 0;
+}
+
+/** True when a daemon holds this routine's clock: a check trigger, or a clock routine handed to a host. */
+export function clockOnDaemon(job: CronJob): boolean {
+  return !!job.check || isClockOwned(job);
+}
+
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!job.enabled) return undefined;
 
   // A trigger's clock lives on its host's daemon. Whatever that daemon last
   // reported IS the next check time, so the server keeps it verbatim instead of
-  // computing a second (always wrong) answer next to it.
-  if (job.check) return job.state.nextRunAtMs;
+  // computing a second (always wrong) answer next to it. Same for a clock
+  // routine whose clock is on a host.
+  if (clockOnDaemon(job)) return job.state.nextRunAtMs;
+  return scheduleNextRunAtMs(job, nowMs);
+}
 
+/** The next slot by the schedule alone, wherever the clock lives (a handover and an edit start from it). */
+export function scheduleNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
+  if (!job.enabled) return undefined;
   if (job.schedule.kind === 'every') {
     const anchorMs = resolveEveryAnchorMs(job.schedule, job.createdAtMs);
     return computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs);
@@ -119,6 +138,10 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
         job.state.nextRunAtMs = undefined;
         changed = true;
       }
+      if (job.state.clockCatchUpAtMs !== undefined) {
+        delete job.state.clockCatchUpAtMs;
+        changed = true;
+      }
       if (job.state.runningAtMs !== undefined) {
         job.state.runningAtMs = undefined;
         changed = true;
@@ -134,6 +157,8 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     }
     // Only recompute if missing or past-due
     const nextRun = job.state.nextRunAtMs;
+    // A slot a host's daemon gave back unrun stays due until the timer runs it.
+    if (typeof nextRun === 'number' && nextRun === job.state.clockCatchUpAtMs) continue;
     if (nextRun === undefined || now >= nextRun) {
       const newNext = computeJobNextRunAtMs(job, now);
       if (job.state.nextRunAtMs !== newNext) {
@@ -154,7 +179,7 @@ export function nextWakeAtMs(state: CronServiceState): number | undefined {
   // nextRunAtMs is a daemon REPORT, routinely already in the past, and the timer
   // would then re-arm with delay 0 forever over a job it must never run.
   const enabled = jobs.filter((j) =>
-    j.enabled && typeof j.state.nextRunAtMs === 'number' && !j.check && !cloudModeSkipsJob(j));
+    j.enabled && typeof j.state.nextRunAtMs === 'number' && !clockOnDaemon(j) && !cloudModeSkipsJob(j));
   if (enabled.length === 0) return undefined;
   return enabled.reduce(
     (min, j) => Math.min(min, j.state.nextRunAtMs as number),
@@ -342,5 +367,7 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   if (!job.state) job.state = {};
   if (typeof job.state.runningAtMs === 'number') return false;
   if (opts.forced) return true;
+  // A slot of a clock a host's daemon holds is that daemon's to run.
+  if (isClockOwned(job)) return false;
   return job.enabled && typeof job.state.nextRunAtMs === 'number' && nowMs >= job.state.nextRunAtMs;
 }

@@ -266,8 +266,10 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
     const envelope = envelopeFor(job, message, config.prompt);
 
     const sessions = await delivery.sessionsForTask(taskId);
-    // A fire comes from its check host's daemon, so that host is reachable now.
-    const pickOpts: DeliveryPickOptions = job.check?.host ? { reachableHost: job.check.host } : {};
+    // A fire comes from its check host's daemon (or the host holding a clock
+    // routine's clock), so that host is reachable now.
+    const firedFrom = job.check?.host ?? job.state?.clockHost;
+    const pickOpts: DeliveryPickOptions = firedFrom ? { reachableHost: firedFrom } : {};
     const target = pickDeliverySession(sessions, pickOpts);
     if (target) {
       await delivery.sendToSession(target.claudeSessionId, envelope, taskId);

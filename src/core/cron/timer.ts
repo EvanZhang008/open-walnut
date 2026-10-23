@@ -9,7 +9,7 @@
  */
 
 import type { CronJob, CronServiceState, CronEvent } from './types.js';
-import { cloudModeSkipsJob, computeJobNextRunAtMs, nextWakeAtMs, recomputeNextRuns } from './jobs.js';
+import { cloudModeSkipsJob, computeJobNextRunAtMs, isClockOwned, nextWakeAtMs, recomputeNextRuns } from './jobs.js';
 import { ensureLoaded, persist } from './store.js';
 import { withFileLock } from '../../utils/file-lock.js';
 import {
@@ -183,6 +183,8 @@ export function applyJobResult(
   result: JobRunOutcome,
 ): boolean {
   job.state.runningAtMs = undefined;
+  // A slot a host's daemon gave back is spent by this run, whatever its outcome.
+  delete job.state.clockCatchUpAtMs;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
@@ -575,6 +577,8 @@ export function findDueJobs(state: CronServiceState): CronJob[] {
     // report, and running the executor from the server would deliver a fire
     // nothing decided (no check output, no dedup, no seen set).
     if (j.check) return false;
+    // A clock a host's daemon holds: that daemon runs its slots (clock-routine-v1).
+    if (isClockOwned(j)) return false;
     if (typeof j.state.runningAtMs === 'number') return false;
     const next = j.state.nextRunAtMs;
     if (!(typeof next === 'number' && now >= next)) return false;
@@ -736,8 +740,9 @@ export function findMissedJobs(state: CronServiceState): CronJob[] {
     if (!j.state) j.state = {};
     if (!j.enabled) return false;
     // Same rule as findDueJobs: a trigger missed nothing while the server was
-    // down (its daemon kept polling), so there is nothing to catch up here.
-    if (j.check) return false;
+    // down (its daemon kept polling), so there is nothing to catch up here. A
+    // clock a host's daemon holds catches up there, by the same one-run rule.
+    if (j.check || isClockOwned(j)) return false;
     if (typeof j.state.runningAtMs === 'number') return false;
     if (j.schedule.kind === 'at' && j.state.lastStatus === 'ok') return false;
     const next = j.state.nextRunAtMs;

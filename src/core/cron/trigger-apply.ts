@@ -16,6 +16,7 @@ import type { TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/tri
 import type { CronJob, CronServiceState } from './types.js';
 import { ensureLoaded, persist } from './store.js';
 import { applyJobResult, emit, locked } from './timer.js';
+import { isClockOwned } from './jobs.js';
 import {
   appendAudit, auditDelivery, auditWarnings, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
   TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
@@ -354,7 +355,10 @@ export async function applyTriggerFired(
   const phase1 = await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     const job = state.store?.jobs.find((j) => j.id === head.id);
-    if (!job || !job.check) return { found: false as const };
+    // A clock routine's run (clock-routine-v1) is a fire of a routine with no
+    // check; it is recorded even after the server took the clock back, since the
+    // daemon ran that slot and nobody else will.
+    if (!job || (!job.check && !head.clock)) return { found: false as const };
     if (!job.state) job.state = {};
     const jobState = job.state;
     const fresh = batch.filter((e) => !isDuplicateFire(jobState, e));
@@ -419,16 +423,19 @@ export async function applyTriggerFired(
       ? `delivery failed ${attempts} times, giving up: ${result.error ?? 'unknown error'}`
       : result.error;
 
-    applyJobResult(state, target, {
-      status: result.status,
-      error,
-      startedAt,
-      endedAt,
-    });
+    const clockRun = !!head.clock && !target.check;
+    const shouldDelete = clockRun
+      ? applyClockRun(target, { status: result.status, error, startedAt, endedAt })
+      : applyJobResult(state, target, {
+        status: result.status,
+        error,
+        startedAt,
+        endedAt,
+      });
     // A replayed backlog lands after the checks that ran since it was held, so
     // it replaces lastCheck only when it is not older than the one recorded.
     const priorCheckAt = target.state.lastCheck?.atMs;
-    if (!(Number.isFinite(priorCheckAt) && priorCheckAt! > startedAt)) {
+    if (!clockRun && !(Number.isFinite(priorCheckAt) && priorCheckAt! > startedAt)) {
       target.state.lastCheck = {
         atMs: startedAt,
         outcome: 'fired',
@@ -467,14 +474,15 @@ export async function applyTriggerFired(
     // A fire's envelope carries its warnings, so a delivered one has told the session.
     if (result.status === 'ok' && auditEntry.warnings) target.state.warningNoticeAtMs = endedAt;
     // A fire is a check that worked: the user's "keeps failing" bell is out of date.
-    const recovered = typeof target.state.checkErrorUserNoticeSinceMs === 'number';
+    const recovered = !clockRun && typeof target.state.checkErrorUserNoticeSinceMs === 'number';
     if (recovered) target.state.checkErrorUserNoticeSinceMs = undefined;
     const stamped = { ...auditEntry, ...(identity.epoch ? { epoch: identity.epoch } : {}) };
     target.state.fireLog = mergeFireAttempt(target.state.fireLog, stamped, TRIGGER_FIRE_LOG_MAX);
     // Both lists carry the fire: checkLog is "what has this trigger been doing",
     // and a fire absent from it would read as a gap in the clock. Merged there
-    // too, so a replayed attempt updates its row instead of adding one.
-    target.state.checkLog = mergeFireAttempt(target.state.checkLog, stamped, TRIGGER_CHECK_LOG_MAX);
+    // too, so a replayed attempt updates its row instead of adding one. A clock
+    // routine runs no check, so it keeps the fire row alone.
+    if (!clockRun) target.state.checkLog = mergeFireAttempt(target.state.checkLog, stamped, TRIGGER_CHECK_LOG_MAX);
     // Counted only when the fire is being recorded (an unacked retry is still the
     // same fire), so the total never double-counts a replay. A trigger that was
     // already firing before this trail existed seeds its total from the daemon's
@@ -503,8 +511,15 @@ export async function applyTriggerFired(
         ? { ...chain, seq: Math.min(...open), seqs: open }
         : undefined;
     }
-    const nextRun = Math.max(...batch.map((e) => (Number.isFinite(e.nextRunAtMs) ? e.nextRunAtMs : Number.NEGATIVE_INFINITY)));
-    target.state.nextRunAtMs = target.enabled && Number.isFinite(nextRun) ? nextRun : undefined;
+    // The daemon's next slot, while it holds the clock. A clock the server took
+    // back keeps the server's own next run (a slot it still has to catch up).
+    if (!clockRun || isClockOwned(target)) {
+      const nextRun = Math.max(...batch.map((e) => (Number.isFinite(e.nextRunAtMs) ? e.nextRunAtMs : Number.NEGATIVE_INFINITY)));
+      target.state.nextRunAtMs = target.enabled && Number.isFinite(nextRun) ? nextRun : undefined;
+    }
+    if (shouldDelete && state.store) {
+      state.store.jobs = state.store.jobs.filter((j) => j.id !== target.id);
+    }
     await persist(state);
     emit(state, {
       jobId: target.id,
@@ -516,6 +531,7 @@ export async function applyTriggerFired(
       durationMs: target.state.lastDurationMs,
       nextRunAtMs: target.state.nextRunAtMs,
     });
+    if (shouldDelete) emit(state, { jobId: target.id, action: 'removed' });
     return {
       found: true,
       duplicate: false,
@@ -531,6 +547,33 @@ export async function applyTriggerFired(
       ...(recovered ? { recovered } : {}),
     };
   });
+}
+
+/**
+ * A clock routine's run, recorded the way the timer records one (applyJobResult)
+ * minus everything about the next slot: the daemon that ran it owns that, and a
+ * server that took the clock back keeps its own. A one-shot is spent either way.
+ * Returns true when the routine should be deleted (a one-shot that ran).
+ */
+function applyClockRun(
+  job: CronJob,
+  r: { status: 'ok' | 'error'; error?: string; startedAt: number; endedAt: number },
+): boolean {
+  job.state.runningAtMs = undefined;
+  job.state.lastRunAtMs = r.startedAt;
+  job.state.lastStatus = r.status;
+  job.state.lastDurationMs = Math.max(0, r.endedAt - r.startedAt);
+  job.state.lastError = r.error;
+  job.state.consecutiveErrors = r.status === 'error' ? (job.state.consecutiveErrors ?? 0) + 1 : 0;
+  job.updatedAtMs = r.endedAt;
+  if (job.schedule.kind !== 'at') return false;
+  if (r.status === 'ok' && job.deleteAfterRun === true) return true;
+  job.enabled = false;
+  job.state.nextRunAtMs = undefined;
+  // Its one run is over: no clock holds it anywhere now.
+  delete job.state.clockHost;
+  delete job.state.clockFromMs;
+  return false;
 }
 
 /** The newest fire's time: a batch is dated by the moment its backlog ends. */

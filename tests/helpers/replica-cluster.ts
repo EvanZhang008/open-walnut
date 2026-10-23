@@ -59,6 +59,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { buildSync } from 'esbuild'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
@@ -349,6 +350,12 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
   if (twin === 'source') {
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
+    // The trigger sidecar a deploy ships beside the script (scripts/build-daemon.sh):
+    // without it the source twin has no triggers and no clock routines.
+    buildSync({
+      entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
+      bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
+    })
     proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     if (!BUN) throw new Error('the standalone twin needs bun (BUN_INSTALL, ~/.bun/bin/bun)')

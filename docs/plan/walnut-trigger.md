@@ -173,9 +173,63 @@ Resume: deliver once, no storm. Re-arming reads the kept state file, so the firs
 
 UI: the task keeps showing a paused or stopped trigger. The TRIGGER pill always reads `TRIGGER` (no count, no PAUSED): solid while something on the task polls, dashed and muted when nothing does, and in a narrow task column it folds to `T`; the flyout row carries a Paused/Stopped badge, no next run, and Resume in place of Pause and Run check now. The routine behind an ended snooze wait is switched off by the wait itself and stays hidden, as before. The Routines card's switch reads On / Paused / Stopped.
 
+## Clock routines: a routine runs where its work runs
+
+A scheduled routine whose work runs on a host keeps its clock in that host's daemon
+(capability `clock-routine-v1`), so it runs while the Mac sleeps:
+
+- a `session` routine whose task's session runs on a host: the daemon fires on the
+  schedule and delivers the run into that session, the way it delivers a trigger fire;
+- a `claude-code` routine whose `host` is a remote host: the daemon decides when it
+  runs; the Mac starts the session, as before.
+
+Everything else stays on the server's timer: main-agent, walnut-agent and watcher
+routines, a `claude-code` routine on the Mac, a routine whose host is unknown or is
+the Mac's own, one with a `check` (a trigger), a `wake` or an init processor, an
+`every` under 10 s, a cron pattern the daemon cannot run (it stays with croner), a
+session routine whose prompt is too long to carry, and one whose task is complete or
+has no session on a host. A daemon without `clock-routine-v1` holds no clock.
+
+Placement (`src/core/routines/clock-placement.ts`) runs on the Mac, at every trigger
+push: a session routine follows its task's transfers and takes the host of the session
+a delivery would pick. A new session, a task change and a routine edit place it again
+(3 s debounce, one push per host).
+
+The clock is a def in the same `triggers.configure` set, with no `check` and
+`clock: {schedule, fromMs}`. Both twins tick it with the schedule core the server uses
+(`src/providers/clock-schedule-core.ts`: croner's matching and time zones, no
+dependency; parity tested against croner on random patterns and the DST edges). A run
+is a fire carrying `clock: {slotMs, fromMs}`, so it reuses everything a fire has:
+pending fires, (epoch, seq) dedupe, replay, the claim, delivery on the host after the
+grace, the ack and the fire log. Missed slots give one run for all of them, the
+timer's catch-up rule; while one run is owed, a later slot only moves the clock on.
+
+A slot never runs twice across a handover, in either direction
+(`src/core/cron/clock-handover.ts`):
+
+- Server to host: under the cron lock, BEFORE the push, the server sets
+  `state.clockHost` and `clockFromMs` (the first slot it has not run); its timer never
+  runs the routine after that. A routine the timer is running is handed over on a
+  later push. A refused push hands nothing over.
+- Host to server: the server takes a clock back only from the daemon's configure reply
+  (`released`, where `owedSlotMs` is the oldest run nobody took, which the daemon
+  drops; a reply that no longer holds it; an old daemon's reply), or when the host is
+  gone from the config. A slot already past stays due (`clockCatchUpAtMs`) and the
+  server's timer runs it once.
+- A new `fromMs` (a handover, a schedule edit, a resume) starts the daemon's clock over
+  and drops the runs nobody took under the old one. A claim of a clock run the daemon
+  no longer holds is `wait`: the server never delivers it from the fire.
+- Pause keeps the clock's host: the daemon disarms it and nothing runs. Resume starts
+  it over there from its next slot, or on the server when its work moved.
+- Run now stays on the server: it is an explicit run, not a slot.
+
+UI: the Routines card shows `clock @ <host>` under the timing, the label a trigger
+uses for its check's host; the task's TRIGGER pill lists the routine with the same
+label, `Run now`, and no last check.
+
 ## Boundaries (not in this slice)
 
-Long-running scripts; webhook or event sources; an MCP client; `cron` schedules on check triggers; resuming or starting a session from the host when the server is down (a fire for a task with no live session on its host waits for the server).
+Long-running scripts; webhook or event sources; an MCP client; `cron` schedules on check triggers; resuming or starting a session from the host when the server is down (a fire for a task with no live session on its host waits for the server; so does a `claude-code` clock routine's run, which the Mac starts once when it answers).
 
 ## Phases
 

@@ -48,6 +48,10 @@ export function deliverSpecOf(job: CronJob, home: string = WALNUT_HOME): Trigger
 export interface CompiledTriggers {
   payload: TriggersConfigurePayload;
   hash: string;
+  /** The daemon accepted this set: settle the clock routines it holds (clock-placement.ts). */
+  applied?: (reply: Record<string, unknown>) => Promise<void>;
+  /** The daemon refused it: what this set handed over comes back. */
+  rejected?: () => Promise<void>;
 }
 
 /** One stored job → one wire def. Returns null when the job is not a trigger for this host. */
@@ -86,10 +90,11 @@ export function wireFireCap(stored: number): number {
   return cap > 0 ? cap : FIRE_BUDGET_UNLIMITED;
 }
 
-export function compileTriggerDefs(jobs: CronJob[], host: string): CompiledTriggers {
+export function compileTriggerDefs(jobs: CronJob[], host: string, clockDefs: TriggerDef[] = []): CompiledTriggers {
   const triggers = jobs
     .map((job) => triggerDefOf(job, host))
     .filter((def): def is TriggerDef => def !== null)
+    .concat(clockDefs)
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const hash = createHash('sha256').update(JSON.stringify(triggers)).digest('hex').slice(0, 16);
   return { payload: { version: 1, triggers }, hash };
@@ -101,10 +106,23 @@ export function compileTriggerDefs(jobs: CronJob[], host: string): CompiledTrigg
  * null is load-bearing: an empty set would DISARM every trigger on that host,
  * and a connect that lands while the server is still booting must not do that.
  */
-export async function compileTriggersForHost(host: string): Promise<CompiledTriggers | null> {
+export async function compileTriggersForHost(
+  host: string,
+  opts: { clock?: 'yes' | 'no' | 'unknown' } = {},
+): Promise<CompiledTriggers | null> {
   const { getCronService } = await import('../../web/routes/cron.js');
   const service = getCronService();
   if (!service) return null;
-  const jobs = await service.list({ includeDisabled: true });
-  return compileTriggerDefs(jobs, host);
+  // As stored: a recompute here would move a slot that is due right now past the
+  // timer about to run it (or past the daemon about to be handed it).
+  const jobs = await service.list({ includeDisabled: true, recompute: false });
+  // Clock routines whose work runs on this host (clock-routine-v1). Placement
+  // writes the handover under the cron lock BEFORE this set goes out.
+  // Only the Mac hands clocks out; any other server pushes its checks alone.
+  const { placement } = await import('../server-role.js');
+  if (placement() !== 'mac') return compileTriggerDefs(jobs, host);
+  const { placeClocksForHost, noteWatchedTasks } = await import('./clock-placement.js');
+  noteWatchedTasks(jobs);
+  const clocks = await placeClocksForHost(service, host, jobs, opts.clock ?? 'unknown');
+  return { ...compileTriggerDefs(jobs, host, clocks.defs), applied: clocks.applied, rejected: clocks.rejected };
 }

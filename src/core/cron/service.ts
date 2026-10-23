@@ -23,6 +23,10 @@ import {
   type TriggerFiredApplied,
 } from './trigger-apply.js';
 import type { TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
+import {
+  placeClocks, releaseOrphanClocks, revertClocks, settleClocks,
+  type ClockPlacement, type ClockReply, type PlaceClocksOptions,
+} from './clock-handover.js';
 
 function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   return {
@@ -55,7 +59,7 @@ export class CronService {
     return await ops.status(this.state);
   }
 
-  async list(opts?: { includeDisabled?: boolean }): Promise<CronJob[]> {
+  async list(opts?: { includeDisabled?: boolean; recompute?: boolean }): Promise<CronJob[]> {
     return await ops.list(this.state, opts);
   }
 
@@ -113,6 +117,26 @@ export class CronService {
     deliver: (job: CronJob, fires: TriggerFiredEvent[], at: { startedAtMs: number }) => Promise<DeliverResult>,
   ): Promise<TriggerFiredApplied> {
     return await applyTriggerFired(this.state, events, deliver);
+  }
+
+  /**
+   * Clock routines (clock-routine-v1, cron/clock-handover.ts): which clocks a
+   * host's daemon holds for the push about to go out, and the daemon's answer.
+   */
+  async placeClocks(host: string, opts: PlaceClocksOptions): Promise<ClockPlacement> {
+    return await placeClocks(this.state, host, opts);
+  }
+
+  async settleClocks(host: string, reply: ClockReply): Promise<string[]> {
+    return await settleClocks(this.state, host, reply);
+  }
+
+  async revertClocks(host: string, handed: readonly string[]): Promise<void> {
+    await revertClocks(this.state, host, handed);
+  }
+
+  async releaseOrphanClocks(knownHosts: ReadonlySet<string>): Promise<string[]> {
+    return await releaseOrphanClocks(this.state, knownHosts);
   }
 
   /**

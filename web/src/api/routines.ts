@@ -119,6 +119,9 @@ export type RoutineState = {
   /** Wake routines: counted events waiting for the next run. */
   wakeCount?: number;
   wakeLastAtMs?: number;
+  /** A routine whose work runs on a host keeps its clock in that host's daemon (clock-routine-v1). */
+  clockHost?: string;
+  clockFromMs?: number;
 };
 
 export interface Routine {

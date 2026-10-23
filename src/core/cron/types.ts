@@ -285,6 +285,26 @@ export type CronJobState = {
   wakeCount?: number;
   /** Wake jobs only: when the counter was last bumped. */
   wakeLastAtMs?: number;
+  /**
+   * Clock routines (clock-routine-v1, docs/plan/walnut-trigger.md): the host whose
+   * daemon holds this routine's clock, because its work runs there. While set, the
+   * server's timer never ticks the routine and `nextRunAtMs` is that daemon's
+   * report. Machine-local on purpose: the handover is this server's, and a copy
+   * synced to another box must not stop that box's timer.
+   */
+  clockHost?: string;
+  /**
+   * The first slot that daemon owns. Minted anew when the clock starts over (a
+   * handover, a schedule edit, a resume); the same value means the daemon keeps
+   * its own place (trigger-clock-core.ts).
+   */
+  clockFromMs?: number;
+  /**
+   * A slot a host's daemon gave back unrun (its clock came back to this server):
+   * it stays due until the timer runs it, instead of being skipped as a stale
+   * past slot by the next recompute.
+   */
+  clockCatchUpAtMs?: number;
 };
 
 // ── The job itself ──
@@ -312,7 +332,8 @@ export type CronJob = {
   /**
    * Present = this routine is a TRIGGER: the daemon on `check.host` decides
    * whether it fires, so the server's timer never ticks it and its
-   * `state.nextRunAtMs` is whatever that daemon last reported.
+   * `state.nextRunAtMs` is whatever that daemon last reported. A routine with no
+   * check can hand its clock to a host's daemon too (`state.clockHost`).
    */
   check?: TriggerCheck;
   /**

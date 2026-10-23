@@ -1797,6 +1797,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // 'started'/'finished' change no definition, so they are skipped.
       if (evt.action === 'added' || evt.action === 'updated' || evt.action === 'removed') {
         routineWakeHandle?.refresh()
+        // A routine whose work runs on a host keeps its clock there (clock-routine-v1):
+        // a changed definition may move it, so the hosts' sets are compiled again.
+        void import('../core/routines/clock-placement.js').then((m) => m.scheduleClockPlacement()).catch(() => {})
       }
       // Wake heartbeat when a cron job finishes
       if (evt.action === 'finished' && heartbeatHandle) {
@@ -1877,6 +1880,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { handleTriggerEvent } = await import('../core/routines/trigger-events.js')
     setTriggerPayloadProvider(compileTriggersForHost)
     setTriggerEventSink(handleTriggerEvent)
+    // Clock routines (clock-routine-v1): a clock held by a host that is no longer
+    // configured comes back to this server's timer, and a session that starts on a
+    // routine's task later moves its clock to that session's host.
+    if (bootPolicy('cron') && placement() === 'mac') {
+      const { defaultPlacementDeps, startClockPlacementWatch } = await import('../core/routines/clock-placement.js')
+      const back = await cronService.releaseOrphanClocks(await defaultPlacementDeps().hosts()).catch((err: unknown) => {
+        log.cron.warn('clock routines: orphan release failed', { error: err instanceof Error ? err.message : String(err) })
+        return [] as string[]
+      })
+      if (back.length > 0) log.cron.info('clock routines back on the server timer at boot', { jobIds: back })
+      startClockPlacementWatch()
+    }
     // A daemon already connected before this point (an adopted local daemon)
     // never got a push, and pushTriggers with no provider is a deliberate no-op.
     const { pushTriggersToAllHosts } = await import('../providers/daemon-connection.js')

@@ -1118,7 +1118,9 @@ export class DaemonConnection {
           const { getTriggerPayloadProvider } = await import('../core/routines/trigger-bridge.js')
           const provider = getTriggerPayloadProvider()
           if (!provider) return
-          const compiled = await provider(this.hostKey)
+          // Clock routines go only to a daemon that said it holds them (clock-routine-v1).
+          const clock = !this.capabilitiesKnown ? 'unknown' : this.hasCapability('clock-routine-v1') ? 'yes' : 'no'
+          const compiled = await provider(this.hostKey, { clock })
           if (!compiled) return
           if (compiled.hash === this.lastTriggersPushHash) continue
           const reply = await this.send('triggers.configure', {
@@ -1128,9 +1130,16 @@ export class DaemonConnection {
             log.session.warn('DaemonConnection: triggers push rejected', {
               host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
             })
+            await compiled.rejected?.().catch((err: unknown) => log.session.warn('DaemonConnection: clock handover revert failed', {
+              host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+            }))
             continue
           }
           this.lastTriggersPushHash = compiled.hash
+          // The daemon's own word on the clocks it holds and gave back.
+          await compiled.applied?.(reply).catch((err: unknown) => log.session.warn('DaemonConnection: clock settle failed', {
+            host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+          }))
           log.session.info('DaemonConnection: triggers pushed', {
             host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length,
           })
