@@ -12,6 +12,12 @@
  *   (scripts/build-sqlite-dylib.mjs; skipped when current). Fail-open:
  *   no network or no clang warns and leaves the install alone.
  *
+ * package.json runs it as `node scripts/postinstall.mjs`, not `bun ...`: npm on a
+ * machine without bun must get as far as the refusal above (with `bun` it stops
+ * at "bun: command not found"), and bun answers `node` itself in a lifecycle
+ * script where no Node is installed. So this file, and the dylib build it runs
+ * with the same runtime, stay plain Node: `node:` imports only.
+ *
  * PUBLISHED PACKAGE (npm install open-walnut / npx open-walnut):
  *   No package manager applies a dependency's own patches, and with npm hoisting
  *   the SDK lives in the PARENT node_modules. So we read the SDK patch named in

@@ -154,6 +154,22 @@ describe('postinstall', () => {
     expect(webInstallCommand({ npm_execpath: '/usr/lib/node_modules/npm/bin/npm-cli.js' }).cmd).toBe('bun')
   })
 
+  it('runs as `node`, so npm without bun reaches the refusal, and imports only node: modules', () => {
+    // `bun scripts/postinstall.mjs` under npm on a machine without bun ends at
+    // "bun: command not found", before the refusal below can say what to do.
+    // Under bun install, bun answers `node` itself where no Node is installed.
+    const scripts = (JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> }).scripts
+    expect(scripts.postinstall).toBe('node scripts/postinstall.mjs')
+    for (const file of ['scripts/postinstall.mjs', 'scripts/build-sqlite-dylib.mjs']) {
+      const text = fs.readFileSync(path.join(REPO, file), 'utf8')
+      const specs = [...text.matchAll(/^import\s[^'"]*['"]([^'"]+)['"]/gm), ...text.matchAll(/\bimport\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
+      expect(specs.length, file).toBeGreaterThan(0)
+      expect(specs.filter((s) => !s.startsWith('node:')), file).toEqual([])
+      // bun's own API (Bun.spawn, Bun.file, ...); a `bun:` module is an import, checked above.
+      expect(text, file).not.toMatch(/\bBun\.[a-z]/)
+    }
+  })
+
   it('stops a checkout installed with anything but bun, and says to run bun install', () => {
     expect(refusedInstaller('bun')).toBeNull()
     // Run by hand (no user agent): it runs on bun, so it goes on.

@@ -13,6 +13,9 @@
  *
  *   bun scripts/build-sqlite-dylib.mjs [--force]
  *
+ * postinstall runs it with its own runtime, which is Node where the machine has
+ * one (see scripts/postinstall.mjs), so it stays plain Node: `node:` imports only.
+ *
  * Output (gitignored): vendor/sqlite/darwin/libsqlite3.dylib, its stamp.json, and
  * the verified source under vendor/sqlite/src/. A stamp that matches the pins
  * below skips the build, so postinstall runs it on every install. Needs network

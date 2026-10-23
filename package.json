@@ -82,7 +82,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "postinstall": "bun scripts/postinstall.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
     "prepublishOnly": "WALNUT_REQUIRE_BUN=1 bun run build && cd web && bun x vite build && cd .. && bun scripts/check-publish.mjs",
     "start": "bun run web:build && bun dist/cli.js web --port 3456",
     "build:plugins": "bun run --filter @open-walnut/plugin-api build && bun run --filter @open-walnut/plugin-cli build",
