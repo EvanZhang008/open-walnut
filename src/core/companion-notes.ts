@@ -31,6 +31,7 @@ import { COMPANION_REPLICA_HOME, companionCopyHolds, companionHostReplica, setCo
 import { companionJournalBlobBody, companionJournalRecords, journalNote, macDrains } from './companion-journal.js'
 import type { JournalRecord } from '../providers/offline-journal-core.js'
 import { followerKind } from './server-role.js'
+import { leftOut } from './replication/keep-rule.js'
 
 const NOTE_MAX_BYTES = 1024 * 1024
 /** A save the Mac took is shown over the copy at most this long without a later round. */
@@ -253,19 +254,35 @@ export function companionNoteKept(key: string): boolean {
   return !!replica && replica.keepsNote(COMPANION_REPLICA_HOME, key)
 }
 
-/** The copy leaves notes out (a folder, a note, one too large): its lists and searches are not whole. */
+/** The copy leaves notes out (a folder, a note, one too large): its lists are not whole. */
 export function companionNotesPartial(): boolean {
   const replica = companionHostReplica()
   return !!replica && replica.notesPartial(COMPANION_REPLICA_HOME)
 }
 
 /**
+ * The user left notes out of the box's copy (a folder or a single note): its searches are not
+ * whole. A note over the size cap is not the user's choice and the box's search copy keeps it
+ * (search-replica-keep.ts), so it never makes a search partial.
+ */
+export function companionNotesExcluded(): boolean {
+  const replica = companionHostReplica()
+  return !!replica && replica.notesKeep(COMPANION_REPLICA_HOME).keepExclude.length > 0
+}
+
+/** The note at `key` is one the user left out of the box's copy (by its folder, or itself). */
+export function companionNoteLeftOutByChoice(key: string): boolean {
+  const replica = companionHostReplica()
+  return !!replica && leftOut(key, replica.notesKeep(COMPANION_REPLICA_HOME).keepExclude)
+}
+
+/**
  * A notes search here would leave out what the user keeps from the box (notes off for it, or
  * notes left out of its copy): the search goes to the Mac while it answers. A copy that keeps
- * every note searches here as before.
+ * every note the user chose (the default) searches here as before.
  */
 export function companionNotesSearchIsPartial(): boolean {
-  return followerKind() === 'companion' && (companionNotesOff() || (companionCopyHolds('notes') && companionNotesPartial()))
+  return followerKind() === 'companion' && (companionNotesOff() || (companionCopyHolds('notes') && companionNotesExcluded()))
 }
 
 /** The Mac turned notes off for the box (its last word was replica.drop). */

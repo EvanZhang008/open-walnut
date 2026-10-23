@@ -5,12 +5,15 @@
  * socket, for a stream to the primary; the daemon hands it to this server's
  * link (providers/daemon-connection.ts), which plugs it in here.
  *
- * The same rules as the server.http forward (target.ts), on bytes instead of
- * one JSON frame, so no size cap: only /api/v1 (and the console's task-store
- * writes on the exact list in policy.ts), never a route the companion keeps,
- * only the content and cache headers cross (never a credential or a Walnut
- * caller header), and every call reaches this server's
- * own routes over loopback labelled `x-walnut-origin: remote-http`. Every route
+ * The same rules as the server.http forward (target.ts checkForwardCall and
+ * settleKeptCall, the two steps checkForwardTarget runs: one check for both
+ * doors), on bytes instead of one JSON frame, so no size cap: only /api/v1 (and
+ * the console's task-store writes and its calls about what the companion's copy
+ * does not keep, on the exact lists in policy.ts), never a route the companion
+ * keeps for itself unless its copy cannot answer it, only the content and cache
+ * headers cross (never a credential or a Walnut caller header), and every call
+ * reaches this server's own routes over loopback labelled
+ * `x-walnut-origin: remote-http`. Every route
  * then applies the rule it applies to a paired phone. A call refused here
  * answers with `x-walnut-forward-refused: 1`, so the companion answers it itself.
  *
@@ -29,7 +32,8 @@ import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
 import { controlRefusedForHost, controlRelayOrigin } from '../../core/sessions/control-host-policy.js'
 import { bootPolicy } from '../../core/boot-policy.js'
-import { FORWARD_METHODS, companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseConsoleTaskWrite, parseForwardUrl } from './policy.js'
+import { forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite } from './policy.js'
+import { checkForwardCall, settleKeptCall, type Checked } from './target.js'
 
 /** Set on an answer the door gave itself: nothing ran here, the companion may answer the call. */
 export const FORWARD_REFUSED_HEADER = 'x-walnut-forward-refused'
@@ -65,26 +69,6 @@ export interface CompanionDoorOptions {
   idleMs?: number
   /** A stream still open this long after its answer is closed. */
   afterAnswerMs?: number
-}
-
-export type Checked = { ok: true; path: string; rel: string } | { ok: false; status: number; message: string }
-
-/**
- * The target target.ts checks for a server.http call, for one request line: a /api/v1
- * call the companion does not keep, or a console task-store write on the exact list.
- */
-export function checkForwardedCall(method: string | undefined, url: string | undefined): Checked {
-  const m = (method ?? '').toUpperCase()
-  if (!FORWARD_METHODS.has(m)) return { ok: false, status: 405, message: 'Unsupported method' }
-  const parsed = parseForwardUrl(url)
-  if (!parsed) {
-    const write = parseConsoleTaskWrite(m, url)
-    if (!write) return { ok: false, status: 400, message: 'Invalid forwarded path' }
-    return { ok: true, path: write.pathname, rel: write.rel }
-  }
-  const kept = companionAnswers(m, parsed.rel)
-  if (kept) return { ok: false, status: 400, message: `The companion answers ${parsed.pathname} itself (${kept})` }
-  return { ok: true, path: `${parsed.pathname}${parsed.search}`, rel: parsed.rel }
 }
 
 function refuse(res: ServerResponse, status: number, message: string): void {
@@ -139,7 +123,20 @@ export function createCompanionDoor(opts: CompanionDoorOptions = {}): CompanionD
     const stream = req.socket as unknown as Duplex
     disarm(stream)
     res.on('close', () => { if (!stream.destroyed) arm(stream, opts.afterAnswerMs ?? STREAM_AFTER_ANSWER_MS) })
-    const c = checkForwardedCall(req.method, req.url)
+    // The check target.ts runs on a server.http frame, the same steps: one rule for both doors.
+    // What the call says is checked at once, so a refusal goes out before the parser reads on
+    // (bytes after a `Connection: close` request end the stream); only a call the companion
+    // keeps waits for the config, its body unread until it is served or refused.
+    const now = checkForwardCall(req.method, req.url)
+    if (now.ok !== 'kept') { serve(req, res, now); return }
+    void settleKeptCall(now)
+      .catch((err): Checked => ({ ok: false, status: 500, message: `The call could not be checked: ${err instanceof Error ? err.message : String(err)}` }))
+      .then((c) => serve(req, res, c))
+  })
+
+  function serve(req: IncomingMessage, res: ServerResponse, c: Checked): void {
+    // The companion gave up while the call was checked: nothing to answer, nothing runs.
+    if (res.destroyed) { req.resume(); return }
     const method = (req.method ?? '').toUpperCase()
     const port = ownPort()
     const bodyOnRead = (method === 'GET' || method === 'HEAD') && (Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'] !== undefined)
@@ -175,7 +172,7 @@ export function createCompanionDoor(opts: CompanionDoorOptions = {}): CompanionD
     // The companion gave up (its stream closed): the call here goes with it.
     res.on('close', () => { if (!res.writableFinished) up.destroy() })
     req.pipe(up)
-  })
+  }
   // No WebSocket under /api/v1 on this server: an upgrade is refused before anything runs.
   server.on('upgrade', (req: IncomingMessage, socket: Duplex) => {
     socket.on('error', () => { /* the companion went away; its close ends this */ })

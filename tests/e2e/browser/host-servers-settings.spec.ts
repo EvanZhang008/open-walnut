@@ -138,7 +138,7 @@ test.describe('Walnut on a host', () => {
     await expect(box('inbox_bodies')).toBeChecked({ timeout: 15_000 })
     await expect.poll(async () => ((await hostsNow(page))[KEY]?.server as { copies?: Record<string, boolean> })?.copies, { timeout: 15_000 })
       .toMatchObject({ inbox_bodies: true })
-    await copies.getByText('Inbox', { exact: true }).click()
+    await copies.getByText('Inbox and notification cards', { exact: true }).click()
     await expect(box('inbox')).not.toBeChecked({ timeout: 15_000 })
     // Bodies ride with the index: without the inbox there is nothing to keep them for.
     await expect(box('inbox_bodies')).toBeDisabled()
@@ -147,13 +147,13 @@ test.describe('Walnut on a host', () => {
       .toEqual({ inbox_bodies: false, inbox: false })
     await shot(page, '2c-copies-chosen', group)
     // The inbox on again: bodies stay off until the user picks them again.
-    await copies.getByText('Inbox', { exact: true }).click()
+    await copies.getByText('Inbox and notification cards', { exact: true }).click()
     await expect(box('inbox')).toBeChecked({ timeout: 15_000 })
     await expect(box('inbox_bodies')).toBeEnabled()
     await expect(box('inbox_bodies')).not.toBeChecked()
     await expect.poll(async () => ((await hostsNow(page))[KEY]?.server as { copies?: Record<string, boolean> })?.copies, { timeout: 15_000 })
       .toEqual({ inbox_bodies: false, inbox: true })
-    await copies.getByText('Inbox', { exact: true }).click()
+    await copies.getByText('Inbox and notification cards', { exact: true }).click()
     await expect(box('inbox')).not.toBeChecked({ timeout: 15_000 })
 
     await page.reload()

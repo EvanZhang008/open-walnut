@@ -34,6 +34,7 @@ import { isFollower, type FollowerKind } from '../server-role.js'
 import type { ReplicaTarget } from './replica-targets.js'
 import { refOfReplicaKey, replicaKey } from '../search/replica-refs.js'
 import { DigestMap } from './search-digest.js'
+import { companionKeepOf } from './companion-keep.js'
 import { keepsAllSearch, searchKeyKept, searchNoteKeyPrefix, type SearchKeep } from './search-replica-keep.js'
 import {
   companionSearchMode, manifestValue, type CompanionSearchMode, type CompanionSearchReason, type WireDoc,
@@ -383,7 +384,7 @@ async function defaultDeps(): Promise<SearchReplicaDeps> {
     keep: async (target) => {
       const hr = await import('../host-replica.js')
       const hostKey = target.kind === 'companion' ? hr.COMPANION_REPLICA_HOST : target.id.replace(/^host:/, '')
-      const k = hr.hostKeepFor(await getConfig(), hostKey)
+      const k = hr.hostKeepFor(await getConfig(), hostKey, { companion: target.kind === 'companion' })
       return { notes: k.notes, memory: k.memory, skills: k.skills, notesExclude: k.notesExclude }
     },
     notePrefix: searchNoteKeyPrefix(WALNUT_HOME, NOTES_DIR),
@@ -425,7 +426,7 @@ export function startSearchReplicaSync(given?: SearchReplicaDeps): { stop: () =>
   const name = 'search-replica-config'
   // What each replica keeps, as one string: a change starts a round (the first one after boot too).
   const keepsOf = (config: { hosts?: Record<string, { keep?: unknown } | undefined>; cloud_bridge?: { keep?: unknown } }): string =>
-    JSON.stringify([config.cloud_bridge?.keep ?? null, Object.entries(config.hosts ?? {}).filter(([, h]) => h?.keep).map(([k, h]) => [k, h!.keep])])
+    JSON.stringify([companionKeepOf(config as Parameters<typeof companionKeepOf>[0]) ?? null, Object.entries(config.hosts ?? {}).filter(([, h]) => h?.keep).map(([k, h]) => [k, h!.keep])])
   let lastKeeps: string | null = null
   void import('../config-manager.js').then(({ getConfig }) => getConfig()).then((c) => { lastKeeps ??= keepsOf(c as Parameters<typeof keepsOf>[0]) }).catch(() => {})
   void import('../event-bus.js').then(({ bus }) => {

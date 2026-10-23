@@ -3468,8 +3468,14 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
     }
     // The companion builds the list from its copy of the Mac's sessions once it is
     // held (stage 2c, core/companion-sessions.ts); else the pushed projection.
-    const { projection, copyAsOf } = await readSessionProjectionWithAsOf()
+    const read = await readSessionProjectionWithAsOf()
+    const { copyAsOf } = read
     if (copyAsOf !== null) res.setHeader('x-walnut-copy-as-of', String(copyAsOf))
+    // Sessions turned off for the companion, the Mac away: the box's own sessions only, never
+    // the Mac's from the projection it keeps for routing (4f; replica/away-kind-reads.ts marks
+    // the answer partial).
+    const heldBack = await (await import('../../replica/away-kind-reads.js')).companionHoldsSessionsBack()
+    const projection = heldBack ? null : read.projection
     // Sessions THIS cloud box owns (cloud.exec) never enter the Mac-authored
     // projection — the exporter is primary-only and that file must keep exactly
     // ONE writer (no content clock: two writers would let git-sync's commit-time
@@ -3493,7 +3499,7 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
         })
       }
     }
-    if (!projection && ownRows.length === 0) {
+    if (!projection && ownRows.length === 0 && !heldBack) {
       sendError(res, 503, 'unavailable', 'Session projection not synced yet')
       return
     }

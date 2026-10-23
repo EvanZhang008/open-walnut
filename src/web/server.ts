@@ -1088,6 +1088,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (!front.link.capabilities()?.includes('replica-reads-v1')) return Promise.reject(new Error('daemon_needs_upgrade: this host\'s daemon has no replica-reads-v1'))
       return front.link.request(cmd, params, timeoutMs)
     })))
+    // Its memory and skills: the daemon's copy of those (stage 4e), never this data dir (4f).
+    ;(await import('../replica/host-copy-reads.js')).installHostCopyReads((cmd, params, timeoutMs) => {
+      if (!front.link.capabilities()?.includes('replica-reads-v1')) return Promise.reject(new Error('daemon_needs_upgrade: this host\'s daemon has no replica-reads-v1'))
+      return front.link.request(cmd, params, timeoutMs)
+    })
     // Its notes' pictures and files: the daemon's copy of those, where it keeps one.
     ;(await import('../replica/attachment-source.js')).installReplicaAttachments((cmd, params, timeoutMs) => {
       if (!front.link.capabilities()?.includes('attachment-copy-v1')) return Promise.reject(new Error('daemon_needs_upgrade: this host\'s daemon has no attachment-copy-v1'))
@@ -1566,12 +1571,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       readHostHistory: (sid, tailBytes) => front.link.request('read-history', { sid, tailBytes }, 20_000),
       log: (level, msg, data) => log.web[level](msg, data),
     }))
-    // The sessions turned off for this host (Settings): their reads need the Mac (4f).
+    // The sessions turned off for this host (Settings): the Mac's need the Mac (4f); this
+    // host's own (the ones that run on it) stay, and its lists show those, marked partial.
     {
       const [{ awayKindReads }, { copyKindOff }] = await Promise.all([
         import('../replica/away-kind-reads.js'), import('../core/replication/kinds/gate.js'),
       ])
-      app.use('/api', awayKindReads({ alone: () => front.route().kind === 'alone', off: copyKindOff }))
+      app.use('/api', awayKindReads({
+        alone: () => front.route().kind === 'alone',
+        off: copyKindOff,
+        own: async (sid) => { const r = await getSessionByClaudeId(sid); return !!r && !!hostKey && (r.host ?? '').trim() === hostKey },
+        ownLists: true,
+      }))
     }
     // Writes while the Mac is away (WP10): the overlay of this host's journal over
     // the copies, the write port, its routes, and the /ws RPC writes.
@@ -1902,7 +1913,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       import('../replica/away-kind-reads.js'), import('../core/replication/kinds/gate.js'),
       import('../core/server-role.js'), import('../core/cloud-owned-session.js'),
     ])
-    app.use('/api', awayKindReads({ alone: () => !leaderAnswers(), off: copyKindOff, own: async (sid) => (await cloudOwnedSession(sid)) !== null }))
+    // Its console's session routes read the box's own registry: only the phone's (/v1) are held back.
+    app.use('/api', awayKindReads({
+      alone: () => !leaderAnswers(),
+      off: copyKindOff,
+      own: async (sid) => (await cloudOwnedSession(sid)) !== null,
+      scope: 'v1',
+      // The phone's list keeps the box's own sessions (routes/api-v1.ts drops the Mac's).
+      ownLists: /^\/v1\/sessions\/?$/i,
+    }))
   }
   app.use('/api/tasks', tasksRouter)
   app.use('/api/dashboard', dashboardRouter)
@@ -6181,6 +6200,7 @@ export async function stopServer(): Promise<void> {
     await hostReplicaFront.stop().catch(() => {})
     hostReplicaFront = null
     ;(await import('../replica/notes-source.js')).installReplicaNotesSource(null)
+    ;(await import('../replica/host-copy-reads.js')).installHostCopyReads(null)
     ;(await import('../replica/attachment-source.js')).installReplicaAttachments(null)
   }
   if (bootPolicy('leader-heartbeat')) {

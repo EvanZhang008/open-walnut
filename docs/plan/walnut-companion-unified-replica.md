@@ -871,25 +871,45 @@ empty list, or a part of a list shown as the whole.
 - Where it is checked: every reader of a copy. A host replica forwards every read while the
   Mac answers (its dispatcher); away, the readers say `not_kept_here` (`assertCopyKept` for
   the copy kinds, `replica/away-kind-reads.ts` for the sessions, the notes source's manifest
-  for notes, route-table rows for the memory and skills, which a host replica has no reader
-  of). The companion answers its console's copy reads itself, so a read of what it does not
-  keep is carried to the Mac first (`core/companion-forward.ts`, the v1 forward's console
-  door, `policy.ts` CONSOLE_COPY_READS); a phone read the box keeps for itself (the chat list
-  and a chat's messages) goes to the Mac when that kind is off, and the Mac takes it only
-  when its own choice for the box says so (`phoneCopyReadOf`). The daemon's offline host
-  refuses a read or a save of a note it does not keep the same way.
-- Search: a replica whose copy leaves anything out (a folder or note left out, a note over
-  the size cap, notes, memory or skills off) says so on every search it answers itself:
-  `partial: {why: 'not_kept_here', message}`, which the notes search box and Cmd+K show.
-  The companion's console search goes to the Mac while it answers. A replica that keeps
-  everything answers as before: no `partial`, no forward.
+  for notes). Its memory and skills are read from the copy its daemon keeps (the same copy
+  the companion keeps, 4e), through the follower link (`replica/host-copy-reads.ts`,
+  `replica.list/readMany {kind}`), never from the host's own data dir: kept, they read;
+  off, `not_kept_here`; not there yet, `kind_not_copied`; a daemon that cannot answer,
+  `copy_unreadable`. The companion answers its console's copy reads itself, so a read of
+  what it does not keep is carried to the Mac first (`core/companion-forward.ts`, the v1
+  forward's console door, `policy.ts` CONSOLE_COPY_READS); a phone read the box keeps for
+  itself (the chat list and a chat's messages) goes to the Mac when that kind is off there,
+  and the Mac takes it when its own choice for the box turns the kind off, or when no round
+  of the kind has reached the box since it was turned on again (the Mac's last state of
+  that kind for the companion is not `synced`), so the box never answers `not_kept_here`
+  for a kind the user just turned back on (`phoneCopyReadOf`, `target.ts` companionKeepsNot).
+  Both of the Mac's doors (a `server.http` frame and a stream) run the one check
+  (`target.ts` checkForwardCall, then settleKeptCall for a call the box keeps). The daemon's
+  offline host refuses a read or a save of a note it does not keep the same way.
+- Writes the box cannot keep go to the Mac while it answers (`policy.ts` CONSOLE_COPY_WRITES,
+  a ratchet walks the routers): a note's save and move, the global notes, MEMORY.md and
+  USER.md when memory is off for the box (kept, the box journals their saves for the Mac),
+  the daily log compaction, and every skill change. Away, each answers needs-the-Mac.
+- Search: a replica the user keeps less on (a folder or note left out, notes, memory or
+  skills off) says so on every search it answers itself: `partial: {why: 'not_kept_here',
+  message}`, which the notes search box and Cmd+K show. The companion's console search goes
+  to the Mac while it answers. A note over the size cap is not a choice: only the notes copy
+  leaves it out, the search copy keeps it, so it makes no search partial and sends none to
+  the Mac, and its semantic hit shows (the notes tree and lists do say partial). A replica
+  that keeps everything answers as before: no `partial`, no forward.
 - What stays: a replica's own work (a host's sessions, their tasks, triggers, the team Board,
-  replies; the box's own cards and chats) is always its own. The companion still gets the
-  Mac's session projection with sessions turned off, because it routes a phone's message to
-  the session's host by it, but it never shows it while the Mac is away: the sessions' reads
-  (the list, a session, its transcript) answer `not_kept_here` and the phone's event snapshot
-  carries none of the Mac's sessions (`replica/away-kind-reads.ts`, the same check a host
-  replica runs), while a session of the box's own still reads. Its chat lane still renders an
+  replies; the box's own cards and chats) is always its own. A host replica's purge of its
+  sessions copy keeps the rows of the sessions that run on it (`kinds/sessions.ts`), so while
+  the Mac is away its session lists answer those, marked `partial`, and a read of one passes;
+  a session of the Mac's answers `not_kept_here`. Those rows are as the copy held them at the
+  purge: a session that started on the host later, while the Mac answered, is listed there
+  only once the sessions are kept again (the Mac sends none while they are off). The
+  companion still gets the Mac's session projection with sessions turned off, because it
+  routes a phone's message to the session's host by it, but it never shows it while the Mac
+  is away: the phone's session list answers the box's own sessions only, marked `partial`,
+  its other session reads of the Mac's answer `not_kept_here`, and the phone's event
+  snapshot carries none of the Mac's sessions (`replica/away-kind-reads.ts`, the same check
+  a host replica runs), while a session of the box's own still reads. Its chat lane still renders an
   agent itself when the personas are not kept; its notification feed while the Mac is away shows only its own cards, marked
   offline. A picture is bytes and never rides the bridge, so a picture the box does not keep
   (a path into a folder left out, or a bare name that may be in one: `keep-rule.ts`
@@ -901,6 +921,29 @@ empty list, or a part of a list shown as the whole.
   the user's choice does not explain (the notes copy, the pictures, the search docs).
 - A chat the box answered while the Mac was away shows in a forwarded read of the chat list
   or its messages once the Mac has taken the box's journal, seconds after it is back.
+- Where the companion's choice lives: `cloud_bridge.keep` and `cloud_bridge.copies`. An
+  older build kept them in `hosts.companion.keep` and `hosts.companion.server.copies`;
+  every read of config.yaml shows them in cloud_bridge, and every write and the boot move
+  them there on disk (`replication/companion-keep.ts`, one reader for the server and
+  Settings, so the switches show what the server does). The companion's host row
+  (`__cloudbox__`) follows the companion's keep, its pictures too. No host takes the alias
+  `companion`, the companion's own key for its copy rounds and journal: Remote Hosts says so
+  on the row and saves nothing, `PUT /api/config` answers `400 host_alias_taken`, and SSH
+  config discovery skips it. A host an older build saved there keeps saving, and its row asks
+  for another alias, since until then it shares the companion's copy rounds.
+- The copy kinds' off flags and their copy clocks are read from each kind's state file once
+  per write to it (`kinds/gate.ts`, by its inode, size and mtime), not on every request.
+- Settings: every keep row is a switch, on both editors (a host's and the companion's), and
+  each label names everything it covers ("Sessions and model lists", "Inbox and notification
+  cards", "Agents and their model picks", "Settings and speech vocabulary"). The companion's
+  leave-out box keeps what was typed until a save takes it: a failed save, or a switch
+  flipped while typing whose save fails, never clears it.
+- Single notes left out need a current daemon. A daemon still on an older build (the
+  minutes before the auto-upgrade reaches it) knows only folders, matched letter case for
+  letter case: for a single note left out (or a folder written in another case) its offline
+  host answers a read as not found instead of `not_kept_here`, says nothing of `partial`, and
+  takes a save of it into its journal for the Mac. Its copy never holds such a note, since
+  the Mac's rounds leave it out; once the daemon upgrades, the rule is the same everywhere.
 - Two answers that say "the Mac" without this why: a host replica's console `GET /api/config`
   with settings not kept answers the defaults with `configCopied: false` (it also carries the
   page's role and build, so it is never a 503), and the phone's routines on a companion that

@@ -167,11 +167,6 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // with that answer.
   { method: 'GET', pattern: '/api/v1/conversations/:id/messages', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
   { method: 'GET', pattern: '/api/v1/chat/stats', away: 'needs-leader', why: 'conversation_bodies_need_mac' },
-  // The memory and the skills: the daemon keeps their copy for its sessions, but this
-  // server has no reader of it, and its own data dir holds neither, so a read here
-  // would answer an empty memory or only the built-in skills as if they were the user's.
-  ...['/api/memory', '/api/memory/*', '/api/v1/memory', '/api/v1/memory/*'].map((pattern): RouteRow => ({ method: 'GET', pattern, away: 'needs-leader', why: 'memory_needs_mac' })),
-  ...['/api/skills', '/api/skills/*', '/api/v1/skills', '/api/v1/skills/*'].map((pattern): RouteRow => ({ method: 'GET', pattern, away: 'needs-leader', why: 'skills_need_mac' })),
   // The writes of those copied stores: the Mac owns each store, so each says which
   // one it is (the same why the replica's own refusal of it carries). Exact
   // methods: a routine's `:id` would also take /draft, /check-test and /trigger,

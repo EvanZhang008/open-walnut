@@ -1,10 +1,12 @@
 /**
  * Which kinds the Mac copies to a replica (core/replication/kinds/copy-kind.ts): the
  * same rows and defaults for every replica (a host's "Walnut on a host" row, the cloud
- * companion in Phones & Cloud). A kind not kept is answered by this Mac.
+ * companion in Phones & Cloud). A kind not kept is answered by this Mac. Each row is a
+ * switch, like every other keep row (ReplicaKeepRows): a click answers at once, and a
+ * second one while a save is on its way wins (`busy` only marks it).
  */
 import { SettingsRow } from '../SettingsSection';
-import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
+import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { HOST_COPY_ROWS, copyChoiceOf, copyChoicePatch, type HostCopyChoice } from './host-servers-status';
 
 interface Props {
@@ -24,14 +26,23 @@ export function ReplicaCopyRows({ idOf, copies, busy, onChange, help, label = 'K
     <>
       <SettingsRow label={label} help={help} />
       {HOST_COPY_ROWS.map((row) => (
-        <SettingsCheckbox
+        <SettingsRow
           key={row.key}
-          id={idOf(row.key)}
-          checked={choice[row.key]}
-          disabled={busy || (row.with !== undefined && !choice[row.with])}
           label={row.label}
-          data-testid={idOf(row.key)}
-          onChange={(v) => onChange(copyChoicePatch(row.key, v))}
+          htmlFor={idOf(row.key)}
+          indent
+          data-testid={`${idOf(row.key)}-row`}
+          control={
+            <ToggleSwitch
+              id={idOf(row.key)}
+              checked={choice[row.key]}
+              // A row that rides with another (the messages with the chat list) is off with it.
+              disabled={row.with !== undefined && !choice[row.with]}
+              busy={busy}
+              data-testid={idOf(row.key)}
+              onChange={(v) => onChange(copyChoicePatch(row.key, v))}
+            />
+          }
         />
       ))}
     </>

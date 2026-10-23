@@ -276,3 +276,53 @@ describe('config writes are atomic', () => {
     await Promise.all([writes, ...reads]);
   });
 });
+
+// The companion's keep choice where an older build kept it (replication/companion-keep.ts):
+// every read shows it in cloud_bridge, and every write moves it there on disk.
+describe('the companion keep choice moves from hosts.companion to cloud_bridge', () => {
+  const legacy = {
+    version: 1,
+    cloud_bridge: { enabled: true },
+    hosts: { companion: { keep: { notes: false, notes_exclude: ['Journal'] }, server: { copies: { inbox: false } } }, dev: { hostname: 'dev.example' } },
+  };
+
+  it('a read shows it in cloud_bridge and no hosts.companion', async () => {
+    await fs.writeFile(CONFIG_FILE, yaml.dump(legacy), 'utf-8');
+    const config = await getConfig();
+    expect(config.cloud_bridge).toMatchObject({ enabled: true, keep: { notes: false, notes_exclude: ['Journal'] }, copies: { inbox: false } });
+    expect(config.hosts?.companion).toBeUndefined();
+    expect(config.hosts?.dev).toMatchObject({ hostname: 'dev.example' });
+  });
+
+  it('a write of another key moves it on disk; a write that replaces hosts never drops it', async () => {
+    await fs.writeFile(CONFIG_FILE, yaml.dump(legacy), 'utf-8');
+    await updateConfig({ hosts: { dev: { hostname: 'dev.example' } } } as any);
+    const raw = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(raw.cloud_bridge).toEqual({ enabled: true, keep: { notes: false, notes_exclude: ['Journal'] }, copies: { inbox: false } });
+    expect(raw.hosts.companion).toBeUndefined();
+  });
+
+  it('a save of cloud_bridge.keep from Settings writes cloud_bridge and the older keys go', async () => {
+    await fs.writeFile(CONFIG_FILE, yaml.dump(legacy), 'utf-8');
+    await updateConfig({ cloud_bridge: { enabled: true, keep: { memory: false }, copies: { inbox: false } } } as any);
+    const raw = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(raw.cloud_bridge).toEqual({ enabled: true, keep: { memory: false }, copies: { inbox: false } });
+    expect(raw.hosts).toEqual({ dev: { hostname: 'dev.example' } });
+  });
+
+  it('a stale write that carries the older keys back cannot bring them back', async () => {
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, cloud_bridge: { keep: { notes: true } } }), 'utf-8');
+    await updateConfig({ hosts: { companion: { keep: { notes: false } } } } as any);
+    const raw = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(raw.cloud_bridge).toEqual({ keep: { notes: true } });
+    expect(raw.hosts).toEqual({});
+  });
+
+  it('a real host named companion keeps its own entry', async () => {
+    const real = { version: 1, hosts: { companion: { hostname: 'box.example', keep: { notes: false } } } };
+    await fs.writeFile(CONFIG_FILE, yaml.dump(real), 'utf-8');
+    const config = await getConfig();
+    expect(config.hosts?.companion).toMatchObject({ hostname: 'box.example', keep: { notes: false } });
+    expect(config.cloud_bridge?.keep).toBeUndefined();
+  });
+});

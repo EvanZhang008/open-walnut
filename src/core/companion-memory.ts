@@ -72,16 +72,20 @@ export function companionMemoryBlocked(): { why: 'kind_not_copied' | 'not_kept_h
   return null
 }
 
-/** The copy's own doc (the Mac's, as of its last round), or null when it has none. */
-function copyDoc(doc: MemoryDocName): CopyMemoryDoc | null {
-  const r = companionHostReplica()?.read(COMPANION_REPLICA_HOME, 'memory', doc)
-  if (!r) return null
+/** A doc of a copy (the body the Mac sent: its route's doc object), or null when it is no doc. */
+export function parseCopyMemoryDoc(doc: MemoryDocName, body: string): CopyMemoryDoc | null {
   try {
-    const d = JSON.parse(r.body) as Partial<CopyMemoryDoc>
+    const d = JSON.parse(body) as Partial<CopyMemoryDoc>
     return typeof d.content === 'string' ? { ...FILE_OF[doc], category: 'global', createdAt: '', updatedAt: '', ...d, contentHash: computeContentHash(d.content) } as CopyMemoryDoc : null
   } catch {
     return null
   }
+}
+
+/** The copy's own doc (the Mac's, as of its last round), or null when it has none. */
+function copyDoc(doc: MemoryDocName): CopyMemoryDoc | null {
+  const r = companionHostReplica()?.read(COMPANION_REPLICA_HOME, 'memory', doc)
+  return r ? parseCopyMemoryDoc(doc, r.body) : null
 }
 
 /** The latest pending record of `doc`. */

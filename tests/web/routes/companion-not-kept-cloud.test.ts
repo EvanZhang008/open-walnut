@@ -73,6 +73,7 @@ import { copyKinds } from '../../../src/core/replication/kinds/index.js'
 import { syncCopyKinds, type CopyKind } from '../../../src/core/replication/kinds/copy-kind.js'
 import { replicaTargets } from '../../../src/core/replication/replica-targets.js'
 import { copyKindOff } from '../../../src/core/replication/kinds/gate.js'
+import { companionNoteKept, companionNoteLeftOutByChoice, companionNotesPartial } from '../../../src/core/companion-notes.js'
 import { configCopyRows } from '../../../src/core/replication/config-allowlist.js'
 import type { PersonaRow } from '../../../src/core/replication/kinds/personas.js'
 import type { PrefsRow } from '../../../src/core/replication/kinds/prefs.js'
@@ -261,10 +262,16 @@ describe('copy kinds the box does not keep (cloud_bridge.copies)', () => {
       '/api/v1/conversations/conv-acme/messages?agentId=general',
       '/api/sessions/host-model-catalogs',
       '/api/v1/requests/rq-acac01',
-      // The sessions: never the projection the box keeps to route a phone's message.
-      '/api/v1/sessions', '/api/sessions', '/api/v1/sessions/s-mac-1', '/api/v1/sessions/s-mac-1/transcript',
+      // A Mac session: never from the projection the box keeps to route a phone's message.
+      '/api/v1/sessions/s-mac-1', '/api/v1/sessions/s-mac-1/transcript',
     ]
     for (const p of reads) expect([p, why(await api(p))]).toEqual([p, NOT_KEPT])
+    // The phone's list: the box's own sessions only (none here), said to be partial; never the Mac's.
+    const list = await api('/api/v1/sessions')
+    expect([list.status, list.body.partial?.why, (list.body.sessions as Array<{ id: string }>).map((s) => s.id)]).toEqual([200, 'not_kept_here', []])
+    // The console's list is the box's own registry: its own work, kept.
+    const own = await api('/api/sessions')
+    expect([own.status, (own.body.sessions as Array<{ claudeSessionId: string }>).some((s) => s.claudeSessionId === 's-mac-1')]).toEqual([200, false])
     // A read under /sessions that reads no session still answers.
     expect(why(await api('/api/sessions/working-dirs')).why).not.toBe('not_kept_here')
     // A word added here needs the Mac too.
@@ -336,5 +343,77 @@ describe('the Mac answers: only what the box leaves out goes to it', () => {
     expect(mac.calls).toEqual(['/api/ui-prefs', '/api/favorites'])
     await chooseForBox({})
     await syncCopyKinds(macKinds(), { targets: () => [companion()] })
+  })
+})
+
+describe('what the user did not choose leaves nothing out of a search', () => {
+  afterEach(() => { mac.answers = false; mac.calls = [] })
+
+  it('a note over the size cap: no search says partial or goes to the Mac; its semantic hit is not dropped; the lists say partial', async () => {
+    await chooseForBox({})
+    const big = path.join(NOTES_DIR, 'Big/archive.md')
+    await fs.mkdir(path.dirname(big), { recursive: true })
+    await fs.writeFile(big, withId('Big/archive.md', `# Archive\n\nFriday ${'x'.repeat(1024 * 1024 + 10)}\n`))
+    try {
+      forgetCompanionHostReplica()
+      await syncCompanionHostReplica()
+      // The notes copy leaves it out (its lists are not whole), the user chose nothing.
+      expect([companionNotesPartial(), companionNoteKept('Big/archive.md'), companionNoteLeftOutByChoice('Big/archive.md')]).toEqual([true, false, false])
+      mac.answers = true
+      const all = await api('/api/search?q=friday&slim=1')
+      expect([all.status, all.body.from, all.body.partial]).toEqual([200, undefined, undefined])
+      const v2 = await api('/api/notes-v2/search?q=friday&mode=string')
+      expect([v2.status, v2.body.from, v2.body.partial]).toEqual([200, undefined, undefined])
+      expect(mac.calls).toEqual([])
+    } finally {
+      await fs.rm(path.dirname(big), { recursive: true, force: true })
+      forgetCompanionHostReplica()
+      await syncCompanionHostReplica()
+    }
+  })
+
+  it('an older build\'s hosts.companion.keep is the box\'s keep', async () => {
+    const raw = (yaml.load(await fs.readFile(CONFIG_FILE, 'utf8')) ?? {}) as Record<string, unknown>
+    const { cloud_bridge: _bridge, ...rest } = raw
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ ...rest, hosts: { companion: { keep: { notes_exclude: ['acme/VENDORS'] } } } }))
+    forgetCompanionHostReplica()
+    await syncCompanionHostReplica()
+    expect(why(await api('/api/notes-v2/content/Acme/vendors'))).toEqual(NOT_KEPT)
+    expect((await api('/api/notes-v2/content/Acme/launch-plan')).status).toBe(200)
+    // A save from Settings moves it (config-manager.ts updateConfig): here, the file as one leaves it.
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ ...rest, cloud_bridge: {} }))
+    forgetCompanionHostReplica()
+    await syncCompanionHostReplica()
+    expect((await api('/api/notes-v2/content/Acme/vendors')).status).toBe(200)
+  })
+})
+
+describe('memory and skill changes are the Mac\'s (policy.ts CONSOLE_COPY_WRITES)', () => {
+  afterEach(() => { mac.answers = false; mac.calls = [] })
+
+  it('while it answers, every one goes to it, the daily-log compaction too; away, each needs the Mac', async () => {
+    await chooseForBox({})
+    forgetCompanionHostReplica()
+    await syncCompanionHostReplica()
+    const writes: Array<[string, string, unknown]> = [
+      ['POST', '/api/memory/daily-log/compact', {}],
+      ['POST', '/api/skills', { name: 'acme-new', content: '# New\n' }],
+      ['PUT', '/api/skills/acme-tool', { content: '# Changed\n' }],
+      ['PATCH', '/api/skills/acme-tool', { enabled: false }],
+      ['DELETE', '/api/skills/acme-tool', undefined],
+    ]
+    mac.answers = true
+    for (const [method, p, body] of writes) {
+      const r = await api(p, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+      expect([method, p, r.body]).toEqual([method, p, { from: 'mac' }])
+    }
+    expect(mac.calls).toEqual(writes.map(([, p]) => p))
+    mac.answers = false
+    for (const [method, p, body] of writes) {
+      const r = await api(p, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+      expect([method, p, r.status, r.body.error?.code ?? r.body.code]).toEqual([method, p, 503, 'needs_leader'])
+    }
+    // Nothing changed here.
+    expect(await fs.readFile(path.join(GLOBAL_SKILLS_DIR, 'acme-tool', 'SKILL.md'), 'utf8')).toContain('# Acme tool')
   })
 })

@@ -154,3 +154,19 @@ describe('migrateConfigFileToProjectOnly (on disk)', () => {
     expect(config.plugins.jira.project).toBe('Work');
   });
 });
+
+describe('migrateConfigFileToProjectOnly also moves the companion keep choice (on disk)', () => {
+  it('a project-only config with the older hosts.companion keys is rewritten once', async () => {
+    await fs.mkdir(WALNUT_HOME, { recursive: true });
+    await fs.writeFile(CONFIG_FILE, yaml.dump({
+      version: 1,
+      cloud_bridge: { enabled: true },
+      hosts: { companion: { keep: { notes: false } }, devbox: { hostname: 'dev.invalid' } },
+    }), 'utf-8');
+    expect(await migrateConfigFileToProjectOnly()).toBe(true);
+    const after = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(after.cloud_bridge).toEqual({ enabled: true, keep: { notes: false } });
+    expect(after.hosts).toEqual({ devbox: { hostname: 'dev.invalid' } });
+    expect(await migrateConfigFileToProjectOnly()).toBe(false);
+  });
+});

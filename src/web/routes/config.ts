@@ -622,6 +622,16 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       res.status(403).json({ error: 'Only you, at this computer, can change how Walnut is reached from outside (Settings, Phones & Cloud).', code: 'person_at_this_machine' })
       return
     }
+    // `companion` names the cloud companion (replication/companion-keep.ts): a host saved
+    // under it would take the companion's keep choice. One already there stays.
+    if (body.hosts && typeof body.hosts === 'object' && !Array.isArray(body.hosts)) {
+      const { COMPANION_ALIAS, companionAliasRefusal } = await import('../../core/replication/companion-keep.js')
+      const sentHost = (body.hosts as Record<string, { hostname?: unknown } | undefined>)[COMPANION_ALIAS]
+      if (sentHost?.hostname && !(await getConfig()).hosts?.[COMPANION_ALIAS]?.hostname) {
+        res.status(400).json({ error: companionAliasRefusal(COMPANION_ALIAS), code: 'host_alias_taken', field: `hosts.${COMPANION_ALIAS}` })
+        return
+      }
+    }
     // A server this Mac runs on a host (hosts.<key>.server) is written through
     // /api/host-servers only: a hosts map sent without it (the Remote Hosts editor)
     // keeps each host's current one, so a stale editor never turns one off.

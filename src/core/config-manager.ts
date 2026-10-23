@@ -14,6 +14,7 @@ import { realSshReachAllowed } from '../lib/real-ssh-guard.js';
 import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
 import { isHostReplicaProgram } from './server-role.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
+import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/companion-keep.js';
 
 const DEFAULT_CONFIG: Config = {
   version: 1,
@@ -282,6 +283,8 @@ export function normalizeReadConfig(config: Config): Config {
   // In-memory field migration so readers never see retired category fields,
   // even before seedConfigDefaults() persists the cleanup.
   migrateConfigToProjectOnly(config as unknown as Record<string, unknown>);
+  // The companion's keep choice where an older build kept it: read from cloud_bridge.
+  migrateLegacyCompanionKeep(config as unknown as Record<string, unknown>);
   // Sanitize legacy priority values to new 3-tier system
   if (config.defaults?.priority && !(VALID_PRIORITIES as readonly string[]).includes(config.defaults.priority)) {
     const p = config.defaults.priority as string;
@@ -367,8 +370,9 @@ async function mergeSshDiscoveredHosts(config: Config): Promise<void> {
   );
 
   for (const [alias, host] of discovered) {
-    // Skip if the alias OR the machine (hostname) is already configured.
-    if (config.hosts[alias] || knownHostnames.has(host.hostname.toLowerCase())) {
+    // Skip if the alias OR the machine (hostname) is already configured. `companion`
+    // names the cloud companion (replication/companion-keep.ts): no host takes it.
+    if (alias === COMPANION_ALIAS || config.hosts[alias] || knownHostnames.has(host.hostname.toLowerCase())) {
       continue;
     }
 
@@ -422,7 +426,8 @@ export async function saveConfig(config: Config): Promise<void> {
     // A caller that read config through getConfig() holds the injected cloud
     // box row; it is never persisted.
     const hosts = withoutCloudBoxHost(config.hosts);
-    const toWrite = hosts === config.hosts ? config : { ...config, hosts };
+    const toWrite = (hosts === config.hosts ? { ...config } : { ...config, hosts }) as Config;
+    migrateLegacyCompanionKeep(toWrite as unknown as Record<string, unknown>);
     let content = yaml.dump(toWrite, { indent: 2, lineWidth: 120 });
     // Add comment above available_models (js-yaml strips comments, so we inject after dump)
     content = content.replace(
@@ -456,6 +461,9 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
       });
     }
 
+    // The companion's keep choice where an older build kept it moves to cloud_bridge
+    // first, so a partial that replaces `hosts` or `cloud_bridge` never drops it.
+    migrateLegacyCompanionKeep(existing);
     // Merge: each top-level key in partial replaces the existing key
     const merged = { ...existing };
     for (const [key, value] of Object.entries(partial)) {
@@ -463,6 +471,7 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
         merged[key] = value;
       }
     }
+    migrateLegacyCompanionKeep(merged);
     // A whole `hosts` map sent back from a getConfig() read carries the
     // injected cloud box row; it must never reach config.yaml.
     if (merged.hosts && typeof merged.hosts === 'object') {
@@ -647,7 +656,9 @@ export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
       return false;
     }
 
-    if (!migrateConfigToProjectOnly(parsed)) return false;
+    const projectOnly = migrateConfigToProjectOnly(parsed);
+    const companionKeep = migrateLegacyCompanionKeep(parsed);
+    if (!projectOnly && !companionKeep) return false;
 
     let content = yaml.dump(parsed, { indent: 2, lineWidth: 120 });
     content = content.replace(
@@ -655,7 +666,7 @@ export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
       '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
     );
     await writeConfigWithBackup(content);
-    log.session.info('config-manager: migrated config.yaml to the project-only model');
+    log.session.info('config-manager: migrated config.yaml', { projectOnly, companionKeep });
     return true;
   });
 }

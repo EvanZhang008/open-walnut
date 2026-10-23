@@ -25,6 +25,7 @@
       "@open-walnut/host-problem": ["../src/core/hosts/host-problem"],
       "@open-walnut/ask-list": ["../src/core/sessions/ask-list"],
       "@open-walnut/org-tree": ["../src/core/org/org-tree"],
+      "@open-walnut/companion-keep": ["../src/core/replication/companion-keep"],
       "@open-walnut/history-turn-window": ["../src/lib/history-turn-window"],
       "@open-walnut/history-injected-banner": ["../src/lib/history-injected-banner"],
       "@open-walnut/history-session-envelope": ["../src/lib/history-session-envelope"],

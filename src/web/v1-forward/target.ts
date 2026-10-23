@@ -85,16 +85,58 @@ async function readUpTo(response: Response, limit: number): Promise<Buffer | nul
   return Buffer.concat(chunks, total)
 }
 
-/** A kept phone read of a copy this Mac's choice turned off for the companion (policy.ts phoneCopyReadOf). */
+/**
+ * A kept phone read of a copy the box does not hold (policy.ts phoneCopyReadOf): this Mac's
+ * choice turned the kind off for the companion, or turned it on again and no round of it has
+ * reached the box since (its copy is still the off marker, so the box would answer
+ * not_kept_here; docs/plan/walnut-companion-unified-replica.md, 4f).
+ */
 async function companionKeepsNot(method: string, rel: string): Promise<boolean> {
   const read = phoneCopyReadOf(method, rel)
   if (!read) return false
-  const [{ getConfig }, { copyChoiceFrom }] = await Promise.all([
-    import('../../core/config-manager.js'), import('../../core/replication/kinds/copy-kind.js'),
+  const [{ getConfig }, { copyChoiceFrom, copyKindHeldBy }, { companionCopiesOf }] = await Promise.all([
+    import('../../core/config-manager.js'), import('../../core/replication/kinds/copy-kind.js'), import('../../core/replication/companion-keep.js'),
   ])
-  const config = await getConfig()
-  const choice = copyChoiceFrom(config.cloud_bridge?.copies ?? config.hosts?.companion?.server?.copies) as unknown as Record<string, boolean>
-  return choice[read.choice] === false
+  const choice = copyChoiceFrom(companionCopiesOf(await getConfig())) as unknown as Record<string, boolean>
+  return choice[read.choice] === false || !copyKindHeldBy('companion', read.kind)
+}
+
+export type Checked = { ok: true; path: string; rel: string } | { ok: false; status: number; message: string }
+/** A /api/v1 call the companion keeps for itself: run here only when its copy cannot answer it (companionKeepsNot). */
+export interface KeptCall { ok: 'kept'; method: string; rel: string; path: string; pathname: string; kept: string }
+
+/**
+ * The one check both of this Mac's doors run on a forwarded call before anything runs
+ * (target.ts for a server.http frame, stream-door.ts for a stream): a /api/v1 call the
+ * companion does not keep for itself, or keeps but cannot answer (companionKeepsNot); one
+ * of the console's task-store writes, exactly as listed (policy.ts CONSOLE_TASK_WRITES); or
+ * one of its calls about what the companion's copy does not keep (CONSOLE_COPY_READS and
+ * CONSOLE_COPY_WRITES). `path` is the path and query to run, `rel` what isTaskCopyWrite reads.
+ *
+ * In two steps, so a stream's refusal goes out before its parser reads on: what the call
+ * itself says (checkForwardCall, synchronous), then, for a kept call only, the config
+ * (settleKeptCall). checkForwardTarget runs both.
+ */
+export function checkForwardCall(method: unknown, url: unknown): Checked | KeptCall {
+  const m = typeof method === 'string' ? method.toUpperCase() : ''
+  if (!FORWARD_METHODS.has(m)) return { ok: false, status: 405, message: 'Unsupported method' }
+  const v1 = parseForwardUrl(url)
+  const parsed = v1 ?? parseConsoleTaskWrite(m, url) ?? parseConsoleCopyCall(m, url)
+  if (!parsed) return { ok: false, status: 400, message: 'Invalid forwarded path' }
+  const path = `${parsed.pathname}${parsed.search}`
+  const kept = v1 ? companionAnswers(m, v1.rel) : null
+  if (kept) return { ok: 'kept', method: m, rel: parsed.rel, path, pathname: parsed.pathname, kept }
+  return { ok: true, path, rel: parsed.rel }
+}
+
+export async function settleKeptCall(k: KeptCall): Promise<Checked> {
+  if (!(await companionKeepsNot(k.method, k.rel))) return { ok: false, status: 400, message: `The companion answers ${k.pathname} itself (${k.kept})` }
+  return { ok: true, path: k.path, rel: k.rel }
+}
+
+export async function checkForwardTarget(method: unknown, url: unknown): Promise<Checked> {
+  const c = checkForwardCall(method, url)
+  return c.ok === 'kept' ? settleKeptCall(c) : c
 }
 
 /**
@@ -103,14 +145,8 @@ async function companionKeepsNot(method: string, rel: string): Promise<boolean> 
  */
 export async function runForwardedCall(params: Record<string, unknown>, relayOrigin?: string): Promise<ForwardReply> {
   const method = typeof params.method === 'string' ? params.method.toUpperCase() : ''
-  if (!FORWARD_METHODS.has(method)) throw refuse('Unsupported method', 405)
-  const v1 = parseForwardUrl(params.url)
-  // Else one of the console's task-store writes, exactly as listed (policy.ts CONSOLE_TASK_WRITES),
-  // or one of its calls about what the companion's copy does not keep (CONSOLE_COPY_READS/WRITES).
-  const url = v1 ?? parseConsoleTaskWrite(method, params.url) ?? parseConsoleCopyCall(method, params.url)
-  if (!url) throw refuse('Invalid forwarded path')
-  const kept = v1 ? companionAnswers(method, v1.rel) : null
-  if (kept && !(await companionKeepsNot(method, v1!.rel))) throw refuse(`The companion answers ${url.pathname} itself (${kept})`)
+  const url = await checkForwardTarget(method, params.url)
+  if (!url.ok) throw refuse(url.message, url.status)
   const body = decodeBody(params.data, params.size)
   if ((method === 'GET' || method === 'HEAD') && body.byteLength > 0) throw refuse(`${method} cannot have a body`)
   const root = getSelfApiRoot()
@@ -121,7 +157,7 @@ export async function runForwardedCall(params: Record<string, unknown>, relayOri
     ? Math.min(params.timeoutMs, FORWARD_TARGET_TIMEOUT_MS) : FORWARD_TARGET_TIMEOUT_MS
   let response: Response
   try {
-    response = await fetch(new URL(`${url.pathname}${url.search}`, root), {
+    response = await fetch(new URL(url.path, root), {
       method,
       headers,
       ...(body.byteLength > 0 ? { body: body as unknown as BodyInit } : {}),

@@ -32,7 +32,8 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-console-w
 
 import { createV1Forward, type CallOutcome, type PrimarySnapshot } from '../../../src/web/v1-forward/proxy.js'
 import { CONSOLE_TASK_WRITES, parseConsoleTaskWrite } from '../../../src/web/v1-forward/policy.js'
-import { checkForwardedCall, createCompanionDoor } from '../../../src/web/v1-forward/stream-door.js'
+import { createCompanionDoor } from '../../../src/web/v1-forward/stream-door.js'
+import { checkForwardTarget } from '../../../src/web/v1-forward/target.js'
 import { runForwardedCall, ForwardError } from '../../../src/web/v1-forward/target.js'
 import { setSelfApiRoot } from '../../../src/lib/self-api-root.js'
 import { createStreamRelay } from '../../../src/providers/stream-relay-core.js'
@@ -353,7 +354,7 @@ describe('ratchet: the console writes the Mac runs for the companion', () => {
       const url = sample(r.route)
       const listed = EXPECTED.includes(name)
       expect([name, parseConsoleTaskWrite(r.method, url) !== null]).toEqual([name, listed])
-      expect([name, checkForwardedCall(r.method, url).ok]).toEqual([name, listed])
+      expect([name, (await checkForwardTarget(r.method, url)).ok]).toEqual([name, listed])
       if (!listed) {
         const err = await runForwardedCall({ method: r.method, url }, 'remote-http').then(() => null, (e: unknown) => e)
         expect([name, err instanceof ForwardError && err.code === 'forward_refused']).toEqual([name, true])

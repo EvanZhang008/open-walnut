@@ -182,9 +182,18 @@ describe('a round', () => {
 
   it('the companion\'s keep settings are cloud_bridge.keep, the same shape and defaults', () => {
     const c = { cloud_bridge: { keep: { notes_exclude: ['health/Checkup.md'], memory: false } } } as unknown as Config
-    expect(hostKeepFor(c, 'companion')).toEqual({ notes: true, notesExclude: ['health/Checkup.md'], memory: false, skills: true, attachments: true })
+    const companion = { notes: true, notesExclude: ['health/Checkup.md'], memory: false, skills: true, attachments: true }
+    expect(hostKeepFor(c, 'companion', { companion: true })).toEqual(companion)
     // A host never reads the companion's.
     expect(hostKeepFor(c, 'devbox')).toEqual({ notes: true, notesExclude: [], memory: true, skills: true, attachments: true })
+    // The cloud box's daemon (the Mac's sessions on the companion's machine) keeps what the companion keeps, pictures too.
+    expect(hostKeepFor(c, '__cloudbox__')).toEqual(companion)
+    expect(hostKeepFor({ cloud_bridge: { keep: { attachments: false } } } as unknown as Config, '__cloudbox__').attachments).toBe(false)
+    // An older build's keys under hosts.companion are the companion's; a real host of that name keeps its own.
+    expect(hostKeepFor({ hosts: { companion: { keep: { skills: false } } } } as unknown as Config, 'companion', { companion: true }).skills).toBe(false)
+    const real = { cloud_bridge: { keep: { memory: false } }, hosts: { companion: { hostname: 'box.example.com', keep: { skills: false } } } } as unknown as Config
+    expect([hostKeepFor(real, 'companion').memory, hostKeepFor(real, 'companion').skills]).toEqual([true, false])
+    expect([hostKeepFor(real, 'companion', { companion: true }).memory, hostKeepFor(real, 'companion', { companion: true }).skills]).toEqual([false, true])
   })
 
   it('the search exclusions travel with the manifest', async () => {
