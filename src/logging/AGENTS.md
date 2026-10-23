@@ -23,7 +23,8 @@ architecture, investigation commands).
   (`holdFromMs`, `holdToMs`; checkpoints are the previous probe tick, a 100 ms timer, and the end
   of every loop iteration, at most every 5 ms): `holdCpuMs` is the thread's CPU in it,
   `afterHoldCpuMs` its CPU after it up to the probe, `loopIdleMs` the time the loop waited in poll
-  inside it, `afterWaitMs` a pause it began right after and `afterHoldPauseMs` the pauses between
+  inside it (absent with `loopIdleSource: "none"` on bun, which keeps no idle clock: the verdict
+  then takes the time the thread did not run in the hold as a possible wait), `afterWaitMs` a pause it began right after and `afterHoldPauseMs` the pauses between
   its end and the probe (each a second or more the thread ran under a tenth of and under 250 ms
   in: more is a block load stretched, not a pause), and `baseCpuShare` the loop's rate in its
   normal turns over the 10 s before, or further back up to a minute when blocks and pauses filled

@@ -86,7 +86,7 @@ for (const w of windows) {
       const h = s.hold
       const inHold = typeof h.holdCpuMs === 'number'
         ? `, ${h.holdCpuMs} ms of it in the hold itself` +
-          (typeof h.holdToMs === 'number' ? ` (${h.holdFromMs} to ${h.holdToMs} ms around the deadline, the loop waiting in poll ${h.loopIdleMs} ms of it)` : '') +
+          (typeof h.holdToMs === 'number' ? ` (${h.holdFromMs} to ${h.holdToMs} ms around the deadline, ${typeof h.loopIdleMs === 'number' ? `the loop waiting in poll ${h.loopIdleMs} ms of it` : 'its wait in poll unknown: no idle clock on this runtime'})` : '') +
           (typeof h.afterHoldCpuMs === 'number' ? ` and ${h.afterHoldCpuMs} ms after it` : '') +
           (h.afterWaitMs > 0 ? `, right after a ${h.afterWaitMs} ms pause` : '') +
           (h.afterHoldPauseMs > 0 ? `, with a ${h.afterHoldPauseMs} ms pause before the probe` : '') +
