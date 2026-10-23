@@ -37,6 +37,16 @@ interface FakeHost extends HostServerHost {
   statusExtra?: Record<string, unknown>
   /** The install script last uploaded. */
   script?: string
+  /** The prune scripts it ran: the builds each kept. */
+  prunes: string[][]
+  /** The sha256 each upload named. */
+  uploadShas: Array<string | undefined>
+  /** What the running server reports as its build (version, commit). */
+  reportBuild?: { version: string; commit: string }
+  /** Per configured command: whether a server of it reports (a broken build does not). */
+  answers?: (command: string) => boolean
+  /** The pid the report names (the server's own process.pid). */
+  reportPid?: number
 }
 
 /** The host server's end of a stream: what the Mac posts to it. */
@@ -48,7 +58,7 @@ function fakeHost(): FakeHost {
   const h: FakeHost = {
     hostKey: 'devbox',
     connected: true,
-    calls: [], specs: [], uploads: [], streams: [], lane: [],
+    calls: [], specs: [], uploads: [], streams: [], lane: [], prunes: [], uploadShas: [],
     installState: 'absent', pollsUntilReady: 2, system: 'os=Linux\narch=x86_64\nlibc=glibc\ntranslated=0\nglibc=2.26\n',
     caps: new Set(['host-server-v1', 'follower-v1', 'stream-relay-v1']),
     daemonState: 'off',
@@ -58,7 +68,10 @@ function fakeHost(): FakeHost {
       h.calls.push(`send ${cmd}`)
       if (cmd === 'server.status') {
         // The host's clock is an hour behind: only the age it gives counts.
-        const report = h.daemonState === 'running' && h.reports ? { report: { route: { kind: 'leader' }, version: '0.6.7' }, reportedAt: Date.now() - 3_600_000, reportAgeMs: 1_000 } : {}
+        const current = h.specs.at(-1)
+        const answering = h.reports && (!current || !h.answers || h.answers(String(current.command)))
+        const build = h.reportBuild ?? { version: '0.6.7' }
+        const report = h.daemonState === 'running' && answering ? { report: { route: { kind: 'leader' }, ...build, ...(h.reportPid ? { pid: h.reportPid } : {}) }, reportedAt: Date.now() - 3_600_000, reportAgeMs: 1_000 } : {}
         return { ok: true, status: { state: h.daemonState, since: 0, restarts: 0, ...report, ...h.statusExtra } }
       }
       if (cmd === 'server.configure') {
@@ -78,13 +91,19 @@ function fakeHost(): FakeHost {
         if (h.installState === 'failed') return 'FAILED\nthe walnut file does not start on this host (Linux x86_64, glibc 2.26): boom\n__LOG__\nboom'
         return { absent: 'ABSENT', running: 'RUNNING', ready: 'READY' }[h.installState] ?? 'ABSENT'
       }
+      if (script.includes('echo pruned')) {
+        const keep = /KEEP=' ([^']*) '/.exec(script)?.[1]?.split(' ') ?? []
+        h.calls.push('prune')
+        h.prunes.push(keep)
+        return 'pruned'
+      }
       if (script.includes('require("net")')) {
         h.calls.push(script.startsWith('BUN_BE_BUN=1 ') ? `ports ${script.split(' ')[1]}` : `ports ${script.split(' ')[0]}`)
         return script.split(' ').filter((w) => /^\d{5}$/.test(w)).map((p) => `${p}:free`).join('\n')
       }
       throw new Error('unexpected script: ' + script.slice(0, 80))
     },
-    async uploadFile(p, data) { h.uploads.push({ path: p, bytes: data.length }); if (p.endsWith('.install.sh')) h.script = data.toString() },
+    async uploadFile(p, data, opts) { h.uploads.push({ path: p, bytes: data.length }); h.uploadShas.push(opts?.sha256); if (p.endsWith('.install.sh')) h.script = data.toString() },
     keepStreamLane(on) { h.lane.push(on) },
     async openStream(to, purpose) {
       h.streams.push(`${to}:${purpose}`)
@@ -109,11 +128,11 @@ let readies: string[] = []
 let fileAsks: string[] = []
 function fakeFiles(over: Partial<HostFileSource> = {}): HostFileSource {
   return {
-    buildId: async () => ({ id: '0.6.7-abc1234', version: '0.6.7' }),
+    buildId: async () => ({ id: '0.6.7-abc1234', version: '0.6.7', commit: 'abc1234' }),
     file: async (target, say) => {
       fileAsks.push(target)
       say?.(`Building Walnut 0.6.7-abc1234 for ${target} on this computer (about a minute, once per build).`)
-      return { id: '0.6.7-abc1234', version: '0.6.7', target, gz: Buffer.alloc(3 * 2 ** 20), sha256: 'c'.repeat(64) } satisfies HostFile
+      return { id: '0.6.7-abc1234', version: '0.6.7', commit: 'abc1234', target, gz: Buffer.alloc(3 * 2 ** 20), sha256: 'c'.repeat(64), gzSha256: 'd'.repeat(64) } satisfies HostFile
     },
     ...over,
   }
@@ -188,7 +207,12 @@ describe('host server manager', () => {
     await m.connected(host)
     // No Node anywhere: the probe says which file, the installed file itself finds the port.
     const file = '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut'
-    expect(host.calls.filter((c) => c !== 'state')).toEqual(['probe', 'launch', `ports '${file}'`, 'send server.configure', 'send server.status'])
+    // The status before the configure says which build ran (kept on the host until this one answers),
+    // the prune after the first report removes the rest.
+    expect(host.calls.filter((c) => c !== 'state')).toEqual(['probe', 'launch', `ports '${file}'`, 'send server.status', 'send server.configure', 'send server.status', 'prune'])
+    expect(host.prunes).toEqual([['0.6.7-abc1234']])
+    // The gz goes with its sha256: one already on the host (an earlier try) is not sent again.
+    expect(host.uploadShas).toEqual(['d'.repeat(64), undefined])
     expect(fileAsks).toEqual(['linux-x64'])
     expect(host.uploads).toEqual([
       { path: '/home/me/.open-walnut-host/incoming/0.6.7-abc1234.gz', bytes: 3 * 2 ** 20 },
@@ -196,6 +220,7 @@ describe('host server manager', () => {
     ])
     // The script installs that file: its version, its sha256, the host in words.
     expect(host.script).toContain("VERSION='0.6.7'")
+    expect(host.script).toContain("COMMIT='abc1234'")
     expect(host.script).toContain(`SHA='${'c'.repeat(64)}'`)
     expect(host.script).toContain("HOSTDESC='Linux x86_64, glibc 2.26'")
     expect(host.script).toContain('ROOT="$HOME/.open-walnut-host"')
@@ -210,7 +235,9 @@ describe('host server manager', () => {
     ])
     const ports = JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox
     expect(fs.statSync(path.join(dir, 'host-servers.json')).mode & 0o777).toBe(0o600)
-    expect(Object.keys(ports)).toEqual(['publicPort'])
+    expect(Object.keys(ports).sort()).toEqual(['publicPort', 'working'])
+    // The program that answered, kept for a build after it that does not.
+    expect(ports.working).toMatchObject({ id: '0.6.7-abc1234', command: file, args: ['host-server'], cwd: '/home/me/.open-walnut-host/data', log: '/home/me/.open-walnut-host/logs/server.log' })
     // The door host server streams come in by, and a lane of their own to the host.
     expect(held).toEqual(['host-server:devbox'])
     expect(host.lane).toEqual([true])
@@ -342,8 +369,107 @@ describe('host server manager', () => {
     host.installState = 'failed'
     await run
     expect(m.view('devbox')).toMatchObject({ phase: 'error', install: { state: 'failed', logTail: 'boom' } })
-    expect(m.view('devbox').message).toMatch(/the install on the host failed: the walnut file does not start on this host \(Linux x86_64, glibc 2\.26\): boom/)
+    expect(m.view('devbox').message).toMatch(/the install of Walnut 0\.6\.7-abc1234 on the host failed: the walnut file does not start on this host \(Linux x86_64, glibc 2\.26\): boom/)
     expect(host.specs).toEqual([])
+  })
+
+  it('a failed install is not sent again on the next connect, only on Retry', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.installState = 'failed'
+    await m.connected(host)
+    // The same file would fail the same way after the same 50 MB upload.
+    expect(host.uploads).toEqual([])
+    expect(host.calls).not.toContain('launch')
+    expect(m.view('devbox').message).toMatch(/the install of Walnut 0\.6\.7-abc1234 on the host failed: .*boom\. Press Retry to install it again\./)
+    await m.connected(host)
+    expect(host.uploads).toEqual([])
+    // The person's Retry installs it again.
+    host.pollsUntilReady = 1
+    host.installState = 'failed'
+    const retried = m.reconcile('devbox', { retry: true })
+    await retried
+    expect(host.calls).toContain('launch')
+    expect(host.uploads.map((u) => path.basename(u.path))).toEqual(['0.6.7-abc1234.gz', '0.6.7-abc1234.install.sh'])
+  })
+
+  it('a new build that does not answer gives the host back the one that did, until Retry', async () => {
+    const host = fakeHost()
+    // 0.6.6 was installed and answered.
+    const m0 = createHostServerManager(deps({ hostFile: fakeFiles({ buildId: async () => ({ id: '0.6.6-aaa1111', version: '0.6.6', commit: 'aaa1111' }) }) }))
+    host.reportBuild = { version: '0.6.6', commit: 'aaa1111' }
+    await m0.connected(host)
+    expect(m0.view('devbox').phase).toBe('running')
+    const oldFile = '/home/me/.open-walnut-host/app/0.6.6-aaa1111/walnut'
+    expect(host.specs.at(-1)!.command).toBe(oldFile)
+    m0.stop()
+    // This Mac now runs 0.6.7, whose file installs but never answers on the host.
+    host.installState = 'absent'
+    host.pollsUntilReady = 1
+    host.answers = (command) => command === oldFile
+    host.calls = []
+    host.prunes = []
+    const m1 = createHostServerManager(deps({ firstReportMs: 30 }))
+    await m1.connected(host)
+    const newFile = '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut'
+    expect(host.specs.slice(-2).map((sp) => sp!.command)).toEqual([newFile, oldFile])
+    const v = m1.view('devbox')
+    expect(v.phase).toBe('running')
+    expect(v.notice).toMatch(/^It runs Walnut 0\.6\.6-aaa1111, the build before this computer's: 0\.6\.7-abc1234 did not answer on the host \(the server on the host did not answer within a minute; its log is .*\)\. Try again to start 0\.6\.7-abc1234\.$/)
+    // Nothing was removed on the host: the new build never answered.
+    expect(host.prunes).toEqual([])
+    const record = JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox
+    expect(record.working.id).toBe('0.6.6-aaa1111')
+    expect(record.refused.id).toBe('0.6.7-abc1234')
+    // A later connect (a restart of this Mac's server too) keeps the old one: no switch back and forth.
+    host.installState = 'ready'
+    const m2 = createHostServerManager(deps({ firstReportMs: 30 }))
+    const before = host.specs.length
+    await m2.connected(host)
+    expect(host.specs.slice(before).map((sp) => sp!.command)).toEqual([oldFile])
+    expect(m2.view('devbox')).toMatchObject({ phase: 'running', notice: expect.stringContaining('Try again to start 0.6.7-abc1234') })
+    // Retry tries the new build; once it answers it is the working one, and the old one may go.
+    host.answers = () => true
+    host.reportBuild = { version: '0.6.7', commit: 'abc1234' }
+    await m2.reconcile('devbox', { retry: true })
+    expect(host.specs.at(-1)!.command).toBe(newFile)
+    expect(m2.view('devbox')).toMatchObject({ phase: 'running' })
+    expect(m2.view('devbox').notice).toBeUndefined()
+    const after = JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox
+    expect(after.working.id).toBe('0.6.7-abc1234')
+    expect(after.refused).toBeUndefined()
+    // The one that ran before it stays on the host beside it.
+    expect(host.prunes.at(-1)).toEqual(['0.6.7-abc1234', '0.6.6-aaa1111'])
+  })
+
+  it('a report from the process a configure replaced is not the new build answering', async () => {
+    const host = fakeHost()
+    // The daemon runs pid 5000 now; the report still comes from 4000, which is stopping.
+    host.statusExtra = { pid: 5000 }
+    host.reportPid = 4000
+    const m = createHostServerManager(deps({ firstReportMs: 30 }))
+    await m.connected(host)
+    expect(m.view('devbox')).toMatchObject({ phase: 'error' })
+    expect(m.view('devbox').message).toMatch(/did not answer within a minute/)
+    // Nothing was kept as working, nothing removed on the host.
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox.working).toBeUndefined()
+    expect(host.prunes).toEqual([])
+    // Its own report counts.
+    host.reportPid = 5000
+    await m.connected(host)
+    expect(m.view('devbox').phase).toBe('running')
+  })
+
+  it('the first switch from a Node build keeps that build on the host until the file answers', async () => {
+    const host = fakeHost()
+    // What the Node layout ran: the manager of then kept no record; its report names its build.
+    host.daemonState = 'running'
+    host.reportBuild = { version: '0.6.6', commit: 'f00dbab3' }
+    host.answers = () => true
+    const m = createHostServerManager(deps())
+    await m.connected(host)
+    expect(m.view('devbox').phase).toBe('running')
+    expect(host.prunes).toEqual([['0.6.7-abc1234', '0.6.6-f00dbab3']])
   })
 
   it('an older daemon is told to update first', async () => {

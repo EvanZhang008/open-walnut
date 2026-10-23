@@ -153,7 +153,8 @@ hostServersRouter.post('/:hostKey/retry', async (req: Request, res: Response, ne
     if (!isPersonAtThisMachine(req)) return refuse(res)
     const hostKey = String(req.params.hostKey)
     if (!HOST_KEY.test(hostKey) || !(await hostEntry(hostKey))) { res.status(404).json({ error: `No host named ${hostKey}` }); return }
-    void getHostServerManager()?.reconcile(hostKey)
+    // The person's Retry: a failed install and a build that did not answer are tried again.
+    void getHostServerManager()?.reconcile(hostKey, { retry: true })
     res.json({ host: await hostEntry(hostKey) })
   } catch (err) {
     next(err)

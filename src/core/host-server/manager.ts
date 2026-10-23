@@ -17,7 +17,14 @@
  *   4. `server.configure` on the daemon (`<app>/walnut host-server`, or
  *      `web --replica`), with the server's tunnel in its settings; the daemon
  *      keeps it running
- *   5. its first report, through the daemon (`server.status`)
+ *   5. its first report, through the daemon (`server.status`); only then are the
+ *      older builds on the host removed (pruneScript), and the program is kept
+ *      in the state file as the one that works
+ *
+ * A new build that misses its first report is not left in place of one that
+ * worked: the program that last reported is configured again, the new build is
+ * marked refused (the state file), and no connect tries it again until Retry.
+ * An install that failed on the host is not sent again either until Retry.
  *
  * Which program: a daemon with `replica-host-v1` runs the full server program as a
  * follower (`web --replica`, docs/plan/walnut-replica-servers-impl.md WP2, the
@@ -43,8 +50,9 @@ import { getExposeProvider } from '../expose/registry.js'
 import type { ExposeProviderDefinition, ExposeStatus } from '../expose/types.js'
 import type { HostFileSource } from './host-file.js'
 import { parseHostTarget, targetProbeScript } from './host-target.js'
+import { validBuildId } from '../companion-build/wire.js'
 import {
-  checkHostRoot, fileInstallScript, freePortsScript, HOST_ROOT, launchScript, parseFreePorts, parseInstallState, stateScript,
+  checkHostRoot, fileInstallScript, freePortsScript, HOST_ROOT, launchScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
   type InstallState,
 } from './install.js'
 
@@ -115,9 +123,27 @@ export interface HostServerView {
    * host server after the replica crash-looped (`daemon.fallback` says since, until, why).
    */
   program?: 'replica' | 'host-server' | 'fallback'
+  /** While it runs: why it runs an older build than this Mac's (that one did not answer; Retry tries it again). */
+  notice?: string
 }
 
-interface PortsRecord { publicPort: number }
+/** A program the host ran that reported, as configured (the settings are always the current ones). */
+interface WorkingProgram {
+  id: string
+  command: string
+  args: string[]
+  env: Record<string, string>
+  fallback?: { args: string[]; env: Record<string, string> }
+  cwd: string
+  log: string
+}
+
+/** Per host, in the state file: its port, the program that last worked, a build that did not. */
+interface HostRecord {
+  publicPort: number
+  working?: WorkingProgram
+  refused?: { id: string; message: string }
+}
 
 /** A host's copy target: `ready` when its server answers, `restarted` when another process answers than last time. */
 export interface HostCopyTarget { unregister(): void; ready(restarted: boolean): void }
@@ -198,6 +224,7 @@ export function createHostServerManager(deps: ManagerDeps) {
   const hosts = new Map<string, HostServerHost>()
   const running = new Map<string, Promise<void>>()
   const rerun = new Set<string>()
+  const retries = new Set<string>()
   const polls = new Map<string, ReturnType<typeof setInterval>>()
   /** Per host set up: the copy target, the spec last sent (for a tunnel retry), the server pid the target last heard of. */
   const links = new Map<string, { target?: HostCopyTarget; spec?: Record<string, unknown>; ranAs?: number }>()
@@ -211,6 +238,8 @@ export function createHostServerManager(deps: ManagerDeps) {
    * runs on the reconnect, before this host's reconcile has configured it again.
    */
   const configured = new Map<string, { command: string; args: string[] }>()
+  /** Per host running an older build than this Mac's: why (the view's `notice`). */
+  const notices = new Map<string, string>()
   /** The program the view shows: the daemon's own word wins (its fallback runs while the Mac sleeps too). */
   const programOf = (hostKey: string, status: HostServerStatus | undefined): HostServerView['program'] =>
     status?.program === 'fallback' ? 'fallback' : asked.get(hostKey)
@@ -238,55 +267,74 @@ export function createHostServerManager(deps: ManagerDeps) {
     }
   }
 
-  function readPorts(): Record<string, PortsRecord> {
-    try { return JSON.parse(fs.readFileSync(deps.stateFile, 'utf8')) as Record<string, PortsRecord> } catch { return {} }
+  function readState(): Record<string, HostRecord> {
+    try { return JSON.parse(fs.readFileSync(deps.stateFile, 'utf8')) as Record<string, HostRecord> } catch { return {} }
   }
 
-  function writePorts(all: Record<string, PortsRecord>): void {
+  /** Change one host's record (its port must be there already). */
+  function updateRecord(hostKey: string, patch: (r: HostRecord) => void): void {
+    const all = readState()
+    const r = all[hostKey]
+    if (!r) return
+    patch(r)
+    writeState(all)
+  }
+
+  function writeState(all: Record<string, HostRecord>): void {
     fs.mkdirSync(path.dirname(deps.stateFile), { recursive: true })
     const tmp = `${deps.stateFile}.${process.pid}.tmp`
     fs.writeFileSync(tmp, JSON.stringify(all, null, 2), { mode: 0o600 })
     fs.renameSync(tmp, deps.stateFile)
   }
 
-  async function portsFor(host: HostServerHost, program: HostProgram): Promise<PortsRecord> {
-    const all = readPorts()
+  async function portsFor(host: HostServerHost, program: HostProgram): Promise<HostRecord> {
+    const all = readState()
     const kept = all[host.hostKey]
     if (kept && Number.isInteger(kept.publicPort)) return kept
     const candidates = Array.from({ length: 8 }, () => PORT_BASE + crypto.randomInt(PORT_SPAN))
     const free = [...parseFreePorts(await host.runRemoteScript(freePortsScript(program, candidates), 20_000))]
     if (free.length < 1) throw new Error('could not find a free port on the host')
-    const rec: PortsRecord = { publicPort: free[0]! }
+    const rec: HostRecord = { publicPort: free[0]! }
     all[host.hostKey] = rec
-    writePorts(all)
+    writeState(all)
     return rec
   }
 
-  async function ensureInstalled(host: HostServerHost): Promise<{ program: HostProgram; dataDir: string; logFile: string; runDir: string }> {
+  /**
+   * This Mac's build installed on the host: its id and how to run it. An install
+   * that failed there is not sent again until `retry` (the person's Retry): the
+   * same file would fail the same way, after the same upload.
+   */
+  async function ensureInstalled(host: HostServerHost, retry: boolean): Promise<{ id: string; root: string; rootSpec: string; program: HostProgram; dataDir: string; logFile: string; runDir: string }> {
     const rootSpec = checkHostRoot(deps.hostRoot ?? HOST_ROOT)
     const remoteHome = rootSpec.startsWith('$HOME') ? (await host.runRemoteScript('printf %s "$HOME"', 10_000)).trim() : ''
     if (rootSpec.startsWith('$HOME') && !remoteHome.startsWith('/')) throw new Error('the host did not say where its home is')
     const root = rootSpec.replace('$HOME', remoteHome)
-    const dirs = { dataDir: `${root}/data`, logFile: `${root}/logs/server.log`, runDir: `${root}/run` }
+    const dirs = { root, rootSpec, dataDir: `${root}/data`, logFile: `${root}/logs/server.log`, runDir: `${root}/run` }
     if (deps.appDir) {
       // Tests: a local tree stands in for an installed build.
       if (!deps.appDir.startsWith('/')) throw new Error('WALNUT_HOST_SERVER_APP_DIR must be an absolute path')
       set(host.hostKey, { build: 'local-app', install: { state: 'ready' } })
-      return { program: { command: deps.appCommand ?? process.execPath, prefix: [`${deps.appDir}/dist/cli.js`], asBun: false }, ...dirs }
+      return { id: 'local-app', program: { command: deps.appCommand ?? process.execPath, prefix: [`${deps.appDir}/dist/cli.js`], asBun: false }, ...dirs }
     }
     const { id } = await deps.hostFile.buildId()
-    const installed = { program: { command: `${root}/app/${id}/walnut`, prefix: [], asBun: true }, ...dirs }
+    const installed = { id, program: { command: `${root}/app/${id}/walnut`, prefix: [], asBun: true }, ...dirs }
     set(host.hostKey, { build: id })
     let state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
     if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
+    if (state.state === 'failed' && !retry) {
+      set(host.hostKey, { install: state })
+      throw new Error(`the install of Walnut ${id} on the host failed: ${state.message}. Press Retry to install it again.`)
+    }
     if (state.state !== 'running') {
       const target = parseHostTarget(await host.runRemoteScript(targetProbeScript(), 15_000))
       set(host.hostKey, { phase: 'installing', message: `Getting Walnut ${id} for ${target.target}.`, install: { state: 'running' } })
       const file = await deps.hostFile.file(target.target, (message) => set(host.hostKey, { message }))
       set(host.hostKey, { message: `Sending Walnut ${id} for ${target.target} to the host (${Math.max(1, Math.round(file.gz.length / 2 ** 20))} MB).` })
-      // The daemon deploy's path: one SSH stream, small chunks over their own connections when a proxy kills it.
-      await host.uploadFile(`${root}/incoming/${id}.gz`, file.gz)
-      const script = fileInstallScript({ id, version: file.version, sha256: file.sha256, host: target.describe, ...(deps.hostRoot ? { root: rootSpec } : {}) })
+      // The daemon deploy's path: one SSH stream, small chunks over their own connections when a
+      // proxy kills it; one already there (an earlier try) is not sent again.
+      await host.uploadFile(`${root}/incoming/${id}.gz`, file.gz, { sha256: file.gzSha256 })
+      const script = fileInstallScript({ id, version: file.version, commit: file.commit, sha256: file.sha256, host: target.describe, ...(deps.hostRoot ? { root: rootSpec } : {}) })
       await host.uploadFile(`${root}/incoming/${id}.install.sh`, Buffer.from(script))
       await host.runRemoteScript(launchScript(id, rootSpec), 15_000)
       set(host.hostKey, { message: `Installing Walnut ${id} on the host.` })
@@ -299,7 +347,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (!host.connected) throw new Error('the host went away during the install')
       state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
       if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
-      if (state.state === 'failed') { set(host.hostKey, { install: state }); throw new Error(`the install on the host failed: ${state.message}`) }
+      if (state.state === 'failed') { set(host.hostKey, { install: state }); throw new Error(`the install of Walnut ${id} on the host failed: ${state.message}`) }
       if (state.state === 'absent') throw new Error(`the install on the host stopped without a word (see ${root}/incoming on the host)`)
       if (deps.now() > until) throw new Error('the install on the host took more than 5 minutes')
     }
@@ -317,14 +365,19 @@ export function createHostServerManager(deps: ManagerDeps) {
     const status = (daemon?.status ?? undefined) as HostServerStatus | undefined
     // The host's own clock says how old the report is; the two clocks may differ.
     const age = typeof status?.reportAgeMs === 'number' ? status.reportAgeMs : status?.reportedAt ? deps.now() - status.reportedAt : Infinity
-    const fresh = !!status?.report && age <= REPORT_STALE_MS
+    // A report is the program's that runs now only when it names that pid: the daemon files a
+    // report under the Walnut it serves, and the process a configure just replaced reports on
+    // until it is gone, which would read as the new build answering.
+    const reportPid = (status?.report as { pid?: unknown } | undefined)?.pid
+    const ours = typeof reportPid !== 'number' || typeof status?.pid !== 'number' || reportPid === status.pid
+    const fresh = !!status?.report && age <= REPORT_STALE_MS && ours
     const server = fresh ? (status!.report as HostServerView['server']) : null
     const phase: HostServerPhase = server ? 'running' : status?.state === 'running' || status?.state === 'starting' ? 'starting' : 'error'
     const message = server ? undefined
       : status?.state === 'retrying' ? `The server on the host stopped (${status.lastError ?? 'no reason given'}); its daemon starts it again shortly.`
         : status?.state === 'off' ? 'The host\'s daemon is not running the server.'
           : 'Waiting for the server on the host to answer.'
-    set(host.hostKey, { phase, message, daemon: status, server, program: programOf(host.hostKey, status) })
+    set(host.hostKey, { phase, message, daemon: status, server, program: programOf(host.hostKey, status), notice: server ? notices.get(host.hostKey) : undefined })
     return status
   }
 
@@ -338,7 +391,39 @@ export function createHostServerManager(deps: ManagerDeps) {
     if (t) { clearInterval(t); polls.delete(hostKey) }
   }
 
-  async function reconcileOnce(hostKey: string): Promise<void> {
+  /** Tell the daemon to run `spec`, and remember what it runs. */
+  async function configure(host: HostServerHost, spec: Record<string, unknown> & { command: string; args: string[] }, replica: boolean): Promise<void> {
+    const hostKey = host.hostKey
+    const reply = await host.send('server.configure', { home: deps.home, spec }, 15_000)
+    if (reply.ok !== true) throw new Error(`the host's daemon refused the server: ${String(reply.error ?? '')}`)
+    asked.set(hostKey, replica ? 'replica' : 'host-server')
+    configured.set(hostKey, { command: spec.command, args: [...spec.args] })
+    set(hostKey, { daemon: reply.status as HostServerStatus, program: programOf(hostKey, reply.status as HostServerStatus) })
+    const link = links.get(hostKey) ?? {}
+    link.spec = spec
+    links.set(hostKey, link)
+  }
+
+  /** Wait for the server's first report through its daemon: null once it reports, else why not. */
+  async function firstReport(host: HostServerHost, logFile: string): Promise<string | null> {
+    const until = deps.now() + (deps.firstReportMs ?? FIRST_REPORT_MS)
+    for (;;) {
+      const status = await refreshStatus(host)
+      if (view(host.hostKey).phase === 'running') return null
+      if (deps.now() > until) {
+        return `the server on the host did not answer within a minute${status?.lastError ? ` (${status.lastError})` : ''}; its log is ${logFile} on the host`
+      }
+      await new Promise((r) => setTimeout(r, deps.installPollMs ?? 2_000))
+    }
+  }
+
+  /** The id of the build the host server reports it runs, when it says (`<version>-<commit>`). */
+  function reportedId(status: HostServerStatus | undefined): string | null {
+    const r = status?.report as { version?: unknown; commit?: unknown } | undefined
+    return typeof r?.version === 'string' && typeof r.commit === 'string' && r.commit ? `${r.version}-${r.commit}` : null
+  }
+
+  async function reconcileOnce(hostKey: string, retry = false): Promise<void> {
     const host = hosts.get(hostKey)
     const settings = await deps.settingsOf(hostKey)
     const enabled = settings?.enabled === true
@@ -355,6 +440,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       }
       dropLink(hostKey)
       configured.delete(hostKey)
+      notices.delete(hostKey)
       host?.keepStreamLane?.(false)
       await deps.releaseTunnelPort(`host-server:${hostKey}`)
       set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined })
@@ -370,7 +456,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     }
     set(hostKey, { enabled: true, phase: 'checking', message: 'Checking the host.' })
     try {
-      const install = await ensureInstalled(host)
+      const install = await ensureInstalled(host, retry)
       const rec = await portsFor(host, install.program)
       set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: rec.publicPort })
       // The door its streams come in by (the tunnel port trusts nothing on loopback).
@@ -392,7 +478,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       // The full program as this host's replica wherever the daemon can (D13: the default since
       // the WP14 release gate); `server_program: 'host-server'` keeps the plain host server.
       const replica = settings!.program !== 'host-server' && host.hasCapability('replica-host-v1')
-      const run = replica
+      const run: Omit<WorkingProgram, 'id' | 'command' | 'cwd' | 'log'> = replica
         ? {
             args: [...prefix, 'web', '--replica'],
             // Its own run dir (hostServerEnv): a replica never writes the daemon's dir or /tmp/open-walnut.
@@ -407,66 +493,97 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (settings!.program !== 'host-server' && !replica) {
         log.session.info('host server: the host would run the replica, its daemon cannot run it yet', { host: hostKey })
       }
-      const spec = {
+      const fresh: WorkingProgram = { id: install.id, command, cwd: install.dataDir, log: install.logFile, ...run }
+      const specOf = async (p: WorkingProgram) => ({
         v: 1, home: deps.home, walnutId: await deps.walnutId(),
-        command,
-        args: run.args,
-        cwd: install.dataDir,
-        env: run.env,
-        ...('fallback' in run ? { fallback: run.fallback } : {}),
-        log: install.logFile,
-        port: rec.publicPort,
+        command: p.command, args: p.args, cwd: p.cwd, env: p.env,
+        ...(p.fallback ? { fallback: p.fallback } : {}),
+        log: p.log, port: rec.publicPort,
         // Read by the server while it runs: a change here restarts nothing.
         settings: { expose: await exposeSettingsFor(settings!), exposeRetry: exposeRetries.get(hostKey) ?? 0 },
-      }
-      const reply = await host.send('server.configure', { home: deps.home, spec }, 15_000)
-      if (reply.ok !== true) throw new Error(`the host's daemon refused the server: ${String(reply.error ?? '')}`)
-      asked.set(hostKey, replica ? 'replica' : 'host-server')
-      configured.set(hostKey, { command, args: [...run.args] })
-      set(hostKey, { daemon: reply.status as HostServerStatus, program: programOf(hostKey, reply.status as HostServerStatus) })
-      const link = links.get(hostKey) ?? {}
-      link.spec = spec
-      links.set(hostKey, link)
-      // A new ask on the host while the Mac is away (WP12): the spawn template its daemon
-      // fills from validated fields only (spawn-template.ts, host-start-core.ts). Asks run in
-      // the replica's data dir, the host's counterpart of this Mac's WALNUT_HOME.
-      if (replica) {
-        try {
-          const { pushHostSpawnTemplate } = await import('../../providers/spawn-template.js')
-          const pushed = await pushHostSpawnTemplate(host, { home: deps.home, hostKey, cwd: install.dataDir, bypassAllowed: settings!.askBypass === true })
-          if (pushed) log.session.info('host server: spawn template pushed', { host: hostKey, cwd: install.dataDir, bypass: settings!.askBypass === true })
-        } catch (err) {
-          log.session.warn('host server: the spawn template was not pushed; a new ask there needs this Mac', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+      })
+      const isReplica = (p: WorkingProgram) => p.args.includes('--replica')
+      const working = rec.working && rec.working.id !== fresh.id ? rec.working : undefined
+      let runs = fresh
+      if (!retry && working && rec.refused?.id === fresh.id) {
+        // This build did not answer before: until Retry, the host keeps the one that worked.
+        runs = working
+        notices.set(hostKey, olderNotice(fresh.id, working.id, rec.refused.message))
+        await configure(host, await specOf(working), isReplica(working))
+      } else {
+        // What ran before this build, by the record or by its own report: kept on the host until this one answers.
+        const before = reportedId((await host.send('server.status', { home: deps.home }, 10_000).catch(() => null))?.status as HostServerStatus | undefined)
+        notices.delete(hostKey)
+        await configure(host, await specOf(fresh), replica)
+        await afterConfigure(host, replica)
+        const missed = await firstReport(host, fresh.log)
+        if (!missed) {
+          updateRecord(hostKey, (r) => { r.working = fresh; delete r.refused })
+          if (!deps.appDir) {
+            const keep = [...new Set([fresh.id, working?.id, before].filter((k): k is string => !!k && validBuildId(k)))]
+            await host.runRemoteScript(pruneScript(keep, install.rootSpec), 60_000)
+              .catch((err: Error) => log.session.warn('host server: removing older builds on the host failed', { host: hostKey, error: err.message }))
+          }
+          startPoll(hostKey)
+          return
         }
+        if (!working) throw new Error(missed)
+        // Back to the program that worked; this build waits for Retry.
+        log.session.warn('host server: the new build did not answer, running the one before it', { host: hostKey, build: fresh.id, previous: working.id, error: missed })
+        updateRecord(hostKey, (r) => { r.refused = { id: fresh.id, message: missed } })
+        runs = working
+        notices.set(hostKey, olderNotice(fresh.id, working.id, missed))
+        await configure(host, await specOf(working), isReplica(working))
       }
-      // The copies (task store, search index) for this follower, on a stream through its daemon.
-      if (deps.registerTarget && !link.target) {
-        link.target = deps.registerTarget(hostKey, async (body, opts) => {
-          const h = hosts.get(hostKey)
-          if (!h?.connected) throw new Error('the host is not connected')
-          const stream = await h.openStream('follower', 'replica')
-          return requestOver(stream, 'POST', '/bridge/replica', Buffer.from(JSON.stringify(body)), opts?.timeoutMs ?? 60_000)
-        }, async () => (await deps.settingsOf(hostKey))?.copies)
-      }
-      // Up once it reports through its daemon.
-      const until = deps.now() + (deps.firstReportMs ?? FIRST_REPORT_MS)
-      for (;;) {
-        const status = await refreshStatus(host)
-        if (view(hostKey).phase === 'running') break
-        if (deps.now() > until) {
-          throw new Error(`the server on the host did not answer within a minute${status?.lastError ? ` (${status.lastError})` : ''}; its log is ${install.logFile} on the host`)
-        }
-        await new Promise((r) => setTimeout(r, deps.installPollMs ?? 2_000))
-      }
-      if (!polls.has(hostKey)) {
-        const t = setInterval(() => { void poll(hostKey) }, deps.pollMs ?? 30_000)
-        t.unref?.()
-        polls.set(hostKey, t)
-      }
+      await afterConfigure(host, isReplica(runs))
+      const missed = await firstReport(host, runs.log)
+      if (missed) throw new Error(missed)
+      startPoll(hostKey)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log.session.warn('host server: setup failed', { host: hostKey, error: message })
       set(hostKey, { phase: 'error', message })
+    }
+  }
+
+  function olderNotice(id: string, older: string, why: string): string {
+    return `It runs Walnut ${older}, the build before this computer's: ${id} did not answer on the host (${why}). Try again to start ${id}.`
+  }
+
+  function startPoll(hostKey: string): void {
+    if (polls.has(hostKey)) return
+    const t = setInterval(() => { void poll(hostKey) }, deps.pollMs ?? 30_000)
+    t.unref?.()
+    polls.set(hostKey, t)
+  }
+
+  /** What follows a configure: the replica's spawn template, the copy target. */
+  async function afterConfigure(host: HostServerHost, replica: boolean): Promise<void> {
+    const hostKey = host.hostKey
+    const settings = await deps.settingsOf(hostKey)
+    const dataDir = (links.get(hostKey)?.spec as { cwd?: string } | undefined)?.cwd
+    // A new ask on the host while the Mac is away (WP12): the spawn template its daemon
+    // fills from validated fields only (spawn-template.ts, host-start-core.ts). Asks run in
+    // the replica's data dir, the host's counterpart of this Mac's WALNUT_HOME.
+    if (replica && dataDir) {
+      try {
+        const { pushHostSpawnTemplate } = await import('../../providers/spawn-template.js')
+        const pushed = await pushHostSpawnTemplate(host, { home: deps.home, hostKey, cwd: dataDir, bypassAllowed: settings?.askBypass === true })
+        if (pushed) log.session.info('host server: spawn template pushed', { host: hostKey, cwd: dataDir, bypass: settings?.askBypass === true })
+      } catch (err) {
+        log.session.warn('host server: the spawn template was not pushed; a new ask there needs this Mac', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    // The copies (task store, search index) for this follower, on a stream through its daemon.
+    const link = links.get(hostKey) ?? {}
+    links.set(hostKey, link)
+    if (deps.registerTarget && !link.target) {
+      link.target = deps.registerTarget(hostKey, async (body, opts) => {
+        const h = hosts.get(hostKey)
+        if (!h?.connected) throw new Error('the host is not connected')
+        const stream = await h.openStream('follower', 'replica')
+        return requestOver(stream, 'POST', '/bridge/replica', Buffer.from(JSON.stringify(body)), opts?.timeoutMs ?? 60_000)
+      }, async () => (await deps.settingsOf(hostKey))?.copies)
     }
   }
 
@@ -480,14 +597,19 @@ export function createHostServerManager(deps: ManagerDeps) {
     }
   }
 
-  /** Serialized per host; a call while one runs makes it run once more. */
-  function reconcile(hostKey: string): Promise<void> {
+  /**
+   * Serialized per host; a call while one runs makes it run once more. `retry`:
+   * the person asked (Retry): a failed install and a refused build are tried again.
+   */
+  function reconcile(hostKey: string, opts: { retry?: boolean } = {}): Promise<void> {
+    if (opts.retry) retries.add(hostKey)
     const current = running.get(hostKey)
     if (current) { rerun.add(hostKey); return current }
     const run = (async () => {
       do {
         rerun.delete(hostKey)
-        await reconcileOnce(hostKey)
+        const retry = retries.delete(hostKey)
+        await reconcileOnce(hostKey, retry)
       } while (rerun.has(hostKey))
     })().finally(() => { running.delete(hostKey) })
     running.set(hostKey, run)

@@ -16,6 +16,8 @@ export interface HostServerView {
   since: number;
   build?: string;
   port?: number;
+  /** While it runs: why it runs an older build than this computer's (Try again starts this one). */
+  notice?: string;
   server?: {
     route?: { kind: string; why?: string };
     expose?: ExposeStatus;
@@ -122,6 +124,7 @@ export function describeHostServer(entry: HostServerEntry): HostServerLine {
     case 'starting':
       return { dot: 'pending', text: v.message ?? 'Setting it up...', retry: false };
     case 'running':
+      if (v.notice) return { dot: 'action', text: `${routeText(v.server?.route)} ${v.notice}`, retry: true };
       return { dot: 'done', text: routeText(v.server?.route), retry: false };
     case 'error':
       return { dot: 'error', text: v.message ?? 'It stopped on an error.', retry: true };
