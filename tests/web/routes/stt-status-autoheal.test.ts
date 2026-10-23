@@ -161,7 +161,7 @@ describe('custom vocabulary in config/share/', () => {
     expect(res.status).toBe(200);
     expect(res.body.words).toEqual(['Walnut', 'Marina']);
     // A move, not a copy: the root path must stop being a live location.
-    await expect(fs.access(STT_VOCAB_FILE)).resolves.toBeUndefined();
+    await expect(fs.access(STT_VOCAB_FILE).then(() => true)).resolves.toBe(true);
     await expect(fs.access(LEGACY_VOCAB_FILE)).rejects.toThrow();
   });
 
@@ -188,6 +188,6 @@ describe('custom vocabulary in config/share/', () => {
     const res = await request(makeApp()).get('/api/stt/vocab');
 
     expect(res.body.words).toEqual(['Migrated']);
-    await expect(fs.access(LEGACY_VOCAB_FILE)).resolves.toBeUndefined();
+    await expect(fs.access(LEGACY_VOCAB_FILE).then(() => true)).resolves.toBe(true);
   });
 });

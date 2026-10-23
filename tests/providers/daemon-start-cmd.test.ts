@@ -81,7 +81,7 @@ describe('buildDaemonStartCmd', () => {
     })
     const { stdout } = await run(cmd)
     expect(stdout).toContain('"running":true')
-    await expect(fsp.access(path.join(dir, 'preamble-ran'))).resolves.toBeUndefined()
+    await expect(fsp.access(path.join(dir, 'preamble-ran')).then(() => true)).resolves.toBe(true)
     const envDump = await fsp.readFile(path.join(dir, 'env.txt'), 'utf-8')
     expect(envDump).toContain('WALNUT_ENFORCE_SESSION_CRON=1')
   })

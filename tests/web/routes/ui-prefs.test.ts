@@ -68,7 +68,7 @@ describe('one-time move of the root ui-prefs.json into config/share/', () => {
     expect(res.body.prefs['open-walnut-theme']).toEqual({ v: 'dark', ts: 100 });
     // New file exists; the old one is gone (a move, not a copy — a leftover
     // would keep the pre-2026-08 root path alive as a second source of truth).
-    await expect(fs.access(UI_PREFS_FILE)).resolves.toBeUndefined();
+    await expect(fs.access(UI_PREFS_FILE).then(() => true)).resolves.toBe(true);
     await expect(fs.access(LEGACY_PREFS_FILE)).rejects.toThrow();
   });
 
@@ -82,7 +82,7 @@ describe('one-time move of the root ui-prefs.json into config/share/', () => {
     expect(res.body.prefs['open-walnut-theme']).toEqual({ v: 'new', ts: 200 });
     // The stale root copy is left on disk untouched — deleting a file we didn't
     // migrate is not this code's business.
-    await expect(fs.access(LEGACY_PREFS_FILE)).resolves.toBeUndefined();
+    await expect(fs.access(LEGACY_PREFS_FILE).then(() => true)).resolves.toBe(true);
   });
 
   it('moves a corrupt legacy file verbatim (migration never eats data it cannot parse)', async () => {

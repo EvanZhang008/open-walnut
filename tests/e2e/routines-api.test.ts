@@ -224,7 +224,7 @@ describe('watcher routines through the real API', () => {
     const { updateTriggerState, triggerStatePath } = await import('../../src/core/routines/trigger-state.js');
     await updateTriggerState(created.job.id, (s) => { s.acted.k = Date.now(); });
     const fs = await import('node:fs/promises');
-    await expect(fs.access(triggerStatePath(created.job.id))).resolves.toBeUndefined();
+    await expect(fs.access(triggerStatePath(created.job.id)).then(() => true)).resolves.toBe(true);
 
     const res = await fetch(apiUrl(`/api/routines/${created.job.id}`), { method: 'DELETE' });
     expect(res.status).toBe(204);
