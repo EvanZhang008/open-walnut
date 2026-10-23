@@ -2,9 +2,9 @@
  * Queue rule for pre-assigned uuid rows (spec 5.4, C49 queue half).
  *
  * A row with a `userUuid` is a question's head row: a thread anchor is keyed by
- * that uuid. It must become its own transcript line in its own turn, so the
- * native drain never batches it and a mid-turn inject never takes it. Plain rows
- * keep today's batching byte for byte.
+ * that uuid. It must become its own transcript line, so the drain never batches
+ * it with another row. It is still delivered while a turn runs: the CLI queues
+ * the line itself. Plain rows keep today's batching byte for byte.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
@@ -91,21 +91,20 @@ describe('markProcessing with uuid rows', () => {
     expect(batch.every((m) => !('userUuid' in m))).toBe(true);
   });
 
-  it('mid-turn takes nothing while any pending row carries a uuid', async () => {
+  it('delivers plain and uuid rows during a running turn without merging their identities', async () => {
     await enqueueMessage(SID, 'plain a');
     await enqueueMessage(SID, 'question one', { userUuid: U1 });
-    expect(await markProcessing(SID, null, { midTurn: true })).toEqual([]);
-    const queue = await getQueue(SID);
-    expect(queue.map((m) => m.status)).toEqual(['pending', 'pending']);
-    // The turn ends: processNext's normal drain delivers them one turn each.
-    const turns = await drainTurns();
-    expect(turns.map((t) => t.uuid)).toEqual([undefined, U1]);
+    const plain = await markProcessing(SID, null);
+    expect(plain.map((m) => m.message)).toEqual(['plain a']);
+    const question = await markProcessing(SID, null);
+    expect(question.map((m) => [m.message, m.lineUuid])).toEqual([['question one', U1]]);
+    expect((await getQueue(SID)).map((m) => m.status)).toEqual(['processing', 'processing']);
   });
 
-  it('mid-turn still injects plain rows exactly as before', async () => {
+  it('plain rows still go out as one batch', async () => {
     await enqueueMessage(SID, 'plain a');
     await enqueueMessage(SID, 'plain b');
-    const batch = await markProcessing(SID, null, { midTurn: true });
+    const batch = await markProcessing(SID, null);
     expect(batch.map((m) => m.message)).toEqual(['plain a', 'plain b']);
   });
 });

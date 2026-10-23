@@ -4,8 +4,8 @@
  * The thread titler reads `turnUserUuid(sessionId)` at `session:result` to prove a
  * result answers one question (batch-uuid.ts). A plain send injected mid-turn
  * joins the running turn, so the result covers both: the attribution must be
- * dropped (no refine from a mixed answer), never kept. A pending question row is
- * never injected mid-turn, so the running question keeps its attribution then.
+ * dropped (no refine from a mixed answer), never kept. A question row is injected
+ * the same way and drops it too: the CLI must see the user's message at once.
  *
  * What's real: SessionRunner.injectMidTurn, the disk queue, the batch-uuid map.
  * What's mocked: the transport (every FIFO write succeeds; no process).
@@ -82,13 +82,13 @@ describe('mid-turn injection and the question a turn answers', () => {
     await vi.waitFor(async () => expect(await getQueue(SID)).toEqual([]))
   })
 
-  it('a pending question row is never injected, so the running question keeps it', async () => {
+  it('injects a uuid row without attributing the mixed answer to either question', async () => {
     const { internals, writes } = runningRunner()
     noteTurnUserUuid(SID, HEAD)
     await enqueueMessage(SID, 'next question', { userUuid: NEXT })
     await internals.injectMidTurn(SID)
-    expect(writes).toEqual([])
-    expect(turnUserUuid(SID)).toBe(HEAD)
-    expect((await getQueue(SID)).map((m) => m.status)).toEqual(['pending'])
+    expect(writes).toEqual(['next question'])
+    expect(turnUserUuid(SID)).toBeUndefined()
+    await vi.waitFor(async () => expect(await getQueue(SID)).toEqual([]))
   })
 })

@@ -251,10 +251,9 @@ export async function sendMessageToSession(
  *
  * A row carrying a pre-assigned `userUuid` (a question's head row) is never
  * batched: at the head it goes alone, otherwise the run stops before it
- * (splitBatchAtUuid), so every turn carries at most one uuid row. `midTurn`
- * marks NOTHING while any pending row carries a uuid: a question must start its
- * own turn, never ride inside the answer to another one; processNext picks it
- * up when the current turn ends.
+ * (splitBatchAtUuid), so every line carries at most one uuid. A uuid row is
+ * still delivered while a turn runs: holding it in Walnut's queue hid the user's
+ * message from the CLI until the turn ended (2026-10-23, 8 minutes).
  *
  * The batch is one stdin line. Rows that already went out in a line (they carry
  * its `lineUuid`) go out again alone and together, under that uuid; fresh rows
@@ -265,9 +264,8 @@ export async function sendMessageToSession(
 export async function markProcessing(
   sessionId: string,
   stopFence?: string | null,
-  opts?: { midTurn?: boolean; tracked?: boolean },
+  opts?: { tracked?: boolean },
 ): Promise<QueuedMessage[]> {
-  let deferredForQuestion = false;
   const pending = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return [];
@@ -280,10 +278,6 @@ export async function markProcessing(
       }
     }
     const pendingRows = queue.filter((m) => m.status === 'pending');
-    if (opts?.midTurn && pendingRows.some((m) => m.userUuid)) {
-      deferredForQuestion = true;
-      return [];
-    }
     const head = pendingRows[0];
     if (!head) return [];
     const run: QueuedMessage[] = [];
@@ -303,9 +297,6 @@ export async function markProcessing(
     }
     return batch;
   }, stopFence !== undefined);
-  if (deferredForQuestion) {
-    log.session.info('mid-turn injection deferred: a question row starts its own turn', { sessionId });
-  }
   if (pending.length === 0) return [];
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });
   return pending;

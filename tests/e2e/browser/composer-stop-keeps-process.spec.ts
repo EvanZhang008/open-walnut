@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
+import { switchView } from './threads-helpers'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/composer-stop-keeps-process'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -127,6 +128,67 @@ async function startLongTurnFromPanel(panel: Locator, before: number): Promise<v
   await expect(panel.getByText(PARTIAL_TEXT, { exact: false })).toHaveCount(before + 1, { timeout: 20_000 })
   await expect(stopButton(panel)).toBeVisible()
 }
+
+test('Tree Mode sends UUID messages into the FIFO before the running turn ends', async ({ page }) => {
+  test.setTimeout(90_000)
+  const sent: Array<{ sessionId: string; message: string; userUuid?: string }> = []
+  page.on('websocket', (socket) => socket.on('framesent', (frame) => {
+    if (typeof frame.payload !== 'string') return
+    const row = JSON.parse(frame.payload)
+    if (row.method === 'session:send') sent.push(row.payload)
+  }))
+  const { sessionId, panel } = await startLongTurnFromDraft(page)
+  await switchView(panel, 'stack')
+  const pid = (await sessionRecord(page, sessionId)).pid
+  const streamPath = `${fixtureRoot.replace(/\/ps-fixture$/, '')}/daemon-streams/${sessionId}.jsonl`
+  const composer = panel.locator('.chat-input-textarea')
+  // A short send, then a long one with Unicode test data (e-acute, CJK "hello").
+  const texts = ['Answer me first', `Follow-up: caf\u00e9 \u4f60\u597d ${'Keep the same runtime. '.repeat(60)}`]
+  const queuedInCli = async (uuid: string) => {
+    const stream = await fs.readFile(streamPath, 'utf8').catch(() => '')
+    return stream.split('\n').filter(Boolean).some((line) => {
+      try {
+        const row = JSON.parse(line)
+        return row.type === 'command_lifecycle' && row.command_uuid === uuid && row.state === 'queued'
+      } catch { return false }
+    })
+  }
+  for (const text of texts) {
+    const count = sent.length
+    await composer.fill(`snapshot-clean-turn:${text}`)
+    await composer.press('Enter')
+    await expect.poll(() => sent.length).toBe(count + 1)
+    const payload = sent.at(-1)!
+    expect(payload.sessionId).toBe(sessionId)
+    // Tree Mode names every send with a uuid; that alone must not hold it back.
+    expect(payload.userUuid).toMatch(/^[0-9a-f-]{36}$/)
+    // The CLI itself reports the line queued behind the running turn.
+    await expect.poll(() => queuedInCli(payload.userUuid!), { timeout: 10_000 }).toBe(true)
+    const rec = await sessionRecord(page, sessionId)
+    expect(rec.process_status).toBe('running')
+    expect(rec.pid).toBe(pid)
+  }
+  await expect(panel.locator('.session-msg-delivered-badge')).toHaveCount(2, { timeout: 10_000 })
+  await expect(panel.locator('.session-msg-received-badge')).toHaveCount(0)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/10-tree-mid-turn-delivered.png` })
+
+  // A reload while the turn still runs does not bring a Queued badge back.
+  await page.reload()
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  await expect(stopButton(panel)).toBeVisible({ timeout: 20_000 })
+  await expect(panel.locator('.session-msg-received-badge')).toHaveCount(0)
+  expect((await sessionRecord(page, sessionId)).pid).toBe(pid)
+
+  // Stop ends the turn on the same process; the next message is answered there.
+  await stopButton(panel).click()
+  await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.process_status), { timeout: 15_000 }).toBe('idle')
+  await composer.fill('snapshot-clean-turn:after the tree stop')
+  await composer.press('Enter')
+  await expect(panel.getByText('after the tree stop', { exact: true }).last()).toBeVisible({ timeout: 30_000 })
+  expect((await sessionRecord(page, sessionId)).pid).toBe(pid)
+  await expect(panel.locator('.session-error-banner')).toHaveCount(0)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/11-tree-after-stop.png` })
+})
 
 test('Stop mid-stream keeps the process: no error banner, follow-up streams with no "Resuming session"', async ({ page }) => {
   test.setTimeout(90_000)
