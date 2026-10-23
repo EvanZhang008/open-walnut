@@ -267,8 +267,8 @@ describe('SessionReaper — rotateArchives drops archives older than 180 days', 
     await expect(fsp.access(staleArchive)).rejects.toBeTruthy();
     await expect(fsp.access(staleStream)).rejects.toBeTruthy();
     // Fresh artifacts untouched.
-    await expect(fsp.access(freshArchive)).resolves.toBeUndefined();
-    await expect(fsp.access(freshStream)).resolves.toBeUndefined();
+    await expect(fsp.access(freshArchive).then(() => true)).resolves.toBe(true);
+    await expect(fsp.access(freshStream).then(() => true)).resolves.toBe(true);
   });
 });
 

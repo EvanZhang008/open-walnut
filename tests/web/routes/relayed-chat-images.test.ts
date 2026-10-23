@@ -114,7 +114,7 @@ describe('adopting staged images into this box\'s own store', () => {
       // history hydration treat it like any locally-attached picture.
       expect(path.dirname(saved.filePath)).toBe(IMAGES_DIR)
       expect(saved.filename).toBe(path.basename(saved.filePath))
-      await expect(fs.access(saved.filePath)).resolves.toBeUndefined()
+      await expect(fs.access(saved.filePath).then(() => true)).resolves.toBe(true)
     }
     // Model-facing blocks are real base64, the shape runAgentLoop consumes.
     const first = adopted!.imageContentBlocks[0]

@@ -455,7 +455,7 @@ describe('an image turn also runs on the primary\'s engine', () => {
       // Adopted into the answering box's OWN store (IMAGES_DIR root), which is
       // what makes GET /api/images/:filename and history hydration work.
       expect(path.dirname(adopted!.savedImages[0].filePath)).toBe(IMAGES_DIR)
-      await expect(fs.access(adopted!.savedImages[0].filePath)).resolves.toBeUndefined()
+      await expect(fs.access(adopted!.savedImages[0].filePath).then(() => true)).resolves.toBe(true)
 
       // The primary's own ACCEPT handler refuses a path outside the staging dir,
       // and refuses it BEFORE starting a turn — the gate is not caller-trusted,
