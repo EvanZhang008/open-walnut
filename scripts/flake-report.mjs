@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The flake hunt's reporter (.github/workflows/flake-hunt.yml). The hunt reruns a
  * blocking tier on a commit CI just passed, so any failure there is a flake by

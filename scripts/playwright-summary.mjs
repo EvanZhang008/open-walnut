@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * A Playwright JSON report (`--reporter=json`) as a short markdown summary for a
  * CI step summary: the totals, then each failing and each flaky test by file and
