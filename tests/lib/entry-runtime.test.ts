@@ -1,14 +1,16 @@
 /**
  * The CLI entries refuse Node before anything else loads (src/lib/entry-runtime.ts):
  * `node dist/cli.js --version` used to answer, so an install check on Node
- * passed and Walnut failed later, at its first database open.
+ * passed and Walnut failed later, at its first database open. They also drop
+ * BUN_BE_BUN, which a walnut file running a dist build as bun carries in its env
+ * and every child it starts would inherit.
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { runtimeRefusal } from '../../src/lib/entry-runtime.js'
+import { dropBunBeBun, runtimeRefusal } from '../../src/lib/entry-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const NODE = spawnSync('node', ['--version'], { encoding: 'utf8' }).status === 0 ? 'node' : null
@@ -59,5 +61,21 @@ describe('the CLI entries run only on bun', () => {
     expect(r.status).toBe(0)
     expect(r.stdout.trim()).toBe('went on')
     expect(r.stderr).toBe('')
+  })
+
+  it('drops BUN_BE_BUN, so no child of a walnut file running the build as bun is told to be bun', () => {
+    const env: NodeJS.ProcessEnv = { BUN_BE_BUN: '1', OPEN_WALNUT_HOME: '/home/alice/.open-walnut' }
+    expect(dropBunBeBun(env)).toBe(true)
+    expect(env).toEqual({ OPEN_WALNUT_HOME: '/home/alice/.open-walnut' })
+    expect(dropBunBeBun(env)).toBe(false)
+    // A real process: started with BUN_BE_BUN=1 (as a box's smoke boot starts the
+    // build), the entry module runs, and a child it starts afterwards has none.
+    const probe = `await import(${JSON.stringify(builtModule())});` +
+      "const { spawnSync } = await import('node:child_process');" +
+      "const child = spawnSync('/usr/bin/env', [], { encoding: 'utf8' }).stdout;" +
+      "console.log(JSON.stringify({ own: process.env.BUN_BE_BUN ?? null, child: /^BUN_BE_BUN=/m.test(child) }))"
+    const r = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8', env: { ...process.env, BUN_BE_BUN: '1' } })
+    expect(r.status, r.stderr).toBe(0)
+    expect(JSON.parse(r.stdout.trim())).toEqual({ own: null, child: false })
   })
 })
