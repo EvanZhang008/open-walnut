@@ -48,6 +48,7 @@ import { spawn } from 'node:child_process';
 import { createSubsystemLogger } from '../logging/index.js';
 import { bunCommand } from '../lib/runtime.js';
 import { safeKillProcessGroup } from './process-group-kill.js';
+import { npmrcNetworkEnv } from './plugin-npm-env.js';
 
 const log = createSubsystemLogger('plugin-sources');
 
@@ -337,8 +338,10 @@ function pickField(data: Record<string, unknown>, dotted: string): string | unde
 }
 
 /**
- * The environment of one bun command run in a directory this module owns (a
- * staging or metadata dir, removed afterwards).
+ * The environment of one bun command: the npm network settings bun does not
+ * read from ~/.npmrc (proxies, strict-ssl: plugin-npm-env.ts), and, run in a
+ * directory this module owns (a staging or metadata dir, removed afterwards),
+ * its own package cache.
  *
  * bun keeps one package cache for every project, keyed by name@version (its
  * manifests too). npm checks a cached tarball against the integrity the registry
@@ -348,15 +351,15 @@ function pickField(data: Record<string, unknown>, dotted: string): string | unde
  * cache inside the owned dir starts empty, so bun fetches what the registry
  * serves now, and it goes when the dir goes.
  */
-function ownedDirEnv(dir: string): Record<string, string> {
-  return { BUN_INSTALL_CACHE_DIR: path.join(dir, '.bun-cache') };
+function bunEnv(ownedDir?: string): Record<string, string> {
+  return { ...npmrcNetworkEnv(), ...(ownedDir ? { BUN_INSTALL_CACHE_DIR: path.join(ownedDir, '.bun-cache') } : {}) };
 }
 
 /**
  * Ask the registry what a spec means right now. Nothing else in this module
  * accepts a tag — resolution happens exactly once per explicit user action.
  * `cwd`, when given, is a directory the caller owns and removes: bun's cache for
- * this lookup lives there (ownedDirEnv).
+ * this lookup lives there (bunEnv).
  */
 export async function resolveNpmSpec(raw: string, opts: { cwd?: string } = {}): Promise<ResolvedNpmPackage> {
   const parsed = parseNpmSpec(raw);
@@ -365,7 +368,7 @@ export async function resolveNpmSpec(raw: string, opts: { cwd?: string } = {}): 
   const cwd = opts.cwd ?? process.cwd();
   const { stdout } = await activeRunner(
     ['info', '--json', '--', parsed.spec, 'name', 'version', 'dist.integrity', 'dist.tarball'],
-    { cwd, timeoutMs: VIEW_TIMEOUT, ...(opts.cwd ? { env: ownedDirEnv(opts.cwd) } : {}) },
+    { cwd, timeoutMs: VIEW_TIMEOUT, env: bunEnv(opts.cwd) },
   );
 
   let payload: unknown;
@@ -636,7 +639,7 @@ async function stagePackage(
       '--no-summary',
       '--',
       resolved.resolved,       // exact name@version, never the tag
-    ], { cwd: stagingDir, timeoutMs: INSTALL_TIMEOUT, env: ownedDirEnv(stagingDir) });
+    ], { cwd: stagingDir, timeoutMs: INSTALL_TIMEOUT, env: bunEnv(stagingDir) });
 
     const modulesDir = path.join(stagingDir, 'node_modules');
     await assertRealDirectory(modulesDir, 'node_modules');

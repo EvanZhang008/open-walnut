@@ -6,12 +6,15 @@
  * the bun.lock receipt it writes, the hoisted tree it leaves, and that the
  * plugin still loads its dependency once Walnut moved it beside the plugin.
  *
+ * It also proves the npmrc proxy bun itself ignores reaches it (plugin-npm-env.ts).
+ *
  * Needs openssl for the registry's certificate; skipped without it.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -51,7 +54,8 @@ let tmp = ''
 let server: Served | null = null
 const tarballs: Record<string, { bytes: Buffer; integrity: string }> = {}
 const saved: Record<string, string | undefined> = {}
-const ENV = ['NPM_CONFIG_REGISTRY', 'NODE_EXTRA_CA_CERTS', 'BUN_INSTALL_CACHE_DIR', 'BUN_CONFIG_REGISTRY']
+const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy', 'NPM_CONFIG_USERCONFIG', 'npm_config_userconfig']
+const ENV = ['NPM_CONFIG_REGISTRY', 'NODE_EXTRA_CA_CERTS', 'BUN_INSTALL_CACHE_DIR', 'BUN_CONFIG_REGISTRY', ...PROXY_ENV]
 
 beforeAll(() => {
   if (!HAS_OPENSSL) return
@@ -95,6 +99,9 @@ beforeAll(() => {
   delete process.env.BUN_CONFIG_REGISTRY
   process.env.NODE_EXTRA_CA_CERTS = cert
   process.env.BUN_INSTALL_CACHE_DIR = path.join(tmp, 'cache')
+  // This machine's own proxy settings must not decide where these requests go.
+  for (const k of PROXY_ENV) delete process.env[k]
+  process.env.NPM_CONFIG_USERCONFIG = path.join(tmp, 'no-npmrc')
   setNpmRunner(null)
 }, 60_000)
 
@@ -145,6 +152,42 @@ describe.skipIf(!HAS_OPENSSL)('installing an npm plugin with real bun', () => {
       expect(fs.readdirSync(stagingRoot).filter((n) => n.startsWith('.'))).toEqual([])
     } finally {
       tarballs[name] = before
+    }
+  }, 120_000)
+
+  it('goes through the proxy ~/.npmrc names, which bun does not read itself', async () => {
+    // A CONNECT proxy that records every tunnel it opens.
+    const tunnels: string[] = []
+    const proxy = net.createServer((sock) => {
+      sock.once('data', (head) => {
+        const line = head.toString().split('\r\n')[0] ?? ''
+        tunnels.push(line)
+        const m = /^CONNECT ([^:\s]+):(\d+) /.exec(line)
+        if (!m) { sock.end('HTTP/1.1 400 Bad Request\r\n\r\n'); return }
+        const up = net.connect(Number(m[2]), '127.0.0.1', () => {
+          sock.write('HTTP/1.1 200 Connection established\r\n\r\n')
+          up.pipe(sock)
+          sock.pipe(up)
+        })
+        up.on('error', () => sock.destroy())
+        sock.on('error', () => up.destroy())
+      })
+    })
+    await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve))
+    const npmrc = path.join(tmp, 'proxy-npmrc')
+    fs.writeFileSync(npmrc, `https-proxy=http://127.0.0.1:${(proxy.address() as net.AddressInfo).port}\n`)
+    process.env.NPM_CONFIG_USERCONFIG = npmrc
+    try {
+      const stagingRoot = path.join(tmp, 'plugin-stores-proxy')
+      const finalDir = path.join(stagingRoot, 'npm-walnut-livecheck-plugin')
+      await installNpmPlugin({ spec: 'walnut-livecheck-plugin', finalDir, stagingRoot })
+      expect(tunnels.length).toBeGreaterThan(0)
+      expect(tunnels.every((t) => t.startsWith(`CONNECT localhost:${server!.port} `))).toBe(true)
+      const mod = await import(pathToFileURL(path.join(finalDir, 'server.mjs')).href) as { answer: string }
+      expect(mod.answer).toBe('dep-42')
+    } finally {
+      process.env.NPM_CONFIG_USERCONFIG = path.join(tmp, 'no-npmrc')
+      await new Promise((resolve) => proxy.close(resolve))
     }
   }, 120_000)
 })
