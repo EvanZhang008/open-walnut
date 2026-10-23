@@ -12,7 +12,7 @@ let env: Record<string, string>;
 
 beforeAll(() => {
   // Build the project before running integration tests
-  execSync('npm run build', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+  execSync('bun run build', { cwd: PROJECT_ROOT, stdio: 'pipe' });
 });
 
 beforeEach(async () => {
@@ -42,7 +42,7 @@ afterEach(async () => {
 });
 
 function run(args: string): unknown {
-  const stdout = execSync(`node ${CLI} ${args}`, {
+  const stdout = execSync(`${JSON.stringify(process.execPath)} ${CLI} ${args}`, {
     cwd: PROJECT_ROOT,
     env,
     encoding: 'utf-8',

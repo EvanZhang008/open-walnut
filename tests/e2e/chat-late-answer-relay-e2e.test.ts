@@ -57,7 +57,6 @@ import { LANE_STALL_NOTICE } from '../../src/web/routes/lane-turn-late.js'
 
 const LANE_SID = 'late-relay-lane-0000-1111'
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
-const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
 
 let base = ''
 let primaryConn: { disconnect: () => void } | null = null
@@ -108,7 +107,7 @@ process.on('SIGINT', close)
 // Our handler owns the exit, so startServer() must not re-raise the signal first.
 armGracefulSignalExit()
 `)
-  const proc = spawn(TSX, [script], {
+  const proc = spawn(process.execPath, [script], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,

@@ -255,7 +255,7 @@ describe('compaction force-push → bundle fallback (the weekly production scena
       `console.log('RESULT:' + JSON.stringify(result));`,
     ].join('\n'));
     const { stdout } = await execFileAsync(
-      path.join(repoRoot, 'node_modules', '.bin', 'tsx'), [runner, repo],
+      process.execPath, [runner, repo],
       { encoding: 'utf-8', timeout: 100_000, env: { ...process.env, OPEN_WALNUT_HOME: path.join(tmpRoot, 'worker-home') } },
     );
     const line = stdout.split('\n').find((l) => l.startsWith('RESULT:'));

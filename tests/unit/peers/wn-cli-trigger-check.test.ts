@@ -18,7 +18,6 @@ import {
 } from '../../../src/providers/trigger-check-core.js'
 
 const REPO = path.resolve(import.meta.dirname, '../../..')
-const TSX = path.join(REPO, 'node_modules/.bin/tsx')
 const RUNNER = "import('./src/providers/wn-cli.ts').then((m) => m.runWalnutCli(process.argv.slice(1))).then((c) => process.exit(c))"
 
 let dir = ''
@@ -58,7 +57,7 @@ afterAll(async () => {
 
 function run(args: string[], stdin: string, env: Record<string, string> = {}) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
-    const child = spawn(TSX, ['-e', RUNNER, 'trigger-check', ...args], {
+    const child = spawn(process.execPath, ['-e', RUNNER, 'trigger-check', ...args], {
       cwd: REPO,
       env: { ...process.env, WALNUT_AGENT_SOCKET: socketPath, WALNUT_SESSION_ID: '', ...env },
       stdio: ['pipe', 'pipe', 'pipe'],

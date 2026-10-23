@@ -39,7 +39,6 @@ import { agentReply, getLetter, humanInboxPaths, sendLetter } from '../../src/co
 import type { LetterRecord, LetterSender } from '../../src/core/human-inbox/types.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
-const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
 const SENDER: LetterSender = { sessionId: 'sess-offline-e2e', host: 'workstation' }
 
 let base = ''
@@ -88,7 +87,7 @@ process.on('SIGTERM', close)
 process.on('SIGINT', close)
 armGracefulSignalExit()
 `)
-  const proc = spawn(TSX, [script], {
+  const proc = spawn(process.execPath, [script], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,

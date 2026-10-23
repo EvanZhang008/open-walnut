@@ -27,7 +27,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
 
 // ── The cloud box: a real server process in cloud mode ──────────────────────
 
@@ -72,7 +71,7 @@ async function startCloudBox(pairingCode: string): Promise<CloudBox> {
   const scriptPath = path.join(base, 'boot-box.mts')
   await fsp.writeFile(scriptPath, BOX_SCRIPT)
 
-  const proc = spawn(TSX, [scriptPath], {
+  const proc = spawn(process.execPath, [scriptPath], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
@@ -146,9 +145,6 @@ async function loadMacModules() {
 
 const ORIGINAL_HOME = process.env.OPEN_WALNUT_HOME
 
-beforeAll(() => {
-  if (!fs.existsSync(TSX)) throw new Error(`tsx is missing at ${TSX} — run npm install`)
-})
 
 let box: CloudBox | null = null
 let restoreDriver: (() => void) | null = null

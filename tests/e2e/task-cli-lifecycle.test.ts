@@ -25,9 +25,8 @@ const streamFilePath = (sid: string) => path.join(`${isolation.dir}-streams`, `$
 const daemonBin = path.join(process.env.WALNUT_VERIFY_DAEMON_DIR || path.resolve('dist/daemon-binaries'), 'daemon-darwin-arm64')
 
 async function cli(name: string, args: Record<string, unknown> = {}) {
-  const prefix = cliPath.endsWith('.ts') ? ['--import', 'tsx'] : []
   return new Promise<{ code: number; body: any; stderr: string }>((resolve, reject) => {
-    execFile(process.execPath, [...prefix, cliPath, 'tools', 'call', name, JSON.stringify(args)], {
+    execFile(process.execPath, [cliPath, 'tools', 'call', name, JSON.stringify(args)], {
       env: { ...process.env, OPEN_WALNUT_API_URL: base, WALNUT_SESSION_ID: '', WALNUT_AGENT_SOCKET: '', WALNUT_CLI_DIRECT: '' },
       timeout: 45_000, maxBuffer: 4 * 1024 * 1024,
     }, (error, stdout, stderr) => {

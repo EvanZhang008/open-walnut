@@ -3,11 +3,12 @@
  * server (2026-10-04).
  *
  * getDaemonSource() inlines core functions by fn.toString(), so the text it
- * ships is whatever the loader made of them. tsx (it runs the e2e fixture
- * servers) and any esbuild build with keepNames rewrite named inner functions
+ * ships is whatever the loader made of them. tsx (it ran the e2e fixture
+ * servers then) and any esbuild build with keepNames rewrite named inner functions
  * into __name(fn, "f"), a helper only their own module defines: every source
  * deploy from such a server refused with "__name is not defined", and a host
- * with no daemon binary got no daemon at all. Each case loads daemon-source.ts
+ * with no daemon binary got no daemon at all. bun now runs the server from
+ * source and every fixture server. Each case loads daemon-source.ts
  * one real way, writes the source, starts it as local-daemon.ts runs
  * daemon-fallback.cjs (process.execPath <file> --start) and sends the hello a
  * DaemonConnection sends first.
@@ -27,7 +28,6 @@ import * as esbuild from 'esbuild'
 const run = promisify(execFile)
 const REPO = path.resolve(__dirname, '../..')
 const DAEMON_SOURCE_TS = path.join(REPO, 'src/providers/daemon-source.ts')
-const TSX = path.join(REPO, 'node_modules/.bin/tsx')
 // The target dist is built for, read from the build config so the case follows it.
 const TARGET = /target:\s*'([^']+)'/.exec(fs.readFileSync(path.join(REPO, 'tsup.config.ts'), 'utf8'))![1]
 
@@ -70,9 +70,9 @@ async function bundled(dir: string, keepNames: boolean): Promise<string> {
   return out
 }
 
-async function underTsx(dir: string): Promise<string> {
+async function underBun(dir: string): Promise<string> {
   const out = path.join(dir, 'daemon-fallback.cjs')
-  await run(TSX, [writeGenerator(dir), out], { cwd: REPO, timeout: 120_000 })
+  await run(process.execPath, [writeGenerator(dir), out], { cwd: REPO, timeout: 120_000 })
   return out
 }
 
@@ -123,7 +123,7 @@ async function startAndHello(script: string): Promise<Record<string, unknown>> {
 const LOADERS: Array<{ name: string; keepsNames: boolean; make: (dir: string) => Promise<string> }> = [
   { name: 'an esbuild bundle as tsup builds dist (keepNames off)', keepsNames: false, make: (d) => bundled(d, false) },
   { name: 'an esbuild bundle with keepNames', keepsNames: true, make: (d) => bundled(d, true) },
-  { name: 'tsx, which runs the e2e fixture servers', keepsNames: true, make: underTsx },
+  { name: 'bun, which runs the server from source and every fixture server', keepsNames: false, make: underBun },
 ]
 
 describe.each(LOADERS)('source-fallback daemon loaded by $name', ({ keepsNames, make }) => {

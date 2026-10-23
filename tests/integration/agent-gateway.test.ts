@@ -49,7 +49,7 @@ async function writeDaemonScript(): Promise<string> {
 }
 
 async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<DaemonProc> {
-  const proc = spawn('node', [scriptPath, '--start'], {
+  const proc = spawn(process.execPath, [scriptPath, '--start'], {
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,

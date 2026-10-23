@@ -18,10 +18,12 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { bunRuntime } from './bun-runtime.js'
 import { endTunnelSessionGroups } from './cloud-box-daemon-build.js'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
+/** The companion, its CLIs and its operator commands run on bun (bun-runtime.ts). */
+const BUN = bunRuntime()
 const MOCK_CLI = path.join(REPO_ROOT, 'tests/providers/mock-claude.mjs')
 
 export interface ReplicaTokens {
@@ -132,7 +134,7 @@ export async function startCloudBoxReplica(base: string, release?: DaemonRelease
   await fsp.writeFile(path.join(box.projects, 'alpha', 'README.md'), '# alpha on the box\n')
   // The box's `claude`: the mock CLI, answering --version like a current release.
   await fsp.writeFile(path.join(box.home, '.toolbox', 'bin', 'claude'),
-    `#!/bin/sh\n[ "$1" = "--version" ] && { echo "9.9.9 (Claude Code)"; exit 0; }\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(MOCK_CLI)} "$@"\n`, { mode: 0o755 })
+    `#!/bin/sh\n[ "$1" = "--version" ] && { echo "9.9.9 (Claude Code)"; exit 0; }\nexec ${JSON.stringify(BUN)} ${JSON.stringify(MOCK_CLI)} "$@"\n`, { mode: 0o755 })
   await fsp.writeFile(path.join(box.data, 'config.yaml'),
     `version: 1\nuser:\n  name: Box\ncloud:\n  exec:\n    enabled: true\n    cwd_roots:\n      - ${box.projects}\n`)
   const now = new Date().toISOString()
@@ -215,7 +217,7 @@ armGracefulSignalExit()
   })
 
   async function boot(rel: DaemonRelease | undefined): Promise<{ proc: ChildProcess; port: number }> {
-    const proc = spawn(TSX, [script], { cwd: REPO_ROOT, env: boxEnv(rel), stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = spawn(BUN, [script], { cwd: REPO_ROOT, env: boxEnv(rel), stdio: ['ignore', 'pipe', 'pipe'] })
     proc.stderr!.on('data', (b: Buffer) => { log = (log + b.toString()).slice(-400_000) })
     const port = await new Promise<number>((resolve, reject) => {
       let out = ''
@@ -289,7 +291,7 @@ armGracefulSignalExit()
     },
     owner: () => (JSON.parse(fs.readFileSync(path.join(box.data, 'auth.json'), 'utf-8')) as { owner?: { id: string; via: string } | null }).owner,
     operator: (cmd, name) => new Promise((resolve) => {
-      const p = spawn(TSX, [operatorScript, cmd, name], { cwd: REPO_ROOT, env: boxEnv(release), stdio: ['ignore', 'pipe', 'pipe'] })
+      const p = spawn(BUN, [operatorScript, cmd, name], { cwd: REPO_ROOT, env: boxEnv(release), stdio: ['ignore', 'pipe', 'pipe'] })
       let out = ''
       p.stdout!.on('data', (b: Buffer) => { out += b.toString() })
       p.stderr!.on('data', (b: Buffer) => { out += b.toString() })

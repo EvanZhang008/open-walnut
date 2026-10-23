@@ -33,7 +33,7 @@ function writeDaemonScript(): string {
 }
 
 async function spawnDaemon(extraEnv: Record<string, string> = {}): Promise<DaemonProc> {
-  const proc = spawn('node', [scriptPath, '--start'], {
+  const proc = spawn(process.execPath, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

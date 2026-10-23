@@ -32,7 +32,7 @@ function writeDaemonScript(): string {
 async function spawnDaemon(scriptPath: string, extraEnv: Record<string, string>): Promise<ChildProcess> {
   const daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-watchdog-dir-'))
   tmpDirs.push(daemonDir)
-  const proc = spawn('node', [scriptPath, '--start'], {
+  const proc = spawn(process.execPath, [scriptPath, '--start'], {
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,

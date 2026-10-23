@@ -3,7 +3,7 @@
  * ends on its own, and a host that is a process of its own (a one-shot CLI, a
  * server shutting down) neither hangs on its worker nor leaves it behind.
  *
- * Every case here starts real node processes through tsx, which is why this
+ * Every case here starts real bun processes, which is why this
  * file is in the slow tier; the in-process stop protocol is in
  * hybrid-search-embed-worker-stop.test.ts.
  */
@@ -24,11 +24,11 @@ function alive(pid: number): boolean {
 }
 
 describe('the real embed worker ends on its own', () => {
-  // The real entry (embed-worker.ts) through tsx; no job is sent, so nothing
-  // loads a model.
+  // The real entry (embed-worker.ts), which bun runs as it is; no job is sent,
+  // so nothing loads a model.
   function startRealWorker() {
     return fork(REAL_WORKER, [], {
-      execArgv: ['--import', 'tsx'],
+      execArgv: [],
       cwd: REPO,
       serialization: 'advanced',
       env: { ...process.env, [EMBED_WORKER_CONFIG_ENV]: JSON.stringify({ modelId: 'none', dims: 4 }) },
@@ -59,7 +59,7 @@ describe('the real embed worker ends on its own', () => {
 });
 
 describe('a one-shot host and its worker', () => {
-  // A separate node process running the real embedder through tsx: whether a
+  // A separate bun process running the real embedder: whether a
   // host stays alive, or exits, is exactly what a test inside vitest cannot see.
   let hostDir = '';
   afterEach(() => { if (hostDir) fs.rmSync(hostDir, { recursive: true, force: true }); hostDir = ''; });
@@ -72,7 +72,7 @@ describe('a one-shot host and its worker', () => {
       `const dir = ${JSON.stringify(hostDir)};`,
       ...body,
     ].join('\n'));
-    const child = spawn(process.execPath, ['--import', 'tsx', script], { cwd: REPO, stdio: ['ignore', 'pipe', 'inherit'] });
+    const child = spawn(process.execPath, [script], { cwd: REPO, stdio: ['ignore', 'pipe', 'inherit'] });
     let out = '';
     child.stdout.on('data', (d) => { out += String(d); });
     const t0 = Date.now();

@@ -140,7 +140,7 @@ beforeAll(async () => {
   scriptPath = path.join(dir, 'daemon.cjs')
   fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 
-  daemonProc = spawn('node', [scriptPath, '--start'], {
+  daemonProc = spawn(process.execPath, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: DAEMON_DIR, WALNUT_STREAMS_DIR: STREAMS_DIR },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
@@ -672,7 +672,7 @@ describe('C1 snapshot wiring — daemon restart (SIGKILL) rebuilds foldState on 
   const spawned: ChildProcess[] = []
 
   function spawnDaemon(daemonDir: string, streamsDir: string): Promise<{ proc: ChildProcess; port: number }> {
-    const proc = spawn('node', [scriptPath, '--start'], {
+    const proc = spawn(process.execPath, [scriptPath, '--start'], {
       env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_STREAMS_DIR: streamsDir },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,

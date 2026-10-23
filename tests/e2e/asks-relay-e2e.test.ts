@@ -69,7 +69,7 @@ function createApp() {
 async function spawnDaemon(): Promise<void> {
   const script = path.join(tmpRoot, 'daemon.cjs')
   fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  const proc = spawn('node', [script, '--start'], {
+  const proc = spawn(process.execPath, [script, '--start'], {
     env: {
       ...process.env,
       // Every directory the daemon owns is ours: it must never see the real

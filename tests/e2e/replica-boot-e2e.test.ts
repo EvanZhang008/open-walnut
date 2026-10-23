@@ -18,13 +18,13 @@
  * 401, a token from the device copy 200; every file it made is 0600 and every
  * dir 0700, and a file left 0644 is repaired; logs older than three days are
  * pruned; the boot policy line, with RSS; the idle CPU and RSS of the server
- * process itself (the pid that listens, tsx's node child, never tsx or esbuild).
+ * process itself (the pid that listens: the bun process this test spawned).
  *
  * Never touching /tmp/open-walnut is checked over each replica's WHOLE life
  * (read after its last test and its stop) by two means,
  * since the production Walnut writes there all the time and a watcher on the
- * dir cannot tell whose write it saw: every node process of the child loads a
- * preload (NODE_OPTIONS) that records any fs call, socket connect or spawn
+ * dir cannot tell whose write it saw: every bun process of the child loads a
+ * preload (BUN_OPTIONS --preload) that records any fs call, socket connect or spawn
  * argument naming /tmp/open-walnut or /tmp/open-walnut-streams (short opens and
  * closes included); and lsof polls the child's long-lived pids the whole time,
  * where a missing or failing lsof fails the test instead of passing it.
@@ -43,7 +43,6 @@ import os from 'node:os'
 import path from 'node:path'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
-const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
 const LEADER_ID = '0f1e2d3c4b5a69788796a5b4c3d2e1f0'
 const PHONE_TOKEN = crypto.randomBytes(16).toString('hex')
 const sha256 = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
@@ -104,7 +103,7 @@ function openPaths(pid: number): string[] {
 /** What lsof saw over a boot: how often it ran, what failed, what it found under the shared dirs. */
 interface LsofWatch { runs: number; errors: string[]; held: string[]; stop: () => Promise<void> }
 
-/** Polls lsof on the child and its direct children (tsx runs the server in one) until stopped. */
+/** Polls lsof on the child and its direct children (its local daemon among them) until stopped. */
 function watchLsof(rootPid: number): LsofWatch {
   const w: LsofWatch = { runs: 0, errors: [], held: [], stop: async () => {} }
   let on = true
@@ -130,16 +129,22 @@ function directChildren(pid: number): number[] {
 }
 
 /**
- * Loaded by every node process of the child (NODE_OPTIONS --import): records
+ * Loaded by every bun process of the child (BUN_OPTIONS --preload): records
  * each fs call, socket connect or spawn that names a shared dir, into
  * REPLICA_FS_TRACE, and its own pid into REPLICA_FS_READY (proof it ran).
+ *
+ * CommonJS on purpose: on bun an ES module import of a builtin (`import { x }
+ * from 'node:fs'`, `import * as fs`) is bound when bun first builds that module's
+ * ES namespace, and a patch made after that is never seen by it. A preload that
+ * patches through require() runs before any ES import builds the namespace, so
+ * every import of the server, named ones included, gets the wrapped functions.
  */
 const FS_TRACE_PRELOAD = `
-import fs from 'node:fs'
-import net from 'node:net'
-import cp from 'node:child_process'
-import path from 'node:path'
-import { syncBuiltinESMExports } from 'node:module'
+const fs = require('node:fs')
+const fsp = require('node:fs/promises')
+const net = require('node:net')
+const cp = require('node:child_process')
+const path = require('node:path')
 const TRACE = process.env.REPLICA_FS_TRACE
 const append = fs.appendFileSync.bind(fs)
 append(process.env.REPLICA_FS_READY, process.pid + '\\n')
@@ -177,6 +182,7 @@ wrap(fs, ONE, 'fs.')
 wrap(fs, TWO, 'fs.', true)
 wrap(fs.promises, ONE, 'fsp.')
 wrap(fs.promises, TWO, 'fsp.', true)
+if (fsp !== fs.promises) { wrap(fsp, ONE, 'fsp.'); wrap(fsp, TWO, 'fsp.', true) }
 const connect = net.Socket.prototype.connect
 net.Socket.prototype.connect = function (...a) {
   // net.connect hands the socket its args already normalized: [options, cb].
@@ -193,10 +199,9 @@ for (const n of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'exec
     return orig.apply(this, a)
   }, orig)
 }
-syncBuiltinESMExports()
 `
 
-/** Descendants of `pid` (tsx runs the server in a node child). */
+/** Descendants of `pid` (the server's own children). */
 function childPids(pid: number): number[] {
   let direct: number[] = []
   try { direct = execFileSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number) } catch { return [] }
@@ -250,7 +255,7 @@ interface Boot {
   child: ChildProcess; run: string; data: string; hostd: string; port: number
   stderr: string; doorPort: number; firstAnswerMs: number
   lsof: LsofWatch; trace: string; ready: string
-  /** The node process that runs the server (tsx's child, the one that listens), from the boot script. */
+  /** The process that runs the server (the child itself, the one that listens), from the boot script. */
   serverPid: number
   /** The boot script's path: the server's command line names it. */
   script: string
@@ -273,7 +278,7 @@ async function bootReplica(tag: string, d: { home: string; data: string; run: st
   const at = await freePort()
   const script = path.join(base, `boot-${tag}.mts`)
   await fsp.writeFile(script, BOOT(d.data, d.run, path.join(REPO_ROOT, 'src')))
-  const preload = path.join(base, 'fs-trace.mjs')
+  const preload = path.join(base, 'fs-trace.cjs')
   await fsp.writeFile(preload, FS_TRACE_PRELOAD)
   const trace = path.join(base, `fs-trace-${tag}.txt`)
   const ready = path.join(base, `fs-ready-${tag}.txt`)
@@ -288,10 +293,10 @@ async function bootReplica(tag: string, d: { home: string; data: string; run: st
     // The replica's own run dir and role (the WP2 spec adds these).
     WALNUT_DAEMON_DIR: d.run, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host',
     NODE_ENV: 'production',
-    NODE_OPTIONS: `--import ${preload}`, REPLICA_FS_TRACE: trace, REPLICA_FS_READY: ready,
+    BUN_OPTIONS: `--preload ${preload}`, REPLICA_FS_TRACE: trace, REPLICA_FS_READY: ready,
   }
   const spawnedAt = Date.now()
-  const proc = spawn(TSX, [script], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(process.execPath, [script], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   const b: Boot = { child: proc, run: d.run, data: d.data, hostd: d.hostd, port: at, stderr: '', doorPort: 0, firstAnswerMs: 0, lsof: watchLsof(proc.pid!), trace, ready, serverPid: 0, script }
   proc.stderr!.on('data', (x: Buffer) => { b.stderr = (b.stderr + x.toString()).slice(-400_000) })
   if (process.env.DEBUG_LIVE) proc.stderr!.on('data', (x: Buffer) => process.stderr.write(x))
@@ -330,9 +335,8 @@ function killTree(pid: number): void {
 
 /**
  * Stops a boot by the pid this test spawned (SIGTERM, then SIGKILL on it and
- * on every descendant: a SIGKILL to tsx never reaches the server it runs), and
- * its lsof poller. A server left behind by a tsx that is gone is stopped by its
- * pid once its command line still names this boot's script.
+ * on every descendant), and its lsof poller. A server still running after that
+ * is stopped by its pid once its command line still names this boot's script.
  */
 async function stopBoot(b: Boot | null): Promise<void> {
   if (!b) return
@@ -355,7 +359,7 @@ async function stopBoot(b: Boot | null): Promise<void> {
 async function expectNoSharedDirTouch(b: Boot): Promise<void> {
   await b.lsof.stop()
   const readyPids = fs.readFileSync(b.ready, 'utf8').split('\n').filter(Boolean).map(Number)
-  // The tsx launcher loads the preload too: the server's own pid must be there.
+  // Every bun process of the boot loads the preload: the server's own pid must be there.
   expect(b.serverPid).toBeGreaterThan(0)
   expect(readyPids, 'the fs trace preload loaded in the server process').toContain(b.serverPid)
   const traced = fs.existsSync(b.trace) ? fs.readFileSync(b.trace, 'utf8').split('\n').filter(Boolean) : []
@@ -378,7 +382,7 @@ beforeAll(async () => {
   const seedRun = path.join(base, 'seed-run')
   await fsp.mkdir(seedRun, { recursive: true, mode: 0o700 })
   await fsp.writeFile(path.join(base, 'seed.mts'), SEED(path.join(REPO_ROOT, 'src')))
-  const seeded = execFileSync(TSX, [path.join(base, 'seed.mts')], {
+  const seeded = execFileSync(process.execPath, [path.join(base, 'seed.mts')], {
     cwd: REPO_ROOT, encoding: 'utf8', timeout: 180_000,
     env: { PATH: process.env.PATH, HOME: dirs.home, TMPDIR: os.tmpdir(), NODE_ENV: 'production', OPEN_WALNUT_HOME: dirs.data, WALNUT_DAEMON_DIR: seedRun },
   })
@@ -497,13 +501,13 @@ describe('what it does not start', () => {
   })
 
   it('idles under 1% CPU and 400 MB RSS once booted, with copies of 6,500 tasks and 5,000 sessions', async () => {
-    // The server itself: the pid that listens on the replica's port, tsx's own
-    // node child (never tsx, nor the esbuild helper the server process runs).
+    // The server itself: the pid that listens on the replica's port, the bun
+    // process this test spawned (never a helper the server process runs).
     const pid = main!.serverPid
     const listeners = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 15_000 }).split('\n').filter(Boolean).map(Number)
     expect(listeners).toEqual([pid])
-    expect(directChildren(child!.pid!)).toContain(pid)
-    expect(path.basename(execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8' }).trim())).toBe('node')
+    expect(pid).toBe(child!.pid)
+    expect(path.basename(execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8' }).trim())).toBe('bun')
     expect(commandOf(pid)).not.toMatch(/esbuild/)
     await sleep(10_000)
     const a = cpuSeconds(pid)
@@ -613,13 +617,13 @@ describe('a host replica refuses a run dir that is not its own', () => {
       WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(await freePort()), WALNUT_WALNUT_ID: LEADER_ID,
       WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_FOLLOWER_TOKEN: 'follower-token-e2e',
     }
-    const proc = spawn(TSX, [path.join(REPO_ROOT, 'src/cli.ts'), 'web', '--replica', '--dev'], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = spawn(process.execPath, [path.join(REPO_ROOT, 'src/cli.ts'), 'web', '--replica', '--dev'], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
     let err = ''
     proc.stdout!.on('data', (b: Buffer) => { out += b.toString() })
     proc.stderr!.on('data', (b: Buffer) => { err += b.toString() })
     const code = await new Promise<number | null>((resolve) => {
-      // On a hang the whole tree goes: a SIGKILL to tsx alone leaves its node child running.
+      // On a hang the whole tree goes: a SIGKILL to the CLI alone leaves its children running.
       const t = setTimeout(() => { killTree(proc.pid!); resolve(null) }, 120_000)
       proc.once('exit', (c) => { clearTimeout(t); resolve(c) })
     })

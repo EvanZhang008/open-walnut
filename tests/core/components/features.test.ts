@@ -96,14 +96,13 @@ describe('search by meaning from the embedding component', () => {
     const loaded = resolveComponent('embedding');
     if (loaded?.source !== 'installed') throw new Error('embedding is not installed');
     const { createEmbedder, cosineInt8 } = await import('../../../src/lib/hybrid-search/embedder.js');
-    const onBun = !!process.versions.bun;
     const embedder = createEmbedder({
       modelId: 'Xenova/paraphrase-MiniLM-L3-v2',
       dims: 384,
       cacheDir: path.join(os.tmpdir(), 'walnut-components-model-cache'),
       workerPath: path.join(REPO, 'src', 'lib', 'hybrid-search', 'embed-worker.ts'),
-      // The worker entry is TypeScript here: bun runs it as is, node through tsx.
-      workerLauncher: { execPath: process.execPath, execArgv: onBun ? [] : ['--import', 'tsx'] },
+      // The worker entry is TypeScript here: bun runs it as is.
+      workerLauncher: { execPath: process.execPath, execArgv: [] },
       moduleUrl: () => resolveComponent('embedding')?.source === 'installed' ? loaded.entryUrl : null,
     }, () => {});
     try {
@@ -142,11 +141,11 @@ describe('audio capture from the audio-capture component', () => {
 describe('the compiled file\'s selftest lines (src/core/components/selftest.ts)', () => {
   it('each installed component answers one real call through its feature', async () => {
     const { componentSelftest } = await import('../../../src/core/components/selftest.js');
-    // The real embed worker, run the way the embedder runs it (TypeScript here: bun as is, node through tsx).
+    // The real embed worker, run the way the embedder runs it (TypeScript here: bun runs it as is).
     const embedWorker = {
       path: path.join(REPO, 'src', 'lib', 'hybrid-search', 'embed-worker.ts'),
       execPath: process.execPath,
-      execArgv: process.versions.bun ? [] : ['--import', 'tsx'],
+      execArgv: [],
     };
     for (const name of built) {
       const said = await componentSelftest(name, { embedWorker });

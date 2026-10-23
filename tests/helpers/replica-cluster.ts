@@ -6,10 +6,10 @@
  *     to a remote host) + its own local daemon, each in its own temp dirs
  *     | direct test transport: getDirectDaemonConnection('devbox', ws://127.0.0.1:<port>)
  *     v
- *   host daemon child (the source twin under node, or the standalone twin under bun)
+ *   host daemon child (the source twin, daemon-source.ts, or the standalone twin, both on bun)
  *     | server.configure from the Mac's real host-server manager (hosts.devbox
  *     |   server_program: replica), with WALNUT_HOST_SERVER_APP_DIR standing in
- *     |   for an install: <base>/app/dist/cli.js runs this tree's src/cli.ts under tsx
+ *     |   for an install: <base>/app/dist/cli.js runs this tree's src/cli.ts on bun
  *     v
  *   the replica child (`web --replica`), supervised by that daemon; the Mac sends
  *     it its copies (tasks, sessions, boards, requests, inbox, devices, and WP5's
@@ -27,19 +27,19 @@
  * `exit` handler SIGCONT before SIGTERM. Every signal goes to a process this
  * harness can name, checked right before it is sent, never to a pid alone and
  * never to a process matched by the base path alone:
- *   a direct child (the host daemon, the Mac's tsx): its ChildProcess, still running
+ *   a direct child (the host daemon, the Mac): its ChildProcess, still running
  *   the Mac server and the Mac's own daemon: pinned when first seen (pid, start
  *     time, command line) and signalled only while all three still match
  *   the replica: its host daemon's pid file, with the start time the file names
- *     equal to the process's, and the replica's command line (`<node> <app>/dist/cli.js web --replica`)
+ *     equal to the process's, and the replica's command line (`<bun> <app>/dist/cli.js web --replica`)
  *   a mock CLI: its command line runs this cluster's own copy of the mock
- *     (`<node> <base>/bin/mock-claude.cjs`)
+ *     (`<bun> <base>/bin/mock-claude.cjs`)
  * stop() fails when one of those is still running.
  *
- * App: `source` (default) runs this tree's src/cli.ts under tsx, the Mac in dev
+ * App: `source` (default) runs this tree's src/cli.ts on bun, the Mac in dev
  * mode (the browser fixture serves the SPA from Vite). `built` runs a real build
- * of this tree (ROOT/dist, its web/static included: `npm run build`, then the
- * web build) on both sides: the replica `node <app>/dist/cli.js web --replica`
+ * of this tree (ROOT/dist, its web/static included: `bun run build`, then the
+ * web build) on both sides: the replica `bun <app>/dist/cli.js web --replica`
  * (dev:false, its own static), the Mac dev:false over the same static, so the
  * console's page and assets come from the replica itself (S9).
  *
@@ -62,27 +62,19 @@ import path from 'node:path'
 import { buildSync } from 'esbuild'
 import Database from '../../src/lib/sqlite.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { bunRuntime } from './bun-runtime.js'
 
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
-const TSX = path.join(ROOT, 'node_modules', '.bin', 'tsx')
 export const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 
 /**
- * The Node the Mac and its host server run under: tsx starts the Mac with the
- * `node` on PATH, which is not this runner's runtime when the suite runs on bun.
- * Its real path, because that is the Mac's process.execPath, and the Mac's test
- * transport runs only probes of the Node it runs under.
+ * The runtime the Mac and its host server run under: bun (the runner's own, or in
+ * the Playwright runner the first on PATH). The Mac is started with it, and the
+ * Mac's manager starts the replica with its own process.execPath; the Mac's test
+ * transport runs only probes of that runtime.
  */
-export const HOST_NODE = typeof process.versions.bun === 'string' ? nodeOnPath() : process.execPath
-
-function nodeOnPath(): string {
-  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-    const candidate = path.join(dir, 'node')
-    try { fs.accessSync(candidate, fs.constants.X_OK); return fs.realpathSync(candidate) } catch { /* next */ }
-  }
-  throw new Error('no node on PATH: the Mac of a replica cluster runs under it (tsx)')
-}
+export const HOST_RUNTIME = bunRuntime()
 
 export const WINDOWS = { quietMs: 6_000, beatMs: 1_000, takeoverMs: 12_000 } as const
 export const HOST_KEY = 'devbox'
@@ -142,7 +134,7 @@ function seedHostTranscript(hostHome: string, cwd: string): void {
 }
 
 export type Twin = 'source' | 'standalone'
-/** What runs as the app: this tree's sources under tsx, or its real build (ROOT/dist). */
+/** What runs as the app: this tree's sources on bun, or its real build (ROOT/dist). */
 export type ClusterApp = 'source' | 'built'
 
 /** The build `built` runs: the CLI and the web app's static files. */
@@ -222,15 +214,15 @@ const MOCK_CLI_NAME = 'mock-claude.cjs'
 export function writeStubBin(bin: string): void {
   fs.mkdirSync(bin, { recursive: true, mode: 0o700 })
   fs.copyFileSync(path.join(import.meta.dirname, 'replica-mock-cli.cjs'), path.join(bin, MOCK_CLI_NAME))
-  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(bin, MOCK_CLI_NAME))} "$@"\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nexec ${JSON.stringify(HOST_RUNTIME)} ${JSON.stringify(path.join(bin, MOCK_CLI_NAME))} "$@"\n`, { mode: 0o755 })
   fs.writeFileSync(path.join(bin, 'ssh'), '#!/bin/sh\necho "ssh is disabled in this test" >&2\nexit 255\n', { mode: 0o755 })
 }
 
 /**
  * The app dir the Mac's manager runs on the host (WALNUT_HOST_SERVER_APP_DIR):
  * `<this runtime> <app>/dist/cli.js web --replica` (the manager's appCommand default). `source`: a dist/cli.js that runs this
- * tree's CLI under tsx, the way an install runs its built dist/cli.js. `built`:
- * <app>/dist is this tree's real build (a link to ROOT/dist; node runs it from
+ * tree's CLI (bun imports its TypeScript), the way an install runs its built dist/cli.js. `built`:
+ * <app>/dist is this tree's real build (a link to ROOT/dist; bun runs it from
  * there, so it finds its own web/static), and the command line still names <app>.
  */
 function writeAppDir(app: string, mode: ClusterApp): void {
@@ -240,10 +232,7 @@ function writeAppDir(app: string, mode: ClusterApp): void {
     return
   }
   fs.mkdirSync(path.join(app, 'dist'), { recursive: true })
-  const api = path.join(ROOT, 'node_modules', 'tsx', 'dist', 'esm', 'api', 'index.mjs')
   fs.writeFileSync(path.join(app, 'dist', 'cli.js'), [
-    `const { register } = await import(${JSON.stringify('file://' + api)})`,
-    'register()',
     `await import(${JSON.stringify('file://' + path.join(ROOT, 'src', 'cli.ts'))})`,
     '',
   ].join('\n'))
@@ -373,7 +362,7 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
       entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
       bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
     })
-    proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    proc = spawn(HOST_RUNTIME, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     if (!BUN) throw new Error('the standalone twin needs bun (BUN_INSTALL, ~/.bun/bin/bun)')
     proc = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
@@ -425,10 +414,10 @@ const { execFile } = await import('node:child_process')
 // The test transport is this machine: the manager's host probe (free ports, asked
 // of this runtime) runs in a local sh. Anything else meant for devbox is refused.
 const original = dcm.DaemonConnection.prototype.runRemoteScript
-const nodeQ = "'" + process.execPath + "' "
+const runtimeQ = "'" + process.execPath + "' "
 dcm.DaemonConnection.prototype.runRemoteScript = function (script, timeoutMs = 30000) {
   if (this.hostKey !== ${JSON.stringify(HOST_KEY)}) return original.call(this, script, timeoutMs)
-  if (typeof script !== 'string' || !script.startsWith(nodeQ)) return Promise.reject(new Error('the test transport runs only the host server probes'))
+  if (typeof script !== 'string' || !script.startsWith(runtimeQ)) return Promise.reject(new Error('the test transport runs only the host server probes'))
   return new Promise((resolve, reject) => execFile('/bin/sh', ['-c', script], { timeout: timeoutMs, env: { PATH: process.env.PATH, HOME: process.env.HOME } },
     (err, stdout) => (err ? reject(err) : resolve(String(stdout).trim()))))
 }
@@ -485,7 +474,7 @@ armGracefulSignalExit()
 /** Boot the Mac child; resolves with its port, pid and the seed's ids. */
 async function bootMac(script: string, file: string, env: Record<string, string>, logRef: { text: string }): Promise<{ proc: ChildProcess; port: number; pid: number; ids: { board: string; other: string } }> {
   fs.writeFileSync(file, script)
-  const proc = spawn(TSX, [file], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(HOST_RUNTIME, [file], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   proc.stderr!.on('data', (b: Buffer) => {
     logRef.text = (logRef.text + b.toString()).slice(-300_000)
     if (process.env.DEBUG_CLUSTER) process.stderr.write(`[mac] ${b}`)
@@ -495,7 +484,7 @@ async function bootMac(script: string, file: string, env: Record<string, string>
     let meta: { ids: { board: string; other: string }; pid: number } | null = null
     let done = false
     const t = setTimeout(() => {
-      // Never left behind: the child this harness spawned (tsx relays the signal to the server).
+      // Never left behind: the child this harness spawned (the Mac server itself).
       try { proc.kill('SIGTERM') } catch { /* gone */ }
       reject(new Error(`the Mac did not report a port in 240 s\n${logRef.text.slice(-3000)}`))
     }, 240_000)
@@ -522,7 +511,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
     const missing = builtAppMissing()
-    if (missing) throw new Error(`replica-cluster: app 'built' runs this tree's build, and ${missing} is missing (npm run build, then cd web && npx vite build)`)
+    if (missing) throw new Error(`replica-cluster: app 'built' runs this tree's build, and ${missing} is missing (bun run build, then cd web && bun --bun vite build)`)
   }
   // Short: the daemons' unix socket paths must fit in 104 bytes on macOS.
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rcl-'))
@@ -555,8 +544,8 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   /** The Mac server (the process mac-boot reports) and the Mac's own daemon, pinned when first seen. */
   let macPin: Pinned | null = null
   let macDaemonPin: Pinned | null = null
-  /** A replica process: `<node> <app>/dist/cli.js web ... --replica`. */
-  const isReplicaCommand = (command: string) => command.startsWith(`${HOST_NODE} ${appCli} web`) && / --replica(\s|$)/.test(command)
+  /** A replica process: `<bun> <app>/dist/cli.js web ... --replica`. */
+  const isReplicaCommand = (command: string) => command.startsWith(`${HOST_RUNTIME} ${appCli} web`) && / --replica(\s|$)/.test(command)
   /**
    * The replica's processes: each pid in the host daemon's pid files whose start
    * time is the one the file names and whose command line is the replica's, and
@@ -576,14 +565,14 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       if (p && (typeof rec.startTime !== 'string' || rec.startTime.trim() === p.started)) out.set(pid, p)
     }
     // Under `source` the app path is this base's; under `built` it is this base's link to the build.
-    for (const pid of pidsRunning(`${HOST_NODE} ${appCli} `)) {
+    for (const pid of pidsRunning(`${HOST_RUNTIME} ${appCli} `)) {
       const p = pin('replica', pid, isReplicaCommand)
       if (p) out.set(pid, p)
     }
     return [...out.values()]
   }
-  /** Mock CLIs this cluster's daemons started: `<node> <base>/bin/mock-claude.cjs ...` (they outlive a daemon by design). */
-  const mockPins = (): Pinned[] => pidsRunning(`${process.execPath} ${mockCli}`).map((pid) => pin('mock-cli', pid, (c) => c.startsWith(`${process.execPath} ${mockCli}`))).filter((p): p is Pinned => p !== null)
+  /** Mock CLIs this cluster's daemons started: `<bun> <base>/bin/mock-claude.cjs ...` (they outlive a daemon by design). */
+  const mockPins = (): Pinned[] => pidsRunning(`${HOST_RUNTIME} ${mockCli}`).map((pid) => pin('mock-cli', pid, (c) => c.startsWith(`${HOST_RUNTIME} ${mockCli}`))).filter((p): p is Pinned => p !== null)
   /** Everything of this cluster still running (stop() fails on any). */
   const running = (): Pinned[] => [
     ...[macPin, macDaemonPin].filter((p): p is Pinned => p !== null && stillPinned(p)),
@@ -643,9 +632,8 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
     mac = await bootMac(macBoot({ macData: d.macData, daemonPort: hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built' }), macBootFile, macEnv, macLog)
-    // The server mac-boot runs (tsx's child): its command line runs that file, under
-    // the `node` on PATH (not this runner's runtime when the suite runs on bun).
-    macPin = pin('mac', mac.pid, (c) => /^\S*\bnode\s/.test(c) && c.includes(` ${macBootFile}`))
+    // The server mac-boot runs: the child itself, its command line this runtime and that file.
+    macPin = pin('mac', mac.pid, (c) => c.startsWith(`${HOST_RUNTIME} `) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)
     // The Mac's own daemon, pinned the moment it is there (a pid file can outlive its process).
     macDaemonPin = await waitFor(() => pin('mac-daemon', readPid(path.join(d.macDaemon, 'daemon.pid')), (c) => / --start(\s|$)/.test(c)), 60_000, 'the Mac\'s own daemon')

@@ -33,8 +33,8 @@ interface Child {
 }
 
 function startChild(job: object): Child {
-  // This file's runtime: bun runs the TypeScript as is, node through tsx.
-  const execArgv = process.versions.bun ? [] : ['--import', 'tsx'];
+  // This file's runtime: bun runs the TypeScript as is.
+  const execArgv: string[] = [];
   const env: NodeJS.ProcessEnv = {
     ...process.env, INSTALL_CHILD: JSON.stringify(job), WALNUT_COMPONENTS_BASE_URL: srv.base, OPEN_WALNUT_HOME: tmpDir('walnut-comp-child-home-'),
   };

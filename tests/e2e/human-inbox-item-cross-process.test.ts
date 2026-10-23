@@ -19,7 +19,8 @@ async function stopWorker(proc: ChildProcess): Promise<void> {
   });
 }
 async function worker(script: string, data: string, children: ChildProcess[]): Promise<{ id: string; reused: boolean }> {
-  const proc = spawn(process.execPath, ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), script], { cwd: data,
+  // bun runs the TypeScript worker as it is.
+  const proc = spawn(process.execPath, [script], { cwd: data,
     env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: data, USERPROFILE: data, OPEN_WALNUT_HOME: data, NODE_ENV: 'test',
       CLAUDE_CONFIG_DIR: path.join(data, '.claude'), OPEN_WALNUT_API_URL: 'http://127.0.0.1:1', WALNUT_DISABLE_BACKGROUND_AI: '1' },
     stdio: ['ignore', 'pipe', 'pipe'] });

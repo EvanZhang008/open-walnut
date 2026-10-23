@@ -89,8 +89,8 @@ function start(file: string, args: string[], env: NodeJS.ProcessEnv = process.en
   return { ready, done }
 }
 
-/** An updater process: `node --import tsx` (no watcher, no IPC socket), or bun, which runs TypeScript itself. */
-const worker = (args: string[]) => start(process.execPath, [...(process.versions.bun ? [] : ['--import', 'tsx']), WORKER, ...args])
+/** An updater process: bun, which runs TypeScript itself (no loader, no watcher, no IPC socket). */
+const worker = (args: string[]) => start(process.execPath, [WORKER, ...args])
 
 const installSh = (root: string, home: string) => start('/bin/sh', [SCRIPT], {
   PATH: guardedPath([], '/usr/bin:/bin:/usr/sbin:/sbin'), HOME: home,

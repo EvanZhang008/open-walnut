@@ -52,7 +52,7 @@ describe('server startup failure lifecycle', () => {
     const startedAt = Date.now();
     child = spawn(
       process.execPath,
-      ['--import', 'tsx', 'src/cli.ts', 'web', '--port', String(port), '--dev'],
+      ['src/cli.ts', 'web', '--port', String(port), '--dev'],
       {
         cwd: process.cwd(),
         env: {

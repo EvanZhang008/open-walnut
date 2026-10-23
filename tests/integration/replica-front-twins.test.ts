@@ -1,14 +1,14 @@
 /**
  * A host replica's front against both daemon twins, every piece a real process
  * (docs/plan/walnut-replica-servers-impl.md, WP2): the daemon (the source twin
- * under node, the standalone twin under bun) supervises a real `web --replica`
- * child that it started from `server.configure` (a tsx boot spec, with the plain
+ * or the standalone twin, both on bun) supervises a real `web --replica`
+ * child that it started from `server.configure` (a bun boot spec, with the plain
  * host server as its fallback); a stand-in Mac links to the daemon over WS the
  * way the real one does (leader.configure, streams to its door).
  *
  *   browser --> replica public port --+ follower link (loopback)
  *                                     v
- *   stand-in Mac -- trusted link --> real daemon --spawns--> web --replica (tsx)
+ *   stand-in Mac -- trusted link --> real daemon --spawns--> web --replica (bun)
  *      | its stream end
  *      v
  *   the Mac's door (an echo server)
@@ -46,7 +46,6 @@ import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../s
 import { BUN, freePort, waitFor } from '../helpers/host-alone-harness.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
-const TSX_CLI = path.join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 const HOME = '/fixture/marina-mac-home'
 const WALNUT = 'b7c6d5e4f3a2918071625344a5b6c7d8'
 const QUIET_MS = 6_000
@@ -172,7 +171,7 @@ async function macAsks(mac: Mac, method: string, route: string, body?: unknown):
   })
 }
 
-/** Descendants of `pid` (tsx runs the server in a node child). */
+/** Descendants of `pid` (a server's own children, its local daemon among them). */
 function childPids(pid: number): number[] {
   let direct: number[] = []
   try { direct = execFileSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number) } catch { return [] }
@@ -195,7 +194,7 @@ function replicaDirs(base: string) {
   return d
 }
 
-/** The spec the Mac's manager sends for a host that opted in (core/host-server/manager.ts), run from this tree by tsx. */
+/** The spec the Mac's manager sends for a host that opted in (core/host-server/manager.ts), run from this tree on bun. */
 function replicaSpec(rig: Rig, extraEnv: Record<string, string> = {}): Record<string, unknown> {
   const d = replicaDirs(rig.base)
   const boot = path.join(rig.base, 'boot.mts')
@@ -206,7 +205,7 @@ function replicaSpec(rig: Rig, extraEnv: Record<string, string> = {}): Record<st
     WALNUT_LEADER_HOME: HOME, WALNUT_WALNUT_ID: WALNUT, WALNUT_HOST_LABEL: 'devbox', WALNUT_NO_AUTO_UPDATE: '1',
   }
   return {
-    v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [TSX_CLI, boot], cwd: ROOT,
+    v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [boot], cwd: ROOT,
     env: {
       ...common, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_DAEMON_DIR: d.run,
       WALNUT_LEADER_QUIET_MS: String(QUIET_MS), REPLICA_PROBE_FILE: path.join(rig.base, 'probe.port'), ...extraEnv,
@@ -214,7 +213,7 @@ function replicaSpec(rig: Rig, extraEnv: Record<string, string> = {}): Record<st
     log: path.join(rig.base, 'server.log'), port: rig.publicPort,
     settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
     // The plain host server, as the manager sends it (its log dir its own here, never /tmp/open-walnut).
-    fallback: { args: [TSX_CLI, path.join(ROOT, 'src/cli.ts'), 'host-server'], env: { ...common, WALNUT_DAEMON_DIR: d.hsRun } },
+    fallback: { args: [path.join(ROOT, 'src/cli.ts'), 'host-server'], env: { ...common, WALNUT_DAEMON_DIR: d.hsRun } },
   }
 }
 

@@ -102,10 +102,8 @@ describe('PluginManager', () => {
   })
 
   it('keeps activation and cleanup deadlines alive without other event-loop handles', () => {
+    // bun evaluates the module, TypeScript imports included.
     const child = spawnSync(process.execPath, [
-      '--import',
-      'tsx',
-      '--input-type=module',
       '--eval',
       `
         import { PluginContext } from './src/core/plugins/plugin-context.ts'

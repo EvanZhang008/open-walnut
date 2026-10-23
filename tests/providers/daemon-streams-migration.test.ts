@@ -61,7 +61,7 @@ async function spawnDaemon(opts: {
   const scriptPath = path.join(daemonDir, 'daemon.cjs')
   fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 
-  const proc = spawn('node', [scriptPath, '--start'], {
+  const proc = spawn(process.execPath, [scriptPath, '--start'], {
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,

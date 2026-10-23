@@ -44,7 +44,7 @@ async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<Daemo
   }
 
   // Start daemon (prints port to stdout)
-  const proc = spawn('node', [scriptPath, '--start'], {
+  const proc = spawn(process.execPath, [scriptPath, '--start'], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,

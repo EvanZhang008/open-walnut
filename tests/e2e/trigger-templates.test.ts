@@ -34,7 +34,6 @@ import { ORIGIN_HEADER, hostOrigin } from '../../src/lib/caller-origin.js'
 import type { Disposable } from '../../src/core/plugins/disposable.js'
 
 const REPO = path.resolve(import.meta.dirname, '../..')
-const TSX = path.join(REPO, 'node_modules/.bin/tsx')
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const REMOTE_SID = 'c0ffee00-aaaa-bbbb-cccc-444455556666'
 const HOST = hostOrigin('remote-dev')
@@ -312,7 +311,7 @@ describe('the check route and the stored command', () => {
       // No daemon socket, so the command takes its HTTP fallback to THIS server. Without
       // the two overrides it would find this machine's real daemon and reach its server.
       const isolated = { WALNUT_AGENT_SOCKET: '', WALNUT_SESSION_ID: '', WALNUT_DAEMON_DIR: path.join(WALNUT_HOME, 'no-daemon') }
-      const child = spawn(TSX, ['src/cli.ts', 'trigger-check', ...args], {
+      const child = spawn(process.execPath, ['src/cli.ts', 'trigger-check', ...args], {
         cwd: REPO, env: { ...process.env, ...isolated, ...env }, stdio: ['pipe', 'pipe', 'pipe'],
       })
       let stdout = ''

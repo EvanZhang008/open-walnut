@@ -66,9 +66,10 @@ describe('the replica browser fixture and an early SIGTERM', () => {
   it('a SIGTERM while the cluster starts waits for it, stops all of it, and exits 0', async () => {
     const port = await freePair()
     let stderr = ''
-    // The env Playwright gives it: the runner's, without vitest's own markers.
+    // The command and env Playwright gives it (replica.config.ts): bun running the
+    // fixture, the runner's env without vitest's own markers.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('VITEST') && k !== 'NODE_ENV'))
-    fixture = spawn(process.execPath, ['--import', 'tsx', 'tests/e2e/browser/replica-server.ts'], {
+    fixture = spawn(process.execPath, ['tests/e2e/browser/replica-server.ts'], {
       cwd: ROOT, env: { ...env, PW_TEST_PORT: String(port), TMPDIR: tmp }, stdio: ['ignore', 'pipe', 'pipe'],
     })
     fixture.stdout!.resume()

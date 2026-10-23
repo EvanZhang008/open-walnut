@@ -61,7 +61,7 @@ async function spawnDaemon(name: string): Promise<Daemon> {
   fs.mkdirSync(dir, { recursive: true })
   const script = path.join(dir, 'daemon.cjs')
   fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  const proc = spawn('node', [script, '--start'], {
+  const proc = spawn(process.execPath, [script, '--start'], {
     // Every directory the daemon owns is ours: it never sees a real registry or stream.
     env: { ...process.env, WALNUT_DAEMON_DIR: path.join(dir, 'd'), WALNUT_STREAMS_DIR: path.join(dir, 's'), WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'ls') },
     stdio: ['ignore', 'pipe', 'pipe'],

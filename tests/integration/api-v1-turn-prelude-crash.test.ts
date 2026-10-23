@@ -30,7 +30,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
 
 const BOOT = `
 import { startServer } from ${JSON.stringify(path.join(REPO_ROOT, 'src/web/server.ts'))}
@@ -52,7 +51,7 @@ beforeAll(async () => {
   const scriptPath = path.join(base, 'boot.mts')
   await fsp.writeFile(scriptPath, BOOT)
 
-  proc = spawn(TSX, [scriptPath], {
+  proc = spawn(process.execPath, [scriptPath], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,

@@ -43,9 +43,6 @@ const describeMaybe = GATED ? describe : describe.skip;
 const REMOTE_ID = 'cross-process-contested-id';
 const ANCHOR_ID = 'anchor-row-0001';
 const WORKER = path.resolve(__dirname, 'remote-id-cross-process-worker.ts');
-// A real devDependency — `npx tsx` alone measured 88s of resolution on this
-// machine, which is why CLAUDE.md forbids it in a test hot path.
-const TSX = path.resolve(__dirname, '../../node_modules/.bin/tsx');
 
 let home = '';
 
@@ -57,7 +54,7 @@ interface WorkerTally {
 function runWorker(mode: string, iterations: number): Promise<WorkerTally> {
   return new Promise((resolve, reject) => {
     const child = spawn(
-      TSX,
+      process.execPath,
       [WORKER, home, mode, REMOTE_ID, String(iterations), ANCHOR_ID],
       {
         // NODE_ENV=test is LOAD-BEARING, not hygiene: without it constants.ts
@@ -92,7 +89,6 @@ function readDb<T>(fn: (db: DatabaseType) => T): T {
 beforeAll(async () => {
   if (!GATED) return;
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-xproc-'));
-  expect(fs.existsSync(TSX), `tsx must be installed at ${TSX}`).toBe(true);
   const setup = await runWorker('setup', 1);
   expect(setup.created).toBe(1);
 }, 180_000);

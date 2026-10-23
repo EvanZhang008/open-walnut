@@ -20,7 +20,7 @@ beforeAll(async () => {
   const scriptPath = path.join(tmpDir, 'daemon.cjs')
   fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 
-  proc = spawn('node', [scriptPath, '--start'], {
+  proc = spawn(process.execPath, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: path.join(tmpDir, 'daemon') },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

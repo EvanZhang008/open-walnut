@@ -58,7 +58,7 @@ async function spawnDaemon(extraEnv: Record<string, string>): Promise<{
     'WALNUT_TURN_RETRY_BACKOFF_MAX_MS',
   ]) delete env[key]
 
-  const proc = spawn('node', [scriptPath, '--start'], {
+  const proc = spawn(process.execPath, [scriptPath, '--start'], {
     env: {
       ...env,
       WALNUT_DAEMON_DIR: daemonDir,

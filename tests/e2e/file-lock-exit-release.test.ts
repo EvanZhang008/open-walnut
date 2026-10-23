@@ -8,7 +8,7 @@
  * server's boot lost its 'web-assets' recovery write to it, twice in a row, and
  * the card it would have retired stayed up.
  *
- * Real child processes (tsx), each exiting with process.exit while inside fn.
+ * Real child processes (bun), each exiting with process.exit while inside fn.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'node:child_process'
@@ -18,7 +18,6 @@ import path from 'node:path'
 import { withFileLock } from '../../src/utils/file-lock.js'
 
 const REPO = path.resolve(import.meta.dirname, '../..')
-const TSX = path.join(REPO, 'node_modules/.bin/tsx')
 const CHILD = path.join(import.meta.dirname, 'fixtures/file-lock-exit-child.ts')
 
 let tmp: string
@@ -28,7 +27,7 @@ afterAll(() => { fs.rmSync(tmp, { recursive: true, force: true }) })
 
 function runChild(file: string, mode: string): Promise<{ code: number | null; out: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(TSX, [CHILD, file, mode], {
+    const child = spawn(process.execPath, [CHILD, file, mode], {
       cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, OTHER_PID: String(process.pid) },
     })

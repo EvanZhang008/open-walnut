@@ -51,7 +51,7 @@ export async function startLiveServer(): Promise<LiveServer> {
   const serverLog = path.join(dataDir, 'server.log')
   const spawnServer = (): ChildProcess => {
     const logFd = fs.openSync(serverLog, 'a')
-    return spawn('node', [path.join(REPO_ROOT, 'dist/cli.js'), 'web', '--port', String(port)], {
+    return spawn(process.execPath, [path.join(REPO_ROOT, 'dist/cli.js'), 'web', '--port', String(port)], {
       env,
       stdio: ['ignore', logFd, logFd],
     })

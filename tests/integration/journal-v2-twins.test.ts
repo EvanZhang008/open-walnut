@@ -126,7 +126,7 @@ function oldDaemonSource(): string {
   execFileSync('tar', ['-x', '-C', tree], { input: archive })
   fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(tree, 'node_modules'))
   const out = path.join(tree, 'daemon.cjs')
-  execFileSync(path.join(ROOT, 'node_modules/.bin/tsx'), ['-e',
+  execFileSync(process.execPath, ['-e',
     `import('./src/providers/daemon-source.ts').then((m) => require('fs').writeFileSync(${JSON.stringify(out)}, m.getDaemonSource()))`,
   ], { cwd: tree, env: { ...process.env, OPEN_WALNUT_HOME: path.join(tree, 'home'), WALNUT_DAEMON_DIR: path.join(tree, 'run') }, stdio: 'pipe', timeout: 120_000 })
   oldSource = fs.readFileSync(out, 'utf8')

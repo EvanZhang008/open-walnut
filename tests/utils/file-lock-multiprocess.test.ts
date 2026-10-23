@@ -41,8 +41,8 @@ afterEach(async () => {
 
 /** Start one locker; resolves `ready` once it waits on the start file, `result` when it exits. */
 function startLocker(args: string[]): { ready: Promise<void>; result: Promise<Result> } {
-  // `node --import tsx`, not the tsx CLI: no watcher process, and no IPC socket in TMPDIR.
-  const child = spawn(process.execPath, ['--import', 'tsx', WORKER, ...args], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  // bun runs the TypeScript worker itself: no loader, no watcher process, no IPC socket in TMPDIR.
+  const child = spawn(process.execPath, [WORKER, ...args], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   children.push(child);
   let out = '';
   let err = '';

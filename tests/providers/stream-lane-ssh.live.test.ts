@@ -153,8 +153,8 @@ describe.skipIf(!enabled)('the stream lane\'s own SSH forward, on real OpenSSH',
       `fs.writeFileSync(${JSON.stringify(out)}, String(fwd.port))`,
       `setInterval(() => {}, 1 << 30)`,
     ].join('\n'))
-    // One process (the tsx wrapper would leave its child alive): the SIGKILL hits the holder itself.
-    const holder = spawn(process.execPath, ['--import', 'tsx', script], { stdio: 'ignore', cwd: ROOT })
+    // One process: the SIGKILL hits the holder itself.
+    const holder = spawn(process.execPath, [script], { stdio: 'ignore', cwd: ROOT })
     await until('the holder\'s forward', async () => fs.existsSync(out), 30_000)
     const fwdPort = Number(fs.readFileSync(out, 'utf8'))
     expect(await roundTrip(fwdPort, 'held')).toBe('held')

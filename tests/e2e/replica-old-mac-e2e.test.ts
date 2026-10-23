@@ -2,10 +2,10 @@
  * An old Mac in front of a new host daemon (docs/plan/walnut-replica-servers-impl.md,
  * section 10 rows R10 and R25; WP10). The old leader is the 1fe1fd194 build (the last
  * one before journal v2), unpacked with `git archive` and run from its own sources
- * under tsx; the new one is this tree. Each Mac is a real, non-ephemeral server child
+ * on bun; the new one is this tree. Each Mac is a real, non-ephemeral server child
  * on the SAME data dir (an upgrade and a rollback, the way a person installs one
  * build over another), each with a local daemon dir of its own. The host daemon is
- * this tree's twin (source under node, standalone under bun), and a session runs on it
+ * this tree's twin (source or standalone, both on bun), and a session runs on it
  * (the cluster's mock CLI). The Mac sleeps by SIGSTOP.
  *
  *   P1 old Mac, fresh data (R10): the session's task_update while it sleeps is a v1
@@ -42,18 +42,35 @@ import {
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
 const OLD_BUILD = '1fe1fd194'
-const TSX = path.join(ROOT, 'node_modules', '.bin', 'tsx')
 type Pinned = NonNullable<ReturnType<typeof guard.pin>>
 
-/** The 1fe1fd194 sources, unpacked once for the file (its node_modules: this tree's, the package files are the same). */
+/** The 1fe1fd194 sources, unpacked once for the file (its node_modules: oldNodeModules). */
 let oldRoot = ''
 function oldTree(): string {
   if (oldRoot) return oldRoot
   const tree = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-old-mac-'))
   execFileSync('/bin/sh', ['-c', `git -C "${ROOT}" archive ${OLD_BUILD} src package.json tsconfig.json | tar -x -C "${tree}"`])
-  fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(tree, 'node_modules'))
+  oldNodeModules(tree)
   oldRoot = tree
   return tree
+}
+
+/**
+ * The old build's node_modules: this tree's packages, except better-sqlite3. That
+ * build opens SQLite with better-sqlite3, which cannot load on bun at all (it calls
+ * V8's C++ API); on bun it gets this tree's src/lib/sqlite.ts instead, the
+ * better-sqlite3 API over bun:sqlite. Everything else of it runs as it is.
+ */
+function oldNodeModules(tree: string): void {
+  const nm = path.join(tree, 'node_modules')
+  fs.mkdirSync(nm)
+  for (const name of fs.readdirSync(path.join(ROOT, 'node_modules'))) {
+    if (name !== 'better-sqlite3') fs.symlinkSync(path.join(ROOT, 'node_modules', name), path.join(nm, name))
+  }
+  const shim = path.join(nm, 'better-sqlite3')
+  fs.mkdirSync(shim)
+  fs.writeFileSync(path.join(shim, 'package.json'), JSON.stringify({ name: 'better-sqlite3', main: 'index.js' }))
+  fs.writeFileSync(path.join(shim, 'index.js'), `module.exports = require(${JSON.stringify(path.join(ROOT, 'src', 'lib', 'sqlite.ts'))}).default\n`)
 }
 
 function macConfig(): string {
@@ -111,7 +128,7 @@ process.on('SIGINT', close)
 armGracefulSignalExit()
 `
 }
-/** A Mac server child: tsx's, the server it runs (pinned), its own local daemon (pinned once there). */
+/** A Mac server child: the server itself (pinned), its own local daemon (pinned once there). */
 interface Mac {
   build: 'old' | 'new'
   proc: ChildProcess
@@ -142,7 +159,7 @@ async function bootMac(c: Cluster, build: 'old' | 'new', phase: string, seed: bo
     NODE_ENV: 'production',
   }
   const log = { text: '' }
-  const proc = spawn(TSX, [file], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(process.execPath, [file], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] })
   started.push(proc)
   proc.stderr!.on('data', (b: Buffer) => {
     log.text = (log.text + b.toString()).slice(-300_000)
@@ -160,8 +177,8 @@ async function bootMac(c: Cluster, build: 'old' | 'new', phase: string, seed: bo
     })
     proc.once('exit', (code) => { clearTimeout(t); reject(new Error(`the ${build} Mac exited early (${code})\n${log.text.slice(-3000)}`)) })
   })
-  // tsx runs the Mac under the `node` on PATH, which is not this runner's runtime when the suite runs on bun.
-  const server = guard.pin(`mac-${phase}`, meta.pid, (cmd) => /^\S*\bnode\s/.test(cmd) && cmd.includes(` ${file}`))
+  // The child is the server: this runtime running that file.
+  const server = guard.pin(`mac-${phase}`, meta.pid, (cmd) => cmd.startsWith(`${process.execPath} `) && cmd.includes(` ${file}`))
   if (!server) throw new Error(`the ${build} Mac reported pid ${meta.pid}, which does not run ${file}`)
   const mac: Mac = { build, proc, server, daemon: null, daemonDir, port: meta.port, ids: meta.ids, log }
   macs.push(mac)
@@ -194,7 +211,7 @@ async function macPost(mac: Mac, p: string, body: unknown): Promise<{ status: nu
   const r = await fetch(`http://127.0.0.1:${mac.port}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   return { status: r.status, json: await r.json().catch(() => null) }
 }
-/** Every tsx child and every Mac this file started (afterAll reaps whatever is left). */
+/** Every Mac child and every Mac this file started (afterAll reaps whatever is left). */
 const started: ChildProcess[] = []
 const macs: Mac[] = []
 
@@ -281,7 +298,7 @@ function macLog(mac: Mac, re: RegExp): string[] {
   return filesUnder(mac.daemonDir, /\.log$/, 0).sort().flatMap((f) => fs.readFileSync(f, 'utf8').split('\n')).filter((l) => re.test(l))
 }
 
-/** The mock CLIs this cluster's host daemon started (`<node> <bin>/mock-claude.cjs`): they outlive a daemon by design. */
+/** The mock CLIs this cluster's host daemon started (`<bun> <bin>/mock-claude.cjs`): they outlive a daemon by design. */
 function mockPins(c: Cluster): Pinned[] {
   const prefix = `${process.execPath} ${path.join(c.bin, 'mock-claude.cjs')}`
   return guard.pidsRunning(prefix).map((pid) => guard.pin('mock-cli', pid, (cmd) => cmd.startsWith(prefix))).filter((p): p is Pinned => p !== null)

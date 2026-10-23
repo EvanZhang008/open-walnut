@@ -39,7 +39,6 @@ const ROUND_MS = 10_000
 const BOARD_MS = 3_000
 const TWIN: Twin = process.env.REPLICA_SCALE_TWIN === 'standalone' && BUN ? 'standalone' : 'source'
 const NOTE_JOURNAL = (ADVERTISED_DAEMON_CAPABILITIES as readonly string[]).includes('note-journal-v1')
-const TSX = path.join(ROOT, 'node_modules', '.bin', 'tsx')
 
 /**
  * The fixed generator: the Mac's stores written the way the Mac writes them (task-db,
@@ -81,7 +80,7 @@ const seedMac: SeedMac = ({ base, env }) => {
   fs.writeFileSync(file, SEED(path.join(ROOT, 'src')))
   const run = path.join(base, 'seed-run')
   fs.mkdirSync(run, { recursive: true, mode: 0o700 })
-  const out = execFileSync(TSX, [file], { cwd: ROOT, env: { ...env, WALNUT_DAEMON_DIR: run }, encoding: 'utf8', timeout: 240_000 })
+  const out = execFileSync(process.execPath, [file], { cwd: ROOT, env: { ...env, WALNUT_DAEMON_DIR: run }, encoding: 'utf8', timeout: 240_000 })
   if (!out.includes('SEEDED')) throw new Error('the scale seed did not finish: ' + out.slice(-500))
 }
 

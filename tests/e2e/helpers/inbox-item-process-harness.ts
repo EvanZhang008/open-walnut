@@ -146,7 +146,8 @@ if(m.uuid)out({type:'command_lifecycle',command_uuid:m.uuid,state:'completed'});
       FIXTURE_DAEMON_URL: `ws://127.0.0.1:${this.daemonPort}`, FIXTURE_ROOT: lane.dir };
   }
   private async boot(lane: Lane, cloud: boolean): Promise<void> {
-    const proc = spawn(process.execPath, ['--import', path.join(ROOT, 'node_modules/tsx/dist/loader.mjs'), BOOT], { cwd: lane.dir, env: this.env(lane, cloud), stdio: ['ignore', 'pipe', 'pipe'] });
+    // bun runs the TypeScript boot script as it is.
+    const proc = spawn(process.execPath, [BOOT], { cwd: lane.dir, env: this.env(lane, cloud), stdio: ['ignore', 'pipe', 'pipe'] });
     this.children.push(proc); lane.proc = proc;
     proc.stderr!.on('data', chunk => { this.logs = (this.logs + chunk.toString()).slice(-30_000); });
     lane.port = await new Promise<number>((resolve, reject) => {
