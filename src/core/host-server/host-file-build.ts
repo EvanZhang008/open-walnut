@@ -5,19 +5,20 @@
  * and this checkout's dist is the one the running server serves (a deploy that
  * wiped its assets is a known outage), while its working tree may hold other
  * people's unfinished changes. So the build runs in a clone of the commit the
- * running dist was built from, the way scripts/deploy-committed.sh deploys:
+ * running dist was built from, the way scripts/deploy-committed.sh deploys (a
+ * dist built from uncommitted changes is refused before this: host-file.ts):
  *
  *   git clone --shared --no-checkout <checkout> <work>/tree; checkout <commit>
- *   a dist built from uncommitted changes: the checkout's changes against that
- *     commit and its untracked files are applied too (the closest copy of what
- *     the dist was built from)
  *   node_modules: every entry linked to the checkout's, except the workspace
  *     packages, which are the clone's own (as deploy-committed.sh links them)
  *   dist/web/static: a copy of the running server's, so the file serves the same
  *     web app and the web build is skipped (--reuse-web)
- *   bun scripts/build-binary.mjs --target <t>   in the utility QoS band, output to a log
+ *   bun scripts/build-binary.mjs --target <t> [--target <u>...]   one run for
+ *     every target asked at once, in the utility QoS band, output to a log
  *
- * Every step is a child process with a deadline: nothing here holds the event loop.
+ * Every step is a child process in its own process group with a deadline: a
+ * build that runs too long is ended with its children, and nothing here holds
+ * the event loop.
  */
 
 import { spawn } from 'node:child_process'
@@ -26,6 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { gitChildEnv } from '../../lib/git-env.js'
 import { withUtilityQosClamp } from '../../lib/background-qos.js'
+import { safeKillProcessGroup } from '../process-group-kill.js'
 import type { HostFileTarget } from './host-target.js'
 
 export interface CloneBuild {
@@ -34,9 +36,8 @@ export interface CloneBuild {
   /** The running dist: its web/static goes into the file. */
   distDir: string
   commit: string
-  /** The dist was built from uncommitted changes: apply the checkout's own on top of the commit. */
-  dirty: boolean
-  target: HostFileTarget
+  /** One build-binary run makes all of them. */
+  targets: HostFileTarget[]
   /** An empty dir to build in; the caller removes it. */
   work: string
   /** The build's output (appended). */
@@ -46,21 +47,30 @@ export interface CloneBuild {
 }
 
 const STEP_MS = 120_000
-const BUILD_MS = 15 * 60_000
+export const BUILD_MS = 15 * 60_000
+/** After SIGTERM at the deadline, the group gets this long before SIGKILL. */
+const KILL_GRACE_MS = 10_000
 
 interface Ran { code: number | null; stdout: Buffer; stderr: string }
 
 function run(cmd: string, args: string[], opts: { cwd: string; env?: NodeJS.ProcessEnv; input?: Buffer; timeoutMs?: number; logFd?: number }): Promise<Ran> {
   return new Promise((resolve, reject) => {
     const stdio: Array<'pipe' | 'ignore' | number> = [opts.input ? 'pipe' : 'ignore', opts.logFd ?? 'pipe', opts.logFd ?? 'pipe']
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env ?? gitChildEnv(), stdio })
+    // Its own group: the deadline ends bun and every compiler child it started, not only the wrapper.
+    const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env ?? gitChildEnv(), stdio, detached: true })
     const out: Buffer[] = []
     let err = ''
     child.stdout?.on('data', (c: Buffer) => out.push(c))
     child.stderr?.on('data', (c: Buffer) => { err = (err + c.toString()).slice(-4000) })
-    const timer = setTimeout(() => { child.kill('SIGTERM') }, opts.timeoutMs ?? STEP_MS)
-    child.once('error', (e) => { clearTimeout(timer); reject(e) })
-    child.once('close', (code) => { clearTimeout(timer); resolve({ code, stdout: Buffer.concat(out), stderr: err }) })
+    let hard: ReturnType<typeof setTimeout> | undefined
+    const signal = (sig: NodeJS.Signals) => { safeKillProcessGroup(child.pid, sig) }
+    const timer = setTimeout(() => {
+      signal('SIGTERM')
+      hard = setTimeout(() => signal('SIGKILL'), KILL_GRACE_MS)
+    }, opts.timeoutMs ?? STEP_MS)
+    const done = () => { clearTimeout(timer); if (hard) clearTimeout(hard) }
+    child.once('error', (e) => { done(); reject(e) })
+    child.once('close', (code) => { done(); resolve({ code, stdout: Buffer.concat(out), stderr: err }) })
     if (opts.input) child.stdin!.end(opts.input)
   })
 }
@@ -110,33 +120,14 @@ export async function linkDependencies(checkout: string, tree: string): Promise<
   if (fs.existsSync(webModules) && fs.existsSync(path.join(tree, 'web'))) await fs.promises.symlink(webModules, path.join(tree, 'web', 'node_modules'))
 }
 
-/** The checkout's changes against `commit` and its untracked files, laid onto the clone. */
-async function applyWorkingTree(checkout: string, tree: string, commit: string): Promise<void> {
-  const diff = await git(checkout, ['diff', '--binary', commit, '--'])
-  if (diff.length > 0) await git(tree, ['apply', '--binary', '--whitespace=nowarn', '-'], diff)
-  // Never dependencies or build output: the clone links its own, and a build writes its own.
-  const untracked = (await git(checkout, ['ls-files', '-o', '--exclude-standard', '-z'])).toString().split('\0')
-    .filter((rel) => rel && !/(^|\/)node_modules(\/|$)/.test(rel) && !/^dist(-bin)?(\/|$)/.test(rel))
-  for (const rel of untracked) {
-    const from = path.join(checkout, rel)
-    const to = path.join(tree, rel)
-    try {
-      const st = await fs.promises.lstat(from)
-      await fs.promises.mkdir(path.dirname(to), { recursive: true })
-      if (st.isSymbolicLink()) await fs.promises.symlink(await fs.promises.readlink(from), to)
-      else if (st.isFile()) await fs.promises.copyFile(from, to)
-    } catch { /* gone since git listed it */ }
-  }
-}
-
-/** Build the file in a clone; returns its path (inside `work`). */
-export async function buildFileInClone(b: CloneBuild): Promise<string> {
+/** Build the files in a clone; returns each target's path (inside `work`). */
+export async function buildFileInClone(b: CloneBuild): Promise<Partial<Record<HostFileTarget, string>>> {
+  if (b.targets.length === 0) throw new Error('no target to build')
   const tree = path.join(b.work, 'tree')
   await git(b.work, ['clone', '--quiet', '--shared', '--no-checkout', b.checkout, tree])
   await git(tree, ['checkout', '--quiet', '--detach', b.commit])
-  if (b.dirty) await applyWorkingTree(b.checkout, tree, b.commit)
   await linkDependencies(b.checkout, tree)
-  const args = ['scripts/build-binary.mjs', '--target', b.target]
+  const args = ['scripts/build-binary.mjs', ...b.targets.flatMap((t) => ['--target', t])]
   const statics = path.join(b.distDir, 'web', 'static')
   if (fs.existsSync(path.join(statics, 'index.html'))) {
     await fs.promises.cp(statics, path.join(tree, 'dist', 'web', 'static'), { recursive: true, dereference: true })
@@ -144,20 +135,63 @@ export async function buildFileInClone(b: CloneBuild): Promise<string> {
   }
   const log = await fs.promises.open(b.log, 'a')
   try {
-    await log.write(`${new Date().toISOString()} building the walnut file for ${b.target} from ${b.commit}${b.dirty ? ' and the checkout\'s changes' : ''}\n`)
+    await log.write(`${new Date().toISOString()} building the walnut file for ${b.targets.join(', ')} from ${b.commit}\n`)
     const env = gitChildEnv({ PATH: `${path.dirname(b.bun)}${path.delimiter}${process.env.PATH ?? ''}` })
     const [cmd, cmdArgs] = withUtilityQosClamp(b.bun, args)
     const r = await run(cmd, cmdArgs, { cwd: tree, env, timeoutMs: b.timeoutMs ?? BUILD_MS, logFd: log.fd })
     if (r.code !== 0) {
       const tail = (await fs.promises.readFile(b.log, 'utf8').catch(() => '')).trim().split('\n').slice(-3).join(' ')
-      throw new Error(`building the walnut file for ${b.target} failed (${r.code === null ? 'it took too long' : `exit ${r.code}`}): ${tail.slice(-300)}; the whole log is ${b.log}`)
+      throw new Error(`building the walnut file for ${b.targets.join(', ')} failed (${r.code === null ? 'it took too long' : `exit ${r.code}`}): ${tail.slice(-300)}; the whole log is ${b.log}`)
     }
   } finally {
     await log.close()
   }
-  const file = path.join(tree, 'dist-bin', `walnut-${b.target}`)
-  if (!fs.existsSync(file)) throw new Error(`the build left no dist-bin/walnut-${b.target}; see ${b.log}`)
-  return file
+  const files: Partial<Record<HostFileTarget, string>> = {}
+  for (const t of b.targets) {
+    const file = path.join(tree, 'dist-bin', `walnut-${t}`)
+    if (!fs.existsSync(file)) throw new Error(`the build left no dist-bin/walnut-${t}; see ${b.log}`)
+    files[t] = file
+  }
+  return files
+}
+
+/** package.json as of `commit` in the checkout (never its working tree, which may hold other changes). */
+export async function packageJsonAt(checkout: string, commit: string): Promise<string> {
+  return (await git(checkout, ['show', `${commit}:package.json`])).toString('utf8')
+}
+
+/** What a build's work dir says about who made it, so a later server can tell an abandoned one. */
+export const WORK_OWNER = 'owner.json'
+
+function alive(pid: unknown): boolean {
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1) return false
+  try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+/**
+ * Remove the build dirs (`<prefix>*` in `dir`) a server left when it stopped
+ * mid-build: their owner is gone, or they are older than any build may take.
+ * A clone and its dist-bin are a few hundred MB each.
+ */
+export async function pruneAbandonedWork(dir: string, prefix: string, now = Date.now()): Promise<string[]> {
+  const removed: string[] = []
+  let names: string[] = []
+  try { names = await fs.promises.readdir(dir) } catch { return removed }
+  for (const n of names) {
+    if (!n.startsWith(prefix)) continue
+    const work = path.join(dir, n)
+    const owner = await fs.promises.readFile(path.join(work, WORK_OWNER), 'utf8').then((t) => JSON.parse(t) as { pid?: unknown; at?: unknown }, () => null)
+    const st = await fs.promises.stat(work).catch(() => null)
+    if (!st?.isDirectory()) continue
+    const at = typeof owner?.at === 'number' ? owner.at : st.mtimeMs
+    const old = now - at > 2 * BUILD_MS
+    // A dir without its owner file is one being made right now, unless it is old.
+    if (old || (owner && !alive(owner.pid))) {
+      await fs.promises.rm(work, { recursive: true, force: true }).catch(() => undefined)
+      removed.push(work)
+    }
+  }
+  return removed
 }
 
 /** `bun@1.4.4` (package.json packageManager) as `1.4.4`, or null. */

@@ -2,18 +2,22 @@
  * The clone build of a host's walnut file (src/core/host-server/host-file-build.ts),
  * for real: a git checkout in a temp dir, real git, and a stand-in for
  * scripts/build-binary.mjs (run by a stand-in bun that is this test's own
- * runtime) that writes what it saw as the "file". What is checked: the file is
- * built from the dist's commit (not a newer HEAD), with the checkout's changes
- * when the dist was built from them, against the checkout's dependencies but the
- * clone's own workspace packages and the running dist's web app; the checkout
- * itself is never touched.
+ * runtime) that writes what it saw as the "file". What is checked: the files are
+ * built from the dist's commit (not a newer HEAD, never the checkout's
+ * uncommitted changes), every target asked in one run, against the checkout's
+ * dependencies but the clone's own workspace packages and the running dist's web
+ * app; the checkout itself is never touched; a build past its deadline is ended
+ * with every process it started; a build dir a stopped server left is removed.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildFileInClone, findBun, linkDependencies, pinnedBun } from '../../src/core/host-server/host-file-build.js'
+import {
+  buildFileInClone, findBun, linkDependencies, packageJsonAt, pinnedBun, pruneAbandonedWork, WORK_OWNER, BUILD_MS,
+} from '../../src/core/host-server/host-file-build.js'
+import type { HostFileTarget } from '../../src/core/host-server/host-target.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
 
 let dir = ''
@@ -26,8 +30,15 @@ const git = (args: string[], cwd = repo) => execFileSync('git', ['-c', 'user.nam
 const BUILD_SCRIPT = `
 import fs from 'node:fs'
 import path from 'node:path'
-const target = process.argv[process.argv.indexOf('--target') + 1]
+import { spawn } from 'node:child_process'
+const targets = process.argv.flatMap((a, i) => (process.argv[i - 1] === '--target' ? [a] : []))
 if (fs.existsSync('FAIL')) { console.error('bundle failed: ' + fs.readFileSync('FAIL', 'utf8')); process.exit(3) }
+if (fs.existsSync('HANG')) {
+  // A compiler child that would outlive a kill of this process alone.
+  const child = spawn('sleep', ['60'], { stdio: 'ignore' })
+  fs.writeFileSync(fs.readFileSync('HANG', 'utf8').trim(), String(child.pid))
+  setInterval(() => {}, 1000)
+} else {
 const real = (p) => { try { return fs.realpathSync(p) } catch { return null } }
 const seen = {
   args: process.argv.slice(2), cwd: process.cwd(),
@@ -38,7 +49,8 @@ const seen = {
   webModules: real('web/node_modules'),
 }
 fs.mkdirSync('dist-bin', { recursive: true })
-fs.writeFileSync(path.join('dist-bin', 'walnut-' + target), JSON.stringify(seen))
+for (const t of targets) fs.writeFileSync(path.join('dist-bin', 'walnut-' + t), JSON.stringify({ ...seen, target: t }))
+}
 `
 
 function write(rel: string, text: string, root = repo): void {
@@ -76,11 +88,12 @@ beforeEach(() => {
 
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 
-async function buildOnce(commit: string, dirty: boolean, target: 'linux-x64' | 'linux-arm64-musl' = 'linux-x64') {
+async function buildOnce(commit: string, targets: HostFileTarget[] = ['linux-x64']) {
   const work = fs.mkdtempSync(path.join(dir, 'work-'))
   const log = path.join(dir, 'build.log')
-  const file = await buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit, dirty, target, work, log, bun })
-  return { file, work, log, seen: JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, any> }
+  const files = await buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit, targets, work, log, bun })
+  const file = files[targets[0]!]!
+  return { files, file, work, log, seen: JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, any> }
 }
 
 describe('the clone build', () => {
@@ -89,7 +102,7 @@ describe('the clone build', () => {
     write('src/a.txt', 'v2')
     git(['commit', '-qam', 'two'])
     const before = git(['status', '--porcelain', '--ignored'])
-    const { file, work, seen } = await buildOnce(built, false)
+    const { file, work, seen } = await buildOnce(built)
     expect(file).toBe(path.join(work, 'tree', 'dist-bin', 'walnut-linux-x64'))
     expect(seen.a).toBe('v1')
     expect(seen.added).toBeNull()
@@ -106,21 +119,48 @@ describe('the clone build', () => {
     expect(fs.readdirSync(path.join(repo, 'node_modules', '@open-walnut')).sort()).toEqual(['other', 'plugin-api'])
   })
 
-  it('a dist built from uncommitted changes is built with them, untracked files too, never dependencies', async () => {
+  it('the checkout\'s uncommitted changes never reach the file', async () => {
     const commit = git(['rev-parse', '--short', 'HEAD'])
     write('src/a.txt', 'v3 (not committed)')
     write('src/new.txt', 'a new file')
-    const { seen } = await buildOnce(commit, true)
-    expect(seen.a).toBe('v3 (not committed)')
-    expect(seen.added).toBe('a new file')
-    expect(seen.dep).toBe(path.join(repo, 'node_modules', 'dep'))
-    // git() trims: the first line's leading space (a change not staged) is gone.
+    const { seen } = await buildOnce(commit)
+    expect(seen.a).toBe('v1')
+    expect(seen.added).toBeNull()
     expect(git(['status', '--porcelain'])).toBe('M src/a.txt\n?? src/new.txt')
+  })
+
+  it('every target asked at once is one run', async () => {
+    const { files, work, seen } = await buildOnce(git(['rev-parse', 'HEAD']), ['linux-x64', 'linux-arm64-musl'])
+    expect(seen.args).toEqual(['--target', 'linux-x64', '--target', 'linux-arm64-musl', '--reuse-web'])
+    expect(files).toEqual({
+      'linux-x64': path.join(work, 'tree', 'dist-bin', 'walnut-linux-x64'),
+      'linux-arm64-musl': path.join(work, 'tree', 'dist-bin', 'walnut-linux-arm64-musl'),
+    })
+    expect(JSON.parse(fs.readFileSync(files['linux-arm64-musl']!, 'utf8')).target).toBe('linux-arm64-musl')
+  })
+
+  it('a build past its deadline is ended with the processes it started', async () => {
+    const pidFile = path.join(dir, 'grandchild.pid')
+    write('HANG', pidFile)
+    git(['add', 'HANG'])
+    git(['commit', '-qm', 'hangs'])
+    const work = fs.mkdtempSync(path.join(dir, 'work-'))
+    const started = Date.now()
+    await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'HEAD', targets: ['linux-x64'], work, log: path.join(dir, 'b.log'), bun, timeoutMs: 3_000 }))
+      .rejects.toThrow(/failed \(it took too long\)/)
+    expect(Date.now() - started).toBeLessThan(20_000)
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'))
+    expect(pid).toBeGreaterThan(1)
+    let gone = false
+    for (let i = 0; i < 50 && !gone; i++) {
+      try { process.kill(pid, 0); spawnSync('sleep', ['0.1']) } catch { gone = true }
+    }
+    expect(gone).toBe(true)
   })
 
   it('without the running web app, the build makes its own', async () => {
     fs.rmSync(path.join(repo, 'dist'), { recursive: true, force: true })
-    const { seen } = await buildOnce(git(['rev-parse', 'HEAD']), false, 'linux-arm64-musl')
+    const { seen } = await buildOnce(git(['rev-parse', 'HEAD']), ['linux-arm64-musl'])
     expect(seen.args).toEqual(['--target', 'linux-arm64-musl'])
     expect(seen.web).toBeNull()
   })
@@ -131,14 +171,14 @@ describe('the clone build', () => {
     git(['commit', '-qm', 'broken'])
     const work = fs.mkdtempSync(path.join(dir, 'work-'))
     const log = path.join(dir, 'build.log')
-    await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'HEAD', dirty: false, target: 'linux-x64', work, log, bun }))
+    await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'HEAD', targets: ['linux-x64'], work, log, bun }))
       .rejects.toThrow(new RegExp(`failed \\(exit 3\\): .*bundle failed: Could not resolve "missing-module".*the whole log is ${log.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
     expect(fs.readFileSync(log, 'utf8')).toMatch(/building the walnut file for linux-x64 from HEAD\n[\s\S]*bundle failed/)
   })
 
   it('a commit the checkout does not have fails at the checkout step', async () => {
     const work = fs.mkdtempSync(path.join(dir, 'work-'))
-    await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'deadbeef1', dirty: false, target: 'linux-x64', work, log: path.join(dir, 'b.log'), bun }))
+    await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'deadbeef1', targets: ['linux-x64'], work, log: path.join(dir, 'b.log'), bun }))
       .rejects.toThrow(/git checkout failed/)
   })
 })
@@ -168,7 +208,9 @@ describe('findBun', () => {
     const pinned = fakeBun('pinned', '1.4.4')
     const newer = fakeBun('newer', '1.5.0')
     expect(await findBun({ WALNUT_BUN: newer, PATH: path.dirname(pinned) }, '1.4.4', [], null)).toEqual({ path: newer, version: '1.5.0' })
-    expect(await findBun({ PATH: `${path.join(dir, 'nothing')}:${path.dirname(old)}:${path.dirname(pinned)}` }, '1.4.4', [], null)).toEqual({ path: pinned, version: '1.4.4' })
+    // Where findBun looks: only the stand-in buns' dirs.
+    const lookIn = [path.join(dir, 'nothing'), path.dirname(old), path.dirname(pinned)].join(path.delimiter)
+    expect(await findBun({ PATH: lookIn }, '1.4.4', [], null)).toEqual({ path: pinned, version: '1.4.4' })
     expect(await findBun({ PATH: path.dirname(old) }, null, [], null)).toEqual({ path: old, version: '1.3.9' })
   })
 
@@ -184,5 +226,35 @@ describe('findBun', () => {
     expect(pinnedBun(JSON.stringify({ packageManager: 'bun@1.4.4' }))).toBe('1.4.4')
     expect(pinnedBun(JSON.stringify({ packageManager: 'npm@10.0.0' }))).toBeNull()
     expect(pinnedBun('not json')).toBeNull()
+  })
+
+  it('the pin is the commit\'s, not the working tree\'s', async () => {
+    write('package.json', JSON.stringify({ name: 'open-walnut', version: '0.6.14', packageManager: 'bun@1.4.4' }))
+    git(['commit', '-qam', 'pin'])
+    const commit = git(['rev-parse', '--short', 'HEAD'])
+    write('package.json', JSON.stringify({ name: 'open-walnut', version: '0.6.14', packageManager: 'bun@9.9.9' }))
+    expect(pinnedBun(await packageJsonAt(repo, commit))).toBe('1.4.4')
+  })
+})
+
+describe('pruneAbandonedWork', () => {
+  it('removes the build dirs of a server that is gone, and old ones, never one in use', async () => {
+    const tmp = path.join(dir, 'tmp')
+    fs.mkdirSync(tmp)
+    const make = (name: string, owner?: Record<string, unknown>) => {
+      fs.mkdirSync(path.join(tmp, name, 'tree'), { recursive: true })
+      if (owner) fs.writeFileSync(path.join(tmp, name, WORK_OWNER), JSON.stringify(owner))
+    }
+    // A pid that existed and is gone: a child this test ran to its end.
+    const dead = spawnSync('sh', ['-c', 'echo $$'], { encoding: 'utf8' }).stdout.trim()
+    const now = Date.now()
+    make('walnut-host-file-dead', { pid: Number(dead), at: now })
+    make('walnut-host-file-live', { pid: process.pid, at: now })
+    make('walnut-host-file-old', { pid: process.pid, at: now - 3 * BUILD_MS })
+    make('walnut-host-file-new') // being made: no owner file yet
+    make('other-dir', { pid: Number(dead), at: now })
+    const removed = await pruneAbandonedWork(tmp, 'walnut-host-file-', now)
+    expect(removed.map((r) => path.basename(r)).sort()).toEqual(['walnut-host-file-dead', 'walnut-host-file-old'])
+    expect(fs.readdirSync(tmp).sort()).toEqual(['other-dir', 'walnut-host-file-live', 'walnut-host-file-new'])
   })
 })
