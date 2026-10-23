@@ -144,6 +144,13 @@ function sliceFields(t: Task): Partial<OfflineSliceTask> {
   return out as Partial<OfflineSliceTask>;
 }
 
+/** Whether its host's copy lists this session (before the MAX_SESSIONS cap). */
+function inHostCopy(s: SessionRecord, now: number): boolean {
+  return !s.archived
+    && s.provider !== 'embedded' && s.provider !== 'sdk'
+    && now - Date.parse(s.lastActiveAt || s.startedAt || '') < SESSION_RECENCY_MS;
+}
+
 export async function buildHostSlice(hostKey: string, now = Date.now()): Promise<HostSlice> {
   const key = normalizeHostKey(hostKey);
   const [{ listSessions, isListableSession }, { listTasksByIds }, requests] = await Promise.all([
@@ -154,10 +161,7 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
 
   const allSessions = await listSessions();
   const records = allSessions
-    .filter((s) => !s.archived
-      && s.provider !== 'embedded' && s.provider !== 'sdk'
-      && normalizeHostKey(s.host) === key
-      && now - Date.parse(s.lastActiveAt || s.startedAt || '') < SESSION_RECENCY_MS)
+    .filter((s) => inHostCopy(s, now) && normalizeHostKey(s.host) === key)
     .sort((a, b) => (b.lastActiveAt || '').localeCompare(a.lastActiveAt || ''))
     .slice(0, MAX_SESSIONS);
 
@@ -253,12 +257,51 @@ let syncStarted = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 /** Coalesce a burst (a task_update fires several events) into one push per host. */
 const PUSH_DEBOUNCE_MS = 3_000;
+/** Sessions a status change already checked, so one no copy lists (past its cap, say) costs one look, not one per change. */
+const checkedForStatus = new Set<string>();
+
+/**
+ * A session's host learns about it at once, not after the debounce: the host answers
+ * the session's `walnut` calls while this server is away only once its copy names the
+ * session, and the Mac may go away right after the start (2026-10-23, tests/fleet).
+ * A start that knows its session's id (task start, quick start, a lane, a rewind)
+ * writes the record, host and task included, before `session:started`, and an ACP
+ * start writes it on establish, before the event too, so the copy pushed then names
+ * them. A CLI start without an id writes the record at the CLI's init line; the
+ * session's first `session:status-changed` follows that write and pushes while no
+ * copy names the session yet.
+ */
+async function pushStartingSession(event: { name: string; data: unknown }): Promise<void> {
+  const d = (event.data ?? {}) as { sessionId?: string; claudeSessionId?: string; host?: string };
+  const sid = d.claudeSessionId || d.sessionId;
+  const started = event.name === 'session:started';
+  if (!started && (!sid || checkedForStatus.has(sid))) return;
+  const [{ getSessionByClaudeId }, { pushHostSliceToHost, hostSliceNamesSession }] = await Promise.all([
+    import('./session-tracker.js'),
+    import('../providers/daemon-connection.js'),
+  ]);
+  if (started) {
+    // A CLI start names its host (none: this machine) and no id; an ACP start only its id.
+    const host = d.host ?? (sid ? (await getSessionByClaudeId(sid))?.host : undefined);
+    pushHostSliceToHost(normalizeHostKey(host));
+    return;
+  }
+  if (!sid || hostSliceNamesSession(sid)) return;
+  if (checkedForStatus.size >= 2_000) checkedForStatus.clear();
+  checkedForStatus.add(sid);
+  const record = await getSessionByClaudeId(sid);
+  if (record && inHostCopy(record, Date.now())) pushHostSliceToHost(normalizeHostKey(record.host));
+}
 
 export function ensureHostSliceSync(): void {
   if (syncStarted) return;
   syncStarted = true;
   void import('./event-bus.js').then(({ bus }) => {
-    bus.subscribe('host-slice', () => {
+    bus.subscribe('host-slice', (event) => {
+      if (event.name === 'session:started' || event.name === 'session:status-changed') {
+        void pushStartingSession(event).catch((err) => log.session.warn('host slice: push for a starting session failed', { error: err instanceof Error ? err.message : String(err) }));
+      }
+      // The rest of the burst (the task's link, its phase) still rides the debounce.
       if (timer) return;
       timer = setTimeout(() => {
         timer = null;

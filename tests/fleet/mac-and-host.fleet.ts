@@ -14,6 +14,10 @@
  *      side of the old connections): the same write is journaled, the link heals,
  *      the Mac reconnects by itself and applies it exactly once; after the person
  *      renames the task, one more drop and reconnect applies nothing again
+ *   5  the lid closes right as a session starts, before its first turn's
+ *      `walnut tools call task_update`: devbox's copy already names the session (the
+ *      Mac pushes it with the start, not 3 s later), so the write is journaled there
+ *      and applied once on wake instead of answering "hub unreachable" until then
  *
  * Each row ends on the stores themselves: the Mac's tasks.sqlite (read only) and
  * log, the host's stream, journal and copy files (docker exec).
@@ -22,7 +26,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { waitFor } from '../helpers/replica-cluster.js'
 import { dockerUnavailable } from './docker.js'
 import { startFleet, type Fleet } from './fleet.js'
-import { appliedLines, attemptsSummary, expectControlMaster, journaledTitle, startHostSession, startUpdateTurn, updateTurnsEnded, type HostSession } from './steps.js'
+import { appliedLines, attemptsSummary, expectControlMaster, journaledTitle, makeTask, runningTurns, startHostSession, startSession, startUpdateTurn, updateTurnsEnded, type HostSession } from './steps.js'
 
 const unavailable = await dockerUnavailable()
 if (unavailable) process.stdout.write(`\n[fleet] SKIPPED: Docker is not available here (${unavailable}). Start Docker and run npm run test:fleet.\n\n`)
@@ -39,10 +43,10 @@ describe.skipIf(!!unavailable)('the fleet: a Mac and a Linux host over real SSH'
   const times: Record<string, number> = {}
   const t0 = () => { const start = Date.now(); return () => Date.now() - start }
   /** The Mac logged one `queued fields applied` for the task since `before` (its log reaches the file a moment after the write). */
-  const appliedOnce = async (before: number) => {
-    await waitFor(() => appliedLines(f, s.taskId).length > before, 30_000, 'the Mac to log the apply')
+  const appliedOnce = async (before: number, taskId = s.taskId) => {
+    await waitFor(() => appliedLines(f, taskId).length > before, 30_000, 'the Mac to log the apply')
     await new Promise((r) => setTimeout(r, 2_000))
-    expect(appliedLines(f, s.taskId).length - before).toBe(1)
+    expect(appliedLines(f, taskId).length - before).toBe(1)
   }
 
   beforeAll(async () => {
@@ -159,4 +163,45 @@ describe.skipIf(!!unavailable)('the fleet: a Mac and a Linux host over real SSH'
     expect(appliedLines(f, s.taskId).length - appliedBefore).toBe(1)
     times.scenario3 = took()
   }, 420_000)
+
+  it('5: the lid closes right as a session starts; its first turn\'s write is journaled on the host and applied once on wake', async () => {
+    const took = t0()
+    const title = 'Fixed by a session started just before the lid closed'
+    const taskId = await makeTask(f, 'Start, then sleep, on devbox')
+    // The task's own push goes by first, so only the start can bring the host the session.
+    await new Promise((r) => setTimeout(r, 4_000))
+    const started = t0()
+    const n = await startSession(f, HOST, taskId, `please update ${taskId} title ${title} after 8s`)
+    await waitFor(async () => (await runningTurns(f, n)) > 0, 60_000, 'the CLI on devbox to start the first turn', 100)
+    f.sleepMac()
+    times.sleptAfterStart = started()
+    const slept = t0()
+    const copyAtSleep = await f.hostSliceHolds(HOST, n.sid)
+    process.stdout.write(`[fleet] lid closed ${times.sleptAfterStart} ms after the start; devbox's copy named the session then: ${copyAtSleep}\n`)
+    // The turn writes 8 s in, through the host's offline answer: journaled there, not refused.
+    await waitFor(async () => (await journaledTitle(f, n, title)).length > 0, 60_000, 'the first turn\'s write to be journaled on devbox')
+      .catch(async (err: Error) => { throw new Error(`${err.message}; walnut attempts ${await attemptsSummary(f, n)}`) })
+    await updateTurnsEnded(f, n, 1)
+    // Past the host's keepalive, as in row 2: the wake is a reconnect over SSH.
+    await new Promise((r) => setTimeout(r, Math.max(0, 12_000 - slept())))
+    process.stdout.write(`[fleet] lid closed at the start: walnut attempts ${await attemptsSummary(f, n)}\n`)
+    expect(copyAtSleep).toBe(true)
+    expect((await f.hostAttempts(HOST, n.sid)).at(-1)?.code).toBe(0)
+    const recs = await journaledTitle(f, n, title)
+    expect(recs).toHaveLength(1)
+    expect(f.macTask(taskId)?.title).not.toBe(title)
+    const appliedBefore = appliedLines(f, taskId).length
+    const woke = t0()
+    f.wakeMac()
+    await waitFor(() => f.macTask(taskId)?.title === title, 120_000, 'the Mac to apply the write')
+    times.applyAfterStartWake = woke()
+    await waitFor(async () => (await f.hostJournal(HOST)).acked.has(recs[0]!.seq), 60_000, 'the record to be acked')
+    await appliedOnce(appliedBefore, taskId)
+    // When the copy left the Mac, from its log (not asserted: the copy at the lid is).
+    const at = (l: string) => Date.parse(JSON.parse(l).time as string)
+    const startedAt = f.mac.logLines(/"emit session:started"/).map(at).filter((t) => t <= Date.now() - woke()).at(-1)
+    const pushedAt = f.mac.logLines(/host slice pushed/).filter((l) => JSON.parse(l).host === HOST).map(at).find((t) => startedAt !== undefined && t >= startedAt)
+    if (startedAt !== undefined && pushedAt !== undefined) process.stdout.write(`[fleet] devbox's copy was pushed ${pushedAt - startedAt} ms after session:started\n`)
+    times.scenario5 = took()
+  }, 300_000)
 })
