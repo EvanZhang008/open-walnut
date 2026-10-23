@@ -11,10 +11,18 @@
  * restart included. One def the daemon cannot take is refused alone, and a clock
  * never runs a slot at or before the routine's last run.
  *
+ * A claude-code routine whose def carries `start` (clock-host-start-v1) is started
+ * by the host itself when no server takes its run: the CLI from the Mac's routine
+ * spawn template, then its task-create and session records in the journal, then the
+ * fire marked as started; a server that comes back records the run (the fire's
+ * replay, a claim) and never starts it again, and a daemon that dies between the CLI
+ * and the records starts nothing twice.
+ *
  * What's real: the daemon process (source twin under node with its trigger
  * sidecar bundled into its dir; standalone twin under bun), the state files, a
  * mock CLI reading its FIFO. The Walnut server is a bare WS client. Every daemon
- * is stopped by the pid it wrote into its own temp dir.
+ * is stopped by the pid it wrote into its own temp dir, every mock CLI by the pid it
+ * recorded.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket } from 'ws'
@@ -25,6 +33,9 @@ import path from 'node:path'
 import { buildSync } from 'esbuild'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
+import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
+import { buildRoutineSpawnTemplate } from '../../src/providers/spawn-template.js'
+import { START_TASK_TOKEN } from '../../src/providers/trigger-clock-core.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/walnut-home'
@@ -77,8 +88,9 @@ async function waitFor(cond: () => boolean, ms: number, label: string): Promise<
   }
 }
 
-async function spawnDaemon(twin: 'source' | 'standalone', reuseDir?: string): Promise<Daemon> {
+async function spawnDaemon(twin: 'source' | 'standalone', reuseDir?: string, extraEnv: Record<string, string> = {}): Promise<Daemon> {
   const dir = reuseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), `walnut-clock-${twin}-`))
+  fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -86,8 +98,12 @@ async function spawnDaemon(twin: 'source' | 'standalone', reuseDir?: string): Pr
     WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_TRIGGER_HOST_GRACE_MS: String(GRACE_MS),
     WALNUT_TRIGGER_REPLAY_MS: '60000',
+    ...extraEnv,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
+  delete env.WALNUT_DAEMON_STATE_DIR; delete env.WALNUT_JOURNAL_DIR
+  // A run from inside a Walnut session inherits its API root and gateway: none may reach these daemons.
+  delete env.OPEN_WALNUT_API_URL; delete env.WALNUT_AGENT_SOCKET; delete env.WALNUT_SESSION_ID
   let proc: ChildProcess
   if (twin === 'source') {
     const script = path.join(dir, 'daemon.cjs')
@@ -391,4 +407,259 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     expect(triggersFile().draining).toBeUndefined()
     await server.close()
   }, 90_000)
+})
+
+/**
+ * The mock `claude` a routine template names: records its argv, cwd and pid, and every
+ * user line it reads, under OUT. One program, as `claude` is (a shell wrapper).
+ */
+function routineMock(base: string): { mock: string; out: string } {
+  const out = path.join(base, 'mock-out')
+  fs.mkdirSync(out, { recursive: true })
+  const script = path.join(base, 'routine-mock-cli.cjs')
+  fs.writeFileSync(script, `
+const fs = require('fs')
+const OUT = ${JSON.stringify(out)}
+const argv = process.argv.slice(2)
+const at = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined }
+const sid = at('--session-id') || at('--resume') || 'none'
+fs.appendFileSync(OUT + '/calls.jsonl', JSON.stringify({ pid: process.pid, sid, argv, cwd: process.cwd() }) + '\\n')
+fs.appendFileSync(OUT + '/pids.txt', process.pid + '\\n')
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ type: 'system', subtype: 'init', session_id: sid })
+let buf = ''
+process.stdin.on('data', (chunk) => {
+  buf += chunk.toString('utf8')
+  let nl
+  while ((nl = buf.indexOf('\\n')) !== -1) {
+    const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
+    let m; try { m = JSON.parse(line) } catch { continue }
+    if (!m || m.type !== 'user') continue
+    const c = m.message && m.message.content
+    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (p && p.text) || '').join('') : ''
+    fs.appendFileSync(OUT + '/stdin.jsonl', JSON.stringify({ sid, text }) + '\\n')
+    out({ type: 'result', subtype: 'success', is_error: false, result: 'built', session_id: sid })
+    out({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
+  }
+})
+setInterval(() => {}, 1 << 30)
+`)
+  const mock = path.join(base, 'claude')
+  fs.writeFileSync(mock, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)} "$@"\n`, { mode: 0o755 })
+  return { mock, out }
+}
+
+function lines<T>(file: string): T[] {
+  try { return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as T) } catch { return [] }
+}
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)('a claude-code routine run the real %s daemon starts itself', (twin) => {
+  const ROUTINE = 'mclockr0-e5e5'
+  const WALNUT = 'wwalnuthome01'
+  const MESSAGE = 'Build the nightly and report. é中'
+  const T0 = Date.now()
+  // Hourly, anchored half an hour back: one slot is owed now, the next is half an hour out.
+  const anchor = T0 - 0.5 * HOUR
+  const bases: string[] = []
+
+  const startOf = (cwd: string) => ({
+    home: HOME, host: 'devbox', title: 'Routine: Nightly build', project: 'Routines', cwd, message: MESSAGE, mode: 'bypass',
+    context: `You are working on the task "Routine: Nightly build" (id ${START_TASK_TOKEN}, project "Routines").`,
+  })
+  const routineDef = (cwd: string) => ({
+    id: ROUTINE, name: 'Nightly build', everyMs: 0,
+    clock: { schedule: { kind: 'every', everyMs: HOUR, anchorMs: anchor }, fromMs: anchor },
+    start: startOf(cwd),
+  })
+  const stateIn = (dir: string) => JSON.parse(fs.readFileSync(path.join(dir, 'trigger-state', `${ROUTINE}.json`), 'utf8')) as {
+    pendingFires: Array<Record<string, any> & { seq: number }>
+    seq: number
+  }
+
+  /** The Mac connects: describes its Walnut (the v2 drains) and pushes its copy. */
+  async function macConnects(d: Daemon): Promise<FakeServer> {
+    const mac = await FakeServer.connect(d.port)
+    const conf = await mac.cmd({ cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false, drains: JOURNAL_V2_DRAINS })
+    expect(conf.ok, JSON.stringify(conf)).toBe(true)
+    expect((await mac.cmd({ cmd: 'host.slice', slice: { ...slice(), sessions: [], tasks: [] } })).ok).toBe(true)
+    return mac
+  }
+
+  /** Drain everything the host journaled, acking each batch. */
+  async function macDrains(mac: FakeServer): Promise<Array<Record<string, any>>> {
+    const all: Array<Record<string, any>> = []
+    for (let round = 0; round < 20; round++) {
+      const r = await mac.cmd({ cmd: 'offline.drain', home: HOME, kinds: JOURNAL_V2_DRAINS })
+      expect(r.ok, JSON.stringify(r)).toBe(true)
+      const recs = (data(r).records ?? []) as Array<Record<string, any>>
+      if (!recs.length) break
+      all.push(...recs)
+      expect((await mac.cmd({ cmd: 'offline.ack', home: HOME, seqs: recs.map((x) => x.seq) })).ok).toBe(true)
+    }
+    return all
+  }
+
+  /** A daemon with the Mac's routine template and the routine's clock, and no server connected. */
+  async function setUp(name: string, extraEnv: Record<string, string> = {}) {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-rstart-${twin}-${name}-`))
+    bases.push(base)
+    const cwd = path.join(base, 'repo')
+    fs.mkdirSync(cwd)
+    const m = routineMock(base)
+    const d = await spawnDaemon(twin, path.join(base, 'daemon'), extraEnv)
+    const mac = await macConnects(d)
+    const hello = await mac.cmd({ cmd: 'hello' })
+    expect(hello.capabilities as string[]).toContain('clock-host-start-v1')
+    const template = buildRoutineSpawnTemplate({ home: HOME, hostKey: 'devbox', cliCommand: m.mock, env: {} })
+    const t = await mac.cmd({ cmd: 'leader.spawnTemplate', home: HOME, template, use: 'routine' })
+    expect(t.ok, JSON.stringify(t)).toBe(true)
+    const reply = data(await mac.cmd({ cmd: 'triggers.configure', config: { version: 1, triggers: [routineDef(cwd)] } }))
+    expect(reply.refused ?? []).toEqual([])
+    await mac.close()
+    return { base, cwd, m, d }
+  }
+
+  afterAll(() => {
+    // Only the CLIs these daemons started for this test (each recorded its own pid).
+    for (const base of bases) {
+      for (const pid of lines<number>(path.join(base, 'mock-out', 'pids.txt'))) if (pid > 1 && alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+      try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
+  })
+
+  it('with no server: starts the run once from the Mac\'s template, journals its task and session, and a later server records it and starts nothing', async () => {
+    const { cwd, m, d } = await setUp('once')
+    try {
+      await waitFor(() => lines(path.join(m.out, 'calls.jsonl')).length > 0, 40_000, 'the routine CLI')
+      const [call] = lines<{ pid: number; sid: string; argv: string[]; cwd: string }>(path.join(m.out, 'calls.jsonl'))
+      expect(call.sid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+      expect(fs.realpathSync(call.cwd)).toBe(fs.realpathSync(cwd))
+      expect(call.argv[call.argv.indexOf('--permission-mode') + 1]).toBe('bypassPermissions')
+      const ctx = call.argv[call.argv.indexOf('--append-system-prompt') + 1]
+      expect(ctx).not.toContain(START_TASK_TOKEN)
+      const taskId = /\(id ([^,]+), project "Routines"\)/.exec(ctx)?.[1] ?? ''
+      expect(taskId).toMatch(/^[a-z0-9]+-[0-9a-f]{8}$/)
+      expect(call.argv).not.toContain('--allowedTools')
+      await waitFor(() => lines<{ text: string }>(path.join(m.out, 'stdin.jsonl')).some((l) => l.text === MESSAGE), 20_000, 'the instructions on stdin')
+      // The fire is marked as started here, with its session and task.
+      await waitFor(() => !!stateIn(d.dir).pendingFires[0]?.host, 10_000, 'the started mark')
+      const fire = stateIn(d.dir).pendingFires[0]
+      expect(fire).toMatchObject({ seq: 1, clock: { slotMs: anchor }, host: { sessionId: call.sid, started: true, taskId, seqs: [1] } })
+      // Past the grace and the retry: still one CLI, one run.
+      await sleep(GRACE_MS + 6_000)
+      expect(lines(path.join(m.out, 'calls.jsonl'))).toHaveLength(1)
+      expect(stateIn(d.dir).seq).toBe(1)
+
+      // A server comes back: the journal holds the run's task, then its session.
+      const mac = await macConnects(d)
+      const recs = await macDrains(mac)
+      expect(recs.map((r) => r.kind)).toEqual(['task-create', 'session'])
+      expect(recs[0]).toMatchObject({ taskId, fields: { title: 'Routine: Nightly build', pinned: false }, placement: { project: 'Routines' }, actor: { kind: 'trigger', id: ROUTINE } })
+      expect(recs[1]).toMatchObject({ sid: call.sid, taskId, host: 'devbox', cwd, mode: 'bypass', title: 'Routine: Nightly build', firstMessage: MESSAGE, routine: { id: ROUTINE, slotMs: anchor } })
+      expect(recs[1].agentId).toBeUndefined()
+      // The fire replays with its mark, and a claim of it gets the run back: the server records it.
+      const again = data(await mac.cmd({ cmd: 'triggers.configure', config: { version: 1, triggers: [routineDef(cwd)] } }))
+      expect(again.refused ?? []).toEqual([])
+      await waitFor(() => mac.fires(ROUTINE).some((e) => (e.host as Record<string, unknown> | undefined)?.started === true), 10_000, 'the replay with its mark')
+      const epoch = String(mac.fires(ROUTINE)[0].epoch)
+      const claim = data(await mac.cmd({ cmd: 'triggers.claim', triggerId: ROUTINE, epoch, seqs: [1] }))
+      expect(claim).toMatchObject({ claimed: [], host: [{ seq: 1, host: { sessionId: call.sid, started: true, taskId } }] })
+      expect(data(await mac.cmd({ cmd: 'triggers.ack', triggerId: ROUTINE, seq: 1 })).acked).toBe(true)
+      await mac.close()
+      await sleep(GRACE_MS + 3_000)
+      expect(lines(path.join(m.out, 'calls.jsonl'))).toHaveLength(1)
+      expect(stateIn(d.dir).pendingFires).toEqual([])
+    } finally {
+      await stopDaemon(d)
+    }
+  }, 120_000)
+
+  it('a server that answers takes the run itself: the host starts nothing', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-rstart-${twin}-mac-`))
+    bases.push(base)
+    const cwd = path.join(base, 'repo')
+    fs.mkdirSync(cwd)
+    const m = routineMock(base)
+    const d = await spawnDaemon(twin, path.join(base, 'daemon'))
+    try {
+      const mac = await macConnects(d)
+      const template = buildRoutineSpawnTemplate({ home: HOME, hostKey: 'devbox', cliCommand: m.mock, env: {} })
+      expect((await mac.cmd({ cmd: 'leader.spawnTemplate', home: HOME, template, use: 'routine' })).ok).toBe(true)
+      await mac.cmd({ cmd: 'triggers.configure', config: { version: 1, triggers: [routineDef(cwd)] } })
+      await waitFor(() => mac.fires(ROUTINE).length > 0, 40_000, 'the fire')
+      const epoch = String(mac.fires(ROUTINE)[0].epoch)
+      expect(data(await mac.cmd({ cmd: 'triggers.claim', triggerId: ROUTINE, epoch, seqs: [1] }))).toMatchObject({ claimed: [1] })
+      await sleep(GRACE_MS + 4_000)
+      expect(lines(path.join(m.out, 'calls.jsonl'))).toEqual([])
+      expect(stateIn(d.dir).pendingFires[0].host).toBeUndefined()
+      await mac.close()
+    } finally {
+      await stopDaemon(d)
+    }
+  }, 90_000)
+
+  it('a daemon that dies between the CLI and the records starts nothing twice: the next boot journals both, once, and marks the fire', async () => {
+    const set = await setUp('crash', { WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN: '1' })
+    const { cwd, m } = set
+    let d = set.d
+    try {
+      await waitFor(() => lines(path.join(m.out, 'calls.jsonl')).length > 0, 40_000, 'the routine CLI')
+      await waitFor(() => !alive(d.pid), 20_000, 'the daemon death')
+      const [call] = lines<{ pid: number; sid: string }>(path.join(m.out, 'calls.jsonl'))
+      expect(alive(call.pid)).toBe(true)
+      for (const f of ['daemon.port', 'daemon.pid']) { try { fs.unlinkSync(path.join(d.dir, f)) } catch { /* gone */ } }
+      d = await spawnDaemon(twin, d.dir)
+      // Past the boot, the grace and a tick: the run is marked as started, from its journaled session.
+      await waitFor(() => { try { return !!stateIn(d.dir).pendingFires[0]?.host } catch { return false } }, 40_000, 'the started mark after the restart')
+      expect(stateIn(d.dir).pendingFires[0].host).toMatchObject({ sessionId: call.sid, started: true })
+      await sleep(GRACE_MS + 4_000)
+      // One more boot: still nothing new.
+      await stopDaemon(d)
+      d = await spawnDaemon(twin, d.dir)
+      await sleep(GRACE_MS + 8_000)
+      expect(lines(path.join(m.out, 'calls.jsonl'))).toHaveLength(1)
+      const mac = await macConnects(d)
+      const recs = await macDrains(mac)
+      expect(recs.map((r) => r.kind)).toEqual(['task-create', 'session'])
+      expect(recs[1]).toMatchObject({ sid: call.sid, cwd, routine: { id: ROUTINE, slotMs: anchor } })
+      expect(recs[1].taskId).toBe(recs[0].taskId)
+      await mac.close()
+    } finally {
+      await stopDaemon(d)
+    }
+  }, 180_000)
+
+  it('a server that claims a run whose mark a daemon death cut gets the run back, never the run to start again', async () => {
+    const set = await setUp('claim', { WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN: '1' })
+    const { cwd, m } = set
+    let d = set.d
+    try {
+      await waitFor(() => lines(path.join(m.out, 'calls.jsonl')).length > 0, 40_000, 'the routine CLI')
+      await waitFor(() => !alive(d.pid), 20_000, 'the daemon death')
+      const [call] = lines<{ pid: number; sid: string }>(path.join(m.out, 'calls.jsonl'))
+      for (const f of ['daemon.port', 'daemon.pid']) { try { fs.unlinkSync(path.join(d.dir, f)) } catch { /* gone */ } }
+      // A long grace: the host does not get to mark the run itself before the server claims it.
+      d = await spawnDaemon(twin, d.dir, { WALNUT_TRIGGER_HOST_GRACE_MS: '120000' })
+      expect(stateIn(d.dir).pendingFires[0].host).toBeUndefined()
+      const mac = await macConnects(d)
+      await mac.cmd({ cmd: 'triggers.configure', config: { version: 1, triggers: [routineDef(cwd)] } })
+      await waitFor(() => mac.fires(ROUTINE).length > 0, 10_000, 'the replay of the unmarked run')
+      const epoch = String(mac.fires(ROUTINE)[0].epoch)
+      const claim = data(await mac.cmd({ cmd: 'triggers.claim', triggerId: ROUTINE, epoch, seqs: [1] }))
+      expect(claim).toMatchObject({ claimed: [], host: [{ seq: 1, host: { sessionId: call.sid, started: true } }] })
+      expect(stateIn(d.dir).pendingFires[0].host).toMatchObject({ sessionId: call.sid, started: true })
+      const recs = await macDrains(mac)
+      expect(recs.map((r) => r.kind)).toEqual(['task-create', 'session'])
+      expect(data(await mac.cmd({ cmd: 'triggers.ack', triggerId: ROUTINE, seq: 1 })).acked).toBe(true)
+      await mac.close()
+      await sleep(3_000)
+      expect(lines(path.join(m.out, 'calls.jsonl'))).toHaveLength(1)
+    } finally {
+      await stopDaemon(d)
+    }
+  }, 180_000)
 })

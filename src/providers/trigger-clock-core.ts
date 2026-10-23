@@ -96,6 +96,93 @@ export function clockStateOnArm(spec: TriggerClockSpec, prev: ClockHostState | u
   return { fromMs: base.fromMs, ...(next !== undefined ? { nextRunAtMs: next } : {}) };
 }
 
+// ── A claude-code routine's run started on this host (clock-host-start-v1) ──
+
+/** A host that starts routine runs itself while its Walnut is away. */
+export const CLOCK_HOST_START_CAPABILITY = 'clock-host-start-v1';
+
+/** Longest first message a start carries (a longer routine stays the Mac's to start). */
+export const START_MESSAGE_MAX = 32 * 1024;
+/** Longest session context a start carries (one argv string on Linux is 128 KB). */
+export const START_CONTEXT_MAX = 120 * 1024;
+
+/**
+ * What the Mac's own clock def says a run started here is, the fields its
+ * claude-code executor would use (core/routines/executors/claude-code.ts). Sent
+ * only on the trusted socket, and only for a routine the Mac judged eligible
+ * (core/routines/clock-placement.ts routineStartOf); the daemon checks each field
+ * again and fills the Mac's routine spawn template with them (host-start-core.ts
+ * planRoutine), never an argv of its own.
+ */
+export interface ClockStartSpec {
+  /** The Walnut (its data dir on the Mac): the tenant key of the host copy and the journal. */
+  home: string;
+  /** The Mac's name for this host: the session record's `host`. */
+  host: string;
+  /** The run's task title (the routine's taskTitle, else "Routine: <name>"). */
+  title: string;
+  /** The run's task project (the routine's project, else "Routines"). */
+  project: string;
+  /** Absolute folder the session runs in; it must exist on this host. */
+  cwd: string;
+  /** The first message: the routine's instructions. */
+  message: string;
+  /** Walnut mode id the Mac would run it in (checked against the routine template). */
+  mode: string;
+  model?: string;
+  effort?: string;
+  /**
+   * The session context the Mac would append (session-context.ts), built for the
+   * run's task with START_TASK_TOKEN where its id goes: the id is minted here.
+   */
+  context?: string;
+}
+
+/** Where the run's task id goes in `context`. */
+export const START_TASK_TOKEN = '__WALNUT_ROUTINE_TASK_ID__';
+
+/**
+ * A def's `start`, checked for shape. Anything wrong drops the start alone (the
+ * run then waits for the Mac, as before), never the clock.
+ */
+export function validateClockStartSpec(raw: unknown): { ok: true; spec: ClockStartSpec } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'start must be an object' };
+  const r = raw as Record<string, unknown>;
+  const text = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.length <= max && v.indexOf('\u0000') === -1 ? v : undefined);
+  const home = text(r.home, 1024);
+  if (!home) return { ok: false, error: 'start.home is required' };
+  const host = typeof r.host === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(r.host) ? r.host : '';
+  if (!host) return { ok: false, error: 'start.host must be a host name' };
+  const title = text(r.title, 500);
+  if (!title || !title.trim()) return { ok: false, error: 'start.title is required' };
+  const project = r.project === undefined ? '' : text(r.project, 200);
+  if (project === undefined) return { ok: false, error: 'start.project is not a project name' };
+  const cwd = text(r.cwd, 1024);
+  if (!cwd || !cwd.startsWith('/') || cwd.split('/').indexOf('..') !== -1) return { ok: false, error: 'start.cwd must be an absolute path' };
+  const message = text(r.message, START_MESSAGE_MAX);
+  if (!message || !message.trim()) return { ok: false, error: `start.message must hold 1 to ${START_MESSAGE_MAX} characters` };
+  const mode = typeof r.mode === 'string' && /^[A-Za-z]{1,32}$/.test(r.mode) ? r.mode : '';
+  if (!mode) return { ok: false, error: 'start.mode is required' };
+  const model = r.model === undefined ? undefined : typeof r.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:[\]/-]{0,127}$/.test(r.model) ? r.model : null;
+  if (model === null) return { ok: false, error: 'start.model must be one CLI value' };
+  const effort = r.effort === undefined ? undefined : typeof r.effort === 'string' && /^[A-Za-z]{1,32}$/.test(r.effort) ? r.effort : null;
+  if (effort === null) return { ok: false, error: 'start.effort is not an effort' };
+  const context = r.context === undefined ? undefined : text(r.context, START_CONTEXT_MAX);
+  if (context === undefined && r.context !== undefined) return { ok: false, error: `start.context must hold at most ${START_CONTEXT_MAX} characters` };
+  return {
+    ok: true,
+    spec: {
+      home, host, title, project: project ?? '', cwd, message, mode,
+      ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(context ? { context } : {}),
+    },
+  };
+}
+
+/** The stable text of a start for the set's hash. */
+export function clockStartKey(spec: ClockStartSpec): string {
+  return JSON.stringify([spec.home, spec.host, spec.title, spec.project, spec.cwd, spec.message, spec.mode, spec.model ?? '', spec.effort ?? '', spec.context ?? '']);
+}
+
 /** A run nobody has taken: no server claimed it and the host did not deliver it. */
 function owed(f: PendingFire): boolean {
   return !!f.clock && !f.host && f.claimedAt === undefined;

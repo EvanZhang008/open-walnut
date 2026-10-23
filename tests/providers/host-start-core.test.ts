@@ -12,7 +12,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostStart, type HostStart } from '../../src/providers/host-start-core.js'
-import { buildHostSpawnTemplate } from '../../src/providers/spawn-template.js'
+import { buildHostSpawnTemplate, buildRoutineSpawnTemplate, hostRoutineModes } from '../../src/providers/spawn-template.js'
+import { START_TASK_TOKEN } from '../../src/providers/trigger-clock-core.js'
 
 const HOME = '/Users/marina/.open-walnut'
 const SID = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -381,5 +382,111 @@ describe('a start kept on disk until its session record is (a daemon death in be
     fs.writeFileSync(path.join(pd, `k1-${SID}.json`), JSON.stringify({ v: 1, home: HOME, sid: SID, record: { ...record, kind: 'note' }, at: 1 }))
     expect(hs.pendingStarts()).toEqual([])
     expect(fs.readdirSync(pd)).toEqual([])
+  })
+})
+
+describe('a routine run (planRoutine, clock-host-start-v1)', () => {
+  const RSID = 'dddddddd-4444-4444-8444-000000000001'
+  function routineTemplate() {
+    return buildRoutineSpawnTemplate({ home: HOME, hostKey: 'marina', env: {}, now })
+  }
+  function run(over: Record<string, unknown> = {}) {
+    return {
+      sid: RSID, taskId: 'mrun1-0a1b2c3d', title: 'Routine: nightly report', cwd: dir, mode: 'bypass',
+      context: `You are working on the task "Routine: nightly report" (id ${START_TASK_TOKEN}, project "Routines").`, taskToken: START_TASK_TOKEN,
+      firstMessage: 'write the nightly report', routine: { id: 'job-1', slotMs: 1_760_000_000_000 }, ...over,
+    } as Parameters<HostStart['planRoutine']>[1]
+  }
+
+  it('needs the routine template: the ask template never serves a routine, and the routine one never an ask', () => {
+    const hs = make()
+    hs.setTemplate(HOME, template({ bypassAllowed: true }))
+    expect(hs.planRoutine(HOME, run(), 'marina')).toMatchObject({ ok: false, code: 'needs_leader', detail: { why: 'no_spawn_template' } })
+    const hs2 = make()
+    fs.rmSync(path.join(dir, 'spawn-template-k1.json'))
+    hs2.setTemplate(HOME, routineTemplate(), 'routine')
+    expect(hs2.plan(HOME, fields(), 'marina')).toMatchObject({ ok: false, code: 'needs_leader', detail: { why: 'no_spawn_template' } })
+    expect(fs.statSync(path.join(dir, 'spawn-template-routine-k1.json')).mode & 0o777).toBe(0o600)
+    // A restarted daemon reads it back.
+    expect(make().planRoutine(HOME, run(), 'marina').ok).toBe(true)
+  })
+
+  it('fills the Mac\'s argv: the run\'s sid, mode, model and effort, its context with the task id, no tool lists, in its folder', () => {
+    const hs = make()
+    hs.setTemplate(HOME, routineTemplate(), 'routine')
+    const r = hs.planRoutine(HOME, run({ model: 'opus', effort: 'high' }), 'marina')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const a = r.plan.args
+    expect(a[a.indexOf('--session-id') + 1]).toBe(RSID)
+    expect(a[a.indexOf('--permission-mode') + 1]).toBe('bypassPermissions')
+    expect(a).toContain('--model')
+    expect(a[a.indexOf('--effort') + 1]).toBe('high')
+    const ctx = a[a.indexOf('--append-system-prompt') + 1]
+    expect(ctx).toContain('(id mrun1-0a1b2c3d, project "Routines")')
+    expect(ctx).not.toContain(START_TASK_TOKEN)
+    expect(a).not.toContain('--allowedTools')
+    expect(a).not.toContain('--tools')
+    expect(a).not.toContain('--system-prompt')
+    expect(r.plan).toMatchObject({ sid: RSID, taskId: 'mrun1-0a1b2c3d', cwd: dir, mode: 'bypass', message: 'write the nightly report', personaFile: '' })
+    expect(r.plan.record).toEqual({
+      kind: 'session', sid: RSID, taskId: 'mrun1-0a1b2c3d', host: 'marina', cwd: dir, mode: 'bypass', title: 'Routine: nightly report',
+      startedAt: now, firstMessage: 'write the nightly report', model: 'opus', effort: 'high', routine: { id: 'job-1', slotMs: 1_760_000_000_000 },
+    })
+    expect(r.plan.record.agentId).toBeUndefined()
+  })
+
+  it('refuses a folder that is missing here, a relative one, a mode the Mac did not allow, and a bad context', () => {
+    const hs = make()
+    hs.setTemplate(HOME, routineTemplate(), 'routine')
+    expect(hs.planRoutine(HOME, run({ cwd: path.join(dir, 'gone') }), 'marina')).toMatchObject({ ok: false, code: 'cwd_missing' })
+    expect(hs.planRoutine(HOME, run({ cwd: 'relative/dir' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(hs.planRoutine(HOME, run({ cwd: `${dir}/../x` }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(Object.keys(hostRoutineModes().modes).sort()).toEqual(['bypass', 'default'])
+    expect(hs.planRoutine(HOME, run({ mode: 'plan' }), 'marina')).toMatchObject({ ok: false, code: 'mode_not_allowed' })
+    expect(hs.planRoutine(HOME, run({ mode: 'dontAsk' }), 'marina')).toMatchObject({ ok: false, code: 'mode_not_allowed' })
+    expect(hs.planRoutine(HOME, run({ context: '--dangerously-skip-permissions' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(hs.planRoutine(HOME, run({ context: 'x'.repeat(121 * 1024) }), 'marina')).toMatchObject({ ok: false, detail: { why: 'persona_too_large' } })
+    expect(hs.planRoutine(HOME, run({ sid: 'not-a-uuid' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(hs.planRoutine(HOME, run({ model: '--model=evil' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(hs.planRoutine(HOME, run({ firstMessage: '   ' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
+  })
+
+  it('an injection string in the message or title never reaches the argv as its own flag', () => {
+    const hs = make()
+    hs.setTemplate(HOME, routineTemplate(), 'routine')
+    const r = hs.planRoutine(HOME, run({ firstMessage: INJECT, title: INJECT }), 'marina')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.plan.args.join('\u0000')).not.toContain('pwned')
+    expect(r.plan.args.filter((x) => x === '--dangerously-skip-permissions')).toEqual([])
+    expect(r.plan.message).toBe(INJECT)
+  })
+
+  it('a routine template keeps no agents and needs no folder of its own', () => {
+    const hs = make()
+    const t = hs.setTemplate(HOME, { ...routineTemplate(), agents: { general: { allowedTools: ['Bash'] } }, cwd: 'not absolute' }, 'routine')
+    expect(t.agents).toEqual({})
+    expect(t.cwd).toBe('')
+    expect(() => hs.setTemplate(HOME, routineTemplate(), 'other' as never)).toThrow(/use/)
+  })
+
+  it('shares the host limits with asks', () => {
+    const hs = make()
+    hs.setTemplate(HOME, routineTemplate(), 'routine')
+    busy = 20
+    expect(hs.planRoutine(HOME, run(), 'marina')).toMatchObject({ ok: false, code: 'throttled' })
+  })
+
+  it('keeps the run\'s task-create with its start on disk, and reads it back', () => {
+    const hs = make()
+    const r = (() => { hs.setTemplate(HOME, routineTemplate(), 'routine'); return hs.planRoutine(HOME, run(), 'marina') })()
+    if (!r.ok) throw new Error('no plan')
+    const task = { record: { kind: 'task-create' as const, taskId: 'mrun1-0a1b2c3d', fields: { title: 'Routine: nightly report', pinned: false }, placement: { project: 'Routines' } }, opId: 'routine-abc', jobId: 'job-1' }
+    hs.holdPending(HOME, { sid: RSID, record: r.plan.record, opId: 'routine-abc-session', task })
+    expect(make().pendingStarts()).toEqual([{ home: HOME, sid: RSID, record: r.plan.record, opId: 'routine-abc-session', task, at: now }])
+    // A task-create for another task is not this start's: it is dropped, the start kept.
+    hs.holdPending(HOME, { sid: RSID, record: r.plan.record, opId: 'routine-abc-session', task: { ...task, record: { ...task.record, taskId: 'other' } } })
+    expect(make().pendingStarts()[0].task).toBeUndefined()
   })
 })

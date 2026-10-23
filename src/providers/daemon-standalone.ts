@@ -90,6 +90,7 @@ import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createHostStart, type HostStartAnswer, type HostStartPlan } from './host-start-core.js'
+import { createClockHostStart } from './clock-host-start-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createLetterCheck } from '../core/human-inbox/letter-check.js'
@@ -158,7 +159,7 @@ import {
   type TriggersTestResult,
 } from './trigger-check-core.js'
 import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-core.js'
-import { clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
+import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
@@ -3862,13 +3863,18 @@ const hostStart = createHostStart({
   },
 })
 
-/** The leader's spawn template for its Walnut: the socket its leader.configure tagged only. */
+/**
+ * The leader's spawn template for its Walnut: the socket its leader.configure tagged only.
+ * `use: 'routine'` (clock-host-start-v1): the template a routine run starts from, kept
+ * apart from the ask template.
+ */
 function cmdLeaderSpawnTemplate(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (!isServerClient(ws)) return sendError(ws, id, 'leader.spawnTemplate: the leader only')
   const home = typeof cmd.home === 'string' ? cmd.home : ''
   if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'leader.spawnTemplate: send leader.configure for this Walnut first')
+  if (cmd.use !== undefined && cmd.use !== 'ask' && cmd.use !== 'routine') return sendError(ws, id, 'leader.spawnTemplate: use must be ask or routine')
   try {
-    const t = hostStart.setTemplate(home, cmd.template)
+    const t = hostStart.setTemplate(home, cmd.template, cmd.use === 'routine' ? 'routine' : 'ask')
     sendOk(ws, id, { builtAt: t.builtAt })
   } catch (err) {
     sendError(ws, id, (err as Error).message)
@@ -3877,6 +3883,32 @@ function cmdLeaderSpawnTemplate(ws: ServerWebSocket<WsData>, id: number, cmd: Re
 
 /** Tests only (never in the real daemon dir): die right after a host ask's CLI is spawned, before its record. */
 const DIE_AFTER_ASK_SPAWN = !IS_PROD_DAEMON_DIR && process.env.WALNUT_TEST_DIE_AFTER_ASK_SPAWN === '1'
+/** Tests only (never in the real daemon dir): die right after a routine run's CLI is spawned, before its records. */
+const DIE_AFTER_ROUTINE_SPAWN = !IS_PROD_DAEMON_DIR && process.env.WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN === '1'
+
+// A claude-code routine's run while the Mac is away ('clock-host-start-v1',
+// clock-host-start-core.ts): the trigger tick hands it a due fire of a clock def with
+// `start` (startUnclaimedRun). Keep in sync with daemon-source.ts.
+const clockHostStart = createClockHostStart({
+  hostStart,
+  offline: {
+    checkRoutineRun: (home, sid) => offlineHost.checkRoutineRun(home, sid),
+    noteRoutineTask: (home, rec, opId, jobId) => offlineHost.noteRoutineTaskWaiting(home, rec, opId, jobId),
+    noteSession: (home, rec, opId) => offlineHost.noteSessionWaiting(home, rec, opId),
+    knowsSession: (home, sid) => offlineHost.knowsSession(home, sid),
+  },
+  primaryAnswers: (home) => primaryAnswersFollower(home),
+  ownsDir: () => ownsDaemonDir(),
+  ran: (sid) => sessions.has(sid) || fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl')),
+  spawn: (home, taskId, p) => sessionStartGate.run(p.sid, () => startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home, task: taskId } })),
+  stop: (sid) => { const s = sessions.get(sid); if (s?.pid) killProcessGroup(s.pid, 'SIGTERM') },
+  marker: (sid, text, messageId) => { core.handleAppendUserMarker(sid, text, messageId) },
+  taskToken: () => START_TASK_TOKEN,
+  sha256: (text) => crypto.createHash('sha256').update(text).digest('hex'),
+  now: () => Date.now(),
+  log: (level, msg, data) => logMsg(level, msg, data),
+  ...(DIE_AFTER_ROUTINE_SPAWN ? { afterSpawn: () => { process.kill(process.pid, 'SIGKILL') } } : {}),
+})
 
 /**
  * Asks a daemon death cut between their CLI and their `session` record (startHostAsk keeps
@@ -3889,7 +3921,9 @@ function recoverPendingAsks() {
     try {
       const ran = sessions.has(p.sid) || fs.existsSync(path.join(STREAMS_DIR, p.sid + '.jsonl'))
       if (ran && offlineHost.ownerOf(p.sid) !== p.home) {
-        const saved = offlineHost.noteSession(p.home, p.record, p.opId, p.actor)
+        // A routine run's own task goes first (clock-host-start-v1): its session record names it.
+        const task = p.task ? offlineHost.noteRoutineTask(p.home, p.task.record, p.task.opId, p.task.jobId) : null
+        const saved = task && !task.ok ? task : offlineHost.noteSession(p.home, p.record, p.opId, p.actor)
         if (saved.ok) {
           logMsg('info', 'startup: an ask cut before its session record is journaled now', { home: p.home, sid: p.sid, taskId: p.record.taskId })
         } else {
@@ -5422,7 +5456,9 @@ function runClock(entry: ArmedTrigger, manual: boolean): 'fired' | 'held' {
     entry.nextRunAtMs = next ?? Number.POSITIVE_INFINITY
   }
   const owed = !manual && clockFireOwed(entry.state.pendingFires)
-  const fire = owed ? null : applyClockFire(entry.state, now, slotMs, !!entry.def.deliver, clock.fromMs)
+  // Arbitrated (a server claims it, else the host takes it) when the host can deliver
+  // the run itself: into a session here, or by starting the routine's session here.
+  const fire = owed ? null : applyClockFire(entry.state, now, slotMs, !!entry.def.deliver || !!entry.def.start, clock.fromMs)
   persistTriggerState(entry.def.id, entry.state)
   logMsg('info', 'clock routine run', {
     id: entry.def.id, outcome: fire ? 'fired' : 'held', slotMs, manual,
@@ -5709,9 +5745,10 @@ function deliverUnclaimedFires(now: number): void {
   for (const entry of fireHolders()) {
     const spec = entry.def.deliver
     const id = entry.def.id
-    if (!spec || hostDeliveriesInFlight.has(id)) continue
+    if ((!spec && !entry.def.start) || hostDeliveriesInFlight.has(id)) continue
     const due = entry.state.pendingFires.filter((f) => fireDueOnHost(f, now, entry.armedAtMs, grace, HOST_DELIVERY_RETRY_MS))
     if (due.length === 0) continue
+    if (!spec) { startUnclaimedRun(entry, due[0], now); continue }
     const seqs = due.map((f) => f.seq)
     const epoch = entry.state.epoch
     const messageId = `qm-trigger-${crypto.randomBytes(6).toString('hex')}`
@@ -5746,6 +5783,48 @@ function deliverUnclaimedFires(now: number): void {
       hostDeliveriesInFlight.delete(id)
     })
   }
+}
+
+/**
+ * Start, on this host, the run of a claude-code routine no server claimed in time
+ * (clock-host-start-v1, clock-host-start-core.ts): one fire at a time per routine, its
+ * outcome recorded on whatever holds the trigger's state when the start ends, as a host
+ * delivery is. A start that could not be made leaves the fire for the server and is
+ * tried again after a minute; one held back because a server answers is not held back.
+ * Keep in sync with daemon-source.ts.
+ */
+function startUnclaimedRun(entry: ArmedTrigger, fire: PendingFire, now: number): void {
+  const id = entry.def.id
+  const def = entry.def
+  const start = def.start
+  if (!start) return
+  const epoch = entry.state.epoch
+  const seqs = [fire.seq]
+  hostDeliveriesInFlight.set(id, new Set(seqs))
+  void clockHostStart.start({ id, name: def.name, start }, fire).then((r) => {
+    const current = heldTrigger(id)
+    const state = current ? current.state : readTriggerState(id, Date.now())
+    if (state.epoch !== epoch) {
+      logMsg('warn', 'routine run outcome dropped: state file started over', { id, seqs, started: r.ok })
+      return
+    }
+    if (r.ok) {
+      markHostDelivered(state, { atMs: Date.now(), sessionId: r.sid, messageId: r.messageId, seqs, started: true, taskId: r.taskId })
+    } else if (!r.wait) {
+      for (const f of state.pendingFires) if (seqs.includes(f.seq)) f.hostTriedAt = now
+    } else {
+      return
+    }
+    persistTriggerState(id, state)
+    // A server that is connected but slow records it now instead of a minute later.
+    if (r.ok && current) {
+      for (const f of current.state.pendingFires) if (seqs.includes(f.seq)) sendTriggerFire(current, f, true)
+    }
+  }).catch((err) => {
+    logMsg('error', 'routine run start threw', { id, seqs, error: (err as Error).message })
+  }).finally(() => {
+    hostDeliveriesInFlight.delete(id)
+  })
 }
 
 /** Overlap is SKIPPED, never queued: a slow check must not build a backlog. */
@@ -5988,13 +6067,36 @@ function cmdTriggersClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     return sendOk(ws, id, { ...empty, busy: seqs.filter((s) => inFlight.has(s)), unknown: seqs.filter((s) => !inFlight.has(s)) })
   }
   const home = gatewayClientHomes.get(ws)
-  if (entry.def.deliver && home && home !== entry.def.deliver.home) {
+  const owner = entry.def.deliver?.home ?? entry.def.start?.home
+  if (owner && home && home !== owner) {
     logMsg('warn', 'trigger claim refused: another Walnut', { id: tid, seqs })
     return sendOk(ws, id, { ...empty, foreign: true })
   }
+  const marked = markStartedRuns(entry, seqs)
   const { reply, changed } = claimFires(entry.state, seqs, Date.now(), inFlight)
-  if (changed) persistTriggerState(tid, entry.state)
+  if (changed || marked) persistTriggerState(tid, entry.state)
   return sendOk(ws, id, reply as unknown as Record<string, unknown>)
+}
+
+/**
+ * Fires of a routine whose run this host started already (clock-host-start-v1) but
+ * whose mark a daemon death cut (the records were kept, the state was not): marked
+ * now, before a server's claim, so the server records the run instead of starting a
+ * second one. Keep in sync with daemon-source.ts.
+ */
+function markStartedRuns(entry: ArmedTrigger, seqs: readonly number[]): boolean {
+  const start = entry.def.start
+  if (!start) return false
+  let changed = false
+  for (const f of entry.state.pendingFires) {
+    if (!seqs.includes(f.seq) || f.host || f.claimedAt !== undefined || !f.clock) continue
+    const run = clockHostStart.startedRun({ id: entry.def.id, start }, f)
+    if (!run) continue
+    markHostDelivered(entry.state, { atMs: Date.now(), sessionId: run.sid, messageId: run.messageId, seqs: [f.seq], started: true, taskId: run.taskId })
+    logMsg('info', 'routine run started here already: a claim gets it back', { id: entry.def.id, seq: f.seq, sid: run.sid })
+    changed = true
+  }
+  return changed
 }
 
 function cmdTriggersAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {

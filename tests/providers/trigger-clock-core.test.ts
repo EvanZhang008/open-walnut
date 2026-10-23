@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, validateClockSpec,
+  START_CONTEXT_MAX, START_MESSAGE_MAX, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, validateClockSpec, validateClockStartSpec,
 } from '../../src/providers/trigger-clock-core.js'
 import {
   applyClockFire, claimFires, emptyHostState, triggersSetHash, validateTriggerDef, validateTriggerSet,
@@ -141,5 +141,63 @@ describe('a pushed set', () => {
     expect(refused[0]).toMatchObject({ id: 'r3' })
     expect(refused[1].id).toBeUndefined()
     expect(refused[2]).toEqual({ id: 'r1', error: 'duplicate trigger id r1' })
+  })
+})
+
+describe('a claude-code routine\'s start (clock-host-start-v1)', () => {
+  const start = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    home: '/h', host: 'marina', title: 'Routine: nightly', project: 'Routines', cwd: '/srv/repo',
+    message: 'write the report', mode: 'bypass', model: 'opus[1m]', effort: 'high', context: 'You are a coding session.', ...over,
+  })
+  const startDef = (over: Record<string, unknown> = {}): Record<string, unknown> => {
+    const { deliver: _d, ...rest } = cronDef(10)
+    return { ...rest, start: start(over) }
+  }
+
+  it('takes the Mac\'s fields as they are', () => {
+    expect(validateClockStartSpec(start())).toEqual({ ok: true, spec: start() })
+    const bare = validateClockStartSpec(start({ model: undefined, effort: undefined, context: undefined, project: undefined }))
+    expect(bare).toEqual({ ok: true, spec: { home: '/h', host: 'marina', title: 'Routine: nightly', project: '', cwd: '/srv/repo', message: 'write the report', mode: 'bypass' } })
+  })
+
+  it('refuses a field a host could misread', () => {
+    for (const over of [
+      { home: '' }, { host: 'a b' }, { host: '../x' }, { title: '  ' }, { cwd: 'srv/repo' }, { cwd: '/srv/../etc' },
+      { message: '' }, { message: 'x'.repeat(START_MESSAGE_MAX + 1) }, { mode: '--dangerously-skip-permissions' },
+      { model: '--model' }, { model: 'opus; id' }, { effort: 'max high' }, { context: 'x'.repeat(START_CONTEXT_MAX + 1) },
+      { title: 'a\u0000b' }, { cwd: '/srv/\u0000' },
+    ]) {
+      expect(validateClockStartSpec(start(over)).ok, JSON.stringify(over).slice(0, 80)).toBe(false)
+    }
+    expect(validateClockStartSpec(null).ok).toBe(false)
+    expect(validateClockStartSpec([start()]).ok).toBe(false)
+  })
+
+  it('a clock def keeps its start; a malformed start costs only the start; a def that delivers carries none', () => {
+    const ok = validateTriggerDef(startDef())
+    expect(ok).toMatchObject({ ok: true, def: { id: 'r1', start: start() } })
+    const badStart = validateTriggerDef(startDef({ cwd: 'relative' }))
+    expect(badStart.ok).toBe(true)
+    if (badStart.ok) {
+      expect(badStart.def.start).toBeUndefined()
+      expect(badStart.def.clock).toBeDefined()
+    }
+    const both = validateTriggerDef({ ...cronDef(10), start: start() })
+    expect(both.ok && both.def.start === undefined && both.def.deliver !== undefined).toBe(true)
+  })
+
+  it('the set hash moves with every field of the start', () => {
+    const hashOf = (over: Record<string, unknown>) => {
+      const v = validateTriggerDef(startDef(over))
+      if (!v.ok) throw new Error(v.error)
+      return triggersSetHash([v.def])
+    }
+    const base = hashOf({})
+    const none = validateTriggerDef((() => { const { start: _s, ...d } = startDef(); return d })())
+    if (!none.ok) throw new Error('no def')
+    expect(triggersSetHash([none.def])).not.toBe(base)
+    for (const over of [{ title: 'other' }, { cwd: '/srv/other' }, { message: 'other' }, { mode: 'default' }, { model: 'sonnet' }, { effort: 'low' }, { context: 'other' }, { project: 'Other' }]) {
+      expect(hashOf(over), JSON.stringify(over)).not.toBe(base)
+    }
   })
 })

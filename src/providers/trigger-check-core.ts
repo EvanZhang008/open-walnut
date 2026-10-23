@@ -17,7 +17,9 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { clockSpecKey, validateClockSpec, type ClockHostState, type TriggerClockSpec } from './trigger-clock-core.js';
+import {
+  clockSpecKey, clockStartKey, validateClockSpec, validateClockStartSpec, type ClockHostState, type ClockStartSpec, type TriggerClockSpec,
+} from './trigger-clock-core.js';
 
 // ── Limits (every number is a cron-storm lesson; keep them in one place) ──
 
@@ -159,6 +161,12 @@ export interface TriggerDef {
   clock?: TriggerClockSpec;
   limits?: TriggerLimits;
   deliver?: TriggerDeliverSpec;
+  /**
+   * A clock routine whose run starts a NEW session on this host (a claude-code
+   * routine, clock-host-start-v1): what that run is, so the host starts it itself
+   * when no server took it in time (clock-host-start-core.ts).
+   */
+  start?: ClockStartSpec;
 }
 
 /** The host delivered a fire itself; the server records it and never delivers it again. */
@@ -170,6 +178,10 @@ export interface HostDelivery {
   seqs: number[];
   /** The session was stopped and the host started it again with this message (trigger-host-resume-v1). */
   resumed?: true;
+  /** The run started a NEW session here, on a task the host made for it (clock-host-start-v1). */
+  started?: true;
+  /** That task (journaled for the server as a `task-create`). */
+  taskId?: string;
 }
 
 export interface TriggerItem {
@@ -998,6 +1010,7 @@ export function triggersSetHash(defs: TriggerDef[]): string {
     // Appended only when present, so a set without host delivery keeps the hash
     // it always had and an upgrade does not rewrite every triggers.json.
     ...(d.deliver ? [d.deliver.home, d.deliver.taskId, d.deliver.prompt] : []),
+    ...(d.start ? ['start', clockStartKey(d.start)] : []),
   ]);
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 12);
 }
@@ -1112,6 +1125,9 @@ function validateClockDef(r: Record<string, unknown> & { id: string }): { ok: tr
   const clock = validateClockSpec(r.clock);
   if (!clock.ok) return { ok: false, error: `trigger ${r.id}: ${clock.error}` };
   const deliver = deliverSpecOf(r.deliver);
+  // A malformed start only costs the host start (the run waits for the server, as
+  // before), never the clock. A routine that delivers into a session starts none.
+  const start = !deliver && r.start !== undefined ? validateClockStartSpec(r.start) : null;
   return {
     ok: true,
     def: {
@@ -1120,6 +1136,7 @@ function validateClockDef(r: Record<string, unknown> & { id: string }): { ok: tr
       everyMs: typeof r.everyMs === 'number' && Number.isFinite(r.everyMs) ? Math.floor(r.everyMs) : 0,
       clock: clock.spec,
       ...(deliver ? { deliver } : {}),
+      ...(start && start.ok ? { start: start.spec } : {}),
     },
   };
 }

@@ -42,6 +42,16 @@
  * `once` holds a start per session id: a retry while the CLI is still starting (or
  * soon after it answered) gets the first attempt's answer, never a second CLI.
  *
+ * A claude-code routine's run while the Mac is away (clock-host-start-v1,
+ * clock-host-start-core.ts) uses the same fill through `planRoutine`, from a SECOND
+ * template the Mac pushes for that purpose (`leader.spawnTemplate {use:'routine'}`,
+ * spawn-template-routine-<key>.json): its modes are the ones the Mac runs a routine
+ * in, its cwd is the routine's own (absolute, existing here), it has no persona and
+ * no tool lists, and its context is the session context the Mac built. The ask
+ * template and its ask_bypass rule never serve a routine, and the routine template
+ * never serves follower.start: every field of a routine start comes from the Mac's
+ * own clock def, never from a follower.
+ *
  * How the daemon twins get it: daemon-standalone.ts imports createHostStart;
  * daemon-source.ts inlines `createHostStart.toString()` through
  * `__CREATE_HOST_START__`. So the factory body references NOTHING at module
@@ -64,6 +74,9 @@ export interface EffortRules {
 /** An agent's tool lists, from the Mac's lane profile for that agent. */
 export interface AgentTools { allowedTools?: string[]; tools?: string[] }
 
+/** Which start a template serves: a follower's new ask, or a routine run from the Mac's own clock def. */
+export type TemplateUse = 'ask' | 'routine'
+
 export interface SpawnTemplate {
   v: 1
   /** The Walnut (its data dir on the Mac) this template is for. */
@@ -85,7 +98,7 @@ export interface SpawnTemplate {
   agents: Record<string, AgentTools>
   /** How the persona rides: as the CLI's file flag, or as the string flag. */
   persona: 'arg' | 'file'
-  /** The folder asks run in on this host (absolute). */
+  /** The folder asks run in on this host (absolute). A routine template has none (''): a routine names its own. */
   cwd: string
   builtAt: number
 }
@@ -115,6 +128,24 @@ export type HostStartAnswer =
   | { ok: true; reply: Record<string, unknown> }
   | { ok: false; error: string; extra: Record<string, unknown> }
 
+/** A claude-code routine's run, from the Mac's own clock def (clock-host-start-core.ts). */
+export interface RoutineStartFields {
+  sid: string
+  taskId: string
+  title: string
+  /** Absolute, existing on this host. */
+  cwd: string
+  mode: string
+  model?: string
+  effort?: string
+  /** The session context the Mac built for the run's task; `taskToken` stands where the task id goes. */
+  context?: string
+  taskToken?: string
+  firstMessage: string
+  /** The routine and the slot this run stands for: the Mac records the session as that run's. */
+  routine: { id: string; slotMs: number }
+}
+
 export interface HostStartPlan {
   sid: string
   taskId: string
@@ -124,11 +155,16 @@ export interface HostStartPlan {
   message: string
   /** Walnut mode id the session starts in. */
   mode: string
+  /** '' when nothing rides a file (a routine with no context, a string persona's ask writes one anyway). */
   personaFile: string
   /** The journal's `session` record body (offline-journal-core v2 kind `session`). */
-  record: { kind: 'session'; sid: string; taskId: string; host: string; cwd: string; agentId: string; model?: string; effort?: string; mode: string; title: string; startedAt: number
+  record: { kind: 'session'; sid: string; taskId: string; host: string; cwd: string
+    /** An ask's agent; a routine run names none. */
+    agentId?: string; model?: string; effort?: string; mode: string; title: string; startedAt: number
     /** The first words (at most 4000 characters): the Mac titles the ask from them after adoption. */
-    firstMessage?: string }
+    firstMessage?: string
+    /** A routine's run (clock-host-start-v1): not an ask, so the Mac adopts it as the routine's session. */
+    routine?: { id: string; slotMs: number } }
 }
 
 export type HostStartRefusal = { ok: false; code: string; message: string; detail?: Record<string, unknown>; retryAfterMs?: number }
@@ -145,20 +181,32 @@ export interface HostStartDeps {
   busy: () => number
 }
 
+/** The `task-create` a routine run journals for its own task (clock-host-start-core.ts). */
+export interface PendingTask {
+  record: { kind: 'task-create'; taskId: string; fields: Record<string, unknown>; placement: { project?: string } }
+  opId: string
+  /** The routine: the record's actor (`{kind:'trigger', id}`). */
+  jobId: string
+}
+
 /** A start whose CLI may run before its `session` record is kept (startHostAsk in the twins). */
 export interface PendingStart {
   sid: string
   record: HostStartPlan['record']
   opId?: string
   actor?: unknown
+  /** A routine run's own task, journaled before its session record (at the next boot too). */
+  task?: PendingTask
 }
 
 export interface HostStart {
-  /** The Mac's template for a Walnut (trusted socket only; the twin checks). Throws on a bad one. */
-  setTemplate(home: string, raw: unknown): SpawnTemplate
-  templateOf(home: string): SpawnTemplate | null
+  /** The Mac's template for a Walnut (trusted socket only; the twin checks). Throws on a bad one. `use`: 'ask' when absent. */
+  setTemplate(home: string, raw: unknown, use?: TemplateUse): SpawnTemplate
+  templateOf(home: string, use?: TemplateUse): SpawnTemplate | null
   /** Validate and fill: the plan the twin spawns, or a refusal. Never throws. */
   plan(home: string, raw: unknown, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal
+  /** The same fill for a routine run, from the routine template (its own folder, no persona, no tool lists). Never throws. */
+  planRoutine(home: string, raw: RoutineStartFields, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal
   /** Every check `plan` makes (the limits too), with no taskId needed and nothing written: null when it passes. */
   precheck(home: string, raw: unknown): HostStartRefusal | null
   /** A start is under way (limits). Returns the release. */
@@ -214,8 +262,13 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     return { ok: false, code, message, ...(detail ? { detail } : {}), ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) }
   }
 
-  function fileOf(home: string): string {
-    return path.join(deps.dir, 'spawn-template-' + deps.keyOf(home) + '.json')
+  function fileOf(home: string, use: TemplateUse): string {
+    return path.join(deps.dir, 'spawn-template-' + (use === 'routine' ? 'routine-' : '') + deps.keyOf(home) + '.json')
+  }
+
+  /** The two templates of a home never share a slot. */
+  function slotOf(home: string, use: TemplateUse): string {
+    return use === 'routine' ? 'routine\u0000' + home : home
   }
 
   function isRecord(v: unknown): v is Record<string, unknown> {
@@ -230,7 +283,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
   }
 
   /** The Mac's template, checked for shape (it comes from the trusted socket, but a bad one must not half-work). */
-  function checkTemplate(home: string, raw: unknown): SpawnTemplate {
+  function checkTemplate(home: string, raw: unknown, use: TemplateUse): SpawnTemplate {
     if (!isRecord(raw) || raw.v !== 1) throw new Error('spawn template: v must be 1')
     if (raw.home !== home) throw new Error('spawn template: home must be the Walnut it is pushed for')
     if (!Array.isArray(raw.argv) || raw.argv.length < 2 || raw.argv.length > 128) throw new Error('spawn template: argv must hold 2 to 128 items')
@@ -281,10 +334,14 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       agents[k] = { ...(allowedTools.length ? { allowedTools } : {}), ...(tools.length ? { tools } : {}) }
     }
     if (raw.persona !== 'arg' && raw.persona !== 'file') throw new Error('spawn template: persona must be arg or file')
-    if (typeof raw.cwd !== 'string' || !raw.cwd.startsWith('/') || raw.cwd.length > 1024 || raw.cwd.split('/').indexOf('..') !== -1) throw new Error('spawn template: cwd must be an absolute path')
+    // A routine names its own folder (planRoutine checks it), so its template holds none.
+    const cwd = use === 'routine' ? '' : raw.cwd
+    if (use !== 'routine' && (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.length > 1024 || cwd.split('/').indexOf('..') !== -1)) throw new Error('spawn template: cwd must be an absolute path')
     return {
-      v: 1, home, argv, modes, defaultMode: raw.defaultMode, models, autoEffort: raw.autoEffort === true, effortRules, efforts, agents,
-      persona: raw.persona, cwd: raw.cwd, builtAt: typeof raw.builtAt === 'number' ? raw.builtAt : deps.now(),
+      v: 1, home, argv, modes, defaultMode: raw.defaultMode, models, autoEffort: raw.autoEffort === true, effortRules, efforts,
+      // A routine session gets no agent's tool lists, as a routine run on the Mac gets none.
+      agents: use === 'routine' ? {} : agents,
+      persona: raw.persona, cwd: cwd as string, builtAt: typeof raw.builtAt === 'number' ? raw.builtAt : deps.now(),
     }
   }
 
@@ -303,29 +360,30 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     fs.renameSync(tmp, file)
   }
 
-  function setTemplate(home: string, raw: unknown): SpawnTemplate {
+  function setTemplate(home: string, raw: unknown, use: TemplateUse = 'ask'): SpawnTemplate {
     if (typeof home !== 'string' || !home) throw new Error('spawn template: missing home')
-    const t = checkTemplate(home, raw)
-    templates.set(home, t)
+    if (use !== 'ask' && use !== 'routine') throw new Error('spawn template: use must be ask or routine')
+    const t = checkTemplate(home, raw, use)
+    templates.set(slotOf(home, use), t)
     // Kept on disk too: a daemon restarted while the Mac sleeps still starts asks.
-    try { writeAtomic(fileOf(home), JSON.stringify(t)) } catch (err) {
-      deps.log('warn', 'host start: the spawn template was not saved', { home, error: (err as Error).message })
+    try { writeAtomic(fileOf(home, use), JSON.stringify(t)) } catch (err) {
+      deps.log('warn', 'host start: the spawn template was not saved', { home, use, error: (err as Error).message })
     }
-    deps.log('info', 'host start: spawn template set', { home, argv: t.argv.length, modes: Object.keys(t.modes).join(','), persona: t.persona })
+    deps.log('info', 'host start: spawn template set', { home, use, argv: t.argv.length, modes: Object.keys(t.modes).join(','), persona: t.persona })
     return t
   }
 
-  function templateOf(home: string): SpawnTemplate | null {
-    const known = templates.get(home)
+  function templateOf(home: string, use: TemplateUse = 'ask'): SpawnTemplate | null {
+    const known = templates.get(slotOf(home, use))
     if (known) return known
     let text: string
-    try { text = fs.readFileSync(fileOf(home), 'utf8') } catch { return null }
+    try { text = fs.readFileSync(fileOf(home, use), 'utf8') } catch { return null }
     try {
-      const t = checkTemplate(home, JSON.parse(text))
-      templates.set(home, t)
+      const t = checkTemplate(home, JSON.parse(text), use)
+      templates.set(slotOf(home, use), t)
       return t
     } catch (err) {
-      deps.log('warn', 'host start: the saved spawn template does not read back', { home, error: (err as Error).message })
+      deps.log('warn', 'host start: the saved spawn template does not read back', { home, use, error: (err as Error).message })
       return null
     }
   }
@@ -389,16 +447,8 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     if (raw.cwd !== undefined && raw.cwd !== t.cwd) return refuse('bad_request', 'follower.start: an ask runs in the folder your Mac set for this host')
     const mode = raw.mode === undefined || raw.mode === '' ? t.defaultMode : typeof raw.mode === 'string' && Object.prototype.hasOwnProperty.call(t.modes, raw.mode) ? raw.mode : ''
     if (!mode) return refuse('bad_request', 'follower.start: that permission mode is not allowed for an ask on this host', { modes: Object.keys(t.modes) })
-    let model: Fields['model'] = null
-    if (raw.model !== undefined && raw.model !== '' && raw.model !== 'default') {
-      const id = typeof raw.model === 'string' ? raw.model : ''
-      const hit = Object.prototype.hasOwnProperty.call(t.models, id) ? t.models[id] : Object.values(t.models).find((m) => m.cli === id)
-      // A value the template does not list rides as itself, as send() passes it
-      // (SESSION_MODEL_CLI_MAP[model] ?? model): one CLI value, never a flag.
-      if (hit) model = { id, ...hit }
-      else if (CLI_VALUE_RE.test(id)) model = { id, cli: id, effort: effortOf(t, id) }
-      else return refuse('bad_request', 'follower.start: a model must be one CLI value', { models: Object.keys(t.models) })
-    }
+    const model = modelOf(t, raw.model)
+    if (model === undefined) return refuse('bad_request', 'follower.start: a model must be one CLI value', { models: Object.keys(t.models) })
     const effort = raw.effort === undefined || raw.effort === '' ? undefined : typeof raw.effort === 'string' && t.efforts.indexOf(raw.effort) !== -1 ? raw.effort : null
     if (effort === null) return refuse('bad_request', 'follower.start: unknown effort')
     const p = isRecord(raw.persona) ? raw.persona : null
@@ -422,6 +472,55 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     return { t, sid, taskId, agentId, title, mode, model, ...(effort ? { effort } : {}), text, context, replace, appendText, message, tools }
   }
 
+  /**
+   * A start's model: null for Auto (absent, empty, 'default'), the template's CLI value
+   * for an id (or CLI value) it lists, else the value itself when it is one CLI value, as
+   * send() passes an unknown id (SESSION_MODEL_CLI_MAP[model] ?? model). undefined: refused.
+   */
+  function modelOf(t: SpawnTemplate, raw: unknown): Fields['model'] | undefined {
+    if (raw === undefined || raw === '' || raw === 'default') return null
+    const id = typeof raw === 'string' ? raw : ''
+    const hit = Object.prototype.hasOwnProperty.call(t.models, id) ? t.models[id] : Object.values(t.models).find((m) => m.cli === id)
+    if (hit) return { id, ...hit }
+    return CLI_VALUE_RE.test(id) ? { id, cli: id, effort: effortOf(t, id) } : undefined
+  }
+
+  /** The template's argv with its slots filled from checked values only (asks and routine runs alike). */
+  function fill(t: SpawnTemplate, f: {
+    sid: string; mode: string; model: Fields['model']; effort?: string; tools: AgentTools
+    persona: { replace: boolean; text: string; appendText: string; file: string; contextFile: string }
+  }): string[] {
+    const args: string[] = []
+    const { replace, text, appendText, file, contextFile } = f.persona
+    for (const a of t.argv) {
+      if (typeof a === 'string') { args.push(a); continue }
+      switch (a.slot) {
+        case 'sid': args.push('--session-id', f.sid); break
+        case 'mode': args.push('--permission-mode', t.modes[f.mode]); break
+        case 'model': if (f.model) args.push('--model', f.model.cli); break
+        case 'effort': if (f.effort && (f.model ? f.model.effort : t.autoEffort)) args.push('--effort', f.effort); break
+        case 'persona':
+          if (t.persona === 'file') {
+            if (replace) { args.push('--system-prompt-file', file); if (contextFile) args.push('--append-system-prompt-file', contextFile) }
+            else if (appendText) args.push('--append-system-prompt-file', file)
+          } else {
+            if (replace) args.push('--system-prompt', text)
+            if (appendText) args.push('--append-system-prompt', appendText)
+          }
+          break
+        case 'tools':
+          if (f.tools.allowedTools && f.tools.allowedTools.length) args.push('--allowedTools', f.tools.allowedTools.join(','))
+          if (f.tools.tools && f.tools.tools.length) args.push('--tools', f.tools.tools.join(','))
+          break
+      }
+    }
+    return args
+  }
+
+  function hostOf(hostKey: string): string {
+    return typeof hostKey === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(hostKey) ? hostKey : ''
+  }
+
   function precheck(home: string, raw: unknown): HostStartRefusal | null {
     try {
       const f = validate(home, raw, true)
@@ -443,30 +542,8 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       if (blocked) return blocked
       const file = personaFile(home, sid, replace ? text + (context ? '\n\n' + context : '') : appendText)
       const contextFile = replace && context && t.persona === 'file' ? personaFile(home, sid + '-context', context) : ''
-      const args: string[] = []
-      for (const a of t.argv) {
-        if (typeof a === 'string') { args.push(a); continue }
-        switch (a.slot) {
-          case 'sid': args.push('--session-id', sid); break
-          case 'mode': args.push('--permission-mode', t.modes[mode]); break
-          case 'model': if (model) args.push('--model', model.cli); break
-          case 'effort': if (effort && (model ? model.effort : t.autoEffort)) args.push('--effort', effort); break
-          case 'persona':
-            if (t.persona === 'file') {
-              if (replace) { args.push('--system-prompt-file', file); if (contextFile) args.push('--append-system-prompt-file', contextFile) }
-              else if (appendText) args.push('--append-system-prompt-file', file)
-            } else {
-              if (replace) args.push('--system-prompt', text)
-              if (appendText) args.push('--append-system-prompt', appendText)
-            }
-            break
-          case 'tools':
-            if (f.tools.allowedTools && f.tools.allowedTools.length) args.push('--allowedTools', f.tools.allowedTools.join(','))
-            if (f.tools.tools && f.tools.tools.length) args.push('--tools', f.tools.tools.join(','))
-            break
-        }
-      }
-      const host = typeof hostKey === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(hostKey) ? hostKey : ''
+      const args = fill(t, { sid, mode, model, ...(effort ? { effort } : {}), tools: f.tools, persona: { replace, text, appendText, file, contextFile } })
+      const host = hostOf(hostKey)
       return {
         ok: true,
         plan: {
@@ -480,6 +557,70 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       }
     } catch (err) {
       deps.log('warn', 'host start: the start could not be planned', { home, error: (err as Error).message })
+      return refuse('journal_unwritable', 'this host could not prepare the session: ' + (err as Error).message)
+    }
+  }
+
+  /**
+   * A routine run's start (clock-host-start-v1): the routine template filled from the
+   * Mac's own clock def. Its folder is the routine's (absolute, a directory here), its
+   * mode one the routine template allows, its model and effort as an ask's, its context
+   * the Mac's session context with the run's task id put in, and the same limits.
+   */
+  function planRoutine(home: string, raw: RoutineStartFields, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal {
+    try {
+      const t = templateOf(home, 'routine')
+      if (!t) return refuse('needs_leader', 'this host has no routine spawn template from your Mac yet; the run waits for your Mac', { why: 'no_spawn_template' })
+      if (!isRecord(raw)) return refuse('bad_request', 'routine start: needs an object')
+      const sid = typeof raw.sid === 'string' && SID_RE.test(raw.sid) ? raw.sid : ''
+      if (!sid) return refuse('bad_request', 'routine start: sid must be a v4 UUID')
+      const taskId = typeof raw.taskId === 'string' && ID_RE.test(raw.taskId) ? raw.taskId : ''
+      if (!taskId) return refuse('bad_request', 'routine start: bad taskId')
+      const routine = isRecord(raw.routine) && typeof raw.routine.id === 'string' && raw.routine.id && raw.routine.id.length <= 200
+        && typeof raw.routine.slotMs === 'number' && Number.isFinite(raw.routine.slotMs) ? { id: raw.routine.id, slotMs: Math.floor(raw.routine.slotMs) } : null
+      if (!routine) return refuse('bad_request', 'routine start: bad routine')
+      const title = str(raw.title, 500)
+      if (!title || !title.trim()) return refuse('bad_request', 'routine start: bad title')
+      const cwd = typeof raw.cwd === 'string' && raw.cwd.startsWith('/') && raw.cwd.length <= 1024 && raw.cwd.split('/').indexOf('..') === -1 && raw.cwd.indexOf('\u0000') === -1 ? raw.cwd : ''
+      if (!cwd) return refuse('bad_request', 'routine start: the folder must be an absolute path')
+      let isDir = false
+      try { isDir = fs.statSync(cwd).isDirectory() } catch { isDir = false }
+      if (!isDir) return refuse('cwd_missing', `routine start: the folder ${cwd} does not exist on this host`, { why: 'cwd_missing' })
+      const mode = typeof raw.mode === 'string' && Object.prototype.hasOwnProperty.call(t.modes, raw.mode) ? raw.mode : ''
+      if (!mode) return refuse('mode_not_allowed', 'routine start: your Mac does not let a routine start in that permission mode on this host', { modes: Object.keys(t.modes) })
+      const model = modelOf(t, raw.model)
+      if (model === undefined) return refuse('bad_request', 'routine start: a model must be one CLI value')
+      const effort = raw.effort === undefined || raw.effort === '' ? undefined : typeof raw.effort === 'string' && t.efforts.indexOf(raw.effort) !== -1 ? raw.effort : null
+      if (effort === null) return refuse('bad_request', 'routine start: unknown effort')
+      const message = str(raw.firstMessage, MAX_MESSAGE_BYTES)
+      if (!message || !message.trim() || bytes(message) > MAX_MESSAGE_BYTES) return refuse('bad_request', 'routine start: bad first message')
+      const token = typeof raw.taskToken === 'string' && raw.taskToken.length >= 8 ? raw.taskToken : ''
+      const given = raw.context === undefined ? '' : str(raw.context, MAX_PERSONA_FILE_BYTES)
+      if (given === undefined) return refuse('bad_request', 'routine start: bad context')
+      const context = token ? given.split(token).join(taskId) : given
+      // A flag's value never starts with a dash: the CLI's parser must not read it as a flag.
+      if (context.startsWith('-')) return refuse('bad_request', 'routine start: a context must not start with a dash')
+      if (t.persona === 'arg' && bytes(context) > MAX_PERSONA_ARG_BYTES) {
+        return refuse('bad_request', `routine start: the context is over ${MAX_PERSONA_ARG_BYTES} bytes, too large for one argv string`, { why: 'persona_too_large' })
+      }
+      const blocked = limits(home)
+      if (blocked) return blocked
+      const file = context && t.persona === 'file' ? personaFile(home, sid, context) : ''
+      const args = fill(t, { sid, mode, model, ...(effort ? { effort } : {}), tools: {}, persona: { replace: false, text: '', appendText: context, file, contextFile: '' } })
+      return {
+        ok: true,
+        plan: {
+          sid, taskId, args, cwd, message, mode, personaFile: file,
+          record: {
+            kind: 'session', sid, taskId, host: hostOf(hostKey), cwd, mode, title, startedAt: deps.now(),
+            firstMessage: message.slice(0, 4000),
+            ...(model ? { model: model.id } : {}), ...(effort ? { effort } : {}),
+            routine,
+          },
+        },
+      }
+    } catch (err) {
+      deps.log('warn', 'host start: the routine start could not be planned', { home, error: (err as Error).message })
       return refuse('journal_unwritable', 'this host could not prepare the session: ' + (err as Error).message)
     }
   }
@@ -545,13 +686,17 @@ export function createHostStart(deps: HostStartDeps): HostStart {
         try { fs.unlinkSync(file) } catch { /* gone */ }
         continue
       }
+      // A routine run's own task-create, journaled before its session at the next boot.
+      const task = isRecord(e.task) && isRecord(e.task.record) && e.task.record.kind === 'task-create' && e.task.record.taskId === record.taskId
+        && typeof e.task.opId === 'string' && typeof e.task.jobId === 'string' ? e.task as unknown as PendingTask : undefined
       out.push({
         home, sid, record: record as PendingStart['record'], at: Number(e.at) || 0,
         ...(typeof e.opId === 'string' ? { opId: e.opId } : {}), ...(e.actor !== undefined ? { actor: e.actor } : {}),
+        ...(task ? { task } : {}),
       })
     }
     return out
   }
 
-  return { setTemplate, templateOf, plan, precheck, begin, once, firstStart, holdPending, releasePending, pendingStarts }
+  return { setTemplate, templateOf, plan, planRoutine, precheck, begin, once, firstStart, holdPending, releasePending, pendingStarts }
 }

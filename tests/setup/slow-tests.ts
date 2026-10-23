@@ -60,7 +60,7 @@ export const SLOW_TEST_FILES = [
   'tests/integration/host-server-twins.test.ts', // ~40s: both daemon twins as processes, a 5s restart backoff, a daemon restart each
   'tests/integration/bridge-stream-twins.test.ts', // ~20s: both daemon twins as processes dial a /bridge, streams to the primary (WP13)
   'tests/integration/replica-front-twins.test.ts', // ~4 min: both daemon twins supervise a real `web --replica` (tsx), a 6s quiet window, a crash loop to the fallback
-  'tests/integration/clock-routine-twins.test.ts', // ~4.5 min: both daemon twins as processes, clock slots, daemon restarts, replays until acked
+  'tests/integration/clock-routine-twins.test.ts', // ~7 min: both daemon twins as processes, clock slots, daemon restarts, replays until acked, routine runs the host starts
   'tests/integration/journal-v2-twins.test.ts', // ~3 min: both daemon twins as processes, SIGKILL and reboot, a 1fe1fd194 daemon, 1,000 appends, a 30s quiet window
   'tests/integration/replica-local-routes-twins.test.ts', // both daemon twins as processes, the real startServer as their host replica, a 13 MB copy
   'tests/integration/note-journal-twins.test.ts', // both daemon twins as processes, a follower and a session saving one note, 120 autosaves, a drain (WP11)

@@ -38,8 +38,12 @@ export { RefusedWrite };
  * apply-note-attachment.ts, apply-conversation-edit.ts).
  */
 export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit', 'letter'] as const;
-/** What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks. */
-export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor'];
+/**
+ * What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks, plus
+ * `routine-run` (a `session` record with `routine` is adopted as a routine's run, not an ask:
+ * apply-session.ts; a host starts one only for a Mac that says so).
+ */
+export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor', 'routine-run'];
 
 export type JournalActorLike = { kind: 'session'; sid: string } | { kind: 'device'; deviceId: string; name?: string } | { kind: 'trigger'; id: string };
 

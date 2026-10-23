@@ -192,22 +192,31 @@ async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Pro
     return;
   }
   const applied = await service.applyTriggerFired(group, async (job, fresh) => {
-    const text = head.clock
-      ? scheduledText(job, fresh, h.atMs)
-      : buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: h.atMs });
-    await wakeParkedTarget(job, h);
+    // A claude-code run the host started itself (clock-host-start-v1): its session's
+    // first message is the instructions, as the executor sends them; its task and
+    // session arrive through the offline journal, in either order with this fire.
+    const text = h.started
+      ? promptOf(job)
+      : head.clock
+        ? scheduledText(job, fresh, h.atMs)
+        : buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: h.atMs });
+    if (!h.started) await wakeParkedTarget(job, h);
+    const where = host === '__local__' ? 'the local host' : host;
     return {
       status: 'ok' as const,
       // Short, and ending in the session handle: the history row clamps this clause
       // and keeps only the handle's id once it runs long.
       // A stopped session the host started again with it (trigger-host-resume-v1).
-      summary: `${host === '__local__' ? 'the local host' : host} ${h.resumed ? 'resumed' : 'sent it to'} session ${await sessionLabel(h.sessionId)}`,
+      summary: h.started
+        ? `${where} started it in session ${await sessionLabel(h.sessionId)}`
+        : `${where} ${h.resumed ? 'resumed' : 'sent it to'} session ${await sessionLabel(h.sessionId)}`,
       delivered: { sessionId: h.sessionId, text },
       deliveredAtMs: h.atMs,
     };
   }, { fromHost: host });
   log.cron.info('trigger fire recorded: delivered on host', {
     host, jobId: head.id, epoch: head.epoch, seqs, sessionId: h.sessionId, messageId: h.messageId,
+    ...(h.started ? { started: true, taskId: h.taskId } : {}),
     deliveredAt: new Date(h.atMs).toISOString(), found: applied.found, duplicate: applied.duplicate,
   });
   if (!applied.found && !(await hasPushedTriggersTo(host))) {

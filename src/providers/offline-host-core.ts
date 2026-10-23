@@ -192,8 +192,12 @@ export type OfflineRecordV2 =
   | { kind: 'note'; path: string; noteId?: string; mode: 'put' | 'create' | 'delete'; baseHash: string | null; baseBlob: string | null; oursBlob: string | null }
   /** A paired device removed itself while the Mac was away (WP10): the Mac revokes it on drain. */
   | { kind: 'device-revoke'; deviceId: string; name?: string }
-  /** A new ask started on this host while the Mac was away (WP12, host-start-core.ts): the Mac adopts it on drain. */
-  | { kind: 'session'; sid: string; taskId: string; host: string; cwd: string; agentId: string; model?: string; effort?: string; mode: string; title: string; startedAt: number; firstMessage?: string }
+  /**
+   * A new ask started on this host while the Mac was away (WP12, host-start-core.ts): the Mac adopts it on drain.
+   * `routine`: a claude-code routine's run this host started (clock-host-start-v1), not an ask (no agent).
+   */
+  | { kind: 'session'; sid: string; taskId: string; host: string; cwd: string; agentId?: string; model?: string; effort?: string; mode: string; title: string; startedAt: number; firstMessage?: string
+    routine?: { id: string; slotMs: number } }
   /**
    * A session's letter to the user (human_inbox_send) while the Mac was away: the op's
    * arguments but the body, which is the blob `bodyBlob`; the Mac sends it with this id.
@@ -608,6 +612,17 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     for (const sid of [...m.keys()]) if (listed.has(sid)) m.delete(sid)
     return [...m.values()]
   }
+  /**
+   * Whether this Walnut's copy names the session, or a `session` record journaled here
+   * does (pending, or acked and not yet in the Mac's next copy). Reads the journal, so it
+   * holds across a daemon restart, unlike the in-memory overlay alone.
+   */
+  function knowsSession(home: string, sid: string): boolean {
+    if (!sid) return false
+    if ((slices.get(home)?.sessions ?? []).some((s) => s.sid === sid)) return true
+    return startedOf(home).some((s) => s.sid === sid)
+  }
+
   /** Who asked for a host-started session, or why its record could not be kept. */
   function sessionActor(home: string, sid: string, by: unknown): { ok: true; actor: import('./offline-journal-core.js').JournalActor } | { ok: false; refused: GatewayResult } {
     if (!slices.get(home)) return { ok: false, refused: fail('not_found', 'this host holds no copy for that Walnut') }
@@ -626,6 +641,43 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   function checkSession(home: string, sid: string, by?: unknown): GatewayResult {
     const a = sessionActor(home, sid, by)
     return a.ok ? ok({ checked: true, sid }) : a.refused
+  }
+
+  /**
+   * Whether a claude-code routine's run may be started here (clock-host-start-v1): its
+   * `task-create` and `session` records would be kept, for a Mac that adopts a routine's
+   * session (`routine-run` in its drains; an older Mac would take it for an ask). Journals nothing.
+   */
+  function checkRoutineRun(home: string, sid: string): GatewayResult {
+    return routineRoom(home) ?? checkSession(home, sid)
+  }
+
+  function routineRoom(home: string): GatewayResult | null {
+    if (!slices.get(home)) return fail('not_found', 'this host holds no copy for that Walnut')
+    if (!drainsKind(home, 'task-create') || !drainsKind(home, 'session') || !drainsKind(home, 'routine-run')) {
+      return fail('needs_leader', 'your Mac runs an older Walnut that cannot take a routine run started here; it waits for your Mac', { detail: { why: 'mac_too_old' } })
+    }
+    return roomFor(home)
+  }
+
+  /**
+   * Journal the task a routine run starts on (clock-host-start-v1), under the routine as
+   * its actor (`{kind:'trigger', id}`: the Mac files it with a person's defaults, which the
+   * fields set: not pinned). `opId` is derived from the run, so a retry is the same record.
+   */
+  function noteRoutineTask(
+    home: string, rec: { taskId: string; fields: Record<string, unknown>; placement: { project?: string } }, opId: string, jobId: string,
+  ): GatewayResult {
+    const room = routineRoom(home)
+    if (room) return room
+    if (!OP_ID_RE.test(opId) || !OP_ID_RE.test(rec.taskId) || typeof jobId !== 'string' || !jobId) return fail('bad_request', 'routine task: bad ids')
+    const bad = Object.keys(rec.fields).filter((k) => QUEUEABLE.indexOf(k) === -1)
+    if (bad.length) return fail('bad_request', `routine task: ${bad.join(', ')} cannot be queued`)
+    const record = { kind: 'task-create' as const, taskId: rec.taskId, fields: rec.fields, placement: { ...(typeof rec.placement?.project === 'string' ? { project: rec.placement.project } : {}) } }
+    const saved = append(home, record as OfflineRecordV2 & Record<string, unknown>, false, { actor: { kind: 'trigger', id: jobId }, opId, limit: true })
+    if (!saved.ok) return refusal(saved) ?? fail('journal_unwritable', 'the routine task was not saved')
+    deps.log('info', 'offline host: a routine run made its task here while the Mac is away', { home, taskId: rec.taskId, jobId, seq: saved.seq, ...(saved.duplicate ? { duplicate: true } : {}) })
+    return ok({ queued: true, offline: true, kind: 'task-create', seq: saved.seq, taskId: rec.taskId, ...(saved.duplicate ? { duplicate: true } : {}) })
   }
 
   /**
@@ -2461,6 +2513,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     handleFollowerWaiting: (home: string, req: Parameters<typeof handleFollower>[1]) => whenUnlocked(home, String(req.op ?? ''), () => handleFollower(home, req)),
     /** noteSession, waiting out another process's journal lock (whenUnlocked): the twins' host ask. */
     noteSessionWaiting: (home: string, rec: Parameters<typeof noteSession>[1], opId?: string, by?: unknown) => whenUnlocked(home, 'session', () => noteSession(home, rec, opId, by)),
+    /** noteRoutineTask, waiting out another process's journal lock: a routine run's task (clock-host-start-v1). */
+    noteRoutineTaskWaiting: (home: string, rec: Parameters<typeof noteRoutineTask>[1], opId: string, jobId: string) => whenUnlocked(home, 'task-create', () => noteRoutineTask(home, rec, opId, jobId)),
+    noteRoutineTask, checkRoutineRun, knowsSession,
     pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession,
     triggerHolds, homes: () => [...slices.keys()], journal, QUEUEABLE, RETIRED_TASK_INPUTS,
   }

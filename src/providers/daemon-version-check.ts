@@ -194,6 +194,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/host-resume-core.ts',
   // A new ask while the Mac is away (replica-start-v1): same import-or-inline rule.
   'src/providers/host-start-core.ts',
+  // A routine run started on its host while the Mac is away (clock-host-start-v1): same rule.
+  'src/providers/clock-host-start-core.ts',
   'src/core/sessions/open-items-text.ts',
   // A letter from a session, checked on the host while the Mac is away: same rule.
   'src/core/human-inbox/letter-check.ts',

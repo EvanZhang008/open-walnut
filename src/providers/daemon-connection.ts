@@ -503,6 +503,8 @@ export class DaemonConnection {
   private hostSliceRetryTimer: ReturnType<typeof setTimeout> | null = null
   /** The Walnut was described to this daemon (leader.configure) on this connection. */
   private leaderConfigured = false
+  /** The routine spawn template this daemon holds from this connection (clock-host-start-v1), by hash. */
+  private routineTemplateHash: string | null = null
   /** This connection's first host-replica round was started. */
   private replicaPushed = false
 
@@ -883,6 +885,7 @@ export class DaemonConnection {
     // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
     if (changed) {
       this.lastHostSlicePushHash = null; this.hostSliceSids = new Set(); this.offlineDrainDue = true; this.leaderConfigured = false; this.replicaPushed = false
+      this.routineTemplateHash = null
       void import('../core/host-replica.js').then((m) => m.forgetHostReplica(this.hostKey)).catch(() => {})
     }
     if (changed && value) this.pushHostSlice()
@@ -1120,7 +1123,8 @@ export class DaemonConnection {
           if (!provider) return
           // Clock routines go only to a daemon that said it holds them (clock-routine-v1).
           const clock = !this.capabilitiesKnown ? 'unknown' : this.hasCapability('clock-routine-v1') ? 'yes' : 'no'
-          const compiled = await provider(this.hostKey, { clock, fresh: this.lastTriggersPushHash === null })
+          const hostStart = clock === 'yes' && await this.routineHostStart()
+          const compiled = await provider(this.hostKey, { clock, fresh: this.lastTriggersPushHash === null, hostStart })
           if (!compiled) return
           if (compiled.hash === this.lastTriggersPushHash) continue
           const reply = await this.send('triggers.configure', {
@@ -1152,6 +1156,34 @@ export class DaemonConnection {
         this.triggersPushInFlight = false
       }
     })()
+  }
+
+  /**
+   * Whether this daemon may start a claude-code routine's run itself while this Mac is
+   * away (clock-host-start-v1, clock-placement.ts routineStartOf): a remote host that
+   * says it can, told which Walnut speaks on this connection (leader.configure), and
+   * holding this Mac's routine spawn template, pushed here when it does not (or when
+   * the template changed). Anything short of that: its clock defs carry no `start`,
+   * so the host keeps every run for this Mac, as before.
+   */
+  private async routineHostStart(): Promise<boolean> {
+    if (this.hostKey === '__local__' || !this.capabilitiesKnown || !this.leaderConfigured) return false
+    if (!this.hasCapability('replica-start-v1') || !this.hasCapability('clock-host-start-v1')) return false
+    try {
+      const { pushRoutineSpawnTemplate } = await import('./spawn-template.js')
+      const hash = await pushRoutineSpawnTemplate(
+        { hasCapability: (cap) => this.hasCapability(cap), send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) },
+        { home: WALNUT_HOME, hostKey: this.hostKey, unlessHash: this.routineTemplateHash },
+      )
+      this.routineTemplateHash = hash
+      return hash !== null
+    } catch (err) {
+      this.routineTemplateHash = null
+      log.session.warn('DaemonConnection: routine spawn template push failed; routine runs on this host wait for this Mac', {
+        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+      })
+      return false
+    }
   }
 
   /**
@@ -1216,6 +1248,9 @@ export class DaemonConnection {
           const { configureHostLeader } = await import('../core/leader/primary-leader.js')
           if (await configureHostLeader({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })) {
             this.leaderConfigured = true
+            // A routine run may start on this host now (clock-host-start-v1): the set
+            // goes again with its `start` fields (a no-op push when no routine has one).
+            if (this.hostKey !== '__local__' && this.hasCapability('clock-host-start-v1')) this.pushTriggers()
             // The daemon now knows which Walnut speaks: the server this Mac keeps
             // on the host may be set up (core/host-server/; off unless enabled).
             void import('../core/host-server/index.js').then((m) => m.hostServerConnected(this.hostServerHandle())).catch((err) => {

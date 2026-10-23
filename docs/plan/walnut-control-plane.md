@@ -166,9 +166,11 @@ and no host may take the alias `companion`.
 
 A scheduled routine is host work when its work runs on a host: a `session` routine
 whose task's session is there, a `claude-code` routine whose `host` is there. Its clock
-then moves to that host's daemon, which fires on the schedule while the Mac sleeps and
-delivers a session routine's run into the session there (docs/plan/walnut-trigger.md
-"Clock routines"). Everything else, and every routine of the Mac's own, stays on the
+then moves to that host's daemon, which fires on the schedule while the Mac sleeps,
+delivers a session routine's run into the session there, and starts a claude-code
+routine's run itself from the Mac's own clock def and routine spawn template, journaling
+its task and session for the Mac to adopt (docs/plan/walnut-trigger.md "Clock
+routines"). Everything else, and every routine of the Mac's own, stays on the
 server's timer. The Mac decides where each clock lives and hands it over or takes it
 back through the daemon's own reply, so no slot runs on both sides; a host that is not
 connected loses a clock only when the routine plainly no longer belongs there, and a
@@ -632,8 +634,6 @@ Auto asks for.
   Messages between a host's sessions already are (docs/plan/daemon-first-hosts.md
   "Same-host messages while the server answers").
 - A daemon as a leader (a host that reaches every other host).
-- A `claude-code` routine's session started on its host while the Mac is away: its
-  clock is on the host, but the run waits there until the Mac answers.
 - Answers the companion gives alone while the Mac is away for what only the Mac
   holds today (usage): a copy of that store. Of the session controls, a
   restart, a retry and a fork still need the Mac (they spawn a CLI).

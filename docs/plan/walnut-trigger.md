@@ -181,7 +181,8 @@ A scheduled routine whose work runs on a host keeps its clock in that host's dae
 - a `session` routine whose task's session runs on a host: the daemon fires on the
   schedule and delivers the run into that session, the way it delivers a trigger fire;
 - a `claude-code` routine whose `host` is a remote host: the daemon decides when it
-  runs; the Mac starts the session, as before.
+  runs; the Mac starts the session when it takes the run, and while the Mac is away
+  the host starts it itself (capability `clock-host-start-v1`, below).
 
 Everything else stays on the server's timer: main-agent, walnut-agent and watcher
 routines, a `claude-code` routine on the Mac, a routine whose host is unknown or is
@@ -256,6 +257,65 @@ A slot never runs twice across a handover, in either direction
 - Run now stays on the server: it is an explicit run, not a slot. It leaves a History
   row (`manual`), as every run of a session routine on the server's timer does.
 
+### A `claude-code` run started on its host while the Mac is away
+
+A claude-code routine's run that comes due while no server for its Walnut answers the
+host is started by the host itself (`clock-host-start-v1`,
+`src/providers/clock-host-start-core.ts`), once, as the Mac's executor would have
+started it:
+
+- What the host runs comes from the Mac's own clock def and nowhere else: the def's
+  `start` (`ClockStartSpec` in `src/providers/trigger-clock-core.ts`) carries the
+  instructions as the first message, the routine's folder, the task's title
+  (`taskTitle`, else "Routine: <name>", sent as the literal text) and project
+  (`project`, else "Routines"), the mode the Mac runs a routine in (none named, so
+  `DEFAULT_SESSION_MODE`), the model, the configured session effort, and the session
+  context the Mac appends, built for the run's task with `START_TASK_TOKEN` where its
+  id goes. The argv is the Mac's ROUTINE spawn template (`leader.spawnTemplate
+  {use:'routine'}`, `buildRoutineSpawnTemplate` in `src/providers/spawn-template.ts`,
+  filled by `planRoutine` in `src/providers/host-start-core.ts`): the ask template's
+  argv with the routine modes (`hostRoutineModes`), no agents and no tool lists. The
+  ask template and its `ask_bypass` rule never serve a routine, and the routine
+  template never serves a follower's start. The daemon checks every field again (the
+  folder is absolute and exists there, the mode is one the template allows, the model
+  is one CLI value, the message and context sizes), and shares the ask limits.
+- Which routines get a `start` (`routineStartOf` in `clock-placement.ts`): a
+  claude-code routine on a configured remote host with no console agent and no title
+  template, instructions short enough to go inline (25 000 characters, where the Mac
+  spills to a file) with no task or project pill (the Mac adds their cards), an
+  absolute folder, the Claude Code engine for that host, and no SDK session server.
+  The def carries it only for a daemon with `clock-host-start-v1` and
+  `replica-start-v1` that this Mac described its Walnut to on that connection
+  (`leader.configure`) and pushed its routine template to (`DaemonConnection`
+  `routineHostStart`, the template re-sent when its content changes). Without a
+  `start` nothing changes: the run waits on the host for the Mac.
+- The order on the host: every check first (no server answers this Walnut, the
+  daemon owns its dir, the Mac's drains include `routine-run`, the journal has room,
+  the template fills), then the start kept on disk with its task (the pending-start
+  file a host ask uses), then the CLI, then the run's `task-create` (actor: the
+  routine) and its `session` record (with `routine: {id, slotMs}`), then the fire
+  marked `host: {started: true, taskId, sessionId, messageId}`. A CLI whose records
+  cannot be kept is stopped. A daemon that dies between the CLI and the records
+  journals both at its next boot from the kept start, as a host ask does.
+- One run per slot: the session id, the task id and both op ids are derived from
+  (Walnut, routine id, slot). A second attempt for a slot finds the session record
+  and only marks the fire; a record written twice is one record (the journal's op id,
+  the Mac's ledger and `created_by_op`); a server's claim of a fire whose mark a
+  daemon death cut is answered with the run (`startedRun`), never handed over to start
+  again.
+- A start that cannot be made leaves the run owed, as before, and is tried again after
+  a minute; each reason is logged once per run. While a server answers the Walnut, the
+  host tries nothing: that server claims the run and starts it.
+- The Mac records the run from the fire (`recordHostDelivery`: History row and last
+  run, "<host> started it in session <name>", the executor never called) and adopts the
+  session from the journal (`apply-session.ts`: no ask stamp and no persona, the task's
+  folder set, the session context, the mode checked against the routine modes, no
+  title or organize pass), in either order.
+
+What a host run does not do that a Mac run does: the host start gate (readiness
+checks) is not consulted, and the Mac's prompt spill and reference cards make a
+routine ineligible instead of being reproduced.
+
 The server's timer keeps the same rules: a recompute never moves an enabled routine's
 due slot that has not run (only a run or the boot catch-up does), the timer never
 wakes for a slot it would refuse (the replay guard's slot, a run in flight), and
@@ -266,13 +326,14 @@ stops there.
 UI: the Routines card shows `clock @ <host>` under the timing, the label a trigger
 uses for its check's host; for a `claude-code` routine the hover says a run that comes
 due while the Mac sleeps waits on the host, and a slot that has passed reads "Due 2h
-ago: waiting on <host> for this Mac to start it". The task's TRIGGER pill lists every
+ago: waiting on <host> for this Mac to start it" (not yet updated for a routine the
+host starts itself, whose run starts there after the grace). The task's TRIGGER pill lists every
 session routine on the task wherever its clock is (with the host label when it is on
 a host), `Run now`, and its History; the replica copy carries `clockHost`.
 
 ## Boundaries (not in this slice)
 
-Long-running scripts; webhook or event sources; an MCP client; `cron` schedules on check triggers; resuming or starting a session from the host when the server is down (a fire for a task with no live session on its host waits for the server; so does a `claude-code` clock routine's run, which the Mac starts once when it answers).
+Long-running scripts; webhook or event sources; an MCP client; `cron` schedules on check triggers; resuming or starting a session from the host when the server is down (a fire for a task with no live session on its host waits for the server; so does a `claude-code` clock routine's run the host cannot start as the Mac would, see above, which the Mac starts once when it answers).
 
 ## Phases
 

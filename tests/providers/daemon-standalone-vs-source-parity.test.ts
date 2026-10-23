@@ -3320,6 +3320,58 @@ describe('walnut-trigger daemon parity', () => {
   })
 })
 
+// A claude-code routine's run started on its host while the Mac is away
+// (clock-host-start-v1, clock-host-start-core.ts): both twins run the one core (the
+// standalone imports it, the source twin inlines it), arbitrate a start def's fires,
+// hand an unclaimed one to the start, give a claim of a run they started back as the
+// run, and journal a cut start's task before its session at boot.
+describe('clock host start daemon parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both route a start def\'s due fire to the start, and arbitrate its fires', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/applyClockFire\(entry\.state, now, slotMs, !!entry\.def\.deliver \|\| !!entry\.def\.start, clock\.fromMs\)/)
+      expect(src).toMatch(/if \(\(!spec && !entry\.def\.start\) \|\| hostDeliveriesInFlight\.has\(id\)\) continue/)
+      expect(src).toMatch(/if \(!spec\) \{ startUnclaimedRun\(entry, due\[0\], now\); continue;? \}/)
+      expect(src).toMatch(/function startUnclaimedRun\(/)
+      expect(src).toMatch(/clockHostStart\.start\(/)
+      expect(src).toMatch(/started: true, taskId: r\.taskId/)
+      // A start held back because a server answers is not held back: no hostTriedAt, no persist.
+      expect(src).toMatch(/else if \(!r\.wait\)/)
+    }
+  })
+
+  it('both give a claim of a run they started back as the run, and refuse another Walnut\'s claim', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/function markStartedRuns\(/)
+      expect(src).toMatch(/markStartedRuns\(entry, seqs\)[;\s]+(?:const|var) (?:\{ reply, changed \}|claim) = (?:triggerCheckCore\.)?claimFires\(/)
+      expect(src).toMatch(/clockHostStart\.startedRun\(/)
+      expect(src).toMatch(/entry\.def\.start\s*(?:\?\.|\? entry\.def\.start\.)home/)
+    }
+  })
+
+  it('both journal a cut start\'s task before its session at boot', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/p\.task \? offlineHost\.noteRoutineTask\(p\.home, p\.task\.record, p\.task\.opId, p\.task\.jobId\) : null/)
+      expect(src).toMatch(/task && !task\.ok \? task : offlineHost\.noteSession\(p\.home, p\.record, p\.opId, p\.actor\)/)
+      expect(src).toMatch(/WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN === '1'/)
+      expect(src).toMatch(/cmd\.use === 'routine' \? 'routine' : 'ask'|cmd\.use === 'routine'/)
+    }
+  })
+
+  it('the source twin inlines the core and gates the capability on the sidecar; the core is hashed in both lists', () => {
+    expect(templateSrc.split('__CREATE_CLOCK_HOST_START__').length - 1).toBe(3) // injection entry, smoke check, use
+    expect(templateSrc).toMatch(/SIDECAR_GATED_CAPABILITIES = new Set\(\[[^\]]*'clock-host-start-v1'/)
+    expect(templateSrc).toMatch(/typeof triggerCheckCore\.validateClockStartSpec === 'function'[^\n]*caps\.push\('clock-host-start-v1'\)/)
+    expect(standaloneSrc).toMatch(/import \{ createClockHostStart \} from '\.\/clock-host-start-core\.js'/)
+    const build = readFile(path.join(ROOT, 'scripts/build-daemon.sh'))
+    const check = readFile(path.join(ROOT, 'src/providers/daemon-version-check.ts'))
+    expect(build).toContain('src/providers/clock-host-start-core.ts')
+    expect(check).toContain("'src/providers/clock-host-start-core.ts'")
+  })
+})
+
 // skills.sync distributes MORE THAN ONE skill (walnut, walnut-trigger, …) so the
 // engines discover each natively. Both twins take `skills: [{name, skill}]` and
 // still accept the older bare `skill` string; every path is built from a

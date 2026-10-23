@@ -130,6 +130,55 @@ export function buildHostSpawnTemplate(i: SpawnTemplateInputs): SpawnTemplate {
 }
 
 /**
+ * The Walnut mode ids a claude-code routine's run may start in on a host
+ * (clock-host-start-v1): the mode this Mac runs a routine in (it names none, so
+ * DEFAULT_SESSION_MODE), and plain default. Not the ask rule: a routine is the
+ * user's own automation, which this Mac already runs in that mode on that host.
+ */
+export function hostRoutineModes(): { modes: Record<string, string>; defaultMode: string } {
+  const ids = new Set<SessionMode>([DEFAULT_SESSION_MODE, 'default'])
+  const modes: Record<string, string> = {}
+  for (const id of ids) modes[id] = SESSION_MODE_CLI_MAP[id]
+  return { modes, defaultMode: DEFAULT_SESSION_MODE }
+}
+
+/**
+ * The template a routine's run starts from on that host while the Mac is away
+ * (host-start-core.ts planRoutine): the same argv as an ask's, the routine modes, no
+ * agents (a routine run has no persona and no tool lists), and no cwd of its own (each
+ * run names its routine's folder).
+ */
+export function buildRoutineSpawnTemplate(i: Omit<SpawnTemplateInputs, 'cwd' | 'bypassAllowed' | 'agents'>): SpawnTemplate {
+  return { ...buildHostSpawnTemplate({ ...i, cwd: '' }), ...hostRoutineModes(), agents: {} }
+}
+
+/**
+ * Push this Mac's routine template to a host's daemon (`leader.spawnTemplate
+ * {use:'routine'}`, trusted socket, after leader.configure). Returns the template's
+ * hash (its content without the build time), and sends nothing when that is
+ * `unlessHash` (the daemon holds it already); null for a daemon that cannot start a
+ * routine run (no 'replica-start-v1' or no 'clock-host-start-v1'). Throws on a refusal.
+ */
+export async function pushRoutineSpawnTemplate(
+  host: { hasCapability(cap: string): boolean; send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> },
+  o: { home: string; hostKey: string; unlessHash?: string | null },
+): Promise<string | null> {
+  if (!host.hasCapability('replica-start-v1') || !host.hasCapability('clock-host-start-v1')) return null
+  const [{ getConfig }, { createHash }] = await Promise.all([import('../core/config-manager.js'), import('node:crypto')])
+  const config = await getConfig()
+  const template = buildRoutineSpawnTemplate({
+    home: o.home, hostKey: o.hostKey,
+    streamPartialMessages: config.session?.stream_partial_messages, permissionPrompt: config.session?.permission_prompt,
+  })
+  const { builtAt: _at, ...content } = template
+  const hash = createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16)
+  if (hash === o.unlessHash) return hash
+  const reply = await host.send('leader.spawnTemplate', { home: o.home, template, use: 'routine' }, 15_000)
+  if (reply.ok !== true) throw new Error(String(reply.error ?? 'leader.spawnTemplate refused'))
+  return hash
+}
+
+/**
  * Push this Mac's template to a host's daemon (`leader.spawnTemplate`, trusted socket,
  * after leader.configure), so a new ask can start there while the Mac is away. Called by
  * the host-server manager when it configures the replica program (it knows the replica's

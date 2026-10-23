@@ -108,7 +108,7 @@ export function compileTriggerDefs(jobs: CronJob[], host: string, clockDefs: Tri
  */
 export async function compileTriggersForHost(
   host: string,
-  opts: { clock?: 'yes' | 'no' | 'unknown'; fresh?: boolean } = {},
+  opts: { clock?: 'yes' | 'no' | 'unknown'; fresh?: boolean; hostStart?: boolean } = {},
 ): Promise<CompiledTriggers | null> {
   const { getCronService } = await import('../../web/routes/cron.js');
   const service = getCronService();
@@ -123,6 +123,6 @@ export async function compileTriggersForHost(
   if (placement() !== 'mac') return compileTriggerDefs(jobs, host);
   const { placeClocksForHost, noteWatchedTasks } = await import('./clock-placement.js');
   noteWatchedTasks(jobs);
-  const clocks = await placeClocksForHost(service, host, jobs, opts.clock ?? 'unknown', undefined, { fresh: opts.fresh === true });
+  const clocks = await placeClocksForHost(service, host, jobs, opts.clock ?? 'unknown', undefined, { fresh: opts.fresh === true, hostStart: opts.hostStart === true });
   return { ...compileTriggerDefs(jobs, host, clocks.defs), applied: clocks.applied, rejected: clocks.rejected };
 }

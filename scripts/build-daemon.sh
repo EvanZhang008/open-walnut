@@ -138,6 +138,7 @@ SOURCES=(
   src/providers/stream-relay-core.ts
   src/providers/host-resume-core.ts
   src/providers/host-start-core.ts
+  src/providers/clock-host-start-core.ts
   src/core/sessions/open-items-text.ts
   src/core/human-inbox/letter-check.ts
   src/providers/git-diff-core.ts

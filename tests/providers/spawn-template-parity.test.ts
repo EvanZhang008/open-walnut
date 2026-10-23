@@ -26,7 +26,8 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
 import { createHostStart } from '../../src/providers/host-start-core.js'
-import { buildHostSpawnTemplate, hostEffortRules } from '../../src/providers/spawn-template.js'
+import { buildHostSpawnTemplate, buildRoutineSpawnTemplate, hostEffortRules } from '../../src/providers/spawn-template.js'
+import { START_TASK_TOKEN } from '../../src/providers/trigger-clock-core.js'
 import { modelSupportsEffort } from '../../src/core/types.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { bus } from '../../src/core/event-bus.js'
@@ -162,4 +163,43 @@ describe('the template\'s effort rules decide as the Mac does', () => {
       expect(r.plan.args.includes('--effort'), v).toBe(modelSupportsEffort(v))
     }
   })
+})
+
+describe('a filled routine template equals what claude-code-session.ts builds for a routine run (clock-host-start-v1)', () => {
+  // A routine run on the Mac: no profile, the session context as the append prompt, the
+  // mode it names none of (DEFAULT_SESSION_MODE), its own folder, on that host.
+  const ROUTINE_TASK = 'mrun1abc-0a1b2c3d'
+  const context = (id: string) => `You are a coding session opened by Walnut.\n\nYou are working on the task "Routine: Nightly build" (id ${id}, project "Routines").`
+  const RCASES: Array<{ name: string; sid: string; model?: string; effort?: 'low' | 'high' | 'max' }> = [
+    { name: 'Auto model, no effort', sid: '22222222-2222-4333-8444-555555555551' },
+    { name: 'opus with an effort', sid: '22222222-2222-4333-8444-555555555552', model: 'opus', effort: 'high' },
+    { name: 'a host catalog model value', sid: '22222222-2222-4333-8444-555555555553', model: 'global.anthropic.claude-fable-5[1m]', effort: 'max' },
+  ]
+  for (const c of RCASES) {
+    it(c.name, async () => {
+      delete process.env.WALNUT_CLAUDE_DEBUG
+      delete process.env.WALNUT_COMPACT_OPEN_ITEMS
+      const hs = createHostStart({ fs, path, dir, keyOf: () => 'k', now: () => 1, log: () => {}, busy: () => 0 })
+      hs.setTemplate(HOME, buildRoutineSpawnTemplate({ home: HOME, hostKey: 'marina', env: { ...process.env } }), 'routine')
+      const filled = hs.planRoutine(HOME, {
+        sid: c.sid, taskId: ROUTINE_TASK, title: 'Routine: Nightly build', cwd: dir, mode: 'bypass',
+        ...(c.model ? { model: c.model } : {}), ...(c.effort ? { effort: c.effort } : {}),
+        context: context(START_TASK_TOKEN), taskToken: START_TASK_TOKEN, firstMessage: 'build the nightly', routine: { id: 'job-1', slotMs: 1 },
+      }, 'marina')
+      if (!filled.ok) throw new Error(filled.message)
+      const session = new ClaudeCodeSession(ROUTINE_TASK, 'Routines', MOCK_CLI)
+      ;(session as unknown as { _testDaemonUrl?: string })._testDaemonUrl = `ws://127.0.0.1:${daemon.port}`
+      session.send(
+        'build the nightly', dir, undefined, undefined, c.model, context(ROUTINE_TASK), 'marina', undefined, undefined,
+        undefined, undefined, undefined, c.effort, undefined, { preassignedSessionId: c.sid },
+      )
+      const payload = await startPayload(c.sid)
+      expect(filled.plan.args).toEqual(payload.args)
+      expect(payload).not.toHaveProperty('env')
+      expect(payload.cwd).toBe(filled.plan.cwd)
+      expect(payload.mode).toBe(filled.plan.mode)
+      expect(payload.args as string[]).not.toContain('--allowedTools')
+      try { session.detach() } catch { /* the mock daemon reaps its CLIs at stop */ }
+    })
+  }
 })

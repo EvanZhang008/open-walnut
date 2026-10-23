@@ -60,6 +60,7 @@ import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createHostStart } from './host-start-core.js'
+import { createClockHostStart } from './clock-host-start-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
@@ -209,7 +210,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -262,6 +263,7 @@ export function getDaemonSource(): string {
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
+    ['__CREATE_CLOCK_HOST_START__', createClockHostStart.toString()],
     ['__CREATE_CLOCK_SCHEDULE__', createClockSchedule.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
     ['__CREATE_LETTER_CHECK__', createLetterCheck.toString()],
@@ -507,6 +509,18 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const hs = createStart({ fs: noDir, path, dir: '/nonexistent', keyOf: () => 'k', now: () => 0, log: () => {}, busy: () => 0 })
       const r = hs.plan('/h', { sid: 'aaaaaaaa-1111-4111-8111-111111111111', taskId: 't' }, 'h')
       if (r.ok || r.code !== 'needs_leader' || r.detail?.why !== 'no_spawn_template') throw new Error('host start did not build')
+    }
+    // Clock host start smoke (clock-host-start-v1): a reconstructed copy must derive a
+    // v4-shaped session id and a task id for a run, the same for the same slot.
+    const createClockStart = reconstructed['__CREATE_CLOCK_HOST_START__'] as typeof createClockHostStart | undefined
+    if (createClockStart) {
+      const sha = (t: string) => { let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0; return h.toString(16).padStart(8, '0').repeat(8) }
+      const cs = createClockStart({ sha256: sha } as unknown as Parameters<typeof createClockHostStart>[0])
+      const a = cs.idsOf('/h', 'job', 1_700_000_000_000)
+      const b = cs.idsOf('/h', 'job', 1_700_000_000_000)
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(a.sid) || a.sid !== b.sid || !/^[a-z0-9]+-[0-9a-f]{8}$/.test(a.taskId)) {
+        throw new Error('clock host start did not build')
+      }
     }
     // Clock schedule smoke (clock-routine-v1): a reconstructed copy must find the
     // next 09:00 in a named zone and refuse a pattern only croner reads.
@@ -4893,12 +4907,15 @@ var hostStart = (__CREATE_HOST_START__)({
   },
 });
 
+// use: 'routine' (clock-host-start-v1): the template a routine run starts from, kept
+// apart from the ask template. Twin of daemon-standalone.ts.
 function cmdLeaderSpawnTemplate(ws, id, cmd) {
   if (!isServerClient(ws)) return sendError(ws, id, 'leader.spawnTemplate: the leader only');
   var home = typeof cmd.home === 'string' ? cmd.home : '';
   if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'leader.spawnTemplate: send leader.configure for this Walnut first');
+  if (cmd.use !== undefined && cmd.use !== 'ask' && cmd.use !== 'routine') return sendError(ws, id, 'leader.spawnTemplate: use must be ask or routine');
   try {
-    var t = hostStart.setTemplate(home, cmd.template);
+    var t = hostStart.setTemplate(home, cmd.template, cmd.use === 'routine' ? 'routine' : 'ask');
     sendOk(ws, id, { builtAt: t.builtAt });
   } catch (err) {
     sendError(ws, id, err.message);
@@ -4962,6 +4979,42 @@ async function cmdFollowerStart(ws, id, cmd) {
 // One ask's start: refusals before the CLI, the record after it runs (a failed start leaves none).
 // Tests only (never in the real daemon dir): die right after a host ask's CLI is spawned, before its record.
 var DIE_AFTER_ASK_SPAWN = !IS_PROD_DAEMON_DIR && process.env.WALNUT_TEST_DIE_AFTER_ASK_SPAWN === '1';
+// Tests only (never in the real daemon dir): die right after a routine run's CLI is spawned, before its records.
+var DIE_AFTER_ROUTINE_SPAWN = !IS_PROD_DAEMON_DIR && process.env.WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN === '1';
+
+// A claude-code routine's run while the Mac is away ('clock-host-start-v1',
+// clock-host-start-core.ts): the trigger tick hands it a due fire of a clock def with
+// start (startUnclaimedRun). Twin of daemon-standalone.ts.
+var clockHostStartDeps = {
+  hostStart: hostStart,
+  offline: {
+    checkRoutineRun: function (home, sid) { return offlineHost.checkRoutineRun(home, sid); },
+    noteRoutineTask: function (home, rec, opId, jobId) { return offlineHost.noteRoutineTaskWaiting(home, rec, opId, jobId); },
+    noteSession: function (home, rec, opId) { return offlineHost.noteSessionWaiting(home, rec, opId); },
+    knowsSession: function (home, sid) { return offlineHost.knowsSession(home, sid); },
+  },
+  primaryAnswers: function (home) { return primaryAnswersFollower(home); },
+  ownsDir: function () { return ownsDaemonDir(); },
+  ran: function (sid) { return sessions.has(sid) || fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl')); },
+  spawn: function (home, taskId, p) {
+    return sessionStartGate.run(p.sid, function () {
+      return startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home: home, task: taskId } });
+    });
+  },
+  stop: function (sid) { var s = sessions.get(sid); if (s && s.pid) killProcessGroup(s.pid, 'SIGTERM'); },
+  marker: function (sid, text, messageId) {
+    var started = sessions.get(sid);
+    if (started) appendUserMarkerLine(sid, started, text, messageId, false);
+    else logMsg('warn', 'routine run: no turn-start marker', { sid: sid, messageId: messageId });
+  },
+  // The token rides the trigger sidecar (trigger-clock-core.ts); a start runs only once it loaded.
+  taskToken: function () { return triggerCheckCore && typeof triggerCheckCore.START_TASK_TOKEN === 'string' ? triggerCheckCore.START_TASK_TOKEN : ''; },
+  sha256: function (text) { return crypto.createHash('sha256').update(text).digest('hex'); },
+  now: function () { return Date.now(); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+};
+if (DIE_AFTER_ROUTINE_SPAWN) clockHostStartDeps.afterSpawn = function () { process.kill(process.pid, 'SIGKILL'); };
+var clockHostStart = (__CREATE_CLOCK_HOST_START__)(clockHostStartDeps);
 
 // Asks a daemon death cut between their CLI and their session record (startHostAsk keeps
 // each start on disk until its record is): one whose CLI ran is journaled now, under the
@@ -4974,7 +5027,9 @@ function recoverPendingAsks() {
     try {
       var ran = sessions.has(p.sid) || fs.existsSync(path.join(STREAMS_DIR, p.sid + '.jsonl'));
       if (ran && offlineHost.ownerOf(p.sid) !== p.home) {
-        var saved = offlineHost.noteSession(p.home, p.record, p.opId, p.actor);
+        // A routine run's own task goes first (clock-host-start-v1): its session record names it.
+        var task = p.task ? offlineHost.noteRoutineTask(p.home, p.task.record, p.task.opId, p.task.jobId) : null;
+        var saved = task && !task.ok ? task : offlineHost.noteSession(p.home, p.record, p.opId, p.actor);
         if (saved.ok) {
           logMsg('info', 'startup: an ask cut before its session record is journaled now', { home: p.home, sid: p.sid, taskId: p.record.taskId });
         } else {
@@ -6722,7 +6777,9 @@ function runClock(entry, manual) {
     entry.nextRunAtMs = next !== undefined ? next : Number.POSITIVE_INFINITY;
   }
   var owed = !manual && triggerCheckCore.clockFireOwed(entry.state.pendingFires);
-  var fire = owed ? null : triggerCheckCore.applyClockFire(entry.state, now, slotMs, !!entry.def.deliver, clock.fromMs);
+  // Arbitrated (a server claims it, else the host takes it) when the host can deliver
+  // the run itself: into a session here, or by starting the routine's session here.
+  var fire = owed ? null : triggerCheckCore.applyClockFire(entry.state, now, slotMs, !!entry.def.deliver || !!entry.def.start, clock.fromMs);
   persistTriggerState(entry.def.id, entry.state);
   var line = { id: entry.def.id, outcome: fire ? 'fired' : 'held', slotMs: slotMs, manual: manual, nextRunAtMs: entry.state.clock && entry.state.clock.nextRunAtMs !== undefined ? entry.state.clock.nextRunAtMs : null };
   if (fire) line.seq = fire.seq;
@@ -7046,11 +7103,12 @@ function deliverUnclaimedFires(now) {
   for (const entry of fireHolders()) {
     const spec = entry.def.deliver;
     const id = entry.def.id;
-    if (!spec || hostDeliveriesInFlight.has(id)) continue;
+    if ((!spec && !entry.def.start) || hostDeliveriesInFlight.has(id)) continue;
     const due = entry.state.pendingFires.filter(function (f) {
       return triggerCheckCore.fireDueOnHost(f, now, entry.armedAtMs, grace, triggerCheckCore.HOST_DELIVERY_RETRY_MS);
     });
     if (due.length === 0) continue;
+    if (!spec) { startUnclaimedRun(entry, due[0], now); continue; }
     const seqs = due.map(function (f) { return f.seq; });
     const epoch = entry.state.epoch;
     const messageId = 'qm-trigger-' + crypto.randomBytes(6).toString('hex');
@@ -7093,6 +7151,49 @@ function deliverUnclaimedFires(now) {
       hostDeliveriesInFlight.delete(id);
     });
   }
+}
+
+// Start, on this host, the run of a claude-code routine no server claimed in time
+// (clock-host-start-v1, clock-host-start-core.ts): one fire at a time per routine, its
+// outcome recorded on whatever holds the trigger's state when the start ends, as a host
+// delivery is. A start that could not be made leaves the fire for the server and is
+// tried again after a minute; one held back because a server answers is not held back.
+// Twin of daemon-standalone.ts.
+function startUnclaimedRun(entry, fire, now) {
+  var id = entry.def.id;
+  var def = entry.def;
+  if (!def.start) return;
+  var epoch = entry.state.epoch;
+  var seqs = [fire.seq];
+  hostDeliveriesInFlight.set(id, new Set(seqs));
+  clockHostStart.start({ id: id, name: def.name, start: def.start }, fire).then(function (r) {
+    var current = heldTrigger(id);
+    var state = current ? current.state : readTriggerState(id, Date.now());
+    if (state.epoch !== epoch) {
+      logMsg('warn', 'routine run outcome dropped: state file started over', { id: id, seqs: seqs, started: r.ok });
+      return;
+    }
+    if (r.ok) {
+      triggerCheckCore.markHostDelivered(state, { atMs: Date.now(), sessionId: r.sid, messageId: r.messageId, seqs: seqs, started: true, taskId: r.taskId });
+    } else if (!r.wait) {
+      for (var i = 0; i < state.pendingFires.length; i++) {
+        if (seqs.indexOf(state.pendingFires[i].seq) !== -1) state.pendingFires[i].hostTriedAt = now;
+      }
+    } else {
+      return;
+    }
+    persistTriggerState(id, state);
+    // A server that is connected but slow records it now instead of a minute later.
+    if (r.ok && current) {
+      for (var f = 0; f < current.state.pendingFires.length; f++) {
+        if (seqs.indexOf(current.state.pendingFires[f].seq) !== -1) sendTriggerFire(current, current.state.pendingFires[f], true);
+      }
+    }
+  }).catch(function (err) {
+    logMsg('error', 'routine run start threw', { id: id, seqs: seqs, error: err && err.message });
+  }).finally(function () {
+    hostDeliveriesInFlight.delete(id);
+  });
 }
 
 // Overlap is SKIPPED, never queued: a slow check must not build a backlog.
@@ -7310,13 +7411,35 @@ function cmdTriggersClaim(ws, id, cmd) {
     });
   }
   var home = gatewayClientHomes.get(ws);
-  if (entry.def.deliver && home && home !== entry.def.deliver.home) {
+  var owner = entry.def.deliver ? entry.def.deliver.home : entry.def.start ? entry.def.start.home : undefined;
+  if (owner && home && home !== owner) {
     logMsg('warn', 'trigger claim refused: another Walnut', { id: tid, seqs: seqs });
     return sendOk(ws, id, { claimed: [], unknown: [], host: [], busy: [], foreign: true });
   }
+  var marked = markStartedRuns(entry, seqs);
   var claim = triggerCheckCore.claimFires(entry.state, seqs, Date.now(), inFlight);
-  if (claim.changed) persistTriggerState(tid, entry.state);
+  if (claim.changed || marked) persistTriggerState(tid, entry.state);
   return sendOk(ws, id, claim.reply);
+}
+
+// Fires of a routine whose run this host started already (clock-host-start-v1) but
+// whose mark a daemon death cut (the records were kept, the state was not): marked
+// now, before a server's claim, so the server records the run instead of starting a
+// second one. Twin of daemon-standalone.ts.
+function markStartedRuns(entry, seqs) {
+  var start = entry.def.start;
+  if (!start) return false;
+  var changed = false;
+  for (var i = 0; i < entry.state.pendingFires.length; i++) {
+    var f = entry.state.pendingFires[i];
+    if (seqs.indexOf(f.seq) === -1 || f.host || f.claimedAt !== undefined || !f.clock) continue;
+    var run = clockHostStart.startedRun({ id: entry.def.id, start: start }, f);
+    if (!run) continue;
+    triggerCheckCore.markHostDelivered(entry.state, { atMs: Date.now(), sessionId: run.sid, messageId: run.messageId, seqs: [f.seq], started: true, taskId: run.taskId });
+    logMsg('info', 'routine run started here already: a claim gets it back', { id: entry.def.id, seq: f.seq, sid: run.sid });
+    changed = true;
+  }
+  return changed;
 }
 
 function cmdTriggersAck(ws, id, cmd) {
@@ -10911,6 +11034,8 @@ function daemonCapabilities() {
   // Host delivery needs the envelope builder the newer sidecar carries.
   if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1');
   if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.buildScheduledMessage === 'function') caps.push('clock-routine-v1');
+  // A routine run started here needs the start's checks and its task token from the sidecar.
+  if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.validateClockStartSpec === 'function' && typeof triggerCheckCore.START_TASK_TOKEN === 'string') caps.push('clock-host-start-v1');
   if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1');
   if (cronRuntimeCore && typeof cronRuntimeCore.prepareDaemonServiceHandover === 'function') caps.push('service-handover-v1');
   // 'grep-v1' is NOT sidecar-gated: cmdFsGrep is inlined above and needs only

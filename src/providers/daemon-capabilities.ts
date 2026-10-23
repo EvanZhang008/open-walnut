@@ -459,6 +459,18 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'offline-triggers-v1',
   // 'clock-routine-v1': clock defs in the trigger table (see the note above).
   'clock-routine-v1',
+  // 'clock-host-start-v1': a claude-code routine's run starts on this host while its
+  // Walnut is away (clock-host-start-core.ts). A clock def may carry `start` (the run's
+  // title, project, folder, first message, mode, model, effort and session context, all
+  // from the Mac's own def on the trusted socket), and `leader.spawnTemplate` takes
+  // `use: 'routine'`: a second per-home template, the routine one, that never serves
+  // follower.start. A run no server claimed within the grace starts from that template
+  // (host-start-core.ts planRoutine), journals its `task-create` and `session` records
+  // and is replayed with `host.started`, so the Mac records it and starts nothing. Ids
+  // are derived from (home, routine, slot): one run per slot. Optional: without it the
+  // Mac pushes neither and the run waits for the Mac. Sidecar-gated in the source twin
+  // like clock-routine-v1.
+  'clock-host-start-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs-write-atomic-v1',
