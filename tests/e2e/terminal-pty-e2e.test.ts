@@ -25,6 +25,9 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-terminal
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
+import { killDtachSession } from '../../src/web/terminal/dtach-lifecycle.js'
+
+const SESSION_ID = 'term-pty-e2e-1'
 
 let server: HttpServer
 let port = 0
@@ -112,6 +115,9 @@ beforeAll(async () => {
 }, 60_000)
 
 afterAll(async () => {
+  // A dtach session outlives the server by design: end it here, so a failed
+  // assertion does not leave its shell running.
+  await killDtachSession({ claudeSessionId: SESSION_ID }).catch(() => {})
   await stopServer()
   if (savedShell === undefined) delete process.env.SHELL
   else process.env.SHELL = savedShell
@@ -119,7 +125,7 @@ afterAll(async () => {
 
 describe('the in-app terminal over a real pty', () => {
   it('runs a shell that answers input, keeps UTF-8 whole, resizes, and takes Ctrl-C', async () => {
-    const sessionId = 'term-pty-e2e-1'
+    const sessionId = SESSION_ID
     const cwd = path.join(WALNUT_HOME, 'work')
     await fs.mkdir(cwd, { recursive: true })
     await createSessionRecord(sessionId, `task-${sessionId}`, '', cwd)
