@@ -170,7 +170,9 @@ describe('buildNotificationFixMessage — a separate checkout', () => {
     // The repo's own CLAUDE.md would send it to dev:prod; that would restart a
     // server this tree never built.
     expect(message).toContain('Do NOT run it');
-    expect(message).toContain('npm install -g .');
+    // Nothing is installed over the user's Walnut from a checkout.
+    expect(message).not.toContain('npm install -g .');
+    expect(message).toContain('bun run dev:ephemeral');
     expect(message).toContain('bun run web:build');
   });
 

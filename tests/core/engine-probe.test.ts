@@ -212,9 +212,16 @@ describe('probeEngine — bundled-adapter engine (codex)', () => {
     expect(ok.installed).toBe(true)
 
     _resetEngineProbeCache()
-    const missingAdapter = await probeEngine('codex', baseOptions({ bundledAdapterPresent: () => false }))
+    const missingAdapter = await probeEngine('codex', baseOptions({ bundledAdapterPresent: () => false, runsFromCheckout: () => false }))
     expect(missingAdapter.installed).toBe(false)
     expect(missingAdapter.reason).toContain('codex-acp')
+    // An npm, Homebrew or compiled-file user has no checkout to run bun install in.
+    expect(missingAdapter.reason).toContain('reinstall or update Walnut')
+    expect(missingAdapter.reason).not.toContain('bun install')
+
+    _resetEngineProbeCache()
+    const inCheckout = await probeEngine('codex', baseOptions({ bundledAdapterPresent: () => false, runsFromCheckout: () => true }))
+    expect(inCheckout.reason).toContain('run bun install in the Walnut checkout')
   })
 
   it('reports not installed when the CLI is absent even though the adapter ships', async () => {

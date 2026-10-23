@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import type { SessionEngine } from '../types.js';
 import { resolveClaudeCliExecutable } from '../claude-cli-detect.js';
 import { ENGINE_REGISTRY, type EngineCapabilities } from './engine-registry.js';
+import { detectInstall } from '../self-update/install-kind.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -69,6 +70,8 @@ export interface EngineProbeOptions {
   loadConfig?: () => Promise<unknown>;
   /** Injected presence check for the bundled ACP adapter entry. */
   bundledAdapterPresent?: (binaryName: string) => boolean;
+  /** Injected: whether this Walnut runs from a source checkout (default detectInstall). */
+  runsFromCheckout?: () => boolean;
   now?: () => number;
 }
 
@@ -281,6 +284,14 @@ const BUNDLED_ADAPTER_ENTRIES: Record<string, string> = {
  * the first ancestor that owns the adapter — same shape as
  * acp-session.resolveAcpArtifacts, which builds the argv from it.
  */
+function runsFromCheckout(): boolean {
+  try {
+    return detectInstall().kind === 'source';
+  } catch {
+    return false;
+  }
+}
+
 function bundledAdapterExists(binaryName: string): boolean {
   const rel = BUNDLED_ADAPTER_ENTRIES[binaryName];
   if (!rel) return false;
@@ -387,7 +398,11 @@ async function runProbe(caps: EngineCapabilities, options: EngineProbeOptions): 
   if (adapter.source === 'bundled') {
     const present = (options.bundledAdapterPresent ?? bundledAdapterExists)(binaryName);
     if (!present) {
-      const remedy = caps.id === 'pi' ? 'reinstall Walnut, or run bun run build:daemon in a source checkout' : 'run bun install';
+      // Only a source checkout installs its own dependencies: any other install got the adapter from its release.
+      const checkout = (options.runsFromCheckout ?? runsFromCheckout)();
+      const remedy = !checkout
+        ? 'reinstall or update Walnut'
+        : caps.id === 'pi' ? 'run bun run build:daemon in the Walnut checkout' : 'run bun install in the Walnut checkout';
       return { availability: unavailable(`the bundled ${binaryName}-acp adapter is missing from this walnut install (${remedy})`) };
     }
   }
