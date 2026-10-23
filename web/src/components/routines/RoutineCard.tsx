@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Routine } from '@/api/routines';
 import {
   describeRoutineTiming, describeExecutorBadge, describeCheck, describeFireTally, describeLastCheck,
-  describeClockHost, clockHostTitle,
+  describeClockHost, describeClockWait, clockHostTitle,
   describeTriggerOff, triggerRunState,
 } from '@/utils/routine-format';
 import '@/styles/routine-description.css';
@@ -57,6 +57,8 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
   // A paused trigger is disarmed on its daemon, which answers a run with
   // "unknown trigger"; Resume is the way to check it again.
   const canRunNow = routine.enabled || !routine.check;
+  // A Claude Code run that came due while this Mac was away waits on the host.
+  const waiting = describeClockWait(routine);
 
   return (
     <div className={`cron-job-card card routine-card${!routine.enabled ? ' cron-job-disabled' : ''}`}>
@@ -67,8 +69,9 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
         <div className="cron-job-info">
           <span className="cron-job-name">{routine.name}</span>
           <span className="cron-job-desc text-sm text-muted">
-            {/* A switched-off routine has no next run: say why it is quiet instead. */}
-            {describeRoutineTiming(routine.schedule, routine.enabled ? routine.state : undefined, routine.wake)}
+            {/* A switched-off routine has no next run: say why it is quiet instead. A run
+                waiting on its host is past its slot, and the clock line says since when. */}
+            {describeRoutineTiming(routine.schedule, routine.enabled && !waiting ? routine.state : undefined, routine.wake)}
             {off ? ` · ${off}` : ''}
           </span>
         </div>
@@ -144,8 +147,9 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
       )}
       {/* A routine whose work runs on a host keeps its clock there: say where, as a trigger's check line does. */}
       {!routine.check && routine.state.clockHost && (
-        <div className="routine-check-line routine-clock-line text-xs" title={clockHostTitle(routine.state.clockHost)} data-testid="routine-clock-host">
+        <div className="routine-check-line routine-clock-line text-xs" title={clockHostTitle(routine.state.clockHost, routine.executor?.type)} data-testid="routine-clock-host">
           <code className="routine-check-run">{describeClockHost(routine.state)}</code>
+          {waiting && <span className="routine-check-status pending" data-testid="routine-clock-wait">{waiting}</span>}
         </div>
       )}
       {routine.state.lastError && (

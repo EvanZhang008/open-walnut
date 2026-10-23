@@ -104,6 +104,9 @@ describe('the status projection', () => {
   it('keeps what the page shows, drops what moves unseen', () => {
     expect(projectStatus(state(1) as never)).toEqual({ nextRunAtMs: 9_999, lastRunAtMs: 5_001, lastStatus: 'ok', lastDurationMs: 40 })
     expect(projectStatus(undefined)).toEqual({})
+    // The host a clock routine's clock is on: the Routines card and the task's badge name it.
+    expect(projectStatus({ ...state(1), clockHost: 'devbox', clockFromMs: 5 } as never)).toMatchObject({ clockHost: 'devbox' })
+    expect(projectStatus({ ...state(1), clockHost: 'devbox', clockFromMs: 5 } as never)).not.toHaveProperty('clockFromMs')
     // A trigger's next run is the daemon's re-arm of its next check: left out.
     expect(projectStatus(state(1) as never, { trigger: true })).toEqual({ lastRunAtMs: 5_001, lastStatus: 'ok', lastDurationMs: 40 })
   })

@@ -60,9 +60,9 @@ export function triggerPillTitle(routines: readonly Routine[], nowMs = Date.now(
   return routines
     .map((r) => {
       const off = describeTriggerOff(r, nowMs);
-      const where = r.check ? describeCheck(r.check) : describeClockHost(r.state) ?? '';
+      const where = r.check ? describeCheck(r.check) : describeClockHost(r.state);
       const last = r.check ? `, last check ${describeLastCheck(r.state.lastCheck, nowMs)}` : '';
-      return `${r.name}${off ? ` (${off.toLowerCase()})` : ''}: ${r.description ? `${r.description.replace(/\s+/g, ' ')} · ` : ''}${describeSchedule(r.schedule)}, ${where}, ${describeFireTally(r.state, nowMs)}${last}`;
+      return `${r.name}${off ? ` (${off.toLowerCase()})` : ''}: ${r.description ? `${r.description.replace(/\s+/g, ' ')} · ` : ''}${describeSchedule(r.schedule)}, ${where ? `${where}, ` : ''}${describeFireTally(r.state, nowMs)}${last}`;
     })
     .join('\n');
 }
@@ -153,8 +153,10 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
   // the clock), and fireLog is the fire-only memory that survives a burst of quiet
   // checks; auditHistory merges them so one fire is one row.
   const history = auditHistory(routine.state);
-  // A clock routine (clock-routine-v1) runs on its schedule, not on a check.
-  const clock = !routine.check ? describeClockHost(routine.state) : null;
+  // A clock routine runs on its schedule, not on a check; its host is named when
+  // a host's daemon holds the clock (clock-routine-v1).
+  const clock = !routine.check;
+  const clockWhere = clock ? describeClockHost(routine.state) : null;
 
   // Delete needs no close step: the store drops the routine from the task's list
   // at once, and the pill closes itself when none is left. Pause keeps the row.
@@ -188,8 +190,8 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
         <p className="routine-description trigger-jobs-description" title={routine.description}>{routine.description}</p>
       )}
       {routine.check && <code className="trigger-jobs-run" title={routine.check.run}>{describeCheck(routine.check)}</code>}
-      {clock && routine.state.clockHost && (
-        <code className="trigger-jobs-run" title={clockHostTitle(routine.state.clockHost)} data-testid="trigger-jobs-clock">{clock}</code>
+      {clockWhere && routine.state.clockHost && (
+        <code className="trigger-jobs-run" title={clockHostTitle(routine.state.clockHost, routine.executor?.type)} data-testid="trigger-jobs-clock">{clockWhere}</code>
       )}
       {/* The one line that answers "does this actually work": how many times it
           has fired, and when — not just what the newest check decided. */}
@@ -287,6 +289,15 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
       </div>
     </li>
   );
+}
+
+/** The flyout's closing line: what decides a run, and where it lands. */
+export function triggerFoot(triggers: readonly Routine[]): string {
+  if (triggers.some((r) => r.check)) return "The check runs on the daemon; a fire is delivered into this task's session.";
+  const hosted = triggers.filter((r) => r.state?.clockHost).length;
+  if (hosted === triggers.length) return "The clock runs on the host's daemon; each run is delivered into this task's session.";
+  if (hosted === 0) return "It runs on this Mac's schedule; each run is delivered into this task's session.";
+  return "Each run is delivered into this task's session, from this Mac or from the host whose daemon holds its clock.";
 }
 
 export function TriggerPill({ taskId }: TriggerPillProps) {
@@ -407,11 +418,7 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
                   />
                 ))}
               </ul>
-              <div className="trigger-jobs-foot">
-                {triggers.every((r) => !r.check)
-                  ? <>The clock runs on the host&apos;s daemon; each run is delivered into this task&apos;s session.</>
-                  : <>The check runs on the daemon; a fire is delivered into this task&apos;s session.</>}
-              </div>
+              <div className="trigger-jobs-foot">{triggerFoot(triggers)}</div>
             </div>,
             document.body,
           )

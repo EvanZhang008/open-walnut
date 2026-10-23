@@ -6,8 +6,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  auditClock, auditHistory, auditTarget, describeAgo, describeAuditEntry, describeCheck, describeFireTally,
-  describeLastCheck, describeSchedule,
+  auditClock, auditHistory, auditTarget, clockHostTitle, describeAgo, describeAuditEntry, describeCheck, describeClockWait,
+  describeFireTally, describeLastCheck, describeSchedule,
 } from '../../web/src/utils/routine-format';
 
 const NOW = Date.parse('2026-09-16T12:00:00Z');
@@ -243,5 +243,33 @@ describe('the trigger audit trail as sentences', () => {
       ],
     });
     expect(rows.map((r) => r.atMs)).toEqual([NOW, NOW - 60_000, NOW - 43 * 3_600_000]);
+  });
+});
+
+describe('a clock routine on a host, and the runs this server makes itself', () => {
+  it('a Claude Code clock says its runs wait on the host for the Mac; a session clock fires while it sleeps', () => {
+    expect(clockHostTitle('devbox')).toContain('fires while this Mac sleeps');
+    expect(clockHostTitle('devbox', 'session')).toContain('fires while this Mac sleeps');
+    const code = clockHostTitle('devbox', 'claude-code');
+    expect(code).toContain('waits there');
+    expect(code).not.toContain('fires while this Mac sleeps');
+  });
+
+  it('a Claude Code run that came due with its clock on a host reads as waiting for the Mac', () => {
+    const due = { enabled: true, executor: { type: 'claude-code' }, state: { clockHost: 'devbox', nextRunAtMs: NOW - 2 * 3_600_000 } };
+    expect(describeClockWait(due, NOW)).toBe('Due 2h ago: waiting on devbox for this Mac to start it');
+    expect(describeClockWait({ ...due, state: { ...due.state, nextRunAtMs: NOW + 60_000 } }, NOW)).toBeNull();
+    expect(describeClockWait({ ...due, executor: { type: 'session' } }, NOW)).toBeNull();
+    expect(describeClockWait({ ...due, state: { nextRunAtMs: NOW - 1 } }, NOW)).toBeNull();
+    expect(describeClockWait({ ...due, enabled: false }, NOW)).toBeNull();
+    expect(describeClockWait({ ...due, state: { ...due.state, runningAtMs: NOW } }, NOW)).toBeNull();
+  });
+
+  it('runs with no daemon seq (this server’s timer, Run now) are separate rows, and Run now says so', () => {
+    const run = (atMs: number, manual?: true) => ({ atMs, outcome: 'fired' as const, delivery: { status: 'ok' as const, summary: 'sent to session [ab12]' }, ...(manual ? { manual } : {}) });
+    const rows = auditHistory({ fireLog: [run(NOW, true), run(NOW - 3_600_000), run(NOW - 7_200_000)] });
+    expect(rows).toHaveLength(3);
+    expect(describeAuditEntry(rows[0])).toBe('run now → sent to session [ab12]');
+    expect(describeAuditEntry(rows[1])).toBe('fired → sent to session [ab12]');
   });
 });

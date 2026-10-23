@@ -1,9 +1,10 @@
 /**
  * The walnut-triggers of ONE task: routines whose `check` script runs on a
  * daemon and whose fires are delivered into this task's session (executor
- * `session`, `config.target` = the task id), and the scheduled routines on the
- * task whose clock a host's daemon holds the same way (clock-routine-v1, a
- * `state.clockHost`). Read from the shared routines store,
+ * `session`, `config.target` = the task id), and the scheduled routines that run
+ * in that session, wherever their clock is: this server's timer, or a host's
+ * daemon (clock-routine-v1, a `state.clockHost`), so a routine never comes and
+ * goes from its task as its clock moves. Read from the shared routines store,
  * so a task list with hundreds of rows costs one fetch, not one per row.
  *
  * Paused and stopped triggers are returned too: switching one off must not make
@@ -18,9 +19,10 @@ import { getRoutinesSnapshot, loadRoutines, onRoutinesChanged, subscribeRoutines
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 
 export function isTriggerForTask(routine: Routine, taskId: string): boolean {
-  if (!routine.check && !routine.state?.clockHost) return false;
   if (routine.executor?.type !== 'session') return false;
-  return (routine.executor.config as { target?: unknown }).target === taskId;
+  if ((routine.executor.config as { target?: unknown }).target !== taskId) return false;
+  // A wake counter is the other kind of session routine: not a trigger or a clock.
+  return !!routine.check || !routine.wake;
 }
 
 export function triggersForTask(routines: readonly Routine[], taskId: string | null | undefined): Routine[] {

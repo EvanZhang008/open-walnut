@@ -178,9 +178,31 @@ export function describeClockHost(state: RoutineState | undefined): string | nul
   return host ? `clock @ ${hostLabel(host)}` : null;
 }
 
-/** The hover text that goes with describeClockHost. */
-export function clockHostTitle(host: string): string {
-  return `Its clock runs on ${hostLabel(host)}, where its work runs, so it fires while this Mac sleeps.`;
+/**
+ * The hover text that goes with describeClockHost. A session routine is delivered
+ * there while this Mac sleeps; a Claude Code run is started by this Mac, so a slot
+ * that comes while it sleeps waits on the host until the Mac is back.
+ */
+export function clockHostTitle(host: string, executorType?: string): string {
+  const where = hostLabel(host);
+  return executorType === 'claude-code'
+    ? `Its clock runs on ${where}, where its work runs. A run that comes due while this Mac sleeps waits there, and this Mac starts it when it is back.`
+    : `Its clock runs on ${where}, where its work runs, so it fires while this Mac sleeps.`;
+}
+
+/**
+ * A Claude Code routine whose clock is on a host and whose slot has passed: the
+ * host holds that run until this Mac takes it and starts the session (null otherwise).
+ */
+export function describeClockWait(
+  routine: { enabled?: boolean; executor?: { type: string }; state?: RoutineState },
+  nowMs = Date.now(),
+): string | null {
+  const s = routine.state;
+  const next = s?.nextRunAtMs;
+  if (!routine.enabled || routine.executor?.type !== 'claude-code' || !s?.clockHost || typeof next !== 'number') return null;
+  if (next > nowMs || typeof s.runningAtMs === 'number') return null;
+  return `Due ${describeAgo(next, nowMs)}: waiting on ${hostLabel(s.clockHost)} for this Mac to start it`;
 }
 
 /** Badge text: "Claude Code @ clouddev" / "Home Chat" / "Walnut Agent". */
@@ -236,9 +258,10 @@ function describeAuditVerdict(entry: RoutineAuditEntry): string {
   const n = entry.items ?? 0;
   const newItems = `${n} new item${n === 1 ? '' : 's'}`;
   // A backlog delivered as one envelope is one row: say how many fires it held.
-  const what = (entry.coalesced ?? 1) > 1
-    ? `${entry.coalesced} fires, ${newItems}`
-    : n > 0 ? `fired, ${newItems}` : 'fired';
+  const what = entry.manual ? 'run now'
+    : (entry.coalesced ?? 1) > 1
+      ? `${entry.coalesced} fires, ${newItems}`
+      : n > 0 ? `fired, ${newItems}` : 'fired';
   const d = entry.delivery;
   if (!d) return what;
   const tries = (entry.attempts ?? 1) > 1 ? ` after ${entry.attempts} tries` : '';
@@ -327,6 +350,14 @@ export function describeFireTally(state: RoutineState | undefined, nowMs = Date.
 }
 
 /**
+ * Which fire a row is: the daemon's (epoch, seq), or, for a run this server made
+ * itself (no seq: its own timer, Run now), the row's own time.
+ */
+function fireKey(row: RoutineAuditEntry): string {
+  return row.seq !== undefined ? `${row.epoch ?? ''}#${row.seq}` : `at#${row.atMs}`;
+}
+
+/**
  * The rows the History fold shows, newest first: the recent checks, with each
  * fire appearing ONCE.
  *
@@ -344,12 +375,12 @@ export function auditHistory(state: RoutineState | undefined): RoutineAuditEntry
   const out: RoutineAuditEntry[] = [];
   for (const row of rows) {
     if (row.outcome !== 'fired') { out.push(row); continue; }
-    const key = `${row.epoch ?? ''}#${row.seq ?? ''}`;
+    const key = fireKey(row);
     if (seen.has(key)) continue;
     seen.add(key);
     // The fire-only list is never thinned by quiet checks, so its copy is the one
     // that carries the newest attempt count and delivery verdict.
-    out.push(fires.find((f) => `${f.epoch ?? ''}#${f.seq ?? ''}` === key) ?? row);
+    out.push(fires.find((f) => fireKey(f) === key) ?? row);
   }
   // Shown by each row's own time. The lists are stored in write order (their
   // bound keeps the most recent WRITES, so a late fire is never cut the moment it

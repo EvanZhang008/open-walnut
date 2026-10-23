@@ -94,6 +94,8 @@ export type RoutineAuditEntry = {
   injected?: { chars: number; preview: string };
   /** What the daemon repaired in what the check printed (an over-long id, a dropped item). */
   warnings?: string[];
+  /** A run someone asked for (Run now), not one the schedule made. */
+  manual?: true;
 };
 
 export type RoutineState = {

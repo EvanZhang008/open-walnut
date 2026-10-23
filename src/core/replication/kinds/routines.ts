@@ -34,7 +34,7 @@ export const ROUTINES_SCHEMA_VERSION = 1
 export const ROUTINES_REMOVAL_FLOOR = 20
 
 /** What the Routines page shows of a routine's run state. */
-const STATUS_FIELDS = ['nextRunAtMs', 'lastRunAtMs', 'lastStatus', 'lastError', 'lastDurationMs', 'consecutiveErrors', 'pausedAtMs'] as const
+const STATUS_FIELDS = ['nextRunAtMs', 'lastRunAtMs', 'lastStatus', 'lastError', 'lastDurationMs', 'consecutiveErrors', 'pausedAtMs', 'clockHost'] as const
 
 /** A copied definition: `updatedAtMs` left out (an older Mac's row may still carry it). */
 export type CopiedJob = Omit<CronJob, 'state' | 'updatedAtMs'> & { updatedAtMs?: number }

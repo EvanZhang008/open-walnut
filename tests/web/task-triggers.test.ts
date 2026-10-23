@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Routine } from '../../web/src/api/routines';
 import { isTriggerForTask, triggersForTask } from '../../web/src/hooks/useTaskTriggers';
-import { triggerPillLabel, triggerPillTitle } from '../../web/src/components/routines/TriggerPill';
+import { triggerFoot, triggerPillLabel, triggerPillTitle } from '../../web/src/components/routines/TriggerPill';
 import { describeTriggerOff, triggerRunState } from '../../web/src/utils/routine-format';
 import { TRIGGER_STOP_AFTER_ERRORS } from '../../src/core/cron/trigger-run-state';
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-core';
@@ -29,13 +29,18 @@ function routine(over: Partial<Routine> & { id: string }): Routine {
 }
 
 describe('isTriggerForTask', () => {
-  it('needs a routine with a check whose session executor targets the task', () => {
+  it('needs a routine whose session executor targets the task: a check, or a schedule wherever its clock is', () => {
     expect(isTriggerForTask(routine({ id: 'a' }), 'task-1')).toBe(true);
     expect(isTriggerForTask(routine({ id: 'a' }), 'task-2')).toBe(false);
     // A paused trigger stays on its task: switching it off is not a delete.
     expect(isTriggerForTask(routine({ id: 'paused', enabled: false, state: { pausedAtMs: NOW } }), 'task-1')).toBe(true);
-    expect(isTriggerForTask(routine({ id: 'no-check', check: undefined }), 'task-1')).toBe(false);
-    // A plain scheduled session routine on the task is not a trigger.
+    // A scheduled routine that runs in the task's session is listed on the server's
+    // timer and on a host's daemon alike, so it never comes and goes as its clock moves.
+    expect(isTriggerForTask(routine({ id: 'server-clock', check: undefined }), 'task-1')).toBe(true);
+    expect(isTriggerForTask(routine({ id: 'host-clock', check: undefined, state: { clockHost: 'devbox' } }), 'task-1')).toBe(true);
+    // A wake counter is not a trigger.
+    expect(isTriggerForTask(routine({ id: 'wake', check: undefined, wake: { events: ['task:completed'], threshold: 5 } } as Partial<Routine> & { id: string }), 'task-1')).toBe(false);
+    // Another executor on the task is not one either.
     expect(isTriggerForTask(routine({ id: 'other-exec', executor: { type: 'claude-code', config: { target: 'task-1' } } }), 'task-1')).toBe(false);
     expect(isTriggerForTask(routine({ id: 'no-exec', executor: undefined }), 'task-1')).toBe(false);
   });
@@ -136,3 +141,20 @@ describe('triggerRunState / describeTriggerOff', () => {
     expect(describeTriggerOff(stopped('a'), NOW)).toBe(`Stopped after ${MAX_CONSECUTIVE_CHECK_ERRORS} failed checks`);
   });
 });
+
+describe('the flyout’s closing line', () => {
+  it('says where a run comes from: a check, a host’s clock, this Mac’s schedule, or both', () => {
+    const hosted = routine({ id: 'h', check: undefined, state: { clockHost: 'devbox' } })
+    const local = routine({ id: 'l', check: undefined })
+    expect(triggerFoot([routine({ id: 'c' }), hosted])).toContain('The check runs on the daemon')
+    expect(triggerFoot([hosted])).toContain('The clock runs on the host')
+    expect(triggerFoot([local])).toContain('this Mac')
+    expect(triggerFoot([local, hosted])).toContain('from this Mac or from the host')
+  })
+
+  it('names a server-timer clock routine in the hover text without a host', () => {
+    const title = triggerPillTitle([routine({ id: 'l', name: 'Digest', check: undefined, schedule: { kind: 'every', everyMs: 3_600_000 } })], NOW)
+    expect(title).not.toContain('@')
+    expect(title).toContain('Digest')
+  })
+})
