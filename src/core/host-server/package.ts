@@ -85,6 +85,8 @@ interface BuildFacts {
   info: BuildInfo
   dependencies: Record<string, string>
   optionalDependencies: Record<string, string>
+  /** The dependencies whose install scripts bun runs (package.json trustedDependencies), sorted. */
+  trustedDependencies: string[]
   depsHash: string
   appPackageJson: string
 }
@@ -92,17 +94,28 @@ interface BuildFacts {
 async function readBuild(dist: { distDir: string; root: string }): Promise<BuildFacts> {
   const pkg = JSON.parse(await fs.promises.readFile(path.join(dist.root, 'package.json'), 'utf8')) as {
     name?: string; version?: string; dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>
+    trustedDependencies?: unknown
   }
   const info = readBuildInfoFile(path.join(dist.distDir, 'build-info.json'), pkg.version ?? '0.0.0')
   const dependencies = pkg.dependencies ?? {}
+  // bun runs a dependency's install script (sharp's, onnxruntime-node's) only when
+  // the project trusts it: the box's install (installScript, install.ts) takes the
+  // list from appPackageJson, and a changed list is a different install.
+  const trusted = Array.isArray(pkg.trustedDependencies)
+    ? pkg.trustedDependencies.filter((t): t is string => typeof t === 'string').sort()
+    : []
   return {
     id: buildIdOf(info, PROCESS_STARTED),
     version: info.version,
     info,
     dependencies,
     optionalDependencies: pkg.optionalDependencies ?? {},
-    depsHash: sha(JSON.stringify(Object.entries(dependencies).sort())).slice(0, 16),
-    appPackageJson: JSON.stringify({ name: pkg.name ?? 'open-walnut', version: info.version, private: true, type: 'module' }, null, 2),
+    trustedDependencies: trusted,
+    depsHash: sha(JSON.stringify([Object.entries(dependencies).sort(), trusted])).slice(0, 16),
+    appPackageJson: JSON.stringify({
+      name: pkg.name ?? 'open-walnut', version: info.version, private: true, type: 'module',
+      ...(trusted.length ? { trustedDependencies: trusted } : {}),
+    }, null, 2),
   }
 }
 
@@ -208,7 +221,7 @@ export async function buildCompanionAppPackage(
     dependencies: facts.dependencies,
     depsHash: facts.depsHash,
     optionalDependencies: facts.optionalDependencies,
-    companionDepsHash: sha(JSON.stringify([Object.entries(facts.dependencies).sort(), Object.entries(facts.optionalDependencies).sort()])).slice(0, 16),
+    companionDepsHash: sha(JSON.stringify([Object.entries(facts.dependencies).sort(), Object.entries(facts.optionalDependencies).sort(), facts.trustedDependencies])).slice(0, 16),
     appPackageJson: facts.appPackageJson,
     tgz,
   }

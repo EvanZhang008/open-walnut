@@ -14,6 +14,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-package
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { buildCompanionAppPackage, keepsDaemonFile, readRunningBuild, runningBuildId } from '../../src/core/host-server/package.js'
+import { installScript } from '../../src/core/host-server/install.js'
 import { buildIdOf } from '../../src/core/companion-build/wire.js'
 
 let root = ''
@@ -120,6 +121,48 @@ describe('companion package', () => {
       'package/dist/daemon-binaries/daemon-linux-x64',
       'package/dist/daemon-binaries/daemon-linux-x64.version',
     ])
+  })
+
+  it('carries the trusted dependencies from package.json to the box install, which hands them to bun', async () => {
+    write('package.json', JSON.stringify({
+      name: 'open-walnut', version: '0.6.14',
+      dependencies: { express: '^5.1.0', sharp: '^0.34.5' },
+      optionalDependencies: { 'onnxruntime-node': '^1.24.0' },
+      trustedDependencies: ['sharp', 'onnxruntime-node'],
+    }))
+    const pkg = await buildCompanionAppPackage({ platform: 'linux', arch: 'arm64' }, dist)
+    expect(JSON.parse(pkg.appPackageJson)).toEqual({ name: 'open-walnut', version: '0.6.14', private: true, type: 'module', trustedDependencies: ['onnxruntime-node', 'sharp'] })
+    // What box.ts builds from the request the Mac sends (mac.ts installStep).
+    const script = installScript({
+      id: pkg.id, depsHash: pkg.companionDepsHash, dependencies: pkg.dependencies, optionalDependencies: pkg.optionalDependencies,
+      appPackageJson: pkg.appPackageJson, bun: { command: '/opt/walnut/walnut', asBun: true }, buildEnv: {},
+    })
+    const deps = /cat > [^\n]*<<'WALNUT_EOF'\n(\{\n  "name": "open-walnut-host-deps"[\s\S]*?)\nWALNUT_EOF/.exec(script)
+    expect(deps, script).not.toBeNull()
+    expect(JSON.parse(deps![1]!)).toEqual({
+      name: 'open-walnut-host-deps', private: true,
+      dependencies: { express: '^5.1.0', sharp: '^0.34.5' },
+      optionalDependencies: { 'onnxruntime-node': '^1.24.0' },
+      trustedDependencies: ['onnxruntime-node', 'sharp'],
+    })
+
+    // Another trusted list is another install: the box keys its deps dir by the hash.
+    write('package.json', JSON.stringify({
+      name: 'open-walnut', version: '0.6.14',
+      dependencies: { express: '^5.1.0', sharp: '^0.34.5' },
+      optionalDependencies: { 'onnxruntime-node': '^1.24.0' },
+      trustedDependencies: ['sharp'],
+    }))
+    fs.rmSync(cacheDir(), { recursive: true, force: true })
+    const fewer = await buildCompanionAppPackage({ platform: 'linux', arch: 'arm64' }, dist)
+    expect(fewer.companionDepsHash).not.toBe(pkg.companionDepsHash)
+    expect(fewer.depsHash).not.toBe(pkg.depsHash)
+    expect(JSON.parse(fewer.appPackageJson).trustedDependencies).toEqual(['sharp'])
+  })
+
+  it('names no trusted dependencies when package.json trusts none', async () => {
+    const pkg = await buildCompanionAppPackage({ platform: 'linux', arch: 'arm64' }, dist)
+    expect(JSON.parse(pkg.appPackageJson)).toEqual({ name: 'open-walnut', version: '0.6.14', private: true, type: 'module' })
   })
 
   it('has an empty optionalDependencies when package.json has none', async () => {
