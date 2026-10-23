@@ -5,8 +5,9 @@
  * Two layers, because they fail differently:
  *   1. package.json invariants — always run. A missing `publishConfig.access`
  *      or a lingering `private: true` only shows up as a failed release.
- *   2. what npm would actually pack — needs a built `dist`, so it is skipped on
- *      a clean checkout. This is the layer that catches an `exports` target that
+ *   2. what npm would actually pack: needs a built `dist` (skipped on a clean
+ *      checkout) and npm (skipped where there is none, as in CI's Node-free
+ *      jobs; the node-side job runs it, tests/helpers/npm-on-path.ts). This is the layer that catches an `exports` target that
  *      the `files` allowlist quietly leaves out of the tarball.
  */
 import { spawnSync } from 'node:child_process'
@@ -14,11 +15,14 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { npmOnPath } from '../helpers/npm-on-path.js'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
 const ROOT_LICENSE = fs.readFileSync(path.join(REPO_ROOT, 'LICENSE'), 'utf8')
 const REPO_URL = 'https://github.com/EvanZhang008/open-walnut'
 const webRequire = createRequire(path.join(REPO_ROOT, 'web', 'package.json'))
+
+const NPM = npmOnPath()
 
 const PACKAGES = [
   { name: '@open-walnut/plugin-api', dir: 'packages/plugin-api' },
@@ -151,8 +155,8 @@ describe.each(PACKAGES)('$name publishing contract', ({ name, dir }) => {
     expect(maps).toEqual([])
   })
 
-  describe.skipIf(!built)('npm pack --dry-run', () => {
-    const files = built ? packedFiles(dir) : []
+  describe.skipIf(!built || !NPM)('npm pack --dry-run', () => {
+    const files = built && NPM ? packedFiles(dir) : []
 
     it('carries the metadata files and no source maps', () => {
       expect(files).toContain('package.json')
@@ -252,7 +256,7 @@ describe('@open-walnut/plugin-cli publishing contract', () => {
     expect(fs.existsSync(path.join(distDir, 'index.d.ts'))).toBe(true)
   })
 
-  it.skipIf(!built)('packs the bin', () => {
+  it.skipIf(!built || !NPM)('packs the bin', () => {
     expect(packedFiles(dir)).toContain('dist/cli.js')
   })
 })

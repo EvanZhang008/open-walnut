@@ -15,6 +15,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { bunExecutable, vitestCommand, vitestCommandLine } from '../../scripts/bun-vitest.mjs'
+import { npmOnPath } from '../helpers/npm-on-path.js'
 
 const REPO = path.resolve(__dirname, '../..')
 const REMOVE_NODE = path.join(REPO, 'scripts', 'ci-remove-node.sh')
@@ -101,6 +102,29 @@ describe('package test scripts start bun, never Node', () => {
       // `npx vitest` start it on Node, and `bun --bun ./node_modules/.bin/vitest`
       // leaves the children it starts on the Node on PATH.
       if (/\bvitest\b/.test(part) && !part.startsWith('bash ')) expect(part).toMatch(/(^|\s)bun --bun vitest(\s|$)/)
+    }
+  })
+})
+
+describe('the npm tests: skipped where there is no npm, required where CI runs them', () => {
+  it('the node-side job\'s script requires npm, so its npm tests can never skip there', () => {
+    const scripts = (JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> }).scripts
+    expect(scripts['test:plugin-packages']).toContain('WALNUT_REQUIRE_NPM=1 bun --bun vitest run')
+  })
+
+  it('npmOnPath: an executable npm on PATH, none, and none while required', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'npm-on-path-'))
+    try {
+      const withNpm = path.join(root, 'with')
+      const without = path.join(root, 'without')
+      fs.mkdirSync(withNpm)
+      fs.mkdirSync(without)
+      fs.writeFileSync(path.join(withNpm, process.platform === 'win32' ? 'npm.cmd' : 'npm'), '#!/bin/sh\n', { mode: 0o755 })
+      expect(npmOnPath({ PATH: [without, withNpm].join(path.delimiter) })).toBe(true)
+      expect(npmOnPath({ PATH: without })).toBe(false)
+      expect(() => npmOnPath({ PATH: without, WALNUT_REQUIRE_NPM: '1' })).toThrow(/WALNUT_REQUIRE_NPM=1, and there is no npm on PATH/)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
     }
   })
 })
