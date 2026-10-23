@@ -181,11 +181,33 @@ phone ── tunnel (on the host) ── host server ── stream via the host'
   host server on a stream through its daemon (`src/core/replication/replica-targets.ts`
   names the targets; `src/core/server-role.ts` says which role this server plays
   and whether its leader answers).
-- **Runtime.** The host needs a Node that runs there. On an older Linux (glibc
-  2.26), stock Node 24 does not start and the prebuilt SQLite module does not
-  load; a Node built for that system and a newer compiler for native modules
-  (`CC`, `CXX`) are the answer, and the install step checks both before it starts
-  anything.
+- **Runtime.** A host server is the compiled walnut file for the host's system
+  (docs/plan/walnut-single-binary.md), so the host needs nothing installed first:
+  no Node, no npm, no compiler, no network. On connect the Mac:
+  1. reads the host's system with one sh probe: `uname`, and musl or glibc
+     (`src/core/host-server/host-target.ts`). Linux x64 gets bun's baseline
+     build, which needs no AVX2; Alpine gets the musl build.
+  2. gets its own build as that file (`src/core/host-server/host-file.ts`).
+     A server that runs a dist of a checkout builds it in a clone of the dist's
+     commit, never in the checkout (`host-file-build.ts`; about a minute, once
+     per build and target). A server that runs a released build (the compiled
+     file, an npm install) downloads the release's `walnut-<version>-<target>.gz`
+     and checks it against `SHA256SUMS`. Anything else (running from source, a
+     build with uncommitted changes and no checkout, a version that was never
+     released) stops with a sentence in the host's status that says which;
+     nothing is installed on the host instead. The file is cached in the data
+     dir (`cache/host-server/files/<id>/`).
+  3. sends it over the daemon deploy's SSH path (`DaemonConnection.uploadFile`:
+     one stream, then small chunks over their own connections when a proxy
+     kills a large transfer), with the install script.
+  4. installs it on the host (`fileInstallScript` in `install.ts`):
+     `~/.open-walnut-host/app/<id>/walnut`, checked by its sha256 and by
+     `--version` (which also unpacks the file's own runtime tree into the
+     host server's data dir), `.ready` written last. The build before it is
+     kept, older ones go.
+  5. asks the installed file for a free port (`BUN_BE_BUN=1 <file> -e`, the
+     file running as bun) and has the daemon start `<file> host-server`, or
+     `<file> web --replica` (the replica).
 
 ### One kind of link
 

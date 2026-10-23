@@ -49,7 +49,7 @@ Process facts on the host after this plan:
 
 | Item | Value | Why |
 |---|---|---|
-| program | `<node> <appDir>/dist/cli.js web --replica` | the spec is generic (`src/providers/host-server-core.ts:142-168`); dist already ships `cli.js web` and the SPA (`src/core/host-server/package.ts:79`) |
+| program | `<node> <appDir>/dist/cli.js web --replica`; since the move to one compiled file, `<root>/app/<id>/walnut web --replica` (walnut-servers-everywhere.md, "Runtime") | the spec is generic (`src/providers/host-server-core.ts:142-168`); dist already ships `cli.js web` and the SPA (`src/core/host-server/package.ts:79`) |
 | role env | `WALNUT_ROLE=replica`, `WALNUT_PLACEMENT=host` (plus `WALNUT_HOST_SERVER=1` kept for old code paths) | `followerKind()` already keys on `WALNUT_HOST_SERVER` (`src/core/server-role.ts:20-24`) |
 | data | `OPEN_WALNUT_HOME=~/.open-walnut-host/data` (same dir the host server uses: device and search copies carry over) | `src/core/host-server/manager.ts:318` |
 | own run dir | `WALNUT_DAEMON_DIR=~/.open-walnut-host/run` | `LOG_DIR`, streams, dtach and image dirs derive from it (`src/constants.ts:303-325`); the replica must never write `/tmp/open-walnut` |
