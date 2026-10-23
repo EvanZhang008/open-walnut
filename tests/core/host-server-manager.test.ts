@@ -2,8 +2,9 @@
  * The Mac's host-server manager (src/core/host-server/manager.ts) against a fake
  * host: what it asks the host's daemon, what it runs over SSH, what it sends on
  * a stream to the host server, and what it tells the person. The scripts
- * themselves run for real in host-server-install.test.ts; a whole host server
- * in tests/e2e/host-server-e2e.test.ts.
+ * themselves run for real in host-server-install.test.ts and
+ * host-server-target.test.ts, the real install and start of the compiled file in
+ * host-server-file-e2e.test.ts; a whole host server in tests/e2e/host-server-e2e.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
@@ -12,6 +13,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostServerManager, type HostServerHost, type HostServerSettings, type ManagerDeps } from '../../src/core/host-server/manager.js'
+import type { HostFile, HostFileSource } from '../../src/core/host-server/host-file.js'
 import { registerExposeProvider, _resetExposeProvidersForTesting } from '../../src/core/expose/registry.js'
 
 const HOME = '/Users/me/.open-walnut'
@@ -25,13 +27,16 @@ interface FakeHost extends HostServerHost {
   lane: boolean[]
   installState: 'absent' | 'running' | 'ready' | 'failed'
   pollsUntilReady: number
-  nodeVersion: string
+  /** What the target probe answers. */
+  system: string
   caps: Set<string>
   daemonState: string
   /** The server reports through its daemon once started. */
   reports: boolean
   /** More of the daemon's server.status (its program, a fallback). */
   statusExtra?: Record<string, unknown>
+  /** The install script last uploaded. */
+  script?: string
 }
 
 /** The host server's end of a stream: what the Mac posts to it. */
@@ -44,14 +49,13 @@ function fakeHost(): FakeHost {
     hostKey: 'devbox',
     connected: true,
     calls: [], specs: [], uploads: [], streams: [], lane: [],
-    installState: 'absent', pollsUntilReady: 2, nodeVersion: 'v24.3.0',
+    installState: 'absent', pollsUntilReady: 2, system: 'os=Linux\narch=x86_64\nlibc=glibc\ntranslated=0\nglibc=2.26\n',
     caps: new Set(['host-server-v1', 'follower-v1', 'stream-relay-v1']),
     daemonState: 'off',
     reports: true,
     hasCapability: (cap) => h.caps.has(cap),
     async send(cmd, params) {
       h.calls.push(`send ${cmd}`)
-      if (cmd === 'host.preflight') return { ok: true, result: { nodeDir: '/opt/node24/bin' } }
       if (cmd === 'server.status') {
         // The host's clock is an hour behind: only the age it gives counts.
         const report = h.daemonState === 'running' && h.reports ? { report: { route: { kind: 'leader' }, version: '0.6.7' }, reportedAt: Date.now() - 3_600_000, reportAgeMs: 1_000 } : {}
@@ -65,23 +69,22 @@ function fakeHost(): FakeHost {
       return { ok: false, error: 'unknown' }
     },
     async runRemoteScript(script) {
-      if (script.includes(' -v 2>&1')) { h.calls.push('node -v'); return h.nodeVersion }
       if (script === 'printf %s "$HOME"') return '/home/me'
-      if (script.startsWith('command -v')) return '/usr/bin/node'
+      if (script.includes('s=$(uname -s')) { h.calls.push('probe'); return h.system }
       if (script.includes('nohup sh')) { h.calls.push('launch'); h.installState = 'running'; return 'launched' }
       if (script.includes('if [ -f "$ROOT/app/$ID/.ready" ]')) {
         h.calls.push('state')
         if (h.installState === 'running' && --h.pollsUntilReady <= 0) h.installState = 'ready'
-        if (h.installState === 'failed') return 'FAILED\nnpm install of its dependencies failed\n__LOG__\ngyp ERR! old compiler'
+        if (h.installState === 'failed') return 'FAILED\nthe walnut file does not start on this host (Linux x86_64, glibc 2.26): boom\n__LOG__\nboom'
         return { absent: 'ABSENT', running: 'RUNNING', ready: 'READY' }[h.installState] ?? 'ABSENT'
       }
       if (script.includes('require("net")')) {
-        h.calls.push('ports')
+        h.calls.push(script.startsWith('BUN_BE_BUN=1 ') ? `ports ${script.split(' ')[1]}` : `ports ${script.split(' ')[0]}`)
         return script.split(' ').filter((w) => /^\d{5}$/.test(w)).map((p) => `${p}:free`).join('\n')
       }
       throw new Error('unexpected script: ' + script.slice(0, 80))
     },
-    async uploadFile(p, data) { h.uploads.push({ path: p, bytes: data.length }) },
+    async uploadFile(p, data) { h.uploads.push({ path: p, bytes: data.length }); if (p.endsWith('.install.sh')) h.script = data.toString() },
     keepStreamLane(on) { h.lane.push(on) },
     async openStream(to, purpose) {
       h.streams.push(`${to}:${purpose}`)
@@ -102,6 +105,20 @@ let targets: Array<{ id: string; post?: (body: Record<string, unknown>) => Promi
 /** Each `ready` the copy target heard: `<host>` or `<host> restarted`. */
 let readies: string[] = []
 
+/** This Mac's build as the walnut file: what it was asked for, and what it said while getting it. */
+let fileAsks: string[] = []
+function fakeFiles(over: Partial<HostFileSource> = {}): HostFileSource {
+  return {
+    buildId: async () => ({ id: '0.6.7-abc1234', version: '0.6.7' }),
+    file: async (target, say) => {
+      fileAsks.push(target)
+      say?.(`Building Walnut 0.6.7-abc1234 for ${target} on this computer (about a minute, once per build).`)
+      return { id: '0.6.7-abc1234', version: '0.6.7', target, gz: Buffer.alloc(3 * 2 ** 20), sha256: 'c'.repeat(64) } satisfies HostFile
+    },
+    ...over,
+  }
+}
+
 function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
   return {
     settingsOf: async () => settings,
@@ -110,10 +127,7 @@ function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
     home: HOME,
     holdTunnelPort: async (holder) => { held.push(holder); return tunnelPort },
     releaseTunnelPort: async (holder) => { released.push(holder) },
-    buildPackage: async () => ({
-      id: '0.6.7-abc1234', version: '0.6.7', dependencies: { ws: '^8' }, depsHash: 'deps01',
-      appPackageJson: '{"name":"open-walnut","type":"module"}', tgz: Buffer.alloc(1234),
-    }),
+    hostFile: fakeFiles(),
     stateFile: path.join(dir, 'host-servers.json'),
     now: Date.now,
     registerTarget: (hostKey, post, copies) => {
@@ -128,7 +142,8 @@ function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
 
 beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hsm-'))
-  settings = { enabled: true, buildEnv: {}, expose: { enabled: false, provider: null, options: {} } }
+  settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
+  fileAsks = []
   tunnelPort = 5555
   released = []
   held = []
@@ -166,14 +181,32 @@ describe('host server manager', () => {
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
   })
 
-  it('sets it up: node, install, its port, the door, the daemon spec with its tunnel, and a copy target over a stream', async () => {
-    const m = createHostServerManager(deps())
+  it('sets it up: the file for its system, its port, the door, the daemon spec with its tunnel, and a copy target over a stream', async () => {
+    const messages: string[] = []
+    const m = createHostServerManager(deps({ changed: (v) => { if (v.message && messages.at(-1) !== v.message) messages.push(v.message) } }))
     const host = fakeHost()
     await m.connected(host)
-    expect(host.calls.filter((c) => c !== 'state')).toEqual(['send host.preflight', 'node -v', 'launch', 'ports', 'send server.configure', 'send server.status'])
-    expect(host.uploads.map((u) => u.path)).toEqual([
-      '/home/me/.open-walnut-host/incoming/0.6.7-abc1234.tgz',
-      '/home/me/.open-walnut-host/incoming/0.6.7-abc1234.install.sh',
+    // No Node anywhere: the probe says which file, the installed file itself finds the port.
+    const file = '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut'
+    expect(host.calls.filter((c) => c !== 'state')).toEqual(['probe', 'launch', `ports '${file}'`, 'send server.configure', 'send server.status'])
+    expect(fileAsks).toEqual(['linux-x64'])
+    expect(host.uploads).toEqual([
+      { path: '/home/me/.open-walnut-host/incoming/0.6.7-abc1234.gz', bytes: 3 * 2 ** 20 },
+      { path: '/home/me/.open-walnut-host/incoming/0.6.7-abc1234.install.sh', bytes: expect.any(Number) },
+    ])
+    // The script installs that file: its version, its sha256, the host in words.
+    expect(host.script).toContain("VERSION='0.6.7'")
+    expect(host.script).toContain(`SHA='${'c'.repeat(64)}'`)
+    expect(host.script).toContain("HOSTDESC='Linux x86_64, glibc 2.26'")
+    expect(host.script).toContain('ROOT="$HOME/.open-walnut-host"')
+    expect(host.script).not.toMatch(/npm|node_modules\/|NODE=/)
+    expect(messages).toEqual([
+      'Checking the host.',
+      'Getting Walnut 0.6.7-abc1234 for linux-x64.',
+      'Building Walnut 0.6.7-abc1234 for linux-x64 on this computer (about a minute, once per build).',
+      'Sending Walnut 0.6.7-abc1234 for linux-x64 to the host (3 MB).',
+      'Installing Walnut 0.6.7-abc1234 on the host.',
+      'Starting the server on the host.',
     ])
     const ports = JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox
     expect(fs.statSync(path.join(dir, 'host-servers.json')).mode & 0o777).toBe(0o600)
@@ -183,8 +216,8 @@ describe('host server manager', () => {
     expect(host.lane).toEqual([true])
     const spec = host.specs[0]!
     expect(spec).toMatchObject({
-      home: HOME, walnutId: 'wmac01', command: '/opt/node24/bin/node',
-      args: ['/home/me/.open-walnut-host/app/0.6.7-abc1234/dist/cli.js', 'host-server'],
+      home: HOME, walnutId: 'wmac01', command: file,
+      args: ['host-server'],
       cwd: '/home/me/.open-walnut-host/data', log: '/home/me/.open-walnut-host/logs/server.log',
       port: ports.publicPort,
       settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
@@ -221,10 +254,14 @@ describe('host server manager', () => {
     expect(m.view('devbox').phase).toBe('waiting-for-host')
     expect(ids()).toEqual(['+devbox', '-devbox'])
     expect(released).toEqual(['host-server:devbox'])
+    fileAsks = []
     await m.connected(again)
     expect(again.calls).not.toContain('launch')
-    expect(again.calls).not.toContain('ports')
+    expect(again.calls).not.toContain('probe')
+    expect(again.calls.filter((c) => c.startsWith('ports'))).toEqual([])
     expect(again.uploads).toEqual([])
+    // Installed already: the file is neither built nor downloaded again.
+    expect(fileAsks).toEqual([])
     expect(again.specs[0]).toEqual(first.specs[0])
     expect(again.specs[0]!.port).toBe(ports.publicPort)
     expect(ids()).toEqual(['+devbox', '-devbox', '+devbox'])
@@ -257,18 +294,43 @@ describe('host server manager', () => {
     expect(host.specs[0]!.settings.expose).toEqual({ enabled: false, definition: null, options: {} })
   })
 
-  it('a Node that does not run, or is too old, says which setting to change', async () => {
+  it('a host there is no file for says so, and gets nothing', async () => {
     const m = createHostServerManager(deps())
     const host = fakeHost()
-    host.nodeVersion = "node: /lib64/libc.so.6: version `GLIBC_2.28' not found"
+    host.system = 'os=FreeBSD\narch=amd64\nlibc=\ntranslated=0\nglibc=\n'
     await m.connected(host)
     expect(m.view('devbox')).toMatchObject({ phase: 'error' })
-    expect(m.view('devbox').message).toMatch(/needs Node 22 or newer.*GLIBC_2\.28.*Set hosts\.devbox\.server\.node/)
+    expect(m.view('devbox').message).toMatch(/the host runs FreeBSD on amd64; the walnut file is built for Linux and macOS on x64 and arm64/)
+    expect(fileAsks).toEqual([])
+    expect(host.uploads).toEqual([])
     expect(host.specs).toEqual([])
-    const old = fakeHost()
-    old.nodeVersion = 'v20.11.0'
-    await m.connected(old)
-    expect(m.view('devbox').message).toMatch(/v20\.11\.0/)
+  })
+
+  it('the musl and arm64 systems get their own file', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.system = 'os=Linux\narch=aarch64\nlibc=musl\ntranslated=0\nglibc=\n'
+    await m.connected(host)
+    expect(fileAsks).toEqual(['linux-arm64-musl'])
+    expect(host.script).toContain("HOSTDESC='Linux aarch64, musl'")
+    expect(m.view('devbox').phase).toBe('running')
+  })
+
+  it('a build this Mac cannot get a file for says why in the host\'s status; nothing is installed on the host', async () => {
+    const why = 'Walnut 0.6.7 is not a published release (https://example.invalid/v0.6.7/SHA256SUMS is not there), and this compiled walnut file has no checkout to build the walnut file for linux-x64 from.'
+    const m = createHostServerManager(deps({ hostFile: fakeFiles({ file: async () => { throw new Error(why) } }) }))
+    const host = fakeHost()
+    await m.connected(host)
+    expect(m.view('devbox')).toMatchObject({ phase: 'error', message: why })
+    expect(host.uploads).toEqual([])
+    expect(host.calls).not.toContain('launch')
+    expect(host.specs).toEqual([])
+    // Running from source: not even an id, so the host is not asked anything about an install.
+    const src = createHostServerManager(deps({ hostFile: fakeFiles({ buildId: async () => { throw new Error('This server runs from source, not from a build') } }) }))
+    const h2 = fakeHost()
+    await src.connected(h2)
+    expect(src.view('devbox')).toMatchObject({ phase: 'error', message: 'This server runs from source, not from a build' })
+    expect(h2.calls).toEqual([])
   })
 
   it('a failed install says why and starts nothing', async () => {
@@ -279,8 +341,8 @@ describe('host server manager', () => {
     await new Promise((r) => setTimeout(r, 20))
     host.installState = 'failed'
     await run
-    expect(m.view('devbox')).toMatchObject({ phase: 'error', install: { state: 'failed', logTail: 'gyp ERR! old compiler' } })
-    expect(m.view('devbox').message).toMatch(/the install on the host failed: npm install of its dependencies failed/)
+    expect(m.view('devbox')).toMatchObject({ phase: 'error', install: { state: 'failed', logTail: 'boom' } })
+    expect(m.view('devbox').message).toMatch(/the install on the host failed: the walnut file does not start on this host \(Linux x86_64, glibc 2\.26\): boom/)
     expect(host.specs).toEqual([])
   })
 
@@ -310,7 +372,7 @@ describe('host server manager', () => {
     const m = createHostServerManager(deps())
     expect(m.programOf('devbox')).toBeNull()
     await m.connected(fakeHost())
-    const program = { command: '/opt/node24/bin/node', args: ['/home/me/.open-walnut-host/app/0.6.7-abc1234/dist/cli.js', 'host-server'] }
+    const program = { command: '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut', args: ['host-server'] }
     expect(m.programOf('devbox')).toEqual(program)
     // The Mac woke and the host is back: its drain asks before this host is configured again.
     m.disconnected('devbox')
@@ -375,7 +437,7 @@ describe('host server manager', () => {
 })
 
 describe('host server manager: which program (WP2)', () => {
-  const cli = '/home/me/.open-walnut-host/app/0.6.7-abc1234/dist/cli.js'
+  const file = '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut'
   const hostServerEnv = (port: number) => ({
     OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/data', WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/run', WALNUT_HOST_SERVER: '1',
     WALNUT_HOST_SERVER_PORT: String(port), WALNUT_LEADER_HOME: HOME, WALNUT_WALNUT_ID: 'wmac01',
@@ -389,14 +451,14 @@ describe('host server manager: which program (WP2)', () => {
     host.caps.add('replica-host-v1')
     await m.connected(host)
     const spec = host.specs[0]!
-    expect(spec.args).toEqual([cli, 'web', '--replica'])
+    expect(spec).toMatchObject({ command: file, args: ['web', '--replica'] })
     expect(spec.env).toEqual({
       ...hostServerEnv(spec.port), WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host',
       // WP6 reads this host's sessions and files on the replica itself; WP7's console tells them from the Mac's.
       WALNUT_HOST_KEY: 'devbox',
     })
     // The plain host server's env is unchanged: no host key.
-    expect(spec.fallback).toEqual({ args: [cli, 'host-server'], env: hostServerEnv(spec.port) })
+    expect(spec.fallback).toEqual({ args: ['host-server'], env: hostServerEnv(spec.port) })
     expect(m.view('devbox')).toMatchObject({ phase: 'running', program: 'replica' })
   })
 
@@ -422,33 +484,33 @@ describe('host server manager: which program (WP2)', () => {
     const host = fakeHost()
     await m.connected(host)
     const spec = host.specs[0]!
-    expect(spec.args).toEqual([cli, 'host-server'])
+    expect(spec).toMatchObject({ command: file, args: ['host-server'] })
     expect(spec.env).toEqual(hostServerEnv(spec.port))
     expect('fallback' in spec).toBe(false)
     expect(m.view('devbox').program).toBe('host-server')
   })
 
   it('D13: a daemon with replica-host-v1 runs the replica when the host names no program', async () => {
-    settings = { enabled: true, buildEnv: {}, expose: { enabled: false, provider: null, options: {} } }
+    settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
     const m = createHostServerManager(deps())
     const host = fakeHost()
     host.caps.add('replica-host-v1')
     await m.connected(host)
     const spec = host.specs[0]!
-    expect(spec.args).toEqual([cli, 'web', '--replica'])
-    expect(spec.fallback?.args).toEqual([cli, 'host-server'])
+    expect(spec).toMatchObject({ command: file, args: ['web', '--replica'] })
+    expect(spec.fallback?.args).toEqual(['host-server'])
     expect(m.view('devbox').program).toBe('replica')
   })
 
   it('the rollback: server_program host-server on a daemon with replica-host-v1 runs host-server exactly as before', async () => {
     for (const program of ['host-server'] as const) {
-      settings = { enabled: true, buildEnv: {}, expose: { enabled: false, provider: null, options: {} }, ...(program ? { program } : {}) }
+      settings = { enabled: true, expose: { enabled: false, provider: null, options: {} }, ...(program ? { program } : {}) }
       const m = createHostServerManager(deps())
       const host = fakeHost()
       host.caps.add('replica-host-v1')
       await m.connected(host)
       const spec = host.specs[0]!
-      expect(spec.args).toEqual([cli, 'host-server'])
+      expect(spec).toMatchObject({ command: file, args: ['host-server'] })
       expect(spec.env).toEqual(hostServerEnv(spec.port))
       expect(Object.keys(spec)).toEqual(['v', 'home', 'walnutId', 'command', 'args', 'cwd', 'env', 'log', 'port', 'settings'])
     }
@@ -456,15 +518,28 @@ describe('host server manager: which program (WP2)', () => {
 
   it('another root and a local app dir: no install, every path under that root', async () => {
     settings = { ...settings, program: 'replica' }
-    const m = createHostServerManager(deps({ hostRoot: '/srv/marina-host', appDir: '/work/walnut-tree' }))
+    const m = createHostServerManager(deps({ hostRoot: '/srv/marina-host', appDir: '/work/walnut-tree', appCommand: '/opt/js/bin/runtime' }))
     const host = fakeHost()
     host.caps.add('replica-host-v1')
     await m.connected(host)
     expect(host.uploads).toEqual([])
     expect(host.calls).not.toContain('launch')
+    expect(host.calls).not.toContain('probe')
+    expect(fileAsks).toEqual([])
+    // Its port is asked of the runtime the app dir runs on (no BUN_BE_BUN: it is not the walnut file).
+    expect(host.calls).toContain("ports '/opt/js/bin/runtime'")
     const spec = host.specs[0]!
-    expect(spec).toMatchObject({ args: ['/work/walnut-tree/dist/cli.js', 'web', '--replica'], cwd: '/srv/marina-host/data', log: '/srv/marina-host/logs/server.log' })
+    expect(spec).toMatchObject({ command: '/opt/js/bin/runtime', args: ['/work/walnut-tree/dist/cli.js', 'web', '--replica'], cwd: '/srv/marina-host/data', log: '/srv/marina-host/logs/server.log' })
     expect(spec.env).toMatchObject({ OPEN_WALNUT_HOME: '/srv/marina-host/data', WALNUT_DAEMON_DIR: '/srv/marina-host/run' })
+  })
+
+  it('another root takes the file and the install too', async () => {
+    const m = createHostServerManager(deps({ hostRoot: '/srv/marina-host' }))
+    const host = fakeHost()
+    await m.connected(host)
+    expect(host.uploads.map((u) => u.path)).toEqual(['/srv/marina-host/incoming/0.6.7-abc1234.gz', '/srv/marina-host/incoming/0.6.7-abc1234.install.sh'])
+    expect(host.script).toContain('ROOT="/srv/marina-host"')
+    expect(host.specs[0]).toMatchObject({ command: '/srv/marina-host/app/0.6.7-abc1234/walnut', args: ['host-server'], cwd: '/srv/marina-host/data' })
   })
 
   it('a root a shell would expand is refused', async () => {

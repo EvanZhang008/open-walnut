@@ -1,7 +1,7 @@
 /**
- * The packages this Mac sends (src/core/host-server/package.ts): the host
- * package (no daemon binaries) and the companion package (the host package plus
- * the session daemon of the box's platform). A fake dist in a temp dir, real tar.
+ * The package this Mac sends its cloud companion (src/core/host-server/package.ts):
+ * the build plus the session daemon of the box's platform. A fake dist in a temp
+ * dir, real tar. (A host server gets the compiled walnut file instead: host-file.ts.)
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFile } from 'node:child_process'
@@ -13,7 +13,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-package'))
 
 import { WALNUT_HOME } from '../../src/constants.js'
-import { buildCompanionAppPackage, buildHostAppPackage, keepsDaemonFile, runningBuildId } from '../../src/core/host-server/package.js'
+import { buildCompanionAppPackage, keepsDaemonFile, readRunningBuild, runningBuildId } from '../../src/core/host-server/package.js'
 import { buildIdOf } from '../../src/core/companion-build/wire.js'
 
 let root = ''
@@ -72,31 +72,27 @@ afterEach(() => {
   fs.rmSync(cacheDir(), { recursive: true, force: true })
 })
 
-describe('host package', () => {
-  it('keeps the id it always had and carries no daemon binaries', async () => {
-    const pkg = await buildHostAppPackage(dist)
-    expect(pkg.id).toBe('0.6.14-5408d5875')
-    expect(pkg.id).toBe(buildIdOf({ version: '0.6.14', commit: '5408d5875', dirty: false, builtAt: '2026-10-20T10:00:00.000Z' }))
-    expect(await runningBuildId(dist)).toBe(pkg.id)
-    expect(pkg.dependencies).toEqual({ express: '^5.1.0', yaml: '^2.0.0' })
-    expect(pkg.depsHash).toMatch(/^[a-f0-9]{16}$/)
-    expect(await listTgz(pkg.tgz)).toEqual(['package/dist/build-info.json', 'package/dist/cli.js', 'package/dist/web/index.html'])
-    expect(fs.existsSync(path.join(cacheDir(), `${pkg.id}.tgz`))).toBe(true)
+describe('the running build', () => {
+  it('keeps the id it always had (the host file and the companion package are named by it)', async () => {
+    const id = await runningBuildId(dist)
+    expect(id).toBe('0.6.14-5408d5875')
+    expect(id).toBe(buildIdOf({ version: '0.6.14', commit: '5408d5875', dirty: false, builtAt: '2026-10-20T10:00:00.000Z' }))
+    expect(await readRunningBuild(dist)).toEqual({ id, info: { version: '0.6.14', commit: '5408d5875', branch: 'main', builtAt: '2026-10-20T10:00:00.000Z', dirty: false } })
+    expect(await runningBuildId(null)).toBeNull()
   })
 
   it('marks a dirty build with a hash of its build time', async () => {
     write('dist/build-info.json', JSON.stringify({ version: '0.6.14', commit: 'abc1234', builtAt: '2026-10-20T10:00:00.000Z', dirty: true }))
-    const pkg = await buildHostAppPackage(dist)
-    expect(pkg.id).toMatch(/^0\.6\.14-abc1234-d[a-f0-9]{6}$/)
+    expect(await runningBuildId(dist)).toMatch(/^0\.6\.14-abc1234-d[a-f0-9]{6}$/)
   })
 })
 
 describe('companion package', () => {
-  it('is the host package plus the daemon binaries of the box platform only', async () => {
-    const host = await buildHostAppPackage(dist)
+  it('is the build plus the daemon binaries of the box platform only', async () => {
     const pkg = await buildCompanionAppPackage({ platform: 'linux', arch: 'arm64' }, dist)
-    expect(pkg.id).toBe(host.id)
-    expect(pkg.depsHash).toBe(host.depsHash)
+    expect(pkg.id).toBe('0.6.14-5408d5875')
+    expect(pkg.dependencies).toEqual({ express: '^5.1.0', yaml: '^2.0.0' })
+    expect(pkg.depsHash).toMatch(/^[a-f0-9]{16}$/)
     expect(pkg.optionalDependencies).toEqual({ fsevents: '^2.3.0' })
     expect(pkg.companionDepsHash).toMatch(/^[a-f0-9]{16}$/)
     expect(pkg.companionDepsHash).not.toBe(pkg.depsHash)
@@ -149,8 +145,10 @@ describe('companion package', () => {
     expect(second.tgz.equals(first.tgz)).toBe(true)
   })
 
-  it('prunes each family on its own: the newest host package survives a run of companion builds', async () => {
-    const host = await buildHostAppPackage(dist)
+  it('prunes each family on its own: a host package of the Node layout survives a run of companion builds', async () => {
+    const host = { id: '0.6.13-0ld0001' }
+    fs.mkdirSync(cacheDir(), { recursive: true })
+    fs.writeFileSync(path.join(cacheDir(), `${host.id}.tgz`), 'host package')
     const ids: string[] = []
     for (const commit of ['aaa0001', 'aaa0002', 'aaa0003', 'aaa0004', 'aaa0005']) {
       writeBuildInfo(commit)

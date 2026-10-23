@@ -129,7 +129,7 @@ function maskFreeFormMaps(config: Record<string, unknown>): Record<string, unkno
   if (config.providers !== undefined) out.providers = each(config.providers, (p) => at(p, 'headers', shapes))
   // An engine's environment (`ANTHROPIC_API_KEY`), handed to its process as it is.
   if (config.engines !== undefined) out.engines = each(config.engines, (e) => at(e, 'env', shapes))
-  // A host server's build environment (`NPM_TOKEN`) and its tunnel provider's options.
+  // A host server's build environment (`NPM_TOKEN`; no longer read, older configs carry it) and its tunnel provider's options.
   if (config.hosts !== undefined) {
     out.hosts = each(config.hosts, (h) => at(h, 'server', (server) => isRecord(server)
       ? at(at(server, 'build_env', shapes), 'expose', (e) => (isRecord(e) ? at(e, 'options', shapes) : e))

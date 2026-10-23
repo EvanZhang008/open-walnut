@@ -53,7 +53,6 @@ async function hostEntry(hostKey: string) {
       enabled: settings.enabled,
       ...(settings.carriesTunnel ? { carriesTunnel: true } : {}),
       expose: { ...expose, options: maskSecretShapes(expose.options) },
-      ...(settings.node ? { node: settings.node } : {}),
       // Which kinds the Mac copies to this host's replica (WP4), defaults filled in.
       copies: copyChoiceFrom((host.server as { copies?: unknown } | undefined)?.copies),
       ...(host.server_program ? { program: host.server_program } : {}),

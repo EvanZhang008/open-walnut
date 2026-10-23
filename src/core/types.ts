@@ -1315,9 +1315,8 @@ export interface Config {
      *  (core/host-server/, docs/plan/walnut-servers-everywhere.md). Off unless enabled. */
     server?: {
       enabled?: boolean;
-      /** A Node (22 or newer) that runs on the host. Default: the one the host's preflight found. */
-      node?: string;
-      /** Extra environment for installing its native modules there (a newer compiler: CC, CXX). */
+      /** @deprecated Not read: a host server is the compiled walnut file, so nothing is
+       *  built on the host. Older configs carry it; its secrets stay masked (config-redact.ts). */
       build_env?: Record<string, string>;
       /** The host's own tunnel, so a browser anywhere can open it. */
       expose?: {
