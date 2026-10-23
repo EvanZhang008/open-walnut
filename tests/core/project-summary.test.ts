@@ -137,26 +137,37 @@ describe('maybeRefreshForTask', () => {
   });
 
   it('debounces bulk sources: a burst is one refresh at the final count, never a drop', async () => {
-    process.env.WALNUT_SUMMARY_SYNC_DEBOUNCE_MS = '50';
+    const quietMs = 300;
+    process.env.WALNUT_SUMMARY_SYNC_DEBOUNCE_MS = String(quietMs);
     try {
-      // Simulate a sync import: 5 creates in a tight loop, each firing the event.
+      // Simulate a sync import: 5 creates in a tight loop, each firing the event. The
+      // real timer runs, so a gap between two events as long as the quiet window (a
+      // starved machine: a 50 ms window failed at a load of 60) rightly lets a refresh
+      // through mid-burst; the strict checks hold only when no gap was that long.
+      let lastEvent = 0;
+      let longestGap = 0;
       for (let i = 0; i < 5; i++) {
         const last = await seedTasks(1);
         expect(await maybeRefreshForTask(last, 'ms-todo-reconcile')).toBe(false);
+        const now = Date.now();
+        if (lastEvent) longestGap = Math.max(longestGap, now - lastEvent);
+        lastEvent = now;
       }
-      expect(sendMessageMock).not.toHaveBeenCalled(); // nothing during the burst
+      const quietBurst = longestGap < quietMs;
+      if (quietBurst) expect(sendMessageMock).not.toHaveBeenCalled(); // nothing during the burst
 
       // Wait for the stored count, not the model call: the metadata write lands after
       // the call resolves, and a read in between sees nothing on a slow runner.
       await vi.waitFor(async () => {
         const meta = await getProjectMetadata('walnut');
         expect(meta?.summary_task_count).toBe(5); // final count, not any mid-burst size
-      }, { timeout: 3_000 });
-      expect(sendMessageMock).toHaveBeenCalledOnce();
+      }, { timeout: 5_000 });
+      const calls = sendMessageMock.mock.calls.length;
+      if (quietBurst) expect(calls).toBe(1);
 
       // The quiet window elapsing again must not double-fire.
-      await new Promise((r) => setTimeout(r, 150));
-      expect(sendMessageMock).toHaveBeenCalledOnce();
+      await new Promise((r) => setTimeout(r, quietMs * 2));
+      expect(sendMessageMock).toHaveBeenCalledTimes(calls);
     } finally {
       delete process.env.WALNUT_SUMMARY_SYNC_DEBOUNCE_MS;
     }
