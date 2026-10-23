@@ -160,7 +160,8 @@ async function bootMac(c: Cluster, build: 'old' | 'new', phase: string, seed: bo
     })
     proc.once('exit', (code) => { clearTimeout(t); reject(new Error(`the ${build} Mac exited early (${code})\n${log.text.slice(-3000)}`)) })
   })
-  const server = guard.pin(`mac-${phase}`, meta.pid, (cmd) => cmd.startsWith(`${process.execPath} `) && cmd.includes(file))
+  // tsx runs the Mac under the `node` on PATH, which is not this runner's runtime when the suite runs on bun.
+  const server = guard.pin(`mac-${phase}`, meta.pid, (cmd) => /^\S*\bnode\s/.test(cmd) && cmd.includes(` ${file}`))
   if (!server) throw new Error(`the ${build} Mac reported pid ${meta.pid}, which does not run ${file}`)
   const mac: Mac = { build, proc, server, daemon: null, daemonDir, port: meta.port, ids: meta.ids, log }
   macs.push(mac)

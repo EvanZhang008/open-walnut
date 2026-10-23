@@ -627,8 +627,9 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
     mac = await bootMac(macBoot({ macData: d.macData, daemonPort: hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built' }), macBootFile, macEnv, macLog)
-    // The server mac-boot runs (tsx's child): its command line runs that file.
-    macPin = pin('mac', mac.pid, (c) => c.startsWith(`${process.execPath} `) && c.includes(macBootFile))
+    // The server mac-boot runs (tsx's child): its command line runs that file, under
+    // the `node` on PATH (not this runner's runtime when the suite runs on bun).
+    macPin = pin('mac', mac.pid, (c) => /^\S*\bnode\s/.test(c) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)
     // The Mac's own daemon, pinned the moment it is there (a pid file can outlive its process).
     macDaemonPin = await waitFor(() => pin('mac-daemon', readPid(path.join(d.macDaemon, 'daemon.pid')), (c) => / --start(\s|$)/.test(c)), 60_000, 'the Mac\'s own daemon')
