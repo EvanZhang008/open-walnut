@@ -325,9 +325,17 @@ enum RuntimeUpgrade {
     /// seconds), the way T3's update brings its new backend inside the app.
     /// Never a downgrade: a runtime that updated itself past the app (the
     /// nightly channel, `walnut update`) keeps its own.
-    static func shouldInstallCarried(carried: String?, installed: String?) -> Bool {
+    ///
+    /// A Node archive (`replacesArchive`, the releases before the compiled file)
+    /// is replaced by a carried file of its own version too. It updates itself
+    /// when its server starts, which on an app launch comes before the app's own
+    /// update is offered, so by the time the new app runs, the archive is
+    /// usually at the very version the app carries; only the app's install
+    /// moves it to the file.
+    static func shouldInstallCarried(carried: String?, installed: String?, replacesArchive: Bool = false) -> Bool {
         guard let carried = carried else { return false }
         guard let installed = installed else { return true }
+        if replacesArchive { return !AppUpdateVersion.isNewer(installed, than: carried) }
         return AppUpdateVersion.isNewer(carried, than: installed)
     }
 }

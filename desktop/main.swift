@@ -184,9 +184,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             appBuiltCheckout = config.appBuiltCheckout
             showLoadingScreen()
             // An updated app carries a newer Walnut than the one installed: put it
-            // in first (offline, seconds), so the update brings both.
+            // in first (offline, seconds), so the update brings both. A Node archive
+            // is moved to the file at its own version too (RuntimeUpgrade).
             if let rt = runtime, let carried = carriedReleaseForThisMac(),
-               RuntimeUpgrade.shouldInstallCarried(carried: carried.version, installed: installedRuntimeVersion(rt)) {
+               RuntimeUpgrade.shouldInstallCarried(carried: carried.version, installed: installedRuntimeVersion(rt), replacesArchive: rt.layout() == .archive) {
                 upgradeRuntime(rt, to: carried)
             } else {
                 startServer()
@@ -964,7 +965,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// downloads beside the version in use and swaps the link. The server keeps
     /// its file; the next start runs the new one.
     func updateRuntimeInBackground() {
-        guard !runtimeUpdateStarted, let rt = runtime, let home = walnutHome, case .file? = rt.layout() else { return }
+        guard !runtimeUpdateStarted, let rt = runtime, let home = walnutHome,
+              let layout = rt.layout(), BundledRuntime.appUpdatesWhileServing(layout) else { return }
         runtimeUpdateStarted = true
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rt.link)
@@ -1060,8 +1062,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         env["WALNUT_LAUNCHER"] = "mac-app"
         // The self-contained Walnut updates while its server runs (updateRuntimeInBackground),
         // never before it listens: that download would count against the startup deadline,
-        // and the restart after it would be a process this app does not know.
-        if runtime != nil {
+        // and the restart after it would be a process this app does not know. A Node archive
+        // has no background update here, so it keeps updating itself at start, as under the
+        // app that installed it, until an app that carries a file moves it over.
+        if let layout = runtimeLayout, BundledRuntime.appUpdatesWhileServing(layout) {
             env["WALNUT_LAUNCHER_UPDATES"] = "1"
         }
         let extraPaths = [

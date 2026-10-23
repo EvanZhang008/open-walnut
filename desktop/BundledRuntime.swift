@@ -20,9 +20,10 @@ import Foundation
 //
 // Before the compiled file, install.sh installed a Node archive into app/
 // (scripts/runtime-bundle/build.mjs). A Mac that has one keeps running it
-// (Layout.archive) until the next install replaces it: the first app update
-// that carries a file does. REMOVE the archive case with the archives
-// (.github/workflows/release-archives.yml).
+// (Layout.archive), updating itself at start, until the next install replaces
+// it: the first launch of an app that carries a file at least as new as the
+// archive does (RuntimeUpgrade.shouldInstallCarried). REMOVE the archive case
+// with the archives (.github/workflows/release-archives.yml).
 //
 // Foundation only, so tests/desktop/bundled-runtime-tests.swift compiles it alone.
 
@@ -131,6 +132,15 @@ struct BundledRuntime {
         case .archive:
             return Launch(executable: node, arguments: [cli, "web", "--port", String(port)], directory: packageRoot)
         }
+    }
+
+    /// Whether the app updates this layout itself while its server runs
+    /// (`walnut update --auto`, so the server starts with WALNUT_LAUNCHER_UPDATES=1
+    /// and never updates before it listens): the file. A Node archive keeps
+    /// updating itself at start, as it did under the app that installed it.
+    static func appUpdatesWhileServing(_ layout: Layout) -> Bool {
+        if case .file = layout { return true }
+        return false
     }
 
     /// The `walnut` command for ~/.local/bin (CommandLineTool.swift).

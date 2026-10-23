@@ -185,6 +185,14 @@ struct AppUpdateTests {
         precondition(RuntimeUpgrade.shouldInstallCarried(carried: "0.6.10", installed: "0.6.10-nightly.20261011.2"))
         precondition(!RuntimeUpgrade.shouldInstallCarried(carried: nil, installed: "0.6.8"))
         precondition(RuntimeUpgrade.shouldInstallCarried(carried: "0.6.9", installed: nil))
+        // A Node archive that updated itself to the version the app carries (its
+        // updater runs at start, before the app's update is offered) moves to the file.
+        precondition(RuntimeUpgrade.shouldInstallCarried(carried: "0.6.18", installed: "0.6.18", replacesArchive: true))
+        precondition(RuntimeUpgrade.shouldInstallCarried(carried: "0.6.18", installed: "0.6.17", replacesArchive: true))
+        precondition(RuntimeUpgrade.shouldInstallCarried(carried: "0.6.18", installed: nil, replacesArchive: true))
+        // One that went past it stays until an app carries one at least as new: never a downgrade.
+        precondition(!RuntimeUpgrade.shouldInstallCarried(carried: "0.6.18", installed: "0.6.19", replacesArchive: true))
+        precondition(!RuntimeUpgrade.shouldInstallCarried(carried: nil, installed: "0.6.18", replacesArchive: true))
 
         print("app-update-tests: ok")
     }

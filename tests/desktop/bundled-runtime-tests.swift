@@ -67,6 +67,10 @@ struct BundledRuntimeTests {
         precondition(rt.serverLaunch(port: 3457, layout: .archive) == BundledRuntime.Launch(executable: rt.node, arguments: [rt.cli, "web", "--port", "3457"], directory: rt.packageRoot))
         precondition(rt.command(layout: .file(version: "0.7.0")) == rt.link)
         precondition(rt.command(layout: .archive) == rt.appDir + "/bin/walnut")
+        // The app updates the file while it serves (WALNUT_LAUNCHER_UPDATES=1); an archive,
+        // which the app never updates, keeps updating itself at start.
+        precondition(BundledRuntime.appUpdatesWhileServing(.file(version: "0.7.0")))
+        precondition(!BundledRuntime.appUpdatesWhileServing(.archive))
         // What `ps` shows for each, and what it never takes for a Walnut server.
         precondition(rt.isServerCommand(rt.link + " web --port 3456"))
         precondition(rt.isServerCommand(rt.link + " web"))
