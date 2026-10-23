@@ -439,7 +439,8 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
         await new Promise((r) => setTimeout(r, batchWindowMs))
         await before.catch(() => undefined)
         if (open === batch) open = null
-        return buildBatch(o, commit, [...batch.targets])
+        // Sorted: callers join the batch in whatever order their own awaits finish.
+        return buildBatch(o, commit, [...batch.targets].sort())
       })()
       previous = batch.done
       open = batch
