@@ -51,6 +51,12 @@ if (( ${#JS_RUN[@]} == 0 )); then
 fi
 
 BUILD="${TMPDIR:-/tmp}"
+# A rehearsal (scripts/dev-prod.sh) writes everything into the dir it is given,
+# its clone included. A dir it would refuse is left to it to refuse.
+rehearsal_dir="${WALNUT_DEVPROD_REHEARSAL_DIR:-}"
+if [[ "${WALNUT_DEVPROD_REHEARSAL:-0}" == "1" && "$rehearsal_dir" == /* && -d "$rehearsal_dir" ]]; then
+  BUILD="$rehearsal_dir"
+fi
 BUILD="${BUILD%/}/open-walnut-build.${SHA:0:12}.$$"
 cleanup() {
   if [[ "${WALNUT_DEPLOY_KEEP_BUILD:-0}" == "1" ]]; then

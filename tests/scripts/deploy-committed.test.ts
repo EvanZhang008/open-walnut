@@ -182,6 +182,21 @@ describe('deploy-committed.sh', () => {
     expect(fs.readdirSync(old.tmp)).toEqual([])
   })
 
+  it('in a rehearsal, clones into the rehearsal dir, never the caller\'s TMPDIR', () => {
+    const f = fixture()
+    const dir = path.join(path.dirname(f.repo), 'rehearsal')
+    fs.mkdirSync(dir)
+    const r = run(f, { WALNUT_DEVPROD_REHEARSAL: '1', WALNUT_DEVPROD_REHEARSAL_DIR: dir })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.report!.here).toMatch(new RegExp(`^${dir}/open-walnut-build\\.[0-9a-f]{12}\\.\\d+$`))
+    expect(fs.readdirSync(f.tmp)).toEqual([])
+    // Without the rehearsal switch, or with a dir dev-prod.sh will refuse, TMPDIR as before.
+    for (const env of [{ WALNUT_DEVPROD_REHEARSAL_DIR: dir }, { WALNUT_DEVPROD_REHEARSAL: '1', WALNUT_DEVPROD_REHEARSAL_DIR: 'relative' }]) {
+      const other = run(f, env)
+      expect(other.report!.here.startsWith(`${f.tmp}/open-walnut-build.`)).toBe(true)
+    }
+  })
+
   it('passes the stub\'s failure through and still removes the clone', () => {
     const f = fixture({ stub: '#!/usr/bin/env bash\n# WALNUT_DEVPROD_SERVE_ROOT\necho "build failed" >&2\nexit 7\n' })
     const r = run(f)
