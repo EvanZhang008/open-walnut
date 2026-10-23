@@ -112,7 +112,8 @@ describe('update check API', () => {
     const took = Date.now() - started;
     expect(r.status).toBe(200);
     expect(took).toBeLessThan(8_000);
-    expect(r.data.error).toMatch(/abort|timeout/i);
+    // The runtime's own words: Node "aborted due to timeout", bun "The operation timed out."
+    expect(r.data.error).toMatch(/abort|timeout|timed out/i);
     expect(r.data).toMatchObject({ latest: '0.5.1', available: false });
   }, 15_000);
 
