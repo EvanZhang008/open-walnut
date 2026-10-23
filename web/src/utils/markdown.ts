@@ -15,6 +15,8 @@ import {
 // contract (no fs, no async, no imports) and is bundled into the browser here.
 import { hasTraversalSegment, parsePathDestination } from '../../../src/providers/path-ref-parse';
 import { linkBareTaskIds, type BareTaskIdMode, type BareTaskIdRenderer } from './bare-task-ids';
+import { ensureReadableText, withReadableInk } from './html-contrast';
+import '@/styles/rich-ink.css';
 
 /**
  * GFM `del` retuned to require DOUBLE tildes — shared by EVERY renderer here.
@@ -665,6 +667,10 @@ export function markExternalAnchor(node: Element): void {
   node.setAttribute('rel', 'noopener noreferrer');
 }
 DOMPurify.addHook('afterSanitizeAttributes', markExternalAnchor);
+// A model-painted background with no text colour inherits Walnut's (light text in
+// code blocks and in the dark theme): give it the colour that background needs.
+// Inert outside `withReadableInk` (model replies only).
+DOMPurify.addHook('afterSanitizeAttributes', ensureReadableText);
 
 // ── JSON ID pill injection for tool call INPUT/RESULT areas ──
 
@@ -1521,12 +1527,12 @@ export function renderMarkdownWithRefs(
     // `formaction` are still stripped either way. "Here is the CSS, here is the
     // markup" is the order a model writes most naturally, so this was the common
     // shape, not the exotic one.
-    html = DOMPurify.sanitize(parsed, {
+    html = withReadableInk(() => DOMPurify.sanitize(parsed, {
       ADD_ATTR: SANITIZE_ATTRS,
       FORCE_BODY: true,
       FORBID_TAGS: allowStyle ? ['form'] : ['form', 'style'],
       FORBID_ATTR: ['action', 'formaction'],
-    });
+    }));
   } catch {
     html = DOMPurify.sanitize(text);
   }

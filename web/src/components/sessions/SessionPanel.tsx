@@ -44,7 +44,7 @@ import { useSessionLetters } from '@/hooks/useSessionLetters';
 import {
   consumeSessionInboxLink, deepLinkFullscreenReassert, SESSION_INBOX_LINK_EVENT,
 } from '@/components/inbox/session-inbox-link';
-import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
+import { buildPassagePrefill, buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
 import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
@@ -990,6 +990,22 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     };
     window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
     return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
+  }, [sessionId]);
+  // The transcript pill's "Quote" (beside "Ask here"): the
+  // passage leads the MAIN conversation's next message as a quote. On a question
+  // (its page, or the composer's target in Conversation Mode) the panel goes back
+  // to the main conversation first; that question keeps its own draft.
+  const quoteInChat = useCallback((passage: string) => {
+    const t = threadsForInsert.current;
+    if (t.draftKey !== sessionDraftKey(sessionId)) {
+      t.api.requestCard(null, 'quote-in-chat');
+      t.stack.api.popTo(ROOT_THREAD_KEY, 'quote-in-chat');
+    }
+    setPrefillText(buildPassagePrefill(passage));
+    setPrefillMode('keep-draft');
+    setPrefillNonce((n) => n + 1);
+    autoCollapsed.current = false;
+    setChatCollapsed(false);
   }, [sessionId]);
   // Messages the CLI had queued behind the turn that a Stop dropped: like Esc in
   // Claude Code, their text goes back into the input (ahead of anything typed since)
@@ -2741,6 +2757,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             // requestComposerFocus): it just jumped somewhere.
             scrollToBottomNonce={prefillNonce + composerScrollNonce}
             onRequestComposerFocus={requestComposerFocus}
+            onQuoteInChat={quoteInChat}
           />
         </div>
 

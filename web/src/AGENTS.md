@@ -481,6 +481,14 @@ show inline after the open ones, other completed hits that show the query fold i
   Ratchets: `tests/web/thread-tree.test.ts`, `tests/web/thread-stack-state.test.ts`,
   `tests/web/thread-map.test.ts`, `tests/e2e/browser/session-threads*.spec.ts`,
   `tests/e2e/browser/session-thread-map.spec.ts`.
+  **The transcript's selection pill has both ways to ask, like the Files tab's** (2026-10-22):
+  `Ask here` opens a question page on the passage (the old Ask), `Quote` puts the passage as
+  a Markdown quote at the head of the MAIN conversation's composer (`buildPassagePrefill`,
+  prefill mode `keep-draft`, so typed words follow it). On a question page, or with a question as
+  Conversation Mode's composer target, `SessionPanel.quoteInChat` goes back to the main
+  conversation first with `popTo`, not `replyInMain`, so the question keeps its own draft. Only a
+  timeline with a composer passes `onQuoteInChat`. Ratchet:
+  `tests/e2e/browser/session-quote-in-chat.spec.ts`.
   **A passage of a FILE in the Files tab is asked about the same way (2026-10-01).** The anchor's
   parent is `file:<absolute path>` (`FILE_PARENT_PREFIX`, `fileParentOf` / `fileOfParent` in
   `utils/thread-tree.ts`; the server takes a `file:` parent up to 1024 chars and an optional
