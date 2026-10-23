@@ -17,7 +17,7 @@
  * support is disabled gracefully (the server still boots). bun has one built in.
  */
 
-import type { WebSocket } from 'ws'
+import type { WebSocket } from '#ws'
 import { registerMethod } from '../ws/handler.js'
 import { terminalManager } from './terminal-manager.js'
 import { probeTerminalMode, type TerminalMode } from './dtach-check.js'

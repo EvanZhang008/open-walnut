@@ -8,7 +8,7 @@
  * ALL events back (text, tools, questions, plan, compact, permissions).
  */
 
-import { WebSocketServer, WebSocket } from 'ws'
+import { WebSocketServer, WebSocket } from '#ws'
 import { createServer, type Server as HttpServer } from 'node:http'
 import { SdkSession } from './sdk-session.js'
 import { StateManager } from './state.js'

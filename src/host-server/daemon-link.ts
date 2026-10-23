@@ -16,7 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Duplex } from 'node:stream'
-import WebSocket from 'ws'
+import WebSocket from '#ws'
 import { createStreamEndpoint, type IncomingStreamInfo, type StreamEndpoint } from '../lib/link-stream.js'
 
 export interface FollowerView {

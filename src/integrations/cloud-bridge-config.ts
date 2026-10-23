@@ -291,7 +291,7 @@ export async function probeMachineToken(
   token: string,
 ): Promise<'valid' | 'refused' | 'unknown'> {
   const [{ WebSocket }, { TUNNEL_PROBE_HEADER, DAEMON_TUNNEL_PATH }] = await Promise.all([
-    import('ws'), import('../core/hosts/cloud-box-host.js'),
+    import('#ws'), import('../core/hosts/cloud-box-host.js'),
   ])
   return new Promise((resolve) => {
     let settled = false

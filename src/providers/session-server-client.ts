@@ -9,7 +9,7 @@
  * - Interactive event routing (ask-question, permission-request)
  */
 
-import WebSocket from 'ws'
+import WebSocket from '#ws'
 import crypto from 'node:crypto'
 import { bus, EventNames } from '../core/event-bus.js'
 import { log } from '../logging/index.js'

@@ -22,7 +22,7 @@
  * stopped by pid in afterAll.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { WebSocket } from 'ws'
+import { WebSocket } from '#ws'
 import { execFileSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'

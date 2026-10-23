@@ -12,7 +12,7 @@
  */
 
 import { Router } from 'express'
-import type { WebSocket } from 'ws'
+import type { WebSocket } from '#ws'
 import { registerMethod } from '../ws/handler.js'
 import { log } from '../../logging/index.js'
 import { writeLogEntry } from '../../logging/logger.js'

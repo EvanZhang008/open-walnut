@@ -5,7 +5,7 @@
  * incoming RPC requests to registered method handlers.
  */
 
-import { WebSocketServer, WebSocket } from 'ws'
+import { WebSocketServer, WebSocket } from '#ws'
 import type { IncomingMessage } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import type { WsFrame } from './protocol.js'

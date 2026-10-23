@@ -5,7 +5,7 @@
  */
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { WebSocket, WebSocketServer } from 'ws'
+import { WebSocket, WebSocketServer } from '#ws'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 
 export const BRIDGE_SESSION_STREAM_PATH = '/bridge/session-stream'

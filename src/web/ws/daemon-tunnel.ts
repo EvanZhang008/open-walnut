@@ -27,7 +27,7 @@
 
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { WebSocket, WebSocketServer, type RawData } from 'ws'
+import { WebSocket, WebSocketServer, type RawData } from '#ws'
 import { log } from '../../logging/index.js'
 import { TUNNEL_PROBE_HEADER, TUNNEL_REFUSAL_HEADER } from '../../core/hosts/cloud-box-host.js'
 

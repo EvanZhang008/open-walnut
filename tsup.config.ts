@@ -61,6 +61,16 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: false,
+  // `#ws` (package.json "imports") is `ws` on Node: the build says so, so dist
+  // imports the package as it always did. Bundled, its CommonJS `require`s of
+  // Node built-ins throw in an ES module; left as `#ws`, every package.json a
+  // build ships with (a host server's) would need the alias too.
+  esbuildPlugins: [{
+    name: 'ws-on-node',
+    setup(build) {
+      build.onResolve({ filter: /^#ws$/ }, () => ({ path: 'ws', external: true }));
+    },
+  }],
   // 'bun:sqlite' only exists on bun; src/lib/sqlite.ts loads it at runtime there.
   external: ['better-sqlite3', 'bun:sqlite', 'sharp', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@huggingface/transformers'],
 });

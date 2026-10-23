@@ -15,7 +15,7 @@
  * daemon dir or journal.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { WebSocket } from 'ws'
+import { WebSocket } from '#ws'
 import { spawn, spawnSync, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'

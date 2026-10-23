@@ -18,7 +18,7 @@
  * never broadcast.
  */
 
-import type { WebSocket } from 'ws'
+import type { WebSocket } from '#ws'
 import type { Pty } from '../../lib/pty.js'
 import { sendToClient } from '../ws/handler.js'
 import { resolveSpawnForSession } from './spawn.js'
