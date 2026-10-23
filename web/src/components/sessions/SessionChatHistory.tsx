@@ -243,6 +243,9 @@ interface SessionChatHistoryProps {
    * pill: the passage is already on screen and the user is about to type.
    */
   onRequestComposerFocus?: (opts?: { keepTimelinePosition?: boolean }) => void;
+  /** The selection pill's "Quote": the passage goes into the panel's
+   *  composer as a quote for the main conversation. Omitted = no such button. */
+  onQuoteInChat?: (passage: string) => void;
   /** The session runs a chat (a lane session): what the chat said before it is
    *  shown above its first message (ChatEarlierBlock). */
   chatLane?: boolean;
@@ -421,7 +424,7 @@ const THREAD_BAR_HIT_PX = 11;
 /** Stable empty mark list for a page (or view) without question marks. */
 const NO_MARKS: MarkSpec[] = [];
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, chatLane }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -3653,6 +3656,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               sessionId={sessionId}
               onPin={pinsApi.pinQuote}
               {...(threadsApi.canAsk ? { onAsk: askAboutQuote } : {})}
+              {...(onQuoteInChat ? { onQuoteInChat } : {})}
             />
             <QuotePinPopover
               containerRef={containerRef}

@@ -30,7 +30,7 @@
  * document selection — and used to take the pill with it. The composer now asks the
  * pill to HOLD first (`requestSelectionHold`, selection-hold.ts): the captured
  * passage stays, `useHeldPassage` keeps painting the words the selection covered
- * and keeps the pill on them through re-renders and scrolls, and Pin / Ask / Copy
+ * and keeps the pill on them through re-renders and scrolls, and Pin / Ask here / Quote / Copy
  * keep working from the capture. The hold ends when the user acts on the pill,
  * sends a message (the panel releases it), presses Escape, presses anywhere that is
  * not this panel's composer or mic, or makes a new selection. Nothing about a held
@@ -82,6 +82,12 @@ interface QuotePinSelectionBarProps {
    * anchors to keeps the pill honest.
    */
   onAsk?: (target: QuotePinTarget) => void;
+  /**
+   * "Quote": put the passage into the main conversation's composer as a quote
+   * (the Files tab's "Quote in chat"); nothing is sent. Omitted = no button, which is how a
+   * timeline with no composer of its own keeps the pill honest.
+   */
+  onQuoteInChat?: (passage: string) => void;
 }
 
 /** The captured passage (shared with the dictation path — see selection-quote.ts)
@@ -166,7 +172,7 @@ function readLiveSelection(
   return { captured, anchor, range, backward: selectionIsBackward(selection) };
 }
 
-export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: QuotePinSelectionBarProps) {
+export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, onQuoteInChat }: QuotePinSelectionBarProps) {
   const [state, setState] = useState<PillState | null>(null);
   const pillRef = useRef<HTMLDivElement | null>(null);
   const noTrigger = useRef<HTMLElement | null>(null);
@@ -424,6 +430,16 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     dismiss();
   }, [onAsk, sessionId, state, dismiss]);
 
+  const quoteInChat = useCallback(() => {
+    if (!state?.text.trim() || !onQuoteInChat) return;
+    log.info('session', 'quoting a passage in the chat', {
+      sessionId, msgId: state.msgId, chars: state.text.length,
+    });
+    onQuoteInChat(state.text);
+    window.getSelection()?.removeAllRanges();
+    dismiss();
+  }, [onQuoteInChat, sessionId, state, dismiss]);
+
   const copy = useCallback(() => {
     if (state?.text.trim()) void copyTextRobust(state.text);
     dismiss();
@@ -491,7 +507,19 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
           title="Ask about this passage (opens a question page)"
         >
           {ICON_ASK}
-          <span>Ask</span>
+          <span>Ask here</span>
+        </button>
+      )}
+      {onQuoteInChat && !!state.text.trim() && (
+        <button
+          type="button"
+          className="quote-pin-pill-btn"
+          data-testid="quote-in-chat-btn"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={quoteInChat}
+          title="Quote this passage in the message box (for the main conversation)"
+        >
+          <span>Quote</span>
         </button>
       )}
       <button

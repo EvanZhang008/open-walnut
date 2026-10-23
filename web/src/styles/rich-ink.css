@@ -1,0 +1,13 @@
+/* A model-painted box the sanitizer gave a text colour (`data-ink`, see
+   utils/html-contrast.ts). Chips inside it that paint their own theme
+   background (inline code, table headers) take the theme's text colour back,
+   or they would wear the box's ink on the theme's fill. Code inside a <pre>
+   paints no fill of its own, so it keeps following its block. */
+[data-ink] code:not([style]),
+[data-ink] th:not([style]) {
+  color: var(--fg);
+}
+[data-ink] pre code:not([style]),
+pre[data-ink] code:not([style]) {
+  color: inherit;
+}

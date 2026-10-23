@@ -87,3 +87,14 @@ export function buildReviewMessage(comments: ReviewComment[]): string {
   });
   return `Code review — ${comments.length} comments:\n\n${blocks.join('\n\n')}`;
 }
+
+/**
+ * The transcript's "Quote" (the selection pill): the passage as a Markdown
+ * quote that leads the main conversation's next message, then a blank line for
+ * the user's own words. Each line quoted, so a multi-paragraph passage stays one
+ * quote; trailing spaces go, since they would only end up inside the quote.
+ */
+export function buildPassagePrefill(passage: string): string {
+  const lines = passage.replace(/\r\n?/g, '\n').trim().split('\n').map((l) => l.trimEnd());
+  return `${lines.map((l) => (l ? `> ${l}` : '>')).join('\n')}\n\n`;
+}
