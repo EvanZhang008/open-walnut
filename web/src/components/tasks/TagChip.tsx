@@ -1,5 +1,6 @@
 import React from 'react';
 import { linkPathOfTag, linkTagKey, linkTagLabel, linkTagShowsId, linkUrlOfTag } from '../../../../src/core/link-tags';
+import { useLinkHoverCard } from './LinkHoverCard';
 
 interface TagChipProps {
   tag: string;
@@ -46,6 +47,14 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
   const prefix = showsId ? linkTagKey(tag)! : hasPrefix && !valueOnly && !isLink ? tag.slice(0, colonIdx) : null;
   const value = isLink ? (showsId ? linkTagLabel(tag)! : linkTagKey(tag)!) : hasPrefix ? tag.slice(colonIdx + 1) : tag;
   const openPath = ownPath && onOpenPath && !onClick ? () => onOpenPath(ownPath) : undefined;
+  // A link tag names its target in a hover card (its pill shows only the kind); the tag editor,
+  // where the pill has a remove button, keeps the plain tooltip.
+  const hover = useLinkHoverCard(isLink && !onRemove ? {
+    kind: linkTagKey(tag)!,
+    target: (ownUrl ?? ownPath)!,
+    opens: ownUrl ? `Opens in a new tab \u00b7 ${hostOf(ownUrl)}` : openPath ? 'Opens in Files' : 'A file on this task',
+  } : undefined);
+  const hoverRef = (el: HTMLElement | null) => { hover.anchorRef.current = el; };
 
   const className = [
     'tag-chip',
@@ -73,10 +82,12 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
   if (openPath && !onRemove) {
     return (
       <span
+        ref={hoverRef}
+        {...hover.handlers}
         className={className}
         role="link"
         tabIndex={0}
-        title={`${title} (opens in Files)`}
+        aria-label={`${title} (opens in Files)`}
         data-tag={tag}
         onClick={(e) => { e.stopPropagation(); openPath(); }}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); openPath(); } }}
@@ -84,6 +95,7 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
         onMouseDown={keepToLink}
       >
         {text}
+        {hover.card}
       </span>
     );
   }
@@ -92,22 +104,27 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
   // children); one with a remove button keeps the button outside the link.
   if (linkProps && !onRemove) {
     return (
-      <a {...linkProps} className={className} title={`${title} (opens ${hostOf(href!)})`} data-tag={tag}
+      <a {...linkProps} ref={hoverRef} {...hover.handlers} className={className} data-tag={tag}
+        {...(isLink ? { 'aria-label': `${title} (opens ${hostOf(href!)})` } : { title: `${title} (opens ${hostOf(href!)})` })}
         data-hidden-on-tasks={hiddenOnTasks ? 'true' : undefined}>
         {text}
+        {hover.card}
       </a>
     );
   }
 
   return (
     <span
+      ref={hoverRef}
+      {...hover.handlers}
       className={className}
       onClick={onClick}
-      title={title}
+      {...(isLink && !onRemove ? { 'aria-label': title } : { title })}
       data-hidden-on-tasks={hiddenOnTasks ? 'true' : undefined}
       data-tag={tag}
     >
       {linkProps ? <a {...linkProps} className="tag-chip-link" title={`${title} (opens ${hostOf(href!)})`}>{text}</a> : text}
+      {hover.card}
       {onRemove && (
         <button
           className="tag-chip-remove"

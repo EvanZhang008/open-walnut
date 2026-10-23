@@ -1,0 +1,41 @@
+/* The hover card of a link pill (LinkHoverCard.tsx): the kind, the whole URL or path, and
+   where a click takes it. Never takes the pointer, so it cannot steal a click. */
+.link-hover-card {
+  position: fixed;
+  z-index: 9600;
+  max-width: min(380px, calc(100vw - 16px));
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated, var(--bg));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  color: var(--fg);
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+.link-hover-card-kind {
+  font-weight: 600;
+  color: #8944AB;
+}
+:root[data-theme="dark"] .link-hover-card-kind { color: #BF5AF2; }
+.link-hover-card-target {
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+  /* A very long URL stays a few lines, never a wall. */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.link-hover-card-opens {
+  margin-top: 4px;
+  color: var(--fg-secondary);
+}
+
+/* A file pill opens like a link: the same pointer and underline as a URL pill. */
+span.tag-chip-linked[role="link"] { cursor: pointer; }
+span.tag-chip-linked[role="link"]:hover .tag-chip-value,
+span.tag-chip-linked[role="link"]:focus-visible .tag-chip-value { text-decoration: underline; }

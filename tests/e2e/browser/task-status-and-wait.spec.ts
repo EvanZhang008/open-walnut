@@ -496,7 +496,7 @@ test('the Status filter can show only Waiting tasks; a Waiting task keeps a plai
   await expect(rowEl).toBeVisible({ timeout: 15_000 })
   await expect(plainRow).toBeVisible()
   const pill = rowEl.getByTestId('task-trigger-pill')
-  await expect(pill).toHaveText('TRIGGER')
+  await expect(pill).toHaveText('Trigger')
   await expect(pill).not.toHaveAttribute('data-snoozed', 'true')
   await shot(rowEl, 'row-waiting-trigger', browserName)
 

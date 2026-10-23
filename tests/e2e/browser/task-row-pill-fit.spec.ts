@@ -140,7 +140,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
 
   // A lone pill is a letter too: the whole column folds, never row by row.
   expect(await pillLook(row(f.lone), 'subtask-pill'), 'lone Worker @306').toMatchObject({ text: 'Worker', wordDrawn: false, letter: 'W' })
-  expect(await pillLook(row(f.loneTrigger), 'task-trigger-pill'), 'lone TRIGGER @306').toMatchObject({ text: 'TRIGGER', wordDrawn: false, letter: 'T' })
+  expect(await pillLook(row(f.loneTrigger), 'task-trigger-pill'), 'lone TRIGGER @306').toMatchObject({ text: 'Trigger', wordDrawn: false, letter: 'T' })
 
   // Every pill the column draws, seeded or not, is a letter with its word hidden.
   const column = await page.locator('.home-navigation-scroll').first().evaluate((scroller) => {
@@ -158,7 +158,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   expect(await pillLook(row(f.tagWorker), 'subtask-pill'), 'tag+Worker @306').toMatchObject({ wordDrawn: false, letter: 'W' })
   // Worker + TRIGGER: both letters.
   expect(await pillLook(row(f.workerTrigger), 'subtask-pill'), 'Worker @306 beside TRIGGER').toMatchObject({ wordDrawn: false, letter: 'W' })
-  expect(await pillLook(row(f.workerTrigger), 'task-trigger-pill'), 'TRIGGER @306 beside Worker').toMatchObject({ wordDrawn: false, letter: 'T', text: 'TRIGGER' })
+  expect(await pillLook(row(f.workerTrigger), 'task-trigger-pill'), 'TRIGGER @306 beside Worker').toMatchObject({ wordDrawn: false, letter: 'T', text: 'Trigger' })
   // Tag + Worker + TRIGGER: the row from the report.
   expect(await pillLook(row(f.tagWorkerTrigger), 'task-trigger-pill')).toMatchObject({ wordDrawn: false, letter: 'T' })
   expect(await pillLook(row(f.tagWorkerTrigger), 'subtask-pill')).toMatchObject({ wordDrawn: false, letter: 'W' })
@@ -187,10 +187,10 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
 
   // Dashed only when EVERY trigger is off; solid while any polls; never a count or PAUSED.
   const paused = await pillLook(row(f.allPaused), 'task-trigger-pill')
-  expect(paused, 'all-paused TRIGGER').toMatchObject({ text: 'TRIGGER', borderStyle: 'dashed' })
+  expect(paused, 'all-paused TRIGGER').toMatchObject({ text: 'Trigger', borderStyle: 'dashed' })
   await expect(row(f.allPaused).getByTestId('task-trigger-pill')).toHaveAttribute('data-paused', 'true')
   const mixed = await pillLook(row(f.mixedPaused), 'task-trigger-pill')
-  expect(mixed, 'one armed, one paused: solid').toMatchObject({ text: 'TRIGGER', borderStyle: 'solid' })
+  expect(mixed, 'one armed, one paused: solid').toMatchObject({ text: 'Trigger', borderStyle: 'solid' })
   await expect(row(f.mixedPaused).getByTestId('task-trigger-pill')).not.toHaveAttribute('data-paused', 'true')
   await expect(row(f.mixedPaused).getByTestId('task-trigger-pill')).toHaveAttribute('data-trigger-count', '2')
 
@@ -203,7 +203,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   await setColumnWidth(page, 640)
   await expect(page.locator('.home-navigation-scroll').first()).toHaveAttribute('data-row-fit', 'roomy')
   expect(await pillLook(row(f.tagWorkerTrigger), 'subtask-pill'), 'Worker @640').toMatchObject({ text: 'Worker', wordDrawn: true, letter: '' })
-  expect(await pillLook(row(f.tagWorkerTrigger), 'task-trigger-pill'), 'TRIGGER @640').toMatchObject({ text: 'TRIGGER', wordDrawn: true, letter: '' })
+  expect(await pillLook(row(f.tagWorkerTrigger), 'task-trigger-pill'), 'TRIGGER @640').toMatchObject({ text: 'Trigger', wordDrawn: true, letter: '' })
   expect(await pillLook(row(f.leaderTrigger), 'leader-pill'), 'Leader @640').toMatchObject({ wordDrawn: true, letter: '' })
   expect((await pillLook(row(f.leaderTrigger), 'leader-pill')).text).toMatch(/^Leader · \d+$/)
   await row(f.tagWorkerTrigger).screenshot({ path: `${SHOT_DIR}/${browserName}-${shotName}-roomy.png` })

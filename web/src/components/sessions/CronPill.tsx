@@ -24,7 +24,7 @@ export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
         data-cron-source="cron"
         data-short="C"
       >
-        <span className="task-pill-long">CRON</span>
+        <span className="task-pill-long">Cron</span>
       </span>
     );
   }
@@ -42,7 +42,7 @@ export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
       data-short="C"
       onClick={(event) => { event.stopPropagation(); onClick(); }}
     >
-      <span className="task-pill-long">CRON</span>
+      <span className="task-pill-long">Cron</span>
     </button>
   );
 }

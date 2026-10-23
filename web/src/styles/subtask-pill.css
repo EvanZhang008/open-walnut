@@ -1,13 +1,8 @@
 /* Worker and Leader pills (SubtaskPill.tsx, LeaderPill.tsx): the team link, a
-   clickable pair. They are BUTTONS, so they take the shape every clickable pill
-   in a title row has, the TRIGGER pill's (.task-trigger-pill in globals.css) and
-   the header CRON pill's: 15px tall, 4px corners, a 1px border, 10px bold
-   capitals. Only the hue differs: violet, so the pair reads as one relation and
-   apart from TRIGGER's blue. The informational pills (due date, start date,
-   Imported) keep the soft rounded .todo-item-due-pill look; a clickable pill
-   dressed like a date is what made Leader look foreign beside TRIGGER.
-   The capitals are CSS only: the DOM text stays "Worker" / "Leader · N", which is
-   what a screen reader says and what tests read.
+   clickable pair, in the shape every status pill in a title row has (the Trigger
+   pill's, .task-trigger-pill in globals.css: the session status badge's soft tint,
+   rounded, normal case). Only the hue differs: violet, so the pair reads as one
+   relation and apart from Trigger's blue.
    Every selector pairs two classes: this file is injected BEFORE globals.css
    (the component module loads first), so a single class can lose on order.
    Dark mode follows the app's two switches: an explicit data-theme, or the OS
@@ -18,19 +13,18 @@
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
-  height: 15px;
   margin: 0;
-  padding: 0 5px;
-  border: 1px solid rgba(124, 92, 255, 0.45);
-  border-radius: 4px;
+  height: auto;
+  padding: 1px 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: rgba(124, 92, 255, 0.1);
   color: #6a4fd8;
   font: inherit;
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: normal;
+  line-height: 1.2;
   white-space: nowrap;
   cursor: pointer;
   appearance: none;
@@ -42,14 +36,12 @@
 .task-team-pill.todo-item-leader-pill:hover,
 .task-team-pill.todo-item-leader-pill:focus-visible,
 .task-team-pill.todo-item-leader-pill[aria-expanded="true"] {
-  border-color: rgb(124, 92, 255);
   background: rgba(124, 92, 255, 0.18);
   outline: none;
 }
 
 :root[data-theme="dark"] .task-team-pill.todo-item-subtask-pill,
 :root[data-theme="dark"] .task-team-pill.todo-item-leader-pill {
-  border-color: rgba(160, 140, 255, 0.5);
   background: rgba(160, 140, 255, 0.14);
   color: #b9a8ff;
 }
@@ -59,14 +51,12 @@
 :root[data-theme="dark"] .task-team-pill.todo-item-leader-pill:hover,
 :root[data-theme="dark"] .task-team-pill.todo-item-leader-pill:focus-visible,
 :root[data-theme="dark"] .task-team-pill.todo-item-leader-pill[aria-expanded="true"] {
-  border-color: rgb(160, 140, 255);
   background: rgba(160, 140, 255, 0.26);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .task-team-pill.todo-item-subtask-pill,
   :root:not([data-theme]) .task-team-pill.todo-item-leader-pill {
-    border-color: rgba(160, 140, 255, 0.5);
     background: rgba(160, 140, 255, 0.14);
     color: #b9a8ff;
   }
@@ -75,7 +65,6 @@
   :root:not([data-theme]) .task-team-pill.todo-item-leader-pill:hover,
   :root:not([data-theme]) .task-team-pill.todo-item-leader-pill:focus-visible,
   :root:not([data-theme]) .task-team-pill.todo-item-leader-pill[aria-expanded="true"] {
-    border-color: rgb(160, 140, 255);
     background: rgba(160, 140, 255, 0.26);
   }
 }

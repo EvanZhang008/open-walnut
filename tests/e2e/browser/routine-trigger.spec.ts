@@ -224,7 +224,7 @@ test('a task with an armed trigger shows the TRIGGER pill; the pill opens the tr
     routines.push(first.id)
     const pill = row.getByTestId('task-trigger-pill')
     await expect(pill).toBeVisible({ timeout: 10_000 })
-    await expect(pill).toHaveText('TRIGGER')
+    await expect(pill).toHaveText('Trigger')
     await expect(pill).toHaveAttribute('title', new RegExp(`${name}: Every 5 min, \\$ echo`))
 
     // The pill opens the trigger, not a page: name, cadence, command, last check.
@@ -251,7 +251,7 @@ test('a task with an armed trigger shows the TRIGGER pill; the pill opens the tr
     await expect(pill).toBeFocused()
     const second = await createTriggerFor(task.id, `${name} b`, `echo '{"fire": false}'`)
     routines.push(second.id)
-    await expect(pill).toHaveText('TRIGGER', { timeout: 10_000 })
+    await expect(pill).toHaveText('Trigger', { timeout: 10_000 })
     await expect(pill).toHaveAttribute('data-trigger-count', '2')
     await pill.click()
     await expect(flyout).toContainText('2 triggers on this task')
@@ -270,11 +270,11 @@ test('a task with an armed trigger shows the TRIGGER pill; the pill opens the tr
     await expect(rowSecond.getByRole('button', { name: 'Resume' })).toBeVisible()
     await expect(rowSecond.getByRole('button', { name: 'Run check now' })).toHaveCount(0)
     // One still polls: the pill stays solid and says nothing about the pause.
-    await expect(pill).toHaveText('TRIGGER')
+    await expect(pill).toHaveText('Trigger')
     await expect(pill).not.toHaveAttribute('data-paused', 'true')
     await expect.poll(async () => (await getRoutine(second.id))?.enabled).toBe(false)
     await rowFirst.getByRole('button', { name: 'Pause' }).click()
-    await expect(pill).toHaveText('TRIGGER')
+    await expect(pill).toHaveText('Trigger')
     await expect(pill).toHaveAttribute('data-paused', 'true')
     expect(await pill.evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('dashed')
     await expect(flyout).toBeVisible()
@@ -282,7 +282,7 @@ test('a task with an armed trigger shows the TRIGGER pill; the pill opens the tr
     // Resume brings one back; the other stays paused.
     await rowSecond.getByRole('button', { name: 'Resume' }).click()
     await expect(rowSecond).toHaveAttribute('data-state', 'armed')
-    await expect(pill).toHaveText('TRIGGER')
+    await expect(pill).toHaveText('Trigger')
     await expect(pill).not.toHaveAttribute('data-paused', 'true')
     expect(await pill.evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('solid')
     await expect.poll(async () => (await getRoutine(second.id))?.enabled).toBe(true)

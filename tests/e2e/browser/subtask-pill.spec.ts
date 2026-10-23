@@ -64,8 +64,8 @@ async function expectTriggerShape(pill: Locator): Promise<void> {
     return out
   })
   expect(mine).toEqual(trigger)
-  // The capitals are CSS only; the DOM text (asserted elsewhere) stays mixed case.
-  expect(await pill.evaluate((el) => getComputedStyle(el).textTransform)).toBe('uppercase')
+  // Normal case, like the session status badge (2026-10-23).
+  expect(await pill.evaluate((el) => getComputedStyle(el).textTransform)).toBe('none')
 }
 
 test.beforeEach(async ({ page }) => {

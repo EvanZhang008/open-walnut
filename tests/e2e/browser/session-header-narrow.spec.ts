@@ -263,7 +263,7 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   expect(states[240].titleRow.fit).toBe('letters')
   await expect(meta.locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
   await expect(meta.locator('[data-testid="leader-pill"]')).toHaveText('Leader · 1')
-  await expect(meta.locator('[data-testid="task-trigger-pill"]')).toHaveText('TRIGGER')
+  await expect(meta.locator('[data-testid="task-trigger-pill"]')).toHaveText('Trigger')
   expect(states[180].titleRow.titleWidth).toBeGreaterThanOrEqual(40)
 
   // 180px: the "..." menu names every hidden view, then the hidden window buttons (the
@@ -347,7 +347,7 @@ test('a second trigger while narrow keeps the single letter; the word returns wi
   await expect(panel.getByText('Narrow header second turn finished', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
   await dressAsBusyTask(taskId)
   const trigger = panel.locator('.session-panel-title-meta [data-testid="task-trigger-pill"]')
-  await expect(trigger).toHaveText('TRIGGER', { timeout: 20_000 })
+  await expect(trigger).toHaveText('Trigger', { timeout: 20_000 })
 
   const narrow = await settleAt(page, panel, 260)
   expect(narrow.titleRow.fit).toBe('letters')
@@ -357,7 +357,7 @@ test('a second trigger while narrow keeps the single letter; the word returns wi
     run: `echo '{"fire": false}'`, every: '5m', prompt: 'Nothing to do.', session: taskId,
   })
   litterRoutines.push(second.job.id)
-  await expect(trigger).toHaveText('TRIGGER', { timeout: 20_000 })
+  await expect(trigger).toHaveText('Trigger', { timeout: 20_000 })
   await expect(trigger).toHaveAttribute('data-trigger-count', '2')
   const still = await settleAt(page, panel, 260)
   expectInsidePanel(still, '260px with two triggers')
@@ -366,6 +366,6 @@ test('a second trigger while narrow keeps the single letter; the word returns wi
 
   const wide = await settleAt(page, panel, null)
   expect(wide.titleRow.fit).toBe('full')
-  expect(wide.letters.trigger).toBe('text:TRIGGER')
+  expect(wide.letters.trigger).toBe('text:Trigger')
   expect(errors).toEqual([])
 })

@@ -101,12 +101,12 @@ const stopped = (id: string) => ({ id, enabled: false, state: { consecutiveError
 
 describe('triggerPillLabel', () => {
   it('is the word TRIGGER alone: no count, no PAUSED or STOPPED (the look and the hover text carry them)', () => {
-    expect(triggerPillLabel([on('a')])).toBe('TRIGGER');
-    expect(triggerPillLabel([on('a'), on('b'), on('c')])).toBe('TRIGGER');
-    expect(triggerPillLabel([paused('a')])).toBe('TRIGGER');
-    expect(triggerPillLabel([paused('a'), paused('b')])).toBe('TRIGGER');
-    expect(triggerPillLabel([stopped('a')])).toBe('TRIGGER');
-    expect(triggerPillLabel([on('a'), paused('b'), stopped('c')])).toBe('TRIGGER');
+    expect(triggerPillLabel([on('a')])).toBe('Trigger');
+    expect(triggerPillLabel([on('a'), on('b'), on('c')])).toBe('Trigger');
+    expect(triggerPillLabel([paused('a')])).toBe('Trigger');
+    expect(triggerPillLabel([paused('a'), paused('b')])).toBe('Trigger');
+    expect(triggerPillLabel([stopped('a')])).toBe('Trigger');
+    expect(triggerPillLabel([on('a'), paused('b'), stopped('c')])).toBe('Trigger');
   });
 
   it('is empty with no trigger (the pill does not render then)', () => {

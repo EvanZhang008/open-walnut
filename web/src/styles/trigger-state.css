@@ -4,7 +4,7 @@
 .task-trigger-pill.is-paused {
   border-style: dashed;
   border-color: color-mix(in srgb, var(--fg-secondary) 55%, transparent);
-  background: transparent;
+  background: color-mix(in srgb, var(--fg-secondary) 6%, transparent);
   color: var(--fg-secondary);
 }
 .task-trigger-pill.is-paused:hover,

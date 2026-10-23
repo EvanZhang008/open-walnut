@@ -52,7 +52,7 @@ function offWord(off: readonly PillTrigger[]): string {
 
 /** The pill's text: the word alone. Count and off state live in the look, the hover text and the flyout. */
 export function triggerPillLabel(triggers: readonly PillTrigger[]): string {
-  return triggers.length ? 'TRIGGER' : '';
+  return triggers.length ? 'Trigger' : '';
 }
 
 /** The hover text: one line per trigger, so the pill alone tells what is polling. */

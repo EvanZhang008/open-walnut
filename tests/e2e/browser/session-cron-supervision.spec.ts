@@ -497,7 +497,7 @@ test('the cron pill rides the task row and the session header, and only a newer 
   await waitForWs(page)
   await push(cron({ revision: 1 }))
   const rowPill = row.locator('.session-cron-pill')
-  await expect(rowPill).toHaveText('CRON')
+  await expect(rowPill).toHaveText('Cron')
   await expect(rowPill).toHaveAttribute('data-cron-presence', 'active')
   // The row pill cannot open a card, so its hover text carries the schedule itself.
   await expect(rowPill).toHaveAttribute('title', /^Cron job: Every day at 9:23 AM\. Next run .* \(in 12h (39|40)m\)\.$/)
@@ -509,7 +509,7 @@ test('the cron pill rides the task row and the session header, and only a newer 
   const column = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
   await expect(column).toBeVisible()
   const headerPill = column.locator('.session-cron-pill')
-  await expect(headerPill).toHaveText('CRON')
+  await expect(headerPill).toHaveText('Cron')
   await expect(headerPill).toHaveAttribute('data-cron-presence', 'active')
   await expect(headerPill).toHaveAttribute('data-cron-source', 'cron')
   // The pill is an addition, not a replacement: the process badge keeps its own

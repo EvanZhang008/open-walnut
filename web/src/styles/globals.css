@@ -28928,30 +28928,32 @@ a.file-link:hover {
   color: var(--fg-secondary);
 }
 
-/* The TRIGGER pill on a task row / Focus card / session header: same footprint
-   as the CRON pill so the two sit on one line, in the accent tone the Routines
-   card uses for a trigger so it reads as a trigger at a glance. */
+/* The Trigger pill on a task row / Focus card / session header. Every status pill
+   (Trigger, Cron, Worker, Leader) takes the session status badge's look ("Running"):
+   a soft tint of its colour, rounded, normal case, the size of a tag pill, so a row
+   reads as tags plus a few states, not two kinds of badge (2026-10-23). The border is
+   transparent so a paused trigger can dash it without changing the size. */
 .task-trigger-pill {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  height: 15px;
-  padding: 0 5px;
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius: 4px;
+  box-sizing: border-box;
+  height: auto;
+  padding: 1px 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
   font: inherit;
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  line-height: 1;
+  font-weight: 500;
+  letter-spacing: normal;
+  line-height: 1.2;
   white-space: nowrap;
   cursor: pointer;
 }
 .task-trigger-pill:hover,
 .task-trigger-pill[aria-expanded="true"] {
-  border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
