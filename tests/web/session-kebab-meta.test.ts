@@ -23,6 +23,8 @@ describe('sessionKebabMetaRows', () => {
   })
 
   it('hovering a time gives the exact time', () => {
+    // The same text on V8 (Node, Chrome) and JavaScriptCore (bun, WebKit), whose
+    // combined date-time format would say "2026 at 10:14:00 AM".
     const [created, updated] = sessionKebabMetaRows(session, NOW)
     expect(created.title).toBe('Sun, Sep 20, 2026, 10:14:00 AM')
     expect(updated.title).toBe('Mon, Sep 28, 2026, 4:02:05 PM')

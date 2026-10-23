@@ -24,12 +24,15 @@ interface SessionMeta {
 
 const NBSP_RE = /[\u202f\u00a0]/g;
 
-/** `Mon, Sep 28, 2026, 3:02:05 PM`: the exact time behind a relative one. */
+/**
+ * `Mon, Sep 28, 2026, 3:02:05 PM`: the exact time behind a relative one. Date and
+ * time are formatted apart and joined here, because one combined format joins them
+ * with ", " in V8 (Chrome) but " at " in JavaScriptCore (WebKit, so the Mac app).
+ */
 function exactTime(d: Date): string {
-  return d.toLocaleString('en-US', {
-    weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', second: '2-digit',
-  }).replace(NBSP_RE, ' ');
+  const date = d.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+  return `${date}, ${time}`.replace(NBSP_RE, ' ');
 }
 
 function timeRow(key: 'created' | 'updated', label: string, iso: string | undefined, now: number): KebabMetaRow | null {
