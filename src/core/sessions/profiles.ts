@@ -17,24 +17,27 @@ import type { SessionProfile } from '../types.js'
  * The bare bin name `open-walnut` proved unreliable: whether it exists on
  * PATH depends on how the package was linked (this very machine only links
  * `walnut`), and a dead command means the MCP mount silently never comes up —
- * the session falls back to raw curl. The server process IS the CLI package
- * (`node dist/cli.js web ...`), so its own argv[1] is the one entry we can
- * trust absolutely. Guarded by a basename allowlist so a test runner
+ * the session falls back to raw curl. The server process IS the CLI
+ * (`bun dist/cli.js web ...`, `bun src/cli.ts web ...` from source, the
+ * compiled file, whose argv[1] is its own entry `/$bunfs/root/walnut`), so its
+ * own argv[1] is the one entry we can trust absolutely, run by its own
+ * runtime (process.execPath). Guarded by a basename allowlist so a test runner
  * (vitest) is never mistaken for the CLI.
  */
-const CLI_ENTRY: string | null = (() => {
-  const entry = process.argv[1]
-  if (!entry) return null
-  const base = path.basename(entry)
-  return base === 'cli.js' || base === 'open-walnut.js' || base === 'walnut.js' || base === 'open-walnut' || base === 'walnut'
-    ? path.resolve(entry)
+export function cliEntryOf(argv1: string | undefined): string | null {
+  if (!argv1) return null
+  const base = path.basename(argv1)
+  return base === 'cli.js' || base === 'cli.ts' || base === 'open-walnut.js' || base === 'walnut.js' || base === 'open-walnut' || base === 'walnut'
+    ? path.resolve(argv1)
     : null
-})()
+}
+
+const CLI_ENTRY: string | null = cliEntryOf(process.argv[1])
 
 /**
  * Mount the Walnut MCP server into a session, giving the CLI structured access
  * to tasks / projects / sessions / search instead of prose instructions. The
- * mount targets this install's own CLI entry via the running node binary
+ * mount targets this install's own CLI entry via the running bun or walnut file
  * (PATH-independent); the bare bin name is only a fallback for exotic setups.
  * The server talks to the local API (see src/mcp/server.ts).
  */
