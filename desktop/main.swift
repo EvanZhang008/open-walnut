@@ -36,7 +36,7 @@ func saveConfig(_ config: WalnutConfig) {
 
 /// PID of the server *this app* spawned, persisted across app crashes. Used to
 /// tell "our own orphan" (safe to reclaim) apart from a server the user started
-/// themselves (e.g. a dev checkout's `npm run dev:prod` — NEVER kill that).
+/// themselves (e.g. a dev checkout's `bun run dev:prod`: NEVER kill that).
 func serverPidFilePath() -> URL {
     return configFilePath().deletingLastPathComponent().appendingPathComponent("server.pid")
 }
@@ -53,8 +53,6 @@ func recordedSpawnedServerPid() -> Int32? {
     guard let raw = try? String(contentsOf: serverPidFilePath(), encoding: .utf8) else { return nil }
     return Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines))
 }
-
-let REPO_URL = "https://github.com/EvanZhang008/open-walnut.git"
 
 // Printed by the server when it recompiles a native addon for the running Node.
 // Keep in sync with REBUILD_MARKER in src/core/native-abi-preflight.ts.
@@ -166,6 +164,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if let config = loadConfig(),
+           FileManager.default.fileExists(atPath: config.walnutHome),
+           config.runtimeDir == nil,
+           BundledRuntime.isAppBuiltCheckout(walnutHome: config.walnutHome, sourceDir: config.walnutSourceDir) {
+            // An older version of this app built a checkout with npm into
+            // <data home>/source; Walnut no longer runs that way. Install the
+            // self-contained Walnut and keep the same data.
+            DesktopLogger.shared.log("app_built_checkout_migrated", fields: ["home": config.walnutHome])
+            installRuntime(dataHome: config.walnutHome, offerExisting: false)
+        } else if let config = loadConfig(),
            FileManager.default.fileExists(atPath: config.walnutHome),
            BundledRuntime.setupRuns(runtimeDir: config.runtimeDir, sourceDir: config.walnutSourceDir) {
             walnutHome = config.walnutHome
@@ -424,8 +431,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// app carries, with its data in ~/.open-walnut (an existing one is kept and
     /// used as it is). A Mac where install.sh already ran uses that copy.
     @objc func startFreshSetup() {
+        installRuntime(dataHome: NSHomeDirectory() + "/.open-walnut", offerExisting: true)
+    }
+
+    /// The self-contained Walnut with its data in `dataHome`: Get Started, Set Up
+    /// Now for a folder the user picked, and the move of an app-built checkout.
+    /// The install is the one `curl -fsSL .../install.sh | sh` makes, by the
+    /// install.sh this app carries; nothing is built and no Node or npm is needed.
+    func installRuntime(dataHome: String, offerExisting: Bool) {
         let home = NSHomeDirectory()
-        let dataHome = home + "/.open-walnut"
         // A release build carries this Mac's file: installed from the app, offline.
         let carried = carriedReleaseForThisMac()
         let env = BundledRuntime.installEnvironment(base: ProcessInfo.processInfo.environment, home: home, carried: carried)
@@ -442,12 +456,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        retrySetup = { [weak self] in self?.startFreshSetup() }
+        retrySetup = { [weak self] in self?.installRuntime(dataHome: dataHome, offerExisting: offerExisting) }
         showBootstrapScreen(
             detail: carried != nil
                 ? "This takes a few seconds, the first time only."
                 : "Walnut downloads itself once. After that it opens at once.",
-            offerExisting: true)
+            offerExisting: offerExisting)
         statusLabel?.stringValue = "Getting Walnut..."
         try? FileManager.default.removeItem(at: bootstrapLogPath())
         DesktopLogger.shared.log("runtime_install_started", fields: [
@@ -520,39 +534,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // No checkout: the server starts from the runtime (tryStartServerOnPort).
         walnutSourceDir = bundled.installDir
         finishSetup()
-    }
-
-    func runBootstrap(walnutHome home: String) {
-        runtime = nil
-        retrySetup = { [weak self] in self?.runBootstrap(walnutHome: home) }
-        // Verify prerequisites
-        guard let nodePath = findNodeOrNil() else {
-            showError("Node.js 20+ not found.\n\nInstall Node.js from https://nodejs.org or via Homebrew:\n  brew install node")
-            return
-        }
-
-        // open-walnut needs Node 20+ (deps use the /v regex flag and engines: >=20).
-        // Don't proceed with an older node — npm install fails deep in a postinstall
-        // script with a confusing SyntaxError.
-        guard nodeVersionMeetsMinimum(nodePath, major: 20) else {
-            showError("Node.js 20+ is required, but the newest Node found is older:\n\(nodePath)\n\nInstall a newer Node, e.g.:\n  mise install node@22   (or brew install node)")
-            return
-        }
-
-        guard let gitPath = findGitOrNil() else {
-            showError("Git not found.\n\nInstall Git via Xcode Command Line Tools:\n  xcode-select --install")
-            return
-        }
-
-        let sourceDir = home + "/source"
-
-        // Show progress screen
-        showBootstrapScreen()
-
-        // Run the bootstrap in background
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.doBootstrap(home: home, sourceDir: sourceDir, nodePath: nodePath, gitPath: gitPath)
-        }
     }
 
     /// The setup screen's step, and the download's share as a bar once curl knows the size.
@@ -641,135 +622,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = container
     }
 
-    func doBootstrap(home: String, sourceDir: String, nodePath: String, gitPath: String) {
-        // Start a fresh log for this bootstrap run
-        try? FileManager.default.removeItem(at: bootstrapLogPath())
-        appendToBootstrapLog("bootstrap start", "node: \(nodePath)\ngit: \(gitPath)\nhome: \(home)")
-
-        // Step 1: Create home directory
-        try? FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
-
-        // Step 2: Clone the repo (or pull if already exists)
-        if FileManager.default.fileExists(atPath: sourceDir + "/.git") {
-            updateStatus("Updating source code...")
-            let pullResult = runProcess(gitPath, args: ["-C", sourceDir, "pull", "--ff-only"], cwd: sourceDir)
-            appendToBootstrapLog("git pull", pullResult.output)
-            if !pullResult.success {
-                // Pull failed — not fatal, continue with existing code
-            }
-        } else {
-            // Remove any partial/non-git source dir
-            if FileManager.default.fileExists(atPath: sourceDir) {
-                try? FileManager.default.removeItem(atPath: sourceDir)
-            }
-            updateStatus("Cloning open-walnut repository...")
-            let cloneResult = runProcess(gitPath, args: ["clone", "--depth", "1", REPO_URL, sourceDir], cwd: home)
-            appendToBootstrapLog("git clone", cloneResult.output)
-            if !cloneResult.success {
-                DispatchQueue.main.async { [weak self] in
-                    self?.showError("Failed to clone repository. Make sure you have internet access and git is configured.", details: cloneResult.output)
-                }
-                return
-            }
-        }
-
-        // Step 3: npm install
-        updateStatus("Installing dependencies (npm install)...")
-        guard let npmCliJs = findNpmCliJs(near: nodePath) else {
-            DispatchQueue.main.async { [weak self] in
-                self?.showError("Could not find npm-cli.js.\n\nnpm may not be installed correctly alongside node at:\n\(nodePath)\n\nTry reinstalling Node.js.")
-            }
-            return
-        }
-        // Ensure child processes (postinstall scripts) find the same node version
-        let nodeDir = (nodePath as NSString).deletingLastPathComponent
-        let installResult = runProcess(nodePath, args: [npmCliJs, "install", "--production=false"], cwd: sourceDir, prependToPath: nodeDir)
-        appendToBootstrapLog("npm install (node: \(nodePath))", installResult.output)
-        if !installResult.success {
-            DispatchQueue.main.async { [weak self] in
-                self?.showError("npm install failed (using node at \(nodePath)).", details: installResult.output)
-            }
-            return
-        }
-
-        // Step 4: Build (tsup + copy data/manifests)
-        // The full `npm run build` requires bun for cross-compiling daemon binaries.
-        // The desktop app only needs the CLI/web server, so run tsup directly.
-        updateStatus("Building Walnut...")
-        let tsupBin = sourceDir + "/node_modules/.bin/tsup"
-        let buildResult: (success: Bool, output: String)
-        if FileManager.default.fileExists(atPath: tsupBin) {
-            buildResult = runProcess(nodePath, args: [tsupBin], cwd: sourceDir, prependToPath: nodeDir)
-        } else {
-            // Fallback: try npm run build (requires bun)
-            buildResult = runProcess(nodePath, args: [npmCliJs, "run", "build"], cwd: sourceDir, prependToPath: nodeDir)
-        }
-        appendToBootstrapLog("build (tsup)", buildResult.output)
-        if !buildResult.success {
-            DispatchQueue.main.async { [weak self] in
-                self?.showError("Build failed.", details: buildResult.output)
-            }
-            return
-        }
-        // Copy data directory and integration manifests (mirrors the npm build script)
-        let dataResult = runProcess("/bin/cp", args: ["-r", sourceDir + "/src/data", sourceDir + "/dist/"], cwd: sourceDir)
-        if !dataResult.success {
-            // Non-fatal: some data files may be missing
-        }
-        // Copy integration manifests
-        let integrationsDir = sourceDir + "/src/integrations"
-        if let integrations = try? FileManager.default.contentsOfDirectory(atPath: integrationsDir) {
-            for integration in integrations {
-                let manifest = integrationsDir + "/\(integration)/manifest.json"
-                let destDir = sourceDir + "/dist/integrations/\(integration)"
-                if FileManager.default.fileExists(atPath: manifest) {
-                    try? FileManager.default.createDirectory(atPath: destDir, withIntermediateDirectories: true)
-                    try? FileManager.default.copyItem(atPath: manifest, toPath: destDir + "/manifest.json")
-                }
-            }
-        }
-
-        // Remove daemon source marker so the runtime daemon-version-check skips the
-        // bun-based rebuild (the desktop app doesn't use remote daemon sessions).
-        let daemonMarker = sourceDir + "/src/providers/daemon-standalone.ts"
-        try? FileManager.default.removeItem(atPath: daemonMarker)
-
-        // Step 5: Build the web frontend
-        updateStatus("Building web interface...")
-        let webDir = sourceDir + "/web"
-        if FileManager.default.fileExists(atPath: webDir + "/package.json") {
-            // Run vite build directly — the upstream npm build script runs tsc first
-            // which may fail on type errors that don't affect the runtime bundle.
-            let viteBin = webDir + "/node_modules/.bin/vite"
-            if FileManager.default.fileExists(atPath: viteBin) {
-                let webBuildResult = runProcess(nodePath, args: [viteBin, "build"], cwd: webDir, prependToPath: nodeDir)
-                appendToBootstrapLog("web build (vite)", webBuildResult.output)
-                if !webBuildResult.success {
-                    // Non-fatal — server might still work without web assets
-                }
-            } else {
-                let webBuildResult = runProcess(nodePath, args: [npmCliJs, "run", "build"], cwd: webDir, prependToPath: nodeDir)
-                appendToBootstrapLog("web build (npm run build)", webBuildResult.output)
-                if !webBuildResult.success {
-                    // Non-fatal
-                }
-            }
-        }
-
-        // Done — save config and start
-        DispatchQueue.main.async { [weak self] in
-            self?.walnutHome = home
-            self?.walnutSourceDir = sourceDir
-            self?.finishSetup()
-        }
-    }
-
-    func updateStatus(_ message: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.statusLabel?.stringValue = message
-        }
-    }
-
     func runProcess(_ executable: String, args: [String], cwd: String, prependToPath: String? = nil) -> (success: Bool, output: String) {
         let proc = Process()
         let pipe = Pipe()
@@ -806,45 +658,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return (false, "Failed to launch \(executable): \(error.localizedDescription)")
         }
 
-        // Drain the pipe BEFORE waitUntilExit: a chatty child (npm) fills the 64KB
+        // Drain the pipe BEFORE waitUntilExit: a chatty child fills the 64KB
         // pipe buffer and blocks forever if nobody reads until after it exits.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
         let output = String(data: data, encoding: .utf8) ?? ""
         return (proc.terminationStatus == 0, output)
-    }
-
-    func findNpmCliJs(near nodePath: String) -> String? {
-        // The npm binary in mise/nvm/fnm installs is a bash wrapper script, NOT a JS file.
-        // We need the actual npm-cli.js that node can execute directly.
-        // Pattern: <prefix>/lib/node_modules/npm/bin/npm-cli.js
-        let nodeDir = (nodePath as NSString).deletingLastPathComponent
-        let prefix = (nodeDir as NSString).deletingLastPathComponent
-        let npmCliJs = prefix + "/lib/node_modules/npm/bin/npm-cli.js"
-        if FileManager.default.fileExists(atPath: npmCliJs) {
-            return npmCliJs
-        }
-
-        // Some installs (Homebrew linked, system) put npm-cli.js at a different prefix
-        // Try resolving symlinks on the npm binary to find the real location
-        let npmBin = nodeDir + "/npm"
-        if FileManager.default.fileExists(atPath: npmBin) {
-            // Check if it's a symlink pointing to npm-cli.js
-            if let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: npmBin) {
-                let resolved = dest.hasPrefix("/") ? dest : nodeDir + "/" + dest
-                if resolved.hasSuffix("npm-cli.js"), FileManager.default.fileExists(atPath: resolved) {
-                    return resolved
-                }
-            }
-            // Check if it's already a JS file (starts with #!/usr/bin/env node)
-            if let data = FileManager.default.contents(atPath: npmBin),
-               let firstLine = String(data: data.prefix(64), encoding: .utf8),
-               firstLine.contains("node") && !firstLine.contains("bash") {
-                return npmBin
-            }
-        }
-
-        return nil
     }
 
     // MARK: - Use Existing Folder
@@ -871,7 +690,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Select your .open-walnut directory — or a built open-walnut dev checkout"
+        panel.message = "Select your .open-walnut directory, or a built open-walnut dev checkout"
         panel.prompt = "Use This Folder"
 
         if FileManager.default.fileExists(atPath: defaultPath) {
@@ -881,31 +700,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             let home = url.path
-            let sourceDir = home + "/source"
+            let fm = FileManager.default
 
-            // Layout A — a data home (~/.open-walnut) with a bundled source/ dir.
-            if FileManager.default.fileExists(atPath: sourceDir + "/dist/cli.js") {
-                beforeUse?()
-                self?.runtime = nil
-                self?.walnutHome = home
-                self?.walnutSourceDir = sourceDir
-                self?.finishSetup()
-            // Layout B — a dev checkout itself (dist/cli.js at the root). Run
-            // straight from it: no clone, no pull, no second source tree. Data
-            // still lives in the standard ~/.open-walnut home.
-            } else if FileManager.default.fileExists(atPath: home + "/dist/cli.js") {
+            // A dev checkout itself (package.json and a built dist/cli.js at the
+            // root): run straight from it on bun. Data still lives in the
+            // standard ~/.open-walnut home.
+            if BundledRuntime.isBuiltCheckout(home) {
                 beforeUse?()
                 self?.runtime = nil
                 let dataHome = NSHomeDirectory() + "/.open-walnut"
-                try? FileManager.default.createDirectory(atPath: dataHome, withIntermediateDirectories: true)
+                try? fm.createDirectory(atPath: dataHome, withIntermediateDirectories: true)
                 self?.walnutHome = dataHome
                 self?.walnutSourceDir = home
                 self?.finishSetup()
+            // A data home (config.yaml, or the source/ checkout an older version
+            // of this app built there): the self-contained Walnut with its data here.
+            } else if fm.fileExists(atPath: home + "/config.yaml") || fm.fileExists(atPath: home + "/source/dist/cli.js") {
+                beforeUse?()
+                self?.installRuntime(dataHome: home, offerExisting: false)
             } else {
-                // Maybe they have source elsewhere in the folder or it needs bootstrap
                 let alert = NSAlert()
-                alert.messageText = "Source Not Found"
-                alert.informativeText = "This folder doesn't have a built copy of open-walnut yet. Would you like to download and set it up now?"
+                alert.messageText = "No Walnut Here Yet"
+                alert.informativeText = "This folder has no Walnut data and is not a built checkout. Set Walnut up with its data in this folder? It installs the self-contained Walnut, one file, with nothing else to install."
                 alert.addButton(withTitle: "Set Up Now")
                 alert.addButton(withTitle: "Cancel")
 
@@ -913,7 +729,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     // Cancel leaves whatever was running (a first-launch download) as it was.
                     if alertResponse == .alertFirstButtonReturn {
                         beforeUse?()
-                        self?.runBootstrap(walnutHome: home)
+                        self?.installRuntime(dataHome: home, offerExisting: false)
                     }
                 }
             }
@@ -1118,7 +934,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let process = Process()
         // The self-contained Walnut starts from what install.sh left (the file, or
-        // an older archive); a checkout runs on a Node found on this Mac.
+        // an older archive); a checkout runs on a bun found on this Mac.
         let launch: BundledRuntime.Launch
         var runtimeLayout: BundledRuntime.Layout?
         if let rt = runtime {
@@ -1129,7 +945,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             runtimeLayout = layout
             launch = rt.serverLaunch(port: port, layout: layout)
         } else {
-            launch = BundledRuntime.Launch(executable: findNode(), arguments: [source + "/dist/cli.js", "web", "--port", String(port)], directory: source)
+            guard let bun = findBunOrNil(sourceDir: source) else {
+                handleServerStartupFailure("Running Walnut from the checkout at \(source) needs Bun \(checkoutBunPin(source) ?? "") or newer, and none was found.\n\nInstall it:\n  curl -fsSL https://bun.sh/install | bash\n\nor choose Reset Setup... from the Walnut menu to use the self-contained Walnut instead.")
+                return
+            }
+            launch = BundledRuntime.checkoutLaunch(bun: bun, sourceDir: source, port: port)
         }
         DesktopLogger.shared.log("server_spawn_attempted", fields: [
             "port": String(port),
@@ -1314,7 +1134,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         + "\(detail)\n\n"
                         + (self.runtime != nil
                             ? "Reset Setup... and Get Started again downloads a fresh copy (your data stays)."
-                            : "This is usually a stale build. In the source directory run:\n    npm run web:build"))
+                            : "This is usually a stale build. In the source directory run:\n    bun run web:build"))
                 }
             }
         }
@@ -1614,149 +1434,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Find Executables
 
-    func findNode() -> String {
-        return findNodeOrNil() ?? "/usr/local/bin/node"
+    /// The bun version the checkout pins (package.json packageManager), or nil.
+    func checkoutBunPin(_ sourceDir: String) -> String? {
+        return BundledRuntime.bunPin(packageJson: FileManager.default.contents(atPath: sourceDir + "/package.json"))
     }
 
-    func findNodeOrNil() -> String? {
-        var allCandidates: [String] = []
-
-        // 1. Mise installs (sorted newest-first — likely to meet version requirements)
-        let miseDir = NSHomeDirectory() + "/.local/share/mise/installs/node"
-        if let versions = try? FileManager.default.contentsOfDirectory(atPath: miseDir) {
-            // Filter to real version directories (e.g. "22.12.0"), skip symlinks like "lts"
-            let realVersions = versions.filter { $0.first?.isNumber == true && $0.contains(".") && $0.filter({ $0 == "." }).count >= 1 }
-            let sorted = realVersions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
-            for version in sorted {
-                let candidate = miseDir + "/\(version)/bin/node"
-                if FileManager.default.fileExists(atPath: candidate) {
-                    allCandidates.append(candidate)
-                }
-            }
+    /// A bun for a checkout's server: at least the version the checkout pins.
+    /// Looks on PATH, in bun's own install place and Homebrew's, then asks the
+    /// login shell (a version manager may put it elsewhere).
+    func findBunOrNil(sourceDir: String) -> String? {
+        let pin = checkoutBunPin(sourceDir)
+        var candidates = BundledRuntime.bunCandidates(home: NSHomeDirectory(), pathEnv: ProcessInfo.processInfo.environment["PATH"])
+        let version: (String) -> String? = { [weak self] path in
+            guard let r = self?.runProcess(path, args: ["--version"], cwd: "/tmp"), r.success else { return nil }
+            return r.output
         }
-
-        // 2. nvm versions (sorted newest-first)
-        let nvmDir = NSHomeDirectory() + "/.nvm/versions/node"
-        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmDir) {
-            let sorted = versions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
-            for version in sorted {
-                let candidate = nvmDir + "/\(version)/bin/node"
-                if FileManager.default.fileExists(atPath: candidate) {
-                    allCandidates.append(candidate)
-                }
-            }
+        if let found = BundledRuntime.pickBun(candidates: candidates, pin: pin, fileExists: FileManager.default.isExecutableFile(atPath:), version: version) {
+            return found
         }
-
-        // 3. Well-known locations
-        let wellKnown = [
-            "/opt/homebrew/bin/node",
-            "/usr/local/bin/node",
-            NSHomeDirectory() + "/.nvm/current/bin/node",
-            NSHomeDirectory() + "/.fnm/current/bin/node"
-        ]
-        for candidate in wellKnown {
-            if FileManager.default.fileExists(atPath: candidate) {
-                allCandidates.append(candidate)
-            }
-        }
-
-        // 4. Login shell resolution (mise activate, etc.)
-        let shellResult = runShellCommand("eval \"$(mise activate zsh 2>/dev/null)\"; which node 2>/dev/null || command -v node 2>/dev/null")
-        if let path = shellResult, FileManager.default.fileExists(atPath: path) {
-            allCandidates.append(path)
-        }
-
-        // 5. Last resort
-        let fallback = runShellCommand("which node 2>/dev/null")
-        if let path = fallback, FileManager.default.fileExists(atPath: path) {
-            allCandidates.append(path)
-        }
-
-        // Deduplicate (resolve symlinks for comparison)
-        var seen = Set<String>()
-        var unique: [String] = []
-        for candidate in allCandidates {
-            let resolved = (try? FileManager.default.destinationOfSymbolicLink(atPath: candidate)) ?? candidate
-            let key = resolved.hasPrefix("/") ? resolved : (candidate as NSString).deletingLastPathComponent + "/" + resolved
-            if !seen.contains(key) {
-                seen.insert(key)
-                unique.append(candidate)
-            }
-        }
-
-        // Node >= 22 matches package.json "engines". (Below 20, ora's string-width
-        // dependency uses the `v` regex flag and can't even load.)
-        let supported = unique.filter { nodeVersionMeetsMinimum($0, major: 22) }
-
-        // Version alone can't tell us a runtime WORKS: better-sqlite3 is compiled
-        // against one Node ABI, so the newest Node is often the wrong one. Prefer a
-        // candidate that can actually load the compiled addons. Falling back to the
-        // newest supported Node is safe — the server's native-module preflight
-        // recompiles for whatever it's run under (native-abi-preflight.ts); this
-        // probe just avoids paying for a rebuild when a matching runtime exists.
-        if let source = walnutSourceDir,
-           FileManager.default.fileExists(atPath: source + "/node_modules/better-sqlite3") {
-            for candidate in supported where nodeCanLoadNativeModules(candidate, sourceDir: source) {
-                return candidate
-            }
-        }
-
-        if let newest = supported.first { return newest }
-
-        // Fall back to any available node (user will see engine warnings but might still work)
-        return unique.first
-    }
-
-    /// True when `nodePath` can actually load the compiled native addons in
-    /// `sourceDir` — i.e. its ABI matches what `npm install` compiled against.
-    /// better-sqlite3 resolves its `.node` lazily on first Database construction,
-    /// so the probe must construct one; a bare require() passes even on a mismatch.
-    func nodeCanLoadNativeModules(_ nodePath: String, sourceDir: String) -> Bool {
-        let script = "const D=require('better-sqlite3'); new D(':memory:').close()"
-        return runProcess(nodePath, args: ["-e", script], cwd: sourceDir).success
-    }
-
-    func nodeVersionMeetsMinimum(_ nodePath: String, major minimum: Int) -> Bool {
-        // Try to extract version from path (e.g. .../node/22.12.0/bin/node)
-        let components = nodePath.split(separator: "/")
-        for (i, component) in components.enumerated() {
-            if component == "node" && i + 1 < components.count {
-                let next = String(components[i + 1])
-                if let dotIndex = next.firstIndex(of: ".") {
-                    let majorStr = String(next[next.startIndex..<dotIndex])
-                    if let majorVersion = Int(majorStr) {
-                        return majorVersion >= minimum
-                    }
-                }
-            }
-        }
-        // Path doesn't contain version — run the binary to check
-        let result = runProcess(nodePath, args: ["--version"], cwd: "/tmp")
-        // Output like "v22.12.0"
-        let version = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        if version.hasPrefix("v"), let dotIndex = version.firstIndex(of: ".") {
-            let majorStr = String(version[version.index(after: version.startIndex)..<dotIndex])
-            if let majorVersion = Int(majorStr) {
-                return majorVersion >= minimum
-            }
-        }
-        return false
-    }
-
-    func findGitOrNil() -> String? {
-        let candidates = [
-            "/usr/bin/git",
-            "/opt/homebrew/bin/git",
-            "/usr/local/bin/git"
-        ]
-        for candidate in candidates {
-            if FileManager.default.fileExists(atPath: candidate) {
-                return candidate
-            }
-        }
-        let fallback = runShellCommand("which git 2>/dev/null")
-        if let path = fallback, FileManager.default.fileExists(atPath: path) {
-            return path
+        if let shell = runShellCommand("command -v bun 2>/dev/null"), !candidates.contains(shell) {
+            candidates = [shell]
+            return BundledRuntime.pickBun(candidates: candidates, pin: pin, fileExists: FileManager.default.isExecutableFile(atPath:), version: version)
         }
         return nil
     }
@@ -1859,7 +1557,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         msgLabel.preferredMaxLayoutWidth = 450
         stack.addArrangedSubview(msgLabel)
 
-        // Show the actual child-process output (git/npm stderr) so failures are
+        // Show the actual child-process output (install.sh, the server) so failures are
         // diagnosable instead of a vague one-liner.
         if let details = details, !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let tail = String(details.suffix(4000))

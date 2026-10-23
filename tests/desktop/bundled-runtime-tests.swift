@@ -91,6 +91,43 @@ struct BundledRuntimeTests {
         precondition(BundledRuntime.isCheckoutServerCommand("/a b/node " + checkout + "/dist/cli.js web", sourceDir: checkout))
         precondition(!BundledRuntime.isCheckoutServerCommand("/opt/homebrew/bin/node " + checkout + "/dist/cli.js update", sourceDir: checkout))
         precondition(!BundledRuntime.isCheckoutServerCommand("/opt/homebrew/bin/node /elsewhere/dist/cli.js web", sourceDir: checkout))
+        // A checkout runs on bun now: its server is bun on dist/cli.js, and the check sees that too.
+        let co = BundledRuntime.checkoutLaunch(bun: "/Users/someone/.bun/bin/bun", sourceDir: checkout, port: 3456)
+        precondition(co == BundledRuntime.Launch(executable: "/Users/someone/.bun/bin/bun", arguments: [checkout + "/dist/cli.js", "web", "--port", "3456"], directory: checkout))
+        precondition(BundledRuntime.isCheckoutServerCommand(co.executable + " " + co.arguments.joined(separator: " "), sourceDir: checkout))
+
+        // Which bun a checkout runs on: PATH first, then bun's and Homebrew's places, each once.
+        let cands = BundledRuntime.bunCandidates(home: home, pathEnv: "/opt/homebrew/bin:relative/bin:/usr/bin")
+        precondition(cands == ["/opt/homebrew/bin/bun", "/usr/bin/bun", "/Users/someone/.bun/bin/bun", "/usr/local/bin/bun"], "\(cands)")
+        precondition(BundledRuntime.bunCandidates(home: home, pathEnv: nil) == ["/Users/someone/.bun/bin/bun", "/opt/homebrew/bin/bun", "/usr/local/bin/bun"])
+        // The pin is package.json's packageManager; a non-bun manager or a malformed one pins nothing.
+        let pinJson: (String) -> Data = { Data($0.utf8) }
+        precondition(BundledRuntime.bunPin(packageJson: pinJson(#"{"packageManager":"bun@1.4.4"}"#)) == "1.4.4")
+        precondition(BundledRuntime.bunPin(packageJson: pinJson(#"{"packageManager":"npm@10.0.0"}"#)) == nil)
+        precondition(BundledRuntime.bunPin(packageJson: pinJson(#"{"packageManager":"bun@1.4"}"#)) == nil)
+        precondition(BundledRuntime.bunPin(packageJson: nil) == nil)
+        precondition(BundledRuntime.versionAtLeast("1.4.4", "1.4.4"))
+        precondition(BundledRuntime.versionAtLeast("1.10.0", "1.4.4"))
+        precondition(!BundledRuntime.versionAtLeast("1.3.9", "1.4.4"))
+        precondition(!BundledRuntime.versionAtLeast("garbage", "1.4.4"))
+        // An older bun (1.3.9 at ~/.bun) is passed over for a new enough one; a canary counts by its release part.
+        let versions = ["/a/bun": "1.3.9\n", "/b/bun": "1.5.0-canary.2", "/c/bun": "1.4.4"]
+        let exists: (String) -> Bool = { versions[$0] != nil }
+        precondition(BundledRuntime.pickBun(candidates: ["/missing/bun", "/a/bun", "/b/bun", "/c/bun"], pin: "1.4.4", fileExists: exists, version: { versions[$0] }) == "/b/bun")
+        precondition(BundledRuntime.pickBun(candidates: ["/a/bun"], pin: "1.4.4", fileExists: exists, version: { versions[$0] }) == nil)
+        precondition(BundledRuntime.pickBun(candidates: ["/a/bun"], pin: nil, fileExists: exists, version: { versions[$0] }) == "/a/bun")
+        precondition(BundledRuntime.pickBun(candidates: ["/a/bun"], pin: nil, fileExists: exists, version: { _ in nil }) == nil)
+
+        // The setup the app's old first launch made (an npm-built clone in <data>/source)
+        // moves to the self-contained Walnut; a checkout the user picked does not.
+        precondition(BundledRuntime.isAppBuiltCheckout(walnutHome: "/Users/someone/.open-walnut", sourceDir: "/Users/someone/.open-walnut/source"))
+        precondition(BundledRuntime.isAppBuiltCheckout(walnutHome: "/Users/someone/.open-walnut/", sourceDir: "/Users/someone/.open-walnut/source"))
+        precondition(!BundledRuntime.isAppBuiltCheckout(walnutHome: "/Users/someone/.open-walnut", sourceDir: checkout))
+        precondition(!BundledRuntime.isAppBuiltCheckout(walnutHome: "", sourceDir: "/source"))
+        // A folder is a checkout to run from only with its own package.json and a built dist/cli.js.
+        precondition(BundledRuntime.isBuiltCheckout(checkout, fileExists: { [checkout + "/package.json", checkout + "/dist/cli.js"].contains($0) }))
+        precondition(!BundledRuntime.isBuiltCheckout(checkout, fileExists: { $0 == checkout + "/dist/cli.js" }))
+        precondition(!BundledRuntime.isBuiltCheckout(checkout, fileExists: { $0 == checkout + "/package.json" }))
 
         // The installer is told where to put it, and the system's own tools come first.
         let env = BundledRuntime.installEnvironment(base: ["PATH": "/opt/homebrew/bin:/usr/bin", "HOME": home], home: home)

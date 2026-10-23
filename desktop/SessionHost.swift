@@ -7,8 +7,9 @@
 // time from the top of the launcher chain. When Walnut.app starts the server, the
 // server, the daemon, the `claude` CLI and every tool the CLI runs are already
 // attributed to Walnut, and none of this code is needed. The gap is a server
-// started from a TERMINAL (`npm run dev:prod`), which makes `…/bin/node` the
-// responsible process for the whole subtree. What the user then saw:
+// started from a TERMINAL (`bun run dev:prod`; `npm run dev:prod` when this was
+// written), which makes the runtime binary (then `…/bin/node`) the responsible
+// process for the whole subtree. What the user then saw:
 //
 //   - the dialog says `"node" would like to access data from other apps`, naming
 //     a shared runtime instead of the thing that is asking;

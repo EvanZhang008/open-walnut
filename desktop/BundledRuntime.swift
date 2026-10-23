@@ -155,7 +155,71 @@ struct BundledRuntime {
         return BundledRuntime.startsCommand(String(rest[slash...]), with: "/walnut web")
     }
 
-    /// The same for a checkout's server: any Node on `<sourceDir>/dist/cli.js web`.
+    // MARK: A source checkout
+
+    /// A checkout's server: bun on its `dist/cli.js` (Walnut runs on bun only).
+    static func checkoutLaunch(bun: String, sourceDir: String, port: Int) -> Launch {
+        return Launch(executable: bun, arguments: [sourceDir + "/dist/cli.js", "web", "--port", String(port)], directory: sourceDir)
+    }
+
+    /// Where a bun may be, in order: the user's PATH, then the places its
+    /// installer and Homebrew use (an app started from the Dock has a thin PATH).
+    static func bunCandidates(home: String, pathEnv: String?) -> [String] {
+        var out: [String] = []
+        for dir in (pathEnv ?? "").split(separator: ":") where dir.hasPrefix("/") {
+            out.append(String(dir) + "/bun")
+        }
+        out += [home + "/.bun/bin/bun", "/opt/homebrew/bin/bun", "/usr/local/bin/bun"]
+        var seen = Set<String>()
+        return out.filter { seen.insert($0).inserted }
+    }
+
+    /// The bun version a checkout's package.json pins (`"packageManager": "bun@X.Y.Z"`).
+    static func bunPin(packageJson: Data?) -> String? {
+        guard let data = packageJson,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pm = obj["packageManager"] as? String, pm.hasPrefix("bun@") else { return nil }
+        let version = String(pm.dropFirst(4).prefix { $0.isNumber || $0 == "." })
+        return version.split(separator: ".").count == 3 ? version : nil
+    }
+
+    /// X.Y.Z at least `minimum` (also X.Y.Z); anything that is not a version is not.
+    static func versionAtLeast(_ version: String, _ minimum: String) -> Bool {
+        let a = version.split(separator: ".").map { Int($0) }
+        let b = minimum.split(separator: ".").map { Int($0) }
+        guard a.count == 3, b.count == 3, !a.contains(nil), !b.contains(nil) else { return false }
+        for i in 0..<3 where a[i]! != b[i]! { return a[i]! > b[i]! }
+        return true
+    }
+
+    /// The first candidate that exists and reports a version at least the pin
+    /// (any version when the checkout pins none). `version` runs `bun --version`.
+    static func pickBun(candidates: [String], pin: String?, fileExists: (String) -> Bool, version: (String) -> String?) -> String? {
+        for cand in candidates where fileExists(cand) {
+            // "1.4.4", or "1.5.0-canary.3": the release part decides.
+            guard let raw = version(cand)?.trimmingCharacters(in: .whitespacesAndNewlines) else { continue }
+            let v = String(raw.prefix { $0.isNumber || $0 == "." })
+            if versionAtLeast(v, pin ?? "0.0.0") { return cand }
+        }
+        return nil
+    }
+
+    /// A setup the app's own first-launch build made before the compiled file: it
+    /// cloned the repo into `<data home>/source` and built it with npm. That
+    /// checkout runs on neither runtime now (its packages were built for Node), so
+    /// such a setup moves to the self-contained Walnut, keeping its data home.
+    static func isAppBuiltCheckout(walnutHome: String, sourceDir: String) -> Bool {
+        let home = walnutHome.hasSuffix("/") ? String(walnutHome.dropLast()) : walnutHome
+        return !home.isEmpty && sourceDir == home + "/source"
+    }
+
+    /// Whether a folder the user picked is a checkout to run from (its own
+    /// package.json and a built dist/cli.js), rather than a data home.
+    static func isBuiltCheckout(_ dir: String, fileExists: (String) -> Bool = FileManager.default.fileExists(atPath:)) -> Bool {
+        return fileExists(dir + "/package.json") && fileExists(dir + "/dist/cli.js")
+    }
+
+    /// The same for a checkout's server: bun (or an older Node) on `<sourceDir>/dist/cli.js web`.
     static func isCheckoutServerCommand(_ command: String, sourceDir: String) -> Bool {
         let script = " " + sourceDir + "/dist/cli.js web"
         guard let found = command.range(of: script) else { return false }
