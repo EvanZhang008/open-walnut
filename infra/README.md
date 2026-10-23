@@ -44,11 +44,16 @@ cannot reach a checkout of `infra/`.
 
 ## One-command deploy (manual route)
 
+The AWS CDK runs on Node: its CLI, and the app it starts (`cdk.json` runs it with
+`npx ts-node`). So this route, like Walnut's own cloud setup
+(`src/core/cloud-setup/providers/aws.ts`), needs Node 22 with npm on the computer you
+deploy from.
+
 ```bash
 cd infra
 bun install --frozen-lockfile                       # the CDK versions in infra/bun.lock
-bun x cdk bootstrap --profile <your-profile>        # first time per account/region only
-bun x cdk deploy \
+npx cdk bootstrap --profile <your-profile>          # first time per account/region only
+npx cdk deploy \
   -c domain=wn.example.com \
   -c alertEmail=you@example.com \
   --profile <your-profile>

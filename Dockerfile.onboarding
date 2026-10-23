@@ -20,12 +20,11 @@
 
 FROM debian:bookworm-slim
 
-# git for the skill demo. python3, make and g++ only because `bun install` still runs
-# better-sqlite3's install script (a dependency while src/lib/sqlite.ts keeps its Node
-# branch): it has no prebuilt for bun's ABI, so it compiles. The server never loads it
-# on bun (bun:sqlite). Drop the three when better-sqlite3 leaves package.json.
+# git for the skill demo. No compiler: Walnut has no native module that builds on
+# install (SQLite and the terminal are bun's own), and every native dependency it
+# has ships a prebuilt binary.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl python3 make g++ \
+      git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # The only runtime: bun, at the version package.json pins (packageManager).

@@ -347,9 +347,6 @@ Skills that ship with Walnut cannot be edited or deleted there: both answer
 409 with the reason (edit them on your primary Mac; disable one to turn it
 off). No copy is made in the data dir's `skills/`, because that dir syncs to
 the Mac, where the copy would hide every later release of the shipped skill.
-One other thing does not work there: the server's own
-`npm rebuild` of a native module that fails to load, which is why `setup.sh`
-and the deploy check `better-sqlite3` at build time.
 
 `setup.sh`, the deploy and `ensure-harness.sh` all check the tree before root
 runs anything from it. A tree someone else can write is never taken back and

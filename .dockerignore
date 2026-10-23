@@ -1,5 +1,5 @@
 # Keep the build context lean AND keep host secrets/artifacts out of the image.
-# Native modules are rebuilt inside the container, so never ship host node_modules/dist.
+# Dependencies are installed and the app built inside the container, so never ship host node_modules/dist.
 node_modules
 web/node_modules
 dist
