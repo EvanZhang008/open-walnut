@@ -181,13 +181,10 @@ describe('dependency-ordered loading', () => {
     expect(record(registry, 'alpha')?.state).toBe('active');
     expect(record(registry, 'beta')?.state).toBe('active');
     expect(marks().activated.indexOf('alpha')).toBeLessThan(marks().activated.indexOf('beta'));
-
-    // The guard on the guard: the discovery order has to be the one this test is fighting.
-    // If the filesystem stops handing back `a-beta` before `z-alpha`, the assertion above
-    // proves nothing and this line says so instead of quietly passing.
-    const dirs = await fsp.readdir(path.join(WALNUT_HOME, 'plugins'));
-    expect(dirs).toEqual([...dirs].sort());
-    expect(dirs.indexOf('a-beta')).toBeLessThan(dirs.indexOf('z-alpha'));
+    // The discovery order this fights is the loader's own: it reads plugin directories by
+    // name ("plugin load order" in external-plugin-loader.test.ts pins that), never in the
+    // file system's order (bun's readdir does not sort, Node's does), so `a-beta` is read
+    // before `z-alpha` on both runtimes.
   });
 
   it('blocks a wrong-version dependent without ever evaluating its module', async () => {

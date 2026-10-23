@@ -577,6 +577,8 @@ export async function _resetCompanionBuildForTesting(): Promise<void> {
   generation++
   await inFlight?.catch(() => {})
   await gaveUpRecord.settled()
+  // A build change of the last test must not end a rest the next one sets.
+  await buildChanges
   view = { state: 'checking', mine: null, theirs: null, autoUpdate: true, at: Date.now() }
   inFlight = null
   inFlightGen = -1

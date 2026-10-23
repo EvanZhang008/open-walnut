@@ -459,9 +459,12 @@ describe('away notes: held on the host, merged on the Mac, copied after the ack'
     calls = []
     await new Promise((r) => setImmediate(r))
     await vi.advanceTimersByTimeAsync(HELD_RERUN_MS + 10)
-    for (let i = 0; i < 400 && !cmds().includes('replica.put:notes'); i++) await new Promise((r) => setImmediate(r))
-    for (let i = 0; i < 400 && cmds().length < 2; i++) await new Promise((r) => setImmediate(r))
-    expect(cmds()).toContain('replica.put:notes')
+    // The rerun has fired; its round does real file I/O, so wait in real time, not in
+    // setImmediate turns: Node polls I/O between two immediates, bun runs 400 of them in
+    // under a millisecond with the walk still pending. Real timers from here also mean no
+    // second rerun (another HELD_RERUN_MS) can land inside the wait.
+    vi.useRealTimers()
+    await vi.waitFor(() => expect(cmds()).toContain('replica.put:notes'), { timeout: 10_000, interval: 10 })
     expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { content: merged, contentHash: sha12(merged) } })
   }, 30_000)
 })
