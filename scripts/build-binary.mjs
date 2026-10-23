@@ -279,6 +279,30 @@ function runtimeDirnamePlugin() {
   }
 }
 
+/**
+ * bun signs a darwin-arm64 file it compiles (ad-hoc, on any host), but a
+ * darwin-x64 one keeps the signature of bun's own x64 runtime, which the
+ * appended code invalidates (`codesign --verify`: "code or signature have been
+ * modified"). Re-sign it ad-hoc, keeping that signature's flags and
+ * entitlements (bun's JIT needs allow-jit): codesign on macOS, rcodesign
+ * elsewhere (scripts/install-rcodesign.sh; `WALNUT_RCODESIGN` names another).
+ */
+function signDarwin(target, outfile) {
+  if (target !== 'darwin-x64') return
+  if (process.platform === 'darwin') {
+    run('codesign', ['--force', '--sign', '-', '--preserve-metadata=entitlements,flags', outfile], { stdio: 'ignore' })
+    run('codesign', ['--verify', outfile])
+    return
+  }
+  const rcodesign = process.env.WALNUT_RCODESIGN || 'rcodesign'
+  try {
+    execFileSync(rcodesign, ['--version'], { stdio: 'ignore' })
+  } catch {
+    throw new Error(`walnut-darwin-x64 needs an ad-hoc signature: build it on macOS, or put rcodesign on PATH (sh scripts/install-rcodesign.sh <dir>)`)
+  }
+  run(rcodesign, ['sign', outfile], { stdio: 'ignore' })
+}
+
 function notInFilePlugin(names) {
   const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
   const filter = new RegExp(`^(${escaped.join('|')})(/.*)?$`)
@@ -412,6 +436,7 @@ async function main() {
     const outfile = path.join(outDir, `walnut-${target}`)
     await compile(target, outfile, options, stage)
     assertNoBuildPaths(outfile, [repo, os.homedir()])
+    signDarwin(target, outfile)
     const raw = fs.statSync(outfile).size
     const gzip = zlib.gzipSync(fs.readFileSync(outfile), { level: 6 }).length
     rows.push({ target, raw, gzip, runtime: await runtimeSize(target, stage) })

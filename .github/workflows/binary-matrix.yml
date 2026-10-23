@@ -29,6 +29,8 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
+      # The darwin-x64 file needs an ad-hoc signature, made off macOS by rcodesign.
+      - run: sh scripts/install-rcodesign.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       # Every target from one machine: bun cross-compiles.
       - run: bun scripts/build-binary.mjs --all
       - name: sizes
@@ -93,6 +95,8 @@ jobs:
           name: walnut-files
           path: dist-bin
       - run: chmod +x dist-bin/walnut-*
+      # An invalid signature may run today and be refused by a later macOS: judge it here.
+      - run: codesign --verify --verbose "dist-bin/${{ matrix.file }}"
       - name: rehearse
         env:
           BUN_BE_BUN: '1'
