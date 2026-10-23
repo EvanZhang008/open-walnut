@@ -229,13 +229,13 @@ describe('scripts/ci-remove-node.sh', () => {
     timeout: 30_000,
   })
 
-  it('refuses to run anywhere but a GitHub CI runner, and removes nothing', () => {
+  it('refuses to run anywhere but a GitHub-hosted runner (not self-hosted, not an emulator), and removes nothing', () => {
     const s = scratch()
     const a = s.dir('a', ['node', 'npm'])
-    for (const env of [{}, { CI: 'true' }, { GITHUB_ACTIONS: 'true' }, { CI: '1', GITHUB_ACTIONS: 'true' }]) {
+    for (const env of [{}, { CI: 'true' }, { GITHUB_ACTIONS: 'true' }, { CI: '1', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' }, { CI: 'true', GITHUB_ACTIONS: 'true' }, { CI: 'true', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted' }]) {
       const r = run([a, s.tools], env)
       expect(r.status, JSON.stringify(env)).toBe(2)
-      expect(r.stderr).toContain('runs on GitHub\'s CI runners only')
+      expect(r.stderr).toContain('runs on GitHub-hosted runners only')
     }
     expect(fs.readdirSync(a).sort()).toEqual(['node', 'npm'])
   })
@@ -244,7 +244,7 @@ describe('scripts/ci-remove-node.sh', () => {
     const s = scratch()
     const a = s.dir('a', ['node', 'npm', 'npx', 'corepack', 'bun'])
     const b = s.dir('b', ['node', 'npm', 'nodemon'])
-    const r = run([a, b, s.tools], { CI: 'true', GITHUB_ACTIONS: 'true' })
+    const r = run([a, b, s.tools], { CI: 'true', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' })
     expect(r.status, r.stdout + r.stderr).toBe(0)
     expect(fs.readdirSync(a)).toEqual(['bun'])
     expect(fs.readdirSync(b)).toEqual(['nodemon'])
@@ -257,7 +257,7 @@ describe('scripts/ci-remove-node.sh', () => {
     const s = scratch()
     const locked = s.dir('locked', ['node'])
     fs.chmodSync(locked, 0o555)
-    const r = run([locked, s.tools], { CI: 'true', GITHUB_ACTIONS: 'true' })
+    const r = run([locked, s.tools], { CI: 'true', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' })
     expect(r.status).toBe(1)
     expect(r.stdout).toContain(`::error::node is still on PATH (${path.join(locked, 'node')}) after removing it`)
     // A dir this user cannot write goes through sudo, a bounded number of times.

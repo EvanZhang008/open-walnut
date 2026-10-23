@@ -9,11 +9,12 @@
 # PATH for the scripts it starts, which is how a package script's `node` keeps
 # working with no Node installed.
 #
-# CI runners only: it refuses to run anywhere CI is not "true".
+# GitHub-hosted runners only: it refuses anywhere else, a self-hosted runner or a
+# local Actions emulator included, where the Node it deletes is a real machine's.
 set -euo pipefail
 
-if [ "${CI:-}" != "true" ] || [ "${GITHUB_ACTIONS:-}" != "true" ]; then
-  echo "ci-remove-node.sh removes files from PATH; it runs on GitHub's CI runners only" >&2
+if [ "${CI:-}" != "true" ] || [ "${GITHUB_ACTIONS:-}" != "true" ] || [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+  echo "ci-remove-node.sh removes files from PATH; it runs on GitHub-hosted runners only" >&2
   exit 2
 fi
 
