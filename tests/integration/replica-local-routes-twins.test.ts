@@ -31,6 +31,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-replica-local'))
 
@@ -42,8 +43,7 @@ const SID = 'cccccccc-1111-4111-8111-111111111111'
 const OTHER_SID = 'dddddddd-2222-4222-8222-222222222222'
 const TOKEN = 'marina-browser-token-' + 'z'.repeat(32)
 const QUIET_MS = 1500
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const sha256 = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')

@@ -18,6 +18,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { WebSocket } from '#ws'
+import { testBun } from './bun-runtime.js'
 
 export const HOME = '/fixture/mac-home'
 export const WALNUT = 'whostalone01'
@@ -29,8 +30,7 @@ export const TOKEN = 'browser-token-' + 'x'.repeat(40)
 export const DEVICE = 'browser-a1b2c3'
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
 
-export const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+export const BUN: string | undefined = testBun()
 
 /**
  * Answers a person's message with "echo: <text>", and asks to run a tool for one with "ASK:".

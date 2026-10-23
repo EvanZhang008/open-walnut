@@ -9,6 +9,7 @@
  * with no Node at all, which is what CI's test jobs are.
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 let found: string | null = null
@@ -32,4 +33,18 @@ export function bunRuntime(env: NodeJS.ProcessEnv = process.env): string {
 /** The same, quoted for a shell command line (a Playwright webServer command). */
 export function bunCommand(env: NodeJS.ProcessEnv = process.env): string {
   return JSON.stringify(bunRuntime(env))
+}
+
+/**
+ * The bun a test runs a bun-only child with (the standalone daemon twin, a
+ * compiled daemon): this runner's own bun, the version package.json pins, else
+ * the first of BUN_INSTALL, ~/.bun/bin, /opt/homebrew/bin and /usr/local/bin.
+ * The runner's own comes first because the exec guard points BUN_INSTALL at the
+ * real home's bun, which on a developer machine can be an older one. undefined
+ * when there is none.
+ */
+export function testBun(): string | undefined {
+  if (typeof process.versions.bun === 'string') return process.execPath
+  return [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
+    .find((p): p is string => !!p && fs.existsSync(p))
 }

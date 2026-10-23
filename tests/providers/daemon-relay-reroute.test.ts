@@ -24,13 +24,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const HOST_ALIAS = 'reroute-host'
 const SID = 'sid-reroute-1'
 
 const bunPath = (() => {
-  const candidates = [process.env.WALNUT_TEST_BUN, path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
+  const candidates = [process.env.WALNUT_TEST_BUN, testBun()]
   for (const p of candidates) if (p && fs.existsSync(p)) return p
   try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
 })()

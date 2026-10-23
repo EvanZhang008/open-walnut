@@ -40,9 +40,9 @@ import os from 'node:os'
 import { createRequire } from 'node:module'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { BRIDGE_WATCHDOG, bridgeSilenceTeardownMs } from '../../src/providers/daemon-core.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 const WS_PACKAGE_DIR = path.dirname(createRequire(import.meta.url).resolve('ws/package.json'))
 

@@ -25,6 +25,7 @@ import { fetchOfflineBlob } from '../../src/core/offline-merge/blob.js'
 import { LETTER_ID_RE } from '../../src/core/human-inbox/normalize.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
 import type { InboxLetterItem } from '../../src/core/human-inbox/types.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/marina-home'
@@ -47,8 +48,7 @@ const ITEMS: InboxLetterItem[] = Array.from({ length: 30 }, (_, n) => ({
 }))
 const LETTER = { subject: 'Pick a layout', type: 'action_required', markdown: BODY, actions: [{ id: 'a', label: 'Layout A' }, { id: 'b', label: 'Layout B' }], items: ITEMS }
 const OLD_DRAINS = JOURNAL_V2_DRAINS.filter((k) => k !== 'letter')
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 
 const MOCK_CLI = `
 const fs = require('fs')

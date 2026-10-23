@@ -27,6 +27,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/walnut-home'
@@ -37,8 +38,9 @@ const TASK_A = 'mtaskaaa-0001'
 const TASK_B = 'mtaskbbb-0002'
 
 const bunPath = (() => {
-  // BUN_INSTALL first: the test setup swaps HOME for a fake one and points this at the real bun.
-  for (const p of [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) if (p && fs.existsSync(p)) return p
+  // The runner's own bun first, then the real home's (the test setup fakes HOME): testBun().
+  const own = testBun()
+  if (own) return own
   try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
 })()
 

@@ -21,11 +21,11 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { HOST_RUNTIME_MESSAGES } from '../../src/providers/host-runtime-core.js'
 import { claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 let scriptPath = ''
 let root = ''
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 type Twin = { name: string; command: () => [string, string[]] }
 const TWINS: Twin[] = [

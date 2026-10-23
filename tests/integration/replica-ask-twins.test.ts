@@ -31,6 +31,7 @@ import { buildSync } from 'esbuild'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/marina-home'
@@ -41,8 +42,7 @@ const TASK_LEADER = 'mtaskaaa-0001'
 const DEVICE = { kind: 'device', deviceId: 'dev-acme-phone', name: 'Acme phone' }
 const PERSONA = 'You are Walnut, the marina assistant.'
 const CONTEXT = '## Your task\nAsk Walnut (task mtask-ask)'
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 
 /** The host server: hands its follower token to the test (FAKE_OUT) and idles. */
 const FAKE_SERVER = `

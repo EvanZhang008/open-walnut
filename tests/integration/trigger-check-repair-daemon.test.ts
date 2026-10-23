@@ -21,12 +21,14 @@ import path from 'node:path'
 import { buildSync } from 'esbuild'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { CHECK_ITEM_ID_MAX, shortItemId } from '../../src/providers/trigger-check-core.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const TRIGGER = 'mrep0000-a1b2'
 
 const bunPath = (() => {
-  for (const p of [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) if (p && fs.existsSync(p)) return p
+  const own = testBun()
+  if (own) return own
   try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
 })()
 

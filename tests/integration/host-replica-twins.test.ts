@@ -35,13 +35,13 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { syncHostReplica, forgetHostReplica, sha12 } from '../../src/core/host-replica.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 /** The daemon's keepalive beat: 3 missed = silent (reads skip it), 8 = the socket is closed. */
 const BEAT = 600
 const GATEWAY_TIMEOUT = 3_000
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 
 const MOCK_CLI = `
 const sid = process.argv[2]

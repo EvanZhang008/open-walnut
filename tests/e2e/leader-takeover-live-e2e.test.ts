@@ -44,10 +44,10 @@ import { LiveProcs, realProcTable, type Owned } from '../helpers/live-procs.js'
 import { LIVE_CONNECT_GUARD, LIVE_KEEPER, liveEnv, liveWallsAvailable, walled } from '../helpers/live-isolation.js'
 import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from '../helpers/live-run.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const A = 'aaaaaaaa-1111-4111-8111-111111111111'
 const B = 'bbbbbbbb-2222-4222-8222-222222222222'
 /** A second session on oldbox, for the stop (A and B keep running for the wake). */

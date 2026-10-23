@@ -29,6 +29,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const HOME = '/fixture/marina-home'
@@ -37,8 +38,7 @@ const WALNUT = 'wmarinaleader01'
 const OTHER_WALNUT = 'wacmeleader0001'
 const CAP = 64 * 1024
 
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const REQUIRE_BUN = process.env.WALNUT_REQUIRE_BUN === '1'
 
 /** A replica as its daemon sees it: structured lines in its run dir, a flood on stdout. */

@@ -62,11 +62,10 @@ import path from 'node:path'
 import { buildSync } from 'esbuild'
 import Database from '../../src/lib/sqlite.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { bunRuntime } from './bun-runtime.js'
+import { bunRuntime, testBun } from './bun-runtime.js'
 
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
-export const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+export const BUN: string | undefined = testBun()
 
 /**
  * The runtime the Mac and its host server run under: bun (the runner's own, or in

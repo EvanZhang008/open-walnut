@@ -25,6 +25,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const HOME_A = '/fixture/marina-home'
@@ -37,8 +38,7 @@ const SB = 'bbbbbbbb-0b0b-4b0b-8b0b-0b0b0b0b0b0b'
 const UNI_KEY = 'Journal/\u00e9t\u00e9 \u6e2c\u8a66.md'
 const UNI_BODY = '# \u00c9t\u00e9\n\nCaf\u00e9 \u2603 \u{1F330}\r\nline two\n'
 
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 
 /** A Claude CLI stand-in: init, idle, and gone with its stdin. */
 const MOCK_CLI = `

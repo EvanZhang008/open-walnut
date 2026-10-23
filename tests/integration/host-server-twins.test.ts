@@ -29,6 +29,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { StreamLane } from '../../src/providers/stream-lane.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const HOME = '/fixture/walnut-home'
@@ -36,8 +37,7 @@ const WALNUT = 'wprimaryhost01'
 /** The takeover window: a primary unheard this long is away. */
 const T = 3_000
 
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const WS_PATH = createRequire(import.meta.url).resolve('ws')
 
 /** A host server as its daemon sees it: a follower that reads and tries what it may not. */

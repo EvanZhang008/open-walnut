@@ -20,15 +20,14 @@ import os from 'node:os'
 import { spawn, execFileSync } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
 function findBun(): string | null {
-  // BUN_INSTALL first: the test setup swaps HOME for a fake one and points this at the real bun.
-  for (const candidate of [process.env.BUN_PATH, process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) {
-    if (candidate && fs.existsSync(candidate)) return candidate
-  }
-  return null
+  // The runner's own bun first, then the real home's (the test setup fakes HOME): testBun().
+  if (process.env.BUN_PATH && fs.existsSync(process.env.BUN_PATH)) return process.env.BUN_PATH
+  return testBun() ?? null
 }
 
 const BUN = findBun()

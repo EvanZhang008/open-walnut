@@ -19,13 +19,13 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-transfer-twins-')))
 afterAll(() => { if (root.includes('walnut-transfer-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
 const scriptPath = path.join(root, 'daemon.cjs')
 fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 // The source twin finds task directories through its sidecar, as deployed next to it.
 if (BUN) {

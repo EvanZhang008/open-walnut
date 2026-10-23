@@ -33,6 +33,7 @@ import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { createBackupLeader } from '../../src/core/leader/backup-leader.js'
 import { createBackupGateway } from '../../src/core/leader/backup-gateway.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const HOME = '/fixture/walnut-home'
@@ -47,8 +48,7 @@ const TASK_B = 'mworkbbb-0002'
 const T = 5_000
 const BEAT = 2_000
 
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const WS_PATH = createRequire(import.meta.url).resolve('ws')
 
 const MOCK_CLI = `

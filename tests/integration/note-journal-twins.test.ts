@@ -30,6 +30,7 @@ import { applyNoteRecord, type NoteRecordLike } from '../../src/core/offline-mer
 import { mergeVersions } from '../../src/lib/three-way-merge.js'
 import { withNoteId } from '../../src/core/parse-frontmatter.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/marina-home'
@@ -39,8 +40,7 @@ const TASK_A = 'mtaskaaa-0005'
 const PHONE = { kind: 'device', deviceId: 'dev-acme-phone', name: 'Acme phone' }
 const KEY = 'Projects/Plan.md'
 const BODY = '---\nid: n_plan01\n---\n# Plan\n\nShip on Friday.\nThe rollback is ready.\nNotes end here.\n'
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const sha12 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 12)
 
 const FAKE_SERVER = `

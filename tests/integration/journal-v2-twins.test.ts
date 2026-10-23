@@ -27,6 +27,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { buildSync } from 'esbuild'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
 import { OLD_BUILD_SHA, ensureOldBuild } from '../helpers/v1-daemon-sources.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/marina-home'
@@ -35,8 +36,7 @@ const A = 'aaaaaaaa-1111-4111-8111-111111111111'
 const TASK_A = 'mtaskaaa-0001'
 const TASK_B = 'mtaskbbb-0002'
 const DEVICE = { kind: 'device', deviceId: 'dev-acme-phone', name: 'Acme phone' }
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 
 /** The host server: hands its follower token to the test (FAKE_OUT) and idles. */
 const FAKE_SERVER = `
