@@ -219,15 +219,22 @@ describe('with the model catalogs copy too', () => {
 })
 
 describe('a purge: the Mac turned the sessions choice off for the box', () => {
-  it('drops both copies; the readers go back to the pushed projection, and the push is read again', async () => {
+  it('drops both copies; the box routes by the pushed projection again, but never shows it while the Mac is away (4f)', async () => {
     copies = { sessions: false }
-    const off = await syncCopyKinds(macKinds(['sessions', 'config', 'model-catalogs']), { targets: () => [companion] })
-    expect(off.filter((r) => r.kind !== 'config').map((r) => `${r.kind}:${r.error}`).sort()).toEqual(['model-catalogs:kind_not_copied', 'sessions:kind_not_copied'])
-    expect((await recent())).toMatchObject({ ids: ['s-pushed'], asOf: null })
-    expect(await snapshotIds()).toEqual(['s-pushed'])
-    expect(await pickerIds('s-pushed')).toEqual(['pushed-model'])
-    expect(await pushSessions(pushed('Pushed after the purge'))).toBe('sent')
-    copies = {}
+    try {
+      const off = await syncCopyKinds(macKinds(['sessions', 'config', 'model-catalogs']), { targets: () => [companion] })
+      expect(off.filter((r) => r.kind !== 'config').map((r) => `${r.kind}:${r.error}`).sort()).toEqual(['model-catalogs:kind_not_copied', 'sessions:kind_not_copied'])
+      // Not kept here, the Mac away: the list needs it, the event snapshot carries none.
+      const r = await fetch(`http://127.0.0.1:${port}/api/v1/sessions/recent?limit=20`, { headers: { Authorization: `Bearer ${T.phone}` } })
+      expect([r.status, ((await r.json()) as { error?: { why?: string } }).error?.why]).toEqual([503, 'not_kept_here'])
+      expect(await snapshotIds()).toEqual([])
+      // The box's own readers (a session's host, its model picker) take the push.
+      expect(await resolveCloudSessionHost('s-pushed')).toMatchObject({ host: 'devbox' })
+      expect(await pickerIds('s-pushed')).toEqual(['pushed-model'])
+      expect(await pushSessions(pushed('Pushed after the purge'))).toBe('sent')
+    } finally {
+      copies = {}
+    }
   })
 })
 

@@ -1888,6 +1888,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           if (deps.replica && deps.replica.has(home, 'notes') && drainsKind(home, 'note')) {
             return name === 'note_write' ? opNoteWrite(home, callerSid, args) : opNoteEdit(home, callerSid, args)
           }
+          // Notes turned off for this host: kept only on the Mac (4f).
+          if (deps.replica && typeof deps.replica.isOff === 'function' && deps.replica.isOff(home, 'notes')) return notesNotKept()
           return needsServer(`"${name}"`, home)
         // A letter to the user, when the leading Mac drains letters; an older one: as before.
         case 'human_inbox_send':
@@ -2336,20 +2338,29 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * contentHash, 12 hex) is the lock: a mismatch answers 409 `conflict` with
    * `{serverHash, serverContent}`, as the v1 route does, so the editor merges.
    */
+  function notesNotKept(): GatewayResult {
+    return fail('needs_leader', 'your notes are kept only on your Mac, so this needs your Mac', { detail: { why: 'not_kept_here' } })
+  }
+
   function notePut(home: string, req: {
     path: unknown; content?: unknown; expectedHash?: unknown; mode?: 'put' | 'delete'; createOnly?: boolean
     actor: import('./offline-journal-core.js').JournalActor; opId?: string; budgetKey: string
   }): GatewayResult {
     const replica = deps.replica
+    if (replica && typeof replica.isOff === 'function' && replica.isOff(home, 'notes')) return notesNotKept()
     if (!replica || !replica.has(home, 'notes')) return fail('needs_leader', 'this host keeps no copy of the notes; that needs your Mac', { detail: { why: 'kind_not_copied' } })
     if (!drainsKind(home, 'note')) return fail('needs_leader', 'your Mac runs an older Walnut that cannot take a note change later; it needs your Mac', { detail: { why: 'mac_too_old' } })
     const key = noteKeyOf(req.path)
     if (!key) return fail('bad_request', 'a note save needs a vault-relative path')
-    const keep = replica.notesKeep(home)
-    // Case-insensitive: the Mac's vault (APFS by default) is, so `private/x.md` is `Private/x.md` there.
+    // The copy's own rule (a folder or one note left out, a note too large; any case, as the
+    // Mac's APFS vault): host-replica-core.ts keepsNote, the twin of core/replication/keep-rule.ts.
     const lower = key.toLowerCase()
-    if (keep.keepExclude.some((f) => { const lf = f.toLowerCase(); return lower === lf || lower.startsWith(`${lf}/`) }) || keep.tooBig.some((t) => t.toLowerCase() === lower)) {
-      return fail('needs_leader', 'this note is not kept on this host, so it can only be changed on your Mac', { detail: { why: 'note_not_kept' } })
+    const keep = replica.notesKeep(home)
+    const notKept = typeof replica.keepsNote === 'function'
+      ? !replica.keepsNote(home, key)
+      : keep.keepExclude.some((f) => { const lf = f.toLowerCase(); return lower === lf || lower.startsWith(`${lf}/`) }) || keep.tooBig.some((t) => t.toLowerCase() === lower)
+    if (notKept) {
+      return fail('needs_leader', 'this note is kept only on your Mac, so it can only be changed there', { detail: { why: 'not_kept_here' } })
     }
     const view = noteOverlay(home)
     const shown = view && view.has(key) ? view.get(key) : undefined

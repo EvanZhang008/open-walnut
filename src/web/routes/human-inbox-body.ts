@@ -393,8 +393,16 @@ async function bodyNotCopied(res: Response, id: string): Promise<boolean> {
   const { readLetterIndexForReplica } = await import('../../core/human-inbox/store.js')
   // The host's choice turned the inbox off: its index is gone, so any letter needs the Mac.
   const { copyKindOff } = await import('../../core/replication/kinds/gate.js')
-  if (!(await copyKindOff('inbox')) && !(await readLetterIndexForReplica()).some((l) => l.id === id)) return false
+  const inboxOff = await copyKindOff('inbox')
+  if (!inboxOff && !(await readLetterIndexForReplica()).some((l) => l.id === id)) return false
   log.notif.info('human-inbox: letter body not kept on this host replica, it needs the Mac', { letterId: id })
+  // The user's choice (the inbox or its bodies turned off) says so; else the body is over the copy's cap.
+  if (inboxOff || (await copyKindOff('inbox-bodies'))) {
+    res.status(503).set('retry-after', '5').json({
+      error: { code: 'needs_leader', why: 'not_kept_here', retryAfter: 5, message: 'Letter bodies are kept only on your Mac.' },
+    })
+    return true
+  }
   res.status(503).set('retry-after', '5').json({
     error: { code: 'needs_leader', why: 'kind_not_copied', retryAfter: 5, message: 'This needs your Mac, which is not answering right now.' },
   })

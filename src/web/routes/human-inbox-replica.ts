@@ -17,6 +17,7 @@ import type { Response } from 'express'
 import { log } from '../../logging/index.js'
 import { callPrimaryControl, sendV1Error as sendError, type RelayFailure } from './v1-control-relay.js'
 import type { LetterStateField } from '../../core/human-inbox/store.js'
+import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 const SERVER_RELAY_SID = '__server__'
 
@@ -74,8 +75,23 @@ async function relayRead(
   return { failure: reply.failure }
 }
 
+/** The words of a read of the inbox the user keeps from this box (Settings): the Mac's alone. */
+const INBOX_NOT_KEPT = 'Your inbox is kept only on your Mac.'
+
+/** The inbox turned off for this box: never its synced copy, only the Mac (kinds/gate.ts). */
+async function inboxOff(): Promise<boolean> {
+  const { copyKindOff } = await import('../../core/replication/kinds/gate.js')
+  return copyKindOff('inbox')
+}
+
 /** GET /human-inbox[?archived=1] on a replica. */
 export async function replicaListLetters(res: Response, archived: boolean): Promise<void> {
+  if (await inboxOff()) {
+    const relayed = await relayRead(res, 'server.human-inbox', { archived })
+    if (relayed === true) return
+    if ('result' in relayed) { res.json(relayed.result); return }
+    throw new NeedsLeaderError('not_kept_here', INBOX_NOT_KEPT)
+  }
   const q = await replicaState()
   // With changes still queued, the copy is the consistent list: the primary's
   // would show those letters as they were, and an archive moves a letter
@@ -106,6 +122,12 @@ export async function replicaListLetters(res: Response, archived: boolean): Prom
 
 /** GET /human-inbox/:id on a replica. */
 export async function replicaGetLetter(res: Response, id: string): Promise<void> {
+  if (await inboxOff()) {
+    const relayed = await relayRead(res, 'server.human-inbox.get', { id })
+    if (relayed === true) return
+    if ('result' in relayed) { res.json(relayed.result); return }
+    throw new NeedsLeaderError('not_kept_here', INBOX_NOT_KEPT)
+  }
   const q = await replicaState()
   const pending = await queueStillPending(q)
   // One letter is always asked for: the queued changes go on top of the

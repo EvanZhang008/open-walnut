@@ -171,6 +171,8 @@ export const NotesTreePanel = memo(function NotesTreePanel({
 }: NotesTreePanelProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  /** This replica's copy leaves notes out: the server's sentence, above the results. */
+  const [searchPartial, setSearchPartial] = useState<string | null>(null);
   // Folders whose NAME matched the query — rendered ABOVE the note rows so a
   // query like "dairy" answers with the Dairy/ folder, not 30 date-named notes.
   const [searchFolders, setSearchFolders] = useState<SearchFolderGroup[]>([]);
@@ -367,6 +369,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           setSearchResults(p.results);
           setSearchFolders(p.folders ?? []);
           setSearchTokens(p.queryTokens ?? []);
+          setSearchPartial(p.partial?.message ?? null);
         })
         .catch(() => { if (fresh()) setSearchResults([]); });
 
@@ -377,6 +380,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           setSearchResults(p.results);
           setSearchFolders(p.folders ?? []);
           setSearchTokens(p.queryTokens ?? []);
+          setSearchPartial(p.partial?.message ?? null);
         })
         .catch(() => { /* stage 1 already rendered — a semantic failure is not fatal */ });
     }, SEARCH_DEBOUNCE_MS);
@@ -896,6 +900,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       >
         {searchResults ? (
           <div className="notes-search-results">
+            {searchPartial && <div className="notes-search-partial" data-testid="notes-search-partial">{searchPartial}</div>}
             {searchGroups.length === 0 ? (
               <div className="notes-tree-empty">No results</div>
             ) : (

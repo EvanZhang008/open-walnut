@@ -283,6 +283,10 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   images_need_mac: 'Pictures reach a session through your Mac; send the text alone, or wait for your Mac.',
   // The copies (kinds/gate.ts, notes-routes.ts).
   kind_not_copied: 'This host keeps no copy of it.',
+  // What the user chose not to keep on this replica (Settings, What this replica keeps): only on the Mac.
+  not_kept_here: 'This is kept only on your Mac, not in this copy.',
+  memory_needs_mac: 'Your memory is read from your Mac on this host.',
+  skills_need_mac: 'Your skills are read from your Mac on this host.',
   copy_unreadable: 'The copy on this host could not be read.',
   no_spawn_template: 'Starting a session here needs your Mac once first.',
   persona_not_copied: 'This host has no copy of the agent yet.',

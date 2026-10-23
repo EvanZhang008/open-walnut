@@ -110,9 +110,17 @@ describe('manifest and bodies', () => {
     const r = make()
     fill(r)
     expect(r.drop(HOME, 'notes')).toEqual({ dropped: true })
-    expect(fs.readdirSync(dir, { recursive: true }).map(String).some((f) => f.includes('notes'))).toBe(false)
-    expect(r.answer(HOME, 'note_read', { path: 'Projects/Retro' }, '')).toBeNull()
+    // No body and no row is left: only the mark that the user turned the notes off here.
+    const left = fs.readdirSync(dir, { recursive: true }).map(String).filter((f) => f.includes('notes'))
+    expect(left.filter((f) => !/notes$/.test(f) && !/notes[\\/]index\.json$/.test(f))).toEqual([])
+    expect(r.status(HOME).notes).toMatchObject({ entries: 0, asOf: null, off: true })
+    expect(r.isOff(HOME, 'notes')).toBe(true)
+    // A read of a kind turned off is the leader's: needs_leader, never "not found".
+    expect(r.answer(HOME, 'note_read', { path: 'Projects/Retro' }, '')).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
     expect(r.drop(HOME, 'notes')).toEqual({ dropped: false })
+    // The next manifest (notes on again) clears the mark.
+    r.sync(HOME, 'notes', [], 1)
+    expect(r.isOff(HOME, 'notes')).toBe(false)
   })
 
   it('a restarted daemon answers from what it kept', () => {
@@ -201,6 +209,71 @@ describe('reads from the copy', () => {
     const r = make()
     fill(r)
     expect(r.answer('/other/home', 'note_read', { path: 'Projects/Retro' }, '')).toBeNull()
+  })
+})
+
+describe('what the copy leaves out is the leader\'s (4f)', () => {
+  const without = (k: string) => Object.fromEntries(Object.entries(notes).filter(([key]) => key !== k))
+  const fillLeavingOut = (r: ReturnType<typeof make>, keepExclude: string[], tooBig: string[] = []) => {
+    const src = without('Projects/Retro.md')
+    const { need } = r.sync(HOME, 'notes', manifest(src), clock, { keepExclude, tooBig })
+    r.put(HOME, 'notes', need.map((k) => ({ k, body: src[k].body })))
+  }
+
+  it('one note left out (no .md, any case): its reads need the leader, a plain miss is still not found', () => {
+    const r = make()
+    fillLeavingOut(r, ['projects/RETRO'])
+    expect(r.keepsNote(HOME, 'Projects/Retro.md')).toBe(false)
+    expect(r.keepsNote(HOME, 'Projects/Release plan.md')).toBe(true)
+    // By its path: sure it is the leader's.
+    const byPath = r.answer(HOME, 'note_read', { path: 'Projects/Retro' }, '')
+    expect(byPath).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+    expect(byPath?.ok === false && byPath.error.message).toMatch(/kept only on your Mac/)
+    // By a title or an id the copy lacks: it may be the left-out note, so never "not found".
+    expect(r.answer(HOME, 'note_read', { path: 'Retro' }, '')).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+    expect(r.answer(HOME, 'note_read', { id: 'n_gone99' }, '')).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+    // A path that is not left out is not on the leader either.
+    expect(r.answer(HOME, 'note_read', { path: 'Projects/Nope' }, '')).toMatchObject({ ok: false, error: { code: 'not_found' } })
+    // What is kept still reads.
+    expect(r.answer(HOME, 'note_read', { path: 'Projects/Release plan' }, '')).toMatchObject({ ok: true })
+    expect(r.list(HOME, 'notes')).toMatchObject({ keep: { exclude: ['projects/RETRO'], tooBig: [] } })
+  })
+
+  it('a search over a copy that leaves notes out says so; a full copy answers as before', () => {
+    const r = make()
+    fillLeavingOut(r, ['Projects/Retro.md'])
+    const res = r.answer(HOME, 'note_search', { q: 'build' }, '') as { ok: true; result: Record<string, unknown> }
+    expect(res.result.partial).toEqual({ why: 'not_kept_here', message: expect.stringMatching(/kept only on your Mac/) })
+    expect(String(res.result.outcome)).toMatch(/kept only on your Mac/)
+    // Another Walnut's copy on the same host keeps every note (the default).
+    const WHOLE = '/fixture/whole-home'
+    const { need } = r.sync(WHOLE, 'notes', manifest(), clock)
+    r.put(WHOLE, 'notes', need.map((k) => ({ k, body: notes[k].body })))
+    const plain = r.answer(WHOLE, 'note_search', { q: 'build' }, '') as { ok: true; result: Record<string, unknown> }
+    expect(plain.result).not.toHaveProperty('partial')
+    expect(String(plain.result.outcome)).not.toMatch(/only on your Mac/)
+    expect(r.list(WHOLE, 'notes')).not.toHaveProperty('keep')
+    expect(r.answer(WHOLE, 'note_read', { path: 'Nope' }, '')).toMatchObject({ ok: false, error: { code: 'not_found' } })
+  })
+
+  it('a note held back by the size cap counts as left out', () => {
+    const r = make()
+    fill(r)
+    r.sync(HOME, 'notes', manifest(), clock, { tooBig: ['Big.md'] })
+    expect(r.notesPartial(HOME)).toBe(true)
+    expect(r.answer(HOME, 'note_read', { path: 'big' }, '')).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+  })
+
+  it('a kind turned off answers needs the leader and is named on the notes manifest', () => {
+    const r = make()
+    fill(r)
+    const body = JSON.stringify({ path: 'MEMORY.md', content: 'x' })
+    const { need } = r.sync(HOME, 'memory', [{ k: 'global', h: sha12(body), n: body.length }], clock)
+    r.put(HOME, 'memory', need.map((k) => ({ k, body })))
+    r.drop(HOME, 'memory')
+    expect(r.answer(HOME, 'memory_read', { doc: 'global' }, '')).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' }, message: 'Your memory is kept only on your Mac, which is not answering this host right now.' } })
+    expect(r.list(HOME, 'notes')).toMatchObject({ offKinds: ['memory'] })
+    expect(r.list(HOME, 'memory')).toMatchObject({ off: true, entries: [] })
   })
 })
 
@@ -436,6 +509,21 @@ describe('the half rule (section 4): a manifest that would empty most of a large
     expect(() => r.sync(HOME, 'notes', manifest(kept), clock + 1, undefined, { confirm: false, confirmFor: { entries: 10, keys: keysHash(kept) } })).toThrow(/manifest_removes_most_rows/)
     const ok = r.sync(HOME, 'notes', manifest(kept), clock + 1, undefined, { confirm: true, confirmFor: { entries: 10, keys: keysHash(kept) } })
     expect(ok).toMatchObject({ removed: 240, need: Object.keys(kept) })
+  })
+
+  it('what the user leaves out goes however much it is; the rest still counts (4f)', () => {
+    const r = make()
+    const archive = Object.fromEntries(Object.entries(many(210)).map(([k, v]) => [k.replace('bulk/', 'Archive/'), v]))
+    const rest = many(10, 900)
+    fill(r, { ...archive, ...rest })
+    // The Archive folder left out (any case): 210 of 220 go, taken.
+    expect(r.sync(HOME, 'notes', manifest(rest), clock + 1, { keepExclude: ['archive'] })).toMatchObject({ removed: 210 })
+    expect(r.status(HOME).notes.entries).toBe(10)
+    // A manifest that drops most of a copy for no chosen reason is still refused.
+    const r2 = make()
+    fill(r2, { ...archive, ...rest })
+    expect(() => r2.sync(HOME, 'notes', manifest(rest), clock + 1, { keepExclude: ['elsewhere'] })).toThrow(/manifest_removes_most_rows/)
+    expect(r2.status(HOME).notes.entries).toBe(220)
   })
 
   it('keys an away write holds count as kept, not as removed', () => {

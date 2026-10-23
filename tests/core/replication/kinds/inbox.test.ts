@@ -329,7 +329,8 @@ describe('letter bodies', () => {
       const away = await fetch(`${base}/${letters[0].id}`)
       expect(away.status).toBe(503)
       expect(away.headers.get('retry-after')).toBe('5')
-      expect(await away.json()).toMatchObject({ error: { code: 'needs_leader', why: 'kind_not_copied', retryAfter: 5 } })
+      // Turned off for this host: kept only on the Mac, in so many words (4f).
+      expect(await away.json()).toMatchObject({ error: { code: 'needs_leader', why: 'not_kept_here', retryAfter: 5 } })
       // A letter the index does not have is still a plain 404.
       expect((await fetch(`${base}/lt-zzzzzz-b0000`)).status).toBe(404)
       const chosen = await startCopyHarness({ id: 'host:bodies-served' }) // the default: bodies too
@@ -368,7 +369,7 @@ describe('letter bodies', () => {
       expect(stateOf('inbox-bodies')).toMatchObject({ v: 1, off: true })
       const away = await fetch(`${base}/${letters[0].id}`)
       expect(away.status).toBe(503)
-      expect(await away.json()).toMatchObject({ error: { code: 'needs_leader', why: 'kind_not_copied' } })
+      expect(await away.json()).toMatchObject({ error: { code: 'needs_leader', why: 'not_kept_here' } })
       from = host.calls.length
       await syncCopyKinds([index, bodies], { targets: () => [host.target] })
       expect(stepsSince(host.calls, from)).toEqual([]) // purged once

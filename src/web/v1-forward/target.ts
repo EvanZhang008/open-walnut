@@ -7,7 +7,9 @@
  *
  * The call is a loopback request to this server, labelled with the caller's
  * class (`x-walnut-origin: remote-http`), exactly as the plugin HTTP relay and
- * the op executor label theirs. So every route applies the rule it applies to a
+ * the op executor label theirs. The console's calls about what the companion's copy does not
+ * keep (policy.ts CONSOLE_COPY_READS and CONSOLE_COPY_WRITES) come the same way.
+ * So every route applies the rule it applies to a
  * paired phone, and none of the "this Mac only" ones open: they read the label
  * (src/web/middleware/request-origin.ts). No credential crosses: the phone's
  * token stays on the companion, and the label is how this server knows the call
@@ -18,7 +20,7 @@ import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
 import {
   FORWARD_METHODS, FORWARD_TARGET_TIMEOUT_MS, MAX_FORWARD_REQUEST_BYTES, MAX_FORWARD_RESPONSE_BYTES,
-  companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseConsoleTaskWrite, parseForwardUrl,
+  companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseConsoleCopyCall, parseConsoleTaskWrite, parseForwardUrl, phoneCopyReadOf,
 } from './policy.js'
 
 /**
@@ -83,6 +85,18 @@ async function readUpTo(response: Response, limit: number): Promise<Buffer | nul
   return Buffer.concat(chunks, total)
 }
 
+/** A kept phone read of a copy this Mac's choice turned off for the companion (policy.ts phoneCopyReadOf). */
+async function companionKeepsNot(method: string, rel: string): Promise<boolean> {
+  const read = phoneCopyReadOf(method, rel)
+  if (!read) return false
+  const [{ getConfig }, { copyChoiceFrom }] = await Promise.all([
+    import('../../core/config-manager.js'), import('../../core/replication/kinds/copy-kind.js'),
+  ])
+  const config = await getConfig()
+  const choice = copyChoiceFrom(config.cloud_bridge?.copies ?? config.hosts?.companion?.server?.copies) as unknown as Record<string, boolean>
+  return choice[read.choice] === false
+}
+
 /**
  * Run one forwarded call. `relayOrigin` is who the relay acts for (the cloud
  * bridge: remote-http); the call never acts above a client off this Mac.
@@ -91,11 +105,12 @@ export async function runForwardedCall(params: Record<string, unknown>, relayOri
   const method = typeof params.method === 'string' ? params.method.toUpperCase() : ''
   if (!FORWARD_METHODS.has(method)) throw refuse('Unsupported method', 405)
   const v1 = parseForwardUrl(params.url)
-  // Else one of the console's task-store writes, exactly as listed (policy.ts CONSOLE_TASK_WRITES).
-  const url = v1 ?? parseConsoleTaskWrite(method, params.url)
+  // Else one of the console's task-store writes, exactly as listed (policy.ts CONSOLE_TASK_WRITES),
+  // or one of its calls about what the companion's copy does not keep (CONSOLE_COPY_READS/WRITES).
+  const url = v1 ?? parseConsoleTaskWrite(method, params.url) ?? parseConsoleCopyCall(method, params.url)
   if (!url) throw refuse('Invalid forwarded path')
   const kept = v1 ? companionAnswers(method, v1.rel) : null
-  if (kept) throw refuse(`The companion answers ${url.pathname} itself (${kept})`)
+  if (kept && !(await companionKeepsNot(method, v1!.rel))) throw refuse(`The companion answers ${url.pathname} itself (${kept})`)
   const body = decodeBody(params.data, params.size)
   if ((method === 'GET' || method === 'HEAD') && body.byteLength > 0) throw refuse(`${method} cannot have a body`)
   const root = getSelfApiRoot()

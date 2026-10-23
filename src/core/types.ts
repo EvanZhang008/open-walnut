@@ -1025,6 +1025,39 @@ export interface AgentConfig {
   main_provider?: string;
 }
 
+/** What a replica keeps a read copy of (hosts.<key>.keep, cloud_bridge.keep; core/host-replica.ts).
+ *  Each is on unless set false; a kind turned off is removed from the replica, and what is
+ *  not kept is answered by this Mac. A host's own work (its sessions, their tasks, triggers,
+ *  the team Board, replies) is always kept. */
+export interface ReplicaKeepConfig {
+  notes?: boolean;
+  /** Vault folders, or single notes (with or without `.md`), never copied to this replica. */
+  notes_exclude?: string[];
+  memory?: boolean;
+  skills?: boolean;
+  /** The pictures and files in the notes (core/attachment-replica.ts), on every
+   *  replica whose daemon keeps them. On unless set false, and only while `notes` is kept. */
+  attachments?: boolean;
+}
+
+/** The kinds this Mac copies to a replica (docs/plan/walnut-replica-servers-impl.md, WP4).
+ *  Unset keys keep the default, the same for every replica: every kind on. */
+export interface ReplicaCopiesConfig {
+  sessions?: boolean;
+  requests?: boolean;
+  boards?: boolean;
+  inbox?: boolean;
+  inbox_bodies?: boolean;
+  routines?: boolean;
+  conversations?: boolean;
+  prefs?: boolean;
+  config?: boolean;
+  /** The Ask personas, so a new ask starts on the host while the Mac is away (WP12). */
+  personas?: boolean;
+  /** Each recent conversation's messages. */
+  conversation_bodies?: boolean;
+}
+
 export interface Config {
   version: 1;
   user: { name?: string };
@@ -1179,16 +1212,7 @@ export interface Config {
      *  Mac cannot answer (core/host-replica.ts). Each is on unless set false; a
      *  kind turned off is removed from the host. Its own work (sessions, their
      *  tasks, triggers, the team Board, replies) is always kept. */
-    keep?: {
-      notes?: boolean;
-      /** Vault folders never copied to this host. */
-      notes_exclude?: string[];
-      memory?: boolean;
-      skills?: boolean;
-      /** The pictures and files in the notes (core/attachment-replica.ts), on every
-       *  replica whose daemon keeps them. On unless set false, and only while `notes` is kept. */
-      attachments?: boolean;
-    };
+    keep?: ReplicaKeepConfig;
     /** A Walnut server this Mac keeps running on the host, following it
      *  (core/host-server/, docs/plan/walnut-servers-everywhere.md). Off unless enabled. */
     server?: {
@@ -1205,21 +1229,7 @@ export interface Config {
       };
       /** What the Mac copies to this host's replica (docs/plan/walnut-replica-servers-impl.md, WP4).
        *  Unset keys keep the default, the same for every replica: every kind on. */
-      copies?: {
-        sessions?: boolean;
-        requests?: boolean;
-        boards?: boolean;
-        inbox?: boolean;
-        inbox_bodies?: boolean;
-        routines?: boolean;
-        conversations?: boolean;
-        prefs?: boolean;
-        config?: boolean;
-        /** The Ask personas, so a new ask starts on the host while the Mac is away (WP12). */
-        personas?: boolean;
-        /** Each recent conversation's messages. */
-        conversation_bodies?: boolean;
-      };
+      copies?: ReplicaCopiesConfig;
       /** A new ask on this host while the Mac is away may start in bypassPermissions
        *  (docs/plan/walnut-replica-servers-impl.md section 8). Off: the host default is
        *  `default` (the CLI asks), and plan. */
@@ -1673,6 +1683,12 @@ export interface Config {
      *  false leaves the companion on the build it has.
      *  See docs/plan/walnut-companion-unified-replica.md, stage 1. */
     auto_update?: boolean;
+    /** What the cloud companion keeps a copy of: the same switches and defaults as a
+     *  host's (hosts.<key>.keep), every one on unless set false. What it does not keep
+     *  is answered by this Mac (docs/plan/walnut-companion-unified-replica.md, 4f). */
+    keep?: ReplicaKeepConfig;
+    /** The kinds this Mac copies to the companion, as hosts.<key>.server.copies. */
+    copies?: ReplicaCopiesConfig;
   };
   /** Open this server from a browser anywhere through a tunnel it runs
    *  (docs/plan/walnut-servers-everywhere.md). Off unless enabled. */

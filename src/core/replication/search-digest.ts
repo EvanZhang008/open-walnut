@@ -53,6 +53,18 @@ export class DigestMap {
     return id === undefined ? undefined : this.byId.get(id)?.value
   }
 
+  /** The digest of the entries whose key passes `pred` (a follower that keeps less than all). */
+  digestWhere(pred: (key: string) => boolean): string {
+    let n = 0
+    let sum = 0
+    for (const e of this.byId.values()) {
+      if (!pred(e.key)) continue
+      n++
+      sum = (sum + e.h) % MOD
+    }
+    return `${n}.${sum.toString(16)}`
+  }
+
   countValues(pred: (value: string) => boolean): number {
     let n = 0
     for (const e of this.byId.values()) if (pred(e.value)) n++

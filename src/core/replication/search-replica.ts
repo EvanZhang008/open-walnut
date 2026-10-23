@@ -27,13 +27,14 @@
  * first copy (about 126 MB gzipped) is never sent to two at once.
  */
 
-import { WALNUT_HOME } from '../../constants.js'
+import { NOTES_DIR, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { SearchIndex } from '../../lib/hybrid-search/index.js'
 import { isFollower, type FollowerKind } from '../server-role.js'
 import type { ReplicaTarget } from './replica-targets.js'
 import { refOfReplicaKey, replicaKey } from '../search/replica-refs.js'
 import { DigestMap } from './search-digest.js'
+import { keepsAllSearch, searchKeyKept, searchNoteKeyPrefix, type SearchKeep } from './search-replica-keep.js'
 import {
   companionSearchMode, manifestValue, type CompanionSearchMode, type CompanionSearchReason, type WireDoc,
 } from './search-replica-wire.js'
@@ -60,6 +61,10 @@ export interface SearchReplicaDeps {
   targets: () => ReplicaTarget[]
   /** Wait between slices of a walk (the event loop's turn). */
   pause?: () => Promise<void>
+  /** What a follower keeps (its notes, memory and skills choices); null or absent: everything. */
+  keep?: (target: ReplicaTarget) => Promise<SearchKeep | null>
+  /** Where note keys start, for the notes a follower leaves out (search-replica-keep.ts). */
+  notePrefix?: string | null
 }
 
 /** What Settings shows about one follower's copy. */
@@ -202,15 +207,20 @@ async function sendManifest(
   digest: string,
   whole: boolean,
   pause: () => Promise<void>,
+  dropped: ReadonlySet<string>,
 ): Promise<{ need: number; sent: number; removed: number; inSync: boolean }> {
   let payload: Record<string, unknown>
   if (whole || !fs.confirmed) {
     payload = { op: 'sync', entries: [...snapshot].map(([k, h]) => ({ k, h })) }
+    // The docs this follower's choice leaves out go even when they are most of its copy.
+    if (dropped.size > 0) payload.drop = [...dropped]
   } else {
     const was = fs.confirmed
     const entries = [...snapshot].filter(([k, h]) => was.get(k) !== h).map(([k, h]) => ({ k, h }))
     const removes = [...was.keys()].filter((k) => !snapshot.has(k))
     payload = { op: 'sync', partial: true, entries, removes }
+    const drop = removes.filter((k) => dropped.has(k))
+    if (drop.length > 0) payload.drop = drop
   }
   const synced = await step(target, payload)
   const need = Array.isArray(synced.need) ? (synced.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
@@ -298,7 +308,18 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget): Promise<Ro
   try {
     // Shared by every follower; after the first one it reads only what changed meanwhile.
     await refreshMap(index, deps.home, pause)
-    const reply = await step(target, { op: 'status', mode, model, digest: map.digest })
+    // A follower that leaves notes, memory or skills out gets only the docs it keeps.
+    const keep = deps.keep ? await deps.keep(target) : null
+    const filter = keepsAllSearch(keep) ? null : keep
+    const notePrefix = deps.notePrefix ?? null
+    const snapshot = new Map<string, string>()
+    const dropped = new Set<string>()
+    for (const e of map.entries()) {
+      if (searchKeyKept(e.key, filter, notePrefix)) snapshot.set(e.key, e.value)
+      else dropped.add(e.key)
+    }
+    const manifestDigest = filter ? map.digestWhere((k) => snapshot.has(k)) : map.digest
+    const reply = await step(target, { op: 'status', mode, model, digest: manifestDigest })
     const info = {
       reason: reply.reason as CompanionSearchReason | undefined,
       totalMb: Number(reply.totalMb) || undefined,
@@ -312,8 +333,6 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget): Promise<Ro
       return { action: 'off' }
     }
     const counts = { docs: Number(reply.docs) || 0, vectored: Number(reply.vectored) || 0 }
-    const snapshot = new Map(map.entries().map((e) => [e.key, e.value]))
-    const manifestDigest = map.digest
     if (reply.inSync === true || reply.digest === manifestDigest) {
       fs.confirmed = snapshot
       fs.status = { ...base, ...info, ...counts, state: 'ready' }
@@ -325,7 +344,7 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget): Promise<Ro
     let totals = { need: 0, sent: 0, removed: 0 }
     let inSync = false
     for (const whole of fs.confirmed ? [false, true] : [true]) {
-      const r = await sendManifest(deps, target, fs, index, snapshot, manifestDigest, whole, pause)
+      const r = await sendManifest(deps, target, fs, index, snapshot, manifestDigest, whole, pause, dropped)
       totals = { need: totals.need + r.need, sent: totals.sent + r.sent, removed: totals.removed + r.removed }
       inSync = r.inSync
       if (inSync) break
@@ -361,6 +380,13 @@ async function defaultDeps(): Promise<SearchReplicaDeps> {
     home: WALNUT_HOME,
     mode: async () => companionSearchMode((await getConfig()).search?.companion_semantic),
     targets: targets.replicaTargets,
+    keep: async (target) => {
+      const hr = await import('../host-replica.js')
+      const hostKey = target.kind === 'companion' ? hr.COMPANION_REPLICA_HOST : target.id.replace(/^host:/, '')
+      const k = hr.hostKeepFor(await getConfig(), hostKey)
+      return { notes: k.notes, memory: k.memory, skills: k.skills, notesExclude: k.notesExclude }
+    },
+    notePrefix: searchNoteKeyPrefix(WALNUT_HOME, NOTES_DIR),
   }
 }
 
@@ -397,15 +423,24 @@ export function startSearchReplicaSync(given?: SearchReplicaDeps): { stop: () =>
   const every = setInterval(run, ROUND_MS)
   every.unref?.()
   const name = 'search-replica-config'
+  // What each replica keeps, as one string: a change starts a round (the first one after boot too).
+  const keepsOf = (config: { hosts?: Record<string, { keep?: unknown } | undefined>; cloud_bridge?: { keep?: unknown } }): string =>
+    JSON.stringify([config.cloud_bridge?.keep ?? null, Object.entries(config.hosts ?? {}).filter(([, h]) => h?.keep).map(([k, h]) => [k, h!.keep])])
+  let lastKeeps: string | null = null
+  void import('../config-manager.js').then(({ getConfig }) => getConfig()).then((c) => { lastKeeps ??= keepsOf(c as Parameters<typeof keepsOf>[0]) }).catch(() => {})
   void import('../event-bus.js').then(({ bus }) => {
     if (stopped) return
     bus.subscribe(name, (event) => {
       // A Settings save carries the whole merged config; only a new mode is news here.
-      const config = (event.data as { config?: { search?: { companion_semantic?: unknown } } } | undefined)?.config
+      const config = (event.data as { config?: { search?: { companion_semantic?: unknown }; hosts?: Record<string, { keep?: unknown }>; cloud_bridge?: { keep?: unknown } } } | undefined)?.config
       if (!config) return
       const next = companionSearchMode(config.search?.companion_semantic)
+      // What each replica keeps decides which docs it holds (search-replica-keep.ts).
+      const keeps = keepsOf(config)
+      const keepChanged = lastKeeps !== null && keeps !== lastKeeps
+      lastKeeps = keeps
       const seen = followerSearchStatuses()
-      if (seen.length > 0 && seen.every((s) => s.mode === next)) return
+      if (!keepChanged && seen.length > 0 && seen.every((s) => s.mode === next)) return
       soonRound()
     }, { global: true, interest: ['config:changed'] })
   })

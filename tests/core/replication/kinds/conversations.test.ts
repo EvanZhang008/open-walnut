@@ -222,8 +222,8 @@ describe('the host turned the conversations copy off', () => {
       await syncCopyKinds([kind], { targets: () => [host.target] })
       expect(stepsSince(host.calls, from)).toEqual(['purge:conversations'])
       expect(fs.existsSync(path.join(CONVERSATIONS_DIR, 'general', '_index.json'))).toBe(false)
-      // Turned off is not "no chats".
-      await expect(conv.listConversations('general')).rejects.toMatchObject({ code: 'needs_leader', why: 'kind_not_copied' })
+      // Turned off is not "no chats": kept only on the Mac (4f).
+      await expect(conv.listConversations('general')).rejects.toMatchObject({ code: 'needs_leader', why: 'not_kept_here' })
       choice = {}
       from = host.calls.length
       await syncCopyKinds([kind], { targets: () => [host.target] })

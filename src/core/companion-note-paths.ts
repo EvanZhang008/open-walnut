@@ -32,7 +32,7 @@ import { isAttachmentFile } from './notes-tree.js'
 type Refusal = Extract<NoteSaveResult, { ok: false }>
 export type NotePathResult = { ok: true; seq?: number; updated?: number } | Refusal
 
-const NOT_KEPT: Refusal = { ok: false, code: 'needs_leader', message: 'This note is not kept on this box, so it can only be changed on your Mac.', detail: { why: 'note_not_kept' } }
+const NOT_KEPT: Refusal = { ok: false, code: 'needs_leader', message: 'This note is kept only on your Mac, so it is changed there.', detail: { why: 'not_kept_here' } }
 
 /** The box takes note moves into its journal (the Mac drains `note-move` too). */
 export function companionMovesNotes(): boolean {

@@ -39,6 +39,8 @@ async function canonicalProjectName(name: string): Promise<string> {
  * off) it answers needs_leader kind_not_copied, never "no favorites".
  */
 export async function readFavorites(): Promise<{ projects: string[]; notes: string[] }> {
+  // Turned off for this replica (Settings): the Mac's favorites alone, never this box's config.
+  await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('prefs')
   if (isHostReplicaProgram()) {
     const fav = await (await import('../../core/replication/kinds/prefs.js')).readFavoritesCopy()
     if (!fav) throw new NeedsLeaderError(KIND_NOT_COPIED)

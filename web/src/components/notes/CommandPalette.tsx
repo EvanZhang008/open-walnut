@@ -124,6 +124,8 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
   // Server-tokenized query words for token-wise title highlighting.
   const [resultTokens, setResultTokens] = useState<string[]>([]);
   const [degraded, setDegraded] = useState(false);
+  /** This replica's copy leaves notes out: the server's sentence, shown above the results. */
+  const [partial, setPartial] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -186,6 +188,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
           setResults(res.results);
           setResultTokens(res.queryTokens ?? []);
           setDegraded(res.degraded === 'semantic-unavailable');
+          setPartial(res.partial?.message ?? null);
         })
         .catch((err) => {
           if (ctrl.signal.aborted) return;
@@ -341,6 +344,9 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
 
         {degraded && (
           <div className="notes-cmdk-degraded">Semantic search unavailable — showing exact matches only.</div>
+        )}
+        {partial && q && (
+          <div className="notes-cmdk-degraded" data-testid="notes-cmdk-partial">{partial}</div>
         )}
 
         <div className="notes-cmdk-list" ref={listRef}>

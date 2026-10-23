@@ -128,6 +128,7 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
       // Bodies ride with the index: turning the inbox off turns bodies off too, so
       // turning the inbox on again never brings back a body choice the user cannot see.
       if (next.inbox === false) next.inbox_bodies = false
+      if (next.conversations === false) next.conversation_bodies = false
       patch.copies = next
     }
     await updateHostServerConfig(hostKey, patch)

@@ -494,6 +494,15 @@
   background: var(--warning-subtle, rgba(245, 158, 11, 0.1));
   border-bottom: 1px solid var(--border, #2a2d34);
 }
+/* The tree's search: a replica whose copy leaves notes out says so above the results. */
+.notes-search-partial {
+  margin: 4px 8px 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  color: var(--warning, #f59e0b);
+  background: var(--warning-subtle, rgba(245, 158, 11, 0.1));
+}
 .notes-cmdk-list {
   flex: 1;
   overflow-y: auto;

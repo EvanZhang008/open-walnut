@@ -136,9 +136,13 @@ chatHistoryRouter.get('/history', async (req: Request, res: Response, next: Next
       // The Mac's copy, this box's own turns on the tail; a chat the copy does not hold needs the Mac.
       const { listConversations } = await import('../../core/conversations.js')
       const meta = (await listConversations(agentId ?? 'general')).find((c) => c.id === conversationId)
+      // The messages turned off for the box (Settings): a chat this box did not make is the Mac's.
+      const { copyKindOff } = await import('../../core/replication/kinds/gate.js')
+      const bodiesOff = await copyKindOff('conversation-bodies')
+      if (bodiesOff && !meta) throw new NeedsLeaderError('not_kept_here', 'This chat is kept only on your Mac.')
       const { companionChatHistoryPage } = await import('../../core/companion-conversation-rows.js')
       const copied = await companionChatHistoryPage(agentId ?? 'general', conversationId, page, pageSize, meta?.messageCount ?? 0)
-      if (!copied) throw new NeedsLeaderError('chat_history_needs_mac')
+      if (!copied) throw new NeedsLeaderError(bodiesOff ? 'not_kept_here' : 'chat_history_needs_mac')
       res.json(copied)
       return
     }

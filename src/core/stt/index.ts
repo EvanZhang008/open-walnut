@@ -241,6 +241,9 @@ export async function loadVocabPrompt(): Promise<string> {
     // (replication/kinds/stt-vocab.ts); before the first round, its own file.
     const copied = await (await import('../replication/kinds/stt-vocab.js')).readSttVocabCopy();
     if (copied) return copied.words.join(', ');
+    // Turned off for this replica: no words rather than this server's own file.
+    const gate = await import('../replication/kinds/gate.js');
+    if (gate.keepsCopies('stt-vocab') && await gate.copyKindOff('stt-vocab')) return '';
     await ensureSttVocabMigrated();
     return vocabWords(await readFile(STT_VOCAB_FILE, 'utf-8')).join(', ');
   } catch {

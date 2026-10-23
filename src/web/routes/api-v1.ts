@@ -22,7 +22,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { NeedsLeaderError, isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 import { replicaNotesReads } from '../../replica/notes-routes.js'
 import { companionNoteWrites } from '../../replica/companion-note-writes.js'
 import type { MessageParam } from '../../model/model.js'
@@ -284,6 +284,8 @@ apiV1Router.get('/conversations', async (req: Request, res: Response, next: Next
       return
     }
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
+    // The chat list turned off for this replica: the Mac's alone (the forward takes it while it answers).
+    await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('conversations')
     // On the companion a chat it answered while the Mac was away moves up (stage 3e).
     const list = followerKind() === 'companion'
       ? await (await import('../../core/companion-chat-turns.js')).withCompanionTurnTimes(agentId, await listConversations(agentId))
@@ -1452,7 +1454,11 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
       return
     }
     const conversationId = paramStr(req.params.id)
-    if (!(await conversationExists(agentId, conversationId))) {
+    // A chat's messages turned off for this replica (with or without its list): this box's
+    // list is not the Mac's, so a chat it lacks is not "not found" (kinds/gate.ts).
+    const gate = await import('../../core/replication/kinds/gate.js')
+    const bodiesOff = gate.keepsCopies('conversation-bodies') && await gate.copyKindOff('conversation-bodies')
+    if (!bodiesOff && !(await conversationExists(agentId, conversationId))) {
       sendError(res, 404, 'not_found', `Conversation not found: ${conversationId}`)
       return
     }
@@ -1505,6 +1511,8 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
       // turns out would make the phone REPLACE its rows with it (ChatStore.loadMessages);
       // on the 503 it keeps what it has and retries.
       const meta = (await listConversations(agentId)).find((c) => c.id === conversationId)
+      // Not one this box made, and the Mac's messages are not kept here: the Mac's alone.
+      if (bodiesOff && !meta) throw new NeedsLeaderError('not_kept_here', 'This chat is kept only on your Mac.')
       if ((meta?.messageCount ?? 0) > 0) {
         sendError(res, 503, 'primary_unreachable',
           before ? 'Your primary box is unreachable, so the older part of this conversation could not be loaded yet' : 'Your primary box is unreachable, so this conversation could not be loaded yet',

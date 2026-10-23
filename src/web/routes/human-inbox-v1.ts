@@ -286,6 +286,8 @@ humanInboxV1Router.get('/human-inbox', async (req: Request, res: Response, next:
       await replicaListLetters(res, archived)
       return
     }
+    // A host replica the user keeps the inbox from: the Mac's alone (kinds/gate.ts).
+    await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('inbox')
     const { listLetters } = await import('../../core/human-inbox/store.js')
     res.json(await listLetters({ archived }))
   })
@@ -300,8 +302,11 @@ humanInboxV1Router.get('/human-inbox/:id', async (req: Request, res: Response, n
       await replicaGetLetter(res, id)
       return
     }
+    const gate = await import('../../core/replication/kinds/gate.js')
+    await gate.assertCopyKept('inbox')
     const { getLetter } = await import('../../core/human-inbox/store.js')
-    const letter = await getLetter(id)
+    const deferBodies = gate.keepsCopies('inbox-bodies') && await gate.copyKindOff('inbox-bodies')
+    const letter = await getLetter(id, deferBodies ? { deferBodies } : {})
     if (!letter) {
       sendError(res, 404, 'not_found', `Letter not found: ${id}`)
       return

@@ -71,6 +71,8 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
     asOf: number | null
     /** The manifest still filling in. */
     pendingAsOf: number | null
+    /** When the leader turned the pictures off here (attachments.drop); absent: it did not. */
+    off?: number
   }
 
   const states = new Map<string, State>()
@@ -88,6 +90,7 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
         st.rows = raw.rows as Record<string, Row>
         st.asOf = typeof raw.asOf === 'number' ? raw.asOf : null
         st.pendingAsOf = typeof raw.pendingAsOf === 'number' ? raw.pendingAsOf : null
+        if (typeof raw.off === 'number') st.off = raw.off
       }
     } catch { /* no copy yet */ }
     states.set(home, st)
@@ -152,7 +155,14 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
     const stored = new Set(Object.values(st.rows).map((r) => r.h).filter(Boolean))
     const removing = Object.keys(st.rows).filter((k) => !seen.has(k) && !ownHeld(st.rows[k]!, at, t))
     const local = Object.keys(st.rows).length
-    if (local >= REMOVAL_FLOOR && removing.length * 2 > local) {
+    // The folders the user left out (`exclude`, sent by a newer leader) go however many files they hold.
+    const exclude = Array.isArray(params.exclude)
+      ? (params.exclude as unknown[]).filter((e): e is string => typeof e === 'string').slice(0, 200)
+        .map((e) => e.trim().split('\\').join('/').replace(/^\/+|\/+$/g, '').toLowerCase()).filter(Boolean)
+      : []
+    const chosen = (k: string): boolean => { const lk = k.toLowerCase(); return exclude.some((e) => lk === e || lk.startsWith(e + '/')) }
+    const unchosen = exclude.length ? removing.filter((k) => !chosen(k)).length : removing.length
+    if (local >= REMOVAL_FLOOR && unchosen * 2 > local) {
       deps.log('warn', 'attachments copy: a manifest that removes most of the copy was refused', { local, removing: removing.length, entries: seen.size })
       return refused('manifest_removes_most_rows', 'the manifest would remove ' + removing.length + ' of ' + local + ' files kept here', { local, removing: removing.length, entries: seen.size })
     }
@@ -179,6 +189,7 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
       need.push(k)
     }
     if (need.length === 0) { st.asOf = at; st.pendingAsOf = null } else st.pendingAsOf = at
+    delete st.off
     await persist(home, st)
     await collect(home, st, freed)
     // Where a broken upload stopped, so the leader goes on from there.
@@ -241,7 +252,10 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
   async function drop(home: string): Promise<AttachmentReply> {
     const existed = Object.keys(load(home).rows).length > 0
     await fsp.rm(deps.dirOf(home), { recursive: true, force: true }).catch(() => {})
-    states.set(home, { rows: {}, asOf: null, pendingAsOf: null })
+    // The mark says the user turned them off here: a read is the leader's, never this side's disk.
+    const st: State = { rows: {}, asOf: null, pendingAsOf: null, off: now() }
+    states.set(home, st)
+    await persist(home, st)
     if (existed) deps.log('info', 'attachments copy: removed')
     return { ok: true, dropped: existed }
   }
@@ -253,6 +267,7 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
       ok: true, entries: rows.length, pending: rows.filter((r) => r.want).length,
       bytes: rows.reduce((n, r) => n + (r.h ? r.n : 0), 0),
       asOf: at !== null ? new Date(at).toISOString() : null,
+      ...(load(home).off ? { off: true } : {}),
     }
   }
 
@@ -284,6 +299,11 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
   /** A whole manifest arrived at least once. */
   function held(home: string): boolean {
     return load(home).asOf !== null
+  }
+
+  /** The leader turned the pictures off here (its last word was attachments.drop). */
+  function isOff(home: string): boolean {
+    return !!load(home).off
   }
 
   /** The paths whose bytes this copy has, sorted. */
@@ -324,7 +344,7 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
       out.push(all[i]!)
     }
     const at = load(home).asOf
-    return { keys: out, asOf: at !== null ? new Date(at).toISOString() : null, next }
+    return { keys: out, asOf: at !== null ? new Date(at).toISOString() : null, next, ...(load(home).off ? { off: true } : {}) }
   }
 
   /** One slice of one file, base64, for a reader that asks chunk by chunk (sync: a follower read). */
@@ -380,7 +400,7 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
     states.clear()
   }
 
-  return { command, held, keys, row, readFile, list, readChunk, keepOwn, keyOf, forgetState, CHUNK_BYTES }
+  return { command, held, isOff, keys, row, readFile, list, readChunk, keepOwn, keyOf, forgetState, CHUNK_BYTES }
 }
 
 export type AttachmentCopy = ReturnType<typeof createAttachmentCopy>

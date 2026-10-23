@@ -32,6 +32,7 @@ import {
 import type { ReplicaTarget } from '../../src/core/replication/replica-targets.js'
 import { companionSearchDecision, wireDocOf, AUTO_MIN_TOTAL_MB } from '../../src/core/replication/search-replica-wire.js'
 import { DigestMap } from '../../src/core/replication/search-digest.js'
+import { searchKeyKept, searchNoteKeyPrefix, type SearchKeep } from '../../src/core/replication/search-replica-keep.js'
 import { replicaKey, refOfReplicaKey } from '../../src/core/search/replica-refs.js'
 import { companionSearchReady } from '../../src/core/search/companion-ready.js'
 import { drainBackfill, paragraphs, vecRows } from '../lib/text-embed-index.js'
@@ -162,6 +163,57 @@ describe('the companion copy of the search index', () => {
     calls = []
     expect(await round()).toEqual({ action: 'in-sync' })
     expect(ops()).toEqual(['status'])
+  })
+
+  it('a follower that leaves notes out gets none of their docs, and drops the ones it held (4f)', async () => {
+    const notePrefix = 'note:~/notes/'
+    let keep: SearchKeep | null = null
+    const keeping: SearchReplicaDeps = { ...deps, keep: async () => keep, notePrefix }
+    const lantern = path.join(WALNUT_HOME, 'notes', 'garden', 'lantern.md')
+    const memoryDoc = path.join(WALNUT_HOME, 'memory', 'MEMORY.md')
+    // Keeping everything (the default): the whole index, as before.
+    expect(await syncSearchReplica(keeping)).toEqual([expect.objectContaining({ target: 'companion', action: 'synced', need: 4, inSync: true })])
+    expect(copyDoc('note', lantern)).toBeDefined()
+    // A folder left out: its note leaves the copy, the rest stays, and both sides agree (one digest).
+    keep = { notes: true, memory: true, skills: true, notesExclude: ['Garden'] }
+    expect(await syncSearchReplica(keeping)).toEqual([expect.objectContaining({ action: 'synced', removed: 1, inSync: true })])
+    expect(copyDoc('note', lantern)).toBeUndefined()
+    expect(copyDoc('task', 't-1')).toBeDefined()
+    calls = []
+    expect(await syncSearchReplica(keeping)).toEqual([{ target: 'companion', action: 'in-sync' }])
+    expect(ops()).toEqual(['status'])
+    // A changed note it leaves out is never sent.
+    src.upsert({ kind: 'note', ref: `${MAC_HOME}/notes/garden/lantern.md`, title: 'Lantern notes, edited', note: LANTERN, updatedAt: 9_000 })
+    await syncSearchReplica(keeping)
+    expect(copyDoc('note', lantern)).toBeUndefined()
+    // Memory turned off: its doc goes too.
+    keep = { notes: true, memory: false, skills: true, notesExclude: ['garden'] }
+    await syncSearchReplica(keeping)
+    expect(copyDoc('memory', memoryDoc)).toBeUndefined()
+    // Back to everything: both come back.
+    keep = null
+    expect(await syncSearchReplica(keeping)).toEqual([expect.objectContaining({ action: 'synced', inSync: true })])
+    expect(copyDoc('note', lantern)?.title).toBe('Lantern notes, edited')
+    expect(copyDoc('memory', memoryDoc)).toBeDefined()
+  })
+
+  it('leaving out most of a large copy is the user\'s choice: applied, never refused as an emptied index (4f)', async () => {
+    const notePrefix = 'note:~/notes/'
+    let keep: SearchKeep | null = null
+    const keeping: SearchReplicaDeps = { ...deps, keep: async () => keep, notePrefix }
+    for (let i = 0; i < 210; i++) src.upsert({ kind: 'note', ref: `${MAC_HOME}/notes/archive/n${i}.md`, title: `Archive note ${i}`, note: `Old note ${i}`, updatedAt: 20_000 + i })
+    await syncSearchReplica(keeping)
+    expect(copy().stats().docs).toBe(214)
+    keep = { notes: true, memory: true, skills: true, notesExclude: ['archive'] }
+    expect(await syncSearchReplica(keeping)).toEqual([expect.objectContaining({ action: 'synced', removed: 210, inSync: true })])
+    expect(copy().stats().docs).toBe(4)
+    // The guard still holds for what the user did not choose: an emptied Mac index is refused.
+    keep = null
+    await syncSearchReplica(keeping)
+    expect(copy().stats().docs).toBe(214)
+    await src.rebuildAll([])
+    expect(await syncSearchReplica(keeping)).toEqual([expect.objectContaining({ action: 'failed', error: 'manifest_removes_most_docs' })])
+    expect(copy().stats().docs).toBe(214)
   })
 
   it('a change on the Mac is one small delta: the changed doc goes, a removed doc leaves', async () => {
@@ -417,5 +469,34 @@ describe('the pieces', () => {
     for (const bad of [{ ...good, h: 'xyz' }, { ...good, hash: 'short' }, { ...good, vectors: [{ s: -1, b: '' }] }, { ...good, idents: [1] }, { ...good, updatedAt: 'now' }]) {
       expect(wireDocOf(bad)).toBeNull()
     }
+  })
+})
+
+describe('what a follower keeps of the search docs (search-replica-keep.ts)', () => {
+  it('note keys by the keep rule, memory and skills by their switches, everything else always', () => {
+    const prefix = searchNoteKeyPrefix(MAC_HOME, `${MAC_HOME}/notes`)
+    expect(prefix).toBe('note:~/notes/')
+    expect(searchNoteKeyPrefix(MAC_HOME, '/Volumes/elsewhere/vault')).toBeNull()
+    const keep: SearchKeep = { notes: true, memory: false, skills: true, notesExclude: ['health', 'work/Plan'] }
+    expect(searchKeyKept('note:~/notes/health/a.md', keep, prefix)).toBe(false)
+    expect(searchKeyKept('note:~/notes/Work/plan.md', keep, prefix)).toBe(false)
+    expect(searchKeyKept('note:~/notes/work/plan2.md', keep, prefix)).toBe(true)
+    expect(searchKeyKept('memory:~/memory/MEMORY.md', keep, prefix)).toBe(false)
+    expect(searchKeyKept('skill:~/skills/a/SKILL.md', keep, prefix)).toBe(true)
+    expect(searchKeyKept('task:t-1', keep, prefix)).toBe(true)
+    expect(searchKeyKept('note:~/notes/a.md', { ...keep, notes: false }, prefix)).toBe(false)
+    // Keeping everything (or no settings): every key.
+    expect(searchKeyKept('note:~/notes/health/a.md', null, prefix)).toBe(true)
+    expect(searchKeyKept('note:~/notes/health/a.md', { notes: true, memory: true, skills: true, notesExclude: [] }, prefix)).toBe(true)
+  })
+
+  it('a filtered digest is the digest of the kept entries', () => {
+    const m = new DigestMap()
+    m.set(1, 'task:a', 'v1')
+    m.set(2, 'note:~/notes/x.md', 'v2')
+    const kept = new DigestMap()
+    kept.set(1, 'task:a', 'v1')
+    expect(m.digestWhere((k) => k.startsWith('task:'))).toBe(kept.digest)
+    expect(m.digestWhere(() => true)).toBe(m.digest)
   })
 })

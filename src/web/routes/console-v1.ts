@@ -88,9 +88,11 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
 /** `config` with the companion's held config copy laid over it (top-level keys), else `config` as it is. */
 async function overlayConfigCopy<C extends object>(config: C, res?: Response): Promise<C> {
   // The Mac holds no copy; on a host replica getConfig already is the copy.
-  const [{ readConfigCopy }, { copyKindAsOf, COPY_AS_OF_HEADER }] = await Promise.all([
+  const [{ readConfigCopy }, { assertCopyKept, copyKindAsOf, COPY_AS_OF_HEADER }] = await Promise.all([
     import('../../core/replication/kinds/config.js'), import('../../core/replication/kinds/gate.js'),
   ])
+  // Settings turned off for this replica: the Mac's alone, never this box's own file shown as them.
+  await assertCopyKept('config')
   const asOf = await copyKindAsOf('config')
   const copied = asOf === null ? null : await readConfigCopy()
   if (!copied) return config

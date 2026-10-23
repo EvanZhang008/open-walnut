@@ -99,7 +99,7 @@ and team, triggers, the team Board, reply requests) is always kept: that is the
 
 | Kind | What is copied | Answers |
 |---|---|---|
-| notes | the `.md` text of the vault; no dot folders, no `_attachment`, nothing over 1 MB, none of the folders the user left out | `note_read` (by path, id or title), `note_search` (keyword, every word, title first; the server's search exclusions apply) |
+| notes | the `.md` text of the vault; no dot folders, no `_attachment`, nothing over 1 MB, none of the folders or notes the user left out | `note_read` (by path, id or title), `note_search` (keyword, every word, title first; the server's search exclusions apply) |
 | memory | the global and user memory documents, and the rest of the memory dir (`f/<path>`, `r/<repo>`, the `files.v1` marker) | `memory_read` (the two documents) |
 | skills | every skill `skill_read` can open, and each skill's reference files (`<skill>/references/<file>`) | `skill_read` (a name without a slash) |
 | attachments | the pictures and files the notes embed (the files the attachment route serves, at most 50 MB each), on a daemon with `attachment-copy-v1` | a host replica's picture reads while the Mac is away (`attachments.list`, `attachments.read`) |
@@ -135,11 +135,19 @@ server may have applied it. Every answer says it came from the copy and how
 old it is (`offline: true`, `as_of`); note search from the copy says
 `degraded: 'offline-keyword'`.
 
-`hosts.<alias>.keep` (Settings, Remote Hosts, Edit): `notes`, `memory`,
-`skills` switches and `notes_exclude` folders. A kind turned off is removed from
-the host (`replica.drop`), and its reads go to the server again. The commands
-are trusted-socket only: the companion's bridge can neither send nor read a
-copy. An old daemon (no `host-replica-v1`) keeps no copy and is never sent one.
+`hosts.<alias>.keep` (Settings, Remote Hosts, Edit; the companion's is
+`cloud_bridge.keep`, Settings, Phones & Cloud): `notes`, `attachments`, `memory`,
+`skills` switches and `notes_exclude`, folders or single notes (with or without
+`.md`, any letter case: `core/replication/keep-rule.ts`). A kind turned off is
+removed from the host (`replica.drop`, which leaves an off marker), and so is a
+note left out. What a host does not keep is never answered from its copy: while
+the server answers, the read goes there; while it is away, `note_read`,
+`note_search` misses, `memory_read` and `skill_read` answer `needs_leader` with
+why `not_kept_here`, never "not found". A `note_search` over a copy that leaves
+notes out says so (`partial`). The commands are trusted-socket only: the
+companion's bridge can neither send nor read a copy. An old daemon (no
+`host-replica-v1`) keeps no copy and is never sent one. The same rule for every
+replica and every copy kind: docs/plan/walnut-companion-unified-replica.md, 4f.
 
 ## The companion's copy of the tasks
 

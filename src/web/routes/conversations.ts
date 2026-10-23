@@ -36,6 +36,8 @@ export function createConversationsRouter(): Router {
   router.get('/:agentId/conversations', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const agentId = validateAgentId(req.params.agentId as string)
+      // The chat list turned off for this replica: the Mac's alone (kinds/gate.ts).
+      await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('conversations')
       // Resolve the main conversation FIRST so the lazy back-fill runs (legacy
       // indexes get an isMain promoted + persisted) before we read the list —
       // the returned metas then carry isMain so the UI badge shows immediately.

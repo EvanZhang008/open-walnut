@@ -8,9 +8,13 @@
  * memory dir), the skills with their references (host-replica-extras.ts), and the
  * pictures and files of the notes (attachment-replica.ts, where the target's daemon
  * has 'attachment-copy-v1'), so its sessions and pages read them while the leader
- * cannot answer. What a host keeps is the user's choice (config `hosts.<alias>.keep`,
- * Settings > Remote Hosts); each kind is on unless turned off, and a kind turned
- * off is removed from that host on the next round.
+ * cannot answer. What a replica keeps is the user's choice (config `hosts.<alias>.keep`,
+ * Settings > Remote Hosts; the companion's `cloud_bridge.keep`, Settings > Phones &
+ * Cloud); each kind is on unless turned off, and a kind turned off, or a folder or a
+ * note left out (replication/keep-rule.ts), is removed from that replica on the next
+ * round. What a replica does not keep is never answered from its copy: its reads go
+ * to this Mac while it answers, and answer needs-the-Mac (`not_kept_here`) while it
+ * is away (docs/plan/walnut-companion-unified-replica.md, 4f).
  *
  * One round per kind: `replica.sync` sends the manifest (key, sha256-12 of the
  * body, small metadata); the daemon answers the keys it lacks; `replica.put`
@@ -31,13 +35,14 @@ import { log } from '../logging/index.js'
 import type { Config } from './types.js'
 import { _resetAttachmentReplicaForTesting, forgetAttachments, syncAttachments } from './attachment-replica.js'
 import { replicaExtras, type Extras } from './host-replica-extras.js'
+import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 export const REPLICA_KINDS: readonly ReplicaKind[] = ['notes', 'memory', 'skills']
 
 export interface HostKeep {
   notes: boolean
-  /** Vault folders never copied to this host. */
+  /** Vault folders and single notes never copied to this host (replication/keep-rule.ts). */
   notesExclude: string[]
   memory: boolean
   skills: boolean
@@ -55,17 +60,21 @@ export function sha12(body: string): string {
   return crypto.createHash('sha256').update(body).digest('hex').slice(0, 12)
 }
 
-function cleanFolders(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return []
-  return raw.map((e) => String(e).trim().split('\\').join('/').replace(/^\/+|\/+$/g, '')).filter(Boolean)
+/** The companion's host key: its copy's Settings row (`host:companion`), its keep settings. */
+export const COMPANION_REPLICA_HOST = 'companion'
+
+/** Where a replica's keep settings live: a host's `hosts.<key>.keep`; the companion's `cloud_bridge.keep`. */
+export function keepSettingsOf(config: Config, hostKey: string): NonNullable<Config['cloud_bridge']>['keep'] {
+  if (hostKey === COMPANION_REPLICA_HOST) return config.cloud_bridge?.keep ?? config.hosts?.[hostKey]?.keep
+  return config.hosts?.[hostKey]?.keep
 }
 
-/** What `hostKey` keeps. A host with no settings keeps everything. */
+/** What `hostKey` keeps. A replica with no settings keeps everything. */
 export function hostKeepFor(config: Config, hostKey: string): HostKeep {
-  const keep = config.hosts?.[hostKey]?.keep
+  const keep = keepSettingsOf(config, hostKey)
   return {
     notes: keep?.notes !== false,
-    notesExclude: cleanFolders(keep?.notes_exclude),
+    notesExclude: cleanKeepEntries(keep?.notes_exclude),
     memory: keep?.memory !== false,
     skills: keep?.skills !== false,
     attachments: keep?.notes !== false && keep?.attachments !== false,
@@ -82,10 +91,6 @@ const tooBigByRoot = new Map<string, string[]>()
 /** The notes too large to copy, as the last walk of `root` found them (capped). */
 export function notesTooBig(root = NOTES_DIR): string[] {
   return tooBigByRoot.get(root) ?? []
-}
-
-function inFolder(rel: string, folders: string[]): boolean {
-  return folders.some((f) => rel === f || rel.startsWith(`${f}/`))
 }
 
 function noteTitle(rel: string, content: string, data: Record<string, unknown>): string {
@@ -105,7 +110,7 @@ async function noteMeta(rel: string, content: string, mtimeMs: number): Promise<
 /** Walks in progress: the hosts' rounds a note edit starts together share one walk of the vault. */
 const walking = new Map<string, Promise<ReplicaEntry[]>>()
 
-/** Every note this host may keep: `.md` files, no dot folders, no attachment folder, none excluded. */
+/** Every note this host may keep: `.md` files, no dot folders, no attachment folder, none left out. */
 export function noteEntries(exclude: string[], root = NOTES_DIR): Promise<ReplicaEntry[]> {
   const key = JSON.stringify([root, exclude])
   const running = walking.get(key)
@@ -126,11 +131,11 @@ async function walkNotes(exclude: string[], root: string): Promise<ReplicaEntry[
       if (d.name.startsWith('.')) continue
       const rel = relDir ? `${relDir}/${d.name}` : d.name
       if (d.isDirectory()) {
-        if (d.name === '_attachment' || inFolder(rel, exclude)) continue
+        if (d.name === '_attachment' || leftOut(rel, exclude)) continue
         await walk(path.join(dir, d.name), rel)
         continue
       }
-      if (!d.isFile() || !/\.md$/i.test(d.name) || inFolder(rel, exclude)) continue
+      if (!d.isFile() || !/\.md$/i.test(d.name) || leftOut(rel, exclude)) continue
       const abs = path.join(dir, d.name)
       let st: import('node:fs').Stats
       try { st = await fsp.stat(abs) } catch { continue }
@@ -291,7 +296,7 @@ export async function confirmHostReplicaRemoval(hostKey: string, kind: ReplicaKi
 }
 
 async function searchExclude(config: Config): Promise<string[]> {
-  return cleanFolders((config as { search?: { excluded_folders?: unknown } }).search?.excluded_folders)
+  return cleanKeepEntries((config as { search?: { excluded_folders?: unknown } }).search?.excluded_folders)
 }
 
 async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep, config: Config): Promise<ReplicaRoundResult> {
@@ -367,8 +372,6 @@ const inFlight = new Map<string, { rerun: boolean }>()
 
 // ── The cloud companion as a host (stage 4 of docs/plan/walnut-companion-unified-replica.md) ──
 
-/** The companion's host key: its copy's Settings row (`host:companion`), its keep settings. */
-export const COMPANION_REPLICA_HOST = 'companion'
 /** How long an unchanged manifest is trusted for the companion before it goes again. */
 const COMPANION_MEMO_MS = 30 * 60_000
 let companionMemoAt = 0
@@ -392,8 +395,9 @@ export async function syncCompanionHostReplica(): Promise<ReplicaRoundResult[]> 
   // One small step first: an older build (no door) or a box that is down costs no round.
   const st = await ingest.postToCloudHostReplica('replica.status', {})
   if (st.ok !== true) return []
-  const kinds = (st.kinds ?? {}) as Record<string, { asOf?: unknown }>
-  if (Date.now() - companionMemoAt > COMPANION_MEMO_MS || REPLICA_KINDS.some((k) => kinds[k]?.asOf == null)) {
+  const kinds = (st.kinds ?? {}) as Record<string, { asOf?: unknown; off?: unknown }>
+  // A kind the user turned off for the box has no asOf by design: that is not a new box.
+  if (Date.now() - companionMemoAt > COMPANION_MEMO_MS || REPLICA_KINDS.some((k) => kinds[k]?.asOf == null && kinds[k]?.off !== true)) {
     forgetHostReplica(COMPANION_REPLICA_HOST)
     companionMemoAt = Date.now()
   }

@@ -429,6 +429,8 @@ const VOCAB_DISPLAY_PATH = relative(WALNUT_HOME, STT_VOCAB_FILE);
  * server's own file.
  */
 export async function readSttVocab(): Promise<{ words: string[]; path: string; copyAsOf: number | null }> {
+  // Turned off for this replica: the Mac's words alone, never this server's own file.
+  await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('stt-vocab');
   const copied = await (await import('../../core/replication/kinds/stt-vocab.js')).readSttVocabCopy();
   if (copied) return { words: copied.words, path: VOCAB_DISPLAY_PATH, copyAsOf: copied.asOf };
   await ensureSttVocabMigrated();
@@ -445,6 +447,8 @@ export async function readSttVocab(): Promise<{ words: string[]; path: string; c
  */
 export async function addSttVocabWord(word: string): Promise<{ added: boolean; word: string; reason?: string }> {
   const trimmed = word.trim();
+  const gate = await import('../../core/replication/kinds/gate.js');
+  if (gate.keepsCopies('stt-vocab') && await gate.copyKindOff('stt-vocab')) throw new NeedsLeaderError('stt_vocab_writes_need_mac');
   if (await (await import('../../core/replication/kinds/stt-vocab.js')).readSttVocabCopy()) {
     throw new NeedsLeaderError('stt_vocab_writes_need_mac');
   }

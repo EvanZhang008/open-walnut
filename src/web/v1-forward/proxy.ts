@@ -29,7 +29,7 @@ import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { setLeaderPresence } from '../../core/server-role.js'
 import { LEADER_HEARTBEAT_MS } from '../../core/leader/protocol.js'
 import type { RelayFailure } from '../routes/v1-control-relay.js'
-import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleTaskWrite } from './policy.js'
+import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleCopyCall, parseConsoleTaskWrite, phoneCopyReadOf } from './policy.js'
 import { forwardOnStream } from './stream-forward.js'
 
 /** What the companion knows of the Mac right now. */
@@ -150,12 +150,21 @@ export function createV1Forward(deps: ForwardDeps) {
     next()
   }
 
+  async function keptReadOff(method: string, rel: string): Promise<boolean> {
+    const read = phoneCopyReadOf(method, rel)
+    if (!read) return false
+    try {
+      return (await import('../../core/replication/kinds/gate.js')).copyKindOff(read.kind)
+    } catch { return false }
+  }
+
   async function middleware(req: Request, res: Response, next: NextFunction): Promise<void> {
     const method = req.method.toUpperCase()
     if (!deps.enabled()) return answerHere('turned-off', req, res, next)
     if (deps.ownCall?.(req)) return answerHere('own-call', req, res, next)
     const kept = companionAnswers(method, req.path)
-    if (kept) return answerHere(kept, req, res, next)
+    // A kept read of a copy turned off for this box (policy.ts phoneCopyReadOf): the Mac's while it answers.
+    if (kept && !(await keptReadOff(method, req.path))) return answerHere(kept, req, res, next)
     return toMac(req, res, next, method, isTaskCopyWrite(method, req.path))
   }
 
@@ -173,6 +182,19 @@ export function createV1Forward(deps: ForwardDeps) {
     if (!deps.enabled()) return answerHere('turned-off', req, res, next)
     if (deps.ownCall?.(req)) return answerHere('own-call', req, res, next)
     return toMac(req, res, next, method, true)
+  }
+
+  /**
+   * A console call about what this box's copy does not keep (policy.ts CONSOLE_COPY_READS
+   * and CONSOLE_COPY_WRITES, core/companion-forward.ts): the Mac answers it while it
+   * answers; else `next` answers here. A write that went out unanswered is told so (504).
+   */
+  async function consoleCopyMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+    const method = req.method.toUpperCase()
+    if (!parseConsoleCopyCall(method, req.originalUrl)) return next()
+    if (!deps.enabled()) return answerHere('turned-off', req, res, next)
+    if (deps.ownCall?.(req)) return answerHere('own-call', req, res, next)
+    return toMac(req, res, next, method, false)
   }
 
   /**
@@ -324,6 +346,10 @@ export function createV1Forward(deps: ForwardDeps) {
     /** The console's task-store writes on /api/tasks and /api/focus (consoleMiddleware above). */
     consoleMiddleware: (req: Request, res: Response, next: NextFunction): void => {
       consoleMiddleware(req, res, next).catch(next)
+    },
+    /** A console call about what the copy does not keep (consoleCopyMiddleware above); `here` when not forwarded. */
+    consoleCopy: (req: Request, res: Response, here: () => void): void => {
+      consoleCopyMiddleware(req, res, () => here()).catch(() => { if (!res.headersSent) here() })
     },
     /**
      * The Mac is away by the companion's own view: no bridge, silent, a forward

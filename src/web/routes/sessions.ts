@@ -208,6 +208,8 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
 // Display only: the quick-start route applies both fields itself at spawn.
 sessionsRouter.get('/ask-walnut-launch', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // The personas turned off for this replica: the Mac's pick alone, never this box's own file.
+    await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('personas')
     res.json(await getAskWalnutLaunchPrefs())
   } catch (err) {
     next(err)
@@ -984,6 +986,8 @@ sessionsRouter.get('/summaries', async (req: Request, res: Response, next: NextF
 // MUST be registered before the '/:sessionId' catch-all below.
 sessionsRouter.get('/host-model-catalogs', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // Turned off for this replica (with the sessions): the Mac's list alone, never a part of it.
+    await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('model-catalogs')
     res.json({ catalogs: await listHostModelCatalogs() })
   } catch (err) {
     next(err)

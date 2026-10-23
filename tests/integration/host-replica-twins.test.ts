@@ -328,8 +328,9 @@ for (const twin of twinsToRun) {
         expect(found.ms).toBeLessThan(GATEWAY_TIMEOUT)
         const remembered = await gatewayCall(d, 'search', { q: 'deploy script', types: 'memory' })
         expect(remembered.ok && remembered.result.results).toEqual([expect.objectContaining({ type: 'memory', path: 'MEMORY.md' })])
-        // A left-out folder is not in the copy.
-        expect(await gatewayCall(d, 'note_read', { path: 'health/Checkup' })).toMatchObject({ ok: false, error: { code: 'not_found' } })
+        // A left-out folder is not in the copy: its notes are the Mac's, never a plain miss (4f).
+        const leftOut = await gatewayCall(d, 'note_read', { path: 'health/Checkup' })
+        expect(leftOut, JSON.stringify(leftOut)).toMatchObject({ ok: false, error: { code: 'needs_leader', message: expect.stringMatching(/kept only on your Mac/), detail: { why: 'not_kept_here' } } })
         // Its own task: written here at once, journaled for the server.
         const own = await gatewayCall(d, 'task_update', { id: 'mtask000-0001', description: 'Drafted while the Mac slept.' })
         expect(own, JSON.stringify(own)).toMatchObject({ ok: true, result: { queued: true, offline: true } })
@@ -388,7 +389,8 @@ for (const twin of twinsToRun) {
       expect(round.find((r) => r.kind === 'notes')).toMatchObject({ action: 'dropped' })
       // No notes, no pictures of them either.
       expect(await primary.send('attachments.status', { home: WALNUT_HOME })).toMatchObject({ ok: true, entries: 0, asOf: null })
-      expect(fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String).some((f) => f.includes('attachments'))).toBe(false)
+      // What is left of it is the off mark (attachment-copy-core.ts drop): no picture.
+      expect(fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String).filter((f) => f.includes('attachments') && !/attachments(\/index\.json)?$/.test(f))).toEqual([])
       // A stuck server: a note read is the server's again (it times out as before),
       // while memory, still kept here, comes from the copy at the timeout.
       primary.answerRelays = false
@@ -396,8 +398,12 @@ for (const twin of twinsToRun) {
       expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true, result: { offline: true } })
       primary.close()
       await sleep(200)
+      // The server gone: kept only on the Mac, in so many words (4f), never a plain miss.
       const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
-      expect(r).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+      expect(r).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+      // A note written here needs the Mac the same way.
+      const w = await gatewayCall(d, 'note_write', { path: 'Projects/New idea', content: '# New idea\n' })
+      expect(w).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
       const left = fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String).filter((f) => /[/\\]f[/\\]/.test(f))
       expect(left.map((f) => fs.readFileSync(path.join(d.dir, 'replica', f), 'utf8')).join('\n')).not.toContain('rollback')
       // Memory and skills are still kept.

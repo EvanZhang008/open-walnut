@@ -11,6 +11,10 @@
  * While the leader cannot answer, the offline host hands the read ops here:
  * note_read, note_search (keyword only: the primary's semantic index stays on
  * the primary), memory_read and skill_read, each saying how old the copy is.
+ * What the user left out of this copy (a folder or a note, `keepExclude`, and the
+ * notes too large to copy, `tooBig`) is never answered from it: a read of one
+ * needs the leader (`not_kept_here`), and a search says some notes are only there.
+ * A kind the leader turned off here (`replica.drop`) is marked off, not just gone.
  *
  * How the daemon twins get it: daemon-standalone.ts imports createHostReplica;
  * daemon-source.ts inlines `createHostReplica.toString()` through
@@ -35,7 +39,7 @@ export interface ReplicaFile { k: string; body: string }
 export interface ReplicaSyncOptions {
   /** notes: folders the primary's own search leaves out (config search.excluded_folders). */
   searchExclude?: string[]
-  /** notes: folders this host does not keep (hosts.<key>.keep.notes_exclude): never written here while away. */
+  /** notes: folders and notes this host does not keep (hosts.<key>.keep.notes_exclude): never read or written here. */
   keepExclude?: string[]
   /** notes: notes the primary keeps to itself because they are too large to copy: never written here while away. */
   tooBig?: string[]
@@ -98,6 +102,8 @@ export function createHostReplica(deps: HostReplicaDeps) {
     /** The manifest that is still filling in. */
     pendingAsOf: number
     opts: ReplicaSyncOptions
+    /** When the leader turned this kind off here (replica.drop); 0: it did not. */
+    off: number
   }
 
   const states = new Map<string, KindState>()
@@ -137,13 +143,14 @@ export function createHostReplica(deps: HostReplicaDeps) {
     const key = stateKey(home, kind)
     let st = states.get(key)
     if (st) return st
-    st = { index: {}, pending: {}, pendingMeta: {}, asOf: 0, pendingAsOf: 0, opts: {} }
+    st = { index: {}, pending: {}, pendingMeta: {}, asOf: 0, pendingAsOf: 0, opts: {}, off: 0 }
     try {
       const raw = JSON.parse(fs.readFileSync(path.join(kindDir(home, kind), 'index.json'), 'utf8')) as Partial<KindState>
       if (raw && typeof raw.index === 'object' && raw.index) {
         st.index = raw.index as Record<string, IndexRow>
         st.asOf = typeof raw.asOf === 'number' ? raw.asOf : 0
         st.opts = raw.opts && typeof raw.opts === 'object' ? raw.opts : {}
+        st.off = typeof raw.off === 'number' ? raw.off : 0
       }
     } catch { /* no copy yet */ }
     states.set(key, st)
@@ -152,7 +159,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
 
   function persist(home: string, kind: ReplicaKind, st: KindState): void {
     try {
-      writeAtomic(path.join(kindDir(home, kind), 'index.json'), JSON.stringify({ index: st.index, asOf: st.asOf, opts: st.opts }))
+      writeAtomic(path.join(kindDir(home, kind), 'index.json'), JSON.stringify({ index: st.index, asOf: st.asOf, opts: st.opts, ...(st.off ? { off: st.off } : {}) }))
     } catch (err) {
       deps.log('warn', 'host replica: persist failed', { kind, error: (err as Error).message })
     }
@@ -213,7 +220,12 @@ export function createHostReplica(deps: HostReplicaDeps) {
     }
     const removing = Object.keys(st.index).filter((k) => !seen.has(k) && !holds.has(k))
     const local = Object.keys(st.index).length
-    if (local >= REMOVAL_FLOOR && removing.length * 2 > local) {
+    // What the user's choice leaves out goes however much it is; only the rest counts.
+    const chosen = kind === 'notes' && opts && typeof opts === 'object'
+      ? { exclude: folders(opts.keepExclude, 200) ?? [], tooBig: new Set((folders(opts.tooBig, 5_000) ?? []).map((t) => t.toLowerCase())) }
+      : null
+    const unchosen = chosen ? removing.filter((k) => !leftOut(k, chosen.exclude) && !chosen.tooBig.has(k.toLowerCase())).length : removing.length
+    if (local >= REMOVAL_FLOOR && unchosen * 2 > local) {
       // The half rule (section 4): a leader that lost its store must not empty this copy.
       const c = guard?.confirmFor as { entries?: unknown; keys?: unknown } | undefined
       const keys = deps.hash([...seen].sort().join('\n'))
@@ -255,6 +267,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
       ...(kind === 'notes' ? { keepExclude: folders(opts.keepExclude, 200), tooBig: folders(opts.tooBig, 5_000) } : {}),
     } : {}
     if (need.length === 0) { st.asOf = at; st.pendingAsOf = 0 } else st.pendingAsOf = at
+    st.off = 0
     persist(home, kind, st)
     if (heldKeys.length) deps.log('info', 'host replica: keys an away write holds were kept', { kind, held: heldKeys.length })
     return { need, entries: seen.size, held: heldKeys.length, ...(heldKeys.length ? { heldKeys: heldKeys.slice(0, 100) } : {}), removed: removing.length }
@@ -298,20 +311,58 @@ export function createHostReplica(deps: HostReplicaDeps) {
     if (!isKind(kind)) throw new Error(`replica.drop: unknown kind ${String(kind)}`)
     const existed = has(home, kind)
     try { fs.rmSync(kindDir(home, kind), { recursive: true, force: true }) } catch { /* nothing kept */ }
-    states.delete(stateKey(home, kind))
     bodies.delete(stateKey(home, kind))
+    // The mark says the user turned it off here: a read of it is the leader's, not "not copied yet".
+    const st: KindState = { index: {}, pending: {}, pendingMeta: {}, asOf: 0, pendingAsOf: 0, opts: {}, off: deps.now() }
+    states.set(stateKey(home, kind), st)
+    persist(home, kind, st)
     if (existed) deps.log('info', 'host replica: copy removed', { kind })
     return { dropped: existed }
   }
 
-  function status(home: string): Record<string, { entries: number; pending: number; asOf: string | null }> {
-    const out: Record<string, { entries: number; pending: number; asOf: string | null }> = {}
+  function status(home: string): Record<string, { entries: number; pending: number; asOf: string | null; off?: true }> {
+    const out: Record<string, { entries: number; pending: number; asOf: string | null; off?: true }> = {}
     for (const kind of KINDS) {
       const st = load(home, kind)
-      out[kind] = { entries: Object.keys(st.index).length, pending: Object.keys(st.pending).length, asOf: st.asOf ? new Date(st.asOf).toISOString() : null }
+      out[kind] = { entries: Object.keys(st.index).length, pending: Object.keys(st.pending).length, asOf: st.asOf ? new Date(st.asOf).toISOString() : null, ...(st.off ? { off: true as const } : {}) }
     }
     return out
   }
+
+  /** The leader turned `kind` off here (its last word was replica.drop). */
+  function isOff(home: string, kind: ReplicaKind): boolean {
+    return load(home, kind).off > 0
+  }
+
+  // ── what this copy leaves out (core/replication/keep-rule.ts, the same rule) ──
+
+  /** Whether `rel` is left out by one of `entries`: a folder, or one note with or without `.md`, any case. */
+  function leftOut(rel: string, entries: readonly string[]): boolean {
+    if (!entries || entries.length === 0) return false
+    const k = rel.toLowerCase()
+    for (const raw of entries) {
+      const e = String(raw ?? '').trim().split('\\').join('/').replace(/^(\.\/)+/, '').replace(/^\/+|\/+$/g, '').toLowerCase()
+      if (!e) continue
+      if (k === e || k.startsWith(`${e}/`)) return true
+      if (!e.endsWith('.md') && k === `${e}.md`) return true
+    }
+    return false
+  }
+
+  /** The note at `k` is one the leader keeps from this copy (left out, or too large). */
+  function noteLeftOut(home: string, k: string): boolean {
+    const o = load(home, 'notes').opts
+    const lower = k.toLowerCase()
+    return leftOut(k, o.keepExclude ?? []) || (o.tooBig ?? []).some((t) => t.toLowerCase() === lower)
+  }
+
+  /** This copy of the notes leaves notes out: a miss may be a note kept only on the leader. */
+  function notesPartial(home: string): boolean {
+    const o = load(home, 'notes').opts
+    return (o.keepExclude ?? []).length > 0 || (o.tooBig ?? []).length > 0
+  }
+
+  const PARTIAL_SEARCH = 'Some notes are kept only on your Mac, so they are not in these results.'
 
   // ── answering reads ──
 
@@ -401,29 +452,42 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return s
   }
 
-  function resolveNote(v: View, args: Record<string, unknown>): { k?: string; error?: GatewayResult } {
+  /** A note this copy does not hold and may not: the leader's (never "not found"). */
+  function notKept(what: string, sure: boolean, verb = 'is'): GatewayResult {
+    const message = sure
+      ? `${what} ${verb} kept only on your Mac, which is not answering this host right now.`
+      : `${what} ${verb} not in this host's copy, and some notes are kept only on your Mac, which is not answering this host right now.`
+    return fail('needs_leader', message, { why: 'not_kept_here' })
+  }
+
+  function resolveNote(home: string, v: View, args: Record<string, unknown>): { k?: string; error?: GatewayResult } {
     const id = str(args.id)
     const p = str(args.path)
     if (!id && !p) return { error: fail('bad_request', 'pass path (vault-relative note path) or id (from note_search)') }
     const keys = keysOf(v)
     const ref = id || p
+    const partial = notesPartial(home)
     if (id || /^n_[a-z0-9]+$/i.test(p)) {
       for (const k of keys) { const row = rowIn(v, k); if (row && row.m && row.m.id === ref) return { k } }
-      if (id) return { error: fail('not_found', `No note with id ${ref} in this host's copy`) }
+      if (id) return { error: partial ? notKept(`The note with id ${ref}`, false) : fail('not_found', `No note with id ${ref} in this host's copy`) }
     }
     const direct = normalizeNotePath(p)
     if (rowIn(v, direct)) return { k: direct }
+    if (noteLeftOut(home, direct)) return { error: notKept(`The note ${direct}`, true) }
     // A title, as online: the note whose title or file name is the text.
     const want = p.replace(/\.md$/i, '').toLowerCase()
     const hits = keys.filter((k) => titleOf(k, rowIn(v, k)!).toLowerCase() === want || path.posix.basename(k).replace(/\.md$/i, '').toLowerCase() === want)
     if (hits.length === 1) return { k: hits[0] }
     if (hits.length > 1) return { error: fail('ambiguous', `"${p}" names ${hits.length} notes in this host's copy; pass the path`, { candidates: hits.slice(0, 20) }) }
+    // A title may name a note the copy leaves out (its title is not known here); a path
+    // that is not left out is not on the Mac either.
+    if (partial && !p.includes('/')) return { error: notKept(`The note "${p}"`, false) }
     return { error: fail('not_found', `Note not found in this host's copy: ${p}`) }
   }
 
   function noteRead(home: string, args: Record<string, unknown>, why: string): GatewayResult {
     const v = viewOf(home, 'notes')
-    const r = resolveNote(v, args)
+    const r = resolveNote(home, v, args)
     if (r.error) return r.error
     const k = r.k!
     const row = rowIn(v, k)
@@ -440,6 +504,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
     })
   }
 
+  /** The server's search exclusions (`search.excluded_folders`): folders, as the server reads them. */
   function excluded(k: string, folders: string[] | undefined): boolean {
     if (!folders || folders.length === 0) return false
     for (const raw of folders) {
@@ -503,9 +568,12 @@ export function createHostReplica(deps: HostReplicaDeps) {
         matchType: 'exact', score: h.score,
       }
     })
+    // Said only when the copy leaves notes out: a full copy answers as before.
+    const partial = notesPartial(home)
     return ok({
       results, queryTokens: tokens, degraded: 'offline-keyword', offline: true, as_of: ageOf(home, 'notes'),
-      outcome: `${results.length} note${results.length === 1 ? '' : 's'} from a keyword search of this host's copy (as of ${ageOf(home, 'notes')}). ${why}`,
+      ...(partial ? { partial: { why: 'not_kept_here', message: PARTIAL_SEARCH } } : {}),
+      outcome: `${results.length} note${results.length === 1 ? '' : 's'} from a keyword search of this host's copy (as of ${ageOf(home, 'notes')}).${partial ? ` ${PARTIAL_SEARCH}` : ''} ${why}`,
       next: 'Read a hit with note_read, by id or path.',
     })
   }
@@ -548,7 +616,9 @@ export function createHostReplica(deps: HostReplicaDeps) {
   /** A read op this copy answers for `home`, or null (not a replica op, or that kind is not kept here). */
   function answer(home: string, name: string, args: Record<string, unknown>, why: string): GatewayResult | null {
     const kind = READ_OPS[name]
-    if (!kind || !has(home, kind)) return null
+    if (!kind) return null
+    // Turned off here by the user: the leader's, never "not found" (not copied yet: null, as before).
+    if (!has(home, kind)) return isOff(home, kind) ? notKept(kind === 'memory' ? 'Your memory' : `Your ${kind}`, true, kind === 'memory' ? 'is' : 'are') : null
     try {
       if (name === 'note_read') return noteRead(home, args, why)
       if (name === 'note_search') return noteSearch(home, args, why)
@@ -597,8 +667,12 @@ export function createHostReplica(deps: HostReplicaDeps) {
     try { return fs.readFileSync(bodyFile(home, kind, row.f), 'utf8') } catch { return null }
   }
 
-  /** The manifest as this host holds it, or null for a kind it never keeps. */
-  function list(home: string, kind: unknown): { entries: Array<{ k: string; h: string; n?: number; m?: Record<string, unknown> }>; asOf: string | null; manifestHash: string } | null {
+  /**
+   * The manifest as this host holds it, or null for a kind it never keeps. `off`: the
+   * leader turned the kind off here; `keep` (notes): what the leader leaves out of it;
+   * `offKinds` (notes): the memory or skills turned off here.
+   */
+  function list(home: string, kind: unknown): { entries: Array<{ k: string; h: string; n?: number; m?: Record<string, unknown> }>; asOf: string | null; manifestHash: string; off?: true; keep?: { exclude: string[]; tooBig: string[] }; offKinds?: ReplicaKind[] } | null {
     if (!isKind(kind) || typeof home !== 'string' || !home) return null
     const st = load(home, kind)
     const v = viewOf(home, kind)
@@ -606,7 +680,15 @@ export function createHostReplica(deps: HostReplicaDeps) {
       const row = rowIn(v, k)!
       return { k, h: row.h, ...(row.n !== undefined ? { n: row.n } : {}), ...(row.m ? { m: row.m } : {}) }
     })
-    return { entries, asOf: st.asOf ? new Date(st.asOf).toISOString() : null, manifestHash: manifestHash(home, kind, v) }
+    const exclude = st.opts.keepExclude ?? []
+    const tooBig = st.opts.tooBig ?? []
+    return {
+      entries, asOf: st.asOf ? new Date(st.asOf).toISOString() : null, manifestHash: manifestHash(home, kind, v),
+      ...(st.off ? { off: true as const } : {}),
+      ...(kind === 'notes' && (exclude.length > 0 || tooBig.length > 0) ? { keep: { exclude, tooBig } } : {}),
+      // The other kinds turned off here: a search over this host's copies leaves them out.
+      ...(kind === 'notes' && KINDS.some((k) => k !== 'notes' && isOff(home, k)) ? { offKinds: KINDS.filter((k) => k !== 'notes' && isOff(home, k)) } : {}),
+    }
   }
 
   /** One entry with its body, or null (no such key in this copy). */
@@ -661,6 +743,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
 
   return {
     sync, put, drop, status, answer, ops, has, keeps, memoryDocs, READ_OPS: Object.keys(READ_OPS), list, read, readMany,
+    isOff, leftOut, notesPartial, keepsNote: (home: string, k: string): boolean => !noteLeftOut(home, k),
     manifestHash: (home: string, kind: ReplicaKind) => manifestHash(home, kind),
     setJournalView, copyBody, notesKeep, peekNote: (home: string, k: string) => peekBody(home, 'notes', k), noteRow: (home: string, k: string): { h: string; n?: number; m?: Record<string, unknown> } | null => rowIn(viewOf(home, 'notes'), k) ?? null,
     hashOf: (body: string) => deps.hash(body),

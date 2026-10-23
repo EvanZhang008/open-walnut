@@ -231,16 +231,20 @@ function boardFile(taskId: string): string {
  * server's own dir. Writes always name boardFile: nothing on the companion writes
  * a board (its board writes answer 501, no board job runs there).
  *
- * The companion holding no copy (before the first round, an older Mac, or the
- * user turned boards off for it) answers needs_leader {why:'kind_not_copied'}, never
- * the files git sync wrote into its data dir: those stop being written (stage 4d),
- * and a board read from them would show the Mac's board as it once was.
+ * Boards the user turned off for a replica (a host's or the companion's) answer
+ * needs_leader {why:'not_kept_here'} (gate.ts assertCopyKept): its dir holds none.
+ * The companion holding no copy (before the first round, an older Mac) answers
+ * needs_leader {why:'kind_not_copied'}, never the files git sync wrote into its data
+ * dir: those stop being written (stage 4d), and a board read from them would show
+ * the Mac's board as it once was.
  */
 async function readBoardsDir(): Promise<string> {
+  const gate = await import('../replication/kinds/gate.js');
+  if (!gate.keepsCopies('boards')) return boardsDir();
+  await gate.assertCopyKept('boards');
   if (!isCompanion()) return boardsDir();
-  const { copyKindHeld, copyPath, KIND_NOT_COPIED } = await import('../replication/kinds/gate.js');
-  if (!(await copyKindHeld('boards'))) throw new NeedsLeaderError(KIND_NOT_COPIED);
-  return copyPath(boardsDir());
+  if (!(await gate.copyKindHeld('boards'))) throw new NeedsLeaderError(gate.KIND_NOT_COPIED);
+  return gate.copyPath(boardsDir());
 }
 
 async function readBoardFile(taskId: string): Promise<string> {
@@ -249,7 +253,10 @@ async function readBoardFile(taskId: string): Promise<string> {
 
 /** The names of every board on disk (the reminder clock's boot scan). */
 export async function listBoardTaskIds(): Promise<string[]> {
-  const names = await fsp.readdir(await readBoardsDir()).catch(() => [] as string[]);
+  // No boards kept here (turned off, or no copy yet): none to scan.
+  const dir = await readBoardsDir().catch(() => null);
+  if (!dir) return [];
+  const names = await fsp.readdir(dir).catch(() => [] as string[]);
   return names
     .filter((n) => n.endsWith('.json'))
     .map((n) => n.slice(0, -'.json'.length))

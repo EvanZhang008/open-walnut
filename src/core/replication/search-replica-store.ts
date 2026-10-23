@@ -262,16 +262,21 @@ export function searchReplicaSync(body: Record<string, unknown>): Promise<Replic
     const removes = partial && Array.isArray(body.removes)
       ? new Set(body.removes.filter((k): k is string => typeof k === 'string' && k.length > 0))
       : null
+    // Docs the user's choice leaves out of this copy (search-replica-keep.ts): they go, however many.
+    const drop = Array.isArray(body.drop)
+      ? new Set(body.drop.filter((k): k is string => typeof k === 'string' && k.length > 0))
+      : null
     const index = await openIndex()
     await refreshMap(index)
     const need: string[] = []
     for (const [k, h] of wanted) if (map.valueOfKey(k) !== h) need.push(k)
     const remove = partial
-      ? map.entries().filter((e) => removes?.has(e.key) && !wanted.has(e.key))
+      ? map.entries().filter((e) => (removes?.has(e.key) || drop?.has(e.key)) && !wanted.has(e.key))
       : map.entries().filter((e) => !wanted.has(e.key))
     // A primary whose index was emptied (a damaged file, a rebuild in its first
     // seconds) must not empty this copy, which may be the only one that works.
-    if (map.size >= MASS_REMOVE_FLOOR && remove.length * 2 > map.size) {
+    const unchosen = drop ? remove.filter((e) => !drop.has(e.key)).length : remove.length
+    if (map.size >= MASS_REMOVE_FLOOR && unchosen * 2 > map.size) {
       log.memory.warn('search replica: refused a manifest that removes most docs', { entries: wanted.size, local: map.size, removing: remove.length })
       return { ok: false, status: 400, error: 'manifest_removes_most_docs' }
     }

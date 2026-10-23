@@ -17,9 +17,10 @@
  *   off markers        the leader's `purge` step (a kind the host's Settings row
  *                      turned off) removes that kind's store and leaves
  *                      `cache/replica/<kind>.json` as `{v:1, off:true}`: no copy
- *                      state, and the kind answers `needs_leader {why:'kind_not_copied'}`
- *                      while the Mac is away (copyKindOff). The next manifest round
- *                      (the kind turned on again) overwrites the marker.
+ *                      state, and the kind's reads go to the Mac while it answers and
+ *                      answer `needs_leader {why:'not_kept_here'}` while it is away
+ *                      (copyKindOff, assertCopyKept). The next manifest round (the
+ *                      kind turned on again) overwrites the marker.
  */
 
 import fsp from 'node:fs/promises'
@@ -27,6 +28,7 @@ import path from 'node:path'
 import { WALNUT_HOME } from '../../../constants.js'
 import { followerKind, isHostReplicaProgram } from '../../server-role.js'
 import { writeCopyFile, type Refusal } from '../kind-follower.js'
+import { NeedsLeaderError } from '../needs-leader.js'
 
 /**
  * The kinds the companion keeps (stage 2a, 2b, 2c, 3c, 3e, 4d). Each has a box read that answers
@@ -110,3 +112,17 @@ export const COPY_AS_OF_HEADER = 'x-walnut-copy-as-of'
 
 /** The why of a read that finds no copy of its kind here. */
 export const KIND_NOT_COPIED = 'kind_not_copied'
+
+/** The why of a read of what the user keeps from this replica (a kind off, a note left out). */
+export const NOT_KEPT_HERE = 'not_kept_here'
+
+/**
+ * A copy kind the user turned off for this replica is the Mac's: never read from the copy
+ * or from this server's own disk (docs/plan/walnut-companion-unified-replica.md, 4f).
+ * Throws NeedsLeaderError('not_kept_here') when `kind` is off here; nothing otherwise
+ * (kept, or never turned off: each reader keeps its own fallback for an older Mac).
+ */
+export async function assertCopyKept(kind: string): Promise<void> {
+  if (!keepsCopies(kind)) return
+  if (await copyKindOff(kind)) throw new NeedsLeaderError(NOT_KEPT_HERE, 'This is kept only on your Mac.')
+}

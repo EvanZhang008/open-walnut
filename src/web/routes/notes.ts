@@ -27,6 +27,9 @@ export async function readGlobalNotes(): Promise<{ content: string; contentHash:
     if ('needs' in copied) throw new NeedsLeaderError(copied.needs)
     return { content: copied.content, contentHash: computeContentHash(copied.content) }
   }
+  // A host replica reads the daemon's copy (it keeps no vault of its own): never its disk.
+  const fromCopy = await hostReplicaGlobalNotes()
+  if (fromCopy) return fromCopy
   let content = ''
   try {
     content = await fsp.readFile(GLOBAL_NOTES_FILE, 'utf-8')
@@ -36,6 +39,35 @@ export async function readGlobalNotes(): Promise<{ content: string; contentHash:
   }
   return { content, contentHash: computeContentHash(content) }
 }
+
+/** The global notes from a host replica's copy (replica/notes-source.ts), null anywhere else. */
+async function hostReplicaGlobalNotes(): Promise<{ content: string; contentHash: string } | null> {
+  const { isHostReplicaProgram } = await import('../../core/server-role.js')
+  if (!isHostReplicaProgram()) return null
+  const { replicaNotesSource } = await import('../../replica/notes-source.js')
+  const src = replicaNotesSource()
+  if (!src) return null
+  const key = 'global-notes.md'
+  const st = await src.copyState()
+  if (!st.held) throw new NeedsLeaderError(st.off ? 'not_kept_here' : 'kind_not_copied')
+  if (st.partial && await src.leftOut(key)) throw new NeedsLeaderError('not_kept_here')
+  const content = (await src.content(key))?.content ?? ''
+  return { content, contentHash: computeContentHash(content) }
+}
+
+/**
+ * The companion's global notes when its copy does not keep them (notes off for it, the
+ * file left out): the Mac's route while it answers (core/companion-forward.ts), else the route here.
+ */
+notesRouter.use('/global', (req: Request, res: Response, next: NextFunction) => {
+  void (async () => {
+    const { companionGlobalNotes } = await import('../../core/companion-notes.js')
+    const copied = companionGlobalNotes()
+    if (!copied || !('needs' in copied)) { next(); return }
+    const { forwardUnkept } = await import('../../core/companion-forward.js')
+    forwardUnkept(req, res, () => next())
+  })().catch(next)
+})
 
 /**
  * Write the global notes file with optional optimistic locking. Shared by

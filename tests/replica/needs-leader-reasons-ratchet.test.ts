@@ -122,7 +122,9 @@ describe('needs_leader reasons ratchet', () => {
       'config_writes_need_mac', 'routine_writes_need_mac', 'prefs_writes_need_mac', 'conversation_writes_need_mac',
       'other_hosts_need_mac', 'conversation_bodies_need_mac',
       // WP10: the write port's and the away routes' refusals.
-      'fields', 'reorder_needs_mac', 'list_order_needs_mac', 'images_need_mac', 'device_changes_need_mac']) {
+      'fields', 'reorder_needs_mac', 'list_order_needs_mac', 'images_need_mac', 'device_changes_need_mac',
+      // 4f: what a replica does not keep (kinds/gate.ts NOT_KEPT_HERE, the route table's memory and skills rows).
+      'not_kept_here', 'memory_needs_mac', 'skills_need_mac']) {
       expect(found.has(code), `${code} not found by the scan`).toBe(true)
     }
     expect(found.size).toBeGreaterThanOrEqual(20)

@@ -23,7 +23,7 @@
 
 import { log } from '../logging/index.js'
 import { computeContentHash } from '../utils/file-ops.js'
-import { COMPANION_REPLICA_HOME, companionCopyHolds, companionHostReplica } from './companion-host-replica.js'
+import { COMPANION_REPLICA_HOME, companionCopyHolds, companionCopyOff, companionHostReplica } from './companion-host-replica.js'
 import { companionJournalBlobBody, companionJournalRecords, journalMemory, macDrains } from './companion-journal.js'
 import type { JournalRecord } from '../providers/offline-journal-core.js'
 import { followerKind } from './server-role.js'
@@ -64,8 +64,9 @@ export function companionMemoryActive(): boolean {
 }
 
 /** Why the box takes no memory save now, or null (it does, or this is not the companion). */
-export function companionMemoryBlocked(): { why: 'kind_not_copied' | 'mac_too_old'; message: string } | null {
+export function companionMemoryBlocked(): { why: 'kind_not_copied' | 'not_kept_here' | 'mac_too_old'; message: string } | null {
   if (followerKind() !== 'companion') return null
+  if (companionCopyOff('memory')) return { why: 'not_kept_here', message: 'Your memory is kept only on your Mac, so it is changed there.' }
   if (!companionCopyHolds('memory')) return { why: 'kind_not_copied', message: 'This box keeps no copy of the memory yet; that needs your Mac.' }
   if (!macDrains('memory')) return { why: 'mac_too_old', message: 'Your Mac runs an older Walnut that cannot take a memory change later; it needs your Mac.' }
   return null

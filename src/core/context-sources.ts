@@ -171,8 +171,9 @@ async function loadJournalRecent(budget: number): Promise<string> {
   const isEntry = (f: string) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f);
   // The cloud companion reads the Mac's copy of the notes (stage 4d), never its disk.
   const { companionDiaryEntries } = await import('./companion-notes.js');
-  const copied = companionDiaryEntries(DIARY, isEntry, 7);
-  if (copied === 'needs-mac') return '(the diary is on your Mac, and this box keeps no copy of the notes yet)';
+  // A host replica reads the daemon's copy the same way (hostReplicaDiary below).
+  const copied = companionDiaryEntries(DIARY, isEntry, 7) ?? await hostReplicaDiary(DIARY, isEntry, 7);
+  if (copied === 'needs-mac') return '(the diary is on your Mac, and this server keeps no copy of it to read)';
   const entries: string[] = [];
   if (copied) {
     for (const e of copied) entries.push(`--- ${e.name.replace('.md', '')} ---\n${e.body.trim()}`);
@@ -193,6 +194,37 @@ async function loadJournalRecent(budget: number): Promise<string> {
   }
   if (entries.length === 0) return '(no diary entries found)';
   return truncateToTokenBudgetTail(entries.join('\n\n'), budget);
+}
+
+/**
+ * A host replica's diary: its copy of the notes (replica/notes-source.ts), the newest
+ * entries first. `needs-mac` while no copy is held or the diary (its folder, or one of
+ * its notes) is left out of it; null on anything but a host replica.
+ */
+async function hostReplicaDiary(folder: string, want: (name: string) => boolean, limit: number): Promise<Array<{ name: string; body: string }> | 'needs-mac' | null> {
+  const { isHostReplicaProgram } = await import('./server-role.js');
+  if (!isHostReplicaProgram()) return null;
+  const src = (await import('../replica/notes-source.js')).replicaNotesSource();
+  if (!src) return null;
+  try {
+    const st = await src.copyState();
+    if (!st.held) return 'needs-mac';
+    const { leftOut } = await import('./replication/keep-rule.js');
+    const lower = `${folder.toLowerCase()}/`;
+    if (leftOut(`${folder}/x.md`, st.exclude) || st.exclude.some((e) => e.toLowerCase().startsWith(lower))) return 'needs-mac';
+    const prefix = `${folder}/`;
+    const names = (await src.list()).notes.map((n) => n.path)
+      .filter((p) => p.startsWith(prefix) && !p.slice(prefix.length).includes('/') && want(p.slice(prefix.length)))
+      .sort().reverse().slice(0, limit);
+    const out: Array<{ name: string; body: string }> = [];
+    for (const p of names) {
+      const note = await src.content(p);
+      if (note) out.push({ name: p.slice(prefix.length), body: note.content });
+    }
+    return out;
+  } catch {
+    return 'needs-mac';
+  }
 }
 
 // ── XML tag names for each source ──

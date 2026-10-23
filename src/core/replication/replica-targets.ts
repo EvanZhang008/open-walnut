@@ -45,6 +45,11 @@ const COMPANION: ReplicaTarget = {
   label: 'Cloud companion',
   post: async (payload, opts) => (await import('../cloud-ingest.js')).postToCloudReplica(payload, opts),
   available: async () => (await import('../cloud-ingest.js')).cloudReplicaAvailable(),
+  // Its Settings rows (Phones & Cloud) write cloud_bridge.copies; the same defaults as a host's.
+  copies: async () => {
+    const config = await (await import('../config-manager.js')).getConfig()
+    return config.cloud_bridge?.copies ?? config.hosts?.companion?.server?.copies
+  },
 }
 
 const registered = new Map<string, ReplicaTarget>()

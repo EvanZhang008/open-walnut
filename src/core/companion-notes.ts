@@ -18,6 +18,10 @@
  *            were made (the copy's journal view), and one the Mac took until a copy
  *            round from after its ack stores the Mac's own result (or 10 minutes): the
  *            box never shows a note going back
+ *   not kept a note the user left out of the companion's copy (a folder or a note in
+ *            cloud_bridge.keep.notes_exclude, one too large), or every note when notes
+ *            are off for it, is the Mac's: its reads and writes go there while it
+ *            answers (core/companion-forward.ts) and need the Mac while it is away
  *
  * Cloud companion only.
  */
@@ -217,13 +221,17 @@ export async function installCompanionNotes(): Promise<void> {
   const source = notes.createCopyNotesSource({
     async list() {
       const l = r().list(COMPANION_REPLICA_HOME, 'notes')
-      return l ? { entries: l.entries, asOf: l.asOf, manifestHash: l.manifestHash } : { entries: [], asOf: null, manifestHash: '' }
+      return l ? { entries: l.entries, asOf: l.asOf, manifestHash: l.manifestHash, off: l.off === true, keep: l.keep ?? null, offKinds: l.offKinds ?? [] } : { entries: [], asOf: null, manifestHash: '' }
     },
     async read(key) { return r().read(COMPANION_REPLICA_HOME, 'notes', key) },
     async readMany(keys) { return r().readMany(COMPANION_REPLICA_HOME, 'notes', keys, 4 * 1024 * 1024) ?? { files: [], missing: keys, more: [] } },
   })
   copySource = source
-  notes.installReplicaNotesSource(source, { active: () => companionCopyHolds('notes'), search: false })
+  ;(await import('./companion-host-replica.js')).onCompanionNotesCopyChanged(companionNotesChanged)
+  // Always installed: a copy not held (notes off for the box, or none yet) answers through the
+  // source's own rule, which asks the Mac first while it answers (notes-routes.ts).
+  const { forwardUnkept } = await import('./companion-forward.js')
+  notes.installReplicaNotesSource(source, { search: false, forward: forwardUnkept })
 }
 
 /** The server stops: its notes reads go back to the disk vault (a test starts another in this process). */
@@ -239,14 +247,31 @@ export type NoteSaveResult =
   | { ok: true; contentHash?: string; noteId?: string; updatedAt: string; seq: number; coalesced?: boolean }
   | { ok: false; code: string; message: string; detail?: Record<string, unknown> }
 
-/** Is the note at `key` in the copy's keep (not under a folder the Mac leaves out, not too big)? */
+/** Is the note at `key` in the copy's keep (not a folder or a note the Mac leaves out, not too big)? */
 export function companionNoteKept(key: string): boolean {
   const replica = companionHostReplica()
-  if (!replica) return false
-  const keep = replica.notesKeep(COMPANION_REPLICA_HOME)
-  const lower = key.toLowerCase()
-  return !keep.keepExclude.some((f) => { const lf = f.toLowerCase(); return lower === lf || lower.startsWith(`${lf}/`) })
-    && !keep.tooBig.some((t) => t.toLowerCase() === lower)
+  return !!replica && replica.keepsNote(COMPANION_REPLICA_HOME, key)
+}
+
+/** The copy leaves notes out (a folder, a note, one too large): its lists and searches are not whole. */
+export function companionNotesPartial(): boolean {
+  const replica = companionHostReplica()
+  return !!replica && replica.notesPartial(COMPANION_REPLICA_HOME)
+}
+
+/**
+ * A notes search here would leave out what the user keeps from the box (notes off for it, or
+ * notes left out of its copy): the search goes to the Mac while it answers. A copy that keeps
+ * every note searches here as before.
+ */
+export function companionNotesSearchIsPartial(): boolean {
+  return followerKind() === 'companion' && (companionNotesOff() || (companionCopyHolds('notes') && companionNotesPartial()))
+}
+
+/** The Mac turned notes off for the box (its last word was replica.drop). */
+export function companionNotesOff(): boolean {
+  const replica = companionHostReplica()
+  return !!replica && replica.isOff(COMPANION_REPLICA_HOME, 'notes')
 }
 
 /** The box takes note saves into its journal: the copy is held and the Mac drains notes. */
@@ -259,8 +284,9 @@ export function companionNotesWritable(): boolean {
  * A change the box cannot journal needs the Mac: it is never written to the box's disk,
  * which is no longer the Mac's vault once git sync stops writing it.
  */
-export function companionNotesBlocked(): { why: 'kind_not_copied' | 'mac_too_old'; message: string } | null {
+export function companionNotesBlocked(): { why: 'kind_not_copied' | 'not_kept_here' | 'mac_too_old'; message: string } | null {
   if (followerKind() !== 'companion') return null
+  if (companionNotesOff()) return { why: 'not_kept_here', message: 'Your notes are kept only on your Mac.' }
   if (!companionCopyHolds('notes')) return { why: 'kind_not_copied', message: 'This box keeps no copy of the notes yet; that needs your Mac.' }
   if (!macDrains('note')) return { why: 'mac_too_old', message: 'Your Mac runs an older Walnut that cannot take a note change later; it needs your Mac.' }
   return null
@@ -271,10 +297,11 @@ export function companionNotesBlocked(): { why: 'kind_not_copied' | 'mac_too_old
  * else the copy; none yet reads as empty, as on the Mac), `{needs}` when the box cannot
  * tell (no copy yet, or the Mac keeps the file to itself), null on anything but the companion.
  */
-export function companionGlobalNotes(): { content: string } | { needs: 'kind_not_copied' | 'note_not_kept' } | null {
+export function companionGlobalNotes(): { content: string } | { needs: 'kind_not_copied' | 'not_kept_here' } | null {
   if (followerKind() !== 'companion') return null
+  if (companionNotesOff()) return { needs: 'not_kept_here' }
   if (!companionCopyHolds('notes')) return { needs: 'kind_not_copied' }
-  if (!companionNoteKept(GLOBAL_NOTES_KEY)) return { needs: 'note_not_kept' }
+  if (!companionNoteKept(GLOBAL_NOTES_KEY)) return { needs: 'not_kept_here' }
   return { content: companionNoteAt(GLOBAL_NOTES_KEY)?.body ?? '' }
 }
 
@@ -300,7 +327,7 @@ export async function companionNotesSearch(q: string, limit: number): Promise<{
   const list = src ? companionHostReplica()?.list(COMPANION_REPLICA_HOME, 'notes') : null
   if (!src || !list) {
     const { NeedsLeaderError } = await import('./replication/needs-leader.js')
-    throw new NeedsLeaderError('kind_not_copied')
+    throw new NeedsLeaderError(companionNotesOff() ? 'not_kept_here' : 'kind_not_copied')
   }
   const phrase = q.trim().toLowerCase()
   const tokens = phrase.split(/\s+/).filter(Boolean)
@@ -335,6 +362,8 @@ export function companionDiaryEntries(folder: string, want: (name: string) => bo
   if (followerKind() !== 'companion') return null
   const list = companionCopyHolds('notes') ? companionHostReplica()?.list(COMPANION_REPLICA_HOME, 'notes') : null
   if (!list) return 'needs-mac'
+  // A diary the user left out of the box (its folder, or one of its notes) is the Mac's.
+  if (companionNotesPartial() && (!companionNoteKept(folder) || list.keep?.exclude.some((e) => e.toLowerCase().startsWith(`${folder.toLowerCase()}/`)))) return 'needs-mac'
   const prefix = `${folder}/`
   const names = list.entries.map((e) => e.k).filter((k) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/') && want(k.slice(prefix.length)))
   names.sort().reverse()
@@ -359,7 +388,7 @@ export function companionNoteSave(req: { path: unknown; content?: unknown; expec
   if (!key) return { ok: false, code: 'bad_request', message: 'a note save needs a vault-relative path' }
   const home = COMPANION_REPLICA_HOME
   if (!companionNoteKept(key)) {
-    return { ok: false, code: 'needs_leader', message: 'This note is not kept on this box, so it can only be changed on your Mac.', detail: { why: 'note_not_kept' } }
+    return { ok: false, code: 'needs_leader', message: 'This note is kept only on your Mac, so it is changed there.', detail: { why: 'not_kept_here' } }
   }
   const view = noteOverlay(home)
   const shown = view && view.has(key) ? view.get(key) : undefined
