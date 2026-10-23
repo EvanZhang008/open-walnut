@@ -4,7 +4,7 @@
  * between server and SPA, so keep the two in step by hand).
  */
 
-export type InstallKind = 'source' | 'npm' | 'other' | 'replica';
+export type InstallKind = 'source' | 'npm' | 'binary' | 'other' | 'replica';
 export type UpdateCheckDisabledReason = 'source' | 'replica' | 'opted-out' | 'test' | 'unknown-version';
 
 export interface UpdateInstallInfo {

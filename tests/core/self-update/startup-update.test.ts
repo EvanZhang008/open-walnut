@@ -6,11 +6,13 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
+import { guardedPath } from '../../setup/exec-guard.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-startup-update'))
 
 import {
-  APPLIED_ENV, autoUpdateEnabled, decideStartupUpdate, installDirWritable, updateOnStart, type StartupUpdateDeps,
+  APPLIED_ENV, LAUNCHER_UPDATES_ENV, READY_FILE_ENV, autoUpdateEnabled, binaryRootWritable, decideStartupUpdate, installDirWritable, reexecSelf, relaunchArgv, updateOnStart, watchStop,
+  type ReexecResult, type StartupUpdateDeps, type UpdateStop,
 } from '../../../src/core/self-update/startup-update.js'
 import type { UpdateStatus } from '../../../src/core/self-update/update-check.js'
 
@@ -69,25 +71,41 @@ describe('decideStartupUpdate', () => {
   })
 })
 
+/** How a restarted server ended: by default it served, then exited 0. */
+const ended = (over: Partial<ReexecResult> = {}): ReexecResult => ({ exitCode: 0, served: true, stopped: false, ms: 5_000, ...over })
+
+/** A stop that never fires unless the test fires it. */
+function stopStub(): UpdateStop & { fire: (reason: Error, signal?: NodeJS.Signals) => void } {
+  const controller = new AbortController()
+  let received: NodeJS.Signals | null = null
+  return {
+    signal: controller.signal,
+    received: () => received,
+    done: () => {},
+    fire: (reason, signal) => { received = signal ?? null; controller.abort(reason) },
+  }
+}
+
 function deps(status: UpdateStatus, over: Partial<StartupUpdateDeps> = {}) {
   const err: string[] = []
   const run = vi.fn(async () => 0)
-  const reexec = vi.fn(async () => 0)
+  const reexec = vi.fn(async () => ended())
   const checkNow = vi.fn(async () => status)
+  const stop = stopStub()
   const d: StartupUpdateDeps = {
-    checkNow, configAuto: async () => undefined, env: {}, writable: () => true, run, reexec, err: (l) => err.push(l), ...over,
+    checkNow, configAuto: async () => undefined, env: {}, writable: () => true, run, reexec, watch: () => stop, err: (l) => err.push(l), ...over,
   }
-  return { d, err, run, reexec, checkNow }
+  return { d, err, run, reexec, checkNow, stop }
 }
 
 describe('updateOnStart', () => {
   it('installs, then starts the same command again with the applied marker, and reports the child\'s exit code', async () => {
-    const reexec = vi.fn(async () => 3)
+    const reexec = vi.fn(async () => ended({ exitCode: 3 }))
     const { d, err, run } = deps(BASE, { env: { HOME: '/Users/alice' }, reexec })
     const out = await updateOnStart(d)
     expect(out).toEqual({ kind: 'reexeced', version: '0.6.0', exitCode: 3 })
-    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW])
-    expect(reexec).toHaveBeenCalledWith({ HOME: '/Users/alice', [APPLIED_ENV]: '1' })
+    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW], expect.anything())
+    expect(reexec).toHaveBeenCalledWith({ HOME: '/Users/alice', [APPLIED_ENV]: '1' }, BASE.install)
     expect(run.mock.invocationCallOrder[0]).toBeLessThan(reexec.mock.invocationCallOrder[0]!)
     expect(err[0]).toContain('0.6.0 is published (this is 0.5.1); installing it before starting')
     expect(err[1]).toBe('Installed Open Walnut 0.6.0; starting it.')
@@ -139,5 +157,202 @@ describe('updateOnStart', () => {
     const down = deps({ ...BASE, latest: null, available: false, error: 'fetch failed' })
     expect((await updateOnStart(down.d)).decision).toEqual({ action: 'skip', reason: 'unreachable', note: 'fetch failed' })
     expect(down.err).toEqual([])
+  })
+})
+
+const ROOT = '/home/alice/.local/share/open-walnut'
+const FILE: UpdateStatus = {
+  ...BASE,
+  install: {
+    kind: 'binary', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'walnut update',
+    binary: { root: ROOT, target: 'linux-x64', version: '0.5.1' }, relaunch: [`${ROOT}/bin/walnut`],
+  },
+}
+
+describe('the compiled file in install.sh\'s layout', () => {
+  it('installs the published version into its own layout, never through a manager', () => {
+    expect(decideStartupUpdate(FILE, ALL)).toEqual({ action: 'install-file', version: '0.6.0', install: FILE.install.binary })
+    expect(decideStartupUpdate({ ...FILE, latest: '0.5.1', available: false }, ALL)).toEqual({ action: 'skip', reason: 'current' })
+    expect(decideStartupUpdate(FILE, { ...ALL, writable: false })).toMatchObject({ action: 'skip', reason: 'not-writable' })
+  })
+
+  it('needs its versions and bin folders writable', () => {
+    const seen: string[] = []
+    expect(binaryRootWritable(ROOT, (p) => { seen.push(p) })).toBe(true)
+    expect(seen).toEqual([`${ROOT}/versions`, `${ROOT}/bin`])
+    expect(binaryRootWritable(ROOT, (p) => { if (p.endsWith('/bin')) throw new Error('EACCES') })).toBe(false)
+  })
+
+  it('installs, then starts again through its link with the applied marker', async () => {
+    const installFile = vi.fn(async () => {})
+    const { d, err, run, reexec } = deps(FILE, { installFile, binaryWritable: () => true, writable: () => false })
+    expect(await updateOnStart(d)).toEqual({ kind: 'reexeced', version: '0.6.0', exitCode: 0 })
+    expect(installFile).toHaveBeenCalledWith(FILE.install.binary, '0.6.0', expect.any(AbortSignal))
+    expect(run).not.toHaveBeenCalled()
+    expect(reexec).toHaveBeenCalledWith({ [APPLIED_ENV]: '1' }, FILE.install)
+    expect(err.at(-1)).toBe('Installed Open Walnut 0.6.0; starting it.')
+  })
+
+  it('a failed download or check starts the old version, with the reason', async () => {
+    const installFile = vi.fn(async () => { throw new Error('the downloaded Walnut does not run here') })
+    const { d, err, reexec } = deps(FILE, { installFile, binaryWritable: () => true })
+    expect(await updateOnStart(d)).toMatchObject({ kind: 'continue', installFailed: 'the downloaded Walnut does not run here' })
+    expect(reexec).not.toHaveBeenCalled()
+    expect(err.at(-1)).toBe('Could not install 0.6.0 (the downloaded Walnut does not run here); starting 0.5.1 as it is.')
+  })
+
+  it('a root this user cannot write says so and starts as it is', async () => {
+    const installFile = vi.fn(async () => {})
+    const { d, err } = deps(FILE, { installFile, binaryWritable: () => false })
+    expect((await updateOnStart(d)).decision).toMatchObject({ reason: 'not-writable' })
+    expect(installFile).not.toHaveBeenCalled()
+    expect(err[0]).toContain(`this install is not writable by this user. Fix it: make ${ROOT} writable`)
+  })
+})
+
+describe('a new version that does not start', () => {
+  const failed = ended({ exitCode: 1, served: false, ms: 800 })
+
+  it('one that exits non-zero before it serves is gone back from, and the version before starts', async () => {
+    const installFile = vi.fn(async () => ({ from: '0.5.1' }))
+    const rollBack = vi.fn(async () => {})
+    const undoRollBack = vi.fn(async () => {})
+    const reexec = vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(ended({ exitCode: 0 }))
+    const { d, err } = deps(FILE, { installFile, rollBack, undoRollBack, reexec, binaryWritable: () => true })
+    expect(await updateOnStart(d)).toEqual({ kind: 'reexeced', version: '0.5.1', exitCode: 0, rolledBackFrom: '0.6.0' })
+    expect(rollBack).toHaveBeenCalledWith(FILE, '0.5.1', '0.6.0', 'exited with 1 before it served')
+    expect(rollBack.mock.invocationCallOrder[0]).toBeLessThan(reexec.mock.invocationCallOrder[1]!)
+    expect(reexec).toHaveBeenNthCalledWith(2, { [APPLIED_ENV]: '1' }, FILE.install)
+    expect(undoRollBack).not.toHaveBeenCalled()
+    expect(err).toContain('Open Walnut 0.6.0 exited with 1 before it served; going back to 0.5.1. 0.6.0 is skipped until a newer release is published.')
+  })
+
+  it('one that served, or was stopped by a signal, is no failed start', async () => {
+    for (const end of [ended({ exitCode: 1, served: true }), ended({ exitCode: 143, served: false, stopped: true })]) {
+      const rollBack = vi.fn(async () => {})
+      const { d } = deps(FILE, { installFile: async () => ({ from: '0.5.1' }), rollBack, reexec: vi.fn(async () => end), binaryWritable: () => true })
+      expect(await updateOnStart(d)).toEqual({ kind: 'reexeced', version: '0.6.0', exitCode: end.exitCode })
+      expect(rollBack).not.toHaveBeenCalled()
+    }
+  })
+
+  it('when the version gone back to fails to start as well, the new one was not the cause: that is undone', async () => {
+    const rollBack = vi.fn(async () => {})
+    const undoRollBack = vi.fn(async () => {})
+    const reexec = vi.fn(async () => failed)
+    const { d, err } = deps(FILE, { installFile: async () => ({ from: '0.5.1' }), rollBack, undoRollBack, reexec, binaryWritable: () => true })
+    expect(await updateOnStart(d)).toMatchObject({ kind: 'reexeced', version: '0.5.1', exitCode: 1 })
+    expect(undoRollBack).toHaveBeenCalledWith(FILE, '0.6.0')
+    expect(err.at(-1)).toBe('Open Walnut 0.5.1 did not start either, so 0.6.0 was not the cause; the next start runs 0.6.0 again.')
+  })
+
+  it('an npm install goes back the same way', async () => {
+    const rollBack = vi.fn(async () => {})
+    const reexec = vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(ended())
+    const { d } = deps(BASE, { rollBack, reexec })
+    expect(await updateOnStart(d)).toEqual({ kind: 'reexeced', version: '0.5.1', exitCode: 0, rolledBackFrom: '0.6.0' })
+    expect(rollBack).toHaveBeenCalledWith(BASE, '0.5.1', '0.6.0', 'exited with 1 before it served')
+  })
+
+  it('a version held back (it failed here before, or the install was moved back from it) is not installed', async () => {
+    const installFile = vi.fn(async () => {})
+    const { d, err } = deps(FILE, { installFile, binaryWritable: () => true, held: () => '0.6.0 did not start here before (x); it is skipped until a newer release is published' })
+    expect((await updateOnStart(d)).decision).toMatchObject({ action: 'skip', reason: 'held' })
+    expect(installFile).not.toHaveBeenCalled()
+    expect(err).toEqual(['Open Walnut 0.6.0 is published, but 0.6.0 did not start here before (x); it is skipped until a newer release is published. Starting 0.5.1.'])
+  })
+})
+
+describe('an npm install that did not bring its file', () => {
+  it('installs once more when the launcher does not start the new version, then starts it', async () => {
+    const versionOf = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce('0.6.0 (abc12345, 2026-10-22)')
+    const { d, run, reexec, err } = deps(BASE, { versionOf })
+    expect(await updateOnStart(d)).toEqual({ kind: 'reexeced', version: '0.6.0', exitCode: 0 })
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(reexec).toHaveBeenCalledTimes(1)
+    expect(err).toContain('The installed launcher does not start 0.6.0 (it printed: nothing); installing it once more.')
+  })
+
+  it('still not: the version before goes back, and it starts as it was', async () => {
+    const versionOf = vi.fn(async () => null)
+    const { d, run, reexec, err } = deps(BASE, { versionOf })
+    expect(await updateOnStart(d)).toMatchObject({ kind: 'continue', installFailed: 'it still starts nothing' })
+    expect(run.mock.calls.map((c) => (c as unknown[])[1])).toEqual([
+      ['install', '-g', 'open-walnut@0.6.0', ALLOW], ['install', '-g', 'open-walnut@0.6.0', ALLOW], ['install', '-g', 'open-walnut@0.5.1', ALLOW],
+    ])
+    expect(reexec).not.toHaveBeenCalled()
+    expect(err.at(-1)).toBe('Open Walnut 0.6.0 did not install its file for this machine (it still starts nothing); 0.5.1 is back.')
+  })
+})
+
+describe('the start\'s own end', () => {
+  it('a download longer than the budget gives up and starts the version in use', async () => {
+    const { d, err, reexec, stop } = deps(FILE, { binaryWritable: () => true })
+    d.installFile = (_install, _version, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason))
+      stop.fire(new Error('it took longer than 60 s'))
+    })
+    expect(await updateOnStart(d)).toMatchObject({ kind: 'continue', installFailed: 'it took longer than 60 s; `walnut update` installs it without a limit' })
+    expect(reexec).not.toHaveBeenCalled()
+    expect(err.at(-1)).toBe('Could not install 0.6.0 (it took longer than 60 s; `walnut update` installs it without a limit); starting 0.5.1 as it is.')
+  })
+
+  it('a signal while it installs stops it: nothing starts', async () => {
+    const { d, reexec, stop } = deps(FILE, { binaryWritable: () => true })
+    d.installFile = (_install, _version, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason))
+      stop.fire(new Error('stopped by SIGTERM'), 'SIGTERM')
+    })
+    expect(await updateOnStart(d)).toEqual({ kind: 'stopped', signal: 'SIGTERM' })
+    expect(reexec).not.toHaveBeenCalled()
+    // npm's install the same: its own run ends, then nothing starts.
+    const npm = deps(BASE)
+    npm.d.run = vi.fn(async () => { npm.stop.fire(new Error('stopped by SIGINT'), 'SIGINT'); return 130 })
+    expect(await updateOnStart(npm.d)).toEqual({ kind: 'stopped', signal: 'SIGINT' })
+  })
+
+  it('a launcher that updates the install itself starts the server without asking the registry', async () => {
+    const { d, checkNow } = deps(FILE, { env: { [LAUNCHER_UPDATES_ENV]: '1' } })
+    expect(await updateOnStart(d)).toEqual({ kind: 'continue', decision: { action: 'skip', reason: 'launcher' } })
+    expect(checkNow).not.toHaveBeenCalled()
+  })
+
+  it('watchStop hears SIGINT, SIGTERM and SIGHUP while it watches, and lets go of them after', () => {
+    const before = process.listenerCount('SIGHUP')
+    const stop = watchStop(60_000)
+    expect(process.listenerCount('SIGHUP')).toBe(before + 1)
+    process.emit('SIGHUP', 'SIGHUP')
+    expect(stop.received()).toBe('SIGHUP')
+    expect(stop.signal.aborted).toBe(true)
+    stop.done()
+    expect(process.listenerCount('SIGHUP')).toBe(before)
+  })
+})
+
+describe('reexecSelf', () => {
+  const as = (script: string) => ({ relaunch: ['/bin/sh', '-c', script, 'walnut'], binary: null }) as unknown as Parameters<typeof reexecSelf>[1]
+
+  it('says whether the restarted server wrote its ready file before it exited, and with what code', async () => {
+    const served = await reexecSelf({ PATH: guardedPath([], '/usr/bin:/bin') }, as(`echo $$ > "$${READY_FILE_ENV}"; exit 3`))
+    expect(served).toMatchObject({ exitCode: 3, served: true, stopped: false })
+    const crashed = await reexecSelf({ PATH: guardedPath([], '/usr/bin:/bin') }, as('exit 1'))
+    expect(crashed).toMatchObject({ exitCode: 1, served: false, stopped: false })
+    // Killed by a signal nobody here sent: a crash, with the shell's code for it.
+    const killed = await reexecSelf({ PATH: guardedPath([], '/usr/bin:/bin') }, as('kill -TERM $$'))
+    expect(killed).toMatchObject({ exitCode: 143, served: false, stopped: false })
+  })
+})
+
+describe('relaunchArgv', () => {
+  it('runs the install\'s own relaunch with this process\'s arguments, else this process again', () => {
+    const fileArgv = ['bun', '/$bunfs/root/walnut', 'web', '--port', '3456']
+    expect(relaunchArgv(FILE.install, fileArgv)).toEqual({ file: `${ROOT}/bin/walnut`, args: ['web', '--port', '3456'] })
+    const viaLauncher = { relaunch: ['/usr/bin/node', '/usr/lib/node_modules/open-walnut/bin/open-walnut.js'], binary: null }
+    expect(relaunchArgv(viaLauncher, fileArgv)).toEqual({ file: '/usr/bin/node', args: ['/usr/lib/node_modules/open-walnut/bin/open-walnut.js', 'web', '--port', '3456'] })
+    const nodeArgv = ['/usr/bin/node', '/usr/lib/node_modules/open-walnut/bin/open-walnut.js', 'web']
+    expect(relaunchArgv(null, nodeArgv, '/usr/bin/node')).toEqual({ file: '/usr/bin/node', args: ['/usr/lib/node_modules/open-walnut/bin/open-walnut.js', 'web'] })
+    // The compiled file with no relaunch: itself again, without its own entry (it adds that itself).
+    const npmFile = '/usr/lib/node_modules/open-walnut/node_modules/@open-walnut/linux-x64/walnut'
+    expect(relaunchArgv({ relaunch: null, binary: null }, fileArgv, npmFile)).toEqual({ file: npmFile, args: ['web', '--port', '3456'] })
   })
 })

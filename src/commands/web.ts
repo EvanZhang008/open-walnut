@@ -89,31 +89,42 @@ export async function runWeb(options: {
   // Note: ephemeral WALNUT_HOME guard is in constants.ts (must run at import time,
   // before any derived paths are computed). See resolveWalnutHome() there.
 
-  // Update on restart (src/core/self-update/startup-update.ts): an npm install with
-  // a newer release published installs it now, before anything is listening, and
-  // this process becomes a thin parent of the new one. Every other case (a source
+  // Update on restart (src/core/self-update/startup-update.ts): an npm install, or
+  // the compiled file in install.sh's layout, with a newer release published
+  // installs it now, before anything is listening, and this process becomes a
+  // thin parent of the new one. Every other case (a source
   // checkout, updates.auto: false, no newer release, the registry down, a
   // read-only prefix) falls through and starts as it is.
+  // The parent that restarted this process after an update learns from this file
+  // that it listened, so its exit is no failure to start (startup-update.ts).
+  const { READY_FILE_ENV, runStartupUpdate } = await import('../core/self-update/startup-update.js')
+  const readyFile = process.env[READY_FILE_ENV]
+  delete process.env[READY_FILE_ENV]
   {
-    const { updateOnStart, installDirWritable, runInherited, reexecSelf } = await import('../core/self-update/startup-update.js')
-    const { UpdateChecker } = await import('../core/self-update/update-check.js')
-    const outcome = await updateOnStart({
-      checkNow: () => new UpdateChecker().checkNow(),
-      configAuto: async () => {
-        const { getConfig } = await import('../core/config-manager.js')
-        return (await getConfig()).updates?.auto
-      },
-      env: process.env,
-      writable: installDirWritable,
-      run: runInherited,
-      reexec: reexecSelf,
-      err: (line) => process.stderr.write(`${line}\n`),
+    const outcome = await runStartupUpdate(async () => {
+      const { getConfig } = await import('../core/config-manager.js')
+      return (await getConfig()).updates?.auto
     })
     if (outcome.kind === 'reexeced') {
       process.exitCode = outcome.exitCode
       return
     }
+    if (outcome.kind === 'stopped') {
+      // Stopped while it installed (it cleaned up): the shell's code for that signal.
+      process.exit(128 + (os.constants.signals[outcome.signal] ?? 0))
+    }
   }
+
+  // The compiled file in install.sh's layout marks the version it runs from, so no
+  // update removes that file while this server still starts it (binary-install.ts).
+  try {
+    const { detectInstall } = await import('../core/self-update/install-kind.js')
+    const install = detectInstall()
+    if (install.kind === 'binary' && install.binary) {
+      const { markRunning } = await import('../core/self-update/binary-install.js')
+      markRunning(install.binary.root, install.binary.version)
+    }
+  } catch { /* advisory: the server starts either way */ }
 
   // Native addons (better-sqlite3) are compiled against one Node ABI. If the
   // running Node differs, the task store can't open and startup dies with an
@@ -195,6 +206,9 @@ export async function runWeb(options: {
   armGracefulSignalExit()
 
   await startServer({ port, dev: !!options.dev })
+  if (readyFile) {
+    try { fs.writeFileSync(readyFile, `${process.pid}\n`) } catch { /* the parent then reads an exit as a failed start */ }
+  }
 
   // Someone watching `walnut web` in a terminal gets the npm-style one-liner when
   // the first check (20 s after listen) finds a newer release. A server started by

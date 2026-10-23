@@ -11,7 +11,9 @@ import { readBunLock, runtimeClosure, splitSpec } from '../../helpers/bun-lock.j
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-install-kind'))
 
-import { detectInstall, globalPrefixOf, INSTALL_SCRIPT_PACKAGES, managerArgv, managerCommand, managerFromPath, RUNTIME_MARKER, runtimePrefixOf } from '../../../src/core/self-update/install-kind.js'
+import {
+  BINARY_MARKER, detectInstall, globalPrefixOf, INSTALL_SCRIPT_PACKAGES, LAUNCHER_ENV, managerArgv, managerCommand, managerFromPath, RUNTIME_MARKER, runsCompiled, runtimePrefixOf,
+} from '../../../src/core/self-update/install-kind.js'
 
 describe('managerFromPath', () => {
   it('names the manager a global install path belongs to', () => {
@@ -111,8 +113,87 @@ describe('detectInstall', () => {
   })
 
   it('reads the process defaults from constants when called bare', () => {
+    // This process is a script runtime, in no layout of the file's: nothing below applies.
     // The mocked constants have no install dir and no package root: an "other" install, not a crash.
     expect(detectInstall().kind).toBe('other')
+  })
+})
+
+// The compiled file (scripts/build-binary.mjs) reports a package root of its own
+// (its unpacked runtime), which never says how it was installed: its executable's
+// place does, or the npm launcher's env when that names this very file.
+describe('detectInstall for the compiled file', () => {
+  const root = '/home/alice/.local/share/open-walnut'
+  const file = `${root}/versions/0.8.0/walnut`
+  const runtimeRoot = '/home/alice/.open-walnut/local/runtime/0.8.0-abc'
+  const files: Record<string, string> = {
+    [`${root}/${BINARY_MARKER}`]: JSON.stringify({ layout: 'versions', target: 'linux-x64-musl' }),
+    '/usr/lib/node_modules/open-walnut/package.json': JSON.stringify({ name: 'open-walnut', version: '0.8.0' }),
+  }
+  const readFile = (p: string) => { if (p in files) return files[p]!; throw new Error(`ENOENT ${p}`) }
+  // Links: ~/.local/bin/walnut -> <root>/bin/walnut -> versions/0.8.0/walnut.
+  const links: Record<string, string> = { '/home/alice/.local/bin/walnut': file, [`${root}/bin/walnut`]: file }
+  const realpath = (p: string) => links[p] ?? p
+  const inputs = { cloud: false, installDir: null, packageRoot: runtimeRoot, readFile, realpath }
+
+  it('is a binary install in install.sh\'s versions layout, updated by itself, restarted through its link', () => {
+    const info = detectInstall({ ...inputs, execPath: file, env: {} })
+    expect(info).toMatchObject({
+      kind: 'binary', manager: null, updateCommand: 'walnut update', packageRoot: null,
+      binary: { root, target: 'linux-x64-musl', version: '0.8.0' }, relaunch: [`${root}/bin/walnut`],
+    })
+  })
+
+  it('needs install.sh\'s marker: the same shape anywhere else is not one', () => {
+    const elsewhere = '/home/alice/Downloads/versions/0.8.0/walnut'
+    expect(detectInstall({ ...inputs, execPath: elsewhere, env: {} }).kind).toBe('other')
+    const bad = { ...files, [`${root}/${BINARY_MARKER}`]: JSON.stringify({ layout: 'versions', target: '../../etc' }) }
+    expect(detectInstall({ ...inputs, readFile: (p) => bad[p] ?? readFile(p), execPath: file, env: {} }).kind).toBe('other')
+    // A file named otherwise in that place is not the walnut install.sh put there.
+    expect(detectInstall({ ...inputs, execPath: `${root}/versions/0.8.0/node`, env: {} }).kind).toBe('other')
+  })
+
+  it('a compiled file in no install\'s place is no npm install, whatever package root its runtime reports', () => {
+    const loose = '/home/alice/Downloads/walnut'
+    const underNodeModules = '/home/alice/node_modules/open-walnut'
+    expect(detectInstall({ ...inputs, packageRoot: underNodeModules, execPath: loose, env: {}, compiled: true })).toMatchObject({ kind: 'other', packageRoot: null, updateCommand: null })
+    // Node running the package from there is that npm install, as before.
+    expect(detectInstall({ ...inputs, packageRoot: underNodeModules, execPath: '/usr/bin/node', env: {}, compiled: false }).kind).toBe('npm')
+    expect(runsCompiled(['bun', '/$bunfs/root/walnut', 'web'])).toBe(true)
+    expect(runsCompiled(['/usr/bin/node', '/usr/lib/node_modules/open-walnut/dist/cli.js', 'web'])).toBe(false)
+  })
+
+  it('a file Homebrew installed names brew, and nothing else updates it', () => {
+    const info = detectInstall({ ...inputs, execPath: '/opt/homebrew/Cellar/open-walnut/0.8.0/bin/walnut', env: {} })
+    expect(info).toMatchObject({ kind: 'other', updateCommand: 'brew upgrade open-walnut', manager: null })
+  })
+
+  it('started by the npm launcher, it is that npm install, restarted through the launcher', () => {
+    const npmFile = '/usr/lib/node_modules/open-walnut/node_modules/@open-walnut/linux-x64/walnut'
+    const env = {
+      [LAUNCHER_ENV.packageRoot]: '/usr/lib/node_modules/open-walnut',
+      [LAUNCHER_ENV.file]: npmFile,
+      [LAUNCHER_ENV.relaunch]: JSON.stringify(['/usr/bin/node', '/usr/lib/node_modules/open-walnut/bin/open-walnut.js']),
+    }
+    const info = detectInstall({ ...inputs, execPath: npmFile, env })
+    expect(info).toMatchObject({
+      kind: 'npm', manager: 'npm', updateCommand: 'npm install -g open-walnut@latest', packageRoot: '/usr/lib/node_modules/open-walnut',
+      relaunch: ['/usr/bin/node', '/usr/lib/node_modules/open-walnut/bin/open-walnut.js'],
+    })
+    // Inherited by a child that is another Walnut (a session running a binary install's
+    // walnut): the env names a different file there, so it counts for nothing.
+    expect(detectInstall({ ...inputs, execPath: file, env }).kind).toBe('binary')
+    // A package root that is not open-walnut's is not believed either.
+    expect(detectInstall({ ...inputs, execPath: npmFile, env: { ...env, [LAUNCHER_ENV.packageRoot]: '/tmp/evil' } }).kind).toBe('other')
+    // A relaunch that is not an argv is dropped; the install is still npm.
+    expect(detectInstall({ ...inputs, execPath: npmFile, env: { ...env, [LAUNCHER_ENV.relaunch]: '"node"' } })).toMatchObject({ kind: 'npm', relaunch: null })
+  })
+
+  it('the launcher wins over a source checkout the file happens to sit near; nothing else does', () => {
+    const npmFile = '/usr/lib/node_modules/open-walnut/node_modules/@open-walnut/linux-x64/walnut'
+    const env = { [LAUNCHER_ENV.packageRoot]: '/usr/lib/node_modules/open-walnut', [LAUNCHER_ENV.file]: npmFile }
+    expect(detectInstall({ ...inputs, installDir: '/home/alice/open-walnut', execPath: npmFile, env }).kind).toBe('npm')
+    expect(detectInstall({ ...inputs, installDir: '/home/alice/open-walnut', execPath: '/usr/bin/node', env: {} }).kind).toBe('source')
   })
 })
 

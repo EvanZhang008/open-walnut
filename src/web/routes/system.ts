@@ -113,13 +113,18 @@ systemRouter.post('/desktop-update/restart', async (req, res) => {
 /** The registry call is 5 s; this is the route's own ceiling so a stalled socket never pins a request. */
 const UPDATE_CHECK_DEADLINE_MS = 8_000
 
-/** The status plus whether `open-walnut web` installs updates on start (config `updates.auto`), for the card's wording. */
+/**
+ * The status plus whether `open-walnut web` installs updates on start (config `updates.auto`),
+ * for the card's wording. Only an npm or binary install updates itself; Homebrew and source never do.
+ */
 async function updateStatusForClient() {
   const { getUpdateChecker } = await import('../../core/self-update/update-check.js')
   const { autoUpdateEnabled } = await import('../../core/self-update/startup-update.js')
   let configAuto: boolean | undefined
   try { configAuto = (await getConfig()).updates?.auto } catch { /* default */ }
-  return { ...getUpdateChecker().status(), autoUpdate: autoUpdateEnabled(configAuto, process.env) }
+  const status = getUpdateChecker().status()
+  const selfUpdates = status.install.kind === 'npm' || status.install.kind === 'binary'
+  return { ...status, autoUpdate: selfUpdates && autoUpdateEnabled(configAuto, process.env) }
 }
 
 // GET /api/system/update: the cached answer, never a network call.

@@ -361,9 +361,10 @@ export function registerCommands(program: Command): void {
     .description('Check npm for a newer Open Walnut and install it (a source checkout is told the git steps instead)')
     .option('--check', 'Only report whether a newer version is published')
     .option('--channel <channel>', 'Follow stable (tagged releases) or nightly (main, published daily) instead of the installed build\'s channel')
+    .option('--auto', 'Update only as an automatic update would: not when updates.auto is false, and not to a version held back')
     .action(async (options: Record<string, unknown>, cmd) => {
       const { runUpdate } = await import('./update.js');
-      await runUpdate(options as { check?: boolean; channel?: string }, cmd.optsWithGlobals());
+      await runUpdate(options as { check?: boolean; channel?: string; auto?: boolean }, cmd.optsWithGlobals());
     });
 
   program
