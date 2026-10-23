@@ -21,7 +21,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { WebSocket } from 'ws'
+import { WebSocket } from '#ws'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

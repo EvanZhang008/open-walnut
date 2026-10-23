@@ -1,8 +1,10 @@
 import { defineConfig } from 'vitest/config';
 import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
-import { runtimeDeps } from './tests/setup/runtime-deps';
+import { runtimeAliases, runtimeDeps } from './tests/setup/runtime-deps';
 
 export default defineConfig({
+  // `#ws` on bun: see tests/setup/runtime-deps.ts.
+  resolve: { alias: runtimeAliases(import.meta.dirname) },
   test: {
     globals: true,
     environment: 'node',

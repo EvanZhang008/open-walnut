@@ -26,6 +26,12 @@
     "automation"
   ],
   "type": "module",
+  "imports": {
+    "#ws": {
+      "bun": "./src/lib/ws-npm.ts",
+      "default": "ws"
+    }
+  },
   "workspaces": [
     "packages/plugin-api",
     "packages/plugin-cli"

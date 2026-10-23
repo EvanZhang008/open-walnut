@@ -33,3 +33,12 @@ export function runtimeDeps(): { interopDefault?: boolean } {
   }
   return { interopDefault: false }
 }
+
+/**
+ * Module aliases for a vitest run on bun. `#ws` (package.json "imports") names
+ * src/lib/ws-npm.ts under the "bun" condition, which vite's resolver does not
+ * apply, so on bun the alias says it; Node resolves `#ws` to `ws` itself.
+ */
+export function runtimeAliases(root: string): Record<string, string> {
+  return typeof process.versions.bun === 'string' ? { '#ws': `${root}/src/lib/ws-npm.ts` } : {}
+}

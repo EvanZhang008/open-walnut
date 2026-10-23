@@ -16,7 +16,7 @@
  * env knob, so "fresh" is 667ms and "quiet" is 1.5s.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { WebSocket, WebSocketServer } from 'ws'
+import { WebSocket, WebSocketServer } from '#ws'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'

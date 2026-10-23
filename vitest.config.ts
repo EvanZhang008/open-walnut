@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
-import { runtimeDeps } from './tests/setup/runtime-deps';
+import { runtimeAliases, runtimeDeps } from './tests/setup/runtime-deps';
 
 export default defineConfig({
   // Same aliases as vitest.quick.config.ts: '@open-walnut/*' are alias-only
@@ -26,6 +26,8 @@ export default defineConfig({
       '@open-walnut/history-injected-banner': path.resolve(import.meta.dirname, 'src/lib/history-injected-banner.ts'),
       '@open-walnut/history-session-envelope': path.resolve(import.meta.dirname, 'src/lib/history-session-envelope.ts'),
       '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
+      // `#ws` on bun: see tests/setup/runtime-deps.ts.
+      ...runtimeAliases(import.meta.dirname),
     },
   },
   test: {

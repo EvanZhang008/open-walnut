@@ -17,7 +17,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { WebSocket } from 'ws'
+import { WebSocket } from '#ws'
 
 export const HOME = '/fixture/mac-home'
 export const WALNUT = 'whostalone01'

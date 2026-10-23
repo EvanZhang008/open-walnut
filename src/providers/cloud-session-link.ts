@@ -1,4 +1,4 @@
-import { WebSocket } from 'ws'
+import { WebSocket } from '#ws'
 import { cloudSessionEndpoint, recoverCloudSessionCredential } from '../core/cloud-ingest.js'
 import type { DaemonEvent } from './daemon-connection.js'
 import { SendHeldError } from './delivery-failure.js'

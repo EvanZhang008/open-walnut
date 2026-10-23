@@ -15,7 +15,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
-import { WebSocket } from 'ws'
+import { WebSocket } from '#ws'
 import { createStreamEndpoint, type StreamEndpoint, type StreamEndpointOptions, type StreamPeer } from '../lib/link-stream.js'
 import { log } from '../logging/index.js'
 

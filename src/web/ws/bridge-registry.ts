@@ -25,7 +25,7 @@
 
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
-import type { WebSocket } from 'ws'
+import type { WebSocket } from '#ws'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../lib/link-stream.js'
 import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { emitSse, sseConnCount } from '../sse-channels.js'
