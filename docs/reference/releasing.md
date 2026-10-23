@@ -498,7 +498,7 @@ guess):
 |---|---|---|
 | `install.sh` (and the Mac app) | `binary`: the file is `<root>/versions/<v>/walnut` beside `open-walnut-install.json` | the same platform package an npm install gets, `@open-walnut/<target>@<v>` from the registry the update check reads, checked against its sha512 integrity, unpacked into `versions/<v>/` and run (`--version`), then `bin/walnut` swapped with one rename (`src/core/self-update/binary-install.ts`). The version before stays for a rollback, and any version a running server marked (`running/<pid>`); one update per root at a time (a lock naming its owner, taken over once that process is gone) |
 | npm (pnpm, bun, yarn) | `npm`: started through the launcher, which names its package | `npm install -g open-walnut@<v>` through the manager that installed it; the restart runs the launcher again, which finds the new platform package |
-| Homebrew | `other`: the file is inside a `Cellar/open-walnut/` keg | `brew upgrade open-walnut` (Walnut only names it) |
+| Homebrew | `other`: the file is inside a `Cellar/open-walnut/` keg, or the npm launcher is (a keg of the archive formula whose updater moved it onto the launcher) | `brew upgrade open-walnut` (Walnut only names it) |
 | A Node archive (until removed) | `npm` with the archive's own prefix | the archive's own Node and npm, into its prefix |
 
 - `walnut update` installs the newer version now (as above) and reminds you that a running

@@ -169,6 +169,47 @@ describe('detectInstall for the compiled file', () => {
     expect(info).toMatchObject({ kind: 'other', updateCommand: 'brew upgrade open-walnut', manager: null })
   })
 
+  // 0.6.17's formula installed the Node archive into the keg, and its updater (which
+  // knew no keg) put the launcher and its platform package into the archive's npm
+  // prefix there. The launcher's env names that package root, marker beside it.
+  it('a keg\'s Node archive that updated itself onto the launcher names brew, never npm into the keg', () => {
+    const keg = '/opt/homebrew/Cellar/open-walnut/0.6.17/libexec/app/runtime'
+    const pkg = `${keg}/lib/node_modules/open-walnut`
+    const kegFile = `${pkg}/node_modules/@open-walnut/darwin-arm64/walnut`
+    const relaunch = [`${keg}/bin/node`, `${pkg}/bin/open-walnut.js`]
+    const env = { [LAUNCHER_ENV.packageRoot]: pkg, [LAUNCHER_ENV.file]: kegFile, [LAUNCHER_ENV.relaunch]: JSON.stringify(relaunch) }
+    const withPkg = (p: string) => (p === `${pkg}/package.json` ? JSON.stringify({ name: 'open-walnut', version: '0.6.99' }) : readFile(p))
+    const exists = (p: string) => p === `${keg}/${RUNTIME_MARKER}`
+    const info = detectInstall({ ...inputs, readFile: withPkg, exists, execPath: kegFile, env })
+    expect(info).toMatchObject({ kind: 'other', updateCommand: 'brew upgrade open-walnut', manager: null, runtimePrefix: null, packageRoot: null, relaunch })
+    // Reached through the keg's opt link: the real path decides.
+    const opt = '/opt/homebrew/opt/open-walnut/libexec/app/runtime/lib/node_modules/open-walnut'
+    const viaOpt = (p: string) => (p.startsWith(opt) ? pkg + p.slice(opt.length) : realpath(p))
+    expect(detectInstall({ ...inputs, readFile: (p) => withPkg(viaOpt(p)), realpath: viaOpt, exists, execPath: kegFile, env: { ...env, [LAUNCHER_ENV.packageRoot]: opt } }).kind).toBe('other')
+    // The same archive outside a keg (install.sh's, the Mac app's) still updates itself with its own npm.
+    const share = '/Users/alice/.local/share/open-walnut/app/runtime'
+    const sharePkg = `${share}/lib/node_modules/open-walnut`
+    const shareFile = `${sharePkg}/node_modules/@open-walnut/darwin-arm64/walnut`
+    const shareInfo = detectInstall({
+      ...inputs,
+      readFile: (p) => (p === `${sharePkg}/package.json` ? JSON.stringify({ name: 'open-walnut' }) : readFile(p)),
+      exists: (p) => p === `${share}/${RUNTIME_MARKER}`,
+      execPath: shareFile,
+      env: { [LAUNCHER_ENV.packageRoot]: sharePkg, [LAUNCHER_ENV.file]: shareFile },
+    })
+    expect(shareInfo).toMatchObject({ kind: 'npm', runtimePrefix: share, updateCommand: 'walnut update' })
+    // An npm install on Homebrew's own Node is npm's, not the keg's: its root is no open-walnut keg.
+    const brewNode = '/opt/homebrew/lib/node_modules/open-walnut'
+    const brewNodeFile = `${brewNode}/node_modules/@open-walnut/darwin-arm64/walnut`
+    const brewNodeInfo = detectInstall({
+      ...inputs,
+      readFile: (p) => (p === `${brewNode}/package.json` ? JSON.stringify({ name: 'open-walnut' }) : readFile(p)),
+      execPath: brewNodeFile,
+      env: { [LAUNCHER_ENV.packageRoot]: brewNode, [LAUNCHER_ENV.file]: brewNodeFile },
+    })
+    expect(brewNodeInfo).toMatchObject({ kind: 'npm', updateCommand: 'npm install -g open-walnut@latest' })
+  })
+
   it('started by the npm launcher, it is that npm install, restarted through the launcher', () => {
     const npmFile = '/usr/lib/node_modules/open-walnut/node_modules/@open-walnut/linux-x64/walnut'
     const env = {

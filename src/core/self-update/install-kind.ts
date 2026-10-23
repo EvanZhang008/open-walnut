@@ -18,7 +18,8 @@
  *   - `other`: a package root without a checkout or a node_modules parent (an
  *     unpacked tarball, a cloud bundle), or a compiled file outside any layout
  *     Walnut knows. Checked, but there is no one command Walnut runs; a file in a
- *     Homebrew keg names `brew upgrade`.
+ *     Homebrew keg names `brew upgrade`, and so does a keg's Node archive that
+ *     updated itself onto the npm launcher before the formula installed the file.
  *   - `replica`: the cloud companion. It deploys through its own scripts, and
  *     the primary console is where the user acts.
  */
@@ -242,6 +243,11 @@ export function detectInstall(inputs: DetectInstallInputs = {
     // The compiled file: these say how it was installed, and a package root the
     // file reports (its unpacked runtime) never does.
     const launched = launcherPackageRoot(inputs.execPath, inputs.env ?? {}, realpath, readFile)
+    // A keg's Node archive that updated itself onto the launcher (0.6.17's updater
+    // knew no keg): brew owns the keg, and `brew upgrade` replaces it with the file.
+    if (launched && inHomebrewKeg(safeRealpath(realpath, launched.packageRoot) ?? launched.packageRoot)) {
+      return { ...base, kind: 'other', packageRoot: null, updateCommand: HOMEBREW_UPDATE_COMMAND, relaunch: launched.relaunch }
+    }
     if (launched) {
       viaLauncher = true
       packageRoot = launched.packageRoot
