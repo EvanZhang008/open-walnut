@@ -201,11 +201,17 @@ phone ── tunnel (on the host) ── host server ── stream via the host'
        a build in a clone of the build's commit, never in the checkout
        (`host-file-build.ts`; about a minute, once per build; targets asked
        together are one run);
-     - else, for a released build (an install of the compiled file, an npm
-       install), the release's `walnut-<version>-<target>.gz`, checked against
-       `SHA256SUMS`.
-     Anything else (running from source, a version that was never released, a
-     build that names no commit) stops with a sentence in the host's status
+     - else, for a published build (an install of the compiled file, an npm
+       install), a download (`host-file-download.ts`): the GitHub release's
+       `walnut-<version>-<target>.gz`, checked against `SHA256SUMS`, or npm's
+       platform package `@open-walnut/<target>@<version>` (its `package/walnut`),
+       checked against the registry's sha512 integrity and its `gitHead`.
+       Nightlies are published on npm only, so a prerelease asks npm first; a
+       stable version asks npm when its GitHub release lacks the file. A file
+       that runs on this computer must also answer this build's version and
+       commit to `--version`.
+     Anything else (running from source, a version on neither GitHub nor npm,
+     a build that names no commit) stops with a sentence in the host's status
      that says which; nothing is installed on the host instead. The file is
      cached in the data dir (`cache/host-server/files/<id>/`).
   3. sends it over the daemon deploy's SSH path (`DaemonConnection.uploadFile`:
