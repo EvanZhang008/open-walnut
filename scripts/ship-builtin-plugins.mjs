@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Ships first-party web plugins as BUILTINS, so a stock install has their Apps
  * without anyone running an install command.
@@ -72,10 +72,11 @@ function run(command, args) {
   execFileSync(command, args, { cwd: root, stdio: 'inherit' });
 }
 
-// `npm run build` builds the plugin workspaces first, but `web:build` (what
-// dev-prod.sh runs) does not — so make the dependency explicit instead of
-// inheriting whichever chain called us.
-if (!existsSync(cli)) run('npm', ['run', 'build:plugins']);
+// `bun run build` builds the plugin workspaces first, but `web:build` (what
+// dev-prod.sh runs) does not, so the dependency is made explicit here. Both
+// steps run on the runtime running this script (bun, from package.json), so a
+// machine without node or npm builds the same way.
+if (!existsSync(cli)) run(process.versions.bun ? process.execPath : 'bun', ['run', 'build:plugins']);
 
 for (const rel of SHIPPED) {
   const source = join(root, rel);
@@ -91,7 +92,7 @@ for (const rel of SHIPPED) {
     process.exit(1);
   }
 
-  run('node', [cli, 'build', '--root', rel]);
+  run(process.execPath, [cli, 'build', '--root', rel]);
 
   const bundle = join(source, web);
   if (!existsSync(bundle)) {

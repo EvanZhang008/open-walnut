@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The isolated test server agents use for live checks (`bun run dev:ephemeral`).
 #
-#   bun run dev:ephemeral                    build dist/ from this tree, run `node dist/cli.js web --ephemeral`
+#   bun run dev:ephemeral                    build dist/ from this tree, run `bun dist/cli.js web --ephemeral`
 #   bun run dev:ephemeral --file <path>      run a compiled walnut file instead: `<path> web --ephemeral`
 #   bun run dev:ephemeral --file             build this tree's file for this machine first
 #                                            (bun scripts/build-binary.mjs, about a minute), then run it
@@ -32,9 +32,24 @@ while (( $# > 0 )); do
   esac
 done
 
+# The bun that builds and runs the source build: WALNUT_BUN, PATH, then the usual
+# install places (a `bash scripts/dev-ephemeral.sh` from a thin PATH finds it too).
+find_bun() {
+  local cand
+  for cand in "${WALNUT_BUN:-}" "$(command -v bun || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+    if [[ -n "$cand" && -x "$cand" && ! -d "$cand" ]]; then printf '%s' "$cand"; return 0; fi
+  done
+  return 1
+}
+
 if [[ -z "$file" && "$build_file" == 0 ]]; then
-  bun run web:build
-  exec node dist/cli.js web --ephemeral
+  if ! BUN="$(find_bun)"; then
+    echo "dev-ephemeral: no bun found (WALNUT_BUN, PATH, ~/.bun/bin); install it: curl -fsSL https://bun.sh/install | bash" >&2
+    exit 1
+  fi
+  # Progress to stderr: stdout carries only the launcher's one JSON line.
+  PATH="$(dirname "$BUN"):$PATH" "$BUN" --bun run web:build >&2
+  exec "$BUN" dist/cli.js web --ephemeral
 fi
 
 if [[ "$build_file" == 1 ]]; then
@@ -49,8 +64,12 @@ if [[ "$build_file" == 1 ]]; then
     libc="$(ldd --version 2>&1 || true)"
     if [[ "$libc" == *musl* ]]; then target="$target-musl"; fi
   fi
+  if ! BUN="$(find_bun)"; then
+    echo "dev-ephemeral: building the file needs bun (WALNUT_BUN, PATH, ~/.bun/bin); install it: curl -fsSL https://bun.sh/install | bash" >&2
+    exit 1
+  fi
   # Progress to stderr: stdout carries only the launcher's one JSON line.
-  bun scripts/build-binary.mjs --target "$target" >&2
+  "$BUN" scripts/build-binary.mjs --target "$target" >&2
   file="$REPO/dist-bin/walnut-$target"
 fi
 

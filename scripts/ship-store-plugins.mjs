@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Ships the bundled plugin store: every `plugin-store/<id>/` plugin is built and copied
  * into `dist/plugin-store/<id>/`, so it travels INSIDE the Walnut build.
@@ -89,9 +89,11 @@ if (plugins.length === 0) {
   process.exit(0);
 }
 
-// `npm run build` builds the plugin workspaces first, but `web:build` (what dev-prod.sh
-// runs) does not, so the dependency is made explicit here.
-if (!existsSync(cli)) run('npm', ['run', 'build:plugins']);
+// `bun run build` builds the plugin workspaces first, but `web:build` (what
+// dev-prod.sh runs) does not, so the dependency is made explicit here. Both
+// steps run on the runtime running this script (bun, from package.json), so a
+// machine without node or npm builds the same way.
+if (!existsSync(cli)) run(process.versions.bun ? process.execPath : 'bun', ['run', 'build:plugins']);
 
 for (const name of plugins) {
   const rel = `${storeRel}/${name}`;
@@ -105,10 +107,10 @@ for (const name of plugins) {
   const missing = unresolvedDependencies(source);
   if (missing.length > 0) {
     console.log(`ship-store-plugins: ${name}: installing ${missing.join(', ')}`);
-    run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], source);
+    run(process.versions.bun ? process.execPath : 'bun', ['install', '--production', '--ignore-scripts', '--no-save'], source);
   }
 
-  run('node', [cli, 'build', '--root', rel]);
+  run(process.execPath, [cli, 'build', '--root', rel]);
 
   for (const key of ['server', 'web']) {
     if (manifest[key] === undefined) continue;

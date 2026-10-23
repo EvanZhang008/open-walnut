@@ -3,12 +3,14 @@
  * runtime trees go to $TMPDIR/walnut-ephemeral-runtime, never the data home,
  * and the launcher prunes old ones there (the file prunes nothing under
  * WALNUT_RUNTIME_DIR). A stand-in "file" reports what it was started with.
+ * Without --file it builds dist/ and runs it on bun; a stand-in bun records that.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { guardedPath } from '../setup/exec-guard-core.js'
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', 'scripts', 'dev-ephemeral.sh')
 
@@ -80,5 +82,47 @@ describe('dev-ephemeral.sh --file', () => {
     const r = launch(path.join(s.root, 'missing'), s.tmpdir)
     expect(r.status).toBe(1)
     expect(r.stderr).toMatch(/is not an executable walnut file/)
+  })
+})
+
+describe('dev-ephemeral.sh source build', () => {
+  /** Stand-ins: a bun that records each call, and a node that fails loudly if anything runs it. */
+  function tools() {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dev-ephemeral-src-')))
+    dirs.push(root)
+    const bin = path.join(root, 'bin')
+    fs.mkdirSync(bin)
+    const log = path.join(root, 'calls.log')
+    fs.writeFileSync(path.join(bin, 'bun'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\n`, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\necho "node ran: $*" >&2\nexit 99\n', { mode: 0o755 })
+    const home = path.join(root, 'home')
+    fs.mkdirSync(home)
+    return { root, bin, log, home }
+  }
+
+  it('builds with bun (build tools on bun too) and runs dist/cli.js on bun, never on node', () => {
+    const t = tools()
+    const r = spawnSync('bash', [SCRIPT], { encoding: 'utf-8', env: { PATH: guardedPath([t.bin], '/usr/bin:/bin'), HOME: t.home, TMPDIR: t.root } })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).not.toMatch(/node ran/)
+    expect(fs.readFileSync(t.log, 'utf-8').trim().split('\n')).toEqual(['--bun run web:build', 'dist/cli.js web --ephemeral'])
+  })
+
+  it('takes WALNUT_BUN first, and names bun when there is none', () => {
+    const t = tools()
+    const pinned = path.join(t.root, 'pinned-bun')
+    fs.copyFileSync(path.join(t.bin, 'bun'), pinned)
+    fs.chmodSync(pinned, 0o755)
+    fs.rmSync(path.join(t.bin, 'bun'))
+    const ok = spawnSync('bash', [SCRIPT], { encoding: 'utf-8', env: { PATH: guardedPath([t.bin], '/usr/bin:/bin'), HOME: t.home, TMPDIR: t.root, WALNUT_BUN: pinned } })
+    expect(ok.status, ok.stderr).toBe(0)
+    expect(fs.readFileSync(t.log, 'utf-8')).toContain('dist/cli.js web --ephemeral')
+    const none = spawnSync('bash', [SCRIPT], { encoding: 'utf-8', env: { PATH: guardedPath([t.bin], '/usr/bin:/bin'), HOME: t.home, TMPDIR: t.root } })
+    // Only when no bun sits in the fixed install places of this machine either.
+    if (!['/opt/homebrew/bin/bun', '/usr/local/bin/bun'].some((p) => fs.existsSync(p))) {
+      expect(none.status).toBe(1)
+      expect(none.stderr).toMatch(/no bun found .*curl -fsSL https:\/\/bun\.sh\/install \| bash/)
+      expect(none.stderr).not.toMatch(/node ran/)
+    }
   })
 })

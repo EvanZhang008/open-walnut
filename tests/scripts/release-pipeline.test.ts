@@ -769,7 +769,7 @@ describe('release.yml', () => {
 
   it('package.json exposes the release command', () => {
     const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')) as { scripts: Record<string, string> }
-    expect(pkg.scripts.release).toBe('node scripts/release.mjs')
+    expect(pkg.scripts.release).toBe('bun scripts/release.mjs')
   })
 })
 
