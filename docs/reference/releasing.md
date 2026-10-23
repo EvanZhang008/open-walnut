@@ -49,7 +49,7 @@ steps one after the other, the second finding everything done.
    fresh HOME and requires `/api/system/health` to answer. Every npm install updates itself
    on restart and nothing rolls a broken update back, so a release must start on a machine
    that has never run Walnut.
-3. **Publish.** It checks out the candidate, installs with `npm ci`, sets the version and
+3. **Publish.** It checks out the candidate, installs with `bun install --frozen-lockfile`, sets the version and
    runs `npm publish --provenance --access public` (`prepublishOnly` builds and checks the
    tarball as for any publish), waits until npm serves the version as `latest`, tags
    `vX.Y.Z` on the candidate, and opens the GitHub Release. npm holds a version it accepted
@@ -61,7 +61,7 @@ steps one after the other, the second finding everything done.
    published; the tag step still requires the tag on the candidate.
 4. **Roll main.** A `release: X.Y.Z` commit on `main` moves the released entries from
    Unreleased under `## [X.Y.Z] - date`, keeps the entries written since the candidate, and
-   sets the version in `package.json` and `package-lock.json`. A push that loses the race
+   sets the version in `package.json` (`bun.lock` holds no version). A push that loses the race
    to another push on `main` starts again from the new `main`, five times; after that the
    job fails, because a `main` left unrolled would repeat this release's notes in the next
    one.
@@ -247,21 +247,22 @@ npm run release -- patch --dry-run
 
 `scripts/release.mjs` refuses to start when the branch is not `main`, `main` is not at
 `origin/main`, CI did not pass on that commit (or is still running), the tag exists,
-`package.json`, `package-lock.json` or `CHANGELOG.md` has uncommitted edits, or
+`package.json` or `CHANGELOG.md` has uncommitted edits, or
 `CHANGELOG.md` has an empty `## [Unreleased]` section. Other uncommitted work in the tree
-is fine and stays as it is: the release commit is HEAD plus those three files, built
+is fine and stays as it is: the release commit is HEAD plus those two files, built
 through a private index, so nothing else that is staged or edited can slip into it.
 
 Then it moves the Unreleased section under `## [X.Y.Z] - date` (and opens a fresh empty
-Unreleased), sets the version in `package.json` and `package-lock.json`, commits
+Unreleased), sets the version in `package.json` (`bun.lock` holds no version), commits
 `release: X.Y.Z`, tags `vX.Y.Z` and pushes both atomically. Nothing is built or published
 on the machine that runs it.
 
 The push of the tag starts `.github/workflows/release.yml`, job `stable`: it checks the tag
 against `package.json`, checks CI again (`scripts/ci-gate.mjs release HEAD`; a release
 commit only rolls the version and CHANGELOG, so its parent's result counts), installs with
-`npm ci` (exactly the lockfiles, never rewritten, so the build is not stamped dirty),
-runs `npm run lint`, and runs `npm publish --provenance --access public`. `prepublishOnly` does the real build (`WALNUT_REQUIRE_BUN=1 npm run
+`bun install --frozen-lockfile` (exactly the lockfiles, never rewritten, so the build is
+not stamped dirty; `scripts/postinstall.mjs` installs `web/` frozen too when `CI` is set),
+runs `npm run lint`, and runs `npm publish --provenance --access public`. `prepublishOnly` does the real build (`WALNUT_REQUIRE_BUN=1 bun run
 build`, the web app, `scripts/check-publish.mjs` against the tarball), so a publish can
 never ship a stale or partial `dist/`. The job then creates a GitHub Release whose notes
 are the version's CHANGELOG section.
@@ -345,15 +346,17 @@ npm 12 changed two install defaults that Walnut depends on, and the 0.6.0 publis
 on the first one:
 
 - **Tarball URL dependencies are refused** (`EALLOWREMOTE`). `web/` takes `xlsx` from the
-  SheetJS CDN on purpose (current releases are not on the registry), so
-  `scripts/postinstall.mjs` passes `--allow-remote=root` to the `web/` install under npm 12.
+  SheetJS CDN on purpose (current releases are not on the registry). A checkout installs
+  with Bun, which takes it as `web/bun.lock` pins it; when a checkout is installed with npm
+  anyway, `scripts/postinstall.mjs` passes `--allow-remote=root` to the `web/` install under npm 12.
 - **A dependency's install script runs only when allowed.** better-sqlite3 and node-pty
   fetch their native binaries in theirs, so without it Walnut cannot open its database.
-  `allowScripts` in `package.json` allows them for a checkout and for `npm rebuild` inside
-  the installed package. A global install has no project to allow them in, so the update
+  `allowScripts` in `package.json` allows them for `npm rebuild` inside the installed
+  package, and `trustedDependencies` (the same list) for Bun in a checkout. A global install
+  has no project to allow them in, so the update
   that `open-walnut web` and `open-walnut update` run passes `--allow-scripts` with the same
   list (`INSTALL_SCRIPT_PACKAGES` in `src/core/self-update/install-kind.ts`; a test keeps it,
-  `allowScripts` and the lockfile in step). A plain `npm install -g open-walnut` still
+  `allowScripts`, `trustedDependencies` and `bun.lock` in step). A plain `npm install -g open-walnut` still
   lands without the binaries; the first start notices (`src/core/native-abi-preflight.ts`)
   and runs `npm rebuild` in the package once, which takes about 15 seconds.
 

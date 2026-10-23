@@ -32,14 +32,13 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
-      # The build compiles the remote-session daemon with Bun
-      # (scripts/build-daemon.sh). Without it `npm run build` fails with
-      # `bun: command not found` (exit 127).
+      # Bun installs the dependencies (bun.lock, at the version package.json pins
+      # as packageManager), and the build compiles the remote-session daemon with it
+      # (scripts/build-daemon.sh). Node stays: the later steps still run on it.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: npm ci
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
       - run: npm run lint
       # Playwright loads every spec before it runs one: a single bad import fails
       # the whole browser suite with 0 tests. Listing is that load step alone
@@ -89,11 +88,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: npm ci
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
       # Workspace packages are consumed from their dist/ (demo-plugin-lifecycle loads
       # @open-walnut/plugin-api/dist/react.js); a fresh clone has not built them.
       - run: npm run build:plugins
@@ -114,11 +112,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: npm ci
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
       - run: npm run build
       - name: slow tests
         env:
@@ -149,11 +146,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: npm ci
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
       # The tier spawns the session daemon, which the build produces.
       - run: npm run build
       - name: e2e tests
@@ -185,8 +181,10 @@ jobs:
   # onboarding break hid from CI for weeks: `npm start` called build-daemon.sh,
   # which exited 1 when Bun was absent, so the very first command in the README
   # failed on every machine that had never installed Bun. This job is deliberately
-  # BARE: no Bun, no caches, nothing the docs don't tell a person to install. It
-  # runs the documented commands and requires the server to answer.
+  # BARE: no caches, nothing the docs don't tell a person to install. A checkout
+  # installs with Bun, which the README asks for, so the clone route has Node and
+  # Bun; Bun is removed again before the published package, which needs neither
+  # Bun nor a build. It runs the documented commands and requires the server to answer.
   #
   # macOS matters on its own: it is real Mac hardware, free for public
   # repos, and the only platform where the install can hit Xcode/native-module
@@ -206,21 +204,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: Make sure Bun is absent
-        # Neither runner image ships Bun today. If one starts to, remove it rather than
-        # fail every PR: the point is a machine without Bun, not a runner without Bun.
-        run: |
-          for b in "$(command -v bun 2>/dev/null)" "$HOME/.bun/bin/bun" /usr/local/bin/bun /opt/homebrew/bin/bun; do
-            [ -n "$b" ] && [ -e "$b" ] && { echo "::warning::runner ships bun at $b; removing it for this job"; sudo rm -f "$b"; }
-          done
-          hash -r
-          if command -v bun >/dev/null 2>&1; then
-            echo "::error::bun is still on PATH, so this job no longer tests a new user's machine"
-            exit 1
-          fi
-          echo "no bun, as intended"
-      # The two commands the README gives, nothing else.
-      - run: npm install
+      # The Bun the README asks a checkout to install (the version package.json pins).
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # The README's install command, as it gives it.
+      - run: bun install
       - name: npm start, then require the server to answer
         run: |
           npm start > /tmp/walnut-start.log 2>&1 &
@@ -244,6 +233,23 @@ jobs:
           echo "::error::server never answered within 600s"; tail -n 40 /tmp/walnut-start.log
           [ "$start_pid" -gt 1 ] && kill -TERM "$start_pid" 2>/dev/null || true
           exit 1
+      - name: Remove Bun (the published package needs none)
+        # setup-bun put it on PATH for the clone route; the runner images ship none.
+        # The point is a machine without Bun, not a runner without Bun.
+        run: |
+          for _ in 1 2 3 4 5; do
+            b="$(command -v bun 2>/dev/null)" || break
+            echo "removing bun at $b for the published route"; sudo rm -f "$b"; hash -r
+          done
+          for b in "$HOME/.bun/bin/bun" /usr/local/bin/bun /opt/homebrew/bin/bun; do
+            if [ -e "$b" ]; then sudo rm -f "$b"; fi
+          done
+          hash -r
+          if command -v bun >/dev/null 2>&1; then
+            echo "::error::bun is still on PATH ($(command -v bun)), so the published route no longer tests a machine without Bun"
+            exit 1
+          fi
+          echo "no bun, as intended"
       # The README's other route: the published package, no clone, no build, no Bun.
       # A fresh HOME so it starts the way a new user's first launch does, not on the
       # data the clone route just created.
@@ -314,11 +320,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: npm ci
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
       - run: npm run build:daemon
         env:
           WALNUT_REQUIRE_BUN: '1'
@@ -390,11 +395,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: npm ci
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
       - name: Build as prepublishOnly does
         run: WALNUT_REQUIRE_BUN=1 npm run build && (cd web && npx vite build) && node scripts/check-publish.mjs
       - name: Pack this commit as the next patch, and an older build of it
@@ -444,11 +448,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: npm ci
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
       - name: Build as prepublishOnly does
         run: WALNUT_REQUIRE_BUN=1 npm run build && (cd web && npx vite build) && node scripts/check-publish.mjs
       - name: Pack this commit as the next patch
@@ -489,11 +492,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: npm ci
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
       - run: npm run build && (cd web && npx vite build)
       # WebKit too: the *.webkit.spec.ts specs launch it themselves (the Mac app
       # is WebKit), and without it each one failed at launch (98 tests, 2026-10-23).

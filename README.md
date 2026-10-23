@@ -45,8 +45,8 @@ self-hosted, local-first, and has no telemetry.
 
 - macOS or Linux. The one-line installer and Homebrew bring their own Node; the npm and
   checkout routes need Node.js 22 or newer (`curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash` then `nvm install 22`).
-- git, only for the checkout route below (macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`)
-- Linux: a C library from 2019 or later (glibc 2.29+: Ubuntu 20.04+, Debian 11+, AL2023, Fedora). Older distros compile one native module and need a newer Python and GCC first; `npm start` prints the exact commands, and [Getting Started](GETTING_STARTED.md#older-linux-glibc-before-229) has them too.
+- git and [Bun](https://bun.sh) 1.4.4 or newer, only for the checkout route below (git: `xcode-select --install` on macOS, `sudo apt install git` on Ubuntu; Bun: `curl -fsSL https://bun.sh/install | bash`)
+- Linux: a C library from 2019 or later (glibc 2.29+: Ubuntu 20.04+, Debian 11+, AL2023, Fedora). Older distros compile one native module and need a newer Python and GCC first; `bun run start` prints the exact commands, and [Getting Started](GETTING_STARTED.md#older-linux-glibc-before-229) has them too.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`)
 
 That is the whole AI setup. Every AI turn Walnut runs is a Claude Code session: Ask Walnut (the Walnut agent), your coding sessions, scheduled routines, and the agents a session hook dispatches all use the `claude` you already have, however it signs in (Anthropic account, Bedrock, or Vertex). An Anthropic API key or AWS Bedrock credentials are optional, and they change only where the small single calls go (session titles, summaries, voice cleanup, quick parses): by default those also go through your Claude Code login, and Settings → Ask Walnut Provider points them at a provider instead.
@@ -90,8 +90,8 @@ To work on Walnut itself, run it from a checkout instead:
 ```bash
 git clone https://github.com/EvanZhang008/open-walnut.git
 cd open-walnut
-npm install
-npm start
+bun install
+bun run start
 ```
 
 Open [http://localhost:3456](http://localhost:3456). Walnut runs your sessions with Claude Code: when it
@@ -390,20 +390,25 @@ Read [Architecture](ARCHITECTURE.md) for the system design and the
 
 ## Development
 
+A checkout installs with Bun: `bun install` installs the exact versions in `bun.lock`
+(and `web/bun.lock`) and applies `patches/`. Commit a changed `bun.lock` with the
+`package.json` change that made it.
+
 ```bash
-npm run build                       # Build the server and session daemon
-cd web && npx vite build            # Build the web app
-npm run dev                         # Watch the server
-cd web && npx vite                  # Run the web app with hot reload
-npm run test:quick                  # Run the default fast test suite
-npm run test:focus -- <test-path>   # Run focused tests
-npm run lint                        # Type-check the server
+bun install                         # Install dependencies (root and web/)
+bun run build                       # Build the server and session daemon
+cd web && bun x vite build          # Build the web app
+bun run dev                         # Watch the server
+cd web && bun x vite                # Run the web app with hot reload
+bun run test:quick                  # Run the default fast test suite
+bun run test:focus -- <test-path>   # Run focused tests
+bun run lint                        # Type-check the server
 ```
 
 The backend development server and Vite can also be started together with:
 
 ```bash
-npm run web:dev
+bun run web:dev
 ```
 
 ## Tech Stack

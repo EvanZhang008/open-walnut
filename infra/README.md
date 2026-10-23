@@ -46,9 +46,9 @@ cannot reach a checkout of `infra/`.
 
 ```bash
 cd infra
-npm install
-npx cdk bootstrap --profile <your-profile>          # first time per account/region only
-npx cdk deploy \
+bun install --frozen-lockfile                       # the CDK versions in infra/bun.lock
+bun x cdk bootstrap --profile <your-profile>        # first time per account/region only
+bun x cdk deploy \
   -c domain=wn.example.com \
   -c alertEmail=you@example.com \
   --profile <your-profile>

@@ -1,0 +1,7 @@
+# Bun reads this for `bun install` (and `bun run` / `bun test`) at the repo root.
+[install]
+# One flat node_modules, the layout npm built and the code relies on (scripts
+# and tests resolve files under node_modules/<pkg>/ directly). Bun picks the
+# isolated layout for a workspace project whose bun.lock it creates from
+# scratch, so the choice is written down instead of left to the lockfile.
+linker = "hoisted"

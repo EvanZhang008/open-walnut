@@ -1,80 +1,90 @@
 #!/usr/bin/env node
 /**
- * Unified postinstall — routes between two very different install shapes:
+ * Unified postinstall: routes between two very different install shapes.
  *
- * DEV CHECKOUT (git clone; web/ + src/ present):
- *   patch-package && (cd web && npm install)
- *   Strict: any failure fails the install, same as the historical inline chain.
+ * DEV CHECKOUT (git clone; web/ + src/ present), installed with Bun:
+ *   Bun applies patches/ itself (package.json `patchedDependencies`), so this
+ *   only installs web/, which has its own package.json and bun.lock.
+ *   Strict: any failure fails the install.
+ *   Installed with npm instead (the Mac app's "Set Up Now" clones and runs npm),
+ *   it still works, with a warning: npm reads no bun.lock and applies no patch,
+ *   so this applies the SDK patch the way the published chain does and installs
+ *   web/ with npm too. The versions are then npm's own picks, not bun.lock's.
  *
  * PUBLISHED PACKAGE (npm install open-walnut / npx open-walnut):
- *   - patch-package is a devDependency and, even if present, resolves targets
- *     via ./node_modules/<name> — with npm hoisting the SDK lives in the
- *     PARENT node_modules, so it can never find it. Instead we parse our own
- *     patch file (single-hunk, single-line change) and apply it directly to
- *     the resolved install location.
+ *   No package manager applies a dependency's own patches, and with npm hoisting
+ *   the SDK lives in the PARENT node_modules. So we read the SDK patch named in
+ *   our package.json `patchedDependencies` (single hunk, single-line change) and
+ *   apply it directly to the resolved install location.
  *   Fail-open: a cosmetic patch failure must never break `npm install` for a
- *   consumer — warn loudly and continue.
+ *   consumer; warn loudly and continue.
  */
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const isDevCheckout =
-  existsSync(join(root, 'web', 'package.json')) && existsSync(join(root, 'src'));
+const SDK = '@anthropic-ai/claude-agent-sdk';
 
-function run(cmd, args, opts = {}) {
-  const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: root, ...opts });
-  return res.status === 0;
+/** True when `root` is a git checkout of this repo rather than an installed package. */
+export function isDevCheckout(root) {
+  return existsSync(join(root, 'web', 'package.json')) && existsSync(join(root, 'src'));
 }
 
-if (isDevCheckout) {
-  // ── Dev chain (strict) ──
-  if (!run('npx', ['patch-package'])) process.exit(1);
-  // web/ takes xlsx as a tarball URL on purpose (SheetJS publishes current
-  // releases only on its own CDN). npm 12 refuses tarball URLs unless allowed
-  // (EALLOWREMOTE); npm 11 and older warn on the unknown flag.
-  const npmMajor = Number(/\bnpm\/(\d+)\./.exec(process.env.npm_config_user_agent ?? '')?.[1] ?? 0);
-  // `npm ci` at the root (CI, the release jobs) installs exactly the lockfile and
-  // never rewrites it: do the same in web/, or a web/package-lock.json that lags
-  // web/package.json is rewritten mid-release and the build is stamped dirty.
-  const webCommand = process.env.npm_command === 'ci' ? 'ci' : 'install';
-  const webInstall = npmMajor >= 12 ? [webCommand, '--allow-remote=root'] : [webCommand];
-  if (!run('npm', webInstall, { cwd: join(root, 'web') })) process.exit(1);
-  process.exit(0);
+/** The installing tool from npm_config_user_agent (`bun/1.4.4 npm/? node/...`). */
+export function installerOf(env = process.env) {
+  return /^([a-z]+)\//.exec(env.npm_config_user_agent ?? '')?.[1] ?? 'unknown';
 }
 
-// ── Published-package chain (fail-open) ──
-
-function warn(msg) {
-  console.warn(`open-walnut postinstall: ${msg}`);
+/** npm 12 refuses web/'s tarball-URL dependency (xlsx) unless allowed. */
+export function npmWebInstallArgs(env = process.env) {
+  const npmMajor = Number(/\bnpm\/(\d+)\./.exec(env.npm_config_user_agent ?? '')?.[1] ?? 0);
+  return npmMajor >= 12 ? ['install', '--allow-remote=root'] : ['install'];
 }
 
 /**
- * Apply the claude-agent-sdk reminder patch by parsing the shipped
- * patch-package diff. The patch is one hunk changing one line of the minified
- * cli.js bundle, which makes direct find-and-replace both exact and safe.
- * The .patch file stays the single source of truth — no duplicated strings.
+ * The command that installs web/ under Bun. The root install leaves no trace of
+ * --frozen-lockfile for its scripts, so CI (which always installs frozen) is
+ * the signal: there a web/bun.lock that lags web/package.json must fail the
+ * job, never be rewritten mid-release (the build would be stamped dirty).
  */
-function applySdkPatch() {
-  const patchesDir = join(root, 'patches');
-  let patchFile = null;
-  try {
-    patchFile = readdirSync(patchesDir).find(
-      (f) => f.startsWith('@anthropic-ai+claude-agent-sdk+') && f.endsWith('.patch'),
-    );
-  } catch { /* no patches dir shipped */ }
-  if (!patchFile) return warn('SDK patch file not found, skipping');
+export function webInstallCommand(env = process.env) {
+  const bun = env.npm_execpath && /bun(\.exe)?$/.test(env.npm_execpath) ? env.npm_execpath : 'bun';
+  const frozen = Boolean(env.CI) && env.CI !== 'false' && env.CI !== '0';
+  return { cmd: bun, args: frozen ? ['install', '--frozen-lockfile'] : ['install'] };
+}
 
-  const patchVersion = patchFile.slice('@anthropic-ai+claude-agent-sdk+'.length, -'.patch'.length);
+/** The SDK patch our package.json names: { version, file } or null. */
+export function sdkPatchOf(pkg) {
+  for (const [key, file] of Object.entries(pkg.patchedDependencies ?? {})) {
+    if (key.startsWith(`${SDK}@`)) return { version: key.slice(SDK.length + 1), file };
+  }
+  return null;
+}
+
+/**
+ * Apply the claude-agent-sdk reminder patch by parsing the shipped diff. The
+ * patch is one hunk changing one line of the minified cli.js bundle, which
+ * makes direct find-and-replace both exact and safe. The .patch file stays the
+ * single source of truth: no duplicated strings.
+ */
+export function applySdkPatch(root, { warn = (m) => console.warn(`open-walnut postinstall: ${m}`), resolveSdk } = {}) {
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  } catch {
+    return warn('package.json not readable, skipping SDK patch');
+  }
+  const patch = sdkPatchOf(pkg);
+  if (!patch) return warn('no SDK patch named in package.json, skipping');
+  const patchPath = join(root, patch.file);
+  if (!existsSync(patchPath)) return warn(`SDK patch file ${patch.file} not found, skipping`);
 
   // Resolve the installed SDK (may be hoisted to a parent node_modules).
   let sdkDir;
   try {
-    const require_ = createRequire(import.meta.url);
-    let dir = dirname(require_.resolve('@anthropic-ai/claude-agent-sdk'));
+    let dir = dirname((resolveSdk ?? ((name) => createRequire(join(root, 'package.json')).resolve(name)))(SDK));
     while (dir !== dirname(dir) && !existsSync(join(dir, 'package.json'))) dir = dirname(dir);
     sdkDir = dir;
   } catch {
@@ -82,14 +92,14 @@ function applySdkPatch() {
   }
 
   const installedVersion = JSON.parse(readFileSync(join(sdkDir, 'package.json'), 'utf8')).version;
-  if (installedVersion !== patchVersion) {
+  if (installedVersion !== patch.version) {
     return warn(
-      `SDK ${installedVersion} != patch target ${patchVersion} — skipping (file reads will carry the SDK's cyber reminder, costing context)`,
+      `SDK ${installedVersion} != patch target ${patch.version}, skipping (file reads will carry the SDK's cyber reminder, costing context)`,
     );
   }
 
   // Extract the one removed and one added line from the diff.
-  const lines = readFileSync(join(patchesDir, patchFile), 'utf8').split('\n');
+  const lines = readFileSync(patchPath, 'utf8').split('\n');
   const removed = lines.filter((l) => l.startsWith('-') && !l.startsWith('---')).map((l) => l.slice(1));
   const added = lines.filter((l) => l.startsWith('+') && !l.startsWith('+++')).map((l) => l.slice(1));
   if (removed.length !== 1 || added.length !== 1) {
@@ -103,18 +113,48 @@ function applySdkPatch() {
   } catch {
     return warn(`SDK cli.js not readable at ${cliPath}, skipping`);
   }
-  if (content.includes(added[0])) return; // already patched (reinstall/idempotent)
+  if (content.includes(added[0])) return 'already'; // already patched (reinstall/idempotent)
   if (!content.includes(removed[0])) {
     return warn('SDK cli.js does not match the patch context, skipping');
   }
   writeFileSync(cliPath, content.replace(removed[0], added[0]), 'utf8');
   console.log(`open-walnut postinstall: patched claude-agent-sdk@${installedVersion} (reminder disabled)`);
+  return 'patched';
 }
 
-try {
-  applySdkPatch();
-} catch (err) {
-  warn(`SDK patch failed (continuing): ${err instanceof Error ? err.message : err}`);
+function main() {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+  if (isDevCheckout(root)) {
+    // ── Dev chain (strict) ──
+    const installer = installerOf();
+    if (installer === 'bun') {
+      const { cmd, args } = webInstallCommand();
+      const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: join(root, 'web') });
+      process.exit(res.status === 0 ? 0 : 1);
+    }
+    console.warn(
+      `open-walnut postinstall: this checkout installs with Bun (https://bun.sh): \`bun install\` gets the versions bun.lock pins.\n`
+      + `  ${installer} reads no bun.lock and applies no patch, so its versions are its own picks.`,
+    );
+    let patched;
+    try {
+      patched = applySdkPatch(root);
+    } catch (err) {
+      console.error(`open-walnut postinstall: SDK patch failed: ${err instanceof Error ? err.message : err}`);
+    }
+    if (patched !== 'patched' && patched !== 'already') process.exit(1);
+    const res = spawnSync('npm', npmWebInstallArgs(), { stdio: 'inherit', cwd: join(root, 'web') });
+    process.exit(res.status === 0 ? 0 : 1);
+  }
+
+  // ── Published-package chain (fail-open) ──
+  try {
+    applySdkPatch(root);
+  } catch (err) {
+    console.warn(`open-walnut postinstall: SDK patch failed (continuing): ${err instanceof Error ? err.message : err}`);
+  }
+  process.exit(0);
 }
 
-process.exit(0);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

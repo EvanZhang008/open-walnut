@@ -34,8 +34,8 @@ const execFileAsync = promisify(execFile)
 
 const STACK_NAME = 'WalnutCloudStack'
 const IDENTITY_TIMEOUT_MS = 8_000
-/** `npm ci` in infra/ pulls the whole CDK library — slow but bounded. */
-const NPM_CI_TIMEOUT_MS = 10 * 60_000
+/** `bun install` in infra/ pulls the whole CDK library: slow but bounded. */
+const INSTALL_TIMEOUT_MS = 10 * 60_000
 const DEPLOY_TIMEOUT_MS = 30 * 60_000
 const BOOTSTRAP_TIMEOUT_MS = 10 * 60_000
 /** After a kill, how long a cancelled or timed-out child may take to exit before we stop waiting. */
@@ -44,18 +44,32 @@ const CHILD_EXIT_WAIT_MS = 15_000
 /** Build state inside a CDK app dir: never copied from the package, kept across refreshes. */
 const INFRA_STATE = new Set(['node_modules', 'cdk.out', 'cdk.context.json'])
 /**
- * Hash of the package-lock the copy's node_modules was installed from. It lives
- * INSIDE node_modules: `npm ci` removes that directory first, so an install that
+ * Hash of the bun.lock the copy's node_modules was installed from. It lives
+ * INSIDE node_modules and is removed before every install, so an install that
  * is interrupted can never leave an older, matching stamp behind.
  */
 const LOCK_STAMP = path.join('node_modules', '.walnut-installed-lock')
+
+/**
+ * The Bun that installs infra/ (infra/bun.lock pins the CDK). PATH first, then
+ * where Bun's installer and Homebrew put it, because a server started from a
+ * thin PATH (launchd) still has it there.
+ */
+function bunCommand(): string {
+  const dirs = [...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean), path.join(os.homedir(), '.bun', 'bin'), '/opt/homebrew/bin', '/usr/local/bin']
+  for (const dir of dirs) {
+    const candidate = path.join(dir, process.platform === 'win32' ? 'bun.exe' : 'bun')
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return 'bun'
+}
 
 /**
  * Where the CDK app comes from. A source checkout deploys its own infra/ in
  * place. An npm install ships infra/ inside the package (package.json files[]),
  * but that directory can be root-owned and is replaced by every upgrade, so it
  * is only the source: the app runs from a copy under WALNUT_HOME/cache, where
- * `npm ci` and cdk.out can write (cache/ is never git-synced; node_modules and
+ * `bun install` and cdk.out can write (cache/ is never git-synced; node_modules and
  * cdk.context.json, which holds the account id, must not travel).
  */
 function infraSource(): { dir: string; copy: boolean } | null {
@@ -68,8 +82,8 @@ function infraSource(): { dir: string; copy: boolean } | null {
 const NO_INFRA = 'This Walnut install has no CDK app (infra/) to deploy the AWS stack with. '
   + 'Update Walnut, run it from a git clone, or use the manual provider.'
 
-const NO_NPM = 'Deploying the AWS stack needs Node.js and npm on this machine: the CDK app installs '
-  + 'and runs with them. Install Node.js 22 or newer, then re-check, or use the manual provider.'
+const NO_NPM = 'Deploying the AWS stack needs Node.js and npm on this machine: the CDK CLI runs '
+  + 'with them (npx cdk). Install Node.js 22 or newer, then re-check, or use the manual provider.'
 
 /**
  * Whether `npm` runs here. Only a missing binary counts: the deploy needs it,
@@ -118,7 +132,7 @@ async function fileHash(file: string): Promise<string> {
 
 /**
  * One preparation at a time: a job that is cancelled and started again must not
- * refresh the copy or run `npm ci` while the previous one still works in the
+ * refresh the copy or run `bun install` while the previous one still works in the
  * same directory.
  */
 let infraQueue: Promise<unknown> = Promise.resolve()
@@ -132,7 +146,7 @@ function prepareInfra(onLog: (line: string) => void, signal?: AbortSignal): Prom
  * The directory to run `cdk` in, with its dependencies installed. A checkout
  * installs once (a fresh clone has no node_modules, and `npx cdk` would then
  * resolve to a download prompt); the package copy reinstalls whenever the
- * shipped package-lock changed, so an upgrade brings its CDK version along.
+ * shipped bun.lock changed, so an upgrade brings its CDK version along.
  */
 async function prepareInfraNow(onLog: (line: string) => void, signal?: AbortSignal): Promise<string> {
   if (signal?.aborted) throw new Error('cancelled')
@@ -141,19 +155,19 @@ async function prepareInfraNow(onLog: (line: string) => void, signal?: AbortSign
   const cwd = source.copy ? infraWorkDir() : source.dir
   if (source.copy) await refreshInfraCopy(source.dir, cwd)
 
-  const lock = path.join(cwd, 'package-lock.json')
+  const lock = path.join(cwd, 'bun.lock')
   const lockHash = source.copy && fs.existsSync(lock) ? await fileHash(lock) : null
   const stamp = path.join(cwd, LOCK_STAMP)
   const installed = fs.existsSync(path.join(cwd, 'node_modules', 'aws-cdk-lib'))
     && (!lockHash || (fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf-8').trim() === lockHash))
   if (!installed) {
     onLog(`installing CDK dependencies in ${cwd} (this takes a few minutes)`)
-    // --include=dev: the cdk CLI, ts-node and typescript are devDependencies, and
-    // a NODE_ENV=production in Walnut's environment would otherwise omit them.
-    // No AWS call here (npm only fetches packages), so the ambient env is right.
+    // The cdk CLI, ts-node and typescript are devDependencies; bun install takes
+    // them whatever NODE_ENV says (measured on bun 1.4.4: npm ci needed --include=dev).
+    // No AWS call here (the install only fetches packages), so the ambient env is right.
     await fsp.rm(stamp, { force: true })
-    const install = await runStreaming('npm', ['ci', '--include=dev'], cwd, onLog, NPM_CI_TIMEOUT_MS, process.env, signal)
-    if (install.code !== 0) throw new Error(`npm ci failed in ${cwd} (exit ${install.code})`)
+    const install = await runStreaming(bunCommand(), ['install', '--frozen-lockfile'], cwd, onLog, INSTALL_TIMEOUT_MS, process.env, signal)
+    if (install.code !== 0) throw new Error(`bun install failed in ${cwd} (exit ${install.code})`)
     // Written only after a clean exit, into the directory that run created.
     if (lockHash) await fsp.writeFile(stamp, `${lockHash}\n`, 'utf-8')
   }
@@ -450,11 +464,11 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
 /** The manual "get the CDK app ready" step, naming the directory this install has. */
 function infraStep(): string {
   const source = infraSource()
-  if (!source) return 'Get the CDK app: clone the Walnut repository, then `cd infra && npm ci --include=dev`.'
+  if (!source) return 'Get the CDK app: clone the Walnut repository, then `cd infra && bun install --frozen-lockfile`.'
   const q = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`
-  if (!source.copy) return `In the CDK app: \`cd ${q(source.dir)} && npm ci --include=dev\`.`
+  if (!source.copy) return `In the CDK app: \`cd ${q(source.dir)} && bun install --frozen-lockfile\`.`
   const dest = infraWorkDir()
-  return `Copy the CDK app somewhere writable: \`mkdir -p ${q(dest)} && cp -R ${q(source.dir)}/. ${q(dest)} && cd ${q(dest)} && npm ci --include=dev\`.`
+  return `Copy the CDK app somewhere writable: \`mkdir -p ${q(dest)} && cp -R ${q(source.dir)}/. ${q(dest)} && cd ${q(dest)} && bun install --frozen-lockfile\`.`
 }
 
 function instructions(params: InstructionsParams): DriverInstructions {

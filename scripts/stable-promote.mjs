@@ -6,7 +6,7 @@
  *   plan   decide whether there is anything to release, and as which version.
  *          Prints `key=value` lines for $GITHUB_OUTPUT and writes the notes file.
  *   roll   on a checkout of main: move the released CHANGELOG entries under the new
- *          version heading and set the version in package.json and package-lock.json.
+ *          version heading and set the version in package.json.
  *   allow-scripts   the `--allow-scripts` list the updater passes, for the smoke install.
  *
  * What gets released is a commit, not "whatever main is now": the newest nightly
@@ -214,10 +214,9 @@ async function main() {
     const date = new Date().toISOString().slice(0, 10)
     const changelog = path.join(root, 'CHANGELOG.md')
     fs.writeFileSync(changelog, rollReleased(fs.readFileSync(changelog, 'utf8'), fs.readFileSync(notesFile, 'utf8'), version, date))
-    for (const file of ['package.json', 'package-lock.json']) {
-      const p = path.join(root, file)
-      fs.writeFileSync(p, setManifestVersion(fs.readFileSync(p, 'utf8'), version))
-    }
+    // bun.lock holds no version of its own: package.json is the one manifest.
+    const manifest = path.join(root, 'package.json')
+    fs.writeFileSync(manifest, setManifestVersion(fs.readFileSync(manifest, 'utf8'), version))
     return
   }
   if (mode === 'allow-scripts') {

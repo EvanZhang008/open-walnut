@@ -1,7 +1,7 @@
-diff --git a/node_modules/@anthropic-ai/claude-agent-sdk/cli.js b/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
-index 394c46b..745b6cc 100755
---- a/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
-+++ b/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
+diff --git a/cli.js b/cli.js
+index 394c46bd5fbba71fdb3152f3a9fdca1831ecda76..745b6cc2ffb4ad6fc9b8f71fcec0329ca418a9a7 100755
+--- a/cli.js
++++ b/cli.js
 @@ -4895,7 +4895,7 @@ The scratchpad directory is session-specific, isolated from the user's project,
  <system-reminder>
  Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.

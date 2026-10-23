@@ -97,7 +97,7 @@
   "scripts": {
     "build": "tsup --config tsup.config.ts",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "bun run build"
   },
   "engines": {
     "node": ">=22"

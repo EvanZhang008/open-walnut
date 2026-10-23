@@ -38,6 +38,7 @@
   "engines": {
     "node": ">=22"
   },
+  "packageManager": "bun@1.4.4",
   "allowScripts": {
     "@homebridge/node-pty-prebuilt-multiarch": true,
     "better-sqlite3": true,
@@ -47,6 +48,15 @@
     "screencapturekit-audio-capture": true,
     "sharp": true
   },
+  "trustedDependencies": [
+    "@homebridge/node-pty-prebuilt-multiarch",
+    "better-sqlite3",
+    "esbuild",
+    "onnxruntime-node",
+    "protobufjs",
+    "screencapturekit-audio-capture",
+    "sharp"
+  ],
   "files": [
     "bin",
     "dist",
@@ -61,7 +71,7 @@
     "infra/lib",
     "infra/cdk.json",
     "infra/package.json",
-    "infra/package-lock.json",
+    "infra/bun.lock",
     "infra/tsconfig.json",
     "infra/README.md",
     "!infra/**/*.js",
@@ -71,17 +81,17 @@
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
-    "prepublishOnly": "WALNUT_REQUIRE_BUN=1 npm run build && cd web && npx vite build && cd .. && node scripts/check-publish.mjs",
+    "prepublishOnly": "WALNUT_REQUIRE_BUN=1 bun run build && cd web && bun x vite build && cd .. && node scripts/check-publish.mjs",
     "prestart": "node scripts/check-node.mjs && node scripts/check-native-toolchain.mjs",
-    "start": "npm run web:build && node dist/cli.js web --port 3456",
-    "build:plugins": "npm run build -w @open-walnut/plugin-api && npm run build -w @open-walnut/plugin-cli",
-    "build": "npm run build:plugins && bash scripts/build-daemon.sh && tsup && rm -rf dist/data && cp -r src/data dist/ && for d in src/integrations/*/manifest.json; do t=\"dist/integrations/$(basename $(dirname $d))\"; mkdir -p \"$t\"; cp \"$d\" \"$t/\"; i=\"$(dirname $d)/icon.svg\"; rm -f \"$t/icon.svg\"; if [ -f \"$i\" ]; then cp \"$i\" \"$t/\"; fi; for sub in skills agent-skills; do s=\"$(dirname $d)/$sub\"; rm -rf \"$t/$sub\"; if [ -d \"$s\" ]; then cp -r \"$s\" \"$t/\"; fi; done; done && node scripts/ship-builtin-plugins.mjs && node scripts/ship-store-plugins.mjs",
+    "start": "bun run web:build && node dist/cli.js web --port 3456",
+    "build:plugins": "bun run --filter @open-walnut/plugin-api build && bun run --filter @open-walnut/plugin-cli build",
+    "build": "bun run build:plugins && bash scripts/build-daemon.sh && tsup && rm -rf dist/data && cp -r src/data dist/ && for d in src/integrations/*/manifest.json; do t=\"dist/integrations/$(basename $(dirname $d))\"; mkdir -p \"$t\"; cp \"$d\" \"$t/\"; i=\"$(dirname $d)/icon.svg\"; rm -f \"$t/icon.svg\"; if [ -f \"$i\" ]; then cp \"$i\" \"$t/\"; fi; for sub in skills agent-skills; do s=\"$(dirname $d)/$sub\"; rm -rf \"$t/$sub\"; if [ -d \"$s\" ]; then cp -r \"$s\" \"$t/\"; fi; done; done && node scripts/ship-builtin-plugins.mjs && node scripts/ship-store-plugins.mjs",
     "docs:check": "node scripts/generate-ops-docs.mjs --check --repo-only && node scripts/check-plugin-doc-snippets.mjs",
-    "test:plugin-packages": "npm run build:plugins && vitest run --config vitest.focus.config.ts tests/core/plugin-package-metadata.test.ts tests/core/plugin-cli-dev.test.ts tests/core/plugin-cli-scaffold.test.ts tests/core/plugin-publish-check.test.ts && node scripts/check-plugin-packages.mjs",
+    "test:plugin-packages": "bun run build:plugins && vitest run --config vitest.focus.config.ts tests/core/plugin-package-metadata.test.ts tests/core/plugin-cli-dev.test.ts tests/core/plugin-cli-scaffold.test.ts tests/core/plugin-publish-check.test.ts && node scripts/check-plugin-packages.mjs",
     "dev": "tsup --watch",
     "release": "node scripts/release.mjs",
     "test": "node scripts/test-parallel.mjs",
-    "test:quick": "npm run docs:check && vitest run --config vitest.quick.config.ts",
+    "test:quick": "bun run docs:check && vitest run --config vitest.quick.config.ts",
     "search:eval": "tsx scripts/search-eval.mjs",
     "search:robustness": "tsx scripts/search-robustness-eval.mjs",
     "test:slow": "vitest run --config vitest.slow.config.ts",
@@ -90,7 +100,7 @@
     "test:changed": "node scripts/test-changed.mjs",
     "test:baseline": "node scripts/test-baseline.mjs check",
     "test:baseline:record": "node scripts/test-baseline.mjs record",
-    "test:pre-commit": "npm run docs:check && node scripts/test-changed.mjs --tiers",
+    "test:pre-commit": "bun run docs:check && node scripts/test-changed.mjs --tiers",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
@@ -100,19 +110,19 @@
     "test:live:providers": "vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts",
     "test:live:aws-setup": "bash scripts/run-live-aws-cloud-setup.sh",
     "test:fleet": "bash scripts/run-fleet-tests.sh",
-    "test:full": "npm run test && npm run test:e2e && npm run test:live:daemon && npm run test:live:cloud",
-    "test:all": "npm run lint && npm run lint:paths && npm run test && npx playwright test",
+    "test:full": "bun run test && bun run test:e2e && bun run test:live:daemon && bun run test:live:cloud",
+    "test:all": "bun run lint && bun run lint:paths && bun run test && bun x playwright test",
     "lint:paths": "bash scripts/lint-production-paths.sh",
-    "lint:plugins": "npm run build:plugins && tsc --noEmit -p packages/plugin-api/tsconfig.json && tsc --noEmit -p packages/plugin-cli/tsconfig.json && tsc -p tests/typechecks/tsconfig.plugin-api.json && tsc --noEmit -p examples/plugins/walnut-demo/tsconfig.json && tsc --noEmit -p examples/plugins/walnut-time/tsconfig.json",
+    "lint:plugins": "bun run build:plugins && tsc --noEmit -p packages/plugin-api/tsconfig.json && tsc --noEmit -p packages/plugin-cli/tsconfig.json && tsc -p tests/typechecks/tsconfig.plugin-api.json && tsc --noEmit -p examples/plugins/walnut-demo/tsconfig.json && tsc --noEmit -p examples/plugins/walnut-time/tsconfig.json",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "build:daemon": "bash scripts/build-daemon.sh",
-    "lint": "tsc --noEmit && npm run lint:plugins",
+    "lint": "tsc --noEmit && bun run lint:plugins",
     "web": "node dist/web/server.js",
-    "web:dev": "concurrently \"tsup --watch\" \"cd web && npx vite\"",
-    "web:build": "bash scripts/build-daemon.sh && tsup && rm -rf dist/data && cp -r src/data dist/ && for d in src/integrations/*/manifest.json; do t=\"dist/integrations/$(basename $(dirname $d))\"; mkdir -p \"$t\"; cp \"$d\" \"$t/\"; i=\"$(dirname $d)/icon.svg\"; rm -f \"$t/icon.svg\"; if [ -f \"$i\" ]; then cp \"$i\" \"$t/\"; fi; for sub in skills agent-skills; do s=\"$(dirname $d)/$sub\"; rm -rf \"$t/$sub\"; if [ -d \"$s\" ]; then cp -r \"$s\" \"$t/\"; fi; done; done && node scripts/ship-builtin-plugins.mjs && node scripts/ship-store-plugins.mjs && cd web && npx vite build",
-    "dev:ephemeral": "npm run web:build && node dist/cli.js web --ephemeral",
-    "dev:demo": "npm run web:build && (lsof -ti:3457 -sTCP:LISTEN | xargs kill -15 2>/dev/null || true); (cat /tmp/open-walnut-demo/daemon.pid 2>/dev/null | xargs kill -15 2>/dev/null || true); sleep 1; echo \"Demo server: http://localhost:3457  (data: $HOME/.open-walnut-demo, daemon: /tmp/open-walnut-demo — fully isolated from prod)\"; OPEN_WALNUT_HOME=\"$HOME/.open-walnut-demo\" WALNUT_DAEMON_DIR=/tmp/open-walnut-demo node dist/cli.js web --port 3457",
+    "web:dev": "concurrently \"tsup --watch\" \"cd web && bun x vite\"",
+    "web:build": "bash scripts/build-daemon.sh && tsup && rm -rf dist/data && cp -r src/data dist/ && for d in src/integrations/*/manifest.json; do t=\"dist/integrations/$(basename $(dirname $d))\"; mkdir -p \"$t\"; cp \"$d\" \"$t/\"; i=\"$(dirname $d)/icon.svg\"; rm -f \"$t/icon.svg\"; if [ -f \"$i\" ]; then cp \"$i\" \"$t/\"; fi; for sub in skills agent-skills; do s=\"$(dirname $d)/$sub\"; rm -rf \"$t/$sub\"; if [ -d \"$s\" ]; then cp -r \"$s\" \"$t/\"; fi; done; done && node scripts/ship-builtin-plugins.mjs && node scripts/ship-store-plugins.mjs && cd web && ./node_modules/.bin/vite build",
+    "dev:ephemeral": "bun run web:build && node dist/cli.js web --ephemeral",
+    "dev:demo": "bun run web:build && (lsof -ti:3457 -sTCP:LISTEN | xargs kill -15 2>/dev/null || true); (cat /tmp/open-walnut-demo/daemon.pid 2>/dev/null | xargs kill -15 2>/dev/null || true); sleep 1; echo \"Demo server: http://localhost:3457  (data: $HOME/.open-walnut-demo, daemon: /tmp/open-walnut-demo — fully isolated from prod)\"; OPEN_WALNUT_HOME=\"$HOME/.open-walnut-demo\" WALNUT_DAEMON_DIR=/tmp/open-walnut-demo node dist/cli.js web --port 3457",
     "dev:prod": "bash scripts/dev-prod.sh",
     "prepare": "husky"
   },
@@ -174,12 +184,15 @@
     "@vitest/coverage-v8": "^3.1.0",
     "concurrently": "^9.2.1",
     "husky": "^9.1.7",
-    "patch-package": "^8.0.1",
     "pi-acp": "0.0.33",
     "supertest": "^7.2.2",
     "tsup": "^8.5.0",
     "tsx": "^4.23.1",
     "typescript": "^5.8.0",
-    "vitest": "^3.1.0"
+    "vitest": "^3.1.0",
+    "yaml": "^2.8.3"
+  },
+  "patchedDependencies": {
+    "@anthropic-ai/claude-agent-sdk@0.2.50": "patches/@anthropic-ai%2Fclaude-agent-sdk@0.2.50.patch"
   }
 }

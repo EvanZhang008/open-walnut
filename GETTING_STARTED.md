@@ -29,14 +29,15 @@ export ANTHROPIC_API_KEY=sk-ant-...   # get one at console.anthropic.com
 open-walnut web                       # starts on port 3456
 ```
 
-Working on Walnut itself? Swap step 2 for a checkout, and start with `npm start`, which
-builds the server and the frontend first:
+Working on Walnut itself? Swap step 2 for a checkout, installed with
+[Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`), and start with
+`bun run start`, which builds the server and the frontend first:
 
 ```bash
 git clone https://github.com/EvanZhang008/open-walnut.git
 cd open-walnut
-npm install
-npm start
+bun install
+bun run start
 ```
 
 Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat and the agent should reply. You're done!
@@ -86,15 +87,15 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 
 ### Older Linux (glibc before 2.29)
 
-Walnut's one required native module, better-sqlite3, ships a prebuilt binary for glibc 2.29 and newer, which every mainstream distro since 2019 has. On an older C library (glibc 2.26 systems are still around) it compiles during `npm install`, and compiling against Node 22 needs Python 3.8+ and a C++20 compiler (GCC 10+), which such a system usually lacks. The stock toolchain fails inside node-gyp with a Python `SyntaxError` or C++ template errors that never mention either requirement.
+Walnut's one required native module, better-sqlite3, ships a prebuilt binary for glibc 2.29 and newer, which every mainstream distro since 2019 has. On an older C library (glibc 2.26 systems are still around) it compiles during the install (`bun install` in a checkout, `npm install -g` for the package), and compiling against Node 22 needs Python 3.8+ and a C++20 compiler (GCC 10+), which such a system usually lacks. The stock toolchain fails inside node-gyp with a Python `SyntaxError` or C++ template errors that never mention either requirement.
 
-`npm start` runs `scripts/check-native-toolchain.mjs`, which detects this and prints the commands for your box. On a yum-based glibc 2.26 system they are:
+In a checkout, `bun run start` runs `scripts/check-native-toolchain.mjs`, which detects this and prints the commands for your box. On a yum-based glibc 2.26 system they are:
 
 ```bash
 sudo yum install -y gcc10-c++ make
 curl -LsSf https://astral.sh/uv/install.sh | sh        # node-gyp needs Python 3.8+; the system python3 is 3.7
 ~/.local/bin/uv python install 3.12                    # a static build that runs on glibc 2.17+, no sudo
-PYTHON="$(~/.local/bin/uv python find 3.12)" CC=gcc10-gcc CXX=gcc10-g++ npm install
+PYTHON="$(~/.local/bin/uv python find 3.12)" CC=gcc10-gcc CXX=gcc10-g++ bun install
 ```
 
 The Python step deliberately does not use the distro's package channel: on one such machine the channel had no Python 3.8 at all, while uv's managed Python installed in seconds and the compile went through (verified 2026-09-03).
@@ -116,7 +117,7 @@ export PATH="$HOME/.local/node22/bin:$PATH"   # add to your shell profile too
 |---|---|---|---|
 | **Git** | macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`, or [git-scm.com](https://git-scm.com/) | Cloning the repo, and auto-backup of `~/.open-walnut/` every 30 seconds | The npm install route needs no git. Data is still saved locally, just not version-controlled. |
 | **Provider key** | See [Provider Configuration](#provider-configuration) | Sends the small background single calls (session titles, summaries, voice cleanup, quick parses) to Anthropic, Bedrock, or another provider instead of your Claude Code login | Those calls go through Claude Code, which is the default. Chat, coding sessions, and routines never read a key. |
-| **Bun** | [bun.sh](https://bun.sh/) | Prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Claude Code sessions still work: the daemon deploys from source instead, and `npm start` says so and carries on. Non-Claude engines (Codex, Gemini, OpenCode, Goose, Pi) need the ACP bundles `npm run build:daemon` makes, so on a checkout install Bun and re-run it before using those. Not needed with the npm install route, which ships those bundles prebuilt. |
+| **Bun** | [bun.sh](https://bun.sh/) (1.4.4 or newer) | Required for a checkout: it installs the dependencies (`bun install`), and builds the prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Not needed with the npm install route, which ships those bundles prebuilt. |
 
 ### One AI login: Claude Code
 
@@ -139,10 +140,11 @@ Settings → Ask Walnut Provider is the one place this is chosen, and it means e
 ```bash
 git clone https://github.com/EvanZhang008/open-walnut.git
 cd open-walnut
-npm install
+bun install
 ```
 
-This installs both backend and frontend dependencies. The first `npm start` will build everything automatically.
+This installs both backend and frontend dependencies, at the exact versions in
+`bun.lock` and `web/bun.lock`. The first `bun run start` will build everything automatically.
 
 ---
 
@@ -200,14 +202,14 @@ providers:
 
 ### Verify Your Setup
 
-After starting the server (`npm start`), open [http://localhost:3456](http://localhost:3456) and go to Settings → Ask Walnut Provider, then press Test Connection on the provider you configured. A green result means the key, region, and model are all usable. The home page chat is not the test for this: it runs on Claude Code either way.
+After starting the server (`bun run start` in a checkout, `open-walnut web` otherwise), open [http://localhost:3456](http://localhost:3456) and go to Settings → Ask Walnut Provider, then press Test Connection on the provider you configured. A green result means the key, region, and model are all usable. The home page chat is not the test for this: it runs on Claude Code either way.
 
 ---
 
 ## First Run
 
 ```bash
-npm start
+bun run start
 ```
 
 On first launch, Open Walnut:
@@ -451,7 +453,7 @@ Two models ship as presets, selected with an environment variable before startup
 export WALNUT_SEARCH_V2_EMBED_MODEL=e5-small   # pick a preset
 export WALNUT_SEARCH_V2_SEMANTIC=0             # keyword-only, no model at all
 export WALNUT_DISABLE_SEARCH=1                 # do not index anything
-npm start
+bun run start
 ```
 
 Switching presets is safe: the index notices the model changed, drops the stored vectors, and re-embeds in the background. Keyword search keeps working the whole time. **Settings → Search** shows index health, per-kind document counts, and a **Rebuild index** button.
@@ -691,9 +693,9 @@ the command still reports this machine and says so.
 2. Find what's using port 3456: `lsof -i :3456`
 3. If it's an old Walnut process, stop it and restart
 
-### npm install fails
+### Install fails
 
-**Symptoms**: Build errors during `npm install`, especially around `better-sqlite3` or `sharp`.
+**Symptoms**: Build errors during `bun install` (a checkout) or `npm install -g open-walnut`, especially around `better-sqlite3` or `sharp`.
 
 **Fixes**:
 1. Check Node.js version: `node --version` (must be >= 22)
@@ -713,7 +715,7 @@ The embedding model is fetched on first use into `~/.open-walnut/models/`. Until
 **To use a smaller, faster model** (a third of the index size):
 ```bash
 export WALNUT_SEARCH_V2_EMBED_MODEL=e5-small
-npm start
+bun run start
 ```
 
 If a machine should never spend anything on embeddings, `WALNUT_SEARCH_V2_SEMANTIC=0` keeps keyword search and skips the model entirely.

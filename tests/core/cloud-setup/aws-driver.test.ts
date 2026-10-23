@@ -21,13 +21,15 @@ let stackOutputs: Record<string, string> = {}
 /** What the next `cdk deploy` prints and exits with. Reset per test. */
 let deployOutput: () => { text: string; code: number } = () => ({ text: 'fake cdk: done', code: 0 })
 
-/** How the next `npm ci` behaves: its exit code and how long it runs. Reset per test. */
-let npmCi: { code: number; delayMs: number } = { code: 0, delayMs: 0 }
-/** `npm ci` processes running right now, and the most that ever ran at once. */
-let npmActive = 0
-let npmMaxActive = 0
-/** When each `npm ci` exited (its close event), for ordering assertions. */
-const npmClosedAt: number[] = []
+/** How the next `bun install` behaves: its exit code and how long it runs. Reset per test. */
+let installRun: { code: number; delayMs: number } = { code: 0, delayMs: 0 }
+/** `bun install` processes running right now, and the most that ever ran at once. */
+let installActive = 0
+let installMaxActive = 0
+/** When each `bun install` exited (its close event), for ordering assertions. */
+const installClosedAt: number[] = []
+/** A spawn of the driver's dependency install (bunCommand() is a path to bun, or `bun`). */
+const isBunInstall = (c: { cmd: string; args: string[] }): boolean => path.basename(c.cmd) === 'bun' && c.args[0] === 'install'
 
 /** Every `aws` invocation detectCreds made, with the env it would have run under. */
 const execFileCalls: Array<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv }> = []
@@ -69,14 +71,14 @@ vi.mock('node:child_process', async (importOriginal) => {
     spawn: (cmd: string, args: string[], opts?: { env?: NodeJS.ProcessEnv; cwd?: string }) => {
       // cdk resolves the target ACCOUNT from its own env, so record it.
       spawnCalls.push({ cmd, args, env: opts?.env, cwd: opts?.cwd })
-      // `npm ci` starts by removing node_modules and leaves the marker the driver
-      // checks for, as the real one does (an interrupted one leaves the marker too).
-      const isNpmCi = cmd === 'npm' && args[0] === 'ci' && !!opts?.cwd
-      if (isNpmCi) {
-        fs.rmSync(path.join(opts!.cwd!, 'node_modules'), { recursive: true, force: true })
+      // `bun install` leaves the marker the driver checks for, as the real one does
+      // (an interrupted one leaves it too). Unlike `npm ci` it keeps what node_modules
+      // held, so only the driver's own removal clears an older stamp.
+      const isInstall = isBunInstall({ cmd, args }) && !!opts?.cwd
+      if (isInstall) {
         fs.mkdirSync(path.join(opts!.cwd!, 'node_modules', 'aws-cdk-lib'), { recursive: true })
-        npmActive++
-        npmMaxActive = Math.max(npmMaxActive, npmActive)
+        installActive++
+        installMaxActive = Math.max(installMaxActive, installActive)
       }
       // Real PassThroughs, not bare EventEmitters: the driver calls
       // stream.setEncoding() on both pipes, so a fake without it would fail for
@@ -96,7 +98,7 @@ vi.mock('node:child_process', async (importOriginal) => {
       // Only the deploy consults deployOutput, so a test can make the FIRST deploy
       // report "not bootstrapped" and still let the retry succeed.
       const reply = args.includes('deploy') ? deployOutput()
-        : isNpmCi ? { text: 'fake npm: done', code: npmCi.code } : { text: 'fake cdk: done', code: 0 }
+        : isInstall ? { text: 'fake bun: done', code: installRun.code } : { text: 'fake cdk: done', code: 0 }
       setTimeout(async () => {
         if (outFileIdx !== -1 && reply.code === 0) {
           await fsp.writeFile(
@@ -107,10 +109,10 @@ vi.mock('node:child_process', async (importOriginal) => {
         }
         child.stdout.end(`${reply.text}\n`)
         child.stderr.end()
-        if (isNpmCi) { npmActive--; npmClosedAt.push(Date.now()) }
+        if (isInstall) { installActive--; installClosedAt.push(Date.now()) }
         child.exitCode = reply.code
         child.emit('close', reply.code)
-      }, isNpmCi ? npmCi.delayMs : 0)
+      }, isInstall ? installRun.delayMs : 0)
       return child
     },
   }
@@ -324,7 +326,7 @@ describe('awsDriver.createVM', () => {
     deployOutput = () => ({ text: 'fake cdk: done', code: 0 })
     stackOutputs = { InstanceId: 'i-0abc', ElasticIp: '203.0.113.77', Domain: 'wn.example.com' }
     // Minimal fake checkout: infra/cdk.json + a node_modules marker so the
-    // driver skips its `npm ci` step.
+    // driver skips its install step.
     installDir = await fakeRoot('walnut-aws-driver-')
     await fsp.mkdir(path.join(installDir, 'infra', 'node_modules', 'aws-cdk-lib'), { recursive: true })
   })
@@ -498,15 +500,15 @@ describe('awsDriver with the CDK app an npm package carries', () => {
     logs.length = 0
     deployOutput = () => ({ text: 'fake cdk: done', code: 0 })
     stackOutputs = { InstanceId: 'i-0abc', ElasticIp: '203.0.113.77' }
-    npmCi = { code: 0, delayMs: 0 }
-    npmActive = 0
-    npmMaxActive = 0
-    npmClosedAt.length = 0
+    installRun = { code: 0, delayMs: 0 }
+    installActive = 0
+    installMaxActive = 0
+    installClosedAt.length = 0
     installDir = null
     packageRoot = await fakeRoot('walnut-aws-pkg-')
     await fsp.mkdir(path.join(packageRoot, 'infra', 'lib'), { recursive: true })
     await fsp.writeFile(path.join(packageRoot, 'infra', 'lib', 'stack.ts'), 'export {}\n', 'utf-8')
-    await fsp.writeFile(path.join(packageRoot, 'infra', 'package-lock.json'), '{"lockfileVersion":3}\n', 'utf-8')
+    await fsp.writeFile(path.join(packageRoot, 'infra', 'bun.lock'), '{"lockfileVersion":1}\n', 'utf-8')
     walnutHome = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-aws-home-'))
     workDir = path.join(walnutHome, 'cache', 'cloud-infra')
   })
@@ -525,10 +527,10 @@ describe('awsDriver with the CDK app an npm package carries', () => {
 
   it('installs and deploys from the copy, never writing into the package', async () => {
     await deploy()
-    const install = spawnCalls.find((c) => c.cmd === 'npm')!
-    // Dev dependencies carry the cdk CLI and ts-node: a NODE_ENV=production
-    // environment must not drop them.
-    expect(install.args).toEqual(['ci', '--include=dev'])
+    const install = spawnCalls.find(isBunInstall)!
+    // Dev dependencies carry the cdk CLI and ts-node; bun install takes them
+    // whatever NODE_ENV says, so no flag asks for them.
+    expect(install.args).toEqual(['install', '--frozen-lockfile'])
     expect(install.cwd).toBe(workDir)
     expect(spawnCalls.find((c) => c.args.includes('deploy'))!.cwd).toBe(workDir)
     expect(fs.existsSync(path.join(workDir, 'lib', 'stack.ts'))).toBe(true)
@@ -539,13 +541,13 @@ describe('awsDriver with the CDK app an npm package carries', () => {
     await deploy()
     spawnCalls.length = 0
     await deploy()
-    expect(spawnCalls.some((c) => c.cmd === 'npm')).toBe(false)
+    expect(spawnCalls.some(isBunInstall)).toBe(false)
 
     // An upgrade ships a new lockfile (a newer CDK): the copy must follow it.
-    await fsp.writeFile(path.join(packageRoot!, 'infra', 'package-lock.json'), '{"lockfileVersion":3,"v":2}\n', 'utf-8')
+    await fsp.writeFile(path.join(packageRoot!, 'infra', 'bun.lock'), '{"lockfileVersion":1,"v":2}\n', 'utf-8')
     spawnCalls.length = 0
     await deploy()
-    expect(spawnCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+    expect(spawnCalls.filter(isBunInstall)).toHaveLength(1)
   })
 
   it('a refresh drops files the package no longer ships and keeps the build state', async () => {
@@ -560,54 +562,54 @@ describe('awsDriver with the CDK app an npm package carries', () => {
     expect(fs.existsSync(path.join(workDir, 'node_modules', 'aws-cdk-lib'))).toBe(true)
   })
 
-  it('a half install (the marker but no stamp, as an interrupted npm ci leaves) is redone', async () => {
+  it('a half install (the marker but no stamp, as an interrupted install leaves) is redone', async () => {
     await fsp.mkdir(path.join(workDir, 'node_modules', 'aws-cdk-lib'), { recursive: true })
     await deploy()
-    expect(spawnCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+    expect(spawnCalls.filter(isBunInstall)).toHaveLength(1)
   })
 
-  it('keeps the lock stamp inside node_modules, where npm ci removes it first', async () => {
+  it('keeps the lock stamp inside node_modules', async () => {
     await deploy()
     expect(fs.existsSync(path.join(workDir, 'node_modules', '.walnut-installed-lock'))).toBe(true)
     expect(fs.existsSync(path.join(workDir, '.walnut-installed-lock'))).toBe(false)
   })
 
   it('an interrupted reinstall never leaves a stamp that matches the older lock', async () => {
-    const lock = path.join(packageRoot!, 'infra', 'package-lock.json')
+    const lock = path.join(packageRoot!, 'infra', 'bun.lock')
     const v1 = fs.readFileSync(lock, 'utf-8')
     await deploy()                                        // installed and stamped for v1
-    await fsp.writeFile(lock, '{"lockfileVersion":3,"v":2}\n', 'utf-8')
-    npmCi = { code: 1, delayMs: 0 }                       // the upgrade's npm ci fails half way
-    await expect(deploy()).rejects.toThrow(/npm ci failed/)
+    await fsp.writeFile(lock, '{"lockfileVersion":1,"v":2}\n', 'utf-8')
+    installRun = { code: 1, delayMs: 0 }                  // the upgrade's install fails half way
+    await expect(deploy()).rejects.toThrow(/bun install failed/)
     await fsp.writeFile(lock, v1, 'utf-8')                // back to the v1 package
-    npmCi = { code: 0, delayMs: 0 }
+    installRun = { code: 0, delayMs: 0 }
     spawnCalls.length = 0
     await deploy()
-    expect(spawnCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+    expect(spawnCalls.filter(isBunInstall)).toHaveLength(1)
   })
 
-  it('a cancelled install settles only after npm has exited', async () => {
-    npmCi = { code: 0, delayMs: 80 }
+  it('a cancelled install settles only after the install has exited', async () => {
+    installRun = { code: 0, delayMs: 80 }
     const ac = new AbortController()
     const run = awsDriver.createVM!(
       { userData: USER_DATA, name: 'walnut-cloud', domainMode: 'sslip', signal: ac.signal },
       (l) => logs.push(l),
     )
-    while (!spawnCalls.some((c) => c.cmd === 'npm')) await new Promise((r) => setTimeout(r, 5))
+    while (!spawnCalls.some(isBunInstall)) await new Promise((r) => setTimeout(r, 5))
     ac.abort()
     let settledAt = 0
     await run.catch(() => { settledAt = Date.now() })
-    expect(npmClosedAt).toHaveLength(1)
-    expect(settledAt).toBeGreaterThanOrEqual(npmClosedAt[0])
+    expect(installClosedAt).toHaveLength(1)
+    expect(settledAt).toBeGreaterThanOrEqual(installClosedAt[0])
     expect(spawnCalls.some((c) => c.args.includes('deploy'))).toBe(false)
   })
 
-  it('a job restarted while another prepares never runs npm ci beside it', async () => {
-    npmCi = { code: 0, delayMs: 40 }
+  it('a job restarted while another prepares never runs an install beside it', async () => {
+    installRun = { code: 0, delayMs: 40 }
     await Promise.all([deploy(), deploy()])
-    expect(npmMaxActive).toBe(1)
+    expect(installMaxActive).toBe(1)
     // The second waited, found the first one's install, and did not reinstall.
-    expect(spawnCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+    expect(spawnCalls.filter(isBunInstall)).toHaveLength(1)
   })
 
   it('tears down from the same copy', async () => {
@@ -620,10 +622,10 @@ describe('awsDriver with the CDK app an npm package carries', () => {
   it('the manual steps name the package copy, not a checkout', () => {
     const { steps } = awsDriver.instructions({ userData: USER_DATA, domain: '', domainMode: 'sslip' })
     const joined = steps.join('\n')
-    // Quoted (a home dir may hold a space) and with the dev dependencies cdk needs.
+    // Quoted (a home dir may hold a space), and installed from the shipped lockfile.
     expect(joined).toContain(`'${path.join(packageRoot!, 'infra')}'/.`)
     expect(joined).toContain(`'${workDir}'`)
-    expect(joined).toContain('npm ci --include=dev')
+    expect(joined).toContain('bun install --frozen-lockfile')
     expect(joined).not.toMatch(/source checkout/)
   })
 })

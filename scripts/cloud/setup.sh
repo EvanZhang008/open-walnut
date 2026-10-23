@@ -248,10 +248,15 @@ fi
 swapon --show | grep -q /swapfile || swapon /swapfile
 grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
-echo "==> [3/10] Bun (required by scripts/build-daemon.sh during npm run build)"
-if ! command -v bun >/dev/null 2>&1; then
+echo "==> [3/10] Bun (installs the dependencies; scripts/build-daemon.sh compiles with it)"
+# The version package.json pins (packageManager). bun.lock is read only by that
+# version or a newer one, so an older Bun left by an earlier boot is replaced too.
+BUN_VERSION="$(sed -n 's/^ *"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' "$REPO_DIR/package.json")"
+[ -n "$BUN_VERSION" ] || { echo "FATAL: no bun@<version> packageManager in $REPO_DIR/package.json"; exit 1; }
+BUN_HAVE="$(bun --version 2>/dev/null || true)"
+if [ -z "$BUN_HAVE" ] || [ "$(printf '%s\n%s\n' "$BUN_VERSION" "$BUN_HAVE" | sort -V | head -n 1)" != "$BUN_VERSION" ]; then
   export BUN_INSTALL=/opt/bun
-  curl -fsSL https://bun.sh/install | bash
+  curl -fsSL https://bun.sh/install | bash -s "bun-v$BUN_VERSION"
   ln -sf /opt/bun/bin/bun /usr/local/bin/bun
 fi
 
@@ -487,8 +492,8 @@ export PATH="/usr/local/bin:$PATH"
 # guard is the right default again.
 git config --global --unset-all safe.directory "^$REPO_DIR\$" || true
 cd "$REPO_DIR"
-npm ci
-# npm ci normally installs the right prebuilt native binding, but a deploy can
+bun install --frozen-lockfile
+# The install normally fetches the right prebuilt native binding, but a deploy can
 # leave a stale/foreign-platform binding behind (observed 2026-07-10: linux-arm64
 # binding missing → every SQLite consumer degraded to "null.prepare" errors).
 # Verify the binding actually loads on THIS platform; rebuild if it doesn't.

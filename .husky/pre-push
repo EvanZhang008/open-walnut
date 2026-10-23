@@ -1,6 +1,6 @@
 # Pre-push gate (committed; runs for everyone who installs deps).
 #
-# 1. TypeScript type-check — matches CI's `npm run lint` (tsc --noEmit).
+# 1. TypeScript type-check: matches CI's `npm run lint` (tsc --noEmit; `bun run lint` here).
 #    The local dev build uses tsup/esbuild, which ONLY transpiles and SKIPS
 #    type-checking, so type errors stay invisible locally and surface only in
 #    CI. This makes a local push fail for the same reason CI would, before the
@@ -18,7 +18,7 @@
 # Bypass everything with `git push --no-verify` (not recommended).
 
 echo "Type-checking before push (tsc --noEmit)…"
-if ! npm run --silent lint; then
+if ! bun run --silent lint; then
   echo ""
   echo "Push blocked: TypeScript errors above (CI would fail too)."
   echo "Fix them, or bypass with: git push --no-verify"

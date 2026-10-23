@@ -44,7 +44,7 @@ export const CLOUD_SETUP_TIMINGS = {
   dnsPatienceMs: 30 * 60_000,
   serverIntervalMs: 10_000,
   /**
-   * First boot is a git clone + npm ci + a server build + a web build, and the
+   * First boot is a git clone + bun install + a server build + a web build, and the
    * budget has to carry the CHEAPEST documented box, not the comfortable one:
    * measured comfortable on 2 GiB, but swap-bound on the 1 GiB default the
    * Azure path recommends, where those builds can run past 20 min. 30 min keeps

@@ -7,7 +7,7 @@
  *
  * What matters: the tag lands on the released commit, the release commit lands
  * on the newest main (main moves between the plan and the push) and changes
- * only the three release files, a rerun of a release that stopped halfway
+ * only the two release files, a rerun of a release that stopped halfway
  * finishes it without doing anything twice, and a main that cannot be rolled
  * fails the job instead of passing with a warning.
  *
@@ -212,8 +212,8 @@ beforeEach(() => {
     fs.copyFileSync(path.join(REPO, 'scripts', f), path.join(seed, 'scripts', f))
   }
   fs.writeFileSync(path.join(seed, 'package.json'), `${JSON.stringify({ name: 'open-walnut', version: '0.6.0' }, null, 2)}\n`)
-  const lock = { name: 'open-walnut', version: '0.6.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'open-walnut', version: '0.6.0' } } }
-  fs.writeFileSync(path.join(seed, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`)
+  // bun.lock carries no version of its own: the roll leaves it alone.
+  fs.writeFileSync(path.join(seed, 'bun.lock'), '{\n  "lockfileVersion": 1,\n  "packages": {},\n}\n')
   fs.writeFileSync(path.join(seed, 'CHANGELOG.md'), CHANGELOG)
   fs.mkdirSync(path.join(seed, '.github', 'workflows'), { recursive: true })
   fs.writeFileSync(path.join(seed, '.github', 'workflows', 'ci.yml'), 'name: CI\n')
@@ -264,9 +264,8 @@ describe('release.yml promote steps', { timeout: 120_000 }, () => {
     expect(atOrigin('rev-parse', 'main~1')).toBe(mainBefore)
     expect(atOrigin('log', '-1', '--format=%s', 'main')).toBe(`release: ${VERSION}`)
     expect(atOrigin('diff', '--name-only', mainBefore, head).split('\n').sort())
-      .toEqual(['CHANGELOG.md', 'package-lock.json', 'package.json'])
+      .toEqual(['CHANGELOG.md', 'package.json'])
     expect(JSON.parse(atOrigin('show', 'main:package.json')).version).toBe(VERSION)
-    expect(JSON.parse(atOrigin('show', 'main:package-lock.json')).packages[''].version).toBe(VERSION)
     const changelog = atOrigin('show', 'main:CHANGELOG.md')
     const unreleased = changelog.slice(changelog.indexOf('## [Unreleased]'), changelog.indexOf(`## [${VERSION}]`))
     expect(unreleased).toContain('Later fix')

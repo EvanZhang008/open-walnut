@@ -15,8 +15,7 @@
  * build (`npm run build` and the web build), which this does not repeat:
  * prepublishOnly's tarball check (scripts/check-publish.mjs) runs on each one.
  *
- * It rewrites package.json, package-lock.json and dist/, then puts the two
- * manifests back. That is why it refuses to run in a git clone outside CI:
+ * It rewrites package.json and dist/, then puts the manifest back. That is why it refuses to run in a git clone outside CI:
  * the shared worktree's dist/ is what a running server serves.
  */
 import { execFileSync } from 'node:child_process'
@@ -56,7 +55,8 @@ function main() {
     throw new Error('this rebuilds dist/ and rewrites package.json: run it in CI or in a copy of the tree (git archive), or pass --allow-checkout')
   }
   fs.mkdirSync(out, { recursive: true })
-  const manifests = ['package.json', 'package-lock.json'].map((f) => [f, fs.readFileSync(path.join(root, f), 'utf8')])
+  // bun.lock holds no version of its own: package.json is the one manifest.
+  const manifests = ['package.json'].map((f) => [f, fs.readFileSync(path.join(root, f), 'utf8')])
   const files = []
   let restamped = false
   try {

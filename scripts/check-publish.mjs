@@ -118,7 +118,7 @@ const mustInclude = [
   'dist/daemon-binaries/daemon-instance-lock.cjs',
   'dist/daemon-binaries/daemon-service-cli.cjs',
   // The AWS one-click setup deploys this CDK app; an install without it can only fail.
-  'infra/cdk.json', 'infra/package.json', 'infra/package-lock.json', 'infra/tsconfig.json',
+  'infra/cdk.json', 'infra/package.json', 'infra/bun.lock', 'infra/tsconfig.json',
   'infra/bin/walnut-cloud.ts', 'infra/lib/walnut-cloud-stack.ts',
   ...dtachFiles.flatMap((f) => [`dist/daemon-binaries/${f}`, `dist/daemon-binaries/${f}.source-hash`]),
 ];
