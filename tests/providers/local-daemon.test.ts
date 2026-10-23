@@ -43,6 +43,8 @@ interface MockOpts {
   noPidFile?: boolean
   deadOnPing?: boolean
   helloDelay?: number
+  /** Push events at every client, before and right before its hello answer, as a busy daemon does. */
+  eventsFirst?: boolean
 }
 
 /**
@@ -68,6 +70,8 @@ const HELLO_DELAY = ${opts.helloDelay ?? 0}
 const DEAD_ON_PING = ${opts.deadOnPing ? 'true' : 'false'}
 const NO_PORT = ${opts.noPortFile ? 'true' : 'false'}
 const NO_PID = ${opts.noPidFile ? 'true' : 'false'}
+const EVENTS_FIRST = ${opts.eventsFirst ? 'true' : 'false'}
+const event = (ws) => ws.send(JSON.stringify({ ev: 'session_state', sid: 's-1', state: 'dead', exitCode: 0, reason: 'proc-exit' }))
 fs.mkdirSync(DAEMON_DIR, { recursive: true })
 const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
 wss.on('listening', () => {
@@ -77,11 +81,13 @@ wss.on('listening', () => {
   console.log(port)
 })
 wss.on('connection', (ws) => {
+  if (EVENTS_FIRST) event(ws)
   ws.on('message', (data) => {
     const msg = JSON.parse(data.toString())
     if (msg.cmd === 'hello') {
       if (DEAD_ON_PING) return
       setTimeout(() => {
+        if (EVENTS_FIRST) event(ws)
         ws.send(JSON.stringify({ id: msg.id, ok: true, version: VERSION, capabilities: ['hello', 'start', 'attach', 'setMode'] }))
       }, HELLO_DELAY)
     }
@@ -191,6 +197,20 @@ describe('LocalDaemon — mock daemon coverage', () => {
 
     expect(port).toBeGreaterThan(0)
     expect(port).not.toBe(99999)
+  }, 10000)
+
+  // 2026-10-23: the ping took the first message for its answer, so a daemon that
+  // had just pushed a session's state was called dead and respawned, and every
+  // local read failed until the failed connect aged out.
+  it('an event pushed before the hello answer leaves a live daemon adopted, not respawned', async () => {
+    const { daemon: d1, binary, daemonDir } = makeDaemon(tmpDir, 'v1-events', { eventsFirst: true })
+    const port1 = await d1.ensureRunning()
+    const pid1 = fs.readFileSync(path.join(daemonDir, 'daemon.pid'), 'utf-8')
+    const d2 = new LocalDaemon({ daemonDir, binaryPath: binary })
+    expect(await d2.ensureRunning()).toBe(port1)
+    expect(fs.readFileSync(path.join(daemonDir, 'daemon.pid'), 'utf-8')).toBe(pid1)
+    // @ts-expect-error private
+    expect(await d2.ping(port1)).toMatchObject({ alive: true, version: 'v1-events' })
   }, 10000)
 
   it('throws when daemon does not respond to hello (hung daemon)', async () => {
