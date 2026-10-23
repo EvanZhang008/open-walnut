@@ -10,6 +10,23 @@ const pkgVersion = (JSON.parse(fs.readFileSync('package.json', 'utf-8')) as { ve
 
 const outDir = 'dist';
 
+// What `#ws` is in a bundle: the ws package found from the bundle's own place
+// (dist/ beside node_modules, or a host build's linked node_modules) and loaded
+// by its file path, which bun does not swap for its built-in WebSocket. Its
+// package.json is the one subpath the package exports.
+const WS_ON_BUN = `
+import { createRequire as __wsRequire } from 'node:module';
+import __wsPath from 'node:path';
+const __wsReq = __wsRequire(import.meta.url);
+const ws = __wsReq(__wsPath.join(__wsPath.dirname(__wsReq.resolve('ws/package.json')), 'index.js'));
+export default ws;
+export const WebSocket = ws.WebSocket;
+export const WebSocketServer = ws.WebSocketServer;
+export const createWebSocketStream = ws.createWebSocketStream;
+export const Receiver = ws.Receiver;
+export const Sender = ws.Sender;
+`;
+
 // dist/build-info.json: which commit this dist was built from (src/lib/build-info.ts
 // reads it). Stamped from onSuccess, never at config load: a FAILED build must leave
 // the old bundles with the old stamp, not credit them to the new commit. tsup calls
@@ -61,16 +78,20 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: false,
-  // `#ws` (package.json "imports") is `ws` on Node: the build says so, so dist
-  // imports the package as it always did. Bundled, its CommonJS `require`s of
-  // Node built-ins throw in an ES module; left as `#ws`, every package.json a
-  // build ships with (a host server's) would need the alias too.
+  // `#ws` (package.json "imports"): the npm `ws` package, never bun's own
+  // WebSocket, which bun hands out for a bare `ws` import (src/lib/ws-npm.ts says
+  // why that breaks the link checks). dist runs on bun, so each bundle carries
+  // WS_ON_BUN, which loads the package by its path. Bundled, ws's CommonJS
+  // `require`s of Node built-ins throw in an ES module; left as `#ws`, every
+  // package.json a build ships with (a host server's) would need the alias too.
   esbuildPlugins: [{
-    name: 'ws-on-node',
+    name: 'ws-on-bun',
     setup(build) {
-      build.onResolve({ filter: /^#ws$/ }, () => ({ path: 'ws', external: true }));
+      build.onResolve({ filter: /^#ws$/ }, () => ({ path: 'ws', namespace: 'walnut-ws' }));
+      build.onLoad({ filter: /.*/, namespace: 'walnut-ws' }, () => ({ contents: WS_ON_BUN, loader: 'js', resolveDir: process.cwd() }));
     },
   }],
-  // 'bun:sqlite' only exists on bun; src/lib/sqlite.ts loads it at runtime there.
-  external: ['better-sqlite3', 'bun:sqlite', 'sharp', '@anthropic-ai/claude-agent-sdk', 'esbuild', 'screencapturekit-audio-capture', '@homebridge/node-pty-prebuilt-multiarch', '@huggingface/transformers'],
+  // 'bun:sqlite' exists only at runtime (src/lib/sqlite.ts loads it); the rest
+  // are optional or downloaded components, loaded where they are installed.
+  external: ['bun:sqlite', 'sharp', '@anthropic-ai/claude-agent-sdk', 'screencapturekit-audio-capture', '@huggingface/transformers'],
 });

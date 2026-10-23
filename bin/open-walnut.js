@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import fs from 'node:fs';
 // One interface, one rule: DATA commands (one HTTP request to the local
 // server) run the slim dist/cli-fast.js entry (~0.1s boot); process-owning
@@ -15,18 +15,17 @@ import fs from 'node:fs';
 // a broken pipe means the reader got a TRUNCATED answer, and reporting that as
 // success is how a half-written JSON reply passes for a complete one. 141 is the
 // shell's SIGPIPE convention.
-// Node version: npm only WARNS about an unmet `engines`, so an old Node installs the
-// package happily and then dies inside the bundle with a syntax error that says nothing
-// about versions. Answer the real question here, once, with the command that fixes it.
-const nodeMajor = Number(process.versions.node.split('.')[0]);
-if (Number.isFinite(nodeMajor) && nodeMajor < 22) {
-  process.stderr.write(
-    `Walnut needs Node.js 22 or newer, and this is Node ${process.versions.node}.\n\n` +
-    `  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash\n` +
-    `  nvm install 22\n\n` +
-    `Then run the same command again.\n`,
-    () => process.exit(1),
-  );
+// A checkout's Walnut runs on bun (package.json `engines`): its SQLite is bun:sqlite
+// and its terminal bun's pty, so on Node the CLI would start and then fail at its
+// first database. `node bin/open-walnut.js` (or an old link) is answered here, once,
+// with the command that fixes it. The compiled file (src/binary/main.ts) needs neither.
+// Written synchronously: process.exit right after an async write can cut it off.
+if (typeof process.versions.bun !== 'string') {
+  fs.writeSync(2,
+    `Walnut runs on bun, and this is Node ${process.versions.node}.\n\n` +
+    `  curl -fsSL https://bun.sh/install | bash\n\n` +
+    `Then run the same command with bun: bun ${[process.argv[1] ?? 'bin/open-walnut.js', ...process.argv.slice(2)].join(' ')}\n`);
+  process.exit(1);
 }
 
 let wroteStdout = false;
