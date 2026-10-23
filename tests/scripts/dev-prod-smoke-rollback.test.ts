@@ -35,7 +35,7 @@ describe('dev-prod.sh smoke boot ordering', () => {
 
   it('runs after the build and BEFORE the prod-server kill', () => {
     const dryRunExit = indexOfOrFail('nothing was deployed')
-    const build = indexOfOrFail('"$BUN_BIN" run web:build')
+    const build = indexOfOrFail('"$BUN_BIN" --bun run web:build')
     const fileBuild = indexOfOrFail('scripts/build-binary.mjs" "${args[@]}"')
     const filesBuilt = indexOfOrFail('if build_files $FILE_TARGETS; then')
     const smoke = indexOfOrFail('Pre-kill smoke boot')
@@ -128,7 +128,7 @@ describe('dev-prod.sh smoke boot isolation', () => {
 })
 
 describe('dev-prod.sh last-known-good rollback', () => {
-  it('snapshots the dist only AFTER readiness passed', () => {
+  it('snapshots the build only AFTER readiness passed', () => {
     const readyGate = indexOfOrFail('if [[ "$ready" != "1" ]]; then')
     const snapshot = indexOfOrFail('if ! snapshot_lkg', readyGate)
     // The snapshot call sits after the failure branch, i.e. only a dist that
@@ -137,7 +137,7 @@ describe('dev-prod.sh last-known-good rollback', () => {
     expect(script.slice(readyGate, snapshot)).toMatch(/exit 1/)
   })
 
-  it('readiness failure rolls back to the LKG dist before exiting', () => {
+  it('readiness failure rolls back to the LKG file before exiting', () => {
     const fail = indexOfOrFail('Server failed its bounded readiness check')
     const snapshot = indexOfOrFail('if ! snapshot_lkg')
     const branch = script.slice(fail, snapshot)
@@ -150,10 +150,11 @@ describe('dev-prod.sh last-known-good rollback', () => {
     // post-kill exits left :3456 dark with no rollback at all.
     const fn = indexOfOrFail('rollback_to_lkg() {')
     const body = script.slice(fn, script.indexOf('\n}\n', fn))
-    // Whatever kind the last good build was: the compiled file or the Node dist.
-    expect(body).toMatch(/lkg_rel="dist-bin\/walnut-\$MACHINE_TARGET"/)
-    expect(body).toMatch(/lkg_rel="dist\/cli\.js"/)
-    expect(body).toMatch(/launch_server "\$lkg_kind" "\$from\/\$lkg_rel"/)
+    // The last good compiled file for this machine (lkg_file); never a Node dist.
+    expect(script).toMatch(/printf '%s' "\$LKG_DIR\/dist-bin\/walnut-\$MACHINE_TARGET"/)
+    expect(body).toMatch(/lkg_path="\$\(lkg_file\)"/)
+    expect(body).toMatch(/launch_server "\$lkg_path"/)
+    expect(body).not.toMatch(/NODE_BIN|launch_server node/)
     for (const marker of [
       'Server process exited before becoming ready.',
       'deployment aborted.',
@@ -219,10 +220,11 @@ describe('the rollback snapshot survives a reboot', () => {
     expect(script).toMatch(/^ {2}LKG_DIR="\$\{WALNUT_DEVPROD_LKG_DIR:-\$\{XDG_STATE_HOME:-\$HOME\/\.local\/state\}\/open-walnut\/open-walnut-lkg\}"$/m)
     // A rehearsal keeps its own in its state dir, never production's.
     expect(script).toMatch(/if \[\[ "\$REHEARSAL" == "1" \]\]; then\n {2}LKG_DIR="\$TMPDIR\/open-walnut-lkg"/)
-    const fn = script.slice(script.indexOf('rollback_to_lkg() {'))
-    expect(fn).toMatch(/lkg="\$LKG_LEGACY_DIR"/)
+    const file = script.slice(script.indexOf('lkg_file() {'))
+    expect(file).toMatch(/printf '%s' "\$legacy\/dist-bin\/walnut-\$MACHINE_TARGET"/)
     // Whichever snapshot is read (new or legacy) is staged before it boots.
-    expect(fn).toMatch(/stage_lkg_for_rollback "\$lkg_kind" "\$lkg"/)
+    const fn = script.slice(script.indexOf('rollback_to_lkg() {'))
+    expect(fn).toMatch(/stage_lkg_for_rollback "\$lkg"/)
     const stage = script.slice(script.indexOf('stage_lkg_for_rollback() {'))
     expect(stage).toMatch(/dir="\$STAGE_ROOT\/open-walnut-stage\.rollback\.\$\(date \+%s\)\.\$\$"/)
     // A compiled-file snapshot is staged the same way, its runtime tree with it.

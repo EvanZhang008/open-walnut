@@ -71,7 +71,7 @@ describe('dev-prod.sh server log path', () => {
 
   it('proves appendability before any destructive step', () => {
     const check = script.indexOf('Cannot append to server log')
-    const build = script.indexOf('npm run web:build')
+    const build = script.indexOf('--bun run web:build')
     const launchdRemove = script.indexOf('  if ! remove_launchd_job; then\n', script.indexOf('  use_launchd=1\n'))
     const killExisting = script.indexOf('kill -15 $existing_pids')
     expect(check).toBeGreaterThan(-1)
@@ -102,9 +102,10 @@ const shellNice = Number(runBash('ps -o ni= -p $$').stdout.trim() || '0')
 const BUN_PIN = /^bun@(\d+\.\d+\.\d+)/.exec(JSON.parse(fs.readFileSync(path.join(path.dirname(SCRIPT), '..', 'package.json'), 'utf-8')).packageManager ?? '')?.[1] ?? '1.0.0'
 
 /**
- * A dir holding stand-ins for bun and node that only answer `--version`: the
- * dry run asks nothing else, so the file path is exercised on any OS whether or
- * not a real bun of the pinned version is installed.
+ * A dir holding a stand-in bun that only answers `--version`: the dry run asks
+ * nothing else, so the file path is exercised on any OS whether or not a real
+ * bun of the pinned version is installed. A node stand-in sits beside it so a
+ * test can prove the deploy never picks one.
  */
 function standIns(bunVersion = BUN_PIN): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-tools-'))
@@ -161,16 +162,30 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     expect(bad.stderr).toMatch(/unknown target 'plan9-mips'/)
   })
 
-  it('WALNUT_DEVPROD_RUNTIME=node is the way back to the Node build, and nothing else is accepted', async () => {
-    const node = await dryRun({ WALNUT_DEVPROD_RUNTIME: 'node' })
-    expect(node.status, node.stderr).toBe(0)
-    expect(node.stdout).toMatch(/would run node .* with dist\/cli\.js \(WALNUT_DEVPROD_RUNTIME=node\)\./)
-    // The way back from a bun problem runs its helpers on node, bun or not.
-    expect(node.stdout).toMatch(/helper scripts \(type-check, render checks, publish\) run on \S+\/node;/)
-    const other = await dryRun({ WALNUT_DEVPROD_RUNTIME: 'deno' })
-    expect(other.status).toBe(1)
-    expect(other.stderr).toMatch(/WALNUT_DEVPROD_RUNTIME='deno' is neither file/)
-    expect(other.stdout).not.toMatch(/every guard passed/)
+  it('serves only the compiled file: WALNUT_DEVPROD_RUNTIME=node (the old way back) is refused before any step', async () => {
+    for (const runtime of ['node', 'deno']) {
+      const r = await dryRun({ WALNUT_DEVPROD_RUNTIME: runtime })
+      expect(r.status).toBe(1)
+      expect(r.stderr).toMatch(new RegExp(`WALNUT_DEVPROD_RUNTIME='${runtime}' is not supported: the deploy serves only the compiled walnut file`))
+      expect(r.stderr).toMatch(/rolls back to the last-known-good file/)
+      expect(r.stdout).not.toMatch(/every guard passed/)
+    }
+    // Set to file, the knob is a no-op; a node on PATH is never picked for anything.
+    const file = await dryRun({ WALNUT_DEVPROD_RUNTIME: 'file' })
+    expect(file.status, file.stderr).toBe(0)
+    expect(file.stdout).not.toMatch(/\/node\b/)
+  })
+
+  it('names the rollback file the deploy would use, and says when there is none', async () => {
+    const r = await dryRun()
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/rollback file: none yet \(.*open-walnut-lkg\)\./)
+    // An LKG an older deploy left as a Node build cannot be rolled back to.
+    const lkg = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-lkg-'))
+    fs.mkdirSync(path.join(lkg, 'dist'))
+    fs.writeFileSync(path.join(lkg, 'dist', 'cli.js'), '')
+    const old = await dryRun({ WALNUT_DEVPROD_LKG_DIR: lkg })
+    expect(old.stdout).toMatch(/rollback file: none \(.* holds a Node build, which Walnut can no longer run\)\./)
   })
 
   // Every place find_bun looks besides PATH; a real bun there of the pinned
@@ -183,7 +198,8 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     expect(r.status).toBe(1)
     expect(r.stderr).toMatch(new RegExp(`needs bun ${BUN_PIN.replace(/\./g, '\\.')} or newer`))
     expect(r.stderr).toMatch(/Found only: 0\.0\.1 at /)
-    expect(r.stderr).toMatch(/WALNUT_DEVPROD_RUNTIME=node/)
+    expect(r.stderr).toMatch(/curl -fsSL https:\/\/bun\.sh\/install \| bash/)
+    expect(r.stderr).not.toMatch(/WALNUT_DEVPROD_RUNTIME/)
     expect(r.stdout).not.toMatch(/every guard passed/)
   })
 
@@ -227,14 +243,14 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
     expect(bad.status).toBe(1)
     expect(bad.stderr).toMatch(/WALNUT_DEVPROD_SERVE_ROOT is not a Walnut checkout/)
     expect(bad.stdout).not.toMatch(/every guard passed/)
-    // The server runs as the serve root: its cwd, its node_modules (stage and
-    // rollback copy alike) and the source repo it reports. The build stays REPO_ROOT's.
-    expect(script).toMatch(/ln -sfn "\$SERVE_ROOT\/node_modules" "\$STAGE_DIR\/node_modules"/)
-    expect(script).toMatch(/ln -sfn "\$SERVE_ROOT\/node_modules" "\$LKG_DIR\.tmp\/node_modules"/)
+    // The server runs as the serve root: its cwd and the source repo it reports
+    // (stage, LKG and rollback copy alike). The build stays REPO_ROOT's. The
+    // compiled file carries its packages, so no stage links a node_modules.
     expect(script).toMatch(/printf '%s\\n' "\$SERVE_ROOT" > "\$STAGE_DIR\/\.walnut-source-root"/)
+    expect(script).toMatch(/printf '%s\\n' "\$SERVE_ROOT" > "\$LKG_DIR\.tmp\/\.walnut-source-root"/)
     expect(script).toMatch(/open-walnut\n\s*"\$SERVE_ROOT" \/usr\/bin\/env/)
-    expect(script).toMatch(/cp -Rc "\$REPO_ROOT\/dist" "\$STAGE_DIR\/dist"/)
-    expect(script).not.toMatch(/ln -sfn "\$REPO_ROOT\/node_modules"/)
+    expect(script).not.toMatch(/ln -sfn "\$\w+\/node_modules"/)
+    expect(script).not.toMatch(/cp -Rc? "\$REPO_ROOT\/dist" "\$STAGE_DIR\/dist"/)
   })
 
   it('honours the port override only in dry-run mode and in a guarded rehearsal', () => {

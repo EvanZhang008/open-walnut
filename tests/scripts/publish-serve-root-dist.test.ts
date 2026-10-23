@@ -152,10 +152,10 @@ describe('dev-prod.sh publishes the serving build', () => {
     const guard = DEV_PROD.lastIndexOf('if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then', at(call))
     expect(guard).toBeGreaterThan(0)
     expect(at(call) - guard).toBeLessThan(700)
-    // The Node build publishes its staged dist; the compiled file the dist it was built from.
+    // The compiled file is all a deploy serves: it publishes the dist it was built from.
     const pick = DEV_PROD.slice(guard, at(call))
-    expect(pick).toContain('publish_from="$STAGE_DIR/dist"')
-    expect(pick).toMatch(/if \[\[ "\$SERVER_KIND" == "file" \]\]; then publish_from="\$REPO_ROOT\/dist"; fi/)
+    expect(pick).toContain('publish_from="$REPO_ROOT/dist"')
+    expect(pick).not.toContain('$STAGE_DIR/dist"')
     // Into this checkout, except in a rehearsal, which writes only into its own dirs.
     expect(pick).toContain('publish_to="$SERVE_ROOT/dist"')
     expect(pick).toMatch(/if \[\[ "\$REHEARSAL" == "1" \]\]; then[\s\S]*publish_to="\$TMPDIR\/rehearsal-serve-root\/dist"/)

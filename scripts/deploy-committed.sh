@@ -5,7 +5,7 @@
 #   bash scripts/deploy-committed.sh <commit>    # deploy another commit
 #   WALNUT_DEVPROD_DRY_RUN=1 bash scripts/deploy-committed.sh
 #
-# Several agents share one checkout, and `npm run dev:prod` builds whatever is on
+# Several agents share one checkout, and `bun run dev:prod` builds whatever is on
 # disk, so a peer's half-written files ship with your commit (2026-09-26: a peer's
 # JS went out without its CSS and no long session could scroll). This script
 # clones the commit into a temp directory (a separate clone that borrows this
@@ -14,9 +14,8 @@
 # WALNUT_DEVPROD_SERVE_ROOT pointing back here, so the server still runs as this
 # checkout. Every guard of dev-prod.sh applies unchanged (type-check, smoke boot
 # before the kill, rollback, cooldown), and WALNUT_DEVPROD_* knobs pass through:
-# by default the clone builds and serves the compiled walnut file for this
-# machine (plus the Linux files host servers take, from the same build), and
-# WALNUT_DEVPROD_RUNTIME=node deploys the Node build instead. The compiled files
+# the clone builds and serves the compiled walnut file for this machine (plus
+# the Linux files host servers take, from the same build). The compiled files
 # are staged outside the clone, so removing it never touches the running server.
 # The clone is removed afterwards (WALNUT_DEPLOY_KEEP_BUILD=1 keeps it).
 set -euo pipefail
@@ -34,20 +33,16 @@ fi
 BRANCH="$(git -C "$SERVE_ROOT" rev-parse --abbrev-ref HEAD)"
 if [[ "$BRANCH" == "HEAD" ]]; then BRANCH=deploy; fi
 
-# Runs the dependency-linking snippet below from stdin: bun (what the build
-# uses) as `bun run -`, else `node -`. A bare `bun -` is NOT stdin: bun reads it
-# as `bun add` and installs the arguments as packages.
+# Runs the dependency-linking snippet below from stdin with bun (what the build
+# uses) as `bun run -`. A bare `bun -` is NOT stdin: bun reads it as `bun add`
+# and installs the arguments as packages. dev-prod.sh then checks the version.
 JS_RUN=()
 for cand in "${WALNUT_BUN:-}" "$(command -v bun || true)" "$HOME/.bun/bin/bun"; do
   if [[ -n "$cand" && -x "$cand" ]]; then JS_RUN=("$cand" run -); break; fi
 done
 if (( ${#JS_RUN[@]} == 0 )); then
-  node_bin="$(command -v node || true)"
-  if [[ -z "$node_bin" ]]; then
-    echo "Neither bun nor node was found on PATH" >&2
-    exit 1
-  fi
-  JS_RUN=("$node_bin" -)
+  echo "No bun found (WALNUT_BUN, PATH, ~/.bun/bin): install it with curl -fsSL https://bun.sh/install | bash" >&2
+  exit 1
 fi
 
 BUILD="${TMPDIR:-/tmp}"
@@ -74,12 +69,12 @@ git -C "$BUILD" checkout --quiet -B "$BRANCH" "$SHA"
 # A commit from before the serve-root knob would run the server inside the clone,
 # which is deleted on exit.
 if ! grep -q 'WALNUT_DEVPROD_SERVE_ROOT' "$BUILD/scripts/dev-prod.sh"; then
-  echo "Commit ${SHA:0:12} predates WALNUT_DEVPROD_SERVE_ROOT; deploy it with npm run dev:prod from a clean tree." >&2
+  echo "Commit ${SHA:0:12} predates WALNUT_DEVPROD_SERVE_ROOT; deploy it with bun run dev:prod from a clean tree." >&2
   exit 1
 fi
 
 # Dependencies: every top-level entry of this checkout's node_modules is linked,
-# except the npm workspace packages, which must be the COMMITTED ones in the
+# except the workspace packages, which must be the COMMITTED ones in the
 # clone (this checkout's links point at its own, possibly edited, packages/).
 "${JS_RUN[@]}" "$SERVE_ROOT/node_modules" "$BUILD/node_modules" "$BUILD" <<'JS'
 const fs = require('fs')

@@ -181,7 +181,7 @@ describe('dev-prod.sh wires the render check into the smoke block', () => {
   };
 
   it('type-checks web/ BEFORE the build, with a named escape hatch', () => {
-    expect(idx('WALNUT_DEVPROD_SKIP_TSC')).toBeLessThan(idx('npm run web:build'));
+    expect(idx('WALNUT_DEVPROD_SKIP_TSC')).toBeLessThan(idx('--bun run web:build'));
     expect(script).toMatch(/WEB_TSC" --noEmit -p tsconfig\.json/);
     expect(script).toContain('web/ type-check FAILED');
   });

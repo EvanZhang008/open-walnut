@@ -141,7 +141,7 @@ describe('deploy-committed.sh', () => {
     expect(r.report!.ws_file).toBe('committed lib')
   })
 
-  it('falls back to node - on a machine without bun', () => {
+  it('needs bun: a machine with only node is told how to install it, and nothing runs on node', () => {
     const f = fixture()
     const bin = path.join(path.dirname(f.repo), 'bin')
     fs.mkdirSync(bin)
@@ -149,10 +149,10 @@ describe('deploy-committed.sh', () => {
     const home = path.join(path.dirname(f.repo), 'home')
     fs.mkdirSync(home)
     const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', PATH: guardedPath([bin], '/usr/bin:/bin'), HOME: home })
-    expect(r.stderr).toBe('')
-    expect(r.status).toBe(0)
-    expect(fs.readFileSync(path.join(bin, 'node.args'), 'utf-8').trim()).toMatch(/^- \//)
-    expect(r.report!.scoped_dep).toBe(path.join(f.repo, 'node_modules', '@acme', 'other'))
+    expect(r.status).toBe(1)
+    expect(r.stderr).toMatch(/No bun found .*curl -fsSL https:\/\/bun\.sh\/install \| bash/)
+    expect(fs.existsSync(path.join(bin, 'node.args'))).toBe(false)
+    expect(r.report).toBeNull()
   })
 
   it('deploys a named commit, and keeps the clone on request', () => {

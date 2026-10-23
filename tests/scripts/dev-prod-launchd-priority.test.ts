@@ -103,15 +103,11 @@ describe('dev-prod.sh launchd priority', () => {
     expect(out).toBe('a&amp;b &lt;c&gt; &quot;d&quot; &amp;amp; &amp;lt;')
   })
 
-  // Both server kinds: the compiled file runs directly (no node), with its
-  // runtime tree beside its dist-bin/; the Node build is node plus cli.js.
-  const KINDS: Array<[string, string, string[]]> = [
-    ['file', '/stage dir/dist-bin/walnut-darwin-arm64', ['WALNUT_RUNTIME_DIR=/stage dir/runtime', '/stage dir/dist-bin/walnut-darwin-arm64', 'web', '--port', '3456']],
-    ['node', '/stage dir/dist/cli.js', ['/usr/local/bin/node', '/stage dir/dist/cli.js', 'web', '--port', '3456']],
-  ]
-  const cases = bashes().flatMap((b) => KINDS.map(([kind, file, tail]) => [b, kind, file, tail] as const))
+  // The compiled file runs directly (no node), with its runtime tree beside its dist-bin/.
+  const FILE = '/stage dir/dist-bin/walnut-darwin-arm64'
+  const TAIL = ['WALNUT_RUNTIME_DIR=/stage dir/runtime', FILE, 'web', '--port', '3456']
 
-  it.each(cases)('writes a plist whose arguments survive exactly under %s (%s)', (bash, kind, file, tail) => {
+  it.each(bashes())('writes a plist whose arguments survive exactly under %s', (bash) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-plist-'))
     try {
       const out = path.join(dir, 'job.plist')
@@ -123,10 +119,9 @@ describe('dev-prod.sh launchd priority', () => {
         // The job's cwd is the serve root (the checkout, or WALNUT_DEVPROD_SERVE_ROOT for a deploy of a clean clone).
         `SERVE_ROOT='/repo with space/a&b'`,
         `PATH='/bin:/usr/bin:/odd/"quoted"/<dir>&x'`,
-        'NODE_BIN=/usr/local/bin/node',
         'PORT=3456',
         `SERVER_LOG='/tmp/log & more.log'`,
-        `set_server_argv ${kind} '${file}'`,
+        `set_server_argv '${FILE}'`,
         'launchd_job_argv',
         `write_launchd_plist '${out}'`,
         `printf '%s\\n' "\${launchd_argv[@]}"`,
@@ -139,14 +134,14 @@ describe('dev-prod.sh launchd priority', () => {
       expect(args).toEqual(expected)
       expect(args).toContain(`PATH=/bin:/usr/bin:/odd/"quoted"/<dir>&x`)
       expect(args).toContain('/repo with space/a&b')
-      expect(args.slice(-tail.length)).toEqual(tail)
+      expect(args.slice(-TAIL.length)).toEqual(TAIL)
       // An inherited runtime dir (a deploy run from a session of the old server
       // names the OLD stage) is dropped before the new one is set.
       expect(args.indexOf('WALNUT_RUNTIME_DIR')).toBeGreaterThan(args.indexOf('-u'))
       expect(args[args.indexOf('WALNUT_RUNTIME_DIR') - 1]).toBe('-u')
       // BUN_BE_BUN=1 makes a compiled bun file run as the bun CLI instead of Walnut.
       expect(args[args.indexOf('BUN_BE_BUN') - 1]).toBe('-u')
-      if (kind === 'file') expect(args).not.toContain('/usr/local/bin/node')
+      expect(args.some((a) => /(^|\/)node$/.test(a))).toBe(false)
       expect(xml).toContain('<key>StandardOutPath</key><string>/tmp/log &amp; more.log</string>')
       // The clamp request rides in the plist only: the argv is shared with the
       // submit fallback, which stays in the utility band and must not claim otherwise.

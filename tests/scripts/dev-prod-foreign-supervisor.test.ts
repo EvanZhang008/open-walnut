@@ -66,7 +66,7 @@ function run(stub: Stub): { status: number | null; stdout: string; stderr: strin
     '  fi',
     '  echo "UNEXPECTED launchctl $*"; return 1',
     '}',
-    'ps() { echo "node /repo/dist/cli.js web --port 3456"; }',
+    'ps() { echo "bun /repo/dist/cli.js web --port 3456"; }',
     'remove_launchd_job() { echo REMOVED_JOB; }',
   ].join('\n')
   const r = spawnSync('bash', ['-c', `${prelude}\n${block()}\necho DONE`], { encoding: 'utf-8' })

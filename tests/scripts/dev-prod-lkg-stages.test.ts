@@ -95,7 +95,7 @@ describe('snapshot_lkg', () => {
     fs.writeFileSync(path.join(stage, 'dist-bin', 'walnut-x'), 'new build')
     fs.mkdirSync(path.join(stage, 'runtime', 'id-new'), { recursive: true })
     return [fn('clone_copy'), fn('dir_has_live_process'), fn('snapshot_lkg'),
-      `STAGE_DIR='${stage}'`, `LKG_DIR='${lkg}'`, 'SERVER_KIND=file', `SERVE_ROOT='${root}'`, `REPO_ROOT='${root}'`,
+      `STAGE_DIR='${stage}'`, `LKG_DIR='${lkg}'`, `SERVE_ROOT='${root}'`, `REPO_ROOT='${root}'`,
       'snapshot_lkg'].join('\n')
   }
 
@@ -126,11 +126,11 @@ describe('snapshot_lkg', () => {
 
 describe('rollback_to_lkg', () => {
   function harness(root: string, lkg: string): string {
-    return [fn('clone_copy'), fn('lkg_has_build'), fn('stage_lkg_for_rollback'), fn('rollback_to_lkg'),
-      'launch_server() { printf "LAUNCH %s %s\\n" "$1" "$2"; }',
+    return [fn('clone_copy'), fn('stage_lkg_for_rollback'), fn('lkg_file'), fn('rollback_to_lkg'),
+      'launch_server() { printf "LAUNCH %s\\n" "$*"; }',
       'wait_for_config_ready() { return 0; }',
       `STAGE_ROOT='${root}'`, `LKG_DIR='${lkg}'`, `SERVE_ROOT='${root}/serve'`, 'MACHINE_TARGET=darwin-arm64',
-      'NODE_BIN=/usr/bin/true', 'PORT=1', 'rollback_to_lkg'].join('\n')
+      'PORT=1', 'rollback_to_lkg'].join('\n')
   }
 
   it('starts the compiled file from a stage cloned from the LKG, never from the LKG itself', () => {
@@ -141,7 +141,7 @@ describe('rollback_to_lkg', () => {
     fs.mkdirSync(path.join(lkg, 'runtime', 'id-1', 'dist'), { recursive: true })
     const r = bash(harness(root, lkg))
     expect(r.status, r.stderr).toBe(0)
-    const m = /^LAUNCH file (.+)$/m.exec(r.stdout)
+    const m = /^LAUNCH (.+)$/m.exec(r.stdout)
     expect(m, r.stdout + r.stderr).not.toBeNull()
     const launched = m![1]
     expect(launched.startsWith(`${root}/open-walnut-stage.rollback.`)).toBe(true)
@@ -153,7 +153,24 @@ describe('rollback_to_lkg', () => {
     expect(fs.readFileSync(path.join(stage, '.walnut-source-root'), 'utf-8').trim()).toBe(`${root}/serve`)
   })
 
-  it('starts a Node LKG from a stage too, with its package.json and the serve root dependencies', () => {
+  it('reads the old temp snapshot until the first one lands off the temp dir, and stages it too', () => {
+    const root = tmp()
+    const legacy = path.join(root, 'tmp', 'open-walnut-lkg')
+    program(path.join(legacy, 'dist-bin', 'walnut-darwin-arm64'))
+    const r = bash([harness(root, path.join(root, 'state', 'open-walnut-lkg')).replace(/\nrollback_to_lkg$/, ''),
+      `LKG_LEGACY_DIR='${legacy}'`, 'rollback_to_lkg'].join('\n'))
+    expect(r.status, r.stderr).toBe(0)
+    const launched = /^LAUNCH (.+)$/m.exec(r.stdout)![1]
+    expect(launched.startsWith(`${root}/open-walnut-stage.rollback.`)).toBe(true)
+    expect(launched.endsWith('/dist-bin/walnut-darwin-arm64')).toBe(true)
+    // A WALNUT_DEVPROD_LKG_DIR the caller named is the only place read.
+    const named = bash([harness(root, path.join(root, 'state', 'open-walnut-lkg')).replace(/\nrollback_to_lkg$/, ''),
+      `LKG_LEGACY_DIR='${legacy}'`, `WALNUT_DEVPROD_LKG_DIR='${root}/state/open-walnut-lkg'`, 'rollback_to_lkg'].join('\n'))
+    expect(named.stdout).not.toMatch(/^LAUNCH/m)
+    expect(named.stderr).toMatch(/No last-known-good file at/)
+  })
+
+  it('never starts a Node LKG an older deploy left: it names it and leaves the port unserved', () => {
     const root = tmp()
     const lkg = path.join(root, 'open-walnut-lkg')
     fs.mkdirSync(path.join(lkg, 'dist'), { recursive: true })
@@ -161,11 +178,18 @@ describe('rollback_to_lkg', () => {
     fs.writeFileSync(path.join(lkg, 'package.json'), '{"version":"1.2.3"}')
     const r = bash(harness(root, lkg))
     expect(r.status, r.stderr).toBe(0)
-    const launched = /^LAUNCH node (.+)$/m.exec(r.stdout)![1]
-    expect(launched.startsWith(`${root}/open-walnut-stage.rollback.`)).toBe(true)
-    const stage = path.dirname(path.dirname(launched))
-    expect(fs.readFileSync(path.join(stage, 'package.json'), 'utf-8')).toContain('1.2.3')
-    expect(fs.readlinkSync(path.join(stage, 'node_modules'))).toBe(`${root}/serve/node_modules`)
+    expect(r.stdout).not.toMatch(/^LAUNCH/m)
+    expect(r.stderr).toMatch(/is a Node build, which Walnut can no longer run; :1 is left unserved/)
+    // Nothing was staged for it.
+    expect(fs.readdirSync(root).filter((n) => n.startsWith('open-walnut-stage.rollback.'))).toEqual([])
+  })
+
+  it('says so when there is no LKG at all', () => {
+    const root = tmp()
+    const r = bash(harness(root, path.join(root, 'open-walnut-lkg')))
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout).not.toMatch(/^LAUNCH/m)
+    expect(r.stderr).toMatch(/No last-known-good file at .*open-walnut-lkg; :1 is left unserved/)
   })
 })
 
