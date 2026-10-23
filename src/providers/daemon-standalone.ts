@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import net from 'node:net'
 import { spawn, execSync, execFile, execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import type { ServerWebSocket } from 'bun'
@@ -10057,7 +10058,40 @@ function scheduleBridgeRedial(gen: number): void {
 // Bun.connect({ tls }) socket (node:tls destroy() and resetAndDestroy() under
 // Bun end nothing either), so doing it means owning the TLS transport under
 // the WebSocket, which this twin does not. Keep in sync with daemon-source.ts.
+//
+// Bun 1.4.4 rewrote its WebSocket client (oven-sh/bun#45223), and terminate()
+// now ends a ws:// socket with a FIN, after the kernel has sent what it
+// buffered: the drain this call was chosen to avoid. The same release builds
+// its `ws` on native transports and honours createConnection, so from 1.4.4 a
+// ws:// bridge rides a TCP socket this twin opens itself and is reset with
+// resetAndDestroy(), as daemon-source.ts does (measured 2026-10-23: a RST on
+// 1.4.3 and 1.4.4; Bun's ws ignores createConnection before 1.4.4). Older Bun
+// keeps the global WebSocket, whose terminate() resets; wss:// stays on it too.
+const BRIDGE_OWN_TCP = Bun.semver.satisfies(Bun.version, '>=1.4.4')
+const bridgeTcp = new WeakMap<object, { tcp?: net.Socket }>()
+
+function openBridgeClient(url: string): WebSocket {
+  if (!BRIDGE_OWN_TCP || !/^ws:/i.test(url)) return new WebSocket(url)
+  const { WebSocket: WsClient } = require('ws') as { WebSocket: new (url: string, opts: object) => WebSocket }
+  const holder: { tcp?: net.Socket } = {}
+  const client = new WsClient(url, {
+    createConnection: (opts: { host?: string; hostname?: string; port?: number | string }) => {
+      const tcp = net.connect({ host: opts.host || opts.hostname, port: Number(opts.port) })
+      // An 'error' nobody listens for ends the daemon; the client hears failures through ws.
+      tcp.on('error', () => {})
+      holder.tcp = tcp
+      return tcp
+    },
+  })
+  bridgeTcp.set(client, holder)
+  return client
+}
+
 function abandonBridgeSocket(client: WebSocket) {
+  const tcp = bridgeTcp.get(client)?.tcp
+  if (tcp && !tcp.destroyed && !tcp.connecting) {
+    try { tcp.resetAndDestroy(); return } catch {}
+  }
   try {
     const t = (client as unknown as { terminate?: () => void }).terminate
     if (typeof t === 'function') t.call(client); else client.close()
@@ -10146,7 +10180,7 @@ function dialBridge(gen: number): void {
 
   let client: WebSocket
   try {
-    client = new WebSocket(dialUrl)
+    client = openBridgeClient(dialUrl)
   } catch (err) {
     logMsg('warn', 'bridge: dial failed', { err: (err as Error).message })
     scheduleBridgeRedial(gen)
