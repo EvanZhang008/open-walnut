@@ -2,7 +2,7 @@
  * Safe sqlite snapshots for backup.
  *
  * Canonical DBs are live-written by the running server; a raw file copy can
- * photograph a torn page mid-transaction. better-sqlite3's `db.backup()` uses
+ * photograph a torn page mid-transaction. `db.backup()` (src/lib/sqlite.ts) uses
  * SQLite's online backup API, which yields a consistent copy while writers
  * keep going. Snapshots land in a staging dir and ride the upload set under
  * SQLITE_SNAPSHOT_PREFIX; restore puts them back at their original paths.

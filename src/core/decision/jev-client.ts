@@ -199,8 +199,8 @@ export function getJevClient(config: Config): JevClient | undefined {
 
       try {
         // Dynamic on purpose: usage/index.js instantiates the sqlite-backed
-        // tracker at import time. A static import would drag better-sqlite3 and
-        // a real DB open into every unit test that imports a caller module.
+        // tracker at import time. A static import would drag SQLite and a real
+        // DB open into every unit test that imports a caller module.
         const { usageTracker } = await import('../usage/index.js');
         usageTracker.record({
           source: 'jev',

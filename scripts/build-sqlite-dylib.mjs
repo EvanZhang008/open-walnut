@@ -3,13 +3,15 @@
  * Build the SQLite Walnut opens on macOS when it runs on bun (src/lib/sqlite.ts).
  *
  * bun:sqlite loads the system SQLite on macOS, an Apple build that behaves unlike
- * the one better-sqlite3 compiles in: every query on a database whose file was
+ * the one Walnut was written against (better-sqlite3, its Node binding until
+ * Walnut moved to bun, compiled its own): every query on a database whose file was
  * deleted or replaced while open fails (SQLITE_IOERR_VNODE), -wal and -shm stay
  * after the last close, and a WAL database with no -wal will not open read-only.
- * This compiles the pinned upstream amalgamation with better-sqlite3's options
- * (node_modules/better-sqlite3/deps/defines.gypi) into a universal dylib.
+ * This compiles the pinned upstream amalgamation with that build's options
+ * (better-sqlite3's deps/defines.gypi, copied into DEFINES below) into a
+ * universal dylib.
  *
- *   bun scripts/build-sqlite-dylib.mjs [--force]      (node works too)
+ *   bun scripts/build-sqlite-dylib.mjs [--force]
  *
  * Output (gitignored): vendor/sqlite/darwin/libsqlite3.dylib, its stamp.json, and
  * the verified source under vendor/sqlite/src/. A stamp that matches the pins
