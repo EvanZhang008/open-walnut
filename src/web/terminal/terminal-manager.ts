@@ -19,7 +19,7 @@
  */
 
 import type { WebSocket } from 'ws'
-import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch'
+import type { Pty } from '../../lib/pty.js'
 import { sendToClient } from '../ws/handler.js'
 import { resolveSpawnForSession } from './spawn.js'
 import type { TerminalMode } from './dtach-check.js'
@@ -70,7 +70,7 @@ class TerminalSession {
   readonly sessionId: string
   readonly host?: string
   mode: TerminalMode
-  private pty: IPty
+  private pty: Pty
   private ring = new RingBuffer(RING_CAPACITY)
   private attached: WebSocket | null = null
   private graceTimer: ReturnType<typeof setTimeout> | null = null
@@ -87,7 +87,7 @@ class TerminalSession {
     sessionId: string
     host?: string
     mode: TerminalMode
-    pty: IPty
+    pty: Pty
     cols: number
     rows: number
     onDestroy: (t: TerminalSession) => void

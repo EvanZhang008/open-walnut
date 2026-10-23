@@ -13,8 +13,8 @@
  * without gcc with no terminal at all; a LOUD fallback keeps the no-silent-loss
  * intent. ssh failures stay blocking: nothing can run there. See dtach-check.ts.
  *
- * node-pty is a native binary — if it fails to load, terminal support is
- * disabled gracefully (the server still boots).
+ * On Node the pty is node-pty, a native binary — if it fails to load, terminal
+ * support is disabled gracefully (the server still boots). bun has one built in.
  */
 
 import type { WebSocket } from 'ws'
@@ -25,6 +25,7 @@ import { killDtachSession } from './dtach-lifecycle.js'
 import { prewarmRemoteHost } from './spawn.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
 import { log } from '../../logging/index.js'
+import { loadPty } from '../../lib/pty.js'
 
 function asObj(payload: unknown, method: string): Record<string, unknown> {
   if (typeof payload !== 'object' || payload === null) {
@@ -51,14 +52,14 @@ function openPayload(r: { terminalId: string; cols: number; rows: number; mode: 
 }
 
 /**
- * Register terminal RPC. Returns true if node-pty loaded and methods were
+ * Register terminal RPC. Returns true if the pty loaded and methods were
  * registered; false if the native binary is unavailable (feature disabled).
  */
 export async function registerTerminalRpc(): Promise<boolean> {
   try {
-    await import('@homebridge/node-pty-prebuilt-multiarch')
+    await loadPty()
   } catch (err) {
-    log.web.warn('terminal disabled: node-pty failed to load', { error: err instanceof Error ? err.message : String(err) })
+    log.web.warn('terminal disabled: the pty failed to load', { error: err instanceof Error ? err.message : String(err) })
     return false
   }
 

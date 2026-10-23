@@ -1,11 +1,11 @@
 /**
  * Terminal spawn — the ONLY place that knows where terminal bytes come from.
  *
- * Returns an `IPty` handle for a session's shell. The shell runs under `dtach`
+ * Returns a `Pty` handle for a session's shell. The shell runs under `dtach`
  * (a ~50KB detach/attach tool) on the target host so it survives ssh/server
  * death WITHOUT taking over the terminal the way tmux does:
- *   - local:  node-pty spawns `dtach -A <socket> -z -E ... <$SHELL> -l`
- *   - remote: node-pty spawns `ssh -tt <host> 'cd <cwd> && exec dtach -A ... "$SHELL" -l'`
+ *   - local:  the pty (src/lib/pty.ts) runs `dtach -A <socket> -z -E ... <$SHELL> -l`
+ *   - remote: the pty runs `ssh -tt <host> 'cd <cwd> && exec dtach -A ... "$SHELL" -l'`
  *
  * The shell is the user's DEFAULT $SHELL launched as a LOGIN shell (`-l`), so
  * the embedded terminal feels exactly like opening tmux on that host: the full
@@ -33,14 +33,14 @@
  * and login shell with no dtach socket, so it dies with its connection. The UI
  * labels it "Not persistent"; see dtach-check.ts for why that beats refusing.
  *
- * The upper layers (TerminalManager / ring buffer / RPC) only see `IPty` — to
+ * The upper layers (TerminalManager / ring buffer / RPC) only see `Pty` — to
  * change transport you only touch this file.
  */
 
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
-import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch'
+import { loadPty, type Pty } from '../../lib/pty.js'
 import type { SessionRecord } from '../../core/types.js'
 import type { SshTarget } from '../../providers/session-io.js'
 import { shellQuote } from '../../providers/session-io.js'
@@ -70,7 +70,7 @@ export function sshControlMasterArgs(host: string): string[] {
 }
 
 export interface SpawnResult {
-  pty: IPty
+  pty: Pty
   /** Resolved working directory (for diagnostics). */
   cwd?: string
   /** Host alias when remote, undefined for local. */
@@ -333,8 +333,9 @@ export async function prewarmRemoteHost(host: string | undefined): Promise<void>
 
 /**
  * Spawn a terminal pty for a session record. Local → dtach; remote → ssh→dtach.
- * `node-pty` is imported lazily so a native-binary load failure can be caught
- * by the caller and degrade gracefully (terminal disabled, server stays up).
+ * The pty is loaded lazily so a native-binary load failure (node-pty on Node)
+ * can be caught by the caller and degrade gracefully (terminal disabled, server
+ * stays up).
  *
  * `persistent: true` assumes dtach is already provisioned on the target (the
  * RPC layer runs the probe first). `persistent: false` spawns a plain login
@@ -346,7 +347,7 @@ export async function resolveSpawnForSession(
   rows: number,
   opts: { persistent?: boolean } = {},
 ): Promise<SpawnResult> {
-  const pty = await import('@homebridge/node-pty-prebuilt-multiarch')
+  const pty = await loadPty()
   const env = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
   const persistent = opts.persistent !== false
 
@@ -389,7 +390,7 @@ export async function resolveSpawnForSession(
   } catch { /* best-effort; EEXIST = already claimed */ }
   const args = buildDtachArgs(dtachBin, record.claudeSessionId, localShell())
   log.web.info('terminal spawn (local/dtach)', { sessionId: record.claudeSessionId, cwd })
-  // Start dir comes from node-pty's cwd option (a new dtach session inherits
+  // Start dir comes from the pty's cwd option (a new dtach session inherits
   // the launching process's cwd).
   const p = pty.spawn(dtachBin, args.slice(1), { name: 'xterm-256color', cols, rows, cwd, env })
   return { pty: p, cwd }
