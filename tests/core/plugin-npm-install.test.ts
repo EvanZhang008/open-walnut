@@ -14,7 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   parseNpmSpec, isValidNpmSpec, slugForNpmPackage, sanitizeNpmOutput, parseBunLock,
-  resolveNpmSpec, installNpmPlugin, replaceNpmPlugin, setNpmRunner,
+  resolveNpmSpec, installNpmPlugin, replaceNpmPlugin, setNpmRunner, bundledFailureMessage,
   type NpmRunner,
 } from '../../src/core/plugin-npm-install.js';
 
@@ -43,6 +43,8 @@ interface FakePackage {
   ownModulesSymlinkTo?: string;
   /** The receipt's ident (default `name@version`). */
   receiptIdent?: string;
+  /** bundledDependencies the registry reports; `bun add` fetches each, and one with no fixture is a 404. */
+  bundledDependencies?: string[];
   omitReceipt?: boolean;
   omitReceiptRoot?: boolean;
   /** The receipt entry in the shape bun writes for a non-registry source: no tarball field. */
@@ -88,6 +90,7 @@ const fakeRunner: NpmRunner = async (args, opts) => {
         version: pkg.version,
         ...(pkg.integrity ? { 'dist.integrity': pkg.integrity } : {}),
         'dist.tarball': `${pkg.registryOrigin ?? 'https://registry.example'}/${name}/-/${name}-${pkg.version}.tgz`,
+        ...(pkg.bundledDependencies ? { bundledDependencies: pkg.bundledDependencies } : {}),
       }),
       stderr: '',
     };
@@ -100,6 +103,10 @@ const fakeRunner: NpmRunner = async (args, opts) => {
     const name = nameOf(spec);
     const pkg = registryFixtures[name];
     if (!pkg) throw new Error(`404 Not Found - ${name}`);
+    for (const dep of pkg.bundledDependencies ?? []) {
+      // What bun 1.4.4 prints: it asks the registry for a bundled dependency.
+      if (!registryFixtures[dep]) throw new Error(`bun add failed: error: GET https://registry.example/${dep} - 404\nerror: ${dep}@1.0.0 failed to resolve`);
+    }
 
     const modulesDir = path.join(prefix, 'node_modules');
     if (pkg.modulesSymlinkTo) {
@@ -284,7 +291,7 @@ describe('resolveNpmSpec', () => {
     const resolved = await resolveNpmSpec('walnut-plugin@latest', { cwd: tmpRoot });
     expect(resolved).toMatchObject({ name: 'walnut-plugin', version: '2.3.4', resolved: 'walnut-plugin@2.3.4', integrity: 'sha512-AAAA==' });
     expect(npmCalls[0]).toEqual([
-      'info', '--json', '--', 'walnut-plugin@latest', 'name', 'version', 'dist.integrity', 'dist.tarball',
+      'info', '--json', '--', 'walnut-plugin@latest', 'name', 'version', 'dist.integrity', 'dist.tarball', 'bundledDependencies', 'bundleDependencies',
     ]);
   });
 
@@ -568,6 +575,24 @@ describe('installNpmPlugin', () => {
     seen.length = 0;
     await resolveNpmSpec('walnut-plugin');
     expect(seen).toEqual([{ cmd: 'info', cwd: process.cwd(), cache: undefined }]);
+  });
+
+  it('says plainly that bun installs bundled dependencies from the registry, when one is not published there', async () => {
+    registryFixtures['walnut-plugin'] = { version: '1.0.0', files: { 'manifest.json': MANIFEST('p') }, bundledDependencies: ['private-helper'] };
+    await expect(installNpmPlugin({ spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot() }))
+      .rejects.toThrow(/^walnut-plugin@1\.0\.0 bundles private-helper \(bundledDependencies\)\. Walnut installs plugins with bun, which does not install bundled copies: .*GET https:\/\/registry\.example\/private-helper - 404/s);
+    expect(fs.existsSync(finalDir())).toBe(false);
+    expect(await leftoverTempDirs()).toEqual([]);
+    // Published there too: it installs (from the registry).
+    registryFixtures['private-helper'] = { version: '1.0.0' };
+    await expect(installNpmPlugin({ spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot() })).resolves.toMatchObject({ resolved: 'walnut-plugin@1.0.0' });
+  });
+
+  it('leaves any other failure as it was, bundled dependencies or not', () => {
+    const resolved = { name: 'p', version: '1.0.0', resolved: 'p@1.0.0', tarball: 'https://registry.example/p.tgz' };
+    expect(bundledFailureMessage(resolved, 'bun add failed: ECONNRESET')).toBeNull();
+    expect(bundledFailureMessage({ ...resolved, bundledDependencies: ['helper'] }, 'bun add failed: ECONNRESET')).toBeNull();
+    expect(bundledFailureMessage({ ...resolved, bundledDependencies: true }, 'error: x@1 failed to resolve')).toMatch(/^p@1\.0\.0 bundles all of its dependencies/);
   });
 
   it('stages in a 0700 directory', async () => {

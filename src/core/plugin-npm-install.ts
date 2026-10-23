@@ -308,6 +308,12 @@ export interface ResolvedNpmPackage {
   integrity?: string;
   /** Registry-advertised tarball URL, used to bind the install receipt to its origin. */
   tarball: string;
+  /**
+   * The package's bundledDependencies, when it has any (`true`: all of them).
+   * bun does not install the copies inside the tarball: it fetches each one from
+   * the registry, so one that is not published there fails the install.
+   */
+  bundledDependencies?: string[] | true;
 }
 
 function secureTarballUrl(value: string, label: string): URL {
@@ -355,6 +361,35 @@ function bunEnv(ownedDir?: string): Record<string, string> {
   return { ...npmrcNetworkEnv(), ...(ownedDir ? { BUN_INSTALL_CACHE_DIR: path.join(ownedDir, '.bun-cache') } : {}) };
 }
 
+/** bundledDependencies (or npm's other spelling) from `bun info`: a list, `true`, or none. */
+function bundledOf(data: Record<string, unknown>): string[] | true | undefined {
+  for (const key of ['bundledDependencies', 'bundleDependencies']) {
+    const value = data[key];
+    if (value === true) return true;
+    if (Array.isArray(value)) {
+      const names = value.filter((v): v is string => typeof v === 'string' && v.length > 0);
+      if (names.length) return names;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Why `bun add` failed, said plainly when the plugin bundles dependencies and
+ * the failure names one of them (or names none when it bundles all of them):
+ * npm would install the copies inside the tarball, bun asks the registry.
+ */
+export function bundledFailureMessage(resolved: ResolvedNpmPackage, detail: string): string | null {
+  const bundled = resolved.bundledDependencies;
+  if (!bundled) return null;
+  const hit = bundled === true
+    ? /\b404\b|failed to resolve/i.test(detail)
+    : bundled.some((name) => detail.includes(name));
+  if (!hit) return null;
+  const what = bundled === true ? 'all of its dependencies' : bundled.join(', ');
+  return `${resolved.resolved} bundles ${what} (bundledDependencies). Walnut installs plugins with bun, which does not install bundled copies: it fetches each one from the registry, where one is not published. The plugin's author needs to publish them, or make them ordinary dependencies. (${detail})`;
+}
+
 /**
  * Ask the registry what a spec means right now. Nothing else in this module
  * accepts a tag — resolution happens exactly once per explicit user action.
@@ -367,7 +402,7 @@ export async function resolveNpmSpec(raw: string, opts: { cwd?: string } = {}): 
 
   const cwd = opts.cwd ?? process.cwd();
   const { stdout } = await activeRunner(
-    ['info', '--json', '--', parsed.spec, 'name', 'version', 'dist.integrity', 'dist.tarball'],
+    ['info', '--json', '--', parsed.spec, 'name', 'version', 'dist.integrity', 'dist.tarball', 'bundledDependencies', 'bundleDependencies'],
     { cwd, timeoutMs: VIEW_TIMEOUT, env: bunEnv(opts.cwd) },
   );
 
@@ -410,12 +445,14 @@ export async function resolveNpmSpec(raw: string, opts: { cwd?: string } = {}): 
   if (!tarball) throw new Error(`Registry response for "${parsed.spec}" is missing dist.tarball.`);
   secureTarballUrl(tarball, `Registry tarball for "${parsed.spec}"`);
 
+  const bundled = bundledOf(data);
   return {
     name,
     version,
     resolved: `${name}@${version}`,
     ...(integrity ? { integrity: integrity.trim() } : {}),
     tarball,
+    ...(bundled ? { bundledDependencies: bundled } : {}),
   };
 }
 
@@ -627,6 +664,11 @@ async function stagePackage(
       throw new Error(`Resolved package ${resolved.name} does not match requested package ${parsed.name}.`);
     }
 
+    if (resolved.bundledDependencies) {
+      log.warn('npm Plugin bundles dependencies: bun installs them from the registry instead', {
+        resolved: resolved.resolved, bundled: resolved.bundledDependencies,
+      });
+    }
     await activeRunner([
       'add',
       '--ignore-scripts',      // no package lifecycle code, ever
@@ -639,7 +681,11 @@ async function stagePackage(
       '--no-summary',
       '--',
       resolved.resolved,       // exact name@version, never the tag
-    ], { cwd: stagingDir, timeoutMs: INSTALL_TIMEOUT, env: bunEnv(stagingDir) });
+    ], { cwd: stagingDir, timeoutMs: INSTALL_TIMEOUT, env: bunEnv(stagingDir) }).catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      const plain = bundledFailureMessage(resolved, detail);
+      throw plain ? new Error(plain) : err;
+    });
 
     const modulesDir = path.join(stagingDir, 'node_modules');
     await assertRealDirectory(modulesDir, 'node_modules');

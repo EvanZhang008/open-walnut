@@ -37,13 +37,24 @@ const PACKAGES: Record<string, Record<string, string>> = {
     'manifest.json': JSON.stringify({ id: 'livecheck', name: 'Live check', version: '1.0.0', apiVersion: 1, server: 'server.mjs' }),
     'server.mjs': "export { answer } from 'livecheck-dep'\n",
   },
+  // Its helper rides inside the tarball (bundledDependencies) and is on no registry.
+  'walnut-bundles-plugin': {
+    'package.json': JSON.stringify({ name: 'walnut-bundles-plugin', version: '1.0.0', type: 'module', dependencies: { 'livecheck-private': '1.0.0' }, bundledDependencies: ['livecheck-private'] }),
+    'manifest.json': JSON.stringify({ id: 'bundles', name: 'Bundles', version: '1.0.0', apiVersion: 1, server: 'server.mjs' }),
+    'server.mjs': "export { answer } from 'livecheck-private'\n",
+    'node_modules/livecheck-private/package.json': JSON.stringify({ name: 'livecheck-private', version: '1.0.0', type: 'module', main: 'index.js' }),
+    'node_modules/livecheck-private/index.js': "export const answer = 'bundled'\n",
+  },
 }
 
 /** Pack one fixture package as the registry serves it. */
 function pack(name: string, files: Record<string, string>, tag = ''): { bytes: Buffer; integrity: string } {
   const root = path.join(tmp, `pkgs${tag}`, name, 'package')
   fs.mkdirSync(root, { recursive: true })
-  for (const [rel, text] of Object.entries(files)) fs.writeFileSync(path.join(root, rel), text)
+  for (const [rel, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true })
+    fs.writeFileSync(path.join(root, rel), text)
+  }
   const file = path.join(tmp, `pkgs${tag}`, `${name}.tgz`)
   execFileSync('tar', ['-czf', file, '-C', path.dirname(root), 'package'], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
   const bytes = fs.readFileSync(file)
@@ -153,6 +164,13 @@ describe.skipIf(!HAS_OPENSSL)('installing an npm plugin with real bun', () => {
     } finally {
       tarballs[name] = before
     }
+  }, 120_000)
+
+  it('says that bun fetches a bundled dependency from the registry, when the registry has none', async () => {
+    const stagingRoot = path.join(tmp, 'plugin-stores-bundles')
+    await expect(installNpmPlugin({ spec: 'walnut-bundles-plugin', finalDir: path.join(stagingRoot, 'npm-walnut-bundles-plugin'), stagingRoot }))
+      .rejects.toThrow(/^walnut-bundles-plugin@1\.0\.0 bundles livecheck-private \(bundledDependencies\)\. Walnut installs plugins with bun, .*livecheck-private.*404/s)
+    expect(fs.readdirSync(stagingRoot)).toEqual([])
   }, 120_000)
 
   it('goes through the proxy ~/.npmrc names, which bun does not read itself', async () => {
