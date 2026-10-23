@@ -14,7 +14,7 @@ import path from 'node:path'
 import { guardedPath } from '../setup/exec-guard.js'
 import zlib from 'node:zlib'
 import {
-  fileInstallScript, freePortsScript, installScript, launchScript, parseFreePorts, parseInstallState, stateScript,
+  fileInstallScript, freePortsScript, installScript, launchScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
 } from '../../src/core/host-server/install.js'
 
 let home = ''
@@ -175,7 +175,8 @@ describe('the companion\'s install script (a Node build and its npm dependencies
     const inc = path.join(home, '.open-walnut-host', 'incoming')
     fs.mkdirSync(inc, { recursive: true })
     fs.writeFileSync(path.join(inc, 'b1.failed'), 'the last try failed\n')
-    const live = spawn('sleep', ['30'])
+    fs.writeFileSync(path.join(inc, 'b1.install.sh'), 'sleep 30\n')
+    const live = spawn('sh', [path.join(inc, 'b1.install.sh')])
     try {
       fs.writeFileSync(path.join(inc, 'b1.pid'), `${live.pid}\n`)
       expect(parseInstallState(sh(stateScript('b1')).out)).toEqual({ state: 'running' })
@@ -192,13 +193,24 @@ describe('the companion\'s install script (a Node build and its npm dependencies
   })
 })
 
-/** A stand-in walnut file: `--version` as the compiled file prints it (and unpacks into its data dir); as bun when BUN_BE_BUN=1. */
-function standInFile(version = '0.6.14', extra = ''): Buffer {
+/**
+ * A stand-in walnut file: `--version` as the compiled file prints it (and unpacks
+ * into its data dir), `__selftest` as its JSON lines (`selftest: 'sqlite'` fails
+ * that required check); as bun when BUN_BE_BUN=1.
+ */
+function standInFile(version = '0.6.14', extra = '', o: { commit?: string; selftest?: string; versionStderr?: string } = {}): Buffer {
+  const failing = o.selftest
+    ? `echo '{"check":"runtime-tree","ok":true,"ms":1}'; echo '{"check":"${o.selftest}","ok":false,"required":true,"ms":2,"error":"bun:sqlite did not load"}'; echo '{"check":"component sharp","ok":false,"required":false,"ms":1,"error":"absent"}'; exit 1`
+    : `echo '{"check":"runtime-tree","ok":true,"ms":1}'; echo '{"check":"component sharp","ok":false,"required":false,"ms":1,"error":"absent"}'`
   return Buffer.from([
     '#!/bin/sh',
     `if [ -n "\${BUN_BE_BUN:-}" ]; then echo "1.4.4"; exit 0; fi`,
     extra,
-    `case "$1" in --version) mkdir -p "$OPEN_WALNUT_HOME/local/runtime/${version}-abc" && echo "${version} (80dc024a8, 2026-10-22)" ;; *) echo "walnut $*" ;; esac`,
+    'case "$1" in',
+    `  --version) mkdir -p "$OPEN_WALNUT_HOME/local/runtime/${version}-abc" && ${o.versionStderr ? `echo ${JSON.stringify(o.versionStderr)} >&2 && ` : ''}echo "${version} (${o.commit ?? '80dc024a8'}, 2026-10-22)" ;;`,
+    `  __selftest) ${failing} ;;`,
+    '  *) echo "walnut $*" ;;',
+    'esac',
     '',
   ].join('\n'))
 }
@@ -210,7 +222,7 @@ const hostRoot = () => path.join(home, '.open-walnut-host')
 function upload(id: string, file: Buffer, over: Partial<Parameters<typeof fileInstallScript>[0]> = {}): string {
   fs.mkdirSync(path.join(hostRoot(), 'incoming'), { recursive: true })
   fs.writeFileSync(path.join(hostRoot(), 'incoming', `${id}.gz`), zlib.gzipSync(file))
-  const script = fileInstallScript({ id, version: '0.6.14', sha256: sha(file), host: 'Linux x86_64, glibc 2.26', ...over })
+  const script = fileInstallScript({ id, version: '0.6.14', commit: '80dc024a8', sha256: sha(file), host: 'Linux x86_64, glibc 2.26', ...over })
   fs.writeFileSync(path.join(hostRoot(), 'incoming', `${id}.install.sh`), script)
   return script
 }
@@ -221,20 +233,23 @@ const run = (id: string, env: Record<string, string> = {}) => {
 }
 
 const failed = (id: string) => parseInstallState(sh(stateScript(id)).out)
+const appDir = (id: string) => path.join(hostRoot(), 'app', id)
+const incoming = (name: string) => path.join(hostRoot(), 'incoming', name)
 
 describe('the host\'s install of the walnut file', () => {
-  it('unpacks the file, checks it, runs it once in the data dir, and marks it ready last', () => {
+  it('unpacks the file, checks it, runs it once in the data dir and its self-check, and marks it ready last', () => {
     const file = standInFile()
     upload('0.6.14-80dc024a8', file)
     expect(run('0.6.14-80dc024a8').out).toContain('installed')
-    const app = path.join(hostRoot(), 'app', '0.6.14-80dc024a8')
+    const app = appDir('0.6.14-80dc024a8')
     expect(fs.readFileSync(path.join(app, 'walnut'))).toEqual(file)
     expect(fs.statSync(path.join(app, 'walnut')).mode & 0o777).toBe(0o755)
     expect(fs.existsSync(path.join(app, '.ready'))).toBe(true)
     // Its --version ran with the host server's data dir: the runtime tree is there, warm.
     expect(fs.existsSync(path.join(hostRoot(), 'data', 'local', 'runtime', '0.6.14-abc'))).toBe(true)
-    expect(fs.readFileSync(path.join(hostRoot(), 'incoming', '0.6.14-80dc024a8.version'), 'utf8')).toMatch(/^0\.6\.14 \(80dc024a8/)
-    expect(fs.existsSync(path.join(hostRoot(), 'incoming', '0.6.14-80dc024a8.gz'))).toBe(false)
+    expect(fs.readFileSync(incoming('0.6.14-80dc024a8.version'), 'utf8')).toMatch(/^0\.6\.14 \(80dc024a8/)
+    expect(fs.readFileSync(incoming('0.6.14-80dc024a8.selftest'), 'utf8')).toContain('"check":"runtime-tree","ok":true')
+    expect(fs.existsSync(incoming('0.6.14-80dc024a8.gz'))).toBe(false)
     expect(fs.existsSync(`${app}.partial`)).toBe(false)
     // No Node layout: no deps, no node_modules, no package.json.
     expect(fs.existsSync(path.join(hostRoot(), 'deps'))).toBe(false)
@@ -242,10 +257,39 @@ describe('the host\'s install of the walnut file', () => {
     expect(failed('0.6.14-80dc024a8')).toEqual({ state: 'ready' })
   })
 
-  it('launched detached, it reads as running and then ready', () => {
+  it('launched detached, it reads as running and then ready, and its pid file goes when it ends', () => {
     upload('b1', standInFile('0.6.14', 'sleep 1'))
     expect(sh(launchScript('b1')).out).toContain('launched')
     expect(failed('b1')).toEqual({ state: 'running' })
+    let st = failed('b1')
+    for (let i = 0; i < 100 && st.state === 'running'; i++) { spawnSync('sleep', ['0.1']); st = failed('b1') }
+    expect(st).toEqual({ state: 'ready' })
+    for (let i = 0; i < 20 && fs.existsSync(incoming('b1.pid')); i++) spawnSync('sleep', ['0.1'])
+    expect(fs.existsSync(incoming('b1.pid'))).toBe(false)
+  })
+
+  it('a pid the system gave to another process is not an install that runs', () => {
+    upload('b1', standInFile())
+    fs.writeFileSync(incoming('b1.failed'), 'the last try failed\n')
+    // An unrelated process now has the pid the install once had.
+    const other = spawn('sleep', ['30'])
+    try {
+      fs.writeFileSync(incoming('b1.pid'), `${other.pid}\n`)
+      expect(failed('b1')).toMatchObject({ state: 'failed', message: 'the last try failed' })
+      fs.rmSync(incoming('b1.failed'))
+      expect(failed('b1')).toEqual({ state: 'absent' })
+    } finally {
+      other.kill()
+    }
+  })
+
+  it('a launch clears an earlier attempt\'s note and pid', () => {
+    upload('b1', standInFile('0.6.14', 'sleep 1'))
+    fs.writeFileSync(incoming('b1.failed'), 'the last try failed\n')
+    fs.writeFileSync(incoming('b1.pid'), '1\n')
+    expect(sh(launchScript('b1')).out).toContain('launched')
+    expect(fs.existsSync(incoming('b1.failed'))).toBe(false)
+    expect(Number(fs.readFileSync(incoming('b1.pid'), 'utf8'))).toBeGreaterThan(1)
     let st = failed('b1')
     for (let i = 0; i < 100 && st.state === 'running'; i++) { spawnSync('sleep', ['0.1']); st = failed('b1') }
     expect(st).toEqual({ state: 'ready' })
@@ -256,13 +300,15 @@ describe('the host\'s install of the walnut file', () => {
     expect(run('b1', { BUN_BE_BUN: '1' }).out).toContain('installed')
   })
 
-  it('a file that arrived broken is not installed and says so', () => {
+  it('a file that arrived broken is not installed and says so; the upload stays for a retry, the half-made dir does not', () => {
     upload('b1', standInFile(), { sha256: 'a'.repeat(64) })
     expect(run('b1').code).toBe(1)
     const st = failed('b1')
     expect(st.state === 'failed' && st.message).toMatch(/the walnut file arrived broken \(sha256 [0-9a-f]{64}, expected a{64}\)/)
-    expect(fs.existsSync(path.join(hostRoot(), 'app', 'b1'))).toBe(false)
-    expect(fs.existsSync(path.join(hostRoot(), 'app', 'b1.partial'))).toBe(false)
+    expect(fs.existsSync(appDir('b1'))).toBe(false)
+    expect(fs.existsSync(`${appDir('b1')}.partial`)).toBe(false)
+    expect(fs.existsSync(incoming('b1.gz'))).toBe(true)
+    expect(fs.existsSync(incoming('b1.pid'))).toBe(false)
   })
 
   it('a host with neither sha256sum nor shasum still installs, checked by the version alone', () => {
@@ -276,40 +322,47 @@ describe('the host\'s install of the walnut file', () => {
     expect(run('b1').code).toBe(1)
     const st = failed('b1')
     expect(st.state === 'failed' && st.message).toMatch(/the walnut file does not start on this host \(Linux x86_64, glibc 2\.26\): walnut: \/lib64\/libc\.so\.6: version GLIBC_2\.28 not found/)
-    expect(fs.existsSync(path.join(hostRoot(), 'app', 'b1'))).toBe(false)
+    expect(fs.existsSync(appDir('b1'))).toBe(false)
+    expect(fs.existsSync(`${appDir('b1')}.partial`)).toBe(false)
   })
 
-  it('a file that is another version is not installed', () => {
+  it('a warning on stderr does not fail a file that answers right', () => {
+    upload('b1', standInFile('0.6.14', '', { versionStderr: 'warning: the locale is not set' }))
+    expect(run('b1').out).toContain('installed')
+  })
+
+  it('a file of another version, or of another commit, is not installed', () => {
     upload('b1', standInFile('0.6.13'))
     expect(run('b1').code).toBe(1)
+    let st = failed('b1')
+    expect(st.state === 'failed' && st.message).toMatch(/the walnut file answered "0\.6\.13 \(80dc024a8, 2026-10-22\)", not Walnut 0\.6\.14 \(80dc024a8\)/)
+    // The release of this version, built from another commit than this server.
+    upload('b2', standInFile('0.6.14', '', { commit: '5bf3ccc9f' }))
+    expect(run('b2').code).toBe(1)
+    st = failed('b2')
+    expect(st.state === 'failed' && st.message).toMatch(/answered "0\.6\.14 \(5bf3ccc9f, 2026-10-22\)", not Walnut 0\.6\.14 \(80dc024a8\)/)
+    // A commit that only starts the same is another commit.
+    upload('b3', standInFile('0.6.14', '', { commit: '80dc024a81' }))
+    expect(run('b3').code).toBe(1)
+    // A build that names no commit is checked by its version alone.
+    upload('b4', standInFile('0.6.14', '', { commit: '5bf3ccc9f' }), { commit: null })
+    expect(run('b4').out).toContain('installed')
+  })
+
+  it('a file that fails its self-check is not installed and names the check', () => {
+    upload('b1', standInFile('0.6.14', '', { selftest: 'sqlite' }))
+    expect(run('b1').code).toBe(1)
     const st = failed('b1')
-    expect(st.state === 'failed' && st.message).toMatch(/the walnut file answered "0\.6\.13 \(80dc024a8, 2026-10-22\)", not Walnut 0\.6\.14/)
+    expect(st.state === 'failed' && st.message).toMatch(/the walnut file failed its self-check on this host \(Linux x86_64, glibc 2\.26\): .*"check":"sqlite","ok":false,"required":true.*bun:sqlite did not load/)
+    // An optional component that is absent is no reason.
+    expect(st.state === 'failed' && st.message).not.toContain('component sharp')
+    expect(fs.existsSync(appDir('b1'))).toBe(false)
+    expect(fs.existsSync(`${appDir('b1')}.partial`)).toBe(false)
   })
 
-  it('keeps this build and the newest other; a Node layout build ages out and its dependencies with it', () => {
-    // A host that ran the Node layout before: app/old/dist with node_modules linked to deps/d1.
-    const old = path.join(hostRoot(), 'app', 'old')
-    fs.mkdirSync(path.join(old, 'dist'), { recursive: true })
-    fs.mkdirSync(path.join(hostRoot(), 'deps', 'd1', 'node_modules'), { recursive: true })
-    fs.symlinkSync('../../deps/d1/node_modules', path.join(old, 'node_modules'))
-    fs.writeFileSync(path.join(old, '.ready'), '')
-    // Older than anything installed next (the prune orders by mtime).
-    const past = new Date(Date.now() - 60_000)
-    fs.utimesSync(old, past, past)
-    upload('b1', standInFile())
-    expect(run('b1').out).toContain('installed')
-    // The Node build is the newest other one: kept, and so is what it links to.
-    expect(fs.readdirSync(path.join(hostRoot(), 'app')).sort()).toEqual(['b1', 'old'])
-    expect(fs.existsSync(path.join(hostRoot(), 'deps', 'd1'))).toBe(true)
-    upload('b2', standInFile())
-    expect(run('b2').out).toContain('installed')
-    expect(fs.readdirSync(path.join(hostRoot(), 'app')).sort()).toEqual(['b1', 'b2'])
-    expect(fs.existsSync(path.join(hostRoot(), 'deps', 'd1'))).toBe(false)
-  })
-
-  it('a kept build survives the prune', () => {
+  it('an install removes no other build: the server of the previous one still runs', () => {
     for (const id of ['b1', 'b2', 'b3']) {
-      upload(id, standInFile(), { keep: ['b1'] })
+      upload(id, standInFile())
       expect(run(id).out).toContain('installed')
     }
     expect(fs.readdirSync(path.join(hostRoot(), 'app')).sort()).toEqual(['b1', 'b2', 'b3'])
@@ -320,20 +373,71 @@ describe('the host\'s install of the walnut file', () => {
     fs.mkdirSync(path.join(root, 'incoming'), { recursive: true })
     const file = standInFile()
     fs.writeFileSync(path.join(root, 'incoming', 'b1.gz'), zlib.gzipSync(file))
-    fs.writeFileSync(path.join(root, 'incoming', 'b1.install.sh'), fileInstallScript({ id: 'b1', version: '0.6.14', sha256: sha(file), host: 'x', root }))
+    fs.writeFileSync(path.join(root, 'incoming', 'b1.install.sh'), fileInstallScript({ id: 'b1', version: '0.6.14', commit: '80dc024a8', sha256: sha(file), host: 'x', root }))
     expect(sh(`sh ${JSON.stringify(path.join(root, 'incoming', 'b1.install.sh'))}`).out).toContain('installed')
     expect(fs.existsSync(path.join(root, 'app', 'b1', '.ready'))).toBe(true)
     expect(fs.existsSync(path.join(root, 'data'))).toBe(true)
     expect(fs.existsSync(hostRoot())).toBe(false)
   })
 
-  it('refuses what is not a build id, a sha256 or a version', () => {
-    const ok = { id: 'b1', version: '0.6.14', sha256: 'a'.repeat(64), host: 'x' }
+  it('refuses what is not a build id, a sha256, a version or a commit', () => {
+    const ok = { id: 'b1', version: '0.6.14', commit: '80dc024a8', sha256: 'a'.repeat(64), host: 'x' }
     expect(() => fileInstallScript({ ...ok, id: 'x; rm -rf /' })).toThrow(/not a build id/)
     expect(() => fileInstallScript({ ...ok, sha256: 'xyz' })).toThrow(/sha256/)
     expect(() => fileInstallScript({ ...ok, version: '1.0 $(touch x)' })).toThrow(/not a version/)
-    expect(() => fileInstallScript({ ...ok, keep: ['../up'] })).toThrow(/keep has a bad build id/)
+    expect(() => fileInstallScript({ ...ok, commit: '$(touch x)' })).toThrow(/not a commit/)
     expect(() => fileInstallScript({ ...ok, root: '/srv/$(touch x)' })).toThrow(/plain characters/)
+  })
+})
+
+describe('the prune once the new server has reported', () => {
+  const ago = (p: string, minutes: number) => { const t = new Date(Date.now() - minutes * 60_000); fs.utimesSync(p, t, t) }
+  function installed(id: string, minutesAgo: number): void {
+    fs.mkdirSync(appDir(id), { recursive: true })
+    fs.writeFileSync(path.join(appDir(id), '.ready'), '')
+    ago(appDir(id), minutesAgo)
+  }
+
+  it('keeps the kept builds and the newest other; the Node layout and its dependencies go', () => {
+    // A host that ran the Node layout before: app/old/dist with node_modules linked to deps/d1.
+    const old = appDir('old')
+    fs.mkdirSync(path.join(old, 'dist'), { recursive: true })
+    fs.mkdirSync(path.join(hostRoot(), 'deps', 'd1', 'node_modules'), { recursive: true })
+    fs.symlinkSync('../../deps/d1/node_modules', path.join(old, 'node_modules'))
+    ago(old, 300)
+    installed('b1', 200)
+    installed('b2', 100)
+    installed('b3', 5)
+    // b3 runs now and b1 ran before it (an older one, kept by name, not by its time).
+    expect(sh(pruneScript(['b3', 'b1'])).out).toContain('pruned')
+    expect(fs.readdirSync(path.join(hostRoot(), 'app')).sort()).toEqual(['b1', 'b2', 'b3'])
+    expect(fs.existsSync(path.join(hostRoot(), 'deps', 'd1'))).toBe(false)
+    expect(sh(pruneScript(['b3'])).out).toContain('pruned')
+    expect(fs.readdirSync(path.join(hostRoot(), 'app')).sort()).toEqual(['b1', 'b3'])
+  })
+
+  it('a half-made dir of an hour ago and other builds\' uploads go; this build\'s and fresh ones stay', () => {
+    installed('b3', 1)
+    fs.mkdirSync(`${appDir('b0')}.partial`, { recursive: true })
+    ago(`${appDir('b0')}.partial`, 120)
+    fs.mkdirSync(`${appDir('b4')}.partial`, { recursive: true })
+    for (const [name, minutes] of [['b0.gz', 120], ['b0.install.log', 120], ['b0.failed', 2000], ['b0.gz.chunks-0123456789abcdef', 120], ['b4.gz', 5], ['b3.gz', 500], ['b3.failed', 3000]] as const) {
+      const f = incoming(name)
+      fs.mkdirSync(path.dirname(f), { recursive: true })
+      if (name.includes('.chunks-')) fs.mkdirSync(f)
+      else fs.writeFileSync(f, 'x')
+      ago(f, minutes)
+    }
+    expect(sh(pruneScript(['b3'])).out).toContain('pruned')
+    expect(fs.existsSync(`${appDir('b0')}.partial`)).toBe(false)
+    // One being made right now (another install) stays.
+    expect(fs.existsSync(`${appDir('b4')}.partial`)).toBe(true)
+    expect(fs.readdirSync(path.join(hostRoot(), 'incoming')).sort()).toEqual(['b0.install.log', 'b3.failed', 'b3.gz', 'b4.gz'])
+  })
+
+  it('refuses a kept id that is not a build id, and a prune that keeps nothing', () => {
+    expect(() => pruneScript(['../up'])).toThrow(/keep has a bad build id/)
+    expect(() => pruneScript([])).toThrow(/keeps at least/)
   })
 })
 

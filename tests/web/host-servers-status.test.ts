@@ -42,6 +42,13 @@ describe('describeHostServer', () => {
     expect(running({ kind: 'companion' }).text).toContain('cloud companion')
     expect(running({ kind: 'alone', why: 'no link' }).text).toContain('on its own')
   })
+
+  it('running an older build than this computer\'s says why and offers Try again', () => {
+    const notice = 'It runs Walnut 0.6.6-aaa1111, the build before this computer\'s: 0.6.7-abc1234 did not answer on the host (boom). Try again to start 0.6.7-abc1234.'
+    expect(describeHostServer(entry({ phase: 'running', server: { route: { kind: 'leader' } }, notice }))).toEqual({
+      dot: 'action', text: `Running. A browser there reaches this Mac. ${notice}`, retry: true,
+    })
+  })
 })
 
 describe('hostServersPollMs', () => {
