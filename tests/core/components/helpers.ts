@@ -10,7 +10,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import type { AddressInfo } from 'node:net';
-import { packTar } from '../../../src/lib/tar.js';
+import { packTar, type TarEntry } from '../../../src/lib/tar.js';
 import type { ComponentName, ComponentsManifest, ManifestPlatformEntry, Platform } from '../../../src/core/components/types.js';
 
 export const tmpDir = (prefix = 'walnut-comp-') => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -109,17 +109,24 @@ export interface FakeComponent {
  * feature loads from the component dir. `padBytes` adds random (incompressible)
  * bytes, so a download is long enough to cut, stall or slow down.
  */
-export function fakeComponent(name: ComponentName, platform: Platform, opts: { version?: string; padBytes?: number; marker?: string } = {}): FakeComponent {
+export function fakeComponent(
+  name: ComponentName,
+  platform: Platform,
+  opts: { version?: string; padBytes?: number; marker?: string; files?: Record<string, string> } = {},
+): FakeComponent {
   const version = opts.version ?? '1.0.0-1';
   const marker = opts.marker ?? `${name}-${version}`;
-  const tar = packTar([
+  const base: TarEntry[] = [
     { path: 'node_modules/fake-dep/index.js', type: 'file', data: Buffer.from(`module.exports = ${JSON.stringify(marker)};\n`) },
     { path: 'node_modules/fake-dep/package.json', type: 'file', data: Buffer.from('{"name":"fake-dep","main":"index.js"}') },
     { path: 'node_modules/fake-lib/index.js', type: 'file', data: Buffer.from("module.exports = { hello: () => 'hello from ' + require('fake-dep') };\n") },
     { path: 'node_modules/fake-lib/index.mjs', type: 'file', data: Buffer.from("export const hello = () => 'esm hello';\n") },
     { path: 'node_modules/fake-lib/package.json', type: 'file', data: Buffer.from('{"name":"fake-lib","main":"index.js"}') },
     ...(opts.padBytes ? [{ path: 'node_modules/fake-lib/pad.bin', type: 'file' as const, data: randomBytes(opts.padBytes) }] : []),
-  ]);
+  ];
+  // Files added or replaced, under the component dir.
+  const extra: TarEntry[] = Object.entries(opts.files ?? {}).map(([p, text]) => ({ path: p, type: 'file', data: Buffer.from(text) }));
+  const tar = packTar([...base.filter((e) => !opts.files?.[e.path]), ...extra]);
   const archive = gzipSync(tar);
   const asset = `walnut-${name}-${version}-${platform}.tar.gz`;
   const entry: ManifestPlatformEntry = {

@@ -13,6 +13,12 @@
  *      except that the server (startComponentUpgrades) brings a component the
  *      person already had up to the pinned version.
  *
+ * A version this process handed to a feature stays on disk for the life of the
+ * process, even once a newer one is installed: a feature keeps what it loaded
+ * (sharp in this process, the transformers module in a running embed worker),
+ * and a worker that loads a file of it lazily would fail on a removed dir. New
+ * loads take the new version at once; the next server start removes the old one.
+ *
  * Never on the event loop's critical path: status reads are in memory, every
  * disk and network step is async, and a feature waits for an install only up
  * to that install's own deadline (whenComponentReady): the first caller gets
@@ -31,12 +37,13 @@ import { pathToFileURL } from 'node:url';
 import { createSubsystemLogger } from '../../logging/index.js';
 import { singleFile } from '../../lib/single-file.js';
 import { COMPONENTS } from './catalog.js';
-import { findUsable, installComponent, otherVersions, type InstalledComponent, type InstallOptions } from './install.js';
+import { findUsable, installComponent, otherVersions, pruneOld, type InstalledComponent, type InstallOptions } from './install.js';
 import { acquireLock } from './lock.js';
 import { getManifest, loadManifestOverride, manifestComponent, manifestEntry } from './manifest.js';
 import { componentsRoot, lockFile } from './paths.js';
 import { currentPlatform, currentPlatformSync } from './platform.js';
 import { COMPONENT_NAMES, componentErrorCode, isPermanentFailure, type ComponentName, type ComponentStatus } from './types.js';
+import { compareVersions } from './version.js';
 
 export * from './types.js';
 export { COMPONENTS } from './catalog.js';
@@ -78,6 +85,13 @@ export interface ComponentTuning extends Partial<InstallOptions> {
 }
 
 const slots = new Map<ComponentName, Slot>();
+/** Installed versions handed to a feature in this process (loaded()): never pruned while it runs. */
+const handedOut = new Map<ComponentName, Set<string>>();
+const inUse = (name: ComponentName): Set<string> => {
+  let set = handedOut.get(name);
+  if (!set) { set = new Set(); handedOut.set(name, set); }
+  return set;
+};
 const listeners = new Set<(s: ComponentStatus) => void>();
 let initPromise: Promise<void> | null = null;
 let initDone = false;
@@ -224,11 +238,32 @@ export async function startComponentUpgrades(): Promise<void> {
   for (const name of COMPONENT_NAMES) {
     const s = slot(name);
     const version = manifestComponent(name, getManifest())?.version;
-    if (!version || s.status.state === 'unsupported' || pinnedReady(s)) continue;
+    if (!version || s.status.state === 'unsupported') continue;
+    if (pinnedReady(s)) {
+      // An older version an earlier process kept while a feature still loaded from it.
+      if (s.status.source === 'installed') await pruneOlder(name, version).catch((err) => log.warn('component prune failed', { name, error: errText(err) }));
+      continue;
+    }
     const others = await otherVersions(name, componentsRoot(), version).catch(() => [] as string[]);
     if (!s.installed?.fallback && others.length === 0) continue;
     log.info('component upgrade: another version is on disk', { name, others, version, using: s.installed?.version ?? null });
     void ensureComponent(name, 'upgrade');
+  }
+}
+
+/** Remove the versions older than the pinned one that nothing in this process loads from. */
+async function pruneOlder(name: ComponentName, version: string): Promise<void> {
+  if (installsHeld) return;
+  const root = componentsRoot();
+  const using = inUse(name);
+  const stale = (await otherVersions(name, root, version)).filter((v) => compareVersions(v, version) < 0 && !using.has(v));
+  if (!stale.length) return;
+  const lock = await acquireLock(lockFile(root, name), { ...tuning.lock, waitMs: 60_000 });
+  try {
+    const removed = await pruneOld(name, root, version, inUse(name));
+    if (removed.length) log.info('component: older versions removed', { name, removed, version });
+  } finally {
+    await lock.release();
   }
 }
 
@@ -283,6 +318,7 @@ export function ensureComponent(name: ComponentName, trigger: ComponentTrigger):
         root: componentsRoot(),
         platform,
         ...installTuning,
+        inUse: () => inUse(name),
         onPhase: (phase) => { say({ state: phase }); },
         onProgress: (done, total) => { say({ state: 'downloading', progress: { done, total } }); },
       });
@@ -339,6 +375,7 @@ function loaded(name: ComponentName): LoadedComponent | null {
   if (s.status.source === 'bundled') return { source: 'bundled' };
   const inst = s.installed;
   if (!inst) return null;
+  inUse(name).add(inst.version);
   return {
     source: 'installed',
     version: inst.version,
@@ -412,6 +449,7 @@ export function markInstalledBroken(name: ComponentName, err: unknown): void {
 /** Test seam: forget every status, and set the install options and clocks (the platform cache is platform.ts's). */
 export function resetComponentsForTests(defaults: ComponentTuning = {}): void {
   slots.clear();
+  handedOut.clear();
   bundledCache.clear();
   brokenBundled.clear();
   initPromise = null;
