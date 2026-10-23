@@ -686,22 +686,24 @@ export class LocalDaemon {
           socket.send(JSON.stringify({ id: 1, cmd: 'hello' }))
         })
         socket.on('message', (data) => {
+          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string } | null = null
+          try { msg = JSON.parse(data.toString()) } catch { /* not JSON: a bad reply */ }
+          // The daemon pushes its events (a session's state, cron metadata) to
+          // every client, this one too, and echoes a command's id: only the
+          // answer to this hello counts. Taking the first message called a daemon
+          // that had just ended a turn dead, and the respawn that followed failed
+          // every local read for a while.
+          if (msg && msg.id !== 1) return
           clearTimeout(timeout)
           socket.close()
-          try {
-            const msg = JSON.parse(data.toString()) as {
-              ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string
-            }
-            resolve({
-              alive: msg.ok === true,
-              version: msg.version,
-              capabilities: msg.capabilities,
-              instanceId: msg.instanceId,
-              ...(msg.ok === true ? {} : { failure: 'bad-reply' as const }),
-            })
-          } catch {
-            resolve({ alive: false, failure: 'bad-reply' })
-          }
+          if (!msg) { resolve({ alive: false, failure: 'bad-reply' }); return }
+          resolve({
+            alive: msg.ok === true,
+            version: msg.version,
+            capabilities: msg.capabilities,
+            instanceId: msg.instanceId,
+            ...(msg.ok === true ? {} : { failure: 'bad-reply' as const }),
+          })
         })
         socket.on('error', () => { clearTimeout(timeout); resolve({ alive: false, failure: 'error' }) })
       } catch {
