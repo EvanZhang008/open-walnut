@@ -103,7 +103,7 @@ Tests: `tests/web/markdown/bare-task-id.test.ts`, `tests/e2e/browser/bare-task-i
 
 | What | Where |
 |---|---|
-| Renderer behavior, CJK shapes, sanitize | `tests/web/markdown/*.test.ts` (`npm run test:focus tests/web/markdown`) |
+| Renderer behavior, CJK shapes, sanitize | `tests/web/markdown/*.test.ts` (`bun run test:focus tests/web/markdown`) |
 | Local-path links, fence and renderer halves | `tests/web/markdown/link-to-local-path.test.ts`, `tests/e2e/browser/link-to-local-path.spec.ts` |
 | Chunker invariants, blank-line collapsing | `tests/web/rich-blocks.test.ts` |
 | Interrupt carry, both sides | `tests/web/session-stream-buffer-pending-markup.test.ts`, `tests/core/stream/*` |

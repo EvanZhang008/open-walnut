@@ -12,8 +12,8 @@ spawn time from the top of the launcher chain.
 When `Walnut.app` starts the server, that chain already ends at Walnut: the
 server, the session daemon, the `claude` CLI and every tool the CLI runs are all
 attributed to Walnut, and nothing here is needed. The gap is a server started from
-a **terminal** (`npm run dev:prod`), which makes the `node` binary responsible for
-the whole subtree. Three results:
+a **terminal** (`bun run dev:prod`). When the server ran on Node, that made the `node`
+binary responsible for the whole subtree. Three results:
 
 - The permission dialog said `"node" would like to access data from other apps`,
   naming a shared runtime rather than what was actually asking.
@@ -126,8 +126,8 @@ added.
   (`com.local.walnut-desktop` plus the team) across rebuilds. Check before
   installing over an existing app: `codesign -dv --verbose=2 <app>` must report the
   same `Identifier` and `Authority` as the app being replaced, or the grant is lost.
-- An npm or terminal-only install with no `Walnut.app` keeps the plain node
-  identity. Nothing is installed and no bundle is built to change that.
+- An npm or terminal-only install with no `Walnut.app` keeps the plain identity
+  of whatever started it. Nothing is installed and no bundle is built to change that.
 - Linux hosts (local or over SSH) keep the existing daemon and ordinary filesystem
   permissions: no bundle, no Apple signing, no TCC. Which mechanism applies is
   decided by the machine the session *runs on*, not by the client you use. Driving

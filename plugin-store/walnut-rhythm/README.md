@@ -112,10 +112,10 @@ Rhythm owns one quiet hold. When a focus block and a macOS Focus overlap, the ho
 ## Development
 
 ```bash
-npm run build:plugins                      # once, from the repo root
-node packages/plugin-cli/dist/cli.js build --root plugin-store/walnut-rhythm
-node packages/plugin-cli/dist/cli.js validate --root plugin-store/walnut-rhythm
-npm run test:focus tests/plugins/walnut-rhythm
+bun run build:plugins                      # once, from the repo root
+bun packages/plugin-cli/dist/cli.js build --root plugin-store/walnut-rhythm
+bun packages/plugin-cli/dist/cli.js validate --root plugin-store/walnut-rhythm
+bun run test:focus tests/plugins/walnut-rhythm
 ```
 
 The decisions live in pure modules with their own tests: `presence.ts` (the streak), `scheduler.ts` (the reminder), `focus.ts` (the block cycle and the quiet hold), `clock.ts`, `macos-focus.ts`, `macos-shortcuts.ts` and `music.ts` (which files are tracks). The console's player is `web/music.ts`; the phone's is `ios-native/Walnut/Stores/FocusMusicPlayer.swift`. `runtime.ts` applies them and is tested on a fake clock and a fake host.

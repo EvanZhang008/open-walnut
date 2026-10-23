@@ -81,10 +81,10 @@ The crash button is the one intentionally destructive control: it throws inside 
 From the Open Walnut repository checkout, build the unpublished author packages and then build and validate the Demo:
 
 ```bash
-npm run build:plugins
-node packages/plugin-cli/dist/cli.js build --root examples/plugins/walnut-demo
-node packages/plugin-cli/dist/cli.js validate --root examples/plugins/walnut-demo
-npm --prefix examples/plugins/walnut-demo run typecheck
+bun run build:plugins
+bun packages/plugin-cli/dist/cli.js build --root examples/plugins/walnut-demo
+bun packages/plugin-cli/dist/cli.js validate --root examples/plugins/walnut-demo
+bun run --cwd examples/plugins/walnut-demo typecheck
 ```
 
 Link it into an isolated Walnut install during development. Do not point the Demo at a production server.

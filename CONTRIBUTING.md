@@ -16,8 +16,7 @@ The Vite dev server proxies `/api` and `/ws` to `localhost:3456`.
 
 ### Prerequisites
 
-- Node.js >= 22 (the server and the tests run on it)
-- [Bun](https://bun.sh) >= 1.4.4 (installs the dependencies; `package.json` pins the version as `packageManager`)
+- git and [Bun](https://bun.sh) >= 1.4.4, nothing else: bun installs the dependencies and runs the server, the build and the tests (`package.json` pins the version as `packageManager`)
 
 A dependency change is a `package.json` edit plus the `bun.lock` that `bun install`
 writes for it; commit both. Patches to dependencies live in `patches/` and are made
@@ -35,8 +34,8 @@ bun run test:all      # lint + all tests + Playwright browser tests
 
 1. **Fork** the repo and create a branch from `main`
 2. **Write tests** for any new functionality
-3. **Run `npm run lint`** — no type errors allowed
-4. **Run `npm test`** — all tests must pass
+3. **Run `bun run lint`**: no type errors allowed
+4. **Run `bun run test`**: all tests must pass
 5. **Keep changes focused** — one feature or fix per PR
 
 ## Code Style

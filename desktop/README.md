@@ -23,9 +23,9 @@ codebase. This wrapper only:
   launch and every 4 minutes, an update item in the sidebar once there is one,
   a download you start, and **Restart to update** (see [Updates](#updates)).
   Or point it at an existing `~/.open-walnut` install or a source checkout.
-- For a source checkout, locates a suitable **Node.js** (mise / nvm / fnm /
-  Homebrew / system, newest first, requires **Node 22+**) and **Git**.
-- Starts the server (`walnut web`, or `node dist/cli.js web` for a checkout) on port **3456** (falls back to 4567),
+- For a source checkout, finds **bun** (PATH, `~/.bun/bin`, Homebrew, `/usr/local/bin`),
+  at least the version the checkout's `package.json` pins.
+- Starts the server (`walnut web`, or `bun dist/cli.js web` for a checkout) on port **3456** (falls back to 4567),
   reclaiming a stale server orphaned by a previous crash, and loads
   `http://localhost:<port>` in the window.
 - Restarts an owned server automatically after an unexpected exit, with bounded
@@ -36,9 +36,9 @@ codebase. This wrapper only:
 
 - macOS 12+ (Monterey or newer)
 - To build it: **Xcode Command Line Tools** (`swiftc`): `xcode-select --install`
-- To run it from a source checkout: **Node.js 22+**, via [mise](https://mise.jdx.dev),
-  `nvm`, `fnm`, or [Homebrew](https://brew.sh) (`brew install node`). The
-  downloaded app needs neither.
+- To run it from a source checkout: **bun**, at least the version its `package.json`
+  pins (`curl -fsSL https://bun.sh/install | bash`), and a build (`bun install`,
+  `bun run web:build`). The downloaded app needs nothing else.
 
 ## Build
 
@@ -125,12 +125,12 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
   and the server then
   runs as that copy's `bin/walnut` link, so a restart after an update runs the
   new version (an older Node archive: on its own Node). **Set Up Now** (from Use
-  Existing, for a folder with no build) clones
-  `https://github.com/EvanZhang008/open-walnut.git`, runs `npm install`, then
-  builds the CLI/server (`tsup`) and web UI (`vite`) directly. Progress and a full
-  `bootstrap.log` land in `~/Library/Application Support/Walnut/`; Retry runs
-  the setup that failed again.
-- **Server lifecycle**: spawns `walnut web --port <port>` (a checkout: `node dist/cli.js web --port <port>`) with
+  Existing, for a folder with no Walnut yet) installs the same self-contained
+  Walnut with its data in that folder. A setup an older app made there as an npm
+  checkout (`<folder>/source`) moves to it on the next launch and keeps its data.
+  Progress and a full `bootstrap.log` land in
+  `~/Library/Application Support/Walnut/`; Retry runs the setup that failed again.
+- **Server lifecycle**: spawns `walnut web --port <port>` (a checkout: `bun dist/cli.js web --port <port>`) with
   `OPEN_WALNUT_EXIT_ON_ORPHAN=1` so the server self-terminates if the app dies
   uncleanly (no port left held). Detects an already-running server and only
   reclaims it if it's an *orphaned* Walnut process (parent PID 1).

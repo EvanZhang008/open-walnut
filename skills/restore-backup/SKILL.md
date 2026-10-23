@@ -43,16 +43,17 @@ The restore tool ships with Walnut itself.
 open-walnut --version 2>/dev/null && echo CLI-OK
 ```
 
-If that fails (fresh machine), clone and build:
+If that fails (fresh machine), install it. Walnut is one compiled file, and the installer
+needs nothing installed first (no Node, no npm, no build tools):
 
 ```bash
-git clone https://github.com/EvanZhang008/open-walnut.git && cd open-walnut
-npm install && npm run build
-alias open-walnut='node dist/cli.js'   # or use node dist/cli.js directly
+curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"   # install.sh links walnut and open-walnut here
+open-walnut --version
 ```
 
-Node 22+ is required. You do NOT need a running server or any Walnut config to restore —
-the CLI takes everything as flags.
+Homebrew (`brew install evanzhang008/tap/open-walnut`) or the Mac app work too. You do NOT
+need a running server or any Walnut config to restore: the CLI takes everything as flags.
 
 ## Step 2 — Find the backup
 

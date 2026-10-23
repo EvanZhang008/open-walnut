@@ -80,12 +80,9 @@ scripts below are the only way to replace it.**
 
 ```bash
 bash scripts/deploy-committed.sh  # Deploy the committed HEAD (clean clone) → restart 3456
-npm run dev:prod        # Build the working tree as it is → restart 3456
-npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
-npm run dev:ephemeral -- --file [<walnut file>]   # the same, running a compiled file
-
-# The way back from a bad compiled file, for one release: deploy the Node build.
-WALNUT_DEVPROD_RUNTIME=node bash scripts/deploy-committed.sh
+bun run dev:prod        # Build the working tree as it is → restart 3456
+bun run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
+bun run dev:ephemeral -- --file [<walnut file>]   # the same, running a compiled file
 
 # Verify the deploy script itself WITHOUT deploying: runs every guard, then stops
 # before build / server kill / launch. WALNUT_DEVPROD_PORT is honoured only here
@@ -109,9 +106,9 @@ WALNUT_DEVPROD_REHEARSAL=1 WALNUT_DEVPROD_PORT=35871 WALNUT_DEVPROD_REHEARSAL_DI
 
 Anything that creates tasks, sessions, notes or cron jobs to prove a change works (a real-CLI
 turn, a Playwright click path, a `curl` or `walnut tools call` against the API) runs on
-`npm run dev:ephemeral`. Reading :3456 is fine; writing to it for a test is not: every probe
+`bun run dev:ephemeral`. Reading :3456 is fine; writing to it for a test is not: every probe
 task an agent made there stayed on the user's board (a 2026-09-23 audit found dozens).
-`npm run dev:ephemeral -- --file <path>` runs a compiled walnut file instead of the source build
+`bun run dev:ephemeral -- --file <path>` runs a compiled walnut file instead of the source build
 (`--file` alone builds this tree's file first, about a minute): the same launcher code, so the
 same isolation below, and the file's runtime tree goes to `$TMPDIR/walnut-ephemeral-runtime`,
 never into the real data home (`scripts/dev-ephemeral.sh`).
@@ -163,7 +160,7 @@ through one sends it for real.
 **Testing a task sync plugin.** No plugin syncs tasks on a test server, so tasks made there stay
 local, which is what almost every test wants. To test a sync plugin against its real service
 (Microsoft To Do, or one the user installed), start the server with
-`WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1 npm run dev:ephemeral`. It then writes to the user's real
+`WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1 bun run dev:ephemeral`. It then writes to the user's real
 account, and the real Walnut pulls those items back onto the user's board. Change only tasks you
 created there: the copied tasks are linked to real items, so editing, completing or deleting one
 changes the real item. Before you finish, clean up: delete each item you created from the test
@@ -190,7 +187,7 @@ failure re-launches that snapshot instead of leaving :3456 dark. Knobs:
 `WALNUT_DEVPROD_SMOKE_SECS` (default 120), `WALNUT_DEVPROD_SKIP_SMOKE=1`,
 `WALNUT_DEVPROD_LKG_DIR`. Ratchets: `tests/scripts/dev-prod-smoke-rollback.test.ts`.
 
-**What a deploy runs: the compiled file, by default.** After `bun run web:build` (the dist: the
+**What a deploy runs: the compiled file, and nothing else.** After `bun run web:build` (the dist: the
 CLI publish above needs it, and the file reuses its web assets, so the asset mirror sees one
 build either way), `bun scripts/build-binary.mjs --reuse-web` builds this machine's file and the
 Linux ones (`linux-x64`, `linux-arm64`, their musl twins) in ONE run, so every file names the same
@@ -199,8 +196,8 @@ files are staged as `<stage>/dist-bin/walnut-<target>`, where host servers pick 
 (`path.dirname(process.execPath)`). `walnut __selftest` runs first (it also unpacks the runtime
 tree into `<stage>/runtime/<build>`, on the temp volume, never the data home), then the smoke
 boot runs `<file> web` with its own data, daemon and runtime dirs. The launchd job runs the file
-directly; the LKG holds `dist-bin/` and `runtime/`, and a rollback starts whichever kind the last
-good build was, from a fresh stage cloned from the LKG (`open-walnut-stage.rollback.*`), never from
+directly; the LKG holds `dist-bin/` and `runtime/`, and a rollback starts the last good build's
+file, from a fresh stage cloned from the LKG (`open-walnut-stage.rollback.*`), never from
 the LKG itself, and a snapshot never replaces an LKG a process still runs from: the next good
 deploy replaces the LKG whole, and would delete a rollback server's file and tree (or those of
 the daemon it respawned from its own path) from under it. A stage kept only for a daemon or a
@@ -213,8 +210,9 @@ terminals never inherit it, and `dev:ephemeral --file` keeps the newest 3 trees 
 last day) in `$TMPDIR/walnut-ephemeral-runtime` (`WALNUT_EPHEMERAL_KEEP_TREES`). A file runs
 nested copies of a package from their own nested path in the tree, so a nested copy of another
 version reads its own files (`scripts/binary-build-checks.mjs`).
-Knobs: `WALNUT_DEVPROD_RUNTIME=node` (the Node build, for one release as the way back),
-`WALNUT_DEVPROD_FILE_TARGETS` (default the four Linux targets, `""` for none),
+The way back from a bad file is that rollback to the last good one; there is no other runtime
+to deploy (`WALNUT_DEVPROD_RUNTIME` other than `file` is refused). An LKG an older deploy left as a
+Node build is never started; a deploy with no file to roll back to says so before the kill. Knobs: `WALNUT_DEVPROD_FILE_TARGETS` (default the four Linux targets, `""` for none),
 `WALNUT_DEVPROD_SKIP_SELFTEST=1`, `WALNUT_BUN` (the build needs bun at least the
 `packageManager` pin; an older one is refused before any step). `WALNUT_DEVPROD_REHEARSAL=1` runs
 the whole deploy on a private port and data dir (block above); its
@@ -279,7 +277,7 @@ the deploy starts the new server with nohup instead of failing. Check with
 `ps -o pri= -p <pid>` (31 server, 20 daemon; the compiled file's daemon is the same file run as
 `walnut-<target> __daemon --start`).
 
-**⚠️ NEVER wrap `npm run dev:prod` in a bare `launchctl submit`.** `launchctl submit` jobs are
+**⚠️ NEVER wrap `bun run dev:prod` in a bare `launchctl submit`.** `launchctl submit` jobs are
 KeepAlive — the script exits, launchd re-runs it, forever. dev-prod.sh is a one-shot deploy, so
 this becomes a kill-server-every-10s loop (2026-07-25 incident: 7 back-to-back restarts, one of
 which killed a healthy mid-compaction CLI session). If you must deploy from a niced shell, use a
@@ -312,7 +310,7 @@ scripts/walnut-sandbox.sh status | stop          # health | stop+wipe
 - **Rebuild gotcha:** the sandbox runs `dist/cli.js`; `web:build`/`build` DO recompile the server
   via `tsup`, but if you edit server code and forget to rebuild, the sandbox runs STALE server logic.
   A `400 invalid beta flag` on `chat` while `test` passes is the classic symptom of a stale `dist`
-  (an old build that still sent the removed `extended-cache-ttl` beta). Rebuild (`npx tsup`) and re-run.
+  (an old build that still sent the removed `extended-cache-ttl` beta). Rebuild (`bun run build`) and re-run.
 - **Verified-good provider behavior (do NOT "fix"):** Walnut does NOT send `extended-cache-ttl`
   to Bedrock — sending it answers `400 invalid beta flag`, and the 1h cache is GA anyway
   (`cache_control.ttl:'1h'` rides through verbatim; see `EXTENDED_CACHE_TTL_BETA` in
@@ -525,7 +523,7 @@ a marker out of the daemon's scan window proves nothing either. Ratchets:
 
 **Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`.
 
-**Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, gzips + chunks binary into 1MB pieces, each via separate SSH connection (bypasses proxies that kill >5MB transfers), retries 2x per chunk, falls back to 44KB source deploy if chunked binary fails. Just `npm run build && bash scripts/build-daemon.sh && npm run dev:prod` — next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
+**Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, gzips + chunks binary into 1MB pieces, each via separate SSH connection (bypasses proxies that kill >5MB transfers), retries 2x per chunk, falls back to 44KB source deploy if chunked binary fails. Just `bun run build && bash scripts/build-daemon.sh && bun run dev:prod`: the next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
 
 **Never scp manually** — some corporate SSH proxies kills large transfers. That's exactly what the chunked auto-deploy solves.
 
@@ -583,11 +581,12 @@ death).
 ## Development
 
 ```bash
-npm run build                 # Build server → dist/
-cd web && npx vite build      # Build React SPA
-cd web && npx vite            # Frontend hot reload (:5173, proxies to :3456)
-npm run test:quick            # ⭐ DEFAULT — 306 pure-logic files, ~51s
-npm test                      # Everything, sequential tiers (~10 min)
+bun install                   # Dependencies; git and bun 1.4.4+ are all a checkout needs
+bun run build                 # Build server → dist/
+cd web && bun x vite build    # Build React SPA
+cd web && bun x vite          # Frontend hot reload (:5173, proxies to :3456)
+bun run test:quick            # ⭐ DEFAULT: 306 pure-logic files, ~51s
+bun run test                  # Everything, sequential tiers (~10 min)
 ```
 
 ### Test pipeline: run the cheap layer, not the whole suite
@@ -596,13 +595,13 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 
 | Layer | Command | Time | When |
 |---|---|---|---|
-| L1 quick | `npm run test:quick` | ~51s | every code change |
-| L2 focus | `npm run test:focus <path>` | 0.3–30s | one module |
-| L3 pre-commit | `npm run test:pre-commit` | 1–6 min | before a larger commit — maps your diff → affected tiers |
+| L1 quick | `bun run test:quick` | ~51s | every code change |
+| L2 focus | `bun run test:focus <path>` | 0.3 to 30s | one module |
+| L3 pre-commit | `bun run test:pre-commit` | 1 to 6 min | before a larger commit: maps your diff → affected tiers |
 | L4 CI | GitHub Actions, automatic | free | every push/PR |
-| L5 live | `npm run test:live:cloud` / `test:live:daemon` | ~25s / ~2min | cross-machine feature sign-off — zero mocks, real cloud→bridge→CLI; asserts the CLI's actual reply. Mock-green ≠ working (2026-08-07: live layer's first run caught a spawn race no mock can reproduce) |
+| L5 live | `bun run test:live:cloud` / `test:live:daemon` | ~25s / ~2min | cross-machine feature sign-off: zero mocks, real cloud→bridge→CLI; asserts the CLI's actual reply. Mock-green ≠ working (2026-08-07: live layer's first run caught a spawn race no mock can reproduce) |
 
-**The baseline is ONE known failure, not 118** (`d0ae758b` drove it from 121 to 1 by fixing root causes; `tests/setup/known-failures.json` is the record). Judge your change with `npm run test:baseline` — it fails ONLY on failures absent from that file. Never judge from the raw aggregate count, and never wave a pile of red away as "the baseline": at a baseline of 1, extra failures are your regression, another agent's uncommitted `src/` work in this shared worktree, or concurrency noise (fails in a 3-way parallel run, passes alone). Attribute before acting: re-run the file alone, and diff `git show HEAD:<file>` against the worktree to see whose change moved it. When you legitimately fix or add known failures, `npm run test:baseline:record`.
+**The baseline is ONE known failure, not 118** (`d0ae758b` drove it from 121 to 1 by fixing root causes; `tests/setup/known-failures.json` is the record). Judge your change with `bun run test:baseline`: it fails ONLY on failures absent from that file. Never judge from the raw aggregate count, and never wave a pile of red away as "the baseline": at a baseline of 1, extra failures are your regression, another agent's uncommitted `src/` work in this shared worktree, or concurrency noise (fails in a 3-way parallel run, passes alone). Attribute before acting: re-run the file alone, and diff `git show HEAD:<file>` against the worktree to see whose change moved it. When you legitimately fix or add known failures, `bun run test:baseline:record`.
 
 **CI failed?** `scripts/ci-status.sh brief` distils the run into the few real error lines; fix locally (free) rather than running an AI inside CI (paid).
 
@@ -626,12 +625,15 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 ### Playwright runs are machine-wide serialized (don't fight the gate)
 
 Every browser worker is a whole Chromium (~385 MB measured). With several agent
-sessions each running `npx playwright test`, this used to sum to dozens of browsers
+sessions each running `bun x playwright test`, this used to sum to dozens of browsers
 and wedge the Mac (2026-07-25: load avg **225** on 14 cores, 1210 processes) — which
 then surfaced as "Walnut is slow" and as runs dying with `Timed out waiting 30000ms
 from config.webServer`. Concurrent runs were never safe anyway: specs hardcode
 `localhost:3457`, and `reuseExistingServer` makes run #2 attach to run #1's fixture
 server, so they share one dataset and the first to finish kills the other's server.
+
+The Playwright runner is the one tool here that still runs on Node (`bun x playwright test`
+starts it; CI installs Node for it). The fixture servers it tests run on bun like everything else.
 
 `playwright.config.ts` now engages a gate at config-load time (`tests/e2e/browser/pw-gate.ts`):
 
@@ -654,9 +656,9 @@ status`). At load 486 every spec failed on `page.waitForLoadState` — those are
 artifacts, not product bugs. Fixture cold boot is ~20 s idle but ~70 s at load 133, so
 `webServer.timeout` is 120 s.
 
-**Never use `npx tsx` in a test hot path** — tsx is now a real devDependency; use
-`./node_modules/.bin/tsx`. A bare `npx tsx --version` measured **88 s** on this machine,
-which alone exceeded the old 30 s webServer budget.
+**Run a TypeScript script with `bun <file>`.** Bun runs TypeScript itself, so no test path
+needs tsx any more (a bare `npx tsx --version` once measured **88 s** on this machine, which
+alone exceeded the old 30 s webServer budget).
 
 ## Testing
 
@@ -707,7 +709,7 @@ scripts/walnut-logs.sh req <id> | task <id> | errors [n] | tail [n]
 
 **When the whole server froze, run `stalls` before anything else.** The stall flight recorder
 (`src/core/stall-recorder.ts`) keeps a CPU profile of every hold of 2 s or more and tags it with a
-verdict; `node scripts/stall-profile-summary.mjs` (newest profile, or a path) prints the functions
+verdict; `bun scripts/stall-profile-summary.mjs` (newest profile, or a path) prints the functions
 the loop was in during the hold, with file:line. `cpu` means Walnut code held the loop, also on a
 busy machine (`loadStretched: true` then says the load made it longer). Fix that code first. The
 hold itself (`holdCpuMs`, `holdFromMs` to `holdToMs` around the deadline) runs from the last CPU
@@ -762,7 +764,7 @@ Message-send latency is logged as `message delivered {deliveryMs, path, messageI
 When a session goes `idle` with no output, gets stuck mid-turn, or the CLI appears hung, check **Claude Code's own trace log**. Walnut passes `--debug` to every `claude -p` spawn by default, so this log is always available.
 
 ```bash
-WALNUT_CLAUDE_DEBUG=0 npm run dev:prod    # opt out if you need to
+WALNUT_CLAUDE_DEBUG=0 bun run dev:prod    # opt out if you need to
 ```
 
 The flag is added in `src/providers/claude-code-session.ts`. Works for both local and remote (daemon) sessions; args are forwarded through the daemon unchanged.
@@ -781,7 +783,7 @@ tail -F ~/.claude/debug/latest                         # follow local
 ssh clouddev tail -F '~/.claude/debug/latest'          # follow remote
 ```
 
-**Verbosity knobs** (also env vars — export before `npm run dev:prod`; for remote, set them where the daemon was started):
+**Verbosity knobs** (also env vars: export them before `bun run dev:prod`; for remote, set them where the daemon was started):
 
 - `CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose` — include high-volume diagnostics (statusLine, shell, cwd, stdout/stderr). Default is `debug`, which filters those out.
 - `CLAUDE_CODE_DEBUG_LOGS_DIR=/some/path` — override the `~/.claude/debug/` directory.

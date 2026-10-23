@@ -36,13 +36,13 @@ Write the list down before step 2. A plugin that registers a capability nobody a
 The author packages are not on the npm registry yet (`npx @open-walnut/plugin-cli` answers 404), so scaffold from a clone of open-walnut: build the local packages once and keep the local CLI process as the watcher:
 
 ```bash
-npm run build:plugins
-node packages/plugin-cli/dist/cli.js new <plugin-id> --dev --no-install --template both
+bun run build:plugins
+bun packages/plugin-cli/dist/cli.js new <plugin-id> --dev --no-install --template both
 ```
 
 That command scaffolds, validates, builds, links into `~/.open-walnut/plugins/<plugin-id>`, tells the running Walnut to discover and load it, prints the App URL, and then watches. `--no-install` skips installation (inside the checkout the packages resolve from it). Use `--template server` or `--template web` when step 1 ruled the other half out. Once the packages are published, the same command will be `npx @open-walnut/plugin-cli new <plugin-id> --dev --template both`.
 
-For another local-checkout loop, run `node packages/plugin-cli/dist/cli.js dev --root <plugin-directory>`. After the packages are published and installed in the generated project, later loops are `npm run dev` there.
+For another local-checkout loop, run `bun packages/plugin-cli/dist/cli.js dev --root <plugin-directory>`. After the packages are published and installed in the generated project, later loops are `npm run dev` there.
 
 Keep `manifest.json` at the package root, set `apiVersion` to `1`, declare an `engines.walnut` range, and point `server` and `web` at built files under `dist/`.
 
@@ -123,7 +123,7 @@ Check the App against all seven before calling it done, and write down which rul
 
 Register routes, Tools, timers, event listeners, Hooks, Cron actions, Commands, Skills, Agents, Providers, RPC methods, Apps, Settings sections, and CSS through `walnut.*`. The host owns those disposables and removes them in reverse order on disable or reload.
 
-Clean up anything created outside `walnut.*` yourself, and do not assume unloading frees Node's ESM module memory.
+Clean up anything created outside `walnut.*` yourself, and do not assume unloading frees the memory of the ES modules it loaded.
 
 Verify it rather than asserting it: reload the plugin at least three times and check that every contribution count returns to one, and that the App, its Sidebar entry, and its palette entry disappear when the plugin is disabled.
 
@@ -149,7 +149,7 @@ For UI, drive real clicks. Cover the App's main path, a deep link straight into 
 
 ## 8. Security review, then publish-check
 
-Review the diff against the trust model before shipping. A plugin is full-trust code: a server entry has full Node access and a native web entry runs in the host browser realm. Do not invent capability prompts, and do not describe `server`, `web`, and `webview` as permission levels. `webview` is only an iframe entry for content that needs browser isolation, and it does not sandbox a server entry in the same plugin.
+Review the diff against the trust model before shipping. A plugin is full-trust code: a server entry has full runtime access and a native web entry runs in the host browser realm. Do not invent capability prompts, and do not describe `server`, `web`, and `webview` as permission levels. `webview` is only an iframe entry for content that needs browser isolation, and it does not sandbox a server entry in the same plugin.
 
 Check each of these explicitly:
 

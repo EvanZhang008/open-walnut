@@ -68,7 +68,7 @@ Implement Category B. Rules:
 **First**: Read `.claude/skills/walnut-console-ops/SKILL.md`.
 
 Execute Category A:
-- `mkdir -p /tmp/test-and-verify/`, build SPA: `cd web && npx vite build`
+- `mkdir -p /tmp/test-and-verify/`, build SPA: `cd web && bun x vite build`
 - Real UI clicks only. Screenshot every step to `/tmp/test-and-verify/<scenario>-step<N>.png`
 - DOM snapshot before each action. Verify screenshots with `Read` tool.
 - Act → Wait (5-20s) → Screenshot → Snapshot → verify.
@@ -153,19 +153,19 @@ New patterns → append to Learned Patterns below. Console-related → also upda
 ## Test Reference
 
 ```bash
-npm test                    # Unit + Integration (~5s)
-npm run test:e2e            # E2E real server (~15s)
-npm run test:all            # Everything
-npx vitest run <file>       # Single test
-cd web && npx vite build    # Build SPA before Playwright
-npx playwright test         # Browser tests
+bun run test                # Unit + Integration (~5s)
+bun run test:e2e            # E2E real server (~15s)
+bun run test:all            # Everything
+bun run test:focus <file>   # Single test
+cd web && bun x vite build  # Build SPA before Playwright
+bun x playwright test       # Browser tests
 ```
 
 **Pyramid**: Live → Playwright → **E2E** (most important) → Integration → Unit
 
 **Mock only**: Claude CLI. Everything else real.
 
-**Production safety**: `OPEN_WALNUT_HOME=/tmp/walnut-test-*/`. Never `~/.open-walnut/`. Port 3456 = production, never touch. Live checks with a real CLI run on `npm run dev:ephemeral`. A check that must write on :3456 runs as a test run (`x-walnut-test-run`, set by itself in an automated browser, `WALNUT_TEST_RUN` for the CLI), which keeps its objects off the user's board and sweeps them.
+**Production safety**: `OPEN_WALNUT_HOME=/tmp/walnut-test-*/`. Never `~/.open-walnut/`. Port 3456 = production, never touch. Live checks with a real CLI run on `bun run dev:ephemeral`. A check that must write on :3456 runs as a test run (`x-walnut-test-run`, set by itself in an automated browser, `WALNUT_TEST_RUN` for the CLI), which keeps its objects off the user's board and sweeps them.
 
 **Open source**: No internal tool names, employer references, or personal usernames.
 
@@ -234,7 +234,7 @@ sessionRunner.setCliCommand(MOCK_WRAPPER); // before startServer
   `SESSION_STREAMS_DIR` first (see `publishStreamsFile` in
   `tests/web/stream/single-timeline-real-pipeline.test.ts`). Symptom otherwise: history 200 with
   0 messages forever.
-- **Full-suite failure triage**: `npx playwright test` failures may come from PARALLEL agents'
+- **Full-suite failure triage**: `bun x playwright test` failures may come from PARALLEL agents'
   uncommitted UI changes, not yours. Bisect by re-running the failing spec against the HEAD
   version of the shared harness file you touched (`git checkout <file>` → run → restore) before
   assuming a regression.

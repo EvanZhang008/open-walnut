@@ -19,7 +19,7 @@ Ask the user a question **only** when you genuinely cannot proceed without an an
 
 2. **Coding sessions already work with zero config.** The `/sessions` Claude Code sessions
    spawn the user's **own logged-in `claude` binary** and use its login — they need *nothing*
-   from Walnut's config. So even before the Personal AI has a credential, the user can clone, start,
+   from Walnut's config. So even before the Personal AI has a credential, the user can install, start,
    and open coding sessions. Tell them this so they're never blocked: *"You can start using
    coding sessions right now; let's also wire up the Personal AI so home-page chat works."*
 
@@ -125,14 +125,24 @@ write the Anthropic variant in Step 3.
 
 ---
 
-## Step 3 — Locate (or clone) the Open Walnut repo
+## Step 3: Install Open Walnut (skip if `walnut` already runs)
+
+Walnut is one compiled file. The installer needs nothing installed first (no Node, no npm,
+no build tools):
 
 ```bash
-test -d open-walnut || git clone https://github.com/EvanZhang008/open-walnut.git
-cd open-walnut
+command -v walnut >/dev/null || curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"   # install.sh links walnut here
+walnut --version
 WALNUT_HOME="${OPEN_WALNUT_HOME:-$HOME/.open-walnut}"
 mkdir -p "$WALNUT_HOME"
 ```
+
+It checks the download against the release's `SHA256SUMS`, puts it in
+`~/.local/share/open-walnut/versions/<version>/` and links `walnut` into `~/.local/bin`.
+After that Walnut updates itself (on every start, or now with `walnut update`). If the user
+already uses Homebrew (`brew install evanzhang008/tap/open-walnut`) or the Mac app, that works
+too. A source checkout (git plus `bun install`) is only for working on Walnut itself.
 
 ---
 
@@ -184,11 +194,10 @@ When the credential is an env var or `~/.aws` profile, prefer **referencing** it
 
 ---
 
-## Step 5 — Install, start, and PROVE it works (real model call)
+## Step 5: Start, and PROVE it works (real model call)
 
 ```bash
-npm install        # backend + frontend deps (runs postinstall patches)
-npm start          # builds everything, serves http://localhost:3456
+walnut web         # serves http://localhost:3456; keep it running and use a second shell below
 ```
 
 **The proof is a real round-trip, not just "a credential exists."** Use Walnut's own
@@ -224,7 +233,7 @@ Don't stop at the first error. Read `error` from `test-connection`, map it, fix 
 | `ExpiredTokenException` / `UnrecognizedClientException` | Short-term/SSO token expired, or wrong key | Refresh SSO (`aws sso login`) / regenerate the key; re-test |
 | `ValidationException` / model not found | Model not available in that region | Switch `region` (e.g. `us-east-1`/`us-west-2`) where the model is enabled; re-test |
 | profile not found / `CredentialsProviderError` | Wrong `aws_profile` name | Re-list `~/.aws/config` profiles, correct the name; re-test |
-| Server won't start / build fails | Node version or deps | Node ≥ 22; re-run `npm install`; read and fix the named build error |
+| Server won't start | Port in use, or a broken install | `walnut doctor` prints what is wrong (build, claude, PATH); fix what it names, or run the installer again |
 
 Only when a fix needs a value/action solely the user controls (which profile, which region,
 enabling model access, refreshing SSO) do you ask **one targeted question** — then apply the

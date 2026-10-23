@@ -16,6 +16,6 @@ Steps to test this change:
 
 ## Checklist
 
-- [ ] `npm run lint` passes
-- [ ] `npm test` passes
+- [ ] `bun run lint` passes
+- [ ] `bun run test` passes
 - [ ] Tested in the browser (for UI changes)

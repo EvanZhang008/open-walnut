@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/EvanZhang008/open-walnut/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanZhang008/open-walnut/actions)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-green.svg)](https://nodejs.org/)
+[![Bun](https://img.shields.io/badge/Bun-%3E%3D1.4.4-green.svg)](https://bun.sh/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
 [![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/open-walnut?style=social)](https://github.com/EvanZhang008/open-walnut)
 
@@ -47,10 +47,8 @@ self-hosted, local-first, and has no telemetry.
   with everything inside: the one-line installer, Homebrew and the Mac app need nothing
   installed first, and the npm package needs only an npm (any Node 18 or newer) to start it.
   On Alpine, add the C++ runtime it links first: `apk add libstdc++ libgcc`.
-  The checkout route needs Node.js 22 or newer (`curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash` then `nvm install 22`).
-- git and [Bun](https://bun.sh) 1.4.4 or newer, only for the checkout route below (git: `xcode-select --install` on macOS, `sudo apt install git` on Ubuntu; Bun: `curl -fsSL https://bun.sh/install | bash`)
-- Linux, checkout route only: a C library from 2019 or later (glibc 2.29+: Ubuntu 20.04+, Debian 11+, AL2023, Fedora). Older distros compile one native module and need a newer Python and GCC first; `bun run start` prints the exact commands, and [Getting Started](GETTING_STARTED.md#older-linux-glibc-before-229) has them too.
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`)
+- git and [Bun](https://bun.sh) 1.4.4 or newer, only for the checkout route below, and nothing else (git: `xcode-select --install` on macOS, `sudo apt install git` on Ubuntu; Bun: `curl -fsSL https://bun.sh/install | bash`)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`curl -fsSL https://claude.ai/install.sh | bash`, then run `claude`)
 
 That is the whole AI setup. Every AI turn Walnut runs is a Claude Code session: Ask Walnut (the Walnut agent), your coding sessions, scheduled routines, and the agents a session hook dispatches all use the `claude` you already have, however it signs in (Anthropic account, Bedrock, or Vertex). An Anthropic API key or AWS Bedrock credentials are optional, and they change only where the small single calls go (session titles, summaries, voice cleanup, quick parses): by default those also go through your Claude Code login, and Settings → Ask Walnut Provider points them at a provider instead.
 
@@ -137,7 +135,7 @@ Set up Open Walnut for me: read and run the skill at
 https://github.com/EvanZhang008/open-walnut/blob/main/skills/setup-walnut/SKILL.md
 ```
 
-The skill mirrors your existing provider setup, installs dependencies, starts Walnut,
+The skill mirrors your existing provider setup, installs Walnut, starts it,
 and verifies the connection with a real model request. Review the
 [setup skill](skills/setup-walnut/SKILL.md) for the exact steps.
 
@@ -276,7 +274,7 @@ one source does not overwhelm the others.
 
 ### Writing a plugin
 
-A plugin App joins the same App Registry as Walnut's own screens, so one `walnut.ui.app` registration gives it a Sidebar entry, the route `/apps/<plugin-id>~<app-id>`, deep links, a badge, and a Command Palette entry. Installing a plugin means trusting its code: a server entry is full Node, and a native web entry shares the console's React tree.
+A plugin App joins the same App Registry as Walnut's own screens, so one `walnut.ui.app` registration gives it a Sidebar entry, the route `/apps/<plugin-id>~<app-id>`, deep links, a badge, and a Command Palette entry. Installing a plugin means trusting its code: a server entry runs as full code inside Walnut, and a native web entry shares the console's React tree.
 
 The first authoring loop is one command, which scaffolds, links into the running console, and reloads on every save. The author packages are not on npm yet, so run it from a checkout of this repository:
 
@@ -420,7 +418,7 @@ bun run web:dev
 
 ## Tech Stack
 
-- Node.js, Express, TypeScript, and SQLite
+- Bun, Express, TypeScript, and SQLite
 - React, Vite, and TypeScript
 - Anthropic Claude and other configurable model providers
 - Claude Code CLI with stream-JSON I/O

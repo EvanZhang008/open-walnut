@@ -26,11 +26,11 @@ Needs Node 22 or newer.
 This package lives in the Open Walnut repository and is not on the npm registry yet, so the `npx` line above is the shape a release will use. Inside a checkout, build the workspace packages and skip registry installation while the local CLI owns the watcher:
 
 ```bash
-npm run build:plugins
-node packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install
+bun run build:plugins
+bun packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install
 ```
 
-For another local-checkout loop, run `node packages/plugin-cli/dist/cli.js dev --root my-plugin`. The generated project's `npm run dev` becomes the normal loop after the packages are published and installed.
+For another local-checkout loop, run `bun packages/plugin-cli/dist/cli.js dev --root my-plugin`. The generated project's `npm run dev` becomes the normal loop after the packages are published and installed.
 
 ## Templates
 

@@ -48,6 +48,6 @@ The store row takes its name, description and version from the manifest. An entr
 
 ## How it gets into the build
 
-`npm run build` and `npm run web:build` run `scripts/ship-store-plugins.mjs`, which builds every plugin here with `walnut-plugin build`, checks that each declared `server` and `web` artifact exists and is not a stub, and copies `manifest.json`, `README.md`, `dist/` and `skills/` into `dist/plugin-store/<id>/`. A build error in one of these plugins fails the Walnut build, on purpose: a broken bundle would otherwise only show up after someone pressed Install.
+`bun run build` and `bun run web:build` run `scripts/ship-store-plugins.mjs`, which builds every plugin here with `walnut-plugin build`, checks that each declared `server` and `web` artifact exists and is not a stub, and copies `manifest.json`, `README.md`, `dist/` and `skills/` into `dist/plugin-store/<id>/`. A build error in one of these plugins fails the Walnut build, on purpose: a broken bundle would otherwise only show up after someone pressed Install.
 
 To try a plugin while you work on it, `walnut-plugin link plugin-store/<id>` works as for any other plugin, and the linked copy wins over the bundled one.

@@ -12,7 +12,7 @@ npm install --save-dev @open-walnut/plugin-api
 
 The package is ESM only and needs Node 22 or newer. `react` is an optional peer: install it (matching the host's major version, 19) only if your plugin ships web UI.
 
-This package lives in the Open Walnut repository and is not on the npm registry yet, so the install line above is the shape a release will use. Inside a checkout, run `npm run build:plugins`, then `node packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install`; the local CLI can build and watch that project without fetching the unpublished package.
+This package lives in the Open Walnut repository and is not on the npm registry yet, so the install line above is the shape a release will use. Inside a checkout, run `bun run build:plugins`, then `bun packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install`; the local CLI can build and watch that project without fetching the unpublished package.
 
 ## Entry points
 

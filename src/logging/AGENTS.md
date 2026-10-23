@@ -45,7 +45,7 @@ architecture, investigation commands).
   `<log dir>/stall-profiles/` (newest 40, 3 days, 256 MB), and its
   `event-loop stall flight record` line adds the machine's paging counters, this process's
   compressed bytes and the kernel memory pressure level. Read them with
-  `scripts/walnut-logs.sh stalls` and `node scripts/stall-profile-summary.mjs [file]`; never
+  `scripts/walnut-logs.sh stalls` and `bun scripts/stall-profile-summary.mjs [file]`; never
   attach a profiler to production first.
   Windows rotate make-before-break (the next titled profile starts before the old one ends,
   `src/core/stall-recorder-profiler.ts`). Do not turn that back into `Profiler.stop` +

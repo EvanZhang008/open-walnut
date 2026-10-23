@@ -8,27 +8,28 @@ Open Walnut is a Personal AI that manages tasks, accumulates knowledge, and coor
 
 ## Fast Track (5 Minutes + Model Download)
 
-No Node.js? Walnut is one compiled file with everything inside, and one command installs it
-on macOS or Linux: `curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh`
-(or `brew install evanzhang008/tap/open-walnut`), then `walnut web`. On Alpine, run
+Walnut is one compiled file with everything inside, and one command installs it on macOS or
+Linux with nothing installed first (no Node, no npm). On Alpine, run
 `apk add libstdc++ libgcc` first: the musl build links the C++ runtime.
-
-With npm (any Node 18 or newer; npm installs only the package built for your machine):
 
 ```bash
 # 1. Install Claude Code CLI (needed for coding sessions)
-npm install -g @anthropic-ai/claude-code
+curl -fsSL https://claude.ai/install.sh | bash
 claude --version                      # verify it's installed
 
-# 2. Install Walnut from npm (nothing to build)
-npm install -g open-walnut
+# 2. Install Walnut (one file, nothing to build)
+curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh
 
 # 3. Set your API key (Anthropic — simplest option)
 export ANTHROPIC_API_KEY=sk-ant-...   # get one at console.anthropic.com
 
 # 4. Start
-open-walnut web                       # starts on port 3456
+walnut web                            # starts on port 3456
 ```
+
+Homebrew works too (`brew install evanzhang008/tap/open-walnut`), and so does npm for people
+who use it: `npm install -g open-walnut` (any Node 18 or newer) installs a small launcher and
+only the file built for your machine; start it with `open-walnut web`.
 
 Working on Walnut itself? Swap step 2 for a checkout, installed with
 [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`), and start with
@@ -77,50 +78,16 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 
 | Dependency | Version | How to install | Why |
 |---|---|---|---|
-| **Node.js** | >= 22 | [nodejs.org](https://nodejs.org/) or `nvm install 22` | Only to run from a checkout (below); an installed Walnut is one file with its own runtime |
-| **npm** | (comes with Node.js) | — | Package manager for dependencies |
-| **Claude Code CLI** | Latest | `npm install -g @anthropic-ai/claude-code` | Every AI turn is a `claude` session: the home page chat, coding sessions, scheduled routines, and the agents a session hook dispatches |
+| **Claude Code CLI** | Latest | `curl -fsSL https://claude.ai/install.sh \| bash`, then run `claude` once to sign in | Every AI turn is a `claude` session: the home page chat, coding sessions, scheduled routines, and the agents a session hook dispatches |
 | **Disk space** | ~2 GB free | — | For the embedding model (~640 MB) and search index |
-
-> The notes below are for a checkout and for versions from before the compiled file.
->
-> **Native modules**: Open Walnut uses `better-sqlite3` (for search index) and `sharp` (for image processing). Both ship prebuilt binaries for macOS, Linux, and Windows — no compiler needed in most cases. If prebuilds fail on your platform, you may need Python 3 and a C++ compiler (`xcode-select --install` on macOS, `build-essential` on Ubuntu).
->
-> npm 12 runs a dependency's install script only when it is allowed, and that script is what fetches the better-sqlite3 binary. After a plain `npm install -g open-walnut` with npm 12, the first `open-walnut web` notices the missing binary and finishes the install itself (about 15 seconds, once). `open-walnut update` and the update on start pass the flag that allows it.
-
-### Older Linux (glibc before 2.29)
-
-Walnut's one required native module, better-sqlite3, ships a prebuilt binary for glibc 2.29 and newer, which every mainstream distro since 2019 has. On an older C library (glibc 2.26 systems are still around) it compiles during the install (`bun install` in a checkout, `npm install -g` for the package), and compiling against Node 22 needs Python 3.8+ and a C++20 compiler (GCC 10+), which such a system usually lacks. The stock toolchain fails inside node-gyp with a Python `SyntaxError` or C++ template errors that never mention either requirement.
-
-In a checkout, `bun run start` runs `scripts/check-native-toolchain.mjs`, which detects this and prints the commands for your box. On a yum-based glibc 2.26 system they are:
-
-```bash
-sudo yum install -y gcc10-c++ make
-curl -LsSf https://astral.sh/uv/install.sh | sh        # node-gyp needs Python 3.8+; the system python3 is 3.7
-~/.local/bin/uv python install 3.12                    # a static build that runs on glibc 2.17+, no sudo
-PYTHON="$(~/.local/bin/uv python find 3.12)" CC=gcc10-gcc CXX=gcc10-g++ bun install
-```
-
-The Python step deliberately does not use the distro's package channel: on one such machine the channel had no Python 3.8 at all, while uv's managed Python installed in seconds and the compile went through (verified 2026-09-03).
-
-sharp (image compression for pasted images) is optional and is skipped on such a system: images are sent uncompressed. If `npm_config_build_from_source` is set in your environment, unset it; it forces sharp into a source build that needs libvips.
-
-Node itself has the same problem one step earlier: the official Node 22 binaries need glibc 2.28, so `nvm install 22` completes and then `node` dies with `GLIBC_2.28 not found`. Use the [community build for older glibc](https://unofficial-builds.nodejs.org/download/release/) (the `linux-x64-glibc-217` tarball of any v22 release), unpacked anywhere on your `PATH`:
-
-```bash
-v=$(curl -fsSL https://unofficial-builds.nodejs.org/download/release/index.tab | awk -F'\t' 'NR>1 && $1 ~ /^v22\./ && $0 ~ /linux-x64-glibc-217/ {print $1; exit}')
-mkdir -p ~/.local/node22
-curl -fsSL "https://unofficial-builds.nodejs.org/download/release/$v/node-$v-linux-x64-glibc-217.tar.gz" | tar -xz -C ~/.local/node22 --strip-components=1
-export PATH="$HOME/.local/node22/bin:$PATH"   # add to your shell profile too
-```
 
 ### Optional
 
 | Dependency | How to install | Why | Without it |
 |---|---|---|---|
-| **Git** | macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`, or [git-scm.com](https://git-scm.com/) | Cloning the repo, and auto-backup of `~/.open-walnut/` every 30 seconds | The npm install route needs no git. Data is still saved locally, just not version-controlled. |
+| **Git** | macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`, or [git-scm.com](https://git-scm.com/) | Cloning the repo, and auto-backup of `~/.open-walnut/` every 30 seconds | An installed Walnut needs no git. Data is still saved locally, just not version-controlled. |
 | **Provider key** | See [Provider Configuration](#provider-configuration) | Sends the small background single calls (session titles, summaries, voice cleanup, quick parses) to Anthropic, Bedrock, or another provider instead of your Claude Code login | Those calls go through Claude Code, which is the default. Chat, coding sessions, and routines never read a key. |
-| **Bun** | [bun.sh](https://bun.sh/) (1.4.4 or newer) | Required for a checkout: it installs the dependencies (`bun install`), and builds the prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Not needed with the npm install route, which ships those bundles prebuilt. |
+| **Bun** | [bun.sh](https://bun.sh/) (1.4.4 or newer) | Required for a checkout, and the only thing it needs besides git: it installs the dependencies (`bun install`), runs the build and the tests, and builds the prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Not needed by an installed Walnut, which carries all of that inside. |
 
 ### One AI login: Claude Code
 
@@ -623,7 +590,7 @@ The server handles commits, pulls, and pushes automatically.
 
 ### External Plugins
 
-Install a trusted Plugin by linking it under `~/.open-walnut/plugins/<plugin-id>/`, or use Settings → Plugin Store with a Git URL or npm spec. A Plugin can add full Node server logic, a native React App, Settings sections, Tools, Skills, Commands, Hooks, Cron actions, Agents, Providers, routes, and task sync. Installing a Plugin means trusting its code: a server entry is full Node, and a native web entry runs in the console's own React tree.
+Install a trusted Plugin by linking it under `~/.open-walnut/plugins/<plugin-id>/`, or use Settings → Plugin Store with a Git URL or npm spec. A Plugin can add full server logic, a native React App, Settings sections, Tools, Skills, Commands, Hooks, Cron actions, Agents, Providers, routes, and task sync. Installing a Plugin means trusting its code: a server entry runs as full code inside Walnut, and a native web entry runs in the console's own React tree.
 
 A Plugin App joins the same App Registry as Walnut's own screens, so one `walnut.ui.app` registration gives it a Sidebar entry, the route `/apps/<plugin-id>~<app-id>`, deep links into every subpath, a badge, and a Command Palette entry.
 
@@ -732,16 +699,12 @@ the command still reports this machine and says so.
 
 ### Install fails
 
-**Symptoms**: Build errors during `bun install` (a checkout) or `npm install -g open-walnut`, especially around `better-sqlite3` or `sharp`.
+**Symptoms**: `install.sh` stops with an `open-walnut install:` error, or `bun install` fails in a checkout.
 
 **Fixes**:
-1. Check Node.js version: `node --version` (must be >= 22)
-2. On Apple Silicon, ensure you're using the arm64 version of Node.js (not Rosetta)
-3. If `better-sqlite3` fails: prebuilt binaries should auto-download, but if they don't:
-   - macOS: `xcode-select --install` (installs C++ compiler)
-   - Ubuntu/Debian: `sudo apt install build-essential python3`
-   - Then: `npm rebuild better-sqlite3`
-4. If `sharp` fails: `npm rebuild sharp` (it downloads prebuilt libvips binaries for your platform)
+1. Read the installer's last line; it names the cause. `curl or wget is required` and `sha256sum or shasum is required` name a missing tool. A download that does not match `SHA256SUMS` changed nothing: run the installer again. HTTP 403 or 429 is a GitHub limit for your address: try again later.
+2. On Alpine, install the C++ runtime the musl build links: `apk add libstdc++ libgcc`.
+3. In a checkout, check bun: `bun --version` must be 1.4.4 or newer (`bun upgrade` updates it), then run `bun install` again.
 
 ### Search or embedding model issues
 

@@ -65,23 +65,23 @@ Everything comes from host endpoints through `walnut.http.fetch`, which is same-
 
 ## Install
 
-Nothing to install: `scripts/ship-builtin-plugins.mjs` runs during `npm run build` and `npm run web:build`, building this directory's web bundle and copying it (with the manifest) into `dist/integrations/walnut-time/`, where builtin discovery finds it.
+Nothing to install: `scripts/ship-builtin-plugins.mjs` runs during `bun run build` and `bun run web:build`, building this directory's web bundle and copying it (with the manifest) into `dist/integrations/walnut-time/`, where builtin discovery finds it.
 
 The author loop, from a checkout of this repository, is still how you iterate on the code:
 
 ```bash
-npm run build:plugins                                                    # build the plugin API + CLI once
-node packages/plugin-cli/dist/cli.js build --root examples/plugins/walnut-time
-node packages/plugin-cli/dist/cli.js link  --root examples/plugins/walnut-time
+bun run build:plugins                                                   # build the plugin API + CLI once
+bun packages/plugin-cli/dist/cli.js build --root examples/plugins/walnut-time
+bun packages/plugin-cli/dist/cli.js link  --root examples/plugins/walnut-time
 ```
 
 `link` symlinks the directory into `~/.open-walnut/plugins/walnut-time`, then asks the running Walnut to discover and load it, so a first install needs no restart. It talks to `http://127.0.0.1:3456` unless `OPEN_WALNUT_API_URL` says otherwise, which is what you want when testing against an isolated server.
 
-⚠️ **A builtin wins a duplicate id.** On a server started from a build that includes the shipped copy, the builtin in `dist/integrations/walnut-time/` shadows a `link`ed checkout, so `dev` rebuilds will appear to do nothing. Either iterate against a server run from source (a `tsx` run resolves builtins to `src/integrations/`, where this plugin is not), or set `plugins.walnut-time.enabled: false` while you work from the link.
+⚠️ **A builtin wins a duplicate id.** On a server started from a build that includes the shipped copy, the builtin in `dist/integrations/walnut-time/` shadows a `link`ed checkout, so `dev` rebuilds will appear to do nothing. Either iterate against a server run from source (bun running `src/cli.ts` resolves builtins to `src/integrations/`, where this plugin is not), or set `plugins.walnut-time.enabled: false` while you work from the link.
 
 ```bash
-node packages/plugin-cli/dist/cli.js status --root examples/plugins/walnut-time   # state + App URL
-node packages/plugin-cli/dist/cli.js dev    --root examples/plugins/walnut-time   # rebuild + reload on save
+bun packages/plugin-cli/dist/cli.js status --root examples/plugins/walnut-time   # state + App URL
+bun packages/plugin-cli/dist/cli.js dev    --root examples/plugins/walnut-time   # rebuild + reload on save
 ```
 
 Once it is active, the **Apps** page shows a **Time** tile that opens `/apps/walnut-time~main`, and the Sidebar gets no row. The App declares `placement: 'settings'` (no Sidebar row) for that reason: a day report is something you open now and then, and the Sidebar is for the surfaces you live in. Nothing else about the App changes: it is still a full page at its own route, still deep-linkable per tab, and still in the Command Palette as "Open Time".

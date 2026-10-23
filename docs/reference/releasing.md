@@ -7,7 +7,7 @@ an install finds out and updates.
 
 | Channel | npm dist-tag | What it is | How it is cut |
 |---|---|---|---|
-| stable | `latest` | A tagged release `vX.Y.Z` with a CHANGELOG section | Automatic, once a day: the newest nightly that has been out 24 hours. By hand: `npm run release -- patch\|minor\|major` |
+| stable | `latest` | A tagged release `vX.Y.Z` with a CHANGELOG section | Automatic, once a day: the newest nightly that has been out 24 hours. By hand: `bun run release -- patch\|minor\|major` |
 | nightly | `nightly` | The newest commit on `main` that CI passed | GitHub Actions, about every six hours, when that commit is not the last nightly already |
 
 `npm install -g open-walnut` gives the stable channel. `npm install -g open-walnut@nightly`
@@ -165,7 +165,7 @@ The two update scenarios use `registry.mjs`, a local registry that serves the ch
 tarballs under chosen dist-tags and passes every other package through to npm, with
 `WALNUT_UPDATE_REGISTRY_URL` and `npm_config_registry` pointing at it. Locally, run
 `pack.mjs` only in a copy of the tree (it rebuilds `dist/` and refuses to touch a git clone
-outside CI), then `node scripts/release-rehearsal/run.mjs --packs <out>/packs.json --field latest`.
+outside CI), then `bun scripts/release-rehearsal/run.mjs --packs <out>/packs.json --field latest`.
 
 The rehearsal runs on `macos-26` and `ubuntu-24.04`, so it builds the darwin-arm64 and
 linux-x64 archives. CI job `archive-targets` builds the other two a release ships
@@ -320,8 +320,8 @@ never with whatever `npm` is first on PATH. A version whose updater predates the
 For a release that should not wait for the schedule, or an exact version:
 
 ```bash
-npm run release -- patch          # or minor, major, or an exact 0.6.0
-npm run release -- patch --dry-run
+bun run release -- patch          # or minor, major, or an exact 0.6.0
+bun run release -- patch --dry-run
 ```
 
 `scripts/release.mjs` refuses to start when the branch is not `main`, `main` is not at
@@ -341,7 +341,7 @@ against `package.json`, checks CI and the binary matrix again (`scripts/ci-gate.
 HEAD`; a release commit only rolls the version and CHANGELOG, so its parent's result counts),
 installs with `bun install --frozen-lockfile` (exactly the lockfiles, never rewritten, so the
 build is not stamped dirty; `scripts/postinstall.mjs` installs `web/` frozen too when `CI` is
-set), runs `npm run lint` and builds the files (`scripts/release-build.mjs`). Job
+set), runs `bun run lint` and builds the files (`scripts/release-build.mjs`). Job
 `stable-files` runs them through the binary matrix. Job `stable` packs those files and
 publishes the platform packages and then `open-walnut` (`scripts/npm-packages.mjs publish --tag
 latest --provenance`), drafts a GitHub Release whose notes are the version's CHANGELOG section,
@@ -440,7 +440,7 @@ a package that exists. So before the first release that ships the file, the owne
 
    ```bash
    bun install --frozen-lockfile
-   node scripts/release-build.mjs --version <x.y.z> --out /tmp/walnut-release
+   bun scripts/release-build.mjs --version <x.y.z> --out /tmp/walnut-release
    for t in darwin-arm64 darwin-x64 linux-arm64 linux-x64 linux-arm64-musl linux-x64-musl; do
      npm publish "/tmp/walnut-release/npm/@open-walnut/$t" --access public --tag latest
    done
@@ -457,25 +457,17 @@ packages already up, so a re-run after the setup finishes the publish.
 
 ## npm 12
 
-npm 12 changed two install defaults that Walnut depends on, and the 0.6.0 publish stopped
+npm 12 changed two install defaults that Walnut depended on, and the 0.6.0 publish stopped
 on the first one:
 
 - **Tarball URL dependencies are refused** (`EALLOWREMOTE`). `web/` takes `xlsx` from the
   SheetJS CDN on purpose (current releases are not on the registry). A checkout installs
   with Bun, which takes it as `web/bun.lock` pins it; when a checkout is installed with npm
   anyway, `scripts/postinstall.mjs` passes `--allow-remote=root` to the `web/` install under npm 12.
-- **A dependency's install script runs only when allowed.** (A checkout's, and a version from
-  before the compiled file's: the launcher package runs no script and builds nothing.)
-  better-sqlite3 and node-pty
-  fetch their native binaries in theirs, so without it Walnut cannot open its database.
-  `allowScripts` in `package.json` allows them for `npm rebuild` inside the installed
-  package, and `trustedDependencies` (the same list) for Bun in a checkout. A global install
-  has no project to allow them in, so the update
-  that `open-walnut web` and `open-walnut update` run passes `--allow-scripts` with the same
-  list (`INSTALL_SCRIPT_PACKAGES` in `src/core/self-update/install-kind.ts`; a test keeps it,
-  `allowScripts`, `trustedDependencies` and `bun.lock` in step). A plain `npm install -g open-walnut` still
-  lands without the binaries; the first start notices (`src/core/native-abi-preflight.ts`)
-  and runs `npm rebuild` in the package once, which takes about 15 seconds.
+- **A dependency's install script runs only when allowed.** Walnut no longer needs one. The
+  launcher and the platform packages run no install script and build nothing, and a checkout
+  installs with Bun. So the update that `open-walnut web` and `open-walnut update` run passes
+  no `--allow-scripts`.
 
 The release jobs install `npm@12`, not `npm@latest`, so the next major is taken on purpose
 rather than discovered in a publish.
@@ -537,7 +529,7 @@ guess):
 
 1. `## [Unreleased]` in CHANGELOG.md says what changed, for a person who installs from npm.
 2. `main` is pushed and CI passed on it (the script checks, and so does the workflow).
-3. `npm run release -- <bump>`.
+3. `bun run release -- <bump>`.
 4. Watch the Release workflow; the GitHub Release appears when npm has the version.
 5. An install on the stable channel shows the new version in its System card within a day,
    or at once after `Check now`.

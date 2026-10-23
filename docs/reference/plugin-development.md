@@ -5,8 +5,8 @@
 The author packages are not on the npm registry yet, so the first loop runs from a clone of this repository. Build the packages once, then scaffold:
 
 ```bash
-npm run build:plugins
-node packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install
+bun run build:plugins
+bun packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install
 ```
 
 That command is the whole first loop: it scaffolds the project, validates the manifest, builds the entries, links the directory into `~/.open-walnut/plugins/my-plugin`, asks the running Walnut to discover and load the new plugin, reads the runtime state back, prints the App URL, and then keeps watching so every save rebuilds and reloads. A first link needs no server restart. Walnut may be offline while you work, in which case the link loads on Walnut's next start. `--no-install` skips `npm install`, because inside the repository the packages resolve from the checkout; `--open` opens the App in a browser once Walnut reports the plugin active (interactive terminals only).
@@ -20,7 +20,7 @@ cd my-plugin
 npm run dev
 ```
 
-For another local-checkout loop, run `node packages/plugin-cli/dist/cli.js dev --root my-plugin`. After the packages are published and installed in the generated project, its own `npm run dev` script is the normal loop.
+For another local-checkout loop, run `bun packages/plugin-cli/dist/cli.js dev --root my-plugin`. After the packages are published and installed in the generated project, its own `npm run dev` script is the normal loop.
 
 The complete executable example is [examples/plugins/walnut-demo](../../examples/plugins/walnut-demo), the Walnut Plugin Demo. It registers one Demo App and exercises every public server and web capability, and it is the fastest way to see a working shape before you write your own.
 
@@ -34,7 +34,7 @@ A plugin can also declare a workspace provider in its manifest, with no server c
 
 ## Trust model
 
-Installing a plugin means trusting its code. A server entry runs inside the Walnut server process as full Node: it can read local files, start processes, use the network, and reach anything the Walnut user can reach. A native web entry runs inside Walnut's own browser realm and shares the console's React tree, so it can touch the page like any other trusted browser code.
+Installing a plugin means trusting its code. A server entry runs inside the Walnut server process as full code: it can read local files, start processes, use the network, and reach anything the Walnut user can reach. A native web entry runs inside Walnut's own browser realm and shares the console's React tree, so it can touch the page like any other trusted browser code.
 
 Trust is granted once, at install, through one explicit confirmation. After that the plugin is trusted code, and Walnut does not pretend to hold it back. `server`, `web`, and `webview` are entry points, not permission levels, and `capabilities` in an `apiVersion: 1` manifest is descriptive metadata rather than a gate.
 
@@ -55,7 +55,7 @@ Real boundaries:
 
 Not boundaries, whatever they look like:
 
-- The typed service layer (`walnut.tasks`, `walnut.config`, and friends). It exists for stability and ergonomics. Server code already has full Node access, so a narrow method signature restricts nothing.
+- The typed service layer (`walnut.tasks`, `walnut.config`, and friends). It exists for stability and ergonomics. Server code already has full runtime access, so a narrow method signature restricts nothing.
 - Native web code using `walnut.http.fetch`. Same-origin requests carry the user's device bearer token, so a trusted web entry can call any authenticated `/api/**` route, not only the typed Web API.
 - The `webview` entry when the same plugin also ships `server`. The iframe limits the iframe, not the plugin.
 - `walnut.unsafe`. It is an explicit escape hatch, and reaching for it logs a warning so a review can see it.
@@ -1124,7 +1124,7 @@ Discovery first checks API and Walnut version compatibility, then required confi
 
 Every host-created resource enters a reverse-order disposable store. Disable and reload remove contributions before the module activates again, and a stale `Disposable` cannot remove a newer registration with the same key. Walnut gives asynchronous cleanup a five-second total budget, still invokes the remaining owned disposables when that budget expires, and reports the failure without blocking later plugin changes.
 
-Anything you create outside `walnut.*` stays your responsibility. Do not assume unloading frees Node's ESM module memory.
+Anything you create outside `walnut.*` stays your responsibility. Do not assume unloading frees the memory of the ES modules it loaded.
 
 Set `WALNUT_PLUGIN_SAFE_MODE=1` or start Walnut with `--plugin-safe-mode` to disable external plugins while recovering. Clear a quarantine only after fixing or updating the plugin.
 
@@ -1188,7 +1188,7 @@ For native UI, drive real clicks against an isolated Walnut server, never the us
 
 The Apps page's Get more section accepts three source forms: a Git URL with an optional branch or tag, a Walnut Git share snippet, and an npm registry spec such as `my-plugin@1.2.3` or `@scope/my-plugin@stable`.
 
-Git sources record their commit SHA. npm sources record the exact version and integrity from npm's installed-tree receipt. npm installation rejects URLs, filesystem paths, aliases, option-like values, complex ranges, insecure or changed tarball origins, and dependencies installed outside the plugin root, and it always runs with `--ignore-scripts`. New code is never installed automatically.
+Git sources record their commit SHA. npm sources record the exact version and integrity from the `bun.lock` that `bun add` writes. npm installation rejects URLs, filesystem paths, aliases, option-like values, complex ranges, insecure or changed tarball origins, and dependencies installed outside the plugin root, and it always runs with `--ignore-scripts`. New code is never installed automatically.
 
 The REST API accepts `{ "url": "...", "ref": "..." }`, a `walnut_plugin_source` share snippet, an install link in `url`, or `{ "spec": "@scope/my-plugin@1.2.3" }` at `POST /api/plugin-sources`. List, explicit update, check, and remove operations use `/api/plugin-sources/<slug>`.
 
@@ -1208,7 +1208,7 @@ Discovery and reload are different operations: `POST /api/plugin-runtime/discove
 
 ### Bundled store
 
-The repo folder `plugin-store/` holds plugins that ship inside every Walnut build but are not loaded by default. Each one uses the same layout as `examples/plugins/<id>/`, and the folder name must equal the manifest `id`. The build (`scripts/ship-store-plugins.mjs`, run by `npm run build` and `npm run web:build`) builds each one with `walnut-plugin build`, checks its declared `server` and `web` artifacts, and copies `manifest.json`, `README.md`, `dist/` and `skills/` to `dist/plugin-store/<id>/`.
+The repo folder `plugin-store/` holds plugins that ship inside every Walnut build but are not loaded by default. Each one uses the same layout as `examples/plugins/<id>/`, and the folder name must equal the manifest `id`. The build (`scripts/ship-store-plugins.mjs`, run by `bun run build` and `bun run web:build`) builds each one with `walnut-plugin build`, checks its declared `server` and `web` artifacts, and copies `manifest.json`, `README.md`, `dist/` and `skills/` to `dist/plugin-store/<id>/`.
 
 In Settings, Plugins, a bundled plugin lists under Available with an **Install** button:
 

@@ -9,7 +9,7 @@ Repository profiles are stored as YAML files in `~/.open-walnut/repositories/{sl
 name: Project Name                    # Human-readable name
 description: >-                       # 1-3 sentences — what it does, why it matters
   Personal AI that manages tasks, knowledge, and AI sessions.
-  TypeScript/React frontend with Node.js backend. Runs every AI turn as
+  TypeScript/React frontend with a Bun backend. Runs every AI turn as
   a Claude Code session bound to a task.
 hosts:                                # At least one host required
   local:                              # Host label (any string)
@@ -61,14 +61,14 @@ architecture: |                       # Components, data flow, key directories
   web/src/       React SPA (pages, components, hooks, API client)
   tests/         — Vitest E2E and unit tests
 
-tech_stack: [TypeScript, React, Node.js, Express, SQLite, Vite]
+tech_stack: [TypeScript, React, Bun, Express, SQLite, Vite]
 
 common_commands: |                    # Day-one developer commands
-  npm run build              # Build server to dist/
-  cd web && npx vite build   # Build React SPA
-  npm run dev:prod           # Build all + restart server
-  npm test                   # Run all tests
-  cd web && npx vite         # Frontend hot reload (:5173)
+  bun run build              # Build server to dist/
+  cd web && bun x vite build # Build React SPA
+  bun run dev:prod           # Build all + restart server
+  bun run test               # Run all tests
+  cd web && bun x vite       # Frontend hot reload (:5173)
 ```
 
 ## Field Details
