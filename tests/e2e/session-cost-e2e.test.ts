@@ -87,8 +87,25 @@ describe('session cost through the real server', () => {
     expect(body.totalUsd).toBeCloseTo(opus.costUsd + haiku.costUsd, 9)
   })
 
+  it('prices the same usage on the models asked about, the session\'s own at what it cost', async () => {
+    const own = await (await fetch(`http://127.0.0.1:${port}/api/sessions/${SID}/cost`)).json()
+    const res = await fetch(`http://127.0.0.1:${port}/api/sessions/${SID}/cost/compare?models=${encodeURIComponent('claude-opus-5-5[1m],no-such-model')}`)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body, body.reason).toMatchObject({ sessionId: SID, status: 'ok', responses: 4, unknown: ['no-such-model', 'some-unreleased-model'] })
+    const opus = body.rows.find((r: { key: string }) => r.key === 'claude-opus-5-5')
+    expect(opus).toMatchObject({ id: 'claude-opus-5-5[1m]', group: 'walnut', current: true })
+    // Each row prices the WHOLE session at one model: here Opus also takes the Haiku and
+    // unpriced requests, so it costs more than Opus's own share of /cost.
+    const opusOwn = own.models.find((m: { model: string }) => m.model === 'claude-opus-5-5').costUsd
+    expect(opus.costUsd).toBeGreaterThan(opusOwn)
+    const costs = body.rows.map((r: { costUsd: number }) => r.costUsd)
+    expect(costs).toEqual([...costs].sort((a: number, b: number) => a - b))
+  })
+
   it('answers 404 for a session it does not know', async () => {
     const res = await fetch(`http://127.0.0.1:${port}/api/sessions/no-such-session/cost`)
     expect(res.status).toBe(404)
+    expect((await fetch(`http://127.0.0.1:${port}/api/sessions/no-such-session/cost/compare`)).status).toBe(404)
   })
 })

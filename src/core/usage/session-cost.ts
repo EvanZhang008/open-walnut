@@ -213,15 +213,19 @@ export async function priceSessionScan(scan: SessionCostScan, thresholds: number
   };
 }
 
-function unavailable(sessionId: string, engine: string, reason: string): SessionCostPayload {
+export function unavailable(sessionId: string, engine: string, reason: string): SessionCostPayload {
   return { sessionId, engine, source: 'unavailable', status: 'unavailable', reason, totalUsd: null,
     responses: 0, unpricedResponses: 0, models: [], prices: priceBookInfo() };
 }
 
 const DEADLINE_MS = 25_000;
 
-/** One session's cost, answered within the deadline (degraded, never hanging). */
-export async function getSessionCost(sessionId: string): Promise<SessionCostPayload> {
+export type SessionScanRead =
+  | { ok: true; scan: SessionCostScan; thresholds: number[]; overrides?: Record<string, UserPriceRates> }
+  | { ok: false; payload: SessionCostPayload };
+
+/** Read one session's usage on its host, within the deadline (degraded, never hanging). */
+export async function readSessionScan(sessionId: string): Promise<SessionScanRead> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw Object.assign(new Error('session not found'), { statusCode: 404 });
@@ -239,12 +243,19 @@ export async function getSessionCost(sessionId: string): Promise<SessionCostPayl
     // A read that loses the race may still fail later; that failure has no listener left.
     read.catch(() => {});
     const scan = await Promise.race([read, deadline]);
-    if (scan === 'timeout') return unavailable(sessionId, engine, 'The session\'s host did not answer in time.');
-    if (scan === null) return unavailable(sessionId, engine, 'The session\'s host runs an older Walnut daemon; it updates on its next connect.');
-    return await priceSessionScan(scan as SessionCostScan, thresholds, overrides);
+    if (scan === 'timeout') return { ok: false, payload: unavailable(sessionId, engine, 'The session\'s host did not answer in time.') };
+    if (scan === null) return { ok: false, payload: unavailable(sessionId, engine, 'The session\'s host runs an older Walnut daemon; it updates on its next connect.') };
+    return { ok: true, scan: scan as SessionCostScan, thresholds, ...(overrides ? { overrides } : {}) };
   } catch (err) {
-    return unavailable(sessionId, engine, `Usage could not be read: ${(err as Error).message}`);
+    return { ok: false, payload: unavailable(sessionId, engine, `Usage could not be read: ${(err as Error).message}`) };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** One session's cost, answered within the deadline (degraded, never hanging). */
+export async function getSessionCost(sessionId: string): Promise<SessionCostPayload> {
+  const read = await readSessionScan(sessionId);
+  if (!read.ok) return read.payload;
+  return priceSessionScan(read.scan, read.thresholds, read.overrides);
 }

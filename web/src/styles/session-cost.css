@@ -159,3 +159,44 @@
   font-weight: 600;
   color: var(--fg, inherit);
 }
+
+/* "Same usage on other models": a toggle under the model list, then one table. */
+.session-cost-compare {
+  margin-top: 6px;
+}
+
+.session-cost-compare-head {
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  color: var(--fg, inherit);
+  cursor: pointer;
+}
+
+.session-cost-compare-body {
+  margin: 2px 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.4;
+}
+
+.session-cost-compare-table th[scope='row'] {
+  white-space: normal;
+}
+
+.session-cost-compare-table tr.is-current th,
+.session-cost-compare-table tr.is-current td {
+  font-weight: 600;
+  color: var(--fg, inherit);
+}
+
+.session-cost-compare-table tbody tr:not(.session-cost-tier) th,
+.session-cost-compare-table tbody td:nth-child(2) {
+  color: var(--fg, inherit);
+}
+
+.session-cost-compare-table tbody td:last-child {
+  color: var(--fg-muted, #888);
+}

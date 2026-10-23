@@ -146,6 +146,60 @@ test('shows the session total, what it leaves out, how long it ran, and each mod
   expect(errors).toEqual([])
 })
 
+test('prices the same usage on other models, the picker\'s and popular ones', async ({ page }, info) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  const asked: string[][] = []
+  await page.route(`**/api/sessions/${SESSION_ID}/cost`, (route) => route.fulfill({ json: { ...COST, status: 'priced', unpricedResponses: 0,
+    totalUsd: 117.2019, models: [COST.models[0]] } }))
+  const rates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 }
+  await page.route(`**/api/sessions/${SESSION_ID}/cost/compare**`, (route) => {
+    asked.push((new URL(route.request().url()).searchParams.get('models') ?? '').split(',').filter(Boolean))
+    return route.fulfill({ json: { sessionId: SESSION_ID, status: 'ok', responses: 1804, unknown: [], rows: [
+      { id: 'deepseek-v4-flash', key: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', group: 'popular', costUsd: 6.95, longResponses: 0, rates, assumptions: [], current: false, priceSource: { kind: 'litellm', key: 'deepseek-v4-flash' } },
+      { id: 'kimi-k3', key: 'kimi-k3', label: 'Kimi K3', group: 'popular', costUsd: 176.41, longResponses: 0, rates, assumptions: ['cache writes at the input price (no cache write price listed)'], current: false, priceSource: { kind: 'litellm', key: 'moonshot/kimi-k3' } },
+      { id: 'converse/global.openai.gpt-6.1-sol', key: 'gpt-6-1-sol', group: 'walnut', costUsd: 117.2019, longResponses: 746, rates: { ...rates, threshold: 272_000 }, assumptions: [], current: true, priceSource: { kind: 'litellm', key: 'gpt-6.1-sol' } },
+      { id: 'claude-opus-5-5', key: 'claude-opus-5-5', group: 'walnut', costUsd: 191.93, longResponses: 0, rates, assumptions: [], current: false, priceSource: { kind: 'litellm', key: 'claude-opus-5-5' } },
+    ] } })
+  })
+  await page.setViewportSize({ width: 1280, height: 860 })
+  const picker = await openPicker(page)
+  const block = picker.getByTestId('session-cost')
+  await expect(block).toHaveAttribute('data-status', 'priced')
+  await block.locator('.session-cost-head').click()
+  const compare = block.getByTestId('session-cost-compare')
+  // Nothing is asked until the section is opened.
+  expect(asked).toEqual([])
+  await compare.locator('.session-cost-compare-head').click()
+  const table = compare.getByTestId('session-cost-compare-table')
+  await expect(table).toBeVisible()
+  // The picker's own models went along with the request.
+  expect(asked.length).toBeGreaterThan(0)
+  expect(asked.at(-1)!.length).toBeGreaterThan(0)
+  const cells = (tr: Locator) => tr.locator('th, td').allInnerTexts()
+  const walnut = table.locator('tbody[data-group="walnut"] tr:not(.session-cost-tier)')
+  await expect(walnut).toHaveCount(2)
+  expect(await cells(walnut.nth(0))).toEqual(['GPT-6.1 Sol · used in this session', '$117.20', 'same'])
+  expect(await cells(walnut.nth(1))).toEqual(['Opus 5.5', '$191.93', '1.6x'])
+  const popular = table.locator('tbody[data-group="popular"] tr:not(.session-cost-tier)')
+  expect(await cells(popular.nth(0))).toEqual(['DeepSeek V4 Flash', '$6.95', '0.06x'])
+  expect(await cells(popular.nth(1))).toEqual(['Kimi K3', '$176.41', '1.5x'])
+  await expect(popular.nth(1)).toHaveAttribute('title', /\$1 in · \$2 out[\s\S]*cache writes at the input price/)
+  await expect(table.locator('tbody[data-group="walnut"] tr.session-cost-tier')).toHaveText('In Walnut')
+  await expect(table.locator('tbody[data-group="popular"] tr.session-cost-tier')).toHaveText('Popular, not in Walnut')
+  await expect(compare).toContainText('read this as a guide')
+  await compare.scrollIntoViewIfNeeded()
+  await compare.screenshot({ path: `${SHOTS}/compare-${info.project.name}.png` })
+  // Closing and opening again asks again (the session may have grown).
+  const before = asked.length
+  await compare.locator('.session-cost-compare-head').click()
+  await expect(table).toHaveCount(0)
+  await compare.locator('.session-cost-compare-head').click()
+  await expect(compare.getByTestId('session-cost-compare-table')).toBeVisible()
+  expect(asked.length).toBe(before + 1)
+  expect(errors).toEqual([])
+})
+
 test('an unreadable session says why, with nothing to open', async ({ page }) => {
   await page.route(`**/api/sessions/${SESSION_ID}/cost`, (route) => route.fulfill({ json: {
     sessionId: SESSION_ID, engine: 'goose', source: 'none', status: 'unavailable',

@@ -2292,6 +2292,23 @@ sessionsRouter.get('/:sessionId/cost', async (req: Request, res: Response, next:
   }
 })
 
+// GET /api/sessions/:sessionId/cost/compare?models=a,b: the same usage priced at
+// other models' list prices (the picker's models plus a few popular ones). Same
+// deadline as /cost; an id with no price comes back in `unknown`.
+sessionsRouter.get('/:sessionId/cost/compare', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { getSessionCostComparison, MAX_COMPARE_MODELS } = await import('../../core/usage/session-cost-compare.js')
+    const ids = String(req.query.models ?? '').split(',').map(s => s.trim()).filter(s => s && s.length <= 200).slice(0, MAX_COMPARE_MODELS)
+    res.json(await getSessionCostComparison(String(req.params.sessionId), ids))
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode === 404) {
+      res.status(404).json({ error: 'session not found' })
+      return
+    }
+    next(err)
+  }
+})
+
 // GET /api/sessions/:sessionId/slash-commands?fresh=1 — the composer palette for
 // ONE live session: the command set the CLI itself advertised in its init line,
 // decorated with descriptions. `source` tells the client whether it got the CLI
