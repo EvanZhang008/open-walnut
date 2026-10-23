@@ -330,12 +330,4 @@ enum RuntimeUpgrade {
         guard let installed = installed else { return true }
         return AppUpdateVersion.isNewer(carried, than: installed)
     }
-
-    /// The installed runtime's version, from its package.json.
-    static func installedVersion(packageJSON data: Data?) -> String? {
-        guard let data = data,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let v = obj["version"] as? String, !v.isEmpty else { return nil }
-        return v
-    }
 }

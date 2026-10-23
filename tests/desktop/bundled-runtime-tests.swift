@@ -1,27 +1,96 @@
 import Foundation
 
 /// BundledRuntime (desktop/BundledRuntime.swift): where the Mac app finds the
-/// self-contained Walnut its first launch installs, how it runs install.sh, and
-/// what the server it starts sees on PATH. The layout must match what
-/// scripts/runtime-bundle/build.mjs builds and scripts/install.sh installs
-/// (tests/scripts/release-archives.test.ts checks those two sides).
+/// self-contained Walnut its first launch installs, how it runs install.sh, how
+/// it starts the server and what that server sees on PATH. The layout must match
+/// what scripts/install.sh installs (tests/scripts/install-sh.test.ts) and, for
+/// the older archive, what scripts/runtime-bundle/build.mjs builds
+/// (tests/scripts/release-archives.test.ts checks those sides).
 @main
 struct BundledRuntimeTests {
     static func main() {
         let home = "/Users/someone"
         let rt = BundledRuntime(installDir: BundledRuntime.defaultInstallDir(home: home))
 
-        // install.sh's defaults, and the archive's layout under them.
+        // install.sh's defaults, the file's layout under them, and the archive's before it.
         precondition(rt.installDir == "/Users/someone/.local/share/open-walnut")
         precondition(BundledRuntime.binDir(home: home) == "/Users/someone/.local/bin")
+        precondition(rt.link == "/Users/someone/.local/share/open-walnut/bin/walnut")
         precondition(rt.node == "/Users/someone/.local/share/open-walnut/app/runtime/bin/node")
         precondition(rt.cli == "/Users/someone/.local/share/open-walnut/app/runtime/lib/node_modules/open-walnut/dist/cli.js")
         precondition(rt.packageRoot + "/dist/cli.js" == rt.cli)
 
-        // Installed means both the Node and the package: a half-unpacked copy is not.
-        precondition(rt.isInstalled(fileExists: { _ in true }))
-        precondition(!rt.isInstalled(fileExists: { $0 == rt.node }))
-        precondition(!rt.isInstalled(fileExists: { $0 == rt.cli }))
+        // The file: install.sh's link names the version in use, and that version's file is there.
+        let file = rt.installDir + "/versions/0.7.0/walnut"
+        let linked: (String) -> String? = { $0 == rt.link ? "../versions/0.7.0/walnut" : nil }
+        precondition(rt.layout(readLink: linked, fileExists: { $0 == file }) == .file(version: "0.7.0"))
+        precondition(rt.isInstalled(readLink: linked, fileExists: { $0 == file }))
+        // A link to a version that is not there, or not install.sh's shape, is no install.
+        precondition(rt.layout(readLink: linked, fileExists: { _ in false }) == nil)
+        for odd in ["../app/bin/walnut", "/abs/versions/0.7.0/walnut", "../versions/.download-0.7.0-ab12/walnut", "../versions//walnut", "versions/0.7.0/walnut"] {
+            precondition(BundledRuntime.linkedVersion(odd) == nil, odd)
+        }
+        precondition(BundledRuntime.linkedVersion("../versions/0.7.1-nightly.20261022.1/walnut") == "0.7.1-nightly.20261022.1")
+        // A rollback link made by hand names the file by its full path: only under this install.
+        precondition(BundledRuntime.linkedVersion("/abs/versions/0.7.0/walnut", installDir: "/abs") == "0.7.0")
+        precondition(BundledRuntime.linkedVersion("/other/versions/0.7.0/walnut", installDir: "/abs") == nil)
+        precondition(BundledRuntime.linkedVersion("/abs/versions/../x/walnut", installDir: "/abs") == nil)
+        let absolute: (String) -> String? = { $0 == rt.link ? file : nil }
+        precondition(rt.layout(readLink: absolute, fileExists: { $0 == file }) == .file(version: "0.7.0"))
+        // The archive install.sh made before (its link goes to app/): both the Node and the package.
+        let toApp: (String) -> String? = { $0 == rt.link ? "../app/bin/walnut" : nil }
+        precondition(rt.layout(readLink: toApp, fileExists: { _ in true }) == .archive)
+        precondition(rt.layout(readLink: { _ in nil }, fileExists: { $0 == rt.node || $0 == rt.cli }) == .archive)
+        precondition(!rt.isInstalled(readLink: toApp, fileExists: { $0 == rt.node }))
+        precondition(!rt.isInstalled(readLink: toApp, fileExists: { $0 == rt.cli }))
+        // The file wins over an archive left beside it (install.sh keeps the one it replaced).
+        precondition(rt.layout(readLink: linked, fileExists: { _ in true }) == .file(version: "0.7.0"))
+
+        // A saved setup still runs while its runtime is installed, or its checkout is built.
+        precondition(BundledRuntime.setupRuns(runtimeDir: rt.installDir, sourceDir: rt.installDir, readLink: linked, fileExists: { $0 == file }))
+        // An archive-era config named the archive's package root: the runtime dir decides.
+        precondition(BundledRuntime.setupRuns(runtimeDir: rt.installDir, sourceDir: rt.packageRoot, readLink: linked, fileExists: { $0 == file }))
+        precondition(!BundledRuntime.setupRuns(runtimeDir: rt.installDir, sourceDir: rt.installDir, readLink: { _ in nil }, fileExists: { _ in false }))
+        precondition(BundledRuntime.setupRuns(runtimeDir: nil, sourceDir: "/src", readLink: { _ in nil }, fileExists: { $0 == "/src/dist/cli.js" }))
+        precondition(!BundledRuntime.setupRuns(runtimeDir: nil, sourceDir: "/src", readLink: { _ in nil }, fileExists: { _ in false }))
+
+        // The installed version: the file's from its link, the archive's from its package.json.
+        precondition(rt.installedVersion(layout: .file(version: "0.7.0")) == "0.7.0")
+        precondition(rt.installedVersion(layout: .archive, readFile: { $0 == rt.packageRoot + "/package.json" ? Data(#"{"name":"open-walnut","version":"0.6.8"}"#.utf8) : nil }) == "0.6.8")
+        precondition(rt.installedVersion(layout: .archive, readFile: { _ in Data("not json".utf8) }) == nil)
+        precondition(rt.installedVersion(layout: .archive, readFile: { _ in nil }) == nil)
+        precondition(rt.installedVersion(layout: nil) == nil)
+
+        // The server: the file through its link (a restart after an update runs the new
+        // one), the archive's Node on its package.
+        precondition(rt.serverLaunch(port: 3456, layout: .file(version: "0.7.0")) == BundledRuntime.Launch(executable: rt.link, arguments: ["web", "--port", "3456"], directory: rt.installDir))
+        precondition(rt.serverLaunch(port: 3457, layout: .archive) == BundledRuntime.Launch(executable: rt.node, arguments: [rt.cli, "web", "--port", "3457"], directory: rt.packageRoot))
+        precondition(rt.command(layout: .file(version: "0.7.0")) == rt.link)
+        precondition(rt.command(layout: .archive) == rt.appDir + "/bin/walnut")
+        // What `ps` shows for each, and what it never takes for a Walnut server.
+        precondition(rt.isServerCommand(rt.link + " web --port 3456"))
+        precondition(rt.isServerCommand(rt.link + " web"))
+        precondition(rt.isServerCommand(rt.installDir + "/versions/0.7.0/walnut web --port 3456"))
+        precondition(rt.isServerCommand(rt.node + " " + rt.cli + " web --port 3456"))
+        precondition(!rt.isServerCommand(rt.link + " update"))
+        precondition(!rt.isServerCommand(rt.link + " webhook"))
+        precondition(!rt.isServerCommand(rt.installDir + "/versions/.download-0.7.0-ab12/walnut web"))
+        precondition(!rt.isServerCommand("/usr/bin/python3 -m http.server web"))
+        precondition(!rt.isServerCommand("/somewhere/else/walnut web --port 3456"))
+        precondition(!rt.isServerCommand(""))
+        // A home with a space: the line still matches its own paths, and only those.
+        let spaced = BundledRuntime(installDir: "/Users/some one/Library/Application Support/open-walnut")
+        precondition(spaced.isServerCommand(spaced.link + " web --port 3456"))
+        precondition(spaced.isServerCommand(spaced.installDir + "/versions/0.7.0/walnut web --port 3456"))
+        precondition(spaced.isServerCommand(spaced.node + " " + spaced.cli + " web --port 3456"))
+        precondition(!spaced.isServerCommand(rt.link + " web --port 3456"))
+        precondition(!spaced.isServerCommand("/Users/some one/Library/Application Support/other/walnut web"))
+        // A checkout's server, run by whichever Node the app found.
+        let checkout = "/Users/some one/src/open-walnut"
+        precondition(BundledRuntime.isCheckoutServerCommand("/opt/homebrew/bin/node " + checkout + "/dist/cli.js web --port 3456", sourceDir: checkout))
+        precondition(BundledRuntime.isCheckoutServerCommand("/a b/node " + checkout + "/dist/cli.js web", sourceDir: checkout))
+        precondition(!BundledRuntime.isCheckoutServerCommand("/opt/homebrew/bin/node " + checkout + "/dist/cli.js update", sourceDir: checkout))
+        precondition(!BundledRuntime.isCheckoutServerCommand("/opt/homebrew/bin/node /elsewhere/dist/cli.js web", sourceDir: checkout))
 
         // The installer is told where to put it, and the system's own tools come first.
         let env = BundledRuntime.installEnvironment(base: ["PATH": "/opt/homebrew/bin:/usr/bin", "HOME": home], home: home)
@@ -41,12 +110,12 @@ struct BundledRuntimeTests {
         precondition(pinned["OPEN_WALNUT_RELEASE_BASE_URL"] == "http://127.0.0.1:9/r")
         precondition(pinned["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin")
 
-        // A release build carries this Mac's archive: install.sh takes it from this
+        // A release build carries this Mac's file: install.sh takes it from this
         // disk, whatever release mirror or version the caller's knobs name.
         let res = "/Applications/My Apps/Walnut.app/Contents/Resources"
         let tree: [String: [String]] = [
             res + "/release": ["v0.9.1", ".DS_Store"],
-            res + "/release/v0.9.1": ["SHA256SUMS", "open-walnut-0.9.1-darwin-arm64.tar.gz"],
+            res + "/release/v0.9.1": ["SHA256SUMS", "walnut-0.9.1-darwin-arm64"],
         ]
         let list: (String) -> [String] = { tree[$0] ?? [] }
         let carried = BundledRuntime.carriedRelease(resources: res, arch: "arm64", list: list)
@@ -61,8 +130,13 @@ struct BundledRuntimeTests {
         precondition(BundledRuntime.carriedRelease(resources: res, arch: "x64", list: list) == nil)
         // A dev build carries nothing; nor does a release missing its checksums.
         precondition(BundledRuntime.carriedRelease(resources: "/nowhere", arch: "arm64", list: list) == nil)
-        let noSums: (String) -> [String] = { $0.hasSuffix("/v0.9.1") ? ["open-walnut-0.9.1-darwin-arm64.tar.gz"] : list($0) }
+        let noSums: (String) -> [String] = { $0.hasSuffix("/v0.9.1") ? ["walnut-0.9.1-darwin-arm64"] : list($0) }
         precondition(BundledRuntime.carriedRelease(resources: res, arch: "arm64", list: noSums) == nil)
+        // Its .gz counts too; an archive (an app built before the file) does not.
+        let gz: (String) -> [String] = { $0.hasSuffix("/v0.9.1") ? ["SHA256SUMS", "walnut-0.9.1-darwin-x64.gz"] : list($0) }
+        precondition(BundledRuntime.carriedRelease(resources: res, arch: "x64", list: gz) == BundledRuntime.CarriedRelease(version: "0.9.1", root: res + "/release"))
+        let archive: (String) -> [String] = { $0.hasSuffix("/v0.9.1") ? ["SHA256SUMS", "open-walnut-0.9.1-darwin-arm64.tar.gz"] : list($0) }
+        precondition(BundledRuntime.carriedRelease(resources: res, arch: "arm64", list: archive) == nil)
         // Rosetta never turns an Apple silicon Mac into an Intel one.
         precondition(BundledRuntime.machineArch(arm64Capable: true) == "arm64")
         precondition(BundledRuntime.machineArch(arm64Capable: false) == "x64")
@@ -70,22 +144,24 @@ struct BundledRuntimeTests {
         precondition(BundledRuntime.machineArch() == "arm64")
         #endif
 
-        // The server: the user's tools first, this runtime's Node last (the launcher's rule).
-        let path = rt.serverPath(current: "/usr/bin:/bin", extra: ["/opt/homebrew/bin"])
+        // The server: the user's tools first; an archive's Node last (its launcher's rule).
+        let path = rt.serverPath(current: "/usr/bin:/bin", extra: ["/opt/homebrew/bin"], layout: .archive)
         precondition(path == "/opt/homebrew/bin:/usr/bin:/bin:/Users/someone/.local/share/open-walnut/app/runtime/bin")
+        precondition(rt.serverPath(current: "/usr/bin:/bin", extra: ["/opt/homebrew/bin"], layout: .file(version: "0.7.0")) == "/opt/homebrew/bin:/usr/bin:/bin")
 
         // The spinner shows install.sh's latest step, not its blank lines.
-        let out = "\n  Finding the newest release...\n  Installing Open Walnut 0.7.0 (darwin-arm64)...\n  Downloading open-walnut-0.7.0-darwin-arm64.tar.gz...\n\n"
-        precondition(BundledRuntime.statusLine(from: out) == "Downloading open-walnut-0.7.0-darwin-arm64.tar.gz...")
+        let out = "\n  Finding the newest release...\n  Installing Open Walnut 0.7.0 (darwin-arm64)...\n  Downloading walnut-0.7.0-darwin-arm64.gz...\n\n"
+        precondition(BundledRuntime.statusLine(from: out) == "Downloading walnut-0.7.0-darwin-arm64.gz...")
         precondition(BundledRuntime.statusLine(from: "") == nil)
 
         // The setup screen speaks of Walnut, not of install.sh's files and PATH hints.
         precondition(BundledRuntime.friendlyStatus("Finding the newest release...") == "Finding the latest Walnut...")
         precondition(BundledRuntime.friendlyStatus("Installing Open Walnut 0.7.0 (darwin-arm64)...") == "Getting Walnut 0.7.0...")
-        precondition(BundledRuntime.friendlyStatus("Downloading open-walnut-0.7.0-darwin-arm64.tar.gz...") == "Downloading Walnut...")
+        precondition(BundledRuntime.friendlyStatus("Downloading walnut-0.7.0-darwin-arm64.gz...") == "Downloading Walnut...")
         precondition(BundledRuntime.friendlyStatus("Unpacking...") == "Unpacking...")
-        precondition(BundledRuntime.friendlyStatus("Unpacking the open-walnut-0.9.1-darwin-arm64.tar.gz it came with...") == "Unpacking...")
-        precondition(BundledRuntime.downloadFraction(from: "  Installing Open Walnut 0.9.1 (darwin-arm64)...\n  Unpacking the open-walnut-0.9.1-darwin-arm64.tar.gz it came with...\n") == nil)
+        precondition(BundledRuntime.friendlyStatus("Unpacking the walnut-0.9.1-darwin-arm64.gz it came with...") == "Unpacking...")
+        precondition(BundledRuntime.friendlyStatus("Installing the walnut-0.9.1-darwin-arm64 it came with...") == "Installing Walnut...")
+        precondition(BundledRuntime.downloadFraction(from: "  Installing Open Walnut 0.9.1 (darwin-arm64)...\n  Installing the walnut-0.9.1-darwin-arm64 it came with...\n") == nil)
         precondition(BundledRuntime.friendlyStatus("Add /Users/someone/.local/bin to your PATH, then start it with:  walnut web") == "Starting Walnut...")
 
         // The download's share, off curl's bar: the newest figure after the last redraw.

@@ -1,26 +1,30 @@
 name: Release archives
 
-# The self-contained Open Walnut, one archive per platform: its own Node with
-# the released package npm-installed beside it (scripts/runtime-bundle/build.mjs).
-# What `curl -fsSL .../install.sh | sh` (scripts/install.sh) and the Homebrew
-# formula (scripts/homebrew/formula.mjs) install, on a machine with no Node.
+# What a stable release gets once npm and its GitHub Release hold the compiled
+# files (release.yml jobs `promote` and `stable` dispatch this):
 #
-# Release.yml dispatches this once a stable version's GitHub Release is open
-# (jobs `promote` and `stable`). Each archive is built from the version npm
-# serves, so it holds exactly what an npm install of that version holds, and it
-# must install with install.sh and serve a session with no Node on PATH before
-# it is attached. Attached last: SHA256SUMS and install.sh, so a release lists
-# no checksum for an archive that is not there yet. Until its archives are up
-# (a few minutes), install.sh takes the newest release that has them.
+#   homebrew  the formula over the release's files (scripts/homebrew/formula.mjs),
+#             installed from GitHub with brew, tested, attached as open-walnut.rb
+#   mac-app   Walnut.app carrying the release's darwin file (mac-app.yml)
+#   archives  the old self-contained Node archives (jobs support, build, publish)
 #
-# By hand: rebuild any released version's archives (the upload replaces them).
-# Job `mac-app` then builds the Mac app on them (mac-app.yml).
+# By hand: rebuild any released version's formula, app or archives (each upload
+# replaces what it built before).
 #
-# A version whose updater predates the archive (0.6.2 and older, or a stable
-# promoted from a nightly built before it) gets none: its updater would update
-# an archive with whatever npm is on PATH, into that npm's prefix. Job `support`
-# says so and the run stays green; install.sh then takes an older release that
-# has archives, or tells the user to use npm.
+# REMOVE the archive jobs (support, build, publish) two stable releases after the
+# first one that ships the compiled files (docs/reference/releasing.md, "Node
+# archives"). Until then they are the fallback the old installs reach for: an
+# archive from before keeps updating itself with the npm inside it, and gets the
+# launcher package and this platform's file; install.sh installs an archive only
+# for a version that has no file. Each archive is built from the version npm
+# serves, so it holds exactly what an npm install of that version holds (Node,
+# the launcher, the file), and it must install with install.sh and serve a
+# session with no Node on PATH before it is attached. Its lines join the
+# release's SHA256SUMS, after the files' own.
+#
+# A version whose updater predates the archive (0.6.2 and older) gets none: its
+# updater would update an archive with whatever npm is on PATH, into that npm's
+# prefix. Job `support` says so and the run stays green.
 
 on:
   workflow_dispatch:
@@ -38,6 +42,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  files:
+    name: v${{ inputs.version }} has the compiled files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      has_files: ${{ steps.check.outputs.has_files }}
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # From what the release holds, read so that GitHub failing to answer fails
+      # the job: taken for "no files", an outage would write the formula from the
+      # archives and leave the release without its Mac app.
+      - name: Its SHA256SUMS lists them
+        id: check
+        run: |
+          case "$VERSION" in
+            *[!0-9.]* | '' ) echo "::error::$VERSION is not a stable version (x.y.z)"; exit 1 ;;
+          esac
+          assets="$(gh release view "v$VERSION" --json assets --jq '.assets[].name')"
+          held=false
+          listed=false
+          if printf '%s\n' "$assets" | grep -qxF "walnut-$VERSION-darwin-arm64.gz"; then held=true; fi
+          if printf '%s\n' "$assets" | grep -qx SHA256SUMS; then
+            gh release download "v$VERSION" --pattern SHA256SUMS --dir "$RUNNER_TEMP" --clobber
+            if grep -q " walnut-$VERSION-darwin-arm64\.gz\$" "$RUNNER_TEMP/SHA256SUMS"; then listed=true; fi
+          fi
+          if [ "$held" = true ] && [ "$listed" = true ]; then
+            echo "has_files=true" >> "$GITHUB_OUTPUT"
+          elif [ "$held" = false ] && [ "$listed" = false ]; then
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$VERSION predates the compiled file: a formula from its archives, and no Mac app"
+          else
+            echo "::error::v$VERSION holds walnut-$VERSION-darwin-arm64.gz: $held, its SHA256SUMS lists it: $listed. Re-attach the files (scripts/release-attach.sh) before the formula and the app are built from them."
+            exit 1
+          fi
+
+  # REMOVE with the archives (see the top of this file).
   support:
     name: open-walnut ${{ inputs.version }} can have archives
     runs-on: ubuntu-24.04
@@ -117,9 +160,9 @@ jobs:
           path: ${{ runner.temp }}/rehearsal/*/log.txt
           if-no-files-found: ignore
 
-  # The platforms that built go up even when another failed (install.sh tells
-  # that platform to use npm); the run is still red so the failure is seen, and
-  # "Re-run failed jobs" builds the missing one and uploads the set again.
+  # The platforms that built go up even when another failed; the run is still red
+  # so the failure is seen, and "Re-run failed jobs" builds the missing one and
+  # uploads the set again. REMOVE with the archives (see the top of this file).
   publish:
     name: Attach to v${{ inputs.version }}
     needs: [support, build]
@@ -139,26 +182,40 @@ jobs:
           pattern: archive-*
           path: ${{ runner.temp }}/archives
           merge-multiple: true
-      - name: Upload the archives, then SHA256SUMS and install.sh
+      # SHA256SUMS keeps every line the release lists (its compiled files), with
+      # these archives' lines in place of any older ones; the script fails rather
+      # than drop one, and it runs before anything goes up, so a failure uploads
+      # nothing. The archives go up before the SHA256SUMS that lists them.
+      # install.sh goes up only on a release that has none: release.yml attached
+      # the released commit's own.
+      - name: Upload the archives, then SHA256SUMS
         run: |
           cd "$RUNNER_TEMP/archives"
           ls open-walnut-"$VERSION"-*.tar.gz > /dev/null 2>&1 || { echo "::error::no archive built"; exit 1; }
-          sha256sum open-walnut-"$VERSION"-*.tar.gz | tee SHA256SUMS
+          sh "$GITHUB_WORKSPACE/scripts/release-archive-sums.sh" "v$VERSION" "$VERSION" . "$RUNNER_TEMP/SHA256SUMS"
+          cat "$RUNNER_TEMP/SHA256SUMS"
           gh release upload "v$VERSION" open-walnut-"$VERSION"-*.tar.gz --clobber
-          cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
-          gh release upload "v$VERSION" SHA256SUMS install.sh --clobber
+          gh release upload "v$VERSION" "$RUNNER_TEMP/SHA256SUMS" --clobber
+          assets="$(gh release view "v$VERSION" --json assets --jq '.assets[].name')"
+          if ! printf '%s\n' "$assets" | grep -qx install.sh; then
+            cp "$GITHUB_WORKSPACE/scripts/install.sh" install.sh
+            gh release upload "v$VERSION" install.sh --clobber
+          fi
       - name: Every platform built
         if: needs.build.result != 'success'
         run: |
           echo "::error::some platforms did not build (${{ needs.build.result }}); the others are attached. Re-run failed jobs to finish the set."
           exit 1
 
-  # The formula is written from what the release really holds, installed from
-  # GitHub with brew, tested, and attached as open-walnut.rb. The tap
-  # (EvanZhang008/homebrew-tap) copies the newest release's open-walnut.rb.
+  # The formula is written from what the release really holds (its files; the
+  # archives of a release from before them), installed from GitHub with brew,
+  # tested, and attached as open-walnut.rb. The tap (EvanZhang008/homebrew-tap)
+  # copies the newest release's open-walnut.rb. After the archives, so it reads
+  # the SHA256SUMS they leave, but a release with files needs none of them.
   homebrew:
     name: Homebrew formula for v${{ inputs.version }}
-    needs: publish
+    needs: [files, publish]
+    if: ${{ !cancelled() && (needs.files.outputs.has_files == 'true' || needs.publish.result == 'success') }}
     runs-on: macos-26
     timeout-minutes: 30
     permissions:
@@ -193,11 +250,13 @@ jobs:
       - name: Attach it to the release
         run: gh release upload "v$VERSION" "$RUNNER_TEMP/open-walnut.rb" --clobber
 
-  # Walnut.app, signed and notarized, whose first launch installs these archives
-  # (mac-app.yml; its signing secrets live in the `release` environment).
+  # Walnut.app, signed and notarized, carrying the release's darwin file
+  # (mac-app.yml; its signing secrets live in the `release` environment). After
+  # publish, whatever its result: publish replaces SHA256SUMS, which the app reads.
   mac-app:
     name: Mac app for v${{ inputs.version }}
-    needs: publish
+    needs: [files, publish]
+    if: ${{ !cancelled() && needs.files.outputs.has_files == 'true' }}
     uses: ./.github/workflows/mac-app.yml
     with:
       version: ${{ inputs.version }}

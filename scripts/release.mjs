@@ -10,8 +10,9 @@
  * What it checks, and refuses to start when any of it is wrong:
  *   1. the branch is main and main is at origin/main (fetched now): a release is
  *      a point on main that others can check out, never a local pile;
- *   2. CI passed on that commit (scripts/ci-gate.mjs; the workflow checks again):
- *      every npm install updates itself on restart, so a release is cut from green;
+ *   2. CI and the binary matrix passed on that commit (scripts/ci-gate.mjs; the
+ *      workflow checks again, then builds the compiled files from the tag):
+ *      every install updates itself on restart, so a release is cut from green;
  *   3. package.json and CHANGELOG.md have no uncommitted edits (bun.lock holds no
  *      version, so a release leaves it alone).
  *      Other uncommitted work in the tree is fine and stays exactly as it is: the
@@ -132,11 +133,13 @@ function checkCi(sha) {
     return
   }
   const where = result.url ? ` (${result.url})` : ''
+  // CI passed and the binary matrix did not (ci-gate.mjs names its workflow then).
+  const what = result.workflow ? 'the binary matrix' : 'CI'
   switch (result.verdict) {
     case 'green': return
-    case 'pending': fail(`CI is still running on ${sha.slice(0, 8)}${where}; release once it passes`)
-    case 'none': fail(`no CI run found for ${sha.slice(0, 8)}; push main and wait for CI to pass`)
-    default: fail(`CI did not pass on ${sha.slice(0, 8)}${where}. Every npm install updates itself on restart, so releases are cut from a green commit`)
+    case 'pending': fail(`${what} is still running on ${sha.slice(0, 8)}${where}; release once it passes`)
+    case 'none': fail(`no ${what} run found for ${sha.slice(0, 8)}; push main and wait for it to pass`)
+    default: fail(`${what} did not pass on ${sha.slice(0, 8)}${where}. Every install updates itself on restart, so releases are cut from a green commit`)
   }
 }
 

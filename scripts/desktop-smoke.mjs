@@ -2,14 +2,20 @@
 /**
  * First launch of Walnut.app on a Mac that has never seen Walnut: with no click
  * (a first launch starts by itself, as a user's does), the app installs the
- * self-contained Walnut with the install.sh it carries, starts the server with
- * that copy's Node and nothing else on PATH, and serves the console. Then the
- * app dies, the server goes with it (OPEN_WALNUT_EXIT_ON_ORPHAN), and a second
- * launch starts the installed copy again without downloading anything.
+ * self-contained Walnut with the install.sh it carries, starts the server from
+ * that copy with nothing else on PATH (no Node), and serves the console. Then
+ * the app dies, the server goes with it (OPEN_WALNUT_EXIT_ON_ORPHAN), and a
+ * second launch starts the installed copy again without downloading anything.
  *
  *   node scripts/desktop-smoke.mjs --app Walnut.app --version 0.7.0          (from the GitHub release)
- *   node scripts/desktop-smoke.mjs --app Walnut.app --archive <archive.tar.gz> (from a local mirror)
+ *   node scripts/desktop-smoke.mjs --app Walnut.app --release <dir> --version 0.7.0
+ *                                  (from a local mirror: <dir>/v0.7.0/ holds the
+ *                                  release's assets, as scripts/release-files.mjs writes them)
  *   node scripts/desktop-smoke.mjs --app Walnut.app                          (the release it carries)
+ *
+ * The self-contained Walnut is the compiled file (versions/<v>/walnut); an app
+ * built before it (mac-app.yml drives older release apps with this harness)
+ * installs the Node archive instead, and each step checks whichever it put in.
  *
  * An app that carries the release for this Mac (scripts/desktop-carry-release.mjs,
  * one DMG per architecture) must install it with no network: every release URL
@@ -28,20 +34,20 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { carryRelease } from './desktop-carry-release.mjs'
 import { stopOwnDaemon } from './release-rehearsal/own-daemon.mjs'
-import { archiveVersion, publishLocally, serveReleases } from './release-rehearsal/runtime.mjs'
+import { serveReleases } from './release-rehearsal/runtime.mjs'
 
 function parseArgs(argv) {
-  const out = { app: null, version: null, archive: null, work: null, keep: false }
+  const out = { app: null, version: null, release: null, work: null, keep: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--app') out.app = path.resolve(argv[++i])
     else if (a === '--version') out.version = argv[++i]
-    else if (a === '--archive') out.archive = path.resolve(argv[++i])
+    else if (a === '--release') out.release = path.resolve(argv[++i])
     else if (a === '--work') out.work = path.resolve(argv[++i])
     else if (a === '--keep') out.keep = true
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!out.app) throw new Error('usage: desktop-smoke.mjs --app <Walnut.app> [--version <x.y.z> | --archive <file>] [--work <dir>] [--keep]')
+  if (!out.app || (out.release && !out.version)) throw new Error('usage: desktop-smoke.mjs --app <Walnut.app> [--version <x.y.z> [--release <dir>]] [--work <dir>] [--keep]')
   return out
 }
 
@@ -88,7 +94,8 @@ export function machineArch() {
 /**
  * The release `app` carries for a Mac of `arch` (Contents/Resources/release,
  * BundledRuntime.carriedRelease), as `{ version }`, or null: an app without one
- * downloads the release's archive on its first launch.
+ * downloads the release's build on its first launch. The compiled file (plain
+ * or .gz), or an older app's Node archive.
  */
 export function carriedFor(app, arch = machineArch()) {
   const root = path.join(app, 'Contents', 'Resources', 'release')
@@ -97,9 +104,52 @@ export function carriedFor(app, arch = machineArch()) {
   for (const d of dirs) {
     const version = d.slice(1)
     const files = fs.readdirSync(path.join(root, d))
-    if (files.includes('SHA256SUMS') && files.includes(`open-walnut-${version}-darwin-${arch}.tar.gz`)) return { version }
+    const builds = [`walnut-${version}-darwin-${arch}`, `walnut-${version}-darwin-${arch}.gz`, `open-walnut-${version}-darwin-${arch}.tar.gz`]
+    if (files.includes('SHA256SUMS') && builds.some((b) => files.includes(b))) return { version }
   }
   return null
+}
+
+/**
+ * What the app installed in `runtimeDir` (install.sh's layout): the compiled
+ * file, `{ kind: 'file', version, file }` from the link install.sh swaps, or the
+ * Node archive of an older app, `{ kind: 'archive', node, packageJson }`.
+ */
+export function installedRuntime(runtimeDir) {
+  try {
+    const m = /^\.\.\/versions\/([^/]+)\/walnut$/.exec(fs.readlinkSync(path.join(runtimeDir, 'bin', 'walnut')))
+    if (m && fs.existsSync(path.join(runtimeDir, 'versions', m[1], 'walnut'))) return { kind: 'file', version: m[1], file: path.join(runtimeDir, 'versions', m[1], 'walnut') }
+  } catch { /* no link */ }
+  const node = path.join(runtimeDir, 'app', 'runtime', 'bin', 'node')
+  const packageJson = path.join(runtimeDir, 'app', 'runtime', 'lib', 'node_modules', 'open-walnut', 'package.json')
+  if (fs.existsSync(node) && fs.existsSync(packageJson)) return { kind: 'archive', node, packageJson }
+  return null
+}
+
+/**
+ * Make the installed copy look older than `version` to the app, the way an app
+ * update finds it: the file's version directory renamed (and its link moved),
+ * or the archive's package.json rewritten.
+ */
+export function markInstalledOlder(runtimeDir, older = '0.0.1') {
+  const rt = installedRuntime(runtimeDir)
+  if (!rt) throw new Error(`nothing is installed in ${runtimeDir}`)
+  if (rt.kind === 'archive') {
+    const pkg = JSON.parse(fs.readFileSync(rt.packageJson, 'utf8'))
+    fs.writeFileSync(rt.packageJson, JSON.stringify({ ...pkg, version: older }, null, 2))
+    return
+  }
+  fs.renameSync(path.dirname(rt.file), path.join(runtimeDir, 'versions', older))
+  const link = path.join(runtimeDir, 'bin', 'walnut')
+  fs.rmSync(link)
+  fs.symlinkSync(`../versions/${older}/walnut`, link)
+}
+
+/** The installed copy's version, as the app reads it (BundledRuntime.installedVersion). */
+export function installedVersion(runtimeDir) {
+  const rt = installedRuntime(runtimeDir)
+  if (!rt) return null
+  return rt.kind === 'file' ? rt.version : JSON.parse(fs.readFileSync(rt.packageJson, 'utf8')).version
 }
 
 /** Whether the app installs a newer carried Walnut over an older one on launch (an app update's relaunch). */
@@ -127,8 +177,8 @@ export function readsAutosetupKnob(binary) {
 export async function smokeDesktopApp({ app: given, work: made, version, releaseUrl = null, carry = null }) {
   fs.mkdirSync(made, { recursive: true })
   const work = fs.realpathSync(made)
-  // `carry` ({ archive, sums }): a copy of the app, carrying that release, signed
-  // again as the dev build is (ad-hoc), the way a release build carries its own.
+  // `carry` ({ file, sums }): a copy of the app, carrying that release's file,
+  // signed again as the dev build is (ad-hoc), the way a release build carries its own.
   let appBundle = given
   if (carry) {
     appBundle = path.join(work, 'carried', 'Walnut.app')
@@ -140,7 +190,7 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
   const carried = carriedFor(appBundle)
   if (carried && version && carried.version !== version) throw new Error(`the app carries ${carried.version}, not ${version}`)
   version = version ?? carried?.version
-  if (!version) throw new Error('the app carries no release for this Mac: name the one it installs (--version or --archive)')
+  if (!version) throw new Error('the app carries no release for this Mac: name the one it installs (--version)')
   const home = path.join(work, 'home')
   fs.mkdirSync(home, { recursive: true })
   const support = path.join(home, 'Library', 'Application Support', 'Walnut')
@@ -213,8 +263,11 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
       const pid = listener(port)
       serverPid = Number(pid)
       const command = pid ? execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim() : ''
-      const node = fs.realpathSync(path.join(runtimeDir, 'app', 'runtime', 'bin', 'node'))
-      if (!fs.realpathSync(command.split(' ')[0]).startsWith(node)) throw new Error(`the server on ${port} is "${command}", not the installed runtime's Node`)
+      const rt = installedRuntime(runtimeDir)
+      if (!rt) throw new Error(`nothing the app can run is installed in ${runtimeDir}`)
+      // The file, run through its link; an older app's archive, on its own Node.
+      const runs = rt.kind === 'file' ? fs.realpathSync(rt.file) : fs.realpathSync(rt.node)
+      if (!fs.realpathSync(command.split(' ')[0]).startsWith(runs)) throw new Error(`the server on ${port} is "${command}", not the installed ${rt.kind === 'file' ? 'file' : 'runtime\'s Node'}`)
       const started = desktopLog().split('\n').map((l) => { try { return JSON.parse(l) } catch { return null } })
         .filter((r) => r?.event === 'runtime_install_started')
       const from = started.at(-1)?.from
@@ -239,9 +292,8 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
     if (carried && upgradesCarriedRuntime(binary)) {
       await step('the server goes when the app does (again)', appGone)
       await step('an updated app installs the newer Walnut it carries before the server starts', async () => {
-        const pkgFile = path.join(home, '.local', 'share', 'open-walnut', 'app', 'runtime', 'lib', 'node_modules', 'open-walnut', 'package.json')
-        const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'))
-        fs.writeFileSync(pkgFile, JSON.stringify({ ...pkg, version: '0.0.1' }, null, 2))
+        const runtimeDir = path.join(home, '.local', 'share', 'open-walnut')
+        markInstalledOlder(runtimeDir)
         app = launch('app-3.log')
         await until('the console after the upgrade', 3 * 60_000, () => answers(port))
         serverPid = Number(listener(port))
@@ -250,7 +302,7 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
         const finished = records.filter((r) => r?.event === 'runtime_upgrade_finished').at(-1)
         if (!startedUp || startedUp.from !== '0.0.1' || startedUp.to !== version) throw new Error(`no upgrade 0.0.1 -> ${version} started: ${JSON.stringify(startedUp)}`)
         if (!finished || finished.ok !== 'true' || finished.installed !== version) throw new Error(`the upgrade did not finish on ${version}: ${JSON.stringify(finished)}`)
-        const now = JSON.parse(fs.readFileSync(pkgFile, 'utf8')).version
+        const now = installedVersion(runtimeDir)
         if (now !== version) throw new Error(`the installed copy is ${now}, not ${version}`)
         return `0.0.1 -> ${version} from the app, then served`
       })
@@ -284,13 +336,16 @@ async function main() {
   let releases = null
   try {
     let releaseUrl = null
-    if (opts.archive) {
+    if (opts.release) {
+      // The mirror: v<version>/ is the release's assets, and `latest` names it.
       const root = path.join(work, 'releases')
-      publishLocally(root, archiveVersion(opts.archive), opts.archive)
+      fs.mkdirSync(root, { recursive: true })
+      fs.cpSync(opts.release, path.join(root, `v${opts.version}`), { recursive: true })
+      fs.writeFileSync(path.join(root, 'latest'), `${opts.version}\n`)
       releases = await serveReleases(root)
       releaseUrl = releases.url
     }
-    await smokeDesktopApp({ app: opts.app, work, version: opts.version ?? (opts.archive ? archiveVersion(opts.archive) : undefined), releaseUrl })
+    await smokeDesktopApp({ app: opts.app, work, version: opts.version, releaseUrl })
   } finally {
     await releases?.close()
     if (!opts.keep) removeWorkDir(work)

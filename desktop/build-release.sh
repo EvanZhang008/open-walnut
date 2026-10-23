@@ -18,9 +18,10 @@ set -euo pipefail
 #                                 issuer id): notarize and staple the app, then
 #                                 the DMG
 #   WALNUT_APP_RUNTIME, WALNUT_APP_RUNTIME_SUMS
-#                                 a release's open-walnut-<version>-darwin-<arch>.tar.gz
-#                                 and its SHA256SUMS: the app carries them, so its
-#                                 first launch installs with no network
+#                                 a release's walnut-<version>-darwin-<arch>.gz (the
+#                                 compiled Walnut, scripts/release-files.mjs) and its
+#                                 SHA256SUMS: the app carries the file, so its first
+#                                 launch installs with no network
 #                                 (scripts/desktop-carry-release.mjs), and the DMG
 #                                 is Walnut-<arch>.dmg. Without them it is Walnut.dmg
 #                                 and its first launch downloads the release's.
@@ -35,6 +36,8 @@ RESOURCES="$CONTENTS/Resources"
 ICON_SRC="$SCRIPT_DIR/../web/public/walnut-icon.png"
 DMG_OUT="$SCRIPT_DIR/$APP_NAME.dmg"
 ENTITLEMENTS="$SCRIPT_DIR/Walnut.entitlements"
+# The carried file's own: what its JavaScript engine needs under the hardened runtime.
+FILE_ENTITLEMENTS="$SCRIPT_DIR/walnut-file.entitlements"
 # A bundle version is numbers and dots only: a nightly's "-nightly.…" goes.
 APP_VERSION="${WALNUT_APP_VERSION:-$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$SCRIPT_DIR/../package.json" | head -1)}"
 APP_VERSION="${APP_VERSION%%-*}"
@@ -241,14 +244,14 @@ if [ -z "$SIGNED_WITH" ]; then
 fi
 
 # The release it installs, inside it: one app, and one DMG, per Mac architecture.
-# Carried once the identity is known: a Developer ID build signs the binaries
-# inside the archive with it (notarization looks inside), and the app is then
+# Carried once the identity is known: a Developer ID build signs the carried file
+# with it (notarization looks at every binary in the app), and the app is then
 # signed again over what it now carries.
 if [ -n "${WALNUT_APP_RUNTIME:-}" ]; then
     CARRY_SIGN=()
-    [ -n "$SIGNED_WITH" ] && CARRY_SIGN=(--sign "$SIGNED_WITH" ${WALNUT_SIGN_KEYCHAIN:+--keychain "$WALNUT_SIGN_KEYCHAIN"})
+    [ -n "$SIGNED_WITH" ] && CARRY_SIGN=(--sign "$SIGNED_WITH" ${WALNUT_SIGN_KEYCHAIN:+--keychain "$WALNUT_SIGN_KEYCHAIN"} --entitlements "$FILE_ENTITLEMENTS")
     CARRIED=$(node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE" \
-        --archive "$WALNUT_APP_RUNTIME" --sums "${WALNUT_APP_RUNTIME_SUMS:?WALNUT_APP_RUNTIME_SUMS must name the SHA256SUMS of that release}" \
+        --file "$WALNUT_APP_RUNTIME" --sums "${WALNUT_APP_RUNTIME_SUMS:?WALNUT_APP_RUNTIME_SUMS must name the SHA256SUMS of that release}" \
         "${CARRY_SIGN[@]+"${CARRY_SIGN[@]}"}")
     CARRIED_ARCH="${CARRIED%% *}"
     CARRIED_VERSION="${CARRIED#* }"

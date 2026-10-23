@@ -1,21 +1,28 @@
 import Foundation
 
 // The self-contained Walnut the app runs when the user has no checkout of their
-// own: the archive `curl -fsSL …/install.sh | sh` installs
-// (scripts/runtime-bundle/build.mjs), installed by that same install.sh, which
-// ships inside Walnut.app (Contents/Resources/install.sh).
+// own: the compiled Walnut, one file (scripts/build-binary.mjs), installed by the
+// install.sh that ships inside Walnut.app (Contents/Resources/install.sh) into
+// its versions layout, the one `curl -fsSL .../install.sh | sh` makes:
 //
-// A release's app carries its own archive (Contents/Resources/release/v<version>/,
-// beside the release's SHA256SUMS; desktop/build-release.sh), one DMG per Mac
-// architecture: the first launch installs it from there with no network, checked
-// as a download is. It stays an archive inside the bundle, not unpacked code:
-// the runtime is ~1,000 Mach-O files (Node and every native module) that a signed,
-// notarized app would have to sign one by one and could then never update in
-// place. Unpacked by install.sh, nothing is quarantined, the runtime updates
-// itself with its own npm (`walnut update`, and on start), and the app stays a
-// signed shell that is never modified. An app without an archive for this Mac
-// (an Intel DMG on Apple silicon, a dev build) downloads it from the release.
-// A Mac that already ran install.sh shares the same copy (and `walnut` on PATH).
+//   ~/.local/share/open-walnut/versions/<version>/walnut
+//   ~/.local/share/open-walnut/bin/walnut -> ../versions/<version>/walnut
+//
+// A release's app carries this Mac's file (Contents/Resources/release/v<version>/,
+// beside its SHA256SUMS; desktop/build-release.sh), signed with the app's
+// Developer ID, one DMG per Mac architecture: the first launch installs it from
+// there with no network, checked as a download is. install.sh copies it out of
+// the bundle, so the app stays a signed shell that is never modified, nothing is
+// quarantined, and the file updates itself in place (`walnut update`, and on
+// start). An app without a file for this Mac (an Intel DMG on Apple silicon, a
+// dev build) downloads it from the release. A Mac that already ran install.sh
+// shares the same copy (and `walnut` on PATH).
+//
+// Before the compiled file, install.sh installed a Node archive into app/
+// (scripts/runtime-bundle/build.mjs). A Mac that has one keeps running it
+// (Layout.archive) until the next install replaces it: the first app update
+// that carries a file does. REMOVE the archive case with the archives
+// (.github/workflows/release-archives.yml).
 //
 // Foundation only, so tests/desktop/bundled-runtime-tests.swift compiles it alone.
 
@@ -27,7 +34,18 @@ struct BundledRuntime {
     /// Where install.sh links `walnut` (its OPEN_WALNUT_BIN_DIR default).
     static func binDir(home: String) -> String { home + "/.local/bin" }
 
-    /// install.sh unpacks the archive here (and swaps a new copy in at the same path).
+    /// The link install.sh points at the version in use (`walnut` on PATH links here).
+    var link: String { installDir + "/bin/walnut" }
+
+    /// What install.sh left in installDir.
+    enum Layout: Equatable {
+        /// The compiled file, at this version.
+        case file(version: String)
+        /// The Node archive of the releases before it.
+        case archive
+    }
+
+    /// The archive unpacked (install.sh's layout before the file).
     var appDir: String { installDir + "/app" }
     // The archive's layout (build.mjs): the official Node used as an npm prefix.
     var nodeBinDir: String { appDir + "/runtime/bin" }
@@ -35,12 +53,123 @@ struct BundledRuntime {
     var packageRoot: String { appDir + "/runtime/lib/node_modules/open-walnut" }
     var cli: String { packageRoot + "/dist/cli.js" }
 
-    func isInstalled(fileExists: (String) -> Bool = FileManager.default.fileExists(atPath:)) -> Bool {
-        return fileExists(node) && fileExists(cli)
+    static func readLink(_ path: String) -> String? {
+        return try? FileManager.default.destinationOfSymbolicLink(atPath: path)
+    }
+
+    /// The version in install.sh's link, `../versions/<version>/walnut`, or nil. A link
+    /// made by hand (a rollback) may name that file by its full path under `installDir`.
+    static func linkedVersion(_ destination: String?, installDir: String? = nil) -> String? {
+        guard var dest = destination else { return nil }
+        if let dir = installDir, dest.hasPrefix(dir + "/versions/") {
+            dest = "../" + dest.dropFirst(dir.count + 1)
+        }
+        let parts = dest.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 4, parts[0] == "..", parts[1] == "versions", parts[3] == "walnut",
+              !parts[2].isEmpty, !parts[2].hasPrefix(".") else { return nil }
+        return parts[2]
+    }
+
+    func layout(
+        readLink: (String) -> String? = BundledRuntime.readLink,
+        fileExists: (String) -> Bool = FileManager.default.fileExists(atPath:)
+    ) -> Layout? {
+        if let version = BundledRuntime.linkedVersion(readLink(link), installDir: installDir),
+           fileExists(installDir + "/versions/" + version + "/walnut") {
+            return .file(version: version)
+        }
+        // Both the Node and the package: a half-unpacked archive is not installed.
+        if fileExists(node) && fileExists(cli) { return .archive }
+        return nil
+    }
+
+    func isInstalled(
+        readLink: (String) -> String? = BundledRuntime.readLink,
+        fileExists: (String) -> Bool = FileManager.default.fileExists(atPath:)
+    ) -> Bool {
+        return layout(readLink: readLink, fileExists: fileExists) != nil
+    }
+
+    /// Whether a saved setup can still start: its runtime is installed, or its checkout is built.
+    static func setupRuns(
+        runtimeDir: String?, sourceDir: String,
+        readLink: (String) -> String? = BundledRuntime.readLink,
+        fileExists: (String) -> Bool = FileManager.default.fileExists(atPath:)
+    ) -> Bool {
+        if let dir = runtimeDir { return BundledRuntime(installDir: dir).isInstalled(readLink: readLink, fileExists: fileExists) }
+        return fileExists(sourceDir + "/dist/cli.js")
+    }
+
+    /// The installed version: the file's, from its link; the archive's, from its package.json.
+    func installedVersion(layout: Layout?, readFile: (String) -> Data? = { FileManager.default.contents(atPath: $0) }) -> String? {
+        switch layout {
+        case .file(let version)?:
+            return version
+        case .archive?:
+            guard let data = readFile(packageRoot + "/package.json"),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let version = obj["version"] as? String, !version.isEmpty else { return nil }
+            return version
+        case nil:
+            return nil
+        }
+    }
+
+    /// How the app starts the server.
+    struct Launch: Equatable {
+        let executable: String
+        let arguments: [String]
+        let directory: String
+    }
+
+    /// The file through its link, so the restart after an update runs the new
+    /// version; the archive's Node on its package.
+    func serverLaunch(port: Int, layout: Layout) -> Launch {
+        switch layout {
+        case .file:
+            return Launch(executable: link, arguments: ["web", "--port", String(port)], directory: installDir)
+        case .archive:
+            return Launch(executable: node, arguments: [cli, "web", "--port", String(port)], directory: packageRoot)
+        }
+    }
+
+    /// The `walnut` command for ~/.local/bin (CommandLineTool.swift).
+    func command(layout: Layout) -> String {
+        return layout == .archive ? appDir + "/bin/walnut" : link
+    }
+
+    /// Whether `ps`'s command line is a Walnut server this install starts: its
+    /// link or one of its versions' files, or the archive's Node on its package,
+    /// then `web`. `ps` joins the arguments with spaces and a path may hold one,
+    /// so the line is matched against those known paths, never split into words.
+    func isServerCommand(_ command: String) -> Bool {
+        if BundledRuntime.startsCommand(command, with: link + " web") || BundledRuntime.startsCommand(command, with: node + " " + cli + " web") {
+            return true
+        }
+        let versions = installDir + "/versions/"
+        guard command.hasPrefix(versions) else { return false }
+        let rest = command.dropFirst(versions.count)
+        guard let slash = rest.firstIndex(of: "/") else { return false }
+        let version = rest[..<slash]
+        guard !version.isEmpty, !version.hasPrefix("."), !version.contains(" ") else { return false }
+        return BundledRuntime.startsCommand(String(rest[slash...]), with: "/walnut web")
+    }
+
+    /// The same for a checkout's server: any Node on `<sourceDir>/dist/cli.js web`.
+    static func isCheckoutServerCommand(_ command: String, sourceDir: String) -> Bool {
+        let script = " " + sourceDir + "/dist/cli.js web"
+        guard let found = command.range(of: script) else { return false }
+        return found.upperBound == command.endIndex || command[found.upperBound] == " "
+    }
+
+    /// `command` is `start` exactly, or `start` and then more arguments.
+    static func startsCommand(_ command: String, with start: String) -> Bool {
+        return command == start || command.hasPrefix(start + " ")
     }
 
     /// The release this app carries for this Mac: a directory laid out like the
-    /// releases (`v<version>/SHA256SUMS` and `open-walnut-<version>-darwin-<arch>.tar.gz`).
+    /// releases (`v<version>/SHA256SUMS` and `walnut-<version>-darwin-<arch>`,
+    /// or its .gz).
     struct CarriedRelease: Equatable {
         let version: String
         /// The release directory, given to install.sh as a file:// base by path.
@@ -53,7 +182,8 @@ struct BundledRuntime {
         let versions = list(root).filter { $0.hasPrefix("v") && $0.count > 1 }.map { String($0.dropFirst()) }
         for version in versions.sorted(by: >) {
             let files = Set(list(root + "/v" + version))
-            if files.contains("SHA256SUMS") && files.contains("open-walnut-\(version)-darwin-\(arch).tar.gz") {
+            let file = "walnut-\(version)-darwin-\(arch)"
+            if files.contains("SHA256SUMS") && (files.contains(file) || files.contains(file + ".gz")) {
                 return CarriedRelease(version: version, root: root)
             }
         }
@@ -96,15 +226,15 @@ struct BundledRuntime {
         return env
     }
 
-    /// The server's PATH: what the user has first, this runtime's Node last.
-    /// The archive's launcher does the same, so a tool that asks for `node` by
-    /// name finds one on a Mac without Node, and a Node the user installed wins.
-    func serverPath(current: String, extra: [String]) -> String {
-        return (extra + [current, nodeBinDir]).joined(separator: ":")
+    /// The server's PATH: what the user has first. An archive's Node goes last
+    /// (its launcher does the same), so a tool that asks for `node` by name finds
+    /// one on a Mac without Node, and a Node the user installed wins.
+    func serverPath(current: String, extra: [String], layout: Layout) -> String {
+        return (extra + [current] + (layout == .archive ? [nodeBinDir] : [])).joined(separator: ":")
     }
 
     /// The one line of install.sh's output that names its step: the last one
-    /// ("Downloading open-walnut-….tar.gz..."), trimmed, never the progress bar.
+    /// ("Downloading walnut-<version>-darwin-<arch>.gz..."), trimmed, never the progress bar.
     static func statusLine(from output: String) -> String? {
         for raw in output.split(separator: "\n").reversed() {
             let line = raw.trimmingCharacters(in: .whitespaces)
@@ -118,6 +248,8 @@ struct BundledRuntime {
     /// run a script, so its file names and PATH hints are not theirs to read.
     static func friendlyStatus(_ line: String) -> String {
         if line.hasPrefix("Finding the newest release") { return "Finding the latest Walnut..." }
+        // A release the app carries: "Installing the walnut-<version>-darwin-<arch> it came with...".
+        if line.hasPrefix("Installing the ") { return "Installing Walnut..." }
         if line.hasPrefix("Installing Open Walnut ") {
             let version = line.dropFirst("Installing Open Walnut ".count).split(separator: " ").first.map(String.init) ?? ""
             return version.isEmpty ? "Getting Walnut..." : "Getting Walnut \(version)..."

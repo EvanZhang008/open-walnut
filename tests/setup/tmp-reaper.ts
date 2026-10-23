@@ -62,7 +62,9 @@ const ROOT = ROOTS[0]
  * global test home is created by the runner for every worker.
  */
 // walnut-budget-e2e: the ACP budget E2E keeps a scratch root there when its cleanup could not prove its processes gone.
-const NEVER_OURS = [/^open-walnut-test-runtime-/, /^open-walnut-test-global$/, /^open-walnut-stage\./, /^open-walnut-lkg$/, /^walnut-pw-lease$/, /^walnut-vitest-gate/, /^walnut-budget-e2e$/]
+const NEVER_OURS = [/^open-walnut-test-runtime-/, /^open-walnut-test-global$/, /^open-walnut-stage\./, /^open-walnut-lkg$/, /^walnut-pw-lease$/, /^walnut-vitest-gate/, /^walnut-budget-e2e$/,
+  // The compiled files tests/helpers/real-walnut.ts builds, kept across runs on purpose (it prunes them itself).
+  /^walnut-real-file$/]
 
 function toString(p: fs.PathLike | undefined): string | null {
   if (typeof p === 'string') return p

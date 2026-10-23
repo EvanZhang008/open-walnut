@@ -8,7 +8,8 @@ struct WalnutConfig: Codable {
     var walnutHome: String
     var walnutSourceDir: String
     /// Set when the app runs the self-contained Walnut (BundledRuntime.swift):
-    /// its install dir. `walnutSourceDir` is then that runtime's package root.
+    /// its install dir. `walnutSourceDir` is then that dir too (or, in a config
+    /// from the archive's time, the archive's package root), and unused.
     /// Absent in every config written before it, which keeps meaning "source".
     var runtimeDir: String? = nil
 }
@@ -166,7 +167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let config = loadConfig(),
            FileManager.default.fileExists(atPath: config.walnutHome),
-           FileManager.default.fileExists(atPath: config.walnutSourceDir + "/dist/cli.js") {
+           BundledRuntime.setupRuns(runtimeDir: config.runtimeDir, sourceDir: config.walnutSourceDir) {
             walnutHome = config.walnutHome
             walnutSourceDir = config.walnutSourceDir
             runtime = config.runtimeDir.map { BundledRuntime(installDir: $0) }
@@ -229,7 +230,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Quiet unless asked from the menu, where the result is shown.
     func checkCommandLineTool(showResult: Bool) {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        guard let target = CommandLineTool.target(runtimeAppDir: runtime?.appDir, sourceDir: runtime == nil ? walnutSourceDir : nil) else {
+        let runtimeCommand = runtime.flatMap { rt in rt.layout().map { rt.command(layout: $0) } }
+        guard let target = CommandLineTool.target(runtimeCommand: runtimeCommand, sourceDir: runtime == nil ? walnutSourceDir : nil) else {
             if showResult { showCommandLineToolResult("Walnut is not set up yet.") }
             return
         }
@@ -343,7 +345,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Option 1: Get Started (the self-contained Walnut, BundledRuntime.swift)
         let freshBtn = makeButton(
             title: "Get Started",
-            subtitle: "Download Walnut with everything it needs (about 300 MB)",
+            subtitle: "Download Walnut, one file with everything it needs",
             action: #selector(startFreshSetup)
         )
         stack.addArrangedSubview(freshBtn)
@@ -424,7 +426,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func startFreshSetup() {
         let home = NSHomeDirectory()
         let dataHome = home + "/.open-walnut"
-        // A release build carries this Mac's archive: installed from the app, offline.
+        // A release build carries this Mac's file: installed from the app, offline.
         let carried = carriedReleaseForThisMac()
         let env = BundledRuntime.installEnvironment(base: ProcessInfo.processInfo.environment, home: home, carried: carried)
         let bundled = BundledRuntime(installDir: env["OPEN_WALNUT_INSTALL_DIR"]!)
@@ -444,7 +446,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         showBootstrapScreen(
             detail: carried != nil
                 ? "This takes a few seconds, the first time only."
-                : "Walnut downloads what it needs once (about 300 MB). After that it opens at once.",
+                : "Walnut downloads itself once. After that it opens at once.",
             offerExisting: true)
         statusLabel?.stringValue = "Getting Walnut..."
         try? FileManager.default.removeItem(at: bootstrapLogPath())
@@ -467,7 +469,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if result.success, bundled.isInstalled() {
                     self.useRuntime(bundled, home: dataHome)
                 } else if result.success {
-                    self.showError("The download finished, but Walnut is not in \(bundled.appDir) where this app looks for it.", details: result.output)
+                    self.showError("The download finished, but Walnut is not in \(bundled.installDir) where this app looks for it.", details: result.output)
                 } else if carried != nil {
                     self.showError("Walnut could not set itself up from this copy of the app. Download Walnut again from https://github.com/EvanZhang008/open-walnut/releases/latest", details: result.output)
                 } else {
@@ -484,7 +486,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func installedRuntimeVersion(_ rt: BundledRuntime) -> String? {
-        return RuntimeUpgrade.installedVersion(packageJSON: FileManager.default.contents(atPath: rt.packageRoot + "/package.json"))
+        return rt.installedVersion(layout: rt.layout())
     }
 
     /// The relaunch after an app update: install the Walnut this app carries over
@@ -515,7 +517,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func useRuntime(_ bundled: BundledRuntime, home: String) {
         runtime = bundled
         walnutHome = home
-        walnutSourceDir = bundled.packageRoot
+        // No checkout: the server starts from the runtime (tryStartServerOnPort).
+        walnutSourceDir = bundled.installDir
         finishSetup()
     }
 
@@ -973,6 +976,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return custom.isEmpty ? [3456, 4567] : custom
     }()
     var ownsServer = false
+    /// The background update runs once per launch (updateRuntimeInBackground).
+    var runtimeUpdateStarted = false
 
     func startServer() {
         DesktopLogger.shared.log("server_discovery_started")
@@ -1048,12 +1053,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         //    also confirming it still looks like a Walnut server).
         guard pid == recordedPid else { return nil }
         guard let psOut = runShellRaw("ps -o command= -p \(pid) 2>/dev/null"),
-              psOut.contains("cli.js"), psOut.contains("web") else {
+              isOwnServerCommand(psOut.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             // Recorded PID no longer a Walnut server (reused) — stale record.
             clearSpawnedServerPid()
             return nil
         }
         return pid
+    }
+
+    /// The self-contained Walnut's own update, once per launch, while its server
+    /// runs: `walnut update --auto` keeps updates.auto and the versions held back,
+    /// downloads beside the version in use and swaps the link. The server keeps
+    /// its file; the next start runs the new one.
+    func updateRuntimeInBackground() {
+        guard !runtimeUpdateStarted, let rt = runtime, let home = walnutHome, case .file? = rt.layout() else { return }
+        runtimeUpdateStarted = true
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: rt.link)
+        proc.arguments = ["update", "--auto"]
+        proc.currentDirectoryURL = URL(fileURLWithPath: rt.installDir)
+        var env = ProcessInfo.processInfo.environment
+        env["OPEN_WALNUT_HOME"] = home
+        proc.environment = env
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        proc.standardInput = FileHandle.nullDevice
+        let reader = ProcessOutputReader(handle: pipe.fileHandleForReading, maxBufferCharacters: 8_192, logger: { _, _ in })
+        reader.start(onText: { _ in }, onEOF: {})
+        proc.terminationHandler = { finished in
+            reader.stop(reason: "process_exited")
+            DesktopLogger.shared.log("runtime_update_finished", fields: [
+                "status": String(finished.terminationStatus),
+                "output": String(reader.outputSnapshot().suffix(2_000))
+            ])
+        }
+        do {
+            try proc.run()
+            DesktopLogger.shared.log("runtime_update_started", fields: ["pid": String(proc.processIdentifier)])
+        } catch {
+            DesktopLogger.shared.log("runtime_update_failed", fields: ["error": error.localizedDescription])
+        }
+    }
+
+    /// Whether `ps`'s line is a server this app starts: the self-contained Walnut's, or the checkout's.
+    func isOwnServerCommand(_ command: String) -> Bool {
+        if let rt = runtime { return rt.isServerCommand(command) }
+        guard let source = walnutSourceDir else { return false }
+        return BundledRuntime.isCheckoutServerCommand(command, sourceDir: source)
     }
 
     func tryStartServerOnPort(index: Int) {
@@ -1070,15 +1117,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusLabel?.stringValue = "Starting server on port \(port)..."
 
         let process = Process()
-        let nodePath = findNode()
+        // The self-contained Walnut starts from what install.sh left (the file, or
+        // an older archive); a checkout runs on a Node found on this Mac.
+        let launch: BundledRuntime.Launch
+        var runtimeLayout: BundledRuntime.Layout?
+        if let rt = runtime {
+            guard let layout = rt.layout() else {
+                handleServerStartupFailure("Walnut is no longer installed in \(rt.installDir). Choose Reset Setup... from the Walnut menu to install it again.")
+                return
+            }
+            runtimeLayout = layout
+            launch = rt.serverLaunch(port: port, layout: layout)
+        } else {
+            launch = BundledRuntime.Launch(executable: findNode(), arguments: [source + "/dist/cli.js", "web", "--port", String(port)], directory: source)
+        }
         DesktopLogger.shared.log("server_spawn_attempted", fields: [
             "port": String(port),
-            "runtime": nodePath
+            "runtime": launch.executable
         ])
-        let nodeDir = (nodePath as NSString).deletingLastPathComponent
-        process.executableURL = URL(fileURLWithPath: nodePath)
-        process.arguments = [source + "/dist/cli.js", "web", "--port", String(port)]
-        process.currentDirectoryURL = URL(fileURLWithPath: source)
+        let nodeDir = (launch.executable as NSString).deletingLastPathComponent
+        process.executableURL = URL(fileURLWithPath: launch.executable)
+        process.arguments = launch.arguments
+        process.currentDirectoryURL = URL(fileURLWithPath: launch.directory)
         var env = ProcessInfo.processInfo.environment
         env["OPEN_WALNUT_HOME"] = home
         env["NODE_NO_WARNINGS"] = "1"
@@ -1093,6 +1153,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // fix instructions must say "grant to Walnut.app" — not to node or to
         // whatever terminal the user last used. See src/core/permissions/.
         env["WALNUT_LAUNCHER"] = "mac-app"
+        // The self-contained Walnut updates while its server runs (updateRuntimeInBackground),
+        // never before it listens: that download would count against the startup deadline,
+        // and the restart after it would be a process this app does not know.
+        if runtime != nil {
+            env["WALNUT_LAUNCHER_UPDATES"] = "1"
+        }
         let extraPaths = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -1100,8 +1166,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSHomeDirectory() + "/.fnm/current/bin"
         ]
         let currentPath = env["PATH"] ?? "/usr/bin:/bin"
-        if let runtime = runtime {
-            env["PATH"] = runtime.serverPath(current: currentPath, extra: extraPaths)
+        if let runtime = runtime, let layout = runtimeLayout {
+            env["PATH"] = runtime.serverPath(current: currentPath, extra: extraPaths, layout: layout)
         } else {
             env["PATH"] = ([nodeDir] + extraPaths + [currentPath]).joined(separator: ":")
         }
@@ -1158,6 +1224,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.serverReadyAt = Date()
                     self?.isRecoveringServer = false
                     self?.pollForServer()
+                    self?.updateRuntimeInBackground()
                 }
             }
         }, onEOF: {
@@ -1548,8 +1615,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Find Executables
 
     func findNode() -> String {
-        // The self-contained Walnut runs on the Node inside it, never another one.
-        if let runtime = runtime { return runtime.node }
         return findNodeOrNil() ?? "/usr/local/bin/node"
     }
 

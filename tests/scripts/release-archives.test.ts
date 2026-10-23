@@ -21,8 +21,9 @@ import { parse as parseYaml } from 'yaml'
 import { GPU_PROVIDER_LIBS, LAUNCHER, NPMRC, RUNTIME_MARKER, newestOfMajor, pruneForeignBinaries, shaFromSums, shipsNativeBinary, targetOf, updaterKnowsArchive } from '../../scripts/runtime-bundle/build.mjs'
 import { archivesIn, formula } from '../../scripts/homebrew/formula.mjs'
 import { BUNDLE_ID, DMG_ARCHES, cask, dmgName } from '../../scripts/homebrew/cask.mjs'
-import { carriedFor, readsAutosetupKnob } from '../../scripts/desktop-smoke.mjs'
-import { archiveTarget, carryRelease, isMachOHeader } from '../../scripts/desktop-carry-release.mjs'
+import { carriedFor, installedRuntime, installedVersion, markInstalledOlder, readsAutosetupKnob } from '../../scripts/desktop-smoke.mjs'
+import { carryRelease, fileTarget, isMachOHeader, machOArch } from '../../scripts/desktop-carry-release.mjs'
+import zlib from 'node:zlib'
 import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
 
@@ -73,6 +74,13 @@ describe('build.mjs', () => {
     touch(path.join(knows, 'dist/cli.js'), '')
     touch(path.join(knows, 'dist/chunks/install-kind-x1.js'), `const RUNTIME_MARKER = "${RUNTIME_MARKER}"`)
     expect(updaterKnowsArchive(knows)).toBe(true)
+    // The launcher package (npm-packages.mjs): the compiled file it runs is the updater.
+    const launcher = path.join(tmp, 'launcher-pkg')
+    touch(path.join(launcher, 'package.json'), JSON.stringify({ name: 'open-walnut', version: '0.7.0', optionalDependencies: { '@open-walnut/linux-x64': '0.7.0' } }))
+    touch(path.join(launcher, 'dist/cli.js'), "import { launch } from '../lib/launch.js'")
+    expect(updaterKnowsArchive(launcher)).toBe(true)
+    touch(path.join(old, 'package.json'), JSON.stringify({ name: 'open-walnut', version: '0.6.2', optionalDependencies: { fsevents: '2' } }))
+    expect(updaterKnowsArchive(old)).toBe(false)
   })
 
   it('--check says whether the package npm would serve can have an archive, without building one', () => {
@@ -171,7 +179,7 @@ describe('formula.mjs', () => {
 
   it('refuses what is not a version, and a version with no archives', () => {
     expect(() => formula({ version: 'v0.7.0"; system "x', sums })).toThrow(/not a version/)
-    expect(() => formula({ version: '0.8.0', sums })).toThrow(/lists no archive/)
+    expect(() => formula({ version: '0.8.0', sums })).toThrow(/lists no file or archive/)
     // CI's rehearsal writes one for its prerelease build.
     const pre = `${SHA('4')}  open-walnut-0.7.1-rehearsal.1-linux-x64.tar.gz`
     expect(formula({ version: '0.7.1-rehearsal.1', sums: pre })).toContain('version "0.7.1-rehearsal.1"')
@@ -287,11 +295,39 @@ describe('the archive workflows', () => {
     expect(publish.if).toBe("${{ !cancelled() && needs.support.outputs.supported == 'true' }}")
     expect(publish.permissions).toEqual({ contents: 'write' })
     const upload = publish.steps.find((s) => s.run?.includes('gh release upload'))!.run!
-    expect(upload.indexOf('*.tar.gz --clobber')).toBeLessThan(upload.indexOf('SHA256SUMS install.sh --clobber'))
+    // The release's SHA256SUMS keeps the files' lines; only this version's archive
+    // lines are replaced, by a script that fails rather than drop one, before
+    // anything goes up (tests/scripts/release-archive-sums.test.ts runs this step).
+    const merge = upload.indexOf('sh "$GITHUB_WORKSPACE/scripts/release-archive-sums.sh" "v$VERSION" "$VERSION" . "$RUNNER_TEMP/SHA256SUMS"')
+    expect(merge).toBeGreaterThan(-1)
+    expect(merge).toBeLessThan(upload.indexOf('gh release upload'))
+    expect(upload.indexOf('*.tar.gz --clobber')).toBeLessThan(upload.indexOf('gh release upload "v$VERSION" "$RUNNER_TEMP/SHA256SUMS" --clobber'))
+    // GitHub failing to answer is never "nothing there".
+    expect(upload).not.toMatch(/2> ?\/dev\/null|\|\| true/)
+    // install.sh only where the release has none (release.yml attaches the released commit's).
+    expect(upload).toContain('assets="$(gh release view "v$VERSION" --json assets --jq \'.assets[].name\')"')
+    expect(upload).toMatch(/if ! printf '%s\\n' "\$assets" \| grep -qx install\.sh; then/)
     expect(publish.steps.some((s) => s.if === "needs.build.result != 'success'" && s.run?.includes('exit 1'))).toBe(true)
     const brew = archives.jobs.homebrew
-    expect(brew.needs).toBe('publish')
+    expect(brew.needs).toEqual(['files', 'publish'])
+    expect(brew.if).toBe("${{ !cancelled() && (needs.files.outputs.has_files == 'true' || needs.publish.result == 'success') }}")
     expect(brew.steps.map((s) => s.run ?? '').join('\n')).toMatch(/brew install walnut-release\/test\/open-walnut[\s\S]*brew test[\s\S]*gh release upload "v\$VERSION" "\$RUNNER_TEMP\/open-walnut.rb"/)
+  })
+
+  it('asks the release whether it has the compiled files; the formula and the app follow them, not the archives', () => {
+    // From the release's asset list and its SHA256SUMS, and an outage fails the job
+    // (tests/scripts/release-archive-sums.test.ts runs this step).
+    const files = archives.jobs.files.steps.map((s) => s.run ?? '').join('\n')
+    expect(files).toContain('assets="$(gh release view "v$VERSION" --json assets --jq \'.assets[].name\')"')
+    expect(files).toContain('grep -q " walnut-$VERSION-darwin-arm64\\.gz\\$" "$RUNNER_TEMP/SHA256SUMS"')
+    expect(files).not.toMatch(/2> ?\/dev\/null|\|\| true/)
+    const mac = archives.jobs['mac-app']
+    // After publish, which replaces SHA256SUMS (the app downloads it), whatever publish's result.
+    expect(mac.needs).toEqual(['files', 'publish'])
+    expect(mac.if).toBe("${{ !cancelled() && needs.files.outputs.has_files == 'true' }}")
+    // The archive jobs say they go.
+    const text = fs.readFileSync(path.join(ROOT, '.github/workflows/release-archives.yml'), 'utf8')
+    expect(text).toContain('# REMOVE the archive jobs (support, build, publish) two stable releases after the')
   })
 
   it('a version whose updater predates the archive gets none, and the run stays green', () => {
@@ -350,13 +386,18 @@ describe('the Mac app', () => {
   const swift = read('desktop/BundledRuntime.swift')
   const installSh = read('scripts/install.sh')
 
-  it('looks for the runtime where install.sh puts it, in the layout build.mjs builds', () => {
-    // install.sh's defaults, and the folder it swaps each new copy into.
+  it('looks for the runtime where install.sh puts it: the file\'s versions layout, or the archive build.mjs builds', () => {
+    // install.sh's defaults, the link it swaps to each new version, and the
+    // folder it unpacked an archive into before the file.
     expect(installSh).toContain('install_dir="${OPEN_WALNUT_INSTALL_DIR:-$HOME/.local/share/open-walnut}"')
     expect(installSh).toContain('bin_dir="${OPEN_WALNUT_BIN_DIR:-$HOME/.local/bin}"')
+    expect(installSh).toContain('swap_link "../versions/$version/walnut" "$install_dir/bin/walnut"')
     expect(installSh).toContain('mv "$staging/${stem}" "$install_dir/app"')
     expect(swift).toContain('home + "/.local/share/open-walnut"')
     expect(swift).toContain('home + "/.local/bin"')
+    expect(swift).toContain('installDir + "/bin/walnut"')
+    expect(swift).toContain('parts[0] == "..", parts[1] == "versions", parts[3] == "walnut"')
+    expect(swift).toContain('installDir + "/versions/" + version + "/walnut"')
     expect(swift).toContain('installDir + "/app"')
     // build.mjs: runtime/ is the npm prefix, the package inside it, the launcher beside it.
     expect(LAUNCHER).toContain('"$root/runtime/bin/node" "$root/runtime/lib/node_modules/open-walnut/bin/open-walnut.js"')
@@ -394,23 +435,26 @@ describe('the Mac app', () => {
     }
   })
 
-  it('is built after the archives it carries, signed only inside the release environment, and attached only when notarized and launched', () => {
+  it('is built after the files it carries, signed only inside the release environment, and attached only when notarized and launched', () => {
     const app = load('mac-app.yml')
     const job = app.jobs.app as Job & { environment?: string; strategy?: { matrix: { arch: string[] } } }
     expect(job.environment).toBe('release')
     // One app, and one DMG, per Mac architecture, each carrying that build.
     expect(job.strategy?.matrix.arch).toEqual(['arm64', 'x64'])
-    const mac = archives.jobs['mac-app'] as unknown as { needs: string; uses: string; secrets: string }
-    expect(mac.needs).toBe('publish')
+    const mac = archives.jobs['mac-app'] as unknown as { needs: string[]; uses: string; secrets: string }
+    expect(mac.needs).toEqual(['files', 'publish'])
     expect(mac.uses).toBe('./.github/workflows/mac-app.yml')
     expect(mac.secrets).toBe('inherit')
     const names = job.steps.map((s) => s.name ?? s.uses ?? '')
     const at = (pattern: RegExp) => names.findIndex((n) => pattern.test(n))
-    // The release's own archive for that architecture goes into the build.
-    const fetched = job.steps[at(/^The release's archive/)]
-    expect(fetched.run).toContain('--pattern "open-walnut-$VERSION-darwin-$ARCH.tar.gz" --pattern SHA256SUMS')
-    expect(fetched.run).toContain('WALNUT_APP_RUNTIME=')
-    expect(at(/^The release's archive/)).toBeLessThan(at(/^Build Walnut\.app/))
+    // The release's own file for that architecture goes into the build (a release
+    // from before the file: its archive, which that tag's build script carries).
+    const fetched = job.steps[at(/^The release's Walnut/)]
+    expect(fetched.run).toContain('grep -q " walnut-$VERSION-darwin-$ARCH\\.gz\\$" "$RUNNER_TEMP/release/SHA256SUMS"')
+    expect(fetched.run).toContain('carried="walnut-$VERSION-darwin-$ARCH.gz"')
+    expect(fetched.run).toContain('carried="open-walnut-$VERSION-darwin-$ARCH.tar.gz"')
+    expect(fetched.run).toContain('WALNUT_APP_RUNTIME=$RUNNER_TEMP/release/$carried')
+    expect(at(/^The release's Walnut/)).toBeLessThan(at(/^Build Walnut\.app/))
     // Smoke-launched and assessed by Gatekeeper before the upload, the keychain gone after it.
     expect(at(/^Gatekeeper opens it/)).toBeLessThan(at(/^Attach Walnut-/))
     expect(at(/^First launch installs/)).toBeLessThan(at(/^Attach Walnut-/))
@@ -439,117 +483,154 @@ describe('the Mac app', () => {
     expect((job as Job & { env: Record<string, string> }).env.ATTACH).toBe("${{ inputs.attach && inputs.app_ref == '' }}")
   })
 
-  it('the release build carries the archive it is given, checked, and names its DMG for that architecture', () => {
+  it('the release build carries the file it is given, checked, and names its DMG for that architecture', () => {
     const build = read('desktop/build-release.sh')
     expect(build).toContain('node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE"')
+    expect(build).toContain('--file "$WALNUT_APP_RUNTIME" --sums')
     expect(build).toContain('DMG_OUT="$SCRIPT_DIR/$APP_NAME-$CARRIED_ARCH.dmg"')
-    // Carried once the identity is chosen, with its binaries signed by it, and the
-    // app signed again over it before it is notarized: the archive is part of what
-    // is sealed, and notarization looks inside it (2026-10-11: refused for 27
-    // unsigned add-ons in it).
+    // Carried once the identity is chosen, signed by it with the file's own
+    // entitlements, and the app signed again over it before it is notarized: the
+    // file is part of what is sealed, and notarization looks at every binary.
     const carry = build.indexOf('desktop-carry-release.mjs" --app')
     expect(carry).toBeGreaterThan(build.indexOf('done <<< "$CANDIDATES"'))
-    expect(build).toContain('CARRY_SIGN=(--sign "$SIGNED_WITH"')
+    expect(build).toContain('CARRY_SIGN=(--sign "$SIGNED_WITH" ${WALNUT_SIGN_KEYCHAIN:+--keychain "$WALNUT_SIGN_KEYCHAIN"} --entitlements "$FILE_ENTITLEMENTS")')
+    expect(build).toContain('FILE_ENTITLEMENTS="$SCRIPT_DIR/walnut-file.entitlements"')
     expect(build.indexOf('sign_app "$SIGNED_WITH"', carry)).toBeGreaterThan(carry)
     expect(build.indexOf('sign_app "$SIGNED_WITH"', carry)).toBeLessThan(build.indexOf('notarize "$APP_ZIP"'))
     // Where the app looks for it is where the carrier puts it.
     expect(swift).toContain('resources + "/release"')
-    expect(swift).toContain('"open-walnut-\\(version)-darwin-\\(arch).tar.gz"')
+    expect(swift).toContain('let file = "walnut-\\(version)-darwin-\\(arch)"')
+    // What a JavaScript engine needs under the hardened runtime, granted.
+    const entitlements = read('desktop/walnut-file.entitlements')
+    for (const key of ['com.apple.security.cs.allow-jit', 'com.apple.security.cs.allow-unsigned-executable-memory', 'com.apple.security.cs.disable-library-validation']) {
+      expect(entitlements).toMatch(new RegExp(`<key>${key.replace(/\./g, '\\.')}</key>\\s*<true/>`))
+    }
   })
 
-  it('carries a release for one architecture, refusing an archive its checksums do not name', () => {
+  /** A stand-in for the compiled file: a thin 64-bit Mach-O header for `arch`, and a body. */
+  const machO = (arch: 'arm64' | 'x64', body = 'walnut') => Buffer.concat([
+    Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), Buffer.from(arch === 'arm64' ? [0x0c, 0, 0, 0x01] : [0x07, 0, 0, 0x01]), Buffer.alloc(24), Buffer.from(body),
+  ])
+  const sha256Of = (b: Buffer) => createHash('sha256').update(b).digest('hex')
+  /** A release's darwin assets in `dir` as release-files.mjs writes them, and their SHA256SUMS. */
+  function darwinRelease(dir: string, version: string) {
+    const lines: string[] = []
+    for (const arch of ['arm64', 'x64'] as const) {
+      const plain = machO(arch, `walnut ${version} ${arch}`)
+      const gz = zlib.gzipSync(plain)
+      fs.writeFileSync(path.join(dir, `walnut-${version}-darwin-${arch}.gz`), gz)
+      lines.push(`${sha256Of(gz)}  walnut-${version}-darwin-${arch}.gz`, `${sha256Of(plain)}  walnut-${version}-darwin-${arch}`)
+    }
+    lines.push(`${'0'.repeat(64)}  walnut-${version}-linux-x64.gz`)
+    fs.writeFileSync(path.join(dir, 'SHA256SUMS'), `${lines.join('\n')}\n`)
+    return { sums: path.join(dir, 'SHA256SUMS'), gz: (arch: string) => path.join(dir, `walnut-${version}-darwin-${arch}.gz`) }
+  }
+
+  it('carries the release\'s file for one architecture, unpacked, refusing one its checksums or its header disown', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carry-'))
     try {
       const app = path.join(dir, 'Walnut.app')
       fs.mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
-      const archive = path.join(dir, 'open-walnut-0.9.1-darwin-arm64.tar.gz')
-      fs.writeFileSync(archive, 'stand-in archive')
-      const sha = createHash('sha256').update('stand-in archive').digest('hex')
-      const sums = path.join(dir, 'SHA256SUMS')
-      fs.writeFileSync(sums, `${'0'.repeat(64)}  open-walnut-0.9.1-linux-x64.tar.gz\n${sha}  open-walnut-0.9.1-darwin-arm64.tar.gz\n`)
-      expect(carryRelease({ app, archive, sums })).toMatchObject({ version: '0.9.1', arch: 'arm64' })
+      const rel = darwinRelease(dir, '0.9.1')
+      expect(carryRelease({ app, file: rel.gz('arm64'), sums: rel.sums })).toMatchObject({ version: '0.9.1', arch: 'arm64', signed: false })
       const carried = path.join(app, 'Contents', 'Resources', 'release', 'v0.9.1')
-      expect(fs.readdirSync(carried).sort()).toEqual(['SHA256SUMS', 'open-walnut-0.9.1-darwin-arm64.tar.gz'])
+      expect(fs.readdirSync(carried).sort()).toEqual(['SHA256SUMS', 'walnut-0.9.1-darwin-arm64'])
+      const file = fs.readFileSync(path.join(carried, 'walnut-0.9.1-darwin-arm64'))
+      expect(file.equals(machO('arm64', 'walnut 0.9.1 arm64'))).toBe(true)
+      expect(fs.statSync(path.join(carried, 'walnut-0.9.1-darwin-arm64')).mode & 0o111).not.toBe(0)
+      // Its checksum, in the line install.sh reads for a plain file it carries.
+      expect(fs.readFileSync(path.join(carried, 'SHA256SUMS'), 'utf8')).toBe(`${sha256Of(file)}  walnut-0.9.1-darwin-arm64\n`)
       // What the smoke and BundledRuntime read back: arm64 here, nothing for an Intel Mac.
       expect(carriedFor(app, 'arm64')).toEqual({ version: '0.9.1' })
       expect(carriedFor(app, 'x64')).toBeNull()
       expect(carriedFor(dir, 'arm64')).toBeNull()
-      // A tampered archive, a Linux one, an unnamed one: no app carries it.
-      fs.writeFileSync(archive, 'something else')
-      expect(() => carryRelease({ app, archive, sums })).toThrow('does not match its SHA256SUMS entry')
-      const linux = path.join(dir, 'open-walnut-0.9.1-linux-x64.tar.gz')
+      // A rebuild carries one release, never two.
+      carryRelease({ app, file: rel.gz('x64'), sums: rel.sums })
+      expect(fs.readdirSync(path.join(carried)).sort()).toEqual(['SHA256SUMS', 'walnut-0.9.1-darwin-x64'])
+      // A tampered file, a Linux one, an unnamed one, one whose header is another Mac's: no app carries it.
+      fs.writeFileSync(rel.gz('arm64'), zlib.gzipSync(machO('arm64', 'something else')))
+      expect(() => carryRelease({ app, file: rel.gz('arm64'), sums: rel.sums })).toThrow('does not match its SHA256SUMS entry')
+      const linux = path.join(dir, 'walnut-0.9.1-linux-x64.gz')
       fs.writeFileSync(linux, 'x')
-      expect(() => carryRelease({ app, archive: linux, sums })).toThrow('is not a Mac archive')
-      const other = path.join(dir, 'open-walnut-0.9.2-darwin-x64.tar.gz')
+      expect(() => carryRelease({ app, file: linux, sums: rel.sums })).toThrow('is not a Mac build')
+      const other = path.join(dir, 'walnut-0.9.2-darwin-x64.gz')
       fs.writeFileSync(other, 'x')
-      expect(() => carryRelease({ app, archive: other, sums })).toThrow('names no open-walnut-0.9.2-darwin-x64.tar.gz')
-      expect(archiveTarget('open-walnut-0.9.1-darwin-x64.tar.gz')).toEqual({ version: '0.9.1', arch: 'x64' })
+      expect(() => carryRelease({ app, file: other, sums: rel.sums })).toThrow('names no walnut-0.9.2-darwin-x64.gz')
+      const swapped = path.join(dir, 'swapped')
+      fs.mkdirSync(swapped)
+      const bad = zlib.gzipSync(machO('x64'))
+      fs.writeFileSync(path.join(swapped, 'walnut-0.9.1-darwin-arm64.gz'), bad)
+      fs.writeFileSync(path.join(swapped, 'SHA256SUMS'), `${sha256Of(bad)}  walnut-0.9.1-darwin-arm64.gz\n`)
+      expect(() => carryRelease({ app, file: path.join(swapped, 'walnut-0.9.1-darwin-arm64.gz'), sums: path.join(swapped, 'SHA256SUMS') })).toThrow('holds an x64 Mach-O, not the arm64 build its name gives')
+      expect(fileTarget('walnut-0.9.1-darwin-x64')).toEqual({ version: '0.9.1', arch: 'x64', gz: false })
+      expect(fileTarget('open-walnut-0.9.1-darwin-x64.tar.gz')).toBeNull()
+      expect(machOArch(Buffer.from('#!/bin/sh\necho hi\n'))).toBeNull()
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  it('a Developer ID app carries the archive with every binary in it signed, and checksums of its own', () => {
+  it('a Developer ID app carries the file signed with the hardened runtime and its entitlements, and a checksum of its own', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carry-sign-'))
     try {
-      const top = 'open-walnut-0.9.1-darwin-arm64'
-      const tree = path.join(dir, 'src', top)
-      const put = (rel: string, bytes: Buffer | string) => {
-        fs.mkdirSync(path.dirname(path.join(tree, rel)), { recursive: true })
-        fs.writeFileSync(path.join(tree, rel), bytes)
-      }
-      const macho = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01, 0, 0, 0, 0])
-      const fat = Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2, 0, 0, 0, 0])
-      const javaClass = Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 0, 0, 0])
-      put('runtime/bin/node', macho)
-      put('runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/better_sqlite3.node', macho)
-      put('runtime/lib/node_modules/open-walnut/node_modules/@esbuild/darwin-arm64/bin/esbuild', fat)
-      put('runtime/lib/node_modules/open-walnut/node_modules/x/Thing.class', javaClass)
-      put('runtime/lib/node_modules/open-walnut/package.json', '{}')
-      fs.symlinkSync('better_sqlite3.node', path.join(tree, 'runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/link.node'))
-      const archive = path.join(dir, `${top}.tar.gz`)
-      execFileSync('tar', ['-czf', archive, '-C', path.join(dir, 'src'), top])
-      const sums = path.join(dir, 'SHA256SUMS')
-      fs.writeFileSync(sums, `${createHash('sha256').update(fs.readFileSync(archive)).digest('hex')}  ${top}.tar.gz\n`)
+      const rel = darwinRelease(dir, '0.9.1')
       const app = path.join(dir, 'Walnut.app')
       fs.mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
-
-      // Node comes signed for notarization by its project; the rest is unsigned.
       const calls: string[][] = []
-      const codesign = (args: string[], opts?: { probe?: boolean }) => {
-        calls.push(args)
-        if (!opts?.probe) { fs.appendFileSync(args.at(-1)!, 'SIGNED'); return '' }
-        return args.at(-1)!.endsWith('/bin/node')
-          ? 'CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+7 location=embedded\nAuthority=Developer ID Application: Node.js Foundation (TEAMID)\nTimestamp=Sep 23, 2026\n'
-          : `${args.at(-1)}: code object is not signed at all\n`
-      }
-      const out = carryRelease({ app, archive, sums, identity: 'Developer ID Application: Example (TEAMID)', keychain: '/k.keychain-db', codesign })
-      expect(out.signed.sort()).toEqual([
-        `${top}/runtime/lib/node_modules/open-walnut/node_modules/@esbuild/darwin-arm64/bin/esbuild`,
-        `${top}/runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/better_sqlite3.node`,
-      ])
-      const signs = calls.filter((a) => a[0] === '--force')
-      expect(signs).toHaveLength(2)
-      expect(signs[0].slice(0, 6)).toEqual(['--force', '--options', 'runtime', '--timestamp', '--keychain', '/k.keychain-db'])
-      expect(signs[0].slice(6, 8)).toEqual(['--sign', 'Developer ID Application: Example (TEAMID)'])
-
-      // The carried archive holds the signed binaries; its checksums are its own.
+      const codesign = (args: string[]) => { calls.push(args); fs.appendFileSync(args.at(-1)!, 'SIGNED') }
+      const identity = 'Developer ID Application: Example (TEAMID)'
+      // The hardened runtime stops a JavaScript engine without them: never sign without.
+      expect(() => carryRelease({ app, file: rel.gz('arm64'), sums: rel.sums, identity, codesign })).toThrow(/needs --entitlements/)
+      const out = carryRelease({ app, file: rel.gz('arm64'), sums: rel.sums, identity, keychain: '/k.keychain-db', entitlements: '/e.plist', codesign })
+      expect(out.signed).toBe(true)
+      expect(calls).toEqual([['--force', '--options', 'runtime', '--timestamp', '--entitlements', '/e.plist', '--keychain', '/k.keychain-db', '--sign', identity, out.file]])
       const carried = path.join(app, 'Contents', 'Resources', 'release', 'v0.9.1')
-      const name = `${top}.tar.gz`
-      const sumsLine = fs.readFileSync(path.join(carried, 'SHA256SUMS'), 'utf8')
-      expect(sumsLine).toBe(`${createHash('sha256').update(fs.readFileSync(path.join(carried, name))).digest('hex')}  ${name}\n`)
-      const back = path.join(dir, 'back')
-      fs.mkdirSync(back)
-      execFileSync('tar', ['-xzf', path.join(carried, name), '-C', back])
-      const rel = (p: string) => fs.readFileSync(path.join(back, top, p))
-      expect(rel('runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/better_sqlite3.node').toString('latin1')).toMatch(/SIGNED$/)
-      expect(rel('runtime/bin/node').equals(macho)).toBe(true)
-      expect(rel('runtime/lib/node_modules/open-walnut/node_modules/x/Thing.class').equals(javaClass)).toBe(true)
-      expect(fs.lstatSync(path.join(back, top, 'runtime/lib/node_modules/open-walnut/node_modules/better-sqlite3/build/Release/link.node')).isSymbolicLink()).toBe(true)
-      // The release's own archive is untouched.
-      expect(createHash('sha256').update(fs.readFileSync(archive)).digest('hex')).toBe(fs.readFileSync(sums, 'utf8').split(' ')[0])
-      expect(isMachOHeader(javaClass)).toBe(false)
-      expect(isMachOHeader(fat)).toBe(true)
+      const signed = fs.readFileSync(path.join(carried, 'walnut-0.9.1-darwin-arm64'))
+      expect(signed.toString('latin1')).toMatch(/SIGNED$/)
+      expect(fs.readFileSync(path.join(carried, 'SHA256SUMS'), 'utf8')).toBe(`${sha256Of(signed)}  walnut-0.9.1-darwin-arm64\n`)
+      // The release's own file is untouched.
+      expect(sha256Of(fs.readFileSync(rel.gz('arm64')))).toBe(fs.readFileSync(rel.sums, 'utf8').split(' ')[0])
+      expect(isMachOHeader(signed)).toBe(true)
+      expect(isMachOHeader(Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 0, 0, 0]))).toBe(false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('the smoke reads back what the app installed: the file from its link, or an older app\'s archive', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-rt-'))
+    try {
+      const rt = path.join(dir, 'open-walnut')
+      expect(installedRuntime(rt)).toBeNull()
+      fs.mkdirSync(path.join(rt, 'versions', '0.9.1'), { recursive: true })
+      fs.writeFileSync(path.join(rt, 'versions', '0.9.1', 'walnut'), 'file')
+      fs.mkdirSync(path.join(rt, 'bin'))
+      fs.symlinkSync('../versions/0.9.1/walnut', path.join(rt, 'bin', 'walnut'))
+      expect(installedRuntime(rt)).toEqual({ kind: 'file', version: '0.9.1', file: path.join(rt, 'versions', '0.9.1', 'walnut') })
+      expect(installedVersion(rt)).toBe('0.9.1')
+      // An app update finds it older, as BundledRuntime reads the version off the link.
+      markInstalledOlder(rt)
+      expect(fs.readlinkSync(path.join(rt, 'bin', 'walnut'))).toBe('../versions/0.0.1/walnut')
+      expect(installedVersion(rt)).toBe('0.0.1')
+      expect(fs.existsSync(path.join(rt, 'versions', '0.9.1'))).toBe(false)
+      // An older app's archive.
+      const old = path.join(dir, 'archive')
+      fs.mkdirSync(path.join(old, 'app', 'runtime', 'bin'), { recursive: true })
+      fs.writeFileSync(path.join(old, 'app', 'runtime', 'bin', 'node'), '')
+      const pkg = path.join(old, 'app', 'runtime', 'lib', 'node_modules', 'open-walnut', 'package.json')
+      fs.mkdirSync(path.dirname(pkg), { recursive: true })
+      fs.writeFileSync(pkg, JSON.stringify({ name: 'open-walnut', version: '0.6.9' }))
+      expect(installedRuntime(old)?.kind).toBe('archive')
+      expect(installedVersion(old)).toBe('0.6.9')
+      markInstalledOlder(old)
+      expect(installedVersion(old)).toBe('0.0.1')
+      // carriedFor takes either, plain or gzipped, as BundledRuntime does (and an older app's archive).
+      for (const [name, carried] of [['walnut-0.9.1-darwin-arm64.gz', true], ['open-walnut-0.9.1-darwin-arm64.tar.gz', true], ['walnut-0.9.1-linux-x64.gz', false]] as const) {
+        const app = path.join(dir, `app-${name}`)
+        fs.mkdirSync(path.join(app, 'Contents', 'Resources', 'release', 'v0.9.1'), { recursive: true })
+        for (const f of ['SHA256SUMS', name]) fs.writeFileSync(path.join(app, 'Contents', 'Resources', 'release', 'v0.9.1', f), '')
+        expect(carriedFor(app, 'arm64'), name).toEqual(carried ? { version: '0.9.1' } : null)
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

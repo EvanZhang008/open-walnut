@@ -185,9 +185,6 @@ struct AppUpdateTests {
         precondition(RuntimeUpgrade.shouldInstallCarried(carried: "0.6.10", installed: "0.6.10-nightly.20261011.2"))
         precondition(!RuntimeUpgrade.shouldInstallCarried(carried: nil, installed: "0.6.8"))
         precondition(RuntimeUpgrade.shouldInstallCarried(carried: "0.6.9", installed: nil))
-        precondition(RuntimeUpgrade.installedVersion(packageJSON: Data(#"{"name":"open-walnut","version":"0.6.8"}"#.utf8)) == "0.6.8")
-        precondition(RuntimeUpgrade.installedVersion(packageJSON: Data("not json".utf8)) == nil)
-        precondition(RuntimeUpgrade.installedVersion(packageJSON: nil) == nil)
 
         print("app-update-tests: ok")
     }
