@@ -35,6 +35,10 @@ export interface HoldContext {
   /** How long the loop waited in poll inside the hold (eventLoopUtilization): a
    *  process stopped or starved while it waited for work, not while it ran some. */
   loopIdleMs?: number;
+  /** 'none' where the runtime keeps no idle clock for its loop (bun: its
+   *  eventLoopUtilization is all zeros): loopIdleMs is then absent, and holdVerdict
+   *  takes every ms the thread did not run in the hold as a possible wait. */
+  loopIdleSource?: 'none';
   /** Where the hold began and ended, in ms from the deadline (from <= 0 <= to). */
   holdFromMs?: number;
   holdToMs?: number;
@@ -314,7 +318,7 @@ export function holdVerdict(h: {
   lateByMs: number; windowMs: number; mainCpuMs: number; gcMs: number; majorFaults: number; invCtxSwitches: number;
   volCtxSwitches?: number; procCpuMs?: number; holdCpuMs?: number; afterHoldCpuMs?: number; gcMajorMs?: number;
   loopIdleMs?: number; holdFromMs?: number; holdToMs?: number; afterWaitMs?: number; afterHoldPauseMs?: number;
-  baseCpuShare?: number; baseTurnMs?: number;
+  baseCpuShare?: number; baseTurnMs?: number; loopIdleSource?: 'none';
   /** From the kept profile (profileHoldShare): share of the hold with code on top, and its sample count. */
   codeShare?: number; profileSamples?: number;
 }): HoldVerdict {
@@ -353,8 +357,14 @@ export function holdVerdict(h: {
   // poll, then 415 ms of the reads it queued over 5.5 s, read `cpu` while only
   // a wait that was most of the hold counted); a shorter one only when it was
   // most of the hold.
-  const waitedMs = h.loopIdleMs !== undefined && spanMs !== undefined && spanMs > 0
-    && (h.loopIdleMs >= LONG_WAIT_MS || h.loopIdleMs >= 0.5 * spanMs) ? h.loopIdleMs : 0;
+  // Without an idle clock (loopIdleSource 'none', bun) a reading of 0 would say
+  // the loop never waited, and a stop in poll would pass its backlog off as
+  // code: every ms the thread did not run in the hold may have been a wait.
+  const idleMs = h.loopIdleSource === 'none'
+    ? (spanMs !== undefined ? Math.max(0, spanMs - heldMs) : undefined)
+    : h.loopIdleMs;
+  const waitedMs = idleMs !== undefined && spanMs !== undefined && spanMs > 0
+    && (idleMs >= LONG_WAIT_MS || idleMs >= 0.5 * spanMs) ? idleMs : 0;
   const sampled = (h.profileSamples ?? 0) >= 5;
   const sawCode = sampled && (h.codeShare ?? 0) >= 0.5;
   if (past(heldMs, owed(pauseMs + waitedMs)) && (sawCode || (!sampled && h.holdCpuMs !== undefined))) return 'cpu';
@@ -459,6 +469,13 @@ export function captureHold(
     freeMemMb: mb(os.freemem()),
     verdict: 'off-cpu',
   };
+  // A loop with an idle clock has waited in poll some time by the previous tick
+  // (Node); bun's eventLoopUtilization reads 0 at every point, always.
+  const idleClock = prev.idleMs > 0 || now.idleMs > 0 || (span?.since.idleMs ?? 0) > 0 || (span?.until?.idleMs ?? 0) > 0;
+  if (!idleClock) {
+    delete ctx.loopIdleMs;
+    ctx.loopIdleSource = 'none';
+  }
   ctx.verdict = holdVerdict({ lateByMs, ...ctx });
   return ctx;
 }
