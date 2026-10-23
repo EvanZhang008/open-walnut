@@ -19,6 +19,7 @@
 import { promisify } from 'node:util'
 import zlib from 'node:zlib'
 import { log } from '../logging/index.js'
+import { fetchErrorCode, fetchErrorText, isFetchAbort } from '../lib/fetch-error.js'
 
 const gzip = promisify(zlib.gzip)
 
@@ -167,8 +168,8 @@ let replicaUnsupportedUntil = 0
  *  went out on it (ECONNRESET / EPIPE / undici "other side closed"): no answer
  *  was read, and a fresh connection is worth one more try. Never a timeout. */
 function staleSocketReset(err: unknown): boolean {
-  if (!(err instanceof Error) || err.name === 'TimeoutError' || err.name === 'AbortError') return false
-  const code = (err as { cause?: { code?: unknown } }).cause?.code
+  if (!(err instanceof Error) || isFetchAbort(err)) return false
+  const code = fetchErrorCode(err)
   return code === 'ECONNRESET' || code === 'EPIPE' || code === 'UND_ERR_SOCKET'
 }
 
@@ -196,13 +197,8 @@ async function sendStep(send: () => Promise<globalThis.Response>): Promise<globa
   }
 }
 
-/** A request's error with its cause: fetch says only "fetch failed", the cause says why. */
-function stepError(err: unknown): string {
-  if (!(err instanceof Error)) return String(err)
-  const cause = (err as Error & { cause?: { code?: unknown; message?: unknown } }).cause
-  const detail = cause ? (typeof cause.code === 'string' ? cause.code : typeof cause.message === 'string' ? cause.message : '') : ''
-  return detail && !err.message.includes(detail) ? `${err.message} (${detail})` : err.message
-}
+/** A request's error with the code fetch hides (src/lib/fetch-error.ts). */
+const stepError = fetchErrorText
 
 /** A companion is set up and the replica lane is not resting: worth building a manifest for. */
 export async function cloudReplicaAvailable(): Promise<boolean> {

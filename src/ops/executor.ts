@@ -22,6 +22,7 @@ import { TEST_RUN_HEADER, ambientTestRun, parseTestRunLabel } from '../core/test
 const humanCallerScope = new AsyncLocalStorage<boolean>()
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 import { getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
+import { fetchErrorCode } from '../lib/fetch-error.js'
 import {
   ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
@@ -85,16 +86,6 @@ function resolveCallerSid(explicit?: string): string | undefined {
   return sid || undefined
 }
 
-/** Pull the deepest cause code out of a fetch failure (Node wraps in TypeError). */
-function causeCode(err: unknown): string | undefined {
-  let cur: unknown = err
-  for (let i = 0; i < 5 && cur && typeof cur === 'object'; i++) {
-    const code = (cur as { code?: unknown }).code
-    if (typeof code === 'string') return code
-    cur = (cur as { cause?: unknown }).cause
-  }
-  return undefined
-}
 
 /**
  * A test run's header (src/core/test-run.ts): the scope this call runs in, else the CLI's
@@ -142,7 +133,7 @@ async function rawRequest(
       signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err) {
-    const code = causeCode(err)
+    const code = fetchErrorCode(err)
     if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ECONNRESET') {
       return { ok: false, unreachable: true, message: `Walnut server not running at ${base} — start with \`open-walnut web\`` }
     }

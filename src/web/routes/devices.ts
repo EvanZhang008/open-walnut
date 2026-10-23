@@ -25,6 +25,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
+import { fetchErrorCode, fetchErrorDetail, isFetchAbort } from '../../lib/fetch-error.js'
 import {
   MACHINE_PROOF_HEADER, MachineCredentialRefused, adoptMachineCredential, mintMachineCredential, revokeMachineCredential,
 } from '../../core/machine-credentials.js'
@@ -102,13 +103,14 @@ interface CloudDeviceList {
 
 /**
  * A failed fetch in plain words. `AbortSignal.timeout` rejects with "The
- * operation was aborted due to timeout" and an unreachable host with "fetch
- * failed": neither means anything to a person reading Settings.
+ * operation was aborted due to timeout" (bun: "The operation timed out.") and
+ * an unreachable host with "fetch failed" (bun: "ECONNREFUSED: Unable to
+ * connect..."): none of it means anything to a person reading Settings. The
+ * code is on `cause` on Node and on the error itself on bun (src/lib/fetch-error.ts).
  */
 export function plainFetchFailure(err: unknown, timeoutMs: number): string {
-  const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } }
-  if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return `timed out after ${Math.round(timeoutMs / 1000)}s`
-  const code = e?.cause?.code ?? ''
+  if (isFetchAbort(err)) return `timed out after ${Math.round(timeoutMs / 1000)}s`
+  const code = fetchErrorCode(err)
   const byCode: Record<string, string> = {
     ECONNREFUSED: 'the connection was refused',
     ECONNRESET: 'the connection was reset',
@@ -120,8 +122,9 @@ export function plainFetchFailure(err: unknown, timeoutMs: number): string {
     ENETUNREACH: 'the network has no route to it',
   }
   if (byCode[code]) return byCode[code]
-  if (/certificate|CERT_|SSL|TLS/i.test(`${code} ${e?.cause?.message ?? ''}`)) return 'its TLS certificate was not accepted'
-  return e?.cause?.message ?? e?.message ?? String(err)
+  const detail = fetchErrorDetail(err)
+  if (/certificate|CERT_|SSL|TLS/i.test(`${code} ${detail}`)) return 'its TLS certificate was not accepted'
+  return detail
 }
 
 /** A computer that runs Walnut, by its own report: another Mac, never a phone. */

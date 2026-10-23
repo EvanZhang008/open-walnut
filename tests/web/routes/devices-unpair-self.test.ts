@@ -193,7 +193,8 @@ describe('a failed request to the companion, in plain words', () => {
     await new Promise<void>((r) => silent.listen(0, '127.0.0.1', () => r()))
     try {
       const err = await fetch(`http://127.0.0.1:${(silent.address() as AddressInfo).port}/`, { signal: AbortSignal.timeout(200) }).catch((e: unknown) => e)
-      expect(String((err as Error).message)).toMatch(/aborted/i)
+      // The raw text differs by runtime (Node: "...aborted due to timeout", bun: "The operation timed out.").
+      expect((err as Error).name).toBe('TimeoutError')
       expect(plainFetchFailure(err, 8_000)).toBe('timed out after 8s')
       const aborted = new AbortController()
       aborted.abort()

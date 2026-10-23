@@ -349,8 +349,9 @@ describe('postToCloudReplica (the companion\'s task copy, beside ingest)', () =>
     resets = 3
     const r = await postToCloudReplica({ op: 'sync' })
     expect(r).toMatchObject({ ok: false, outcome: 'failed' })
-    // The cause rides along: fetch alone says only "fetch failed".
-    expect(r.ok ? '' : r.error).toMatch(/\(.+\)/)
+    // The code rides along: Node's fetch alone says only "fetch failed" (the code is
+    // on its cause), bun's names it in its message.
+    expect(r.ok ? '' : r.error).toMatch(/ECONNRESET|EPIPE|UND_ERR_SOCKET/)
     expect(seen).toHaveLength(3) // never a fourth
     expect(await cloudReplicaAvailable()).toBe(true) // a failure rests nothing
   })

@@ -7,19 +7,18 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { log } from '../../logging/index.js'
+import { fetchErrorText } from '../../lib/fetch-error.js'
 import type { BoxBuildStatus } from './wire.js'
 
 export type Endpoint = { url: string; token: string }
 export interface Reply { status: number; json: Record<string, unknown> | null }
 
-/** One request to `<origin>/bridge/build<sub>`. Throws on a network error or the timeout. */
-/** A request's error with its cause: fetch says only "fetch failed", the cause says why. */
+/** A request's error with the code fetch hides, on Node and on bun (src/lib/fetch-error.ts). */
 export function requestError(err: unknown): string {
-  if (!(err instanceof Error)) return String(err)
-  const cause = (err as Error & { cause?: { code?: unknown; message?: unknown } }).cause
-  const detail = cause ? (typeof cause.code === 'string' ? cause.code : typeof cause.message === 'string' ? cause.message : '') : ''
-  return detail && !err.message.includes(detail) ? `${err.message} (${detail})` : err.message
+  return fetchErrorText(err)
 }
+
+/** One request to `<origin>/bridge/build<sub>`. Throws on a network error or the timeout. */
 
 export async function call(ep: Endpoint, method: 'GET' | 'PUT' | 'POST', sub: string, body: Buffer | string | undefined, timeoutMs: number): Promise<Reply> {
   const headers: Record<string, string> = { Authorization: `Bearer ${ep.token}` }
