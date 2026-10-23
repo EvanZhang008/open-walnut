@@ -36,24 +36,30 @@ LAUNCH_LABEL=com.open-walnut.dev-prod
 # WALNUT_DEVPROD_REHEARSAL=1 runs every step for real (build, smoke, kill and
 # launch, readiness, last-known-good, rollback) on a private port, data dir,
 # daemon dir and temp dir, under its own launchd label, so the deploy path itself
-# can be proven end to end. It refuses :3456, the production data dir and the
-# production daemon dir, and everything it writes lives in the directories it is
-# given. Required:
-#   WALNUT_DEVPROD_PORT          the port (not 3456)
-#   WALNUT_DEVPROD_REHEARSAL_DIR an existing directory: becomes TMPDIR (lock,
-#                                stamps, stages, smoke, LKG, log)
+# can be proven end to end. It refuses :3456 and :3457, the production data dir
+# and the production daemon dirs, it stops only a listener that runs from its own
+# stages or LKG, and everything it writes lives in the directories it is given.
+# Required:
+#   WALNUT_DEVPROD_PORT          the port (not 3456, production; not 3457, the
+#                                Playwright fixture server)
+#   WALNUT_DEVPROD_REHEARSAL_DIR an existing directory: its rehearsal-state/ subdir,
+#                                made here, becomes TMPDIR (lock, stamps, stages,
+#                                smoke, LKG, log), so no state file can ever be a
+#                                production one, whatever the caller's TMPDIR is
 #   OPEN_WALNUT_HOME             the data dir (never ~/.open-walnut, never named open-walnut-*)
-#   WALNUT_DAEMON_DIR            the daemon dir (never /tmp/open-walnut)
+#   WALNUT_DAEMON_DIR            the daemon dir (never /tmp/open-walnut or ~/.cache/open-walnut;
+#                                the daemon also keeps <daemon dir>-streams beside it)
 # Optional knobs for the failure paths: WALNUT_DEVPROD_REHEARSAL_FAIL_LAUNCH=1
 # starts the new server unable to serve the web app (the post-kill rollback to
 # the last-known-good build runs); WALNUT_DEVPROD_REHEARSAL_FAIL_SMOKE=1 makes
 # the smoke boot fail (nothing is killed).
 REHEARSAL_HOME=""
 REHEARSAL_DAEMON_DIR=""
+REHEARSAL_ROOT=""
 if [[ "$REHEARSAL" == "1" ]]; then
   PORT="${WALNUT_DEVPROD_PORT:-}"
-  if [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( 10#$PORT < 1024 || 10#$PORT > 65535 )) || (( 10#$PORT == 3456 )); then
-    echo "Rehearsal refused: WALNUT_DEVPROD_PORT='$PORT' must be a port from 1024 to 65535 other than 3456." >&2
+  if [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( 10#$PORT < 1024 || 10#$PORT > 65535 )) || (( 10#$PORT == 3456 || 10#$PORT == 3457 )); then
+    echo "Rehearsal refused: WALNUT_DEVPROD_PORT='$PORT' must be a port from 1024 to 65535 other than 3456 (production) and 3457 (the Playwright fixture server)." >&2
     exit 1
   fi
   PORT=$(( 10#$PORT ))
@@ -94,15 +100,23 @@ if [[ "$REHEARSAL" == "1" ]]; then
     exit 1
   fi
   # /tmp is a symlink on macOS: compare with both spellings of the production dirs.
+  # ~/.cache/open-walnut is where a host's daemon goes when /tmp cannot take it, and
+  # a daemon there treats itself as production (daemon-standalone.ts IS_PROD_DAEMON_DIR).
   tmp_real="$(cd /tmp && pwd -P)"
-  for prod_daemon in /tmp/open-walnut "$tmp_real/open-walnut"; do
+  prod_cache_daemon="$(canon_dir "$HOME/.cache/open-walnut" || printf '%s' "$HOME/.cache/open-walnut")"
+  for prod_daemon in /tmp/open-walnut "$tmp_real/open-walnut" "$HOME/.cache/open-walnut" "$prod_cache_daemon"; do
     case "$REHEARSAL_DAEMON_DIR/" in
       "$prod_daemon/"*)
-        echo "Rehearsal refused: WALNUT_DAEMON_DIR is the production daemon dir (or inside it)." >&2
+        echo "Rehearsal refused: WALNUT_DAEMON_DIR is a production daemon dir (or inside one): $REHEARSAL_DAEMON_DIR" >&2
         exit 1 ;;
     esac
   done
-  TMPDIR="$(cd "$rehearsal_dir" && pwd -P)"
+  # Its own state dir, never the caller's TMPDIR itself: a deploy's lock, cooldown
+  # stamps and LKG are named files in TMPDIR, so a rehearsal handed the same dir as
+  # production would take production's lock, arm its cooldown and replace its
+  # rollback build.
+  REHEARSAL_ROOT="$(cd "$rehearsal_dir" && pwd -P)"
+  TMPDIR="$REHEARSAL_ROOT/rehearsal-state"
   export TMPDIR
   LAUNCH_LABEL="com.open-walnut.dev-prod-rehearsal.$PORT"
   # Never the production server log.
@@ -111,17 +125,13 @@ if [[ "$REHEARSAL" == "1" ]]; then
     echo "Rehearsal refused: WALNUT_SERVER_LOG is the production server log." >&2
     exit 1
   fi
-  # The rollback snapshot is replaced whole on success: never production's.
+  # The rollback snapshot is replaced whole on success: a rehearsal keeps its own
+  # in its state dir, never one it is pointed at.
   if [[ -n "${WALNUT_DEVPROD_LKG_DIR:-}" ]]; then
-    rehearsal_lkg="$(canon_dir "$WALNUT_DEVPROD_LKG_DIR" || true)"
-    case "$rehearsal_lkg" in
-      "$TMPDIR"/*) ;;
-      *)
-        echo "Rehearsal refused: WALNUT_DEVPROD_LKG_DIR must be inside WALNUT_DEVPROD_REHEARSAL_DIR." >&2
-        exit 1 ;;
-    esac
+    echo "Rehearsal refused: a rehearsal keeps its LKG in $TMPDIR; unset WALNUT_DEVPROD_LKG_DIR." >&2
+    exit 1
   fi
-  mkdir -p "$REHEARSAL_HOME" "$REHEARSAL_DAEMON_DIR"
+  mkdir -p "$TMPDIR" "$REHEARSAL_HOME" "$REHEARSAL_DAEMON_DIR"
   echo "Rehearsal: the real deploy path on :$PORT (data $REHEARSAL_HOME, daemon $REHEARSAL_DAEMON_DIR, temp $TMPDIR, label $LAUNCH_LABEL)."
 fi
 
@@ -141,6 +151,19 @@ fi
 SERVE_ROOT="$(cd "$SERVE_ROOT" && pwd -P)"
 SUCCESS_STAMP="${TMPDIR:-/tmp}/open-walnut-dev-prod.last-success"
 ATTEMPT_STAMP="${TMPDIR:-/tmp}/open-walnut-dev-prod.last-attempt"
+# Rollback source: a snapshot of the build that passed readiness (snapshot_lkg).
+# It is kept off the temp dir (2026-10-25: a restart emptied /tmp, and the first
+# deploy after a reboot had nothing to roll back to); rollback_to_lkg stages a
+# copy on the temp volume before it boots one, for the scanner reason at
+# STAGE_ROOT. The old temp location is still read until the first snapshot lands
+# here. A rehearsal keeps its own in its state dir: ~/.local/state is production's.
+if [[ "$REHEARSAL" == "1" ]]; then
+  LKG_DIR="$TMPDIR/open-walnut-lkg"
+else
+  LKG_DIR="${WALNUT_DEVPROD_LKG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/open-walnut/open-walnut-lkg}"
+fi
+LKG_LEGACY_DIR="${TMPDIR:-/tmp}"
+LKG_LEGACY_DIR="${LKG_LEGACY_DIR%/}/open-walnut-lkg"
 COOLDOWN_SECS=120
 SERVER_LOG_MAX_BYTES=$(( 256 * 1024 * 1024 ))
 
@@ -197,6 +220,32 @@ listener_pids() {
     fuser) fuser -n tcp "$PORT" 2>/dev/null | tr -s '[:space:]' '\n' | grep -E '^[0-9]+$' || true ;;
   esac
 }
+
+# ── A rehearsal stops only what it started ──────────────────────────────────
+# Its port is any free one the caller picked, so whatever else listens there (a
+# test fixture server, a demo, another agent's server) is not its to stop: every
+# listener must run from one of this rehearsal's stages or its LKG, which its
+# command line names. Checked here, before anything is built, and again right
+# before the kill.
+rehearsal_owns_pid() {
+  local cmd
+  cmd="$(ps -o command= -p "$1" 2>/dev/null || true)"
+  [[ -n "$cmd" ]] || return 1
+  [[ "$cmd" == *"$TMPDIR/open-walnut-stage."* || "$cmd" == *"$LKG_DIR/"* ]]
+}
+rehearsal_refuse_foreign_listeners() {
+  [[ "$REHEARSAL" == "1" ]] || return 0
+  local lpid
+  for lpid in $(listener_pids); do
+    if ! rehearsal_owns_pid "$lpid"; then
+      echo "Rehearsal refused: :$PORT is served by PID $lpid, which this rehearsal did not start:" >&2
+      echo "  $(ps -o command= -p "$lpid" 2>/dev/null || echo '(gone)')" >&2
+      echo "Pick a free port." >&2
+      exit 1
+    fi
+  done
+}
+rehearsal_refuse_foreign_listeners
 
 # ── Redeploy-storm breaker ──────────────────────────────────────────────────
 # 2026-07-25 incident: an agent wrapped this script in `launchctl submit`,
@@ -576,6 +625,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   drain_active_turns
   echo "[dry-run] every guard passed on $(uname -s) (probe: $PORT_PROBE, log: $SERVER_LOG)."
   echo "[dry-run] would run $RUNTIME_DESC${FILE_TARGETS:+, with $FILE_TARGETS beside it}."
+  echo "[dry-run] helper scripts (type-check, render checks, publish) run on $JS_BIN; temp dir $TMPDIR."
   echo "[dry-run] stopping before build, server kill and launch — nothing was deployed."
   exit 0
 fi
@@ -1075,6 +1125,7 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
   fi
 fi
 
+rehearsal_refuse_foreign_listeners
 existing_pids="$(listener_pids)"
 if [[ -n "$existing_pids" ]]; then
   # A listener can exit between lsof and kill (e.g. it was already shutting
@@ -1155,9 +1206,9 @@ for spid in $stray_pids; do
   if [[ -n "$port_arg" && "$port_arg" != "$PORT" ]]; then
     continue
   fi
-  # A rehearsal reaps only a server that names its own port: one with no --port
-  # serves :3456, which is production's.
-  if [[ "$REHEARSAL" == "1" && "$port_arg" != "$PORT" ]]; then
+  # A rehearsal reaps only its own: a server that names its port AND runs from one
+  # of its stages or its LKG. One with no --port serves :3456, production's.
+  if [[ "$REHEARSAL" == "1" ]] && { [[ "$port_arg" != "$PORT" ]] || ! rehearsal_owns_pid "$spid"; }; then
     continue
   fi
   echo "Reaping stray Walnut server PID $spid (never bound :$PORT): $cmd" >&2
@@ -1238,15 +1289,6 @@ for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
   fi
   rm -rf "$old_stage" 2>/dev/null || true
 done
-
-# Rollback source: a dist snapshot taken only AFTER a deploy passes readiness.
-# It is kept off the temp dir (2026-10-25: a restart emptied /tmp, and the first
-# deploy after a reboot had nothing to roll back to); rollback_to_lkg stages a
-# copy on the temp volume before it boots one, for the scanner reason above.
-# The old temp location is still read until the first snapshot lands here.
-LKG_DIR="${WALNUT_DEVPROD_LKG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/open-walnut/open-walnut-lkg}"
-LKG_LEGACY_DIR="${TMPDIR:-/tmp}"
-LKG_LEGACY_DIR="${LKG_LEGACY_DIR%/}/open-walnut-lkg"
 
 # One launchd job for the given cli.js. launchd gives jobs a minimal PATH
 # (/usr/bin:/bin:...) — pass the caller's full PATH through so child tools
