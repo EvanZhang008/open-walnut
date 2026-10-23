@@ -18,6 +18,7 @@ import {
 } from '../../src/core/stall-recorder.js'
 import type { ProbeObserver, StallReport } from '../../src/core/event-loop-monitor.js'
 import { log } from '../../src/logging/index.js'
+import { ON_BUN } from '../../src/lib/runtime.js'
 
 /** The observer the running recorder installed on the probe. */
 const observerOf = (): ProbeObserver => _recorderObserverForTest()
@@ -236,7 +237,8 @@ describe('the flight record verdict weighs the kept profile', () => {
     expect((rec.hold as Record<string, unknown>).verdict).toBe('starved')
   })
 
-  it('weighs a full collection by its own time inside the hold (gcMajorMs), not by the window context', async () => {
+  // V8's own collector, through --expose-gc; bun reports no gc entries.
+  it.skipIf(ON_BUN)('weighs a full collection by its own time inside the hold (gcMajorMs), not by the window context', async () => {
     await startStallRecorder({ force: true, dir, windowMs: 3_600_000, postStallMs: 3_600_000, profileMinMs: 1, profiler: steady(IDLE), systemContext: false })
     const v8 = await import('node:v8')
     const vm = await import('node:vm')

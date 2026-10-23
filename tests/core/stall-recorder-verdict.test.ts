@@ -5,6 +5,7 @@
  * pair of cases on both sides of it.
  */
 import { describe, it, expect, afterEach } from 'vitest'
+import { ON_BUN } from '../../src/lib/runtime.js'
 import { holdVerdict } from '../../src/core/stall-recorder.js'
 import {
   gcWithin, pickHoldSpan, spanFields, startGcRing, stopGcRing, type CpuCheckpoint, type TickSample,
@@ -244,7 +245,8 @@ describe('a hold read from its checkpoints (pickHoldSpan, spanFields, holdVerdic
 describe('gcWithin', () => {
   afterEach(() => stopGcRing())
 
-  it('keeps the time in full collections apart (gcMajorMs), which the gc rule weighs', async () => {
+  // V8's own collector, through --expose-gc; bun reports no gc entries.
+  it.skipIf(ON_BUN)('keeps the time in full collections apart (gcMajorMs), which the gc rule weighs', async () => {
     startGcRing()
     const v8 = await import('node:v8')
     const vm = await import('node:vm')

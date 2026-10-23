@@ -19,8 +19,15 @@
  * in 11 of a loop of 20 timers every 5 s. In a bare loop, a batch of timers
  * that came due in a stop ran before the 100 ms timer in 3 of 4 stops, and
  * after the end-of-iteration checkpoint in 4 of 4.
+ *
+ * On bun only the timer runs. bun's loop does not wait in poll while an
+ * immediate is queued, unref'd or not, so an immediate that queues the next
+ * one spins the loop: measured on bun 1.4.4, 2.4 million iterations and 46% of
+ * a core in 2 s of an idle loop (Node: 19 iterations, 4 ms). Without it a stop's
+ * catch-up may fall in the hold, as the measurement above describes.
  */
 
+import { ON_BUN } from '../lib/runtime.js';
 import { readLoopCpuUs, readLoopIdleMs, type CpuCheckpoint } from './stall-recorder-hold.js';
 
 /** How often the timer reads the loop thread's CPU clock (and the loop's idle
@@ -78,10 +85,10 @@ export function stopCpuCheckpoints(): void {
   if (checkImmediate) { clearImmediate(checkImmediate); checkImmediate = null; }
   cpHead = 0; cpCount = 0; lastMono = -Infinity;
 }
-/** Start the checkpoints: the 100 ms timer and the one at the end of every iteration. */
+/** Start the checkpoints: the 100 ms timer and the one at the end of every iteration (not on bun). */
 export function startCpuCheckpoints(): void {
   stopCpuCheckpoints();
   checkpointTimer = setInterval(() => cpuCheckpoint(), CPU_CHECKPOINT_MS);
   checkpointTimer.unref?.();
-  armCheck();
+  if (!ON_BUN) armCheck();
 }

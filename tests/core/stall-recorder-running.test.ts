@@ -12,6 +12,7 @@ import path from 'node:path'
 import { startStallRecorder, stopStallRecorder, _recorderObserverForTest, _cpuCheckpointForTest } from '../../src/core/stall-recorder.js'
 import { cpuCheckpoints } from '../../src/core/stall-recorder-checkpoints.js'
 import { log } from '../../src/logging/index.js'
+import { ON_BUN } from '../../src/lib/runtime.js'
 
 describe('the running recorder reads the loop thread\'s CPU every 100 ms, and at the end of every loop iteration', () => {
   let dir: string
@@ -64,7 +65,8 @@ describe('the running recorder reads the loop thread\'s CPU every 100 ms, and at
     expect(used).toBeLessThan(100)
   })
 
-  it('a loop that never sleeps reads the CPU clock at the end of an iteration at most every 5 ms', async () => {
+  // bun has no end-of-iteration checkpoint (it would spin the loop: stall-recorder-checkpoints.ts).
+  it.skipIf(ON_BUN)('a loop that never sleeps reads the CPU clock at the end of an iteration at most every 5 ms', async () => {
     await startStallRecorder({ force: true, dir, profile: false, systemContext: false })
     await new Promise((r) => setTimeout(r, 50))
     // A setImmediate chain of 50 us pieces: thousands of iterations a second.
@@ -82,7 +84,7 @@ describe('the running recorder reads the loop thread\'s CPU every 100 ms, and at
     expect(marks.length).toBeGreaterThanOrEqual(20)
   })
 
-  it('a checkpoint falls between any two runs of a 20 ms timer (the one at the end of every iteration)', async () => {
+  it.skipIf(ON_BUN)('a checkpoint falls between any two runs of a 20 ms timer (the one at the end of every iteration)', async () => {
     await startStallRecorder({ force: true, dir, profile: false, systemContext: false })
     // Each run burns 5 ms of CPU. The 100 ms timer alone would miss most of the
     // gaps; the checkpoint at the end of the loop iteration follows every run,
@@ -105,7 +107,7 @@ describe('the running recorder reads the loop thread\'s CPU every 100 ms, and at
     expect(missed).toEqual([])
   }, 30_000)
 
-  it('after a stop, the timers that came due catch up after the hold, not in it (25 timers of 12 ms every 1.5 s)', async () => {
+  it.skipIf(ON_BUN)('after a stop, the timers that came due catch up after the hold, not in it (25 timers of 12 ms every 1.5 s)', async () => {
     await startStallRecorder({ force: true, dir, profile: false, systemContext: false })
     const obs = _recorderObserverForTest()
     // When each timer last started: Node re-arms an interval from that moment.
@@ -157,7 +159,7 @@ describe('the running recorder reads the loop thread\'s CPU every 100 ms, and at
     }
   }, 60_000)
 
-  it('a stop just before a batch of timers comes due: the batch catches up after the hold', async () => {
+  it.skipIf(ON_BUN)('a stop just before a batch of timers comes due: the batch catches up after the hold', async () => {
     await startStallRecorder({ force: true, dir, profile: false, systemContext: false })
     const obs = _recorderObserverForTest()
     type Hold = { holdCpuMs: number; afterHoldCpuMs: number; verdict: string }
@@ -183,7 +185,8 @@ describe('the running recorder reads the loop thread\'s CPU every 100 ms, and at
     }
   }, 30_000)
 
-  it('reads the loop\'s idle time with each checkpoint: a quiet loop waits in poll through the hold', async () => {
+  // bun reports no loop idle time (performance.eventLoopUtilization is all zeros).
+  it.skipIf(ON_BUN)('reads the loop\'s idle time with each checkpoint: a quiet loop waits in poll through the hold', async () => {
     await startStallRecorder({ force: true, dir, profile: false, systemContext: false })
     const obs = _recorderObserverForTest()
     const t0 = mono()

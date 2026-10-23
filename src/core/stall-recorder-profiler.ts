@@ -1,11 +1,13 @@
 /**
  * The CPU profiler behind the stall flight recorder (stall-recorder.ts), as
  * titled profiles that may overlap so a rotation never leaves V8's profiler
- * idle (see the recorder's header for the measured cost of an idle restart),
- * and what a kept profile saw inside one hold (profileHoldShare, stallViews).
+ * idle (see the recorder's header for the measured cost of an idle restart;
+ * bun's own driver is at the end), and what a kept profile saw inside one hold
+ * (profileHoldShare, stallViews).
  */
 
 import type { StallReport } from './event-loop-monitor.js';
+import { ON_BUN } from '../lib/runtime.js';
 
 /**
  * Titled profiles that may overlap. begin() of a second title while one is
@@ -142,6 +144,7 @@ export function stallViews(
  * is enabled, which is why the session enables it first.
  */
 export async function connectInspectorDriver(intervalUs: number): Promise<ProfilerDriver | null> {
+  if (ON_BUN) return connectBunDriver(intervalUs);
   type V8Console = { profile?: (title: string) => void; profileEnd?: (title: string) => void };
   const inspector = await import('node:inspector');
   const vc = (inspector as unknown as { console?: V8Console }).console;
@@ -174,6 +177,59 @@ export async function connectInspectorDriver(intervalUs: number): Promise<Profil
     }),
     close: async () => {
       waiting.clear();
+      try { await post('Profiler.disable'); } catch { /* not enabled */ }
+      try { s.disconnect(); } catch { /* already gone */ }
+    },
+  };
+}
+
+/**
+ * The same driver on bun. JavaScriptCore has no titled console profiles
+ * (inspector.console.profile starts nothing, so every end() timed out), but its
+ * profiler restarts in microseconds with no heap walk (measured on bun 1.4.4:
+ * 0.01 ms, V8 3.7 ms on a small heap). So one profile runs at a time: begin()
+ * of the next title stops the running one and starts again at once, which
+ * keeps each window's start where the recorder measured it, and end() hands
+ * back the profile begin() stopped (or stops it, when no next window began).
+ */
+async function connectBunDriver(intervalUs: number): Promise<ProfilerDriver> {
+  const inspector = await import('node:inspector');
+  const s = new inspector.Session();
+  s.connect();
+  const post = <T = void>(method: string, params?: Record<string, unknown>): Promise<T> => new Promise((resolve, reject) => {
+    s.post(method, params ?? {}, (err: Error | null, result?: unknown) => (err ? reject(err) : resolve(result as T)));
+  });
+  try {
+    await post('Profiler.enable');
+    await post('Profiler.setSamplingInterval', { interval: intervalUs });
+  } catch (err) {
+    try { s.disconnect(); } catch { /* gone */ }
+    throw err;
+  }
+  let running: string | null = null;
+  const stopped = new Map<string, CpuProfile>();
+  const stop = async (): Promise<void> => {
+    const title = running;
+    running = null;
+    const { profile } = await post<{ profile: CpuProfile }>('Profiler.stop');
+    if (title) stopped.set(title, profile);
+  };
+  return {
+    begin: async (title) => {
+      if (running) await stop();
+      await post('Profiler.start');
+      running = title;
+    },
+    end: async (title) => {
+      if (running === title) await stop();
+      const profile = stopped.get(title);
+      stopped.delete(title);
+      if (!profile) throw new Error(`no profile titled ${title}`);
+      return profile;
+    },
+    close: async () => {
+      if (running) { running = null; try { await post('Profiler.stop'); } catch { /* not started */ } }
+      stopped.clear();
       try { await post('Profiler.disable'); } catch { /* not enabled */ }
       try { s.disconnect(); } catch { /* already gone */ }
     },
