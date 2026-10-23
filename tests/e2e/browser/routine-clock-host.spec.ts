@@ -26,7 +26,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${PORT}`
-const SHOTS = '/tmp/g9-cron'
+const SHOTS = process.env.PW_SHOTS_DIR ?? '/tmp/g9-cron'
 /** The fixture config's remote host (test-server.ts): known, so no placement takes the clock back. */
 const HOST = 'fixture-remote'
 
@@ -72,7 +72,7 @@ const createSessionRoutine = (name: string, taskId: string) =>
   createRoutine(name, { type: 'session', config: { target: taskId, prompt: 'Post the morning digest.' } })
 
 /** Hand the routine's clock to HOST in the fixture's cron state, as a settled handover leaves it. */
-async function handClockToHost(id: string, dueAtMs?: number): Promise<void> {
+async function handClockToHost(id: string, dueAtMs?: number, starts?: true): Promise<void> {
   const { walnutHome } = await discoverBrowserFixture(PORT)
   if (PORT === 3456 || !/^walnut-pw-\d+$/.test(path.basename(walnutHome))) throw new Error(`not an isolated fixture: ${walnutHome}`)
   const file = path.join(walnutHome, 'cron-state.json')
@@ -82,9 +82,11 @@ async function handClockToHost(id: string, dueAtMs?: number): Promise<void> {
     const st = raw.states[id] ?? {}
     if (st.clockHost !== HOST) {
       const next = dueAtMs ?? (typeof st.nextRunAtMs === 'number' ? st.nextRunAtMs : Date.now() + 3_600_000)
-      raw.states[id] = { ...st, clockHost: HOST, clockFromMs: next, nextRunAtMs: next }
-      await fs.writeFile(`${file}.pw-tmp`, JSON.stringify(raw, null, 2))
-      await fs.rename(`${file}.pw-tmp`, file)
+      raw.states[id] = { ...st, clockHost: HOST, clockFromMs: next, nextRunAtMs: next, ...(starts ? { clockStarts: true } : {}) }
+      // Its own temp name: the browsers' workers write this file at the same time.
+      const tmp = `${file}.pw-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+      await fs.writeFile(tmp, JSON.stringify(raw, null, 2))
+      await fs.rename(tmp, file)
     }
     return (await getRoutine(id))?.state?.clockHost
   }, { timeout: 20_000 }).toBe(HOST)
@@ -104,13 +106,17 @@ test('a routine whose clock is on a host names it on its card and on its task', 
   const onHost = `PW clock on host ${stamp}`
   const onServer = `PW clock on server ${stamp}`
   const onHostCli = `PW clock Claude Code ${stamp}`
+  const startsCli = `PW clock host starts ${stamp}`
   const hostId = await createSessionRoutine(onHost, task.id)
   const serverId = await createSessionRoutine(onServer, task.id)
   const cliId = await createRoutine(onHostCli, { type: 'claude-code', config: { host: HOST, cwd: '/tmp', instructions: 'Sweep the build logs.' } })
+  const startsId = await createRoutine(startsCli, { type: 'claude-code', config: { host: HOST, cwd: '/tmp', instructions: 'Rotate the logs.' } })
   try {
     await handClockToHost(hostId)
     // Its 09:00 came due ten minutes ago while this Mac was away: the host holds that run.
     await handClockToHost(cliId, Date.now() - 10 * 60_000)
+    // One whose host starts its runs itself (clock-host-start-v1).
+    await handClockToHost(startsId, Date.now() - 10 * 60_000, true)
     expect((await getRoutine(serverId))?.state?.clockHost).toBeUndefined()
 
     // The Routines page: the host-held one says where its clock runs, the other says nothing.
@@ -142,6 +148,12 @@ test('a routine whose clock is on a host names it on its card and on its task', 
     await expect(cliLine).toHaveAttribute('title', `Its clock runs on ${HOST}, where its work runs. A run that comes due while this Mac sleeps waits there, and this Mac starts it when it is back.`)
     await cliCard.scrollIntoViewIfNeeded()
     await shot(cliCard, 'routine-card-clock-waiting')
+    // A host that starts the run itself: the run starts there; this Mac only waits to hear.
+    const startsCard = page.locator('.routine-list .routine-card', { hasText: startsCli }).first()
+    await expect(startsCard.getByTestId('routine-clock-wait')).toHaveText(new RegExp(`^Due 1\\dm ago: waiting on ${HOST}$`))
+    await expect(startsCard.getByTestId('routine-clock-host')).toHaveAttribute('title', `Its clock runs on ${HOST}, where its work runs. A run that comes due while this Mac sleeps starts there on time.`)
+    await startsCard.scrollIntoViewIfNeeded()
+    await shot(startsCard, 'routine-card-clock-host-starts')
 
     // The task: one TRIGGER pill, listing both of its clock routines, the host named on the one it holds.
     await page.goto('/')
@@ -203,6 +215,6 @@ test('a routine whose clock is on a host names it on its card and on its task', 
     await expect(runRow.locator('.trigger-audit-what')).toHaveText(/^run now → /)
     await shot(flyout, 'task-trigger-flyout-run-now')
   } finally {
-    await cleanup([hostId, serverId, cliId], task.id)
+    await cleanup([hostId, serverId, cliId, startsId], task.id)
   }
 })
