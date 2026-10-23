@@ -22,6 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { execFile, execFileSync } from 'node:child_process'
+import { guardedPath } from '../setup/exec-guard-core.js'
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', 'scripts', 'dev-prod.sh')
 const script = fs.readFileSync(SCRIPT, 'utf-8')
@@ -178,7 +179,7 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
   it.skipIf(fixedBunPlaces.some((p) => fs.existsSync(p)))('refuses, before any step, a machine whose bun is older than the pin', async () => {
     const tools = standIns('0.0.1')
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-home-'))
-    const r = await dryRun({ PATH: `${tools}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: home })
+    const r = await dryRun({ PATH: guardedPath([tools], '/usr/bin:/bin:/usr/sbin:/sbin'), HOME: home })
     expect(r.status).toBe(1)
     expect(r.stderr).toMatch(new RegExp(`needs bun ${BUN_PIN.replace(/\./g, '\\.')} or newer`))
     expect(r.stderr).toMatch(/Found only: 0\.0\.1 at /)

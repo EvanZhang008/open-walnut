@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { gitChildEnv } from '../../src/lib/git-env.js'
+import { guardedPath } from '../setup/exec-guard-core.js'
 
 const WRAPPER = path.join(import.meta.dirname, '..', '..', 'scripts', 'deploy-committed.sh')
 const roots: string[] = []
@@ -147,7 +148,7 @@ describe('deploy-committed.sh', () => {
     standIn(bin, 'node')
     const home = path.join(path.dirname(f.repo), 'home')
     fs.mkdirSync(home)
-    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', PATH: `${bin}:/usr/bin:/bin`, HOME: home })
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', PATH: guardedPath([bin], '/usr/bin:/bin'), HOME: home })
     expect(r.stderr).toBe('')
     expect(r.status).toBe(0)
     expect(fs.readFileSync(path.join(bin, 'node.args'), 'utf-8').trim()).toMatch(/^- \//)
