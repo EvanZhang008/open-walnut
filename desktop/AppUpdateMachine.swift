@@ -338,4 +338,12 @@ enum RuntimeUpgrade {
         if replacesArchive { return !AppUpdateVersion.isNewer(installed, than: carried) }
         return AppUpdateVersion.isNewer(carried, than: installed)
     }
+
+    /// Get Started and Set Up Now on a Mac where install.sh already left a copy
+    /// (`curl … | sh`, an earlier app): it is used as it is, unless the carried
+    /// one replaces it by the rule a launch uses, so a setup never starts on what
+    /// the next launch would replace.
+    static func setupKeepsFound(carried: String?, installed: String?, foundArchive: Bool) -> Bool {
+        return !shouldInstallCarried(carried: carried, installed: installed, replacesArchive: foundArchive)
+    }
 }

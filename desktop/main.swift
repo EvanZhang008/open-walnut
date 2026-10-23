@@ -434,7 +434,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Get Started: the self-contained Walnut, installed by the install.sh this
     /// app carries, with its data in ~/.open-walnut (an existing one is kept and
-    /// used as it is). A Mac where install.sh already ran uses that copy.
+    /// used as it is). A Mac where install.sh already ran uses that copy, unless
+    /// it is older than the one this app carries, or a Node archive.
     @objc func startFreshSetup() {
         installRuntime(dataHome: NSHomeDirectory() + "/.open-walnut", offerExisting: true)
     }
@@ -451,7 +452,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let bundled = BundledRuntime(installDir: env["OPEN_WALNUT_INSTALL_DIR"]!)
         try? FileManager.default.createDirectory(atPath: dataHome, withIntermediateDirectories: true)
 
-        if bundled.isInstalled() {
+        // A copy install.sh left here (`curl … | sh`, an earlier app) is used as it is,
+        // unless the carried one replaces it (newer, or the file over a Node archive):
+        // then install.sh below puts it in over that copy.
+        let found = bundled.layout()
+        if let layout = found, RuntimeUpgrade.setupKeepsFound(
+            carried: carried?.version, installed: bundled.installedVersion(layout: layout), foundArchive: layout == .archive) {
             DesktopLogger.shared.log("runtime_found", fields: ["dir": bundled.installDir])
             useRuntime(bundled, home: dataHome)
             return
@@ -486,6 +492,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.appendToBootstrapLog("install.sh", result.output)
                 DesktopLogger.shared.log("runtime_install_finished", fields: ["ok": String(result.success)])
                 if result.success, bundled.isInstalled() {
+                    self.useRuntime(bundled, home: dataHome)
+                } else if !result.success, found != nil, bundled.isInstalled() {
+                    // A failed install.sh changes nothing: the copy found here still runs,
+                    // as a launch runs its own after a failed upgradeRuntime.
+                    DesktopLogger.shared.log("runtime_found_kept", fields: ["dir": bundled.installDir])
                     self.useRuntime(bundled, home: dataHome)
                 } else if result.success {
                     self.showError("The download finished, but Walnut is not in \(bundled.installDir) where this app looks for it.", details: result.output)

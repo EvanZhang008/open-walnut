@@ -193,6 +193,16 @@ struct AppUpdateTests {
         // One that went past it stays until an app carries one at least as new: never a downgrade.
         precondition(!RuntimeUpgrade.shouldInstallCarried(carried: "0.6.18", installed: "0.6.19", replacesArchive: true))
         precondition(!RuntimeUpgrade.shouldInstallCarried(carried: nil, installed: "0.6.18", replacesArchive: true))
+        // A setup that finds a copy: the 0.6.17 archive `curl … | sh` left gets the carried
+        // file put in over it, at once; a file as new as the carried one, or newer, or a
+        // dev build carrying nothing, is used as it is.
+        precondition(!RuntimeUpgrade.setupKeepsFound(carried: "0.6.18", installed: "0.6.17", foundArchive: true))
+        precondition(!RuntimeUpgrade.setupKeepsFound(carried: "0.6.18", installed: "0.6.18", foundArchive: true))
+        precondition(!RuntimeUpgrade.setupKeepsFound(carried: "0.6.18", installed: "0.6.17", foundArchive: false))
+        precondition(RuntimeUpgrade.setupKeepsFound(carried: "0.6.18", installed: "0.6.18", foundArchive: false))
+        precondition(RuntimeUpgrade.setupKeepsFound(carried: "0.6.18", installed: "0.6.19", foundArchive: false))
+        precondition(RuntimeUpgrade.setupKeepsFound(carried: "0.6.18", installed: "0.6.19", foundArchive: true))
+        precondition(RuntimeUpgrade.setupKeepsFound(carried: nil, installed: "0.6.17", foundArchive: true))
 
         print("app-update-tests: ok")
     }
