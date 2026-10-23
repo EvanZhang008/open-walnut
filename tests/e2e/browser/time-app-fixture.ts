@@ -1,3 +1,4 @@
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import net from 'node:net'
 
@@ -28,7 +29,7 @@ async function reservePort(): Promise<number> {
 export async function startTimeFixture(env: Record<string, string>): Promise<{ fixture: TimeFixture; stop: () => Promise<void> }> {
   const port = await reservePort()
   let output = ''
-  const child: ChildProcessWithoutNullStreams = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/time-app-server.ts'], {
+  const child: ChildProcessWithoutNullStreams = spawn(bunRuntime(), ['tests/e2e/browser/time-app-server.ts'], {
     cwd: process.cwd(),
     env: { ...process.env, PW_TIME_APP_PORT: String(port), ...env },
     stdio: ['ignore', 'pipe', 'pipe'],

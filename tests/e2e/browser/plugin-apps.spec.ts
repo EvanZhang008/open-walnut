@@ -11,7 +11,7 @@ import { type Page } from '@playwright/test'
  * The fixture server installs no plugins, so this pins the two behaviors that
  * must hold on a bare install. "No plugins" is load-bearing and slightly subtle:
  * Walnut now SHIPS one first-party App as a builtin (walnut-time), but its artifacts
- * land in `dist/integrations/` only, and this fixture boots from source via tsx,
+ * land in `dist/integrations/` only, and this fixture boots from source on bun,
  * where builtin discovery resolves `src/integrations/` instead. If a fixture is ever
  * pointed at a built `dist`, the counts below become 1, not 0 — that is packaging,
  * not a regression (scripts/ship-builtin-plugins.mjs).

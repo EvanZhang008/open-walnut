@@ -18,6 +18,7 @@
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
+import { bunCommand } from '../../helpers/bun-runtime.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3472)
 if (port === 3456 || port === 3457) throw new Error(`port ${port} is not this config's`)
@@ -49,10 +50,10 @@ export default defineConfig({
     { name: 'chromium-desktop', use: { ...devices['Desktop Chrome'], ...desktop } },
   ],
   webServer: {
-    // node itself, not the tsx CLI: on SIGTERM the CLI waits 30 ms for its child to
-    // report the signal, then SIGKILLs it, so a fixture busy at that moment died
-    // before it stopped the cluster and its replica ran on. One process, one handler.
-    command: `${JSON.stringify(process.execPath)} --import tsx tests/e2e/browser/replica-server.ts`,
+    // bun running the fixture itself, one process with one handler (the tsx CLI
+    // it replaced SIGKILLed a fixture 30 ms after a SIGTERM, before it stopped
+    // the cluster, and the replica ran on). Only this runner stays on Node.
+    command: `${bunCommand()} tests/e2e/browser/replica-server.ts`,
     cwd: path.resolve(import.meta.dirname, '../../..'),
     // The control port opens last, once the replica holds its first copies.
     url: `http://127.0.0.1:${port + 1}/control/ready`,

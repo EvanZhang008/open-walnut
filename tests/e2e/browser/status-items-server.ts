@@ -16,7 +16,7 @@
  * Never :3456 and never the developer's data: OPEN_WALNUT_HOME, HOME and the daemon dirs
  * all point inside one temp directory that is removed on shutdown.
  *
- * Run: ./node_modules/.bin/tsx tests/e2e/browser/status-items-server.ts
+ * Run: bun tests/e2e/browser/status-items-server.ts
  * Reads PW_STATUS_ITEMS_PORT; prints `STATUS_ITEMS_READY <json>` when it is serving.
  */
 import fs from 'node:fs/promises'

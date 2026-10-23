@@ -15,7 +15,7 @@
  * Never :3456 and never the developer's data: OPEN_WALNUT_HOME, HOME and the
  * daemon dirs all point inside one temp directory that is removed on shutdown.
  *
- * Run: ./node_modules/.bin/tsx tests/e2e/browser/plugin-secret-form-server.ts
+ * Run: bun tests/e2e/browser/plugin-secret-form-server.ts
  * Reads PW_PLUGIN_SECRET_FORM_PORT; prints `PLUGIN_SECRET_FORM_READY <json>` when serving.
  */
 
@@ -173,7 +173,7 @@ console.log(`PLUGIN_SECRET_FORM_READY ${JSON.stringify(fixture)}`)
 
 let shuttingDown = false
 const shutdown = async () => {
-  // SIGTERM arrives both directly and relayed by tsx; one teardown, not two.
+  // SIGTERM may arrive more than once (a runner, a process group); one teardown, not two.
   if (shuttingDown) return
   shuttingDown = true
   const teardown = (async () => {

@@ -9,6 +9,8 @@
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
+// The fixture server runs on bun; only the Playwright runner stays on Node.
+import { bunCommand } from '../../helpers/bun-runtime.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3468)
 if (port === 3456) throw new Error('Production port is forbidden')
@@ -31,7 +33,7 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'], viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 } },
   ],
   webServer: {
-    command: './node_modules/.bin/tsx tests/e2e/browser/host-alone-server.ts',
+    command: `${bunCommand()} tests/e2e/browser/host-alone-server.ts`,
     cwd: path.resolve(import.meta.dirname, '../../..'),
     // The control port opens last, once the Mac's device list is in and the Mac is gone.
     url: `http://127.0.0.1:${port + 1}/control/ready`,

@@ -4,9 +4,9 @@
  * Sets WALNUT_HOME env var to a temp dir BEFORE importing any modules,
  * then starts the real Express server serving the pre-built SPA.
  *
- * Run: ./node_modules/.bin/tsx tests/e2e/browser/test-server.ts
- * (Local binary, not `npx tsx` — npx's resolution path costs tens of seconds on a
- * loaded machine and used to blow playwright.config.ts's webServer timeout.)
+ * Run: bun tests/e2e/browser/test-server.ts
+ * (bun runs it as it is, the way playwright.config.ts starts it. Never `npx`: its
+ * resolution path costs tens of seconds on a loaded machine.)
  */
 
 import path from 'node:path'
@@ -4762,8 +4762,8 @@ console.log(`Playwright test server ready on http://localhost:${testPort}`)
 // Graceful shutdown
 let shuttingDown = false
 const shutdown = async () => {
-  // The group SIGTERM Playwright sends reaches this process directly AND via
-  // tsx's signal relay; one teardown, not two racing ones.
+  // A SIGTERM may arrive more than once (Playwright's group signal, a runner's
+  // own); one teardown, not two racing ones.
   if (shuttingDown) return
   shuttingDown = true
   const teardown = (async () => {

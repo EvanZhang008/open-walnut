@@ -1,3 +1,4 @@
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
@@ -72,7 +73,7 @@ test.beforeAll(async () => {
   test.setTimeout(300_000)
   await fs.mkdir(SHOT_DIR, { recursive: true })
   const port = await reservePort()
-  child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/mail-app-server.ts'], {
+  child = spawn(bunRuntime(), ['tests/e2e/browser/mail-app-server.ts'], {
     cwd: process.cwd(),
     env: { ...process.env, PW_MAIL_PORT: String(port), PW_MAIL_DENSE: '1', PW_MAIL_DIGEST_OFF: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],

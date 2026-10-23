@@ -12,6 +12,8 @@
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
+// The fixture server runs on bun; only the Playwright runner stays on Node.
+import { bunCommand } from '../../helpers/bun-runtime.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3469)
 const ports = { chromium: port, webkit: port + 1 }
@@ -19,7 +21,7 @@ if (Object.values(ports).includes(3456)) throw new Error('Production port is for
 engageGate(port)
 const repoRoot = path.resolve(import.meta.dirname, '../../..')
 const fixtureServer = (p: number) => ({
-  command: './node_modules/.bin/tsx tests/e2e/browser/cloud-host-server.ts',
+  command: `${bunCommand()} tests/e2e/browser/cloud-host-server.ts`,
   cwd: repoRoot,
   url: `http://localhost:${p}/api/config`,
   env: { CLOUD_HOST_LINK_CONTROL: '1', PW_TEST_PORT: String(p) },

@@ -1,6 +1,8 @@
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
+// The fixture server runs on bun; only the Playwright runner stays on Node.
+import { bunCommand } from '../../helpers/bun-runtime.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3457)
 if (port === 3456) throw new Error('Production port is forbidden')
@@ -24,7 +26,7 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'], viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 } },
   ],
   webServer: {
-    command: './node_modules/.bin/tsx tests/e2e/browser/warm-session-server.ts',
+    command: `${bunCommand()} tests/e2e/browser/warm-session-server.ts`,
     cwd: path.resolve(import.meta.dirname, '../../..'),
     url: `http://localhost:${port}/api/config`,
     reuseExistingServer: false,

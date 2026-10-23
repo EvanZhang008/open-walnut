@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 import { perRunWorkers } from './tests/e2e/browser/pw-concurrency.js'
 import { engageGate } from './tests/e2e/browser/pw-gate.js'
+import { bunCommand } from './tests/helpers/bun-runtime.js'
 
 const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
 
@@ -46,10 +47,10 @@ export default defineConfig({
   ],
 
   webServer: {
-    // Local binary, NOT `npx tsx`: tsx was never a declared dependency, so every
-    // run paid npx's registry-resolution path — measured at 88s for a bare
-    // `npx tsx --version` on this machine, which alone blew the old 30s budget.
-    command: './node_modules/.bin/tsx tests/e2e/browser/test-server.ts',
+    // The fixture server runs on bun (tests/helpers/bun-runtime.ts), which runs
+    // its TypeScript as it is; only this runner stays on Node. Never `npx`: its
+    // registry resolution alone once took 88s here, past the whole boot budget.
+    command: `${bunCommand()} tests/e2e/browser/test-server.ts`,
     url: `http://localhost:${testPort}/api/dashboard`,
     reuseExistingServer: !process.env.CI,
     // Cold boot of the fixture (real server + vite + isolated daemon) measured at

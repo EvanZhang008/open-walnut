@@ -27,6 +27,7 @@
  * (cloud-host-silent-link.config.ts). Screenshots are cropped to the column, the
  * palette and the picker; CLOUD_HOST_SHOTS picks their directory.
  */
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -467,7 +468,7 @@ test('the operator removes this Mac on the companion: the Cloud card stops sayin
   const cloudCard = page.locator('#cloud')
   await expect(cloudCard.getByText('Connected', { exact: true })).toBeVisible({ timeout: 60_000 })
   // On the box, as its operator runs it (its own data dir, a local caller).
-  const out = execFileSync(path.join(REPO, 'node_modules', '.bin', 'tsx'), [path.join(REPO, 'src', 'cli.ts'), 'device', 'revoke', 'mac-primary'], {
+  const out = execFileSync(bunRuntime(), [path.join(REPO, 'src', 'cli.ts'), 'device', 'revoke', 'mac-primary'], {
     cwd: REPO, encoding: 'utf-8', timeout: 120_000,
     env: {
       ...process.env,

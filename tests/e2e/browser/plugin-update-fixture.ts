@@ -4,6 +4,7 @@
  * builds the linked checkout pair (`linked-work` tracking `linked-origin.git`, plus the
  * `linked-publisher` clone) and the git-source repo under the fixture home.
  */
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { execFile, spawn } from 'node:child_process'
 import net from 'node:net'
 import path from 'node:path'
@@ -32,7 +33,7 @@ async function reservePort(): Promise<number> {
 export async function startPluginFixture(): Promise<PluginFixture> {
   const port = await reservePort()
   let output = ''
-  const child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/test-server.ts'], {
+  const child = spawn(bunRuntime(), ['tests/e2e/browser/test-server.ts'], {
     cwd: process.cwd(),
     env: { ...process.env, PW_TEST_PORT: String(port), PW_NATIVE_PLUGIN_FIXTURE: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],

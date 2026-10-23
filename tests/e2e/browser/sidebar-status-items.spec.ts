@@ -1,3 +1,4 @@
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
@@ -116,7 +117,7 @@ test.beforeAll(async () => {
   test.setTimeout(240_000)
   await fs.mkdir(SHOTS, { recursive: true })
   const port = await reservePort()
-  child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/status-items-server.ts'], {
+  child = spawn(bunRuntime(), ['tests/e2e/browser/status-items-server.ts'], {
     cwd: process.cwd(),
     env: { ...process.env, PW_STATUS_ITEMS_PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],

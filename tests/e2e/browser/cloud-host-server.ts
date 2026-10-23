@@ -16,7 +16,7 @@
  * (`GET /mode?m=pass|blackhole|drop-hold|slow`, and for slow `&ms=<delay>&bps=<bytes/s>`),
  * so a spec can make a connected companion go silent or slow (cloud-host-silent-link.spec.ts).
  *
- * Run: ./node_modules/.bin/tsx tests/e2e/browser/cloud-host-server.ts
+ * Run: bun tests/e2e/browser/cloud-host-server.ts
  * Reads PW_TEST_PORT (default 3466); prints `CLOUD_HOST_READY <json>`.
  */
 import fs from 'node:fs/promises'

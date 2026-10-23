@@ -10,6 +10,7 @@
  * stub, so the shared fixture task is never completed; search answers come
  * from stubs too (three groups on demand).
  */
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
@@ -580,7 +581,7 @@ test.describe('Mail on a phone', () => {
         srv.close(() => (a && typeof a === 'object' ? resolve(a.port) : reject(new Error('no port'))))
       })
     })
-    child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/mail-app-server.ts'], {
+    child = spawn(bunRuntime(), ['tests/e2e/browser/mail-app-server.ts'], {
       cwd: process.cwd(), env: { ...process.env, PW_MAIL_PORT: String(port), PW_MAIL_DENSE: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
     })
     child.stdout.on('data', (c) => { output = `${output}${String(c)}`.slice(-20_000) })

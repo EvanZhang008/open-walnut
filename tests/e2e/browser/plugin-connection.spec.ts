@@ -1,3 +1,4 @@
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
@@ -91,7 +92,7 @@ test.beforeAll(async () => {
   test.setTimeout(240_000)
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
   const port = await reservePort()
-  child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/plugin-connection-server.ts'], {
+  child = spawn(bunRuntime(), ['tests/e2e/browser/plugin-connection-server.ts'], {
     cwd: process.cwd(),
     env: { ...process.env, PW_PLUGIN_CONNECTION_PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],

@@ -21,7 +21,7 @@
  * inside PW_RESTART_HOME, which the spec removes.
  *
  * Run: PW_RESTART_ROLE=api|vite PW_RESTART_HOME=<dir> PW_RESTART_API_PORT=<n> [PW_RESTART_VITE_PORT=<n>]
- *      ./node_modules/.bin/tsx tests/e2e/browser/plugin-restart-server.ts
+ *      bun tests/e2e/browser/plugin-restart-server.ts
  * Prints `RESTART_API_READY <json>` / `RESTART_VITE_READY <json>` once serving.
  */
 

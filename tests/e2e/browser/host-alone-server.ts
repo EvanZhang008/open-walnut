@@ -10,7 +10,7 @@
  * Never :3456 and never the developer's data: the server's data dir and the
  * daemon dir sit under temp dirs, removed on shutdown.
  *
- * Run: ./node_modules/.bin/tsx tests/e2e/browser/host-alone-server.ts
+ * Run: bun tests/e2e/browser/host-alone-server.ts
  * Reads PW_TEST_PORT (default 3468).
  */
 import fs from 'node:fs'

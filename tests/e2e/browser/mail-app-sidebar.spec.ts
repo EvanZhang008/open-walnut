@@ -1,3 +1,4 @@
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
@@ -71,7 +72,7 @@ class FixtureServer {
 
   async start(env: Record<string, string>): Promise<Fixture> {
     const port = await reservePort()
-    this.child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/mail-app-server.ts'], {
+    this.child = spawn(bunRuntime(), ['tests/e2e/browser/mail-app-server.ts'], {
       cwd: process.cwd(),
       env: { ...process.env, PW_MAIL_PORT: String(port), PW_MAIL_DIGEST_OFF: '1', ...env },
       stdio: ['ignore', 'pipe', 'pipe'],

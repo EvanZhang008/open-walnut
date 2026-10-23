@@ -8,6 +8,7 @@
  * mailbox ids, six labels holding stale unread and one of them with cached mail. Every defect these
  * specs pin was only visible at that density.
  */
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
@@ -41,7 +42,7 @@ export class MailFixtureServer {
 
   async start(env: Record<string, string> = {}): Promise<MailFixture> {
     const port = await reservePort()
-    this.child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/mail-app-server.ts'], {
+    this.child = spawn(bunRuntime(), ['tests/e2e/browser/mail-app-server.ts'], {
       cwd: process.cwd(),
       env: {
         ...process.env,

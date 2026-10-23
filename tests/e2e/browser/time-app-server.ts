@@ -11,7 +11,7 @@
  * Never :3456 and never the developer's data: OPEN_WALNUT_HOME, HOME and the daemon
  * dirs all point inside one temp directory that is removed on shutdown.
  *
- * Run: ./node_modules/.bin/tsx tests/e2e/browser/time-app-server.ts
+ * Run: bun tests/e2e/browser/time-app-server.ts
  * Reads PW_TIME_APP_PORT; prints `TIME_APP_READY <json>` when it is serving.
  */
 

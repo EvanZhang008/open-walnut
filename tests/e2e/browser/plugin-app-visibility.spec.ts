@@ -12,6 +12,7 @@
  * Its own servers (plugin-restart-server.ts), because the race needs an api process that is
  * restarted under an open page while the page's origin (Vite) stays up.
  */
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
@@ -45,7 +46,7 @@ async function reservePort(): Promise<number> {
 }
 
 function spawnRole(role: 'api' | 'vite'): ChildProcessWithoutNullStreams {
-  const child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/plugin-restart-server.ts'], {
+  const child = spawn(bunRuntime(), ['tests/e2e/browser/plugin-restart-server.ts'], {
     cwd: process.cwd(),
     env: {
       ...process.env,

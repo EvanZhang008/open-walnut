@@ -1,3 +1,4 @@
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
@@ -202,7 +203,7 @@ async function contrastAgainstCard(target: Locator): Promise<number> {
 test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
   fixturePort = await reservePort()
-  child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/test-server.ts'], {
+  child = spawn(bunRuntime(), ['tests/e2e/browser/test-server.ts'], {
     cwd: process.cwd(),
     env: {
       ...process.env,

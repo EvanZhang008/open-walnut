@@ -21,6 +21,7 @@
  *
  * page.goto only loads the app; everything after is a real click or keystroke.
  */
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -68,7 +69,7 @@ function boxCli(f: Fixture, ...args: string[]): string {
   return runBoxCli(f, args).replace(/\x1b\[[0-9;]*m/g, '')
 }
 function runBoxCli(f: Fixture, args: string[]): string {
-  return execFileSync(path.join(REPO, 'node_modules', '.bin', 'tsx'), [path.join(REPO, 'src', 'cli.ts'), 'device', ...args], {
+  return execFileSync(bunRuntime(), [path.join(REPO, 'src', 'cli.ts'), 'device', ...args], {
     cwd: REPO,
     encoding: 'utf-8',
     timeout: 90_000,
