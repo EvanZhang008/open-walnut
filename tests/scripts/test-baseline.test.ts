@@ -47,9 +47,9 @@ process.exit(Number(process.env.FAKE_EXIT || 0))
 interface FileResult { name: string; status: 'passed' | 'failed'; message?: string; assertionResults: Array<{ fullName: string; status: string; failureMessages?: string[] }> }
 
 /** A report of `files` (repo-relative names), each passing unless listed in `failed`. */
-function report(files: string[], failed: Record<string, string[]> = {}, broken: string[] = []): object {
+function report(files: string[], failed: Record<string, string[]> = {}, broken: string[] = [], root = '/runner/work/repo'): object {
   const testResults: FileResult[] = files.map((f) => ({
-    name: `/runner/work/repo/${f}`,
+    name: `${root}/${f}`,
     status: broken.includes(f) || failed[f] ? 'failed' : 'passed',
     ...(broken.includes(f) ? { message: 'Error: Cannot find module x\n    at y' } : {}),
     assertionResults: broken.includes(f) ? [] : [
@@ -66,7 +66,7 @@ const reported = (r: object | null | undefined) =>
 
 /** `list` defaults to exactly the report's files; null = `vitest list` fails. */
 function run(mode: 'check' | 'record', opts: {
-  report?: object | null; list?: string[] | null; baseline?: object; minFiles?: number; runOut?: string; args?: string[]; env?: Record<string, string>
+  report?: object | null; list?: string[] | null; baseline?: object; minFiles?: number; runOut?: string; args?: string[]; env?: Record<string, string>; cwd?: string
 }): Promise<{ code: number; out: string }> {
   const list = opts.list === undefined ? reported(opts.report) : opts.list
   const reportFile = path.join(tmp, 'report.json')
@@ -75,7 +75,7 @@ function run(mode: 'check' | 'record', opts: {
   if (opts.baseline) fs.writeFileSync(baselineFile, JSON.stringify(opts.baseline))
   return new Promise((resolve) => {
     execFile(process.execPath, [SCRIPT, mode, ...(opts.args ?? [])], {
-      cwd: tmp,
+      cwd: opts.cwd ?? tmp,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -131,6 +131,23 @@ describe('test-baseline.mjs check', () => {
     const listArgv = JSON.parse(fs.readFileSync(path.join(tmp, 'list-argv.json'), 'utf8')) as string[]
     expect(listArgv.slice(0, 4)).toEqual(['vitest@bun', 'list', '--config', 'vitest.e2e.config.ts'])
     expect(listArgv).toEqual(expect.arrayContaining(['--filesOnly', '--maxWorkers=1', '--shard=1/1']))
+  })
+
+  it('keys a file by its path from the repo root, even when the checkout\'s own path has a tests/ in it', async () => {
+    // A clone in `.../bun-only-tests/tree` once keyed every file `tests/tree/tests/...`.
+    const repo = path.join(tmp, 'bun-only-tests', 'tree')
+    fs.mkdirSync(path.join(repo, 'node_modules', '.bin'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'node_modules', '.bin', 'vitest'), FAKE_VITEST, { mode: 0o755 })
+    const runOut = path.join(tmp, 'run.json')
+    const r = await run('check', {
+      report: report([A, B], { [A]: ['known one'] }, [], fs.realpathSync(repo)),
+      list: [A, B],
+      baseline: baseline([`${A} :: known one`]),
+      runOut,
+      cwd: repo,
+    })
+    expect(r.code, r.out).toBe(0)
+    expect(JSON.parse(fs.readFileSync(runOut, 'utf8')).failures).toEqual([`${A} :: known one`])
   })
 
   it('fails a new failure and prints why it failed', async () => {

@@ -39,8 +39,17 @@ if (!['record', 'check'].includes(mode)) {
 
 const TMP = process.env.TMPDIR ?? '/tmp';
 const reportFile = path.join(TMP, `walnut-baseline-${process.pid}.json`);
-/** One key per test file, the same for a reported file and a listed one. */
-const fileKey = (abs) => abs.replace(/^.*?(tests\/.*)$/, '$1');
+/**
+ * One key per test file, the same for a reported file and a listed one: its path
+ * from the repo root (the cwd), else from its first `tests/` (a report written in
+ * another checkout). Not the first `tests/` of a path under the root: a checkout
+ * whose own path has one (a clone in `.../bun-only-tests/tree`) keyed every file
+ * `tests/tree/tests/...`, so no known failure matched.
+ */
+const fileKey = (abs) => {
+  const rel = path.relative(process.cwd(), abs).split(path.sep).join('/');
+  return rel && !rel.startsWith('../') && rel !== '..' && !path.isAbsolute(rel) ? rel : abs.replace(/^.*?(tests\/.*)$/, '$1');
+};
 
 /**
  * The files this run must report, so a file that silently never ran fails the
