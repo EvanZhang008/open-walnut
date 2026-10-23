@@ -23,6 +23,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { MEMORY_DIR, REPOS_MEMORY_DIR } from '../constants.js'
+import { sortedByName } from '../lib/dir-order.js'
 
 export const MEMORY_FILES_MARKER = 'files.v1'
 const MAX_FILE_BYTES = 1024 * 1024
@@ -95,7 +96,7 @@ async function skillExtras(skills: Array<{ dirName: string; location?: string }>
     if (!s.location || !/^[A-Za-z0-9._-]+$/.test(s.dirName)) continue
     const refs = path.join(path.dirname(s.location), 'references')
     let names: fs.Dirent[]
-    try { names = await fsp.readdir(refs, { withFileTypes: true }) } catch { continue }
+    try { names = sortedByName(await fsp.readdir(refs, { withFileTypes: true })) } catch { continue }
     let n = 0
     for (const d of names) {
       if (!d.isFile() || d.name.startsWith('.') || n >= MAX_REFERENCES) continue

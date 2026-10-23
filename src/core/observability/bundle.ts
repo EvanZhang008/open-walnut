@@ -19,6 +19,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { CLAUDE_HOME, LOG_DIR, SESSION_STREAMS_DIR } from '../../constants.js';
 import { log } from '../../logging/index.js';
+import { sortedNames } from '../../lib/dir-order.js';
 
 /**
  * Stream a file line-by-line, collecting the lines `keep` accepts.
@@ -332,8 +333,7 @@ async function captureClientEvidence(
 async function captureDaemonLogs(sessionId: string): Promise<string> {
   let files: string[];
   try {
-    files = fs
-      .readdirSync(LOG_DIR)
+    files = sortedNames(fs.readdirSync(LOG_DIR))
       .filter(f => f.startsWith('daemon-d-') && f.endsWith('.log'))
       .map(f => path.join(LOG_DIR, f));
   } catch {

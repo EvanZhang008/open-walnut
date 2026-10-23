@@ -26,6 +26,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { log } from '../../logging/index.js'
+import { sortedNames } from '../../lib/dir-order.js'
 import { HOST_REDIAL_MIN_INTERVAL_MS } from './host-wake-signal.js'
 
 export const CREDENTIAL_POLL_MS = 15_000
@@ -68,7 +69,7 @@ export async function newestSshFileMtime(
   nowMs: number = Date.now(),
 ): Promise<number | null> {
   let names: string[]
-  try { names = await fs.readdir(dir) } catch { return null }
+  try { names = sortedNames(await fs.readdir(dir)) } catch { return null }
   const stats = await Promise.all(names.filter((n) => !NOT_A_CREDENTIAL.test(n)).slice(0, MAX_FILES)
     .map((n) => fs.stat(path.join(dir, n)).catch(() => null)))
   let newest: number | null = null

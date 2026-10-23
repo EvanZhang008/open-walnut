@@ -23,6 +23,7 @@ import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { timed } from '../../core/observability/metrics.js'
+import { sortedByName } from '../../lib/dir-order.js'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import {
   parseFrontmatter,
@@ -1947,7 +1948,7 @@ async function getAllMdFilesFallback(dir: string): Promise<string[]> {
   const results: string[] = []
   let entries: import('fs').Dirent[]
   try {
-    entries = await fsp.readdir(dir, { withFileTypes: true })
+    entries = sortedByName(await fsp.readdir(dir, { withFileTypes: true }))
   } catch {
     return results
   }
