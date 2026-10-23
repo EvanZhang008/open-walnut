@@ -1489,6 +1489,12 @@ export interface ExposeProviderDefinition {
   signInHint?: string
   /** One sentence for the person when the command is not installed. */
   installHint?: string
+  /**
+   * A shell command that installs the CLI. Walnut runs it once (`sh -c`, the tunnel's
+   * environment) when the command is not found, on the machine that runs the tunnel, then
+   * starts it; Retry runs it again. Unset: only `installHint` is shown.
+   */
+  installCommand?: string
   /** Check the URL answers every minute while connected and restart a silent tunnel. Default true. */
   probe?: boolean
   /**
@@ -1512,6 +1518,10 @@ export interface ExposeStatus {
   nextRetryAt?: number
   /** Set while the tunnel runs on a host's Walnut server instead of this computer. */
   runsOn?: { hostKey: string; label: string; auto: boolean }
+  /** What Walnut is doing for it right now (installing the CLI, say). */
+  activity?: string
+  /** The tunnel is moving to a host: it runs here until that host's is up. */
+  movingTo?: { hostKey: string; label: string; note?: string }
 }
 
 export interface ExposeService {

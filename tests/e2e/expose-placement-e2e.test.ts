@@ -1,14 +1,17 @@
 /**
  * Where the tunnel runs, on a real server (src/core/expose/placement.ts): a
  * provider that names always-on hosts puts this Walnut's tunnel on the server
- * kept on such a host, and none runs here; picking This computer runs it here
- * and lets the host go; a host that would take the same address is held back.
+ * kept on such a host (its server turned on, installed if it had none), and the
+ * one here runs until that host holds it; picking This computer runs it here and
+ * lets the host go; a host whose server was turned off by hand is passed over; a
+ * host that would take the same address is held back.
  *
  * Real server, real child process for the tunnel here (a fake CLI that prints
- * its address), registered the way a plugin registers. The host is named in
- * config.yaml and never connects (a made-up hostname), so its server waits for
- * it: the host's half (a host server running the tunnel it is given) is
- * tests/core/host-server-*.test.ts and tests/host-server/.
+ * its address), registered the way a plugin registers. The hosts are named in
+ * config.yaml and never connect (made-up hostnames), so the tunnel never leaves
+ * here: the handover to a host that connects is tests/e2e/expose-handover-e2e.test.ts,
+ * and a host server running the tunnel it is given tests/core/host-server-*.test.ts
+ * and tests/host-server/.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -72,9 +75,9 @@ beforeAll(async () => {
   await fs.writeFile(fakeTunnel, FAKE_TUNNEL)
   await updateConfig({
     hosts: {
-      // Its server already on: the tunnel follows the provider only to a host that runs Walnut.
+      // Its server already on.
       devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone', server: { enabled: true } },
-      // An always-on host with no server: offered, never picked by itself.
+      // An always-on host with no server yet: second by key, so picked only once devbox is turned off.
       spare: { label: 'Spare box', hostname: 'always-on-spare.invalid', user: 'someone' },
       laptop: { hostname: 'laptop.invalid', user: 'someone' },
     } as never,
@@ -86,7 +89,7 @@ beforeAll(async () => {
     title: 'Acme Tunnel',
     command: process.execPath,
     args: [fakeTunnel, '{name}', pidFile],
-    options: [{ key: 'name', label: 'Tunnel name', default: 'walnut', pattern: '[a-z0-9-]{1,40}' }],
+    options: [{ key: 'name', label: 'Tunnel name', default: 'acme-demo', pattern: '[a-z0-9-]{1,40}' }],
     urlPattern: 'https://[a-z0-9.-]+\\.acme-tunnel\\.example',
     readyPattern: 'connected!',
     probe: false,
@@ -114,31 +117,33 @@ describe('the tunnel on an always-on host by default', () => {
     expect(body.status).toMatchObject({ enabled: false, state: 'off' })
   })
 
-  it('turned on, it runs on the host: none here, the host\'s server is on and carries it', async () => {
+  it('turned on, placed on the host: it runs here until the host holds it, the host\'s server is on and carries it', async () => {
     expect((await put({ enabled: true, provider: 'acme-tunnel' })).status).toBe(200)
-    const status = (await expose()).status
-    expect(status).toMatchObject({ enabled: true, provider: 'acme-tunnel', state: 'starting', runsOn: { hostKey: 'devbox', label: 'Dev box', auto: true } })
-    expect(status.lastError).toMatch(/Dev box/)
-    // Nothing ran here.
-    await new Promise((r) => setTimeout(r, 500))
-    expect(await tunnelPid()).toBeNull()
+    // The address answers at once, from here: the host never connects in this file.
+    const status = await waitFor(async () => { const s = (await expose()).status; return s.state === 'connected' ? s : null })
+    expect(status).toMatchObject({ enabled: true, provider: 'acme-tunnel', url: 'https://someone-acme-demo.acme-tunnel.example', movingTo: { hostKey: 'devbox', label: 'Dev box' } })
+    expect(status.runsOn).toBeUndefined()
+    expect(alive((await waitFor(tunnelPid))!)).toBe(true)
+    expect((await expose()).settings.placedOn).toBe('devbox')
     // The host's server is set up when the host connects (it never does here).
     const host = await waitFor(async () => { const h = await hostEntry('devbox'); return h?.view?.phase === 'waiting-for-host' ? h : null })
     expect(host.settings).toMatchObject({ enabled: true, carriesTunnel: true })
-    expect((await expose()).status.lastError).toBe('Waiting to connect to Dev box.')
+    expect((await expose()).status.movingTo.note).toBe('Waiting to connect to Dev box.')
     expect((await hostEntry('laptop'))?.settings.enabled).toBe(false)
     expect((await hostEntry('spare'))?.settings.enabled).toBe(false)
-    // The sign-in code lists no address of this computer: its tunnel is the host's.
+    // Its address is this computer's until the host holds it.
     const code = await (await api('/api/devices/browser-code', { method: 'POST' })).json()
-    expect(code.addresses.filter((a: { where: string }) => a.where === 'this-computer')).toEqual([])
+    expect(code.addresses.map((a: { where: string }) => a.where)).toEqual(['this-computer'])
   })
 
-  it('picking This computer runs it here and lets the host go', async () => {
+  it('picking This computer keeps it here and lets the host go', async () => {
+    const pid = (await tunnelPid())!
     expect((await put({ run_on: 'here' })).status).toBe(200)
-    const status = await waitFor(async () => { const s = (await expose()).status; return s.state === 'connected' ? s : null })
-    expect(status.url).toBe('https://someone-walnut.acme-tunnel.example')
+    const status = await waitFor(async () => { const s = (await expose()).status; return s.state === 'connected' && !s.movingTo ? s : null })
+    expect(status.url).toBe('https://someone-acme-demo.acme-tunnel.example')
     expect(status.runsOn).toBeUndefined()
-    const pid = await waitFor(tunnelPid)
+    // The same run: nothing restarted it.
+    expect(await tunnelPid()).toBe(pid)
     expect(alive(pid)).toBe(true)
     expect((await expose()).settings).toMatchObject({ runOn: 'here', placedOn: 'here' })
     expect((await getConfig()).expose?.run_on).toBe('here')
@@ -149,13 +154,13 @@ describe('the tunnel on an always-on host by default', () => {
     expect(code.addresses.map((a: { where: string }) => a.where)).toEqual(['this-computer'])
   })
 
-  it('picking the host again stops the one here', async () => {
+  it('picking the host again: the one here keeps running while the host does not hold it', async () => {
     const pid = (await tunnelPid())!
-    await fs.rm(pidFile, { force: true })
     expect((await put({ run_on: 'devbox' })).status).toBe(200)
-    await waitFor(async () => !alive(pid))
-    expect((await expose()).status).toMatchObject({ state: 'starting', runsOn: { hostKey: 'devbox', auto: false } })
-    expect(await tunnelPid()).toBeNull()
+    expect((await expose()).status).toMatchObject({ state: 'connected', movingTo: { hostKey: 'devbox', note: 'Waiting to connect to Dev box.' } })
+    await new Promise((r) => setTimeout(r, 500))
+    expect(alive(pid)).toBe(true)
+    expect(await tunnelPid()).toBe(pid)
   })
 
   it('refuses a place that is not here or a host', async () => {
@@ -166,14 +171,21 @@ describe('the tunnel on an always-on host by default', () => {
     expect((await getConfig()).expose?.run_on).toBe('devbox')
   })
 
-  it('null follows the provider again; a host whose server was turned off by hand is passed over', async () => {
+  it('null follows the provider again; a host whose server was turned off by hand is passed over, for one with none yet', async () => {
     expect((await put({ run_on: null })).status).toBe(200)
     expect((await getConfig()).expose?.run_on).toBeUndefined()
-    expect((await expose()).status.runsOn).toMatchObject({ hostKey: 'devbox', auto: true })
+    expect((await expose()).status.movingTo).toMatchObject({ hostKey: 'devbox' })
     // Its server turned off in Settings (Walnut on a host): the runtime follows the hosts.
     expect((await putHost('devbox', { enabled: false })).status).toBe(200)
-    const status = await waitFor(async () => { const s = (await expose()).status; return s.state === 'connected' && !s.runsOn ? s : null })
-    expect(status.url).toBe('https://someone-walnut.acme-tunnel.example')
+    const status = await waitFor(async () => { const s = (await expose()).status; return s.movingTo?.hostKey === 'spare' ? s : null })
+    expect(status).toMatchObject({ state: 'connected', url: 'https://someone-acme-demo.acme-tunnel.example' })
+    expect((await expose()).settings.placedOn).toBe('spare')
+    // The host with no server gets one: it carries the tunnel.
+    expect((await hostEntry('spare'))?.settings).toMatchObject({ enabled: true, carriesTunnel: true })
+    // Both turned off by hand: here, with no move.
+    expect((await putHost('spare', { enabled: false })).status).toBe(200)
+    const here = await waitFor(async () => { const s = (await expose()).status; return s.state === 'connected' && !s.movingTo ? s : null })
+    expect(here.runsOn).toBeUndefined()
     expect((await expose()).settings.placedOn).toBe('here')
   })
 

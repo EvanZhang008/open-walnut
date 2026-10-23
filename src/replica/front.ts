@@ -63,6 +63,7 @@ import { clearSelfHost, installSelfHost, isLocalHere } from './self-host.js'
 import type { HostServerEnv } from '../host-server/env.js'
 import type { Route } from '../host-server/route.js'
 import { createHostExpose, followExposeSettings, type HostExpose } from '../host-server/expose.js'
+import { answerTunnelProbe } from '../core/expose/probe.js'
 import type { DeviceCopy } from '../host-server/device-copy.js'
 import { chooseReplicaRoute, presenceOf, quietWindow, SuspectMarks, wireLeaderPresence, type Presence, type PresenceInput, type ToldPresence } from './presence.js'
 import { createDispatcher, PRESENCE_BOOT_HEADER, PRESENCE_SEQ_HEADER, type Dispatcher, type OfflineWhy } from './dispatch.js'
@@ -308,6 +309,8 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
 
   return {
     middleware(req, res, next) {
+      // Which machine its tunnel reaches: answered here, never spliced to the Mac (core/expose/probe.ts).
+      if (answerTunnelProbe(req, res, expose.probeToken)) return
       // No alone page here (WP7): away, a page is the console, served from this
       // replica's copies; the alone page stays the plain host server's. One left
       // open from before the host switched program polls /_alone/state forever

@@ -39,6 +39,7 @@ import { createDaemonLink, type DaemonLink, type FollowerView } from './daemon-l
 import { chooseRoute, leaderAnswers, SUSPECT_MS, type Route } from './route.js'
 import { forwardHttp, forwardUpgrade, type ForwardTarget } from './proxy.js'
 import { createHostExpose, followExposeSettings, type HostExpose } from './expose.js'
+import { answerTunnelProbe } from '../core/expose/probe.js'
 import { sendAlone } from './pages.js'
 import { createAloneApi, ALONE_PREFIX } from './alone-api.js'
 import { createDeviceCopy } from './device-copy.js'
@@ -147,6 +148,8 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
   }
 
   function handlePublic(req: IncomingMessage, res: ServerResponse): void {
+    // Which machine its tunnel reaches: answered here, never forwarded to the Mac (core/expose/probe.ts).
+    if (answerTunnelProbe(req, res, expose.probeToken)) return
     // This server's own answers, whoever leads: the page asks /_alone/state to know when to leave.
     if ((req.url ?? '').startsWith(ALONE_PREFIX)) {
       void aloneApi.handle(req, res)

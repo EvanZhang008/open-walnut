@@ -208,7 +208,7 @@ describe('the tunnel port, through a bare pipe of a tunnel', () => {
     const res = await api('/api/expose', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true, provider: 'command' }) })
     expect(res.status).toBe(200)
     const status = await waitFor(async () => { const s = await exposeStatus(); return s.state === 'missing' ? s : null })
-    expect(status.lastError).toMatch(/not installed here/)
+    expect(status.lastError).toMatch(/^Custom command is not installed \(.*no-such-tunnel not found\)\.$/)
     expect(status.nextRetryAt).toBeGreaterThan(Date.now())
     await api('/api/expose', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) })
     await updateConfig({

@@ -53,6 +53,51 @@ describe('describeExpose, the tunnel on a host', () => {
     expect(describeExpose(status({ state: 'starting', lastError: 'ignored' }), 'Acme').text).toBe('Starting Acme...')
     expect(describeExpose(status({ state: 'connected' }), 'Acme').text).toBe('Connected through Acme.')
   })
+
+  it('a CLI missing on the host names the host', () => {
+    expect(describeExpose(status({ state: 'missing', runsOn, lastError: 'Acme is not installed (acme not found).', hint: 'Install acme.' }), 'Acme').text)
+      .toBe('On Dev box: Acme is not installed (acme not found). Install acme.')
+  })
+})
+
+describe('describeExpose, installing the CLI', () => {
+  it('says it installs, here and on a host', () => {
+    expect(describeExpose(status({ state: 'starting', activity: 'Installing Acme...' }), 'Acme')).toEqual({ dot: 'pending', text: 'Installing Acme...', retry: false })
+    expect(describeExpose(status({ state: 'starting', activity: 'Installing Acme...', runsOn: { hostKey: 'devbox', label: 'Dev box', auto: true } }), 'Acme').text)
+      .toBe('Installing Acme on Dev box...')
+  })
+
+  it('a failed install is the person\'s turn, with what it printed last and Retry', () => {
+    expect(describeExpose(status({ state: 'missing', lastError: 'Installing Acme failed: no access.', hint: 'Install acme.' }), 'Acme'))
+      .toMatchObject({ dot: 'action', retry: true, text: 'Installing Acme failed: no access. Install acme.' })
+    // A reason or a hint without a full stop still reads as its own sentence.
+    expect(describeExpose(status({ state: 'missing', lastError: 'Installing Acme failed: error: no access', hint: 'Install acme' }), 'Acme').text)
+      .toBe('Installing Acme failed: error: no access. Install acme.')
+    expect(describeExpose(status({ state: 'retrying', lastError: 'Error: connection refused' }), 'Acme').text).toBe('Error: connection refused.')
+  })
+})
+
+describe('describeExpose, moving to a host', () => {
+  const movingTo = { hostKey: 'devbox', label: 'Dev box' }
+
+  it('connected here meanwhile, with what the host is doing', () => {
+    expect(describeExpose(status({ state: 'connected', url: 'https://a.example', movingTo: { ...movingTo, note: 'Installing Walnut 1.2.3 on the host.' } }), 'Acme'))
+      .toEqual({ dot: 'done', retry: false, text: 'Connected through Acme. Moving to Dev box once it runs there. Installing Walnut 1.2.3 on the host.' })
+    // A note without a full stop gets one; none, no note.
+    expect(describeExpose(status({ state: 'connected', movingTo: { ...movingTo, note: 'Installing Acme...' } }), 'Acme').text)
+      .toBe('Connected through Acme. Moving to Dev box once it runs there. Installing Acme...')
+    expect(describeExpose(status({ state: 'connected', movingTo: { ...movingTo, note: 'Waiting to connect to Dev box' } }), 'Acme').text)
+      .toBe('Connected through Acme. Moving to Dev box once it runs there. Waiting to connect to Dev box.')
+    expect(describeExpose(status({ state: 'connected', movingTo }), 'Acme').text).toBe('Connected through Acme. Moving to Dev box once it runs there.')
+  })
+
+  it('whatever the state here, the move is said too, and the state keeps its dot and Retry', () => {
+    expect(describeExpose(status({ state: 'starting', movingTo }), 'Acme')).toEqual({ dot: 'pending', retry: false, text: 'Starting Acme... Moving to Dev box once it runs there.' })
+    expect(describeExpose(status({ state: 'retrying', lastError: 'Acme exited (code 1).', movingTo }), 'Acme'))
+      .toMatchObject({ dot: 'error', retry: true, text: 'Acme exited (code 1). Moving to Dev box once it runs there.' })
+    // Off says nothing of a move.
+    expect(describeExpose(status({ state: 'off', movingTo }), 'Acme').text).not.toMatch(/Moving/)
+  })
 })
 
 describe('exposePollMs', () => {
@@ -60,5 +105,9 @@ describe('exposePollMs', () => {
     expect(exposePollMs(null)).toBe(3_000)
     for (const state of ['starting', 'retrying', 'needs-sign-in', 'missing'] as const) expect(exposePollMs(status({ state }))).toBe(3_000)
     for (const state of ['off', 'connected', 'unavailable'] as const) expect(exposePollMs(status({ state }))).toBe(30_000)
+  })
+
+  it('often while it moves to a host, connected here or not', () => {
+    expect(exposePollMs(status({ state: 'connected', movingTo: { hostKey: 'devbox', label: 'Dev box' } }))).toBe(3_000)
   })
 })

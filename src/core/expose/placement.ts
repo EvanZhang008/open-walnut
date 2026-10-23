@@ -12,13 +12,15 @@
  *
  * `expose.run_on` in config.yaml: `here`, a host key, or unset. Unset follows the
  * provider: the first host (by key) whose hostname matches the provider's
- * `alwaysOnHostPattern` and whose Walnut server is on; else here. Never a host
- * whose server is off: following the provider must not install a server and
- * copy this Walnut's data there unasked, nor leave the address dark while it
- * installs. Picking a host turns its server on. The built-in `command` provider
- * stays here: its command is written for this computer.
+ * `alwaysOnHostPattern`, unless its server was turned off by hand; else here.
+ * The host that carries it runs a Walnut server (installed there if it was not),
+ * and this computer keeps its own tunnel until that host's is up (the handover,
+ * hostHolds below and web/expose-runtime.ts): the address never goes dark while a
+ * server installs. The built-in `command` provider stays here: its command is
+ * written for this computer.
  */
 
+import crypto from 'node:crypto'
 import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition, type ExposeRunsOn, type ExposeStatus } from './types.js'
 
 export const RUN_ON_HERE = 'here'
@@ -88,7 +90,8 @@ export function exposePlacement(runOn: unknown, def: ExposeProviderDefinition | 
   }
   for (const key of alwaysOnHosts(def, hosts)) {
     const host = hostAt(hosts, key)!
-    if (host.server?.enabled !== true) continue
+    // Turned off by hand: the person said no server there.
+    if (host.server?.enabled === false) continue
     return { where: 'host', hostKey: key, label: hostLabel(key, host), auto: true }
   }
   return { where: 'here', auto: true }
@@ -115,12 +118,68 @@ export function validRunOn(value: unknown, hosts: Hosts): boolean {
   return usable(hostAt(hosts, value))
 }
 
+/**
+ * What one tunnel is, for a handover: its provider and the option values a run fills in
+ * (defaults included). Hashed: an option may be a secret, and the key travels in a host's report.
+ */
+export function tunnelKey(def: Pick<ExposeProviderDefinition, 'id' | 'options'>, values: Record<string, string> = {}): string {
+  const filled = (def.options ?? []).map((o) => (values[o.key] ?? o.default ?? '').trim())
+  return `${def.id}:${crypto.createHash('sha256').update(JSON.stringify(filled)).digest('hex').slice(0, 16)}`
+}
+
 /** The fields of a host server's view (core/host-server/manager.ts) the status reads. */
 export interface PlacementHostView {
   phase: string
   message?: string
   since: number
   server?: { expose?: ExposeStatus } | null
+  /** The reported tunnel's `since`, on this computer's clock (the host's may differ). */
+  exposeSince?: number
+}
+
+/** A host's tunnel that has been up this long at another address than this computer's holds it. */
+export const HOLD_GRACE_MS = 2 * 60_000
+
+/** This computer's own tunnel, as a handover reads it (supervisor.ts `hold()`). */
+export interface LocalHold { url?: string }
+
+export type HandoverStep =
+  | { held: true }
+  | { held: false; recheckInMs?: number }
+
+/** The host server's report of this Walnut's tunnel (provider and options, `key`), connected with an address; else null. */
+export function reportedTunnel(view: PlacementHostView | null, def: Pick<ExposeProviderDefinition, 'id'>, key: string): (ExposeStatus & { url: string }) | null {
+  const r = view?.phase === 'running' ? view.server?.expose : undefined
+  if (!r || !r.enabled || r.provider !== def.id || r.tunnelKey !== key || r.state !== 'connected' || !r.url) return null
+  return r as ExposeStatus & { url: string }
+}
+
+/**
+ * Whether the host is ready to hold this Walnut's tunnel, so the one here may stop. Its
+ * server must report this same tunnel (`key`) connected, and then:
+ *
+ * - at the address this computer's own had (the same name gives the same address), or
+ *   with none here: it is ready. Which connection is newer does not matter: the runtime
+ *   stops the one here first and then asks the host to connect again
+ *   (web/expose-runtime.ts), so the host's is the newest, and the service routes to it;
+ * - at another address (a region that differs, say): once it has been up HOLD_GRACE_MS.
+ *
+ * `firstSeenAt`: when this computer first saw that connection, for a view without the
+ * host's clock readings (`exposeSince`).
+ */
+export function hostHolds(
+  view: PlacementHostView | null,
+  def: Pick<ExposeProviderDefinition, 'id'>,
+  key: string,
+  local: LocalHold,
+  at: { now: number; firstSeenAt?: number },
+): HandoverStep {
+  const r = reportedTunnel(view, def, key)
+  if (!r) return { held: false }
+  if (!local.url || r.url === local.url) return { held: true }
+  const since = view!.exposeSince ?? at.firstSeenAt ?? at.now
+  const left = since + HOLD_GRACE_MS - at.now
+  return left <= 0 ? { held: true } : { held: false, recheckInMs: left }
 }
 
 /**
@@ -132,13 +191,20 @@ export function statusOnHost(
   placement: { hostKey: string; label: string; auto: boolean },
   def: Pick<ExposeProviderDefinition, 'id' | 'title'>,
   view: PlacementHostView | null,
+  /** This computer's tunnelKey: a report of another tunnel of the provider (other options) is not this one. */
+  key?: string,
 ): ExposeStatus {
   const runsOn: ExposeRunsOn = { hostKey: placement.hostKey, label: placement.label, auto: placement.auto }
   const base = { enabled: true, provider: def.id, providerTitle: def.title, runsOn }
   const reported = view?.phase === 'running' ? view.server?.expose : undefined
-  // Another provider's report is the host's own tunnel from before, not this one.
-  if (reported && reported.enabled && reported.state !== 'off' && reported.provider === def.id) {
-    const { port: _hostPort, runsOn: _ignored, enabled: _enabled, provider: _provider, providerTitle: _title, ...rest } = reported
+  // Another provider's report (or another tunnel of it) is the host's own tunnel from before, not this one.
+  // A report without a key comes from an older build there: it can only be this one.
+  const same = !key || reported?.tunnelKey === undefined || reported.tunnelKey === key
+  if (reported && reported.enabled && reported.state !== 'off' && reported.provider === def.id && same) {
+    const {
+      port: _hostPort, runsOn: _ignored, enabled: _enabled, provider: _provider, providerTitle: _title,
+      tunnelKey: _key, movingTo: _moving, ...rest
+    } = reported
     return { ...base, ...rest }
   }
   if (view?.phase === 'error' || view?.phase === 'unsupported') {
@@ -150,6 +216,6 @@ export function statusOnHost(
     since: view?.since ?? 0,
     lastError: view?.phase === 'waiting-for-host'
       ? `Waiting to connect to ${placement.label}.`
-      : view?.message ?? `Starting Walnut on ${placement.label}.`,
+      : view?.message ?? (view?.phase === 'running' ? `Starting ${def.title} on ${placement.label}.` : `Starting Walnut on ${placement.label}.`),
   }
 }

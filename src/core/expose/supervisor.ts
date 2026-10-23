@@ -11,18 +11,28 @@
  * (and, for a provider with a ready pattern, once a ready line came too: some print
  * the address before the connection is up).
  * An exit, a URL that never came, or a URL that stopped answering is `retrying`
- * with growing waits (5 s to 5 min, back to 5 s after a minute connected). A line
+ * with growing waits (5 s to 5 min, back to 5 s after a minute connected). The
+ * check asks which listener answers there (probe.ts): an error page counts as not
+ * answering (an older connection the service no longer routes to gets one), another
+ * Walnut answering does not (the machine the tunnel moves to holds the name). A line
  * matching a sign-in pattern is `needs-sign-in` (connected or not; the next URL or
  * ready line brings it back), a command that is not installed
  * is `missing`: both retry slowly, so renewing the sign-in or installing the tool
- * is all the person has to do. Every callback carries the run's generation, so a
- * late event from a replaced child changes nothing.
+ * is all the person has to do. A provider with an `installCommand` is installed
+ * first, once per command in this process (`activity` says so meanwhile; Retry
+ * allows one more try). Every callback carries the run's generation, so a late
+ * event from a replaced child changes nothing.
  */
 
 import { spawn } from 'node:child_process'
+import crypto from 'node:crypto'
 import { createInterface } from 'node:readline'
 import os from 'node:os'
 import type { ExposeProviderDefinition, ExposeState, ExposeStatus } from './types.js'
+import { installFailure, shellInstall, type InstallResult } from './install-cli.js'
+import { probeAnswer, type ProbeAnswer } from './probe.js'
+
+export type { InstallResult } from './install-cli.js'
 
 export const BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000]
 export const SIGN_IN_RETRY_MS = 60_000
@@ -35,6 +45,8 @@ export const PROBE_EVERY_MS = 60_000
 export const PROBE_TIMEOUT_MS = 10_000
 export const PROBE_FAILURES = 3
 export const KILL_AFTER_MS = 5_000
+/** An install of the provider's CLI that takes longer is stopped. */
+export const INSTALL_TIMEOUT_MS = 10 * 60_000
 
 export interface ExposeChild {
   readonly pid?: number
@@ -46,8 +58,8 @@ export interface ExposeChild {
 
 export interface SupervisorDeps {
   spawn(command: string, args: string[], env: Record<string, string>): ExposeChild
-  /** True when the URL answered at all (any HTTP status); false on a network error or timeout. */
-  probe(url: string, timeoutMs: number): Promise<boolean>
+  /** Which listener answers at the URL (probe.ts; `token` is this run's). A boolean: `true` unverified, `false` down. */
+  probe(url: string, timeoutMs: number, token: string): Promise<ProbeAnswer | boolean>
   now(): number
   setTimer(fn: () => void, ms: number): unknown
   clearTimer(timer: unknown): void
@@ -55,6 +67,8 @@ export interface SupervisorDeps {
     info(message: string, meta?: Record<string, unknown>): void
     warn(message: string, meta?: Record<string, unknown>): void
   }
+  /** Run a provider's install command (default: install-cli.ts shellInstall). */
+  install?(command: string, env: Record<string, string>, timeoutMs: number, signal?: AbortSignal): Promise<InstallResult>
 }
 
 /** A definition ready to run: placeholders filled, patterns compiled. */
@@ -69,6 +83,7 @@ export interface ExposeRun {
   signInPatterns: RegExp[]
   signInHint?: string
   installHint?: string
+  installCommand?: string
   probe: boolean
 }
 
@@ -117,6 +132,7 @@ export function resolveRun(def: ExposeProviderDefinition, port: number, values: 
     signInPatterns,
     ...(def.signInHint ? { signInHint: def.signInHint } : {}),
     ...(def.installHint ? { installHint: def.installHint } : {}),
+    ...(def.installCommand?.trim() ? { installCommand: def.installCommand.trim() } : {}),
     probe: def.probe !== false,
   }
 }
@@ -153,6 +169,17 @@ export class ExposeSupervisor {
   private stopping = false
   /** Retry was pressed while the child still ran: start the next one at once, not after a wait. */
   private restartNow = false
+  /** Install commands run in this process, by command: one try each (Retry allows one more). */
+  private installs = new Map<string, { done: boolean; result?: InstallResult; promise: Promise<InstallResult> }>()
+  /** Bumped by every start attempt: a wait for an install that a newer attempt replaced does nothing. */
+  private attemptSeq = 0
+  private activity: string | undefined
+  /** Aborted on shutdown: an install runs in its own process group, which the server's group stop misses. */
+  private installAbort = new AbortController()
+  /** What this run's tunnel listener answers the probe path with (probe.ts); one per supervisor. */
+  readonly probeToken = crypto.randomBytes(16).toString('hex')
+  /** The probe last found another Walnut at the address (logged once per run). */
+  private otherSeen = false
 
   constructor(private readonly deps: SupervisorDeps, private readonly onStatus: (status: ExposeStatus) => void) {
     this.since = deps.now()
@@ -167,7 +194,13 @@ export class ExposeSupervisor {
       ...(this.lastError ? { lastError: this.lastError } : {}),
       ...(this.hint ? { hint: this.hint } : {}),
       ...(this.nextRetryAt ? { nextRetryAt: this.nextRetryAt } : {}),
+      ...(this.activity ? { activity: this.activity } : {}),
     }
+  }
+
+  /** What a handover reads (web/expose-runtime.ts): the address this run last held. */
+  hold(): { url?: string } {
+    return this.url ? { url: this.url } : {}
   }
 
   /** What is running now, if anything: the runtime compares before it replaces a run. */
@@ -183,6 +216,7 @@ export class ExposeSupervisor {
     this.restartNow = false
     this.attempt = 0
     this.url = undefined
+    this.connectedAt = 0
     this.current = { run, port, child: null, gen: ++this.gen }
     this.spawnNow()
   }
@@ -191,6 +225,8 @@ export class ExposeSupervisor {
   retryNow(): void {
     if (!this.current || this.stopping) return
     this.attempt = 0
+    // One more try of an install that ran (one still running is waited for, never run twice).
+    for (const [command, entry] of this.installs) if (entry.done) this.installs.delete(command)
     if (this.current.child) {
       this.restartNow = true
       this.current.child.kill('SIGTERM')
@@ -220,10 +256,18 @@ export class ExposeSupervisor {
     this.current = null
     this.gen++
     this.url = undefined
+    this.connectedAt = 0
     this.lastError = undefined
     this.hint = undefined
     this.nextRetryAt = undefined
+    this.activity = undefined
     if (!opts.quiet || this.state !== 'off') this.setState('off')
+  }
+
+  /** The server stops for good: also an install still running (its own process group) ends. */
+  async shutdown(): Promise<void> {
+    this.installAbort.abort()
+    await this.stop()
   }
 
   private setTimer(fn: () => void, ms: number): unknown {
@@ -249,6 +293,8 @@ export class ExposeSupervisor {
     if (!cur) return
     const gen = cur.gen
     const { run } = cur
+    this.attemptSeq++
+    this.activity = undefined
     this.nextRetryAt = undefined
     this.probeFailures = 0
     let signInSeen = false
@@ -360,7 +406,15 @@ export class ExposeSupervisor {
     cur.child = null
     const { run } = cur
     if (error.code === 'ENOENT') {
-      this.lastError = `${run.title} is not installed here (${run.command} not found).`
+      const tried = run.installCommand ? this.installs.get(run.installCommand) : undefined
+      if (run.installCommand && !tried?.done) {
+        this.installThenStart(run)
+        return
+      }
+      // No "here": a host's report is read on this computer too.
+      this.lastError = tried?.result?.ok
+        ? `${run.title} was installed, but ${run.command} is still not found.`
+        : tried?.result ? installFailure(run.title, tried.result.output) : `${run.title} is not installed (${run.command} not found).`
       this.hint = run.installHint
       this.scheduleRetry(MISSING_RETRY_MS, 'missing')
       return
@@ -369,6 +423,46 @@ export class ExposeSupervisor {
     const wait = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)]!
     this.attempt++
     this.scheduleRetry(wait, 'retrying')
+  }
+
+  /** Install the missing CLI (or wait for the install that runs), then start it; a failed one waits like a missing CLI. */
+  private installThenStart(run: ExposeRun): void {
+    const cur = this.current
+    if (!cur) return
+    const gen = cur.gen
+    const seq = this.attemptSeq
+    const command = run.installCommand!
+    let entry = this.installs.get(command)
+    if (!entry) {
+      this.deps.log.info('expose: installing the provider', { provider: run.providerId })
+      const install = this.deps.install ?? shellInstall
+      let started: Promise<InstallResult>
+      try { started = install(command, run.env, INSTALL_TIMEOUT_MS, this.installAbort.signal) } catch (error) { started = Promise.reject(error) }
+      const promise = started.catch((error: unknown): InstallResult => ({ ok: false, output: error instanceof Error ? error.message : String(error) }))
+      const fresh: { done: boolean; result?: InstallResult; promise: Promise<InstallResult> } = { done: false, promise }
+      void promise.then((result) => {
+        fresh.done = true
+        fresh.result = result
+        if (result.ok) this.deps.log.info('expose: provider installed', { provider: run.providerId })
+        else this.deps.log.warn('expose: provider install failed', { provider: run.providerId, output: result.output.slice(-2_000) })
+      })
+      this.installs.set(command, fresh)
+      entry = fresh
+    }
+    this.activity = `Installing ${run.title}...`
+    this.lastError = undefined
+    this.setState('starting')
+    void entry.promise.then((result) => {
+      if (this.current?.gen !== gen || this.attemptSeq !== seq || this.stopping) return
+      this.activity = undefined
+      if (result.ok) {
+        this.spawnNow()
+        return
+      }
+      this.lastError = installFailure(run.title, result.output)
+      this.hint = run.installHint
+      this.scheduleRetry(MISSING_RETRY_MS, 'missing')
+    })
   }
 
   private scheduleRetry(ms: number, state: ExposeState): void {
@@ -390,9 +484,16 @@ export class ExposeSupervisor {
       this.probeTimer = null
       const cur = this.current
       if (!cur || cur.gen !== gen || this.state !== 'connected' || !this.url || !cur.child) return
-      const ok = await this.deps.probe(this.url, PROBE_TIMEOUT_MS).catch(() => false)
+      const answer = probeAnswer(await this.deps.probe(this.url, PROBE_TIMEOUT_MS, this.probeToken).catch(() => false))
       if (!this.current || this.current.gen !== gen || !cur.child) return
-      this.probeFailures = ok ? 0 : this.probeFailures + 1
+      // Another Walnut holds the name (the machine the tunnel moves to, say): the address
+      // works, so this connection waits instead of taking it back (no fight over the name).
+      if (answer === 'other' && !this.otherSeen) {
+        this.otherSeen = true
+        this.deps.log.info('expose: another Walnut answers at the address; this connection gets nothing for now', { provider: cur.run.providerId, url: this.url })
+      }
+      if (answer !== 'other') this.otherSeen = false
+      this.probeFailures = answer === 'down' ? this.probeFailures + 1 : 0
       if (this.probeFailures >= PROBE_FAILURES) {
         this.deps.log.warn('expose: the address stopped answering, restarting the provider', { provider: cur.run.providerId, url: this.url })
         const child = cur.child
@@ -433,15 +534,5 @@ export function nodeSpawn(command: string, args: string[], env: Record<string, s
       })
     },
     kill(signal) { try { child.kill(signal) } catch { /* already gone */ } },
-  }
-}
-
-/** Any HTTP answer counts: a tunnel in front of a sign-in page answers 302 or 401. */
-export async function httpProbe(url: string, timeoutMs: number): Promise<boolean> {
-  try {
-    await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
-    return true
-  } catch {
-    return false
   }
 }
