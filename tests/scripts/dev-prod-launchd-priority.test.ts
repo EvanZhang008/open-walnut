@@ -144,6 +144,8 @@ describe('dev-prod.sh launchd priority', () => {
       // names the OLD stage) is dropped before the new one is set.
       expect(args.indexOf('WALNUT_RUNTIME_DIR')).toBeGreaterThan(args.indexOf('-u'))
       expect(args[args.indexOf('WALNUT_RUNTIME_DIR') - 1]).toBe('-u')
+      // BUN_BE_BUN=1 makes a compiled bun file run as the bun CLI instead of Walnut.
+      expect(args[args.indexOf('BUN_BE_BUN') - 1]).toBe('-u')
       if (kind === 'file') expect(args).not.toContain('/usr/local/bin/node')
       expect(xml).toContain('<key>StandardOutPath</key><string>/tmp/log &amp; more.log</string>')
       // The clamp request rides in the plist only: the argv is shared with the
