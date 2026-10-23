@@ -13,17 +13,52 @@
  *  - a BLOB is a Uint8Array (better-sqlite3: a Buffer): wrapped as a Buffer, no copy;
  *  - no `pragma`, `pluck`, `raw`, `backup`: provided here;
  *  - named parameters need their `@`/`$`/`:` prefix unless the database is
- *    opened `strict`, which it always is (an object's keys bind without one).
+ *    opened `strict`, which it always is (an object's keys bind without one);
+ *  - close() keeps the connection open while a prepared statement is alive:
+ *    close() finalizes them, and a statement used after close throws as in
+ *    better-sqlite3;
+ *  - on macOS it is the system SQLite, which keeps -wal and -shm after the
+ *    last close (turned off per connection) and opens a WAL database read-only
+ *    only when its -wal exists (created first, as better-sqlite3's SQLite does).
+ *
+ * Left as is: a whole JS number binds as INTEGER on bun and as REAL in
+ * better-sqlite3. Same value in INTEGER and REAL columns and in comparisons;
+ * it differs only as TEXT ('3' vs '3.0'), in integer division and in json text.
+ * bun also accepts what better-sqlite3 refuses (a boolean, get() on a write,
+ * two statements in one prepare), so code that works on Node works on bun.
  */
 
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
 
 /** True when this process runs on bun. */
 export const ON_BUN = typeof (process.versions as { bun?: string }).bun === 'string'
+
+/**
+ * The file a worker thread loads to get this module (a worker shares nothing
+ * with the bundle that starts it). Unbundled, that is this file. Inside a tsup
+ * bundle (dist/cli.js, dist/web/server.js, dist/integrations/<id>/index.js)
+ * it is the module's own build, dist/lib/sqlite.js, a few levels up; from a
+ * plugin bundle in <package>/.plugin-cache, <package>/dist/lib/sqlite.js.
+ * null when none is found. `here` is the file this code runs from (tests pass one).
+ */
+export function sqliteModuleFile(here: string = fileURLToPath(import.meta.url)): string | null {
+  if (/^sqlite\.[cm]?[jt]s$/.test(path.basename(here))) return here
+  let dir = path.dirname(here)
+  for (let i = 0; i < 4; i++) {
+    for (const candidate of [path.join(dir, 'lib', 'sqlite.js'), path.join(dir, 'dist', 'lib', 'sqlite.js')]) {
+      if (fs.existsSync(candidate)) return candidate
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
 
 export interface RunResult {
   changes: number
@@ -95,6 +130,7 @@ interface BunStatement {
   all(...params: unknown[]): unknown[]
   values(...params: unknown[]): unknown[][]
   iterate(...params: unknown[]): IterableIterator<unknown>
+  finalize(): void
   columnNames: string[]
   toString(): string
 }
@@ -104,17 +140,19 @@ interface BunDatabase {
   exec(sql: string): unknown
   transaction<F extends (...args: never[]) => unknown>(fn: F): Transaction<F>
   serialize(name?: string): Uint8Array
+  fileControl(op: number, value: number): number
   close(throwOnError?: boolean): void
   inTransaction: boolean
   filename: string
 }
 
 type BunDatabaseClass = new (filename: string, options?: Record<string, boolean>) => BunDatabase
+interface BunSqlite { Database: BunDatabaseClass; constants: Record<string, number> }
 
-let bunDatabaseClass: BunDatabaseClass | null = null
-function bunSqlite(): BunDatabaseClass {
-  bunDatabaseClass ??= (require('bun:sqlite') as { Database: BunDatabaseClass }).Database
-  return bunDatabaseClass
+let bunModule: BunSqlite | null = null
+function bunSqlite(): BunSqlite {
+  bunModule ??= require('bun:sqlite') as BunSqlite
+  return bunModule
 }
 
 /** A BLOB comes back as a Buffer over the same bytes, as better-sqlite3 gives it. */
@@ -134,6 +172,29 @@ function fixRow(row: unknown): unknown {
   return obj
 }
 
+/**
+ * better-sqlite3's SQLite opens a WAL database read-only with no -wal file on
+ * disk (it creates one); the macOS system SQLite refuses ("unable to open
+ * database file"). Create the empty -wal it would have made, with the
+ * database's own mode. Only for a WAL database: header bytes 18 and 19 are 2.
+ */
+function ensureWalFileForReadonly(file: string): void {
+  try {
+    const wal = `${file}-wal`
+    if (fs.existsSync(wal)) return
+    const header = Buffer.alloc(20)
+    const fd = fs.openSync(file, 'r')
+    try {
+      if (fs.readSync(fd, header, 0, 20, 0) < 20 || header[18] !== 2 || header[19] !== 2) return
+    } finally {
+      fs.closeSync(fd)
+    }
+    fs.writeFileSync(wal, '', { flag: 'wx', mode: fs.statSync(file).mode & 0o777 })
+  } catch {
+    // The open itself reports any real problem.
+  }
+}
+
 function fixValues(values: unknown[]): unknown[] {
   for (let i = 0; i < values.length; i++) values[i] = asBuffer(values[i])
   return values
@@ -146,38 +207,51 @@ function bindArgs(params: unknown[]): unknown[] {
   return params
 }
 
+/** better-sqlite3's error for any use of a closed database or of a statement prepared on one. */
+function notOpen(): TypeError {
+  return new TypeError('The database connection is not open')
+}
+
 class SqliteStatement implements Statement {
   private mode: 'object' | 'pluck' | 'raw' = 'object'
-  constructor(private readonly stmt: BunStatement, readonly source: string) {}
+  constructor(private readonly stmt: BunStatement, readonly source: string, private readonly owner: SqliteDatabase) {}
 
   get reader(): boolean {
     return this.stmt.columnNames.length > 0
   }
 
+  private live(): BunStatement {
+    if (!this.owner.open) throw notOpen()
+    return this.stmt
+  }
+
   run(...params: unknown[]): RunResult {
-    return this.stmt.run(...bindArgs(params))
+    return this.live().run(...bindArgs(params))
   }
 
   get(...params: unknown[]): unknown {
-    if (this.mode === 'object') return fixRow(this.stmt.get(...bindArgs(params)))
-    const first = this.stmt.values(...bindArgs(params))[0]
+    const stmt = this.live()
+    if (this.mode === 'object') return fixRow(stmt.get(...bindArgs(params)))
+    const first = stmt.values(...bindArgs(params))[0]
     if (!first) return undefined
     return this.mode === 'pluck' ? asBuffer(first[0]) : fixValues(first)
   }
 
   all(...params: unknown[]): unknown[] {
+    const stmt = this.live()
     if (this.mode === 'object') {
-      const rows = this.stmt.all(...bindArgs(params))
+      const rows = stmt.all(...bindArgs(params))
       for (const row of rows) fixRow(row)
       return rows
     }
-    const rows = this.stmt.values(...bindArgs(params))
+    const rows = stmt.values(...bindArgs(params))
     return this.mode === 'pluck' ? rows.map((r) => asBuffer(r[0])) : rows.map(fixValues)
   }
 
   *iterate(...params: unknown[]): IterableIterator<unknown> {
+    const stmt = this.live()
     if (this.mode === 'object') {
-      for (const row of this.stmt.iterate(...bindArgs(params))) yield fixRow(row)
+      for (const row of stmt.iterate(...bindArgs(params))) yield fixRow(row)
       return
     }
     // values() has no iterator form; the rare pluck/raw iterate reads them all.
@@ -198,12 +272,17 @@ class SqliteStatement implements Statement {
 class SqliteDatabase {
   private readonly db: BunDatabase
   private isOpen = true
+  // bun's close() leaves the connection open while any statement prepared on it
+  // is alive (the WAL unmerged, -wal and -shm still on disk) until each is
+  // garbage collected. better-sqlite3 closes at once, so close() finalizes them.
+  private readonly statements = new Set<WeakRef<BunStatement>>()
+  private readonly collected = new FinalizationRegistry<WeakRef<BunStatement>>((ref) => { this.statements.delete(ref) })
   readonly name: string
   readonly readonly: boolean
   readonly memory: boolean
 
   constructor(filename = ':memory:', options: Options = {}) {
-    const Bun = bunSqlite()
+    const bun = bunSqlite()
     this.name = filename
     this.memory = filename === ':memory:' || filename === ''
     this.readonly = options.readonly === true
@@ -214,9 +293,16 @@ class SqliteDatabase {
     if (options.fileMustExist && !this.memory && !fs.existsSync(filename)) {
       throw Object.assign(new Error(`unable to open database file: ${filename}`), { code: 'SQLITE_CANTOPEN' })
     }
-    this.db = new Bun(filename, flags)
+    if (this.readonly && !this.memory) ensureWalFileForReadonly(filename)
+    this.db = new bun.Database(filename, flags)
     const timeout = options.timeout ?? 5000
     this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeout))}`)
+    // On macOS bun uses the system SQLite, which keeps a WAL database's -wal and
+    // -shm files after the last connection closes; better-sqlite3's SQLite removes them.
+    const persistWal = bun.constants.SQLITE_FCNTL_PERSIST_WAL
+    if (!this.memory && persistWal !== undefined) {
+      try { this.db.fileControl(persistWal, 0) } catch { /* a VFS without the control */ }
+    }
   }
 
   get open(): boolean {
@@ -227,26 +313,39 @@ class SqliteDatabase {
     return this.db.inTransaction
   }
 
+  private handle(): BunDatabase {
+    if (!this.isOpen) throw notOpen()
+    return this.db
+  }
+
   prepare(source: string): SqliteStatement {
-    return new SqliteStatement(this.db.prepare(source), source)
+    const stmt = this.handle().prepare(source)
+    const ref = new WeakRef(stmt)
+    this.statements.add(ref)
+    this.collected.register(stmt, ref)
+    return new SqliteStatement(stmt, source, this)
   }
 
   exec(source: string): this {
-    this.db.exec(source)
+    this.handle().exec(source)
     return this
   }
 
   pragma(source: string, options: PragmaOptions = {}): unknown {
-    const stmt = this.db.prepare(`PRAGMA ${source}`)
-    if (options.simple) {
-      const first = stmt.values()[0]
-      return first ? asBuffer(first[0]) : undefined
+    const stmt = this.handle().prepare(`PRAGMA ${source}`)
+    try {
+      if (options.simple) {
+        const first = stmt.values()[0]
+        return first ? asBuffer(first[0]) : undefined
+      }
+      return stmt.all().map(fixRow)
+    } finally {
+      stmt.finalize()
     }
-    return stmt.all().map(fixRow)
   }
 
   transaction<F extends (...args: never[]) => unknown>(fn: F): Transaction<F> {
-    return this.db.transaction(fn)
+    return this.handle().transaction(fn)
   }
 
   async backup(destination: string, _options: BackupOptions = {}): Promise<{ totalPages: number; remainingPages: number }> {
@@ -256,7 +355,8 @@ class SqliteDatabase {
     await fs.promises.mkdir(dir, { recursive: true })
     const temp = path.join(dir, `.${path.basename(destination)}.${process.pid}.${Date.now()}.backup`)
     try {
-      this.db.prepare('VACUUM INTO ?').run(temp)
+      const vacuum = this.handle().prepare('VACUUM INTO ?')
+      try { vacuum.run(temp) } finally { vacuum.finalize() }
       await fs.promises.rename(temp, destination)
     } finally {
       await fs.promises.rm(temp, { force: true }).catch(() => {})
@@ -266,12 +366,14 @@ class SqliteDatabase {
   }
 
   serialize(options: { attached?: string } = {}): Buffer {
-    return asBuffer(this.db.serialize(options.attached ?? 'main')) as Buffer
+    return asBuffer(this.handle().serialize(options.attached ?? 'main')) as Buffer
   }
 
   close(): this {
     if (this.isOpen) {
       this.isOpen = false
+      for (const ref of this.statements) ref.deref()?.finalize()
+      this.statements.clear()
       this.db.close()
     }
     return this
