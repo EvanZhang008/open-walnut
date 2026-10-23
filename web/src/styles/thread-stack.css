@@ -324,3 +324,28 @@
 .thread-turn-label-by { flex: none; margin-left: auto; color: var(--fg-muted); font-size: 10.5px; opacity: 0.8; }
 .thread-turn-label:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .thread-turn-label:focus:not(:focus-visible) { outline: none; }
+
+/* Conversation Mode's fold (utils/thread-fold.ts): a chevron before the turn
+   label; a folded question is this line alone. */
+.thread-turn-head { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 10px 0 2px -5px; }
+.thread-turn-head > .thread-turn-label { margin: 0; }
+.thread-turn-head[data-folded="true"] { margin-bottom: 8px; }
+.thread-turn-fold {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.thread-turn-fold:hover { background: var(--bg-tertiary); color: var(--fg); }
+.thread-turn-fold .thread-icon { fill: currentColor; transform: rotate(90deg); transition: transform 120ms ease; }
+.thread-turn-head[data-folded="true"] .thread-turn-fold .thread-icon { transform: none; }
+.thread-turn-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-turn-fold:focus:not(:focus-visible) { outline: none; }
+@media (prefers-reduced-motion: reduce) { .thread-turn-fold .thread-icon { transition: none; } }

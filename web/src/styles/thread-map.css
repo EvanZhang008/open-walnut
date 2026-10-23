@@ -199,6 +199,37 @@
 .thread-map-row:is([data-kind="pending"], [data-kind="draft"]) .thread-map-label { font-style: italic; }
 .thread-map-row .thread-naming { flex: none; font-size: 11px; }
 
+/* A question row's × (archive): in the status word's place on hover or focus,
+   so nothing moves. The row and its × share one hover. */
+.thread-map-item {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+.thread-map-item:hover > .thread-map-row:not([aria-disabled="true"]) { background: var(--thread-row-hover); color: var(--fg); }
+.thread-map-item:hover > .thread-map-row[data-current="true"] { background: var(--accent-subtle); }
+.thread-map-archive {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+.thread-map-item:is(:hover, :focus-within) .thread-map-archive { opacity: 1; pointer-events: auto; }
+.thread-map-item:is(:hover, :focus-within) .thread-map-status { visibility: hidden; }
+.thread-map-archive:hover { background: var(--bg-tertiary); color: var(--fg); }
+.thread-map-archive .thread-icon { stroke-width: 1.8; }
+
 .thread-map-back {
   flex: none;
   margin: 2px 0 0;
@@ -308,9 +339,11 @@
 .thread-map-keep .thread-icon { transform: none; }
 
 .thread-map-icon:focus-visible,
+.thread-map-archive:focus-visible,
 .thread-map-row:focus-visible,
 .thread-map-back:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.thread-map-icon:focus:not(:focus-visible) { outline: none; }
+.thread-map-icon:focus:not(:focus-visible),
+.thread-map-archive:focus:not(:focus-visible) { outline: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .thread-map-fold .thread-icon { transition: none; }

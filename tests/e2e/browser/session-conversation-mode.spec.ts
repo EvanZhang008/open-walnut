@@ -20,6 +20,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
   centreInHistory, modePill, nextQuestionNumber, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, switchView,
+  unfoldQuestions,
 } from './threads-helpers'
 import { buildTaggedSession, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT, TAGGED_TITLES } from './threads-fixture'
 
@@ -72,6 +73,9 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(header).not.toContainText(/\d+ open/)
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'linear')
 
+    // Both questions were asked after the main conversation's newest message, so
+    // neither folds (utils/thread-fold.ts); shown either way.
+    await unfoldQuestions(panel)
     // Every row is on screen, in order.
     for (const id of [IDS.R1.u, IDS.Q1.u, IDS.LOST.u, IDS.ROOT.u, IDS.Q2.u, IDS.MERGED.u]) await expect(row(panel, id)).toBeAttached()
 
@@ -143,7 +147,10 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
     await expect(row(panel, IDS.Q2.u)).toHaveAttribute('data-thread-current', 'true')
     await expect(labelOf(panel, IDS.Q2.u)).toHaveAttribute('data-current', 'true')
-    await expect(row(panel, IDS.Q1.u)).not.toHaveAttribute('data-thread-current', 'true')
+    // The other question stays open: both were asked after the main
+    // conversation's newest message (utils/thread-fold.ts).
+    await expect(history(panel).locator('[data-thread-fold]')).toHaveCount(0)
+    await expect(row(panel, IDS.Q1.u)).toBeVisible()
     // The composer says where the next message goes.
     await expect(panel.locator('.chat-input-textarea').first()).toHaveAttribute('placeholder', new RegExp(TAGGED_TITLES.Q2))
     // The row also opened the question's card (session-thread-card.spec.ts
@@ -276,6 +283,7 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     const [r, g, b] = tick.colour.match(/\d+/g)!.map(Number)
     expect(Math.max(r, g, b) - Math.min(r, g, b), `tick colour ${tick.colour} is grey`).toBeLessThanOrEqual(12)
     // The labels stay readable at this width: number and title, status as a glyph or word.
+    await unfoldQuestions(panel)
     await expect(labelOf(panel, IDS.Q2.u).locator('.thread-map-num')).toHaveText('2')
     await expect(labelOf(panel, IDS.Q2.u).locator('.thread-turn-label-title')).toBeVisible()
     await pill.click()

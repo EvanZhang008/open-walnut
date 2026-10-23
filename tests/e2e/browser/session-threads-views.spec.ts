@@ -19,6 +19,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import fs from 'node:fs/promises'
 import {
   centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, modePill, openQuestionList, switchView,
+  unfoldQuestions,
 } from './threads-helpers'
 import { buildDenseSession, densePassage } from './threads-fixture'
 
@@ -132,6 +133,8 @@ test.describe('Question stack views', () => {
     await expect(history).toHaveAttribute('data-view-mode', 'linear')
     await expect(modePill(panel)).toHaveText('Tree Mode')
     await expect(panel.locator('.thread-sliver, .thread-stack-header, .thread-quote-head, .thread-asked-from')).toHaveCount(0)
+    // Every other question folds to its line; its chevron shows the rows.
+    await unfoldQuestions(panel)
     await expect(panel.locator(`[data-message-id="${IDS.head.Q8}"]`)).toBeAttached()
     const bar = panel.locator(`.session-msg--threaded[data-message-id="${IDS.head.Q9}"]`)
     await expect(bar).toBeAttached()
@@ -161,6 +164,7 @@ test.describe('Question stack views', () => {
     // transcript, past what the wheel loop covers: bring it near first, then
     // settle it with real wheels.
     await switchView(panel, 'linear')
+    await unfoldQuestions(panel)
     const rule = panel.locator(`.session-msg--threaded[data-message-id="${IDS.head.Q9}"]`)
     await expect(rule).toBeAttached()
     const num = (await rule.locator('.thread-turn-label .thread-map-num').innerText()).trim()

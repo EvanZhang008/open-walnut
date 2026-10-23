@@ -34,6 +34,7 @@ import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trai
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
 import { ThreadMap } from './ThreadMap';
+import type { MapArchiveApi } from './ThreadMapArchive';
 import { placePins } from './outline-order';
 import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
 import { QuotePinPopover } from './QuotePinPopover';
@@ -49,6 +50,7 @@ import { ThreadQuoteHead } from './ThreadQuoteHead';
 import { ThreadAskedFromList } from './ThreadAskedFromList';
 import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
+import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { ThreadCommentCard } from './ThreadCommentCard';
 import { ThreadStackMenu } from './ThreadStackMenu';
 import { useThreadCardPlace } from '@/hooks/useThreadCardPlace';
@@ -1275,10 +1277,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     };
   }, [threadTree, anchorByRowId]);
 
+  /** Conversation Mode's fold chevrons: a question's own choice (true = shown),
+   *  over the rule in utils/thread-fold.ts, until the main conversation moves on. */
+  const [foldOverrides, setFoldOverrides] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const rowThreadKey = useCallback(
     (rowId: string | undefined): string => rowThreadInfo(rowId)?.key ?? ROOT_THREAD_KEY,
     [rowThreadInfo],
   );
+  /** A jump into a folded question's turns shows them first (the row has to be there to land on). */
+  const revealFolded = useCallback((rowId: string) => {
+    const key = rowThreadKey(rowId);
+    if (!convMode || key === ROOT_THREAD_KEY) return;
+    const group = foldGroupOf(threadTree, key);
+    setFoldOverrides((m) => (m.get(group) === true ? m : new Map(m).set(group, true)));
+  }, [convMode, rowThreadKey, threadTree]);
 
   // ── Stack: which page is on screen ─────────────────────────────────────────
   // The stack (useThreadStack, owned by the panel) says which page is on screen;
@@ -1489,6 +1501,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (needed > truncationOffset) {
       setTruncationOffset(needed);
     }
+    revealFolded(msgId);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         // Identity first (`data-message-id`), index second: merged tool runs carry
@@ -1532,7 +1545,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         setTimeout(() => target.classList.remove('user-messages-highlight'), 1500);
       });
     });
-  }, [messages, truncationOffset, sessionId, quotePaint, olderHidden, olderWindowed, loadFullHistory]);
+  }, [messages, truncationOffset, sessionId, quotePaint, olderHidden, olderWindowed, loadFullHistory, revealFolded]);
 
   // The second half of a jump to an unloaded row: the full history has landed (or
   // the load ended without it). Keyed on `messages` because that is what the load
@@ -2847,6 +2860,40 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const optimisticThreadKey = (m: OptimisticMessage): string =>
     rowThreadKey(m.msgId ?? m.userUuid ?? m.walnutMessageId);
 
+  // Newest first, bubbles not persisted yet included (history catches up only
+  // after the turn): the main conversation's newest own message, and every
+  // question asked after it. Those stay open (utils/thread-fold.ts): the reader
+  // is in them. A message in the main chat is the move that folds them.
+  let lastMainUserId: string | undefined;
+  const askedAfterMain: string[] = [];
+  if (convMode) {
+    const seen = (key: string): boolean => {
+      if (key === ROOT_THREAD_KEY) return true;
+      askedAfterMain.push(key);
+      return false;
+    };
+    for (let i = deduped.length - 1; i >= 0 && lastMainUserId === undefined; i--) {
+      const m = deduped[i];
+      if (!m.launch && seen(optimisticThreadKey(m))) lastMainUserId = m.userUuid ?? m.queueId;
+    }
+    for (let i = messages.length - 1; i >= 0 && lastMainUserId === undefined; i--) {
+      const m = messages[i];
+      const id = m.msgId ?? m.walnutMessageId;
+      if (m.role === 'user' && seen(rowThreadKey(id))) lastMainUserId = id ?? `#${i}`;
+    }
+  }
+  const askedAfterMainSig = askedAfterMain.join('\n');
+  // The main conversation moved on: every chevron's choice goes back to the rule.
+  // Its NEWEST message, so loading earlier turns is no move.
+  const lastMainUserSeen = useRef(lastMainUserId);
+  useEffect(() => {
+    const before = lastMainUserSeen.current;
+    lastMainUserSeen.current = lastMainUserId;
+    if (before !== undefined && lastMainUserId !== undefined && before !== lastMainUserId) {
+      setFoldOverrides((m) => (m.size ? new Map() : m));
+    }
+  }, [lastMainUserId]);
+
   /**
    * Where the LIVE stream belongs: the turn of the newest user row, optimistic ones
    * included (the row that started this turn may not have persisted yet). The
@@ -3162,6 +3209,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const openMapList = useCallback(() => threadsApi.openDrawer(), [threadsApi]);
   const markDoneFromRow = useCallback((key: string) => { void threadsApi.actions?.done(key); }, [threadsApi.actions]);
   const notYetFromRow = useCallback((key: string) => { void threadsApi.actions?.notYet(key); }, [threadsApi.actions]);
+  // The map row's ×: archive, with its open follow-ups when the confirm says so.
+  const mapArchive = useMemo<MapArchiveApi | undefined>(() => {
+    const actions = threadsApi.actions;
+    if (!actions) return undefined;
+    return {
+      archive: (key, withFollowUps) => { void (withFollowUps ? actions.doneWithFollowUps(key) : actions.done(key)); },
+      openBelowCount: (key) => actions.openBelowCount(key),
+    };
+  }, [threadsApi.actions]);
 
   // Question marks on the page's answers, and the landing on every navigation.
   const locatePassage = useCallback(
@@ -3191,12 +3247,66 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** Conversation Mode: the label above a question's user row (the turn head)
    *  opens the question's card. */
   const selectTarget = useCallback((key: string) => { openCard(key, 'label'); }, [openCard]);
+  // Conversation Mode's fold: a question's turns down to their label line, by
+  // the rule in utils/thread-fold.ts or the user's chevron.
+  const foldOpen = useMemo(
+    () => (convMode ? foldOpenKeys(threadTree, {
+      target: targetKey, card: cardKey, live: [...threadDerived.live.keys(), ...askedAfterMainSig.split('\n').filter(Boolean)],
+    }) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- askedAfterMain is read through its signature
+    [convMode, threadTree, targetKey, cardKey, threadDerived.live, askedAfterMainSig],
+  );
+  // A removed (hidden) question is no question any more: its rows are plain transcript.
+  const groupFolded = (group: string): boolean => !!foldOpen && !threadsApi.hiddenKeys.has(group)
+    && isFolded(group, foldOpen, foldOverrides);
+  // A fold above the reader must not move what they read: before the new rows
+  // paint, the first main-conversation row on screen goes back where it was.
+  // (Following the bottom, the follow-bottom paths keep the tail instead.)
+  // A mode switch changes it too, and each mode lands its own scroll: only a
+  // change inside Conversation Mode is anchored here.
+  const foldSig = convMode
+    ? `c:${threadTree.threads.filter((n) => n.depth === 1 && groupFolded(n.key)).map((n) => n.key).join('\n')}`
+    : '';
+  const foldSigSeen = useRef(foldSig);
+  const foldAnchor = useRef<{ index: string; top: number } | null>(null);
+  const foldMoved = foldSigSeen.current !== foldSig && !!foldSig && !!foldSigSeen.current;
+  if (foldMoved && foldAnchor.current === null) {
+    // Render time, so the DOM is still the one the reader sees.
+    const box = containerRef.current;
+    if (box) {
+      const viewTop = box.getBoundingClientRect().top;
+      for (const el of Array.from(box.querySelectorAll<HTMLElement>('[data-msg-index]:not(.session-msg--threaded)'))) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom > viewTop && el.dataset.msgIndex) { foldAnchor.current = { index: el.dataset.msgIndex, top: r.top }; break; }
+      }
+    }
+  }
+  useLayoutEffect(() => {
+    if (foldSigSeen.current === foldSig) return;
+    foldSigSeen.current = foldSig;
+    const anchor = foldSig ? foldAnchor.current : null;
+    foldAnchor.current = null;
+    const box = containerRef.current;
+    if (!anchor || !box || isAtBottom.current) return;
+    const el = box.querySelector<HTMLElement>(`[data-msg-index="${anchor.index}"]:not(.session-msg--threaded)`);
+    if (!el) return;
+    const delta = el.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) >= 1) box.scrollTop += delta;
+  }, [foldSig]);
+  const groupFoldedRef = useRef(groupFolded);
+  groupFoldedRef.current = groupFolded;
+  const toggleFold = useCallback((group: string) => {
+    const shown = groupFoldedRef.current(group);
+    setFoldOverrides((m) => new Map(m).set(group, shown));
+  }, []);
   const turnLabelFor = (rowId: string | undefined, role: string): React.ReactNode => {
     if (!convMode || role !== 'user' || !rowId) return null;
     const info = rowThreadInfo(rowId);
     if (!info || info.depth < 1) return null;
     const node = threadTree.byKey.get(info.key);
     const t = displayTitleOf(node, threadsApi.metaIndex);
+    // The chevron folds a whole question, so only the question's own label has it.
+    const foldable = foldGroupOf(threadTree, info.key) === info.key;
     return (
       <ThreadTurnLabel
         threadKey={info.key}
@@ -3207,7 +3317,29 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         unread={threadsApi.unreadKeys.has(info.key)}
         current={info.key === targetKey}
         onSelect={selectTarget}
+        {...(foldable ? { folded: false, onToggleFold: toggleFold } : {})}
       />
+    );
+  };
+  /** A folded question's stretch of the timeline: its label line alone. */
+  const foldLine = (group: string, rowId: string | undefined, key: string): React.ReactNode => {
+    const node = threadTree.byKey.get(group);
+    const t = displayTitleOf(node, threadsApi.metaIndex);
+    return (
+      <div key={`fold-${group}-${key}`} data-thread-fold={group} {...threadWrapperProps(rowId)}>
+        <ThreadTurnLabel
+          threadKey={group}
+          number={questionNumber.get(group)}
+          title={t.title}
+          naming={t.naming}
+          status={node ? viewStatusOf(node, threadsApi.metaIndex, threadDerived.live) : undefined}
+          unread={threadsApi.unreadKeys.has(group)}
+          current={group === targetKey}
+          onSelect={selectTarget}
+          folded
+          onToggleFold={toggleFold}
+        />
+      </div>
     );
   };
 
@@ -3324,7 +3456,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // only when that last answer has no list.
   let stripPlaced = false;
   const lastPart = visibleHistoryParts.length - 1;
-  visibleHistoryParts.forEach((part, i) => {
+  // The last history line's folded question: the live tail goes on from it.
+  let tailFoldGroup: string | null = null;
+  if (convMode) {
+    for (const item of foldParts(visibleHistoryParts, (part) => foldGroupOf(threadTree, partThreadKey(part)), groupFolded)) {
+      if (item.kind === 'fold') {
+        const first = item.part.kind === 'msg' ? item.part.m : item.part.members[0].m;
+        const rowId = first.msgId ?? first.walnutMessageId;
+        pageRows.push(foldLine(item.key, rowId, rowId ?? first.timestamp ?? String(item.index)));
+      } else pageRows.push(renderHistoryPart(item.part));
+      tailFoldGroup = item.kind === 'fold' ? item.key : null;
+    }
+  } else visibleHistoryParts.forEach((part, i) => {
     pageRows.push(renderHistoryPart(part));
     const asked = askedAfter.get(i);
     if (asked && i === lastPart && pageStrip) { pageRows.push(pageStrip); stripPlaced = true; }
@@ -3578,6 +3721,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             onActivate={activateMapRow}
             onOpenList={openMapList}
             onCollapse={threadMap.setCollapsed}
+            {...(mapArchive ? { archive: mapArchive } : {})}
           />
         ) : (
           <SessionPinnedToc
@@ -3851,6 +3995,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 } else if (!streamVisible) {
                   return null;
                 }
+              }
+              // Conversation Mode: a folded question's bubbles and blocks not
+              // persisted yet fold into its line too (utils/thread-fold.ts).
+              if (convMode && (item.kind === 'user' || item.kind === 'block')) {
+                const key = item.kind === 'user' ? optimisticThreadKey(item.msg) : pageKeyOfBlock(item.index);
+                const group = foldGroupOf(threadTree, key);
+                if (group !== ROOT_THREAD_KEY && groupFolded(group)) {
+                  if (tailFoldGroup === group) return null;
+                  tailFoldGroup = group;
+                  return foldLine(group, item.kind === 'user' ? item.msg.userUuid : undefined, `tail-${i}`);
+                }
+                if (!isTransparentStreamItem(item)) tailFoldGroup = null;
               }
               if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) return null;
               if (systemRunMember.has(i)) return null;

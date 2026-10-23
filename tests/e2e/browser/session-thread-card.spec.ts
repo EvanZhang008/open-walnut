@@ -18,6 +18,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
   centreInHistory, modePill, nextQuestionNumber, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, switchView,
+  unfoldQuestions,
 } from './threads-helpers'
 import { buildTaggedSession, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT, TAGGED_TITLES } from './threads-fixture'
 
@@ -60,6 +61,10 @@ test.describe('The comment card in Conversation Mode', () => {
   test('a sidebar row keeps the scroll position and opens the card below the passage, with the whole question in it', async ({ page }) => {
     const panel = await open(page)
     const hist = history(panel)
+    // The questions shown (they fold to their lines on the main conversation,
+    // utils/thread-fold.ts), so the timeline is the long one this test reads.
+    await unfoldQuestions(panel)
+    await hist.evaluate((el) => { el.scrollTop = el.scrollHeight })
     // Start at the bottom (where a session opens); the first message is far above.
     const before = await hist.evaluate((el) => el.scrollTop)
     expect(before).toBeGreaterThan(200)
@@ -163,6 +168,9 @@ test.describe('The comment card in Conversation Mode', () => {
 
   test('Ask on a selection opens a draft card with its own composer; the first send numbers it and the reply lands inside', async ({ page, request }) => {
     const panel = await open(page)
+    // A timeline long enough to scroll: folded, this one is barely taller than
+    // the box, and a box at its bottom follows it (utils/thread-fold.ts).
+    await unfoldQuestions(panel)
     const next = String(await nextQuestionNumber(request, TAGGED_SESSION))
     await centreInHistory(page, panel, TAGGED_PASSAGE.slice(0, 30))
     const before = await history(panel).evaluate((el) => el.scrollTop)
