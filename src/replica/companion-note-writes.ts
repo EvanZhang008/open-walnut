@@ -19,6 +19,10 @@
  * or the Mac, notes-v2.ts performNotesSearch) and the global notes (notes.ts) decide for
  * themselves.
  *
+ * A change of what the box's copy does not keep (notes off for it, a folder or a note left
+ * out, a tag the left-out notes may carry) is the Mac's: it goes there while the Mac
+ * answers (core/companion-forward.ts) and needs the Mac while it is away (4f).
+ *
  * Mounted on the notes routers after the copy reads (notes-v2.ts, api-v1.ts), so a
  * v1 save the companion forwards to the Mac while it answers never reaches here.
  * The answers are the Mac's routes' own shapes (away-notes.ts builds them): a stale
@@ -26,7 +30,8 @@
  */
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
-import { companionNoteSave, companionNotesBlocked } from '../core/companion-notes.js'
+import { companionNoteKept, companionNoteSave, companionNotesBlocked, companionNotesPartial, noteKeyOf } from '../core/companion-notes.js'
+import { forwardUnkept } from '../core/companion-forward.js'
 import { companionCopyHolds } from '../core/companion-host-replica.js'
 import { isCompanion } from '../core/server-role.js'
 import { log } from '../logging/index.js'
@@ -135,33 +140,51 @@ export function companionNoteWrites(flavor: 'v1' | 'v2'): RequestHandler {
     const pathRoute = pathRouteOf(flavor, req.method, req.path)
     const route = pathRoute ? null : noteRouteOf(req.method, flavor === 'v2' ? `/notes-v2${req.path}` : `/v1${req.path}`)
     if (!pathRoute && !route) { next(); return }
-    const blocked = companionNotesBlocked()
-    if (blocked) {
-      log.web.info('companion: a note change needs the Mac', { method: req.method, path: req.originalUrl, why: blocked.why })
-      send(res, needsLeaderAnswer(blocked.why, blocked.message))
-      return
-    }
-    if (pathRoute) {
-      answerNotePath(flavor, pathRoute, req).then((a) => { if (a) send(res, a); else next() }, next)
-      return
-    }
-    const b = bodyOf(req)
-    const noteRoute = route!
-    const notePath = noteRoute.op === 'create' ? (typeof b.path === 'string' ? b.path : '') : noteRoute.path
-    if (!notePath) {
-      send(res, refusalAnswer('bad_request', 'path (string) is required'))
-      return
-    }
-    const r = companionNoteSave(noteRoute.op === 'delete'
-      ? { path: notePath, mode: 'delete' }
-      : { path: notePath, content: noteRoute.op === 'create' && typeof b.content !== 'string' ? '' : b.content, expectedHash: b.expectedHash, createOnly: noteRoute.op === 'create' })
-    if (r.ok) {
-      log.web.info('companion: note change kept for the Mac', { path: notePath, op: noteRoute.op, seq: r.seq, ...(r.coalesced ? { coalesced: true } : {}) })
-      send(res, applied(noteRoute, { contentHash: r.contentHash, updatedAt: r.updatedAt, ...(r.noteId ? { noteId: r.noteId } : {}) }, notePath))
-      return
-    }
-    log.web.info('companion: note change refused', { path: notePath, op: noteRoute.op, code: r.code })
-    const retry = typeof r.detail?.retryAfterMs === 'number' ? r.detail.retryAfterMs : undefined
-    send(res, refusedAnswer(noteRoute, r.code, r.message, r.detail, retry))
+    // What the copy does not keep is the Mac's while it answers; the answers below say so while it is away.
+    if (unkept(pathRoute, route, req)) { forwardUnkept(req, res, () => write(flavor, pathRoute, route, req, res, next)); return }
+    write(flavor, pathRoute, route, req, res, next)
   }
+}
+
+/** A note change about what the box's copy does not keep: notes off for it, a left-out note, a tag rename of a partial copy. */
+function unkept(pathRoute: PathRoute | null, route: ReturnType<typeof noteRouteOf>, req: Request): boolean {
+  const blocked = companionNotesBlocked()
+  if (blocked) return blocked.why === 'not_kept_here'
+  const b = bodyOf(req)
+  const notKept = (p: unknown): boolean => { const k = noteKeyOf(p); return !!k && !companionNoteKept(k) }
+  if (pathRoute === 'move') return notKept(b.from) || notKept(b.to)
+  if (pathRoute === 'tags') return companionNotesPartial()
+  if (route) return notKept(route.op === 'create' ? b.path : route.path)
+  return false
+}
+
+function write(flavor: 'v1' | 'v2', pathRoute: PathRoute | null, route: ReturnType<typeof noteRouteOf>, req: Request, res: Response, next: NextFunction): void {
+  const blocked = companionNotesBlocked()
+  if (blocked) {
+    log.web.info('companion: a note change needs the Mac', { method: req.method, path: req.originalUrl, why: blocked.why })
+    send(res, needsLeaderAnswer(blocked.why, blocked.message))
+    return
+  }
+  if (pathRoute) {
+    answerNotePath(flavor, pathRoute, req).then((a) => { if (a) send(res, a); else next() }, next)
+    return
+  }
+  const b = bodyOf(req)
+  const noteRoute = route!
+  const notePath = noteRoute.op === 'create' ? (typeof b.path === 'string' ? b.path : '') : noteRoute.path
+  if (!notePath) {
+    send(res, refusalAnswer('bad_request', 'path (string) is required'))
+    return
+  }
+  const r = companionNoteSave(noteRoute.op === 'delete'
+    ? { path: notePath, mode: 'delete' }
+    : { path: notePath, content: noteRoute.op === 'create' && typeof b.content !== 'string' ? '' : b.content, expectedHash: b.expectedHash, createOnly: noteRoute.op === 'create' })
+  if (r.ok) {
+    log.web.info('companion: note change kept for the Mac', { path: notePath, op: noteRoute.op, seq: r.seq, ...(r.coalesced ? { coalesced: true } : {}) })
+    send(res, applied(noteRoute, { contentHash: r.contentHash, updatedAt: r.updatedAt, ...(r.noteId ? { noteId: r.noteId } : {}) }, notePath))
+    return
+  }
+  log.web.info('companion: note change refused', { path: notePath, op: noteRoute.op, code: r.code })
+  const retry = typeof r.detail?.retryAfterMs === 'number' ? r.detail.retryAfterMs : undefined
+  send(res, refusedAnswer(noteRoute, r.code, r.message, r.detail, retry))
 }

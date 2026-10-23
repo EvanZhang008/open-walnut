@@ -17,7 +17,8 @@
  *
  * The box never reads or writes its own disk for these: until the copy is held (or with
  * an older Mac that sends the two memory docs only), a read answers needs-the-Mac
- * `kind_not_copied`.
+ * `kind_not_copied`. A kind the user turned off for the box is the Mac's: its calls go
+ * there while it answers (core/companion-forward.ts) and answer `not_kept_here` while away.
  *
  * Mounted first on the routers that own those paths (web/routes/memory.ts,
  * search-memory-v1.ts, skills.ts, console-v1.ts, library-v1.ts). The v1 routers run on
@@ -30,7 +31,8 @@ import { companionMemoryAsOf, companionMemoryDoc, companionMemorySave, isMemoryD
 import { companionMemoryFiles, copyListMemories, copyMemoryBrowseTree, copyMemoryEntry } from '../core/companion-memory-files.js'
 import { isCompanion } from '../core/server-role.js'
 import { computeContentHash } from '../utils/file-ops.js'
-import { COMPANION_REPLICA_HOME, companionCopyHolds, companionCopySkills, companionHostReplica, parseCopySkill, type CopySkill } from '../core/companion-host-replica.js'
+import { COMPANION_REPLICA_HOME, companionCopyHolds, companionCopyOff, companionCopySkills, companionHostReplica, parseCopySkill, type CopySkill } from '../core/companion-host-replica.js'
+import { forwardUnkept } from '../core/companion-forward.js'
 import { LEGACY_SKILL_DIR_ALIASES } from '../core/skill-loader.js'
 import { log } from '../logging/index.js'
 import { needsLeaderAnswer, refusalAnswer, type PortAnswer } from './write-port.js'
@@ -75,11 +77,15 @@ function memoryDocOf(p: string): MemoryDocName | null {
 }
 
 const NO_MEMORY_COPY = 'This box keeps no copy of your memory yet; your Mac answers this.'
+const MEMORY_OFF = 'Your memory is kept only on your Mac.'
+const SKILLS_OFF = 'Your skills are kept only on your Mac.'
 
 export function companionMemoryRoutes(flavor: Flavor): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
     const p = isCompanion() ? memoryPathOf(flavor, req.path) : null
     if (p === null) { next(); return }
+    // Turned off for the box: the Mac's while it answers, needs-the-Mac while it is away.
+    if (companionCopyOff('memory')) { forwardUnkept(req, res, () => send(res, needsLeaderAnswer('not_kept_here', MEMORY_OFF))); return }
     const read = req.method === 'GET' || req.method === 'HEAD'
     const doc = memoryDocOf(p)
     if (doc && (read || req.method === 'PUT')) { memoryDoc(flavor, doc, read, req, res); return }
@@ -185,6 +191,7 @@ export function companionSkillRoutes(flavor: Flavor): RequestHandler {
     const p = isCompanion() ? skillPathOf(flavor, req.path) : null
     if (p === null) { next(); return }
     const read = req.method === 'GET' || req.method === 'HEAD'
+    if (read && companionCopyOff('skills')) { forwardUnkept(req, res, () => send(res, needsLeaderAnswer('not_kept_here', SKILLS_OFF))); return }
     if (!read) {
       // Always the Mac's: the box's own skills dir is a copy git sync no longer brings round.
       log.web.info('companion: a skill change needs the Mac', { method: req.method, path: req.originalUrl })

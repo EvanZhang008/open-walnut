@@ -21,9 +21,9 @@ export function isNeedsLeaderError(err: unknown): err is NeedsLeaderError {
   return !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'needs_leader' && typeof (err as { why?: unknown }).why === 'string'
 }
 
-/** The 503 body, the same shape the replica dispatcher sends (replica/dispatch.ts). */
-export function needsLeaderBody(why: string): { error: { code: 'needs_leader'; why: string; retryAfter: number; message: string } } {
-  return { error: { code: 'needs_leader', why, retryAfter: 5, message: NEEDS_LEADER_MESSAGE } }
+/** The 503 body, the same shape the replica dispatcher sends (replica/dispatch.ts); `message` is the refusal's own sentence. */
+export function needsLeaderBody(why: string, message = NEEDS_LEADER_MESSAGE): { error: { code: 'needs_leader'; why: string; retryAfter: number; message: string } } {
+  return { error: { code: 'needs_leader', why, retryAfter: 5, message: message || NEEDS_LEADER_MESSAGE } }
 }
 
 /**

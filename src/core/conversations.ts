@@ -47,7 +47,9 @@ async function copiedIndex(agentId: string): Promise<ConversationIndex> {
   if (copied) return copied;
   // An agent the copy has no list of is an empty list, once there is a copy at all;
   // with none yet (or the host turned it off) it is not "no chats".
-  const { copyKindHeld, KIND_NOT_COPIED } = await import('./replication/kinds/gate.js');
+  const { copyKindHeld, KIND_NOT_COPIED, assertCopyKept } = await import('./replication/kinds/gate.js');
+  // Turned off for this host: kept only on the Mac (4f), not "not copied yet".
+  await assertCopyKept('conversations');
   if (!(await copyKindHeld('conversations'))) throw new NeedsLeaderError(KIND_NOT_COPIED);
   return { version: 1, activeConversationId: null, conversations: [] };
 }

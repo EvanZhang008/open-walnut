@@ -27,6 +27,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { NOTES_DIR, WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
+import { leftOut } from './replication/keep-rule.js'
 
 const MAX_FILES = 20_000
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -54,8 +55,9 @@ async function hashFile(abs: string): Promise<string> {
   return hash.digest('hex')
 }
 
-function inFolder(rel: string, folders: string[]): boolean {
-  return folders.some((f) => rel === f || rel.startsWith(`${f}/`))
+/** A folder left out leaves its pictures and files out (replication/keep-rule.ts, the notes' own rule). */
+function inFolder(rel: string, entries: string[]): boolean {
+  return leftOut(rel, entries)
 }
 
 /** Walks in progress: the targets' rounds a note edit starts together share one walk of the vault. */
@@ -195,7 +197,8 @@ export async function syncAttachments(target: AttachmentTarget, keep: Attachment
     const manifest = entries.map(({ k, h, n }) => ({ k, h, n }))
     const hash = crypto.createHash('sha256').update(JSON.stringify(manifest)).digest('hex')
     if (s.memo?.hash === hash) return { action: 'unchanged', entries: entries.length }
-    const reply = await target.send('attachments.sync', { home, entries: manifest, asOf: Date.now() })
+    // `exclude`: the folders the user left out, so the copy drops them however many files they hold.
+    const reply = await target.send('attachments.sync', { home, entries: manifest, asOf: Date.now(), exclude: keep.exclude })
     if (reply.ok !== true) return { action: 'failed', error: String(reply.error ?? 'refused') }
     const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
     const have = (reply.have && typeof reply.have === 'object' ? reply.have : {}) as Record<string, unknown>

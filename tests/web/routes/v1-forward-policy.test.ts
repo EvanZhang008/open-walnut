@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  companionAnswers, forwardRequestHeaders, forwardResponseHeaders, parseForwardUrl,
+  companionAnswers, consoleReadKindOf, forwardRequestHeaders, forwardResponseHeaders, parseConsoleCopyCall, parseForwardUrl, phoneCopyReadOf,
 } from '../../../src/web/v1-forward/policy.js'
 
 describe('companionAnswers: the routes the companion keeps', () => {
@@ -197,5 +197,55 @@ describe('headers that cross', () => {
     })).toEqual({
       'content-type': 'application/json; charset=utf-8', etag: '"v2"', 'cache-control': 'no-store', 'x-walnut-api': '1',
     })
+  })
+})
+
+describe('what the companion does not keep (4f)', () => {
+  it('a kept phone read of a copy names its kind and choice key; other reads and writes none', () => {
+    expect(phoneCopyReadOf('GET', '/conversations')).toEqual({ kind: 'conversations', choice: 'conversations' })
+    expect(phoneCopyReadOf('HEAD', '/conversations/c1/messages')).toEqual({ kind: 'conversation-bodies', choice: 'conversation_bodies' })
+    expect(phoneCopyReadOf('POST', '/conversations/c1/messages')).toBeNull()
+    expect(phoneCopyReadOf('GET', '/conversations/c1/stream')).toBeNull()
+    expect(phoneCopyReadOf('GET', '/tasks')).toBeNull()
+  })
+
+  it.each([
+    ['/api/ui-prefs', 'prefs'],
+    ['/api/favorites', 'prefs'],
+    ['/api/favorites/projects', 'prefs'],
+    ['/api/stt/vocab', 'stt-vocab'],
+    ['/api/agents/general/conversations', 'conversations'],
+    ['/api/sessions/ask-walnut-launch', 'personas'],
+    ['/api/chat/history', 'conversation-bodies'],
+    ['/api/sessions/host-model-catalogs', 'model-catalogs'],
+  ])('a console read of %s reads the %s copy', (p, kind) => {
+    expect(consoleReadKindOf(p)).toBe(kind)
+    expect(parseConsoleCopyCall('GET', `${p}?a=1`)).toEqual({ rel: p.slice('/api'.length), pathname: p, search: '?a=1' })
+  })
+
+  it('the notes, memory, skills and search reads are carried, with no kind of their own', () => {
+    for (const p of ['/api/notes-v2', '/api/notes-v2/search', '/api/notes-v2/content/Acme/plan', '/api/memory/global', '/api/skills/acme-tool', '/api/search']) {
+      expect([p, parseConsoleCopyCall('GET', `${p}?q=x`)?.pathname]).toEqual([p, p])
+      expect(consoleReadKindOf(p)).toBeNull()
+    }
+  })
+
+  it('writes are carried only by their exact method, with no query', () => {
+    expect(parseConsoleCopyCall('PUT', '/api/notes-v2/content/Acme/plan')?.rel).toBe('/notes-v2/content/Acme/plan')
+    expect(parseConsoleCopyCall('PUT', '/api/memory/global')?.rel).toBe('/memory/global')
+    expect(parseConsoleCopyCall('POST', '/api/notes-v2/content/Acme/plan')).toBeNull()
+    expect(parseConsoleCopyCall('PUT', '/api/notes-v2/content/Acme/plan?x=1')).toBeNull()
+    expect(parseConsoleCopyCall('PUT', '/api/ui-prefs')).toBeNull()
+    expect(parseConsoleCopyCall('POST', '/api/search')).toBeNull()
+  })
+
+  it('anything else, or a path that only begins like one, is refused', () => {
+    for (const [m, u] of [
+      ['GET', '/api/config'], ['GET', '/api/searchx'], ['GET', '/api/ui-prefsx'], ['GET', '/api/tasks'],
+      ['GET', '/api/notes-v2/content/../../config'], ['GET', '/api/notes-v2//list'], ['GET', '/api/memory\\x'],
+      ['GET', '/api/v1/notes/search'], ['GET', ''], [1, '/api/search'],
+    ] as Array<[unknown, string]>) {
+      expect([m, u, parseConsoleCopyCall(m, u)]).toEqual([m, u, null])
+    }
   })
 })

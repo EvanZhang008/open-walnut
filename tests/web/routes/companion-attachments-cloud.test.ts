@@ -270,7 +270,8 @@ describe('the copy\'s bounds', () => {
       .toMatchObject({ ok: false, errorKind: 'manifest_removes_most_rows' })
     expect(await syncAttachments(companion, { on: false, exclude: [] })).toMatchObject({ action: 'dropped' })
     expect(companionAttachmentsHeld()).toBe(false)
-    await expect(fs.stat(companionAttachmentCopyDir())).rejects.toThrow()
+    // No picture is left; only the off mark (attachment-copy-core.ts drop), so a read is the Mac's.
+    expect(await fs.readdir(companionAttachmentCopyDir())).toEqual(['index.json'])
     // Back on: the next round fills it again.
     _resetAttachmentReplicaForTesting()
     expect(await round()).toMatchObject({ action: 'synced' })

@@ -317,7 +317,7 @@ async function run(d: Daemon): Promise<void> {
   await sleep(300)
   for (const p of ['Private/new', 'private/new', 'PRIVATE/x/y']) {
     const r = await cmd(follower, { cmd: 'follower.op', op: 'note_put', args: { path: p, content: 'x\n' }, actor: PHONE, opId: `op-${twin}-kx-${p.length}-${p[1]}` })
-    expect(r, `${p}: ${JSON.stringify(r)}`).toMatchObject({ ok: false, errorKind: 'needs_leader', detail: { why: 'note_not_kept' } })
+    expect(r, `${p}: ${JSON.stringify(r)}`).toMatchObject({ ok: false, errorKind: 'needs_leader', detail: { why: 'not_kept_here' } })
   }
   const nul = await cmd(follower, { cmd: 'follower.op', op: 'note_put', args: { path: 'Projects/a\u0000b', content: 'x\n' }, actor: PHONE, opId: `op-${twin}-nul` })
   expect(nul, JSON.stringify(nul)).toMatchObject({ ok: false, errorKind: 'bad_request' })

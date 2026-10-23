@@ -632,13 +632,22 @@ export async function listLetters(opts: { archived?: boolean } = {}): Promise<Le
  */
 export async function getLetter(
   id: string,
-  opts: { inlineMaxBytes?: number; dir?: string } = {},
+  opts: { inlineMaxBytes?: number; dir?: string; deferBodies?: boolean } = {},
 ): Promise<LetterDetail | null> {
   if (typeof id !== 'string' || !LETTER_ID_RE.test(id)) return null;
   const dir = opts.dir ?? INBOX_DIR;
   const { letters } = await readStore(dir);
   const record = letters.find(l => l.id === id);
   if (!record) return null;
+  // A replica that keeps no bodies (its choice): every body is the body route's, which asks the Mac.
+  if (opts.deferBodies) {
+    return {
+      ...record,
+      thread: record.thread.map((entry, turn) => (entry.bodyFile ? { ...entry, bodyDeferred: true, bodyUrl: letterBodyUrl(id, turn) } : { ...entry })),
+      bodyDeferred: true,
+      bodyUrl: letterBodyUrl(id),
+    };
+  }
   const inlineMax = opts.inlineMaxBytes ?? LETTER_INLINE_BODY_MAX_BYTES;
 
   const ownStat = await statLetterBody(id, undefined, dir);

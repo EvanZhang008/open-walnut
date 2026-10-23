@@ -851,6 +851,61 @@ What still differs is capability, not data: the transport (HTTPS for the compani
 daemon link for a host), the box's pasted pictures, and which copy kinds a program reads
 (`COMPANION_COPY_KINDS`; the plain host server keeps none).
 
+**4f, what is not kept routes to the Mac.** By default every replica keeps everything. The
+user may keep less on any one of them: the same switches for a host (Settings, Remote Hosts:
+`hosts.<key>.keep` and `hosts.<key>.server.copies`) and for the companion (Settings, Phones &
+Cloud, "What the cloud companion keeps": `cloud_bridge.keep` and `cloud_bridge.copies`). One
+rule then holds on every replica: what it does not keep is never answered from its copy, nor
+from its own disk. While the Mac answers, the read goes to the Mac; while it is away, the
+answer is `503 needs_leader` with why `not_kept_here` and a sentence, never `not_found`, an
+empty list, or a part of a list shown as the whole.
+
+- What is not kept: a kind turned off (its purge leaves an off marker, `kinds/gate.ts`
+  `copyKindOff`; the notes, memory and skills copy remembers `off` after `replica.drop`, and
+  so do the pictures), and in the notes, a folder or a single note left out
+  (`notes_exclude`: a folder, or one note with or without `.md`, any letter case,
+  `core/replication/keep-rule.ts`; the daemon's twin is in `host-replica-core.ts`). The Mac's
+  rounds leave such a note out and remove it from a replica that held it, its pictures (by
+  folder) and its search docs too (`replication/search-replica-keep.ts`: a follower's search
+  copy holds only the docs it keeps, with its own digest).
+- Where it is checked: every reader of a copy. A host replica forwards every read while the
+  Mac answers (its dispatcher); away, the readers say `not_kept_here` (`assertCopyKept` for
+  the copy kinds, `replica/away-kind-reads.ts` for the sessions, the notes source's manifest
+  for notes, route-table rows for the memory and skills, which a host replica has no reader
+  of). The companion answers its console's copy reads itself, so a read of what it does not
+  keep is carried to the Mac first (`core/companion-forward.ts`, the v1 forward's console
+  door, `policy.ts` CONSOLE_COPY_READS); a phone read the box keeps for itself (the chat list
+  and a chat's messages) goes to the Mac when that kind is off, and the Mac takes it only
+  when its own choice for the box says so (`phoneCopyReadOf`). The daemon's offline host
+  refuses a read or a save of a note it does not keep the same way.
+- Search: a replica whose copy leaves anything out (a folder or note left out, a note over
+  the size cap, notes, memory or skills off) says so on every search it answers itself:
+  `partial: {why: 'not_kept_here', message}`, which the notes search box and Cmd+K show.
+  The companion's console search goes to the Mac while it answers. A replica that keeps
+  everything answers as before: no `partial`, no forward.
+- What stays: a replica's own work (a host's sessions, their tasks, triggers, the team Board,
+  replies; the box's own cards and chats) is always its own. The companion still gets the
+  Mac's session projection with sessions turned off, because it routes a phone's message to
+  the session's host by it, but it never shows it while the Mac is away: the sessions' reads
+  (the list, a session, its transcript) answer `not_kept_here` and the phone's event snapshot
+  carries none of the Mac's sessions (`replica/away-kind-reads.ts`, the same check a host
+  replica runs), while a session of the box's own still reads. Its chat lane still renders an
+  agent itself when the personas are not kept; its notification feed while the Mac is away shows only its own cards, marked
+  offline. A picture is bytes and never rides the bridge, so a picture the box does not keep
+  (a path into a folder left out, or a bare name that may be in one: `keep-rule.ts`
+  `pictureMayBeLeftOut`) answers `not_kept_here` even while the Mac answers; any other miss
+  is a broken link, 404. A single note left out keeps its pictures in the copy (pictures are
+  left out by folder).
+- What the user leaves out goes from a copy however much it is: the copies' guard against a
+  manifest that removes most of a copy (a Mac whose store was lost) counts only the removals
+  the user's choice does not explain (the notes copy, the pictures, the search docs).
+- A chat the box answered while the Mac was away shows in a forwarded read of the chat list
+  or its messages once the Mac has taken the box's journal, seconds after it is back.
+- Two answers that say "the Mac" without this why: a host replica's console `GET /api/config`
+  with settings not kept answers the defaults with `configCopied: false` (it also carries the
+  page's role and build, so it is never a 503), and the phone's routines on a companion that
+  does not keep them relay to the Mac and answer `503 bridge_offline` while it is away.
+
 ## Stage 5: capabilities instead of `CLOUD_MODE`
 
 `bootPolicy` gets one `replica` column. What only a companion does becomes a

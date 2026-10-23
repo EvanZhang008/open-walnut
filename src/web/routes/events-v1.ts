@@ -372,6 +372,8 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
       // git-synced file as transition fallback).
       const { readSessionProjection } = await import('../../core/session-projection.js')
       sessions = (await readSessionProjection())?.sessions ?? []
+      // Sessions turned off for the box, the Mac away: none of the Mac's are shown (4f).
+      if (await (await import('../../replica/away-kind-reads.js')).companionHoldsSessionsBack()) sessions = []
     } else {
       const { buildSessionProjection } = await import('../../core/session-projection.js')
       sessions = (await buildSessionProjection()).sessions

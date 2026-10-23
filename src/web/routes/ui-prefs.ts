@@ -141,6 +141,8 @@ async function loadPrefs(): Promise<Record<string, PrefEntry>> {
 // GET /api/ui-prefs → { prefs: Record<string, { v: string|null, ts: number }> }
 uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // Turned off for this replica (Settings): the Mac's prefs alone, never this box's own file.
+    await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('prefs')
     // The companion answers the Mac's prefs once it holds the copy (before: its own file).
     if (isCompanion()) {
       const asOf = await copyKindAsOf('prefs')

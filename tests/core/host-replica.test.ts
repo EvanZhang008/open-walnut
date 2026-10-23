@@ -149,14 +149,42 @@ describe('a round', () => {
     config = { hosts: { devbox: { hostname: 'h', keep: { notes_exclude: ['health'], skills: false } } } } as unknown as Config
     calls = []
     await syncHostReplica(target)
-    expect(read('note_read', { path: 'health/Checkup' })).toMatchObject({ ok: false, error: { code: 'not_found' } })
-    expect(read('skill_read', { dirName: 'deploy' })).toBeNull()
-    expect(fs.readdirSync(daemonDir, { recursive: true }).map(String).some((f) => f.includes('skills'))).toBe(false)
+    // A note left out is the Mac's: never "not found" here.
+    expect(read('note_read', { path: 'health/Checkup' })).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+    // A kind turned off answers needs-the-Mac, never "not found" or nothing.
+    expect(read('skill_read', { dirName: 'deploy' })).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+    // No skill is left there: only the mark that the user turned them off.
+    expect(fs.readdirSync(daemonDir, { recursive: true }).map(String).filter((f) => f.includes('skills') && !/skills$/.test(f) && !/skills[\\/]index\.json$/.test(f))).toEqual([])
     expect(cmds()).toContain('replica.drop:skills')
     // Off stays off without asking again every round.
     calls = []
     await syncHostReplica(target)
     expect(cmds()).not.toContain('replica.drop:skills')
+  })
+
+  it('one note left out (no .md, another case) leaves the host; the rest stays', async () => {
+    await syncHostReplica(target)
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true })
+    config = { hosts: { devbox: { hostname: 'h', keep: { notes_exclude: ['projects/retro'] } } } } as unknown as Config
+    calls = []
+    await syncHostReplica(target)
+    const sync = calls.find((c) => c.cmd === 'replica.sync' && c.params.kind === 'notes')!
+    expect((sync.params.entries as Array<{ k: string }>).map((e) => e.k)).not.toContain('Projects/Retro.md')
+    expect((sync.params.entries as Array<{ k: string }>).map((e) => e.k)).toContain('Projects/Release plan.md')
+    expect(sync.params.opts).toMatchObject({ keepExclude: ['projects/retro'] })
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+    expect(read('note_read', { path: 'Projects/Release plan' })).toMatchObject({ ok: true })
+    // The note back in: copied again.
+    config = { hosts: { devbox: { hostname: 'h' } } } as unknown as Config
+    await syncHostReplica(target)
+    expect(read('note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true })
+  })
+
+  it('the companion\'s keep settings are cloud_bridge.keep, the same shape and defaults', () => {
+    const c = { cloud_bridge: { keep: { notes_exclude: ['health/Checkup.md'], memory: false } } } as unknown as Config
+    expect(hostKeepFor(c, 'companion')).toEqual({ notes: true, notesExclude: ['health/Checkup.md'], memory: false, skills: true, attachments: true })
+    // A host never reads the companion's.
+    expect(hostKeepFor(c, 'devbox')).toEqual({ notes: true, notesExclude: [], memory: true, skills: true, attachments: true })
   })
 
   it('the search exclusions travel with the manifest', async () => {
@@ -340,7 +368,9 @@ describe('every target gets the same copy', () => {
     await syncHostReplica(keeper)
     expect(cmds().filter((c) => c.startsWith('attachments.'))).toEqual(['attachments.drop:undefined'])
     expect(pics.held(WALNUT_HOME)).toBe(false)
-    expect(fs.existsSync(picsDir)).toBe(false)
+    // No bytes are left there: only the index that says the pictures are off for it.
+    expect(fs.readdirSync(picsDir)).toEqual(['index.json'])
+    expect(pics.isOff(WALNUT_HOME)).toBe(true)
     calls = []
     await syncHostReplica(keeper)
     expect(cmds().filter((c) => c.startsWith('attachments.'))).toEqual([])

@@ -58,6 +58,12 @@ export function companionCopyHolds(kind: ReplicaKind): boolean {
   return r !== null && r.status(COMPANION_REPLICA_HOME)[kind]?.asOf != null
 }
 
+/** The Mac turned `kind` off for the box (keep settings): what it holds of it is the Mac's alone. */
+export function companionCopyOff(kind: ReplicaKind): boolean {
+  const r = companionHostReplica()
+  return r !== null && r.isOff(COMPANION_REPLICA_HOME, kind)
+}
+
 export type HostReplicaReply = { ok: true } & Record<string, unknown> | { ok: false; error: string; errorKind?: string; detail?: unknown }
 
 /**
@@ -66,18 +72,26 @@ export type HostReplicaReply = { ok: true } & Record<string, unknown> | { ok: fa
  * `replica.status`. A refusal the Mac reads (`manifest_removes_most_rows`) carries
  * its code and sizes. Never throws.
  */
+/** Told when the Mac's round changed the notes copy (companion-notes.ts: its listed manifest goes). */
+let notesCopyChanged: (() => void) | null = null
+export function onCompanionNotesCopyChanged(fn: (() => void) | null): void {
+  notesCopyChanged = fn
+}
+
 export function companionHostReplicaCommand(cmd: unknown, params: Record<string, unknown>): HostReplicaReply {
   const r = companionHostReplica()
   if (!r) return { ok: false, error: 'not a cloud companion' }
   const home = COMPANION_REPLICA_HOME
+  // A round of the notes (a note left out now, the kind off) shows at the next read, not after the list's 2 s.
+  const changed = <T>(out: T): T => { if (params.kind === 'notes') notesCopyChanged?.(); return out }
   try {
     switch (cmd) {
       case 'replica.sync':
-        return { ok: true, ...r.sync(home, params.kind, params.entries, params.asOf, params.opts as Record<string, unknown> | undefined, { confirm: params.confirm, confirmFor: params.confirmFor }) }
+        return changed({ ok: true, ...r.sync(home, params.kind, params.entries, params.asOf, params.opts as Record<string, unknown> | undefined, { confirm: params.confirm, confirmFor: params.confirmFor }) })
       case 'replica.put':
-        return { ok: true, ...r.put(home, params.kind, params.files) }
+        return changed({ ok: true, ...r.put(home, params.kind, params.files) })
       case 'replica.drop':
-        return { ok: true, ...r.drop(home, params.kind) }
+        return changed({ ok: true, ...r.drop(home, params.kind) })
       case 'replica.status':
         return { ok: true, kinds: r.status(home) }
       default:

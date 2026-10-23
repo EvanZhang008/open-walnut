@@ -120,6 +120,24 @@ export function companionAnswers(method: string, rel: string): CompanionReason |
   return null
 }
 
+/**
+ * A phone read the companion keeps for itself that reads one of its copies: the chat
+ * list and a chat's messages. With that kind turned off for the box (Settings), the call
+ * is the Mac's while it answers; the Mac takes it only when its own choice for the box
+ * says the kind is off (target.ts). Returns the kind and its choice key, or null.
+ */
+const PHONE_COPY_READS: ReadonlyArray<{ re: RegExp; kind: string; choice: string }> = [
+  { re: /^\/conversations$/, kind: 'conversations', choice: 'conversations' },
+  { re: /^\/conversations\/[^/]+\/messages$/, kind: 'conversation-bodies', choice: 'conversation_bodies' },
+]
+
+export function phoneCopyReadOf(method: string, rel: string): { kind: string; choice: string } | null {
+  const m = method.toUpperCase()
+  if (m !== 'GET' && m !== 'HEAD') return null
+  const hit = PHONE_COPY_READS.find((r) => r.re.test(rel))
+  return hit ? { kind: hit.kind, choice: hit.choice } : null
+}
+
 const V1_PREFIX = '/api/v1'
 
 function hasDotSegment(pathname: string): boolean {
@@ -196,6 +214,63 @@ export function parseConsoleTaskWrite(method: unknown, url: unknown): { rel: str
   const m = method.toUpperCase()
   if (!CONSOLE_WRITE_RES.some((w) => w.method === m && w.re.test(url))) return null
   return { rel: url.slice('/api'.length), pathname: url, search: '' }
+}
+
+/**
+ * The console's calls the companion carries to the Mac while it answers, when its copy does
+ * not hold what they read or write: notes, memory or skills turned off for the companion, a
+ * folder or a note left out of its copy (core/companion-forward.ts;
+ * docs/plan/walnut-companion-unified-replica.md, 4f). These paths only, the reads by GET or
+ * HEAD and the writes by their exact method; a copy that keeps everything never sends one.
+ */
+const CONSOLE_COPY_READS: ReadonlyArray<{ re: RegExp; kind?: string }> = [
+  { re: /^\/api\/notes-v2\/?$/ },
+  { re: /^\/api\/notes-v2\/(list|tags|search)$/ },
+  { re: /^\/api\/notes-v2\/(content|backlinks|links)\/.+$/ },
+  { re: /^\/api\/notes-v2\/tags\/[^/]+\/notes$/ },
+  { re: /^\/api\/notes\/global$/ },
+  { re: /^\/api\/memory(\/.*)?$/ },
+  { re: /^\/api\/skills(\/.*)?$/ },
+  // The console's search, when this box's copy leaves notes, memory or skills out (search-kept.ts).
+  { re: /^\/api\/search$/ },
+  // The console's reads of a copy kind (kinds/*.ts): carried while that kind is off for the box.
+  { re: /^\/api\/ui-prefs$/, kind: 'prefs' },
+  { re: /^\/api\/favorites(\/.*)?$/, kind: 'prefs' },
+  { re: /^\/api\/stt\/vocab$/, kind: 'stt-vocab' },
+  { re: /^\/api\/agents\/[^/]+\/conversations$/, kind: 'conversations' },
+  { re: /^\/api\/sessions\/ask-walnut-launch$/, kind: 'personas' },
+  { re: /^\/api\/chat\/history$/, kind: 'conversation-bodies' },
+  { re: /^\/api\/sessions\/host-model-catalogs$/, kind: 'model-catalogs' },
+]
+
+/** The copy kind a console read reads (CONSOLE_COPY_READS), or null: what the companion's forward checks is off. */
+export function consoleReadKindOf(pathname: string): string | null {
+  for (const r of CONSOLE_COPY_READS) if (r.kind && r.re.test(pathname)) return r.kind
+  return null
+}
+const CONSOLE_COPY_WRITES: ReadonlyArray<{ methods: readonly string[]; re: RegExp }> = [
+  { methods: ['PUT', 'DELETE'], re: /^\/api\/notes-v2\/content\/.+$/ },
+  { methods: ['POST'], re: /^\/api\/notes-v2\/(move|tags\/rename)$/ },
+  { methods: ['PUT'], re: /^\/api\/notes\/global$/ },
+  { methods: ['PUT'], re: /^\/api\/memory\/(global|user)$/ },
+]
+
+/**
+ * A console copy call (CONSOLE_COPY_READS, CONSOLE_COPY_WRITES) as a forwarded call, or
+ * null: the checks of parseForwardUrl; a read may carry a query (a search's words), a write
+ * none. `rel` is the path under /api.
+ */
+export function parseConsoleCopyCall(method: unknown, url: unknown): { rel: string; pathname: string; search: string } | null {
+  if (typeof method !== 'string' || typeof url !== 'string' || url.length === 0 || url.length > 4096) return null
+  const m = method.toUpperCase()
+  if (/[\0#\\\r\n]/.test(url)) return null
+  const q = url.indexOf('?')
+  const pathname = q === -1 ? url : url.slice(0, q)
+  const search = q === -1 ? '' : url.slice(q)
+  if (pathname.includes('//') || hasDotSegment(pathname)) return null
+  const read = m === 'GET' || m === 'HEAD'
+  if (read ? !CONSOLE_COPY_READS.some((r) => r.re.test(pathname)) : search !== '' || !CONSOLE_COPY_WRITES.some((w) => w.methods.includes(m) && w.re.test(pathname))) return null
+  return { rel: pathname.slice('/api'.length), pathname, search }
 }
 
 /** The request headers that cross: what a route reads to understand the body and the cache. */

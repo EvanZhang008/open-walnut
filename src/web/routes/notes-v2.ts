@@ -13,7 +13,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { replicaNotesReads } from '../../replica/notes-routes.js'
+import { PARTIAL_SEARCH, replicaNotesReads } from '../../replica/notes-routes.js'
 import { companionNoteWrites } from '../../replica/companion-note-writes.js'
 import { NOTES_DIR, CLOUD_MODE } from '../../constants.js'
 import { companionSearchReady } from '../../core/search/companion-ready.js'
@@ -359,6 +359,11 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown): Prom
   const { companionAttachmentRead } = await import('../../core/companion-attachment-copy.js')
   let copied = await companionAttachmentRead(raw, note)
   if (copied === undefined) copied = await (await import('../../replica/attachment-source.js')).replicaAttachmentRead(raw, note)
+  // What the user keeps from this replica is the Mac's: never a 404 for it (core/replication/keep-rule.ts).
+  if (copied === 'not_kept') {
+    const { NeedsLeaderError } = await import('../../core/replication/needs-leader.js')
+    throw new NeedsLeaderError('not_kept_here', 'This picture or file is kept only on your Mac.')
+  }
   if (copied === null) throw new NotesOpError('Attachment not found', 404)
   if (copied) {
     const cext = path.extname(copied.rel).slice(1).toLowerCase()
@@ -1207,6 +1212,8 @@ export interface NotesSearchPayload {
    *  highlights snippets). One tokenization truth, not a client re-derivation. */
   queryTokens?: string[]
   degraded?: 'semantic-unavailable'
+  /** Only on a replica whose copy leaves notes out (replica/notes-routes.ts PARTIAL_SEARCH): those are not searched here. */
+  partial?: { why: 'not_kept_here'; message: string }
 }
 
 /**
@@ -1290,8 +1297,16 @@ async function performNotesSearchInner(opts: {
     // The cloud companion's string leg is a keyword search of its copy of the Mac's notes
     // (stage 4d, core/companion-notes.ts): its own disk index is off. Null elsewhere; it
     // throws needs-the-Mac while the box keeps no copy.
-    const { companionNotesSearch } = await import('../../core/companion-notes.js')
+    const { companionNotesSearch, companionNotesPartial, companionNoteKept, companionNotesOff } = await import('../../core/companion-notes.js')
+    // Notes turned off for the box: a search of any mode needs the Mac, never an empty list (4f).
+    if (isFollower() && companionNotesOff()) {
+      const { NeedsLeaderError } = await import('../../core/replication/needs-leader.js')
+      throw new NeedsLeaderError('not_kept_here', 'Your notes are kept only on your Mac.')
+    }
     const companionLeg = wantString ? await companionNotesSearch(q, limit * 2) : null
+    // The companion's copy leaves notes out: no hit of one shows (its search copy may still
+    // name it), and the answer says some notes are only on the Mac.
+    const copyPartial = companionNotesPartial()
 
     const [stringSettled, semanticSettled] = await Promise.allSettled([
       wantString && !companionLeg ? Promise.resolve(stringSearch(q, limit * 2, { excludeFolders })) : Promise.resolve([]),
@@ -1364,6 +1379,7 @@ async function performNotesSearchInner(opts: {
         // semantic opinion worth merging.
         const sem = h.cos
         if (sem === undefined) continue
+        if (copyPartial && !companionNoteKept(relForFilter)) continue
         const id = idFromAbsPath(h.filepath)
         const existing = byId.get(id) ?? byPath.get(relForFilter)
         if (existing) {
@@ -1493,11 +1509,23 @@ async function performNotesSearchInner(opts: {
     const payload: NotesSearchPayload = { results: capped, queryTokens: snippetTokens(q) }
     if (folders.length > 0) payload.folders = folders
     if (degraded) payload.degraded = degraded
+    if (copyPartial) payload.partial = { ...PARTIAL_SEARCH }
     return payload
 }
 
 // GET /api/notes-v2/search?q&mode&limit — hybrid string+semantic, deduped, labeled
 notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunction) => {
+  // The companion's copy leaves notes out (or notes are off for it): the Mac's search while it answers.
+  const { companionNotesSearchIsPartial } = await import('../../core/companion-notes.js')
+  if (companionNotesSearchIsPartial()) {
+    const { forwardUnkept } = await import('../../core/companion-forward.js')
+    forwardUnkept(req, res, () => { void notesSearchHere(req, res, next) })
+    return
+  }
+  await notesSearchHere(req, res, next)
+})
+
+async function notesSearchHere(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const payload = await performNotesSearch({
       q: (req.query.q as string) || '',
@@ -1509,7 +1537,7 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
   } catch (err) {
     next(err)
   }
-})
+}
 
 /** Best-effort path lookup for a semantic-only hit keyed by id. */
 function getPathForId(id: string): string | undefined {

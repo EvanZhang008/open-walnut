@@ -228,7 +228,7 @@ describe('the host turned the prefs copy off', () => {
         expect([p, r.status]).toEqual([p, 503])
         // The dispatcher's 503 headers too: a client tells the two apart by nothing.
         expect([p, r.headers.get('retry-after'), r.headers.get('x-walnut-answered-via')]).toEqual([p, '5', 'replica'])
-        expect(await r.json()).toMatchObject({ error: { code: 'needs_leader', why: 'kind_not_copied' } })
+        expect(await r.json()).toMatchObject({ error: { code: 'needs_leader', why: 'not_kept_here' } })
       }
       choice = {}
       from = host.calls.length

@@ -200,13 +200,13 @@ describe('the Mac\'s rounds', () => {
     applyCompanionSessionCopy(companionCopyFile(), { removeIds: [...Array.from({ length: 160 }, (_, i) => `s-bulk-${i}`), 's-mid-parse'] })
   })
 
-  it('a purge (the Mac turned the kind off here) puts the pushed list back', async () => {
+  it('a purge (the Mac turned the kind off here): the list needs the Mac while it is away, never the pushed one (4f)', async () => {
     copies = { sessions: false }
     const off = await syncCopyKinds(macKinds(), { targets: () => [companion] })
     expect(off.find((r) => r.kind === 'sessions')).toMatchObject({ action: 'unsupported', error: 'kind_not_copied', removed: 5 })
     expect(companionSessionCopyIds(companionCopyFile())).toEqual([])
     const l = await list()
-    expect([l.ids, l.asOf]).toEqual([['s-pushed'], null])
+    expect([l.status, (l.body.error as { why?: string } | undefined)?.why, l.ids]).toEqual([503, 'not_kept_here', []])
     // Turned on again: the next round fills it again.
     copies = {}
     await syncCopyKinds(macKinds(), { targets: () => [companion] })

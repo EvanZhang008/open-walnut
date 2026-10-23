@@ -26,8 +26,8 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024
 const MAX_PAGES = 50
 
 let request: Request | null = null
-let listing: { at: number; keys: string[]; asOf: string | null } | null = null
-let listInFlight: Promise<{ keys: string[]; asOf: string | null }> | null = null
+let listing: { at: number; keys: string[]; asOf: string | null; off: boolean } | null = null
+let listInFlight: Promise<{ keys: string[]; asOf: string | null; off: boolean }> | null = null
 
 /** A host replica's boot: its pictures come from the daemon's copy (null: none, the leader and the companion). */
 export function installReplicaAttachments(req: Request | null): void {
@@ -36,22 +36,24 @@ export function installReplicaAttachments(req: Request | null): void {
   listInFlight = null
 }
 
-async function listAll(req: Request): Promise<{ keys: string[]; asOf: string | null }> {
+async function listAll(req: Request): Promise<{ keys: string[]; asOf: string | null; off: boolean }> {
   const keys: string[] = []
   let asOf: string | null = null
+  let off = false
   let after: string | null = null
   for (let page = 0; page < MAX_PAGES; page++) {
     const r = await req('attachments.list', after ? { after } : {}, READ_TIMEOUT_MS)
     if (r.ok !== true) throw new Error(typeof r.error === 'string' ? r.error : 'attachments.list failed')
     if (Array.isArray(r.keys)) for (const k of r.keys) if (typeof k === 'string') keys.push(k)
     asOf = typeof r.asOf === 'string' ? r.asOf : null
+    off = r.off === true
     after = typeof r.next === 'string' && r.next ? r.next : null
     if (!after) break
   }
-  return { keys, asOf }
+  return { keys, asOf, off }
 }
 
-async function index(req: Request): Promise<{ keys: string[]; asOf: string | null }> {
+async function index(req: Request): Promise<{ keys: string[]; asOf: string | null; off: boolean }> {
   if (listing && Date.now() - listing.at < LIST_TTL_MS) return listing
   // One warning per failed listing, not one per picture of the burst that shared it.
   listInFlight ??= listAll(req)
@@ -91,17 +93,26 @@ async function readAll(req: Request, key: string): Promise<Buffer | null> {
 /**
  * The file an embed names, from the host's copy. `null` when the copy is held and names
  * no such file; `undefined` when the replica should read its own disk (no copy reader
- * here, the copy not held yet, or the daemon could not be asked).
+ * here, the copy not held yet, or the daemon could not be asked); `'not_kept'` when the
+ * file is the Mac's alone: the pictures turned off for this host, or a miss in a copy
+ * that leaves notes out (the file may be in one of them).
  */
-export async function replicaAttachmentRead(raw: string, notePath?: string): Promise<{ rel: string; bytes: Buffer } | null | undefined> {
+export async function replicaAttachmentRead(raw: string, notePath?: string): Promise<{ rel: string; bytes: Buffer } | null | undefined | 'not_kept'> {
   const req = request
   if (!req) return undefined
-  let idx: { keys: string[]; asOf: string | null }
+  let idx: { keys: string[]; asOf: string | null; off: boolean }
   try { idx = await index(req) } catch { return undefined }
+  if (idx.off) return 'not_kept'
   if (idx.asOf === null) return undefined
   const { resolveAttachmentInIndex } = await import('../web/routes/notes-attachment.js')
   const rel = resolveAttachmentInIndex(raw, notePath, idx.keys)
-  if (!rel) return null
+  if (!rel) {
+    // A miss: the Mac's when the picture may be in what the copy leaves out, else a broken link.
+    const src = (await import('./notes-source.js')).replicaNotesSource()
+    const exclude = src ? await src.copyState().then((st) => st.exclude, () => [] as string[]) : []
+    const { pictureMayBeLeftOut } = await import('../core/replication/keep-rule.js')
+    return pictureMayBeLeftOut(raw, notePath, exclude) ? 'not_kept' : null
+  }
   const bytes = await readAll(req, rel).catch(() => null)
   return bytes ? { rel, bytes } : null
 }

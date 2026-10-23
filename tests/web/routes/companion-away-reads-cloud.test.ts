@@ -244,7 +244,8 @@ describe('the Mac away, with the copies held', () => {
     const off = await syncCopyKinds(macKinds(['boards']), { targets: () => [{ ...companion, copies: async () => ({ boards: false }) }] })
     expect(off.map((r) => `${r.kind}:${r.error}`)).toEqual(['boards:kind_not_copied'])
     const after = await call(`/api/v1/tasks/${BOARD_TASK}/board`)
-    expect([after.status, why(after)?.why]).toEqual([503, 'kind_not_copied'])
+    // Turned off by the user: kept only on the Mac (4f), not "not copied yet".
+    expect([after.status, why(after)?.why]).toEqual([503, 'not_kept_here'])
     expect(await fs.readFile(path.join(WALNUT_HOME, 'boards', `${BOARD_TASK}.json`), 'utf8')).toBe(GIT_BOARD)
   })
 

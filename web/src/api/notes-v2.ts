@@ -251,6 +251,8 @@ export interface NotesSearchPayload {
    *  for token-wise title/folder highlighting. Absent on older servers. */
   queryTokens?: string[];
   degraded?: 'semantic-unavailable';
+  /** Set only on a replica whose copy leaves notes out (the Mac keeps them): its sentence says so. */
+  partial?: { why: string; message: string };
 }
 
 export async function fetchBacklinks(notePath: string): Promise<BacklinkResult[]> {

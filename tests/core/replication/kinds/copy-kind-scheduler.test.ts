@@ -221,6 +221,37 @@ describe('startCopyKindsSync', () => {
     s.stop()
   })
 
+  it('a config change that changes a target\'s choice rounds now; one that changes nothing does not (4f)', async () => {
+    const { bus, EventNames } = await import('../../../../src/core/event-bus.js')
+    const choice = { sessions: true, boards: true }
+    // A replica's choice in config.yaml (the companion's cloud_bridge.copies reads the same way).
+    const s = startCopyKindsSync(kinds, { targets: () => [target('host:devbox', 'host', 'replica', () => choice)] })
+    try {
+      await tick(COPY_FIRST_ROUND_MS + COPY_DEBOUNCE_MS + 10)
+      expect([...followers.beta.store.keys()]).toEqual(['b1'])
+      // Another setting saved: no round.
+      steps = []
+      rowsRead = []
+      bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui'])
+      await tick(COPY_DEBOUNCE_MS + 10)
+      expect(rowsRead).toEqual([])
+      // Its boards turned off in config.yaml: a purge at once.
+      choice.boards = false
+      bus.emit(EventNames.CONFIG_CHANGED, { key: 'cloud_bridge' }, ['web-ui'])
+      await tick(COPY_DEBOUNCE_MS + 10)
+      expect(steps).toEqual(['host:devbox purge:beta'])
+      expect(followers.beta.store.size).toBe(0)
+    } finally {
+      s.stop()
+    }
+    // Stopped: a later change starts nothing.
+    steps = []
+    choice.boards = true
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'cloud_bridge' }, ['web-ui'])
+    await tick(COPY_DEBOUNCE_MS + 10)
+    expect(steps).toEqual([])
+  })
+
   it('a newer scheduler that stops leaves the older one its round soon', async () => {
     const targets = () => [target('host:devbox', 'host')]
     const older = startCopyKindsSync(kinds, { targets })

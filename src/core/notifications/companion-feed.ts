@@ -90,6 +90,9 @@ async function macFeedHere(): Promise<{ feed: NotificationRecord[]; at: number; 
   } catch (err) {
     log.notif.warn('companion feed: the notifications copy could not be read', { error: err instanceof Error ? err.message : String(err) })
   }
+  // Turned off for the box (Settings): none of the Mac's cards, never the file git sync wrote.
+  // The box's own cards still show, marked offline.
+  if (await (await import('../replication/kinds/gate.js')).copyKindOff('notifications')) return { feed: [], at: 0 }
   return macFileFeed()
 }
 

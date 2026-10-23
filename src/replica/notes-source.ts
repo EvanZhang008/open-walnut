@@ -16,17 +16,37 @@
  * The leader (the Mac) never constructs this: its notes routes read the disk vault.
  * The companion builds one over its own copy (core/companion-notes.ts, stage 4b of
  * docs/plan/walnut-companion-unified-replica.md), active once the copy is held.
+ *
+ * What the Mac leaves out of the copy (a folder or a note the user left out, a note too
+ * large to copy: the manifest's `keep`) is never answered from it: `leftOut` says which
+ * paths, `copyState` whether the copy is held, off, or leaves anything out at all
+ * (core/replication/keep-rule.ts, the rule every side applies).
  */
 import path from 'node:path'
 import { isAttachmentFile, type TreeNode } from '../core/notes-tree.js'
 import { parseFrontmatter } from '../core/parse-frontmatter.js'
+import { leftOut as leftOutBy } from '../core/replication/keep-rule.js'
 
 /** A manifest entry as the daemon answers it (host-replica-core.ts list). */
 export interface CopyEntry { k: string; h: string; n?: number; m?: Record<string, unknown> }
 
+/** What the Mac leaves out of this copy (host-replica-core.ts list `keep`): folders and notes, and the notes too large. */
+export interface CopyKeep { exclude: string[]; tooBig: string[] }
+
+/** The copy's state: held (a whole manifest arrived), off (the Mac turned notes off here), partial (it leaves notes out). */
+export interface CopyState {
+  held: boolean
+  off: boolean
+  partial: boolean
+  /** The memory or skills the Mac turned off for this replica (a search here leaves them out). */
+  offKinds: string[]
+  /** The folders and notes the Mac leaves out of this copy (replication/keep-rule.ts entries). */
+  exclude: string[]
+}
+
 /** The follower link's replica reads, for the notes kind. */
 export interface NotesCopyReader {
-  list(): Promise<{ entries: CopyEntry[]; asOf: string | null; manifestHash: string }>
+  list(): Promise<{ entries: CopyEntry[]; asOf: string | null; manifestHash: string; off?: boolean; keep?: CopyKeep | null; offKinds?: string[] }>
   read(key: string): Promise<{ k: string; h: string; m?: Record<string, unknown>; body: string } | null>
   readMany(keys: string[]): Promise<{ files: Array<{ k: string; h: string; body: string }>; missing: string[]; more: string[] }>
 }
@@ -152,6 +172,10 @@ export interface NotesSource {
   resolve(ref: string): Promise<{ id: string | null; path: string; title: string | null; matchedBy: 'id' | 'path' | 'name' } | { status: 400 | 404 | 409; message: string }>
   /** The copy's age (the manifest's asOf), for x-walnut-offline. */
   asOf(): string | null
+  /** Held, turned off, or leaving notes out (the manifest's own word). */
+  copyState(): Promise<CopyState>
+  /** The note at `rawPath` is one the Mac keeps from this copy (left out, or too large). */
+  leftOut(rawPath: string): Promise<boolean>
   /** Drop the listed manifest: a write the box keeps over its copy shows in the next read (the companion). */
   forget?(): void
 }
@@ -159,7 +183,7 @@ export interface NotesSource {
 export function createCopyNotesSource(reader: NotesCopyReader, opts: { now?: () => number; listTtlMs?: number } = {}): NotesSource {
   const now = opts.now ?? Date.now
   const ttl = opts.listTtlMs ?? LIST_TTL_MS
-  type Manifest = { entries: CopyEntry[]; byKey: Map<string, CopyEntry>; asOf: string | null; hash: string; at: number }
+  type Manifest = { entries: CopyEntry[]; byKey: Map<string, CopyEntry>; asOf: string | null; hash: string; at: number; off: boolean; keep: CopyKeep | null; offKinds?: string[] }
   let manifest: Manifest | null = null
   let manifestInFlight: Promise<Manifest> | null = null
   /** Bumped by forget(): a list started before it never becomes the manifest. */
@@ -175,7 +199,8 @@ export function createCopyNotesSource(reader: NotesCopyReader, opts: { now?: () 
     const started = gen
     const p: Promise<Manifest> = reader.list().then((r) => {
       const byKey = new Map(r.entries.map((e) => [e.k, e]))
-      const m = { entries: r.entries, byKey, asOf: r.asOf, hash: r.manifestHash, at: now() }
+      const keep = r.keep && (r.keep.exclude?.length || r.keep.tooBig?.length) ? { exclude: r.keep.exclude ?? [], tooBig: r.keep.tooBig ?? [] } : null
+      const m = { entries: r.entries, byKey, asOf: r.asOf, hash: r.manifestHash, at: now(), off: r.off === true, keep, offKinds: r.offKinds ?? [] }
       if (started === gen) manifest = m
       return m
     }).finally(() => { if (manifestInFlight === p) manifestInFlight = null })
@@ -388,6 +413,19 @@ export function createCopyNotesSource(reader: NotesCopyReader, opts: { now?: () 
 
     asOf: () => manifest?.asOf ?? null,
 
+    async copyState() {
+      const m = await getManifest()
+      return { held: m.asOf !== null, off: m.off, partial: m.keep !== null, offKinds: m.offKinds ?? [], exclude: m.keep?.exclude ?? [] }
+    },
+
+    async leftOut(rawPath) {
+      const k = noteKey(rawPath)
+      const m = await getManifest()
+      if (!k || !m.keep) return false
+      const lower = k.toLowerCase()
+      return leftOutBy(k, m.keep.exclude) || m.keep.tooBig.some((t) => t.toLowerCase() === lower)
+    },
+
     forget() {
       // Kept for its asOf, never served again: the next read lists anew.
       gen++
@@ -407,7 +445,13 @@ export function notesCopyReaderOver(request: (cmd: string, params: Record<string
   return {
     async list() {
       const r = await ask('replica.list', {})
-      return { entries: (r.entries as CopyEntry[]) ?? [], asOf: (r.asOf as string | null) ?? null, manifestHash: String(r.manifestHash ?? '') }
+      const keep = r.keep && typeof r.keep === 'object' ? r.keep as Partial<CopyKeep> : null
+      return {
+        entries: (r.entries as CopyEntry[]) ?? [], asOf: (r.asOf as string | null) ?? null, manifestHash: String(r.manifestHash ?? ''),
+        off: r.off === true,
+        ...(Array.isArray(r.offKinds) ? { offKinds: (r.offKinds as unknown[]).filter((x): x is string => typeof x === 'string') } : {}),
+        keep: keep ? { exclude: Array.isArray(keep.exclude) ? keep.exclude.filter((x): x is string => typeof x === 'string') : [], tooBig: Array.isArray(keep.tooBig) ? keep.tooBig.filter((x): x is string => typeof x === 'string') : [] } : null,
+      }
     },
     async read(key) {
       const r = await ask('replica.read', { key })
@@ -425,6 +469,12 @@ export interface ReplicaNotesSourceOptions {
   active?: () => boolean
   /** False: searches go on to the server's own search (the companion keeps a copy of the Mac's index). */
   search?: boolean
+  /**
+   * A read of what the copy leaves out goes to the Mac while it answers (the companion, whose
+   * notes reads run here whoever answers; core/companion-notes.ts). `here` answers from this
+   * copy (the Mac did not take it). A host replica has none: its dispatcher forwards first.
+   */
+  forward?: (req: import('express').Request, res: import('express').Response, here: () => void) => void
 }
 
 let replicaSource: NotesSource | null = null
@@ -449,4 +499,9 @@ export function replicaNotesSource(): NotesSource | null {
 /** Whether the source answers searches (a host replica's does; the companion's leaves them to its own search). */
 export function replicaNotesSourceSearches(): boolean {
   return sourceOpts.search !== false
+}
+
+/** How a read of what the copy leaves out reaches the Mac (the companion's forward), or null. */
+export function replicaNotesForward(): ReplicaNotesSourceOptions['forward'] | null {
+  return sourceOpts.forward ?? null
 }

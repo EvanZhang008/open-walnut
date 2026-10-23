@@ -130,10 +130,24 @@ describe('a round', () => {
     expect(await copy.command(HOME, 'attachments.sync', { entries: keep110, asOf: clock })).toMatchObject({ ok: true, removed: 110 })
   })
 
+  it('the folders the user leaves out go however many files they hold; the rest still counts (4f)', async () => {
+    const many: Record<string, Buffer> = {}
+    for (let i = 0; i < 210; i++) many[`Health/_attachment/f${i}.png`] = png(`h${i}`)
+    for (let i = 0; i < 10; i++) many[`Work/f${i}.png`] = png(`w${i}`)
+    await fill(HOME, many)
+    const work = Object.entries(many).filter(([k]) => k.startsWith('Work/')).map(([k, b]) => entry(k, b))
+    expect(await copy.command(HOME, 'attachments.sync', { entries: work, asOf: clock, exclude: ['elsewhere'] })).toMatchObject({ ok: false, errorKind: 'manifest_removes_most_rows' })
+    expect(await copy.command(HOME, 'attachments.sync', { entries: work, asOf: clock, exclude: ['health'] })).toMatchObject({ ok: true, removed: 210 })
+    expect(copy.keys(HOME).length).toBe(10)
+  })
+
   it('a drop removes the copy; the next manifest fills it again', async () => {
     await fill(HOME, { 'a/pic.png': png('one') })
     expect(await copy.command(HOME, 'attachments.drop', {})).toMatchObject({ ok: true, dropped: true })
-    expect(fs.existsSync(dirOf(HOME))).toBe(false)
+    // No bytes are left: only the index, which says the user turned them off here.
+    expect(fs.readdirSync(dirOf(HOME))).toEqual(['index.json'])
+    expect(copy.isOff(HOME)).toBe(true)
+    expect(await copy.command(HOME, 'attachments.status', {})).toMatchObject({ ok: true, entries: 0, off: true })
     expect(copy.held(HOME)).toBe(false)
     expect(await copy.command(HOME, 'attachments.drop', {})).toMatchObject({ ok: true, dropped: false })
     await fill(HOME, { 'a/pic.png': png('one') })

@@ -19,7 +19,8 @@
  *     rests the kind for it. A kind the companion does not keep is skipped
  *     for it, never purged;
  *   - the per-host choice of copied kinds (hosts.<key>.server.copies, the
- *     host's Settings row; core/host-server/manager.ts passes it on the target).
+ *     host's Settings row; core/host-server/manager.ts passes it on the target;
+ *     the companion's is cloud_bridge.copies, replica-targets.ts).
  *     A kind turned off gets one `purge` step: the host drops that kind's store
  *     (kinds/gate.ts) and answers it `needs_leader` while the Mac is away;
  *   - the scheduler: a round a few seconds after the kind's own store wrote,
@@ -462,6 +463,21 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
   void import('../replica-targets.js').then(({ onReplicaTargetsChanged }) => {
     if (!stopped) unlistenTargets = onReplicaTargetsChanged(() => soon())
   })
+  // A choice changed in config.yaml (the companion's Settings rows, an edited file): a round now.
+  const choiceSub = `copy-kinds-choice-${id}`
+  let choices: string | null = null
+  const choicesNow = async (): Promise<string> => {
+    const targets = (deps.targets ?? await defaultTargets())()
+    return JSON.stringify(await Promise.all(targets.map(async (t) => [t.id, await copyChoiceOf(t)])))
+  }
+  void choicesNow().then((c) => { choices ??= c }).catch(() => {})
+  void import('../../event-bus.js').then(({ bus, EventNames }) => {
+    if (stopped) return
+    bus.subscribe(choiceSub, (event) => {
+      if (event.name !== EventNames.CONFIG_CHANGED) return
+      void choicesNow().then((c) => { if (choices !== null && c !== choices) soon(); choices = c }).catch(() => {})
+    }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+  }).catch(() => {})
   const first = setTimeout(() => soon(), COPY_FIRST_ROUND_MS)
   first.unref?.()
   const sweep = setInterval(() => { forgetKindManifests(kinds.map((k) => k.kind)); soon() }, COPY_SWEEP_MS)
@@ -472,6 +488,7 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
       copySoons.delete(soon)
       for (const u of unwatch) { try { u() } catch { /* best effort */ } }
       unlistenTargets?.()
+      void import('../../event-bus.js').then(({ bus }) => bus.unsubscribe(choiceSub)).catch(() => {})
       if (timer) clearTimeout(timer)
       if (retry) clearTimeout(retry)
       if (confirmRetry) clearTimeout(confirmRetry)

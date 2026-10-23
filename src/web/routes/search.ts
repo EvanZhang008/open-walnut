@@ -118,6 +118,25 @@ export function semanticDeadlineFor(slim: boolean, raw: unknown): number | undef
 // GET /api/search?q=...&types=task,memory&limit=20&slim=1&semanticWaitMs=2000
 searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // A replica whose copy leaves notes, memory or skills out (search-kept.ts): the companion's
+    // console asks the Mac while it answers, and an answer here says what it leaves out.
+    // Notes, memory and skills ride the `memory` lane: a search of tasks or sessions alone leaves nothing out.
+    const typesAsked = req.query.types ?? req.query.type
+    const files = typeof typesAsked !== 'string' || !typesAsked || typesAsked.split(',').includes('memory')
+    const partial = files && await (await import('../../replica/search-kept.js')).searchLeavesOut()
+    if (partial && (await import('../../core/server-role.js')).followerKind() === 'companion') {
+      const { forwardUnkept } = await import('../../core/companion-forward.js')
+      forwardUnkept(req, res, () => { void searchHere(req, res, next, true) })
+      return
+    }
+    await searchHere(req, res, next, partial)
+  } catch (err) {
+    next(err)
+  }
+})
+
+async function searchHere(req: Request, res: Response, next: NextFunction, partial: boolean): Promise<void> {
+  try {
     const q = (req.query.q as string) ?? ''
     // `type` (singular) is accepted as an alias: it was silently ignored for
     // months and every caller who guessed the param name got the default lanes
@@ -146,8 +165,9 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
     if (!slim) prewarmAgentSearchChild()
 
     const results = await search(q, { types, limit, semanticDeadlineMs })
-    res.json({ results: slim ? await toSlimResults(results) : results })
+    const { PARTIAL_RESULTS } = await import('../../replica/search-kept.js')
+    res.json({ results: slim ? await toSlimResults(results) : results, ...(partial ? { partial: { ...PARTIAL_RESULTS } } : {}) })
   } catch (err) {
     next(err)
   }
-})
+}

@@ -51,7 +51,9 @@ export function seedStoreFromCopy(copied: CopiedConversation, ownLabel: string):
  */
 export async function companionSeedSource(agentId: string, conversationId: string, ownLabel: string): Promise<SeedSource | null> {
   if (followerKind() !== 'companion') return null
-  const { copyKindHeld } = await import('./replication/kinds/gate.js')
+  const { copyKindHeld, copyKindOff } = await import('./replication/kinds/gate.js')
+  // Turned off for the box: the Mac's messages are not here, and the files git sync wrote are never read.
+  if (await copyKindOff('conversation-bodies')) return async () => ({ entries: [], compactionSummary: null })
   if (!(await copyKindHeld('conversation-bodies'))) return null
   return async () => {
     const copied = await copiedConversation(agentId, conversationId)

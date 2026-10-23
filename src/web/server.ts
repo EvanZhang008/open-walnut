@@ -1566,6 +1566,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       readHostHistory: (sid, tailBytes) => front.link.request('read-history', { sid, tailBytes }, 20_000),
       log: (level, msg, data) => log.web[level](msg, data),
     }))
+    // The sessions turned off for this host (Settings): their reads need the Mac (4f).
+    {
+      const [{ awayKindReads }, { copyKindOff }] = await Promise.all([
+        import('../replica/away-kind-reads.js'), import('../core/replication/kinds/gate.js'),
+      ])
+      app.use('/api', awayKindReads({ alone: () => front.route().kind === 'alone', off: copyKindOff }))
+    }
     // Writes while the Mac is away (WP10): the overlay of this host's journal over
     // the copies, the write port, its routes, and the /ws RPC writes.
     const replicaDevices = (await import('../replica/auth.js')).replicaDeviceCopy()
@@ -1887,6 +1894,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (bootPolicy('v1-forward')) {
     const { getV1Forward } = await import('./v1-forward/proxy.js')
     app.use(['/api/tasks', '/api/focus'], getV1Forward().consoleMiddleware)
+    // A console read of a copy kind turned off for the box: the Mac's while it answers (4f).
+    app.use((await import('../core/companion-forward.js')).companionUnkeptKindReads)
+    // The sessions turned off for the box: while the Mac is away their reads need it, never
+    // the pushed projection the box keeps to route a phone's message (4f). Its own pass.
+    const [{ awayKindReads }, { copyKindOff }, { leaderAnswers }, { cloudOwnedSession }] = await Promise.all([
+      import('../replica/away-kind-reads.js'), import('../core/replication/kinds/gate.js'),
+      import('../core/server-role.js'), import('../core/cloud-owned-session.js'),
+    ])
+    app.use('/api', awayKindReads({ alone: () => !leaderAnswers(), off: copyKindOff, own: async (sid) => (await cloudOwnedSession(sid)) !== null }))
   }
   app.use('/api/tasks', tasksRouter)
   app.use('/api/dashboard', dashboardRouter)

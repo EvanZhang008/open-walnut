@@ -74,14 +74,20 @@ async function pendingPastes(): Promise<Map<string, string>> {
  * The file an embed names, as the box shows it: a picture pasted here first, then the
  * copy. `null` when the copy is held and names no such file; `undefined` when the box
  * should read its own disk (not a companion, or no whole manifest yet, and no paste of
- * that exact path).
+ * that exact path); `'not_kept'` when the file is the Mac's alone: the pictures turned off
+ * for the box, or a miss that may lie in what the box leaves out (keep-rule.ts pictureMayBeLeftOut).
  */
-export async function companionAttachmentRead(raw: string, notePath?: string): Promise<{ rel: string; bytes: Buffer } | null | undefined> {
+export async function companionAttachmentRead(raw: string, notePath?: string): Promise<{ rel: string; bytes: Buffer } | null | undefined | 'not_kept'> {
   if (!onCompanion()) return undefined
   const c = theCopy()
   const pastes = await pendingPastes()
   let rel: string | null
-  if (c.held(HOME)) {
+  if (c.isOff(HOME)) {
+    // Turned off for the box: only a picture pasted here shows; the rest is the Mac's.
+    const exact = raw.split('|')[0]!.trim().replace(/^\/+/, '')
+    if (!pastes.has(exact)) return 'not_kept'
+    rel = exact
+  } else if (c.held(HOME)) {
     const { resolveAttachmentInIndex } = await import('../web/routes/notes-attachment.js')
     rel = resolveAttachmentInIndex(raw, notePath, [...new Set([...pastes.keys(), ...c.keys(HOME)])])
   } else {
@@ -90,7 +96,13 @@ export async function companionAttachmentRead(raw: string, notePath?: string): P
     rel = pastes.has(exact) || c.row(HOME, exact)?.own ? exact : null
     if (!rel) return undefined
   }
-  if (!rel) return null
+  if (!rel) {
+    // A miss: the Mac's when the picture may be in what the box leaves out, else a broken link.
+    const { companionHostReplica, COMPANION_REPLICA_HOME } = await import('./companion-host-replica.js')
+    const exclude = companionHostReplica()?.list(COMPANION_REPLICA_HOME, 'notes')?.keep?.exclude ?? []
+    const { pictureMayBeLeftOut } = await import('./replication/keep-rule.js')
+    return pictureMayBeLeftOut(raw, notePath, exclude) ? 'not_kept' : null
+  }
   const paste = pastes.get(rel)
   if (paste) {
     const { companionJournalBlobBody } = await import('./companion-journal.js')

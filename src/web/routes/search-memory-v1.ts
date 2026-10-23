@@ -130,16 +130,19 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
       // The Mac away: this box's own copies. With its copy of the Mac's search
       // index (core/replication/search-replica-store.ts), the same hybrid
       // search the Mac runs; without it, a keyword search of the task copy.
+      // A copy that leaves notes, memory or skills out says so (replica/search-kept.ts).
+      const kept = await import('../../replica/search-kept.js')
+      const partial = (!types || types.includes('memory')) && await kept.searchLeavesOut() ? { partial: { ...kept.PARTIAL_RESULTS } } : {}
       const ready = await import('../../core/search/companion-ready.js')
       if (ready.companionSearchReady()) {
         const asOf = ready.companionSearchAsOf()
         res.json({
           ...(await withTasks(await search(q, { types, limit, semanticDeadlineMs }))),
-          offline: true, ...(asOf ? { asOf: new Date(asOf).toISOString() } : {}),
+          offline: true, ...(asOf ? { asOf: new Date(asOf).toISOString() } : {}), ...partial,
         })
         return
       }
-      res.json({ ...(await withTasks(await search(q, { types, limit }))), offline: true, degraded: 'offline-keyword' })
+      res.json({ ...(await withTasks(await search(q, { types, limit }))), offline: true, degraded: 'offline-keyword', ...partial })
       return
     }
     res.json(await withTasks(await search(q, { types, limit, semanticDeadlineMs })))

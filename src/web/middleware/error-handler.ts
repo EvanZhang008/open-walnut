@@ -24,7 +24,7 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
   // the same answer the dispatcher gives a needs-leader row, and not a card (nothing is broken).
   if (isNeedsLeaderError(err)) {
     if (shouldLogNeedsLeader(err.why)) log.web.warn('a request on this replica needs the Mac', { reqId: req.reqId, url: req.originalUrl, why: err.why })
-    res.status(503).set(NEEDS_LEADER_HEADERS).json(needsLeaderBody(err.why))
+    res.status(503).set(NEEDS_LEADER_HEADERS).json(needsLeaderBody(err.why, err.message))
     return
   }
   const status = (err as { status?: number }).status ?? 500

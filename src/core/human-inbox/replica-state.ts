@@ -283,6 +283,9 @@ async function mirrorSource(kind: 'inbox' | 'inbox-bodies'): Promise<{ dir: stri
   const { humanInboxPaths } = await import('./store.js');
   const gate = await import('../replication/kinds/gate.js');
   if (!gate.keepsCopies(kind)) return { dir: humanInboxPaths.dir, asOf: null };
+  // Turned off for this box: the copy's place, which holds none of it now, never the
+  // files git sync wrote (a read finds nothing here and goes to the Mac).
+  if (await gate.copyKindOff(kind)) return { dir: gate.copyPath(humanInboxPaths.dir), asOf: null };
   const asOf = await gate.copyKindAsOf(kind);
   return asOf === null ? { dir: humanInboxPaths.dir, asOf: null } : { dir: gate.copyPath(humanInboxPaths.dir), asOf };
 }
@@ -400,13 +403,17 @@ export async function mirrorLetter(id: string): Promise<LetterDetail | null> {
   const { getLetter, humanInboxPaths } = await import('./store.js');
   // The copy's letter needs the copy's bodies too; else the files git sync wrote.
   const [own, bodies] = await Promise.all([mirrorSource('inbox'), mirrorSource('inbox-bodies')]);
-  const dir = own.asOf !== null && bodies.asOf !== null ? own.dir : humanInboxPaths.dir;
+  // Bodies turned off for the box: the copy's letter, every body left to the body route (the Mac's).
+  const gate = await import('../replication/kinds/gate.js');
+  const deferBodies = own.asOf !== null && gate.keepsCopies('inbox-bodies') && await gate.copyKindOff('inbox-bodies');
+  const dir = own.asOf !== null && (bodies.asOf !== null || deferBodies) ? own.dir : humanInboxPaths.dir;
+  const opts = deferBodies ? { dir, deferBodies } : { dir };
   // getLetter reads the index again; a checkout landing between the two reads
   // can hand it a half-written file, so one miss is retried.
-  let detail = await getLetter(id, { dir });
+  let detail = await getLetter(id, opts);
   if (!detail) {
     await new Promise(r => setTimeout(r, MIRROR_RETRY_MS));
-    detail = await getLetter(id, { dir });
+    detail = await getLetter(id, opts);
   }
   if (!detail) return null;
   return overlay(detail, await liveEntries(index.lastUpdated));
