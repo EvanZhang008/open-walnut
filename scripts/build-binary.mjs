@@ -33,7 +33,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
-import { assertNoBuildPaths, runtimeDirname } from './binary-build-checks.mjs'
+import { assertNoBuildPaths, runtimeDirname, treeDirOf } from './binary-build-checks.mjs'
 import { writeBuildInfo } from './build-info.mjs'
 
 if (typeof Bun === 'undefined') {
@@ -290,7 +290,8 @@ function runtimeDirnamePlugin() {
     setup(build) {
       build.onLoad({ filter }, (args) => ({
         loader: 'js',
-        contents: runtimeDirname(fs.readFileSync(args.path, 'utf8'), path.relative(repo, path.dirname(args.path)).split(path.sep).join('/')),
+        // The filter only takes files under node_modules, so treeDirOf always answers.
+        contents: runtimeDirname(fs.readFileSync(args.path, 'utf8'), treeDirOf(args.path)),
       }))
     },
   }
