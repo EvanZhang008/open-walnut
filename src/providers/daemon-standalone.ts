@@ -5221,6 +5221,20 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
  * start. When a node dir is prepended, the RESOLVED claude path runs, so the
  * prepended dir cannot shadow the user's claude with another copy.
  */
+/**
+ * The shell sessions start under: the user's $SHELL, else bash, else sh. A
+ * minimal system (Alpine, a container) has no bash and may set no $SHELL, and
+ * a $SHELL naming a shell that is gone would fail every spawn.
+ */
+function sessionShell(): string {
+  const runs = (file: string) => {
+    try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile() } catch { return false }
+  }
+  const shell = process.env.SHELL
+  if (shell && path.isAbsolute(shell) && runs(shell)) return shell
+  return ['/bin/bash', '/bin/sh'].find(runs) ?? '/bin/sh'
+}
+
 async function gateClaudeLaunch(args: string[]): Promise<{ args: string[]; nodeDir?: string }> {
   const command = args[0] || 'claude'
   const gate = await hostRuntime.ensureClaude(command, process.env.PATH || '')
@@ -5229,7 +5243,7 @@ async function gateClaudeLaunch(args: string[]): Promise<{ args: string[]; nodeD
   }
   // An absolute node in the shebang cannot be supplied by the shell either.
   if (!gate.fixedInterpreter) {
-    const seen = await hostRuntime.shellCanRun(process.env.SHELL || '/bin/bash', buildSpawnPreamble(), command)
+    const seen = await hostRuntime.shellCanRun(sessionShell(), buildSpawnPreamble(), command)
     if (gate.code === 'claude_missing' ? seen.hasCmd : seen.hasNode) return { args }
   }
   logMsg('warn', 'spawn gate: claude cannot run on this host', { code: gate.code, command })
@@ -5501,7 +5515,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // Using $SHELL ensures RC files are sourced by the correct shell interpreter.
   // Empirical verification: bash -c 'source .zshrc' on clouddev produces 0 /usr/bin
   // matches, while zsh -c 'source .zshrc' produces 2 matches, proving the bug.
-  const userShell = process.env.SHELL || '/bin/bash'
+  const userShell = sessionShell()
   // CLAUDE_CODE_MAX_RETRIES: harden against upstream Bedrock degradation windows.
   // Forensics found degradation windows of 10-103 min; the CLI's default 10 API
   // retries only cover a ~3min budget, so a turn dies with "Request timed out"
