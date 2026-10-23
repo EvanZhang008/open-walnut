@@ -552,6 +552,24 @@ describe('installNpmPlugin', () => {
     })).resolves.toMatchObject({ integrity: 'sha512-REAL==' });
   });
 
+  it('gives every bun command a fresh package cache inside its own directory', async () => {
+    registryFixtures['walnut-plugin'] = { version: '1.0.0', files: { 'manifest.json': MANIFEST('p') } };
+    const seen: Array<{ cmd: string; cwd: string; cache: string | undefined }> = [];
+    setNpmRunner(async (args, opts) => {
+      seen.push({ cmd: args[0], cwd: opts.cwd, cache: opts.env?.BUN_INSTALL_CACHE_DIR });
+      return fakeRunner(args, opts);
+    });
+    await installNpmPlugin({ spec: 'walnut-plugin', finalDir: finalDir(), stagingRoot: stagingRoot() });
+    expect(seen.map((c) => c.cmd)).toEqual(['info', 'add']);
+    // bun's shared cache is keyed by name@version: a re-published version would come back stale.
+    for (const c of seen) expect(c.cache).toBe(path.join(c.cwd, '.bun-cache'));
+    expect(await leftoverTempDirs()).toEqual([]);
+    // A lookup in a directory the caller does not own leaves bun's cache alone.
+    seen.length = 0;
+    await resolveNpmSpec('walnut-plugin');
+    expect(seen).toEqual([{ cmd: 'info', cwd: process.cwd(), cache: undefined }]);
+  });
+
   it('stages in a 0700 directory', async () => {
     registryFixtures['walnut-plugin'] = { version: '1.0.0', files: { 'manifest.json': MANIFEST('p') } };
     let stagingMode = -1;

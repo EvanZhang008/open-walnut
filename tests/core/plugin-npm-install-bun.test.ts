@@ -36,6 +36,17 @@ const PACKAGES: Record<string, Record<string, string>> = {
   },
 }
 
+/** Pack one fixture package as the registry serves it. */
+function pack(name: string, files: Record<string, string>, tag = ''): { bytes: Buffer; integrity: string } {
+  const root = path.join(tmp, `pkgs${tag}`, name, 'package')
+  fs.mkdirSync(root, { recursive: true })
+  for (const [rel, text] of Object.entries(files)) fs.writeFileSync(path.join(root, rel), text)
+  const file = path.join(tmp, `pkgs${tag}`, `${name}.tgz`)
+  execFileSync('tar', ['-czf', file, '-C', path.dirname(root), 'package'], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
+  const bytes = fs.readFileSync(file)
+  return { bytes, integrity: `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}` }
+}
+
 let tmp = ''
 let server: Served | null = null
 const tarballs: Record<string, { bytes: Buffer; integrity: string }> = {}
@@ -55,15 +66,7 @@ beforeAll(() => {
   const key = path.join(tmp, 'key.pem')
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-config', cnf], { stdio: 'ignore' })
 
-  for (const [name, files] of Object.entries(PACKAGES)) {
-    const root = path.join(tmp, 'pkgs', name, 'package')
-    fs.mkdirSync(root, { recursive: true })
-    for (const [rel, text] of Object.entries(files)) fs.writeFileSync(path.join(root, rel), text)
-    const file = path.join(tmp, 'pkgs', `${name}.tgz`)
-    execFileSync('tar', ['-czf', file, '-C', path.dirname(root), 'package'], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
-    const bytes = fs.readFileSync(file)
-    tarballs[name] = { bytes, integrity: `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}` }
-  }
+  for (const [name, files] of Object.entries(PACKAGES)) tarballs[name] = pack(name, files)
 
   const serve = (globalThis as unknown as { Bun: { serve: BunServe } }).Bun.serve
   let origin = ''
@@ -124,5 +127,24 @@ describe.skipIf(!HAS_OPENSSL)('installing an npm plugin with real bun', () => {
     expect(mod.answer).toBe('dep-42')
     // Nothing of the staging dir is left.
     expect(fs.readdirSync(stagingRoot).filter((n) => n.startsWith('.'))).toEqual([])
+  }, 120_000)
+
+  it('installs what the registry serves now when a version was re-published, not what bun cached', async () => {
+    // A private registry re-publishes 1.0.0 with other bytes. process.env names one
+    // shared bun cache (beforeAll), which the first install filled with the old ones.
+    const name = 'walnut-livecheck-plugin'
+    const before = tarballs[name]!
+    tarballs[name] = pack(name, { ...PACKAGES[name]!, 'server.mjs': "export const answer = 'republished'\n" }, '-republished')
+    try {
+      const stagingRoot = path.join(tmp, 'plugin-stores-2')
+      const finalDir = path.join(stagingRoot, 'npm-walnut-livecheck-plugin')
+      const result = await installNpmPlugin({ spec: name, finalDir, stagingRoot })
+      expect(result.integrity).toBe(tarballs[name]!.integrity)
+      expect(fs.readFileSync(path.join(finalDir, 'server.mjs'), 'utf8')).toContain('republished')
+      // The per-install cache went with the staging dir.
+      expect(fs.readdirSync(stagingRoot).filter((n) => n.startsWith('.'))).toEqual([])
+    } finally {
+      tarballs[name] = before
+    }
   }, 120_000)
 })

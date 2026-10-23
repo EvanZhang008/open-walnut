@@ -180,8 +180,11 @@ export interface NpmRunResult {
   stderr: string;
 }
 
-/** Runs one bun package-manager command (`info`, `add`): argv after `bun`. */
-export type NpmRunner = (args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<NpmRunResult>;
+/**
+ * Runs one bun package-manager command (`info`, `add`): argv after `bun`. `env`
+ * is added to bun's environment for this one command.
+ */
+export type NpmRunner = (args: string[], opts: { cwd: string; timeoutMs: number; env?: Record<string, string> }) => Promise<NpmRunResult>;
 
 /**
  * Default runner: the running bun (bunCommand), argv-only, in its own process
@@ -192,7 +195,7 @@ const defaultRunner: NpmRunner = (args, opts) =>
     const bun = bunCommand();
     const child = spawn(bun.command, args, {
       cwd: opts.cwd,
-      env: bun.env,
+      env: { ...bun.env, ...opts.env },
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -334,8 +337,26 @@ function pickField(data: Record<string, unknown>, dotted: string): string | unde
 }
 
 /**
+ * The environment of one bun command run in a directory this module owns (a
+ * staging or metadata dir, removed afterwards).
+ *
+ * bun keeps one package cache for every project, keyed by name@version (its
+ * manifests too). npm checks a cached tarball against the integrity the registry
+ * names; bun hands back what it has. A private registry that re-publishes a
+ * version would then install the old bytes, whose integrity no longer matches
+ * what the registry advertises, and the receipt check refuses the plugin. A
+ * cache inside the owned dir starts empty, so bun fetches what the registry
+ * serves now, and it goes when the dir goes.
+ */
+function ownedDirEnv(dir: string): Record<string, string> {
+  return { BUN_INSTALL_CACHE_DIR: path.join(dir, '.bun-cache') };
+}
+
+/**
  * Ask the registry what a spec means right now. Nothing else in this module
  * accepts a tag — resolution happens exactly once per explicit user action.
+ * `cwd`, when given, is a directory the caller owns and removes: bun's cache for
+ * this lookup lives there (ownedDirEnv).
  */
 export async function resolveNpmSpec(raw: string, opts: { cwd?: string } = {}): Promise<ResolvedNpmPackage> {
   const parsed = parseNpmSpec(raw);
@@ -344,7 +365,7 @@ export async function resolveNpmSpec(raw: string, opts: { cwd?: string } = {}): 
   const cwd = opts.cwd ?? process.cwd();
   const { stdout } = await activeRunner(
     ['info', '--json', '--', parsed.spec, 'name', 'version', 'dist.integrity', 'dist.tarball'],
-    { cwd, timeoutMs: VIEW_TIMEOUT },
+    { cwd, timeoutMs: VIEW_TIMEOUT, ...(opts.cwd ? { env: ownedDirEnv(opts.cwd) } : {}) },
   );
 
   let payload: unknown;
@@ -615,7 +636,7 @@ async function stagePackage(
       '--no-summary',
       '--',
       resolved.resolved,       // exact name@version, never the tag
-    ], { cwd: stagingDir, timeoutMs: INSTALL_TIMEOUT });
+    ], { cwd: stagingDir, timeoutMs: INSTALL_TIMEOUT, env: ownedDirEnv(stagingDir) });
 
     const modulesDir = path.join(stagingDir, 'node_modules');
     await assertRealDirectory(modulesDir, 'node_modules');
