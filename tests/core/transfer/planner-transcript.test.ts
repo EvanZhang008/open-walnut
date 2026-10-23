@@ -35,6 +35,32 @@ describe('planning a transfer', () => {
     expect(planTransfer(task, claudeSession, { taskId: 'task-1', host: 'cloud', mode: 'brief' }, hosts).history).toBe('brief');
   });
 
+  it('the same harness keeps the source\'s model, effort and permissions; another harness keeps only the permissions', () => {
+    const src = { ...claudeSession, cliModel: 'opus[1m]', effort: 'high', mode: 'plan' } as SessionRecord;
+    expect(planTransfer(task, src, { taskId: 'task-1', host: 'devbox' }, hosts).target)
+      .toMatchObject({ model: 'opus[1m]', effort: 'high', permissionMode: 'plan' });
+    const other = planTransfer(task, src, { taskId: 'task-1', engine: 'codex' }, hosts).target;
+    expect(other).toMatchObject({ engine: 'codex', permissionMode: 'plan' });
+    expect(other.model).toBeUndefined();
+    expect(other.effort).toBeUndefined();
+  });
+
+  it('picks win over the source, and an ACP harness never takes a separate effort', () => {
+    const src = { ...claudeSession, cliModel: 'opus[1m]', effort: 'high', mode: 'plan' } as SessionRecord;
+    expect(planTransfer(task, src, { taskId: 'task-1', host: 'devbox', model: 'default', effort: 'low', permissionMode: 'accept' }, hosts).target)
+      .toMatchObject({ model: 'default', effort: 'low', permissionMode: 'accept' });
+    expect(planTransfer(task, src, { taskId: 'task-1', engine: 'codex', effort: 'low' }, hosts).target.effort).toBeUndefined();
+  });
+
+  it('a model change alone in the same place is a transfer', () => {
+    expect(planTransfer(task, claudeSession, { taskId: 'task-1', model: 'sonnet' }, hosts).target.model).toBe('sonnet');
+  });
+
+  it('refuses an unknown effort or permission mode', () => {
+    expect(() => planTransfer(task, claudeSession, { taskId: 'task-1', engine: 'codex', effort: 'huge' as never }, hosts)).toThrow(TransferError);
+    expect(() => planTransfer(task, claudeSession, { taskId: 'task-1', engine: 'codex', permissionMode: 'yolo' as never }, hosts)).toThrow(TransferError);
+  });
+
   it('refuses Codex on a remote host with a reason the UI can show', () => {
     expect(() => planTransfer(task, claudeSession, { taskId: 'task-1', engine: 'codex', host: 'devbox' }, hosts))
       .toThrow(/runs on this machine only/);

@@ -31,7 +31,7 @@ import {
 } from '../types.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
-import type { Task } from '../types.js';
+import type { SessionMode, Task } from '../types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import { rememberAskWalnutSessionPick } from './ask-walnut-launch.js';
 import { parseCompanionFields } from '../offline-merge/companion-op.js';
@@ -534,6 +534,9 @@ export interface ForkSessionInput {
   placeOverride?: { host?: string; cwd: string };
   /** Internal (transfer): the message is sent as is, without the fork focus line. */
   rawMessage?: boolean;
+  /** Internal (transfer): the fork's effort and permission mode, over the source's. */
+  effort?: SessionEffort;
+  permissionMode?: SessionMode;
 }
 
 export interface ForkSessionResult {
@@ -714,7 +717,7 @@ export async function forkSessionToTask(
   input: ForkSessionInput,
   source = 'web-api',
 ): Promise<ForkSessionResult> {
-  const { task_id, create_child_task, child_title, message, title, model, imageContext, placeOverride, rawMessage } = input;
+  const { task_id, create_child_task, child_title, message, title, model, imageContext, placeOverride, rawMessage, effort, permissionMode } = input;
 
   if (!task_id && !create_child_task) {
     throw new SessionControlError('Either task_id or create_child_task is required', 400);
@@ -820,6 +823,9 @@ export async function forkSessionToTask(
   // --fork-session). Returning it lets the client open the real forked panel
   // immediately instead of polling.
   const forkSessionId = randomUUID();
+  // A transfer names the permission mode and effort; a plain fork keeps the source's mode.
+  const forkMode = permissionMode ?? (sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined);
+  const forkEffort = effort;
   // The SESSION title is the fork TASK's title — never the fork's prompt. That
   // title is the `Title [8hex]` handle session_list prints and session_send
   // accepts, and the task's is the curated one (`Fork of <source>` now, refined
@@ -832,7 +838,8 @@ export async function forkSessionToTask(
   try {
     await createSessionRecord(forkSessionId, task.id, task.project ?? '', forkCwd, {
       title: forkTitle,
-      mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
+      mode: forkMode,
+      ...(forkEffort ? { effort: forkEffort } : {}),
       host: forkHost,
       forkedFromSessionId: sourceSessionId,
       initialProcessStatus: 'idle',
@@ -862,7 +869,9 @@ export async function forkSessionToTask(
     message: forkMessage,
     cwd: forkCwd,
     project: task.project ?? '',
-    mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
+    mode: forkMode,
+    // The CLI does not carry effort over a --fork-session either.
+    ...(forkEffort ? { effort: forkEffort } : {}),
     // Fork must resume on the EXACT same model as the parent — the CLI does
     // NOT inherit a session's model on --resume/--fork-session. `cliModel` is
     // the parent's original --model arg verbatim (incl. the [1m] marker);

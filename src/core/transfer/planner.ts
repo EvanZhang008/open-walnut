@@ -11,7 +11,7 @@
  * When the host changes, the workspace (branch, uncommitted changes, untracked
  * files) is packed on the source host and moved to the target.
  */
-import type { SessionEngine, SessionRecord, Task } from '../types.js';
+import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionEngine, type SessionMode, type SessionRecord, type Task } from '../types.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 
 export const LOCAL_HOST = '__local__';
@@ -25,7 +25,12 @@ export interface TransferRequest {
   /** Absolute path on the target host, or 'auto' to let Walnut choose one. */
   cwd?: string;
   mode?: TransferMode;
+  /** 'default' = the engine's default, not the source session's model. */
   model?: string;
+  /** Reasoning effort for the new session (Claude Code; an ACP engine's effort rides its model id). */
+  effort?: SessionEffort;
+  /** Permission mode the new session starts in. */
+  permissionMode?: SessionMode;
   /** What the new task should do first, after taking the work over. */
   message?: string;
   /** Leave the source task open (a copy). Default: the source task completes. */
@@ -35,7 +40,11 @@ export interface TransferRequest {
 
 export interface TransferPlan {
   source: { task: Task; session: SessionRecord; engine: SessionEngine; host: string; cwd: string };
-  target: { engine: SessionEngine; host: string; cwd: string | 'auto'; model?: string };
+  target: {
+    engine: SessionEngine; host: string; cwd: string | 'auto';
+    /** Unset = the engine's default. On the same engine it defaults to the source session's. */
+    model?: string; effort?: SessionEffort; permissionMode?: SessionMode;
+  };
   mode: TransferMode;
   history: HistoryMethod;
   changesHost: boolean;
@@ -100,6 +109,17 @@ export function planTransfer(
     throw new TransferError('The source session has no working directory to move', 400, 'no_source_cwd');
   }
 
+  if (req.effort !== undefined && !VALID_SESSION_EFFORT_IDS.has(req.effort)) {
+    throw new TransferError('effort is one of low, medium, high, xhigh, max', 400, 'bad_effort');
+  }
+  if (req.permissionMode !== undefined && !VALID_SESSION_MODE_IDS.has(req.permissionMode)) {
+    throw new TransferError(`Unknown permission mode: ${req.permissionMode}`, 400, 'bad_permission_mode');
+  }
+  // What the new session runs with: the request's pick, else the source's own
+  // settings when they still mean something (the same engine). An ACP engine
+  // has no separate effort: its model id carries it.
+  const launch = targetLaunch(session, sourceEngine, engine, req);
+
   const mode: TransferMode = req.mode ?? 'carry';
   const sourceNative = engineCaps(sourceEngine).historySource === 'provider-jsonl';
   const targetNative = engineCaps(engine).historySource === 'provider-jsonl';
@@ -108,12 +128,29 @@ export function planTransfer(
     : sourceNative && targetNative && sourceEngine === engine ? 'native-copy' : 'replay';
   return {
     source: { task, session, engine: sourceEngine, host: sourceHost, cwd: sourceCwd },
-    target: { engine, host, cwd, ...(req.model ? { model: req.model } : {}) },
+    target: { engine, host, cwd, ...launch },
     mode,
     history,
     changesHost,
     changesEngine,
     moveWorkspace: changesHost,
+  };
+}
+
+/** The model, effort and permission mode the target session launches with. */
+export function targetLaunch(
+  session: SessionRecord, sourceEngine: SessionEngine, engine: SessionEngine,
+  req: Pick<TransferRequest, 'model' | 'effort' | 'permissionMode'>,
+): { model?: string; effort?: SessionEffort; permissionMode?: SessionMode } {
+  const sameEngine = engine === sourceEngine;
+  const model = req.model ?? (sameEngine ? (session.cliModel || session.model || undefined) : undefined);
+  const effort = isAcpEngine(engine) ? undefined : req.effort ?? (sameEngine ? session.effort : undefined);
+  const sourceMode = session.mode && VALID_SESSION_MODE_IDS.has(session.mode) ? session.mode : undefined;
+  const permissionMode = req.permissionMode ?? sourceMode;
+  return {
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
   };
 }
 

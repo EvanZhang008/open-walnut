@@ -1,6 +1,7 @@
 /**
- * The Transfer dialog: pick an engine, a host, a directory and how the new
- * task starts. Every choice is a row of radio-style buttons (no native
+ * The Transfer dialog: pick a harness, a host, the model, effort and
+ * permissions the new session runs with, a directory and how the new task
+ * starts. Every choice is a row of radio-style buttons (no native
  * <select>); a pair the server marks blocked stays visible, disabled, with its
  * reason. State lives in TransferDialogHost so it survives a hide.
  */
@@ -9,9 +10,10 @@ import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import type { TransferOptions } from '@/api/transfer';
 import {
-  blockedReason, effectiveDir, hostKindLabel, hostLabel, sourceLine, submitBlocker,
+  blockedReason, effectiveDir, hostKindLabel, hostLabel, sourceLine, submitBlocker, withEngine,
   type DirChoice, type TransferForm,
 } from './transfer-model';
+import { TransferLaunchRows } from './TransferLaunchRows';
 import '@/styles/transfer.css';
 
 interface Props {
@@ -92,7 +94,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
                 key={e.id}
                 checked={form.engine === e.id}
                 disabled={!!reason}
-                onPick={() => onChange({ engine: e.id })}
+                onPick={() => onChange(withEngine(form, source, e.id))}
                 name={e.displayName}
                 now={source.engine === e.id}
                 sub={reason ?? undefined}
@@ -119,6 +121,13 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
             );
           })}
         </Group>
+        <TransferLaunchRows
+          options={options}
+          source={source}
+          form={form}
+          onChange={onChange}
+          group={(label, children, wide) => <Group label={label} wide={wide}>{children}</Group>}
+        />
         <Group label="Directory" wide>
           <Choice checked={dir === 'auto'} onPick={() => onChange({ dir: 'auto' })} name="Let Walnut choose" sub="Walnut finds or makes the repository on the target." testId="xfer-dir-auto" />
           <Choice

@@ -36,7 +36,7 @@ export interface TransferResult {
   sourceTaskId: string;
   sourceCompleted: boolean;
   history: HistoryMethod;
-  target: { engine: string; host: string; cwd: string };
+  target: { engine: string; host: string; cwd: string; model?: string; effort?: string; permissionMode?: string };
   workspace?: { route: 'direct' | 'relay'; bytes: number; bundleDir: string; files: string[] };
   transcriptPath?: string;
 }
@@ -263,7 +263,10 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   if (plan.history === 'native-copy') {
     const { forkSessionToTask } = await import('../sessions/session-controls.js');
     const forked = await forkSessionToTask(session.claudeSessionId, {
-      task_id: target.id, message, model: plan.target.model, rawMessage: true,
+      // 'default' = no --model (the CLI's own default); a fork would otherwise keep the source's.
+      task_id: target.id, message, model: plan.target.model === 'default' ? '' : plan.target.model, rawMessage: true,
+      ...(plan.target.effort ? { effort: plan.target.effort } : {}),
+      ...(plan.target.permissionMode ? { permissionMode: plan.target.permissionMode } : {}),
       placeOverride: { cwd, ...(plan.target.host === LOCAL_HOST ? {} : { host: plan.target.host }) },
     }, 'transfer');
     sessionId = forked.sessionId;
@@ -272,6 +275,8 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
     const started = await startSessionForTask({
       taskIdPrefix: target.id, message, cwd, host: plan.target.host === LOCAL_HOST ? '__local__' : plan.target.host,
       engine: plan.target.engine, model: plan.target.model, callerSid: req.callerSid, expectReply: false, source: 'transfer',
+      ...(plan.target.effort ? { effort: plan.target.effort } : {}),
+      ...(plan.target.permissionMode ? { mode: plan.target.permissionMode } : {}),
     });
     sessionId = started.sessionId;
     requestId = started.requestId;
@@ -307,7 +312,12 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   return {
     taskId: target.id, title: target.title, ...(sessionId ? { sessionId } : {}), ...(requestId ? { requestId } : {}),
     sourceTaskId: task.id, sourceCompleted, history: plan.history,
-    target: { engine: plan.target.engine, host: plan.target.host, cwd },
+    target: {
+      engine: plan.target.engine, host: plan.target.host, cwd,
+      ...(plan.target.model ? { model: plan.target.model } : {}),
+      ...(plan.target.effort ? { effort: plan.target.effort } : {}),
+      ...(plan.target.permissionMode ? { permissionMode: plan.target.permissionMode } : {}),
+    },
     ...(moved ? { workspace: { route: moved.route, bytes: moved.bytes, bundleDir: moved.bundleDir, files: moved.files } } : {}),
     ...(transcriptPath ? { transcriptPath } : {}),
   };

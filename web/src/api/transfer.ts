@@ -15,6 +15,10 @@ export interface TransferSource {
   engine: string;
   host: string;
   cwd: string | null;
+  /** The source session's launch settings: the new session's defaults. */
+  model?: string | null;
+  effort?: string | null;
+  permissionMode?: string | null;
 }
 
 export interface TransferOptions {
@@ -31,6 +35,8 @@ export interface TransferBody {
   cwd?: string;
   mode?: TransferMode;
   model?: string;
+  effort?: string;
+  permission_mode?: string;
   message?: string;
   keep_source?: boolean;
 }
@@ -42,7 +48,7 @@ export interface TransferResult {
   sourceTaskId: string;
   sourceCompleted: boolean;
   history: 'native-copy' | 'replay' | 'brief';
-  target: { engine: string; host: string; cwd: string };
+  target: { engine: string; host: string; cwd: string; model?: string; effort?: string; permissionMode?: string };
   workspace?: { route: 'direct' | 'relay'; bytes: number; bundleDir: string; files: string[] };
   transcriptPath?: string;
 }

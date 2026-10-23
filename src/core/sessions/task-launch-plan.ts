@@ -3,7 +3,7 @@ import { getProjectMetadata } from '../task-manager.js';
 import { QuickStartError } from './quick-start.js';
 import { recordedCwd } from './task-start.js';
 import { inheritedLaunchPair } from './caller-placement.js';
-import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
+import { resolveModelSwitchValue, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { Task } from '../types.js';
 import type { SessionStartParams } from './task-start.js';
 import { normalizeEngine } from '../agents/engine-registry.js';
@@ -21,6 +21,7 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   if (params.startAttemptId || params.source === 'human-inbox') requireFrozenWorkspaceReady(task, params);
   if (params.cwd !== undefined && !params.cwd.startsWith('/')) throw new QuickStartError('cwd must be an absolute path', 400);
   if (params.mode !== undefined && !VALID_SESSION_MODE_IDS.has(params.mode)) throw new QuickStartError(`Invalid mode: ${params.mode}`, 400);
+  if (params.effort !== undefined && !VALID_SESSION_EFFORT_IDS.has(params.effort)) throw new QuickStartError(`Invalid effort: ${params.effort}`, 400);
   let model: string | undefined;
   if (params.model && params.model !== 'default') {
     model = resolveModelSwitchValue(params.model) ?? undefined;
@@ -51,6 +52,6 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
     if (cwd === path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase())) createLocalDirectory = true;
   }
   return { taskId: task.id, project: task.project, cwd, host, model,
-    mode: params.mode, engine: normalizeEngine(params.engine), createLocalDirectory,
+    mode: params.mode, ...(params.effort ? { effort: params.effort } : {}), engine: normalizeEngine(params.engine), createLocalDirectory,
     message: params.message?.trim() || task.description || `Working on task: ${task.title}` };
 }

@@ -12,7 +12,9 @@
  * disables Transfer with a hint; another host + instruction + keep-source sends
  * the right body, the dialog closes, the toast names the new task and its session
  * opens in the Home columns with a "Moved from" line; a 409 shows the server's
- * words inline and keeps every choice. Run under WebKit too:
+ * words inline and keeps every choice; the Model pill starts on the source's model
+ * and effort, the picker changes them, Permissions starts on the source's mode, and
+ * only what changed goes into the request. Run under WebKit too:
  *   PW_WEBKIT=1 npx playwright test tests/e2e/browser/session-transfer.spec.ts --project webkit
  */
 import { mkdirSync } from 'node:fs'
@@ -31,7 +33,7 @@ const BLOCKED = 'Codex runs on this machine only for now'
 
 const OPTIONS = {
   taskId: TASK_ID,
-  source: { sessionId: SESSION_ID, engine: 'claude', host: '__local__', cwd: '/work/editor-fixture' },
+  source: { sessionId: SESSION_ID, engine: 'claude', host: '__local__', cwd: '/work/editor-fixture', model: 'claude-opus-5-5[1m]', effort: 'high', permissionMode: 'accept' },
   engines: [{ id: 'claude', displayName: 'Claude Code' }, { id: 'codex', displayName: 'Codex' }],
   hosts: [
     { alias: '__local__', kind: 'laptop', probedAt: null },
@@ -85,6 +87,8 @@ async function openTransferFromPanel(page: Page) {
 test('the composer "+" menu opens the same Transfer dialog, right under Engine settings', async ({ page }) => {
   await cannedOptions(page)
   const panel = await openSourcePanel(page)
+  // The task-bound rows join once the panel knows its task (the header kebab shows then).
+  await expect(panel.locator('.session-panel-title-meta .task-kebab-btn')).toBeVisible()
   await panel.locator('.chat-plus-btn').click()
   const menu = panel.locator('.chat-plus-menu[role=menu]')
   await expect(menu).toBeVisible()
@@ -182,6 +186,64 @@ test('transfer from the session menu: blocked pair, nothing-changes guard, submi
   await expect(links).toContainText('Moved from')
   await expect(links.locator('a.task-link')).toHaveText(TASK_TITLE)
   await page.screenshot({ path: `${SHOTS}/3-opened.png` })
+})
+
+test('the new session starts on the source model, effort and permissions, and the picker changes them', async ({ page }) => {
+  await cannedOptions(page)
+  let sent: Record<string, unknown> | null = null
+  await page.route(`**/api/v1/tasks/${TASK_ID}/transfer`, (route) => {
+    sent = route.request().postDataJSON() as Record<string, unknown>
+    return route.fulfill({ status: 409, json: { error: 'stop here', code: 'engine_host_unsupported' } })
+  })
+  const dialog = await openTransferFromPanel(page)
+  const pill = dialog.getByTestId('xfer-model')
+  await expect(pill).toContainText('Opus')
+  await expect(pill).toContainText('High')
+  await expect(pill).toContainText('Now')
+  await expect(dialog.getByTestId('xfer-perm-accept')).toHaveAttribute('aria-checked', 'true')
+  await expect(dialog.getByTestId('xfer-perm-accept')).toContainText('Now')
+  await dialog.screenshot({ path: `${SHOTS}/6-launch-defaults.png` })
+
+  // Escape closes the picker, not the dialog.
+  await pill.click()
+  const picker = page.locator('.model-picker')
+  await expect(picker).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(picker).toBeHidden()
+  await expect(dialog).toBeVisible()
+
+  // Effort first (the picker stays open), then another model (it closes).
+  await pill.click()
+  await picker.locator('.model-picker-col-effort .model-picker-row', { hasText: /^.?Low$/ }).click()
+  await expect(pill).toContainText('Low')
+  const other = picker.locator('.model-picker-col-models .model-picker-row:not(.model-picker-row-active):not([disabled])')
+    .filter({ hasNotText: 'Opus' }).first()
+  const otherName = ((await other.locator('.model-picker-row-name').textContent()) ?? '').trim()
+  await other.click()
+  await expect(picker).toBeHidden()
+  await expect(pill).not.toContainText('Now')
+  await expect(pill).toContainText(otherName.split(' ')[0])
+  await dialog.getByTestId('xfer-perm-plan').click()
+  await expect(dialog.getByTestId('xfer-perm-plan')).toHaveAttribute('aria-checked', 'true')
+  await dialog.screenshot({ path: `${SHOTS}/7-launch-picked.png` })
+
+  // A model change alone in the same place is a transfer.
+  await expect(dialog.getByTestId('xfer-submit')).toBeEnabled()
+  await dialog.getByTestId('xfer-submit').click()
+  await expect.poll(() => sent).not.toBeNull()
+  expect(sent).toMatchObject({ engine: 'claude', host: '__local__', effort: 'low', permission_mode: 'plan' })
+  expect(typeof sent!.model).toBe('string')
+  expect(sent!.model).not.toBe('claude-opus-5-5[1m]')
+
+  // Another harness starts on its own default model, and the permissions stay.
+  await dialog.getByTestId('xfer-engine-codex').click()
+  await expect(pill).toContainText('Auto')
+  await expect(pill).not.toContainText('Low')
+  await expect(dialog.getByTestId('xfer-perm-plan')).toHaveAttribute('aria-checked', 'true')
+  // Back on Claude Code, the source's model and effort come back.
+  await dialog.getByTestId('xfer-engine-claude').click()
+  await expect(pill).toContainText('High')
+  await expect(pill).toContainText('Now')
 })
 
 test('a refused transfer shows the server error inline and keeps the choices', async ({ page }) => {

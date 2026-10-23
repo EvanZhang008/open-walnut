@@ -14,6 +14,12 @@ export interface TransferForm {
   dir: DirChoice | null;
   customPath: string;
   mode: TransferMode;
+  /** The new session's model; undefined = the engine's default. */
+  model?: string;
+  /** Claude Code reasoning effort; undefined = the CLI's default. */
+  effort?: string;
+  /** Permission mode the new session starts in; undefined = the launch default. */
+  permissionMode?: string;
   keepSource: boolean;
   message: string;
 }
@@ -38,8 +44,25 @@ export function hostLabel(host: string, hosts?: readonly { alias: string; label?
   return hosts?.find((h) => h.alias === host)?.label ?? host;
 }
 
+/** What a new session on `engine` starts with by default: the source's own model
+ *  and effort on the same engine, the engine's defaults on another one. */
+export function launchDefaults(source: TransferSource, engine: string): Pick<TransferForm, 'model' | 'effort'> {
+  if (engine !== source.engine) return { model: undefined, effort: undefined };
+  return { model: source.model ?? undefined, effort: source.effort ?? undefined };
+}
+
 export function initialForm(source: TransferSource): TransferForm {
-  return { engine: source.engine, host: source.host, dir: null, customPath: '', mode: 'carry', keepSource: false, message: '' };
+  return {
+    engine: source.engine, host: source.host, dir: null, customPath: '', mode: 'carry',
+    ...launchDefaults(source, source.engine),
+    permissionMode: source.permissionMode ?? undefined,
+    keepSource: false, message: '',
+  };
+}
+
+/** Another engine: its own model list, so the model (and effort) go back to its defaults. */
+export function withEngine(form: TransferForm, source: TransferSource, engine: string): Partial<TransferForm> {
+  return engine === form.engine ? {} : { engine, ...launchDefaults(source, engine) };
 }
 
 export function effectiveDir(form: TransferForm, source: TransferSource): DirChoice {
@@ -66,8 +89,9 @@ export function submitBlocker(opts: TransferOptions, form: TransferForm): string
   if (dir === 'custom' && !custom) return 'Enter a directory.';
   if (dir === 'custom' && !custom.startsWith('/') && !custom.startsWith('~')) return 'Use an absolute path.';
   const sameDir = dir === 'same' || (dir === 'custom' && custom === source.cwd);
-  if (form.engine === source.engine && form.host === source.host && sameDir) {
-    return 'Nothing would change. Pick another engine, host or directory.';
+  const sameModel = (form.model ?? '') === (launchDefaults(source, form.engine).model ?? '');
+  if (form.engine === source.engine && form.host === source.host && sameDir && sameModel) {
+    return 'Nothing would change. Pick another harness, model, host or directory.';
   }
   return null;
 }
@@ -76,11 +100,19 @@ export function buildTransferBody(source: TransferSource, form: TransferForm): T
   const dir = effectiveDir(form, source);
   const cwd = dir === 'auto' ? 'auto' : dir === 'custom' ? form.customPath.trim() : source.cwd ?? undefined;
   const message = form.message.trim();
+  // Only what differs from the server's own default (launchDefaults is the same rule),
+  // so an untouched dialog sends no launch fields at all.
+  const defaults = launchDefaults(source, form.engine);
   return {
     engine: form.engine,
     host: form.host,
     ...(cwd ? { cwd } : {}),
     mode: form.mode,
+    // 'default' says "the engine's default", which is not the same as saying nothing
+    // when the default would have been the source session's model.
+    ...((form.model ?? '') !== (defaults.model ?? '') ? { model: form.model || 'default' } : {}),
+    ...(form.effort && form.effort !== defaults.effort ? { effort: form.effort } : {}),
+    ...(form.permissionMode && form.permissionMode !== (source.permissionMode ?? undefined) ? { permission_mode: form.permissionMode } : {}),
     keep_source: form.keepSource,
     ...(message ? { message } : {}),
   };

@@ -246,6 +246,38 @@ describe('transferTask', () => {
     expect(res.title).toBe('Fix the parser · claude-opus-5-5');
   });
 
+  it('the new session keeps the source\'s model, effort and permissions on the same harness, and takes picks over them', async () => {
+    const src = await taskWithConversation();
+    await updateSessionRecord('claude-sid', { cliModel: 'opus[1m]', effort: 'xhigh', mode: 'plan' } as never);
+    const kept = await transferTask({ taskId: src, cwd: '/work/repo-two', keepSource: true });
+    expect(edges.forks[0].input).toMatchObject({ model: 'opus[1m]', effort: 'xhigh', permissionMode: 'plan' });
+    expect(kept.target).toMatchObject({ model: 'opus[1m]', effort: 'xhigh', permissionMode: 'plan' });
+
+    // Picks win; 'default' means the CLI's own default, so the fork names no model.
+    await transferTask({ taskId: src, cwd: '/work/repo-three', model: 'default', effort: 'low', permissionMode: 'accept', keepSource: true });
+    expect(edges.forks[1].input).toMatchObject({ model: '', effort: 'low', permissionMode: 'accept' });
+  });
+
+  it('another harness starts on its own default model with the source\'s permissions, and an ACP model id goes through', async () => {
+    const src = await taskWithConversation();
+    await updateSessionRecord('claude-sid', { cliModel: 'opus[1m]', effort: 'xhigh', mode: 'accept' } as never);
+    await transferTask({ taskId: src, engine: 'codex', keepSource: true });
+    expect(edges.starts[0]).toMatchObject({ engine: 'codex', mode: 'accept' });
+    expect(edges.starts[0].model).toBeUndefined();
+    // An ACP engine has no separate effort: it rides the model id.
+    expect(edges.starts[0].effort).toBeUndefined();
+    await transferTask({ taskId: src, engine: 'codex', model: 'gpt-5.5[high]', effort: 'low', keepSource: true });
+    expect(edges.starts[1]).toMatchObject({ engine: 'codex', model: 'gpt-5.5[high]' });
+    expect(edges.starts[1].effort).toBeUndefined();
+  });
+
+  it('refuses an unknown effort or permission mode before anything is made', async () => {
+    const src = await taskWithConversation();
+    await expect(transferTask({ taskId: src, engine: 'codex', effort: 'huge' as never })).rejects.toMatchObject({ status: 400, code: 'bad_effort' });
+    await expect(transferTask({ taskId: src, engine: 'codex', permissionMode: 'yolo' as never })).rejects.toMatchObject({ status: 400, code: 'bad_permission_mode' });
+    expect(edges.starts).toHaveLength(0);
+  });
+
   it('a directory the user names wins over where the host already keeps the repository', async () => {
     edges.hosts = { devbox: { hostname: 'devbox.example.org' } };
     await recordRepoPath('devbox', repoKey('https://github.com/acme/marina.git', 'repo'), '/srv/marina');

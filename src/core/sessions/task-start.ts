@@ -7,7 +7,7 @@ import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '..
 import { QuickStartError } from './quick-start.js';
 import { continueTaskConversation, detachTaskSession, taskConversation } from './task-session-claim.js';
 import { stableJson } from '../task-create-idempotency.js';
-import type { Task, SessionEngine, SessionMode } from '../types.js';
+import type { Task, SessionEffort, SessionEngine, SessionMode } from '../types.js';
 import { engineCaps, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
@@ -21,6 +21,8 @@ export interface SessionStartParams {
   host?: string;
   model?: string;
   mode?: string;
+  /** Reasoning effort for the spawn (Claude Code's --effort). */
+  effort?: SessionEffort;
   engine?: SessionEngine;
   expectReply?: boolean;
   replyTimeoutSecs?: number;
@@ -203,6 +205,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
         if (sid) {
           await createSessionRecord(sid, task.id, task.project ?? '', launch.cwd, {
             title: task.title, host: launch.host, mode: params.mode as SessionMode | undefined,
+            ...(launch.effort ? { effort: launch.effort } : {}),
             engine, initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
           });
           seeded = true;

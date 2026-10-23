@@ -14,7 +14,7 @@ import { log } from '../../logging/index.js'
 import { ENGINE_REGISTRY, isKnownEngine } from '../../core/agents/engine-registry.js'
 import { TransferError, transferOptions, LOCAL_HOST, normalizeHost } from '../../core/transfer/planner.js'
 import type { HostKind } from '../../core/hosts/host-profile.js'
-import type { SessionEngine } from '../../core/types.js'
+import type { SessionEffort, SessionEngine, SessionMode } from '../../core/types.js'
 import type { TransferJob } from '../../core/transfer/transfer-jobs.js'
 import { placement } from '../../core/server-role.js'
 
@@ -69,6 +69,10 @@ transferV1Router.get('/tasks/:id/transfer-options', async (req: Request, res: Re
         engine: session.engine ?? 'claude',
         host: normalizeHost(session.host),
         cwd: session.cwd ?? task.cwd ?? null,
+        // What the new session starts with unless the person picks otherwise.
+        model: session.cliModel || session.model || null,
+        effort: session.effort ?? null,
+        permissionMode: session.mode ?? null,
       } : null,
       engines,
       hosts: profiles,
@@ -120,6 +124,8 @@ transferV1Router.post('/tasks/:id/transfer', async (req: Request, res: Response,
       ...(str('cwd') ? { cwd: str('cwd') } : {}),
       ...(mode ? { mode } : {}),
       ...(str('model') ? { model: str('model') } : {}),
+      ...(str('effort') ? { effort: str('effort') as SessionEffort } : {}),
+      ...(str('permission_mode') ? { permissionMode: str('permission_mode') as SessionMode } : {}),
       ...(str('message') ? { message: str('message') } : {}),
       keepSource: body.keep_source === true,
       callerSid: callerSid(req),
