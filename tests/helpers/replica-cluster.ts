@@ -67,6 +67,22 @@ const TSX = path.join(ROOT, 'node_modules', '.bin', 'tsx')
 export const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 
+/**
+ * The Node the Mac and its host server run under: tsx starts the Mac with the
+ * `node` on PATH, which is not this runner's runtime when the suite runs on bun.
+ * Its real path, because that is the Mac's process.execPath, and the Mac's test
+ * transport runs only probes of the Node it runs under.
+ */
+export const HOST_NODE = typeof process.versions.bun === 'string' ? nodeOnPath() : process.execPath
+
+function nodeOnPath(): string {
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+    const candidate = path.join(dir, 'node')
+    try { fs.accessSync(candidate, fs.constants.X_OK); return fs.realpathSync(candidate) } catch { /* next */ }
+  }
+  throw new Error('no node on PATH: the Mac of a replica cluster runs under it (tsx)')
+}
+
 export const WINDOWS = { quietMs: 6_000, beatMs: 1_000, takeoverMs: 12_000 } as const
 export const HOST_KEY = 'devbox'
 /** A session that runs on the Mac (no host). */
@@ -533,7 +549,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   let macPin: Pinned | null = null
   let macDaemonPin: Pinned | null = null
   /** A replica process: `<node> <app>/dist/cli.js web ... --replica`. */
-  const isReplicaCommand = (command: string) => command.startsWith(`${process.execPath} ${appCli} web`) && / --replica(\s|$)/.test(command)
+  const isReplicaCommand = (command: string) => command.startsWith(`${HOST_NODE} ${appCli} web`) && / --replica(\s|$)/.test(command)
   /**
    * The replica's processes: each pid in the host daemon's pid files whose start
    * time is the one the file names and whose command line is the replica's, and
@@ -553,7 +569,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       if (p && (typeof rec.startTime !== 'string' || rec.startTime.trim() === p.started)) out.set(pid, p)
     }
     // Under `source` the app path is this base's; under `built` it is this base's link to the build.
-    for (const pid of pidsRunning(`${process.execPath} ${appCli} `)) {
+    for (const pid of pidsRunning(`${HOST_NODE} ${appCli} `)) {
       const p = pin('replica', pid, isReplicaCommand)
       if (p) out.set(pid, p)
     }
