@@ -16,7 +16,7 @@ name: Binary matrix
 
 on:
   push:
-    branches: [main]
+    branches: [main, bun-ci]
   pull_request:
     branches: [main]
   workflow_dispatch:
