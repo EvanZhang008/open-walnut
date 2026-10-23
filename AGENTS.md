@@ -27,10 +27,11 @@ watched it work (the real UI for a UI change, a read-only check for the rest). A
 review, commit and deploy on your own; don't stop and wait to be asked. The shared tree
 almost always holds other agents' uncommitted work, so deploy the commit, not the tree:
 `bash scripts/deploy-committed.sh` builds the committed HEAD in a clean clone and serves
-it as this checkout; once it serves, that build is copied into this checkout's `dist/`,
-because the local `walnut` CLI runs the op registry (descriptions, schemas, outcomes) from
-there (`scripts/publish-serve-root-dist.mjs`; 2026-10-05: sessions read op text two deploys
-old). Never wait for the tree to be clean, and never stash, revert or commit
+it as this checkout: the compiled walnut file for this Mac (plus the Linux files host servers
+take, from the same build), run directly with no node. Once it serves, the dist of that build is
+copied into this checkout's `dist/`, because the local `walnut` CLI runs the op registry
+(descriptions, schemas, outcomes) from there (`scripts/publish-serve-root-dist.mjs`; 2026-10-05:
+sessions read op text two deploys old). Never wait for the tree to be clean, and never stash, revert or commit
 their files to get there. If a deploy guard refuses (type-check, smoke boot, cooldown), fix
 what it names or report it as the blocker. Never end with "committed, not deployed, say
 deploy". Scope the commit to your own changes only (never sweep up other agents'
@@ -81,10 +82,23 @@ scripts below are the only way to replace it.**
 bash scripts/deploy-committed.sh  # Deploy the committed HEAD (clean clone) → restart 3456
 npm run dev:prod        # Build the working tree as it is → restart 3456
 npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
+npm run dev:ephemeral -- --file [<walnut file>]   # the same, running a compiled file
+
+# The way back from a bad compiled file, for one release: deploy the Node build.
+WALNUT_DEVPROD_RUNTIME=node bash scripts/deploy-committed.sh
 
 # Verify the deploy script itself WITHOUT deploying: runs every guard, then stops
-# before build / server kill / launch. WALNUT_DEVPROD_PORT is honoured only here.
+# before build / server kill / launch. WALNUT_DEVPROD_PORT is honoured only here
+# and in a rehearsal.
 WALNUT_DEVPROD_DRY_RUN=1 WALNUT_DEVPROD_PORT=35999 TMPDIR=/tmp/dry bash scripts/dev-prod.sh
+
+# Rehearse the WHOLE real deploy (build, smoke, kill and launch, LKG, rollback) away
+# from production: its own port, data dir, daemon dir, temp dir and launchd label.
+# Refuses :3456, ~/.open-walnut, /tmp/open-walnut and the production log and LKG; it
+# writes only into the dirs it is given (the CLI publish goes to a stand-in there).
+# Clean up after: bootout com.open-walnut.dev-prod-rehearsal.<port>, then remove the dirs.
+WALNUT_DEVPROD_REHEARSAL=1 WALNUT_DEVPROD_PORT=35871 WALNUT_DEVPROD_REHEARSAL_DIR=/tmp/rh \
+  OPEN_WALNUT_HOME=/tmp/rh/home WALNUT_DAEMON_DIR=/tmp/rh/daemon bash scripts/deploy-committed.sh
 ```
 
 ### Live verification runs on an ephemeral server, never on :3456
@@ -93,6 +107,10 @@ Anything that creates tasks, sessions, notes or cron jobs to prove a change work
 turn, a Playwright click path, a `curl` or `walnut tools call` against the API) runs on
 `npm run dev:ephemeral`. Reading :3456 is fine; writing to it for a test is not: every probe
 task an agent made there stayed on the user's board (a 2026-09-23 audit found dozens).
+`npm run dev:ephemeral -- --file <path>` runs a compiled walnut file instead of the source build
+(`--file` alone builds this tree's file first, about a minute): the same launcher code, so the
+same isolation below, and the file's runtime tree goes to `$TMPDIR/walnut-ephemeral-runtime`,
+never into the real data home (`scripts/dev-ephemeral.sh`).
 
 **When a check must write on :3456, it runs as a test run** (`src/core/test-run.ts`; 2026-10-27:
 an Org chart acceptance run made 9 tasks and 6 projects there, which showed on the user's board
@@ -167,6 +185,25 @@ failure re-launches that snapshot instead of leaving :3456 dark. Knobs:
 `WALNUT_DEVPROD_SMOKE_SECS` (default 120), `WALNUT_DEVPROD_SKIP_SMOKE=1`,
 `WALNUT_DEVPROD_LKG_DIR`. Ratchets: `tests/scripts/dev-prod-smoke-rollback.test.ts`.
 
+**What a deploy runs: the compiled file, by default.** After `bun run web:build` (the dist: the
+CLI publish above needs it, and the file reuses its web assets, so the asset mirror sees one
+build either way), `bun scripts/build-binary.mjs --reuse-web` builds this machine's file and the
+Linux ones (`linux-x64`, `linux-arm64`, their musl twins) in ONE run, so every file names the same
+commit; a failed sibling only warns, a failed file for this machine aborts before the kill. The
+files are staged as `<stage>/dist-bin/walnut-<target>`, where host servers pick the siblings up
+(`path.dirname(process.execPath)`). `walnut __selftest` runs first (it also unpacks the runtime
+tree into `<stage>/runtime/<build>`, on the temp volume, never the data home), then the smoke
+boot runs `<file> web` with its own data, daemon and runtime dirs. The launchd job runs the file
+directly; the LKG holds `dist-bin/` and `runtime/`, and a rollback starts whichever kind the last
+good build was. `WALNUT_RUNTIME_DIR` names the parent of the per-build trees, so a child of the
+server that runs another build unpacks beside it, never over it (`src/binary/runtime-tree.ts`).
+Knobs: `WALNUT_DEVPROD_RUNTIME=node` (the Node build, for one release as the way back),
+`WALNUT_DEVPROD_FILE_TARGETS` (default the four Linux targets, `""` for none),
+`WALNUT_DEVPROD_SKIP_SELFTEST=1`, `WALNUT_BUN` (the build needs bun at least the
+`packageManager` pin; an older one is refused before any step). `WALNUT_DEVPROD_REHEARSAL=1` runs
+the whole deploy on a private port and data dir (block above); its
+`WALNUT_DEVPROD_REHEARSAL_FAIL_LAUNCH=1` / `_FAIL_SMOKE=1` drive the rollback and the pre-kill abort.
+
 **A deploy must not pull the floor out from under an open window.** Every deploy re-hashes and
 WIPES `dist/web/static/assets`, so a window that was open before it still runs the old entry
 bundle and 404s the first time it reaches for a chunk it had not loaded yet. That fetch happens
@@ -223,7 +260,8 @@ plain submit. The job lives in one launchd domain (gui/<uid> from a GUI login, u
 ssh), and every look at it goes through `launchctl print <domain>/<label>`. A removal boots the
 label out of both per-user domains and waits (bounded) until launchd lets go; when it will not,
 the deploy starts the new server with nohup instead of failing. Check with
-`ps -o pri= -p <pid>` (31 server, 20 daemon).
+`ps -o pri= -p <pid>` (31 server, 20 daemon; the compiled file's daemon is the same file run as
+`walnut-<target> __daemon --start`).
 
 **⚠️ NEVER wrap `npm run dev:prod` in a bare `launchctl submit`.** `launchctl submit` jobs are
 KeepAlive — the script exits, launchd re-runs it, forever. dev-prod.sh is a one-shot deploy, so
