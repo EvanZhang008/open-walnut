@@ -306,6 +306,9 @@ async function startInstallLocked(d: Dirs, req: InstallRequest): Promise<StepRep
   const free = await hooks.freeBytes(d.R).catch(() => null)
   if (free !== null && free < MIN_FREE_BYTES) return { ok: false, error: 'disk_full', message: `${free} bytes free, ${MIN_FREE_BYTES} needed` }
 
+  const noBun = dependencyInstallProblem(req)
+  if (noBun) return { ok: false, error: 'bad_request', message: noBun }
+
   const [current, trial] = await Promise.all([readLine(d.current), readLine(d.trial)])
   const keep = [current, trial, runningBuild().id].filter(validBuildId)
   let script: string
@@ -382,7 +385,8 @@ async function runActivation(d: Dirs, id: string): Promise<void> {
       timeoutMs: knobMs(process.env.WALNUT_COMPANION_SMOKE_MS, 150_000),
     })
     if (result.ok) {
-      // A dist build runs only on the runtime it was tried on (the launcher reads this).
+      // A dist build runs only on the runtime it was tried on (the launcher reads this);
+      // a build of the walnut file (package.ts) runs under either.
       await writeAtomic(d.runtime(id), `${smokeRuntime()}\n`)
       await writeAtomic(d.trial, `${id}\n`)
       await Promise.all([rmFile(d.attempts), rmFile(path.join(d.failedDir, id))])
@@ -400,7 +404,22 @@ async function runActivation(d: Dirs, id: string): Promise<void> {
   }
 }
 
-/** The runtime a smoke boot runs a build's dist/cli.js on: this server's own. */
+/**
+ * Why this box cannot install a build's dependencies, or null. Only bun installs
+ * them (this server's executable as bun); a box whose server runs on Node, under a
+ * unit from before setup.sh moved it to bun, has none at hand. The walnut file's
+ * package (companion-build/package.ts) has no dependencies, so it installs there too.
+ */
+export function dependencyInstallProblem(
+  req: Pick<InstallRequest, 'dependencies' | 'optionalDependencies'>,
+  versions: NodeJS.ProcessVersions = process.versions,
+): string | null {
+  const count = Object.keys(req.dependencies ?? {}).length + Object.keys(req.optionalDependencies ?? {}).length
+  if (count === 0 || smokeRuntime(versions) === 'bun') return null
+  return 'this box runs Walnut on Node, and only bun installs the dependencies of a build: run scripts/cloud/setup.sh on the box again (it moves the box to bun)'
+}
+
+/** The runtime a smoke boot runs a build's dist/cli.js on: this server's own (a walnut file is bun). */
 export function smokeRuntime(versions: NodeJS.ProcessVersions = process.versions): 'bun' | 'node' {
   return typeof (versions as { bun?: string }).bun === 'string' ? 'bun' : 'node'
 }

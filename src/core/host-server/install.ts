@@ -95,6 +95,10 @@ export function installScript(plan: InstallPlan): string {
     ...(trusted ? { trustedDependencies: trusted } : {}),
   }, null, 2)
   const omit = optional ? '--production' : '--production --omit=optional'
+  // An empty set (the walnut file's package, companion-build/package.ts) installs
+  // nothing, so no package manager runs: a box whose server runs on Node, with no
+  // bun beside it, takes it too.
+  const empty = Object.keys(plan.dependencies).length === 0 && Object.keys(optional ?? {}).length === 0
   return [
     'set -u',
     `ROOT="${checkHostRoot(plan.root ?? HOST_ROOT)}"`,
@@ -112,7 +116,9 @@ export function installScript(plan: InstallPlan): string {
     'if [ ! -f "$DEPDIR/.ready" ]; then',
     '  rm -rf "$DEPDIR.partial" && mkdir -p "$DEPDIR.partial" || fail "cannot create $DEPDIR"',
     `  ${heredoc('"$DEPDIR.partial/package.json"', depsJson)}`,
-    `  (cd "$DEPDIR.partial" && "$BUN" install ${omit} --linker=hoisted --no-progress) || fail "bun install of its dependencies failed: see $IN/$ID.install.log on the host"`,
+    empty
+      ? '  mkdir -p "$DEPDIR.partial/node_modules" || fail "cannot create $DEPDIR"'
+      : `  (cd "$DEPDIR.partial" && "$BUN" install ${omit} --linker=hoisted --no-progress) || fail "bun install of its dependencies failed: see $IN/$ID.install.log on the host"`,
     '  rm -rf "$DEPDIR" && mv "$DEPDIR.partial" "$DEPDIR" && touch "$DEPDIR/.ready" || fail "cannot move the dependencies in place"',
     'fi',
     'rm -rf "$APP.partial" && mkdir -p "$APP.partial" || fail "cannot create $APP"',

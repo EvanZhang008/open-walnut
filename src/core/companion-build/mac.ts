@@ -1,8 +1,9 @@
 /**
  * The Mac's side of keeping its cloud companion on the Mac's own build
  * (docs/plan/walnut-companion-unified-replica.md, stage 1): look at the box,
- * upload this Mac's companion package, install it, activate it, over the box's
- * /bridge/build door (wire.ts) with this Mac's machine credential.
+ * upload this Mac's companion package (package.ts: the compiled walnut file for
+ * the box, the same file this Mac's host servers run), install it, activate it,
+ * over the box's /bridge/build door (wire.ts) with this Mac's machine credential.
  *
  * Every step is idempotent on the box, so a tick that stops anywhere (a network
  * error, a Mac restart) is resumed by the next one, which reads the box's status
@@ -19,9 +20,8 @@ import path from 'node:path'
 import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { bootPolicy } from '../boot-policy.js'
-import { singleFile } from '../../lib/single-file.js'
 import { cloudSessionEndpoint, recoverCloudSessionCredential } from '../cloud-ingest.js'
-import { buildCompanionAppPackage, runningBuildId, type CompanionAppPackage } from '../host-server/package.js'
+import { boxRunsPackage, buildCompanionPackage, companionBuildId, type CompanionPackage } from './package.js'
 import { getCloudBoxState } from '../hosts/cloud-box-host.js'
 import { isLoopbackDomain } from '../hosts/cloud-box-probe.js'
 import {
@@ -95,6 +95,8 @@ let generation = 0
 let deferred: Promise<void> | null = null
 let restUntil = 0
 let myId: string | null | undefined
+/** Why this Mac has no build to send, when myId is null. */
+let myIdWhy: string | null = null
 /** After a Retry: the box's failed record for this id that was already there (null: none) does not count. */
 let retryBaseline: { id: string; at: number | null | undefined } | null = null
 const gaveUpRecord = createGaveUpRecord(() => path.join(WALNUT_HOME, 'cache', 'companion-build.json'))
@@ -164,11 +166,24 @@ async function autoUpdateOn(): Promise<boolean> {
   }
 }
 
+/** This Mac's build id, learned once (a deploy replaces this process). */
+async function learnMyId(): Promise<string | null> {
+  if (myId === undefined) {
+    try {
+      myId = await companionBuildId()
+      myIdWhy = null
+    } catch (err) {
+      myId = null
+      myIdWhy = err instanceof Error ? err.message : String(err)
+    }
+  }
+  return myId
+}
+
 async function gate(): Promise<Gate> {
   if (!bootPolicy('cloud-box-probe')) return { open: false, state: 'off', mine: null, autoUpdate: false }
   const autoUpdate = await autoUpdateOn()
-  if (myId === undefined) myId = await runningBuildId().catch(() => null)
-  const mine = myId
+  const mine = await learnMyId()
   if (!autoUpdate) return { open: false, state: 'off', mine, autoUpdate }
   // An ephemeral server runs on a copy of the real data dir: only a loopback
   // companion (one a test started) is ever its own (as in cloud-box-probe.ts).
@@ -180,11 +195,8 @@ async function gate(): Promise<Gate> {
   if (!ep) return { open: false, state: 'no_companion', mine, autoUpdate }
   if (IS_EPHEMERAL && !isLoopbackDomain(new URL(ep.url).host)) return { open: false, state: 'no_companion', mine, autoUpdate }
   if (!mine) {
-    // The compiled file has no dist to send, and the box takes only a dist until it takes the file (walnut-single-binary.md).
-    const message = singleFile()
-      ? 'This Mac runs the compiled walnut file, and the companion still takes only a built checkout, so it has no build to send.'
-      : 'This Mac runs Walnut from source, so it has no build to send.'
-    return { open: false, state: 'off', message, mine, autoUpdate }
+    // From source, or a build of uncommitted changes: no walnut file of this build exists (host-file.ts).
+    return { open: false, state: 'off', message: myIdWhy ?? 'This Mac has no build to send.', mine, autoUpdate }
   }
   return { open: true, ep, mine, autoUpdate: true }
 }
@@ -321,10 +333,16 @@ async function update(ctx: Ctx, status: BoxBuildStatus): Promise<void> {
   if (install?.state === 'ready') { if (await activateStep(ctx) !== 'end') await waitForStart(ctx); return }
   if (install?.state === 'running') { if (await waitForInstall(ctx) === 'ready' && await activateStep(ctx) !== 'end') await waitForStart(ctx); return }
 
+  // Never send a build the box cannot run: checked again every round, so a box set up again is taken.
+  const cannot = boxRunsPackage(status)
+  if (cannot) { failed(ctx, cannot, false); return }
   setView(ctx.gen, { state: 'updating', mine, theirs: ctx.theirs, step: 'uploading', progress: 0 })
-  let pkg: CompanionAppPackage
+  let pkg: CompanionPackage
   try {
-    pkg = await buildCompanionAppPackage({ platform: status.platform, arch: status.arch })
+    // Getting the file may take a build in a clone (about a minute): the row says so meanwhile.
+    pkg = await buildCompanionPackage({ platform: status.platform, arch: status.arch }, {
+      say: (message) => { if (live(ctx)) setView(ctx.gen, { state: 'updating', mine, theirs: ctx.theirs, step: 'uploading', progress: 0, message }) },
+    })
   } catch (err) {
     failed(ctx, err instanceof Error ? err.message : String(err), true)
     return
@@ -340,7 +358,7 @@ async function update(ctx: Ctx, status: BoxBuildStatus): Promise<void> {
   await waitForStart(ctx)
 }
 
-async function upload(ctx: Ctx, pkg: CompanionAppPackage, status: BoxBuildStatus): Promise<'done' | End> {
+async function upload(ctx: Ctx, pkg: CompanionPackage, status: BoxBuildStatus): Promise<'done' | End> {
   const size = pkg.tgz.length
   const sha = await sha256Of(pkg.id, pkg.tgz)
   const part = status.upload
@@ -406,7 +424,7 @@ async function postStep(ctx: Ctx, step: 'installing' | 'starting', sub: string, 
   return reply.state === 'ready' ? 'ready' : 'ok'
 }
 
-function installStep(ctx: Ctx, pkg: CompanionAppPackage): Promise<'ok' | 'ready' | End> {
+function installStep(ctx: Ctx, pkg: CompanionPackage): Promise<'ok' | 'ready' | End> {
   const body: InstallRequest = {
     id: ctx.mine,
     depsHash: pkg.companionDepsHash,
@@ -503,8 +521,7 @@ export function tickCompanionBuild(reason: string): Promise<void> {
 
 /** Retry: forget that this Mac gave up on its own build, then look again now. */
 export async function retryCompanionBuild(): Promise<void> {
-  if (myId === undefined) myId = await runningBuildId().catch(() => null)
-  const mine = myId
+  const mine = await learnMyId()
   if (mine) {
     if ((await readGaveUp())[mine]) await writeGaveUp((map) => { delete map[mine] })
     retryBaseline = { id: mine, at: undefined }
@@ -566,6 +583,7 @@ export async function _resetCompanionBuildForTesting(): Promise<void> {
   deferred = null
   restUntil = 0
   myId = undefined
+  myIdWhy = null
   retryBaseline = null
   gaveUpRecord.forget()
   shaCache = null

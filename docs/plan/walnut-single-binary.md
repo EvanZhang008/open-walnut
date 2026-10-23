@@ -169,69 +169,57 @@ bun run build:binary   # the file for this machine; any other target too
 ## The cloud companion
 
 The companion box (`scripts/cloud/setup.sh`, `scripts/cloud/ensure-harness.sh`,
-`scripts/cloud/companion-launch.mjs`, `src/core/companion-build/`) moves in two
-phases.
+`scripts/cloud/companion-launch.mjs`, `src/core/companion-build/`) runs the
+compiled file, and takes it from the Mac the way it took a dist.
 
-**Phase A (done): the box runs the dist on bun.** setup.sh builds the base tree
-with bun (`bun install --frozen-lockfile`, `bun --bun run build`, the web app
-with vite on bun), and the unit starts `<bun> dist/cli.js web`. The launcher
-drop-in takes its runtime from the unit's first word, or bun from PATH, never
-node. A box set up before keeps its old unit, which names node, until setup.sh
-writes it again; a deploy to such a box has to run setup.sh (or rewrite the
-unit) once Walnut no longer runs on Node. The launcher and the harness seed
-script run on bun (the seed script with `--no-install`, so bun never fetches a
-missing package from the registry). Node and npm stay on the box for one
-reason: third-party agent CLIs (Codex and others) and Claude Code's npm
-fallback install from npm. The Mac still sends a dist (`/bridge/build`), and the
-box installs its dependencies in `deps/<hash>` (`installScript` in
-`src/core/host-server/install.ts`), as before.
+**The package (done).** The Mac sends its companion the same file its host
+servers run, built for the box (`createHostFileSource`: the sibling file in the
+stage's `dist-bin/`, a build of the checkout's commit, or a published release),
+packed with a small plain-JS shim (`src/core/companion-build/package.ts`,
+`shim.ts`):
 
-The gap phase A leaves: a Mac that runs the compiled file has no dist to send
-(`runningDist()` is null there), so it cannot update its companion. The
-Settings line says so ("the companion still takes only a built checkout"). A
-Mac running a built checkout (`bun dist/cli.js web`) still can.
+    package/walnut         the compiled file for the box's target
+    package/dist/cli.js    starts ../walnut with the same arguments
 
-**Phase B (planned): the box runs the compiled linux-arm64 file.** Host servers
-already install the file over SSH (`fileInstallScript`, `createHostFileSource`
-in `src/core/host-server/`); the companion takes the same file through its door.
+Every box, of any age, starts a build as `<runtime> app/<id>/dist/cli.js`: its
+install check (`--version`), its smoke boot and its launcher. So the door stays
+schema 1 and the install request is the one a box always took, with an empty
+dependency set. A box set up before the move to bun keeps its unit and launcher
+on node, installs the package with its own code, smoke-boots it through the
+shim on node, and from its next start runs the file: no step on the box. A Mac
+that runs the compiled file updates its companion like any other.
 
-1. Wire (`wire.ts`): `BUILD_SCHEMA` 2. The box status says which kinds it takes
-   (`takes: ['dist', 'file']`) and its file target (`linux-arm64`, from
-   `host-target.ts`). The install request gains a file kind:
-   `{ id, kind: 'file', version, commit, sha256 }` (no dependencies, no
-   package.json). The upload stays the chunked PUT; the package is the file's
-   gz instead of the dist tgz. A schema 1 box gets a dist, as today. The
-   status names the runtime it runs (today `node: process.version`, which on
-   bun is a compatibility string).
-2. Mac (`mac.ts`): for a box that takes a file, the package comes from
-   `createHostFileSource` (the sibling file in the stage's `dist-bin/`, a build
-   of the checkout, or a published release), so the companion and every host
-   server run the same file of the same build. A compiled-file Mac and a box
-   that takes only a dist: the state names the one-time fix (run setup.sh on
-   the box again).
-3. Box (`box.ts`, `box-smoke.ts`): a file install runs `fileInstallScript` with
-   the companion's root (unpack, sha256, `--version`, `__selftest`, `.ready`
-   last); the smoke boot runs `app/<id>/walnut web` with its own data, daemon
-   and runtime dirs. Prune keeps current, trial and the running build, as now.
-4. Launcher (`companion-launch.mjs`): `isReady` takes `.ready` with either
-   `walnut` or `dist/cli.js`. A file starts as `app/<id>/walnut web`, a dist as
-   `<runtime> app/<id>/dist/cli.js web`; `stopStaleServer` learns the file's
-   command line too (it matches `cli.js` today). The drop-in from
-   ensure-harness.sh, and its rollback branch, name the file when the base is
-   one. The file's runtime tree goes to `<root>/runtime` in the service user's
-   home (`WALNUT_RUNTIME_DIR`), never root's code tree; trees are named by
-   build, so a trial and the current build share the dir.
-5. setup.sh, later: the base tree becomes the release file from install.sh,
-   and the launcher a subcommand of the file. Then bun leaves the box, and Node
-   stays only for npm-installed agent CLIs.
+**Running inside the file.** Once the box runs the file, its own box code
+starts the next build's `dist/cli.js` with the file told to be bun
+(`BUN_BE_BUN=1`, `bunCommand` in `src/lib/runtime.ts`); the shim drops that before it
+starts `../walnut`. The shim also keeps the file's pid under the launcher, so a
+file whose shim was killed hard is stopped by the next start instead of
+holding the port.
 
-Proof before it ships: the box tests for both kinds; the launcher tests; a
-linux-arm64 container (Docker on an arm64 Mac, no systemd) that runs the
-launcher on a temp root while a test Mac server pushes a file through the door
-(install, smoke, trial, current, then a broken file that is given up); and a
-schema 1 box still updated with a dist. It was not done in the bun move
-because it changes both sides of a live protocol with a version handshake,
-and the end-to-end proof needs the real box, which this work may not touch.
+**The runtime a build needs.** A dist runs only on the runtime its smoke boot
+passed on: the box writes it to `app/<id>/.runtime` and the launcher skips a
+current dist for another runtime (the base tree runs, and the Mac sends the file
+again) and gives up such a trial. A dist with no record came from a box that did
+everything on node. A build of the file runs under either. This is what keeps a
+box whose unit moved from node to bun (setup.sh run again) from starting a build
+it got on node forever.
+
+**setup.sh.** A new box's base tree is built with bun (`bun install
+--frozen-lockfile`, `bun --bun run build`) and its unit starts
+`<bun> dist/cli.js web`. Node and npm stay on the box only for third-party agent
+CLIs and Claude Code's npm fallback.
+
+Proof: the box, launcher, package and shim tests; the e2e with the real
+launcher and a real build (`tests/e2e/companion-build-update-e2e.test.ts`); and
+a Linux container laid out like a box set up with the 0.6.17 setup.sh (a node
+unit run by a supervisor loop, a 0.6.17 build the Mac pushed in
+`companion/current`) that the Mac moves to two real compiled files of this tree,
+that gives up a broken one, and that keeps the file when the unit then moves to
+bun and the new launcher (`tests/e2e/old-box/run.sh`, which builds the files and
+runs `tests/e2e/companion-old-box-e2e.test.ts`).
+
+Later: the base tree becomes the release file from install.sh, and the
+launcher a subcommand of the file. Then bun leaves the box too.
 
 ## CI: every system, old and new
 

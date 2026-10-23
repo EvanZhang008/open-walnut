@@ -4,19 +4,25 @@
  * (`dist/cli.js web`, WALNUT_CLOUD_MODE=1) started by the real launcher
  * (scripts/cloud/companion-launch.mjs), restarted by a loop that does what
  * systemd's Restart=always does. The Mac's driver (core/companion-build/mac.ts)
- * runs in this process against it over HTTP with the machine credential; only
- * its endpoint lookup, its own build id and which dist it packs are stubbed.
+ * runs in this process against it over HTTP with the machine credential, and
+ * packs the real companion package (core/companion-build/package.ts: the walnut
+ * file plus the dist/cli.js shim); only its endpoint lookup and the walnut file
+ * source are stubbed. The "walnut file" of each build is a small sh script that
+ * runs this tree's build with that build's own build-info, as the compiled file
+ * would (a real compiled file takes minutes to build; tests/e2e/old-box/run.sh
+ * runs real ones on a container laid out like a box from before the file).
  *
  *   base A   the box starts on this tree's build, nothing installed
- *   B        a build with another commit: uploaded, installed, smoke booted,
- *            started as the trial, confirmed, current; a restart keeps it
+ *   B        a build with another commit: uploaded, installed, smoke booted
+ *            through the shim, started as the trial, confirmed, current; a
+ *            restart keeps it
  *   C        a build that answers --version but never serves: the smoke boot
  *            fails, the box gives it up and keeps running B, the Mac does not retry it
  *
- * The dependency set is installed once, by hand, as a link to this tree's
- * node_modules: the install script then skips npm (its .ready is there).
+ * The package's one (empty) dependency set is marked installed by hand: the
+ * install script then runs no package manager.
  *
- * Needs the build: `npm run build`, then `cd web && npx vite build`. Without it
+ * Needs the build: `bun run build`, then `cd web && bun x vite build`. Without it
  * the file fails at once and says so (never a skipped test).
  */
 import crypto from 'node:crypto'
@@ -35,8 +41,8 @@ const DIST = path.join(REPO, 'dist')
 
 const h = vi.hoisted(() => ({
   endpoint: null as { url: string; token: string } | null,
-  mine: '' as string,
-  dist: null as { distDir: string; root: string } | null,
+  /** The build this Mac is on: its id, and the walnut file standing in for it. */
+  build: null as { id: string; version: string; commit: string; file: string } | null,
   /** Uploads the Mac's driver began: its PUTs of a package's first chunk. */
   uploadsBegun: 0,
 }))
@@ -46,12 +52,24 @@ vi.mock('../../src/core/cloud-ingest.js', () => ({
   cloudSessionEndpoint: async () => h.endpoint,
   recoverCloudSessionCredential: async () => {},
 }))
-vi.mock('../../src/core/host-server/package.js', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../../src/core/host-server/package.js')>()
+vi.mock('../../src/core/host-server/index.js', async () => {
+  const crypto = await import('node:crypto')
+  const fs = await import('node:fs')
+  const zlib = await import('node:zlib')
   return {
-    ...real,
-    runningBuildId: async () => h.mine,
-    buildCompanionAppPackage: (target: { platform: string; arch: string }, dist?: { distDir: string; root: string }) => real.buildCompanionAppPackage(target, dist ?? h.dist),
+    sharedHostFileSource: () => ({
+      async buildId() {
+        if (!h.build) throw new Error('no build')
+        return { id: h.build.id, version: h.build.version, commit: h.build.commit }
+      },
+      async file(target: string) {
+        const b = h.build!
+        const body = fs.readFileSync(b.file)
+        const gz = zlib.gzipSync(body)
+        const sha = (x: Buffer) => crypto.createHash('sha256').update(x).digest('hex')
+        return { id: b.id, version: b.version, commit: b.commit, target, gz, sha256: sha(body), gzSha256: sha(gz) }
+      },
+    }),
   }
 })
 // Counted in this process, at the call: the box's own log line is buffered for up to
@@ -72,7 +90,7 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
 }))
 
 import { buildIdOf, type BoxBuildStatus } from '../../src/core/companion-build/wire.js'
-import { buildCompanionAppPackage } from '../../src/core/host-server/package.js'
+import { EMPTY_DEPS_HASH } from '../../src/core/companion-build/package.js'
 import { _resetCompanionBuildForTesting, companionBuildView, tickCompanionBuild } from '../../src/core/companion-build/mac.js'
 
 const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
@@ -89,18 +107,36 @@ function freePort(): Promise<number> {
   })
 }
 
-/** A dist made of links to this tree's dist, with its own build-info (another build id). */
+/**
+ * A dist made of links to this tree's dist, with its own build-info (another build
+ * id). The entry bundles are copies: the runtime resolves a linked module to its
+ * real path, and the bundle reads build-info.json beside where it really is.
+ */
 async function linkedDist(root: string, info: Record<string, unknown>, cliJs?: string): Promise<{ distDir: string; root: string }> {
   const distDir = path.join(root, 'dist')
   await fsp.mkdir(distDir, { recursive: true })
   for (const name of await fsp.readdir(DIST)) {
     if (name === 'build-info.json' || (cliJs && name === 'cli.js')) continue
-    await fsp.symlink(path.join(DIST, name), path.join(distDir, name))
+    if (name === 'cli.js' || name === 'cli-fast.js') await fsp.copyFile(path.join(DIST, name), path.join(distDir, name))
+    else await fsp.symlink(path.join(DIST, name), path.join(distDir, name))
   }
   await fsp.writeFile(path.join(distDir, 'build-info.json'), JSON.stringify(info, null, 2))
   if (cliJs) await fsp.writeFile(path.join(distDir, 'cli.js'), cliJs)
   await fsp.symlink(path.join(REPO, 'package.json'), path.join(root, 'package.json'))
   return { distDir, root }
+}
+
+/** The stand-in for a build's compiled walnut file: this runtime running that build's dist. */
+async function walnutFileFor(dist: { distDir: string; root: string }): Promise<string> {
+  const file = path.join(dist.root, 'walnut')
+  await fsp.writeFile(file, [
+    '#!/bin/sh',
+    // `__selftest` is the compiled file's own command; a dist has none.
+    'if [ "$1" = __selftest ]; then echo \'{"ok":true}\'; exit 0; fi',
+    `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(dist.distDir, 'cli.js'))} "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 })
+  return file
 }
 
 describe('the Mac keeps its companion on its build (real launcher, real build)', () => {
@@ -113,10 +149,8 @@ describe('the Mac keeps its companion on its build (real launcher, real build)',
   let starts = 0
   let log = ''
   let idA = ''
-  let idB = ''
-  let idC = ''
-  let distB: { distDir: string; root: string }
-  let distC: { distDir: string; root: string }
+  let buildB: NonNullable<typeof h.build>
+  let buildC: NonNullable<typeof h.build>
 
   const box = { home: '', data: '' }
 
@@ -211,18 +245,16 @@ describe('the Mac keeps its companion on its build (real launcher, real build)',
     idA = buildIdOf(infoA)
     const infoB = { version: infoA.version, commit: 'e2eb00001', branch: 'main', builtAt: new Date().toISOString(), dirty: false }
     const infoC = { ...infoB, commit: 'e2ec00001' }
-    idB = buildIdOf(infoB)
-    idC = buildIdOf(infoC)
-    distB = await linkedDist(path.join(base, 'pkg-b'), infoB)
+    const distB = await linkedDist(path.join(base, 'pkg-b'), infoB)
     // C answers --version (the install's check) and never serves (the smoke boot's).
-    distC = await linkedDist(path.join(base, 'pkg-c'), infoC,
+    const distC = await linkedDist(path.join(base, 'pkg-c'), infoC,
       "if (process.argv.includes('--version')) { console.log('0.0.0'); process.exit(0) }\nconsole.error('build C does not serve'); process.exit(7)\n")
+    buildB = { id: buildIdOf(infoB), version: infoB.version, commit: infoB.commit, file: await walnutFileFor(distB) }
+    buildC = { id: buildIdOf(infoC), version: infoC.version, commit: infoC.commit, file: await walnutFileFor(distC) }
 
-    // The dependency set, installed by hand: a link to this tree's node_modules.
-    const pkg = await buildCompanionAppPackage({ platform: process.platform, arch: process.arch }, distB)
-    const deps = path.join(R, 'deps', pkg.companionDepsHash)
-    await fsp.mkdir(deps, { recursive: true })
-    await fsp.symlink(path.join(REPO, 'node_modules'), path.join(deps, 'node_modules'))
+    // The package's one dependency set (empty), marked installed: no package manager runs.
+    const deps = path.join(R, 'deps', EMPTY_DEPS_HASH)
+    await fsp.mkdir(path.join(deps, 'node_modules'), { recursive: true })
     await fsp.writeFile(path.join(deps, '.ready'), '')
 
     port = await freePort()
@@ -254,8 +286,8 @@ describe('the Mac keeps its companion on its build (real launcher, real build)',
   })
 
   it('a Mac on build B brings the box to B: upload, install, smoke, trial, confirm', async () => {
-    h.mine = idB
-    h.dist = distB
+    const idB = buildB.id
+    h.build = buildB
     const startsBefore = starts
     await tickCompanionBuild('retry')
     expect(companionBuildView(), log.slice(-4000)).toMatchObject({ state: 'current', mine: idB, theirs: idB })
@@ -265,14 +297,23 @@ describe('the Mac keeps its companion on its build (real launcher, real build)',
     expect(s.trial).toBeNull()
     // One restart into the trial; the box confirmed it itself.
     expect(starts - startsBefore).toBeGreaterThanOrEqual(1)
-    expect(fs.existsSync(path.join(R, 'app', idB, '.ready'))).toBe(true)
-    expect(log).toContain('[companion-launch]')
+    // The build is the walnut file and the shim the launcher starts it through.
+    const app = path.join(R, 'app', idB)
+    expect(fs.existsSync(path.join(app, '.ready'))).toBe(true)
+    expect(fs.readFileSync(path.join(app, 'walnut'), 'utf8')).toBe(fs.readFileSync(buildB.file, 'utf8'))
+    expect(fs.readFileSync(path.join(app, 'dist', 'cli.js'), 'utf8')).toContain('starts the compiled walnut file beside it')
+    // The launcher started B as its trial, and B confirmed itself. The box reports B
+    // as current once B writes it; the launcher logs the confirm on its next poll (2 s).
+    expect(log).toContain(`[companion-launch] trial ${idB}: start 1 of 2`)
+    await vi.waitFor(() => expect(log).toContain(`[companion-launch] trial ${idB} confirmed`), { timeout: 15_000, interval: 200 })
   }, 900_000)
 
   it('a restart of the box keeps B (current, not a trial)', async () => {
     const p = launcher!
     p.kill('SIGTERM')
+    const idB = buildB.id
     await waitFor('the box is back on B after a restart', (s) => s.running.id === idB && !s.running.trial && s.current === idB, 120_000)
+    expect(log).toContain(`[companion-launch] running current build ${idB}`)
     // The Mac sees nothing to do.
     await tickCompanionBuild('retry')
     expect(companionBuildView()).toMatchObject({ state: 'current', mine: idB })
@@ -281,8 +322,9 @@ describe('the Mac keeps its companion on its build (real launcher, real build)',
   it('a build that never serves is given up after its smoke boot; the box keeps B and the Mac does not try again', async () => {
     // A Mac changes its build only by restarting: the driver keeps its id per process.
     await _resetCompanionBuildForTesting()
-    h.mine = idC
-    h.dist = distC
+    const idB = buildB.id
+    const idC = buildC.id
+    h.build = buildC
     await tickCompanionBuild('retry')
     const view = companionBuildView()
     expect(view.state, JSON.stringify(view)).toBe('failed')

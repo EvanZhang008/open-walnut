@@ -18,6 +18,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   _setBoxHooksForTesting, boxBuildStatus, putPackageChunk, runningBuild, startActivate, startInstall, startTrialConfirm, installEnv, smokeRuntime,
+  dependencyInstallProblem,
 } from '../../src/core/companion-build/box.js'
 import { MAX_CHUNK_BYTES, MAX_PACKAGE_BYTES, type InstallRequest } from '../../src/core/companion-build/wire.js'
 
@@ -174,10 +175,22 @@ describe('the install environment', () => {
 })
 
 describe('the runtime a build is tried on', () => {
-  it('names the runtime a smoke boot ran on: bun for bun, else node', () => {
+  it('names the runtime a smoke boot ran on: bun for bun and for the walnut file, else node', () => {
     expect(smokeRuntime({ ...process.versions, bun: '1.4.4' } as NodeJS.ProcessVersions)).toBe('bun')
     const { bun: _bun, ...nodeOnly } = process.versions as NodeJS.ProcessVersions & { bun?: string }
     expect(smokeRuntime(nodeOnly as NodeJS.ProcessVersions)).toBe('node')
+  })
+
+  it('on Node installs only a build with no dependencies (the walnut file), and names the fix for one with them', () => {
+    const { bun: _bun, ...nodeOnly } = process.versions as NodeJS.ProcessVersions & { bun?: string }
+    const onNode = nodeOnly as NodeJS.ProcessVersions
+    const onBun = { ...process.versions, bun: '1.4.4' } as NodeJS.ProcessVersions
+    const none = { dependencies: {}, optionalDependencies: {} }
+    expect(dependencyInstallProblem(none, onNode)).toBeNull()
+    expect(dependencyInstallProblem(none, onBun)).toBeNull()
+    expect(dependencyInstallProblem({ dependencies: { yaml: '2.0.0' }, optionalDependencies: {} }, onBun)).toBeNull()
+    expect(dependencyInstallProblem({ dependencies: { yaml: '2.0.0' }, optionalDependencies: {} }, onNode)).toMatch(/runs Walnut on Node.*scripts\/cloud\/setup\.sh/)
+    expect(dependencyInstallProblem({ dependencies: {}, optionalDependencies: { sharp: '0.33.0' } }, onNode)).toMatch(/only bun installs/)
   })
 })
 

@@ -75,8 +75,10 @@ gives the companion any new power over the Mac or a host.
 /opt/walnut/                         root's tree (setup, deploy): the BASE build
   scripts/cloud/companion-launch.mjs the launcher systemd runs (as the service user)
 $HOME/.open-walnut-host/             the service user's, same layout as a host install
-  deps/<hash>/node_modules           one npm install per dependency set
-  app/<id>/dist  app/<id>/.ready     one directory per build
+  deps/<hash>/node_modules           one install per dependency set (empty for the file)
+  app/<id>/walnut  app/<id>/dist/cli.js  app/<id>/.ready  app/<id>/.runtime
+                                     one directory per build: the compiled walnut
+                                     file and the shim that starts it
   incoming/<id>.tgz(.part)           uploads, install scripts and logs
   companion/current                  the build the box runs (absent: the base)
   companion/trial  companion/attempts the build to try once, and how often it started
@@ -90,12 +92,17 @@ then the Mac only reads the box's build.
 
 ### The launcher
 
-A small Node script with no dependencies, in root's tree. On every start:
+A small script with no dependencies, in root's tree, run by the unit's runtime
+(node on a box set up before the move to bun, bun on a newer one). On every start:
 
 1. A `trial` with `attempts` under 2: count one more start and run the trial.
    Two starts that never confirmed: write `failed/<id>`, drop the trial.
-2. Otherwise `current`, when its directory is ready; otherwise the base.
-3. Run `node <dir>/dist/cli.js web --port 3456` with the unit's environment plus
+2. Otherwise `current`, when its directory is ready and it runs on this
+   launcher's runtime; otherwise the base. A build of the walnut file runs under
+   either; a dist runs only on the runtime its smoke boot passed on (`.runtime`;
+   none means node, the only one a box used before the record). A trial for
+   another runtime is given up.
+3. Run `<runtime> <dir>/dist/cli.js web --port 3456` with the unit's environment plus
    `WALNUT_COMPANION_LAUNCHER=1`, `WALNUT_COMPANION_BUILD=<id or base>`, and
    `WALNUT_COMPANION_TRIAL=1` for a trial. Forward SIGTERM, SIGINT and SIGHUP,
    and exit with the server's code (`Restart=always` starts the launcher again).
@@ -125,9 +132,12 @@ The Mac:
 - does nothing when the companion already runs its build id, when the box
   answers `accepts: false`, or when the user turned off `cloud_bridge.auto_update`;
 - never retries an id the box gave up, until its own build changes;
-- builds the companion package: the host package plus `dist/daemon-binaries` for
-  the box's platform and arch (the companion starts session daemons; a host
-  server does not).
+- builds the companion package (`src/core/companion-build/package.ts`): the
+  compiled walnut file for the box's target, the same file its host servers run
+  (`host-file.ts`), plus `dist/cli.js`, a plain-JS shim that starts it
+  (`shim.ts`). The file carries the session daemon (`walnut __daemon`). Every box
+  starts a build as `<runtime> dist/cli.js`, so a box from before the file (its
+  install check, smoke boot and launcher all on node) takes it unchanged.
 
 The Mac's Cloud Companion settings show one row for this: it runs this Mac's
 build; it is updating (and which step); the update failed and it keeps running

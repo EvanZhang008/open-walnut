@@ -131,6 +131,15 @@ export function withThisWalnutTunnel(
   return settings
 }
 
+/**
+ * The one source of this server's walnut file for a host's target (host-file.ts):
+ * the host servers, the session daemon a compiled Mac deploys to a host
+ * (providers/daemon-connection.ts), and the companion share its cache and batching.
+ */
+export function sharedHostFileSource(): HostFileSource {
+  return (fileSource ??= createHostFileSource({ cacheDir: path.join(WALNUT_HOME, 'cache', 'host-server') }))
+}
+
 export function getHostServerManager(): HostServerManager | null {
   if (CLOUD_MODE) return null
   if (manager) return manager
@@ -162,7 +171,7 @@ export function getHostServerManager(): HostServerManager | null {
       const { getExposeRuntime } = await import('../../web/expose-runtime.js')
       await getExposeRuntime()?.releaseTunnelPort(holder)
     },
-    hostFile: (fileSource ??= createHostFileSource({ cacheDir: path.join(WALNUT_HOME, 'cache', 'host-server') })),
+    hostFile: sharedHostFileSource(),
     stateFile: path.join(WALNUT_HOME, 'host-servers.json'),
     // Machine-local: local/ is never synced (another machine's counts would restart the hosts' tunnels).
     retryFile: path.join(WALNUT_HOME, 'local', 'host-server-tunnel-retries.json'),

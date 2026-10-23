@@ -43,12 +43,15 @@ breaking changes).
 - The setup and restore skills install Walnut with `install.sh`, and the README installs Claude
   Code with its own installer (`curl -fsSL https://claude.ai/install.sh | bash`), so no step a user
   takes needs npm.
-- The cloud companion builds and runs Walnut on bun: `scripts/cloud/setup.sh` builds with bun and
-  the service starts `bun dist/cli.js web`. Node stays on the box only for agent CLIs installed
-  from npm. A box set up before keeps a service that starts Walnut with node, which this release
-  cannot run on: run setup.sh on the box again when you update it. A Mac that runs the compiled
-  file cannot update its companion yet (Settings says so); a Mac running a built checkout still
-  can.
+- The cloud companion runs the compiled file too. The Mac sends its companion the same file its
+  host servers run, built for the box, with a small `dist/cli.js` that starts it, so a box of
+  any age takes it with the update path it already has: a box set up before keeps its service and
+  its launcher, on node, and moves to the file at the Mac's next update, with nothing to do on the
+  box. A Mac that runs the compiled file updates its companion like any other Mac.
+  `scripts/cloud/setup.sh` builds a new box's base tree with bun, and its service starts
+  `bun dist/cli.js web`; Node stays on the box only for agent CLIs installed from npm. A box whose
+  service moves from node to bun skips a build it got on node and runs its base tree until the Mac
+  sends the file.
 
 ## [0.6.19] - 2026-10-27
 

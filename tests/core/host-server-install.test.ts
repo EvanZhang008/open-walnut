@@ -145,6 +145,21 @@ describe('the companion\'s install script (a dist build and its dependencies, by
     expect(fs.readFileSync(path.join(root, 'incoming', 'b1.version'), 'utf8').trim()).toBe('BUN_BE_BUN=1')
   })
 
+  it('an empty dependency set runs no package manager, so a server on Node installs the walnut file\'s package too', () => {
+    fakeBun('echo "the package manager ran" >&2; false')
+    makeBuild('f1')
+    const text = installScript(plan('f1', { dependencies: {}, optionalDependencies: {} }))
+    expect(text).not.toMatch(/"\$BUN" install/)
+    fs.writeFileSync(path.join(home, 'f1.sh'), text)
+    const r = sh(`sh "$HOME/f1.sh"`)
+    expect(r.out).toContain('installed')
+    expect(r.out).not.toContain('the package manager ran')
+    const root = path.join(home, '.open-walnut-host')
+    expect(fs.existsSync(path.join(root, 'deps', 'deps01', '.ready'))).toBe(true)
+    expect(fs.statSync(path.join(root, 'deps', 'deps01', 'node_modules')).isDirectory()).toBe(true)
+    expect(fs.existsSync(path.join(root, 'app', 'f1', '.ready'))).toBe(true)
+  })
+
   it('with optional dependencies, bun installs them (no --omit=optional) and the deps package names them', () => {
     makeBuild('b1')
     fs.writeFileSync(path.join(home, 'b1.sh'), installScript(plan('b1', { optionalDependencies: { fsevents: '^2.3.3' } })))

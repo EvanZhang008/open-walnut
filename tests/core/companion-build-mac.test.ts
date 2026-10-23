@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   endpoint: null as { url: string; token: string } | null,
   autoUpdate: true as boolean | undefined,
   mine: '0.6.14-5408d5875',
+  mineWhy: 'This server runs from source, not from a build, so it has no build to send to a host.',
   pkgThrows: null as string | null,
   builds: 0,
   tgz: Buffer.alloc(0),
@@ -29,15 +30,18 @@ vi.mock('../../src/core/cloud-ingest.js', () => ({
   cloudSessionEndpoint: async () => h.endpoint,
   recoverCloudSessionCredential: async (token: string) => { h.recovered.push(token) },
 }))
-vi.mock('../../src/core/host-server/package.js', () => ({
-  runningBuildId: async () => h.mine,
-  buildCompanionAppPackage: async () => {
+vi.mock('../../src/core/companion-build/package.js', async (importOriginal) => ({
+  boxRunsPackage: (await importOriginal<typeof import('../../src/core/companion-build/package.js')>()).boxRunsPackage,
+  companionBuildId: async () => {
+    if (!h.mine) throw new Error(h.mineWhy)
+    return h.mine
+  },
+  buildCompanionPackage: async () => {
     h.builds++
     if (h.pkgThrows) throw new Error(h.pkgThrows)
     return {
-      id: h.mine, version: '0.6.14', dependencies: { express: '^5.1.0' }, depsHash: 'aaaaaaaaaaaaaaaa',
-      optionalDependencies: { fsevents: '^2.3.0' }, companionDepsHash: 'bbbbbbbbbbbbbbbb',
-      appPackageJson: '{"name":"open-walnut"}', tgz: h.tgz,
+      id: h.mine, version: '0.6.14', commit: '5408d5875', dependencies: {}, optionalDependencies: {},
+      companionDepsHash: 'bbbbbbbbbbbbbbbb', appPackageJson: '{"name":"open-walnut"}', tgz: h.tgz, fileSha256: 'c'.repeat(64),
     }
   },
 }))
@@ -85,6 +89,8 @@ interface Box {
   puts: Array<{ offset: number; bytes: number }>
   installs: Array<Record<string, unknown>>
   activates: number
+  /** The runtime the box reports (process.version on the box). */
+  node: string
 }
 
 let box: Box
@@ -98,7 +104,7 @@ function freshBox(): Box {
     current: null, failed: [], upload: null, hideUpload: false, install: null, activate: null,
     installPolls: 2, installFails: null, ready: new Set(), activatePolls: 2, activateFails: null,
     alwaysMismatchAt: null, dropPut: null, dropRun: 1,
-    gets: 0, puts: [], installs: [], activates: 0,
+    gets: 0, puts: [], installs: [], activates: 0, node: 'v24.3.0',
   }
 }
 
@@ -138,7 +144,7 @@ function status(): BoxBuildStatus {
     running: box.running, current: box.current, trial: null, failed: box.failed,
     upload: u && !box.hideUpload ? { id: u.id, received: u.received, size: u.size, complete: u.complete } : null,
     install: box.install, activate: box.activate,
-    platform: 'linux', arch: 'arm64', node: 'v24.3.0', freeBytes: 10 * 1024 ** 3,
+    platform: 'linux', arch: 'arm64', node: box.node, freeBytes: 10 * 1024 ** 3,
   }
 }
 
@@ -258,14 +264,30 @@ describe('tickCompanionBuild', () => {
     expect(h.builds).toBe(0)
   })
 
+  it('sends nothing to a box whose runtime cannot start the package, and goes on once the box is set up again', async () => {
+    box.node = 'v14.21.3'
+    await tickCompanionBuild('probe')
+    const view = companionBuildView()
+    expect(view).toMatchObject({ state: 'failed', theirs: OLD })
+    expect(view.message).toMatch(/runs Node v14\.21\.3, and the build this Mac sends starts with Node 16 or newer, or bun/)
+    expect(box.puts).toEqual([])
+    expect(h.builds).toBe(0)
+    // Not remembered as given up: the box moved to bun, and the next round sends the build.
+    box.node = 'v24.3.0'
+    await tickCompanionBuild('probe')
+    expect(companionBuildView()).toMatchObject({ state: 'current', mine: h.mine })
+    expect(h.builds).toBe(1)
+  })
+
   it('uploads in order, installs, activates, and ends on the new build', async () => {
     await tickCompanionBuild('probe')
     expect(box.puts.map((p) => p.offset)).toEqual([0, 4096, 8192])
     expect(box.puts.map((p) => p.bytes)).toEqual([4096, 4096, 10_000 - 8192])
     expect(Buffer.concat(box.upload!.data).equals(h.tgz)).toBe(true)
+    // The walnut file needs nothing installed beside it: one empty dependency set for every build.
     expect(box.installs).toEqual([{
-      id: h.mine, depsHash: 'bbbbbbbbbbbbbbbb', dependencies: { express: '^5.1.0' },
-      optionalDependencies: { fsevents: '^2.3.0' }, appPackageJson: '{"name":"open-walnut"}',
+      id: h.mine, depsHash: 'bbbbbbbbbbbbbbbb', dependencies: {},
+      optionalDependencies: {}, appPackageJson: '{"name":"open-walnut"}',
     }])
     expect(box.activates).toBe(1)
     expect(companionBuildView()).toMatchObject({ state: 'current', mine: h.mine, theirs: h.mine })
@@ -407,6 +429,14 @@ describe('tickCompanionBuild', () => {
     await tickCompanionBuild('probe')
     expect(companionBuildView()).toMatchObject({ state: 'off', autoUpdate: false })
     expect(box.gets).toBe(0)
+  })
+
+  it('is off, saying why, when this Mac has no walnut file of its build to send', async () => {
+    h.mine = ''
+    await tickCompanionBuild('probe')
+    expect(companionBuildView()).toMatchObject({ state: 'off', mine: null, message: h.mineWhy })
+    expect(box.puts).toEqual([])
+    expect(h.builds).toBe(0)
   })
 
   it('is no_companion without an endpoint', async () => {
