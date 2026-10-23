@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 // @ts-expect-error: a .mjs build script without types
-import { assertNoBuildPaths, runtimeDirname } from '../../scripts/binary-build-checks.mjs'
+import { assertNoBuildPaths, runtimeDirname, treeDirOf } from '../../scripts/binary-build-checks.mjs'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -48,6 +48,30 @@ describe('runtimeDirname', () => {
   it('leaves a module without __dirname, and longer names, untouched', () => {
     expect(runtimeDirname('const a = 1', 'node_modules/x')).toBe('const a = 1')
     expect(runtimeDirname('const __dirname_x = 1; f(__dirname_x)', 'node_modules/x')).toBe('const __dirname_x = 1; f(__dirname_x)')
+  })
+})
+
+describe('treeDirOf', () => {
+  it('names the package dir in the runtime tree, whatever checkout the module resolved into', () => {
+    // A deploy clone links each node_modules entry to the checkout's, so bun hands the
+    // plugin the checkout's real path: outside the repo being built.
+    expect(treeDirOf('/Users/acme/src/walnut/node_modules/tiktoken/lite/tiktoken.cjs')).toBe('node_modules/tiktoken/lite')
+    expect(treeDirOf('/tmp/open-walnut-build.abc/node_modules/pino/lib/tools.js')).toBe('node_modules/pino/lib')
+    expect(treeDirOf('/x/node_modules/@scope/pkg/dist/a.js')).toBe('node_modules/@scope/pkg/dist')
+    // A nested copy: the dir of the package the module belongs to.
+    expect(treeDirOf('/x/node_modules/pino/node_modules/thread-stream/index.js')).toBe('node_modules/thread-stream')
+  })
+
+  it('never yields a path of the build machine', () => {
+    const dir = treeDirOf(path.join(os.homedir(), 'checkout', 'node_modules', 'tiktoken', 'lite', 'tiktoken.cjs'))
+    expect(dir).toBe('node_modules/tiktoken/lite')
+    const file = tmpFile(runtimeDirname('module.exports = __dirname', dir))
+    expect(() => assertNoBuildPaths(file, [os.homedir()])).not.toThrow()
+  })
+
+  it('answers null outside node_modules', () => {
+    expect(treeDirOf('/repo/src/a.js')).toBeNull()
+    expect(treeDirOf('/repo/node_modules/a.js')).toBeNull()
   })
 })
 

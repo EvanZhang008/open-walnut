@@ -14,6 +14,21 @@ export function runtimeDirname(source, rel) {
 }
 
 /**
+ * The dir of a package module inside the runtime tree, `node_modules/<pkg>/<sub>`,
+ * from the LAST node_modules of its path; null outside node_modules. Read from the
+ * path, never relative to the repo: a build whose node_modules entries are links
+ * (scripts/deploy-committed.sh, src/core/host-server/host-file-build.ts) resolves
+ * modules to the linked checkout, outside the repo, and a repo-relative path then
+ * names that checkout (`../../walnut/node_modules/...`, the builder's home inside).
+ */
+export function treeDirOf(file) {
+  const parts = path.dirname(file).split(/[\\/]+/)
+  const at = parts.lastIndexOf('node_modules')
+  if (at === -1 || at === parts.length - 1) return null
+  return parts.slice(at).join('/')
+}
+
+/**
  * Fail the build when the file carries a path of the machine that built it: such a
  * path exists nowhere else, so whatever reads it works only where it was built.
  */
