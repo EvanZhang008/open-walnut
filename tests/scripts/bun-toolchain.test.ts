@@ -4,6 +4,7 @@
  * pin what a later edit could silently undo (a workflow back on `npm ci`, a
  * setup-bun on `latest`, a dependency bump that leaves its patch behind).
  */
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -61,9 +62,15 @@ describe('lockfiles', () => {
     for (const dir of LOCK_DIRS) {
       expect(fs.existsSync(path.join(REPO, dir, 'bun.lock')), `${dir}/bun.lock`).toBe(true)
       expect(fs.existsSync(path.join(REPO, dir, 'bun.lockb')), `${dir}/bun.lockb`).toBe(false)
-      expect(fs.existsSync(path.join(REPO, dir, 'package-lock.json')), `${dir}/package-lock.json`).toBe(false)
       expect(readBunLock(path.join(REPO, dir, 'bun.lock')).packages).toBeTypeOf('object')
     }
+    // Tracked, not on disk: npm writes an (ignored) package-lock.json when a checkout
+    // is installed with it anyway, and that must not fail anyone's test run.
+    // An inherited GIT_DIR (git exports one while it runs hooks) would answer for another repo.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')))
+    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: REPO, encoding: 'utf8', env }).split('\0')
+    expect(tracked.filter((f) => /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml)$/.test(f))).toEqual([])
+    for (const dir of LOCK_DIRS) expect(tracked, dir).toContain(dir === '.' ? 'bun.lock' : `${dir}/bun.lock`)
   })
 
   it('the root installs into one flat node_modules', () => {
