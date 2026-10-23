@@ -11,6 +11,7 @@
  */
 
 import { getBuildInfo } from '../../lib/build-info.js'
+import { runtimeVersion } from '../../lib/runtime.js'
 import { redactSensitiveText } from '../../logging/index.js'
 import { HOST_RUNTIME_MESSAGES, type HostPreflightResult } from '../../providers/host-runtime-core.js'
 import { LOGIN_SHELL_TIMEOUT_MS, sessionPath, summarizePath } from './local-probes.js'
@@ -143,7 +144,7 @@ async function collectLocal(p: DiagnosticsProbes, env: Env, b: LocalBudgets, war
   const dtach = await bounded(warnings, 'dtach', b.ms, () => p.dtach(pathStr), dtachOutcome)
   const [sqlite, webAssets] = await sideProbes
   return {
-    node: { version: process.version, path: process.execPath },
+    runtime: { version: runtimeVersion(), path: process.execPath },
     claude: claudeFrom(pre, fallbackPath, unknown),
     loginShellPath: login ? summarizePath(login) : null,
     processPath: summarizePath(env.PATH),

@@ -1,6 +1,6 @@
 /**
  * `open-walnut doctor` (also `walnut doctor`): print the paste-ready report of
- * which build, claude, node and PATH this machine runs and what every host can
+ * which build, claude, runtime and PATH this machine runs and what every host can
  * run. Asks the running server first, because only the server knows its hosts;
  * with no server up it collects this machine's half itself and says so.
  *

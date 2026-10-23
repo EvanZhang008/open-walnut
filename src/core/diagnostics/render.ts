@@ -186,7 +186,7 @@ export function renderDiagnosticsText(r: DiagnosticsReport, opts: RenderOptions 
   }
   const s = r.server
   const serverValue = s
-    ? [`pid ${s.pid}`, `port ${s.port ?? '?'}`, `node ${s.node}`, `${s.platform}/${s.arch}`, `nice ${s.nice ?? '?'}`, `up ${formatUptime(s.uptimeMs)}`, s.mode].join('  ')
+    ? [`pid ${s.pid}`, `port ${s.port ?? '?'}`, s.runtime, `${s.platform}/${s.arch}`, `nice ${s.nice ?? '?'}`, `up ${formatUptime(s.uptimeMs)}`, s.mode].join('  ')
     : 'not running (collected by the CLI)'
   const l = r.local
   const out = [
@@ -197,7 +197,7 @@ export function renderDiagnosticsText(r: DiagnosticsReport, opts: RenderOptions 
   ]
   if (s) out.push(line('data dir', s.dataDir))
   out.push(
-    line('node', `${l.node.version}  ${l.node.path}`),
+    line('runtime', `${l.runtime.version}  ${l.runtime.path}`),
     line('claude', claudeValue(r)),
     line('shell', l.shell ?? 'unknown'),
     line('login PATH', pathValue(l.loginShellPath)),

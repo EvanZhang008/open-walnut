@@ -1,7 +1,7 @@
 /**
  * "Copy diagnostics": puts the redacted `open-walnut doctor` text on the
  * clipboard (GET /api/diagnostics?format=text, redacted server-side), so a
- * support thread gets build, claude, node, PATH and hosts in one paste.
+ * support thread gets build, claude, runtime, PATH and hosts in one paste.
  * Two looks, one behaviour: a muted inline link on the Settings build line, and
  * a regular Settings button in the Remote Hosts header (hosts section only).
  *

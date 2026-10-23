@@ -29,11 +29,11 @@ function report(): DiagnosticsReport {
       packageUrl: 'https://www.npmjs.com/package/open-walnut',
     },
     server: {
-      node: 'v24.1.0', platform: 'darwin', arch: 'arm64', pid: 4242, nice: 0, port: 3456,
+      runtime: 'bun 1.4.4', platform: 'darwin', arch: 'arm64', pid: 4242, nice: 0, port: 3456,
       dataDir: '/Users/alice/.open-walnut', uptimeMs: (3 * 3600 + 12 * 60) * 1000, mode: 'primary',
     },
     local: {
-      node: { version: 'v24.1.0', path: '/Users/alice/.nvm/versions/node/v24.1.0/bin/node' },
+      runtime: { version: 'bun 1.4.4', path: '/Users/alice/.bun/bin/bun' },
       claude: { found: true, path: '/Users/alice/.local/bin/claude', version: '2.1.280', kind: 'native', auth: 'ok', authDetail: 'a Claude account', versionOk: true, minVersion: '2.1.280' },
       loginShellPath: { entries: ['/Users/alice/.local/bin', '/opt/homebrew/bin', '/usr/bin'], count: 14 },
       processPath: { entries: ['/usr/bin', '/bin'], count: 2 },
@@ -77,9 +77,9 @@ function report(): DiagnosticsReport {
 const GOLDEN = `Open Walnut doctor (server, 2026-09-24T12:00:00.000Z)
 build      0.4.5  commit f19a59b8+dirty  branch main  built 2026-09-24T11:00:00.000Z
 update     0.4.6 is published  run: npm install -g open-walnut@latest  checked 2026-09-24T11:30:00.000Z
-server     pid 4242  port 3456  node v24.1.0  darwin/arm64  nice 0  up 3h 12m  primary
+server     pid 4242  port 3456  bun 1.4.4  darwin/arm64  nice 0  up 3h 12m  primary
 data dir   /Users/alice/.open-walnut
-node       v24.1.0  /Users/alice/.nvm/versions/node/v24.1.0/bin/node
+runtime    bun 1.4.4  /Users/alice/.bun/bin/bun
 claude     2.1.280  native  signed-in (a Claude account)  /Users/alice/.local/bin/claude
 shell      /bin/zsh
 login PATH 14 entries  /Users/alice/.local/bin:/opt/homebrew/bin:/usr/bin (+11 more)
@@ -184,19 +184,19 @@ describe('redactDiagnostics', () => {
 
   it('does not treat a shared home directory as a person, and leaves the input untouched', () => {
     const r = report()
-    r.local.node.path = '/Users/Shared/node/bin/node'
+    r.local.runtime.path = '/Users/Shared/bun/bin/bun'
     const red = redactDiagnostics(r)
-    expect(red.local.node.path).toBe('/Users/Shared/node/bin/node')
+    expect(red.local.runtime.path).toBe('/Users/Shared/bun/bin/bun')
     expect(r.server?.dataDir).toBe('/Users/alice/.open-walnut')
   })
 
   it('masks Windows and /home paths', () => {
     const r = report()
     r.hosts = []
-    r.local.node.path = 'C:\\Users\\bob\\node\\node.exe'
+    r.local.runtime.path = 'C:\\Users\\bob\\bun\\bun.exe'
     r.local.shell = '/home/carol/bin/zsh'
     const red = redactDiagnostics(r)
-    expect(red.local.node.path).toBe('C:\\Users\\\u2026\\node\\node.exe')
+    expect(red.local.runtime.path).toBe('C:\\Users\\\u2026\\bun\\bun.exe')
     expect(red.local.shell).toBe('/home/\u2026/bin/zsh')
   })
 })

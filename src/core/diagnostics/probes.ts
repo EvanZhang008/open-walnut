@@ -8,6 +8,7 @@
 
 import os from 'node:os'
 import { getSelfApiRoot } from '../../lib/self-api-root.js'
+import { runtimeVersion } from '../../lib/runtime.js'
 import { CLOUD_MODE, CONFIG_FILE, TMP_DIR, WALNUT_HOME } from '../../constants.js'
 import { DEFAULT_MODEL } from '../../model/providers/defaults.js'
 import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
@@ -71,7 +72,7 @@ export function defaultServer(): ServerDiagnostics {
   let nice: number | null = null
   try { nice = os.getPriority() } catch { /* diagnostics only */ }
   return {
-    node: process.version,
+    runtime: runtimeVersion(),
     platform: process.platform,
     arch: process.arch,
     pid: process.pid,

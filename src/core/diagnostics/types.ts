@@ -1,7 +1,7 @@
 /**
  * The `open-walnut doctor` report: ONE artifact that answers the questions a
  * support thread otherwise asks one at a time (which build, which claude, which
- * node, which PATH, what each host can run). Built by collect.ts, rendered by
+ * runtime, which PATH, what each host can run). Built by collect.ts, rendered by
  * render.ts, served by GET /api/diagnostics and printed by `open-walnut doctor`.
  *
  * Contract: no secrets by construction. Every field is picked from an allowlist
@@ -21,7 +21,8 @@ export interface PathSummary {
 }
 
 export interface ServerDiagnostics {
-  node: string
+  /** The runtime the server runs on (`bun 1.4.4`). */
+  runtime: string
   platform: string
   arch: string
   pid: number
@@ -55,8 +56,8 @@ export interface LocalClaudeDiagnostics {
 }
 
 export interface LocalDiagnostics {
-  /** The node running the collector (the server, or the CLI when no server is up). */
-  node: { version: string; path: string }
+  /** The runtime running the collector (the server, or the CLI when no server is up): `bun 1.4.4` and its executable (the walnut file when compiled). */
+  runtime: { version: string; path: string }
   claude: LocalClaudeDiagnostics
   /** PATH captured from the user's login shell, the one sessions start from. */
   loginShellPath: PathSummary | null

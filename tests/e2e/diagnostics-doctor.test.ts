@@ -48,6 +48,9 @@ describe('GET /api/diagnostics on a real server', () => {
     expect(r.collector).toBe('server')
     expect(r.server).toMatchObject({ port, pid: process.pid, dataDir: WALNUT_HOME })
     expect(r.local.sqliteOk).toBe(true)
+    // The runtime is bun, named as bun: process.version on bun is the Node it imitates.
+    expect(r.server?.runtime).toBe(`bun ${process.versions.bun}`)
+    expect(r.local.runtime).toEqual({ version: `bun ${process.versions.bun}`, path: process.execPath })
     expect(r.local.processPath.count).toBeGreaterThan(0)
     expect(r.config?.searchDisabled).toBe(true)
     expect(Array.isArray(r.hosts)).toBe(true)
@@ -60,6 +63,7 @@ describe('GET /api/diagnostics on a real server', () => {
     expect(text.startsWith('Open Walnut doctor (server, ')).toBe(true)
     expect(text).toContain(`port ${port}`)
     expect(text).toContain('sqlite     ok')
+    expect(text).toContain(`runtime    bun ${process.versions.bun}  `)
     const user = os.userInfo().username
     if (user.length > 2) expect(text).not.toContain(`/Users/${user}/`)
 
