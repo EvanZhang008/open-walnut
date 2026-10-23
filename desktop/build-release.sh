@@ -263,32 +263,8 @@ if [ -n "${WALNUT_APP_RUNTIME:-}" ]; then
 fi
 codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 
-# notarize <file>: submit to Apple's notary service and wait; print its log and
-# fail when it is not accepted.
-notarize() {
-    local file="$1" out id
-    out=$(xcrun notarytool submit "$file" --key "$WALNUT_NOTARY_KEY" --key-id "$WALNUT_NOTARY_KEY_ID" \
-        --issuer "$WALNUT_NOTARY_ISSUER" --wait --timeout 45m --output-format json) || true
-    echo "$out"
-    case "$out" in
-        *'"status":"Accepted"'*) ;;
-        *'Timeout of'*)
-            # Apple is still working on it, which is not a rejection: a team's
-            # first submissions can take hours (2026-10-11: over an hour), later
-            # ones minutes. Run the job again once `notarytool info <id>` says Accepted.
-            id=$(printf '%s' "$out" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-            echo "::error::Apple had not finished notarizing $(basename "$file") after 45 minutes (submission $id, not rejected). Run this job again once \`xcrun notarytool info $id\` says Accepted." >&2
-            return 1 ;;
-        *)
-            id=$(printf '%s' "$out" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-            if [ -n "$id" ]; then
-                xcrun notarytool log "$id" --key "$WALNUT_NOTARY_KEY" \
-                    --key-id "$WALNUT_NOTARY_KEY_ID" --issuer "$WALNUT_NOTARY_ISSUER" || true
-            fi
-            echo "Notarization of $(basename "$file") was not accepted." >&2
-            return 1 ;;
-    esac
-}
+# notarize <file>: submit, wait, fail unless accepted (desktop/notarize.sh).
+source "$SCRIPT_DIR/notarize.sh"
 NOTARIZE=""
 if [ -n "${WALNUT_NOTARY_KEY:-}" ]; then
     [ -n "$SIGNED_WITH" ] || { echo "Notarization needs a Developer ID signature." >&2; exit 1; }

@@ -376,7 +376,8 @@ describe('the Mac app', () => {
   it('the release build signs for notarization, and claims what its usage strings promise', () => {
     const build = read('desktop/build-release.sh')
     expect(build).toContain('codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS"')
-    expect(build).toMatch(/xcrun notarytool submit "\$file"/)
+    expect(build).toContain('source "$SCRIPT_DIR/notarize.sh"')
+    expect(read('desktop/notarize.sh')).toMatch(/xcrun notarytool submit "\$file"/)
     expect(build).toContain('xcrun stapler staple "$APP_BUNDLE"')
     expect(build).toContain('xcrun stapler staple "$DMG_OUT"')
     // Never an Apple Development certificate for other people's Macs.
