@@ -18,6 +18,22 @@ function formatTime(hour: number, minute: number): string {
   return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
+/**
+ * The schedule's own zone, short ("UTC", "GMT+8"), when it is not the viewer's: the
+ * hours in a cron expr are that zone's, while "Next run" is shown in the viewer's.
+ */
+function foreignZone(tz: string | undefined): string | null {
+  if (!tz) return null;
+  try {
+    if (tz === Intl.DateTimeFormat().resolvedOptions().timeZone) return null;
+    const part = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
+      .formatToParts(new Date()).find((p) => p.type === 'timeZoneName');
+    return part?.value || tz;
+  } catch {
+    return tz;
+  }
+}
+
 /** Describe a 5-field cron expr in plain English; null if it's not a simple daily/weekly pattern. */
 function describeCronExpr(expr: string): string | null {
   const parts = expr.trim().split(/\s+/);
@@ -57,7 +73,9 @@ export function describeSchedule(schedule: RoutineSchedule): string {
     const hours = mins / 60;
     return Number.isInteger(hours) ? `Every ${hours} hour${hours > 1 ? 's' : ''}` : `Every ${mins} min`;
   }
-  return describeCronExpr(schedule.expr) ?? `Cron: ${schedule.expr}`;
+  const zone = foreignZone(schedule.tz);
+  const said = describeCronExpr(schedule.expr) ?? `Cron: ${schedule.expr}`;
+  return zone ? `${said} ${zone}` : said;
 }
 
 export function describeNextRun(state: RoutineState | undefined): string | null {

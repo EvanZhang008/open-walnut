@@ -67,6 +67,25 @@ describe('describeSchedule for an interval', () => {
   });
 });
 
+describe('describeSchedule for a cron in another zone', () => {
+  // The expr's hours are its zone's, while "Next run" is the viewer's: a 9:00 UTC
+  // routine read "Every day at 9:00 AM" beside "next run tomorrow at 2:00 am".
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const away = here === 'UTC' ? 'Asia/Shanghai' : 'UTC'
+  const short = away === 'UTC' ? 'UTC' : 'GMT+8'
+  it('names the zone when it is not the viewer\'s', () => {
+    expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *', tz: away })).toMatch(new RegExp(`^Every day at 9:00\\sAM ${short}$`))
+    expect(describeSchedule({ kind: 'cron', expr: '5 4 1 * *', tz: away })).toBe(`Cron: 5 4 1 * * ${short}`)
+  })
+  it('says nothing more in the viewer\'s own zone, or with no zone', () => {
+    expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *', tz: here })).toMatch(/^Every day at 9:00\sAM$/)
+    expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *' })).toMatch(/^Every day at 9:00\sAM$/)
+  })
+  it('an unknown zone is named as written', () => {
+    expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *', tz: 'Mars/Olympus' })).toMatch(/Mars\/Olympus$/)
+  })
+})
+
 describe('the trigger audit trail as sentences', () => {
   it('a run the daemon had to repair says so after its verdict', () => {
     const warnings = ['items[0].id was 490 chars (over 200); the daemon shortened it']

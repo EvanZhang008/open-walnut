@@ -138,7 +138,7 @@ test('a routine whose clock is on a host names it on its card and on its task', 
     await expect(cliLine.locator('code')).toHaveText(`clock @ ${HOST}`)
     await expect(cliCard.getByTestId('routine-clock-wait')).toHaveText(new RegExp(`^Due 1\\dm ago: waiting on ${HOST} for this Mac to start it$`))
     // Its slot is past: the timing line names no next run beside it.
-    await expect(cliCard.locator('.cron-job-desc')).toHaveText('Every day at 9:00 AM')
+    await expect(cliCard.locator('.cron-job-desc')).toHaveText(/^Every day at 9:00\sAM( UTC)?$/)
     await expect(cliLine).toHaveAttribute('title', `Its clock runs on ${HOST}, where its work runs. A run that comes due while this Mac sleeps waits there, and this Mac starts it when it is back.`)
     await cliCard.scrollIntoViewIfNeeded()
     await shot(cliCard, 'routine-card-clock-waiting')
