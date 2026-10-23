@@ -63,37 +63,17 @@ refuse_prod() {
 # For every command, before anything runs: `stop` and the reset before each launch
 # signal whatever listens on PORT, so a 3456 here would reach production.
 refuse_prod
-# Sets BUN to the first bun of the version package.json pins (packageManager) or
-# newer, in the order scripts/dev-prod.sh uses. Exits naming bun when there is none,
-# before the sandbox is wiped or anything is built.
+# Sets BUN to a bun of the version package.json pins (packageManager) or newer
+# (scripts/lib/find-bun.sh, as scripts/dev-prod.sh does). Exits naming bun when
+# there is none, before the sandbox is wiped or anything is built.
+# shellcheck source=lib/find-bun.sh
+. "$HERE/scripts/lib/find-bun.sh"
 need_bun() {
-  local pin cand v dir seen="" tried="|"
-  local -a cands=()
-  pin="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$HERE/package.json" 2>/dev/null | head -n 1)"
-  if [ -n "${WALNUT_BUN:-}" ]; then cands+=("$WALNUT_BUN"); fi
-  local IFS=:
-  for dir in $PATH; do
-    if [ -n "$dir" ]; then cands+=("$dir/bun"); fi
-  done
-  unset IFS
-  cands+=("$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun)
-  for cand in "${cands[@]}"; do
-    [[ "$cand" == /* && -x "$cand" && ! -d "$cand" ]] || continue
-    [[ "$tried" != *"|$cand|"* ]] || continue
-    tried="$tried$cand|"
-    v="$("$cand" --version 2>/dev/null || true)"
-    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
-    v="${BASH_REMATCH[0]}"
-    # Sorted by number the older one comes first: when that is the pin, this one is new enough.
-    if [ -z "$pin" ] || [ "$(printf '%s\n%s\n' "$pin" "$v" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)" = "$pin" ]; then
-      BUN="$cand"
-      return 0
-    fi
-    seen="${seen:+$seen, }$v at $cand"
-  done
-  echo "walnut-sandbox: needs bun ${pin:-(any version)} or newer (package.json packageManager), and found none." >&2
-  if [ -n "$seen" ]; then echo "walnut-sandbox: found only: $seen." >&2; fi
-  echo "walnut-sandbox: install it with: curl -fsSL https://bun.sh/install | bash   (or point WALNUT_BUN at one)" >&2
+  if walnut_find_bun "$HERE"; then
+    BUN="$BUN_BIN"
+    return 0
+  fi
+  echo "walnut-sandbox: $(walnut_bun_missing)" >&2
   exit 2
 }
 build_once() {

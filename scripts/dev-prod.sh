@@ -338,61 +338,12 @@ if [[ "$RUNTIME" != "file" ]]; then
   exit 1
 fi
 
-# The bun package.json pins (packageManager "bun@X.Y.Z"), or empty.
-bun_pin() {
-  sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' \
-    "$REPO_ROOT/package.json" 2>/dev/null | head -n 1
-  return 0
-}
-
-# True when version $1 is $2 or newer (both X.Y.Z).
-version_at_least() {
-  local IFS=. i
-  local -a a b
-  read -r -a a <<< "$1"
-  read -r -a b <<< "$2"
-  for i in 0 1 2; do
-    if (( 10#${a[i]:-0} != 10#${b[i]:-0} )); then
-      (( 10#${a[i]:-0} > 10#${b[i]:-0} ))
-      return
-    fi
-  done
-  return 0
-}
-
-# A bun of the pinned version or newer: $WALNUT_BUN, PATH, then the usual
-# install places (the same order as src/core/host-server/host-file-build.ts).
-# The compiled file carries the runtime of the bun that built it, so an older
-# bun would ship an older runtime than the code was written for. Sets BUN_BIN
-# and BUN_VERSION (empty when none fits) and BUN_SEEN (what else was found).
-find_bun() {
-  local pin cand v dir tried="|"
-  local -a cands=()
-  pin="$(bun_pin)"
-  BUN_BIN="" BUN_VERSION="" BUN_SEEN=""
-  if [[ -n "${WALNUT_BUN:-}" ]]; then cands+=("$WALNUT_BUN"); fi
-  local IFS=:
-  for dir in $PATH; do
-    if [[ -n "$dir" ]]; then cands+=("$dir/bun"); fi
-  done
-  unset IFS
-  cands+=("$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun)
-  for cand in "${cands[@]}"; do
-    [[ "$cand" == /* && -x "$cand" && ! -d "$cand" ]] || continue
-    [[ "$tried" != *"|$cand|"* ]] || continue
-    tried="$tried$cand|"
-    v="$("$cand" --version 2>/dev/null || true)"
-    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
-    v="${BASH_REMATCH[0]}"
-    if [[ -z "$pin" ]] || version_at_least "$v" "$pin"; then
-      BUN_BIN="$cand"
-      BUN_VERSION="$v"
-      return 0
-    fi
-    BUN_SEEN="${BUN_SEEN:+$BUN_SEEN, }$v at $cand"
-  done
-  return 0
-}
+# A bun of the pinned version or newer (scripts/lib/find-bun.sh, shared by the
+# repo's scripts): the compiled file carries the runtime of the bun that built
+# it, so an older bun would ship an older runtime than the code was written for.
+# Sets BUN_BIN, BUN_VERSION, BUN_PIN and BUN_SEEN.
+# shellcheck source=lib/find-bun.sh
+. "$REPO_ROOT/scripts/lib/find-bun.sh"
 
 # The release target of THIS machine (scripts/build-binary.mjs TARGETS), or
 # nothing when no compiled file is built for it. A shell under Rosetta reports
@@ -425,7 +376,7 @@ self_target() {
   printf '%s-%s' "$os" "$arch"
 }
 
-find_bun
+walnut_find_bun "$REPO_ROOT" || true
 # This machine's target: the file this deploy builds and serves, and the one a
 # rollback starts from the last-known-good build.
 MACHINE_TARGET="$(self_target)"
@@ -456,7 +407,7 @@ lkg_file_desc() {
 }
 
 if [[ -z "$BUN_BIN" ]]; then
-  echo "Building the compiled walnut file needs bun $(bun_pin) or newer (package.json packageManager)." >&2
+  echo "Building the compiled walnut file needs bun $BUN_PIN or newer (package.json packageManager)." >&2
   if [[ -n "$BUN_SEEN" ]]; then echo "Found only: $BUN_SEEN." >&2; fi
   echo "Put a newer bun first on PATH or set WALNUT_BUN to it (install: curl -fsSL https://bun.sh/install | bash)." >&2
   exit 1

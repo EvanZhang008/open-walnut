@@ -12,8 +12,9 @@
 # `launchctl submit`: a submitted job is KeepAlive and relaunches forever.
 # The agents run a COPY of the code under Application Support, so edits in
 # this shared worktree never change a running monitor until the next install.
-# They run on bun: BRIDGE_MONITOR_BUN, else the first of `bun` on PATH,
-# ~/.bun/bin/bun, /opt/homebrew/bin/bun, /usr/local/bin/bun.
+# They run on bun: BRIDGE_MONITOR_BUN, else a bun of the version package.json
+# pins or newer (scripts/lib/find-bun.sh: WALNUT_BUN, PATH, ~/.bun/bin/bun,
+# /opt/homebrew/bin/bun, /usr/local/bin/bun).
 set -euo pipefail
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -29,11 +30,13 @@ STATE="$SUPPORT/bridge-monitor/state"
 CONFIG="$SUPPORT/bridge-monitor.json"
 LOGDIR="${BRIDGE_MONITOR_LOG_DIR:-$HOME/Library/Logs/Walnut/bridge-monitor}"
 AGENTS="${BRIDGE_MONITOR_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+# BRIDGE_MONITOR_BUN wins as given; else a bun of the pinned version or newer
+# (scripts/lib/find-bun.sh), which the launchd plists then name.
 BUN="${BRIDGE_MONITOR_BUN:-}"
 if [ -z "$BUN" ]; then
-  for cand in "$(command -v bun || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
-    if [ -n "$cand" ] && [ -x "$cand" ]; then BUN="$cand"; break; fi
-  done
+  # shellcheck source=../lib/find-bun.sh
+  . "$REPO/scripts/lib/find-bun.sh"
+  if walnut_find_bun "$REPO"; then BUN="$BUN_BIN"; fi
 fi
 DOMAIN="gui/$(id -u)"
 LABELS=(dev.openwalnut.bridge-monitor dev.openwalnut.bridge-monitor-summary)
@@ -51,7 +54,11 @@ done
 
 # It must print bun's own version: an exit code alone would pass for any binary.
 if [ -z "$BUN" ] || [ -z "$("$BUN" -e 'process.stdout.write(process.versions.bun || "")' 2>/dev/null)" ]; then
-  echo "bridge monitor: needs bun (curl -fsSL https://bun.sh/install | bash, or set BRIDGE_MONITOR_BUN)" >&2
+  if [ -n "${BRIDGE_MONITOR_BUN:-}" ]; then
+    echo "bridge monitor: BRIDGE_MONITOR_BUN=$BRIDGE_MONITOR_BUN is not a bun" >&2
+  else
+    echo "bridge monitor: $(walnut_bun_missing) (or set BRIDGE_MONITOR_BUN)" >&2
+  fi
   exit 1
 fi
 if [ ! -f "$REPO/node_modules/ws/package.json" ]; then

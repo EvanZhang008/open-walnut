@@ -452,12 +452,11 @@ describe('onboarding harness · the operator side runs on bun', () => {
   const aws = read('scripts/onboarding-test/lib/aws.sh')
   const run = read('scripts/onboarding-test/run.sh')
 
-  it('finds bun in the places dev-prod.sh looks, and names bun when there is none', () => {
+  it('finds bun as dev-prod.sh does (scripts/lib/find-bun.sh, held to the pin), and names bun when there is none', () => {
     const need = splitShellFunctions(common).find((f) => f.name === 'need_bun')!
-    for (const where of ['${WALNUT_BUN:-}', 'command -v bun', '$HOME/.bun/bin/bun', '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) {
-      expect(need.body).toContain(where)
-    }
-    expect(need.body).toMatch(/die "missing tool: bun/)
+    expect(common).toContain('. "$ONB_REPO_ROOT/scripts/lib/find-bun.sh"')
+    expect(need.body).toContain('walnut_find_bun "$ONB_REPO_ROOT"')
+    expect(need.body).toMatch(/die "missing tool: bun\. \$\(walnut_bun_missing\)"/)
   })
 
   it('renders the summary with `bun run -` (a bare `bun -` is `bun add`)', () => {

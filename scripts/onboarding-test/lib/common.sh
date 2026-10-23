@@ -25,16 +25,16 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing tool: $1 ($2)"
 }
 
-# The operator's bun, which runs the summary, the SSM JSON and the Playwright capture.
-# The same places scripts/dev-prod.sh looks: WALNUT_BUN, PATH, then the usual installs.
-# Sets ONB_BUN; dies naming bun when there is none.
+# The operator's bun, which runs the summary, the SSM JSON and the Playwright capture:
+# one of the version package.json pins or newer, found as scripts/dev-prod.sh finds
+# it (scripts/lib/find-bun.sh). Sets ONB_BUN; dies naming bun when there is none.
+ONB_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# shellcheck source=../../lib/find-bun.sh
+. "$ONB_REPO_ROOT/scripts/lib/find-bun.sh"
 need_bun() {
-  local cand
   [ -n "${ONB_BUN:-}" ] && return 0
-  for cand in "${WALNUT_BUN:-}" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
-    if [ -n "$cand" ] && [ -x "$cand" ]; then ONB_BUN="$cand"; return 0; fi
-  done
-  die "missing tool: bun (curl -fsSL https://bun.sh/install | bash, or point WALNUT_BUN at one)"
+  if walnut_find_bun "$ONB_REPO_ROOT"; then ONB_BUN="$BUN_BIN"; return 0; fi
+  die "missing tool: bun. $(walnut_bun_missing)"
 }
 
 # Cleanup steps are registered as shell snippets and run in reverse order on EXIT,

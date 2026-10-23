@@ -39,14 +39,14 @@ if [ "$PORT" = "3456" ]; then
   exit 1
 fi
 
-BUN=""
-for cand in "${WALNUT_BUN:-}" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
-  if [ -n "$cand" ] && [ -x "$cand" ]; then BUN="$cand"; break; fi
-done
-if [ -z "$BUN" ]; then
-  echo "needs bun to build and run the server: curl -fsSL https://bun.sh/install | bash (or set WALNUT_BUN)" >&2
+# The bun that builds and runs the server: the pinned version or newer (scripts/lib/find-bun.sh).
+# shellcheck source=lib/find-bun.sh
+. "$REPO/scripts/lib/find-bun.sh"
+if ! walnut_find_bun "$REPO"; then
+  echo "ios-client-log-e2e: building and running the server: $(walnut_bun_missing)" >&2
   exit 1
 fi
+BUN="$BUN_BIN"
 
 # WORK is kept after the run (the ingested file is the evidence), so not in /tmp.
 . "$(dirname "$0")/lib/evidence-dir.sh"

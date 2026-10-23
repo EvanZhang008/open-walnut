@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process'
 import { guardedPath } from '../setup/exec-guard-core.js'
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', 'scripts', 'dev-ephemeral.sh')
+const BUN_PIN = (JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'package.json'), 'utf8')) as { packageManager: string }).packageManager.replace(/^bun@/, '')
 
 const dirs: string[] = []
 afterEach(() => {
@@ -86,14 +87,17 @@ describe('dev-ephemeral.sh --file', () => {
 })
 
 describe('dev-ephemeral.sh source build', () => {
-  /** Stand-ins: a bun that records each call, and a node that fails loudly if anything runs it. */
+  /**
+   * Stand-ins: a bun of the pinned version (scripts/lib/find-bun.sh asks it) that
+   * records every other call, and a node that fails loudly if anything runs it.
+   */
   function tools() {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dev-ephemeral-src-')))
     dirs.push(root)
     const bin = path.join(root, 'bin')
     fs.mkdirSync(bin)
     const log = path.join(root, 'calls.log')
-    fs.writeFileSync(path.join(bin, 'bun'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\n`, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'bun'), `#!/bin/sh\n[ "$1" = --version ] && { echo ${BUN_PIN}; exit 0; }\nprintf '%s\\n' "$*" >> '${log}'\n`, { mode: 0o755 })
     fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\necho "node ran: $*" >&2\nexit 99\n', { mode: 0o755 })
     const home = path.join(root, 'home')
     fs.mkdirSync(home)
@@ -121,7 +125,7 @@ describe('dev-ephemeral.sh source build', () => {
     // Only when no bun sits in the fixed install places of this machine either.
     if (!['/opt/homebrew/bin/bun', '/usr/local/bin/bun'].some((p) => fs.existsSync(p))) {
       expect(none.status).toBe(1)
-      expect(none.stderr).toMatch(/no bun found .*curl -fsSL https:\/\/bun\.sh\/install \| bash/)
+      expect(none.stderr).toMatch(/needs bun .* or newer .*none was found .*curl -fsSL https:\/\/bun\.sh\/install \| bash/)
       expect(none.stderr).not.toMatch(/node ran/)
     }
   })

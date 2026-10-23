@@ -32,21 +32,18 @@ while (( $# > 0 )); do
   esac
 done
 
-# The bun that builds and runs the source build: WALNUT_BUN, PATH, then the usual
-# install places (a `bash scripts/dev-ephemeral.sh` from a thin PATH finds it too).
-find_bun() {
-  local cand
-  for cand in "${WALNUT_BUN:-}" "$(command -v bun || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
-    if [[ -n "$cand" && -x "$cand" && ! -d "$cand" ]]; then printf '%s' "$cand"; return 0; fi
-  done
-  return 1
-}
+# The bun that builds and runs the source build: the pinned version or newer
+# (scripts/lib/find-bun.sh), so a thin PATH, or an older bun first on it, still
+# finds the right one.
+# shellcheck source=lib/find-bun.sh
+. "$REPO/scripts/lib/find-bun.sh"
 
 if [[ -z "$file" && "$build_file" == 0 ]]; then
-  if ! BUN="$(find_bun)"; then
-    echo "dev-ephemeral: no bun found (WALNUT_BUN, PATH, ~/.bun/bin); install it: curl -fsSL https://bun.sh/install | bash" >&2
+  if ! walnut_find_bun "$REPO"; then
+    echo "dev-ephemeral: $(walnut_bun_missing)" >&2
     exit 1
   fi
+  BUN="$BUN_BIN"
   # Progress to stderr: stdout carries only the launcher's one JSON line.
   PATH="$(dirname "$BUN"):$PATH" "$BUN" --bun run web:build >&2
   exec "$BUN" dist/cli.js web --ephemeral
@@ -64,10 +61,11 @@ if [[ "$build_file" == 1 ]]; then
     libc="$(ldd --version 2>&1 || true)"
     if [[ "$libc" == *musl* ]]; then target="$target-musl"; fi
   fi
-  if ! BUN="$(find_bun)"; then
-    echo "dev-ephemeral: building the file needs bun (WALNUT_BUN, PATH, ~/.bun/bin); install it: curl -fsSL https://bun.sh/install | bash" >&2
+  if ! walnut_find_bun "$REPO"; then
+    echo "dev-ephemeral: building the file: $(walnut_bun_missing)" >&2
     exit 1
   fi
+  BUN="$BUN_BIN"
   # Progress to stderr: stdout carries only the launcher's one JSON line.
   "$BUN" scripts/build-binary.mjs --target "$target" >&2
   file="$REPO/dist-bin/walnut-$target"

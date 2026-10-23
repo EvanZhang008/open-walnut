@@ -732,8 +732,11 @@ PY
       cat $logs | grep -aE '"message":"(journal drain|drain record failed|offline merge conflict|replica copy round|forward stale refused|offline drain: conflict letter)' \
         | jq -c --arg h "$host" --arg since "$since" 'select(.time >= $since) | select(((.host // .hostKey // .target // "") | tostring) as $x | $x == $h or $x == ("host:" + $h))' > "$here"
     fi
-    # WALNUT_BUN: the bun to run it with (default the first `bun` on PATH).
-    "${WALNUT_BUN:-bun}" "$(dirname "$0")/replica-logs-fetch.mjs" --host "$host" --n 2000 --sources replica,journal \
+    # A bun of the pinned version or newer (scripts/lib/find-bun.sh; WALNUT_BUN first).
+    # shellcheck source=lib/find-bun.sh
+    . "$(dirname "$0")/lib/find-bun.sh"
+    walnut_find_bun "$(dirname "$0")/.." || { echo "walnut-logs: $(walnut_bun_missing)" >&2; exit 1; }
+    "$BUN_BIN" "$(dirname "$0")/replica-logs-fetch.mjs" --host "$host" --n 2000 --sources replica,journal \
       --match "replica presence,replica forward,replica away answer,journal" 2>&1 >"$there" | sed 's/^/  (host) /'
     jq -c --arg since "$since" 'select((.time // "") >= $since)' "$there" > "$there.f" 2>/dev/null && mv "$there.f" "$there"
     echo "── replica ${host}, last ${mins}min (since ${since}Z): $(wc -l < "$there" | tr -d ' ') host lines, $(wc -l < "$here" | tr -d ' ') Mac lines ──"

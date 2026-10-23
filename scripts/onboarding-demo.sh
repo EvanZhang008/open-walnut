@@ -24,14 +24,15 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 cmd="${1:-help}"
 
+# The bun that drives the browser: the pinned version or newer (scripts/lib/find-bun.sh).
+# shellcheck source=lib/find-bun.sh
+. "$HERE/scripts/lib/find-bun.sh"
 BUN=""
-for cand in "${WALNUT_BUN:-}" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
-  if [ -n "$cand" ] && [ -x "$cand" ]; then BUN="$cand"; break; fi
-done
+if walnut_find_bun "$HERE"; then BUN="$BUN_BIN"; fi
 # Checked before the image is built or a container starts.
 need_bun() {
   if [ -z "$BUN" ]; then
-    echo "onboarding-demo: needs bun to drive the browser; install it with: curl -fsSL https://bun.sh/install | bash   (or point WALNUT_BUN at one)" >&2
+    echo "onboarding-demo: driving the browser: $(walnut_bun_missing)" >&2
     exit 2
   fi
 }

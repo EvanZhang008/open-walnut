@@ -94,12 +94,16 @@ fi
 
 TSC="node_modules/.bin/tsc"
 [ -x "$TSC" ] || { echo "check-committed-bundle: tsc not found, skipping type-check (run bun install)"; exit 0; }
-# tsc's bin says `#!/usr/bin/env node`; it runs on bun here, the repo's one runtime.
-BUN=""
-for cand in "${WALNUT_BUN:-}" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
-  if [ -n "$cand" ] && [ -x "$cand" ]; then BUN="$cand"; break; fi
-done
-[ -n "$BUN" ] || { echo "check-committed-bundle: bun not found, skipping type-check (curl -fsSL https://bun.sh/install | bash)"; exit 0; }
+# tsc's bin says `#!/usr/bin/env node`; it runs on bun here, the repo's one runtime,
+# of the version package.json pins or newer. A push gate that cannot run must
+# stop the push, never wave it through.
+# shellcheck source=lib/find-bun.sh
+. scripts/lib/find-bun.sh
+if ! walnut_find_bun .; then
+  echo "✗ check-committed-bundle: cannot type-check the committed tree: $(walnut_bun_missing)" >&2
+  exit 1
+fi
+BUN="$BUN_BIN"
 # tsconfig.json includes only src/**, which the archive above already holds.
 ln -s "$OLDPWD/node_modules" "$TMP/node_modules" 2>/dev/null || true
 echo "Type-checking the committed tree (src/ is dirty, so HEAD differs)…"

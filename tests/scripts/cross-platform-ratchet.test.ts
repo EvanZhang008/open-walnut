@@ -28,6 +28,8 @@ const REPO = path.join(import.meta.dirname, '..', '..')
 const CROSS_PLATFORM_FILES = [
   'scripts/dev-prod.sh',
   'scripts/build-daemon.sh',
+  // The bun finder dev-prod.sh and build-daemon.sh source.
+  'scripts/lib/find-bun.sh',
   'src/constants.ts',
   'src/providers/local-daemon.ts',
   'src/providers/daemon-source.ts',
@@ -86,7 +88,7 @@ const ALLOWED: Array<{ file: string; needle: string; reason: string }> = [
     reason: 'appended to PATH as an OPTIONAL prefix; a nonexistent dir in PATH is inert on Linux',
   },
   {
-    file: 'scripts/build-daemon.sh',
+    file: 'scripts/lib/find-bun.sh',
     needle: '/opt/homebrew',
     reason: 'one of several bun locations, each probed with -x before use',
   },

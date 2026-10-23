@@ -23,22 +23,20 @@ cd "$(dirname "$0")/.."
 # Resolve bun even under a thin PATH (launchd/cron/systemd give jobs
 # /usr/bin:/bin:... without user install prefixes). Same problem class as
 # src/core/stt/spawn-env.ts — never assume the caller's shell PATH.
-BUN="$(command -v bun || true)"
-if [ -z "$BUN" ]; then
-  for candidate in "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
-    if [ -x "$candidate" ]; then
-      BUN="$candidate"
-      break
-    fi
-  done
-fi
+# A bun of the version package.json pins or newer (scripts/lib/find-bun.sh): the
+# daemon binaries carry the runtime of the bun that compiles them, and the first
+# bun on PATH can be an older one than the bun running the build.
+# shellcheck source=lib/find-bun.sh
+. scripts/lib/find-bun.sh
+BUN=""
+if walnut_find_bun "$PWD"; then BUN="$BUN_BIN"; fi
 if [ -z "$BUN" ]; then
   # Bun only cross-compiles the daemon binaries, and a host without one still gets a
   # working daemon over the source-deploy fallback (daemon-connection.ts: "no binary
-  # found, falling back to source deploy"). Failing here used to stop `npm start` dead
+  # found, falling back to source deploy"). Failing here used to stop the first build dead
   # on any machine that had never installed Bun, which is every new user's machine.
   # Release flows set WALNUT_REQUIRE_BUN=1 so a published tarball can never miss them.
-  echo "build-daemon.sh: bun not found (checked PATH, ~/.bun/bin, /opt/homebrew/bin, /usr/local/bin)." >&2
+  echo "build-daemon.sh: $(walnut_bun_missing)" >&2
   if [ "${WALNUT_REQUIRE_BUN:-0}" = 1 ]; then
     echo "build-daemon.sh: WALNUT_REQUIRE_BUN=1 is set, so this is fatal. Install Bun: https://bun.sh" >&2
     exit 1
