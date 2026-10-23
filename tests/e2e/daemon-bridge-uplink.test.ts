@@ -26,6 +26,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { bunBuildEnv } from '../helpers/cloud-box-daemon-build.js'
 
 const HOST_ALIAS = 'uplink-e2e-host'
 const HWM = 1024 * 1024
@@ -54,7 +55,7 @@ function buildBunDaemon(bun: string, outDir: string): Promise<string> {
     execFile(bun, [
       'build', '--compile', `--target=bun-${process.platform}-${process.arch}`, '--minify',
       '--outfile', out, 'src/providers/daemon-standalone.ts',
-    ], { cwd: REPO_ROOT, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 }, (err, _stdout, stderr) => {
+    ], { cwd: REPO_ROOT, env: bunBuildEnv(), timeout: 180_000, maxBuffer: 8 * 1024 * 1024 }, (err, _stdout, stderr) => {
       if (err) reject(new Error(`bun build of the daemon failed: ${stderr || err.message}`))
       else resolve(out)
     })

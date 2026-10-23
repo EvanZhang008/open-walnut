@@ -35,6 +35,17 @@ export function findBun(): string | null {
   return null
 }
 
+/**
+ * The environment for a `bun build` child: the runner's, without BUN_OPTIONS.
+ * bun puts those options before the subcommand, and `bun --preload x build`
+ * runs the package's "build" script instead of the bundler (a bun test run
+ * that preloads a file sets exactly that).
+ */
+export function bunBuildEnv(): NodeJS.ProcessEnv {
+  const { BUN_OPTIONS: _options, ...env } = process.env
+  return env
+}
+
 /** Compile the daemon from the current source, version read at run time. Null without bun. */
 export async function buildTestDaemon(outDir: string): Promise<string | null> {
   const bun = findBun()
@@ -45,7 +56,7 @@ export async function buildTestDaemon(outDir: string): Promise<string | null> {
     execFile(bun, [
       'build', '--compile', `--target=bun-${process.platform}-${process.arch}`, '--minify',
       '--outfile', out, 'src/providers/daemon-standalone.ts',
-    ], { cwd: REPO_ROOT, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 }, (err, _stdout, stderr) => {
+    ], { cwd: REPO_ROOT, env: bunBuildEnv(), timeout: 180_000, maxBuffer: 8 * 1024 * 1024 }, (err, _stdout, stderr) => {
       if (err) reject(new Error(`bun build of the test daemon failed: ${stderr || err.message}`))
       else resolve()
     })
