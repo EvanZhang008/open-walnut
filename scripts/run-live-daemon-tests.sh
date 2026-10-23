@@ -79,7 +79,7 @@ do
   echo ""
   echo "▶ $test_file"
   cleanup_remote
-  if ! npx vitest run --config vitest.live.config.ts "$test_file"; then
+  if ! bun --bun vitest run --config vitest.live.config.ts "$test_file"; then
     FAILED=$((FAILED + 1))
   fi
 done

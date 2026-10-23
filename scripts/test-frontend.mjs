@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The four FRONTEND-rooted vitest configs, run to completion.
  *
  * These suites can't run under a repo-root config: their deps (@tiptap/*,
  * dompurify, react-diff-view, marked) live in web/node_modules, and they need a
  * linkedom DOM shim. So each has its own web-rooted config, and this script is
- * the single entry point that runs all four — `npm run test:frontend:ci`.
+ * the single entry point that runs all four: `bun run test:frontend:ci`.
  *
  * Runs them SEQUENTIALLY but does NOT stop at the first failure. This replaced an
  * `&&` chain in package.json: with `&&`, a break in the first config hid the state
@@ -17,6 +17,7 @@
  * is nothing to gain and a machine to protect.
  */
 import { spawnSync } from 'node:child_process';
+import { vitestCommand } from './bun-vitest.mjs';
 
 const CONFIGS = [
   'vitest.diff-view.config.ts',
@@ -32,7 +33,8 @@ const env = { ...process.env, WALNUT_TEST_RUN_ID: process.env.WALNUT_TEST_RUN_ID
 const results = [];
 for (const config of CONFIGS) {
   console.log(`\n▶ ${config}\n`);
-  const r = spawnSync('npx', ['vitest', 'run', '--config', config], {
+  const vitest = vitestCommand(['run', '--config', config]);
+  const r = spawnSync(vitest.cmd, vitest.args, {
     stdio: 'inherit',
     env,
     shell: process.platform === 'win32',

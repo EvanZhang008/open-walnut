@@ -1,41 +1,39 @@
 import { spawn } from 'node:child_process';
-import os from 'node:os';
-
-const npm = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+import { vitestCommand, vitestCommandLine } from './bun-vitest.mjs';
 
 const runs = [
   {
     name: 'unit',
-    args: ['vitest', 'run', '--config', 'vitest.unit.config.ts'],
+    args: ['run', '--config', 'vitest.unit.config.ts'],
   },
   {
     name: 'integration',
-    args: ['vitest', 'run', '--config', 'vitest.integration.config.ts'],
+    args: ['run', '--config', 'vitest.integration.config.ts'],
   },
   {
     name: 'e2e',
-    args: ['vitest', 'run', '--config', 'vitest.e2e.config.ts'],
+    args: ['run', '--config', 'vitest.e2e.config.ts'],
   },
   {
     // FRONTEND diff pipeline (react-diff-view/diff) — deps live in web/node_modules,
     // so it runs under a web-rooted config. Guards the session "Changed" view's
     // createPatch→parseDiff→tokenize path (a parse throw here blanks the page).
     name: 'diff-view',
-    args: ['vitest', 'run', '--config', 'vitest.diff-view.config.ts'],
+    args: ['run', '--config', 'vitest.diff-view.config.ts'],
   },
   {
     // FRONTEND WorkflowGraph layout logic (buildLayout/phaseCounts) — pure data
     // transforms behind the dynamic-workflow flow-graph panel. Runs under a
     // repo-root-rooted config that aliases @ → web/src (no DOM needed).
     name: 'workflow-graph',
-    args: ['vitest', 'run', '--config', 'vitest.workflow-graph.config.ts'],
+    args: ['run', '--config', 'vitest.workflow-graph.config.ts'],
   },
   {
     // FRONTEND markdown utils (marked/dompurify in web/node_modules) — backs the
     // per-message copy-as-markdown / copy-as-rich-text buttons and message render.
     // linkedom-backed window so DOMPurify initializes.
     name: 'markdown',
-    args: ['vitest', 'run', '--config', 'vitest.markdown.config.ts'],
+    args: ['run', '--config', 'vitest.markdown.config.ts'],
   },
 ];
 
@@ -56,9 +54,10 @@ const runOnce = (entry, extraArgs = []) =>
       ? [...entry.args, '--maxWorkers', String(maxWorkers), ...extraArgs]
       : [...entry.args, ...extraArgs];
 
-    console.log(`\n▶ [${entry.name}] npx ${args.join(' ')}\n`);
+    console.log(`\n▶ [${entry.name}] ${vitestCommandLine(args)}\n`);
 
-    const child = spawn(npm, args, {
+    const vitest = vitestCommand(args);
+    const child = spawn(vitest.cmd, vitest.args, {
       stdio: 'inherit',
       // WALNUT_TEST_RUN_ID: all 6 tiers of this invocation share ONE slot in
       // the machine-wide vitest gate (tests/setup/test-gate.ts) — without it,
@@ -91,11 +90,12 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 // If passthrough args given, run a single vitest with those args
 if (passthroughArgs.length > 0) {
   const args = maxWorkers
-    ? ['vitest', 'run', '--maxWorkers', String(maxWorkers), ...passthroughArgs]
-    : ['vitest', 'run', ...passthroughArgs];
+    ? ['run', '--maxWorkers', String(maxWorkers), ...passthroughArgs]
+    : ['run', ...passthroughArgs];
 
   const code = await new Promise((resolve) => {
-    const child = spawn(npm, args, {
+    const vitest = vitestCommand(args);
+    const child = spawn(vitest.cmd, vitest.args, {
       stdio: 'inherit',
       env: { ...process.env, WALNUT_TEST_RUN_ID: testRunId },
       shell: process.platform === 'win32',

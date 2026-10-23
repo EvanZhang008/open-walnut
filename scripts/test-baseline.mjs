@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Baseline-aware test gate — how a tier with pre-existing failures can still
  * catch REGRESSIONS.
@@ -11,8 +11,8 @@
  *
  * So compare against a recorded baseline instead of against zero:
  *
- *   node scripts/test-baseline.mjs record [vitest options]  # snapshot today's failures
- *   node scripts/test-baseline.mjs check [vitest options]   # fail ONLY on new failures
+ *   bun scripts/test-baseline.mjs record [vitest options]  # snapshot today's failures
+ *   bun scripts/test-baseline.mjs check [vitest options]   # fail ONLY on new failures
  *
  * `check` exits non-zero if a test that is NOT in the baseline fails. Tests that
  * were already failing stay quiet; tests that get FIXED are reported as progress
@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { vitestCommand } from './bun-vitest.mjs';
 
 const CONFIG = process.env.WALNUT_BASELINE_CONFIG ?? 'vitest.quick.config.ts';
 const BASELINE = process.env.WALNUT_BASELINE_FILE ?? 'tests/setup/known-failures.json';
@@ -32,7 +33,7 @@ const mode = process.argv[2] ?? 'check';
 const vitestArgs = process.argv.slice(3);
 
 if (!['record', 'check'].includes(mode)) {
-  console.error('usage: node scripts/test-baseline.mjs [record|check] [vitest options]');
+  console.error('usage: bun scripts/test-baseline.mjs [record|check] [vitest options]');
   process.exit(2);
 }
 
@@ -50,7 +51,8 @@ const fileKey = (abs) => abs.replace(/^.*?(tests\/.*)$/, '$1');
  */
 function expectedFiles() {
   const out = path.join(TMP, `walnut-baseline-list-${process.pid}.json`);
-  const listed = spawnSync('npx', ['vitest', 'list', '--config', CONFIG, '--filesOnly', `--json=${out}`, ...vitestArgs], {
+  const list = vitestCommand(['list', '--config', CONFIG, '--filesOnly', `--json=${out}`, ...vitestArgs]);
+  const listed = spawnSync(list.cmd, list.args, {
     stdio: ['ignore', 'ignore', 'inherit'],
     env: process.env,
   });
@@ -88,21 +90,17 @@ if (expected.total < MIN_FILES) {
 }
 
 console.log(`Running ${CONFIG}: ${expected.files.length} of its ${expected.total} test files …`);
-const run = spawnSync(
-  'npx',
-  [
-    'vitest',
-    'run',
-    '--config',
-    CONFIG,
-    // Callers may narrow tests or workers, but the JSON report remains owned by
-    // this gate so its verdict cannot be accidentally bypassed.
-    ...vitestArgs,
-    '--reporter=json',
-    `--outputFile=${reportFile}`,
-  ],
-  { stdio: ['inherit', 'ignore', 'inherit'], env: process.env },
-);
+const vitestRun = vitestCommand([
+  'run',
+  '--config',
+  CONFIG,
+  // Callers may narrow tests or workers, but the JSON report remains owned by
+  // this gate so its verdict cannot be accidentally bypassed.
+  ...vitestArgs,
+  '--reporter=json',
+  `--outputFile=${reportFile}`,
+]);
+const run = spawnSync(vitestRun.cmd, vitestRun.args, { stdio: ['inherit', 'ignore', 'inherit'], env: process.env });
 
 if (!fs.existsSync(reportFile)) {
   console.error(`No JSON report produced (vitest exited ${run.status}) — cannot evaluate the baseline.`);
@@ -231,7 +229,7 @@ if (mode === 'record') {
 if (process.env.WALNUT_BASELINE_RUN_OUT) writeRun(process.env.WALNUT_BASELINE_RUN_OUT);
 
 if (!fs.existsSync(BASELINE)) {
-  console.error(`\nNo baseline at ${BASELINE}. Create one with:\n  node scripts/test-baseline.mjs record`);
+  console.error(`\nNo baseline at ${BASELINE}. Create one with:\n  bun scripts/test-baseline.mjs record`);
   process.exit(1);
 }
 

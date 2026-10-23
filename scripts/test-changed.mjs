@@ -1,9 +1,9 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * L3 — run only the test tiers your current change can actually break.
  *
- *   npm run test:changed      → the quick tier, narrowed to tests related to the diff
- *   npm run test:pre-commit   → the FULL tiers the diff touches (quick + slow + e2e as needed)
+ *   bun run test:changed      → the quick tier, narrowed to tests related to the diff
+ *   bun run test:pre-commit   → the FULL tiers the diff touches (quick + slow + e2e as needed)
  *
  * Why a script and not just `vitest --changed`: vitest's module graph answers
  * "which test files import the code I edited", which is the right question for
@@ -16,6 +16,7 @@
  * tests/setup/worker-budget.ts. This script never widens either.
  */
 import { spawnSync, execSync } from 'node:child_process';
+import { bunExecutable, vitestCommand } from './bun-vitest.mjs';
 
 const args = process.argv.slice(2);
 const FULL_TIERS = args.includes('--tiers');
@@ -69,7 +70,7 @@ const RULES = [
   { re: /^src\/providers\/|^src\/web\/(server|ws)/, tiers: ['quick', 'slow', 'e2e'], why: 'session transport — e2e covers it' },
   { re: /^(src|tests)\//, tiers: ['quick', 'slow'], why: 'server/core code + its tests' },
   { re: /^vitest(\..*)?\.config\.ts$|^tests\/setup\//, tiers: ['quick', 'slow'], why: 'test infrastructure' },
-  { re: /^playwright\.config\.ts$/, tiers: [], why: 'browser tier only — run `npx playwright test`' },
+  { re: /^playwright\.config\.ts$/, tiers: [], why: 'browser tier only: run `bun x playwright test`' },
   { re: /^tsup\.config\.ts$|^tsconfig.*\.json$/, tiers: ['quick'], why: 'build/type config' },
   { re: /^web\/src\//, tiers: ['web'], why: 'frontend — covered by the web-rooted configs + Playwright' },
   { re: /^scripts\//, tiers: ['quick'], why: 'scripts are exercised by unit-level tests' },
@@ -82,11 +83,11 @@ const TIER_CMDS = {
   quick: ['vitest', 'run', '--config', 'vitest.quick.config.ts'],
   slow: ['vitest', 'run', '--config', 'vitest.slow.config.ts'],
   e2e: ['vitest', 'run', '--config', 'vitest.e2e.config.ts'],
-  // ALL FOUR frontend-rooted configs, via the npm script. Pointing this at
+  // ALL FOUR frontend-rooted configs, via the package script. Pointing this at
   // vitest.diff-view.config.ts alone silently skipped markdown, workflow-graph
   // and notes-roundtrip — three quarters of the frontend coverage — while
   // reporting the 'web' tier as run.
-  web: ['npm', 'run', 'test:frontend:ci'],
+  web: ['script', 'run', 'test:frontend:ci'],
 };
 
 const files = changedFiles();
@@ -136,15 +137,14 @@ let failed = 0;
 for (const tier of order) {
   // In narrow mode, let vitest intersect the tier with the diff's module graph.
   // Only the quick tier: slow/e2e are already small, and the web tier runs
-  // through an npm script that takes no vitest flags.
+  // through a package script that takes no vitest flags.
   const narrow = !FULL_TIERS && tier === 'quick' ? ['--changed', BASE] : [];
   const [bin, ...rest] = TIER_CMDS[tier];
-  // The web tier shells out to `npm run …`; everything else is a bare vitest
-  // invocation that needs npx. Deriving the binary from the command (rather than
-  // hardcoding npx) keeps those two shapes from silently mixing.
-  const cmd = bin === 'npm' ? 'npm' : 'npx';
-  const argv = bin === 'npm' ? [...rest] : [bin, ...rest, ...narrow];
-  console.log(`▶ [${tier}] ${cmd} ${argv.join(' ')}\n`);
+  // The web tier runs `bun run …`; everything else is vitest on bun
+  // (scripts/bun-vitest.mjs). Deriving the command from the entry (rather than
+  // hardcoding one) keeps those two shapes from silently mixing.
+  const { cmd, args: argv } = bin === 'script' ? { cmd: bunExecutable(), args: rest } : vitestCommand([...rest, ...narrow]);
+  console.log(`▶ [${tier}] bun ${argv.join(' ')}\n`);
   const r = spawnSync(cmd, argv, { stdio: 'inherit', env, shell: process.platform === 'win32' });
   const code = r.status ?? 1;
   console.log(code === 0 ? `\n✓ [${tier}] passed\n` : `\n✗ [${tier}] failed (exit ${code})\n`);

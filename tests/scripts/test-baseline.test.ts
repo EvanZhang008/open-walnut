@@ -1,7 +1,7 @@
 /**
  * scripts/test-baseline.mjs, the gate CI's quick and e2e tiers pass through.
  *
- * Run for real against a fake `npx` that writes a canned vitest JSON report, so
+ * Run for real against a fake `vitest` bin that writes a canned JSON report, so
  * every verdict is the script's own: a known failure passes, a new one fails
  * with its reason, a crashed or truncated run never passes, a file that fails
  * to load counts, and a --shard run neither calls the rest of the baseline
@@ -19,16 +19,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 const SCRIPT = path.resolve(__dirname, '../../scripts/test-baseline.mjs')
 
 let tmp: string
-let bin: string
 
 // \`vitest run\` writes $FAKE_REPORT to the --outputFile it was given; no file when it is
 // empty (a crashed run). \`vitest list\` writes $FAKE_LIST (repo-relative names) to its
 // --json file, or nothing when it is unset. Each records its argv so the test can
-// check what reached vitest.
-const FAKE_NPX = `#!/usr/bin/env node
+// check what reached vitest, led by the runtime it ran on (\`vitest@bun\`): the script
+// starts \`bun --bun vitest\`, which runs this node-shebang bin on bun.
+const FAKE_VITEST = `#!/usr/bin/env node
 const fs = require('fs')
 const path = require('path')
-const argv = process.argv.slice(2)
+const argv = [process.versions.bun ? 'vitest@bun' : 'vitest@node', ...process.argv.slice(2)]
 if (argv[1] === 'list') {
   fs.writeFileSync(process.env.FAKE_LIST_ARGV, JSON.stringify(argv))
   const out = argv.find((a) => a.startsWith('--json='))
@@ -79,7 +79,6 @@ function run(mode: 'check' | 'record', opts: {
       encoding: 'utf8',
       env: {
         ...process.env,
-        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
         TMPDIR: tmp,
         FAKE_ARGV: path.join(tmp, 'argv.json'),
         FAKE_LIST_ARGV: path.join(tmp, 'list-argv.json'),
@@ -106,9 +105,10 @@ const baseline = (failures: string[]) => ({ config: 'vitest.e2e.config.ts', coun
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-baseline-gate-'))
-  bin = path.join(tmp, 'bin')
-  fs.mkdirSync(bin)
-  fs.writeFileSync(path.join(bin, 'npx'), FAKE_NPX, { mode: 0o755 })
+  // Where `bun --bun vitest`, run in tmp, finds vitest.
+  const bin = path.join(tmp, 'node_modules', '.bin')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.writeFileSync(path.join(bin, 'vitest'), FAKE_VITEST, { mode: 0o755 })
 })
 
 afterEach(() => {
@@ -125,11 +125,11 @@ describe('test-baseline.mjs check', () => {
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain('No new failures')
     const argv = JSON.parse(fs.readFileSync(path.join(tmp, 'argv.json'), 'utf8')) as string[]
-    expect(argv.slice(0, 4)).toEqual(['vitest', 'run', '--config', 'vitest.e2e.config.ts'])
+    expect(argv.slice(0, 4)).toEqual(['vitest@bun', 'run', '--config', 'vitest.e2e.config.ts'])
     expect(argv).toEqual(expect.arrayContaining(['--maxWorkers=1', '--shard=1/1', '--reporter=json']))
     // The files it must report are listed with the same config and filters.
     const listArgv = JSON.parse(fs.readFileSync(path.join(tmp, 'list-argv.json'), 'utf8')) as string[]
-    expect(listArgv.slice(0, 4)).toEqual(['vitest', 'list', '--config', 'vitest.e2e.config.ts'])
+    expect(listArgv.slice(0, 4)).toEqual(['vitest@bun', 'list', '--config', 'vitest.e2e.config.ts'])
     expect(listArgv).toEqual(expect.arrayContaining(['--filesOnly', '--maxWorkers=1', '--shard=1/1']))
   })
 

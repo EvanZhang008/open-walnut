@@ -42,5 +42,5 @@ echo -e "${GREEN}Cloud companion reachable — running LIVE mobile-journey tests
 WALNUT_LIVE_CLOUD=1 \
 WALNUT_LIVE_CLOUD_URL="https://$HOSTPART" \
 WALNUT_LIVE_CLOUD_TOKEN="$TOKEN" \
-npx vitest run --config vitest.live.config.ts \
+bun --bun vitest run --config vitest.live.config.ts \
   tests/e2e/cloud-mobile-journey.live.test.ts
