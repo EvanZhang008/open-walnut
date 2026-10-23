@@ -66,6 +66,12 @@ export interface HostServerHost {
   runRemoteScript(script: string, timeoutMs?: number): Promise<string>
   /** `sha256` of `data`: a file already there with it is not sent again (DaemonConnection.uploadFile). */
   uploadFile(remotePath: string, data: Buffer, opts?: { sha256?: string }): Promise<unknown>
+  /**
+   * Put the walnut file with `sha256` at `gz` from the host's daemon slot, when a
+   * compiled Mac made the same file the host's daemon (DaemonConnection
+   * seedHostFileFromDaemon): one upload serves both. False: send it.
+   */
+  seedFromDaemon?(sha256: string, gz: string): Promise<boolean>
   /** A byte stream to the server on that host that follows this Walnut, through its daemon. */
   openStream(to: 'follower', purpose?: string): Promise<Duplex>
   /** Carry those streams on a link of their own while the server runs (providers/stream-lane.ts). */
@@ -389,7 +395,8 @@ export function createHostServerManager(deps: ManagerDeps) {
       set(host.hostKey, { message: `Sending Walnut ${id} for ${target.target} to the host (${Math.max(1, Math.round(file.gz.length / 2 ** 20))} MB).` })
       // The daemon deploy's path: one SSH stream, small chunks over their own connections when a
       // proxy kills it; one already there (an earlier try) is not sent again.
-      await host.uploadFile(`${root}/incoming/${id}.gz`, file.gz, { sha256: file.gzSha256 })
+      const gzPath = `${root}/incoming/${id}.gz`
+      if (!(await host.seedFromDaemon?.(file.sha256, gzPath).catch(() => false))) await host.uploadFile(gzPath, file.gz, { sha256: file.gzSha256 })
       const script = fileInstallScript({ id, version: file.version, commit: file.commit, sha256: file.sha256, host: target.describe, ...(deps.hostRoot ? { root: rootSpec } : {}) })
       await host.uploadFile(`${root}/incoming/${id}.install.sh`, Buffer.from(script))
       await host.runRemoteScript(launchScript(id, rootSpec), 15_000)

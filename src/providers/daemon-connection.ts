@@ -41,6 +41,8 @@ import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
+import { parseSlotAnswer, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotInstallScript } from './daemon-file-slot.js'
+import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import type { SshTarget } from './session-io.js'
 import {
@@ -2279,6 +2281,7 @@ export class DaemonConnection {
       send: (cmd: string, params?: Record<string, unknown>, timeoutMs?: number) => conn.send(cmd, params, timeoutMs),
       runRemoteScript: (script: string, timeoutMs?: number) => conn.runRemoteScript(script, timeoutMs),
       uploadFile: (remotePath: string, data: Buffer, opts?: { sha256?: string }) => conn.uploadFile(remotePath, data, opts),
+      seedFromDaemon: (sha256: string, gz: string) => conn.seedHostFileFromDaemon(sha256, gz),
       openStream: (to: 'follower', purpose?: string) => conn.openStream(to, purpose),
       keepStreamLane: (on: boolean) => conn.keepStreamLane(on),
     }
@@ -3560,6 +3563,18 @@ export class DaemonConnection {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
         })
       }
+    } else if (!skipBinary && singleFile()) {
+      // A compiled Mac has no separate daemon binaries: the host's own walnut file
+      // (which carries the daemon) takes the binary's slot.
+      try {
+        await this.deployWalnutFile()
+        this._deployedViaSource = false
+        return 'binary'
+      } catch (err) {
+        log.session.warn('DaemonConnection: the walnut file could not be deployed as the daemon, falling back to source deploy', {
+          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        })
+      }
     } else {
       log.session.info('DaemonConnection: no binary found, falling back to source deploy', {
         host: this.hostKey, binaryDir: DAEMON_BINARIES_DIR,
@@ -3592,7 +3607,7 @@ export class DaemonConnection {
       } catch (err) {
         const text = err instanceof Error ? err.message : String(err)
         if (isRuntimeStartFailure(text)) this._failedRuntimes.set(runtime, text.slice(0, 300))
-        const next = nextRuntimeAfterStartFailure(runtime, text, { haveBinary: !!(await this.getLocalBinaryPath()), tried })
+        const next = nextRuntimeAfterStartFailure(runtime, text, { haveBinary: await this.hasDaemonBinary(), tried })
         if (!next) throw this.withBunInstallNote(err)
         log.session.warn('DaemonConnection: daemon start failed on this runtime, trying the next one', {
           host: this.hostKey, failed: runtime, next, error: text.slice(0, 500),
@@ -3617,8 +3632,9 @@ export class DaemonConnection {
   private async deployForRuntime(runtime: RemoteRuntime): Promise<void> {
     if (runtime === 'binary') {
       const localBinary = await this.getLocalBinaryPath()
-      if (!localBinary) throw new Error('no prebuilt daemon binary for this host')
-      await this.deployBinary(localBinary)
+      if (localBinary) await this.deployBinary(localBinary)
+      else if (singleFile()) await this.deployWalnutFile()
+      else throw new Error('no prebuilt daemon binary for this host')
       this._deployedViaSource = false
       return
     }
@@ -3700,6 +3716,68 @@ export class DaemonConnection {
       })
     }
     return null
+  }
+
+  /** A daemon binary this Mac can put on the host: a prebuilt one, or (a compiled Mac) the host's walnut file. */
+  private async hasDaemonBinary(): Promise<boolean> {
+    return !!(await this.getLocalBinaryPath()) || singleFile() !== null
+  }
+
+  /**
+   * A compiled Mac's daemon for a Linux host: the host's walnut file (the same
+   * build, for the host's target: host-file.ts, also what the host's Walnut server
+   * runs) in the binary's slot `<dir>/daemon-linux-<arch>`, which the binary start
+   * runs as `--start` and checks with `--status` (src/binary/main.ts). Not sent
+   * when the slot already holds it, copied on the host from a host server install
+   * of it, else uploaded like any large file (one stream, then 256 KB chunks that
+   * resume after a cut: uploadFile) and unpacked beside the slot, checked by
+   * sha256, renamed into place.
+   */
+  private async deployWalnutFile(): Promise<void> {
+    const t0 = Date.now()
+    const [{ parseHostTarget, targetProbeScript }, { sharedHostFileSource, hostServerRootSpec }, { HOST_ROOT, checkHostRoot }] = await Promise.all([
+      import('../core/host-server/host-target.js'),
+      import('../core/host-server/index.js'),
+      import('../core/host-server/install.js'),
+    ])
+    const target = parseHostTarget(await this.sshExec(targetProbeScript(), 15_000))
+    if (!target.target.startsWith('linux-')) throw new Error(`the host runs ${target.describe}; its daemon slot takes a Linux walnut file only`)
+    const file = await sharedHostFileSource().file(target.target, (message) => {
+      log.session.info('DaemonConnection: getting the walnut file for the daemon', { host: this.hostKey, message })
+    })
+    const slot = await this.getRemoteDaemonPath()
+    // A host server install of this very build holds the same file.
+    const rootSpec = checkHostRoot(hostServerRootSpec() ?? HOST_ROOT)
+    const home = rootSpec.startsWith('$HOME') ? (await this.sshExec('printf %s "$HOME"', 10_000)).trim() : ''
+    const alsoAt = !rootSpec.startsWith('$HOME') ? [`${rootSpec}/app/${file.id}/walnut`] : home.startsWith('/') ? [`${rootSpec.replace('$HOME', home)}/app/${file.id}/walnut`] : []
+    const found = parseSlotAnswer(await this.sshExec(slotCheckScript(slot, file.sha256, alsoAt), 120_000))
+    if (found === 'have' || found === 'copied') {
+      log.session.info('DaemonConnection: walnut file deployed as the daemon', {
+        host: this.hostKey, target: target.target, id: file.id, how: found === 'have' ? 'already in the slot' : 'copied from the host server install', deployMs: Date.now() - t0,
+      })
+      return
+    }
+    const gz = `${slot}.gz`
+    const sent = await this.uploadFile(gz, file.gz, { sha256: file.gzSha256 })
+    if (parseSlotAnswer(await this.sshExec(slotInstallScript(slot, gz, file.sha256), 120_000)) !== 'installed') {
+      throw new Error('the walnut file did not go into the daemon slot')
+    }
+    log.session.info('DaemonConnection: walnut file deployed as the daemon', {
+      host: this.hostKey, target: target.target, id: file.id, how: sent.skipped ? 'its gz was already on the host' : 'uploaded',
+      gzBytes: file.gz.length, deployMs: Date.now() - t0,
+    })
+  }
+
+  /**
+   * A host server install of `sha256` takes its gz from the daemon slot when the
+   * slot holds that file (deployWalnutFile put it there): nothing is sent again.
+   */
+  async seedHostFileFromDaemon(sha256: string, gz: string): Promise<boolean> {
+    if (this.isCloudTunnel) return false
+    const slot = await this.getRemoteDaemonPath()
+    const seeded = parseSeedAnswer(await this.sshExec(seedFromSlotScript(slot, sha256, gz), 120_000).catch(() => ''))
+    if (seeded) log.session.info('DaemonConnection: host server file taken from the daemon slot', { host: this.hostKey, gz })
+    return seeded
   }
 
   /**
@@ -4051,7 +4129,7 @@ export class DaemonConnection {
       const dir = this._remoteDir
       const chosen: RemoteRuntime = runtime
         ?? (this._deployedViaSource && this._bunPath ? 'bun'
-          : !this._deployedViaSource && await this.getLocalBinaryPath() ? 'binary' : 'node')
+          : !this._deployedViaSource && await this.hasDaemonBinary() ? 'binary' : 'node')
       let startCmd: string
       if (chosen === 'bun' && this._bunPath) {
         startCmd = buildDaemonStartCmd({ runtime: 'bun', execPath: this._bunPath, env: daemonEnv, dir })

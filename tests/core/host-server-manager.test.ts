@@ -803,3 +803,31 @@ describe('host server manager: the tunnel a host carries outlives this server st
     expect(host.specs.at(-1)!.settings.exposeRetry).toBe(0)
   })
 })
+
+describe('host server manager, a compiled Mac whose file is already the host\'s daemon', () => {
+  it('takes the gz from the daemon slot on the host instead of sending the file again', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    const seeds: Array<{ sha256: string; gz: string }> = []
+    host.seedFromDaemon = async (sha256, gz) => { seeds.push({ sha256, gz }); return true }
+    await m.connected(host)
+    expect(seeds).toEqual([{ sha256: 'c'.repeat(64), gz: '/home/me/.open-walnut-host/incoming/0.6.7-abc1234.gz' }])
+    // Only the install script went over SSH: the file came from the host itself.
+    expect(host.uploads.map((u) => u.path)).toEqual(['/home/me/.open-walnut-host/incoming/0.6.7-abc1234.install.sh'])
+    expect(m.view('devbox').phase).toBe('running')
+  })
+
+  it('sends the file when the slot does not hold it, or the seed fails', async () => {
+    for (const seed of [async () => false, async () => { throw new Error('ssh died') }]) {
+      const m = createHostServerManager(deps())
+      const host = fakeHost()
+      host.seedFromDaemon = seed
+      await m.connected(host)
+      expect(host.uploads.map((u) => u.path)).toEqual([
+        '/home/me/.open-walnut-host/incoming/0.6.7-abc1234.gz',
+        '/home/me/.open-walnut-host/incoming/0.6.7-abc1234.install.sh',
+      ])
+      fs.rmSync(path.join(dir, 'host-servers.json'), { force: true })
+    }
+  })
+})

@@ -5,7 +5,7 @@
  *
  *   walnut <command> ...             the CLI (data commands take the slim cli-fast entry)
  *   walnut __daemon --start          the session daemon (src/providers/daemon-standalone.ts);
- *                                    `--start`, `--stop` and `--service` alone mean the same
+ *                                    `--start`, `--stop`, `--status` and `--service` alone mean the same
  *   walnut __selftest                checks the file's own parts without a server (src/binary/selftest.ts)
  *   walnut walnut <args> | wn <args> the on-host `walnut` the daemon's PATH shim runs
  *   walnut <runtime root>/<script>   a program a Node build starts as a file (src/binary/bundled-modules.ts)
@@ -46,10 +46,13 @@ const LITE = new Set(['tools', 'add', 'tasks', 'done', 'recall', 'projects', 'se
 if (first === '__selftest') {
   const { runSelftest } = await import('./selftest.js')
   process.exit(await runSelftest())
-} else if (first === '__daemon' || first === '--start' || first === '--stop' || first === '--service') {
-  // The daemon reads its own argv (`--start`, `--stop`, `--service`, `--version`). Its
-  // three lifecycle flags also work bare (no CLI meaning), so the file stands in for a
-  // daemon binary wherever one is started that way (the daemon service install).
+} else if (first === '__daemon' || first === '--start' || first === '--stop' || first === '--status' || first === '--service') {
+  // The daemon reads its own argv (`--start`, `--stop`, `--status`, `--service`, `--version`).
+  // Its lifecycle flags also work bare (no CLI meaning as a first word), so the file stands in
+  // for a daemon binary wherever one is started and checked that way: the daemon service
+  // install, and a remote host's daemon slot (`<dir>/daemon-linux-<arch> --start`, then
+  // `--status`), which a compiled Mac fills with the host's own walnut file. `--version`
+  // stays the CLI's; the daemon's own is `walnut __daemon --version`.
   if (first === '__daemon') process.argv.splice(2, 1)
   await import('../providers/daemon-standalone.js')
 } else if (first === 'walnut' || first === 'wn') {

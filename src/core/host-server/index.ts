@@ -140,6 +140,11 @@ export function sharedHostFileSource(): HostFileSource {
   return (fileSource ??= createHostFileSource({ cacheDir: path.join(WALNUT_HOME, 'cache', 'host-server') }))
 }
 
+/** The root of a host's Walnut server install on the host (install.ts HOST_ROOT, or the WALNUT_HOST_SERVER_ROOT knob). */
+export function hostServerRootSpec(): string | undefined {
+  return process.env.WALNUT_HOST_SERVER_ROOT?.trim() || undefined
+}
+
 export function getHostServerManager(): HostServerManager | null {
   if (CLOUD_MODE) return null
   if (manager) return manager
@@ -182,7 +187,7 @@ export function getHostServerManager(): HostServerManager | null {
     frozen: async () => (await import('../integration-registry.js')).registry.isClosing(),
     // Test and safety knobs (docs/plan/walnut-replica-servers-impl.md, WP2): another root
     // on the host, and (tests only) a local tree run in place of an installed build.
-    ...(process.env.WALNUT_HOST_SERVER_ROOT?.trim() ? { hostRoot: process.env.WALNUT_HOST_SERVER_ROOT.trim() } : {}),
+    ...(hostServerRootSpec() ? { hostRoot: hostServerRootSpec() } : {}),
     ...(process.env.WALNUT_HOST_SERVER_APP_DIR?.trim() ? { appDir: process.env.WALNUT_HOST_SERVER_APP_DIR.trim() } : {}),
     registerTarget: (hostKey, post, copies) => {
       // One id for the target and its ready: a ready under another name reaches no target.
