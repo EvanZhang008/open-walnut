@@ -2280,9 +2280,24 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
   // socket (the slow-link e2e pins that reset), and on wss:// neither ends it
   // (gate 2026-10-06, see abandonBridgeSocket). So this pins the call.
   it('the bun twin terminates a socket it gives up on, closing it only when it cannot terminate', () => {
-    const helper = standaloneSrc.slice(standaloneSrc.indexOf('function abandonBridgeSocket('), standaloneSrc.indexOf('function abandonBridgeSocket(') + 300)
+    const helper = standaloneSrc.slice(standaloneSrc.indexOf('function abandonBridgeSocket('), standaloneSrc.indexOf('// Adapter: presents the outbound client WebSocket'))
     expect(helper).toMatch(/const t = \(client as unknown as \{ terminate\?: \(\) => void \}\)\.terminate\s*\n\s*if \(typeof t === 'function'\) t\.call\(client\); else client\.close\(\)/)
     expect(helper.match(/client\.close\(\)/g)).toHaveLength(1)
+  })
+  // 2026-10-23: Bun 1.4.4's WebSocket terminate() ends a ws:// socket with a
+  // FIN (oven-sh/bun#45223), so CI on the latest Bun saw the flow given up on
+  // drain. From 1.4.4 the bun twin dials ws:// over its own TCP socket through
+  // Bun's ws, and resets that socket first, as the JS twin does.
+  it('the bun twin resets its own TCP socket under a ws:// bridge on Bun 1.4.4 and later', () => {
+    expect(standaloneSrc).toContain("const BRIDGE_OWN_TCP = Bun.semver.satisfies(Bun.version, '>=1.4.4')")
+    const open = standaloneSrc.slice(standaloneSrc.indexOf('function openBridgeClient('), standaloneSrc.indexOf('function abandonBridgeSocket('))
+    expect(open).toMatch(/if \(!BRIDGE_OWN_TCP \|\| !\/\^ws:\/i\.test\(url\)\) return new WebSocket\(url\)/)
+    expect(open).toMatch(/createConnection: [\s\S]*net\.connect\([\s\S]*tcp\.on\('error', \(\) => \{\}\)[\s\S]*holder\.tcp = tcp/)
+    const helper = standaloneSrc.slice(standaloneSrc.indexOf('function abandonBridgeSocket('), standaloneSrc.indexOf('// Adapter: presents the outbound client WebSocket'))
+    expect(helper).toMatch(/if \(tcp && !tcp\.destroyed && !tcp\.connecting\) \{\s*\n\s*try \{ tcp\.resetAndDestroy\(\); return \} catch \{\}/)
+    expect(helper.indexOf('resetAndDestroy')).toBeLessThan(helper.indexOf('.terminate'))
+    expect(standaloneSrc).toContain('client = openBridgeClient(dialUrl)')
+    expect(standaloneSrc).not.toContain('client = new WebSocket(dialUrl)')
   })
   // Gate 2026-10-05: destroy() ends a socket with a FIN only after the kernel
   // has sent every byte it buffered, so behind a slow link the flow given up
