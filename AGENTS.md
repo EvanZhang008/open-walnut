@@ -93,9 +93,12 @@ WALNUT_DEVPROD_RUNTIME=node bash scripts/deploy-committed.sh
 WALNUT_DEVPROD_DRY_RUN=1 WALNUT_DEVPROD_PORT=35999 TMPDIR=/tmp/dry bash scripts/dev-prod.sh
 
 # Rehearse the WHOLE real deploy (build, smoke, kill and launch, LKG, rollback) away
-# from production: its own port, data dir, daemon dir, temp dir and launchd label.
-# Refuses :3456, ~/.open-walnut, /tmp/open-walnut and the production log and LKG; it
-# writes only into the dirs it is given (the CLI publish goes to a stand-in there).
+# from production: its own port, data dir, daemon dir and launchd label, and a state
+# dir it makes, <dir>/rehearsal-state (lock, stamps, stages, LKG, log, the CLI publish
+# stand-in), with the build clone beside it in <dir>. It writes only into those dirs
+# (and the daemon's <daemon dir>-streams). Refuses :3456, :3457, a port served by
+# anything it did not start, ~/.open-walnut, /tmp/open-walnut, ~/.cache/open-walnut,
+# the production log and any WALNUT_DEVPROD_LKG_DIR.
 # Clean up after: bootout com.open-walnut.dev-prod-rehearsal.<port>, then remove the dirs.
 WALNUT_DEVPROD_REHEARSAL=1 WALNUT_DEVPROD_PORT=35871 WALNUT_DEVPROD_REHEARSAL_DIR=/tmp/rh \
   OPEN_WALNUT_HOME=/tmp/rh/home WALNUT_DAEMON_DIR=/tmp/rh/daemon bash scripts/deploy-committed.sh
@@ -196,8 +199,19 @@ files are staged as `<stage>/dist-bin/walnut-<target>`, where host servers pick 
 tree into `<stage>/runtime/<build>`, on the temp volume, never the data home), then the smoke
 boot runs `<file> web` with its own data, daemon and runtime dirs. The launchd job runs the file
 directly; the LKG holds `dist-bin/` and `runtime/`, and a rollback starts whichever kind the last
-good build was. `WALNUT_RUNTIME_DIR` names the parent of the per-build trees, so a child of the
-server that runs another build unpacks beside it, never over it (`src/binary/runtime-tree.ts`).
+good build was, from a fresh stage cloned from the LKG (`open-walnut-stage.rollback.*`), never from
+the LKG itself, and a snapshot never replaces an LKG a process still runs from: the next good
+deploy replaces the LKG whole, and would delete a rollback server's file and tree (or those of
+the daemon it respawned from its own path) from under it. A stage kept only for a daemon or a
+session's child loses the Linux files (most of its size; only a serving server reads them), and a
+build clone an interrupted `deploy-committed.sh` left in TMPDIR is removed once nothing runs from
+it. With TMPDIR unset (over ssh) the deploy uses the per-user temp dir on macOS, `/tmp` elsewhere.
+`WALNUT_RUNTIME_DIR` names the parent of the per-build trees, so a child of the server that runs
+another build unpacks beside it, never over it (`src/binary/runtime-tree.ts`); sessions and
+terminals never inherit it, and `dev:ephemeral --file` keeps the newest 3 trees (and any from the
+last day) in `$TMPDIR/walnut-ephemeral-runtime` (`WALNUT_EPHEMERAL_KEEP_TREES`). A file runs
+nested copies of a package from their own nested path in the tree, so a nested copy of another
+version reads its own files (`scripts/binary-build-checks.mjs`).
 Knobs: `WALNUT_DEVPROD_RUNTIME=node` (the Node build, for one release as the way back),
 `WALNUT_DEVPROD_FILE_TARGETS` (default the four Linux targets, `""` for none),
 `WALNUT_DEVPROD_SKIP_SELFTEST=1`, `WALNUT_BUN` (the build needs bun at least the
