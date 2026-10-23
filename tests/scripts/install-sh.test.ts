@@ -396,6 +396,24 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
     expect(entries(home)).not.toContain('app')
   })
 
+  it('going back to a release from before the file says how to stay there', async () => {
+    // Its Node archive updates itself to the newest release when it starts, and knows
+    // nothing of the versions held back (src/core/self-update/held-versions.ts).
+    const home = freshHome()
+    releaseFile('0.7.0')
+    expect((await install(home)).code).toBe(0)
+    await releaseArchive('0.6.9', { latest: false })
+    const back = await install(home, { OPEN_WALNUT_VERSION: '0.6.9' })
+    expect(back.code, back.out).toBe(0)
+    expect(await printed(home)).toBe('0.6.9 (archive)')
+    expect(back.out).toContain('Open Walnut 0.6.9 updates itself to the newest release when it starts')
+    expect(back.out).toContain('updates.auto: false')
+    // A release with the file holds a move back by itself: no such note.
+    const forward = await install(home, { OPEN_WALNUT_VERSION: '0.7.0' })
+    expect(forward.code, forward.out).toBe(0)
+    expect(forward.out).not.toContain('updates itself to the newest release')
+  })
+
   it('installing the version in use again changes nothing and keeps the one before it', async () => {
     const home = freshHome()
     releaseFile('0.7.0')

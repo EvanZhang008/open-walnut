@@ -280,11 +280,13 @@ Release get is what the matrix ran. Both channels also publish only a commit who
   nothing. `OPEN_WALNUT_VERSION` must be a version; a refusal from GitHub's API (its limit for
   an address without a login) says so and names `OPEN_WALNUT_VERSION`. A version with no file (a release
   from before it) still installs its Node archive, and an archive install moves to the file on
-  its next install. The musl build links the C++ runtime (Alpine's `libstdc++` and `libgcc`):
-  when the file cannot start on a musl system without it, install.sh names the `apk add` line
-  (and so does the npm launcher, on its loader's exit 127). A release on this disk
-  (`OPEN_WALNUT_RELEASE_BASE_URL=file://...`, the Mac app's) may hold the plain file instead of
-  the `.gz`. Ratchets: `tests/scripts/install-sh.test.ts` (sh and dash),
+  its next install. A pinned archive (going back to a release from before the file) updates
+  itself on its next start and knows nothing of held versions, so install.sh names
+  `updates.auto: false` as the way to stay on it. The musl build links the C++ runtime
+  (Alpine's `libstdc++` and `libgcc`): when the file cannot start on a musl system without
+  it, install.sh names the `apk add` line (and so does the npm launcher, on its loader's exit
+  127). A release on this disk (`OPEN_WALNUT_RELEASE_BASE_URL=file://...`, the Mac app's) may
+  hold the plain file instead of the `.gz`. Ratchets: `tests/scripts/install-sh.test.ts` (sh and dash),
   `tests/scripts/file-distribution.e2e.test.ts` (the real compiled file at two versions, end to end).
 - **Homebrew** (`scripts/homebrew/formula.mjs`): the formula names each Mac's and glibc Linux's
   `.gz` and its sha256, keeps it packed through `install` and unpacks it in `post_install_steps`

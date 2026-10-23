@@ -468,6 +468,12 @@ install_archive() {
   swap_link "../app/bin/walnut" "$install_dir/bin/walnut"
   prune app "$previous"
   finish
+  # A pinned release from before the file (going back to it): its updater installs the
+  # newest release on its next start and knows nothing of the versions held back.
+  if [ -n "${OPEN_WALNUT_VERSION:-}" ]; then
+    printf '  Open Walnut %s updates itself to the newest release when it starts. To stay on it,\n' "$version" >&2
+    printf '  set updates.auto: false in ~/.open-walnut/config.yaml, or start it with WALNUT_NO_AUTO_UPDATE=1.\n\n' >&2
+  fi
 }
 
 main() {

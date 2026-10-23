@@ -163,7 +163,10 @@ While a newer version is still installed beside the one linked, starting Walnut 
 install it again: it updates once a release newer than that one is published.
 `walnut update` installs the newest one whenever you ask. An npm install updates through npm
 the same way (`npm install -g open-walnut@<version>` goes back; turn updates on start off to
-stay there), Homebrew with `brew upgrade open-walnut`.
+stay there), Homebrew with `brew upgrade open-walnut`. Going back to a release from before the
+single file (`OPEN_WALNUT_VERSION=0.6.17` with the install command) installs its Node archive,
+which updates itself on its next start the way an npm install does: set `updates.auto: false`
+in `~/.open-walnut/config.yaml` to stay on it (install.sh says so).
 
 ---
 
