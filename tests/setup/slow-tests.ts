@@ -68,6 +68,7 @@ export const SLOW_TEST_FILES = [
   'tests/integration/replica-ask-twins.test.ts', // both daemon twins as processes, mock CLIs spawned from the spawn template, a resume, ten asks an hour
   'tests/providers/follower-owner-scope-twins.test.ts', // both daemon twins as processes, two Walnuts and mock CLIs (WP6 owner scope)
   'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
+  'tests/providers/daemon-connection-upload-fake-ssh.test.ts', // ~5s idle, ~20s at load 27: a stand-in ssh process per chunk, ~90 of them
   'tests/utils/file-lock-multiprocess.test.ts', // ~1.5s idle, 3s+ under load: four real locker processes
   'tests/integration/cloud-setup-e2e.test.ts', // real cloud-mode HTTP server + git sync
 
