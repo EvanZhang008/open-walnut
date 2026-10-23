@@ -272,6 +272,11 @@ describe('a clock routine on a host, and the runs this server makes itself', () 
     const code = clockHostTitle('devbox', 'claude-code');
     expect(code).toContain('waits there');
     expect(code).not.toContain('fires while this Mac sleeps');
+    // A host that starts the run itself (clock-host-start-v1) says so instead.
+    const starts = clockHostTitle('devbox', 'claude-code', true);
+    expect(starts).toContain('starts there on time');
+    expect(starts).not.toContain('waits there');
+    expect(clockHostTitle('devbox', 'session', true)).toContain('fires while this Mac sleeps');
   });
 
   it('a Claude Code run that came due with its clock on a host reads as waiting for the Mac', () => {
@@ -282,6 +287,8 @@ describe('a clock routine on a host, and the runs this server makes itself', () 
     expect(describeClockWait({ ...due, state: { nextRunAtMs: NOW - 1 } }, NOW)).toBeNull();
     expect(describeClockWait({ ...due, enabled: false }, NOW)).toBeNull();
     expect(describeClockWait({ ...due, state: { ...due.state, runningAtMs: NOW } }, NOW)).toBeNull();
+    // The host starts it itself: the Mac only waits to hear about it.
+    expect(describeClockWait({ ...due, state: { ...due.state, clockStarts: true } }, NOW)).toBe('Due 2h ago: waiting on devbox');
   });
 
   it('runs with no daemon seq (this server’s timer, Run now) are separate rows, and Run now says so', () => {

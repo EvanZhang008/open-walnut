@@ -147,7 +147,7 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
       )}
       {/* A routine whose work runs on a host keeps its clock there: say where, as a trigger's check line does. */}
       {!routine.check && routine.state.clockHost && (
-        <div className="routine-check-line routine-clock-line text-xs" title={clockHostTitle(routine.state.clockHost, routine.executor?.type)} data-testid="routine-clock-host">
+        <div className="routine-check-line routine-clock-line text-xs" title={clockHostTitle(routine.state.clockHost, routine.executor?.type, routine.state.clockStarts)} data-testid="routine-clock-host">
           <code className="routine-check-run">{describeClockHost(routine.state)}</code>
           {waiting && <span className="routine-check-status pending" data-testid="routine-clock-wait">{waiting}</span>}
         </div>

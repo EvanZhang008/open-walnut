@@ -198,14 +198,16 @@ export function describeClockHost(state: RoutineState | undefined): string | nul
 
 /**
  * The hover text that goes with describeClockHost. A session routine is delivered
- * there while this Mac sleeps; a Claude Code run is started by this Mac, so a slot
- * that comes while it sleeps waits on the host until the Mac is back.
+ * there while this Mac sleeps. A Claude Code run is started there too when the host
+ * can start it (`starts`, clock-host-start-v1); otherwise a slot that comes while
+ * this Mac sleeps waits on the host until the Mac is back.
  */
-export function clockHostTitle(host: string, executorType?: string): string {
+export function clockHostTitle(host: string, executorType?: string, starts?: boolean): string {
   const where = hostLabel(host);
-  return executorType === 'claude-code'
-    ? `Its clock runs on ${where}, where its work runs. A run that comes due while this Mac sleeps waits there, and this Mac starts it when it is back.`
-    : `Its clock runs on ${where}, where its work runs, so it fires while this Mac sleeps.`;
+  if (executorType !== 'claude-code') return `Its clock runs on ${where}, where its work runs, so it fires while this Mac sleeps.`;
+  return starts
+    ? `Its clock runs on ${where}, where its work runs. A run that comes due while this Mac sleeps starts there on time.`
+    : `Its clock runs on ${where}, where its work runs. A run that comes due while this Mac sleeps waits there, and this Mac starts it when it is back.`;
 }
 
 /**
@@ -220,7 +222,10 @@ export function describeClockWait(
   const next = s?.nextRunAtMs;
   if (!routine.enabled || routine.executor?.type !== 'claude-code' || !s?.clockHost || typeof next !== 'number') return null;
   if (next > nowMs || typeof s.runningAtMs === 'number') return null;
-  return `Due ${describeAgo(next, nowMs)}: waiting on ${hostLabel(s.clockHost)} for this Mac to start it`;
+  // A host that starts the run itself has started it or is about to: this Mac waits to hear.
+  return s.clockStarts
+    ? `Due ${describeAgo(next, nowMs)}: waiting on ${hostLabel(s.clockHost)}`
+    : `Due ${describeAgo(next, nowMs)}: waiting on ${hostLabel(s.clockHost)} for this Mac to start it`;
 }
 
 /** Badge text: "Claude Code @ clouddev" / "Home Chat" / "Walnut Agent". */

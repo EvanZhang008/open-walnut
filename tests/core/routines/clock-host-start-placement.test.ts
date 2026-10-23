@@ -150,6 +150,34 @@ describe('placeClocksForHost: the start rides the def only for a daemon that can
     expect(asked).toEqual([code.id])
   })
 
+  it('the routine says the host starts its runs once the daemon holds a def with the start, and stops saying so without one', async () => {
+    const state = makeState()
+    const code = await ops.add(state, routine())
+    const jobs = async () => await ops.list(state, { includeDisabled: true, recompute: false })
+    const stateOf = async () => (await jobs()).find((j) => j.id === code.id)!.state
+    const held = (fromMs: number) => ({ clocks: [{ id: code.id, fromMs, nextRunAtMs: fromMs }] })
+
+    const first = await placeClocksForHost(serviceOf(state), HOST, await jobs(), 'yes', deps(), { hostStart: true })
+    const fromMs = (await stateOf()).clockFromMs!
+    await first.applied(held(fromMs))
+    expect(await stateOf()).toMatchObject({ clockHost: HOST, clockStarts: true })
+
+    // The template is gone (or the routine grew ineligible): the next push carries no start.
+    const again = await placeClocksForHost(serviceOf(state), HOST, await jobs(), 'yes', deps(null), { hostStart: true })
+    await again.applied(held(fromMs))
+    expect(await stateOf()).toMatchObject({ clockHost: HOST })
+    expect((await stateOf()).clockStarts).toBeUndefined()
+
+    // Taken back to this server's timer: nothing of the host stays on it.
+    const third = await placeClocksForHost(serviceOf(state), HOST, await jobs(), 'yes', deps(), { hostStart: true })
+    await third.applied(held(fromMs))
+    expect((await stateOf()).clockStarts).toBe(true)
+    const gone = await placeClocksForHost(serviceOf(state), HOST, await jobs(), 'yes', deps(), { hostStart: true })
+    await gone.applied({ clocks: [] })
+    expect((await stateOf()).clockHost).toBeUndefined()
+    expect((await stateOf()).clockStarts).toBeUndefined()
+  })
+
   it('no start without hostStart (an older daemon, no routine template yet), or for an ineligible routine', async () => {
     const state = makeState()
     const code = await ops.add(state, routine())

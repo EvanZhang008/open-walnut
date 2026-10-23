@@ -297,6 +297,22 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     const message = head.clock
       ? (job.executor.type === 'session' ? scheduledText(job, fresh, at.startedAtMs) : promptOf(job))
       : buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: at.startedAtMs });
+    // The host may have started this slot itself and lost only its mark (a daemon
+    // death between the journal and the mark): its run is here, adopted from the
+    // journal, under the slot's derived id (routine-run-ids.ts). Record it, never a second.
+    if (head.clock && job.executor.type === 'claude-code') {
+      const { hostStartedRunOf } = await import('./routine-run-ids.js');
+      for (const e of fresh) {
+        const sid = e.clock ? await hostStartedRunOf(job.id, e.clock.slotMs) : null;
+        if (!sid) continue;
+        log.cron.info('clock run started on its host already: recorded, not run again', { host, jobId: job.id, seq: e.seq, sessionId: sid });
+        return {
+          status: 'ok' as const,
+          summary: `${host === '__local__' ? 'the local host' : host} started it in session ${await sessionLabel(sid)}`,
+          delivered: { sessionId: sid, text: message },
+        };
+      }
+    }
     const { runExecutor } = await import('./registry.js');
     return await runExecutor(job, job.executor, message);
   }, { fromHost: host });

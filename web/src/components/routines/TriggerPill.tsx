@@ -191,7 +191,7 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
       )}
       {routine.check && <code className="trigger-jobs-run" title={routine.check.run}>{describeCheck(routine.check)}</code>}
       {clockWhere && routine.state.clockHost && (
-        <code className="trigger-jobs-run" title={clockHostTitle(routine.state.clockHost, routine.executor?.type)} data-testid="trigger-jobs-clock">{clockWhere}</code>
+        <code className="trigger-jobs-run" title={clockHostTitle(routine.state.clockHost, routine.executor?.type, routine.state.clockStarts)} data-testid="trigger-jobs-clock">{clockWhere}</code>
       )}
       {/* The one line that answers "does this actually work": how many times it
           has fired, and when — not just what the newest check decided. */}

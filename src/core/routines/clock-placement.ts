@@ -288,6 +288,7 @@ export async function placeClocksForHost(
   // A daemon that has not said it holds clocks gets none: an older one refuses
   // the whole set over a def it cannot read.
   const defs: TriggerDef[] = [];
+  const starts: string[] = [];
   if (capability === 'yes') {
     for (const job of placed.owned) {
       // A claude-code run the host may start itself while this Mac is away
@@ -297,6 +298,7 @@ export async function placeClocksForHost(
         : null;
       const def = clockDefOf(job, taskOf.get(job.id), WALNUT_HOME, start);
       if (def) defs.push(def);
+      if (def?.start) starts.push(job.id);
     }
   }
   const handed = placed.handed;
@@ -309,6 +311,7 @@ export async function placeClocksForHost(
         ...(Array.isArray(reply.clocks) ? { clocks: reply.clocks as ClockReply['clocks'] } : {}),
         ...(Array.isArray(reply.released) ? { released: reply.released as ClockReply['released'] } : {}),
         ...(refused.length ? { refused } : {}),
+        starts,
       };
       rememberRefused(host, placed.owned, taskOf, refused);
       const back = await service.settleClocks(host, clockReply);

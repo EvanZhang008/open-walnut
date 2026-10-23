@@ -124,6 +124,8 @@ export type RoutineState = {
   /** A routine whose work runs on a host keeps its clock in that host's daemon (clock-routine-v1). */
   clockHost?: string;
   clockFromMs?: number;
+  /** The host starts a claude-code routine's runs itself while this Mac is away (clock-host-start-v1). */
+  clockStarts?: boolean;
 };
 
 export interface Routine {

@@ -18,8 +18,14 @@ import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-clock-host-start-mac'))
-const cron = vi.hoisted(() => ({ service: null as unknown }))
+const cron = vi.hoisted(() => ({ service: null as unknown, run: null as null | ((...a: unknown[]) => unknown) }))
 vi.mock('../../../src/web/routes/cron.js', () => ({ getCronService: () => cron.service }))
+// A fire the Mac runs goes through the routines registry, not the service's deps: the
+// executor is watched there, so "nothing started" means no executor ran at all.
+vi.mock('../../../src/core/routines/registry.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/routines/registry.js')>()),
+  runExecutor: (...a: unknown[]) => cron.run!(...a),
+}))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { CronService } from '../../../src/core/cron/service.js'
@@ -132,6 +138,7 @@ async function expectAdopted(run: { sid: string; taskId: string }, title: string
 
 beforeEach(() => {
   runExecutor = vi.fn().mockResolvedValue({ status: 'ok', summary: 'started' })
+  cron.run = runExecutor
   acks = []
   setTriggerDaemonLookupForTest(() => ({
     host: HOST, hasCapability: () => true, capabilitiesKnown: true, triggersPushed: true,
@@ -196,6 +203,35 @@ describe('a routine run the host started while the Mac was away', () => {
     await handleTriggerFired(HOST, fire)
     expect((await jobOf(s, job.id)).state.fireLog).toHaveLength(1)
     await expectAdopted(run, 'Digest of the week', 'Reports')
+  })
+
+  it('the mark was lost (a daemon death after the journal): the adopted run is recorded, not run again', async () => {
+    const s = service()
+    cron.service = s
+    const job = await hostedRoutine(s, 'Nightly check')
+    const { run, fire, create, session } = hostRun(job, 0, 'Routine: Nightly check')
+    await runOfflineHandover(journal([create, session]).conn as never)
+    await expectAdopted(run, 'Routine: Nightly check')
+
+    // The same slot replayed as owed: no `host` mark, so the daemon offers it to the Mac to run.
+    const { host: _mark, ...owed } = fire
+    await handleTriggerFired(HOST, owed)
+    expect(runExecutor).not.toHaveBeenCalled()
+    const recorded = await jobOf(s, job.id)
+    expect(recorded.state.lastStatus).toBe('ok')
+    expect(recorded.state.fireLog).toHaveLength(1)
+    expect(JSON.stringify(recorded.state.fireLog![0])).toContain(`${HOST} started it in session`)
+    expect(getSessionsForTaskSync(run.taskId)).toHaveLength(1)
+  })
+
+  it('an owed slot the host never started still runs here, once', async () => {
+    const s = service()
+    cron.service = s
+    const job = await hostedRoutine(s, 'Morning sync')
+    const { fire } = hostRun(job, 0, 'Routine: Morning sync')
+    const { host: _mark, ...owed } = fire
+    await handleTriggerFired(HOST, owed)
+    expect(runExecutor).toHaveBeenCalledTimes(1)
   })
 
   it('a run of another slot is its own run, with its own task and session', async () => {

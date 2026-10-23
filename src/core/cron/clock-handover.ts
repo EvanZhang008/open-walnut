@@ -69,6 +69,11 @@ export interface ClockReply {
   released?: ClockReport[];
   /** Defs it could not take: the rest of the set was armed without them. */
   refused?: Array<{ id?: string; error: string }>;
+  /**
+   * The server's own note, not the daemon's: the routines whose def carried a `start`
+   * (clock-host-start-v1), so the host starts their runs while this Mac is away.
+   */
+  starts?: string[];
 }
 
 /**
@@ -96,6 +101,7 @@ function takeBack(job: CronJob, host: string, nextRunAtMs: number | undefined, a
   const mark = job.state.clockFromMs;
   delete job.state.clockHost;
   delete job.state.clockFromMs;
+  delete job.state.clockStarts;
   job.state.nextRunAtMs = job.enabled ? nextRunAtMs : undefined;
   // A handover the daemon never armed made no runs: an earlier one's record stays.
   if (armed && typeof mark === 'number') {
@@ -170,7 +176,9 @@ export async function settleClocks(state: CronServiceState, host: string, reply:
     const held = new Map((Array.isArray(reply.clocks) ? reply.clocks : []).map((c) => [c.id, c]));
     const gaveBack = new Map((Array.isArray(reply.released) ? reply.released : []).map((c) => [c.id, c]));
     const refused = new Map((Array.isArray(reply.refused) ? reply.refused : []).filter((r) => typeof r?.id === 'string').map((r) => [r.id!, r.error]));
+    const starts = new Set(Array.isArray(reply.starts) ? reply.starts : []);
     const takenBack: string[] = [];
+    const restated: string[] = [];
     let changed = false;
     for (const job of state.store?.jobs ?? []) {
       if (!job.state || job.state.clockHost !== host) continue;
@@ -180,6 +188,13 @@ export async function settleClocks(state: CronServiceState, host: string, reply:
         // Only a report on the current handover says where this clock stands.
         if (c.fromMs === mark && job.enabled && job.state.nextRunAtMs !== c.nextRunAtMs) {
           job.state.nextRunAtMs = c.nextRunAtMs;
+          changed = true;
+        }
+        // Whether the host starts its runs while this Mac is away (the card says so).
+        if (starts.has(job.id) !== (job.state.clockStarts === true)) {
+          if (starts.has(job.id)) job.state.clockStarts = true;
+          else delete job.state.clockStarts;
+          restated.push(job.id);
           changed = true;
         }
         continue;
@@ -206,7 +221,7 @@ export async function settleClocks(state: CronServiceState, host: string, reply:
       await persist(state);
       armTimer(state);
       for (const job of state.store?.jobs ?? []) {
-        if (takenBack.includes(job.id)) emit(state, { jobId: job.id, action: 'updated', nextRunAtMs: job.state.nextRunAtMs });
+        if (takenBack.includes(job.id) || restated.includes(job.id)) emit(state, { jobId: job.id, action: 'updated', nextRunAtMs: job.state.nextRunAtMs });
       }
     }
     return takenBack;

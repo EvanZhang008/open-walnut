@@ -302,6 +302,12 @@ export type CronJobState = {
    */
   clockFromMs?: number;
   /**
+   * The host starts this claude-code routine's runs itself while this Mac is away
+   * (clock-host-start-v1): its def carried a `start` the daemon took. Absent: a run
+   * that comes due while the Mac sleeps waits on the host for the Mac.
+   */
+  clockStarts?: boolean;
+  /**
    * The last clock a host's daemon held, after it came back to this server. That
    * daemon still sends the runs it made under it (`fromMs`) until each is
    * recorded: slots before `beforeMs` were its own (absent: all of them, a one-shot

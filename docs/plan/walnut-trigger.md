@@ -302,7 +302,10 @@ started it:
   and only marks the fire; a record written twice is one record (the journal's op id,
   the Mac's ledger and `created_by_op`); a server's claim of a fire whose mark a
   daemon death cut is answered with the run (`startedRun`), never handed over to start
-  again.
+  again. The Mac checks too: before it runs a slot the host offers as owed, it derives
+  the slot's session id the same way (`core/routines/routine-run-ids.ts`) and, when it
+  already adopted that session from the journal (it always adopts before it acks),
+  records the run instead of starting it.
 - A start that cannot be made leaves the run owed, as before, and is tried again after
   a minute; each reason is logged once per run. While a server answers the Walnut, the
   host tries nothing: that server claims the run and starts it.
@@ -326,8 +329,10 @@ stops there.
 UI: the Routines card shows `clock @ <host>` under the timing, the label a trigger
 uses for its check's host; for a `claude-code` routine the hover says a run that comes
 due while the Mac sleeps waits on the host, and a slot that has passed reads "Due 2h
-ago: waiting on <host> for this Mac to start it" (not yet updated for a routine the
-host starts itself, whose run starts there after the grace). The task's TRIGGER pill lists every
+ago: waiting on <host> for this Mac to start it". A routine the host starts itself
+(`state.clockStarts`, set when the daemon took a def with `start` and cleared when a
+push carries none or the clock comes back) says its run "starts there on time", and a
+passed slot reads "Due 2h ago: waiting on <host>". The task's TRIGGER pill lists every
 session routine on the task wherever its clock is (with the host label when it is on
 a host), `Run now`, and its History; the replica copy carries `clockHost`.
 
