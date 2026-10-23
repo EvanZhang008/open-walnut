@@ -31,11 +31,11 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import Database from '../../src/lib/sqlite.js'
 import {
   BUN, HOST_KEY, ROOT, WINDOWS, _signalSafetyForTesting as guard, sleep, startHostDaemon, waitFor, writeStubBin, type Twin,
 } from '../helpers/replica-cluster.js'
@@ -271,7 +271,6 @@ function gateway(c: Cluster, sid: string, name: string, args: Record<string, unk
 
 /** The Mac's task row on disk, read only. */
 function macTask(c: Cluster, id: string): { title: string; phase: string } | null {
-  const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { get(...a: unknown[]): unknown }; close(): void }
   const db = new Database(path.join(c.macData, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
   try { return (db.prepare('SELECT title, phase FROM tasks WHERE id = ?').get(id) as { title: string; phase: string } | undefined) ?? null } finally { db.close() }
 }

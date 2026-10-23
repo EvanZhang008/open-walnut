@@ -6,13 +6,15 @@ import path from 'node:path';
  * Boundary gate: src/lib/hybrid-search/ is written as a standalone library
  * (publishable later by copying the directory). It must never import walnut
  * code — no logging, no constants, no event bus, no core types. Config comes
- * in through createSearchIndex options instead.
+ * in through createSearchIndex options instead. SQLite comes through
+ * src/lib/sqlite.ts (which imports nothing from Walnut either), never
+ * better-sqlite3 directly, which cannot load on bun.
  */
 const LIB_DIR = path.resolve(__dirname, '../../src/lib/hybrid-search');
 
 const ALLOWED = [
   /^node:/,
-  /^better-sqlite3$/,
+  /^\.\.\/sqlite\.js$/,
   /^@huggingface\/transformers$/,
   /^\.\/[^/]+\.js$/, // same-directory siblings only
 ];

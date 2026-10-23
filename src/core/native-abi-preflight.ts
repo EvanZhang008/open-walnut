@@ -34,6 +34,13 @@ import { INSTALL_SCRIPT_PACKAGES } from './self-update/install-kind.js';
 const NATIVE_MODULES = ['better-sqlite3'] as const;
 
 /**
+ * On bun, SQLite is built in (bun:sqlite, through src/lib/sqlite.ts): there is
+ * no native SQLite module to load or rebuild. Read here rather than imported
+ * from src/lib/sqlite.ts, whose import loads the driver this file checks.
+ */
+const RUNNING_ON_BUN = typeof (process.versions as { bun?: string }).bun === 'string';
+
+/**
  * Marker the desktop launcher greps for to extend its startup deadline — a
  * from-source rebuild takes far longer than the normal "listening" wait.
  * Keep in sync with REBUILD_MARKER in desktop/main.swift.
@@ -118,16 +125,18 @@ function purgeFromCache(moduleName: string): void {
 
 /**
  * Verify every native addon loads under the running Node; recompile any whose
- * ABI has drifted.
+ * ABI has drifted. On bun there is none to check (`onBun` overrides the
+ * runtime check, for tests).
  *
  * @returns `true` when all addons load (possibly after a repair). `false` means
  *          a load still fails — callers MUST NOT exit on that; the downstream
  *          error is more specific than anything we could raise here.
  */
-export function ensureNativeModulesLoadable(): boolean {
+export function ensureNativeModulesLoadable(opts: { onBun?: boolean } = {}): boolean {
   let allOk = true;
+  const modules: readonly string[] = (opts.onBun ?? RUNNING_ON_BUN) ? [] : NATIVE_MODULES;
 
-  for (const moduleName of NATIVE_MODULES) {
+  for (const moduleName of modules) {
     const first = probe(moduleName);
     if (first.ok) continue;
 

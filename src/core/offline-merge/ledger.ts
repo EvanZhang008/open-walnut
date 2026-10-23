@@ -28,7 +28,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import Database, { type Database as DatabaseType } from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../../lib/sqlite.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 

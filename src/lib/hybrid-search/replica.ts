@@ -19,7 +19,7 @@
  * should not go blind meanwhile. A complete set (seq 0 present) always wins.
  */
 
-import type { Statement } from 'better-sqlite3';
+import type { Statement } from '../sqlite.js';
 import type { SearchDb } from './db.js';
 import { buildFtsColumns } from './writer.js';
 import type { DocChangeListener } from './writer.js';

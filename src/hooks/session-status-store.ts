@@ -1,7 +1,7 @@
-import Database from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../lib/sqlite.js';
 
 function ensureStatusColumns(
-  db: InstanceType<typeof Database>,
+  db: DatabaseType,
   now: string,
 ): void {
   const columns = db.pragma('table_info(sessions)') as Array<{ name: string }>;

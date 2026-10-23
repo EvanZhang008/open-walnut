@@ -51,6 +51,8 @@ const RUN_STARTED_MS = Date.now();
  * corruption risk. Tests report; only the server repairs.
  */
 function assertNativeAbiMatches(): void {
+  // On bun, SQLite is bun:sqlite (src/lib/sqlite.ts): no addon, no ABI to match.
+  if (typeof (process.versions as { bun?: string }).bun === 'string') return;
   try {
     const req = createRequire(import.meta.url);
     const Database = req('better-sqlite3') as new (p: string) => { close(): void };

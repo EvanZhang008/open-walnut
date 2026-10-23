@@ -6,7 +6,7 @@
  * the walk runs on the host thread of a live web server.
  */
 
-import type { Statement } from 'better-sqlite3';
+import type { Statement } from '../sqlite.js';
 import type { SearchDb } from './db.js';
 
 /** Keyset position in the missing-vectors walk (updated_at DESC, id DESC). */

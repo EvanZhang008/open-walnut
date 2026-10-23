@@ -14,7 +14,7 @@
  * helpers.
  */
 
-import Database, { type Database as DatabaseType } from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../lib/sqlite.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';

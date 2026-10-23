@@ -48,9 +48,9 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
-import { createRequire } from 'node:module'
 import net from 'node:net'
 import path from 'node:path'
+import Database from '../../../src/lib/sqlite.js'
 import { HOST_TURN, MAC_FAVORITES, MAC_LETTER, MAC_NOTE, MAC_ROUTINE, MAC_THEME, MAC_USER_NAME, startReplicaCluster, type ReplicaCluster, type Twin } from '../../helpers/replica-cluster.js'
 import { startFakeTunnel, type FakeTunnel } from './replica-tunnel.js'
 
@@ -119,7 +119,6 @@ function journalOf(cl: ReplicaCluster): Array<{ seq: number; kind: string; opId:
 
 /** The Mac's task rows, read only from its store on disk. */
 function macTaskRows(cl: ReplicaCluster): Array<{ id: string; title: string; phase: string }> {
-  const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { all(): unknown[] }; close(): void }
   const db = new Database(path.join(cl.macData, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
   try { return db.prepare('SELECT id, title, phase FROM tasks').all() as Array<{ id: string; title: string; phase: string }> } finally { db.close() }
 }

@@ -30,6 +30,7 @@
 
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import Database from '../sqlite.js';
 
 const requireModule = createRequire(import.meta.url);
 
@@ -205,7 +206,6 @@ function loadMatrix(): VecMatrix | null {
   try {
     // Own READONLY connection: WAL supports readers in other processes, and
     // this worker must never be able to write or lock the host's handle.
-    const Database = requireModule('better-sqlite3') as typeof import('better-sqlite3');
     const db = new Database(config.dbPath, { readonly: true, fileMustExist: true });
     try {
       const rows = db.prepare(

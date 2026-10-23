@@ -41,10 +41,10 @@
  * alone otherwise; REPLICA_CLUSTER_TWINS=source|standalone|source,standalone picks.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { createRequire } from 'node:module'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import Database from '../../src/lib/sqlite.js'
 import { BUN, MAC_NOTE, startReplicaCluster, waitFor, type ReplicaCluster, type Twin } from '../helpers/replica-cluster.js'
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
@@ -53,7 +53,6 @@ type Row = { id: string; title: string; phase: string; project: string | null; p
 
 /** The Mac's task store on disk, read only (its own WAL readers see every commit). */
 function macTasks(c: ReplicaCluster): Row[] {
-  const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { all(): unknown[] }; close(): void }
   const db = new Database(path.join(c.macData, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
   try { return db.prepare('SELECT id, title, phase, project, parent_task_id, focus_tier, pinned, payload FROM tasks').all() as Row[] } finally { db.close() }
 }
@@ -132,7 +131,6 @@ const digest = (b: string | Buffer) => crypto.createHash('sha256').update(b).dig
  */
 function copyDigests(c: ReplicaCluster): Map<string, string> {
   const out = new Map<string, string>()
-  const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { all(): unknown[] }; close(): void }
   for (const [name, file, q] of [
     ['tasks rows', path.join(c.replicaData, 'tasks', 'tasks.sqlite'), 'SELECT * FROM tasks ORDER BY id'],
     ['sessions rows', path.join(c.replicaData, 'sessions.sqlite'), 'SELECT * FROM sessions ORDER BY claude_session_id'],

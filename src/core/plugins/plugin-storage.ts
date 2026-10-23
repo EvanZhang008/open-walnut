@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import { WALNUT_HOME } from '../../constants.js'
+import { ON_BUN, sqliteModuleFile } from '../../lib/sqlite.js'
 import { readJsonFile, updateJsonFile, writeJsonFile } from '../../utils/fs.js'
 import type { Disposable } from './disposable.js'
 import { validatePluginId } from './ids.js'
@@ -12,7 +13,8 @@ const DB_WORKER_SOURCE = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
 const fs = require('node:fs')
 const path = require('node:path')
-const Database = require(workerData.driver)
+const driver = require(workerData.driver)
+const Database = typeof driver === 'function' ? driver : driver.default
 const directory = path.dirname(workerData.file)
 fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
 fs.chmodSync(directory, 0o700)
@@ -58,7 +60,10 @@ parentPort.on('message', ({ id, method, args }) => {
 })
 `
 
-const BETTER_SQLITE3_PATH = createRequire(import.meta.url).resolve('better-sqlite3')
+// The worker opens its database with better-sqlite3 on Node. bun cannot load
+// that addon, so there the worker loads src/lib/sqlite.ts (dist/lib/sqlite.js
+// in a build), which runs on bun:sqlite.
+const SQLITE_DRIVER_PATH = ON_BUN ? sqliteModuleFile() : createRequire(import.meta.url).resolve('better-sqlite3')
 
 interface PendingRequest {
   resolve(value: unknown): void
@@ -73,7 +78,8 @@ export class PluginDatabaseClient implements Disposable {
   private disposed = false
   private dead = false
 
-  constructor(filePath: string, driverPath = BETTER_SQLITE3_PATH) {
+  constructor(filePath: string, driverPath = SQLITE_DRIVER_PATH) {
+    if (!driverPath) throw new Error('Plugin database driver not found (dist/lib/sqlite.js is missing from this build)')
     this.worker = new Worker(DB_WORKER_SOURCE, {
       eval: true,
       workerData: { file: filePath, driver: driverPath },

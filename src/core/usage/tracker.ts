@@ -5,7 +5,7 @@
  * for the admin dashboard.
  */
 
-import Database, { type Database as DatabaseType } from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../../lib/sqlite.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';

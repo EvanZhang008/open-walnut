@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import Database from 'better-sqlite3';
+import Database from '../../../src/lib/sqlite.js';
 import { UsageTracker } from '../../../src/core/usage/tracker.js';
 
 describe('UsageTracker', () => {
@@ -334,7 +334,7 @@ describe('UsageTracker', () => {
     });
 
     it('filters by an explicit date range', () => {
-      const db = (tracker as unknown as { getDb: () => import('better-sqlite3').Database }).getDb();
+      const db = (tracker as unknown as { getDb: () => import('../../../src/lib/sqlite.js').Database }).getDb();
       // Insert two rows on fixed dates directly (record() always stamps "now").
       const ins = db.prepare(`INSERT INTO usage (id, timestamp, date, source, model, input_tokens, cost_usd)
         VALUES (?, ?, ?, 'agent', 'model-a', ?, ?)`);

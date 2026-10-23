@@ -32,7 +32,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
-import Database from 'better-sqlite3'
+import Database from '../../src/lib/sqlite.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 

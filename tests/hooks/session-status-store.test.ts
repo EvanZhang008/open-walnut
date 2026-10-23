@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
+import Database from '../../src/lib/sqlite.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

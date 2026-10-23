@@ -35,7 +35,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../../src/lib/sqlite.js';
 
 const GATED = !!process.env.WALNUT_LIVE_CROSS_PROCESS;
 const describeMaybe = GATED ? describe : describe.skip;
@@ -84,7 +84,7 @@ function runWorker(mode: string, iterations: number): Promise<WorkerTally> {
   });
 }
 
-function readDb<T>(fn: (db: Database.Database) => T): T {
+function readDb<T>(fn: (db: DatabaseType) => T): T {
   const db = new Database(path.join(home, 'tasks', 'tasks.sqlite'), { readonly: true });
   try { return fn(db); } finally { db.close(); }
 }

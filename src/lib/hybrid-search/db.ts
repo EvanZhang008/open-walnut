@@ -23,10 +23,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../sqlite.js';
 import { PASSAGE_POLICY_VERSION } from './chunk.js';
 
-export type SearchDb = Database.Database;
+export type SearchDb = DatabaseType;
 
 export const SCHEMA_VERSION = 1;
 

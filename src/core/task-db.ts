@@ -11,7 +11,7 @@
  * validation all live in task-manager.ts on top of these helpers.
  */
 
-import Database, { type Database as DatabaseType } from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from '../lib/sqlite.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';

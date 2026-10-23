@@ -15,6 +15,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { log } from '../logging/index.js';
 import { markSessionStoppedInSqlite } from './session-status-store.js';
+import Database from '../lib/sqlite.js';
 
 // Local copy of SESSION_DB_PATH to keep the hook bundle free of session-db.ts
 // (which would drag in types + logger). Keep in sync with src/core/session-db.ts:30.
@@ -106,8 +107,6 @@ function updateSessionStore(sessionId: string): void {
 function findLinkedTaskId(): string | null {
   try {
     if (!fs.existsSync(SESSION_DB_PATH)) return null;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require('better-sqlite3') as typeof import('better-sqlite3');
     const db = new Database(SESSION_DB_PATH, { readonly: true, fileMustExist: true });
     try {
       const row = db

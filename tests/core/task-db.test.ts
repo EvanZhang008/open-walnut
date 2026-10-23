@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database from '../../src/lib/sqlite.js';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-db'));
@@ -849,7 +849,7 @@ describe('task-db: backup-on-empty guard', () => {
     expect(fs.existsSync(expectedBackup)).toBe(true);
 
     // Verify the backup is a valid SQLite file containing the 3 seeded rows.
-    const BetterSqlite = (await import('better-sqlite3')).default;
+    const BetterSqlite = (await import('../../src/lib/sqlite.js')).default;
     const backupDb = new BetterSqlite(expectedBackup, { readonly: true });
     try {
       const row = backupDb.prepare('SELECT COUNT(*) AS n FROM tasks').get() as { n: number };
