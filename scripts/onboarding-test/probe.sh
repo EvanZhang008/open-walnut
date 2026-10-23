@@ -3,9 +3,17 @@
 # user to do, timing every step and writing down each place a human would have had to
 # stop and figure something out. It never repairs the product; it only reports.
 #
-#   bash probe.sh [--path readme,npm] [--repo URL] [--ref main] [--pkg open-walnut@latest]
-#                 [--out DIR] [--readme-port 3456] [--npm-port 3458] [--ready-timeout 900]
+#   bash probe.sh [--path installer,readme,npm] [--repo URL] [--ref main] [--pkg open-walnut@latest]
+#                 [--installer-url URL] [--out DIR] [--installer-port 3459] [--readme-port 3456]
+#                 [--npm-port 3458] [--ready-timeout 900]
 #   bash probe.sh --stop [--out DIR]        # stop only the servers this probe started
+#
+# The three README routes, each on its own port:
+#   installer  curl -fsSL .../install.sh | sh, then walnut web (needs nothing first)
+#   readme     the checkout: git, then Bun (curl -fsSL https://bun.sh/install | bash),
+#              git clone, bun install, bun run start. No Node anywhere.
+#   npm        npm install -g open-walnut, then open-walnut web. The one route that needs
+#              Node: when npm is missing it installs Node LTS with nvm, as a person would.
 #
 # Output (all under --out, default ~/walnut-onb):
 #   steps.jsonl      one JSON object per step: name, status ok|fail|skip, seconds, note, finding
@@ -16,11 +24,13 @@
 
 set -u
 
-PATHS="readme,npm"
+PATHS="installer,readme,npm"
 REPO="https://github.com/EvanZhang008/open-walnut.git"
 REF="main"
 PKG="open-walnut@latest"
+INSTALLER_URL="https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh"
 OUT="$HOME/walnut-onb"
+INSTALLER_PORT=3459
 README_PORT=3456
 NPM_PORT=3458
 READY_TIMEOUT=900
@@ -32,7 +42,9 @@ while [ $# -gt 0 ]; do
     --repo) REPO="$2"; shift 2 ;;
     --ref) REF="$2"; shift 2 ;;
     --pkg) PKG="$2"; shift 2 ;;
+    --installer-url) INSTALLER_URL="$2"; shift 2 ;;
     --out) OUT="$2"; shift 2 ;;
+    --installer-port) INSTALLER_PORT="$2"; shift 2 ;;
     --readme-port) README_PORT="$2"; shift 2 ;;
     --npm-port) NPM_PORT="$2"; shift 2 ;;
     --ready-timeout) READY_TIMEOUT="$2"; shift 2 ;;
@@ -144,17 +156,61 @@ wait_ready() {
 
 # Pick the first line of a log that reads like the reason it failed.
 first_error_line() {
-  grep -m1 -E 'not found|ERR!|Error|error:|command not found|EACCES|ENOENT|failed' "$STEP_LOG" | cut -c1-220
+  grep -m1 -E 'not found|ERR!|Error|error:|command not found|EACCES|ENOENT|failed|curl: \(|GLIBC_' "$STEP_LOG" | cut -c1-220
 }
 
-health_note() {  # $1 base url -> "provider:false cli:false | GET / -> 200 in 0.01s"
-  local base="$1" h root ms
+# One top-level field of a flat JSON object, read with sed: the machine may have no
+# JavaScript runtime at all (the installer route needs none), so none is used here.
+json_field() {
+  printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\).*/\1/p" | head -n 1
+}
+
+health_note() {  # $1 base url -> "provider:false cli:false source:none | GET / -> 200 in 0.01s"
+  local base="$1" h root ms summary
   h=$(curl -s --max-time 5 "$base/api/system/health" 2>/dev/null)
   ms=$(curl -s -o /dev/null -w '%{time_total}' --max-time 10 "$base/" 2>/dev/null)
   root=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base/" 2>/dev/null)
-  printf '%s | GET / -> %s in %ss' \
-    "$(printf '%s' "$h" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(`provider:${j.hasReadyProvider} cli:${j.claudeCliAvailable} source:${j.credentialSource??"none"}`)}catch{console.log("health:(unparsed)")}})')" \
-    "$root" "$ms"
+  if [ -n "$(json_field "$h" hasReadyProvider)" ]; then
+    summary="provider:$(json_field "$h" hasReadyProvider) cli:$(json_field "$h" claudeCliAvailable) source:$(json_field "$h" credentialSource)"
+  else
+    summary="health:(unparsed)"
+  fi
+  printf '%s | GET / -> %s in %ss' "$summary" "$root" "$ms"
+}
+
+# Start a server in the background on a port, wait for it, and record the steps
+# <prefix>:start and <prefix>:first-run. $1 prefix, $2 port, $3 the command as a user
+# types it, then the command to run. Sets SERVER_PID ("" when the port was taken).
+start_and_check() {
+  local prefix="$1" port="$2" shown="$3" rc
+  shift 3
+  step_begin "$prefix:start"
+  SERVER_PID=""
+  if port_in_use "$port"; then
+    step_end fail "port $port already has a listener; this is not a fresh machine" "Something already listens on $port here, so the probe cannot tell its own server from it. Run the probe on a fresh machine."
+    step_begin "$prefix:first-run"; step_end skip "port was not free"
+    return 0
+  fi
+  cmd "$shown"
+  "$@" >> "$STEP_LOG" 2>&1 &
+  SERVER_PID=$!
+  echo "$SERVER_PID" >> "$PIDS"
+  say "  waiting for http://127.0.0.1:$port/api/system/health (timeout ${READY_TIMEOUT}s)"
+  if wait_ready "http://127.0.0.1:$port/api/system/health" "$SERVER_PID"; then
+    listeners_on_port "$port" >> "$PIDS"
+    step_end ok "server ready in ${READY_SECS}s"
+    step_begin "$prefix:first-run"
+    step_end ok "$(health_note "http://127.0.0.1:$port")"
+  else
+    rc=$?
+    tail_log 8
+    if [ "$rc" = 1 ]; then
+      step_end fail "'$shown' exited before the server came up: $(first_error_line)" "'$shown' on a fresh machine fails: $(first_error_line). A user following the README stops here."
+    else
+      step_end fail "server not ready after ${READY_TIMEOUT}s" "'$shown' did not serve within ${READY_TIMEOUT}s on this machine."
+    fi
+    step_begin "$prefix:first-run"; step_end skip "server never came up"
+  fi
 }
 
 say "${B}Open Walnut onboarding probe${O}  ${D}$(date -u +%Y-%m-%dT%H:%M:%SZ) · $OS $ARCH · paths: $PATHS${O}"
@@ -163,7 +219,7 @@ say "${B}Open Walnut onboarding probe${O}  ${D}$(date -u +%Y-%m-%dT%H:%M:%SZ) ·
 # ── 0. what does a fresh machine come with? ────────────────────────────────────
 step_begin "system"
 inv=""
-for t in node npm git bun brew curl claude; do
+for t in git curl bun node npm brew claude walnut open-walnut; do
   if have "$t"; then inv="$inv $t=$(ver "$t" --version | cut -c1-24 | tr ' ' '_')"; else inv="$inv $t=missing"; fi
 done
 if [ "$IS_MAC" = 1 ]; then
@@ -175,9 +231,42 @@ fi
 say "  $osv ($ARCH)"; say " $inv"
 step_end ok "$osv;$inv"
 
-# ── 1. git (README step 1 is `git clone`) ─────────────────────────────────────
+# ── installer path: curl … install.sh | sh → walnut web (the README's first route) ──
+if want_path installer; then
+  step_begin "installer:install"
+  cmd "curl -fsSL $INSTALLER_URL | sh"
+  WALNUT_CMD=""
+  # pipefail: a download that fails hands sh an empty script, which "succeeds".
+  if run_logged bash -c 'set -o pipefail; curl -fsSL "$1" | sh' bash "$INSTALLER_URL"; then
+    hash -r 2>/dev/null || true
+    if have walnut; then
+      WALNUT_CMD="$(command -v walnut)"
+      step_end ok "$(ver walnut --version | cut -c1-40) at $WALNUT_CMD"
+    elif [ -x "$HOME/.local/bin/walnut" ]; then
+      # Carry on with the full path, the way a person reads the installer's own hint.
+      WALNUT_CMD="$HOME/.local/bin/walnut"
+      step_end ok "$(ver "$WALNUT_CMD" --version | cut -c1-40); ~/.local/bin is not on PATH" "The installer put walnut in ~/.local/bin, which is not on this machine's PATH: 'walnut web' as the README writes it is 'command not found' until the user adds it (the installer prints the line)."
+    else
+      tail_log 8; step_end fail "the installer finished but there is no walnut: $(first_error_line)" "The one-line installer reported success and left no walnut command."
+    fi
+  else
+    tail_log 8; step_end fail "install failed: $(first_error_line)" "The one-line installer fails on a fresh machine: $(first_error_line)"
+  fi
+  if [ -n "$WALNUT_CMD" ]; then
+    mkdir -p "$OUT/installer-home" "$OUT/installer-daemon"
+    start_and_check installer "$INSTALLER_PORT" "walnut web --port $INSTALLER_PORT" \
+      env OPEN_WALNUT_HOME="$OUT/installer-home" WALNUT_DAEMON_DIR="$OUT/installer-daemon" "$WALNUT_CMD" web --port "$INSTALLER_PORT"
+  fi
+else
+  step_begin "installer:install"; step_end skip "path not requested"
+fi
+
+# ── git: the checkout clones with it, and nvm (the npm route) installs with it ──
+# The installer route above ran first, on the machine as it came: it needs no git.
 step_begin "prereq:git"
-if [ "$IS_MAC" = 1 ] && ! xcode-select -p >/dev/null 2>&1; then
+if ! want_path readme && ! want_path npm; then
+  step_end skip "only the installer route was requested"
+elif [ "$IS_MAC" = 1 ] && ! xcode-select -p >/dev/null 2>&1; then
   say "  git on a fresh Mac needs the Xcode Command Line Tools; installing headlessly (a real user gets a GUI dialog here)"
   cmd "xcode-select --install"
   touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
@@ -206,65 +295,24 @@ else
   else tail_log 5; step_end fail "git install failed: $(first_error_line)" "A fresh Linux box has no git and the README does not say how to get it."; fi
 fi
 
-# ── 2. Node 22 (README: nodejs.org or `nvm install 22`) ───────────────────────
-step_begin "prereq:node22"
-node_major() { node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'; }
-# glibc helpers (Linux only; empty elsewhere)
+# glibc helpers (Linux only; empty elsewhere). Only the npm route's finding reads them.
 glibc_version() { getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}'; }
 glibc_at_least() { local v; v=$(glibc_version); [ -n "$v" ] || return 1; [ "${v%%.*}" -gt "$1" ] 2>/dev/null || { [ "${v%%.*}" -eq "$1" ] && [ "${v#*.}" -ge "$2" ]; } 2>/dev/null; }
-if have node && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
-  step_end ok "already present: $(ver node -v)"
-else
-  say "  README says Node.js 22+; using the nvm route it suggests"
-  cmd "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash"
-  run_logged bash -c 'curl -fsSL -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash'
-  export NVM_DIR="$HOME/.nvm"
-  # shellcheck disable=SC1091
-  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-  cmd "nvm install 22"
-  run_logged bash -c ". \"$NVM_DIR/nvm.sh\" && nvm install 22 && nvm alias default 22"
-  # shellcheck disable=SC1091
-  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 22 >/dev/null 2>&1
-  if have node && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
-    step_end ok "installed $(ver node -v) via nvm" "Node.js is not preinstalled. The README's Requirements now gives the nvm two-liner; this is the time it costs."
-  elif [ -n "$(glibc_version)" ] && ! glibc_at_least 2 28; then
-    # nvm "installed" a binary that cannot start here: official Node 20+ builds need
-    # glibc 2.28. The community glibc-2.17 build is the only Node 22 that runs on this OS.
-    say "  official Node binaries need glibc 2.28 and this OS has $(glibc_version); trying the community glibc-217 build"
-    NODE_UNOFFICIAL_VER=$(curl -fsSL https://unofficial-builds.nodejs.org/download/release/index.tab | awk -F'\t' 'NR>1 && $1 ~ /^v22\./ && $0 ~ /linux-x64-glibc-217/ {print $1; exit}')
-    # Its own prefix, like nvm's: unpacking into ~/.local would make ~/.local/bin npm's
-    # global bin dir, where the server's own `walnut` shim already lives.
-    cmd "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C ~/.local/node22 --strip-components=1"
-    mkdir -p "$HOME/.local/node22"
-    run_logged bash -c "curl -fsSL https://unofficial-builds.nodejs.org/download/release/$NODE_UNOFFICIAL_VER/node-$NODE_UNOFFICIAL_VER-linux-x64-glibc-217.tar.gz | tar -xz -C \"$HOME/.local/node22\" --strip-components=1"
-    export PATH="$HOME/.local/node22/bin:$PATH"; hash -r 2>/dev/null || true
-    if have node && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
-      step_end ok "installed $(ver node -v) (community glibc-217 build)" "This OS has glibc $(glibc_version); the official Node 22 binaries need 2.28, so 'nvm install 22' completes and then node cannot start (GLIBC_2.28 not found). Getting Started's older-Linux section gives the community glibc-217 build; this is the time it costs."
-    else
-      tail_log 5
-      step_end fail "no Node 22 runs on glibc $(glibc_version): $(first_error_line)" "Official Node 22 needs glibc 2.28 and the community glibc-217 build also failed here."
-    fi
-  else
-    tail_log 5
-    step_end fail "node 22 not available after nvm: $(first_error_line)" "Installing Node 22 failed following the README's nvm suggestion."
-  fi
-fi
-have node || { say "${R}cannot continue without node${O}"; exit 1; }
 
-# ── 3. Bun, for the checkout route (README: `curl -fsSL https://bun.sh/install | bash`) ──
+# ── Bun, for the checkout route (README: `curl -fsSL https://bun.sh/install | bash`) ──
 if want_path readme; then
   step_begin "prereq:bun"
   if have bun; then
     step_end ok "already present: $(ver bun --version)"
   else
-    say "  README says a checkout installs with Bun; using the installer it gives"
+    say "  README says a checkout needs Bun and nothing else; using the installer it gives"
     cmd "curl -fsSL https://bun.sh/install | bash"
     run_logged bash -c 'curl -fsSL https://bun.sh/install | bash'
     export PATH="$HOME/.bun/bin:$PATH"; hash -r 2>/dev/null || true
     if have bun; then
       step_end ok "installed $(ver bun --version)" "Bun is not preinstalled. The README's Requirements gives the installer line; this is the time it costs."
     else
-      tail_log 5; step_end fail "bun not available after its installer: $(first_error_line)" "Installing Bun failed following the README."
+      tail_log 5; step_end fail "bun not available after its installer: $(first_error_line)" "Installing Bun failed following the README: $(first_error_line)"
     fi
   fi
 fi
@@ -290,63 +338,22 @@ if want_path readme; then
     tail_log 5; step_end fail "clone failed: $(first_error_line)"
   fi
 
-  if [ -d "$README_DIR" ]; then
+  if [ -d "$README_DIR" ] && have bun; then
     step_begin "readme:bun-install"
     cmd "cd open-walnut && bun install"
     if (cd "$README_DIR" && run_logged bun install); then
       warns=$(grep -c -E '^warn:' "$STEP_LOG" || true)
       step_end ok "ok; $warns bun warnings; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
-    elif [ -f "$README_DIR/scripts/check-native-toolchain.mjs" ] && ! (cd "$README_DIR" && node scripts/check-native-toolchain.mjs >> "$STEP_LOG" 2>&1) && grep -q "Fix, then install again" "$STEP_LOG"; then
-      # The native build failed and Walnut's own check (what `bun run start` would run
-      # next) printed the recipe. A user would paste it; do the same, and record whether
-      # the printed advice actually works. The env it names stays exported for the npm route.
-      # Every indented line between the header and the final `bun install` is one command
-      # to run as printed (sudo installs, the uv bootstrap, ...); the last line's prefix is
-      # the env the rebuilt install needs, kept for the rest of the run.
-      fix_installs=$(sed -n '/Fix, then install again/,/bun install$/p' "$STEP_LOG" | grep -E '^\s+\S' | grep -vE 'bun install$|^\s+#' | sed 's/^ *//')
-      fix_install=$(sed -n '/Fix, then install again/,/bun install$/p' "$STEP_LOG" | grep -E 'bun install$' | tail -1 | sed 's/^ *//')
-      tail_log 14; step_end fail "native build failed (glibc $(glibc_version)); Walnut's check printed the recipe, following it" "This OS has glibc $(glibc_version): prebuilt native modules need 2.29+, so better-sqlite3 compiles and needs Python 3.8+ and GCC 10+, which the stock toolchain lacks. 'bun install' fails in node-gyp; Walnut's check explains and prints the commands."
-      step_begin "readme:bun-install-fix"
-      while IFS= read -r line; do [ -n "$line" ] && { cmd "$line"; run_logged bash -c "$line"; }; done <<< "$fix_installs"
-      fix_env=$(printf '%s' "$fix_install" | sed 's/ *bun install$//')
-      [ -n "$fix_env" ] && { say "  exporting for the rest of the run: $fix_env"; eval "export $fix_env"; }
-      cmd "$fix_install"
-      if [ -n "$fix_install" ] && (cd "$README_DIR" && run_logged bun install); then
-        step_end ok "the printed recipe worked; $(du -sh "$README_DIR/node_modules" 2>/dev/null | cut -f1) node_modules"
-      else
-        tail_log 12; step_end fail "the printed recipe did not work: $(first_error_line)" "The toolchain check's own advice failed on this OS: $(first_error_line)"
-      fi
+    elif grep -q -E 'node-gyp|gyp ERR|gyp info' "$STEP_LOG"; then
+      # The README promises Bun and nothing else, so a native build from source is the finding.
+      tail_log 12; step_end fail "a dependency built from source and failed: $(first_error_line)" "'bun install' compiles a native module on this machine (node-gyp: Python, make and a C++ compiler), which the README's Bun-only checkout does not mention: $(first_error_line)"
     else
       tail_log 8; step_end fail "bun install failed: $(first_error_line)" "'bun install' fails on a fresh machine: $(first_error_line)"
     fi
 
-    step_begin "readme:start"
-    if port_in_use "$README_PORT"; then
-      step_end fail "port $README_PORT already has a listener; this is not a fresh machine" "Something already listens on $README_PORT here, so the probe cannot tell its own server from it. Run the probe on a fresh machine."
-      START_PID=""
-    else
-    cmd "bun run start"
-    ( cd "$README_DIR" && exec bun run start ) >> "$STEP_LOG" 2>&1 &
-    START_PID=$!
-    echo "$START_PID" >> "$PIDS"
-    fi
-    if [ -z "$START_PID" ]; then
-      step_begin "readme:first-run"; step_end skip "port was not free"
-    elif { say "  waiting for http://127.0.0.1:$README_PORT/api/system/health (timeout ${READY_TIMEOUT}s)"; wait_ready "http://127.0.0.1:$README_PORT/api/system/health" "$START_PID"; }; then
-      listeners_on_port "$README_PORT" >> "$PIDS"
-      step_end ok "server ready in ${READY_SECS}s (build + start)"
-      step_begin "readme:first-run"
-      step_end ok "$(health_note "http://127.0.0.1:$README_PORT")"
-    else
-      rc=$?
-      tail_log 8
-      if [ "$rc" = 1 ]; then
-        step_end fail "bun run start exited before the server came up: $(first_error_line)" "'bun run start' on a fresh machine fails: $(first_error_line). A user following the README stops here."
-      else
-        step_end fail "server not ready after ${READY_TIMEOUT}s" "'bun run start' did not serve within ${READY_TIMEOUT}s on this machine."
-      fi
-      step_begin "readme:first-run"; step_end skip "server never came up"
-    fi
+    start_and_check readme "$README_PORT" "bun run start" sh -c 'cd "$1" && exec bun run start' sh "$README_DIR"
+  elif [ -d "$README_DIR" ]; then
+    step_begin "readme:bun-install"; step_end skip "no bun to install with"
   fi
 else
   step_begin "readme:git-clone"; step_end skip "path not requested"
@@ -354,42 +361,64 @@ fi
 
 # ── npm path: npm i -g open-walnut → open-walnut web ──────────────────────────
 if want_path npm; then
-  step_begin "npm:install-global"
-  cmd "npm install -g $PKG"
-  if run_logged npm install -g "$PKG"; then
-    warns=$(grep -c -E '^npm (warn|WARN)' "$STEP_LOG" || true)
-    hash -r 2>/dev/null
-    if have open-walnut; then step_end ok "$(ver open-walnut --version | cut -c1-40); $warns npm warnings"
-    else step_end fail "installed but 'open-walnut' is not on PATH" "After 'npm install -g open-walnut' the command is not on PATH (npm global bin dir not in PATH on this machine)."; fi
+  # The README: "the npm package needs only an npm (any Node 18 or newer)". A machine
+  # without one gets Node LTS through nvm, the way a person most often does it.
+  step_begin "prereq:npm"
+  node_major() { node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'; }
+  if have npm && [ "$(node_major)" -ge 18 ] 2>/dev/null; then
+    step_end ok "already present: npm $(ver npm --version), node $(ver node -v)"
   else
-    tail_log 8; step_end fail "global install failed: $(first_error_line)" "'npm install -g open-walnut' fails on a fresh machine: $(first_error_line)"
+    say "  no npm here; installing Node LTS with nvm for the npm route"
+    cmd "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && nvm install --lts"
+    run_logged bash -c 'curl -fsSL -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash'
+    export NVM_DIR="$HOME/.nvm"
+    run_logged bash -c ". \"$NVM_DIR/nvm.sh\" && nvm install --lts && nvm alias default 'lts/*'"
+    # shellcheck disable=SC1091
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use default >/dev/null 2>&1
+    hash -r 2>/dev/null || true
+    if have npm && [ "$(node_major)" -ge 18 ] 2>/dev/null; then
+      step_end ok "installed node $(ver node -v) via nvm" "The npm route needs Node and npm, which this machine lacks; the installer route needs neither. This is the time nvm costs."
+    elif [ -n "$(glibc_version)" ] && ! glibc_at_least 2 28; then
+      tail_log 5
+      step_end fail "Node LTS cannot start on glibc $(glibc_version): $(first_error_line)" "Official Node builds need glibc 2.28 and this OS has $(glibc_version), so the npm route has no Node to run on here. The one-line installer needs no Node."
+    else
+      tail_log 5
+      step_end fail "no npm after nvm: $(first_error_line)" "Installing Node with nvm failed here, so the npm route cannot start."
+    fi
   fi
 
-  if have open-walnut; then
-    step_begin "npm:start"
-    if port_in_use "$NPM_PORT"; then
-      step_end fail "port $NPM_PORT already has a listener; this is not a fresh machine" "Something already listens on $NPM_PORT here. Run the probe on a fresh machine."
-      NPM_PID=""
+  if have npm && [ "$(node_major)" -ge 18 ] 2>/dev/null; then
+    step_begin "npm:install-global"
+    cmd "npm install -g $PKG"
+    if run_logged npm install -g "$PKG"; then
+      warns=$(grep -c -E '^npm (warn|WARN)' "$STEP_LOG" || true)
+      hash -r 2>/dev/null
+      # npm's own global bin: the installer route also links an open-walnut, into ~/.local/bin.
+      NPM_WALNUT="$(npm prefix -g 2>/dev/null)/bin/open-walnut"
+      on_path="$(command -v open-walnut 2>/dev/null || true)"
+      if [ -x "$NPM_WALNUT" ] && [ "$on_path" = "$NPM_WALNUT" ]; then
+        step_end ok "$(ver "$NPM_WALNUT" --version | cut -c1-40); $warns npm warnings"
+      elif [ -x "$NPM_WALNUT" ] && [ "$on_path" = "$HOME/.local/bin/open-walnut" ] && want_path installer; then
+        # The probe's own installer route put that one there; a person has one or the other.
+        step_end ok "$(ver "$NPM_WALNUT" --version | cut -c1-40); $warns npm warnings; PATH finds the installer route's link first, so npm's own runs"
+      elif [ -x "$NPM_WALNUT" ]; then
+        step_end ok "$(ver "$NPM_WALNUT" --version | cut -c1-40); $warns npm warnings; 'open-walnut' on PATH is ${on_path:-nothing}" "After 'npm install -g open-walnut' the command on PATH is not npm's (${on_path:-none}): npm's global bin dir is not on PATH, or another install comes first."
+      else
+        NPM_WALNUT=""
+        step_end fail "installed but npm's global bin has no open-walnut" "After 'npm install -g open-walnut' there is no open-walnut in npm's global bin dir ($(npm prefix -g 2>/dev/null)/bin)."
+      fi
     else
-    cmd "open-walnut web --port $NPM_PORT"
-    mkdir -p "$OUT/npm-home" "$OUT/npm-daemon"
-    OPEN_WALNUT_HOME="$OUT/npm-home" WALNUT_DAEMON_DIR="$OUT/npm-daemon" open-walnut web --port "$NPM_PORT" >> "$STEP_LOG" 2>&1 &
-    NPM_PID=$!
-    echo "$NPM_PID" >> "$PIDS"
+      NPM_WALNUT=""
+      tail_log 8; step_end fail "global install failed: $(first_error_line)" "'npm install -g open-walnut' fails on a fresh machine: $(first_error_line)"
     fi
-    if [ -z "$NPM_PID" ]; then
-      step_begin "npm:first-run"; step_end skip "port was not free"
-    elif { say "  waiting for http://127.0.0.1:$NPM_PORT/api/system/health (timeout ${READY_TIMEOUT}s)"; wait_ready "http://127.0.0.1:$NPM_PORT/api/system/health" "$NPM_PID"; }; then
-      listeners_on_port "$NPM_PORT" >> "$PIDS"
-      step_end ok "server ready in ${READY_SECS}s"
-      step_begin "npm:first-run"
-      step_end ok "$(health_note "http://127.0.0.1:$NPM_PORT")"
-    else
-      rc=$?; tail_log 8
-      if [ "$rc" = 1 ]; then step_end fail "open-walnut web exited: $(first_error_line)" "'open-walnut web' exits on a fresh machine: $(first_error_line)"
-      else step_end fail "server not ready after ${READY_TIMEOUT}s" "'open-walnut web' did not serve within ${READY_TIMEOUT}s."; fi
-      step_begin "npm:first-run"; step_end skip "server never came up"
+
+    if [ -n "$NPM_WALNUT" ]; then
+      mkdir -p "$OUT/npm-home" "$OUT/npm-daemon"
+      start_and_check npm "$NPM_PORT" "open-walnut web --port $NPM_PORT" \
+        env OPEN_WALNUT_HOME="$OUT/npm-home" WALNUT_DAEMON_DIR="$OUT/npm-daemon" "$NPM_WALNUT" web --port "$NPM_PORT"
     fi
+  else
+    step_begin "npm:install-global"; step_end skip "no working npm on this machine"
   fi
 else
   step_begin "npm:install-global"; step_end skip "path not requested"

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Record a crisp 4K walkthrough of Open Walnut's first-run onboarding against a
  * clean-room server, telling the 3-path story:
@@ -10,7 +10,7 @@
  * injected cursor, requestAnimationFrame repaint, wallclock timestamps) so the
  * output is sharp and the static holds actually produce frames.
  *
- * Usage: node scripts/onboarding-record.mjs --url http://localhost:3457 --out demo/onboarding.mp4
+ * Usage: bun scripts/onboarding-record.mjs --url http://localhost:3457 --out demo/onboarding.mp4
  */
 import path from 'node:path';
 import os from 'node:os';

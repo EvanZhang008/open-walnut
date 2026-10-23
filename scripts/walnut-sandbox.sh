@@ -14,6 +14,12 @@
 #   - WALNUT_DAEMON_DIR → throwaway dir (its own session daemon; never adopts prod sessions).
 #   - PORT 3457         → never 3456. The script refuses to act on 3456.
 #
+# Runtime: bun only. The build is `bun run web:build` and the server is
+# `bun dist/cli.js web`. The bun is found the way scripts/dev-prod.sh finds it
+# (WALNUT_BUN, PATH, ~/.bun/bin/bun, /opt/homebrew/bin/bun, /usr/local/bin/bun) at the
+# version package.json pins or newer, and is handed to `env -i` by absolute path, so a
+# fake HOME or a bare PATH never hides it.
+#
 # HOME handling differs by auth mode (this is the subtle part):
 #   - clean / token / keys  → FAKE HOME (so ~/.aws and ~/.claude are invisible → true first-run
 #                             or a credential supplied ONLY via the injected env/config).
@@ -54,9 +60,46 @@ cmd="${1:-help}"
 refuse_prod() {
   if [ "$PORT" = "3456" ]; then echo "REFUSING to operate on production port 3456." >&2; exit 99; fi
 }
+# For every command, before anything runs: `stop` and the reset before each launch
+# signal whatever listens on PORT, so a 3456 here would reach production.
+refuse_prod
+# Sets BUN to the first bun of the version package.json pins (packageManager) or
+# newer, in the order scripts/dev-prod.sh uses. Exits naming bun when there is none,
+# before the sandbox is wiped or anything is built.
+need_bun() {
+  local pin cand v dir seen="" tried="|"
+  local -a cands=()
+  pin="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$HERE/package.json" 2>/dev/null | head -n 1)"
+  if [ -n "${WALNUT_BUN:-}" ]; then cands+=("$WALNUT_BUN"); fi
+  local IFS=:
+  for dir in $PATH; do
+    if [ -n "$dir" ]; then cands+=("$dir/bun"); fi
+  done
+  unset IFS
+  cands+=("$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun)
+  for cand in "${cands[@]}"; do
+    [[ "$cand" == /* && -x "$cand" && ! -d "$cand" ]] || continue
+    [[ "$tried" != *"|$cand|"* ]] || continue
+    tried="$tried$cand|"
+    v="$("$cand" --version 2>/dev/null || true)"
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
+    v="${BASH_REMATCH[0]}"
+    # Sorted by number the older one comes first: when that is the pin, this one is new enough.
+    if [ -z "$pin" ] || [ "$(printf '%s\n%s\n' "$pin" "$v" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)" = "$pin" ]; then
+      BUN="$cand"
+      return 0
+    fi
+    seen="${seen:+$seen, }$v at $cand"
+  done
+  echo "walnut-sandbox: needs bun ${pin:-(any version)} or newer (package.json packageManager), and found none." >&2
+  if [ -n "$seen" ]; then echo "walnut-sandbox: found only: $seen." >&2; fi
+  echo "walnut-sandbox: install it with: curl -fsSL https://bun.sh/install | bash   (or point WALNUT_BUN at one)" >&2
+  exit 2
+}
 build_once() {
-  echo "==> building (web:build) …"
-  ( cd "$HERE" && npm run web:build >"$ROOT/build.log" 2>&1 ) \
+  echo "==> building (bun run web:build with $BUN) …"
+  # This bun goes first on PATH for the build, so every step under it uses the same one.
+  ( cd "$HERE" && PATH="$(dirname "$BUN"):$PATH" "$BUN" --bun run web:build >"$ROOT/build.log" 2>&1 ) \
     || { echo "build failed:"; tail -15 "$ROOT/build.log"; exit 1; }
 }
 wait_health() {
@@ -140,17 +183,18 @@ launch() {
   local path_val="$1"; shift
   refuse_prod
   mkdir -p "$home_dir"
-  echo "==> HOME=$home_dir  OPEN_WALNUT_HOME=$ROOT/.open-walnut  PORT=$PORT"
+  echo "==> HOME=$home_dir  OPEN_WALNUT_HOME=$ROOT/.open-walnut  PORT=$PORT  bun=$BUN"
+  # The server's bun leads its PATH too, so whatever it starts with `bun` is the same one.
   env -i \
     HOME="$home_dir" \
-    PATH="$path_val" \
+    PATH="$(dirname "$BUN"):$path_val" \
     NODE_ENV=production \
     WALNUT_DISABLE_SEARCH=1 \
     OPEN_WALNUT_HOME="$ROOT/.open-walnut" \
     WALNUT_DAEMON_DIR="$ROOT/daemon" \
     WALNUT_TASK_DIR_ROOT="$ROOT/task-dirs" \
     "$@" \
-    node "$HERE/dist/cli.js" web --port "$PORT" > "$LOG" 2>&1 &
+    "$BUN" "$HERE/dist/cli.js" web --port "$PORT" > "$LOG" 2>&1 &
   echo $! > "$PID_FILE"; disown
   echo "==> pid $(cat "$PID_FILE")  log: $LOG"
 }
@@ -188,7 +232,7 @@ reset_root() { stop_server; sleep 1; rm -rf "$ROOT"; mkdir -p "$ROOT"; }
 
 case "$cmd" in
   clean)
-    reset_root; build_once
+    need_bun; reset_root; build_once
     # Fake HOME + no creds = genuine first-run. PATH kept minimal (no ~/.toolbox).
     launch "$FAKE_HOME" "$PATH"
     wait_health ;;
@@ -196,7 +240,7 @@ case "$cmd" in
   token)
     region="${2:-${AWS_REGION:-us-west-2}}"
     [ -z "${AWS_BEARER_TOKEN_BEDROCK:-}" ] && { echo "need AWS_BEARER_TOKEN_BEDROCK in env"; exit 2; }
-    reset_root; build_once
+    need_bun; reset_root; build_once
     write_bedrock_config "    region: $region
     bearer_token: $AWS_BEARER_TOKEN_BEDROCK"
     launch "$FAKE_HOME" "$PATH"
@@ -205,7 +249,7 @@ case "$cmd" in
   keys)
     region="${2:-${AWS_REGION:-us-west-2}}"
     [ -z "${AWS_ACCESS_KEY_ID:-}" ] && { echo "need AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY"; exit 2; }
-    reset_root; build_once
+    need_bun; reset_root; build_once
     write_bedrock_config "    region: $region
     aws_access_key_id: $AWS_ACCESS_KEY_ID
     aws_secret_access_key: $AWS_SECRET_ACCESS_KEY"
@@ -215,7 +259,7 @@ case "$cmd" in
   profile)
     prof="${2:-}"; region="${3:-us-west-2}"
     [ -z "$prof" ] && { echo "usage: walnut-sandbox.sh profile <NAME> [REGION]"; exit 2; }
-    reset_root; build_once
+    need_bun; reset_root; build_once
     write_bedrock_config "    region: $region
     aws_profile: $prof"
     # REAL HOME so ~/.aws/config resolves; ~/.toolbox/bin on PATH so credential_process (ada) runs.
@@ -235,7 +279,7 @@ case "$cmd" in
     # command like `"/path/claude" default-credential-export` — a double-quoted path
     # followed by an arg — doesn't break YAML parsing and silently drop the block.
     xcmd_yaml="'${xcmd//\'/\'\'}'"
-    reset_root; build_once
+    need_bun; reset_root; build_once
     write_bedrock_config "    region: $region
     aws_credential_export: $xcmd_yaml"
     launch "$HOME" "$HOME/.toolbox/bin:$PATH"
@@ -248,7 +292,7 @@ case "$cmd" in
     # NOT inject AWS_BEARER_TOKEN_BEDROCK — the adapter strips it anyway, and its
     # absence keeps the config purely subscription.
     model="${2:-default}"
-    reset_root; build_once
+    need_bun; reset_root; build_once
     write_subscription_config "$model"
     launch "$HOME" "$HOME/.toolbox/bin:$PATH"
     wait_health ;;
@@ -260,16 +304,17 @@ case "$cmd" in
 
   chat)
     msg="${2:-in one sentence, what can you help me with?}"
-    node "$HERE/scripts/walnut-sandbox-chat.mjs" "$URL" "$msg" ;;
+    need_bun
+    "$BUN" "$HERE/scripts/walnut-sandbox-chat.mjs" "$URL" "$msg" ;;
 
   record)
     out="${2:-demo/Final/onboarding-chain.mp4}"
     [ -z "${WALNUT_DEMO_BEARER_TOKEN:-${AWS_BEARER_TOKEN_BEDROCK:-}}" ] && { echo "need WALNUT_DEMO_BEARER_TOKEN (or AWS_BEARER_TOKEN_BEDROCK)"; exit 2; }
     # Ensure a clean first-run server is up, then drive + record the onboarding chain.
-    reset_root; build_once; launch "$FAKE_HOME" "$PATH"; wait_health >/dev/null
+    need_bun; reset_root; build_once; launch "$FAKE_HOME" "$PATH"; wait_health >/dev/null
     WALNUT_DEMO_BEARER_TOKEN="${WALNUT_DEMO_BEARER_TOKEN:-$AWS_BEARER_TOKEN_BEDROCK}" \
     WALNUT_DEMO_REGION="${WALNUT_DEMO_REGION:-${AWS_REGION:-us-west-2}}" \
-      node "$HERE/scripts/onboarding-chain.mjs" --url "$URL" --out "$out" ;;
+      "$BUN" "$HERE/scripts/onboarding-chain.mjs" --url "$URL" --out "$out" ;;
 
   status)
     curl -s "${URL}/api/system/health" | (python3 -m json.tool 2>/dev/null || cat) ;;
@@ -278,5 +323,6 @@ case "$cmd" in
     stop_server; rm -rf "$ROOT"; echo "stopped + wiped." ;;
 
   *)
-    sed -n '2,40p' "$0" ;;
+    # The header comment: from line 2 to the first line that is not a comment.
+    awk 'NR > 1 && !/^#/ { exit } NR > 1 { print }' "$0" ;;
 esac

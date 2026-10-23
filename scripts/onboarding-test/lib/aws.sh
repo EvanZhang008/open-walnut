@@ -21,6 +21,7 @@ awsq() { aws --output text "$@"; }
 
 aws_require() {
   need_cmd aws "brew install awscli"
+  need_bun   # aws_ssm_exec quotes its command as JSON with it
   need_cmd session-manager-plugin "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
   # Static keys left in the environment silently override --profile; that is the
   # usual reason a working profile suddenly reports an invalid token.
@@ -138,7 +139,7 @@ aws_ssm_cat() {
 aws_ssm_exec() {
   local iid="$1" cmd="$2" timeout="${3:-120}" cid
   cid=$(aws ssm send-command --instance-ids "$iid" --document-name AWS-RunShellScript --timeout-seconds "$timeout" \
-    --parameters "$(node -e 'process.stdout.write(JSON.stringify({commands:[process.argv[1]]}))' "$cmd")" \
+    --parameters "$("$ONB_BUN" -e 'process.stdout.write(JSON.stringify({commands:[process.argv[1]]}))' "$cmd")" \
     --query Command.CommandId --output text) || return 1
   wait_for "case \"\$(awsq ssm get-command-invocation --command-id $cid --instance-id $iid --query Status 2>/dev/null)\" in Success|Failed|TimedOut|Cancelled) true;; *) false;; esac" "$((timeout + 30))" 2 || return 1
   aws ssm get-command-invocation --command-id "$cid" --instance-id "$iid" --query '[StandardOutputContent,StandardErrorContent]' --output text

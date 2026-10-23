@@ -11,6 +11,11 @@
 #
 # Production on :3456 and the real ~/.open-walnut / ~/.claude are never touched.
 #
+# Runtime: bun only (`bun run web:build`, `bun dist/cli.js web`, and the Playwright
+# driver on bun). The bun is the first of WALNUT_BUN, PATH, ~/.bun/bin/bun,
+# /opt/homebrew/bin/bun, /usr/local/bin/bun at the version package.json pins or newer,
+# and `env -i` gets it by absolute path, so the throwaway HOME never hides it.
+#
 #   scripts/onboarding-cleanroom.sh clean            # path 1/3: no creds → onboarding shows
 #   scripts/onboarding-cleanroom.sh happy            # path 2: inject host cred → Personal AI ready
 #   scripts/onboarding-cleanroom.sh record out.mp4   # record the clean-room onboarding
@@ -26,24 +31,58 @@ PID_FILE="$ROOT/server.pid"
 
 cmd="${1:-help}"
 
+# Sets BUN to the first bun of the version package.json pins (packageManager) or
+# newer, in the order scripts/dev-prod.sh uses; exits naming bun when there is none.
+need_bun() {
+  local pin cand v dir seen="" tried="|"
+  local -a cands=()
+  pin="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$HERE/package.json" 2>/dev/null | head -n 1)"
+  if [ -n "${WALNUT_BUN:-}" ]; then cands+=("$WALNUT_BUN"); fi
+  local IFS=:
+  for dir in $PATH; do
+    if [ -n "$dir" ]; then cands+=("$dir/bun"); fi
+  done
+  unset IFS
+  cands+=("$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun)
+  for cand in "${cands[@]}"; do
+    [[ "$cand" == /* && -x "$cand" && ! -d "$cand" ]] || continue
+    [[ "$tried" != *"|$cand|"* ]] || continue
+    tried="$tried$cand|"
+    v="$("$cand" --version 2>/dev/null || true)"
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
+    v="${BASH_REMATCH[0]}"
+    # Sorted by number the older one comes first: when that is the pin, this one is new enough.
+    if [ -z "$pin" ] || [ "$(printf '%s\n%s\n' "$pin" "$v" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)" = "$pin" ]; then
+      BUN="$cand"
+      return 0
+    fi
+    seen="${seen:+$seen, }$v at $cand"
+  done
+  echo "onboarding-cleanroom: needs bun ${pin:-(any version)} or newer (package.json packageManager), and found none." >&2
+  if [ -n "$seen" ]; then echo "onboarding-cleanroom: found only: $seen." >&2; fi
+  echo "onboarding-cleanroom: install it with: curl -fsSL https://bun.sh/install | bash   (or point WALNUT_BUN at one)" >&2
+  exit 2
+}
+
 # Env that makes the room pristine. Note: we deliberately DO NOT pass the dev's
 # AWS_*/ANTHROPIC_* through (env -i style) for the clean path.
 launch_server() {
   # $@ = extra KEY=VAL creds to inject (happy path). None = clean room.
+  need_bun
   rm -rf "$ROOT"; mkdir -p "$FAKE_HOME"
-  echo "==> clean HOME=$FAKE_HOME  OPEN_WALNUT_HOME=$ROOT/.open-walnut  port=$PORT"
-  # Build once (uses the REAL repo node_modules — fine; isolation is about data, not deps).
-  ( cd "$HERE" && npm run web:build >/tmp/walnut-cleanroom-build.log 2>&1 ) || { echo "build failed"; tail -15 /tmp/walnut-cleanroom-build.log; exit 1; }
+  echo "==> clean HOME=$FAKE_HOME  OPEN_WALNUT_HOME=$ROOT/.open-walnut  port=$PORT  bun=$BUN"
+  # Build once. It uses the real repo node_modules, which is fine: isolation is about data, not deps.
+  ( cd "$HERE" && PATH="$(dirname "$BUN"):$PATH" "$BUN" --bun run web:build >/tmp/walnut-cleanroom-build.log 2>&1 ) || { echo "build failed"; tail -15 /tmp/walnut-cleanroom-build.log; exit 1; }
   # env -i gives a truly empty environment; re-add only what's needed + any injected creds.
   env -i \
     HOME="$FAKE_HOME" \
-    PATH="$PATH" \
+    PATH="$(dirname "$BUN"):$PATH" \
     NODE_ENV=production \
     WALNUT_DISABLE_SEARCH=1 \
     OPEN_WALNUT_HOME="$ROOT/.open-walnut" \
     WALNUT_DAEMON_DIR="$ROOT/daemon" \
     "$@" \
-    node "$HERE/dist/cli.js" web --port "$PORT" >"$ROOT/server.log" 2>&1 &
+    "$BUN" "$HERE/dist/cli.js" web --port "$PORT" >"$ROOT/server.log" 2>&1 &
   echo $! > "$PID_FILE"
   echo "==> server pid $(cat "$PID_FILE"), logs: $ROOT/server.log"
 }
@@ -78,7 +117,7 @@ stop_server() {
 case "$cmd" in
   clean)
     launch_server
-    node "$HERE/scripts/onboarding-demo.mjs" --url "$URL"; rc=$?
+    "$BUN" "$HERE/scripts/onboarding-demo.mjs" --url "$URL"; rc=$?
     stop_server; exit $rc ;;
 
   happy)
@@ -94,13 +133,13 @@ case "$cmd" in
     fi
     # NOTE: AWS_PROFILE would need ~/.aws — but FAKE_HOME is empty. Bearer token / keys work standalone.
     launch_server "${CREDS[@]}"
-    node "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --expect-ready --chat "hello, are you there?"; rc=$?
+    "$BUN" "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --expect-ready --chat "hello, are you there?"; rc=$?
     stop_server; exit $rc ;;
 
   record)
     out="${2:-onboarding.mp4}"
     launch_server
-    node "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --record "$out"; rc=$?
+    "$BUN" "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --record "$out"; rc=$?
     stop_server; exit $rc ;;
 
   stop) stop_server; echo "stopped." ;;

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Drive + verify Open Walnut's first-run onboarding against a PRISTINE container,
  * and (optionally) record it. Runs on the Mac HOST; the Walnut server runs inside a
@@ -9,9 +9,9 @@
  * mapped URL (default http://localhost:3457).
  *
  * Usage:
- *   node scripts/onboarding-demo.mjs --url http://localhost:3457            # verify only
- *   node scripts/onboarding-demo.mjs --url http://localhost:3457 --record out.mp4
- *   node scripts/onboarding-demo.mjs --url http://localhost:3457 --expect-ready   # happy path
+ *   bun scripts/onboarding-demo.mjs --url http://localhost:3457            # verify only
+ *   bun scripts/onboarding-demo.mjs --url http://localhost:3457 --record out.mp4
+ *   bun scripts/onboarding-demo.mjs --url http://localhost:3457 --expect-ready   # happy path
  *
  * Flags:
  *   --url <url>        Walnut base URL (the container's mapped port). Required.

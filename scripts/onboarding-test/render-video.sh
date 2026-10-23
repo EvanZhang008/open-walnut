@@ -4,7 +4,7 @@
 #
 #   render-video.sh <run-dir> <target>
 #
-# Long idle stretches (npm install, the build) are clipped to 2s so a 10-minute
+# Long idle stretches (bun install, the build) are clipped to 2s so a 10-minute
 # install reads as a 60-90s story. Needs: agg (brew install agg), ffmpeg.
 
 set -uo pipefail
@@ -24,7 +24,7 @@ ffmpeg -y -loglevel error -i terminal.gif -vf 'scale=1280:800:force_original_asp
 
 # Concatenate terminal + every browser clip that exists, all normalized to 1280x800@30.
 : > concat.txt
-for clip in terminal.mp4 browser-readme.mp4 browser-npm.mp4; do
+for clip in terminal.mp4 browser-installer.mp4 browser-readme.mp4 browser-npm.mp4; do
   [ -s "$clip" ] || continue
   norm="norm-$clip"
   ffmpeg -y -loglevel error -i "$clip" -vf 'scale=1280:800:force_original_aspect_ratio=decrease,pad=1280:800:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p' \

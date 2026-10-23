@@ -2,7 +2,8 @@
 # Fresh-machine onboarding test for Open Walnut.
 #
 # Provisions a machine that has never seen Walnut, does exactly what the README tells a
-# new user to do (git clone → npm install → npm start, and npm install -g open-walnut),
+# new user to do (the one-line installer → walnut web; the checkout: bun, git clone →
+# bun install → bun run start; and npm install -g open-walnut → open-walnut web),
 # times every step, screenshots the first-run page, and tears the machine down. What
 # comes back is a table of steps and a list of "findings": each place a brand-new user
 # would have had to stop and figure something out.
@@ -12,7 +13,7 @@
 #   scripts/onboarding-test/run.sh mac-ec2 [--os sequoia|tahoe] [--type mac2.metal] --yes-mac-host
 #   scripts/onboarding-test/run.sh ssh <[user@]host>   # a box you can already ssh into (not fresh)
 #
-#   common flags: --path readme,npm  --ref <git ref>  --pkg open-walnut@latest
+#   common flags: --path installer,readme,npm  --ref <git ref>  --pkg open-walnut@latest
 #                 --keep (leave the machine up)  --record (asciinema + browser video → mp4)
 #                 --ttl-hours 3 (sweep may kill the instance after this)
 #
@@ -25,6 +26,9 @@
 #            CLT, no git, no node. Free, ~2 min to boot, nothing left behind.
 #   linux    EC2 (Amazon Linux 2023 / Ubuntu 24.04), reached only through SSM.
 #   mac-ec2  EC2 mac2.metal; needs Mac-host eligibility on the account and bills 24h min.
+#
+# On this machine it needs bun (the summary, the SSM JSON and the Playwright capture run on
+# it): WALNUT_BUN, PATH, ~/.bun/bin/bun, /opt/homebrew/bin/bun or /usr/local/bin/bun.
 #
 # Artifacts: <evidence>/walnut-onboarding-test/<run-id>/{report.md,steps.jsonl,logs/,first-run-*.png,onboarding-*.mp4} (scripts/lib/evidence-dir.sh)
 
@@ -42,7 +46,7 @@ SSH_HOST=""
 if [ "$TARGET" = ssh ]; then
   SSH_HOST="${1:-}"; case "$SSH_HOST" in ''|-*) die "ssh: give the host first: run.sh ssh user@host [flags]" ;; esac; shift
 fi
-PATHS="readme,npm"; REF="main"; PKG="open-walnut@latest"; KEEP=0; RECORD=0; TTL_HOURS=3
+PATHS="installer,readme,npm"; REF="main"; PKG="open-walnut@latest"; KEEP=0; RECORD=0; TTL_HOURS=3
 OS=""; ITYPE=""; IMAGE=""; YES_MAC_HOST=0; SWEEP_ALL=0; RELEASE_HOSTS=0; READY_TIMEOUT=900
 ORIG_ARGS=("$@")
 while [ $# -gt 0 ]; do
@@ -67,7 +71,7 @@ done
 export KEEP YES_MAC_HOST
 
 case "$TARGET" in
-  mac-vm|linux|mac-ec2|ssh) ;;
+  mac-vm|linux|mac-ec2|ssh) need_bun ;;   # before anything is provisioned
   status)       . "$HERE/lib/aws.sh"; aws_require; aws_status; exit 0 ;;
   sweep)        . "$HERE/lib/aws.sh"; aws_require; SWEEP_ALL=$SWEEP_ALL RELEASE_HOSTS=$RELEASE_HOSTS aws_sweep; exit 0 ;;
   release-host) . "$HERE/lib/aws.sh"; aws_require; aws_release_hosts; exit 0 ;;
@@ -176,8 +180,8 @@ case "$TARGET" in
         | awk -v dir="$RUN_DIR/logs" '/^@@FILE /{ out = dir "/" $2; printf "" > out; next } out { print >> out }'
     }
     forward()     { aws_port_forward "$INSTANCE_ID" "$1" "$2"; }
-    # SSM runs as ssm-user; the probe must run as the login user so nvm/npm -g land in a
-    # real home directory like they would for a person.
+    # SSM runs as ssm-user; the probe must run as the login user so the installers, Bun
+    # and npm -g land in a real home directory like they would for a person.
     PROBE_CMD="sudo -iu $LOGIN bash -lc 'bash /tmp/probe.sh $PROBE_ARGS'"
     ;;
 esac
@@ -194,13 +198,18 @@ summarize_steps "$RUN_DIR/steps.jsonl" | tee "$RUN_DIR/summary.txt"
 step_ok() { grep -q "\"name\":\"$1\",\"status\":\"ok\"" "$RUN_DIR/steps.jsonl" 2>/dev/null; }
 CAPTURE_FLAGS=""; [ "$RECORD" = 1 ] && CAPTURE_FLAGS="--video"
 LP=$((40000 + RANDOM % 20000))   # per-run local ports so two runs can capture at once
+# The probe's ports: installer 3459, readme 3456, npm 3458.
+if step_ok "installer:first-run"; then
+  forward 3459 "$((LP + 2))"
+  (cd "$REPO_ROOT" && "$ONB_BUN" "$HERE/capture.mjs" --url "http://127.0.0.1:$((LP + 2))" --out "$RUN_DIR" --name installer $CAPTURE_FLAGS) || warn "capture (installer) failed"
+fi
 if step_ok "readme:first-run"; then
   forward 3456 "$LP"
-  (cd "$REPO_ROOT" && node "$HERE/capture.mjs" --url "http://127.0.0.1:$LP" --out "$RUN_DIR" --name readme $CAPTURE_FLAGS) || warn "capture (readme) failed"
+  (cd "$REPO_ROOT" && "$ONB_BUN" "$HERE/capture.mjs" --url "http://127.0.0.1:$LP" --out "$RUN_DIR" --name readme $CAPTURE_FLAGS) || warn "capture (readme) failed"
 fi
 if step_ok "npm:first-run"; then
   forward 3458 "$((LP + 1))"
-  (cd "$REPO_ROOT" && node "$HERE/capture.mjs" --url "http://127.0.0.1:$((LP + 1))" --out "$RUN_DIR" --name npm $CAPTURE_FLAGS) || warn "capture (npm) failed"
+  (cd "$REPO_ROOT" && "$ONB_BUN" "$HERE/capture.mjs" --url "http://127.0.0.1:$((LP + 1))" --out "$RUN_DIR" --name npm $CAPTURE_FLAGS) || warn "capture (npm) failed"
 fi
 
 # ── stop the servers the probe started (its own PIDs only), then teardown via trap ──
@@ -224,5 +233,5 @@ esac
 } > "$RUN_DIR/report.md"
 ok "report: $RUN_DIR/report.md"
 [ "$KEEP" = 1 ] && warn "--keep: machine left running; clean up with: run.sh sweep --all (aws) or tart delete (mac-vm)"
-[ "$TARGET" = ssh ] && log "ssh: left on $SSH_HOST: ~/walnut-onb (clone + logs), ~/probe.sh, and whatever the probe installed (nvm/Node, the global package); remove by hand if unwanted"
+[ "$TARGET" = ssh ] && log "ssh: left on $SSH_HOST: ~/walnut-onb (clone + logs), ~/probe.sh, and whatever the probe installed (walnut in ~/.local/bin and ~/.local/share/open-walnut, Bun in ~/.bun, and for the npm route its Node and the global package); remove by hand if unwanted"
 exit 0

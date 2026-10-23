@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Record the FULL first-run onboarding *chain* — the experience a brand-new user
  * actually goes through — against a clean-room Walnut (server started with NO creds):
@@ -18,6 +18,9 @@
  *
  * The token is typed into a password field (masked dots) — it never appears on screen.
  * Talks only to the clean-room URL (default :3457) — never production :3456.
+ *
+ * Usage: bun scripts/onboarding-chain.mjs --url http://localhost:3457 --out demo/Final/onboarding-chain.mp4
+ *   (scripts/walnut-sandbox.sh record starts the clean-room server and runs this with its bun)
  */
 import path from 'node:path';
 import os from 'node:os';

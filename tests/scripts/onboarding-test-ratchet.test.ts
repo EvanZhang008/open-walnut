@@ -14,6 +14,11 @@
  *      down itself, with a `pid > 1` floor so a truncated pids file can never
  *      turn into a broadcast signal.
  *
+ * Plus the README's routes as the probe walks them: the one-line installer
+ * first, then the checkout on Bun with no Node anywhere, and Node (through nvm)
+ * only on the npm route, which is the one route that needs it. The operator's
+ * side runs on bun too.
+ *
  * Plus the cheap-but-easy-to-lose properties: probe.sh has to stay bash 3.2
  * compatible (a stock macOS install ships bash 3.2 and nothing else, which is the
  * whole point of the mac-vm target), no cloud identifier may be baked into the
@@ -150,6 +155,14 @@ export function groupKillLines(src: string): Array<{ line: number; text: string 
     }
   })
   return out
+}
+
+/**
+ * Code lines (comments skipped) that name node, nvm or npx on their own:
+ * node_modules and node-gyp are other words.
+ */
+export function nodeLines(src: string): string[] {
+  return src.split('\n').filter((l) => !l.trim().startsWith('#') && /(?<![\w-])(node|nvm|npx)(?![\w-])/.test(l)).map((l) => l.trim())
 }
 
 /** A 12-digit run of decimals is an AWS account id; ami-xxxxxxxx is a pinned image. */
@@ -383,6 +396,97 @@ describe('onboarding harness · no cloud identifier is baked in', () => {
   })
 })
 
+describe('onboarding harness · the probe walks the README routes, bun only until npm', () => {
+  const probe = read('scripts/onboarding-test/probe.sh')
+  const npmAt = probe.indexOf('# ── npm path')
+  const beforeNpm = probe.slice(0, npmAt)
+  const npmRoute = probe.slice(npmAt)
+
+  it('walks all three routes by default, the installer first and npm last', () => {
+    expect(probe).toMatch(/^PATHS="installer,readme,npm"$/m)
+    const order = ['step_begin "system"', 'step_begin "installer:install"', 'step_begin "prereq:git"', 'step_begin "prereq:bun"', 'step_begin "readme:git-clone"', 'step_begin "prereq:npm"', 'step_begin "npm:install-global"']
+    const at = order.map((needle) => probe.indexOf(needle))
+    expect(at.every((i) => i > 0), `missing step: ${order.filter((_, i) => at[i] < 0).join(', ')}`).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    expect(npmAt).toBeGreaterThan(probe.indexOf('step_begin "readme:git-clone"'))
+  })
+
+  it('the installer route is the README one-liner, then walnut web', () => {
+    const url = /^INSTALLER_URL="([^"]+)"$/m.exec(probe)?.[1]
+    expect(url).toBe('https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh')
+    expect(read('README.md')).toContain(`curl -fsSL ${url} | sh`)
+    expect(probe).toContain(`run_logged bash -c 'set -o pipefail; curl -fsSL "$1" | sh' bash "$INSTALLER_URL"`)
+    expect(probe).toContain('"$WALNUT_CMD" web --port "$INSTALLER_PORT"')
+  })
+
+  it('the checkout route installs Bun the README way, then bun install and bun run start', () => {
+    expect(beforeNpm).toContain("run_logged bash -c 'curl -fsSL https://bun.sh/install | bash'")
+    expect(beforeNpm).toContain('(cd "$README_DIR" && run_logged bun install)')
+    expect(beforeNpm).toContain(`sh -c 'cd "$1" && exec bun run start' sh "$README_DIR"`)
+  })
+
+  it('needs no Node before the npm route: only the inventory of what the machine has names it', () => {
+    expect(nodeLines(beforeNpm)).toEqual(['for t in git curl bun node npm brew claude walnut open-walnut; do'])
+    for (const gone of ['unofficial-builds', 'check-native-toolchain', 'glibc-217', 'nvm install 22', 'prereq:node22']) {
+      expect(probe, `the probe still carries ${gone}`).not.toContain(gone)
+    }
+  })
+
+  it('reads the health answer with sed, since a machine on the installer route has no JavaScript runtime', () => {
+    const health = splitShellFunctions(probe).find((f) => f.name === 'health_note')!
+    expect(health.body).toContain('json_field "$h" hasReadyProvider')
+    expect(health.body).not.toMatch(/\b(node|bun)\b/)
+  })
+
+  it('the npm route brings its own Node, with nvm, only when there is no working npm', () => {
+    expect(npmRoute).toContain('if have npm && [ "$(node_major)" -ge 18 ] 2>/dev/null; then')
+    expect(npmRoute).toContain('nvm install --lts')
+    expect(npmRoute).toContain('run_logged npm install -g "$PKG"')
+    // npm's own bin, not whatever the installer route linked into ~/.local/bin.
+    expect(npmRoute).toContain('NPM_WALNUT="$(npm prefix -g 2>/dev/null)/bin/open-walnut"')
+  })
+})
+
+describe('onboarding harness · the operator side runs on bun', () => {
+  const common = read('scripts/onboarding-test/lib/common.sh')
+  const aws = read('scripts/onboarding-test/lib/aws.sh')
+  const run = read('scripts/onboarding-test/run.sh')
+
+  it('finds bun in the places dev-prod.sh looks, and names bun when there is none', () => {
+    const need = splitShellFunctions(common).find((f) => f.name === 'need_bun')!
+    for (const where of ['${WALNUT_BUN:-}', 'command -v bun', '$HOME/.bun/bin/bun', '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) {
+      expect(need.body).toContain(where)
+    }
+    expect(need.body).toMatch(/die "missing tool: bun/)
+  })
+
+  it('renders the summary with `bun run -` (a bare `bun -` is `bun add`)', () => {
+    const summary = splitShellFunctions(common).find((f) => f.name === 'summarize_steps')!
+    expect(summary.body).toContain('"$ONB_BUN" run - "$steps" <<\'JS\'')
+    expect(summary.body).not.toMatch(/\bbun -\s/)
+  })
+
+  it('quotes SSM commands as JSON with bun, and checks for bun with the other AWS tools', () => {
+    expect(aws).toContain(`"$ONB_BUN" -e 'process.stdout.write(JSON.stringify({commands:[process.argv[1]]}))' "$cmd"`)
+    expect(splitShellFunctions(aws).find((f) => f.name === 'aws_require')!.body).toContain('need_bun')
+  })
+
+  it('checks for bun before it provisions anything, and captures every route with it', () => {
+    expect(run.indexOf('need_bun')).toBeGreaterThan(-1)
+    expect(run.indexOf('need_bun')).toBeLessThan(run.indexOf('# ── provision'))
+    for (const name of ['installer', 'readme', 'npm']) {
+      expect(run).toMatch(new RegExp(`"\\$ONB_BUN" "\\$HERE/capture\\.mjs" [^\\n]*--name ${name} `))
+    }
+    expect(read('scripts/onboarding-test/capture.mjs').split('\n')[0]).toBe('#!/usr/bin/env bun')
+  })
+
+  it.each(['scripts/onboarding-test/run.sh', 'scripts/onboarding-test/lib/common.sh', 'scripts/onboarding-test/lib/aws.sh', 'scripts/onboarding-test/lib/tart.sh', 'scripts/onboarding-test/render-video.sh'])(
+    '%s runs nothing on node', (file) => {
+      expect(nodeLines(read(file))).toEqual([])
+    },
+  )
+})
+
 describe('onboarding harness · operator help', () => {
   /**
    * Safe to execute: the help path prints the comment header and exits before
@@ -487,6 +591,11 @@ describe('onboarding harness ratchet · the detectors actually catch things', ()
     expect(groupKillLines('kill -0 "$pid"\nkill -TERM "$pid"\nkill $FWD_PID 2>/dev/null || true')).toEqual([])
     const bad = ['kill -TERM -$pgid', 'kill -- -1234', 'kill -9 -"$PGID"'].join('\n')
     expect(groupKillLines(bad).map((g) => g.line)).toEqual([1, 2, 3])
+  })
+
+  it('finds node, nvm and npx used as words, and skips comments, node_modules and node-gyp', () => {
+    const src = ['node -e "1"', '# node is not here', 'du -sh "$DIR/node_modules"', "grep -q 'node-gyp' log", '. "$NVM_DIR/nvm.sh" && nvm use', 'npx tsx x.ts', 'bun run start'].join('\n')
+    expect(nodeLines(src)).toEqual(['node -e "1"', '. "$NVM_DIR/nvm.sh" && nvm use', 'npx tsx x.ts'])
   })
 
   it('flags a baked account id or AMI, and clears an SSM parameter path', () => {

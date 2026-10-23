@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * End-to-end verification of ALL onboarding cases against pristine clean-room servers.
  * Drives the real UI, asserts health + DOM, and (when a real credential is provided)
@@ -10,7 +10,10 @@
  * Live cases need a real Bedrock token in the parent env as WALNUT_TEST_TOKEN
  * (+ optional WALNUT_TEST_REGION, default us-west-2). Detection-only cases run without it.
  *
- * Usage: WALNUT_TEST_TOKEN=... WALNUT_TEST_REGION=... node scripts/onboarding-verify-all.mjs
+ * Each server runs on bun (`bun dist/cli.js web`): WALNUT_BUN when set, else the bun
+ * running this script, else the first `bun` on PATH. Build first: `bun run web:build`.
+ *
+ * Usage: WALNUT_TEST_TOKEN=... WALNUT_TEST_REGION=... bun scripts/onboarding-verify-all.mjs
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,6 +28,7 @@ const SHOTS = path.join(REPO, 'demo', 'onboarding-shots');
 const TOKEN = process.env.WALNUT_TEST_TOKEN || '';
 const REGION = process.env.WALNUT_TEST_REGION || 'us-west-2';
 const RECORDER = path.join(os.homedir(), '.claude/skills/record-webapp-video/scripts/recorder.mjs');
+const BUN = process.env.WALNUT_BUN || (process.versions.bun ? process.execPath : 'bun');
 
 fs.mkdirSync(SHOTS, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -50,7 +54,7 @@ function launch(homeDir, walnutHome, { seed, extraEnv = {} } = {}) {
     WALNUT_DISABLE_SEARCH: '1', OPEN_WALNUT_HOME: walnutHome,
     WALNUT_DAEMON_DIR: path.join(ROOT, 'daemon'), ...extraEnv,
   };
-  return spawn('node', [path.join(REPO, 'dist/cli.js'), 'web', '--port', String(PORT)],
+  return spawn(BUN, [path.join(REPO, 'dist/cli.js'), 'web', '--port', String(PORT)],
     { env, stdio: ['ignore', 'ignore', 'ignore'] });
 }
 
@@ -71,7 +75,7 @@ async function waitHealth(timeoutMs = 45000) {
  * still booting (the common case here — we stop several cases before they finish
  * starting) held no port, so lsof could not see it and nothing ever confirmed its
  * death. Combined with a server-side bug that swallowed SIGTERM during boot, each
- * run of this script leaked one immortal node process per case. On 2026-08-09 that
+ * run of this script leaked one immortal server process per case. On 2026-08-09 that
  * reached 43 concurrent leaked servers — each still running its health monitor,
  * cron, git auto-commit and plugin polling against its own isolated
  * OPEN_WALNUT_HOME (so the single-instance lock never applied). Load average hit

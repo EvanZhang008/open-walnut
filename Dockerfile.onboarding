@@ -5,7 +5,8 @@
 # A container gives a guaranteed-empty home (fresh ~/.claude, no AWS env, empty
 # ~/.open-walnut) where the onboarding banner actually fires.
 #
-# It builds the app fresh inside the image (Linux native modules: better-sqlite3, sharp).
+# It builds the app fresh inside the image, the README's checkout route: bun only, no
+# Node anywhere in the image (`bun install`, `bun run web:build`, `bun dist/cli.js web`).
 # Search/embedding is disabled (WALNUT_DISABLE_SEARCH=1) so no 1.16GB model download.
 #
 # Build:  docker build -f Dockerfile.onboarding -t walnut-onboarding .
@@ -17,14 +18,17 @@
 # The container CANNOT touch the production server on :3456 — separate kernel namespace,
 # separate home, separate port. Nothing is mounted from the host.
 
-FROM node:22-bookworm-slim
+FROM debian:bookworm-slim
 
-# Build toolchain for native modules (better-sqlite3, sharp, node-pty) + git for the skill demo.
+# git for the skill demo. python3, make and g++ only because `bun install` still runs
+# better-sqlite3's install script (a dependency while src/lib/sqlite.ts keeps its Node
+# branch): it has no prebuilt for bun's ABI, so it compiles. The server never loads it
+# on bun (bun:sqlite). Drop the three when better-sqlite3 leaves package.json.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 make g++ git ca-certificates curl \
+      git ca-certificates curl python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# A checkout installs with Bun, at the version package.json pins (packageManager).
+# The only runtime: bun, at the version package.json pins (packageManager).
 COPY --from=oven/bun:1.4.4 /usr/local/bin/bun /usr/local/bin/bun
 
 # Run as a non-root user with a fresh, empty HOME → fresh ~/.claude + ~/.open-walnut.
@@ -57,5 +61,5 @@ ENV WALNUT_DISABLE_SEARCH=1 \
 
 EXPOSE 3457
 
-# Serve the prebuilt dist on :3457. (web:build already ran above, so just run the server.)
-CMD ["node", "dist/cli.js", "web", "--port", "3457"]
+# Serve the prebuilt dist on :3457 with bun. (web:build already ran above, so just run the server.)
+CMD ["bun", "dist/cli.js", "web", "--port", "3457"]

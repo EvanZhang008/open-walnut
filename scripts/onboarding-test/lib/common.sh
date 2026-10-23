@@ -25,6 +25,18 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing tool: $1 ($2)"
 }
 
+# The operator's bun, which runs the summary, the SSM JSON and the Playwright capture.
+# The same places scripts/dev-prod.sh looks: WALNUT_BUN, PATH, then the usual installs.
+# Sets ONB_BUN; dies naming bun when there is none.
+need_bun() {
+  local cand
+  [ -n "${ONB_BUN:-}" ] && return 0
+  for cand in "${WALNUT_BUN:-}" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then ONB_BUN="$cand"; return 0; fi
+  done
+  die "missing tool: bun (curl -fsSL https://bun.sh/install | bash, or point WALNUT_BUN at one)"
+}
+
 # Cleanup steps are registered as shell snippets and run in reverse order on EXIT,
 # so a failure at any point still tears down what was already created.
 ONB_CLEANUP_STACK=""
@@ -60,11 +72,13 @@ wait_for() {
 }
 
 # Pretty-print the probe's steps.jsonl as a summary table + findings list.
-# Uses node because it is guaranteed on the operator box (this repo needs it).
+# Runs on the operator's bun. `bun run -` reads the script from stdin (a bare
+# `bun -` would be `bun add`).
 summarize_steps() {
   local steps="$1"
   [ -s "$steps" ] || { warn "no steps recorded at $steps"; return 1; }
-  node - "$steps" <<'JS'
+  need_bun
+  "$ONB_BUN" run - "$steps" <<'JS'
 const fs = require('fs');
 const lines = fs.readFileSync(process.argv[2], 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 const pad = (s, n) => String(s).padEnd(n);

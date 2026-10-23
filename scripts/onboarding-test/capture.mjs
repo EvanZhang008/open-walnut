@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Capture the FIRST-RUN experience of a freshly installed Walnut server.
  *
@@ -7,8 +7,10 @@
  * (three possible states: full onboarding checklist, an "auto-detected
  * credentials" note, or nothing at all) and optionally records a short video.
  *
- *   node scripts/onboarding-test/capture.mjs --url http://127.0.0.1:43456 \
+ *   bun scripts/onboarding-test/capture.mjs --url http://127.0.0.1:43456 \
  *        --out /tmp/run --name readme [--video]
+ *
+ * Runs on the operator's bun (run.sh starts it); Playwright's browser API works there.
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';

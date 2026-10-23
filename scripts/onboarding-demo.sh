@@ -10,6 +10,10 @@
 # For `happy`, provide a credential via the host env (NEVER committed, NEVER baked in):
 #   AWS_BEARER_TOKEN_BEDROCK=... AWS_REGION=us-west-2 scripts/onboarding-demo.sh happy
 #   (or AWS_PROFILE=... — but a profile needs ~/.aws mounted; bearer token is simplest in a container)
+#
+# The image is bun only (Dockerfile.onboarding). On this machine the Playwright driver
+# (scripts/onboarding-demo.mjs) runs on bun too: WALNUT_BUN, PATH, ~/.bun/bin/bun,
+# /opt/homebrew/bin/bun or /usr/local/bin/bun, the first one found.
 set -euo pipefail
 
 IMAGE=walnut-onboarding
@@ -19,6 +23,18 @@ NAME=walnut-onboarding-run
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 cmd="${1:-help}"
+
+BUN=""
+for cand in "${WALNUT_BUN:-}" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  if [ -n "$cand" ] && [ -x "$cand" ]; then BUN="$cand"; break; fi
+done
+# Checked before the image is built or a container starts.
+need_bun() {
+  if [ -z "$BUN" ]; then
+    echo "onboarding-demo: needs bun to drive the browser; install it with: curl -fsSL https://bun.sh/install | bash   (or point WALNUT_BUN at one)" >&2
+    exit 2
+  fi
+}
 
 build() {
   echo "==> building $IMAGE (fresh Linux build inside the image) …"
@@ -38,16 +54,18 @@ case "$cmd" in
   build) build ;;
 
   clean)
+    need_bun
     docker image inspect "$IMAGE" >/dev/null 2>&1 || build
     run_container
     echo "==> verifying clean-room onboarding (expect banner, no provider) …"
-    node "$HERE/scripts/onboarding-demo.mjs" --url "$URL"
+    "$BUN" "$HERE/scripts/onboarding-demo.mjs" --url "$URL"
     rc=$?
     stop_run
     exit $rc
     ;;
 
   happy)
+    need_bun
     docker image inspect "$IMAGE" >/dev/null 2>&1 || build
     # Pass whatever credential the host has — bearer token is the container-friendly path.
     declare -a CREDS=()
@@ -61,7 +79,7 @@ case "$cmd" in
     fi
     run_container "${CREDS[@]}"
     echo "==> verifying happy path (expect provider ready + Personal AI reply) …"
-    node "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --expect-ready --chat "hello, are you there?"
+    "$BUN" "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --expect-ready --chat "hello, are you there?"
     rc=$?
     stop_run
     exit $rc
@@ -69,10 +87,11 @@ case "$cmd" in
 
   record)
     out="${2:-onboarding.mp4}"
+    need_bun
     docker image inspect "$IMAGE" >/dev/null 2>&1 || build
     run_container
     echo "==> recording clean-room onboarding → $out …"
-    node "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --record "$out"
+    "$BUN" "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --record "$out"
     rc=$?
     stop_run
     exit $rc
