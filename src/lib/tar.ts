@@ -281,16 +281,38 @@ export async function extractTarGz(archive: string, destDir: string, opts: Extra
   const dest = resolve(destDir);
   await mkdir(dest, { recursive: true });
   const tar = new TarExtractor(dest, opts);
+  const stage = ownError();
   try {
     // pipeline carries a read or gunzip error to the caller, where .pipe() would leave it unhandled.
-    await pipeline(createReadStream(archive), createGunzip(), async (source: AsyncIterable<Buffer>) => {
+    await pipeline(createReadStream(archive), createGunzip(), stage.wrap(async (source: AsyncIterable<Buffer>) => {
       for await (const chunk of source) await tar.push(chunk);
-    });
+    }));
     return await tar.end();
   } catch (err) {
     await tar.abort();
-    throw err;
+    throw stage.error ?? err;
   }
+}
+
+/**
+ * The error the last pipeline stage threw itself. Node 22's pipeline rejects
+ * with the AbortError of the streams it tears down ("The operation was
+ * aborted") when that stage throws; Node 24 and bun reject with the stage's own
+ * error, the one that says what is wrong with the archive.
+ */
+function ownError() {
+  const kept: { error: unknown; wrap: <T>(fn: (source: AsyncIterable<Buffer>) => Promise<T>) => (source: AsyncIterable<Buffer>) => Promise<T> } = {
+    error: undefined,
+    wrap: (fn) => async (source) => {
+      try {
+        return await fn(source);
+      } catch (err) {
+        kept.error = err;
+        throw err;
+      }
+    },
+  };
+  return kept;
 }
 
 /**
@@ -301,13 +323,18 @@ export async function extractTarGz(archive: string, destDir: string, opts: Extra
 export async function tarGzDigest(archive: string, maxBytes = Number.POSITIVE_INFINITY): Promise<{ sha256: string; bytes: number }> {
   const hash = createHash('sha256');
   let bytes = 0;
-  await pipeline(createReadStream(archive), createGunzip(), async (source: AsyncIterable<Buffer>) => {
-    for await (const chunk of source) {
-      bytes += chunk.length;
-      if (bytes > maxBytes) throw new Error(`Archive unpacks to more than the ${maxBytes} bytes pinned for it`);
-      hash.update(chunk);
-    }
-  });
+  const stage = ownError();
+  try {
+    await pipeline(createReadStream(archive), createGunzip(), stage.wrap(async (source: AsyncIterable<Buffer>) => {
+      for await (const chunk of source) {
+        bytes += chunk.length;
+        if (bytes > maxBytes) throw new Error(`Archive unpacks to more than the ${maxBytes} bytes pinned for it`);
+        hash.update(chunk);
+      }
+    }));
+  } catch (err) {
+    throw stage.error ?? err;
+  }
   return { sha256: hash.digest('hex'), bytes };
 }
 
