@@ -15,6 +15,7 @@ import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from '../logging/index.js';
 import { WALNUT_HOME } from '../constants.js';
+import { bundledModule } from '../lib/single-file.js';
 import type { ActionDefinition, ActionDescriptor, ActionContext, ActionResult } from './types.js';
 
 const USER_ACTIONS_DIR = join(WALNUT_HOME, 'actions');
@@ -74,7 +75,8 @@ async function scanDir(
 
     const filePath = join(dir, file);
     try {
-      const mod = await import(filePath);
+      // The compiled walnut file carries the built-in actions; dist/actions holds placeholders.
+      const mod = await (bundledModule(filePath)?.() ?? import(filePath));
       if (typeof mod.describe !== 'function') continue;
 
       const descriptor: ActionDescriptor = mod.describe();
@@ -156,7 +158,7 @@ export async function runAction(
     const importPath = action.source === 'user'
       ? `${action.filePath}?t=${Date.now()}`
       : action.filePath;
-    const mod = await import(importPath);
+    const mod = await (bundledModule(action.filePath)?.() ?? import(importPath));
 
     if (typeof mod.run !== 'function') {
       return { invoke: false, content: `Action "${id}" has no run() export` };

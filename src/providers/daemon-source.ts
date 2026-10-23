@@ -5353,6 +5353,7 @@ var LEGACY_WN_SHIM_MARKERS = ['walnut-wn-shim v1'];
 // anywhere else on PATH always wins; otherwise the daemon gateway shim
 // answers. Keep in sync with daemon-standalone.ts userWalnutShimText.
 var USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1';
+var USER_WALNUT_SHIM_MAX_BYTES = 16 * 1024;
 
 function userWalnutShimText() {
   return '#!/bin/sh\\n'
@@ -5422,6 +5423,9 @@ function installUserWalnutShim() {
       var marker = USER_WALNUT_SHIM_MARKER;
       var target = path.join(dir, 'walnut');
       if (fs.existsSync(target)) {
+        // Our shim is a short script. A big file is a real walnut (the compiled
+        // Walnut file carries this marker in its own code): never read or replace it.
+        if (fs.statSync(target).size > USER_WALNUT_SHIM_MAX_BYTES) continue;
         var existing = fs.readFileSync(target, 'utf-8');
         if (existing.indexOf(marker) === -1) continue;
         if (existing === text) { installed.push(target); continue; }
