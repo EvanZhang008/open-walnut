@@ -23,7 +23,7 @@ const PROVIDER = path.resolve(__dirname, '../fixtures/workspace-providers/fake-m
 let scriptDir = ''
 type Twin = { name: string; command: () => [string, string[]] }
 const TWINS: Twin[] = [
-  { name: 'source twin (node)', command: () => [process.execPath, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
+  { name: 'source twin', command: () => [process.execPath, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 

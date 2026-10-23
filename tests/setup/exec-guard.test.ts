@@ -188,7 +188,7 @@ const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/
 const STANDALONE = path.resolve(import.meta.dirname, '../../src/providers/daemon-standalone.ts')
 type Twin = { name: string; command: (script: string) => [string, string[]] }
 const TWINS: Twin[] = [
-  { name: 'source twin (node)', command: (script) => [process.execPath, [script, '--start']] },
+  { name: 'source twin', command: (script) => [process.execPath, [script, '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 

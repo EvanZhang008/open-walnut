@@ -207,7 +207,7 @@ afterAll(() => {
 })
 
 const twins: Array<{ name: string; skip: boolean; command: () => [string, string[]] }> = [
-  { name: 'source twin (node)', skip: false, command: () => ['node', [scriptPath]] },
+  { name: 'source twin', skip: false, command: () => [process.execPath, [scriptPath]] },
   { name: 'Bun twin, compiled from this source', skip: !BUN, command: () => [bunDaemon!, []] },
 ]
 

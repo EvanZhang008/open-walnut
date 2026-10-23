@@ -27,7 +27,7 @@ const CORE = path.resolve(__dirname, '../../src/providers/external-session-scan-
 let scriptDir = ''
 type Twin = { name: string; command: () => [string, string[]] }
 const TWINS: Twin[] = BUN ? [
-  { name: 'source twin (node)', command: () => [process.execPath, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
+  { name: 'source twin', command: () => [process.execPath, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
   { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] },
 ] : []
 

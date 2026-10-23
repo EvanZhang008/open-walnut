@@ -27,7 +27,7 @@ const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 type Twin = { name: string; command: () => [string, string[]] }
 const TWINS: Twin[] = [
-  { name: 'source twin (node)', command: () => [process.execPath, [scriptPath, '--start']] },
+  { name: 'source twin', command: () => [process.execPath, [scriptPath, '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 let proc: ChildProcess | null = null
@@ -143,7 +143,8 @@ describe.each(TWINS)('daemon twin: $name', (twin) => {
     expect(String(r.error)).toMatch(/EDENIED/)
     expect(fs.existsSync(path.join(other, 'daemon.pid'))).toBe(true)
     const hello = await rpc({ id: 6, cmd: 'hello' })
-    expect(hello.runtime).toBe(twin.name.includes('bun') ? 'bun' : 'node')
+    // The standalone twin is bun; the source twin runs on this runner's runtime (bun, in every tier).
+    expect(hello.runtime).toBe(twin.name.includes('bun') || process.versions.bun ? 'bun' : 'node')
   }, 60_000)
 
   it('fs.ls answers through the shared lister: types, links, dangling links, detail, no partial flag when all answered', async () => {

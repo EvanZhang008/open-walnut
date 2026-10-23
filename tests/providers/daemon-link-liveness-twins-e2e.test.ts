@@ -35,7 +35,7 @@ const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 let scriptPath = ''
 type Twin = { name: string; command: () => [string, string[]] }
-const SOURCE_TWIN: Twin = { name: 'source twin (node)', command: () => [process.execPath, [scriptPath, '--start']] }
+const SOURCE_TWIN: Twin = { name: 'source twin', command: () => [process.execPath, [scriptPath, '--start']] }
 const BUN_TWIN: Twin | null = BUN ? { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] } : null
 const TWINS: Twin[] = [SOURCE_TWIN, ...(BUN_TWIN ? [BUN_TWIN] : [])]
 

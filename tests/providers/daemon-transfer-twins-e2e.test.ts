@@ -34,7 +34,7 @@ if (BUN) {
   if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
 }
 const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: 'source twin (node)', command: () => [process.execPath, [scriptPath, '--start']] },
+  { name: 'source twin', command: () => [process.execPath, [scriptPath, '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 
