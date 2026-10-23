@@ -14,7 +14,10 @@
  *
  * One data home may be shared by two Walnut builds (a rollback, an older Mac
  * app next to a newer server): each keeps its own pinned version, and an
- * install only removes versions older than the one it installed.
+ * install only removes versions older than the one it installed. A version the
+ * installing process itself still loads from (`inUse`: an older install that
+ * served until this one landed, whose files a running worker may still read)
+ * stays until the next server start prunes it (index.ts).
  */
 
 import { randomBytes } from 'node:crypto';
@@ -46,6 +49,8 @@ export interface InstallOptions extends Pick<DownloadOptions, 'signal' | 'idleTi
   onPhase?: (phase: 'waiting' | 'downloading' | 'installing') => void;
   onProgress?: (done: number, total: number | null) => void;
   lock?: Omit<LockOptions, 'signal' | 'onWait'>;
+  /** Versions this process still loads from: never removed by this install's prune. */
+  inUse?: () => Iterable<string>;
 }
 
 /** Another installer's leftovers younger than this may still be in use (one that lost the lock). */
@@ -214,7 +219,7 @@ async function installLocked(
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
-    await pruneOld(name, opts.root, comp.version);
+    await pruneOld(name, opts.root, comp.version, opts.inUse?.() ?? []);
     const installed = await findInstalled(name, { root: opts.root, platform: opts.platform, manifest });
     if (!installed) throw new ComponentError(`The ${name} component did not install`, 'disk');
     return installed;
@@ -262,14 +267,16 @@ async function installLocked(
 
 /**
  * With the lock held: remove the versions of `name` older than `keep` (never a
- * newer one: another Walnut build uses it), crashed installs' leftovers, and
- * archives and partial downloads in .downloads/ that are not this version's or
- * that no live installer is writing.
+ * newer one: another Walnut build uses it, and never one in `inUse`: this
+ * process still loads from it), crashed installs' leftovers, and archives and
+ * partial downloads in .downloads/ that are not this version's or that no live
+ * installer is writing.
  */
-export async function pruneOld(name: ComponentName, root: string, keep: string): Promise<string[]> {
+export async function pruneOld(name: ComponentName, root: string, keep: string, inUse: Iterable<string> = []): Promise<string[]> {
   const removed: string[] = [];
+  const using = new Set(inUse);
   for (const v of await otherVersions(name, root, keep)) {
-    if (compareVersions(v, keep) >= 0) continue;
+    if (compareVersions(v, keep) >= 0 || using.has(v)) continue;
     await rm(path.join(root, name, v), { recursive: true, force: true });
     removed.push(v);
   }

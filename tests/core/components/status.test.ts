@@ -245,7 +245,8 @@ describe('component status', () => {
     const now = resolveComponent('images');
     if (now?.source !== 'installed') throw new Error('not installed');
     expect(now.require('fake-lib').hello()).toBe('hello from images-1.0.0-2');
-    expect(fs.readdirSync(path.join(root, 'images'))).toEqual(['1.0.0-2']);
+    // The older one served a feature in this process: it stays until the next start (upgrade-in-use.test.ts).
+    expect(fs.readdirSync(path.join(root, 'images')).sort()).toEqual(['1.0.0-1', '1.0.0-2']);
   });
 
   it('a selftest reports and installs nothing: no upgrade, no feature download, not even a click', async () => {
