@@ -14,7 +14,7 @@
  *   once a week after a fresh-machine install of it (the plan itself is
  *   tests/scripts/stable-promote.test.ts).
  */
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -633,10 +633,34 @@ describe('ci.yml', () => {
     expect(doc.jobs.browser!.strategy!.matrix.shard).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
     expect(runs('browser')).toContain('npx playwright test --project=chromium --shard=${{ matrix.shard }}/8')
     // The run ends itself before the job timeout, so its report is always uploaded.
-    const globalMs = Number(/--global-timeout=(\d+)/.exec(runs('browser'))?.[1])
-    expect(globalMs).toBeGreaterThan(0)
-    expect(globalMs).toBeLessThan(((doc.jobs.browser as unknown as { 'timeout-minutes': number })['timeout-minutes'] - 10) * 60_000)
-    expect(runs('browser')).toContain('node scripts/playwright-summary.mjs')
+    // Its budget is counted from the job's first step (2026-10-23: a 14 min browser
+    // install left a fixed 45 min run still going when the job's 60 ran out).
+    const jobMin = (doc.jobs.browser as unknown as { 'timeout-minutes': number })['timeout-minutes']
+    const steps = doc.jobs.browser!.steps
+    expect(steps[0]!.run).toBe('echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"')
+    const test = runs('browser')
+    expect(test).toMatch(/--global-timeout=\$\(\( budget \* 1000 \)\)/)
+    const left = /left=\$\(\( JOB_STARTED_AT \+ (\d+) \* 60 - \$\(date \+%s\) \)\)/.exec(test)
+    expect(Number(left?.[1])).toBeLessThanOrEqual(jobMin - 5)
+    const cap = Number(/budget=\$\(\( left < (\d+) \? left : \1 \)\)/.exec(test)?.[1])
+    expect(cap * 1000).toBeLessThan((jobMin - 10) * 60_000)
+    // Every engine a spec launches is installed: *.webkit.spec.ts specs launch WebKit.
+    expect(test).toContain('npx playwright install --with-deps chromium webkit')
+    expect(test).toContain('node scripts/playwright-summary.mjs')
+  })
+
+  it('the browser budget never runs the tests past the job timeout, however long the setup took', () => {
+    const test = runs('browser')
+    const script = test.slice(test.indexOf('left=$(('), test.indexOf('npx playwright test --project'))
+    const jobMin = (doc.jobs.browser as unknown as { 'timeout-minutes': number })['timeout-minutes']
+    for (const setupSecs of [60, 840, 2900, 3500]) {
+      const now = 1_800_000_000
+      const r = spawnSync('bash', ['-c', `date() { echo ${now}; }; export -f date; JOB_STARTED_AT=${now - setupSecs}; ${script} echo "$budget"`], { encoding: 'utf8' })
+      const budget = Number(r.stdout.trim().split('\n').pop())
+      expect(budget).toBeGreaterThan(0)
+      expect(budget).toBeLessThanOrEqual(2700)
+      if (setupSecs < 50 * 60) expect(setupSecs + budget).toBeLessThanOrEqual((jobMin - 5) * 60)
+    }
   })
 
   it('a browser spec that fails to load blocks in Lint & build, before any shard runs', () => {
