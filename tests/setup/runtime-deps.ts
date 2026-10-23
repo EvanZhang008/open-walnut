@@ -10,6 +10,26 @@
  * its named exports, so the interop is turned off there and the code under test
  * sees exactly what the bun runtime gives it. Node keeps vitest's default.
  */
+/**
+ * The oldest bun a vitest run is trusted on. With the forks pool, bun 1.3.9 ends
+ * a run after its first file whenever a worker is reused, with no summary and
+ * often exit 0: a green run that tested one file. Fixed in 1.4.4.
+ */
+const MIN_BUN = [1, 4, 4]
+
+function olderThan(version: string, min: number[]): boolean {
+  const parts = version.split(/[.-]/).slice(0, 3).map((n) => Number.parseInt(n, 10) || 0)
+  for (let i = 0; i < min.length; i++) {
+    if (parts[i] !== min[i]) return parts[i] < min[i]
+  }
+  return false
+}
+
 export function runtimeDeps(): { interopDefault?: boolean } {
-  return typeof process.versions.bun === 'string' ? { interopDefault: false } : {}
+  const bun = process.versions.bun
+  if (typeof bun !== 'string') return {}
+  if (olderThan(bun, MIN_BUN)) {
+    throw new Error(`vitest on bun ${bun} silently skips test files; run it on bun ${MIN_BUN.join('.')} or newer (package.json packageManager)`)
+  }
+  return { interopDefault: false }
 }
