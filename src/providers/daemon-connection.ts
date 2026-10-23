@@ -495,6 +495,8 @@ export class DaemonConnection {
   private hostSlicePushInFlight = false
   private hostSlicePushRerun = false
   private lastHostSlicePushHash: string | null = null
+  /** The sessions the copy last pushed here names (host-slice.ts pushes a session it lacks at once). */
+  private hostSliceSids: ReadonlySet<string> = new Set()
   /** The daemon's offline journal may hold records: set on connect and on its offline-journal event. */
   private offlineDrainDue = true
   /** One pending retry after a failed push (a starved daemon timed out the drain). */
@@ -880,7 +882,7 @@ export class DaemonConnection {
     // And for the offline host: first take back what the daemon did while we
     // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
     if (changed) {
-      this.lastHostSlicePushHash = null; this.offlineDrainDue = true; this.leaderConfigured = false; this.replicaPushed = false
+      this.lastHostSlicePushHash = null; this.hostSliceSids = new Set(); this.offlineDrainDue = true; this.leaderConfigured = false; this.replicaPushed = false
       void import('../core/host-replica.js').then((m) => m.forgetHostReplica(this.hostKey)).catch(() => {})
     }
     if (changed && value) this.pushHostSlice()
@@ -1190,6 +1192,7 @@ export class DaemonConnection {
             continue
           }
           this.lastHostSlicePushHash = slice.hash
+          this.hostSliceSids = new Set(slice.sessions.map((s) => s.sid))
           log.session.info('DaemonConnection: host slice pushed', {
             host: this.hostKey, hash: slice.hash, sessions: slice.sessions.length, tasks: slice.tasks.length,
             requests: slice.requests.length, changed: (reply as Record<string, unknown>).changed === true,
@@ -1231,6 +1234,11 @@ export class DaemonConnection {
         this.hostSlicePushInFlight = false
       }
     })()
+  }
+
+  /** Whether the copy last pushed to this daemon names the session. */
+  hostSliceNames(sid: string): boolean {
+    return this.hostSliceSids.has(sid)
   }
 
   /**
@@ -5789,6 +5797,21 @@ export function pushHostSliceToAllHosts(): void {
   for (const conn of connectionPool.values()) {
     if (conn.connected) conn.pushHostSlice()
   }
+}
+
+/** Push one host's read copy now ('__local__' for this machine): a session is starting there. */
+export function pushHostSliceToHost(hostKey: string): void {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected && conn.host === hostKey) conn.pushHostSlice()
+  }
+}
+
+/** Whether the copy last pushed to a connected host names this session. */
+export function hostSliceNamesSession(sid: string): boolean {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected && conn.hostSliceNames(sid)) return true
+  }
+  return false
 }
 
 /** Bring every connected host's read copy up to date (notes, memory, skills or a host's keep list changed). */

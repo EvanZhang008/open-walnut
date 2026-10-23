@@ -9,19 +9,28 @@ import { HOST_WORK, type Fleet } from './fleet.js'
 
 export interface HostSession { host: string; taskId: string; sid: string }
 
-/** A task on the Mac and a session for it on `host`, whose first turn has answered on the host. */
-export async function startHostSession(f: Fleet, host: string, title: string, message: string): Promise<HostSession> {
+/** A task on the Mac, in project Acme; its id. */
+export async function makeTask(f: Fleet, title: string): Promise<string> {
   const made = await f.mac.call('POST', '/api/tasks', { title, project: 'Acme' })
   expect(made.status, made.text).toBe(201)
-  const taskId = made.json.task.id as string
+  return made.json.task.id as string
+}
+
+/** Starts the task's session on `host` with `message` as its first turn; returns once the Mac took the start. */
+export async function startSession(f: Fleet, host: string, taskId: string, message: string): Promise<HostSession> {
   const st = await f.mac.call('POST', `/api/v1/tasks/${taskId}/start`, { host, cwd: HOST_WORK, mode: 'default', message })
   expect(st.status, st.text).toBe(202)
-  const sid = st.json.sessionId as string
-  await waitFor(async () => (await results(f, { host, taskId, sid }, `echo: ${message}`)) > 0, 90_000, `the session on ${host} to answer`)
+  return { host, taskId, sid: st.json.sessionId as string }
+}
+
+/** A task on the Mac and a session for it on `host`, whose first turn has answered on the host. */
+export async function startHostSession(f: Fleet, host: string, title: string, message: string): Promise<HostSession> {
+  const s = await startSession(f, host, await makeTask(f, title), message)
+  await waitFor(async () => (await results(f, s, `echo: ${message}`)) > 0, 90_000, `the session on ${host} to answer`)
   // The host answers a session's calls while the Mac is away only once its copy names the
-  // session: the Mac pushes that copy 3 s after the start (host-slice.ts PUSH_DEBOUNCE_MS).
-  await waitFor(() => f.hostSliceHolds(host, sid), 60_000, `${host}'s copy to name the session`)
-  return { host, taskId, sid }
+  // session; the Mac pushes that copy with the start (host-slice.ts pushStartingSession).
+  await waitFor(() => f.hostSliceHolds(host, s.sid), 10_000, `${host}'s copy to name the session`)
+  return s
 }
 
 /** How many of the session's turns on the host ended with a reply holding `text`. */
@@ -29,7 +38,8 @@ export async function results(f: Fleet, s: HostSession, text: string): Promise<n
   return (await f.hostStream(s.host, s.sid)).filter((l) => l.type === 'result' && String(l.result).includes(text)).length
 }
 
-const runningTurns = async (f: Fleet, s: HostSession) =>
+/** How many turns of the session the host's CLI has started. */
+export const runningTurns = async (f: Fleet, s: HostSession) =>
   (await f.hostStream(s.host, s.sid)).filter((l) => l.type === 'system' && l.subtype === 'session_state_changed' && l.state === 'running').length
 
 /** Sends the update turn and waits until the host's CLI runs it; its write comes `afterS` seconds later. */

@@ -36,8 +36,8 @@ file prints a SKIPPED line and the script exits 0 (not authoritative).
 Cost: the first run pulls `node:22-bookworm-slim` (kept as
 `walnut-fleet-base:node22-bookworm-slim`) and builds `walnut-fleet-host:<hash>`
 (a minute or two). After that the Mac boots in about 10 s,
-`mac-and-host.fleet.ts` takes about a minute and `host-faults.fleet.ts` about two
-(70 s of it is the deploy through the 4 MB cap). Each host container is capped at 1 GB, 1.5 CPUs
+`mac-and-host.fleet.ts` takes about a minute and a half and `host-faults.fleet.ts`
+about two (70 s of it is the deploy through the 4 MB cap). Each host container is capped at 1 GB, 1.5 CPUs
 and 512 processes. A run holds a Walnut server, its daemons and one container per
 host, so run one fleet at a time, on a machine that is not already busy.
 
@@ -91,12 +91,13 @@ its log, and on a host its stream files, its journal and its copy dirs through
   ControlMaster (every command its own SSH login). The fleet's Mac TMPDIR made
   `walnut-ssh-devbox-<digest>` 88 characters. `expectControlMaster` in `steps.ts`
   keeps it pinned.
-- 2026-10-23, open: the Mac tells a host about a new session in its copy 3 s after
-  the start (`host-slice.ts`, `PUSH_DEBOUNCE_MS`). A session whose Mac goes away
-  inside those 3 s is unknown to the host, so its `walnut tools call` writes
-  answer "hub unreachable" (exit 5) until the Mac is back instead of being
-  journaled. `startHostSession` waits for the copy to name the session so the
-  scenarios test the journal, not this window.
+- 2026-10-23, fixed: the Mac told a host about a new session in its copy 3 s after
+  the start (`host-slice.ts`, `PUSH_DEBOUNCE_MS`). A session whose Mac went away
+  inside those 3 s was unknown to the host, so its `walnut tools call` writes
+  answered "hub unreachable" (exit 5) until the Mac was back instead of being
+  journaled. A start now pushes its host's copy at once (`pushStartingSession`;
+  the debounce still coalesces task churn), and row 5 of `mac-and-host.fleet.ts`
+  closes the lid right as a session starts and keeps it pinned.
 
 ## Not covered yet
 
