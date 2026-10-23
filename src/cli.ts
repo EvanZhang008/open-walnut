@@ -1,3 +1,5 @@
+// First: refuses Node before any other module loads (src/lib/entry-runtime.ts).
+import './lib/entry-runtime.js';
 import { Command } from 'commander';
 import { registerCommands } from './commands/index.js';
 import { outputJson } from './utils/json-output.js';

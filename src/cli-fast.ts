@@ -24,6 +24,8 @@
  * drag in core/task-manager, which is exactly what this bundle must not hold.
  */
 
+// First: refuses Node before any other module loads (src/lib/entry-runtime.ts).
+import './lib/entry-runtime.js';
 import { formatBuildVersion, getBuildInfo } from './lib/build-info.js';
 
 /** Data subcommands served by this entry. Mirrored in bin/open-walnut.js. */
