@@ -11,7 +11,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  cancelRecordedForwards, controlSocketPath, forwardsFile, MASTER_PATIENT_VERIFY_TIMEOUT_MS, planControlMaster,
+  cancelRecordedForwards, controlSocketPath, forwardsFile, MASTER_PATIENT_VERIFY_TIMEOUT_MS, MAX_SOCKET_PATH, planControlMaster,
   probeControlMaster, recordForward, removeStaleMaster, startControlMaster, type SshRunner,
 } from '../../src/providers/ssh-control-master.js'
 import type { SshRun } from '../../src/providers/remote-sh.js'
@@ -68,10 +68,13 @@ describe('controlSocketPath', () => {
 
   it('stays inside the unix socket limit for a long alias and a long tmp dir, and carries no ssh % tokens', () => {
     const dir = `/var/folders/ph/${'q'.repeat(30)}/T`
-    const p = controlSocketPath({ ...T, hostKey: `very-long-alias-%h-%p-${'x'.repeat(80)}` }, dir)
-    expect(p.length).toBeLessThanOrEqual(100)
+    const p = controlSocketPath({ ...T, hostKey: `%h-%p-very-long-alias-${'x'.repeat(80)}` }, dir)
+    // ssh binds `<path>.<16 random chars>` first: that, plus the NUL, fits macOS's 104-byte sun_path.
+    expect(MAX_SOCKET_PATH).toBe(86)
+    expect(p.length).toBeLessThanOrEqual(MAX_SOCKET_PATH)
+    expect(p.length + 17 + 1).toBeLessThanOrEqual(104)
     expect(p).not.toContain('%')
-    expect(p.startsWith(`${dir}/walnut-ssh-very-long-alias-_h-_p-`)).toBe(true)
+    expect(p.startsWith(`${dir}/walnut-ssh-_h-_p-`)).toBe(true)
   })
 })
 
