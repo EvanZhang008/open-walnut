@@ -372,9 +372,14 @@ export async function readSessionJsonlContent(
       // (written directly by LocalIO) is still readable.
       if (host) {
         // In the host's own name (a person reads this as the stale-history reason).
-        const { hostDisplayNameFor, inHostTerms } = await import('./hosts/host-display-name.js');
+        const [{ hostDisplayNameFor, inHostTerms }, { RemoteReadError }, { causeKeyForError }] = await Promise.all([
+          import('./hosts/host-display-name.js'), import('./hosts/remote-read-error.js'),
+          import('./notifications/error-cause.js'),
+        ]);
         const name = await hostDisplayNameFor(host);
-        throw new Error(`Remote read failed (${name}): ${inHostTerms(errMsg, host, name)}`);
+        // Judged on the alias form, before the host's name replaces it.
+        const unreachable = causeKeyForError({ text: errMsg, host }) !== undefined;
+        throw new RemoteReadError(`Remote read failed (${name}): ${inHostTerms(errMsg, host, name)}`, host, errMsg, unreachable);
       }
       localReadError = errMsg;
     }

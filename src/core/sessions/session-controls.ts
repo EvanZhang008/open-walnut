@@ -35,6 +35,7 @@ import type { SessionMode, Task } from '../types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import { rememberAskWalnutSessionPick } from './ask-walnut-launch.js';
 import { parseCompanionFields } from '../offline-merge/companion-op.js';
+import { RemoteReadError } from '../hosts/remote-read-error.js';
 
 export class SessionControlError extends Error {
   constructor(
@@ -1815,6 +1816,13 @@ export async function handleSessionControlRelay(
       };
     }
     const message = err instanceof Error ? err.message : String(err);
+    // A host that did not answer a read is the host's condition, not a relay
+    // fault: answered 503 like the primary's own transcript route, logged at
+    // warn like the web history route, with the alias so it groups by host.
+    if (err instanceof RemoteReadError && err.unreachable) {
+      log.session.warn('session control relay: the host did not answer a read', { action, host: err.host, error: err.detail });
+      return { ok: false, error: message, errorKind: 'unavailable' };
+    }
     log.session.error('session control relay failed', { action, error: message });
     return { ok: false, error: message, errorKind: 'internal' };
   }

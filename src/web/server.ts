@@ -164,6 +164,7 @@ import { causeKeyForError, hostCauseKey } from '../core/notifications/error-caus
 import { releaseAbsorbedKeys } from '../core/notifications/log-error-bridge.js'
 import { compactPermissionInput, summarizePermissionRequest } from '../core/notifications/permission-detail.js'
 import { redactSensitiveText } from '../logging/redact.js'
+import { exitDetail } from './exit-detail.js'
 import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
 import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
@@ -759,7 +760,8 @@ function installExitDiagnostics(): void {
     // a server that had already been replaced by a healthy one.
     const meta = {
       pid: process.pid, uptime: process.uptime(),
-      detail: detail instanceof Error ? detail.message : detail,
+      // The error's stack, code and syscall too: a bare message named no owner (exit-detail.ts).
+      ...exitDetail(detail),
       recoveryKey: 'server-lifecycle',
     }
     log.web.error(msg, meta)
