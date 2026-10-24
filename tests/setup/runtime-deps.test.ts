@@ -4,7 +4,8 @@
  * with the command that runs it right.
  */
 import { describe, expect, it } from 'vitest'
-import { MIN_BUN, testRuntimeProblem, testSqliteProblem } from './runtime-deps'
+import { SQLITE_VERSION } from '../../scripts/build-sqlite-dylib.mjs'
+import { MIN_BUN, testRuntimeProblem, testSqliteProblem, type LoadedSqlite, type SqliteFacts } from './runtime-deps'
 
 const node = { node: '25.9.0' } as NodeJS.ProcessVersions
 
@@ -36,25 +37,52 @@ describe('testRuntimeProblem', () => {
 describe('testSqliteProblem', () => {
   const none = (): boolean => false
   const built = '/repo/vendor/sqlite/darwin/libsqlite3.dylib'
+  const ours: LoadedSqlite = { library: built, version: SQLITE_VERSION, options: ['DEFAULT_FOREIGN_KEYS', 'DQS=0'] }
+  const apple: LoadedSqlite = { library: 'system', version: '3.51.0', options: ['DQS=3'] }
+  /** A macOS checkout with the built SQLite, current, and loaded. */
+  const mac = (over: Partial<SqliteFacts> = {}): string | null =>
+    testSqliteProblem({ platform: 'darwin', built, env: {}, exists: none, current: () => true, loaded: () => ours, ...over })
 
   it('refuses macOS without the built SQLite, naming the build command', () => {
-    const problem = testSqliteProblem('darwin', null, {}, none)
+    const problem = mac({ built: null })
     expect(problem).toContain('bun scripts/build-sqlite-dylib.mjs')
     expect(problem).toContain('disk I/O error')
   })
 
-  it('accepts the built SQLite, a library that exists, or the system build asked for', () => {
-    expect(testSqliteProblem('darwin', built, {}, none)).toBeNull()
-    expect(testSqliteProblem('darwin', null, { WALNUT_SQLITE_LIBRARY: '/opt/lib.dylib' }, (f) => f === '/opt/lib.dylib')).toBeNull()
-    expect(testSqliteProblem('darwin', null, { WALNUT_SQLITE_LIBRARY: 'system' }, none)).toBeNull()
+  it('refuses a built SQLite older than the build script asks for', () => {
+    expect(mac({ current: () => false })).toContain('out of date (vendor/sqlite/darwin/stamp.json): run `bun scripts/build-sqlite-dylib.mjs`')
+  })
+
+  it('refuses a run whose databases open on another SQLite, naming what loaded', () => {
+    expect(mac({ loaded: () => apple })).toBe(
+      `SQLite in this run is 3.51.0 without DQS=0 (system), not Walnut's ${SQLITE_VERSION} built with DQS=0: run \`bun scripts/build-sqlite-dylib.mjs\` (bun install runs it)`)
+    // The right version, other options: not the build either.
+    expect(mac({ loaded: () => ({ ...ours, options: ['DQS=3'] }) })).toContain('not Walnut\'s')
+    const env = { WALNUT_SQLITE_LIBRARY: '/opt/lib.dylib' }
+    expect(mac({ env, exists: (f) => f === '/opt/lib.dylib', loaded: () => ({ ...apple, library: '/opt/lib.dylib' }) }))
+      .toContain('(/opt/lib.dylib), not Walnut\'s')
+  })
+
+  it('refuses a run that cannot open a database at all', () => {
+    const env = { WALNUT_SQLITE_LIBRARY: '/etc/hosts' }
+    const loaded = (): LoadedSqlite => { throw new Error('unable to open database file: :memory:') }
+    expect(mac({ env, exists: () => true, loaded })).toBe(
+      'SQLite in this run opens no database (unable to open database file: :memory:): run `bun scripts/build-sqlite-dylib.mjs` (bun install runs it), or unset WALNUT_SQLITE_LIBRARY (/etc/hosts)')
+  })
+
+  it('accepts the built SQLite, a library of the same build, or the system build asked for', () => {
+    expect(mac()).toBeNull()
+    // A named library is checked by what it loads, not by the stamp of the checkout's own.
+    expect(mac({ built: null, current: () => false, env: { WALNUT_SQLITE_LIBRARY: '/opt/lib.dylib' }, exists: (f) => f === '/opt/lib.dylib' })).toBeNull()
+    expect(mac({ built: null, env: { WALNUT_SQLITE_LIBRARY: 'system' }, loaded: () => apple })).toBeNull()
   })
 
   it('refuses a WALNUT_SQLITE_LIBRARY that names no file, even with the built one there', () => {
-    expect(testSqliteProblem('darwin', built, { WALNUT_SQLITE_LIBRARY: '/gone.dylib' }, none)).toContain('names no file (/gone.dylib)')
+    expect(mac({ env: { WALNUT_SQLITE_LIBRARY: '/gone.dylib' } })).toContain('names no file (/gone.dylib)')
   })
 
   it('asks nothing off macOS, where bun carries its own SQLite', () => {
-    expect(testSqliteProblem('linux', null, {}, none)).toBeNull()
+    expect(testSqliteProblem({ platform: 'linux', built: null, env: {}, exists: none, loaded: () => apple })).toBeNull()
   })
 
   it('this run has Walnut\'s SQLite', () => {
