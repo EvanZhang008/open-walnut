@@ -6,6 +6,13 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.18] - 2026-10-24
+
+### Fixed
+
+- The bun twin resets a ws:// bridge it gives up on under Bun 1.4.4
+- A notarization poll that never reached Apple waits again
+
 ## [0.6.17] - 2026-10-23
 
 ### Added
