@@ -283,15 +283,27 @@ describe('an npm install that did not bring its file', () => {
 })
 
 describe('the start\'s own end', () => {
-  it('a download longer than the budget gives up and starts the version in use', async () => {
-    const { d, err, reexec, stop } = deps(FILE, { binaryWritable: () => true })
-    d.installFile = (_install, _version, signal) => new Promise((_resolve, reject) => {
+  it('a download longer than the budget goes on: the version in use starts now, and the card says a restart runs the new one', async () => {
+    const installedLater = vi.fn()
+    const { d, err, reexec, stop } = deps(FILE, { binaryWritable: () => true, installedLater })
+    let finish!: () => void
+    let seen: AbortSignal | null = null
+    d.installFile = (_install, _version, signal) => new Promise((resolve, reject) => {
+      seen = signal
       signal.addEventListener('abort', () => reject(signal.reason))
+      finish = () => resolve({ from: '0.5.1' })
       stop.fire(new Error('it took longer than 60 s'))
     })
-    expect(await updateOnStart(d)).toMatchObject({ kind: 'continue', installFailed: 'it took longer than 60 s; `walnut update` installs it without a limit' })
+    const out = await updateOnStart(d)
+    expect(out).toMatchObject({ kind: 'continue', decision: { action: 'install-file' } })
+    // Out of time is no reason to stop the download.
+    expect(seen!.aborted).toBe(false)
     expect(reexec).not.toHaveBeenCalled()
-    expect(err.at(-1)).toBe('Could not install 0.6.0 (it took longer than 60 s; `walnut update` installs it without a limit); starting 0.5.1 as it is.')
+    expect(err.at(-1)).toBe('Open Walnut 0.6.0 is still installing; starting 0.5.1 now. The install goes on, and the next start runs 0.6.0.')
+    finish()
+    expect(await (out as { later: Promise<boolean> }).later).toBe(true)
+    expect(installedLater).toHaveBeenCalledWith('0.6.0')
+    expect(err.at(-1)).toBe('Installed Open Walnut 0.6.0; restart Walnut to use it.')
   })
 
   it('a signal while it installs stops it: nothing starts', async () => {
@@ -306,6 +318,68 @@ describe('the start\'s own end', () => {
     const npm = deps(BASE)
     npm.d.run = vi.fn(async () => { npm.stop.fire(new Error('stopped by SIGINT'), 'SIGINT'); return 130 })
     expect(await updateOnStart(npm.d)).toEqual({ kind: 'stopped', signal: 'SIGINT' })
+  })
+
+  it('an npm install that outlives the budget goes on by itself, and the version in use starts now', async () => {
+    const installedLater = vi.fn()
+    let exit!: (code: number) => void
+    const job = { done: new Promise<number>((resolve) => { exit = resolve }), quiet: vi.fn() }
+    const startInstall = vi.fn(() => job)
+    const { d, err, run, reexec, stop } = deps(BASE, { startInstall, installedLater, versionOf: async () => '0.6.0 (abc1234, 2026-10-24)' })
+    const pending = updateOnStart(d)
+    await Promise.resolve()
+    stop.fire(new Error('it took longer than 60 s'))
+    const out = await pending
+    expect(out).toMatchObject({ kind: 'continue', decision: { action: 'install' } })
+    expect(startInstall).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW], '0.6.0')
+    expect(run).not.toHaveBeenCalled()
+    expect(reexec).not.toHaveBeenCalled()
+    expect(job.quiet).toHaveBeenCalled()
+    expect(err.at(-1)).toContain('is still installing; starting 0.5.1 now')
+    exit(0)
+    expect(await (out as { later: Promise<boolean> }).later).toBe(true)
+    expect(installedLater).toHaveBeenCalledWith('0.6.0')
+  })
+
+  it('in time, the same install restarts into the new version as before', async () => {
+    const startInstall = vi.fn(() => ({ done: Promise.resolve(0), quiet: vi.fn() }))
+    const { d, reexec } = deps(BASE, { startInstall })
+    expect(await updateOnStart(d)).toEqual({ kind: 'reexeced', version: '0.6.0', exitCode: 0 })
+    expect(reexec).toHaveBeenCalledTimes(1)
+  })
+
+  it('a background install that fails, or brings no file, leaves the version in use and says the next start tries again', async () => {
+    for (const [code, printed, line] of [[1, '0.6.0', 'npm exited with 1'], [0, '0.5.1', 'does not start 0.6.0 (it printed: 0.5.1)']] as const) {
+      const installedLater = vi.fn()
+      const { d, err, stop } = deps(BASE, { startInstall: () => ({ done: new Promise((r) => setTimeout(() => r(code), 5)), quiet: () => {} }), installedLater, versionOf: async () => printed })
+      const pending = updateOnStart(d)
+      await Promise.resolve()
+      stop.fire(new Error('it took longer than 60 s'))
+      const out = await pending
+      expect(await (out as { later: Promise<boolean> }).later).toBe(false)
+      expect(installedLater).not.toHaveBeenCalled()
+      expect(err.at(-1)).toContain(line)
+    }
+  })
+
+  it('a signal while npm installs starts nothing, and npm finishes by itself', async () => {
+    const job = { done: new Promise<number>(() => {}), quiet: vi.fn() }
+    const { d, err, reexec, stop } = deps(BASE, { startInstall: () => job })
+    const pending = updateOnStart(d)
+    await Promise.resolve()
+    stop.fire(new Error('stopped by SIGTERM'), 'SIGTERM')
+    expect(await pending).toEqual({ kind: 'stopped', signal: 'SIGTERM' })
+    expect(reexec).not.toHaveBeenCalled()
+    expect(err.at(-1)).toBe('Stopped by SIGTERM; the install of 0.6.0 finishes by itself, and the next start runs it.')
+  })
+
+  it('an install an earlier start began and that still runs: no second npm into the same prefix', async () => {
+    const startInstall = vi.fn()
+    const { d, err, run } = deps(BASE, { startInstall, busy: async () => 'the install of 0.6.0 an earlier start began still runs (pid 4242)' })
+    expect(await updateOnStart(d)).toMatchObject({ kind: 'continue', decision: { action: 'skip', reason: 'installing' } })
+    expect(startInstall).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    expect(err.at(-1)).toBe('Open Walnut 0.6.0 is published, but the install of 0.6.0 an earlier start began still runs (pid 4242); starting 0.5.1 as it is.')
   })
 
   it('a launcher that updates the install itself starts the server without asking the registry', async () => {

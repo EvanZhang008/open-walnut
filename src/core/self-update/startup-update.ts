@@ -16,10 +16,16 @@
  * config.yaml and WALNUT_NO_AUTO_UPDATE unset. A source checkout, a replica, a
  * Homebrew keg and the ephemeral servers never do this.
  *
+ * Never longer than STARTUP_UPDATE_BUDGET_MS: whoever waits for the server (the
+ * Mac app gives it 180 s, then stops it) must not wait for npm. An install that
+ * takes longer goes on in the background (background-install.ts: npm detached,
+ * its output in a file, never killed half way) while the version in use starts
+ * and serves; once it is in, the update card says a restart runs it.
+ *
  * Failure is never fatal: a registry that does not answer, an installer that
- * exits non-zero or cannot start, a file download that takes longer than a
- * minute all print one line and the old version starts. A signal while it runs
- * cleans up and starts nothing. The restarted process carries
+ * exits non-zero or cannot start all print one line and the old version starts.
+ * A signal while it waits starts nothing: a file download stops, an npm install
+ * finishes by itself. The restarted process carries
  * WALNUT_UPDATE_APPLIED=1 so it starts without asking again, whatever the
  * registry says. One that exits non-zero before it listens is gone back from:
  * the old version is linked (or installed) again and starts, and the new one is
@@ -28,20 +34,20 @@
  * WALNUT_LAUNCHER_UPDATES=1, and nothing here runs.
  */
 
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import type { UpdateStatus } from './update-check.js'
-import { binaryLinkOf, managerArgv, runsCompiled, type BinaryInstall, type InstallInfo } from './install-kind.js'
+import { managerArgv, type BinaryInstall, type InstallInfo } from './install-kind.js'
+import type { InstallJob } from './background-install.js'
+import { APPLIED_ENV, reexecSelf, relaunchVersion, type ReexecResult } from './startup-relaunch.js'
 
-export const APPLIED_ENV = 'WALNUT_UPDATE_APPLIED'
+export { APPLIED_ENV, READY_FILE_ENV, reexecSelf, relaunchArgv, relaunchVersion, type ReexecResult } from './startup-relaunch.js'
+
 export const NO_AUTO_UPDATE_ENV = 'WALNUT_NO_AUTO_UPDATE'
 /** Set by a launcher that updates the install itself while the server runs (the Mac app): no update before listen. */
 export const LAUNCHER_UPDATES_ENV = 'WALNUT_LAUNCHER_UPDATES'
-/** The file the restarted server writes once it listens (web.ts): it started, so its exit is no failure to start. */
-export const READY_FILE_ENV = 'WALNUT_STARTUP_READY_FILE'
 /**
  * How long the file's download and check may hold the start before the old
  * version starts instead. A launcher waits for the port (the Mac app 180 s);
@@ -52,7 +58,7 @@ export const STARTUP_UPDATE_BUDGET_MS = 60_000
 const QUICK_EXIT_MS = 120_000
 
 export type StartupUpdateDecision =
-  | { action: 'skip'; reason: 'applied' | 'off' | 'launcher' | 'not-npm' | 'disabled' | 'unreachable' | 'current' | 'held' | 'not-writable' | 'no-manager'; note?: string }
+  | { action: 'skip'; reason: 'applied' | 'off' | 'launcher' | 'not-npm' | 'disabled' | 'unreachable' | 'current' | 'held' | 'not-writable' | 'no-manager' | 'installing'; note?: string }
   | { action: 'install'; version: string; argv: { file: string; args: string[] } }
   /** The compiled file's own update: download, check, swap the link (binary-install.ts). */
   | { action: 'install-file'; version: string; install: BinaryInstall }
@@ -117,15 +123,6 @@ export function decideStartupUpdate(status: UpdateStatus, inputs: StartupUpdateI
 }
 
 /** How a restarted server ended. */
-export interface ReexecResult {
-  exitCode: number
-  /** It wrote its ready file: it listened before it exited. */
-  served: boolean
-  /** This parent passed it a signal: it was stopped, it did not fail. */
-  stopped: boolean
-  /** How long it ran. */
-  ms: number
-}
 
 /** The start's own end: the time budget, or a signal to this process. */
 export interface UpdateStop {
@@ -165,6 +162,15 @@ export interface StartupUpdateDeps {
   held?: (status: UpdateStatus) => string | null
   /** The installer with inherited stdio; resolves to its exit code. A signal to this process is passed on to it. */
   run: (file: string, args: string[], stop?: UpdateStop) => Promise<number>
+  /**
+   * The startup's npm install, which may outlive the wait (background-install.ts):
+   * detached, its output in a file. Absent: `run`, waited for to the end.
+   */
+  startInstall?: (file: string, args: string[], version: string) => InstallJob
+  /** An install an earlier start began still runs: why this one must not start another, or null. */
+  busy?: () => Promise<string | null>
+  /** A version installed after the budget ran out, with the server already up: a restart runs it. */
+  installedLater?: (version: string) => void
   /** The file's own update (binary-install.ts installFileVersion); throws with the reason. Resolves to the version it replaced. */
   installFile?: (install: BinaryInstall, version: string, signal: AbortSignal) => Promise<{ from: string | null } | void>
   /** What the install's relaunch prints for `--version`, or null when it does not run. */
@@ -181,8 +187,11 @@ export interface StartupUpdateDeps {
 }
 
 export type StartupUpdateOutcome =
-  /** Start the server in this process. */
-  | { kind: 'continue'; decision: StartupUpdateDecision; installFailed?: string }
+  /**
+   * Start the server in this process. `later`: the install outlived the budget and
+   * goes on; it resolves to whether it went in.
+   */
+  | { kind: 'continue'; decision: StartupUpdateDecision; installFailed?: string; later?: Promise<boolean> }
   /** The new code ran in a child and has exited; this process ends with its code. */
   | { kind: 'reexeced'; version: string; exitCode: number; rolledBackFrom?: string }
   /** A signal arrived while the update ran: it cleaned up, and nothing starts. */
@@ -191,6 +200,16 @@ export type StartupUpdateOutcome =
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 const failedToStart = (r: ReexecResult): boolean => r.exitCode !== 0 && !r.served && !r.stopped
+
+/** `work`'s result, or null when the stop fired first (the budget, or a signal). */
+function raceStop<T>(work: Promise<T>, stop: UpdateStop): Promise<T | null> {
+  if (stop.signal.aborted) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const onStop = () => resolve(null)
+    stop.signal.addEventListener('abort', onStop, { once: true })
+    work.then((v) => { stop.signal.removeEventListener('abort', onStop); resolve(v) })
+  })
+}
 
 export async function updateOnStart(deps: StartupUpdateDeps): Promise<StartupUpdateOutcome> {
   const applied = deps.env[APPLIED_ENV] === '1'
@@ -212,26 +231,85 @@ export async function updateOnStart(deps: StartupUpdateDeps): Promise<StartupUpd
     if (decision.reason === 'held') deps.err(`Open Walnut ${status.latest} is published, but ${decision.note}. Starting ${status.current}.`)
     return { kind: 'continue', decision }
   }
+  const busy = await deps.busy?.().catch(() => null)
+  if (busy) {
+    deps.err(`Open Walnut ${decision.version} is published, but ${busy}; starting ${status.current} as it is.`)
+    return { kind: 'continue', decision: { action: 'skip', reason: 'installing', note: busy } }
+  }
   deps.err(`Open Walnut ${decision.version} is published (this is ${status.current}); installing it before starting. Set updates.auto: false in config.yaml or ${NO_AUTO_UPDATE_ENV}=1 to start without updating.`)
   const stop = (deps.watch ?? watchStop)()
   let from: string | null = status.current
+  // Out of time, the install goes on and the version in use starts now.
+  const goOn = (done: Promise<boolean>): StartupUpdateOutcome => {
+    deps.err(`Open Walnut ${decision.version} is still installing; starting ${status.current} now. The install goes on, and the next start runs ${decision.version}.`)
+    const later = done.then((ok) => {
+      if (ok) {
+        deps.installedLater?.(decision.version)
+        deps.err(`Installed Open Walnut ${decision.version}; restart Walnut to use it.`)
+      }
+      return ok
+    }, () => false)
+    return { kind: 'continue', decision, later }
+  }
   try {
     if (decision.action === 'install-file') {
+      // Only a signal stops the download; out of time it goes on.
+      const interrupt = new AbortController()
+      stop.signal.addEventListener('abort', () => { if (stop.received()) interrupt.abort(stop.signal.reason) }, { once: true })
+      let install: Promise<{ from: string | null } | void>
       try {
         if (!deps.installFile) throw new Error('this build cannot update its file')
-        const done = await deps.installFile(decision.install, decision.version, stop.signal)
-        if (done && 'from' in done) from = done.from
+        install = deps.installFile(decision.install, decision.version, interrupt.signal)
       } catch (e) {
-        const signal = stop.received()
-        if (signal) return { kind: 'stopped', signal }
-        const message = stop.signal.aborted ? `${messageOf(stop.signal.reason)}; \`walnut update\` installs it without a limit` : messageOf(e)
+        deps.err(`Could not install ${decision.version} (${messageOf(e)}); starting ${status.current} as it is.`)
+        return { kind: 'continue', decision, installFailed: messageOf(e) }
+      }
+      const first = await raceStop(install.then((done) => ({ done }), (error: unknown) => ({ error })), stop)
+      if (first === null && stop.received()) {
+        await install.catch(() => {})
+        return { kind: 'stopped', signal: stop.received()! }
+      }
+      if (first === null) {
+        return goOn(install.then(() => true, (e) => {
+          deps.err(`Could not install ${decision.version} (${messageOf(e)}); ${status.current} stays.`)
+          return false
+        }))
+      }
+      if ('error' in first) {
+        const message = messageOf(first.error)
         deps.err(`Could not install ${decision.version} (${message}); starting ${status.current} as it is.`)
         return { kind: 'continue', decision, installFailed: message }
       }
+      if (first.done && 'from' in first.done) from = first.done.from
     } else {
       let code: number
       try {
-        code = await deps.run(decision.argv.file, decision.argv.args, stop)
+        if (deps.startInstall) {
+          const job = deps.startInstall(decision.argv.file, decision.argv.args, decision.version)
+          const first = await raceStop(job.done.then((c) => ({ code: c }), (error: unknown) => ({ error })), stop)
+          if (first === null) {
+            job.quiet()
+            const signal = stop.received()
+            if (signal) {
+              deps.err(`Stopped by ${signal}; the install of ${decision.version} finishes by itself, and the next start runs it.`)
+              return { kind: 'stopped', signal }
+            }
+            return goOn(job.done.then(async (c) => {
+              if (c !== 0) {
+                deps.err(`${decision.argv.file} exited with ${c}; ${status.current} stays, and the next start tries again.`)
+                return false
+              }
+              const printed = deps.versionOf ? await deps.versionOf(status.install) : decision.version
+              if (printed?.split(/\s/)[0] === decision.version) return true
+              deps.err(`The installed launcher does not start ${decision.version} (it printed: ${printed || 'nothing'}); the next start installs it again.`)
+              return false
+            }))
+          }
+          if ('error' in first) throw first.error
+          code = first.code
+        } else {
+          code = await deps.run(decision.argv.file, decision.argv.args, stop)
+        }
       } catch (e) {
         const message = messageOf(e)
         deps.err(`Could not run ${decision.argv.file} (${message}); starting ${status.current} as it is.`)
@@ -329,8 +407,10 @@ export async function runStartupUpdate(configAuto: () => Promise<boolean | undef
   const { UpdateChecker } = await import('./update-check.js')
   const { installFileVersion, registryBaseFor, rollBack, undoRollBack } = await import('./binary-install.js')
   const { badDirFor, clearBad, heldBack, markBad } = await import('./held-versions.js')
+  const { installRunning, noteInstalledInBackground, startDetachedInstall } = await import('./background-install.js')
   const { WALNUT_HOME } = await import('../../constants.js')
   const err = (line: string) => { process.stderr.write(`${line}\n`) }
+  const record = path.join(WALNUT_HOME, 'local', 'update-installing.json')
   return updateOnStart({
     checkNow: () => new UpdateChecker().checkNow(),
     configAuto,
@@ -338,6 +418,12 @@ export async function runStartupUpdate(configAuto: () => Promise<boolean | undef
     writable: installDirWritable,
     held: (status) => heldBack(status.install, status.latest!, badDirFor(status.install, WALNUT_HOME)),
     run: runInherited,
+    startInstall: (file, args, version) => startDetachedInstall(file, args, { logFile: path.join(WALNUT_HOME, 'local', 'update-install.log'), record, version }),
+    busy: async () => {
+      const job = await installRunning(record)
+      return job ? `the install of ${job.version} an earlier start began still runs (pid ${job.pid})` : null
+    },
+    installedLater: noteInstalledInBackground,
     installFile: async (install, version, signal) => {
       const done = await installFileVersion({ install, version, registry: registryBaseFor(process.env.WALNUT_UPDATE_REGISTRY_URL), log: err, signal })
       return { from: done.from }
@@ -374,61 +460,5 @@ export function runInherited(file: string, args: string[], stop?: UpdateStop): P
       stop?.signal.removeEventListener('abort', pass)
       resolve(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 0))
     })
-  })
-}
-
-/** What the install's relaunch (the command a restart runs) prints for `--version`, or null. */
-export function relaunchVersion(install: InstallInfo): Promise<string | null> {
-  const { file, args } = relaunchArgv(install, [process.argv[0] ?? '', process.argv[1] ?? '', '--version'])
-  const env = { ...process.env }
-  for (const key of [APPLIED_ENV, READY_FILE_ENV, 'BUN_BE_BUN']) delete env[key]
-  return new Promise((resolve) => {
-    execFile(file, args, { env, timeout: 60_000, encoding: 'utf8' }, (e, stdout) => resolve(e ? null : stdout.trim()))
-  })
-}
-
-/**
- * The command that starts this install again as its newest code: the install's
- * own relaunch (the npm launcher, which finds the new platform package; a binary
- * install's `bin/walnut` link, now pointing at the new version) with this
- * process's arguments, else this process's own command line: a script runtime
- * with argv[1], the bin shim's path, which an install replaces in place; the
- * compiled file without it. Both keep their user's arguments from argv[2] on.
- */
-export function relaunchArgv(install: Pick<InstallInfo, 'relaunch' | 'binary'> | null, argv: string[] = process.argv, execPath = process.execPath): { file: string; args: string[] } {
-  const relaunch = install?.relaunch?.length ? install.relaunch : install?.binary ? [binaryLinkOf(install.binary.root)] : null
-  if (relaunch) return { file: relaunch[0]!, args: [...relaunch.slice(1), ...argv.slice(2)] }
-  // The compiled file's argv[1] is its own entry inside it, which it adds again itself.
-  return { file: execPath, args: argv.slice(runsCompiled(argv) ? 2 : 1) }
-}
-
-/**
- * Run this install again (relaunchArgv) and stay alive as a thin parent:
- * signals are forwarded, and the result says whether it served first.
- */
-export function reexecSelf(env: Record<string, string | undefined>, install: InstallInfo | null = null): Promise<ReexecResult> {
-  return new Promise((resolve) => {
-    const { file, args } = relaunchArgv(install)
-    const ready = path.join(os.tmpdir(), `walnut-ready-${process.pid}-${crypto.randomBytes(4).toString('hex')}`)
-    const started = Date.now()
-    let stopped = false
-    let ended = false
-    const child = spawn(file, args, { stdio: 'inherit', env: { ...env, [READY_FILE_ENV]: ready } })
-    const forward = (signal: NodeJS.Signals) => () => {
-      stopped = true
-      if (child.exitCode === null && child.signalCode === null) child.kill(signal)
-    }
-    const handlers = (['SIGINT', 'SIGTERM', 'SIGHUP'] as const).map((sig) => [sig, forward(sig)] as const)
-    for (const [sig, fn] of handlers) process.on(sig, fn)
-    const finish = (exitCode: number) => {
-      if (ended) return
-      ended = true
-      for (const [sig, fn] of handlers) process.off(sig, fn)
-      const served = fs.existsSync(ready)
-      fs.rmSync(ready, { force: true })
-      resolve({ exitCode, served, stopped, ms: Date.now() - started })
-    }
-    child.on('exit', (code, signal) => finish(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 0)))
-    child.on('error', () => finish(1))
   })
 }

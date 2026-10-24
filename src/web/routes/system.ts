@@ -131,7 +131,13 @@ async function updateStatusForClient() {
     const hint = await brewUpgradeHint(status.install.homebrewKeg, status.current).catch(() => null)
     if (hint) brewHint = { note: hint.note, command: hint.command }
   }
-  return { ...status, autoUpdate: selfUpdates && autoUpdateEnabled(configAuto, process.env), ...(brewHint ? { brewHint } : {}) }
+  // Installed after this server started (the startup update outlived its budget): a restart runs it.
+  const { installedInBackground } = await import('../../core/self-update/background-install.js')
+  const installed = installedInBackground()
+  return {
+    ...status, autoUpdate: selfUpdates && autoUpdateEnabled(configAuto, process.env),
+    ...(brewHint ? { brewHint } : {}), ...(installed ? { installed } : {}),
+  }
 }
 
 // GET /api/system/update: the cached answer, never a network call.

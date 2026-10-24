@@ -46,6 +46,12 @@ function baseView(s: UpdateStatus): UpdateCardView {
   }
   const nightly = s.channel === 'nightly';
   const checked = s.checkedAt ? `Checked ${formatRelative(s.checkedAt)}${nightly ? ' (nightly channel)' : ''}` : undefined;
+  if (s.installed && s.installed !== s.current) {
+    return {
+      tone: 'update', icon: '↑', statusLabel: 'Update', status: `${s.installed} installed`, statusClass: 'accent',
+      note: 'Restart Walnut to use it', canCheck: false,
+    };
+  }
   if (s.available && s.latest) {
     const note = !s.install.updateCommand
       ? `No package manager found for this install; see ${s.packageUrl}`

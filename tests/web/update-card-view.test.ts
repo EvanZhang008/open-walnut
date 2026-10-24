@@ -39,6 +39,12 @@ describe('updateCardView', () => {
     expect(updateCardView(status({ latest: '0.6.0', available: true })).brew).toBeUndefined();
   });
 
+  it('a version installed after the server started (the startup update outlived its wait) asks for a restart', () => {
+    const v = updateCardView(status({ latest: '0.6.0', available: true, autoUpdate: true, installed: '0.6.0' }));
+    expect(v).toMatchObject({ tone: 'update', status: '0.6.0 installed', note: 'Restart Walnut to use it', canCheck: false });
+    expect(v.command).toBeUndefined();
+  });
+
   it('a nightly build names its channel', () => {
     const nightly = status({ current: '0.6.1-nightly.20261001.4', channel: 'nightly', latest: '0.6.1-nightly.20261002.1', tags: { latest: '0.6.0', nightly: '0.6.1-nightly.20261002.1' }, available: true, install: { ...NPM, updateCommand: 'npm install -g open-walnut@nightly' } });
     expect(updateCardView(nightly)).toMatchObject({ status: '0.6.1-nightly.20261002.1 available (nightly)', command: 'npm install -g open-walnut@nightly' });

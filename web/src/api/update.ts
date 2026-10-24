@@ -30,6 +30,8 @@ export interface UpdateStatus {
   available: boolean;
   /** `open-walnut web` installs a newer release before it starts (config `updates.auto`, default on). Route-only. */
   autoUpdate?: boolean;
+  /** A version installed after this server started (its startup update outlived the wait): a restart runs it. Route-only. */
+  installed?: string;
   /** A 0.6.x Homebrew keg that updates itself: `brew upgrade` moves it to the compiled file. Route-only. */
   brewHint?: { note: string; command: string };
   checkedAt: string | null;
