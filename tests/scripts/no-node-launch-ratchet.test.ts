@@ -27,6 +27,8 @@ interface Entry { file: string; match: string; why: string }
 
 const GENUINE: Entry[] = [
   { file: 'package.json', match: 'postinstall: node scripts/postinstall.mjs', why: 'npm runs a package\'s postinstall on the user\'s Node; the script tells an npm user to use bun' },
+  { file: 'scripts/postinstall.mjs', match: '#!/usr/bin/env node', why: 'the runtime package.json\'s postinstall runs it with: npm runs it on the user\'s Node' },
+  { file: 'scripts/build-sqlite-dylib.mjs', match: '#!/usr/bin/env node', why: 'postinstall starts it on its own runtime, the user\'s Node under npm; a direct run matches that' },
   { file: '.github/workflows/ci.yml', match: 'node scripts/npm-registry-lag.mjs npm install -g open-walnut', why: 'the onboarding job is a user\'s machine with Node and npm; the wrapper retries their npm install' },
   { file: '.github/workflows/release.yml', match: 'node "$GITHUB_WORKSPACE/scripts/npm-registry-lag.mjs" npm install -g', why: 'a user\'s npm install, on their Node, retried while npm catches up with a publish' },
   { file: 'desktop/AppBuiltCheckout.swift', match: 'exe == "node"', why: 'recognizes the process of a checkout an older app started; starts nothing' },
