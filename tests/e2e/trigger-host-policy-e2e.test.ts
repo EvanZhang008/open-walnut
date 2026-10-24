@@ -115,9 +115,12 @@ beforeAll(async () => {
   port = typeof addr === 'object' && addr ? addr.port : 0
   setTriggerDaemonLookupForTest((host) => { lookups.push(host); return fakeDaemon(host) })
   taskId = (await addTask({ title: 'Trigger target' })).task.id
+  // A task has one session (src/core/sessions/one-session-per-task.ts), so the caller on
+  // this Mac has a task of its own.
+  const callerTaskId = (await addTask({ title: 'Trigger caller' })).task.id
   // Fabricated rows, no pid: one session on the remote host, one on this Mac.
   await createSessionRecord(REMOTE_SID, taskId, '', '/home/me/marina', { host: 'remote-dev' })
-  await createSessionRecord(LOCAL_SID, taskId, '', '/tmp', {})
+  await createSessionRecord(LOCAL_SID, callerTaskId, '', '/tmp', {})
 }, 60_000)
 
 afterAll(async () => {
