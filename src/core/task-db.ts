@@ -1181,7 +1181,7 @@ function migrateToProjectOnly(handle: DatabaseType): void {
     //    an indexed column.
     //    Requires SQLite >= 3.35 for ALTER TABLE ... DROP COLUMN (added 2021-03).
     //    bun:sqlite carries its own SQLite on Linux, and on macOS src/lib/sqlite.ts
-    //    loads the upstream build in vendor/sqlite (3.51 at time of writing), so
+    //    loads the upstream build in vendor/sqlite (3.53.4 at time of writing), so
     //    the system's sqlite3 version is irrelevant; a switch to the system's
     //    library must re-check this.
     handle.exec(`DROP INDEX IF EXISTS tasks_category_project;`);
