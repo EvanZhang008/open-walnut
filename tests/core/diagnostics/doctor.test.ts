@@ -40,6 +40,16 @@ describe('collectDiagnostics', () => {
     expect(r.warnings).toEqual([])
   })
 
+  it('names the runtime as bun, and keeps the old node fields one release for `doctor --json` readers', async () => {
+    const r = await collectDiagnostics({ probes: fakeProbes(), env: ENV })
+    expect(r.local.runtime).toEqual({ version: `bun ${process.versions.bun}`, path: process.execPath })
+    expect(r.local.node).toEqual({ version: process.version, path: process.execPath })
+    // The server half comes from its probe; the real one fills both (probes.ts defaultServer).
+    expect(r.server).toMatchObject({ runtime: 'bun 1.4.4', node: 'v24.3.0' })
+    const { defaultServer } = await import('../../../src/core/diagnostics/probes.js')
+    expect(defaultServer()).toMatchObject({ runtime: `bun ${process.versions.bun}`, node: process.version })
+  })
+
   it('passes the session PATH (login shell first) to the preflight', async () => {
     const preflight = vi.fn(fakeProbes().preflight!)
     await collectDiagnostics({ probes: fakeProbes({ preflight }), env: ENV })

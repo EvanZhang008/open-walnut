@@ -50,7 +50,7 @@ export function fakeProbes(over: Partial<DiagnosticsProbes> = {}): Partial<Diagn
     webAssets: async () => true,
     config: async () => summarizeConfig({ provider: { type: 'bedrock' }, agent: { main_model: 'claude-opus-5-5' } } as Config, ENV),
     server: () => ({
-      node: 'v24.1.0', platform: 'darwin', arch: 'arm64', pid: 4242, nice: 0, port: 3456,
+      runtime: 'bun 1.4.4', node: 'v24.3.0', platform: 'darwin', arch: 'arm64', pid: 4242, nice: 0, port: 3456,
       dataDir: '/Users/alice/.open-walnut', uptimeMs: 60_000, mode: 'primary',
     }),
     hosts: async () => [HOST],

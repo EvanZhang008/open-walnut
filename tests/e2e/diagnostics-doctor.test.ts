@@ -51,6 +51,9 @@ describe('GET /api/diagnostics on a real server', () => {
     // The runtime is bun, named as bun: process.version on bun is the Node it imitates.
     expect(r.server?.runtime).toBe(`bun ${process.versions.bun}`)
     expect(r.local.runtime).toEqual({ version: `bun ${process.versions.bun}`, path: process.execPath })
+    // The old field names stay for one release, so `doctor --json` readers keep working.
+    expect(r.server?.node).toBe(process.version)
+    expect(r.local.node).toEqual({ version: process.version, path: process.execPath })
     expect(r.local.processPath.count).toBeGreaterThan(0)
     expect(r.config?.searchDisabled).toBe(true)
     expect(Array.isArray(r.hosts)).toBe(true)

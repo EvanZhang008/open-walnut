@@ -31,6 +31,7 @@ const LOCAL_REPORT: DiagnosticsReport = {
   server: null,
   local: {
     runtime: { version: 'bun 1.4.4', path: '/Users/alice/bin/bun' },
+    node: { version: 'v24.3.0', path: '/Users/alice/bin/bun' },
     claude: { found: true, path: '/Users/alice/.local/bin/claude', version: '2.1.280', kind: 'native' },
     loginShellPath: null,
     processPath: { entries: ['/usr/bin'], count: 1 },

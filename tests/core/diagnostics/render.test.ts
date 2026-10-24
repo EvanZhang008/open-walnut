@@ -29,11 +29,12 @@ function report(): DiagnosticsReport {
       packageUrl: 'https://www.npmjs.com/package/open-walnut',
     },
     server: {
-      runtime: 'bun 1.4.4', platform: 'darwin', arch: 'arm64', pid: 4242, nice: 0, port: 3456,
+      runtime: 'bun 1.4.4', node: 'v24.3.0', platform: 'darwin', arch: 'arm64', pid: 4242, nice: 0, port: 3456,
       dataDir: '/Users/alice/.open-walnut', uptimeMs: (3 * 3600 + 12 * 60) * 1000, mode: 'primary',
     },
     local: {
       runtime: { version: 'bun 1.4.4', path: '/Users/alice/.bun/bin/bun' },
+      node: { version: 'v24.3.0', path: '/Users/alice/.bun/bin/bun' },
       claude: { found: true, path: '/Users/alice/.local/bin/claude', version: '2.1.280', kind: 'native', auth: 'ok', authDetail: 'a Claude account', versionOk: true, minVersion: '2.1.280' },
       loginShellPath: { entries: ['/Users/alice/.local/bin', '/opt/homebrew/bin', '/usr/bin'], count: 14 },
       processPath: { entries: ['/usr/bin', '/bin'], count: 2 },

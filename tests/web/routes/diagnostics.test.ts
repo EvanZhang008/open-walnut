@@ -42,7 +42,7 @@ const probes: Partial<DiagnosticsProbes> = {
     providers: [], engine: 'claude', hostsConfigured: 1, searchDisabled: false,
   }),
   server: () => ({
-    runtime: 'bun 1.4.4', platform: 'darwin', arch: 'arm64', pid: 1, nice: 0, port: 3456,
+    runtime: 'bun 1.4.4', node: 'v24.3.0', platform: 'darwin', arch: 'arm64', pid: 1, nice: 0, port: 3456,
     dataDir: '/Users/alice/.open-walnut', uptimeMs: 1000, mode: 'primary',
   }),
   hosts: async () => [{

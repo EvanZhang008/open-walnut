@@ -73,6 +73,7 @@ export function defaultServer(): ServerDiagnostics {
   try { nice = os.getPriority() } catch { /* diagnostics only */ }
   return {
     runtime: runtimeVersion(),
+    node: process.version,
     platform: process.platform,
     arch: process.arch,
     pid: process.pid,

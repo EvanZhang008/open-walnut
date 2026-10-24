@@ -145,6 +145,7 @@ async function collectLocal(p: DiagnosticsProbes, env: Env, b: LocalBudgets, war
   const [sqlite, webAssets] = await sideProbes
   return {
     runtime: { version: runtimeVersion(), path: process.execPath },
+    node: { version: process.version, path: process.execPath },
     claude: claudeFrom(pre, fallbackPath, unknown),
     loginShellPath: login ? summarizePath(login) : null,
     processPath: summarizePath(env.PATH),

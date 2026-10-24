@@ -23,6 +23,11 @@ export interface PathSummary {
 export interface ServerDiagnostics {
   /** The runtime the server runs on (`bun 1.4.4`). */
   runtime: string
+  /**
+   * @deprecated The old name, kept for one release so readers of `doctor --json`
+   * that read it keep working: process.version, the Node version bun reports. Use runtime.
+   */
+  node: string
   platform: string
   arch: string
   pid: number
@@ -58,6 +63,8 @@ export interface LocalClaudeDiagnostics {
 export interface LocalDiagnostics {
   /** The runtime running the collector (the server, or the CLI when no server is up): `bun 1.4.4` and its executable (the walnut file when compiled). */
   runtime: { version: string; path: string }
+  /** @deprecated The old name, kept for one release (see ServerDiagnostics.node): process.version and the executable. Use runtime. */
+  node: { version: string; path: string }
   claude: LocalClaudeDiagnostics
   /** PATH captured from the user's login shell, the one sessions start from. */
   loginShellPath: PathSummary | null
