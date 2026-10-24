@@ -23,7 +23,7 @@ const script = fs.readFileSync(SCRIPT, 'utf-8')
 describe('dev-prod staged boot', () => {
   it('never boots from the repo dist or dist-bin path (scanner-stall class)', () => {
     // Copying $REPO_ROOT/dist or dist-bin (staging, snapshots) and *matching* the
-    // path in the stray-zombie sweep are fine — only EXECUTING from it is the
+    // path in the stray-zombie sweep are fine; only EXECUTING from it is the
     // regression. Boot sites are launch_server calls, the server argv and the
     // selftest. No boot runs on node at all any more.
     expect(script).not.toMatch(/launch_server "\$REPO_ROOT/)
