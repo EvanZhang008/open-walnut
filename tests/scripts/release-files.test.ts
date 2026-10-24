@@ -19,6 +19,7 @@ import { LAUNCHER, buildPackages, launcherManifest, platformManifest, publishOrd
 import { candidateTargets, hasMuslCxxRuntime } from '../../scripts/npm-launcher/launch.js'
 import { formula } from '../../scripts/homebrew/formula.mjs'
 import { hostTarget } from '../../scripts/release-build.mjs'
+import { managerArgv } from '../../src/core/self-update/install-kind.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -111,6 +112,25 @@ describe('npm-packages.mjs', () => {
     expect(launcherManifest(VERSION, JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))).main).toBe('./dist/cli.js')
     for (const f of ['bin/open-walnut.js', 'dist/cli.js', 'lib/launch.js', 'README.md', 'LICENSE']) expect(fs.existsSync(path.join(out, LAUNCHER, f)), f).toBe(true)
     expect(fs.readFileSync(path.join(out, LAUNCHER, 'lib/launch.js'), 'utf8')).toBe(fs.readFileSync(path.join(ROOT, 'scripts/npm-launcher/launch.js'), 'utf8'))
+  })
+
+  it('carry nothing npm runs at install, which the updater relies on: it passes npm no --allow-scripts', () => {
+    // npm runs a package's install, preinstall, postinstall and prepare scripts,
+    // and `node-gyp rebuild` for a binding.gyp at its root (or gypfile: true)
+    // with no install script. The global install (src/core/self-update/install-kind.ts)
+    // allows none of them since 17a9b2858, so any one here would fail or be skipped.
+    const dirs = [LAUNCHER, ...TARGETS.map((t) => `@open-walnut/${t.target}`)]
+    for (const dir of dirs) {
+      const m = manifest(dir)
+      for (const key of ['preinstall', 'install', 'postinstall', 'prepare']) expect(m.scripts?.[key], `${dir} ${key}`).toBeUndefined()
+      expect(m.gypfile, dir).toBeUndefined()
+      expect(fs.existsSync(path.join(out, dir, 'binding.gyp')), `${dir} binding.gyp`).toBe(false)
+      const deps = { ...m.dependencies, ...m.optionalDependencies }
+      expect(Object.keys(deps).filter((name) => !name.startsWith('@open-walnut/')), dir).toEqual([])
+    }
+    for (const manager of ['npm', 'pnpm', 'yarn', 'bun'] as const) {
+      expect(managerArgv(manager, 'open-walnut@latest').args.join(' '), manager).not.toMatch(/allow-scripts|ignore-scripts=false|trust/)
+    }
   })
 
   it('refuses a gitHead that is not a commit', () => {
