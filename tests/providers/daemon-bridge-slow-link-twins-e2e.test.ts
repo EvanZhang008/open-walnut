@@ -21,9 +21,12 @@
  *    ws:// (these links are ws://). On wss:// Bun 1.3.9 ends nothing; see
  *    daemon-bridge-wss-twins-e2e.test.ts and abandonBridgeSocket.
  *
- * Runtimes: the source twin with no ws package (its own client), the source
- * twin with the ws package next to it (as deploySource installs it on a remote
- * host), and the bun twin.
+ * Runtimes: the source twin on this runner's bun, where ws is built in (one
+ * install, and the client getWsClientCtor picks for ws:// on that Bun); when
+ * the machine has a real Node (tests/helpers/source-twin.ts), the source twin
+ * on that Node too, with no ws package (its own client) and with the ws
+ * package next to it (as deploySource installs it on a remote host); and the
+ * bun twin.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the
  * "cloud" is a local ws server; the links are local proxies; daemons are
@@ -31,7 +34,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
@@ -41,6 +44,7 @@ import { createRequire } from 'node:module'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { BRIDGE_WATCHDOG, bridgeSilenceTeardownMs } from '../../src/providers/daemon-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -48,9 +52,18 @@ const WS_PACKAGE_DIR = path.dirname(createRequire(import.meta.url).resolve('ws/p
 
 let srcDir = ''
 type Twin = { name: string; wsClient: string; command: () => [string, string[]] }
+/** Bun 1.4.4 and later: the JS twin dials ws:// with the ws module over its own TCP socket (BRIDGE_OWN_TCP in daemon-source.ts). */
+const BUN_OWN_TCP = !!(globalThis as { Bun?: { version: string; semver: { satisfies(v: string, r: string): boolean } } }).Bun?.semver.satisfies(process.versions.bun ?? '0.0.0', '>=1.4.4')
+const SOURCE_TWINS: Twin[] = [
+  // A source deploy runs the JS twin on bun too: on every bun run.
+  ...(process.versions.bun ? [{ name: 'source twin (bun)', wsClient: BUN_OWN_TCP ? 'ws' : 'bun', command: (): [string, string[]] => [process.execPath, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] }] : []),
+  ...(SOURCE_TWIN.runtime === 'node' ? [
+    { name: 'source twin (node), no ws package', wsClient: 'builtin', command: (): [string, string[]] => [SOURCE_TWIN.file, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] },
+    { name: 'source twin (node), ws package installed', wsClient: 'ws', command: (): [string, string[]] => [SOURCE_TWIN.file, [path.join(srcDir, 'withws/daemon.cjs'), '--start']] },
+  ] : []),
+]
 const TWINS: Twin[] = [
-  { name: 'source twin, no ws package', wsClient: 'builtin', command: () => [process.execPath, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] },
-  { name: 'source twin, ws package installed', wsClient: 'ws', command: () => [process.execPath, [path.join(srcDir, 'withws/daemon.cjs'), '--start']] },
+  ...SOURCE_TWINS,
   ...(BUN ? [{ name: 'standalone twin (bun)', wsClient: 'bun', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 
@@ -91,8 +104,12 @@ beforeAll(() => {
   }
   fs.mkdirSync(path.join(srcDir, 'withws/node_modules'))
   fs.symlinkSync(WS_PACKAGE_DIR, path.join(srcDir, 'withws/node_modules/ws'))
-  // The plain case is only meaningful if nothing above it resolves ws.
-  expect(() => createRequire(path.join(srcDir, 'plain/daemon.cjs')).resolve('ws')).toThrow()
+  // The plain case is only meaningful if nothing above it resolves ws, asked of the
+  // Node that runs it (Bun builds ws in, so its resolver always finds one).
+  if (SOURCE_TWIN.runtime === 'node') {
+    const found = spawnSync(SOURCE_TWIN.file, ['-e', "require.resolve('ws')"], { cwd: path.join(srcDir, 'plain'), stdio: 'ignore' })
+    expect(found.status, 'ws resolves from the install with no ws package').not.toBe(0)
+  }
 })
 afterAll(() => { if (srcDir) fs.rmSync(srcDir, { recursive: true, force: true }) })
 

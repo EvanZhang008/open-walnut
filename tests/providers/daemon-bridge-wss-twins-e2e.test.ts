@@ -14,13 +14,19 @@
  * daemon-standalone.ts), so that check is the JS twins' only. Without a bun
  * binary the Bun row is reported as skipped, with the reason in its name.
  *
+ * The JS twin runs on this runner's bun, where ws is built in: one install,
+ * dialing wss:// with Bun's WebSocket as the bun twin does (getWsClientCtor in
+ * daemon-source.ts), so it is held to the bun twin's checks. When the machine
+ * has a real Node (tests/helpers/source-twin.ts) it runs on that Node too,
+ * with and without the ws package next to it.
+ *
  * MACHINE SAFETY: HOME, the daemon dir, the streams dir and the certificate
  * are temp paths; the cloud and the link are local servers; daemons are
  * SIGKILLed after each test.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import https from 'node:https'
@@ -32,6 +38,7 @@ import { promisify } from 'node:util'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -42,9 +49,16 @@ let certDir = ''
 let certFile = ''
 let keyFile = ''
 type Twin = { name: string; wsClient: string; resets: boolean; skip: boolean; command: () => [string, string[]] }
+const SOURCE_TWINS: Twin[] = [
+  // A source deploy runs the JS twin on bun too: on every bun run.
+  ...(process.versions.bun ? [{ name: 'source twin (bun)', wsClient: 'bun', resets: false, skip: false, command: (): [string, string[]] => [process.execPath, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] }] : []),
+  ...(SOURCE_TWIN.runtime === 'node' ? [
+    { name: 'source twin (node), no ws package', wsClient: 'builtin', resets: true, skip: false, command: (): [string, string[]] => [SOURCE_TWIN.file, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] },
+    { name: 'source twin (node), ws package installed', wsClient: 'ws', resets: true, skip: false, command: (): [string, string[]] => [SOURCE_TWIN.file, [path.join(srcDir, 'withws/daemon.cjs'), '--start']] },
+  ] : []),
+]
 const TWINS: Twin[] = [
-  { name: 'source twin, no ws package', wsClient: 'builtin', resets: true, skip: false, command: () => [process.execPath, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] },
-  { name: 'source twin, ws package installed', wsClient: 'ws', resets: true, skip: false, command: () => [process.execPath, [path.join(srcDir, 'withws/daemon.cjs'), '--start']] },
+  ...SOURCE_TWINS,
   // Without bun this row is reported as skipped, never dropped.
   {
     name: BUN ? 'standalone twin (bun)' : 'standalone twin (bun), SKIPPED: no bun in BUN_INSTALL/bin, ~/.bun/bin, /opt/homebrew/bin or /usr/local/bin',
@@ -76,7 +90,12 @@ beforeAll(async () => {
   }
   fs.mkdirSync(path.join(srcDir, 'withws/node_modules'))
   fs.symlinkSync(WS_PACKAGE_DIR, path.join(srcDir, 'withws/node_modules/ws'))
-  expect(() => createRequire(path.join(srcDir, 'plain/daemon.cjs')).resolve('ws')).toThrow()
+  // The plain case is only meaningful if nothing above it resolves ws, asked of the
+  // Node that runs it (Bun builds ws in, so its resolver always finds one).
+  if (SOURCE_TWIN.runtime === 'node') {
+    const found = spawnSync(SOURCE_TWIN.file, ['-e', "require.resolve('ws')"], { cwd: path.join(srcDir, 'plain'), stdio: 'ignore' })
+    expect(found.status, 'ws resolves from the install with no ws package').not.toBe(0)
+  }
   // A throwaway certificate for localhost, made here and never stored in the
   // repo. RSA: Bun 1.3.9 refused the EC certificate LibreSSL makes.
   certDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-wss-cert-')))
