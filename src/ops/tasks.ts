@@ -472,7 +472,7 @@ function teamSentence(p: Placement | undefined): string {
   const list = shown.map((t) => `"${short(t.title)}" (${t.id}, ${t.phase})`).join('; ')
   const more = total > shown.length ? `; and ${total - shown.length} more (open_items lists them)` : ''
   return `Your task also leads ${total} other open subtask${total === 1 ? '' : 's'}: ${list}${more}. `
-    + 'Each owns its area: more work in one of those areas goes to that task with task_send, not to a new task. '
+    + 'Continue the same deliverable with task_send after checking its scope; an independent goal needs a new task and fresh session, even in the same area. '
     + 'The user follows your workers on your Board (skill walnut-board), not in your chat. '
 }
 
@@ -509,8 +509,9 @@ defineOp({
     'it written down (a placeholder, nothing runs). Otherwise do the work with your own tools (todo list, ' +
     'subagents, agent teams) however big it is: size alone is never a reason, and follow-ups you find are ' +
     'yours to do here. A task is a teammate that owns one area with a clear goal, never a step: one task ' +
-    'per ask (ask the user before splitting), and more work in an area goes to the task that owns ' +
-    'it (task_send; a finished one reopens). The result lists the other open subtasks you lead. Words: a "subagent" is Claude Code\'s Agent tool inside your session, never a ' +
+    'per ask (ask the user before splitting). Continue the SAME deliverable with task_send after checking ' +
+    'the exact id and scope; an independent goal needs a new task and fresh session even in the same area. ' +
+    'The result lists the other open subtasks you lead. Words: a "subagent" is Claude Code\'s Agent tool inside your session, never a ' +
     'Walnut task; a "subtask" or "task" is a Walnut task, which this creates. In Walnut\'s own chat, where ' +
     'you dispatch, the user asking for the work is the signal. Pass message for the instruction and cwd/host ' +
     'to override project defaults. Keep the returned task id: task_send adds context, task_history ' +

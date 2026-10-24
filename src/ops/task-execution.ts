@@ -11,7 +11,7 @@ export const TASK_START_INPUT = {
   cwd: z.string().startsWith('/').optional().describe('Absolute working directory; omit to inherit task/project defaults'),
   host: z.string().optional().describe('Execution host alias; omit to inherit task/project defaults'),
   model: z.string().optional().describe('Model id or provider model value'),
-  mode: z.enum(SESSION_MODE_IDS).optional().describe('Permission mode'),
+  mode: z.enum(SESSION_MODE_IDS).optional().describe('Permission mode. Leave it out for a new coding task: never plan except when the user asks for plan; the owner writes its own plan and carries on.'),
   engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Coding engine; default claude'),
   expect_reply: z.boolean().optional().describe('Report back to the caller; defaults to true for a tracked caller. false opts out'),
   reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before a no-reply notification (default 3600)'),

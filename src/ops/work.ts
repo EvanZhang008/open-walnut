@@ -5,6 +5,7 @@ import type { OpCall } from './core.js';
 import { defineOp, getOp } from './registry.js';
 import { startTask, TASK_START_INPUT } from './task-execution.js';
 import { REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
+import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 
 defineOp({
   name: 'task_start',
@@ -43,7 +44,7 @@ defineOp({
       'Task id or unique prefix. Omit only with in_reply_to. Legacy conversation ids and printed handles are accepted for compatibility.'),
     title: z.string().min(1).max(200).optional().describe(
       'One-line TL;DR of the message (about 10 words): the reader sees only this line until they open the message. Always give one; put the detail in `text`.'),
-    text: z.string().min(1).describe('Message text: the detail behind the title'),
+    text: z.string().min(1).describe(`Message text: the detail behind the title. ${MESSAGE_TEXT_HINT}`),
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),

@@ -18,6 +18,7 @@ import { z } from 'zod';
 import type { OpCall } from './core.js';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 
 interface CallerMe {
   kind?: string
@@ -278,7 +279,7 @@ defineOp({
     task: TASK_ARG,
     thread: z.string().min(1).max(128).describe('The thread id (the <walnut-thread id> attribute)'),
     text: z.string().min(1).max(8192).describe(
-      'Your message, in light markdown (bold, italic, `code`, lists, code blocks, quotes, links); line breaks are kept'),
+      `Your message, in light markdown (bold, italic, \`code\`, lists, code blocks, quotes, links); line breaks are kept. ${MESSAGE_TEXT_HINT}`),
   },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);

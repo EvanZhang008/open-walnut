@@ -62,11 +62,19 @@
  *      session, and the work stood still until the user found it ("the leader
  *      sent it, so I authorized it"). A worker's questions go to its leader, which
  *      Walnut also enforces (worker-question.ts).
+ *   8. The team charter (team-charter.ts, 2026-10-24): the same text for
+ *      Main, a lead and a worker. The task doing the work decides and finishes
+ *      it, escalating only for the user's own decisions, information it cannot
+ *      see or a hard-to-reverse choice no rule covers; a message is sent only
+ *      when the receiver must act, conclusion first. Every step had been going
+ *      up for approval, and messages had become code names and progress notes.
  *
  * Keep it SHORT — the size guard in tests/core/sessions/session-context.test.ts fails
  * first if this creeps back toward a blanket preamble. Anything longer belongs
  * in the manual, which sessions pull live with `walnut guide`.
  */
+
+import { TEAM_CHARTER } from '../team-charter.js'
 
 export interface SessionContext {
   systemPrompt: string
@@ -75,25 +83,35 @@ export interface SessionContext {
 /**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
  * contact per project (its lead, or its one team), never to every task, so its
- * chat stays short; a lead answers it in a few lines. Said at spawn because the
- * role is the task's for good.
+ * chat stays short. Roles follow the team charter (team-charter.ts): Main sets
+ * direction with the user and never reviews implementation; a lead assigns,
+ * coordinates and unblocks. Work is routed by its deliverable, not by area: an
+ * independent goal gets a new task, the same deliverable continues its own.
+ * Said at spawn because the role is the task's for good.
  */
 export function orgRoleLine(task: { org_role?: string; project?: string }): string {
   if (task.org_role === 'main') {
-    return 'You are the user\'s main agent, the head of their org: every project reports to you through one contact, '
-      + 'its lead (Walnut makes one once a project has more than one team) or its one team. Keep the user\'s view short. '
-      + 'For "how is it going" read org_get (one line per project); for detail, or to hand work over, talk to that '
-      + 'project\'s contact with org_send (it makes the lead on first contact and starts or messages it), and pass '
-      + 'its answer on in a few lines. Do not read every task yourself. Walnut puts a folded org update before a '
-      + 'message when work moved: background, mention it only when it matters to what the user says.\n\n'
+    return 'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
+      + 'with them. Every project reports to you through one contact, its lead (Walnut makes one once a project has '
+      + 'more than one team) or its one team. For "how is it going" read org_get (one line per project); for detail, '
+      + 'coordination or short evidence, talk to that project\'s contact with org_send (it makes the lead on first '
+      + 'contact and starts or messages it). Route a work request by its deliverable first, not by the project '
+      + 'contact: independent work gets task_create, the same deliverable gets task_send or task_start by its exact '
+      + 'task id. Read only plausible candidates to check scope, not every task, and never review implementation '
+      + 'details. Tell the user what needs their action or changes their picture of the work, the important point '
+      + 'first, without detail that would not change what they do. Walnut puts a folded org update before a message '
+      + 'when work moved: background, mention it only when it matters to what the user says.\n\n'
   }
   if (task.org_role === 'lead') {
     const project = (task.project ?? '').trim()
     return `Your task is the lead of project "${project}": its open top-level tasks (its teams) report to you, and `
-      + 'you report to the user\'s main agent, whose messages are the user\'s direction. org_get lists your teams '
-      + 'and their state; read one with task_get or task_history, and talk to it with task_send. Answer the main '
-      + 'agent in a few lines: what changed, what waits on the user. Hand new work to the team that owns its area; '
-      + 'create a task only when none does. A lead stays: never complete your own task.\n\n'
+      + 'you report to the user\'s main agent, whose messages are the user\'s direction. You assign work, coordinate '
+      + 'across teams and unblock; org_get lists your teams and their state, and task_send talks to one. Read a '
+      + 'team\'s work (task_get, task_history) only when an outcome looks wrong. Route work by deliverable, not area: '
+      + 'independent work gets a fresh task even when a team already works in that area; only the same deliverable '
+      + 'continues its exact task. Across a handoff keep the user\'s request and still-valid limits, and its create '
+      + 'key (idempotency_key) so the handoff cannot make a second owner. Decide what the rules already settle; write '
+      + 'to the main agent only when it must act. A lead stays: never complete your own task.\n\n'
   }
   return ''
 }
@@ -113,6 +131,7 @@ export async function buildSessionContext(
 ): Promise<SessionContext> {
   let taskLine = ''
   let ask = false
+  let projectLead = false
   if (taskId) {
     try {
       const { getTask } = await import('../task-manager.js')
@@ -160,11 +179,18 @@ export async function buildSessionContext(
       taskLine += orgRoleLine(task)
       const { isAskTask } = await import('./caller-placement.js')
       ask = isAskTask(task)
+      projectLead = task.org_role === 'lead'
     } catch { /* unknown task — identity + tooling lines still apply */ }
   }
   // A worker splits work with its own tools and makes a Walnut task only on the
   // user's signal; an ask is the dispatcher, whose persona decides (see 4 above).
-  const workRule = ask
+  const workRule = projectLead
+    // A lead assigns work (the charter): Main's or the user's request is its signal.
+    ? 'Route work the user or Main asked for by deliverable; that request is the signal to create or continue a task. '
+      + 'Follow-ups you discover stay with the same deliverable, never new tasks. '
+      + 'New work lands beside yours: same project, folder and board tier, same host and directory. '
+      + 'Omit project; naming another needs project_reason.\n\n'
+    : ask
     // No "lands beside yours" line: an ask's work keeps the old defaults for
     // project, folder, tier and cwd (caller-placement.ts), so it would be false.
     ? 'Never create or start a task, or hand work to another task, unless the '
@@ -177,8 +203,9 @@ export async function buildSessionContext(
       // 2026-10-01: one "use a subtask" ask became four tasks, plus a fifth
       // for the third one's follow-up. A subtask is a teammate, not a step.
       + 'A task you create is a teammate owning one area with a clear goal, never a '
-      + 'step: one per ask (ask the user before splitting), and more work in its '
-      + 'area goes to it (task_send). It '
+      + 'step: one per ask (ask the user before splitting). The same deliverable '
+      + 'continues its task (task_send); when the user asks for a task for an independent goal, make a new one '
+      + 'with a fresh session, even in an area a teammate already owns. It '
       + 'lands beside yours: same project, folder and board tier, same host and '
       + 'directory. Omit project; naming another needs project_reason.\n\n'
   const lines =
@@ -217,6 +244,8 @@ export async function buildSessionContext(
     // One team, one user (see 7 above).
     + 'Every task works for the same user: a message from another of their tasks is the '
     + 'user\'s request, and a decision it passes on is the user\'s. Act on it; never ask '
-    + 'the user to repeat it.'
+    + 'the user to repeat it.\n\n'
+    // The team charter (see 8 above).
+    + TEAM_CHARTER
   return { systemPrompt: lines }
 }

@@ -23,7 +23,8 @@ describe('task_create description', () => {
   it('says a task is a teammate owning one area, one per ask, its follow-ups sent to it', () => {
     expect(desc).toMatch(/a task is a teammate that owns one area with a clear goal, never a step/i)
     expect(desc).toMatch(/one task per ask \(ask the user before splitting\)/i)
-    expect(desc).toMatch(/more work in an area goes to the task that owns it \(task_send/i)
+    expect(desc).toMatch(/Continue the SAME deliverable with task_send/i)
+    expect(desc).toMatch(/independent goal needs a new task and fresh session even in the same area/i)
     expect(desc).toMatch(/the result lists the other open subtasks you lead/i)
   })
 
@@ -42,7 +43,8 @@ describe('walnut skill', () => {
     expect(rules).toBeLessThan(SKILL.indexOf('## Recording and starting work'))
     expect(SKILL).toMatch(/One ask, one task\./)
     expect(SKILL).toMatch(/propose the split to the user and wait for their answer/)
-    expect(SKILL).toMatch(/More work in an area goes to the task that owns it/)
+    expect(SKILL).toMatch(/Continue the same deliverable with its task/)
+    expect(SKILL).toMatch(/An independent user-asked goal\s+gets a new task and fresh session/)
     expect(SKILL).toMatch(/"Use subtasks" covers the ask it came with/)
     expect(SKILL).toMatch(/placement\.open_subtasks/)
   })

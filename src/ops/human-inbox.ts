@@ -23,6 +23,7 @@
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { inboxItemsSchema } from '../core/human-inbox/item-schema.js'
+import { MESSAGE_TEXT_HINT } from '../core/team-charter.js'
 
 const LETTER_TYPE = z.enum(['completion', 'action_required', 'review', 'info'])
 
@@ -54,7 +55,7 @@ defineOp({
     subject: z.string().min(1).describe('One line the human reads first, like an email subject'),
     type: LETTER_TYPE.describe(
       'completion | action_required | review | info. action_required also requires `actions`'),
-    markdown: z.string().optional().describe('Letter body as markdown (exactly one of markdown | html)'),
+    markdown: z.string().optional().describe(`Letter body as markdown (exactly one of markdown | html). ${MESSAGE_TEXT_HINT}`),
     html: z.string().optional().describe(
       'Letter body as self-contained HTML, no scripts (inline styles only). The one body that may '
       + 'carry inline media as data: URIs — a chart image, an audio digest as '

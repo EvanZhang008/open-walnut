@@ -65,7 +65,37 @@ What the failures mean:
 - `task_has_no_session`: the task exists but nothing is running for it. Start it with `task_start` (see the `walnut` skill) if the user asked for that, and do not keep resending.
 - `target_archived` / `self_send`: the target is archived, or the handle resolved to your own work, which is never a valid destination.
 
-Keep messages short and factual: what changed, where, what the other task should do.
+## When to send, and how to write it
+
+Every session's default prompt carries the team charter ("How we work"). For messages it comes down to this.
+
+**Send only what the receiver must act on.** A message costs every reader's context. An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for. No progress reports, no acknowledgements, no relays of what the reader can read itself with `task_get` or `task_history`.
+
+**Decide your own work.** The task doing the work has the most context, so it plans, builds, tests, verifies, gets an independent review, commits, and deploys where the repo's own rules say done means deployed and let it, without asking its lead or Main to approve a step. A new coding task starts in its normal mode, never plan mode except when the user asks for plan. Escalate only for:
+
+1. a decision or authority that belongs to the user (outward messages, deleting cloud resources, spending, credentials, permissions);
+2. information you cannot see, or a collision with another team's work;
+3. a hard-to-reverse choice no existing rule covers.
+
+Asked something you can decide, decide it and say what you chose. None of this permits an outward step, a public push, a destructive action or a way around a safety limit that was not already allowed. Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts.
+
+**Write for a reader who has not seen the thread.** The conclusion first, in plain, full sentences, then the decision needed or the next owner. Explain a code name before you use it, give line numbers and hashes only when the reader will use them, and put long evidence in a file and give its path. Never leave out a failure, a safety limit or a risk to save space.
+
+Hard to act on:
+
+```text
+rq-7c1 g13/D8 ok; a1b2c3d+e4f5a6b; P2 open (tests 310/312, 2 flaky?). wait lead.
+```
+
+Clear:
+
+```text
+The import fix is done and on prod. Two of the 312 tests fail. Both pass when run
+alone, so I think they are timing flakes, but I have not proven it.
+You decide: ship as is (my recommendation) or wait one day while I make them stable.
+Next: once you answer, I either close the task or fix the two tests.
+Logs: /tmp/import-fix/test-run.log
+```
 
 ## How a message arrives
 

@@ -1,5 +1,6 @@
 import { PHASE_ORDER } from './phase.js';
 import type { TaskPhase } from './types.js';
+import { TEAM_CHARTER } from './team-charter.js';
 
 // Budget for the whole bootstrap prompt. Raised from 1,800 when the task board
 // model joined it (2026-08-26): the tiers decide where every created task lands,
@@ -18,7 +19,13 @@ import type { TaskPhase } from './types.js';
 // folder), and "project is the only grouping layer" was now false. An agent
 // that believes it names a project on every create and files work away from
 // where the user put the caller, which is a first-tool-call mistake.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 2_200;
+//
+// Raised to 4,850 on 2026-10-24 for the team charter (team-charter.ts): who
+// decides (the task doing the work), when to escalate, what each role does and
+// when a message is worth sending. The Personal AI acts on it from its first
+// turn. It renders 4,713 characters with it; the cap keeps a small margin
+// above that, not room for more.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 4_850;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed
@@ -46,7 +53,9 @@ const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract
 - Focus: today's laser focus. Satellite: the default for a new task, and Satellite is represented by no stored focus tier.
 - Parked (tier \`wait\`): set aside for now, someday work or work waiting on something.
 - Unpinned: not due within a month; search brings it back.
-- Create tasks in Satellite and groom the tier later; do not leave new work off the board.`;
+- Create tasks in Satellite and groom the tier later; do not leave new work off the board.
+
+${TEAM_CHARTER}`;
 
 export function renderSelfKnowledgeContract(): string {
   return SELF_KNOWLEDGE_PROMPT;

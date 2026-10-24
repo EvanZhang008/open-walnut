@@ -354,7 +354,7 @@ describe('task_create says where the task landed', () => {
       .speak({ title: TASK.title, record_only: true })
     expect(one.outcome).toBe('Filed in project marina, folder "Fixture work" (new, holding your task and this one), '
       + 'as a subtask of your task. Your task also leads 1 other open subtask: "Fix the oven door" (t_oven, IN_PROGRESS). '
-      + 'Each owns its area: more work in one of those areas goes to that task with task_send, not to a new task. '
+      + 'Continue the same deliverable with task_send after checking its scope; an independent goal needs a new task and fresh session, even in the same area. '
       + 'The user follows your workers on your Board (skill walnut-board), not in your chat. '
       + 'Placeholder saved. Work was explicitly not started.')
     expect((one.placement as Record<string, unknown>).open_subtasks).toEqual(team.slice(0, 1))
@@ -363,7 +363,7 @@ describe('task_create says where the task landed', () => {
     const lots = await createRunner({ created: { task: TASK, placement: { ...PLACED, open_subtasks: many, more_open_subtasks: 3 } } })
       .speak({ title: TASK.title, record_only: true })
     expect(lots.outcome).toContain('Your task also leads 10 other open subtasks: "Shelf 0" (t_0, TODO); ')
-    expect(lots.outcome).toContain('"Shelf 4" (t_4, TODO); and 5 more (open_items lists them). Each owns its area')
+    expect(lots.outcome).toContain('"Shelf 4" (t_4, TODO); and 5 more (open_items lists them). Continue the same deliverable')
     expect(lots.outcome).not.toContain('Shelf 5')
     // A long legacy title is cut on a code point, never mid surrogate pair.
     const long = `${'a'.repeat(58)}\u{1F35E}\u{1F35E}tail`

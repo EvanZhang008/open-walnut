@@ -171,7 +171,7 @@ describe('buildSessionContext (identity note)', () => {
     // and the third one's follow-up became a fourth task in the second's area.
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).toMatch(/a task you create is a teammate owning one area with a clear goal, never a step/i)
-    expect(systemPrompt).toMatch(/one per ask \(ask the user before splitting\), and more work in its area goes to it \(task_send\)/i)
+    expect(systemPrompt).toMatch(/one per ask \(ask the user before splitting\)\. The same deliverable continues its task \(task_send\); when the user asks for a task for an independent goal, make a new one with a fresh session, even in an area a teammate already owns/i)
     // The signal is the user naming the parts, not "talking to each part".
     expect(systemPrompt).toMatch(/names the parts they want as tasks/i)
     expect(systemPrompt).not.toMatch(/talk to each part/i)
@@ -281,7 +281,11 @@ describe('buildSessionContext (identity note)', () => {
     // 2450 → 2600 (2026-10-05) for the park's clock: name a short wait_until, and
     // when it runs out first, check the thing and the trigger before parking again.
     // A new trigger may be wrong, and the user cannot tell from a hidden task.
-    expect(systemPrompt.length).toBeLessThan(2600)
+    // 2600 → 5400 (2026-10-24) for the team charter (team-charter.ts): every
+    // step had been going up for approval and messages had become code names
+    // and progress notes. The same text for Main, a lead and a worker, so each
+    // knows what the others do. 5,275 with it; a small margin, not more room.
+    expect(systemPrompt.length).toBeLessThan(5400)
   })
 
   it('makes waiting the session\'s job: arm a trigger itself, park only when only the wait is left', async () => {

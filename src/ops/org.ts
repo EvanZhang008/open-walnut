@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { startTask } from './task-execution.js';
 import { REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
+import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 
 defineOp({
   name: 'org_get',
@@ -41,7 +42,7 @@ defineOp({
   input: {
     to: z.string().min(1).describe('A project name ("Inbox" for the Inbox) or a task id'),
     title: z.string().min(1).max(200).optional().describe('One-line TL;DR the reader sees first'),
-    text: z.string().min(1).describe('What you ask or hand over'),
+    text: z.string().min(1).describe(`What you ask or hand over. ${MESSAGE_TEXT_HINT}`),
     expect_reply: z.boolean().optional().describe('Ask for a reply (default true); false = fire and forget'),
   },
   handler: async ({ to, title, text, expect_reply }, call) => {
