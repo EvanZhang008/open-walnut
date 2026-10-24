@@ -35,11 +35,20 @@ const tarballName = (name, version) => `${name.split('/').pop()}-${version}.tgz`
 /**
  * The registry document for one package (open-walnut unless `name` says
  * otherwise): one version per tarball of that name, the given dist-tags (each
- * must name a served version), and publish times in order.
+ * must name a served version), and publish times in order. `published` adds
+ * versions of open-walnut as the real registry has them (their documents, whose
+ * tarballs stay on that registry), older than every tarball here: the release
+ * an install runs today, which a dist-tag may name before the update arrives.
  */
-export function buildPackument({ tarballs, distTags, baseUrl, now = new Date(), name = PACKAGE }) {
+export function buildPackument({ tarballs, distTags, baseUrl, now = new Date(), name = PACKAGE, published = {} }) {
   const versions = {}
   const time = {}
+  if (name === PACKAGE) {
+    Object.values(published).forEach((doc, i, all) => {
+      versions[doc.version] = doc
+      time[doc.version] = new Date(now.getTime() - (all.length - i + tarballs.length + 1) * 60_000).toISOString()
+    })
+  }
   const mine = tarballs.map(({ file }) => ({ file, manifest: readPackedManifest(file) }))
   if (name === PACKAGE) {
     for (const { file, manifest } of mine) if (manifest.name !== PACKAGE && !manifest.name.startsWith('@')) throw new Error(`${file} is ${manifest.name}, not ${PACKAGE}`)
@@ -79,10 +88,12 @@ async function passThrough(req, res, upstream) {
  * Start the registry on a free loopback port. `tarballs` is [{ file }] (packed
  * packages: open-walnut, and any other names, such as its platform packages),
  * `distTags` maps tag -> version for open-walnut; every other package's
- * `latest` is its last tarball. Returns its URL, the hits it answered itself
- * (so a test can prove the updater asked it), and close().
+ * `latest` is its last tarball. `published` (version -> the real registry's
+ * document, publishedVersion) adds released versions of open-walnut. Returns
+ * its URL, the hits it answered itself (so a test can prove the updater asked
+ * it), and close().
  */
-export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM }) {
+export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM, published = {} }) {
   const names = [...new Set(tarballs.map(({ file }) => readPackedManifest(file).name))]
   if (!names.includes(PACKAGE)) names.push(PACKAGE)
   const files = new Map()
@@ -91,13 +102,15 @@ export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM })
     files.set(`${m.name}/-/${tarballName(m.name, m.version)}`, file)
   }
   const hits = []
+  // Packages answered 404 for now: a release still reaching the registry, package by package.
+  let withheld = new Set()
   let packuments = null
   const build = (url, tags) => {
     const out = {}
     for (const name of names) {
       const own = tarballs.filter(({ file }) => readPackedManifest(file).name === name)
       const last = own.length ? readPackedManifest(own[own.length - 1].file).version : null
-      out[name] = buildPackument({ tarballs, distTags: name === PACKAGE ? tags : (last ? { latest: last } : {}), baseUrl: url, name })
+      out[name] = buildPackument({ tarballs, distTags: name === PACKAGE ? tags : (last ? { latest: last } : {}), baseUrl: url, name, published })
     }
     return out
   }
@@ -112,6 +125,7 @@ export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM })
     }
     const name = names.find((n) => pathname === `/${n}` || pathname.startsWith(`/${n}/`))
     if (!name) return void passThrough(req, res, upstream)
+    if (withheld.has(name)) { hits.push(`withheld ${pathname}`); return json(res, { error: 'not found' }, 404) }
     const rest = pathname.slice(name.length + 1)
     if (rest === '') { hits.push(pathname); return json(res, packuments[name]) }
     const tgz = files.get(`${name}${rest}`)
@@ -135,6 +149,17 @@ export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM })
     distTagsUrl: `${url}/-/package/${PACKAGE}/dist-tags`,
     /** Move open-walnut's dist-tags (a release published while an install runs). */
     setDistTags: (tags) => { packuments = build(url, tags) },
+    /** Answer 404 for these packages until called again (a publish npm has not made visible yet). */
+    setWithheld: (list) => { withheld = new Set(list) },
     close: () => new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections() }),
   }
+}
+
+/** One released version's document from the real registry, as `published` takes it. */
+export async function publishedVersion(version, { upstream = UPSTREAM, fetchImpl = fetch } = {}) {
+  const res = await fetchImpl(`${upstream}/${PACKAGE}/${encodeURIComponent(version)}`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(60_000) })
+  if (!res.ok) throw new Error(`the registry answered HTTP ${res.status} for ${PACKAGE}@${version}`)
+  const doc = await res.json()
+  if (doc?.version !== version || !doc?.dist?.tarball) throw new Error(`the registry's ${PACKAGE}@${version} has no tarball`)
+  return doc
 }

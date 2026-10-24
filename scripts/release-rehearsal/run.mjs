@@ -3,8 +3,9 @@
  * Release rehearsal: install the package about to ship the way a user does and
  * make it work, on this machine, without publishing anything.
  *
- *   bun scripts/release-rehearsal/run.mjs --current <B.tgz> [--older <A.tgz>] [--field latest] [--work <dir>] [--keep]
- *   bun scripts/release-rehearsal/run.mjs --packs <dir>/packs.json --field latest --runtime   (pack.mjs --rehearsal wrote it)
+ *   bun scripts/release-rehearsal/run.mjs --current <B.tgz> [--older <A.tgz>] [--work <dir>] [--keep]
+ *   bun scripts/release-rehearsal/run.mjs --packs <dir>/packs.json --runtime   (pack.mjs --rehearsal wrote it)
+ *   bun scripts/release-rehearsal/run.mjs --field latest --field-packs <dir>/field.json   (field-packs.mjs wrote it)
  *   bun scripts/release-rehearsal/run.mjs --archive <open-walnut-x-<platform>-<arch>.tar.gz>
  *   BUN_BE_BUN=1 <walnut file> scripts/release-rehearsal/run.mjs --binary <walnut file>   (binary.mjs)
  *
@@ -22,12 +23,14 @@
  *   update     (--older) an install of A, started, updates itself to B before it
  *              serves (the startup auto-update every npm install runs), from a
  *              local registry whose `latest` is B.
- *   field      (--field latest) the same, starting from the version on npm today:
- *              the update every existing install will take.
- *   field-work (--field latest) that update onto an install already in use: the
- *              npm version keeps a task and a session with a live CLI, its server
- *              restarts into the update, and the task, the history, the session
- *              (a third message) and B's daemon are there afterwards.
+ *   field*     (--field latest --field-packs) the update every existing npm
+ *              and archive install takes: the releases people run today (npm's
+ *              latest and nightly, the newest Node package), installed as they
+ *              were (npm, or a release's install.sh), updated by their own
+ *              updater (and by hand) to this commit published as a release
+ *              publishes it (the launcher and its platform packages), at a
+ *              version above them, fresh and in use (field.mjs). --field-from
+ *              and --field-only narrow it.
  *   archive*   (--runtime: built from --older, updated to --current; --archive:
  *              a built one, alone) the self-contained archive install.sh puts
  *              in place, run with no Node on PATH (runtime.mjs).
@@ -35,20 +38,20 @@
  * CI runs it on Linux and macOS for every push (ci.yml, job `rehearsal`), so the
  * release only ever publishes code whose package has done all of this.
  */
-import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { readPackedManifest, startRegistry } from './registry.mjs'
 import { rehearseBinary } from './binary.mjs'
+import { FIELD_SCENARIOS, rehearseField } from './field.mjs'
 import { rehearseRuntime } from './runtime.mjs'
 import { IsolatedWalnut } from './walnut.mjs'
 import { compareVersions } from './version-order.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
 
 function parseArgs(argv) {
-  const out = { current: null, older: null, field: null, work: null, keep: false, runtime: false, archive: null, binary: null }
+  const out = { current: null, older: null, field: null, fieldPacks: null, fieldFrom: null, fieldOnly: null, work: null, keep: false, runtime: false, archive: null, binary: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--packs') {
@@ -58,6 +61,9 @@ function parseArgs(argv) {
     } else if (a === '--current') out.current = path.resolve(argv[++i])
     else if (a === '--older') out.older = path.resolve(argv[++i])
     else if (a === '--field') out.field = argv[++i]
+    else if (a === '--field-packs') out.fieldPacks = path.resolve(argv[++i])
+    else if (a === '--field-from') out.fieldFrom = argv[++i].split(',').filter(Boolean)
+    else if (a === '--field-only') out.fieldOnly = argv[++i].split(',').filter(Boolean)
     else if (a === '--work') out.work = path.resolve(argv[++i])
     else if (a === '--keep') out.keep = true
     else if (a === '--runtime') out.runtime = true
@@ -65,8 +71,12 @@ function parseArgs(argv) {
     else if (a === '--binary') out.binary = path.resolve(argv[++i])
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!out.current && !out.archive && !out.binary) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--field latest] [--runtime] [--work <dir>] [--keep] | --archive <archive> | --binary <walnut file>')
+  if (!out.current && !out.archive && !out.binary && !out.fieldPacks) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--runtime] [--work <dir>] [--keep] | --field latest --field-packs <field.json> | --archive <archive> | --binary <walnut file>')
   if (out.runtime && !out.older) throw new Error('--runtime builds the archive from --older and updates it to --current')
+  // The field update goes to the release as it is published now; a Node package of this commit is not that.
+  if (out.field && !out.fieldPacks) throw new Error('--field latest updates to the launcher and platform packages field-packs.mjs builds: pass --field-packs <field.json>')
+  if (out.fieldPacks && out.field !== 'latest') throw new Error('--field-packs needs --field latest')
+  for (const k of out.fieldOnly ?? []) if (!FIELD_SCENARIOS.includes(k)) throw new Error(`--field-only takes ${FIELD_SCENARIOS.join(', ')}, not ${k}`)
   return out
 }
 
@@ -128,88 +138,6 @@ async function rehearseUpdate(work, label, fromTgz, toTgz) {
   }
 }
 
-/** What the install's own daemon dir says: the running daemon's version and pid. */
-function daemonOf(w) {
-  const read = (f) => { try { return fs.readFileSync(path.join(w.daemonDir, f), 'utf8').trim() } catch { return null } }
-  return { version: read('daemon.version'), pid: read('daemon.pid') }
-}
-
-/** The process groups of the CLIs the daemon spawned (its streams dir records them). */
-function cliGroups(w) {
-  const streams = `${w.daemonDir}-streams`
-  return (fs.existsSync(streams) ? fs.readdirSync(streams) : []).filter((f) => f.endsWith('.pgid'))
-    .map((f) => fs.readFileSync(path.join(streams, f), 'utf8').trim()).sort()
-}
-
-/**
- * An install that already holds work updates the way every user's does: A serves
- * (its registry's `latest` is A), keeps a task and a session whose CLI stays alive,
- * then the server stops while its daemon and that CLI go on (a user's restart),
- * `latest` becomes B, and the next start updates itself to B before it serves.
- * The task, the session's history and the session itself carry over (a third
- * message is answered), and the daemon that runs it is B's. The detail names
- * whether the same CLI answered: here it is a new one (resumed), because a
- * daemon in its own dir ends its sessions when its server is gone (the parent
- * watchdog every test daemon has); a user's daemon in the default dir outlives
- * the restart and its upgrade adopts the running CLIs.
- */
-async function rehearseUpdateWithWork(work, label, fromTgz, toTgz) {
-  const from = readPackedManifest(fromTgz)
-  const to = readPackedManifest(toTgz)
-  if (compareVersions(to.version, from.version) <= 0) return `skipped: ${to.version} is not newer than ${from.version}`
-  const registry = await startRegistry({ tarballs: [{ file: fromTgz }, { file: toTgz }], distTags: { latest: from.version } })
-  try {
-    const w = new IsolatedWalnut({
-      work, name: label,
-      extraEnv: { npm_config_registry: `${registry.url}/`, WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl },
-    })
-    walnuts.push(w)
-    await w.install(`open-walnut@${from.version}`, allowedScripts(from))
-    await w.start({ timeoutMs: 600_000 })
-    const before = await w.api('GET', '/api/v1/status')
-    if (before.json?.version !== from.version) throw new Error(`${from.version} with latest=${from.version} serves ${before.json?.version ?? before.text.slice(0, 200)}`)
-    const title = `rehearsal task ${nonce()}`
-    const made = await w.api('POST', '/api/v1/tasks', { title })
-    const taskId = made.json?.task?.id
-    if (made.status !== 201 || !taskId) throw new Error(`POST /api/v1/tasks answered ${made.status} ${made.text.slice(0, 300)}`)
-    const marks = [nonce(), nonce(), nonce()]
-    const one = ask('one', marks[0])
-    const res = await w.api('POST', '/api/v1/sessions', { cwd: w.project, message: one.text })
-    const sessionId = res.json?.sessionId
-    if (res.status !== 201 || !sessionId) throw new Error(`POST /api/v1/sessions answered ${res.status} ${res.text.slice(0, 300)}`)
-    await w.waitForAnswer(sessionId, one.answer)
-    const two = ask('two', marks[1])
-    const send = await w.api('POST', '/api/v1/messages', { to: sessionId, text: two.text })
-    if (send.status !== 202) throw new Error(`POST /api/v1/messages answered ${send.status} ${send.text.slice(0, 300)}`)
-    await w.waitForAnswer(sessionId, two.answer)
-    const oldDaemon = daemonOf(w)
-    const oldClis = cliGroups(w)
-
-    await w.stop()
-    registry.setDistTags({ latest: to.version })
-    await w.start({ timeoutMs: 600_000 })
-    const status = await w.api('GET', '/api/v1/status')
-    if (status.json?.version !== to.version) throw new Error(`restarted ${from.version} with latest=${to.version}, serving ${status.json?.version ?? status.text.slice(0, 200)}`)
-    if (!reports(w.version(), to.version)) throw new Error(`after the update the binary reports ${w.version()}`)
-    const tasks = await w.api('GET', '/api/v1/tasks')
-    const kept = (tasks.json?.tasks ?? []).find((t) => t.id === taskId)
-    if (!kept || kept.title !== title) throw new Error(`task ${taskId} ("${title}") is not in ${to.version}'s list (${tasks.status} ${tasks.text.slice(0, 200)})`)
-    const history = await w.waitForAnswer(sessionId, two.answer, 120_000)
-    if (!history.some((m) => m.role === 'assistant' && m.text?.includes(one.answer))) throw new Error('the first turn is gone from the history after the update')
-    const three = ask('three', marks[2])
-    const again = await w.api('POST', '/api/v1/messages', { to: sessionId, text: three.text })
-    if (again.status !== 202) throw new Error(`POST /api/v1/messages after the update answered ${again.status} ${again.text.slice(0, 300)}`)
-    await w.waitForAnswer(sessionId, three.answer)
-    const newDaemon = daemonOf(w)
-    const cli = cliGroups(w).join(',') === oldClis.join(',') ? 'the same CLI process' : 'a new CLI process'
-    const daemon = newDaemon.version === oldDaemon.version ? `daemon ${newDaemon.version} kept` : `daemon ${oldDaemon.version} -> ${newDaemon.version}`
-    await w.shutdown()
-    return `${from.version} -> ${to.version}: task, history and session kept (third message answered by ${cli}); ${daemon}`
-  } finally {
-    await registry.close()
-  }
-}
-
 /** Stop what is left, print the table, and fail unless `expected` scenarios ran and passed. */
 async function finish(opts, work, title, expected) {
   // A scenario that failed half way left its server and daemon running.
@@ -243,6 +171,15 @@ async function main() {
     process.stdout.write(`rehearsing ${path.basename(opts.archive)} in ${work}\n`)
     const ran = await rehearseRuntime({ work, archive: opts.archive, scenario, walnuts })
     return finish(opts, work, path.basename(opts.archive), Math.max(ran, 2))
+  }
+  const fieldOpts = {
+    ...(opts.fieldFrom ? { points: opts.fieldFrom } : {}),
+    ...(opts.fieldOnly ? { only: opts.fieldOnly } : {}),
+  }
+  if (!opts.current) {
+    process.stdout.write(`rehearsing the field update to ${opts.fieldPacks} in ${work}\n`)
+    const expected = await rehearseField({ work, fieldJson: opts.fieldPacks, scenario, walnuts, opts: fieldOpts })
+    return finish(opts, work, 'field update', expected)
   }
   const current = readPackedManifest(opts.current)
   process.stdout.write(`rehearsing open-walnut@${current.version} in ${work}\n`)
@@ -298,28 +235,12 @@ async function main() {
   await w.shutdown()
 
   if (opts.older) await scenario('update', () => rehearseUpdate(work, 'update', opts.older, opts.current))
-  if (opts.field === 'latest') {
-    await scenario('field', async () => {
-      const dir = path.join(work, 'field-pack')
-      fs.mkdirSync(dir, { recursive: true })
-      // The real registry, whatever the caller's npm config says.
-      const out = execFileSync('npm', ['pack', 'open-walnut@latest', '--json', '--pack-destination', dir, '--registry', 'https://registry.npmjs.org/'], { encoding: 'utf8', timeout: 300_000 })
-      const packed = JSON.parse(out)
-      const entry = Array.isArray(packed) ? packed[0] : Object.values(packed)[0]
-      return rehearseUpdate(work, 'field', path.join(dir, entry.filename), opts.current)
-    })
-    // The same release, onto an install that already holds a task and a running session.
-    await scenario('field-work', async () => {
-      const dir = path.join(work, 'field-pack')
-      const tgz = fs.readdirSync(dir).find((f) => f.endsWith('.tgz'))
-      if (!tgz) throw new Error(`no packed open-walnut@latest in ${dir}`)
-      return rehearseUpdateWithWork(work, 'field-work', path.join(dir, tgz), opts.current)
-    })
-  }
+  let fieldExpected = 0
+  if (opts.fieldPacks) fieldExpected = await rehearseField({ work, fieldJson: opts.fieldPacks, scenario, walnuts, opts: fieldOpts })
 
   if (opts.runtime) await rehearseRuntime({ work, fromTgz: opts.older, toTgz: opts.current, scenario, walnuts })
 
-  const expected = 4 + (opts.older ? 1 : 0) + (opts.field === 'latest' ? 2 : 0) + (opts.runtime ? 3 + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) + (process.env.WALNUT_REHEARSAL_APP ? 1 : 0) : 0)
+  const expected = 4 + (opts.older ? 1 : 0) + fieldExpected + (opts.runtime ? 3 + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) + (process.env.WALNUT_REHEARSAL_APP ? 1 : 0) : 0)
   return finish(opts, work, `open-walnut@${current.version}`, expected)
 }
 

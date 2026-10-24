@@ -389,13 +389,14 @@ jobs:
   # The package this commit would publish, installed the way a user installs it
   # (npm 12, the updater's --allow-scripts list, a HOME nothing ran in), must
   # serve, run a session against a mock `claude` across a server restart, and
-  # update itself: an older build of the same code, and the version on npm today,
-  # each started against a local registry whose `latest` is this package must
-  # come up as this package. Nothing is published (scripts/release-rehearsal/).
-  # The self-contained archive install.sh and Homebrew install is built from the
-  # same package, installed by install.sh, served with no Node on PATH, installed
-  # through its Homebrew formula, and updated through its own npm.
-  # The nightly and the daily stable only ship commits whose CI OK includes it.
+  # update itself from an older build of the same code, started against a local
+  # registry whose `latest` is this package. Nothing is published
+  # (scripts/release-rehearsal/). The self-contained archive install.sh and
+  # Homebrew install is built from the same package, installed by install.sh,
+  # served with no Node on PATH, installed through its Homebrew formula, and
+  # updated through its own npm. The update from the versions on npm today is
+  # job `field`. The nightly and the daily stable only ship commits whose CI OK
+  # includes both.
   rehearsal:
     name: Release rehearsal (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -429,7 +430,7 @@ jobs:
           # Homebrew comes with both images; on Ubuntu it is off PATH.
           WALNUT_REHEARSAL_BREW: ${{ startsWith(matrix.os, 'macos') && 'brew' || '/home/linuxbrew/.linuxbrew/bin/brew' }}
           WALNUT_REHEARSAL_APP: ${{ startsWith(matrix.os, 'macos') && format('{0}/desktop/Walnut.app', github.workspace) || '' }}
-        run: bun scripts/release-rehearsal/run.mjs --packs "$RUNNER_TEMP/packs/packs.json" --field latest --runtime --work "$RUNNER_TEMP/rehearsal" --keep
+        run: bun scripts/release-rehearsal/run.mjs --packs "$RUNNER_TEMP/packs/packs.json" --runtime --work "$RUNNER_TEMP/rehearsal" --keep
       - name: Upload rehearsal logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -438,6 +439,54 @@ jobs:
           path: |
             ${{ runner.temp }}/rehearsal/*/log.txt
             ${{ runner.temp }}/rehearsal/*.log
+          if-no-files-found: ignore
+
+  # ── Rehearse the update every existing install takes ────────────────────────
+  # The releases on npm today (its `latest` and `nightly`, and the newest one
+  # still in the Node form), each installed from the real registry the way a
+  # person installed it, take this commit published as a release publishes it
+  # now: the open-walnut launcher and this runner's @open-walnut/<target> file
+  # (scripts/release-rehearsal/field-packs.mjs), at a version above every one
+  # of them, so a version skew never skips it. Fresh and in use (a task, a live
+  # session and its history; the server restarts into the update with its
+  # daemon still running), by the old release's own startup update and `walnut
+  # update`, by `npm install -g` typed by hand, and with the file not yet on
+  # the registry (with and without install scripts); and a stable release's
+  # self-contained archive, installed by its own install.sh, updating through
+  # its own npm into its prefix. Then the release's own updater takes the
+  # version after it (scripts/release-rehearsal/field.mjs).
+  field:
+    name: Release rehearsal, field update (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - name: Compile this commit for this runner at two versions above npm's, and pack them as a release does
+        run: node scripts/release-rehearsal/field-packs.mjs build --out "$RUNNER_TEMP/field"
+      # What the user runs; the updater inside the installed package calls it too.
+      - run: npm install -g npm@12
+      - name: Update the releases on npm today to it, fresh and in use, as a user's machine would
+        run: node scripts/release-rehearsal/run.mjs --field latest --field-packs "$RUNNER_TEMP/field/field.json" --work "$RUNNER_TEMP/field-run" --keep
+      - name: Upload field logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: field-logs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/field-run/*/*.txt
+            ${{ runner.temp }}/field-run/*/daemon/*.log
           if-no-files-found: ignore
 
   # ── The archives the rehearsal does not build ───────────────────────────────
@@ -560,7 +609,7 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-24.04
-    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, archive-targets]
+    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, archive-targets]
     # Runs whatever the gates concluded, EXCEPT on a run a newer push cancelled:
     # there it judged cancelled legs and turned the superseded run red (6 of the
     # 9 red runs on main from 2026-10-02 to 10-04). A job that hits its timeout
@@ -575,6 +624,7 @@ jobs:
           echo "test-heavy: ${{ needs.test-heavy.result }}"
           echo "test-e2e:   ${{ needs.test-e2e.result }}"
           echo "rehearsal:  ${{ needs.rehearsal.result }}"
+          echo "field:      ${{ needs.field.result }}"
           echo "archive-targets: ${{ needs.archive-targets.result }}"
           echo "onboarding: ${{ needs.onboarding.result }}"
           echo "remote-host: ${{ needs.remote-host.result }}"
@@ -587,6 +637,7 @@ jobs:
           [ "${{ needs.test-heavy.result }}" = "success" ] || { echo "::error::the slow tier failed"; failed=1; }
           [ "${{ needs.test-e2e.result }}" = "success" ] || { echo "::error::the e2e tier failed: a failure not in tests/setup/known-failures-e2e.json, or a run that crashed"; failed=1; }
           [ "${{ needs.rehearsal.result }}" = "success" ] || { echo "::error::the release rehearsal failed: this commit's package does not install, serve or update"; failed=1; }
+          [ "${{ needs.field.result }}" = "success" ] || { echo "::error::the field rehearsal failed: an install of a release on npm today does not update to this commit and keep its work"; failed=1; }
           [ "${{ needs.archive-targets.result }}" = "success" ] || { echo "::error::an archive a release ships (darwin-x64 or linux-arm64) did not build or run"; failed=1; }
           [ "${{ needs.onboarding.result }}" = "success" ] || { echo "::error::the documented install broke on a fresh machine"; failed=1; }
           [ "${{ needs.remote-host.result }}" = "success" ] || { echo "::error::Walnut could not onboard a fresh remote host"; failed=1; }

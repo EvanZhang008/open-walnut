@@ -119,6 +119,7 @@ Both channels publish only a commit whose `CI OK` passed (see below), and `CI OK
 | Fresh machine (Linux, macOS) | the README's two install routes on a machine without Bun or Claude Code |
 | Remote host | Walnut provisions a clean Linux dev box over real ssh and starts a session there |
 | Release rehearsal (Linux, macOS) | the package this commit would publish, end to end (next section) |
+| Release rehearsal, field update (Linux, macOS) | the versions on npm today, installed as people installed them, update to this commit as a release publishes it and keep their work (the field rehearsal, below) |
 
 The binary matrix (`binary-matrix.yml`, its own workflow) must pass on the same commit too: the
 compiled file on old and new glibc, musl, arm64 and x64 Linux, both Macs and an old kernel, with
@@ -154,18 +155,17 @@ own npm prefix, HOME, data dir and daemon dir, with a mock `claude`
 | session | a session started through `POST /api/v1/sessions` answers, then answers a second message sent to the live CLI |
 | restart | after a server restart the history is intact and a third message is answered |
 | update | "older", started, updates itself to "current" before it serves |
-| field | the version on npm today, started, updates itself to "current": the update every existing install will take |
 | archive | `scripts/runtime-bundle/build.mjs` builds the self-contained archive of "older" for this machine; `scripts/install.sh` finds it on a local server laid out like GitHub Releases, checks it and installs it |
 | archive-serve | that install serves, finds `claude` and answers a session with no Node on PATH, and its updater says `walnut update` |
 | archive-brew | the Homebrew formula written for it installs from a scratch tap and passes `brew test` (Homebrew comes with both runner images) |
 | archive-app | (macOS) `Walnut.app`, built from this commit by `desktop/build.sh`, installs that archive on its first launch with the `install.sh` inside it, serves the console with no Node on PATH, takes its server with it when it dies, and starts again without downloading (`scripts/desktop-smoke.mjs`) |
 | archive-update | that install, started, updates itself to "current" through its own Node's npm |
 
-The two update scenarios use `registry.mjs`, a local registry that serves the chosen
+The update scenarios use `registry.mjs`, a local registry that serves the chosen
 tarballs under chosen dist-tags and passes every other package through to npm, with
 `WALNUT_UPDATE_REGISTRY_URL` and `npm_config_registry` pointing at it. Locally, run
 `pack.mjs` only in a copy of the tree (it rebuilds `dist/` and refuses to touch a git clone
-outside CI), then `bun scripts/release-rehearsal/run.mjs --packs <out>/packs.json --field latest`.
+outside CI), then `bun scripts/release-rehearsal/run.mjs --packs <out>/packs.json`.
 
 The rehearsal runs on `macos-26` and `ubuntu-24.04`, so it builds the darwin-arm64 and
 linux-x64 archives. CI job `archive-targets` builds the other two a release ships
@@ -173,6 +173,35 @@ linux-x64 archives. CI job `archive-targets` builds the other two a release ship
 commit and runs each the way `release-archives.yml` does (`run.mjs --archive`: install.sh,
 serve and a session with no Node on PATH). CI OK needs it, so no target is first built at
 release time: 0.6.4's darwin-x64 archive was (2026-10-06), and failed.
+
+### The field rehearsal
+
+The update every existing npm install takes, rehearsed on every push (CI job `field`,
+`scripts/release-rehearsal/field.mjs`). Its start points are the versions on npm today:
+`latest`, `nightly` (the nightly channel follows that tag), and the newest stable still in the
+Node form (a full package with `dist/` and `node_modules`) once `latest` is no longer one. Each
+is installed from the real registry, the way a person installed it. What it updates to is this
+commit as a release publishes it now: `field-packs.mjs build` compiles this runner's file at two
+versions above every start point (prereleases of the patch above npm's `latest` and `nightly`,
+so a version skew never skips it) and packs the launcher and the platform packages of each with
+`npm-packages.mjs`. A local registry serves them under the dist-tags, and also the start
+point's own document, so a tag can name it before the update arrives. Once a scenario is over,
+its server and daemon are stopped and only its logs stay, so a run holds one install at a time.
+
+| Scenario | Pass means |
+|---|---|
+| field | a fresh install, started, installs the release with its own startup update and serves it: the launcher and this machine's file, nothing of the Node package left; then the release's own `walnut update` takes the version after it |
+| field-work | an install in use (a task, a session whose CLI stays alive, its history) restarts into the update with its daemon still running, as a person's does: the task, the history and the session (a third message) are there, the old daemon and its CLI are gone, and the SQLite files the old version wrote pass `integrity_check` and take a write under bun:sqlite; then the release's own startup update takes the version after it and the session answers a fourth message |
+| field-cli | an install in use runs its own `walnut update` while it serves; the old server keeps answering, and its restart is the release with the task, the history and the session |
+| field-hand | the same with `npm install -g open-walnut@<release>` typed by hand (no `--allow-scripts`) |
+| field-lag | the release's file for this machine is not on the registry yet when the old version updates: the update fails and npm keeps the old version, which serves; once the file is there, the next start is the release |
+| field-unscripted | `npm install -g` typed by hand while that file is not on the registry yet, with install scripts off (npm 12 without `--allow-scripts`): the launcher alone is installed, and once the file is there the first start fetches it and serves |
+| field-archive | (a stable start point) the self-contained archive its GitHub Release ships, installed by that release's own `install.sh` from a local copy of the release and put to work, restarts into the update: its own Node's npm puts the launcher and this machine's file into the archive's prefix, `node bin/open-walnut.js` and `node dist/cli.js` (what the archive and a 0.6.x Mac app start) both run the file, the work is kept and the old daemon is gone; then the release's `walnut update` takes the version after it |
+
+Locally: `bun scripts/release-rehearsal/field-packs.mjs build --out <dir> --allow-checkout` in a
+copy of the tree (or `field-packs.mjs pack --files <dir of walnut-<target> files> --version <v>`
+for files built already), then `node scripts/release-rehearsal/run.mjs --field latest
+--field-packs <dir>/field.json`; `--field-from <versions>` and `--field-only <scenarios>` narrow it.
 
 ## What a release ships: the compiled file
 

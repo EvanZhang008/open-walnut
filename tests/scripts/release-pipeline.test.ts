@@ -845,7 +845,7 @@ describe('ci.yml', () => {
   const gate = doc.jobs['ci-ok']!
 
   it('CI OK, the check both channels publish by, waits on the rehearsal, the slow tier and e2e', () => {
-    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'node-side', 'test', 'test-heavy', 'test-e2e', 'onboarding', 'remote-host', 'rehearsal']))
+    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'node-side', 'test', 'test-heavy', 'test-e2e', 'onboarding', 'remote-host', 'rehearsal', 'field']))
     // The informational browser suite stays out of the gate.
     expect(gate.needs).not.toContain('browser')
     const check = gate.steps.map((s) => s.run ?? '').join('\n')
@@ -868,8 +868,29 @@ describe('ci.yml', () => {
     expect(pack).toBeGreaterThan(-1)
     expect(npm12).toBeGreaterThan(pack)
     expect(rehearse).toBeGreaterThan(npm12)
-    expect(steps[rehearse]).toContain('--field latest')
+    // The update from npm's versions is job `field`, against what a release publishes now.
+    expect(steps[rehearse]).not.toContain('--field')
     expect(doc.jobs.rehearsal!.steps.some((s) => s['continue-on-error'])).toBe(false)
+  })
+
+  it('the field rehearsal updates npm\'s versions to this commit as a release publishes it, above them, on Linux and macOS', () => {
+    const job = doc.jobs.field!
+    expect(job.strategy!.matrix.os).toEqual(['ubuntu-24.04', 'macos-26'])
+    const steps = job.steps.map((s) => s.run ?? '')
+    // The launcher and platform packages of this commit, compiled at versions above npm's latest and nightly.
+    const build = steps.findIndex((r) => r.includes('scripts/release-rehearsal/field-packs.mjs build'))
+    const npm12 = steps.findIndex((r) => r.includes('npm install -g npm@12'))
+    const rehearse = steps.findIndex((r) => r.includes('scripts/release-rehearsal/run.mjs'))
+    expect(build).toBeGreaterThan(-1)
+    expect(npm12).toBeGreaterThan(build)
+    expect(rehearse).toBeGreaterThan(npm12)
+    expect(steps[rehearse]).toContain('--field latest')
+    expect(steps[rehearse]).toContain('--field-packs "$RUNNER_TEMP/field/field.json"')
+    // Every scenario, every start point: nothing narrows it in CI.
+    expect(steps[rehearse]).not.toMatch(/--field-only|--field-from/)
+    expect(steps[build]).not.toContain('--version')
+    expect(job.steps.some((s) => s['continue-on-error'])).toBe(false)
+    expect(job.needs).toBe('build')
   })
 
   it('the quick tier blocks in three serial legs that cover it once', () => {
