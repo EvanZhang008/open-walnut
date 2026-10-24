@@ -20,6 +20,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -27,7 +28,7 @@ const CORE = path.resolve(__dirname, '../../src/providers/external-session-scan-
 let scriptDir = ''
 type Twin = { name: string; command: () => [string, string[]] }
 const TWINS: Twin[] = BUN ? [
-  { name: 'source twin', command: () => [process.execPath, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
+  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
   { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] },
 ] : []
 

@@ -27,6 +27,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { bunBuildEnv } from '../helpers/cloud-box-daemon-build.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const HOST_ALIAS = 'uplink-e2e-host'
 const HWM = 1024 * 1024
@@ -207,7 +208,7 @@ afterAll(() => {
 })
 
 const twins: Array<{ name: string; skip: boolean; command: () => [string, string[]] }> = [
-  { name: 'source twin', skip: false, command: () => [process.execPath, [scriptPath]] },
+  { name: `source twin (${SOURCE_TWIN.runtime})`, skip: false, command: () => [SOURCE_TWIN.file, [scriptPath]] },
   { name: 'Bun twin, compiled from this source', skip: !BUN, command: () => [bunDaemon!, []] },
 ]
 

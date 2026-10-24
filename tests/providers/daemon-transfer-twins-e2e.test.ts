@@ -20,6 +20,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-transfer-twins-')))
 afterAll(() => { if (root.includes('walnut-transfer-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
@@ -34,7 +35,7 @@ if (BUN) {
   if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
 }
 const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: 'source twin', command: () => [process.execPath, [scriptPath, '--start']] },
+  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 

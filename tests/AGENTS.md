@@ -11,8 +11,11 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
 - **Every tier runs on bun, with no Node needed** (`bun run test:quick`, `bun run test:focus
   <path>`, `bun --bun vitest run --config <config>`). `npx vitest` starts vitest on Node and the
   global setup refuses it. A child a test starts runs `process.execPath` or `bunRuntime()`
-  (`tests/helpers/bun-runtime.ts`), never `node`, `tsx` or `npx`. Only the Playwright runner
-  stays on Node; its fixture servers run on bun.
+  (`tests/helpers/bun-runtime.ts`), never `node`, `tsx` or `npx`. The Playwright runner stays
+  on Node (its fixture servers run on bun), and so does what a user runs on Node: a test that
+  runs npm skips without it (`npmOnPath()`, `tests/helpers/npm-on-path.ts`) and is listed in
+  `test:npm-channel` or `test:plugin-packages`; the twin suites run the daemon's JS twin on the
+  real Node when there is one (`tests/helpers/source-twin.ts`). CI runs those in `node-side`.
 - **Live cloud journeys** (`tests/e2e/cloud-mobile-journey.live.test.ts`): run via
   `bun run test:live:cloud`: the runner script derives the cloud URL + device token from the
   data repo's git remote and injects them via env (zero secrets in the repo; in-process

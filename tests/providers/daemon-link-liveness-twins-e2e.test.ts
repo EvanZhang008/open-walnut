@@ -30,14 +30,15 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { BRIDGE_WATCHDOG, bridgeSilenceTeardownMs } from '../../src/providers/daemon-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 let scriptPath = ''
 type Twin = { name: string; command: () => [string, string[]] }
-const SOURCE_TWIN: Twin = { name: 'source twin', command: () => [process.execPath, [scriptPath, '--start']] }
+const SOURCE_DAEMON: Twin = { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] }
 const BUN_TWIN: Twin | null = BUN ? { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] } : null
-const TWINS: Twin[] = [SOURCE_TWIN, ...(BUN_TWIN ? [BUN_TWIN] : [])]
+const TWINS: Twin[] = [SOURCE_DAEMON, ...(BUN_TWIN ? [BUN_TWIN] : [])]
 
 /** The trusted-client beat and the bridge ping interval the tests run at. */
 const BEAT = 200

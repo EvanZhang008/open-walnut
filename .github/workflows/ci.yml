@@ -46,11 +46,13 @@ jobs:
   # that load step alone (~20s, no browser, no server). The plugin packages,
   # checked the way an outside plugin author uses them: packed and installed
   # with npm, scaffolded, built and tested on Node (scripts/check-plugin-packages.mjs).
-  # And the npm channel: a user's `npm install -g open-walnut` and npm's own file
-  # lists, which the Node-free jobs skip. The vitest runs stay on bun;
-  # WALNUT_REQUIRE_NPM in the scripts makes a missing npm fail instead of skip.
+  # The npm channel: a user's `npm install -g open-walnut` and npm's own file
+  # lists, which the Node-free jobs skip. And the daemon's JS twin on Node, as a
+  # host without the compiled daemon runs it (the Node-free jobs run it on bun).
+  # The vitest runs stay on bun; WALNUT_REQUIRE_NPM / WALNUT_REQUIRE_NODE in the
+  # scripts make a missing npm or Node fail instead of skip.
   node-side:
-    name: Node side (browser specs load, plugin packages, npm channel)
+    name: Node side (browser specs load, plugin packages, npm channel, JS daemon on Node)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -65,6 +67,7 @@ jobs:
         run: bun x playwright test --list --project=chromium > /dev/null
       - run: bun run test:plugin-packages
       - run: bun run test:npm-channel
+      - run: bun run test:source-twin-node
 
   # ── Gate 2: the test tiers that are genuinely green, so they can BLOCK ──────
   #
@@ -579,7 +582,7 @@ jobs:
           # None of these jobs uses continue-on-error, so the values are unambiguous.
           failed=0
           [ "${{ needs.build.result }}" = "success" ] || { echo "::error::build failed"; failed=1; }
-          [ "${{ needs.node-side.result }}" = "success" ] || { echo "::error::a browser spec failed to load, or a Node check failed (plugin packages, npm channel)"; failed=1; }
+          [ "${{ needs.node-side.result }}" = "success" ] || { echo "::error::a browser spec failed to load, or a Node check failed (plugin packages, npm channel, JS daemon on Node)"; failed=1; }
           [ "${{ needs.test.result }}" = "success" ] || { echo "::error::a blocking test tier failed"; failed=1; }
           [ "${{ needs.test-heavy.result }}" = "success" ] || { echo "::error::the slow tier failed"; failed=1; }
           [ "${{ needs.test-e2e.result }}" = "success" ] || { echo "::error::the e2e tier failed: a failure not in tests/setup/known-failures-e2e.json, or a run that crashed"; failed=1; }

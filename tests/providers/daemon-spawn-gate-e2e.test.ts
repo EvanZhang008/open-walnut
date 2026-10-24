@@ -22,6 +22,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { HOST_RUNTIME_MESSAGES } from '../../src/providers/host-runtime-core.js'
 import { claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let scriptPath = ''
 let root = ''
@@ -29,7 +30,7 @@ const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 type Twin = { name: string; command: () => [string, string[]] }
 const TWINS: Twin[] = [
-  { name: 'source twin', command: () => [process.execPath, [scriptPath, '--start']] },
+  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 let twin: Twin = TWINS[0]

@@ -18,6 +18,7 @@ import {
 } from './exec-guard-core.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { assertNotProductionPath } from '../../src/constants.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const THIS_FILE = 'tests/setup/exec-guard.test.ts'
 
@@ -188,7 +189,7 @@ const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/
 const STANDALONE = path.resolve(import.meta.dirname, '../../src/providers/daemon-standalone.ts')
 type Twin = { name: string; command: (script: string) => [string, string[]] }
 const TWINS: Twin[] = [
-  { name: 'source twin', command: (script) => [process.execPath, [script, '--start']] },
+  { name: `source twin (${SOURCE_TWIN.runtime})`, command: (script) => [SOURCE_TWIN.file, [script, '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 

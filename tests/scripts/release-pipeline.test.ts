@@ -951,8 +951,10 @@ describe('ci.yml', () => {
     expect((doc.jobs['node-side']!.steps as Array<{ 'continue-on-error'?: boolean }>).some((s) => s['continue-on-error'])).toBe(false)
   })
 
-  it('the npm channel runs where Node and npm are, and blocks', () => {
-    // The Node-free jobs skip the npm tests; a user's npm is checked here.
+  it('the npm channel and the daemon\'s JS twin on Node run where Node is, and block', () => {
+    // The Node-free jobs skip the npm tests and run the JS twin on bun; a user's npm
+    // and a host's Node are checked here.
     expect(runs('node-side')).toContain('bun run test:npm-channel')
+    expect(runs('node-side')).toContain('bun run test:source-twin-node')
   })
 })

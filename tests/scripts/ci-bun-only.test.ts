@@ -32,7 +32,7 @@ const NODE_FREE: Record<string, string[]> = {
 /** Jobs that keep Node, each for a reason. */
 const KEEPS_NODE: Record<string, Record<string, string>> = {
   'ci.yml': {
-    'node-side': 'the Playwright runner (spec load), a plugin author\'s npm toolchain, the npm channel',
+    'node-side': 'the Playwright runner (spec load), a plugin author\'s npm toolchain, the npm channel, the JS daemon on Node',
     browser: 'the Playwright runner',
     onboarding: 'the npm channel: a user installs with npm on their own Node',
     rehearsal: 'the npm channel: the release package installed with npm 12',
@@ -264,5 +264,16 @@ describe('scripts/ci-remove-node.sh', () => {
     const asked = fs.readFileSync(s.sudoLog, 'utf8').trim().split('\n')
     expect(asked[0]).toBe(`rm -f ${path.join(locked, 'node')}`)
     expect(asked.length).toBe(6)
+  })
+})
+
+describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
+  it('test:source-twin-node requires Node and runs every suite whose source twin follows tests/helpers/source-twin.ts', () => {
+    const script = SCRIPTS['test:source-twin-node']!
+    expect(vitestPartsOf(script).length).toBeGreaterThan(0)
+    for (const part of vitestPartsOf(script)) expect(part).toMatch(/^WALNUT_REQUIRE_NODE=1 bun --bun vitest run .* -t 'source twin \\\(node\\\)' /)
+    const suites = [...testSources()].filter(([, text]) => text.includes('SOURCE_TWIN.file')).map(([f]) => f)
+    expect(suites.length).toBeGreaterThan(10)
+    for (const f of suites) expect(script, f).toContain(f)
   })
 })
