@@ -24,9 +24,10 @@
  */
 import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { TARGETS, assetName, builtName, writeAssets } from '../../scripts/release-files.mjs'
 import { ghCalls, installFakeGh, isDraft, makeRelease, releaseAssets } from './fake-gh-release.js'
@@ -84,10 +85,40 @@ function gitIn(cwd: string, ...args: string[]): string {
 const atOrigin = (...args: string[]) => gitIn(origin, ...args)
 
 /**
+ * The documents installers read, which the publish waits on before the launcher
+ * (npm-packages.mjs installerSees): the abbreviated document and the version's
+ * own, of what this run published, or of every version when FAKE_REGISTRY_HAS=1.
+ */
+let registryServer: http.Server
+let registryUrl = ''
+const registryReads: string[] = []
+beforeAll(async () => {
+  registryServer = http.createServer((req, res) => {
+    registryReads.push(`${req.headers.accept} ${req.url}`)
+    const [, rawName, version] = /^\/([^/]+)(?:\/([^/]+))?$/.exec(req.url ?? '') ?? []
+    const name = decodeURIComponent(rawName ?? '')
+    const sent = path.join(state, 'npm-published')
+    const published = fs.existsSync(sent) ? fs.readFileSync(sent, 'utf8').split('\n').filter(Boolean) : []
+    const known = (v: string) => fs.existsSync(path.join(state, 'registry-has')) || published.includes(`${name}@${v}`)
+    const versions = [...new Set([VERSION, ...published.filter((p) => p.startsWith(`${name}@`)).map((p) => p.slice(name.length + 1))])].filter(known)
+    const answer = version === undefined
+      ? (versions.length ? { name, versions: Object.fromEntries(versions.map((v) => [v, { name, version: v }])) } : null)
+      : (known(decodeURIComponent(version)) ? { name, version: decodeURIComponent(version) } : null)
+    res.writeHead(answer ? 200 : 404, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(answer ?? { error: 'Not found' }))
+  })
+  await new Promise<void>((r) => registryServer.listen(0, '127.0.0.1', () => r()))
+  registryUrl = `http://127.0.0.1:${(registryServer.address() as { port: number }).port}`
+})
+afterAll(async () => { await new Promise((r) => registryServer.close(r)) })
+
+/**
  * One promote step's `run`, the way Actions runs a step with no `shell:` (bash -e,
  * no pipefail), with the job's step env.
  */
 function runStep(step: Step, extra: Record<string, string> = {}, binFirst?: string): Promise<{ code: number; out: string }> {
+  if (extra.FAKE_REGISTRY_HAS === '1') fs.writeFileSync(path.join(state, 'registry-has'), '')
+  else fs.rmSync(path.join(state, 'registry-has'), { force: true })
   const values: Record<string, string> = { GH_TOKEN: 'test-token', GH_REPO: 'example/open-walnut', VERSION, SHA: released, TAG: RELEASE }
   const env: Record<string, string> = {}
   for (const key of Object.keys(step.env ?? {})) {
@@ -100,7 +131,7 @@ function runStep(step: Step, extra: Record<string, string> = {}, binFirst?: stri
     execFile('bash', ['--noprofile', '--norc', '-e', '-c', step.run!], {
       cwd: job,
       encoding: 'utf8',
-      env: cleanEnv({ ...env, PATH, RUNNER_TEMP: runner, FAKE_STATE: state, ...extra }),
+      env: cleanEnv({ ...env, PATH, RUNNER_TEMP: runner, FAKE_STATE: state, npm_config_registry: registryUrl, ...extra }),
     }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : 1) : 0
       resolve({ code, out: `${stdout}${stderr}` })
@@ -118,11 +149,10 @@ const log = (name: string): string[] => {
 const FAKE_NPM = `#!/usr/bin/env node
 const fs = require('fs'), path = require('path')
 fs.appendFileSync(path.join(process.env.FAKE_STATE, 'npm.log'), process.argv.slice(2).join(' ') + '\\n')
-// What this run published; an installer's look (--prefer-online) sees it at once.
+// What this run published: the registry installers read (registryServer) serves it at once.
 const sent = path.join(process.env.FAKE_STATE, 'npm-published')
 if (process.argv[2] === 'view') {
-  const seen = process.argv.includes('--prefer-online') && fs.existsSync(sent) && fs.readFileSync(sent, 'utf8').split('\\n').includes(process.argv[3])
-  if (process.env.FAKE_REGISTRY_HAS !== '1' && !seen) { process.stderr.write('npm error 404 Not Found\\n'); process.exit(1) }
+  if (process.env.FAKE_REGISTRY_HAS !== '1') { process.stderr.write('npm error 404 Not Found\\n'); process.exit(1) }
   process.stdout.write(process.argv[3].slice(process.argv[3].lastIndexOf('@') + 1) + '\\n')
   process.exit(0)
 }
@@ -288,6 +318,12 @@ describe('release.yml promote steps', { timeout: 120_000 }, () => {
       const pkg = path.join(runner, 'release', 'npm', '@open-walnut', target)
       expect(fs.readFileSync(path.join(pkg, 'walnut')).equals(fs.readFileSync(path.join(files, builtName(target)))), target).toBe(true)
       expect(JSON.parse(fs.readFileSync(path.join(pkg, 'package.json'), 'utf8'))).toMatchObject({ version: VERSION, gitHead: released })
+    }
+
+    // Before the launcher: each platform package's documents, as a fresh install reads them.
+    for (const { target } of TARGETS) {
+      expect(registryReads).toContain(`application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */* /@open-walnut%2f${target}`)
+      expect(registryReads).toContain(`application/json /@open-walnut%2f${target}/${VERSION}`)
     }
 
     // An annotated tag on the released commit, not on main.

@@ -15,7 +15,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { TARGETS, assetName, builtName, fileName, filesIn, writeAssets } from '../../scripts/release-files.mjs'
-import { LAUNCHER, LAUNCHER_LIB, buildPackages, launcherManifest, platformManifest, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
+import { INSTALL_ACCEPT, LAUNCHER, LAUNCHER_LIB, buildPackages, installerSees, launcherManifest, platformManifest, probeRegistry, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
 import { createRequire } from 'node:module'
 import { formula } from '../../scripts/homebrew/formula.mjs'
 import { hostTarget } from '../../scripts/release-build.mjs'
@@ -188,6 +188,36 @@ describe('npm-packages.mjs', () => {
     order.length = 0
     expect(() => publishPackages({ dir: out, tag: 'latest', run: ok, has: () => false, log: () => {}, waitVisible: (() => { throw new Error('not seen') }) as never })).toThrow('not seen')
     expect(order).not.toContain(LAUNCHER)
+  })
+
+  it('a rerun waits for the platform packages an earlier run published too: on the registry is not yet seen', () => {
+    const order: string[] = []
+    const ok = ((_cmd: string, args: string[]) => { order.push(path.basename(args[1])); return { status: 0, stdout: '', stderr: '' } }) as never
+    let waitedFor: Array<[string, string]> = []
+    publishPackages({ dir: out, tag: 'latest', run: ok, has: (name: string) => name !== LAUNCHER, log: () => {}, waitVisible: ((pkgs: Array<[string, string]>) => { waitedFor = [...pkgs] }) as never })
+    expect(order).toEqual([LAUNCHER])
+    expect(waitedFor).toEqual(TARGETS.map((t) => [`@open-walnut/${t.target}`, VERSION]))
+  })
+
+  it('an installer sees a version once the abbreviated document npm installs from and the version\'s own both name it', () => {
+    const R = 'https://r.example'
+    const asked: string[] = []
+    const get = (docs: Record<string, unknown>) => (url: string, accept: string) => {
+      asked.push(`${accept} ${url}`)
+      return docs[url] ? { status: 200, body: JSON.stringify(docs[url]) } : { status: 404, body: '' }
+    }
+    const index = { [`${R}/@open-walnut%2fa`]: { versions: { '1.0.0': {} } } }
+    // The CDN still holds the version's own document from before it existed.
+    expect(installerSees('@open-walnut/a', '1.0.0', R, get(index))).toBe(false)
+    expect(asked).toEqual([`${INSTALL_ACCEPT} ${R}/@open-walnut%2fa`, `application/json ${R}/@open-walnut%2fa/1.0.0`])
+    expect(installerSees('@open-walnut/a', '1.0.0', R, get({ ...index, [`${R}/@open-walnut%2fa/1.0.0`]: { version: '1.0.0' } }))).toBe(true)
+    asked.length = 0
+    expect(installerSees('@open-walnut/a', '1.0.0', R, get({ [`${R}/@open-walnut%2fa`]: { versions: { '0.9.0': {} } }, [`${R}/@open-walnut%2fa/1.0.0`]: { version: '1.0.0' } }))).toBe(false)
+    expect(asked).toHaveLength(1)
+    expect(installerSees('open-walnut', '1.0.0', R, get({ [`${R}/open-walnut`]: { versions: { '1.0.0': {} } }, [`${R}/open-walnut/1.0.0`]: { version: '1.0.0' } }))).toBe(true)
+    expect(probeRegistry(null, { npm_config_registry: 'http://m.example/npm/' })).toBe('http://m.example/npm')
+    expect(probeRegistry('http://x.example/', { npm_config_registry: 'http://m.example' })).toBe('http://x.example')
+    expect(probeRegistry(null, {})).toBe('https://registry.npmjs.org')
   })
 
   it('waitUntilVisible polls until every package is seen, and gives up at its deadline', () => {

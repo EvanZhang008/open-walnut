@@ -194,12 +194,38 @@ function onRegistry(name, version, extra) {
 
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
+/** The registry installers read: --registry, else npm's own environment setting, else npm's default. */
+export function probeRegistry(registry = null, env = process.env) {
+  return (registry || env.npm_config_registry || env.NPM_CONFIG_REGISTRY || 'https://registry.npmjs.org').replace(/\/+$/, '')
+}
+
+/** What npm's install asks for: the abbreviated document (what lib/postinstall.js reads is the version's own). */
+export const INSTALL_ACCEPT = 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*'
+
+/** GET `url` with `accept`, from this synchronous script: { status, body } ({ status: 0 } when nothing answered). */
+function getSync(url, accept) {
+  const script = 'fetch(process.argv[1], { headers: { accept: process.argv[2] }, signal: AbortSignal.timeout(60000) })'
+    + '.then(async (r) => process.stdout.write(JSON.stringify({ status: r.status, body: r.ok ? await r.text() : "" })),'
+    + ' (e) => process.stdout.write(JSON.stringify({ status: 0, body: String(e) })))'
+  const r = spawnSync(process.execPath, ['-e', script, url, accept], { encoding: 'utf8', timeout: 90_000, maxBuffer: 256 << 20 })
+  try { return JSON.parse(r.stdout) } catch { return { status: 0, body: r.stderr ?? '' } }
+}
+
+const jsonOf = (res) => { try { return res.status === 200 ? JSON.parse(res.body) : null } catch { return null } }
+
 /**
- * Does an installer see name@version now? npm asks the registry itself, past
- * its own cache (--prefer-online), the way an install right after a publish does.
+ * Does an installer see name@version now? Each document a fresh install reads,
+ * as it reads it (no cache-busting: the registry's CDN caches each document on
+ * its own, and serves the copy it holds): the abbreviated document npm resolves
+ * the launcher's optional dependencies from, and the version's own document
+ * lib/postinstall.js fetches a left-out one by.
  */
-export function installerSees(name, version, extra = []) {
-  return onRegistry(name, version, [...extra, '--prefer-online'])
+export function installerSees(name, version, registry = probeRegistry(), get = getSync) {
+  const at = `${registry}/${name.replace('/', '%2f')}`
+  const index = jsonOf(get(at, INSTALL_ACCEPT))
+  if (!index || !index.versions || !index.versions[version]) return false
+  const doc = jsonOf(get(`${at}/${encodeURIComponent(version)}`, 'application/json'))
+  return Boolean(doc && doc.version === version)
 }
 
 /** How long the launcher waits for its platform packages to be seen by installers. */
@@ -212,11 +238,11 @@ export const VISIBLE_WAIT = { everyMs: 15_000, forMs: 20 * 60_000 }
  * before its platform packages installs as a launcher with no file. Throws when
  * they are still not seen: the launcher is not published, and a re-run finishes.
  */
-export function waitUntilVisible(pkgs, { sees = installerSees, extra = [], wait = VISIBLE_WAIT, sleep = sleepSync, log = () => {}, now = Date.now } = {}) {
+export function waitUntilVisible(pkgs, { sees = installerSees, registry = probeRegistry(), wait = VISIBLE_WAIT, sleep = sleepSync, log = () => {}, now = Date.now } = {}) {
   const deadline = now() + wait.forMs
   let missing = pkgs
   for (;;) {
-    missing = missing.filter(([name, version]) => !sees(name, version, extra))
+    missing = missing.filter(([name, version]) => !sees(name, version, registry))
     if (missing.length === 0) return
     if (now() >= deadline) throw new Error(`installers still do not see ${missing.map(([n, v]) => `${n}@${v}`).join(', ')} after ${Math.round(wait.forMs / 60_000)} min; not publishing the launcher (run the publish again to finish it)`)
     log(`waiting for installers to see ${missing.map(([n, v]) => `${n}@${v}`).join(', ')}`)
@@ -231,10 +257,10 @@ export function publishPackages({ dir, tag, provenance = false, dryRun = false, 
   for (const pkg of publishOrder(dir)) {
     const { name, version } = JSON.parse(fs.readFileSync(path.join(pkg, 'package.json'), 'utf8'))
     // The launcher only once every file it names can be installed.
-    if (name === LAUNCHER && !dryRun) waitVisible(platforms, { extra, log })
-    if (!dryRun && has(name, version, extra)) { log(`${name}@${version} is already on npm; not publishing it again`); continue }
-    // Seen on the registry already, or about to be published: only the latter is waited for.
+    if (name === LAUNCHER && !dryRun) waitVisible(platforms, { registry: probeRegistry(registry), log })
+    // Every one, published now or by an earlier run: on the registry is not yet seen by installers.
     if (name !== LAUNCHER) platforms.push([name, version])
+    if (!dryRun && has(name, version, extra)) { log(`${name}@${version} is already on npm; not publishing it again`); continue }
     const args = ['publish', pkg, '--tag', tag, '--access', 'public', ...(provenance ? ['--provenance'] : []), ...(dryRun ? ['--dry-run'] : []), ...extra]
     const r = run('npm', args, { encoding: 'utf8', timeout: 20 * 60_000, maxBuffer: 64 << 20 })
     const output = npmOut(r)
