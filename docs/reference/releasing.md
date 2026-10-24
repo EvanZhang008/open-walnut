@@ -564,7 +564,9 @@ guess):
   download in the server; npm detached, its output in `~/.open-walnut/local/update-install.log`,
   so a stopped server or a closed pipe never ends it half way, and a record keeps the next start
   from running a second npm into the same prefix); once it is in, the update card says
-  `<version> installed` and a restart runs it. A failed install or a registry that does not
+  `<version> installed` and a restart runs it, watched as the restart after an install is (one
+  that exits before it serves is gone back from; `~/.open-walnut/local/update-unverified.json`
+  names it until that start). A failed install or a registry that does not
   answer prints one line and starts the current version; a signal while it runs starts nothing
   (a file download cleans up; npm finishes by itself). After an npm install, the launcher must start the new version (npm
   can skip its platform package): one more install, else the version before goes back. The

@@ -133,3 +133,22 @@ let installedVersion: string | null = null
 /** A version this server installed after it started: a restart runs it. */
 export function noteInstalledInBackground(version: string): void { installedVersion = version }
 export function installedInBackground(): string | null { return installedVersion }
+
+/** The version a background install put in, and the one it replaced, until its first start. */
+export function readUnverified(file: string): { version: string; from: string } | null {
+  try {
+    const v = JSON.parse(fs.readFileSync(file, 'utf8')) as { version?: unknown; from?: unknown }
+    return typeof v.version === 'string' && typeof v.from === 'string' ? { version: v.version, from: v.from } : null
+  } catch {
+    return null
+  }
+}
+
+export function writeUnverified(file: string, pending: { version: string; from: string } | null): void {
+  try {
+    if (!pending) { fs.rmSync(file, { force: true }); return }
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, `${JSON.stringify(pending)}\n`)
+  } catch { /* without it, that start is not watched; nothing else changes */ }
+}
+

@@ -20,7 +20,9 @@
  * Mac app gives it 180 s, then stops it) must not wait for npm. An install that
  * takes longer goes on in the background (background-install.ts: npm detached,
  * its output in a file, never killed half way) while the version in use starts
- * and serves; once it is in, the update card says a restart runs it.
+ * and serves; once it is in, the update card says a restart runs it, and that
+ * version's first start is watched as the restart after an install is (below),
+ * so one that fails to start is gone back from all the same.
  *
  * Failure is never fatal: a registry that does not answer, an installer that
  * exits non-zero or cannot start all print one line and the old version starts.
@@ -171,6 +173,13 @@ export interface StartupUpdateDeps {
   busy?: () => Promise<string | null>
   /** A version installed after the budget ran out, with the server already up: a restart runs it. */
   installedLater?: (version: string) => void
+  /**
+   * The version a start before this one installed after its budget ran out, and the one it
+   * replaced: its first start is watched as a restart after an update is (startInstalled).
+   */
+  unverified?: () => Promise<{ version: string; from: string } | null>
+  /** Remember (or, with null, forget) that version until its first start. */
+  markUnverified?: (pending: { version: string; from: string } | null) => void
   /** The file's own update (binary-install.ts installFileVersion); throws with the reason. Resolves to the version it replaced. */
   installFile?: (install: BinaryInstall, version: string, signal: AbortSignal) => Promise<{ from: string | null } | void>
   /** What the install's relaunch prints for `--version`, or null when it does not run. */
@@ -215,10 +224,24 @@ export async function updateOnStart(deps: StartupUpdateDeps): Promise<StartupUpd
   const applied = deps.env[APPLIED_ENV] === '1'
   if (applied) return { kind: 'continue', decision: { action: 'skip', reason: 'applied' } }
   if (deps.env[LAUNCHER_UPDATES_ENV] === '1') return { kind: 'continue', decision: { action: 'skip', reason: 'launcher' } }
+  // The first start of a version an earlier start installed in the background: watched as the
+  // restart after an install is, so one that exits before it serves is gone back from.
+  const pending = await deps.unverified?.().catch(() => null)
+  let checked: UpdateStatus | null = null
+  if (pending) {
+    checked = await deps.checkNow()
+    if (pending.version === checked.current && pending.from !== pending.version) {
+      deps.markUnverified?.(null)
+      deps.err(`Open Walnut ${pending.version} went in while ${pending.from} served; starting it.`)
+      return startInstalled(deps, checked, pending.version, pending.from)
+    }
+    // Not in: the install still runs (its first start comes later), or it failed.
+    if (!(await deps.busy?.().catch(() => null))) deps.markUnverified?.(null)
+  }
   const auto = autoUpdateEnabled(await deps.configAuto().catch(() => undefined), deps.env)
   // Nothing to ask when the answer cannot lead to an install: no registry call at all.
   if (!auto) return { kind: 'continue', decision: { action: 'skip', reason: 'off' } }
-  const status = await deps.checkNow()
+  const status = checked ?? await deps.checkNow()
   const binary = status.install.kind === 'binary' ? status.install.binary ?? null : null
   const writable = binary ? (deps.binaryWritable ?? binaryRootWritable)(binary.root) : deps.writable(status.install.packageRoot)
   const held = status.available && status.latest ? deps.held?.(status) ?? null : null
@@ -242,13 +265,16 @@ export async function updateOnStart(deps: StartupUpdateDeps): Promise<StartupUpd
   // Out of time, the install goes on and the version in use starts now.
   const goOn = (done: Promise<boolean>): StartupUpdateOutcome => {
     deps.err(`Open Walnut ${decision.version} is still installing; starting ${status.current} now. The install goes on, and the next start runs ${decision.version}.`)
+    deps.markUnverified?.({ version: decision.version, from: status.current })
     const later = done.then((ok) => {
       if (ok) {
         deps.installedLater?.(decision.version)
         deps.err(`Installed Open Walnut ${decision.version}; restart Walnut to use it.`)
+      } else {
+        deps.markUnverified?.(null)
       }
       return ok
-    }, () => false)
+    }, () => { deps.markUnverified?.(null); return false })
     return { kind: 'continue', decision, later }
   }
   try {
@@ -291,6 +317,7 @@ export async function updateOnStart(deps: StartupUpdateDeps): Promise<StartupUpd
             job.quiet()
             const signal = stop.received()
             if (signal) {
+              deps.markUnverified?.({ version: decision.version, from: status.current })
               deps.err(`Stopped by ${signal}; the install of ${decision.version} finishes by itself, and the next start runs it.`)
               return { kind: 'stopped', signal }
             }
@@ -407,10 +434,11 @@ export async function runStartupUpdate(configAuto: () => Promise<boolean | undef
   const { UpdateChecker } = await import('./update-check.js')
   const { installFileVersion, registryBaseFor, rollBack, undoRollBack } = await import('./binary-install.js')
   const { badDirFor, clearBad, heldBack, markBad } = await import('./held-versions.js')
-  const { installRunning, noteInstalledInBackground, startDetachedInstall } = await import('./background-install.js')
+  const { installRunning, noteInstalledInBackground, readUnverified, startDetachedInstall, writeUnverified } = await import('./background-install.js')
   const { WALNUT_HOME } = await import('../../constants.js')
   const err = (line: string) => { process.stderr.write(`${line}\n`) }
   const record = path.join(WALNUT_HOME, 'local', 'update-installing.json')
+  const unverifiedFile = path.join(WALNUT_HOME, 'local', 'update-unverified.json')
   return updateOnStart({
     checkNow: () => new UpdateChecker().checkNow(),
     configAuto,
@@ -424,6 +452,8 @@ export async function runStartupUpdate(configAuto: () => Promise<boolean | undef
       return job ? `the install of ${job.version} an earlier start began still runs (pid ${job.pid})` : null
     },
     installedLater: noteInstalledInBackground,
+    unverified: async () => readUnverified(unverifiedFile),
+    markUnverified: (pending) => writeUnverified(unverifiedFile, pending),
     installFile: async (install, version, signal) => {
       const done = await installFileVersion({ install, version, registry: registryBaseFor(process.env.WALNUT_UPDATE_REGISTRY_URL), log: err, signal })
       return { from: done.from }

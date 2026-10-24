@@ -93,3 +93,17 @@ describe('installRunning', () => {
     expect(await installRunning(record)).toBeNull()
   })
 })
+
+describe('the pending version', () => {
+  it('is written, read back, and forgotten', async () => {
+    const { readUnverified, writeUnverified } = await import('../../../src/core/self-update/background-install.js')
+    const file = path.join(dir, 'local', 'update-unverified.json')
+    expect(readUnverified(file)).toBeNull()
+    writeUnverified(file, { version: '0.6.0', from: '0.5.1' })
+    expect(readUnverified(file)).toEqual({ version: '0.6.0', from: '0.5.1' })
+    writeUnverified(file, null)
+    expect(fs.existsSync(file)).toBe(false)
+    fs.writeFileSync(file, '{"version":1}')
+    expect(readUnverified(file)).toBeNull()
+  })
+})

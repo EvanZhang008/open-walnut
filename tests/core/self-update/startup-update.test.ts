@@ -285,7 +285,8 @@ describe('an npm install that did not bring its file', () => {
 describe('the start\'s own end', () => {
   it('a download longer than the budget goes on: the version in use starts now, and the card says a restart runs the new one', async () => {
     const installedLater = vi.fn()
-    const { d, err, reexec, stop } = deps(FILE, { binaryWritable: () => true, installedLater })
+    const markUnverified = vi.fn()
+    const { d, err, reexec, stop } = deps(FILE, { binaryWritable: () => true, installedLater, markUnverified })
     let finish!: () => void
     let seen: AbortSignal | null = null
     d.installFile = (_install, _version, signal) => new Promise((resolve, reject) => {
@@ -300,6 +301,8 @@ describe('the start\'s own end', () => {
     expect(seen!.aborted).toBe(false)
     expect(reexec).not.toHaveBeenCalled()
     expect(err.at(-1)).toBe('Open Walnut 0.6.0 is still installing; starting 0.5.1 now. The install goes on, and the next start runs 0.6.0.')
+    // Its first start is watched, whichever process makes it.
+    expect(markUnverified).toHaveBeenLastCalledWith({ version: '0.6.0', from: '0.5.1' })
     finish()
     expect(await (out as { later: Promise<boolean> }).later).toBe(true)
     expect(installedLater).toHaveBeenCalledWith('0.6.0')
@@ -364,13 +367,56 @@ describe('the start\'s own end', () => {
 
   it('a signal while npm installs starts nothing, and npm finishes by itself', async () => {
     const job = { done: new Promise<number>(() => {}), quiet: vi.fn() }
-    const { d, err, reexec, stop } = deps(BASE, { startInstall: () => job })
+    const markUnverified = vi.fn()
+    const { d, err, reexec, stop } = deps(BASE, { startInstall: () => job, markUnverified })
     const pending = updateOnStart(d)
     await Promise.resolve()
     stop.fire(new Error('stopped by SIGTERM'), 'SIGTERM')
     expect(await pending).toEqual({ kind: 'stopped', signal: 'SIGTERM' })
     expect(reexec).not.toHaveBeenCalled()
     expect(err.at(-1)).toBe('Stopped by SIGTERM; the install of 0.6.0 finishes by itself, and the next start runs it.')
+    expect(markUnverified).toHaveBeenCalledWith({ version: '0.6.0', from: '0.5.1' })
+  })
+
+  it('the first start of a version that went in after the budget is watched: one that exits before it serves is gone back from', async () => {
+    const markUnverified = vi.fn()
+    const rollBack = vi.fn(async () => {})
+    const reexec = vi.fn().mockResolvedValueOnce(ended({ exitCode: 1, served: false, ms: 800 })).mockResolvedValueOnce(ended())
+    const now = { ...BASE, current: '0.6.0', available: false }
+    const { d, err, run } = deps(now, { unverified: async () => ({ version: '0.6.0', from: '0.5.1' }), markUnverified, rollBack, reexec })
+    expect(await updateOnStart(d)).toEqual({ kind: 'reexeced', version: '0.5.1', exitCode: 0, rolledBackFrom: '0.6.0' })
+    expect(err[0]).toBe('Open Walnut 0.6.0 went in while 0.5.1 served; starting it.')
+    expect(reexec).toHaveBeenCalledWith({ [APPLIED_ENV]: '1' }, now.install)
+    expect(rollBack).toHaveBeenCalledWith(now, '0.5.1', '0.6.0', 'exited with 1 before it served')
+    expect(markUnverified).toHaveBeenCalledWith(null)
+    expect(run).not.toHaveBeenCalled()
+    // One that serves is simply running.
+    const ok = deps(now, { unverified: async () => ({ version: '0.6.0', from: '0.5.1' }), markUnverified: vi.fn() })
+    expect(await updateOnStart(ok.d)).toEqual({ kind: 'reexeced', version: '0.6.0', exitCode: 0 })
+  })
+
+  it('a pending version that is not in yet: kept while its install runs, forgotten when it failed', async () => {
+    const pending = async () => ({ version: '0.6.0', from: '0.5.1' })
+    const running = vi.fn()
+    const a = deps(BASE, { unverified: pending, markUnverified: running, busy: async () => 'the install of 0.6.0 an earlier start began still runs (pid 7)' })
+    expect(await updateOnStart(a.d)).toMatchObject({ kind: 'continue', decision: { action: 'skip', reason: 'installing' } })
+    expect(running).not.toHaveBeenCalled()
+    expect(a.checkNow).toHaveBeenCalledTimes(1)
+    const failedInstall = vi.fn()
+    const b = deps(BASE, { unverified: pending, markUnverified: failedInstall })
+    expect(await updateOnStart(b.d)).toMatchObject({ kind: 'reexeced', version: '0.6.0' })
+    expect(failedInstall).toHaveBeenCalledWith(null)
+  })
+
+  it('a background install that fails forgets the pending version', async () => {
+    const markUnverified = vi.fn()
+    const { d, stop } = deps(BASE, { startInstall: () => ({ done: new Promise((r) => setTimeout(() => r(1), 5)), quiet: () => {} }), markUnverified })
+    const pending = updateOnStart(d)
+    await Promise.resolve()
+    stop.fire(new Error('it took longer than 60 s'))
+    const out = await pending
+    expect(await (out as { later: Promise<boolean> }).later).toBe(false)
+    expect(markUnverified.mock.calls).toEqual([[{ version: '0.6.0', from: '0.5.1' }], [null]])
   })
 
   it('an install an earlier start began and that still runs: no second npm into the same prefix', async () => {
