@@ -497,11 +497,11 @@ describe('release.yml', () => {
     expect(doc.permissions['id-token']).toBe('write')
     expect(doc.permissions.actions).toBe('read')
     expect(text).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN|registry-url/)
-    expect(runs('stable')).toContain('node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance')
-    expect(runs('nightly')).toContain('node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag nightly --provenance')
-    expect(runs('promote')).toContain('node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance')
+    expect(runs('stable')).toContain('bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance')
+    expect(runs('nightly')).toContain('bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag nightly --provenance')
+    expect(runs('promote')).toContain('bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance')
     for (const job of ['stable', 'nightly', 'promote']) expect(runs(job), job).toContain('npm install -g npm@12')
-    expect(runs('nightly-build')).toContain('node scripts/nightly-version.mjs')
+    expect(runs('nightly-build')).toContain('bun scripts/nightly-version.mjs')
     // The repo's own package is the development one: no job publishes it.
     expect(text).not.toMatch(/npm publish|npm version/)
     // Only the publishing jobs may write.
@@ -516,7 +516,7 @@ describe('release.yml', () => {
       expect(bun?.with?.['bun-version'], build).toBe('1.4.4')
       expect(runs(build), build).not.toContain('npm ci')
       const install = stepIndex(build, 'bun install --frozen-lockfile')
-      const made = stepIndex(build, `node scripts/release-build.mjs --version ${version} --out "$RUNNER_TEMP/release"`)
+      const made = stepIndex(build, `bun scripts/release-build.mjs --version ${version} --out "$RUNNER_TEMP/release"`)
       expect(job['runs-on'], build).toBe(BUILD_RUNNER)
       expect(install, build).toBeGreaterThan(-1)
       expect(made, build).toBeGreaterThan(install)
@@ -538,7 +538,7 @@ describe('release.yml', () => {
   it('every job that builds the files runs on macOS, here and in the binary matrix', () => {
     // build-binary.mjs builds the darwin files' SQLite with clang and refuses to off macOS.
     for (const [name, job] of Object.entries(doc.jobs)) {
-      const build = job.steps?.findIndex((s) => (s.run ?? '').includes('node scripts/release-build.mjs')) ?? -1
+      const build = job.steps?.findIndex((s) => (s.run ?? '').includes('bun scripts/release-build.mjs')) ?? -1
       if (build < 0) continue
       expect(job['runs-on'], name).toBe(BUILD_RUNNER)
     }
@@ -556,19 +556,20 @@ describe('release.yml', () => {
       expect(call.with, files).toEqual({ files: `\${{ needs.${build}.outputs.files }}`, version: versionOut, ref })
       expect(call.permissions, files).toEqual({ contents: 'read' })
       expect(needsOf(publish), publish).toEqual(expect.arrayContaining([build, files]))
-      // The publishing job builds nothing.
+      // The publishing job builds nothing: bun runs the scripts that pack and publish, from
+      // the checkout alone (no install, no build).
       const all = JSON.stringify(doc.jobs[publish])
-      for (const banned of ['release-build.mjs', 'build-binary.mjs', 'setup-bun', 'bun install']) expect(all, `${publish} ${banned}`).not.toContain(banned)
+      for (const banned of ['release-build.mjs', 'build-binary.mjs', 'bun install', 'bun run build']) expect(all, `${publish} ${banned}`).not.toContain(banned)
       const download = doc.jobs[publish]!.steps.findIndex((s) => s.uses?.startsWith('actions/download-artifact') && s.with?.name === `\${{ needs.${build}.outputs.files }}`)
       expect(download, publish).toBeGreaterThan(-1)
       expect(doc.jobs[publish]!.steps[download]!.with!.path, publish).toBe('${{ runner.temp }}/release/assets')
       const pack = doc.jobs[publish]!.steps.find((s) => s.name === 'The npm packages, of the very files the binary matrix ran')!
       expect(pack.run, publish).toContain('sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"\n')
-      expect(pack.run, publish).toContain('node scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head ')
+      expect(pack.run, publish).toContain('bun scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head ')
       expect(pack.run!.indexOf('release-unpack.sh'), publish).toBeLessThan(pack.run!.indexOf('npm-packages.mjs build'))
       const packAt = doc.jobs[publish]!.steps.indexOf(pack)
       expect(packAt, publish).toBeGreaterThan(download)
-      expect(packAt, publish).toBeLessThan(stepIndex(publish, 'node scripts/npm-packages.mjs publish'))
+      expect(packAt, publish).toBeLessThan(stepIndex(publish, 'bun scripts/npm-packages.mjs publish'))
       // The version it packs is the one the matrix rehearsed.
       const versionEnv = pack.env?.VERSION ?? doc.jobs[publish]!.env?.VERSION
       expect(versionEnv, publish).toBe(versionOut)
@@ -584,7 +585,7 @@ describe('release.yml', () => {
       const attach = stepIndex(job, 'sh scripts/release-attach.sh "$TAG" "$RUNNER_TEMP/release/assets"')
       const goPublic = stepIndex(job, 'gh release edit "$TAG" --draft=false --latest')
       const archives = stepIndex(job, 'gh workflow run release-archives.yml')
-      expect(create, job).toBeGreaterThan(stepIndex(job, 'node scripts/npm-packages.mjs publish'))
+      expect(create, job).toBeGreaterThan(stepIndex(job, 'bun scripts/npm-packages.mjs publish'))
       expect(doc.jobs[job]!.steps[create]!.run, job).toMatch(/gh release create "[^"]+" --draft /)
       expect(attach, job).toBeGreaterThan(create)
       expect(goPublic, job).toBeGreaterThan(attach)
@@ -623,30 +624,30 @@ describe('release.yml', () => {
     const tagGate = doc.jobs['stable-build']!.steps.find((s) => s.name?.includes('tag names the version'))
     expect(tagGate?.run).toContain('exit 1')
     const gate = doc.jobs['stable-build']!.steps.indexOf(tagGate!)
-    const ci = stepIndex('stable-build', 'node scripts/ci-gate.mjs release HEAD')
+    const ci = stepIndex('stable-build', 'bun scripts/ci-gate.mjs release HEAD')
     expect(ci).toBeGreaterThan(gate)
     expect(ci).toBeLessThan(stepIndex('stable-build', 'release-build.mjs'))
-    expect(stepIndex('stable-build', 'npm run lint')).toBeLessThan(stepIndex('stable-build', 'release-build.mjs'))
+    expect(stepIndex('stable-build', 'bun run lint')).toBeLessThan(stepIndex('stable-build', 'release-build.mjs'))
     expect(needsOf('stable')).toContain('stable-build')
   })
 
   it('a nightly check publishes only once the last one is old enough; by hand, at once', () => {
     const pick = doc.jobs['nightly-build']!.steps.find((s) => s.id === 'pick')!.run!
-    const due = pick.indexOf('node scripts/nightly-version.mjs due')
+    const due = pick.indexOf('bun scripts/nightly-version.mjs due')
     expect(due).toBeGreaterThan(-1)
-    expect(due).toBeLessThan(pick.indexOf('node scripts/ci-gate.mjs last-green main'))
+    expect(due).toBeLessThan(pick.indexOf('bun scripts/ci-gate.mjs last-green main'))
     expect(pick.slice(0, due)).toContain('"${{ github.event_name }}" != "workflow_dispatch"')
     const plan = doc.jobs['promote-plan']!.steps.find((s) => s.id === 'plan')!.run!
     expect(plan).toContain("github.event_name == 'workflow_dispatch' && '--min-gap-hours 0'")
   })
 
   it('the nightly publishes the newest commit CI passed, without rerunning the tests', () => {
-    expect(runs('nightly-build')).toContain('node scripts/ci-gate.mjs last-green main')
+    expect(runs('nightly-build')).toContain('bun scripts/ci-gate.mjs last-green main')
     for (const job of ['nightly-build', 'nightly']) expect(runs(job), job).not.toContain('test:baseline')
     const pick = doc.jobs['nightly-build']!.steps.find((s) => s.id === 'pick')!
     // The last nightly is the one npm records, never a git tag: the job's token
     // cannot point a tag at a commit whose workflows differ from main's tip.
-    expect(pick.run).toContain('last="$(node scripts/nightly-version.mjs last)"')
+    expect(pick.run).toContain('last="$(bun scripts/nightly-version.mjs last)"')
     expect(pick.run).not.toContain('refs/tags/nightly')
     expect(pick.run).toContain('git checkout --quiet "$green"')
     // Never older than the last nightly (the runs list can lag a finished run).
@@ -658,7 +659,7 @@ describe('release.yml', () => {
     // The run ends only once npm serves what it published, so the next run reads it.
     const steps = doc.jobs.nightly!.steps
     const publish = steps.findIndex((s) => (s.run ?? '').includes('npm-packages.mjs publish'))
-    const wait = steps.findIndex((s) => s.run === 'node scripts/nightly-version.mjs wait "$VERSION"')
+    const wait = steps.findIndex((s) => s.run === 'bun scripts/nightly-version.mjs wait "$VERSION"')
     expect(wait).toBeGreaterThan(publish)
   })
 
@@ -671,7 +672,7 @@ describe('release.yml', () => {
     expect(job.env).toMatchObject({ SHA: '${{ needs.nightly-build.outputs.sha }}', VERSION: '${{ needs.nightly-build.outputs.version }}' })
     const recheck = job.steps.findIndex((s) => s.id === 'recheck')
     const run = job.steps[recheck]!.run!
-    expect(run).toContain('last="$(node scripts/nightly-version.mjs last)"')
+    expect(run).toContain('last="$(bun scripts/nightly-version.mjs last)"')
     expect(run).toContain('[ "$last" = "$SHA" ] && [ "${{ inputs.force }}" != "true" ]')
     expect(run).toContain('[ "${{ inputs.force }}" != "true" ] && [ "$last" != "none" ] && ! git merge-base --is-ancestor "$last" "$SHA"')
     expect(run).toContain('::warning::')
@@ -682,16 +683,16 @@ describe('release.yml', () => {
   })
 
   it('the GitHub Release notes come from the tested script, after the publish', () => {
-    expect(runs('stable')).toContain('node scripts/release-notes.mjs "$VERSION" > release-notes.md')
+    expect(runs('stable')).toContain('bun scripts/release-notes.mjs "$VERSION" > release-notes.md')
     expect(text).not.toContain('node -e')
     expect(stepIndex('stable', 'release-notes.mjs')).toBeGreaterThan(stepIndex('stable', 'npm-packages.mjs publish'))
   })
 
   it('a nightly after a stable release builds on that release', () => {
     const build = doc.jobs['nightly-build']!.steps.find((s) => s.id === 'build')!
-    expect(build.run).toContain('WALNUT_LATEST_STABLE="$(npm view open-walnut@latest version')
-    expect(build.run!.indexOf('export WALNUT_LATEST_STABLE')).toBeLessThan(build.run!.indexOf('node scripts/nightly-version.mjs'))
-    expect(build.run!.indexOf('version="$(node scripts/nightly-version.mjs)"')).toBeLessThan(build.run!.indexOf('release-build.mjs'))
+    expect(build.run).toContain('WALNUT_LATEST_STABLE="$(bun -e \'const r = await fetch("https://registry.npmjs.org/open-walnut/latest")')
+    expect(build.run!.indexOf('export WALNUT_LATEST_STABLE')).toBeLessThan(build.run!.indexOf('bun scripts/nightly-version.mjs'))
+    expect(build.run!.indexOf('version="$(bun scripts/nightly-version.mjs)"')).toBeLessThan(build.run!.indexOf('release-build.mjs'))
   })
 
   it('each publishing job has its own queue and a running publisher is never cancelled', () => {
@@ -721,13 +722,18 @@ describe('release.yml', () => {
 
   it('the daily stable runs the build\'s files everywhere and installs the soaked nightly on fresh Linux and macOS before publishing', () => {
     const jobs = doc.jobs as Record<string, Job & { strategy?: { matrix: { os: string[] } } }>
-    expect(runs('promote-plan')).toMatch(/node scripts\/stable-promote\.mjs plan --notes "\$RUNNER_TEMP\/notes\.md" .*>> "\$GITHUB_OUTPUT"/)
+    expect(runs('promote-plan')).toMatch(/bun scripts\/stable-promote\.mjs plan --notes "\$RUNNER_TEMP\/notes\.md" .*>> "\$GITHUB_OUTPUT"/)
     expect(jobs['promote-smoke']!.needs).toBe('promote-plan')
     expect(jobs['promote-smoke']!.if).toBe("needs.promote-plan.outputs.publish == 'true'")
     expect(jobs['promote-smoke']!.strategy!.matrix.os).toEqual(['ubuntu-24.04', 'macos-26'])
     const smoke = runs('promote-smoke')
     expect(smoke).toContain('npm install -g npm@12')
-    expect(smoke).toContain('node scripts/stable-promote.mjs allow-scripts')
+    // A user's machine, with Node and npm and no bun: the plan works out the allow list.
+    expect(runs('promote-plan')).toContain('echo "allow_scripts=$(bun scripts/stable-promote.mjs allow-scripts)" >> "$GITHUB_OUTPUT"')
+    expect(doc.jobs['promote-plan']!.outputs!.allow_scripts).toBe('${{ steps.allow.outputs.allow_scripts }}')
+    expect(jobs['promote-smoke']!.steps.find((s) => (s.run ?? '').includes('npm install -g "open-walnut@$NIGHTLY"'))!.env!.ALLOW_SCRIPTS).toBe('${{ needs.promote-plan.outputs.allow_scripts }}')
+    expect(smoke).toContain('allow="$ALLOW_SCRIPTS"')
+    expect(JSON.stringify(jobs['promote-smoke'])).not.toContain('setup-bun')
     expect(smoke).toContain('npm install -g "open-walnut@$NIGHTLY" --allow-scripts="$allow"')
     expect(smoke).toContain('HOME="$RUNNER_TEMP/home" open-walnut web')
     expect(smoke).toContain('/api/system/health')
@@ -748,7 +754,7 @@ describe('release.yml', () => {
     expect(checkout?.with?.ref).toBe('${{ needs.promote-plan.outputs.sha }}')
     const publish = stepIndex('promote', 'npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance')
     const tag = stepIndex('promote', 'git tag -f -a "v$VERSION"')
-    const roll = stepIndex('promote', 'node scripts/stable-promote.mjs roll')
+    const roll = stepIndex('promote', 'bun scripts/stable-promote.mjs roll')
     expect(publish).toBeGreaterThan(stepIndex('promote', 'sh scripts/release-unpack.sh'))
     expect(tag).toBeGreaterThan(publish)
     expect(roll).toBeGreaterThan(tag)
@@ -809,7 +815,7 @@ describe('binary-matrix.yml', () => {
       const target = row === 'old-kernel' ? 'linux-x64' : '"${FILE#walnut-}"'
       expect(unpack.run, row).toContain(`sh scripts/release-unpack.sh "$RUNNER_TEMP/release" "$VERSION" dist-bin ${target}\n`)
       // The rehearsal compares the file's --version with package.json's.
-      expect(unpack.run, row).toContain('node scripts/release-files.mjs stamp "$VERSION"')
+      expect(unpack.run, row).toContain('bun scripts/release-files.mjs stamp "$VERSION"')
       expect(doc.jobs[row]!.env?.VERSION, row).toBe('${{ inputs.version }}')
       const rehearse = steps.findIndex((s) => /binary-matrix\.sh|release-rehearsal\/run\.mjs|binary-old-kernel\.sh/.test(s.run ?? ''))
       expect(rehearse, row).toBeGreaterThan(steps.indexOf(unpack))

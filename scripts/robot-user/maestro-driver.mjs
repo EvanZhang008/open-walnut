@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Thin wrapper around the maestro MCP-as-CLI used by the robot user.
  *

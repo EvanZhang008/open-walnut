@@ -107,6 +107,8 @@ jobs:
             sleep 30
           done
           echo "::error::npm did not serve open-walnut@$VERSION within 30 minutes"; exit 1
+      # The Node archive's builder stays on Node: an archive is a published version
+      # installed with npm on that version's own Node (REMOVE with the archives).
       - name: Its updater knows the archive
         id: check
         run: |
@@ -135,15 +137,19 @@ jobs:
     steps:
       # main: the build script, install.sh and the mock `claude` the smoke runs.
       - uses: actions/checkout@v5
+      # Node for the archive's builder (see job support); bun for the smoke.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - name: Build the archive
         run: node scripts/runtime-bundle/build.mjs --spec "open-walnut@$VERSION" --out "$RUNNER_TEMP/out"
       - name: It is this platform's
         run: test -f "$RUNNER_TEMP/out/open-walnut-$VERSION-${{ matrix.target }}.tar.gz"
       - name: It installs with install.sh, serves and answers a session with no Node on PATH
-        run: node scripts/release-rehearsal/run.mjs --archive "$RUNNER_TEMP/out/open-walnut-$VERSION-${{ matrix.target }}.tar.gz" --work "$RUNNER_TEMP/rehearsal" --keep
+        run: bun scripts/release-rehearsal/run.mjs --archive "$RUNNER_TEMP/out/open-walnut-$VERSION-${{ matrix.target }}.tar.gz" --work "$RUNNER_TEMP/rehearsal" --keep
       - uses: actions/upload-artifact@v4
         with:
           name: archive-${{ matrix.target }}
@@ -230,13 +236,13 @@ jobs:
       HOMEBREW_NO_INSTALL_CLEANUP: '1'
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: Write the formula from the release's SHA256SUMS
         run: |
           gh release download "v$VERSION" --pattern SHA256SUMS --dir "$RUNNER_TEMP" --clobber
-          node scripts/homebrew/formula.mjs --version "$VERSION" --sums "$RUNNER_TEMP/SHA256SUMS" > "$RUNNER_TEMP/open-walnut.rb"
+          bun scripts/homebrew/formula.mjs --version "$VERSION" --sums "$RUNNER_TEMP/SHA256SUMS" > "$RUNNER_TEMP/open-walnut.rb"
           cat "$RUNNER_TEMP/open-walnut.rb"
       - name: It installs from GitHub with brew and passes brew test
         run: |

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Verify the unified session split views + always-on-top Fork popover.
  *

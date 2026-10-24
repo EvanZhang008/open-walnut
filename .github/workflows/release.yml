@@ -10,7 +10,7 @@ name: Release
 #            tagged `vX.Y.Z`, a GitHub Release with its notes, then a
 #            `release: X.Y.Z` commit on main rolls CHANGELOG and package.json
 #            (scripts/stable-promote.mjs). By hand, a `vX.Y.Z` tag cut with
-#            `npm run release -- patch|minor|major` publishes through jobs `stable-*`.
+#            `bun run release -- patch|minor|major` publishes through jobs `stable-*`.
 #            Either way its GitHub Release holds the compiled files and install.sh,
 #            and then gets the Homebrew formula, the Mac app and (for two more
 #            releases) the old Node archives (release-archives.yml).
@@ -135,15 +135,15 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 2
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: The tag names the version package.json carries
         id: tag
         run: |
-          version="$(node -p "require('./package.json').version")"
+          version="$(bun -p "require('./package.json').version")"
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME but package.json is $version (cut releases with: npm run release -- <bump>)" >&2
+            echo "tag $GITHUB_REF_NAME but package.json is $version (cut releases with: bun run release -- <bump>)" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -153,14 +153,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: node scripts/ci-gate.mjs release HEAD
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
+        run: bun scripts/ci-gate.mjs release HEAD
       - run: bun install --frozen-lockfile
-      - run: npm run lint
+      - run: bun run lint
       - name: Build the compiled files and their release assets
-        run: node scripts/release-build.mjs --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/release"
+        run: bun scripts/release-build.mjs --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/release"
       # What jobs `stable-files` run and `stable` publishes: the .gz files and SHA256SUMS.
       - uses: actions/upload-artifact@v4
         with:
@@ -204,9 +201,14 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v5
+      # Publishing to npm (trusted publishing and its provenance) is npm's own, on Node;
+      # Walnut's scripts around it run on bun.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - run: npm install -g npm@12
       - uses: actions/download-artifact@v4
         with:
@@ -215,9 +217,9 @@ jobs:
       - name: The npm packages, of the very files the binary matrix ran
         run: |
           sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"
-          node scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$GITHUB_SHA"
+          bun scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$GITHUB_SHA"
       - name: Publish to npm (the platform packages, then open-walnut)
-        run: node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance
+        run: bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance
       - name: Draft the GitHub Release with this version's CHANGELOG section
         env:
           GH_TOKEN: ${{ github.token }}
@@ -226,7 +228,7 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             echo "the $TAG GitHub Release already exists"
           else
-            node scripts/release-notes.mjs "$VERSION" > release-notes.md
+            bun scripts/release-notes.mjs "$VERSION" > release-notes.md
             gh release create "$TAG" --draft --title "Open Walnut $VERSION" --notes-file release-notes.md
           fi
       - name: Attach its files to the GitHub Release
@@ -278,9 +280,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: The newest commit on main that CI passed, if it is new
         id: pick
         env:
@@ -289,12 +291,12 @@ jobs:
         run: |
           # A check (CI finished, or the schedule) publishes only when the last nightly
           # is old enough; by hand, now.
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "$(node scripts/nightly-version.mjs due)" != "due=true" ]; then
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "$(bun scripts/nightly-version.mjs due)" != "due=true" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          green="$(node scripts/ci-gate.mjs last-green main)"
-          last="$(node scripts/nightly-version.mjs last)"
+          green="$(bun scripts/ci-gate.mjs last-green main)"
+          last="$(bun scripts/nightly-version.mjs last)"
           [ -n "$last" ] || last=none
           echo "newest green on main: ${green:-none}"
           echo "last nightly:         $last"
@@ -321,21 +323,17 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "sha=$green" >> "$GITHUB_OUTPUT"
           fi
-      - uses: oven-sh/setup-bun@v2
-        if: steps.pick.outputs.publish == 'true'
-        with:
-          bun-version: 1.4.4
       - if: steps.pick.outputs.publish == 'true'
         run: bun install --frozen-lockfile
       - name: Version this nightly and build it
         if: steps.pick.outputs.publish == 'true'
         id: build
         run: |
-          WALNUT_LATEST_STABLE="$(npm view open-walnut@latest version 2>/dev/null || true)"
+          WALNUT_LATEST_STABLE="$(bun -e 'const r = await fetch("https://registry.npmjs.org/open-walnut/latest"); if (r.ok) console.log((await r.json()).version)' 2>/dev/null || true)"
           export WALNUT_LATEST_STABLE
-          version="$(node scripts/nightly-version.mjs)"
+          version="$(bun scripts/nightly-version.mjs)"
           echo "building open-walnut@$version from ${{ steps.pick.outputs.sha }}"
-          node scripts/release-build.mjs --version "$version" --out "$RUNNER_TEMP/release"
+          bun scripts/release-build.mjs --version "$version" --out "$RUNNER_TEMP/release"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # What jobs `nightly-files` run and `nightly` publishes.
       - uses: actions/upload-artifact@v4
@@ -377,16 +375,21 @@ jobs:
         with:
           ref: ${{ needs.nightly-build.outputs.sha }}
           fetch-depth: 0
+      # Publishing to npm (trusted publishing and its provenance) is npm's own, on Node;
+      # Walnut's scripts around it run on bun.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       # The pick ran before the build and the matrix; a run ahead in this queue may
       # have published since. So the pick's own rule, again, right before publishing:
       # never the same commit twice, never a commit older than the last nightly.
       - name: Still the next nightly
         id: recheck
         run: |
-          last="$(node scripts/nightly-version.mjs last)"
+          last="$(bun scripts/nightly-version.mjs last)"
           [ -n "$last" ] || last=none
           echo "last nightly: $last"
           echo "this build:   $SHA ($VERSION)"
@@ -410,18 +413,18 @@ jobs:
         if: steps.recheck.outputs.publish == 'true'
         run: |
           sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"
-          node scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$SHA"
+          bun scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$SHA"
       # The platform packages first, open-walnut last (npm-packages.mjs): its nightly
       # dist-tag is what the update check reads.
       - name: Publish it as nightly (the platform packages, then open-walnut)
         if: steps.recheck.outputs.publish == 'true'
-        run: node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag nightly --provenance
+        run: bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag nightly --provenance
       # The next run learns the last nightly from npm, and npm serves a version it
       # accepted only minutes later; this job's queue holds the next run's until
       # this step ends, so it never sees the nightly before this one.
       - name: Wait until npm serves it
         if: steps.recheck.outputs.publish == 'true'
-        run: node scripts/nightly-version.mjs wait "$VERSION"
+        run: bun scripts/nightly-version.mjs wait "$VERSION"
       - if: steps.recheck.outputs.publish == 'true'
         run: echo "published open-walnut@$VERSION (dist-tag nightly) from $SHA"
 
@@ -440,14 +443,15 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       version: ${{ steps.plan.outputs.version }}
       nightly: ${{ steps.plan.outputs.nightly }}
+      allow_scripts: ${{ steps.allow.outputs.allow_scripts }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: The nightly that has been out 24 hours, if it carries something new
         id: plan
         env:
@@ -456,7 +460,12 @@ jobs:
         # By hand means now: no one-a-day gap. A dry run takes the newest nightly, soaked
         # or not, so the build, the matrix and the smoke can be tried on demand; it
         # never reaches job `promote`.
-        run: node scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" ${{ github.event_name == 'workflow_dispatch' && '--min-gap-hours 0' || '' }} ${{ inputs.dry_run && '--soak-hours 0' || '' }} >> "$GITHUB_OUTPUT"
+        run: bun scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" ${{ github.event_name == 'workflow_dispatch' && '--min-gap-hours 0' || '' }} ${{ inputs.dry_run && '--soak-hours 0' || '' }} >> "$GITHUB_OUTPUT"
+      # The updater's --allow-scripts list, from main (the candidate may predate the
+      # script), for job promote-smoke, whose machine has only a user's Node and npm.
+      - name: The --allow-scripts list the updater passes
+        id: allow
+        run: echo "allow_scripts=$(bun scripts/stable-promote.mjs allow-scripts)" >> "$GITHUB_OUTPUT"
       # Job `promote-build` builds the compiled file from the nightly's commit, and the
       # matrix and the publish unpack it with that commit's scripts; a nightly from
       # before them has nothing to build, so the stable waits for one that has.
@@ -494,9 +503,6 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.promote-plan.outputs.sha }}
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -504,7 +510,7 @@ jobs:
       - name: Build the compiled files at this version
         env:
           VERSION: ${{ needs.promote-plan.outputs.version }}
-        run: node scripts/release-build.mjs --version "$VERSION" --out "$RUNNER_TEMP/release"
+        run: bun scripts/release-build.mjs --version "$VERSION" --out "$RUNNER_TEMP/release"
       # What jobs `promote-files` run and `promote` publishes.
       - uses: actions/upload-artifact@v4
         with:
@@ -538,7 +544,8 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-26]
     steps:
-      # main, for the script and the allow list (the candidate may predate the script).
+      # main, for the npm-registry-lag wrapper. A user's machine: Node and npm, no bun
+      # (promote-plan worked out the allow list).
       - uses: actions/checkout@v5
         with:
           ref: main
@@ -551,8 +558,9 @@ jobs:
       - name: Install it the way the updater does, start it on a fresh HOME, require it to answer
         env:
           NIGHTLY: ${{ needs.promote-plan.outputs.nightly }}
+          ALLOW_SCRIPTS: ${{ needs.promote-plan.outputs.allow_scripts }}
         run: |
-          allow="$(node scripts/stable-promote.mjs allow-scripts)"
+          allow="$ALLOW_SCRIPTS"
           cd "$RUNNER_TEMP"
           # Again while npm names a dependency it does not serve yet (a publish in flight).
           node "$GITHUB_WORKSPACE/scripts/npm-registry-lag.mjs" npm install -g "open-walnut@$NIGHTLY" --allow-scripts="$allow"
@@ -610,9 +618,14 @@ jobs:
         with:
           name: ${{ needs.promote-build.outputs.files }}
           path: ${{ runner.temp }}/release/assets
+      # Publishing to npm (trusted publishing and its provenance) is npm's own, on Node;
+      # Walnut's scripts around it run on bun.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - run: npm install -g npm@12
       # Every step below skips what an earlier attempt already did, so "Re-run failed
       # jobs" finishes a release that stopped halfway (npm refuses a version twice,
@@ -625,7 +638,7 @@ jobs:
           SHA: ${{ needs.promote-plan.outputs.sha }}
         run: |
           sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"
-          node scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$SHA"
+          bun scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$SHA"
       # npm-packages.mjs skips each package npm already has. npm holds a version it
       # accepted for minutes before it serves it, so that check misses a publish still
       # in that state: one this job made before it stopped, or (before the wait step
@@ -634,7 +647,7 @@ jobs:
       # version". npm's refusal of this very version is its word that the version is
       # taken; the tag step still requires the tag on this release's commit.
       - name: Publish it as latest (the platform packages, then open-walnut)
-        run: node scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance
+        run: bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance
       # The run queued behind this job asks npm, with the check above, whether the
       # version is out, so this job ends only once that check would say yes.
       - name: Wait until npm serves it
@@ -733,7 +746,7 @@ jobs:
             git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
             git checkout --quiet -B main origin/main
             if grep -qF "## [$VERSION]" CHANGELOG.md; then echo "main already says $VERSION"; exit 0; fi
-            node scripts/stable-promote.mjs roll --version "$VERSION" --notes "$RUNNER_TEMP/notes.md"
+            bun scripts/stable-promote.mjs roll --version "$VERSION" --notes "$RUNNER_TEMP/notes.md"
             git commit --quiet -am "release: $VERSION"
             if git push --quiet origin main; then echo "main now says $VERSION"; exit 0; fi
             echo "main moved during the push; trying again ($attempt)"

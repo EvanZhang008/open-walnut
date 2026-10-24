@@ -250,7 +250,7 @@ fi
 if [ -n "${WALNUT_APP_RUNTIME:-}" ]; then
     CARRY_SIGN=()
     [ -n "$SIGNED_WITH" ] && CARRY_SIGN=(--sign "$SIGNED_WITH" ${WALNUT_SIGN_KEYCHAIN:+--keychain "$WALNUT_SIGN_KEYCHAIN"} --entitlements "$FILE_ENTITLEMENTS")
-    CARRIED=$(node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE" \
+    CARRIED=$("${WALNUT_BUN:-bun}" "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE" \
         --file "$WALNUT_APP_RUNTIME" --sums "${WALNUT_APP_RUNTIME_SUMS:?WALNUT_APP_RUNTIME_SUMS must name the SHA256SUMS of that release}" \
         "${CARRY_SIGN[@]+"${CARRY_SIGN[@]}"}")
     CARRIED_ARCH="${CARRIED%% *}"

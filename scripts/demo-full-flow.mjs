@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Complete demo: SSH auto-discovery → Settings → Disable → Session Path Selector verification
  */

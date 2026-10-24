@@ -412,9 +412,9 @@ jobs:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - name: Build as prepublishOnly does
-        run: WALNUT_REQUIRE_BUN=1 npm run build && (cd web && npx vite build) && node scripts/check-publish.mjs
+        run: WALNUT_REQUIRE_BUN=1 bun run build && (cd web && bun x vite build) && bun scripts/check-publish.mjs
       - name: Pack this commit as the next patch, and an older build of it
-        run: node scripts/release-rehearsal/pack.mjs --out "$RUNNER_TEMP/packs" --rehearsal
+        run: bun scripts/release-rehearsal/pack.mjs --out "$RUNNER_TEMP/packs" --rehearsal
       # The Mac app (desktop/): its tests, and the app the rehearsal's archive-app launches.
       - name: Build the Mac app
         if: startsWith(matrix.os, 'macos')
@@ -426,7 +426,7 @@ jobs:
           # Homebrew comes with both images; on Ubuntu it is off PATH.
           WALNUT_REHEARSAL_BREW: ${{ startsWith(matrix.os, 'macos') && 'brew' || '/home/linuxbrew/.linuxbrew/bin/brew' }}
           WALNUT_REHEARSAL_APP: ${{ startsWith(matrix.os, 'macos') && format('{0}/desktop/Walnut.app', github.workspace) || '' }}
-        run: node scripts/release-rehearsal/run.mjs --packs "$RUNNER_TEMP/packs/packs.json" --field latest --runtime --work "$RUNNER_TEMP/rehearsal" --keep
+        run: bun scripts/release-rehearsal/run.mjs --packs "$RUNNER_TEMP/packs/packs.json" --field latest --runtime --work "$RUNNER_TEMP/rehearsal" --keep
       - name: Upload rehearsal logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -465,14 +465,15 @@ jobs:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - name: Build as prepublishOnly does
-        run: WALNUT_REQUIRE_BUN=1 npm run build && (cd web && npx vite build) && node scripts/check-publish.mjs
+        run: WALNUT_REQUIRE_BUN=1 bun run build && (cd web && bun x vite build) && bun scripts/check-publish.mjs
       - name: Pack this commit as the next patch
-        run: node scripts/release-rehearsal/pack.mjs --out "$RUNNER_TEMP/packs" --rehearsal
+        run: bun scripts/release-rehearsal/pack.mjs --out "$RUNNER_TEMP/packs" --rehearsal
       - name: Build its archive, install it with install.sh, serve and answer a session with no Node on PATH
         run: |
-          current="$(node -p "require(process.argv[1]).current" "$RUNNER_TEMP/packs/packs.json")"
+          current="$(bun -p "require(process.argv[1]).current" "$RUNNER_TEMP/packs/packs.json")"
+          # The Node archive's builder stays on Node, as in release-archives.yml.
           node scripts/runtime-bundle/build.mjs --spec "$current" --out "$RUNNER_TEMP/archive"
-          node scripts/release-rehearsal/run.mjs --archive "$(ls "$RUNNER_TEMP"/archive/open-walnut-*-${{ matrix.target }}.tar.gz)" --work "$RUNNER_TEMP/rehearsal" --keep
+          bun scripts/release-rehearsal/run.mjs --archive "$(ls "$RUNNER_TEMP"/archive/open-walnut-*-${{ matrix.target }}.tar.gz)" --work "$RUNNER_TEMP/rehearsal" --keep
       - name: Upload smoke logs
         if: failure()
         uses: actions/upload-artifact@v4

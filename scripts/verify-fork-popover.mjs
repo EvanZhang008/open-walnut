@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Verify the Fork popover UX (frontend only — does NOT actually fork):
  *   1. Smart placement: popover stays fully on-screen (left>=margin, right<=viewport),

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Did CI pass on a commit? The one question both release channels ask before
  * anything reaches npm, because every install updates itself on restart: a red
@@ -11,10 +11,10 @@
  * system it claims. Read through `gh api`, so it works the same in GitHub
  * Actions (GH_TOKEN + GH_REPO) and on a machine where `gh` is signed in.
  *
- *   node scripts/ci-gate.mjs commit <rev>      green | pending | red | none, exit 0 only on green
- *   node scripts/ci-gate.mjs release <rev>     the gate for a release tag: a commit that only
+ *   bun scripts/ci-gate.mjs commit <rev>      green | pending | red | none, exit 0 only on green
+ *   bun scripts/ci-gate.mjs release <rev>     the gate for a release tag: a commit that only
  *                                              touches the release files is judged by its parent
- *   node scripts/ci-gate.mjs last-green [branch]  the newest commit on the branch both passed (empty if none)
+ *   bun scripts/ci-gate.mjs last-green [branch]  the newest commit on the branch both passed (empty if none)
  */
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'

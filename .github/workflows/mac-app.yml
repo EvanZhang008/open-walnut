@@ -100,9 +100,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: harness
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: This release has the app that carries its own Walnut
         id: shape
         run: |
@@ -198,7 +198,7 @@ jobs:
         run: |
           app="$RUNNER_TEMP/Applications/Walnut.app"
           [ -d "$app" ] || app="desktop/Walnut.app"
-          node harness/scripts/desktop-smoke.mjs --app "$app" --version "$VERSION" --work "$RUNNER_TEMP/smoke"
+          bun harness/scripts/desktop-smoke.mjs --app "$app" --version "$VERSION" --work "$RUNNER_TEMP/smoke"
       - uses: actions/upload-artifact@v4
         if: steps.shape.outputs.app == 'true' && !cancelled()
         with:
@@ -240,16 +240,16 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: harness
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: Write walnut.rb from the attached DMGs, install it with brew, and attach it
         run: |
           gh release download "v$VERSION" --dir "$RUNNER_TEMP/attached" --clobber \
             --pattern Walnut-arm64.dmg --pattern Walnut-x64.dmg
           arm="$(shasum -a 256 "$RUNNER_TEMP/attached/Walnut-arm64.dmg" | cut -d' ' -f1)"
           intel="$(shasum -a 256 "$RUNNER_TEMP/attached/Walnut-x64.dmg" | cut -d' ' -f1)"
-          node harness/scripts/homebrew/cask.mjs --version "$VERSION" --sha256-arm64 "$arm" --sha256-x64 "$intel" > "$RUNNER_TEMP/walnut.rb"
+          bun harness/scripts/homebrew/cask.mjs --version "$VERSION" --sha256-arm64 "$arm" --sha256-x64 "$intel" > "$RUNNER_TEMP/walnut.rb"
           cat "$RUNNER_TEMP/walnut.rb"
           brew tap-new --no-git walnut-release/cask
           mkdir -p "$(brew --repository walnut-release/cask)/Casks"

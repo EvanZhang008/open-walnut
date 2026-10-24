@@ -61,7 +61,8 @@ die() { echo "error: $*" >&2; exit 1; }
 case "$DRIVER" in hybrid|ai) ;; *) die "--driver must be hybrid or ai (got '$DRIVER')" ;; esac
 
 # ── prerequisites ────────────────────────────────────────────────────────────
-command -v node >/dev/null 2>&1 || die "node not found on PATH"
+BUN="${WALNUT_BUN:-bun}"
+command -v "$BUN" >/dev/null 2>&1 || die "bun not found on PATH (https://bun.sh, or set WALNUT_BUN)"
 command -v jq   >/dev/null 2>&1 || die "jq not found on PATH (brew install jq)"
 command -v xcrun >/dev/null 2>&1 || die "xcrun not found — Xcode command line tools required"
 
@@ -104,7 +105,7 @@ echo "run:    minutes=$MINUTES seed=$SEED driver=$DRIVER server=$SERVER"
 echo
 
 # ── run the episode; SIGINT is forwarded so the journal is finished cleanly ───
-node "$HERE/episode.mjs" \
+"$BUN" "$HERE/episode.mjs" \
   --device "$DEVICE" \
   --device-name "$DEVICE_NAME" \
   --minutes "$MINUTES" \

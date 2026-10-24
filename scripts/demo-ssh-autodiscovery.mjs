@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Demo video: SSH config auto-discovery feature
  * Records the full flow: Settings page → Remote Hosts → auto-discovered hosts → toggle disable

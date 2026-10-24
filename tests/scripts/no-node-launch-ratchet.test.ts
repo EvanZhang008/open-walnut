@@ -1,6 +1,6 @@
 /**
  * Ratchet: nothing starts Walnut's own code under Node or tsx. Walnut runs on
- * bun alone (one runtime; Node remains only where a user or a tool brings it).
+ * bun alone; Node remains only where a user or a tool brings it.
  *
  * Scanned: package.json scripts, the Playwright configs, every workflow's run
  * lines, the shell scripts in scripts/ and desktop/, the JS/TS launchers in
@@ -9,15 +9,13 @@
  * (a probe like `node --version` starts nothing), `npx tsx`, `--import tsx`,
  * or a spawn naming node or tsx.
  *
- * GENUINE lists the starts that need Node, each with its reason: the user's own
- * Node (npm runs postinstall; the npm channel's jobs have no bun by design) or a
- * tool's. LEFT lists the starts still to move to bun, each with the part of the
- * tree it belongs to; move one and delete its entry. A start in neither list
- * fails here. Entries match by file and a piece of the line, so they keep
- * matching while the files around them change; an entry that matches nothing
- * any more does not fail (it is printed), so the lists can serve trees that
- * have moved different parts. The lists are those of the tree with the bun-only
- * runtime, dev and docs changes in; without them their starts fail here.
+ * GENUINE lists the starts that need Node, each with its reason: a user's own
+ * Node (npm runs postinstall; a job that is a user's machine), or a tool that
+ * needs it (the Node archive's builder, for the releases it is still built
+ * for). Any other start fails here; so does an entry that matches nothing, so
+ * the list never outlives what it allows. Entries match by file and a piece of
+ * the line. The list is that of the tree with the bun-only runtime, dev and
+ * docs changes in.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -34,26 +32,12 @@ const GENUINE: Entry[] = [
   { file: 'desktop/AppBuiltCheckout.swift', match: 'exe == "node"', why: 'recognizes the process of a checkout an older app started; starts nothing' },
   { file: 'desktop/BundledRuntime.swift', match: 'var node: String', why: 'the path of the Node an archive install (before the compiled file) carries; starts nothing' },
   { file: 'scripts/onboarding-test/remote-host/fixture/claude-cli.js', match: '#!/usr/bin/env node', why: 'a stand-in claude CLI inside the remote host container, which is a user\'s host with its own Node' },
-]
-
-const LEFT: Entry[] = [
-  // The release pipeline and its npm channel jobs: Walnut's release scripts, run with node.
-  ...['scripts/release-files.mjs stamp'].map((match) => ({ file: '.github/workflows/binary-matrix.yml', match, why: 'release: the binary matrix stamps with node' })),
-  ...['node scripts/check-publish.mjs', 'node scripts/release-rehearsal/pack.mjs', 'node scripts/release-rehearsal/run.mjs', 'node -p "require(process.argv[1]).current"', 'node scripts/runtime-bundle/build.mjs']
-    .map((match) => ({ file: '.github/workflows/ci.yml', match, why: 'the npm channel jobs (rehearsal, archive-targets) rehearse release.yml\'s own steps, so they move with it' })),
-  ...['scripts/desktop-smoke.mjs', 'scripts/homebrew/cask.mjs'].map((match) => ({ file: '.github/workflows/mac-app.yml', match, why: 'release: the Mac app workflow' })),
-  ...['scripts/runtime-bundle/build.mjs', 'scripts/release-rehearsal/run.mjs', 'scripts/homebrew/formula.mjs'].map((match) => ({ file: '.github/workflows/release-archives.yml', match, why: 'release: the Node archives (to be removed)' })),
-  ...['node -p "require(\'./package.json\').version"', 'scripts/ci-gate.mjs', 'scripts/release-build.mjs', 'scripts/npm-packages.mjs', 'scripts/release-notes.mjs', 'scripts/nightly-version.mjs', 'scripts/stable-promote.mjs']
-    .map((match) => ({ file: '.github/workflows/release.yml', match, why: 'release: the release workflow runs its scripts with node' })),
-  { file: '.github/workflows/star-history.yml', match: 'node scripts/generate-star-history.mjs', why: 'a repo chore workflow' },
-  { file: 'desktop/build-release.sh', match: 'scripts/desktop-carry-release.mjs', why: 'release: the Mac app build carries the release with node' },
-  ...['scripts/ios-perf-check.sh', 'scripts/ios-perf/freeze-probe.sh', 'scripts/ios-perf/kb-loop-probe.sh'].map((file) => ({ file, match: 'node "', why: 'iOS perf probes: their mock server and fixture maker run with node' })),
-  { file: 'scripts/robot-user/robot.sh', match: 'node "$HERE/episode.mjs"', why: 'the robot user soak test' },
-  // Shebangs: run by path, these start on Node.
-  ...['scripts/ci-gate.mjs', 'scripts/demo-full-flow.mjs', 'scripts/demo-ssh-autodiscovery.mjs',
-    'scripts/robot-user/actions.mjs', 'scripts/robot-user/brain.mjs', 'scripts/robot-user/episode.mjs', 'scripts/robot-user/maestro-driver.mjs', 'scripts/robot-user/oracles.mjs',
-    'scripts/runtime-bundle/build.mjs', 'scripts/verify-fork-popover.mjs', 'scripts/verify-session-split-views.mjs']
-    .map((file) => ({ file, match: '#!/usr/bin/env node', why: 'a script that starts on Node when run by its path' })),
+  // The Node archive (release-archives.yml, for the two releases it is still built
+  // for): a published version installed with npm on that version's own Node.
+  { file: 'scripts/runtime-bundle/build.mjs', match: '#!/usr/bin/env node', why: 'the Node archive\'s builder' },
+  { file: '.github/workflows/release-archives.yml', match: 'node scripts/runtime-bundle/build.mjs --check', why: 'the Node archive\'s builder' },
+  { file: '.github/workflows/release-archives.yml', match: 'node scripts/runtime-bundle/build.mjs --spec', why: 'the Node archive\'s builder' },
+  { file: '.github/workflows/ci.yml', match: 'node scripts/runtime-bundle/build.mjs --spec "$current"', why: 'archive-targets rehearses the Node archive\'s builder' },
 ]
 
 /** A start of node, tsx or ts-node at a shell command position (not a version probe). */
@@ -108,18 +92,14 @@ const listed = (list: Entry[], s: { file: string; text: string }) => list.find((
 describe('nothing starts Walnut\'s own code under Node or tsx', () => {
   const found = starts()
 
-  it('every start is a genuine one or one listed to move', () => {
-    const unlisted = found.filter((s) => !listed(GENUINE, s) && !listed(LEFT, s)).map((s) => `${s.at}: ${s.text}`)
-    expect(unlisted, 'run it with bun (or `bun run <script>`); a genuine Node start goes in GENUINE with its reason').toEqual([])
+  it('every start is a genuine one', () => {
+    const unlisted = found.filter((s) => !listed(GENUINE, s)).map((s) => `${s.at}: ${s.text}`)
+    expect(unlisted, 'run it with bun (`bun <script>`, `bun -p`, `bun run <script>`); a start that needs Node goes in GENUINE with its reason').toEqual([])
   })
 
-  it('reports what is still to move', () => {
-    const left = found.filter((s) => !listed(GENUINE, s) && listed(LEFT, s))
-    const unused = [...GENUINE, ...LEFT].filter((e) => !found.some((s) => s.file === e.file && s.text.includes(e.match)))
-    // eslint-disable-next-line no-console
-    console.log(`[no-node-launch] ${left.length} start(s) still to move:\n${left.map((s) => `  ${s.at}: ${s.text.slice(0, 120)}`).join('\n')}` +
-      (unused.length ? `\n[no-node-launch] entries that match nothing here: ${unused.map((e) => `${e.file} (${e.match})`).join(', ')}` : ''))
-    expect(found.length).toBeGreaterThan(0)
+  it('every genuine entry still allows a start', () => {
+    const unused = GENUINE.filter((e) => !found.some((s) => s.file === e.file && s.text.includes(e.match))).map((e) => `${e.file}: ${e.match}`)
+    expect(unused, 'a start that moved to bun leaves its entry behind: delete it').toEqual([])
   })
 
   it('finds each kind of start, and no version probe or word list', () => {

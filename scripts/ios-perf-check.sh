@@ -87,7 +87,7 @@ if [ "$RUN_L2" = 1 ]; then
   echo "[L2] starting mock v1 server on :$MOCK_PORT (built-in 1000-msg mixed transcript + aggressive live stream)"
   pkill -f "ios-perf/mock-server.mjs" 2>/dev/null || true
   PORT=$MOCK_PORT MSG_COUNT=1000 LIVE_TEXT_KB=512 DELTA_MS=100 DELTA_BYTES=2000 DELTA_COUNT=300 \
-    node "$PERF/mock-server.mjs" > "$WORK/l2-mock.log" 2>&1 &
+    "${WALNUT_BUN:-bun}" "$PERF/mock-server.mjs" > "$WORK/l2-mock.log" 2>&1 &
   MOCK_PID=$!
   trap 'kill $MOCK_PID 2>/dev/null' EXIT
   sleep 1

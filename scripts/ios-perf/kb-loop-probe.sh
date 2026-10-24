@@ -84,10 +84,10 @@ LOAD="$(sysctl -n vm.loadavg | awk '{print $2}')"
 echo "== sim $UDID | mode $MODE | port $PORT | host load $LOAD"
 awk -v l="$LOAD" 'BEGIN{ if (l+0 > 25) print "   ⚠️  load > 25 — a UI-query timeout may be STARVATION, not the bug (round-2 lesson)" }'
 
-MODE="$MODE" node "$REPO/scripts/ios-perf/make-idle-fixture.mjs" "$WORK/$MODE-fixture.json" || exit 1
+MODE="$MODE" "${WALNUT_BUN:-bun}" "$REPO/scripts/ios-perf/make-idle-fixture.mjs" "$WORK/$MODE-fixture.json" || exit 1
 pkill -f "mock-server.mjs" 2>/dev/null; sleep 0.5
 IDLE=1 PORT=$PORT FIXTURE="$WORK/$MODE-fixture.json" \
-  node "$REPO/scripts/ios-perf/mock-server.mjs" > "$WORK/mock-$RUN.log" 2>&1 &
+  "${WALNUT_BUN:-bun}" "$REPO/scripts/ios-perf/mock-server.mjs" > "$WORK/mock-$RUN.log" 2>&1 &
 MOCK_PID=$!
 trap 'kill $MOCK_PID 2>/dev/null' EXIT
 sleep 1

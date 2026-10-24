@@ -41,10 +41,10 @@ UDID="$(xcrun simctl list devices available | grep -F "$SIM_NAME (" | head -1 | 
 echo "== sim $UDID  port $PORT  work $WORK"
 
 # ---------- fixture + mock server (IDLE session, real field scale) ----------
-node "$REPO/scripts/ios-perf/make-idle-fixture.mjs" "$WORK/idle-fixture.json" "${API_ROWS:-286}" || exit 1
+"${WALNUT_BUN:-bun}" "$REPO/scripts/ios-perf/make-idle-fixture.mjs" "$WORK/idle-fixture.json" "${API_ROWS:-286}" || exit 1
 pkill -f "mock-server.mjs" 2>/dev/null; sleep 0.5
 IDLE=1 PORT=$PORT FIXTURE="$WORK/idle-fixture.json" \
-  node "$REPO/scripts/ios-perf/mock-server.mjs" > "$WORK/mock.log" 2>&1 &
+  "${WALNUT_BUN:-bun}" "$REPO/scripts/ios-perf/mock-server.mjs" > "$WORK/mock.log" 2>&1 &
 MOCK_PID=$!
 trap 'kill $MOCK_PID 2>/dev/null' EXIT
 sleep 1

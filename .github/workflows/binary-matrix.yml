@@ -118,15 +118,15 @@ jobs:
         with:
           name: ${{ inputs.files }}
           path: ${{ runner.temp }}/release
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         if: inputs.files != ''
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: This row's file from the release's assets
         if: inputs.files != ''
         run: |
           sh scripts/release-unpack.sh "$RUNNER_TEMP/release" "$VERSION" dist-bin "${FILE#walnut-}"
-          node scripts/release-files.mjs stamp "$VERSION"
+          bun scripts/release-files.mjs stamp "$VERSION"
       - run: sh scripts/binary-matrix.sh "dist-bin/${{ matrix.file }}" "${{ matrix.image }}"
 
   macos:
@@ -161,15 +161,15 @@ jobs:
         with:
           name: ${{ inputs.files }}
           path: ${{ runner.temp }}/release
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         if: inputs.files != ''
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: This row's file from the release's assets
         if: inputs.files != ''
         run: |
           sh scripts/release-unpack.sh "$RUNNER_TEMP/release" "$VERSION" dist-bin "${FILE#walnut-}"
-          node scripts/release-files.mjs stamp "$VERSION"
+          bun scripts/release-files.mjs stamp "$VERSION"
       # An invalid signature may run today and be refused by a later macOS: judge it here.
       - run: codesign --verify --verbose "dist-bin/${{ matrix.file }}"
       - name: rehearse
@@ -203,13 +203,13 @@ jobs:
         with:
           name: ${{ inputs.files }}
           path: ${{ runner.temp }}/release
-      - uses: actions/setup-node@v5
+      - uses: oven-sh/setup-bun@v2
         if: inputs.files != ''
         with:
-          node-version: 22
+          bun-version: 1.4.4
       - name: The linux-x64 file from the release's assets
         if: inputs.files != ''
         run: |
           sh scripts/release-unpack.sh "$RUNNER_TEMP/release" "$VERSION" dist-bin linux-x64
-          node scripts/release-files.mjs stamp "$VERSION"
+          bun scripts/release-files.mjs stamp "$VERSION"
       - run: sh scripts/binary-old-kernel.sh dist-bin/walnut-linux-x64

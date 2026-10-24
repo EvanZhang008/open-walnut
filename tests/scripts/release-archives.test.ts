@@ -488,7 +488,7 @@ describe('the Mac app', () => {
 
   it('the release build carries the file it is given, checked, and names its DMG for that architecture', () => {
     const build = read('desktop/build-release.sh')
-    expect(build).toContain('node "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE"')
+    expect(build).toContain('"${WALNUT_BUN:-bun}" "$SCRIPT_DIR/../scripts/desktop-carry-release.mjs" --app "$APP_BUNDLE"')
     expect(build).toContain('--file "$WALNUT_APP_RUNTIME" --sums')
     expect(build).toContain('DMG_OUT="$SCRIPT_DIR/$APP_NAME-$CARRIED_ARCH.dmg"')
     // Carried once the identity is chosen, signed by it with the file's own
@@ -645,11 +645,11 @@ describe('the Mac app', () => {
     const job = load('mac-app.yml').jobs.app as Job
     const harness = job.steps.find((s) => s.uses?.startsWith('actions/checkout') && (s.with as Record<string, string> | undefined)?.path === 'harness')
     expect(harness?.with).toEqual({ ref: '${{ github.sha }}', path: 'harness' })
-    const smoke = job.steps.find((s) => /node \S*desktop-smoke\.mjs/.test(s.run ?? ''))!
-    expect(smoke.run).toMatch(/node harness\/scripts\/desktop-smoke\.mjs /)
-    // Any node script a step runs from the tag's tree is the release's own code, not a check.
+    const smoke = job.steps.find((s) => /bun \S*desktop-smoke\.mjs/.test(s.run ?? ''))!
+    expect(smoke.run).toMatch(/bun harness\/scripts\/desktop-smoke\.mjs /)
+    // Any script a step runs from the tag's tree is the release's own code, not a check.
     for (const s of job.steps) {
-      for (const m of (s.run ?? '').matchAll(/\bnode (\S+\.mjs)/g)) expect(m[1], s.name).toMatch(/^harness\//)
+      for (const m of (s.run ?? '').matchAll(/\b(?:bun|node) (\S+\.mjs)/g)) expect(m[1], s.name).toMatch(/^harness\//)
     }
   })
 
