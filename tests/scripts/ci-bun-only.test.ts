@@ -36,6 +36,7 @@ const KEEPS_NODE: Record<string, Record<string, string>> = {
     browser: 'the Playwright runner',
     onboarding: 'the npm channel: a user installs with npm on their own Node',
     rehearsal: 'the npm channel: the release package installed with npm 12',
+    field: 'the npm channel: the releases on npm today, installed and updated with npm 12',
     'archive-targets': 'the npm channel: the archive is built from the npm package',
   },
 }

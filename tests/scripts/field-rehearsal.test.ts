@@ -20,6 +20,7 @@ import { nodeForm, pruneToLogs, releaseArchive, startPointsOf } from '../../scri
 import { buildPackument, startRegistry } from '../../scripts/release-rehearsal/registry.mjs'
 import { compareVersions } from '../../scripts/release-rehearsal/version-order.mjs'
 import { TARGETS, builtName } from '../../scripts/release-files.mjs'
+import { npmEnv, npmOnPath } from '../helpers/npm-on-path.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'field-rehearsal-test-')))
@@ -138,7 +139,8 @@ describe('field-packs: the release as a release publishes it', () => {
     expect(r.stderr).toContain('rehearsal placeholder')
   })
 
-  it('npm installs the launcher and only this machine\'s package from the registry, and it runs the file', async () => {
+  // A user's npm on their Node: skipped where there is none, run in node-side (`bun run test:npm-channel`).
+  it.skipIf(!npmOnPath())('npm installs the launcher and only this machine\'s package from the registry, and it runs the file', async () => {
     const out = path.join(tmp, 'packs')
     const release = { version: '9.9.9-rehearsal.1', tarballs: packVersion({ files: stub('9.9.9-rehearsal.1'), version: '9.9.9-rehearsal.1', out }) }
     const next = { version: '9.9.9-rehearsal.2', tarballs: packVersion({ files: stub('9.9.9-rehearsal.2'), version: '9.9.9-rehearsal.2', out }) }
@@ -151,7 +153,7 @@ describe('field-packs: the release as a release publishes it', () => {
     const registry = await startRegistry({ tarballs: [...field.release.tarballs, ...field.next.tarballs].map((file: string) => ({ file })), distTags: { latest: field.release.version }, upstream: 'http://127.0.0.1:9' })
     try {
       const prefix = path.join(tmp, 'prefix')
-      const env = { ...process.env, npm_config_prefix: prefix, npm_config_registry: `${registry.url}/`, npm_config_cache: path.join(tmp, 'cache'), npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
+      const env = { ...npmEnv(), npm_config_prefix: prefix, npm_config_registry: `${registry.url}/`, npm_config_cache: path.join(tmp, 'cache'), npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
       const code = await new Promise<number>((resolve) => {
         const child = spawn('npm', ['install', '-g', 'open-walnut@latest'], { env, stdio: 'ignore' })
         child.on('close', (c) => resolve(c ?? 1))

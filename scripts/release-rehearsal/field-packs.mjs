@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The release the field rehearsal updates installs to (run.mjs --field latest,
  * field.mjs): this checkout as a release publishes it now, the open-walnut
@@ -7,12 +7,12 @@
  * never skipped by a version skew. Two versions: the release, and the one after
  * it, which the release's own updater must take (an install keeps working).
  *
- *   node scripts/release-rehearsal/field-packs.mjs versions
+ *   bun scripts/release-rehearsal/field-packs.mjs versions
  *        prints the two versions (above the registry's `latest` and `nightly`, and package.json)
  *   bun scripts/release-rehearsal/field-packs.mjs build --out <dir> [--target <t> ...] [--reuse-web] [--allow-checkout]
  *        compiles this checkout at both versions (build-binary.mjs, this
  *        machine's target unless --target names others) and packs them
- *   node scripts/release-rehearsal/field-packs.mjs pack --files <dir> --version <v> [--next-files <dir> --next <v2>] --out <dir>
+ *   bun scripts/release-rehearsal/field-packs.mjs pack --files <dir> --version <v> [--next-files <dir> --next <v2>] --out <dir>
  *        packs files compiled already (<dir>/walnut-<target>); the next release is optional
  *
  * Both leave <out>/field.json: { release: { version, tarballs }, next?: { version, tarballs } },

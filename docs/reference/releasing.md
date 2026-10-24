@@ -200,7 +200,7 @@ its server and daemon are stopped and only its logs stay, so a run holds one ins
 
 Locally: `bun scripts/release-rehearsal/field-packs.mjs build --out <dir> --allow-checkout` in a
 copy of the tree (or `field-packs.mjs pack --files <dir of walnut-<target> files> --version <v>`
-for files built already), then `node scripts/release-rehearsal/run.mjs --field latest
+for files built already), then `bun scripts/release-rehearsal/run.mjs --field latest
 --field-packs <dir>/field.json`; `--field-from <versions>` and `--field-only <scenarios>` narrow it.
 
 ## What a release ships: the compiled file
