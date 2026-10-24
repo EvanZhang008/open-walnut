@@ -67,10 +67,17 @@ struct BundledRuntimeTests {
         precondition(rt.serverLaunch(port: 3457, layout: .archive) == BundledRuntime.Launch(executable: rt.node, arguments: [rt.cli, "web", "--port", "3457"], directory: rt.packageRoot))
         precondition(rt.command(layout: .file(version: "0.7.0")) == rt.link)
         precondition(rt.command(layout: .archive) == rt.appDir + "/bin/walnut")
-        // The app updates the file while it serves (WALNUT_LAUNCHER_UPDATES=1); an archive,
-        // which the app never updates, keeps updating itself at start.
-        precondition(BundledRuntime.appUpdatesWhileServing(.file(version: "0.7.0")))
-        precondition(!BundledRuntime.appUpdatesWhileServing(.archive))
+        // No server updates before it listens: the file knows WALNUT_LAUNCHER_UPDATES, an
+        // archive's 0.6.x code only WALNUT_NO_AUTO_UPDATE (its npm outlasted the 180 s wait).
+        precondition(BundledRuntime.serverUpdateEnv(.file(version: "0.7.0")) == ["WALNUT_LAUNCHER_UPDATES": "1"])
+        precondition(BundledRuntime.serverUpdateEnv(.archive) == ["WALNUT_LAUNCHER_UPDATES": "1", "WALNUT_NO_AUTO_UPDATE": "1"])
+        // The app updates them while the server runs: the file itself, the archive to the
+        // newest file; an archive on a prerelease waits for an app that carries a newer file.
+        precondition(BundledRuntime.servingUpdate(.file(version: "0.7.0"), installed: "0.7.0") == .selfUpdate)
+        precondition(BundledRuntime.servingUpdate(.archive, installed: "0.6.17") == .moveArchive)
+        precondition(BundledRuntime.servingUpdate(.archive, installed: "0.7.0") == .moveArchive)
+        precondition(BundledRuntime.servingUpdate(.archive, installed: nil) == .moveArchive)
+        precondition(BundledRuntime.servingUpdate(.archive, installed: "0.6.18-nightly.20261020.1") == .none)
         // What `ps` shows for each, and what it never takes for a Walnut server.
         precondition(rt.isServerCommand(rt.link + " web --port 3456"))
         precondition(rt.isServerCommand(rt.link + " web"))

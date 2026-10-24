@@ -974,10 +974,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// The self-contained Walnut's own update, once per launch, while its server
     /// runs: `walnut update --auto` keeps updates.auto and the versions held back,
     /// downloads beside the version in use and swaps the link. The server keeps
-    /// its file; the next start runs the new one.
+    /// its file; the next start runs the new one. A Node archive moves to the
+    /// newest file instead (moveArchiveInBackground).
     func updateRuntimeInBackground() {
-        guard !runtimeUpdateStarted, let rt = runtime, let home = walnutHome,
-              let layout = rt.layout(), BundledRuntime.appUpdatesWhileServing(layout) else { return }
+        guard !runtimeUpdateStarted, let rt = runtime, let home = walnutHome, let layout = rt.layout() else { return }
+        switch BundledRuntime.servingUpdate(layout, installed: rt.installedVersion(layout: layout)) {
+        case .none:
+            return
+        case .moveArchive:
+            runtimeUpdateStarted = true
+            moveArchiveInBackground(rt)
+            return
+        case .selfUpdate:
+            break
+        }
         runtimeUpdateStarted = true
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: rt.link)
@@ -1004,6 +1014,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DesktopLogger.shared.log("runtime_update_started", fields: ["pid": String(proc.processIdentifier)])
         } catch {
             DesktopLogger.shared.log("runtime_update_failed", fields: ["error": error.localizedDescription])
+        }
+    }
+
+    /// A Node archive this launch did not replace (no carried file for this Mac, a
+    /// carried one older than the archive, or an install that failed): its server
+    /// runs with updates off (serverUpdateEnv), and install.sh puts the newest
+    /// release's file in while it serves. install.sh keeps app/ while this server
+    /// runs from it; the next start runs the file.
+    func moveArchiveInBackground(_ rt: BundledRuntime) {
+        guard let script = Bundle.main.path(forResource: "install", ofType: "sh") else { return }
+        var base = ProcessInfo.processInfo.environment
+        base["OPEN_WALNUT_INSTALL_DIR"] = rt.installDir
+        let env = BundledRuntime.installEnvironment(base: base, home: NSHomeDirectory())
+        let from = installedRuntimeVersion(rt) ?? "unknown"
+        DesktopLogger.shared.log("runtime_archive_move_started", fields: ["from": from, "dir": rt.installDir])
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = BundledRuntime.runInstaller(script: script, environment: env, onProgress: { _ in })
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.appendToBootstrapLog("install.sh (archive \(from) -> newest file)", result.output)
+                DesktopLogger.shared.log("runtime_archive_move_finished", fields: [
+                    "ok": String(result.success), "installed": self.installedRuntimeVersion(rt) ?? "unknown",
+                    "output": String(result.output.suffix(2_000)),
+                ])
+            }
         }
     }
 
@@ -1072,12 +1107,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // whatever terminal the user last used. See src/core/permissions/.
         env["WALNUT_LAUNCHER"] = "mac-app"
         // The self-contained Walnut updates while its server runs (updateRuntimeInBackground),
-        // never before it listens: that download would count against the startup deadline,
-        // and the restart after it would be a process this app does not know. A Node archive
-        // has no background update here, so it keeps updating itself at start, as under the
-        // app that installed it, until an app that carries a file moves it over.
-        if let layout = runtimeLayout, BundledRuntime.appUpdatesWhileServing(layout) {
-            env["WALNUT_LAUNCHER_UPDATES"] = "1"
+        // never before it listens: that install would count against the startup deadline
+        // (an archive's npm took 6.5 min under load, and every launch was killed at 180 s),
+        // and the restart after it would be a process this app does not know.
+        if let layout = runtimeLayout {
+            for (key, value) in BundledRuntime.serverUpdateEnv(layout) { env[key] = value }
         }
         let extraPaths = [
             "/opt/homebrew/bin",
@@ -1249,10 +1283,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let trimmed = outputBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.lastServerOutput = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
                     .suffix(15).joined(separator: "\n")
-                let detail = self.lastServerOutput.isEmpty ? "No output was captured." : self.lastServerOutput
-                self.handleServerStartupFailure(
-                    "The Walnut server did not become ready within \(Int(timeout)) seconds.\n\n\(detail)"
-                )
+                self.handleServerStartupFailure(StartupFailureText.timedOut(seconds: Int(timeout), output: outputBuffer))
             }
         }
         armStartupDeadline()

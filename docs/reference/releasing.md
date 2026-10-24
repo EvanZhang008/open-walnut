@@ -576,7 +576,10 @@ guess):
   the newer version it still has beside it). `walnut update` installs a held version when asked;
   `walnut update --auto` (what the Mac app runs while its server is up, starting that server with
   `WALNUT_LAUNCHER_UPDATES=1` so it never updates before listening) keeps `updates.auto` and the
-  held versions.
+  held versions. The Mac app starts a Node archive's server with `WALNUT_NO_AUTO_UPDATE=1` as
+  well (the only switch 0.6.x knows) and moves the archive to the file itself: the file it
+  carries before the server starts, else the newest release's through its `install.sh` while the
+  server runs (`desktop/README.md`).
 
 ## Checklist for a release
 

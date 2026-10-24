@@ -193,9 +193,15 @@ the state and its rules in `AppUpdateMachine.swift`, a port of T3's
    runs `walnut update --auto` once in the background (`runtime_update_*` in
    desktop.log). It keeps `updates.auto: false` and a version held back after
    a failed start; the next server start runs the new version. A Node archive
-   from the releases before the compiled file has no such update: it keeps
-   updating itself at start (no `WALNUT_LAUNCHER_UPDATES`), and the first
-   launch of an app that carries a file at least as new moves it to the file.
+   from the releases before the compiled file starts with
+   `WALNUT_NO_AUTO_UPDATE=1` too, the only switch its 0.6.x code knows (its npm
+   install before listen took 6.5 minutes under load, and the 180 s startup
+   wait killed it on every launch). The first launch of an app that carries a
+   file at least as new installs that file before the server starts; otherwise
+   the app runs its own `install.sh` once the archive's server answers, which
+   puts the newest release's file in beside it (`runtime_archive_move_*`), and
+   the next start runs the file. An archive on a prerelease waits for an app
+   that carries a newer file.
 
 Updates are off in a build with no feed (`build.sh`; a release build names the
 GitHub releases page in Info.plist as `WalnutUpdateFeed`), in an ad-hoc signed

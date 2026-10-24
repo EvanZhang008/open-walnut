@@ -20,10 +20,13 @@ import Foundation
 //
 // Before the compiled file, install.sh installed a Node archive into app/
 // (scripts/runtime-bundle/build.mjs). A Mac that has one keeps running it
-// (Layout.archive), updating itself at start, until the next install replaces
-// it: the first launch of an app that carries a file at least as new as the
-// archive does (RuntimeUpgrade.shouldInstallCarried). REMOVE the archive case
-// with the archives (.github/workflows/release-archives.yml).
+// (Layout.archive) until the app moves it to the file: the first launch of an
+// app that carries a file at least as new as the archive installs that one
+// before the server starts (RuntimeUpgrade.shouldInstallCarried); otherwise
+// install.sh puts the newest release's file in while the archive's server runs
+// (servingUpdate). The archive no longer updates itself at start under this app
+// (serverUpdateEnv). REMOVE the archive case with the archives
+// (.github/workflows/release-archives.yml).
 //
 // Foundation only, so tests/desktop/bundled-runtime-tests.swift compiles it alone.
 
@@ -134,13 +137,38 @@ struct BundledRuntime {
         }
     }
 
-    /// Whether the app updates this layout itself while its server runs
-    /// (`walnut update --auto`, so the server starts with WALNUT_LAUNCHER_UPDATES=1
-    /// and never updates before it listens): the file. A Node archive keeps
-    /// updating itself at start, as it did under the app that installed it.
-    static func appUpdatesWhileServing(_ layout: Layout) -> Bool {
-        if case .file = layout { return true }
-        return false
+    /// What the server gets so it never updates before it listens: the app does
+    /// every update itself while the server runs (servingUpdate). An update before
+    /// listen counts against the app's startup wait, and an archive's npm install
+    /// under load outlasts it (6.5 min against 180 s, killed at the deadline on
+    /// every launch). The file knows WALNUT_LAUNCHER_UPDATES=1; WALNUT_NO_AUTO_UPDATE=1
+    /// is the only switch the 0.6.x code in an archive knows, and the launcher an
+    /// archive updated itself onto knows both.
+    static func serverUpdateEnv(_ layout: Layout) -> [String: String] {
+        var env = ["WALNUT_LAUNCHER_UPDATES": "1"]
+        if layout == .archive { env["WALNUT_NO_AUTO_UPDATE"] = "1" }
+        return env
+    }
+
+    /// The update the app runs once its server answers (updateRuntimeInBackground).
+    enum ServingUpdate: Equatable {
+        /// `walnut update --auto`: the file's own update, beside the version in use.
+        case selfUpdate
+        /// install.sh with the newest release: the archive moves to the file. It
+        /// keeps app/ while a server runs from it, so this server goes on and the
+        /// next start runs the file.
+        case moveArchive
+        /// Nothing: an archive on a prerelease (the nightly channel), which the
+        /// newest release could take back; an app that carries a file at least as
+        /// new moves it.
+        case none
+    }
+
+    static func servingUpdate(_ layout: Layout, installed: String?) -> ServingUpdate {
+        switch layout {
+        case .file: return .selfUpdate
+        case .archive: return (installed ?? "").contains("-") ? .none : .moveArchive
+        }
     }
 
     /// The `walnut` command for ~/.local/bin (CommandLineTool.swift).

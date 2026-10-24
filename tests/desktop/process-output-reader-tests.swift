@@ -100,6 +100,18 @@ struct ProcessOutputReaderTests {
             isCurrentProcess: false
         ))
 
+        // A start that never listened says why on the screen, never only in Console.
+        let npm = "Open Walnut 0.6.17 is published (this is 0.6.16); installing it before starting. Set updates.auto: false\nnpm warn deprecated x@1\n"
+        let stuck = StartupFailureText.timedOut(seconds: 180, output: npm)
+        precondition(stuck.hasPrefix("The Walnut server did not become ready within 180 seconds. It was still installing a Walnut update before starting, which took longer than that.\n\n"))
+        precondition(stuck.hasSuffix("npm warn deprecated x@1"))
+        // An install that finished, or one the server left to run on its own, is not what held it.
+        precondition(!StartupFailureText.timedOut(seconds: 180, output: npm + "Installed Open Walnut 0.6.17; starting it.\n").contains("still installing"))
+        precondition(!StartupFailureText.timedOut(seconds: 180, output: npm + "Open Walnut 0.6.17 is still installing; starting 0.6.16 now.\n").contains("still installing a Walnut update"))
+        precondition(StartupFailureText.timedOut(seconds: 300, output: "") == "The Walnut server did not become ready within 300 seconds.\n\nNo output was captured.")
+        let many = (1...20).map { "line \($0)" }.joined(separator: "\n")
+        precondition(StartupFailureText.timedOut(seconds: 180, output: many).hasSuffix((6...20).map { "line \($0)" }.joined(separator: "\n")))
+
         print("Desktop lifecycle regression tests passed")
     }
 }

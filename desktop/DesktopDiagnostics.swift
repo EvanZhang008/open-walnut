@@ -157,6 +157,24 @@ final class ProcessOutputReader {
     }
 }
 
+/// What the app says when the server never printed "listening" in time. The
+/// wait is finite (ServerRestartPolicy), and the screen says why without
+/// Console: a server that was still installing an update before it starts (one
+/// from before this app, which starts its own with updates off) is named as
+/// such, then the server's last lines.
+enum StartupFailureText {
+    static func timedOut(seconds: Int, output: String) -> String {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tail = trimmed.split(separator: "\n", omittingEmptySubsequences: false).suffix(15).joined(separator: "\n")
+        var text = "The Walnut server did not become ready within \(seconds) seconds."
+        // The 0.6.x server's line before its npm install; a later one names when it starts anyway.
+        if trimmed.contains("installing it before starting") && !trimmed.contains("Installed Open Walnut") && !trimmed.contains("is still installing") {
+            text += " It was still installing a Walnut update before starting, which took longer than that."
+        }
+        return text + "\n\n" + (tail.isEmpty ? "No output was captured." : tail)
+    }
+}
+
 struct ServerRestartPolicy {
     static let healthyResetInterval: TimeInterval = 120
     static let ordinaryStartupTimeout: TimeInterval = 180

@@ -327,11 +327,12 @@ enum RuntimeUpgrade {
     /// nightly channel, `walnut update`) keeps its own.
     ///
     /// A Node archive (`replacesArchive`, the releases before the compiled file)
-    /// is replaced by a carried file of its own version too. It updates itself
-    /// when its server starts, which on an app launch comes before the app's own
-    /// update is offered, so by the time the new app runs, the archive is
-    /// usually at the very version the app carries; only the app's install
-    /// moves it to the file.
+    /// is replaced by a carried file of its own version too. Under the app that
+    /// installed it, it updated itself when its server started, which on an app
+    /// launch came before the app's own update was offered, so by the time the
+    /// new app runs, the archive is usually at the very version the app carries;
+    /// only the app's install moves it to the file. (This app starts it with
+    /// updates off and moves it itself: BundledRuntime.servingUpdate.)
     static func shouldInstallCarried(carried: String?, installed: String?, replacesArchive: Bool = false) -> Bool {
         guard let carried = carried else { return false }
         guard let installed = installed else { return true }
