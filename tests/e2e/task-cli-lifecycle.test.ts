@@ -133,7 +133,7 @@ describe('task CLI lifecycle through a real server and process transport', () =>
     expect(await getSessionsForTask(id)).toHaveLength(1)
   }, 60_000)
 
-  it('fails honestly, keeps the task and failed run, and retries that same task', async () => {
+  it('fails honestly, keeps the task and its error, and retries that same task', async () => {
     const created = await cli('task_create', { title: 'Recover CLI execution', message: 'snapshot-clean-turn:preserved-retry-instruction', cwd: path.join(WALNUT_HOME, 'missing') })
     expect(created.code).not.toBe(0)
     expect(created.body, created.stderr).toBeDefined()
@@ -145,9 +145,12 @@ describe('task CLI lifecycle through a real server and process transport', () =>
     const retried = await cli('task_start', { id, cwd: WALNUT_HOME })
     expect(retried.code, retried.stderr).toBe(0)
     expect(retried.body.started).toBe(true)
+    // One session per task: a start that never ran a turn is replaced by the retry
+    // (sessionHasNoConversation in src/core/sessions/one-session-per-task.ts), so the
+    // task's one row is the retry's. Its error was read above, from the task.
     const rows = await getSessionsForTask(id)
-    expect(rows).toHaveLength(2)
-    expect(rows.find((row) => row.claudeSessionId !== retried.body.sessionId)?.errorMessage).toContain('Working directory no longer exists')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].claudeSessionId).toBe(retried.body.sessionId)
     await vi.waitFor(async () => {
       expect(await fs.readFile(streamFilePath(retried.body.sessionId), 'utf8')).toContain('preserved-retry-instruction')
     }, { timeout: 10_000 })
