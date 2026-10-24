@@ -23,10 +23,10 @@ the Mac (this machine)                                    a host (Linux containe
 ## Run it
 
 ```bash
-npm run test:fleet                                   # every tests/fleet/*.fleet.ts
+bun run test:fleet                                   # every tests/fleet/*.fleet.ts
 bash scripts/run-fleet-tests.sh tests/fleet/mac-and-host.fleet.ts
 bash scripts/run-fleet-tests.sh clean                # remove leftovers and the cached images
-DEBUG_FLEET=1 KEEP_FLEET=1 npm run test:fleet        # Mac stderr live; keep the containers and temp dir
+DEBUG_FLEET=1 KEEP_FLEET=1 bun run test:fleet        # Mac stderr live; keep the containers and temp dir
 ```
 
 Opt-in, like the live tier: no other config includes `*.fleet.ts`, so the
@@ -42,7 +42,7 @@ and 512 processes. A run holds a Walnut server, its daemons and one container pe
 host, so run one fleet at a time, on a machine that is not already busy.
 
 The daemon the Mac deploys: the prebuilt Linux binary when `dist/daemon-binaries`
-holds one for the container's architecture (`npm run build:daemon`), otherwise the
+holds one for the container's architecture (`bun run build:daemon`), otherwise the
 daemon's source under the host's node. `scripts/run-fleet-tests.sh` builds the
 binaries first when the tree has no Linux one (a fresh clone): `host-faults.fleet.ts`
 C1 proves the chunked binary deploy, and C2 runs on C1's session. The host has no

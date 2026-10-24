@@ -29,7 +29,7 @@ import { startFleet, type Fleet } from './fleet.js'
 import { appliedLines, attemptsSummary, expectControlMaster, journaledTitle, makeTask, runningTurns, startHostSession, startSession, startUpdateTurn, updateTurnsEnded, type HostSession } from './steps.js'
 
 const unavailable = await dockerUnavailable()
-if (unavailable) process.stdout.write(`\n[fleet] SKIPPED: Docker is not available here (${unavailable}). Start Docker and run npm run test:fleet.\n\n`)
+if (unavailable) process.stdout.write(`\n[fleet] SKIPPED: Docker is not available here (${unavailable}). Start Docker and run bun run test:fleet.\n\n`)
 
 const NOTE = { path: 'Acme/Runbook.md', text: 'The fleet runbook says drain before you deploy.' }
 const PRIVATE = { path: 'Private/Diary.md', text: 'A private line that never leaves the Mac.' }

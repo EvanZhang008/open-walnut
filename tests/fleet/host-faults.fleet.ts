@@ -20,7 +20,7 @@ import { startFleet, type Fleet } from './fleet.js'
 import { appliedLines, attemptsSummary, expectControlMaster, journaledTitle, results, startHostSession, startUpdateTurn, updateTurnsEnded, type HostSession } from './steps.js'
 
 const unavailable = await dockerUnavailable()
-if (unavailable) process.stdout.write(`\n[fleet] SKIPPED: Docker is not available here (${unavailable}). Start Docker and run npm run test:fleet.\n\n`)
+if (unavailable) process.stdout.write(`\n[fleet] SKIPPED: Docker is not available here (${unavailable}). Start Docker and run bun run test:fleet.\n\n`)
 
 const CAP_BYTES = 4 * 1024 * 1024
 const SKEW = '-10m'

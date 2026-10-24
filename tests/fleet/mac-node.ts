@@ -21,13 +21,15 @@ import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
+import { bunRuntime } from '../helpers/bun-runtime.js'
 import { _signalSafetyForTesting, ROOT, waitFor } from '../helpers/replica-cluster.js'
 import type { SshIdentity } from './ssh-identity.js'
 
 const { pin, stillPinned, signalPinned, signalChild, pidsRunning, readPid } = _signalSafetyForTesting
 type Pinned = NonNullable<ReturnType<typeof pin>>
 
-const TSX = path.join(ROOT, 'node_modules', '.bin', 'tsx')
+/** The bun the Mac's sources and its mock claude run on: this runner's own (tests/helpers/bun-runtime.ts). */
+const MAC_RUNTIME = bunRuntime()
 
 export interface MacSeed {
   /** Notes to write into the vault before boot: relative path to text. */
@@ -37,7 +39,7 @@ export interface MacSeed {
 }
 
 /**
- * What the Mac runs: this tree's sources under tsx (the default), or an installed
+ * What the Mac runs: this tree's sources on bun (the default), or an installed
  * release, started the way a person's install starts it: `<command> web --port <n>`
  * (a Node archive's bin/walnut, or a compiled walnut file). Every program runs on
  * the same data, daemon and temp dirs, so one can replace another (an upgrade, a
@@ -166,7 +168,7 @@ export async function startMac(base: string, ssh: SshIdentity, windows: Record<s
   for (const x of [d.data, d.daemon, path.join(d.home, '.ssh')]) fs.mkdirSync(x, { recursive: true, mode: 0o700 })
   // The Mac's own claude is the same mock (its local daemon may probe one); never the real CLI.
   fs.copyFileSync(path.join(import.meta.dirname, 'host-image', 'mock-claude.cjs'), path.join(ssh.bin, 'mock-claude.cjs'))
-  fs.writeFileSync(path.join(ssh.bin, 'claude'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(ssh.bin, 'mock-claude.cjs'))} "$@"\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(ssh.bin, 'claude'), `#!/bin/sh\nexec ${JSON.stringify(MAC_RUNTIME)} ${JSON.stringify(path.join(ssh.bin, 'mock-claude.cjs'))} "$@"\n`, { mode: 0o755 })
   // The data is the person's from the second start on: an upgrade or a rollback finds it as the last server left it.
   if (fresh) {
     fs.writeFileSync(path.join(d.data, 'config.yaml'), config())
@@ -200,7 +202,7 @@ export async function startMac(base: string, ssh: SshIdentity, windows: Record<s
   let booted: { port: number; pid: number }
   let looksRight: (c: string) => boolean
   if (program.kind === 'source') {
-    proc = spawn(TSX, [bootFile], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    proc = spawn(MAC_RUNTIME, [bootFile], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   } else {
     const port = await freePort()
     proc = spawn(program.command, ['web', '--port', String(port)], { cwd: d.home, env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -223,7 +225,7 @@ export async function startMac(base: string, ssh: SshIdentity, windows: Record<s
       })
       proc.once('exit', (code) => { clearTimeout(t); reject(new Error(`fleet: the Mac exited early (${code})\n${stderr.slice(-3000)}`)) })
     })
-    looksRight = (c) => c.startsWith(`${process.execPath} `) && c.includes(bootFile)
+    looksRight = (c) => c.startsWith(`${MAC_RUNTIME} `) && c.includes(bootFile)
   } else {
     const port = Number(proc.spawnargs[proc.spawnargs.length - 1])
     await untilServes(port, proc, 240_000, () => stderr)
