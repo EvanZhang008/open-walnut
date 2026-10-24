@@ -1,5 +1,6 @@
 import type { Disposable, PluginLogger, WalnutTask, WalnutTaskSummary } from './shared.js'
 import type {
+  AppStatePublishOptions,
   LetterAnsweredEvent,
   LetterSendInput,
   LetterState,
@@ -143,6 +144,11 @@ export interface FakeWalnutResult {
   statusItems: Map<string, StatusItemState>
   /** Every `hosts.run` call, in order. */
   hostRuns: Array<{ alias: string; input: HostRunInput }>
+  /**
+   * What the plugin shares through `appState`, latest per task: the state, its options and
+   * how many times it was published. A `clear` removes the task.
+   */
+  appStates: Map<string, { state: Record<string, unknown>; options: AppStatePublishOptions; version: number }>
   /** The plugin's live `macos.useFullDiskAccess` declarations. */
   fullDiskAccessUses: FullDiskAccessUse[]
   /** Every path `macos.readProtectedFile` was asked for, in order. */
@@ -173,6 +179,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const registeredOps: PluginOpDefinition[] = []
   const services = new Map<string, ServiceApi>()
   let database: PluginDatabase | undefined
+  const appStates: FakeWalnutResult['appStates'] = new Map()
   const letters: LetterState[] = []
   const statusItems = new Map<string, StatusItemState>()
   const hostList: HostInfo[] = [{ alias: '__local__', local: true, enabled: true }, ...(options.hosts ?? []).map((host) => structuredClone(host))]
@@ -728,6 +735,24 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       // The fake never runs a service method on another plugin's behalf, so there is no caller.
       caller() { return undefined },
     },
+    // Latest state per task, with its options: `appStates` on the result.
+    appState: {
+      async publish(taskId, state, publishOptions = {}) {
+        if (typeof taskId !== 'string' || !taskId.trim()) throw new TypeError('App state needs the id of the task whose session reads it')
+        if (!state || typeof state !== 'object' || Array.isArray(state)) throw new TypeError('App state must be a plain object')
+        if (publishOptions.mode !== undefined && publishOptions.mode !== 'passive' && publishOptions.mode !== 'proactive') {
+          throw new TypeError('App state mode is passive or proactive')
+        }
+        const copy = JSON.parse(JSON.stringify(state)) as Record<string, unknown>
+        if (new TextEncoder().encode(JSON.stringify(copy)).length > 64 * 1024) throw new RangeError('App state is over 64 KB')
+        const version = (appStates.get(taskId)?.version ?? 0) + 1
+        appStates.set(taskId, { state: copy, options: { ...publishOptions }, version })
+        return { version, kept: true }
+      },
+      async clear(taskId) {
+        appStates.delete(taskId)
+      },
+    },
     // In-memory inbox: `send` records the letter, `answerLetter` on the result plays the human.
     letters: {
       async send(input: LetterSendInput) {
@@ -827,5 +852,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, appStates, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
 }

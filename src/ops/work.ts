@@ -145,6 +145,27 @@ defineOp({
 });
 
 defineOp({
+  name: 'app_state',
+  title: 'What the App beside you shows',
+  description:
+    'The live state a plugin App shares about your task, whole: for example the code typed in its editor (saved or not), ' +
+    'the last test run, a timer. Messages into your session already carry what changed since you last read it ' +
+    '(a <walnut-message kind="app-state"> note); call this when you need all of it. Read-only; it never changes the App.',
+  input: {},
+  bind: { method: 'GET', path: '/me/app-state' },
+  mapResult: ({ body }) => {
+    const read = (body ?? {}) as { states?: unknown[] };
+    const count = Array.isArray(read.states) ? read.states.length : 0;
+    return withOutcome(
+      { ...read },
+      count === 1 ? 'One App shares state about your task.' : count ? `${count} Apps share state about your task.` : 'No App shares state about your task.',
+      count ? 'Later messages carry only what changes after this read.' : 'Nothing else is required.',
+    );
+  },
+  tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
   name: 'open_items',
   title: 'What is still open for your task',
   description:

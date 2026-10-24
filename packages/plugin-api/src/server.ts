@@ -1300,6 +1300,44 @@ export interface RegistryService {
   skill(definition: PluginSkillDefinition): Disposable
 }
 
+export type AppStateMode = 'passive' | 'proactive'
+
+export interface AppStatePublishOptions {
+  /**
+   * `passive` (default): nothing is sent now; the next message into the task's session
+   * (the person typing, a peer, a trigger) carries what changed, in the same turn.
+   * `proactive`: that note also starts a turn of its own, debounced (2 s) and at most one
+   * a minute per plugin and task. Use it for a change the AI should react to unasked.
+   */
+  mode?: AppStateMode
+  /** Name on the card and in the AI's note. Default: the plugin's name. */
+  label?: string
+  /** One sentence the AI reads with the whole state: what it is, what is left out on purpose. */
+  note?: string
+}
+
+/**
+ * Share what your App shows with the AI working on a task, without an MCP server or a
+ * tool call: Walnut keeps the latest JSON object per task and plugin, and the session
+ * reads it as a `<walnut-message kind="app-state">` note. The first note holds the whole
+ * object; later ones only what changed since that session last read it (one line per
+ * changed value, a line patch for an edited text). The session can read all of it any
+ * time with `walnut tools call app_state`.
+ *
+ * Publish as often as the state changes (each call replaces the last; only the latest
+ * is ever sent). Keep it a status: a plain JSON object of at most 64 KB. Leave out what
+ * the AI must not see (an answer key): everything published is readable by that session.
+ * In memory on the primary Walnut: a restart forgets it, and on a replica `publish`
+ * answers `kept: false`. Everything this plugin published goes away when it is disabled
+ * or reloaded.
+ */
+export interface AppStateService {
+  /** `taskId` is the task whose session reads it, usually one your plugin started. Throws for an unknown task or a state that is not small JSON. */
+  publish(taskId: string, state: Record<string, unknown>, options?: AppStatePublishOptions): Promise<{ version: number; kept: boolean }>
+  /** Stop sharing with that task. */
+  clear(taskId: string): Promise<void>
+}
+
 /**
  * One short text answer from the host's own configured model, on its fast tier.
  *
@@ -1559,6 +1597,7 @@ export interface WalnutServerApi {
   readonly config: ConfigService
   readonly notifications: NotificationService
   readonly ui: UiService
+  readonly appState: AppStateService
   readonly letters: LettersService
   readonly ops: OpsService
   readonly services: ServicesService

@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from '@/api/client'
+import { apiDelete, apiGet, apiPost } from '@/api/client'
 import { getDeviceToken } from '@/api/device-token'
 import { wsClient } from '@/api/ws'
 import { getAppInfo } from '@/utils/app-info'
@@ -123,6 +123,68 @@ function normalizeEventName(pluginId: string, name: string): string {
   return `plugin:${pluginId}:${name}`
 }
 
+/** Publishes inside this window fold into one request: the host keeps only the latest anyway. */
+const APP_STATE_FOLD_MS = 300
+
+type AppStateOptions = { mode?: 'passive' | 'proactive'; label?: string; note?: string }
+type AppStateAnswer = { version: number; kept: boolean }
+
+/**
+ * `walnut.appState` for one plugin's App: the server keeps the state
+ * (core/sessions/app-state.ts); this side folds a burst (an editor publishing on every
+ * keystroke) into one POST per task. Every caller in a burst gets that POST's answer.
+ * A proactive publish in the burst makes the folded one proactive.
+ */
+function createAppStatePublisher(pluginId: string, signal: AbortSignal): WalnutWebApiHost['appState'] {
+  const base = `/api/plugin-runtime/${encodeURIComponent(pluginId)}/app-state`
+  const pending = new Map<string, {
+    state: Record<string, unknown>
+    options: AppStateOptions
+    timer: ReturnType<typeof setTimeout>
+    waiters: Array<{ resolve: (answer: AppStateAnswer) => void; reject: (error: unknown) => void }>
+  }>()
+  const flush = (taskId: string) => {
+    const batch = pending.get(taskId)
+    if (!batch) return
+    pending.delete(taskId)
+    if (signal.aborted) {
+      for (const waiter of batch.waiters) waiter.reject(new Error('The plugin was unloaded before its app state was sent'))
+      return
+    }
+    apiPost<AppStateAnswer>(base, { taskId, state: batch.state, ...batch.options })
+      .then((answer) => { for (const waiter of batch.waiters) waiter.resolve(answer) })
+      .catch((error: unknown) => { for (const waiter of batch.waiters) waiter.reject(error) })
+  }
+  return {
+    publish(taskId, state, options = {}) {
+      return new Promise<AppStateAnswer>((resolve, reject) => {
+        if (typeof taskId !== 'string' || !taskId.trim()) {
+          reject(new TypeError('App state needs the id of the task whose session reads it'))
+          return
+        }
+        const prior = pending.get(taskId)
+        if (prior) clearTimeout(prior.timer)
+        const proactive = options.mode === 'proactive' || prior?.options.mode === 'proactive'
+        pending.set(taskId, {
+          state,
+          options: { ...options, ...(proactive ? { mode: 'proactive' as const } : {}) },
+          timer: setTimeout(() => flush(taskId), APP_STATE_FOLD_MS),
+          waiters: [...(prior?.waiters ?? []), { resolve, reject }],
+        })
+      })
+    },
+    async clear(taskId) {
+      const prior = pending.get(taskId)
+      if (prior) {
+        clearTimeout(prior.timer)
+        pending.delete(taskId)
+        for (const waiter of prior.waiters) waiter.resolve({ version: 0, kept: false })
+      }
+      await apiDelete(`${base}/${encodeURIComponent(taskId)}`)
+    },
+  }
+}
+
 export function createWebPluginApi(
   pluginId: string,
   pluginName: string,
@@ -131,6 +193,7 @@ export function createWebPluginApi(
   const pluginLog = loggerFor(pluginId)
   let unsafeWarned = false
   const own = context.own.bind(context)
+  const appState = createAppStatePublisher(pluginId, context.signal)
 
   return {
     pluginId,
@@ -193,6 +256,7 @@ export function createWebPluginApi(
         return response.ops
       },
     },
+    appState,
     ws: {
       call<T = unknown>(id: string, payload: unknown = {}) {
         validateLocalId(id)

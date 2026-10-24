@@ -480,6 +480,53 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
     }
   })
 
+  /**
+   * App state from the plugin's App in the browser (`walnut.appState` on the web side):
+   * the latest JSON object it shows, for the AI working on `taskId`
+   * (core/sessions/app-state.ts). The leader keeps it; a replica answers `kept: false`.
+   */
+  router.post('/:pluginId/app-state', async (req, res) => {
+    try {
+      const pluginId = routePluginId(req.params.pluginId)
+      if (cloudMode) {
+        res.json({ version: 0, kept: false })
+        return
+      }
+      if (!activePlugin(pluginId)) {
+        res.status(404).json({ error: `Active Plugin "${pluginId}" was not found` })
+        return
+      }
+      const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>
+      const name = deps.list().find((plugin) => plugin.id === pluginId)?.name ?? pluginId
+      const { publishAppState } = await import('../../core/sessions/app-state.js')
+      res.json(await publishAppState(pluginId, name, {
+        taskId: body.taskId as string,
+        state: body.state as Record<string, unknown>,
+        ...(body.mode !== undefined ? { mode: body.mode as 'passive' | 'proactive' } : {}),
+        ...(typeof body.label === 'string' ? { label: body.label } : {}),
+        ...(typeof body.note === 'string' ? { note: body.note } : {}),
+      }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      res.status(/^No task /.test(message) ? 404 : error instanceof RangeError ? 413 : errorStatus(error)).json({ error: message })
+    }
+  })
+
+  router.delete('/:pluginId/app-state/:taskId', async (req, res) => {
+    try {
+      const pluginId = routePluginId(req.params.pluginId)
+      const rawTask = req.params.taskId
+      const taskId = Array.isArray(rawTask) ? rawTask[0] : rawTask
+      if (!cloudMode) {
+        const { clearAppState } = await import('../../core/sessions/app-state.js')
+        clearAppState(pluginId, taskId)
+      }
+      res.json({ ok: true })
+    } catch (error) {
+      res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
   router.post('/:pluginId/reload', async (req, res) => {
     try {
       const pluginId = routePluginId(req.params.pluginId)

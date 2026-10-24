@@ -294,3 +294,21 @@ describe('createFakeWalnut storage.database', () => {
     }
   })
 })
+
+describe('createFakeWalnut appState', () => {
+  it('keeps the latest state per task with its options, and refuses what the host refuses', async () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+    await fake.api.appState.publish('t1', { level: 1 })
+    const second = await fake.api.appState.publish('t1', { level: 2 }, { mode: 'proactive', label: 'Sample' })
+    expect(second).toEqual({ version: 2, kept: true })
+    expect(fake.appStates.get('t1')).toEqual({ state: { level: 2 }, options: { mode: 'proactive', label: 'Sample' }, version: 2 })
+
+    await expect(fake.api.appState.publish('', { a: 1 })).rejects.toThrow(TypeError)
+    await expect(fake.api.appState.publish('t1', [] as unknown as Record<string, unknown>)).rejects.toThrow('plain object')
+    await expect(fake.api.appState.publish('t1', { a: 1 }, { mode: 'loud' as 'passive' })).rejects.toThrow('passive or proactive')
+    await expect(fake.api.appState.publish('t1', { big: 'x'.repeat(64 * 1024) })).rejects.toThrow(RangeError)
+
+    await fake.api.appState.clear('t1')
+    expect(fake.appStates.has('t1')).toBe(false)
+  })
+})

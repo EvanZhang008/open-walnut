@@ -200,22 +200,36 @@ export async function sendMessageToSession(
   // directive a human send would (sessions/output-mode-send.ts).
   const { prepareAutomatedOutputModeSend } = await import('./sessions/output-mode-send.js');
   const rawBody = opts?.enqueueMessage ?? message;
+  // What a plugin App shows (an editor, a test run) rides the same way: what
+  // changed since this session last read it, never a turn (sessions/app-state.ts).
+  const { pendingAppState } = await import('./sessions/app-state.js');
+  const appState = await pendingAppState(sessionId, rawBody);
   const outputMode = await prepareAutomatedOutputModeSend(sessionId, opts?.source, rawBody);
   const body = outputMode?.enqueueText ?? rawBody;
-  const notes = [place?.text, digest?.text].filter(Boolean).join('\n\n');
+  const notes = [place?.text, digest?.text, appState?.text].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
-  const msg = await enqueueMessage(sessionId, enqueueText, {
-    id: opts?.messageId,
-    ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
-    ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
-    ...(opts?.relayTaken ? { relayTaken: true } : {}),
-    ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
-  });
+  let msg: QueuedMessage;
+  try {
+    msg = await enqueueMessage(sessionId, enqueueText, {
+      id: opts?.messageId,
+      ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
+      ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+      ...(opts?.relayTaken ? { relayTaken: true } : {}),
+      ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
+    });
+  } catch (err) {
+    appState?.release();
+    throw err;
+  }
   const source = opts?.source ?? 'unknown';
   // A repeat collapsed onto the row already queued: only the row that holds the note counts.
   if (place && msg.message.startsWith(place.text)) await place.markTold();
   if (digest && msg.message.includes(digest.text)) await digest.markTold();
   if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
+  if (appState) {
+    if (msg.message.includes(appState.text)) appState.markTold();
+    else appState.release();
+  }
 
   // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because
   // the record profile is consumed exactly when this send triggers a cold

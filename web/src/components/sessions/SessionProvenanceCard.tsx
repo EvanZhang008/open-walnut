@@ -197,6 +197,7 @@ function foldDirection(envelope: SessionEnvelope): string {
     case 'reply': return 'Reply from';
     case 'notification': return 'Walnut, about';
     case 'trigger': return 'Trigger';
+    case 'app-state': return 'App state from';
     default: return envelope.source === 'claude-code' ? 'Claude Code session' : 'From';
   }
 }
@@ -323,6 +324,30 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
         {open && (
           <>
             {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
+            <EnvelopeDetails envelope={envelope} />
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // App state comes from a plugin App, not a session: the fold names the App and
+  // says how much changed; open, it is the exact text the model read, verbatim
+  // (a line patch read as markdown would turn its -/+ lines into a list).
+  if (kind === 'app-state') {
+    return (
+      <div className="provenance-card" data-envelope-kind={kind} data-folded={open ? 'false' : 'true'}>
+        <MessageFoldSummary
+          glyph={envelopeDirectionGlyph(kind)}
+          direction={foldDirection(envelope)}
+          sender={peer.title || 'an App'}
+          title={envelope.title}
+          open={open}
+          onToggle={toggle}
+        />
+        {open && (
+          <>
+            {envelope.body !== undefined && <pre className="provenance-app-state">{envelope.body}</pre>}
             <EnvelopeDetails envelope={envelope} />
           </>
         )}

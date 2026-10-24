@@ -405,6 +405,48 @@ export function activate(walnut: WalnutServerApi) {
 
 Two surfaces are still blind to plugin ops, because they are separate processes with their own registry: a standalone `walnut …` command, and the stdio MCP server. `docs/reference/ops.md` is generated from the repo's core ops only, for the same reason.
 
+### App state: what the AI beside your App sees
+
+An App that embeds a session with `SessionView` (an editor beside an AI partner, a dashboard beside an assistant) knows things that session cannot see: the code typed but not saved, the last test run, a timer. `walnut.appState` hands them over without an MCP server and without the AI having to ask. Publish one small JSON object per task, as often as it changes; Walnut keeps the latest copy and the task's session reads it as a `<walnut-message kind="app-state">` note:
+
+- **Passive** (the default): nothing is sent when you publish. The next message into the session, the person typing or anything else, carries the note in the same turn, so ten minutes of typing and then a question costs one note, not a stream of turns.
+- **Proactive**: the note also starts a turn of its own, 2 seconds after the last publish and at most one a minute per plugin and task. Use it for a change the AI should react to unasked, such as an attempt that just finished.
+
+The first note a session gets holds the whole object. After that it holds only what changed since that session last read it: one line per changed value (`lastRun.passed: 3 → 7`), and a line patch for an edited text, so one changed line in a 300-line file costs a few lines. A new session on the task, or a compaction, starts again from the whole object. The session can read everything at any time with `walnut tools call app_state`, and that read counts as seen. In the session view the note folds into a card under the person's message.
+
+```ts compile=app-state-server
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+export function activate(walnut: WalnutServerApi) {
+  walnut.registry.wsMethod('run-finished', async (payload) => {
+    const { taskId, passed, total } = payload as { taskId: string; passed: number; total: number }
+    // Proactive: a finished run is something the AI partner should comment on unasked.
+    await walnut.appState.publish(taskId, { lastRun: { passed, total } }, {
+      mode: passed === total ? 'proactive' : 'passive',
+      note: 'The pattern of the problem is left out on purpose until the person finishes.',
+    })
+    return { ok: true }
+  })
+}
+```
+
+The App in the browser has the same call, which folds calls made within 300 ms into one request, so publishing the editor buffer on every keystroke is fine:
+
+```tsx compile=app-state-web
+import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
+
+export function shareEditor(walnut: WalnutWebApi, taskId: string, file: string, text: string) {
+  void walnut.appState.publish(taskId, { files: { [file]: text } }).catch((error) => walnut.log.warn('app state not shared', { error: String(error) }))
+}
+```
+
+Each publish replaces the whole object, so a server and a browser publishing for the same plugin and task overwrite each other: pick one owner per task, or send the browser's part through your server. `taskId` is the task whose session reads the state, normally one your plugin started with `task_create`. Rules that keep it useful:
+
+- Keep it a status, at most 64 KB of plain JSON. Big content stays in files the session can read; send the path.
+- Everything you publish is readable by that session. Leave out what it must not see (an answer key, a credential).
+- The state lives in memory on the primary Walnut. A restart forgets it, so publish again when your App opens; on a replica `publish` answers `kept: false`. Everything a plugin published goes away when it is disabled or reloaded.
+- Prefer passive. Each proactive turn costs a model call and interrupts the conversation the person is having.
+
 ### Services: plugins on top of plugins
 
 A service is how one plugin builds on another. The publisher hands out a bag of methods under `<pluginId>:<name>`, and a plugin that declared the publisher in its manifest `dependencies` calls those methods directly, in the same process, with no HTTP and no serialization. This is the seam a capability plugin stands on: a base plugin publishes, and its provider plugins depend on it.

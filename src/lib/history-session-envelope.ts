@@ -62,7 +62,7 @@
  * resolves against the real session list.
  */
 
-export type SessionEnvelopeKind = 'reply' | 'peer-note' | 'notification' | 'reply-request' | 'trigger';
+export type SessionEnvelopeKind = 'reply' | 'peer-note' | 'notification' | 'reply-request' | 'trigger' | 'app-state';
 
 /** Who framed the message: Walnut's own envelope, or Claude Code's native one. */
 export type SessionEnvelopeSource = 'walnut' | 'claude-code';
@@ -432,7 +432,7 @@ const TAG_HEAD = /^<walnut-message\s/;
 /** `name="value"`. A value cannot hold a `"` — the serializer escapes it. */
 const ATTR = /([a-z][a-z0-9-]*)="([^"]*)"/g;
 /** The kinds the tag carries. Anything else degrades to raw text on purpose. */
-const TAG_KINDS = new Set(['peer-note', 'reply', 'notification', 'trigger']);
+const TAG_KINDS = new Set(['peer-note', 'reply', 'notification', 'trigger', 'app-state']);
 /** `Title [8hex]` as `sessionHandle()` prints it (4+ so a short id still reads). */
 const HANDLE = /\[([0-9a-f]{4,})\]\s*$/i;
 /** The one line a peer-note with a `request` may be followed by. */
@@ -531,9 +531,12 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
   // statusLine slot while keeping the whole body as the delivery.
   const notify = kind === 'notification';
   const trigger = kind === 'trigger';
+  // App state comes from a plugin App (`from` is its name) and is ABOUT a task;
+  // `title` is its one-line summary and the whole body is what the model read.
+  const appState = kind === 'app-state';
   const handle = notify ? attrs.about : attrs.from;
   const sessionId = notify ? attrs['about-session'] : attrs['from-session'];
-  const taskId = notify ? attrs['about-task'] : attrs['from-task'];
+  const taskId = notify || appState ? attrs['about-task'] : attrs['from-task'];
   const peer: SessionEnvelopePeer = attrs.anonymous === 'true'
     // No tracked session behind the send: a host and nothing that reads as an id.
     ? { ...(attrs.host ? { host: attrs.host } : {}), anonymous: true }
@@ -565,7 +568,7 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
       ...(attrs.request ? { requestId: attrs.request } : {}),
       peer,
       ...(attrs.asked ? { askedPreview: attrs.asked } : {}),
-      ...(attrs.title && (kind === 'peer-note' || kind === 'reply') ? { title: attrs.title } : {}),
+      ...(attrs.title && (kind === 'peer-note' || kind === 'reply' || appState) ? { title: attrs.title } : {}),
       ...(notify ? { statusLine } : trigger ? { statusLine, body } : { body }),
       ...(replyRequest ? { replyRequest } : {}),
       ...(followUp ? { followUp } : {}),
@@ -756,6 +759,7 @@ export function envelopeDirectionLabel(
     case 'notification': return 'Walnut notification';
     case 'reply-request': return 'Walnut asked you to reply';
     case 'trigger': return 'Trigger fired';
+    case 'app-state': return 'App state';
   }
 }
 
@@ -769,5 +773,7 @@ export function envelopeDirectionGlyph(kind: SessionEnvelopeKind): string {
     // ⚡ a check script said so. U+FE0E asks for the text glyph: bare U+26A1 is
     // emoji by default, which iOS draws as a yellow emoji (N2-33, C73).
     case 'trigger': return '\u26A1\uFE0E';
+    // ▣ a square with a smaller one inside: the App's screen, shared.
+    case 'app-state': return '\u25A3';
   }
 }

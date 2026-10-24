@@ -11,7 +11,7 @@ const VS15 = '\uFE0E'
 
 describe('envelopeDirectionGlyph', () => {
   it('never returns an emoji-default glyph without U+FE0E', () => {
-    for (const kind of ['reply', 'peer-note', 'notification', 'reply-request', 'trigger'] as const) {
+    for (const kind of ['reply', 'peer-note', 'notification', 'reply-request', 'trigger', 'app-state'] as const) {
       const g = envelopeDirectionGlyph(kind)
       if (EMOJI_DEFAULT.test(g)) expect(g.endsWith(VS15), kind).toBe(true)
     }

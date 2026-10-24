@@ -31,6 +31,7 @@ import {
 } from './service-registry.js'
 import { clearSkillsCache } from '../skill-loader.js'
 import { toDisposable, type Disposable } from './disposable.js'
+import { clearAppState, disposeAppStateOwner, publishAppState } from '../sessions/app-state.js'
 import { registeredSyncOf } from './legacy-phase-sync.js'
 import { createPluginNotifications } from './plugin-notifications.js'
 import { createPluginUi } from './plugin-status-items.js'
@@ -75,6 +76,9 @@ import type {
   ModelResult,
   ProtocolAdapter,
 } from '../../model/providers/types.js'
+
+/** One per plugin generation: a reload's old generation clears only its own app state. */
+let appStateGenerationSeq = 0
 
 /** Plugins already warned about agentContext — once each, not once per reload. */
 const agentContextWarned = new Set<string>()
@@ -834,6 +838,25 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
 
     notifications: createPluginNotifications({ pluginId, own, assertLive }),
     ui: createPluginUi({ pluginId, pluginName: options.pluginName, own, assertLive }),
+
+    /**
+     * App state: what this plugin's App shows, shared with the AI working on a task
+     * (core/sessions/app-state.ts). Kept in memory on the leader; the next message into
+     * the task's session carries what changed, and `proactive` also starts a turn.
+     */
+    appState: (() => {
+      const generation = `${pluginId}#${++appStateGenerationSeq}`
+      own(toDisposable(() => disposeAppStateOwner(pluginId, generation)))
+      return {
+        async publish(taskId: string, state: Record<string, unknown>, publishOptions: { mode?: 'passive' | 'proactive'; label?: string; note?: string } = {}) {
+          assertLive('appState.publish')
+          return publishAppState(pluginId, options.pluginName, { taskId, state, ...publishOptions }, { generation })
+        },
+        async clear(taskId: string) {
+          clearAppState(pluginId, String(taskId ?? ''))
+        },
+      }
+    })(),
 
     /**
      * Letters: ask the ONE human a question, wherever they are, and hear the answer back.

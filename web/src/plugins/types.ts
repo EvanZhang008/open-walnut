@@ -287,6 +287,20 @@ export interface WalnutWebApiHost {
     injectCss(css: string): Disposable
     readonly views: PluginViews
   }
+  /**
+   * Share what this App shows with the AI working on a task (see the server
+   * `AppStateService`): the latest JSON object wins, and the next message into the
+   * task's session carries what changed. Calls within 300 ms are folded into one
+   * request, so publishing on every keystroke is fine.
+   */
+  readonly appState: {
+    publish(
+      taskId: string,
+      state: Record<string, unknown>,
+      options?: { mode?: 'passive' | 'proactive'; label?: string; note?: string },
+    ): Promise<{ version: number; kept: boolean }>
+    clear(taskId: string): Promise<void>
+  }
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown

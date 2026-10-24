@@ -14,7 +14,8 @@
  * scope (not even a helper import), and every constant lives inside it.
  */
 
-export type EnvelopeKind = 'peer-note' | 'reply' | 'notification' | 'trigger';
+/** `app-state`: what a plugin App shares about the task (sessions/app-state.ts). */
+export type EnvelopeKind = 'peer-note' | 'reply' | 'notification' | 'trigger' | 'app-state';
 export type EnvelopeOutcome = 'completed' | 'error' | 'awaiting_human' | 'timeout';
 
 export interface EnvelopeSender {

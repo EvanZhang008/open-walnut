@@ -2,7 +2,7 @@ export type * from './shared.js'
 
 import type { ComponentType } from 'react'
 import type { Disposable, PluginLogger, TaskPhase, TaskPriority } from './shared.js'
-import type { EventApi, OpsService, PluginFetchInit, PluginFetchResponse } from './server.js'
+import type { AppStatePublishOptions, EventApi, OpsService, PluginFetchInit, PluginFetchResponse } from './server.js'
 
 export type PluginComponent<Props = Record<string, never>> = ComponentType<Props>
 /**
@@ -268,6 +268,16 @@ export interface WalnutWebApi {
     fetch(url: string, init?: PluginFetchInit): Promise<PluginFetchResponse>
   }
   readonly ui: WebUiService
+  /**
+   * Share what this App shows with the AI working on a task (see the server
+   * `AppStateService`): the latest JSON object wins, and the next message into the
+   * task's session carries what changed. Calls within 300 ms are folded into one
+   * request, so publishing on every keystroke is fine.
+   */
+  readonly appState: {
+    publish(taskId: string, state: Record<string, unknown>, options?: AppStatePublishOptions): Promise<{ version: number; kept: boolean }>
+    clear(taskId: string): Promise<void>
+  }
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown

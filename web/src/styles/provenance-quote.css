@@ -43,3 +43,21 @@
   background: transparent;
   padding: 0;
 }
+
+/* App state (SessionProvenanceCard.tsx): the exact text the model read, in the
+   card's quote rail, monospace so a line patch keeps its columns. Long lines
+   wrap rather than scroll the whole card sideways. */
+.provenance-app-state {
+  margin: 6px 0 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--border-strong);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg);
+  background: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow-y: auto;
+}

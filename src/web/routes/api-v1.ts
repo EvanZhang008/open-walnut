@@ -3410,6 +3410,19 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
   }
 })
 
+// GET /api/v1/me/app-state: what plugin Apps share about the calling session's
+// task (core/sessions/app-state.ts), whole. Messages into the session already
+// carry what changed; this is the full read, and it counts as told.
+apiV1Router.get('/me/app-state', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { readAppState } = await import('../../core/sessions/app-state.js')
+    const rawSid = req.headers['x-walnut-caller-sid']
+    res.json(await readAppState(Array.isArray(rawSid) ? rawSid[0] : rawSid))
+  } catch (err) {
+    next(err)
+  }
+})
+
 /** How far GET /sessions looks, nearest ring first. */
 type SessionScope = 'folder' | 'project' | 'all'
 
