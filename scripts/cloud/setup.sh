@@ -493,15 +493,7 @@ export PATH="/usr/local/bin:$PATH"
 git config --global --unset-all safe.directory "^$REPO_DIR\$" || true
 cd "$REPO_DIR"
 bun install --frozen-lockfile
-# The install normally fetches the right prebuilt native binding, but a deploy can
-# leave a stale/foreign-platform binding behind (observed 2026-07-10: linux-arm64
-# binding missing → every SQLite consumer degraded to "null.prepare" errors).
-# Verify the binding actually loads on THIS platform; rebuild if it doesn't.
-# Construct a database, not a bare require: the binding loads lazily, so only
-# this proves it (src/core/native-abi-preflight.ts). This is the only repair:
-# the server's own `npm rebuild` fallback fails on this box, because the
-# service user cannot write node_modules.
-node -e "new (require('better-sqlite3'))(':memory:').close()" 2>/dev/null || npm rebuild better-sqlite3
+# SQLite is bun's own (src/lib/sqlite.ts): there is no native SQLite module to check or rebuild.
 npm run build
 (cd web && npx vite build)
 # Readable and traversable by the service user (incl. node_modules), writable
