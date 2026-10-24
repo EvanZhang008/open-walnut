@@ -118,8 +118,11 @@ const log = (name: string): string[] => {
 const FAKE_NPM = `#!/usr/bin/env node
 const fs = require('fs'), path = require('path')
 fs.appendFileSync(path.join(process.env.FAKE_STATE, 'npm.log'), process.argv.slice(2).join(' ') + '\\n')
+// What this run published; an installer's look (--prefer-online) sees it at once.
+const sent = path.join(process.env.FAKE_STATE, 'npm-published')
 if (process.argv[2] === 'view') {
-  if (process.env.FAKE_REGISTRY_HAS !== '1') { process.stderr.write('npm error 404 Not Found\\n'); process.exit(1) }
+  const seen = process.argv.includes('--prefer-online') && fs.existsSync(sent) && fs.readFileSync(sent, 'utf8').split('\\n').includes(process.argv[3])
+  if (process.env.FAKE_REGISTRY_HAS !== '1' && !seen) { process.stderr.write('npm error 404 Not Found\\n'); process.exit(1) }
   process.stdout.write(process.argv[3].slice(process.argv[3].lastIndexOf('@') + 1) + '\\n')
   process.exit(0)
 }
@@ -130,6 +133,11 @@ const refusals = {
   published: 'npm error code E403\\nnpm error 403 403 Forbidden - PUT https://registry.npmjs.org/open-walnut - You cannot publish over the previously published versions: ' + version + '.',
   newer: 'npm error code E409\\nnpm error 409 Conflict - PUT https://registry.npmjs.org/open-walnut - Cannot publish over previously staged version "' + version + '1".',
   denied: 'npm error code E403\\nnpm error 403 403 Forbidden - PUT https://registry.npmjs.org/open-walnut - You do not have permission to publish "open-walnut".',
+}
+// A version it publishes, or already holds, is on the registry; one it refuses is not.
+if (process.argv[2] === 'publish' && !['newer', 'denied'].includes(process.env.FAKE_NPM_PUBLISH)) {
+  const m = JSON.parse(fs.readFileSync(path.join(process.argv[3], 'package.json'), 'utf8'))
+  fs.appendFileSync(sent, m.name + '@' + m.version + '\\n')
 }
 if (process.argv[2] === 'publish' && refusals[process.env.FAKE_NPM_PUBLISH]) {
   process.stderr.write(refusals[process.env.FAKE_NPM_PUBLISH] + '\\n')
@@ -209,7 +217,7 @@ beforeEach(async () => {
   fs.writeFileSync(path.join(runner, 'notes.md'), NOTES)
 
   for (const f of ['stable-promote.mjs', 'release.mjs', 'ci-gate.mjs', 'release-notes.mjs', 'npm-packages.mjs', 'release-files.mjs',
-    'release-unpack.sh', 'release-attach.sh', 'install.sh', 'npm-launcher/launch.js']) {
+    'release-unpack.sh', 'release-attach.sh', 'install.sh', 'npm-launcher/package.json', 'npm-launcher/launch.js', 'npm-launcher/fetch-platform.js', 'npm-launcher/postinstall.js']) {
     fs.mkdirSync(path.dirname(path.join(seed, 'scripts', f)), { recursive: true })
     fs.copyFileSync(path.join(REPO, 'scripts', f), path.join(seed, 'scripts', f))
   }

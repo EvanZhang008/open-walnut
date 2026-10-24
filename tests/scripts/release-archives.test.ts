@@ -78,7 +78,7 @@ describe('build.mjs', () => {
     // The launcher package (npm-packages.mjs): the compiled file it runs is the updater.
     const launcher = path.join(tmp, 'launcher-pkg')
     touch(path.join(launcher, 'package.json'), JSON.stringify({ name: 'open-walnut', version: '0.7.0', optionalDependencies: { '@open-walnut/linux-x64': '0.7.0' } }))
-    touch(path.join(launcher, 'dist/cli.js'), "import { launch } from '../lib/launch.js'")
+    touch(path.join(launcher, 'dist/cli.js'), "require('../lib/launch.js').launch(__filename)")
     expect(updaterKnowsArchive(launcher)).toBe(true)
     touch(path.join(old, 'package.json'), JSON.stringify({ name: 'open-walnut', version: '0.6.2', optionalDependencies: { fsevents: '2' } }))
     expect(updaterKnowsArchive(old)).toBe(false)

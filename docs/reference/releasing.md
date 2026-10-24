@@ -194,14 +194,28 @@ Release get is what the matrix ran. Both channels also publish only a commit who
   machine; then `open-walnut`, a launcher with no dependencies but those six as
   `optionalDependencies` pinned to its own version. Its `bin/open-walnut.js`
   (`scripts/npm-launcher/launch.js`) runs the installed file with the same arguments and exit
-  code, and tells it how it was started (`OPEN_WALNUT_PACKAGE_ROOT`, `OPEN_WALNUT_LAUNCHED_FILE`,
-  `OPEN_WALNUT_RELAUNCH`) so its update goes through npm. `dist/cli.js` is the same launcher, for
-  what started Walnut as `node <package>/dist/cli.js` before (an archive's restart, an older Mac
-  app). The platform packages go first, the launcher last: the launcher moves the dist-tag the
-  update check reads, so every file it names is on the registry by then. A package already on the
-  registry is skipped, and npm's refusal of a version it holds counts as published, so a re-run
-  finishes a publish that stopped half way. Every manifest carries `gitHead`, the commit it was
-  built from, which `nightly-version.mjs` and `stable-promote.mjs` read.
+  code, and tells it how it was started (`OPEN_WALNUT_PACKAGE_ROOT`,
+  `OPEN_WALNUT_LAUNCHED_FILE`, `OPEN_WALNUT_RELAUNCH`) so its update goes through npm.
+  `dist/cli.js` is the same launcher, for what started Walnut as `node <package>/dist/cli.js`
+  before (an archive's restart, an older Mac app). The file needs no Node, so the launcher must
+  not need a new one: it is CommonJS in ES2017 on Node 8 APIs, and its entries are ES5 up to a
+  version check that names the no-Node install (`tests/scripts/npm-launcher-node-floor.test.ts`;
+  an ES module launcher died with a SyntaxError on Node 12, Debian 11's and Ubuntu 22.04's apt
+  Node). It starts the file in its own directory, or in that path made again when npm replaced
+  it underneath (a 0.6.x Mac app runs its server in the package root, and bun refuses a deleted
+  directory). The platform packages go first, the launcher last, and the launcher only once
+  installers see every platform package (`waitUntilVisible`, up to 20 minutes, else the launcher
+  is not published): the launcher moves the dist-tag the update check reads, and npm finishes an
+  install without an optional dependency it cannot find yet. Its one install script
+  (`lib/postinstall.js`) checks that this machine's file came with it, fetches it when npm left
+  it out (a registry that does not serve it yet; `lib/fetch-platform.js`, checked against the
+  registry's sha512), and otherwise fails the install, so npm puts back the version before (npm
+  10, 11 and 12 all do): a 0.6.x Node release restarts into the launcher without checking. A
+  start that finds no file (an install that ran no scripts) fetches it the same way. A package
+  already on the registry is skipped, and npm's refusal of a version it holds counts as
+  published, so a re-run finishes a publish that stopped half way. Every manifest carries
+  `gitHead`, the commit it was built from, which `nightly-version.mjs` and `stable-promote.mjs`
+  read.
 - **GitHub Release** (stable only; `scripts/release-files.mjs`, `scripts/release-attach.sh`):
   `walnut-<version>-<target>.gz` for each target (gzip -9), `install.sh`, and `SHA256SUMS`, which
   lists every `.gz` and the plain file inside it (`walnut-<version>-<target>`), uploaded last so
@@ -465,9 +479,10 @@ on the first one:
   with Bun, which takes it as `web/bun.lock` pins it; when a checkout is installed with npm
   anyway, `scripts/postinstall.mjs` passes `--allow-remote=root` to the `web/` install under npm 12.
 - **A dependency's install script runs only when allowed.** Walnut no longer needs one. The
-  launcher and the platform packages run no install script and build nothing, and a checkout
-  installs with Bun. So the update that `open-walnut web` and `open-walnut update` run passes
-  no `--allow-scripts`.
+  platform packages run no install script and build nothing, and a checkout installs with Bun.
+  The launcher's own postinstall only checks for its file; without it, as in
+  `npm i -g open-walnut` typed with npm 12, the first start fetches the file instead. So the
+  update that `open-walnut web` and `open-walnut update` run passes no `--allow-scripts`.
 
 The release jobs install `npm@12`, not `npm@latest`, so the next major is taken on purpose
 rather than discovered in a publish.

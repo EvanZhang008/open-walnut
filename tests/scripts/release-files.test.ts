@@ -15,14 +15,16 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { TARGETS, assetName, builtName, fileName, filesIn, writeAssets } from '../../scripts/release-files.mjs'
-import { LAUNCHER, buildPackages, launcherManifest, platformManifest, publishOrder, publishPackages } from '../../scripts/npm-packages.mjs'
-import { candidateTargets, hasMuslCxxRuntime } from '../../scripts/npm-launcher/launch.js'
+import { LAUNCHER, LAUNCHER_LIB, buildPackages, launcherManifest, platformManifest, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
+import { createRequire } from 'node:module'
 import { formula } from '../../scripts/homebrew/formula.mjs'
 import { hostTarget } from '../../scripts/release-build.mjs'
 import { managerArgv } from '../../src/core/self-update/install-kind.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../..')
+// The launcher is CommonJS (it runs on old Node): loaded the way Node loads it.
+const { candidateTargets, hasMuslCxxRuntime } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
 const VERSION = '0.7.0'
 const HEAD = 'a'.repeat(40)
 let tmp = ''
@@ -105,24 +107,29 @@ describe('npm-packages.mjs', () => {
   it('the launcher names every platform package at its own version, and keeps the commands and the old entry', () => {
     const m = manifest(LAUNCHER)
     expect(m).toMatchObject({ name: 'open-walnut', version: VERSION, gitHead: HEAD, bin: { 'open-walnut': 'bin/open-walnut.js', walnut: 'bin/open-walnut.js' } })
+    // CommonJS, for any Node npm installs it with (tests/scripts/npm-launcher-node-floor.test.ts).
+    expect(m.type).toBe('commonjs')
+    expect(m.engines).toEqual({ node: '>=8' })
     expect(m.optionalDependencies).toEqual(Object.fromEntries(TARGETS.map((t) => [`@open-walnut/${t.target}`, VERSION])))
-    // Nothing for npm to run at install, and nothing else to fetch.
-    expect(m.scripts).toBeUndefined()
+    // One script at install: it checks this machine's file came too, else fetches
+    // it or fails the install (npm then keeps the version before). Nothing else to fetch.
+    expect(m.scripts).toEqual({ postinstall: 'node lib/postinstall.js' })
     expect(m.dependencies).toBeUndefined()
     expect(launcherManifest(VERSION, JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))).main).toBe('./dist/cli.js')
-    for (const f of ['bin/open-walnut.js', 'dist/cli.js', 'lib/launch.js', 'README.md', 'LICENSE']) expect(fs.existsSync(path.join(out, LAUNCHER, f)), f).toBe(true)
-    expect(fs.readFileSync(path.join(out, LAUNCHER, 'lib/launch.js'), 'utf8')).toBe(fs.readFileSync(path.join(ROOT, 'scripts/npm-launcher/launch.js'), 'utf8'))
+    for (const f of ['bin/open-walnut.js', 'dist/cli.js', 'lib/launch.js', 'lib/fetch-platform.js', 'lib/postinstall.js', 'README.md', 'LICENSE']) expect(fs.existsSync(path.join(out, LAUNCHER, f)), f).toBe(true)
+    for (const f of LAUNCHER_LIB) expect(fs.readFileSync(path.join(out, LAUNCHER, 'lib', f), 'utf8'), f).toBe(fs.readFileSync(path.join(ROOT, 'scripts/npm-launcher', f), 'utf8'))
   })
 
-  it('carry nothing npm runs at install, which the updater relies on: it passes npm no --allow-scripts', () => {
+  it('carry nothing npm runs at install but the launcher\'s own postinstall, which the updater relies on: it passes npm no --allow-scripts', () => {
     // npm runs a package's install, preinstall, postinstall and prepare scripts,
     // and `node-gyp rebuild` for a binding.gyp at its root (or gypfile: true)
-    // with no install script. The global install (src/core/self-update/install-kind.ts)
-    // allows none of them since 17a9b2858, so any one here would fail or be skipped.
+    // with no install script. The launcher has exactly one, the check that its
+    // file came too (lib/postinstall.js); every other package has none.
     const dirs = [LAUNCHER, ...TARGETS.map((t) => `@open-walnut/${t.target}`)]
     for (const dir of dirs) {
       const m = manifest(dir)
-      for (const key of ['preinstall', 'install', 'postinstall', 'prepare']) expect(m.scripts?.[key], `${dir} ${key}`).toBeUndefined()
+      const allowed: Record<string, string> = dir === LAUNCHER ? { postinstall: 'node lib/postinstall.js' } : {}
+      for (const key of ['preinstall', 'install', 'postinstall', 'prepare']) expect(m.scripts?.[key], `${dir} ${key}`).toBe(allowed[key])
       expect(m.gypfile, dir).toBeUndefined()
       expect(fs.existsSync(path.join(out, dir, 'binding.gyp')), `${dir} binding.gyp`).toBe(false)
       const deps = { ...m.dependencies, ...m.optionalDependencies }
@@ -163,6 +170,34 @@ describe('npm-packages.mjs', () => {
     expect(seen).toHaveLength(1)
     expect(seen).not.toContain(LAUNCHER)
     expect(() => publishPackages({ dir: out, tag: '', dryRun: true, run: broken })).toThrow(/needs --tag/)
+  })
+
+  it('publishes the launcher only once installers see every platform package', () => {
+    const order: string[] = []
+    const ok = ((_cmd: string, args: string[]) => { order.push(path.basename(args[1])); return { status: 0, stdout: '', stderr: '' } }) as never
+    let waitedFor: Array<[string, string]> = []
+    publishPackages({ dir: out, tag: 'latest', run: ok, has: () => false, log: () => {}, waitVisible: ((pkgs: Array<[string, string]>) => { waitedFor = [...pkgs]; order.push('(wait)') }) as never })
+    // npm finishes an install without an optional dependency it cannot find yet:
+    // a launcher out first installs with no file (0.6.x updates restart into it unchecked).
+    expect(order.indexOf('(wait)')).toBe(TARGETS.length)
+    expect(order.at(-1)).toBe(LAUNCHER)
+    expect(waitedFor).toEqual(TARGETS.map((t) => [`@open-walnut/${t.target}`, VERSION]))
+    // Still not seen: the launcher stays out, and a re-run finishes.
+    order.length = 0
+    expect(() => publishPackages({ dir: out, tag: 'latest', run: ok, has: () => false, log: () => {}, waitVisible: (() => { throw new Error('not seen') }) as never })).toThrow('not seen')
+    expect(order).not.toContain(LAUNCHER)
+  })
+
+  it('waitUntilVisible polls until every package is seen, and gives up at its deadline', () => {
+    let t = 0
+    const seenAfter = new Map([['@open-walnut/a', 2], ['@open-walnut/b', 0]])
+    const calls: string[] = []
+    const sees = (name: string) => { calls.push(name); return t >= (seenAfter.get(name) ?? Infinity) }
+    waitUntilVisible([['@open-walnut/a', '1.0.0'], ['@open-walnut/b', '1.0.0']], { sees, sleep: () => { t += 1 }, now: () => t, wait: { everyMs: 1, forMs: 10 } })
+    // b was seen at once and is not asked again.
+    expect(calls.filter((c) => c === '@open-walnut/b')).toHaveLength(1)
+    t = 0
+    expect(() => waitUntilVisible([['@open-walnut/never', '1.0.0']], { sees, sleep: () => { t += 1 }, now: () => t, wait: { everyMs: 1, forMs: 3 } })).toThrow(/still do not see @open-walnut\/never@1.0.0/)
   })
 })
 

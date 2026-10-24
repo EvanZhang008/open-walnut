@@ -9,8 +9,11 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { candidateTargets } from '../../scripts/npm-launcher/launch.js'
+import { ENTRY } from '../../scripts/npm-packages.mjs'
+
+const { candidateTargets, startDir } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
 
 const ROOT = path.resolve(__dirname, '../..')
 let tmp: string
@@ -23,9 +26,9 @@ function layout(script: string): string {
   fs.mkdirSync(path.join(pkg, 'lib'), { recursive: true })
   fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true })
   fs.copyFileSync(path.join(ROOT, 'scripts/npm-launcher/launch.js'), path.join(pkg, 'lib', 'launch.js'))
-  fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"open-walnut","type":"module"}\n')
-  fs.writeFileSync(path.join(pkg, 'bin', 'open-walnut.js'), "import { launch } from '../lib/launch.js'\nlaunch(import.meta.url)\n")
-  const target = candidateTargets()[0]!
+  fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"open-walnut","type":"commonjs"}\n')
+  fs.writeFileSync(path.join(pkg, 'bin', 'open-walnut.js'), ENTRY('../lib/launch.js'))
+  const target: string = candidateTargets()[0]
   const platform = path.join(dir, 'node_modules', '@open-walnut', target)
   fs.mkdirSync(platform, { recursive: true })
   fs.writeFileSync(path.join(platform, 'package.json'), `{"name":"@open-walnut/${target}"}\n`)
@@ -57,5 +60,31 @@ describe('the npm launcher exits as its file did', () => {
     const res = run(layout('kill -PIPE $$'))
     expect(res.signal).toBeNull()
     expect(res.status).toBe(128 + os.constants.signals.SIGPIPE)
+  })
+
+  it('a directory deleted under it (npm replaced the package it ran in) starts the file in the same path made again', () => {
+    // A 0.6.x Mac app runs its server with the package root as its directory; its
+    // update replaces that directory and restarts into the launcher, and bun will
+    // not start in a deleted directory ("The current working directory was deleted").
+    const bin = layout('/bin/pwd -P || exit 9')
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(tmp, 'cwd-')))
+    const res = spawnSync('/bin/sh', ['-c', 'cd "$1" && rm -rf "$1" && mkdir "$1" && exec "$2" "$3"', 'sh', dir, node, bin], { encoding: 'utf8', timeout: 20_000 })
+    expect(res.status, res.stderr).toBe(0)
+    expect(res.stdout.trim()).toBe(dir)
+  })
+
+  it('startDir: this directory while it exists, else PWD, else the package root, else home', () => {
+    const gone = () => { throw Object.assign(new Error('ENOENT: process.cwd failed'), { code: 'ENOENT' }) }
+    expect(startDir('/pkg', () => '/here', () => true)).toBe('/here')
+    const pwd = process.env.PWD
+    try {
+      process.env.PWD = '/made/again'
+      expect(startDir('/pkg', gone, (p: string) => p === '/made/again')).toBe('/made/again')
+      expect(startDir('/pkg', gone, (p: string) => p === '/pkg')).toBe('/pkg')
+      expect(startDir('/pkg', gone, () => false)).toBe(os.homedir())
+    } finally {
+      if (pwd === undefined) delete process.env.PWD
+      else process.env.PWD = pwd
+    }
   })
 })

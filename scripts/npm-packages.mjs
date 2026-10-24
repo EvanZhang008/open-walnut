@@ -13,17 +13,20 @@
  * <dir> after build:
  *   @open-walnut/<target>/   package.json (os, cpu, libc), walnut, README.md, LICENSE
  *   open-walnut/             package.json (bin, optionalDependencies pinned to the
- *                            version), bin/open-walnut.js, lib/launch.js, dist/cli.js,
- *                            README.md, LICENSE
+ *                            version, a postinstall that checks the file came too),
+ *                            bin/open-walnut.js, lib/{launch,fetch-platform,postinstall}.js,
+ *                            dist/cli.js, README.md, LICENSE
  *
  * dist/cli.js is for what started Walnut as `node <package>/dist/cli.js` before
  * the package was a launcher: an archive install's updater restarting into the
  * update, a Mac app of that time. It runs the same launcher.
  *
- * publish goes platform packages first, launcher last: the launcher moves the
- * dist-tag every update check reads (update-check.ts), so by then every file it
- * names is on the registry. A version already on the registry is skipped, so a
- * re-run finishes a publish that stopped half way.
+ * publish goes platform packages first, launcher last, and the launcher only
+ * once installers see every platform package (waitUntilVisible): the launcher
+ * moves the dist-tag every update check reads (update-check.ts), and npm
+ * finishes an install without an optional dependency it cannot find yet. A
+ * version already on the registry is skipped, so a re-run finishes a publish
+ * that stopped half way.
  *
  * Every manifest carries `gitHead`, the commit it was built from (the checkout's
  * HEAD unless --git-head names one): the release scripts find a version's commit
@@ -33,8 +36,12 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { TARGETS, assertVersion, builtName } from './release-files.mjs'
+
+// The launcher's own code is CommonJS (scripts/npm-launcher/package.json).
+const { INSTALL_SH } = createRequire(import.meta.url)('./npm-launcher/launch.js')
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const LAUNCHER = 'open-walnut'
@@ -71,20 +78,39 @@ export function launcherManifest(version, repo) {
     homepage: repo.homepage,
     repository: repo.repository,
     keywords: repo.keywords,
-    type: 'module',
+    // CommonJS on any Node npm installs it with: the compiled file needs no Node,
+    // so the launcher must not need a new one (Debian 11's apt Node is 12).
+    type: 'commonjs',
     bin: { 'open-walnut': 'bin/open-walnut.js', walnut: 'bin/open-walnut.js' },
     main: './dist/cli.js',
-    engines: { node: '>=18' },
+    engines: { node: `>=${LAUNCHER_NODE_FLOOR}` },
     optionalDependencies: Object.fromEntries(TARGETS.map(({ target }) => [platformName(target), version])),
+    // The install is good only with this machine's file: fetched when npm left it
+    // out, else the install fails and npm keeps the version before (lib/postinstall.js).
+    scripts: { postinstall: 'node lib/postinstall.js' },
     files: ['bin', 'dist', 'lib', 'README.md', 'LICENSE'],
   }
 }
 
-const ENTRY = (from) => `#!/usr/bin/env node
-// Open Walnut: runs the compiled Walnut for this machine (lib/launch.js).
-import { launch } from '${from}'
+/** The launcher's own code, scripts/npm-launcher/<name> -> lib/<name>. */
+export const LAUNCHER_LIB = ['launch.js', 'fetch-platform.js', 'postinstall.js']
 
-launch(import.meta.url)
+/** The oldest Node the launcher runs on: its code is CommonJS, ES2017 and Node 8 APIs. */
+export const LAUNCHER_NODE_FLOOR = 8
+
+/**
+ * bin/open-walnut.js and dist/cli.js. ES5 up to the check, so a Node too old
+ * for lib/ says so in one line instead of a SyntaxError.
+ */
+export const ENTRY = (from) => `#!/usr/bin/env node
+// Open Walnut: runs the compiled Walnut for this machine (lib/launch.js).
+'use strict'
+var node = process.versions.node
+if (parseInt(node.split('.')[0], 10) < ${LAUNCHER_NODE_FLOOR}) {
+  process.stderr.write('open-walnut: Node.js ' + node + ' is too old to start Walnut (npm\\'s launcher needs Node.js ${LAUNCHER_NODE_FLOOR} or newer). Walnut itself needs no Node: ${INSTALL_SH}\\n')
+  process.exit(1)
+}
+require('${from}').launch(__filename)
 `
 
 const writeJson = (file, data) => fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
@@ -117,7 +143,7 @@ export function buildPackages({ files, version, out, repoRoot = root, gitHead = 
   const launcher = dirs.launcher
   for (const sub of ['bin', 'lib', 'dist']) fs.mkdirSync(path.join(launcher, sub), { recursive: true })
   writeJson(path.join(launcher, 'package.json'), { ...launcherManifest(version, repo), ...head })
-  fs.copyFileSync(path.join(repoRoot, 'scripts', 'npm-launcher', 'launch.js'), path.join(launcher, 'lib', 'launch.js'))
+  for (const f of LAUNCHER_LIB) fs.copyFileSync(path.join(repoRoot, 'scripts', 'npm-launcher', f), path.join(launcher, 'lib', f))
   fs.writeFileSync(path.join(launcher, 'bin', 'open-walnut.js'), ENTRY('../lib/launch.js'), { mode: 0o755 })
   fs.writeFileSync(path.join(launcher, 'dist', 'cli.js'), ENTRY('../lib/launch.js'), { mode: 0o755 })
   fs.copyFileSync(path.join(repoRoot, 'README.md'), path.join(launcher, 'README.md'))
@@ -164,12 +190,49 @@ function onRegistry(name, version, extra) {
   return r.status === 0 && r.stdout.trim() === version
 }
 
-export function publishPackages({ dir, tag, provenance = false, dryRun = false, registry = null, run = spawnSync, log = (l) => process.stdout.write(`${l}\n`) }) {
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+/**
+ * Does an installer see name@version now? npm asks the registry itself, past
+ * its own cache (--prefer-online), the way an install right after a publish does.
+ */
+export function installerSees(name, version, extra = []) {
+  return onRegistry(name, version, [...extra, '--prefer-online'])
+}
+
+/** How long the launcher waits for its platform packages to be seen by installers. */
+export const VISIBLE_WAIT = { everyMs: 15_000, forMs: 20 * 60_000 }
+
+/**
+ * Wait until installers see every package in `pkgs` ([name, version]). npm makes a
+ * new version visible package by package over minutes, and npm finishes an
+ * install without an optional dependency it cannot find yet: a launcher out
+ * before its platform packages installs as a launcher with no file. Throws when
+ * they are still not seen: the launcher is not published, and a re-run finishes.
+ */
+export function waitUntilVisible(pkgs, { sees = installerSees, extra = [], wait = VISIBLE_WAIT, sleep = sleepSync, log = () => {}, now = Date.now } = {}) {
+  const deadline = now() + wait.forMs
+  let missing = pkgs
+  for (;;) {
+    missing = missing.filter(([name, version]) => !sees(name, version, extra))
+    if (missing.length === 0) return
+    if (now() >= deadline) throw new Error(`installers still do not see ${missing.map(([n, v]) => `${n}@${v}`).join(', ')} after ${Math.round(wait.forMs / 60_000)} min; not publishing the launcher (run the publish again to finish it)`)
+    log(`waiting for installers to see ${missing.map(([n, v]) => `${n}@${v}`).join(', ')}`)
+    sleep(wait.everyMs)
+  }
+}
+
+export function publishPackages({ dir, tag, provenance = false, dryRun = false, registry = null, run = spawnSync, log = (l) => process.stdout.write(`${l}\n`), waitVisible = waitUntilVisible, has = onRegistry }) {
   if (!tag) throw new Error('publish needs --tag (latest or nightly)')
   const extra = registry ? ['--registry', registry] : []
+  const platforms = []
   for (const pkg of publishOrder(dir)) {
     const { name, version } = JSON.parse(fs.readFileSync(path.join(pkg, 'package.json'), 'utf8'))
-    if (!dryRun && onRegistry(name, version, extra)) { log(`${name}@${version} is already on npm; not publishing it again`); continue }
+    // The launcher only once every file it names can be installed.
+    if (name === LAUNCHER && !dryRun) waitVisible(platforms, { extra, log })
+    if (!dryRun && has(name, version, extra)) { log(`${name}@${version} is already on npm; not publishing it again`); continue }
+    // Seen on the registry already, or about to be published: only the latter is waited for.
+    if (name !== LAUNCHER) platforms.push([name, version])
     const args = ['publish', pkg, '--tag', tag, '--access', 'public', ...(provenance ? ['--provenance'] : []), ...(dryRun ? ['--dry-run'] : []), ...extra]
     const r = run('npm', args, { encoding: 'utf8', timeout: 20 * 60_000, maxBuffer: 64 << 20 })
     const output = npmOut(r)

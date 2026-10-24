@@ -45,7 +45,7 @@ self-hosted, local-first, and has no telemetry.
 
 - macOS, or Linux with glibc or musl (Alpine), on arm64 or x64. Walnut is one compiled file
   with everything inside: the one-line installer, Homebrew and the Mac app need nothing
-  installed first, and the npm package needs only an npm (any Node 18 or newer) to start it.
+  installed first, and the npm package needs only an npm (any Node 8 or newer) to start it.
   On Alpine, add the C++ runtime it links first: `apk add libstdc++ libgcc`.
 - git and [Bun](https://bun.sh) 1.4.4 or newer, only for the checkout route below, and nothing else (git: `xcode-select --install` on macOS, `sudo apt install git` on Ubuntu; Bun: `curl -fsSL https://bun.sh/install | bash`)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`curl -fsSL https://claude.ai/install.sh | bash`, then run `claude`)

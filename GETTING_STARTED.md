@@ -28,7 +28,7 @@ walnut web                            # starts on port 3456
 ```
 
 Homebrew works too (`brew install evanzhang008/tap/open-walnut`), and so does npm for people
-who use it: `npm install -g open-walnut` (any Node 18 or newer) installs a small launcher and
+who use it: `npm install -g open-walnut` (any Node 8 or newer) installs a small launcher and
 only the file built for your machine; start it with `open-walnut web`.
 
 Working on Walnut itself? Swap step 2 for a checkout, installed with
