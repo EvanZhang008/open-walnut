@@ -14,7 +14,8 @@ import { RECORDINGS_DIR, TMP_DIR } from '../constants.js'
 import { bus, EventNames } from './event-bus.js'
 import { getConfig } from './config-manager.js'
 import { log } from '../logging/index.js'
-import { isCompiledBinary, loadComponent, markInstalledBroken, resolveComponent } from './components/index.js'
+import { loadComponent, markInstalledBroken, resolveComponent } from './components/index.js'
+import { bunCommand } from '../lib/runtime.js'
 
 // Persistent state file — if this file exists, recording should be active.
 // Written on start(), deleted on stop(). Server reads it on startup to auto-resume.
@@ -39,9 +40,13 @@ function addonRequire(): { req: NodeJS.Require; key: string } | null {
   return c.source === 'bundled' ? { req: require, key: 'bundled' } : { req: c.require, key: c.dir }
 }
 
-/** A probe child runs `<execPath> -e`: the compiled file does that only as bun. */
-export function addonProbeEnv(): NodeJS.ProcessEnv {
-  return isCompiledBinary() ? { ...process.env, BUN_BE_BUN: '1' } : process.env
+/**
+ * A probe child runs `<execPath> -e`, which a walnut file (the compiled file, or
+ * one running a dist build as bun) does only as bun: bunCommand decides from
+ * the executable, as every other `-e` child does.
+ */
+export function addonProbeEnv(env: NodeJS.ProcessEnv = process.env, execPath: string = process.execPath): NodeJS.ProcessEnv {
+  return bunCommand(env, execPath).env
 }
 
 // ── Types ──
