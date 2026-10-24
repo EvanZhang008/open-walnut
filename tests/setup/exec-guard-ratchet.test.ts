@@ -39,6 +39,9 @@ const GUARD_FILES = new Set([
   'tests/setup/exec-guard-ratchet.test.ts',
 ])
 
+/** The fleet tier's files (vitest.fleet.config.ts, exempt above): real ssh to its own containers. */
+const FLEET_DIR = 'tests/fleet/'
+
 /** Unit tests of the daemon's PATH rule: the variable appears in a fake env only. */
 const GUARD_VAR_UNIT_TESTS = new Set(['tests/providers/host-runtime-core.test.ts'])
 
@@ -177,6 +180,9 @@ describe('no test opts out', () => {
     const over: string[] = []
     for (const rel of testFiles) {
       if (GUARD_FILES.has(rel)) continue
+      // The fleet tier's own files: its config loads no guard (EXEMPT_CONFIGS), and a release
+      // Mac there gets a plain Mac's PATH with the run's real-ssh wrapper first, on purpose.
+      if (rel.startsWith(FLEET_DIR)) continue
       const n = literalPathCount(read(rel))
       const budget = LITERAL_PATH_BUDGET[rel] ?? 0
       if (n > budget) {

@@ -32,7 +32,7 @@ import { startSilentLinkProxy, type SilentLinkProxy, type SlowLink } from '../he
 import { waitFor } from '../helpers/replica-cluster.js'
 import * as dk from './docker.js'
 import { makeSshIdentity, type SshIdentity } from './ssh-identity.js'
-import { startMac, type MacNode, type MacSeed } from './mac-node.js'
+import { saveMacLogs, startMac, type MacNode, type MacProgram, type MacSeed } from './mac-node.js'
 
 export const BASE_IMAGE = { public: 'node:22-bookworm-slim', fleet: 'walnut-fleet-base:node22-bookworm-slim' } as const
 export const HOST_IMAGE_REPO = 'walnut-fleet-host'
@@ -60,6 +60,10 @@ export interface FleetOptions {
   seed?: MacSeed
   /** A clock offset per host, as libfaketime takes it ('+90s', '-2m'): every process an SSH session starts there runs on it. */
   clockOffset?: Record<string, string>
+  /** What the Mac runs first (default this tree's sources); `replaceMac` changes it on the same data. */
+  mac?: MacProgram
+  /** Each host container's memory cap (default 1g): a host server is a second Walnut on the host. */
+  hostMemory?: string
 }
 
 export interface FleetHost {
@@ -76,12 +80,20 @@ export interface JournalView { records: Array<Record<string, any>>; acked: Set<n
 export interface Fleet {
   base: string
   run: string
-  mac: MacNode
+  /** The Mac server running now (replaceMac starts another one on the same data). */
+  readonly mac: MacNode
+  /**
+   * Replaces the Mac's server, as an update or a rollback does: the running server
+   * stops (its own daemon and ssh keep running for the next one), then `program`
+   * starts on the same data, daemon and temp dirs.
+   */
+  replaceMac(program: MacProgram): Promise<MacNode>
   hosts: Record<string, FleetHost>
   /** Adds the host to the Mac's config (as Settings > Remote Hosts saves it), asks it to connect, waits until connected. */
   addHost(name: string, def?: Record<string, unknown>, timeoutMs?: number): Promise<number>
   hostConnected(name: string): Promise<boolean>
-  hostExec(name: string, script: string, timeoutMs?: number): Promise<string>
+  /** `sh -c script` on the host as the fleet user (or `user`, root to change the machine itself). */
+  hostExec(name: string, script: string, timeoutMs?: number, user?: string): Promise<string>
   hostFile(name: string, file: string): Promise<string | null>
   /** The host's journal of the Mac's Walnut: every record seen this run, and the seqs acked (an acked record leaves the file). */
   hostJournal(name: string): Promise<JournalView>
@@ -142,6 +154,7 @@ export async function startFleet(opts: FleetOptions): Promise<Fleet> {
   const cleanup = async () => {
     await mac?.stop().catch(() => undefined)
     for (const h of Object.values(hosts)) await h.proxy.close().catch(() => undefined)
+    if (mac) saveMacLogs(mac.daemonDir, `fleet-${run}`)
     // KEEP_FLEET=1 keeps the containers and the temp dir to look at (the next run's sweep removes the containers).
     if (process.env.KEEP_FLEET) return
     await dk.removeRun(containers, network).catch(() => undefined)
@@ -160,7 +173,7 @@ export async function startFleet(opts: FleetOptions): Promise<Fleet> {
         const lib = `/usr/lib/${(await dk.dockerArch()) === 'arm64' ? 'aarch64' : 'x86_64'}-linux-gnu/faketime/libfaketime.so.1`
         Object.assign(env, { FLEET_ENV_LD_PRELOAD: lib, FLEET_ENV_FAKETIME: offset, FLEET_ENV_FAKETIME_DONT_FAKE_MONOTONIC: '1' })
       }
-      await dk.runContainer({ name: container, image, network, run, env, publish: [22], hostname: name })
+      await dk.runContainer({ name: container, image, network, run, env, publish: [22], hostname: name, ...(opts.hostMemory ? { memory: opts.hostMemory } : {}) })
       containers.push(container)
       const sshPort = await dk.publishedPort(container, 22).catch(async (err: Error) => {
         throw new Error(`${err.message}\n--- ${container} log ---\n${(await dk.logs(container)).slice(-2000)}`)
@@ -170,20 +183,21 @@ export async function startFleet(opts: FleetOptions): Promise<Fleet> {
       hosts[name] = { name, container, sshPort, proxy }
     }
     ssh.writeHosts(Object.fromEntries(Object.values(hosts).map((h) => [h.name, h.proxy.port])))
-    mac = await startMac(base, ssh, windows, opts.seed)
+    mac = await startMac(base, ssh, windows, opts.seed, opts.mac)
   } catch (err) {
     await cleanup()
     throw err
   }
-  const theMac = mac
+  let theMac: MacNode = mac
+  const theSsh: SshIdentity = ssh
   const seen = new Map<string, Map<number, Record<string, any>>>()
   const host = (name: string): FleetHost => {
     const h = hosts[name]
     if (!h) throw new Error(`fleet: no host ${name}`)
     return h
   }
-  const hostExec = async (name: string, script: string, timeoutMs?: number) => {
-    const r = await dk.exec(host(name).container, script, { timeoutMs })
+  const hostExec = async (name: string, script: string, timeoutMs?: number, user?: string) => {
+    const r = await dk.exec(host(name).container, script, { timeoutMs, ...(user ? { user } : {}) })
     if (r.code !== 0) throw new Error(`fleet: on ${name}: ${script.slice(0, 120)} exited ${r.code}: ${r.stderr.trim().slice(-500)}`)
     return r.stdout
   }
@@ -198,7 +212,14 @@ export async function startFleet(opts: FleetOptions): Promise<Fleet> {
   }
 
   return {
-    base, run, mac: theMac, hosts,
+    base, run, hosts,
+    get mac() { return theMac },
+    async replaceMac(program) {
+      await theMac.stopServer()
+      theMac = await startMac(base, theSsh, windows, opts.seed, program)
+      mac = theMac
+      return theMac
+    },
     async addHost(name, def = {}, timeoutMs = 180_000) {
       host(name)
       const t0 = Date.now()
