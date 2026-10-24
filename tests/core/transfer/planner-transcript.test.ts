@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { planTransfer, transferOptions, TransferError } from '../../../src/core/transfer/planner.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { planTransfer, transferOptions, TransferError, __setResumeFileGateForTesting } from '../../../src/core/transfer/planner.js';
 import { renderTranscriptMarkdown, renderTranscriptMarkdownChunked, renderTranscriptSeed } from '../../../src/core/transfer/transcript.js';
 import type { SessionRecord, Task } from '../../../src/core/types.js';
 import type { SessionHistoryMessage } from '../../../src/core/session-history.js';
@@ -12,11 +12,26 @@ const claudeSession = {
 const hosts = new Set(['devbox', 'cloud']);
 
 describe('planning a transfer', () => {
-  it('Claude to Claude on another host copies the transcript and moves the workspace', () => {
+  afterEach(() => { __setResumeFileGateForTesting(null); });
+
+  it('Claude to Claude on another host replays the conversation while no CLI is checked to resume a copied file, and moves the workspace', () => {
     const plan = planTransfer(task, claudeSession, { taskId: 'task-1', host: 'devbox' }, hosts);
-    expect(plan.history).toBe('native-copy');
+    expect(plan.history).toBe('replay');
     expect(plan.moveWorkspace).toBe(true);
     expect(plan.target.cwd).toBe('auto');
+    expect(planTransfer(task, claudeSession, { taskId: 'task-1', cwd: '/work/repo-copy' }, hosts).history).toBe('replay');
+  });
+
+  it('Claude to Claude forks natively in place (a model change), and elsewhere once a CLI version is allowed', () => {
+    expect(planTransfer(task, claudeSession, { taskId: 'task-1', model: 'sonnet' }, hosts)).toMatchObject({ history: 'native-copy', inPlace: true });
+    // 'auto' on the same host keeps the directory, and a home-relative cwd is the same place spelled the same way.
+    expect(planTransfer(task, claudeSession, { taskId: 'task-1', cwd: 'auto', model: 'sonnet' }, hosts)).toMatchObject({ history: 'native-copy', inPlace: true });
+    const home = { ...claudeSession, cwd: '~/repo' } as SessionRecord;
+    expect(planTransfer(task, home, { taskId: 'task-1', cwd: '~/repo/', model: 'sonnet' }, hosts)).toMatchObject({ history: 'native-copy', inPlace: true });
+    expect(planTransfer(task, claudeSession, { taskId: 'task-1', host: 'devbox' }, hosts).inPlace).toBe(false);
+    __setResumeFileGateForTesting({ versions: ['9.9.9'], versionOn: async () => '9.9.9' });
+    expect(planTransfer(task, claudeSession, { taskId: 'task-1', host: 'devbox' }, hosts).history).toBe('native-copy');
+    expect(planTransfer(task, claudeSession, { taskId: 'task-1', cwd: '/work/repo-copy' }, hosts).history).toBe('native-copy');
   });
 
   it('Claude to Codex on this machine replays the conversation and keeps the directory', () => {

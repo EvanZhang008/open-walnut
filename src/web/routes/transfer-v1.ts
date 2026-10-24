@@ -5,7 +5,8 @@
  *   GET   /tasks/:id/transfer-options   what the task can move to (blocked pairs carry a reason)
  *   POST  /tasks/:id/transfer           do it: a new task beside this one takes the work (waits up
  *                                       to wait_ms, default 20s, then 202 with the transfer id)
- *   GET   /transfers/:id                that transfer: 200 result, its error, or 202 still running
+ *   GET   /transfers/:id                that transfer: 200 result, its error, 202 still running, or 200
+ *                                       unconfirmed (a restart lost it while its new task was pending)
  *   GET   /hosts/:host/profile          what Walnut knows about a host (+ a few-line summary)
  *   PATCH /hosts/:host/profile          the user names the host's kind or leaves a note
  */
@@ -86,6 +87,10 @@ transferV1Router.get('/tasks/:id/transfer-options', async (req: Request, res: Re
 /** One answer shape for POST and GET: 200 the result, the job's error status, or 202 still running. */
 function sendJob(res: Response, job: TransferJob): void {
   if (job.state === 'done') { res.json({ transferId: job.id, state: job.state, ...job.result }); return }
+  if (job.state === 'unconfirmed') {
+    res.json({ transferId: job.id, state: job.state, sourceTaskId: job.taskId, taskId: job.newTaskId, ...(job.error ? { error: job.error.message } : {}) })
+    return
+  }
   if (job.state === 'error') {
     res.status(job.error?.status ?? 500).json({ transferId: job.id, state: job.state, error: job.error?.message, code: job.error?.code })
     return
@@ -142,7 +147,7 @@ transferV1Router.post('/tasks/:id/transfer', async (req: Request, res: Response,
 transferV1Router.get('/transfers/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const jobs = await import('../../core/transfer/transfer-jobs.js')
-    const job = jobs.getTransferJob(String(req.params.id))
+    const job = jobs.getTransferJob(String(req.params.id)) ?? await jobs.unconfirmedTransferJob(String(req.params.id))
     if (!job) { res.status(404).json({ error: 'No such transfer on this server (it finished over an hour ago, or the server restarted); check the task instead', code: 'transfer_not_found' }); return }
     sendJob(res, await jobs.waitForTransferJob(job, waitMs(req.query.wait_ms, 0)))
   } catch (err) { next(err) }

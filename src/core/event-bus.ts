@@ -57,6 +57,8 @@ export const EventNames = {
   SESSION_CONTENT_UPDATED: 'session:content-updated',
   SESSION_RESULT: 'session:result',
   SESSION_ERROR: 'session:error',
+  /** A transfer's fork: the CLI announced itself and Walnut finished its record (rename included). */
+  TRANSFER_FORK_INIT: 'transfer:fork-init',
   /** The idle reaper is about to kill this session's CLI (≤5 min out).
    *  This is the ONE honest pre-death warning Walnut can make: it comes from
    *  SessionHealthMonitor.checkIdleTimeout, the code that actually decides an

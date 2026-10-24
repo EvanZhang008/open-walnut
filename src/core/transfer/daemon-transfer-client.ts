@@ -23,6 +23,8 @@ export type { PackReply, PackMeta, PackFile, PackUntracked, WritePartReply, Reac
 export const TRANSFER_CAPABILITY = 'transfer-v1'
 export const WRITE_PART_CAPABILITY = 'fs-write-part-v1'
 export const HOST_FACTS_CAPABILITY = 'host-facts-v1'
+/** fs.writePart `private: true`: the transcript stage a Claude to Claude transfer resumes from. */
+export const PRIVATE_STAGE_CAPABILITY = 'transfer-private-v1'
 /** fs.readRange is a required capability; named here so a fake can leave it out. */
 const READ_RANGE_CAPABILITY = 'fs.readRange'
 
@@ -127,12 +129,53 @@ export function packWorkspace(host: string, opts: PackOptions): Promise<PackRepl
   return call<PackReply>(host, TRANSFER_CAPABILITY, 'transfer.pack', params, timeoutMs ?? PACK_RPC_MS)
 }
 
-export interface WritePartOptions { path: string; offset: number; data: Buffer | string; final?: boolean; size?: number; sha256?: string }
+export interface WritePartOptions {
+  path: string; offset: number; data: Buffer | string; final?: boolean; size?: number; sha256?: string
+  /** A private stage part ('transfer-private-v1'): the attempt's 32-hex token. */
+  attempt?: string
+}
 
 /** One chunk of a file onto `host` (data as bytes, or as base64 text already). */
 export function writePart(host: string, opts: WritePartOptions): Promise<WritePartReply> {
+  const { attempt, ...rest } = opts
   const data = typeof opts.data === 'string' ? opts.data : opts.data.toString('base64')
-  return call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', { ...opts, data }, PART_RPC_MS)
+  if (attempt !== undefined) {
+    return call<WritePartReply>(host, PRIVATE_STAGE_CAPABILITY, 'fs.writePart', { ...rest, data, private: true, attempt }, PART_RPC_MS)
+  }
+  return call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', { ...rest, data }, PART_RPC_MS)
+}
+
+/** Refuses unless `host` can hold a private stage; nothing is read or sent. */
+export async function assertPrivateStage(host: string): Promise<void> {
+  await connectionFor(host, PRIVATE_STAGE_CAPABILITY)
+}
+
+/**
+ * Where a session's Claude transcript is on `host`, told apart honestly: the host
+ * did not answer, it has none, it has exactly one, or it has several (then no
+ * file is "the" transcript). Searches the default root only, like the shared
+ * DaemonFileReader.findSessionPath; a CLAUDE_CONFIG_DIR root is not searched.
+ */
+export type TranscriptLookup =
+  | { kind: 'unreachable'; error: string }
+  | { kind: 'none' }
+  | { kind: 'one'; path: string }
+  | { kind: 'many'; paths: string[] }
+
+export async function findTranscript(host: string, sessionId: string): Promise<TranscriptLookup> {
+  let res: Record<string, unknown>
+  try {
+    const conns = await resolver(host)
+    if (conns.length === 0) return { kind: 'unreachable', error: new TransferHostOfflineError(host).message }
+    res = await conns[0].send('fs.find', { path: '~/.claude/projects', name: sessionId + '.jsonl', maxDepth: 3 }, READ_RPC_MS)
+  } catch (err) {
+    return { kind: 'unreachable', error: err instanceof Error ? err.message : String(err) }
+  }
+  if (res.ok === false) return { kind: 'unreachable', error: String(res.error ?? 'fs.find failed') }
+  const files = Array.isArray(res.files) ? (res.files as unknown[]).filter((f): f is string => typeof f === 'string') : []
+  if (files.length === 0) return { kind: 'none' }
+  if (files.length === 1) return { kind: 'one', path: files[0] }
+  return { kind: 'many', paths: files }
 }
 
 /** Where a receiving host should reach the sending one over its own ssh. */
@@ -181,9 +224,13 @@ export interface RelayOptions {
   /** Tries per chunk (default 3). */
   retries?: number
   retryDelayMs?: number
+  /** Write a private stage on the receiver ('transfer-private-v1') under this attempt's token. */
+  privateAttempt?: string
+  /** Called with the bytes the receiver acknowledged, in file order, each byte once. */
+  onBytes?: (bytes: Buffer) => void
 }
 
-export interface RelayResult { bytes: number; sha256: string; chunks: number; retries: number }
+export interface RelayResult { bytes: number; sha256: string; chunks: number; retries: number; path?: string }
 
 async function readChunk(host: string, path: string, start: number, length: number): Promise<{ data: string; bytesRead: number; fileSize: number }> {
   const conn = await connectionFor(host, READ_RANGE_CAPABILITY)
@@ -195,7 +242,10 @@ async function readChunk(host: string, path: string, start: number, length: numb
 }
 
 // A refusal from either daemon (not a dropped link) is final: retrying gets the same answer.
-const FINAL_CODES = ['size_mismatch', 'checksum_mismatch', 'source_changed', 'read_failed', 'bad_request', 'too_large']
+const FINAL_CODES = ['size_mismatch', 'checksum_mismatch', 'source_changed', 'read_failed', 'bad_request', 'too_large',
+  // A private stage's refusals: retrying gets the same answer.
+  'not_owner', 'not_supported', 'topology_unknown', 'not_private_path', 'root_unsafe', 'stage_changed',
+  'stage_foreign', 'stage_incomplete', 'target_exists']
 
 /**
  * Copy one file from `fromHost` to `toHost` through this server, in chunks.
@@ -217,9 +267,10 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
   const delay = opts.retryDelayMs ?? 500
   const hasher = opts.sha256 ? null : crypto.createHash('sha256')
   let hashedTo = 0
+  let deliveredTo = 0
   // Both ends are checked up front, so a missing capability fails before any byte moves.
+  await connectionFor(toHost, opts.privateAttempt !== undefined ? PRIVATE_STAGE_CAPABILITY : WRITE_PART_CAPABILITY)
   await connectionFor(fromHost, READ_RANGE_CAPABILITY)
-  await connectionFor(toHost, WRITE_PART_CAPABILITY)
   let offset = 0
   let chunks = 0
   let retried = 0
@@ -246,13 +297,18 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       const sha256 = !final ? undefined : hasher ? (fresh ? hasher.copy().update(fresh) : hasher.copy()).digest('hex') : opts.sha256
       const reply = await writePart(toHost, {
         path: toPath, offset, data: bytes, ...(final ? { final: true, size: total, sha256 } : {}),
+        ...(opts.privateAttempt !== undefined ? { attempt: opts.privateAttempt } : {}),
       })
       chunks++
       failures = 0
       if (hasher && fresh && !final) { hasher.update(fresh); hashedTo = offset + bytes.length }
+      if (opts.onBytes && offset + bytes.length > deliveredTo) {
+        opts.onBytes(bytes.subarray(deliveredTo - offset))
+        deliveredTo = offset + bytes.length
+      }
       offset += bytes.length
       opts.onProgress?.({ sent: offset, total })
-      if (final) return { bytes: reply.staged, sha256: reply.sha256 ?? sha256 ?? '', chunks, retries: retried }
+      if (final) return { bytes: reply.staged, sha256: reply.sha256 ?? sha256 ?? '', chunks, retries: retried, ...(reply.path ? { path: reply.path } : {}) }
     } catch (err) {
       if (err instanceof TransferCommandError && err.command === 'fs.writePart' && err.code === 'gap') {
         // The receiver lost bytes (a restart, a cleared staging file): resume where it stands.

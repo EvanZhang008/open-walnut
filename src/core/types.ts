@@ -645,6 +645,16 @@ export interface Task {
   transferred_from?: string;
   /** The task this one was transferred to. */
   transferred_to?: string;
+  /**
+   * A Claude to Claude transfer that made this task: `pending` until its fork is
+   * confirmed (the CLI's init, the new transcript holding the source's leaf), then
+   * `done`. Never the task's phase. A `pending` task with no live transfer job (a
+   * restart, a failure after staging) reads as unconfirmed; nothing completes or
+   * removes it on its own.
+   */
+  transfer_state?: 'pending' | 'done';
+  /** That transfer's id and where its private transcript stage is (kept, never auto-removed). */
+  transfer?: { id: string; stage?: { host: string; path: string }; error?: string };
   /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
   last_start?: {
     id: string;

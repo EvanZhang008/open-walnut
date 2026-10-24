@@ -11,7 +11,9 @@ defineOp({
     'Move a task\'s work to another coding engine (e.g. Claude Code to Codex) and/or another host. ' +
     'It always makes a NEW task beside this one (a task keeps one session for its whole life) and starts it; ' +
     'the source task completes unless keep_source is true. ' +
-    'mode=carry (default) brings the conversation (Claude to Claude: the CLI\'s own transcript; other pairs: a transcript file plus a seed); ' +
+    'mode=carry (default) brings the conversation (Claude to Claude on the same host and directory, e.g. a model change: the CLI\'s own transcript, forked; ' +
+    'every other pair, Claude to Claude elsewhere included: a transcript file plus a seed); ' +
+    'a forked carry is done only once the new session started, and the source completes only then; ' +
     'mode=brief starts the new task from a handoff brief instead. ' +
     'On a host change the workspace (branch, uncommitted changes, untracked files) is packed and copied over, host to host when they can reach each other, ' +
     'and the new session sets it up and installs what is missing. cwd="auto" (the default on a host change) lets Walnut pick the directory. ' +
@@ -37,6 +39,14 @@ defineOp({
 
 function transferOutcome(body: unknown): unknown {
   const b = (body ?? {}) as Record<string, unknown>;
+  if (b.state === 'unconfirmed') {
+    return withOutcome(
+      b,
+      `Transfer ${String(b.transferId)} is unconfirmed: this server lost track of it while task ${String(b.taskId)} was still starting. `
+        + 'Nothing was completed or removed; the source task is open.',
+      `walnut tools call task_history '{"id":"${String(b.taskId)}"}' to see whether the new task's session runs.`,
+    );
+  }
   if (b.state === 'running') {
     return withOutcome(
       b,

@@ -2105,7 +2105,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // write host files, run ssh/scp, or (host.facts) read what this host is,
     // which only the trusted walnut socket asks, like host.preflight.
     // Keep in sync with daemon-source.ts.
-    case 'fs.writePart': return replyTransfer(ws, id as number, 'fs.writePart', () => transferCore.writePart(cmd), false)
+    // A private write ('transfer-private-v1') is authorized by this socket's own
+    // binding (leader.configure / leader.claim), never by a field of the command.
+    case 'fs.writePart': return replyTransfer(ws, id as number, 'fs.writePart', () => transferCore.writePart(cmd, { boundHome: gatewayClientHomes.get(ws) ?? null, origin: ws.data?.origin ?? null }), false)
     case 'transfer.pack': return replyTransfer(ws, id as number, 'transfer.pack', () => transferPack.pack(cmd), true)
     case 'transfer.reach': return replyTransfer(ws, id as number, 'transfer.reach', () => transferCore.reach(cmd), false)
     case 'transfer.fetch': return replyTransfer(ws, id as number, 'transfer.fetch', () => transferCore.fetch(cmd), true)
@@ -9326,6 +9328,9 @@ function cmdGitCommitStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
 const transferCore = createTransferCore({
   fs, path, crypto, spawn: spawn as unknown as TransferCoreDeps['spawn'], env: process.env, home: HOME_DIR,
   randomId: () => crypto.randomBytes(6).toString('hex'),
+  getuid: () => process.getuid!(),
+  ownerStamp: readDaemonOwnerStamp,
+  instanceId: DAEMON_INSTANCE_ID,
 })
 const transferPack = createTransferPack({
   fs, path, crypto, spawn: spawn as unknown as TransferPackDeps['spawn'], env: process.env, home: HOME_DIR,
@@ -9335,6 +9340,27 @@ const hostFacts = createHostFacts({
   fs, os, execFile: execFile as unknown as HostFactsDeps['execFile'], http, https,
   env: process.env, home: HOME_DIR, platform: process.platform, arch: process.arch,
 })
+
+/**
+ * The raw text of this daemon's owner stamp (`daemon.owner` in its own daemon dir,
+ * written only by the local Walnut that spawned it): null when there is none (a
+ * daemon started over ssh), undefined when the name holds anything but a small plain
+ * file of ours. Opened without blocking and type-checked on its fd, so a FIFO there
+ * never stalls the daemon. transfer-core.ts decides what the text vouches for (only
+ * a stamp naming DAEMON_INSTANCE_ID). Keep in sync with daemon-source.ts.
+ */
+function readDaemonOwnerStamp(): string | null | undefined {
+  const C = fs.constants
+  let fd: number
+  try { fd = fs.openSync(path.join(DAEMON_DIR, 'daemon.owner'), C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK | C.O_NOCTTY) } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? null : undefined
+  }
+  try {
+    const st = fs.fstatSync(fd)
+    if (!st.isFile() || st.uid !== process.getuid!() || st.size > 64 * 1024) return undefined
+    return fs.readFileSync(fd, 'utf8')
+  } catch { return undefined } finally { try { fs.closeSync(fd) } catch { /* closed */ } }
+}
 
 /**
  * Answer one transfer-family command: its result, or `{error, code, ...data}`.

@@ -538,6 +538,10 @@ export interface ForkSessionInput {
   /** Internal (transfer): the fork's effort and permission mode, over the source's. */
   effort?: SessionEffort;
   permissionMode?: SessionMode;
+  /** Internal (transfer): resume from this private stage file instead of the source's id. */
+  resumeFile?: string;
+  /** Internal (transfer): the attempt whose fork this is (TRANSFER_FORK_INIT carries it). */
+  transferAttemptId?: string;
 }
 
 export interface ForkSessionResult {
@@ -718,7 +722,7 @@ export async function forkSessionToTask(
   input: ForkSessionInput,
   source = 'web-api',
 ): Promise<ForkSessionResult> {
-  const { task_id, create_child_task, child_title, message, title, model, imageContext, placeOverride, rawMessage, effort, permissionMode } = input;
+  const { task_id, create_child_task, child_title, message, title, model, imageContext, placeOverride, rawMessage, effort, permissionMode, resumeFile, transferAttemptId } = input;
 
   if (!task_id && !create_child_task) {
     throw new SessionControlError('Either task_id or create_child_task is required', 400);
@@ -882,6 +886,8 @@ export async function forkSessionToTask(
     title: forkTitle,
     host: forkHost,
     forkedFromSessionId: sourceSessionId,
+    ...(resumeFile ? { resumeFile } : {}),
+    ...(transferAttemptId ? { transferAttemptId } : {}),
   }, ['session-runner'], { source });
 
   return {

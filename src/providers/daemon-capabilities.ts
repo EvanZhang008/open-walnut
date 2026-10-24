@@ -682,6 +682,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // sees its cwd (where it keeps its transcript). Both twins, not bridge-reachable,
   // not for followers. Optional: without it a workspace cannot move off or onto this host.
   'transfer-v1',
+  // 'transfer-private-v1' (transfer-core.ts): `fs.writePart` with `private: true` and an
+  // `attempt` token writes one shape only, `<root>/xf-<uuid>/transcript/<uuid>.jsonl`, where
+  // the root comes from this daemon (its owner stamp and the socket's leader.configure
+  // binding), never from the command. The attempt dir is created 0700 and the files 0600
+  // on their own fds; writes go through one file handle with the path chain re-checked; the
+  // finished file is named with link() (never replacing one). Both twins, not
+  // bridge-reachable, not for followers. Optional: without it a Claude to Claude transfer
+  // refuses before reading any transcript byte.
+  'transfer-private-v1',
   // 'host-facts-v1' (host-facts-core.ts): `host.facts {network?}` answers what this host is
   // (OS and distro, CPU, memory, free disk, FQDN, which proxy variables are set but never
   // their values, EC2 IMDSv2, whether github.com answers, toolchain versions). Read-only,

@@ -6,14 +6,17 @@
  * GET /transfers/:id reads it back (bounded too).
  *
  * In memory on purpose: a transfer is one server's work, a restart ends it,
- * and what it made (the new task, the source's links) is already stored.
+ * and what it made (the new task, the source's links) is already stored. A
+ * Claude to Claude transfer whose new task still reads `transfer_state:
+ * 'pending'` once no job holds it is `unconfirmed`: nobody knows whether its
+ * fork started, so nothing completes or removes anything on its own.
  */
 import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { TransferRequest } from './planner.js';
 import type { TransferResult } from './transfer.js';
 
-export type TransferJobState = 'running' | 'done' | 'error';
+export type TransferJobState = 'running' | 'done' | 'error' | 'unconfirmed';
 
 export interface TransferJob {
   id: string;
@@ -23,6 +26,8 @@ export interface TransferJob {
   finishedAt?: string;
   result?: TransferResult;
   error?: { message: string; status: number; code?: string };
+  /** An unconfirmed transfer: the task it made, which keeps its stage. */
+  newTaskId?: string;
 }
 
 const KEEP_MS = 60 * 60_000;
@@ -56,7 +61,8 @@ export function startTransferJob(
   const existing = runningTransferFor(req.taskId);
   if (existing) return existing;
   prune();
-  const job: TransferJob = { id: `xf-${randomUUID().slice(0, 12)}`, taskId: req.taskId, state: 'running', startedAt: new Date().toISOString() };
+  // A full uuid: the id names the private stage dir, whose shape the daemon checks.
+  const job: TransferJob = { id: `xf-${randomUUID()}`, taskId: req.taskId, state: 'running', startedAt: new Date().toISOString() };
   jobs.set(job.id, job);
   settled.set(job.id, run(req, job.id).then((result) => {
     job.state = 'done';
@@ -76,6 +82,19 @@ export function startTransferJob(
 
 export function getTransferJob(id: string): TransferJob | undefined {
   return jobs.get(id);
+}
+
+/** A transfer this server no longer holds whose new task is still pending (a restart): unconfirmed. */
+export async function unconfirmedTransferJob(id: string): Promise<TransferJob | undefined> {
+  if (!/^xf-[0-9a-f-]{8,36}$/.test(id)) return undefined;
+  const { listTasks } = await import('../task-manager.js');
+  const made = (await listTasks()).find((t) => t.transfer?.id === id && t.transfer_state === 'pending');
+  if (!made) return undefined;
+  return {
+    id, taskId: made.transferred_from ?? '', state: 'unconfirmed', startedAt: made.created_at,
+    ...(made.transfer?.error ? { error: { message: made.transfer.error, status: 409, code: 'transfer_unconfirmed' } } : {}),
+    newTaskId: made.id,
+  };
 }
 
 /** Wait up to `ms` (capped) for the job to finish; returns it either way. */

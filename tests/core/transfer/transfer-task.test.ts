@@ -16,6 +16,7 @@ const edges = vi.hoisted(() => ({
   copies: [] as Array<{ host: string; from: string; to: string }>,
   cwds: [] as Array<{ cwd: string; host?: string }>,
   hosts: {} as Record<string, unknown>,
+  sessionServer: false,
   failStart: false,
 }));
 
@@ -26,7 +27,7 @@ vi.mock('../../../src/core/fork-title.js', () => ({
 }));
 vi.mock('../../../src/core/config-manager.js', async (orig) => {
   const real = await orig<typeof import('../../../src/core/config-manager.js')>();
-  return { ...real, getConfig: async () => ({ ...(await real.getConfig()), hosts: edges.hosts }) };
+  return { ...real, getConfig: async () => ({ ...(await real.getConfig()), hosts: edges.hosts, ...(edges.sessionServer ? { session_server: { enabled: true } } : {}) }) };
 });
 vi.mock('../../../src/core/sessions/ensure-cwd.js', () => ({
   ensureCwd: async (cwd: string, host?: string) => { edges.cwds.push({ cwd, host }); },
@@ -90,7 +91,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.forks.length = 0; edges.writes.length = 0; edges.copies.length = 0; edges.cwds.length = 0;
-  edges.hosts = {}; edges.failStart = false;
+  edges.hosts = {}; edges.failStart = false; edges.sessionServer = false;
 });
 
 afterEach(async () => {
@@ -130,7 +131,7 @@ describe('transferTask', () => {
     const [transcript] = edges.writes;
     expect(transcript.host).toBe('__local__');
     expect(transcript.path.startsWith(`${WALNUT_HOME}-transfers/xf-`)).toBe(true);
-    expect(transcript.path).toMatch(/-transfers\/xf-[0-9a-f-]{12}\/transcript\.md$/);
+    expect(transcript.path).toMatch(/-transfers\/xf-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/transcript\.md$/);
     expect(transcript.content).toContain('Make the parser accept trailing commas');
 
     const source = await getTask(src);
@@ -151,24 +152,30 @@ describe('transferTask', () => {
     expect((await getTask(src)).transferred_to).toBe(res.taskId);
   });
 
-  it('Claude to Claude in another directory copies the CLI transcript and forks into the new task', async () => {
+  it('Claude to Claude in another directory replays the conversation (no CLI is checked to resume a copied file)', async () => {
     const src = await taskWithConversation();
     const res = await transferTask({ taskId: src, cwd: '/work/repo-copy' });
+    expect(res).toMatchObject({ history: 'replay', target: { engine: 'claude', cwd: '/work/repo-copy' } });
+    expect(edges.copies).toEqual([]);
+    expect(edges.forks).toHaveLength(0);
+    expect(edges.starts).toHaveLength(1);
+    expect(String(edges.starts[0].message)).toContain('the magic word is PELICAN');
+    expect(edges.writes.some((w) => w.path.endsWith('/transcript.md'))).toBe(true);
+  });
 
-    expect(res.history).toBe('native-copy');
-    expect(edges.copies).toEqual([{
-      host: '__local__',
-      from: '/Users/me/.claude/projects/-work-repo/claude-sid.jsonl',
-      to: '~/.claude/projects/-private-work-repo-copy/claude-sid.jsonl',
-    }]);
-    const [fork] = edges.forks;
-    expect(fork.sid).toBe('claude-sid');
-    expect(fork.input).toMatchObject({ task_id: res.taskId, rawMessage: true, placeOverride: { cwd: '/work/repo-copy' } });
-    expect(String(fork.input.message)).toContain('Paths and results in it refer to the old place');
-    expect(edges.starts).toHaveLength(0);
+  it('with the SDK session server on, a model change replays instead of forking (that path cannot fork)', async () => {
+    edges.sessionServer = true;
+    const src = await taskWithConversation();
+    const res = await transferTask({ taskId: src, model: 'sonnet' });
+    expect(res.history).toBe('replay');
+    expect(edges.forks).toHaveLength(0);
+    expect(edges.starts).toHaveLength(1);
+  });
+
+  it('a transfer to another directory names it, and the next transfer replaces that layer', async () => {
+    const src = await taskWithConversation();
+    const res = await transferTask({ taskId: src, cwd: '/work/repo-copy', mode: 'brief' });
     expect(res.title).toBe('Fix the parser · repo-copy');
-
-    // Chained: the next transfer replaces the last place instead of stacking another.
     await createSessionRecord('forked-sid', res.taskId, 'Marina', '/work/repo-copy');
     await updateSessionRecord('forked-sid', { process_status: 'idle' } as never);
     const again = await transferTask({ taskId: res.taskId, engine: 'codex' });
@@ -237,26 +244,7 @@ describe('transferTask', () => {
     expect((await getTask(result.taskId)).parent_task_id).toBe(leader.id);
   });
 
-  it('a model change in the same place forks without copying the transcript', async () => {
-    const src = await taskWithConversation();
-    const res = await transferTask({ taskId: src, model: 'claude-opus-5-5' });
-    expect(res.history).toBe('native-copy');
-    expect(edges.copies).toEqual([]);
-    expect(edges.forks[0].input).toMatchObject({ task_id: res.taskId, model: 'claude-opus-5-5' });
-    expect(res.title).toBe('Fix the parser · claude-opus-5-5');
-  });
-
-  it('the new session keeps the source\'s model, effort and permissions on the same harness, and takes picks over them', async () => {
-    const src = await taskWithConversation();
-    await updateSessionRecord('claude-sid', { cliModel: 'opus[1m]', effort: 'xhigh', mode: 'plan' } as never);
-    const kept = await transferTask({ taskId: src, cwd: '/work/repo-two', keepSource: true });
-    expect(edges.forks[0].input).toMatchObject({ model: 'opus[1m]', effort: 'xhigh', permissionMode: 'plan' });
-    expect(kept.target).toMatchObject({ model: 'opus[1m]', effort: 'xhigh', permissionMode: 'plan' });
-
-    // Picks win; 'default' means the CLI's own default, so the fork names no model.
-    await transferTask({ taskId: src, cwd: '/work/repo-three', model: 'default', effort: 'low', permissionMode: 'accept', keepSource: true });
-    expect(edges.forks[1].input).toMatchObject({ model: '', effort: 'low', permissionMode: 'accept' });
-  });
+  // A Claude to Claude fork (in place, its model and settings): transfer-native-fork.test.ts.
 
   it('another harness starts on its own default model with the source\'s permissions, and an ACP model id goes through', async () => {
     const src = await taskWithConversation();

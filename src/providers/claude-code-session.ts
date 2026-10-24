@@ -1170,6 +1170,9 @@ export class ClaudeCodeSession {
   fromPlanSessionId?: string
   /** Source session ID when this session was forked from another session */
   forkedFromSessionId?: string
+  /** A transfer's attempt id: announced once, after the first init's whole
+   *  persist/rename/migrate chain (TRANSFER_FORK_INIT), then cleared. */
+  transferAttemptId?: string
 
   /** Plan file path captured from Write tool_use targeting ~/.claude/plans/ */
   planFile: string | null = null
@@ -5353,6 +5356,16 @@ export class ClaudeCodeSession {
                 await updateSessionRecord(newId, { model: initModel })
               }
               this.emitStatusChanged('IN_PROGRESS')
+              // A transfer waits for this, not for sessionReady: by now the record
+              // carries the id the CLI really runs under and its queue moved with it.
+              const attemptId = this.transferAttemptId
+              if (attemptId) {
+                this.transferAttemptId = undefined
+                bus.emit(EventNames.TRANSFER_FORK_INIT, {
+                  attemptId, preassignedId: expectedId ?? null, actualId: newId,
+                  renamed: !!expectedId && expectedId !== newId,
+                }, ['transfer'], { source: 'session-runner' })
+              }
             } catch (err) {
               // Persist failed — log loudly but still resolve so the session isn't stuck.
               // The session process IS running, just not registered.
@@ -9180,7 +9193,19 @@ export class SessionRunner {
         case EventNames.SESSION_START: {
           const startData = eventData<'session:start'>(event)
           log.session.info('session start requested', { taskId: startData.taskId, host: startData.host, cwd: startData.cwd, mode: startData.mode, engine: startData.engine })
-          await this.assertStartRouting(startData)
+          try {
+            await this.assertStartRouting(startData)
+          } catch (err) {
+            // A throw here ends in the bus's log; a transfer waiting for this
+            // attempt's init would sit out its whole bound, so tell it now.
+            if (startData.transferAttemptId) {
+              bus.emit(EventNames.TRANSFER_FORK_INIT, {
+                attemptId: startData.transferAttemptId, preassignedId: startData.preassignedSessionId ?? null, actualId: '', renamed: false,
+                refused: err instanceof Error ? err.message : String(err),
+              }, ['transfer'], { source: 'session-runner' })
+            }
+            throw err
+          }
           if (isAcpEngine(startData.engine)) {
             log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
             await this.handleAcpStart(startData)
@@ -9948,10 +9973,17 @@ export class SessionRunner {
   private async assertStartRouting(data: {
     engine?: import('../core/types.js').SessionEngine
     forkedFromSessionId?: string
+    resumeFile?: string
+    transferAttemptId?: string
   }): Promise<void> {
     if (!data.forkedFromSessionId) return
     if (isAcpEngine(data.engine)) {
       throw new AcpForkUnsupportedError(data.forkedFromSessionId, resolveEngine(data.engine))
+    }
+    // Only the CLI path forks for a transfer: the SDK path starts a fresh session
+    // (no fork, no resume file) and never announces the init a transfer waits for.
+    if ((data.resumeFile || data.transferAttemptId) && this.sdkClient?.connected) {
+      throw new Error('A transfer forks the conversation through the Claude Code CLI, and this server starts sessions through the session server, which cannot fork')
     }
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const source = await getSessionByClaudeId(data.forkedFromSessionId)
@@ -10603,6 +10635,10 @@ export class SessionRunner {
     host?: string
     fromPlanSessionId?: string
     forkedFromSessionId?: string
+    /** Transfer fork: resume from this transcript file on the target host instead of the source id. */
+    resumeFile?: string
+    /** Transfer fork: announced with TRANSFER_FORK_INIT after the first init. */
+    transferAttemptId?: string
     largePromptFile?: { localPath: string; originalLength: number }
     requestTs?: number
     preassignedSessionId?: string
@@ -10745,6 +10781,7 @@ export class SessionRunner {
     session._testDaemonUrl = this._testDaemonUrl
     if (data.fromPlanSessionId) session.fromPlanSessionId = data.fromPlanSessionId
     if (data.forkedFromSessionId) session.forkedFromSessionId = data.forkedFromSessionId
+    if (data.transferAttemptId) session.transferAttemptId = data.transferAttemptId
     this.sessions.set(mapKey, session)
 
     // Auto-generate title + description
@@ -10909,7 +10946,8 @@ export class SessionRunner {
     const sessionTitle = session.pendingTitle ?? naming.slice(0, 120)
     // For forks: pass source session ID as resumeSessionId with forkSession=true.
     // Claude Code's --resume + --fork-session creates a new session with full context.
-    const resumeId = isFork ? data.forkedFromSessionId : undefined
+    // A transfer resumes from its staged copy, never from the source's own file.
+    const resumeId = isFork ? (data.resumeFile ?? data.forkedFromSessionId) : undefined
     const spillFile = data.largePromptFile ? { localPath: data.largePromptFile.localPath } : undefined
     // Carry the HTTP request ts onto the session instance so the init handler can
     // compute the full route→init latency breakdown (instrumentation only).

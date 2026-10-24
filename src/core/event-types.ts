@@ -103,6 +103,20 @@ export interface ProjectUpdatedEvent {
 
 // ── Session lifecycle events ──
 
+/**
+ * A transfer's fork spawn reached its CLI init AND its persist / rename / queue
+ * move finished (claude-code-session.ts). `actualId` is the id the CLI announced;
+ * it differs from `preassignedId` when the CLI did not take `--session-id`.
+ */
+export interface TransferForkInitEvent {
+  attemptId: string;
+  preassignedId: string | null;
+  actualId: string;
+  renamed: boolean;
+  /** Set instead of an init when the runner refused the start (actualId is ''): the transfer stops waiting. */
+  refused?: string;
+}
+
 export interface SessionStartEvent {
   taskId: string;
   message: string;
@@ -132,6 +146,14 @@ export interface SessionStartEvent {
    * transcript, never appended under the turns it discarded.
    */
   resumeSessionAtMessageUuid?: string;
+  /**
+   * TRANSFER (core/transfer/transfer.ts): resume from this absolute transcript file
+   * (`--resume <file> --fork-session`) instead of the parent's id. Only honored
+   * together with forkedFromSessionId.
+   */
+  resumeFile?: string;
+  /** TRANSFER: the attempt whose fork this is; the init emits TRANSFER_FORK_INIT with it. */
+  transferAttemptId?: string;
   /**
    * Caller-chosen session id (UUID), passed to the CLI as `--session-id`.
    *
@@ -1281,6 +1303,7 @@ export interface EventPayloadMap {
   'session:content-updated': SessionContentUpdatedEvent;
   'session:result': SessionResultEvent;
   'session:error': SessionErrorEvent;
+  'transfer:fork-init': TransferForkInitEvent;
 
   'session:text-delta': SessionTextDeltaEvent;
   'session:thinking-delta': SessionThinkingDeltaEvent;

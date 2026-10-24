@@ -3,9 +3,11 @@
  *
  * A transfer moves a task's conversation to another engine and/or host. It
  * always makes a NEW task (one session per task, sessions/one-session-per-task.ts):
- *   carry: the conversation comes along. Claude to Claude copies the CLI's own
- *          transcript and forks it (lossless); any other pair replays it as a
- *          transcript file plus a seed in the first message.
+ *   carry: the conversation comes along. Claude to Claude in the same place
+ *          forks the CLI's own transcript by id (lossless); elsewhere it does
+ *          so from a private copy once the target's CLI is a version checked
+ *          to resume a copied file (resumeFileGate), and until then replays it
+ *          like any other pair: a transcript file plus a seed in the first message.
  *   brief: the new task starts from a handoff brief written from the
  *          conversation, not from the conversation itself.
  * When the host changes, the workspace (branch, uncommitted changes, untracked
@@ -51,7 +53,25 @@ export interface TransferPlan {
   changesEngine: boolean;
   /** The workspace must be packed and moved (the host changes). */
   moveWorkspace: boolean;
+  /** Same host and directory: a Claude to Claude fork resumes the source by id, nothing is staged. */
+  inPlace: boolean;
 }
+
+/**
+ * Claude Code versions checked to resume a transcript FILE with --fork-session
+ * and --session-id. None yet, and Walnut records no host's CLI version, so a
+ * Claude to Claude carry to another place replays the conversation instead.
+ * Before a version goes in, the private stage's owner stamp must also answer
+ * for every target it would serve: a daemon shared by several Walnuts on one
+ * host, and a local daemon a service manager restarted (no fresh stamp).
+ */
+const CLI_RESUME_FILE_VERSIONS: readonly string[] = [];
+export interface ResumeFileGate { versions: readonly string[]; versionOn: (host: string) => Promise<string | null> }
+const CLOSED_GATE: ResumeFileGate = { versions: CLI_RESUME_FILE_VERSIONS, versionOn: async () => null };
+let resumeFileGate: ResumeFileGate = CLOSED_GATE;
+export function getResumeFileGate(): ResumeFileGate { return resumeFileGate; }
+/** Test-only: the allowlist and the target's CLI version. */
+export function __setResumeFileGateForTesting(gate: ResumeFileGate | null): void { resumeFileGate = gate ?? CLOSED_GATE; }
 
 export class TransferError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
@@ -121,11 +141,14 @@ export function planTransfer(
   const launch = targetLaunch(session, sourceEngine, engine, req);
 
   const mode: TransferMode = req.mode ?? 'carry';
+  // 'auto' without a host change keeps the source's directory (transfer.ts: no move, no place).
+  const inPlace = !changesHost && (cwd === 'auto' || cwd === sourceCwd);
   const sourceNative = engineCaps(sourceEngine).historySource === 'provider-jsonl';
   const targetNative = engineCaps(engine).historySource === 'provider-jsonl';
   const history: HistoryMethod = mode === 'brief'
     ? 'brief'
-    : sourceNative && targetNative && sourceEngine === engine ? 'native-copy' : 'replay';
+    : sourceNative && targetNative && sourceEngine === engine
+      && (inPlace || resumeFileGate.versions.length > 0) ? 'native-copy' : 'replay';
   return {
     source: { task, session, engine: sourceEngine, host: sourceHost, cwd: sourceCwd },
     target: { engine, host, cwd, ...launch },
@@ -134,6 +157,7 @@ export function planTransfer(
     changesHost,
     changesEngine,
     moveWorkspace: changesHost,
+    inPlace,
   };
 }
 

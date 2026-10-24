@@ -33,7 +33,9 @@ export function transfersDir(host: string): string {
 const KEEP_TRANSFER_FILES_MS = 7 * 24 * 3600_000;
 
 /** Remove this machine's transfer files older than a week (the new session has
- *  long applied them). Only `xf-…` entries, never anything else in the folder. */
+ *  long applied them). Only `xf-…` entries, never anything else in the folder, and
+ *  never a private transcript stage (an `.attempt` inside): a transfer that did not
+ *  finish keeps its stage until someone decides about it. */
 export async function pruneLocalTransfers(now = Date.now()): Promise<number> {
   const fsp = await import('node:fs/promises');
   const dir = transfersDir(LOCAL_HOST);
@@ -43,6 +45,7 @@ export async function pruneLocalTransfers(now = Date.now()): Promise<number> {
     if (!/^xf-[0-9a-f-]+$/.test(name)) continue;
     const stat = await fsp.stat(path.join(dir, name)).catch(() => null);
     if (!stat || now - stat.mtimeMs < KEEP_TRANSFER_FILES_MS) continue;
+    if (await fsp.lstat(path.join(dir, name, '.attempt')).then(() => true, (e: NodeJS.ErrnoException) => e.code !== 'ENOENT')) continue;
     await fsp.rm(path.join(dir, name), { recursive: true, force: true }).catch(() => {});
     removed++;
   }
