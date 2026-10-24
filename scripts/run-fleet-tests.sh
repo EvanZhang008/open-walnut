@@ -34,6 +34,15 @@ if [ "${1:-}" = "clean" ]; then
   exit 0
 fi
 
+# host-faults C1 proves the chunked BINARY deploy, and C2 runs on its session: a tree
+# with no Linux daemon binary (a fresh clone) deploys the source instead and fails
+# both for that reason alone. Build them first; without Bun they stay missing.
+if ! ls dist/daemon-binaries/*linux* >/dev/null 2>&1; then
+  echo "[fleet] no Linux daemon binary in dist/daemon-binaries: building them (bash scripts/build-daemon.sh)"
+  bash scripts/build-daemon.sh
+  ls dist/daemon-binaries/*linux* >/dev/null 2>&1 || echo "[fleet] still no Linux daemon binary (Bun missing?): host-faults C1 and C2 will fail"
+fi
+
 if [ "$#" -eq 0 ]; then
   exec ./node_modules/.bin/vitest run --config vitest.fleet.config.ts
 fi
