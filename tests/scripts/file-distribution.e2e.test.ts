@@ -232,7 +232,9 @@ describe('the compiled file, from every way it arrives', () => {
 
   it('`npm install -g open-walnut` installs only this machine\'s platform package, runs it, and updates through npm', async () => {
     const npm = execFileSync('/bin/sh', ['-c', 'command -v npm'], { encoding: 'utf8' }).trim()
-    const node = process.execPath
+    // The launcher package is a Node script: npm's bin shim starts it on the first
+    // node on PATH, which is not this process when vitest runs on bun.
+    const node = fs.realpathSync(execFileSync('/bin/sh', ['-c', 'command -v node'], { encoding: 'utf8', env: { ...process.env, PATH: [path.dirname(npm), process.env.PATH].join(path.delimiter) } }).trim())
     const w = isolated('npm', [path.dirname(npm), path.dirname(node)])
     w.env.PATH = [path.join(w.prefix, 'bin'), w.env.PATH].join(path.delimiter)
     Object.assign(w.env, { npm_config_registry: `${registry.url}/`, npm_config_cache: path.join(work, 'npm-cache') })
