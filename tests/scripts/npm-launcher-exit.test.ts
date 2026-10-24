@@ -13,9 +13,12 @@ import { createRequire } from 'node:module'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ENTRY } from '../../scripts/npm-packages.mjs'
 
-const { candidateTargets, startDir } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
+const { startDir } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
 
 const ROOT = path.resolve(__dirname, '../..')
+const node = process.env.WALNUT_TEST_NODE || 'node'
+// The target the Node under test looks for (WALNUT_TEST_NODE may be another arch, under Rosetta say).
+const TARGET = spawnSync(node, ['-e', `process.stdout.write(require(${JSON.stringify(path.join(ROOT, 'scripts/npm-launcher/launch.js'))}).candidateTargets()[0])`], { encoding: 'utf8' }).stdout
 let tmp: string
 let entry: string
 
@@ -27,8 +30,8 @@ function layout(script: string): string {
   fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true })
   fs.copyFileSync(path.join(ROOT, 'scripts/npm-launcher/launch.js'), path.join(pkg, 'lib', 'launch.js'))
   fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"open-walnut","type":"commonjs"}\n')
-  fs.writeFileSync(path.join(pkg, 'bin', 'open-walnut.js'), ENTRY('../lib/launch.js'))
-  const target: string = candidateTargets()[0]
+  fs.writeFileSync(path.join(pkg, 'bin', 'open-walnut.js'), ENTRY())
+  const target = TARGET
   const platform = path.join(dir, 'node_modules', '@open-walnut', target)
   fs.mkdirSync(platform, { recursive: true })
   fs.writeFileSync(path.join(platform, 'package.json'), `{"name":"@open-walnut/${target}"}\n`)
@@ -36,7 +39,6 @@ function layout(script: string): string {
   return path.join(pkg, 'bin', 'open-walnut.js')
 }
 
-const node = process.env.WALNUT_TEST_NODE || 'node'
 const run = (bin: string) => spawnSync(node, [bin], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000 })
 
 beforeAll(() => {
@@ -71,6 +73,16 @@ describe('the npm launcher exits as its file did', () => {
     const res = spawnSync('/bin/sh', ['-c', 'cd "$1" && rm -rf "$1" && mkdir "$1" && exec "$2" "$3"', 'sh', dir, node, bin], { encoding: 'utf8', timeout: 20_000 })
     expect(res.status, res.stderr).toBe(0)
     expect(res.stdout.trim()).toBe(dir)
+  })
+
+  it('a directory deleted under it and not made again starts the file in the package root, on Node 8 and 10 too', () => {
+    // Node 8 and 10 read the working directory to resolve a relative require: the
+    // entry and the launcher require by absolute path, so they get as far as startDir.
+    const bin = layout('/bin/pwd -P || exit 9')
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(tmp, 'gone-')))
+    const res = spawnSync('/bin/sh', ['-c', 'cd "$1" && rm -rf "$1" && PWD= exec "$2" "$3"', 'sh', dir, node, bin], { encoding: 'utf8', timeout: 20_000 })
+    expect(res.status, res.stderr).toBe(0)
+    expect(res.stdout.trim()).toBe(fs.realpathSync(path.dirname(path.dirname(bin))))
   })
 
   it('startDir: this directory while it exists, else PWD, else the package root, else home', () => {

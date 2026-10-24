@@ -15,8 +15,9 @@ if (parseInt(process.versions.node.split('.')[0], 10) < 8) {
 }
 const fs = require('fs')
 const path = require('path')
-const launcher = require('./launch.js')
-const fetcher = require('./fetch-platform.js')
+// Absolute paths: Node 8 and 10 read the working directory for a relative one, and it may be gone.
+const launcher = require(path.join(__dirname, 'launch.js'))
+const fetcher = require(path.join(__dirname, 'fetch-platform.js'))
 
 const root = path.dirname(__dirname)
 const fail = (line) => {
@@ -28,9 +29,12 @@ function main() {
   const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
   const targets = launcher.candidateTargets()
   if (targets.length === 0) return fail(`Walnut runs on macOS and Linux (arm64 and x64); there is no build for ${process.platform}-${process.arch}.`)
-  if (launcher.findFile(targets, __dirname)) return
+  const found = launcher.findFile(targets, __dirname)
+  if (found && found.unreadable) return fail(launcher.unreadableLine(found.unreadable))
+  if (found) return
   const log = (l) => process.stderr.write(`open-walnut: ${l}\n`)
-  fetcher.fetchPlatformPackage({ packageRoot: root, target: targets[0], version, registry: fetcher.registryFor(), log }).then(() => {
+  // npm fetches it first (npm_execpath: the npm running this), so the settings it has apply.
+  fetcher.fetchPlatformPackage({ packageRoot: root, target: targets[0], version, log }).then(() => {
     process.stderr.write(`open-walnut: npm left out ${fetcher.SCOPE}/${targets[0]}@${version}; it is installed now.\n`)
   }, (err) => {
     fail(`npm did not install ${fetcher.SCOPE}/${targets[0]}@${version}, the Walnut for this machine, and fetching it failed: ${err instanceof Error ? err.message : String(err)}. A release whose packages are still reaching the registry installs in a few minutes; otherwise run: ${launcher.reinstallCommand(root, version)}`)

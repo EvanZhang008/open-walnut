@@ -100,9 +100,11 @@ export const LAUNCHER_NODE_FLOOR = 8
 
 /**
  * bin/open-walnut.js and dist/cli.js. ES5 up to the check, so a Node too old
- * for lib/ says so in one line instead of a SyntaxError.
+ * for lib/ says so in one line instead of a SyntaxError. lib/launch.js by its
+ * absolute path: Node 8 and 10 read the working directory to resolve a relative
+ * require, and a Mac app's server starts in a directory an update deleted.
  */
-export const ENTRY = (from) => `#!/usr/bin/env node
+export const ENTRY = () => `#!/usr/bin/env node
 // Open Walnut: runs the compiled Walnut for this machine (lib/launch.js).
 'use strict'
 var node = process.versions.node
@@ -110,7 +112,7 @@ if (parseInt(node.split('.')[0], 10) < ${LAUNCHER_NODE_FLOOR}) {
   process.stderr.write('open-walnut: Node.js ' + node + ' is too old to start Walnut (npm\\'s launcher needs Node.js ${LAUNCHER_NODE_FLOOR} or newer). Walnut itself needs no Node: ${INSTALL_SH}\\n')
   process.exit(1)
 }
-require('${from}').launch(__filename)
+require(require('path').join(__dirname, '..', 'lib', 'launch.js')).launch(__filename)
 `
 
 const writeJson = (file, data) => fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
@@ -144,8 +146,8 @@ export function buildPackages({ files, version, out, repoRoot = root, gitHead = 
   for (const sub of ['bin', 'lib', 'dist']) fs.mkdirSync(path.join(launcher, sub), { recursive: true })
   writeJson(path.join(launcher, 'package.json'), { ...launcherManifest(version, repo), ...head })
   for (const f of LAUNCHER_LIB) fs.copyFileSync(path.join(repoRoot, 'scripts', 'npm-launcher', f), path.join(launcher, 'lib', f))
-  fs.writeFileSync(path.join(launcher, 'bin', 'open-walnut.js'), ENTRY('../lib/launch.js'), { mode: 0o755 })
-  fs.writeFileSync(path.join(launcher, 'dist', 'cli.js'), ENTRY('../lib/launch.js'), { mode: 0o755 })
+  fs.writeFileSync(path.join(launcher, 'bin', 'open-walnut.js'), ENTRY(), { mode: 0o755 })
+  fs.writeFileSync(path.join(launcher, 'dist', 'cli.js'), ENTRY(), { mode: 0o755 })
   fs.copyFileSync(path.join(repoRoot, 'README.md'), path.join(launcher, 'README.md'))
   fs.copyFileSync(path.join(repoRoot, 'LICENSE'), path.join(launcher, 'LICENSE'))
   return dirs

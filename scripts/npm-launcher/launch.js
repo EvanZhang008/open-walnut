@@ -61,16 +61,60 @@ function hasMuslCxxRuntime(exists) {
   return ['libstdc++.so.6', 'libgcc_s.so.1'].every((name) => dirs.some((dir) => exists(path.join(dir, name))))
 }
 
-/** The installed platform package's file, looked up from `fromDir` the way require does, or null. */
+/**
+ * The installed platform package's file, looked up from `fromDir` the way
+ * require does (the node_modules of `fromDir` and of each directory above it):
+ * { target, file }; { target, unreadable } when a directory on the way is there
+ * but this user may not read it (an install as root whose files only root may
+ * read: fetching it again would only end the same way); else null.
+ */
 function findFile(targets, fromDir) {
   if (fromDir === undefined) fromDir = __dirname
+  const dirs = []
+  for (let dir = path.resolve(fromDir); ; dir = path.dirname(dir)) {
+    if (path.basename(dir) !== 'node_modules') dirs.push(path.join(dir, 'node_modules'))
+    if (path.dirname(dir) === dir) break
+  }
   for (const target of targets) {
-    try {
-      const file = path.join(path.dirname(require.resolve(`${SCOPE}/${target}/package.json`, { paths: [fromDir] })), 'walnut')
-      if (fs.existsSync(file)) return { target, file }
-    } catch (err) { /* not installed */ }
+    for (const modules of dirs) {
+      const file = path.join(modules, SCOPE, target, 'walnut')
+      try {
+        if (fs.statSync(file).isFile()) return { target, file }
+      } catch (err) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') return { target, unreadable: blockedDir([modules, path.join(modules, SCOPE), path.dirname(file)]) }
+      }
+    }
   }
   return null
+}
+
+/** The first of `dirs` this user may not enter, else the last. */
+function blockedDir(dirs) {
+  for (const dir of dirs) {
+    try { fs.accessSync(dir, fs.constants.R_OK | fs.constants.X_OK) } catch (err) { if (err.code === 'EACCES' || err.code === 'EPERM') return dir }
+  }
+  return dirs[dirs.length - 1]
+}
+
+/** What to say when the file is there but this user may not read it. */
+function unreadableLine(dir) {
+  return `cannot read ${dir}: it was installed for another user (as root, say). Make it readable with: sudo chmod -R a+rX ${shellQuote(dir)}`
+}
+
+const shellQuote = (s) => (/^[A-Za-z0-9_\/.,:@%+=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`)
+
+const canWrite = (p) => { try { fs.accessSync(p, fs.constants.W_OK); return true } catch (err) { return false } }
+
+/** Can this user replace the package: its root and the directory npm renames it in (the server's update asks the same). */
+function installWritable(packageRoot) {
+  return canWrite(packageRoot) && canWrite(path.dirname(packageRoot))
+}
+
+/** Can this user put the platform package in place: the deepest directory of its scope that is there. */
+function fetchWritable(packageRoot) {
+  let dir = path.join(packageRoot, 'node_modules', SCOPE)
+  while (!fs.existsSync(dir) && path.dirname(dir) !== dir) dir = path.dirname(dir)
+  return canWrite(dir)
 }
 
 /** The npm prefix of the self-contained Node archive this package root lives in (its marker beside it), or null. */
@@ -83,11 +127,25 @@ function archivePrefixOf(packageRoot, exists) {
   return exists(path.join(prefix, 'open-walnut-runtime.json')) ? prefix : null
 }
 
-/** The command that installs this package again, in the words of the install it is. */
-function reinstallCommand(packageRoot, version, exists) {
+/**
+ * The command that installs this package again, in the words of the install it
+ * is. `io` stands in for the file system in tests: { exists, realpath, writable, sudo }.
+ */
+function reinstallCommand(packageRoot, version, io) {
+  const o = Object.assign({
+    exists: fs.existsSync,
+    realpath: (p) => { try { return fs.realpathSync(p) } catch (err) { return p } },
+    writable: installWritable,
+    // npm running this as root for a person (sudo npm i -g): they need sudo again.
+    sudo: typeof process.getuid === 'function' && process.getuid() === 0 && !!process.env.SUDO_USER,
+  }, io)
+  // A Homebrew keg holds the archive's layout too (its marker included): Homebrew owns it.
+  if (o.realpath(packageRoot).indexOf('/Cellar/open-walnut/') !== -1) return 'brew reinstall open-walnut'
   // The archive's npm is its own and is not on PATH; install.sh replaces it with the compiled file.
-  if (archivePrefixOf(packageRoot, exists)) return INSTALL_SH
-  return `npm install -g open-walnut@${version}`
+  if (archivePrefixOf(packageRoot, o.exists)) return INSTALL_SH
+  // npm 12 runs no install script it was not allowed to, and lib/postinstall.js is what fetches a left-out file.
+  const npm = `npm install -g open-walnut@${version} --allow-scripts=open-walnut`
+  return o.sudo || !o.writable(packageRoot) ? `sudo ${npm}` : npm
 }
 
 function ownVersion(packageRoot) {
@@ -114,12 +172,23 @@ function launch(entry) {
     process.exit(1)
   }
   const found = findFile(targets, path.dirname(path.resolve(entry)))
+  if (found && found.unreadable) {
+    process.stderr.write(`open-walnut: ${unreadableLine(found.unreadable)}\n`)
+    process.exit(1)
+  }
   if (found) return run(found, packageRoot)
   const version = ownVersion(packageRoot)
-  process.stderr.write(`open-walnut: the Walnut for ${targets[0]} was not installed with the package (npm leaves out an optional dependency it could not get); fetching ${SCOPE}/${targets[0]}@${version}.\n`)
+  const missing = `the Walnut for ${targets[0]} was not installed with the package (npm leaves out an optional dependency it could not get)`
+  if (!fetchWritable(packageRoot)) {
+    // Another user's install (sudo npm i -g): a download could not be put in place.
+    process.stderr.write(`open-walnut: ${missing}, and this user cannot write ${packageRoot} to fetch it.\nInstall it again with: ${reinstallCommand(packageRoot, version)}\n`)
+    process.exit(1)
+  }
+  process.stderr.write(`open-walnut: ${missing}; fetching ${SCOPE}/${targets[0]}@${version}.\n`)
   const log = (l) => process.stderr.write(`open-walnut: ${l}\n`)
   Promise.resolve()
-    .then(() => require('./fetch-platform.js').fetchPlatformPackage({ packageRoot, target: targets[0], version, log }))
+    // An absolute path: Node 8 and 10 read the working directory for a relative one, and it may be gone.
+    .then(() => require(path.join(__dirname, 'fetch-platform.js')).fetchPlatformPackage({ packageRoot, target: targets[0], version, log }))
     .then((file) => run({ target: targets[0], file }, packageRoot), (err) => {
       process.stderr.write(
         `open-walnut: could not fetch it either: ${err instanceof Error ? err.message : String(err)}.\n`
@@ -186,4 +255,4 @@ function run(found, packageRoot) {
   start(false)
 }
 
-module.exports = { SCOPE, INSTALL_SH, isMusl, candidateTargets, hasMuslCxxRuntime, findFile, archivePrefixOf, reinstallCommand, ownVersion, startDir, launch }
+module.exports = { SCOPE, INSTALL_SH, isMusl, candidateTargets, hasMuslCxxRuntime, findFile, unreadableLine, installWritable, fetchWritable, archivePrefixOf, reinstallCommand, ownVersion, startDir, launch }

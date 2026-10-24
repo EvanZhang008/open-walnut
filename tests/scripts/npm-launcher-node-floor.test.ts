@@ -16,7 +16,7 @@ import { ENTRY, LAUNCHER_LIB, LAUNCHER_NODE_FLOOR, launcherManifest } from '../.
 
 const ROOT = path.resolve(__dirname, '../..')
 const requireCjs = createRequire(import.meta.url)
-// acorn comes with the build tools; a parser that knows nothing newer than the target is the check.
+// A parser that knows nothing newer than the target is the check (acorn, a devDependency).
 const acorn = requireCjs('acorn') as { parse: (src: string, opts: Record<string, unknown>) => unknown }
 const lib = (f: string) => fs.readFileSync(path.join(ROOT, 'scripts/npm-launcher', f), 'utf8')
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'launcher-floor-')))
@@ -42,6 +42,15 @@ describe('the launcher on an old Node', () => {
       [/Object\.fromEntries|\.flat\(|\.flatMap\(|\.matchAll\(|\.replaceAll\(/, 'an ES2019+ built-in'],
       [/createRequire|import\.meta/, 'an ES module API'],
       [/\burl\.parse\(/, 'url.parse (warns on new Node)'],
+      [/require\(\s*['"]node:/, 'a node: specifier (Node 14.18)'],
+      [/\.at\(/, '.at() (Node 16.6)'],
+      [/Object\.hasOwn\b/, 'Object.hasOwn (Node 16.9)'],
+      [/\bglobalThis\b/, 'globalThis (Node 12)'],
+      [/\.finally\(/, 'Promise.prototype.finally (Node 10)'],
+      [/\bfs\.promises\b|['"]fs\/promises['"]/, 'fs.promises (Node 10)'],
+      [/\bfs\.copyFileSync\(/, 'fs.copyFileSync (Node 8.5)'],
+      // Node 8 and 10 read the working directory to resolve one, and it may have been deleted.
+      [/require\(\s*['"]\.\.?\//, 'a relative require'],
     ]
     for (const f of LAUNCHER_LIB) {
       const src = lib(f)
@@ -50,10 +59,13 @@ describe('the launcher on an old Node', () => {
   })
 
   it('bin/open-walnut.js and dist/cli.js are ES5 CommonJS that checks the Node version first', () => {
-    const entry = ENTRY('../lib/launch.js')
+    const entry = ENTRY()
     expect(() => acorn.parse(entry, { ecmaVersion: 5, sourceType: 'script', allowHashBang: true })).not.toThrow()
     expect(entry.startsWith('#!/usr/bin/env node\n')).toBe(true)
-    expect(entry.indexOf(`< ${LAUNCHER_NODE_FLOOR})`)).toBeLessThan(entry.indexOf("require('../lib/launch.js')"))
+    expect(entry.indexOf(`< ${LAUNCHER_NODE_FLOOR})`)).toBeLessThan(entry.indexOf("'launch.js'))"))
+    // By absolute path: Node 8 and 10 read the working directory to resolve a relative require.
+    expect(entry).toContain("require(require('path').join(__dirname, '..', 'lib', 'launch.js'))")
+    expect(entry).not.toMatch(/require\(\s*['"]\.\.?\//)
     expect(lib('postinstall.js')).toContain(`< ${LAUNCHER_NODE_FLOOR})`)
     // npm warns about engines and installs anyway; the floor it states is the real one.
     expect(launcherManifest('1.0.0', { license: 'MIT' }).engines).toEqual({ node: `>=${LAUNCHER_NODE_FLOOR}` })
@@ -64,7 +76,7 @@ describe('the launcher on an old Node', () => {
     fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true })
     fs.mkdirSync(path.join(pkg, 'lib'), { recursive: true })
     fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"open-walnut","type":"commonjs"}\n')
-    fs.writeFileSync(path.join(pkg, 'bin', 'open-walnut.js'), ENTRY('../lib/launch.js'))
+    fs.writeFileSync(path.join(pkg, 'bin', 'open-walnut.js'), ENTRY())
     // lib/ is never loaded below the floor: a file there that would not parse proves it.
     fs.writeFileSync(path.join(pkg, 'lib', 'launch.js'), 'this is not javascript (\n')
     fs.copyFileSync(path.join(ROOT, 'scripts/npm-launcher/postinstall.js'), path.join(pkg, 'lib', 'postinstall.js'))
