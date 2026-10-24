@@ -480,6 +480,11 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
+      # The test run's budget is counted from here, not from its own start: on
+      # 2026-10-23 installing the browsers took 14 min instead of 20 s, a run
+      # given its fixed 45 min was still going when the job's 60 ran out, and the
+      # shard was cancelled with no report.
+      - run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
@@ -490,7 +495,9 @@ jobs:
           bun-version: latest
       - run: npm ci
       - run: npm run build && (cd web && npx vite build)
-      - run: npx playwright install --with-deps chromium
+      # WebKit too: the *.webkit.spec.ts specs launch it themselves (the Mac app
+      # is WebKit), and without it each one failed at launch (98 tests, 2026-10-23).
+      - run: npx playwright install --with-deps chromium webkit
       - name: browser tests
         id: report
         continue-on-error: true
@@ -500,8 +507,15 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/browser-${{ matrix.shard }}.json
         # Eight shards of ~280 tests fit the hour; four took 58+ min and two hit the
         # job timeout with no report. One retry still tells flaky from failing, and
-        # --global-timeout ends the run itself, so the JSON report is always written.
-        run: npx playwright test --project=chromium --shard=${{ matrix.shard }}/8 --retries=1 --global-timeout=2700000 --reporter=line,json
+        # --global-timeout ends the run itself, so the JSON report is always written:
+        # 45 min at most, and never past 55 min into the job, which leaves the
+        # teardown, the summary and the upload 5 min before the job timeout.
+        run: |
+          left=$(( JOB_STARTED_AT + 55 * 60 - $(date +%s) ))
+          budget=$(( left < 2700 ? left : 2700 ))
+          [ "$budget" -ge 60 ] || budget=60
+          echo "test budget: ${budget}s"
+          npx playwright test --project=chromium --shard=${{ matrix.shard }}/8 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
       - name: Summarize
         if: always()
         run: |
