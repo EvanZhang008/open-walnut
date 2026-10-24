@@ -19,6 +19,10 @@ import Foundation
 ///  3. rounds over every type, a few anchored pages each per round so a long
 ///     heart-rate history never starves the types after it;
 ///  4. the characteristics, when one changed.
+///
+/// Recordings (`s.` types: audiograms, heartbeat series, workout routes) go only
+/// to a server that lists them under `supported.series`, skip priming, and read
+/// a few objects per page, each sent as chunks of points.
 actor HealthSyncEngine {
     static let anchoredLimit = 2000
     static let primeLimit = 3000
@@ -30,6 +34,12 @@ actor HealthSyncEngine {
     /// While a type's history is still being read, its last `lateWindow` goes
     /// out again at most this often (and at once for a type a delivery named).
     static let catchUpInterval: TimeInterval = 300
+    /// Recording objects per anchored page: each is read point by point, and the
+    /// anchor moves only once the whole page is stored, so a page must fit one
+    /// background run. A route can be 100 chunks; the rest are a chunk each.
+    static func recordingPageLimit(_ spec: HealthTypeSpec) -> Int {
+        spec.object == .workoutRoute ? 5 : 25
+    }
     /// A call is not started with less time than this left in the budget.
     static let minimumCallTime: TimeInterval = 2
     static let callTimeout: TimeInterval = 30
@@ -225,7 +235,9 @@ actor HealthSyncEngine {
             var next: [HealthTypeSpec] = []
             for spec in pending {
                 let step: Step
-                if spec.kind == .raw {
+                if spec.isRecording {
+                    step = try await recordingRound(spec, run)
+                } else if spec.kind == .raw {
                     step = try await rawRound(spec, run)
                 } else {
                     step = try await bucketRound(spec, run)
@@ -253,12 +265,15 @@ actor HealthSyncEngine {
         let buckets = status.supported?.buckets.map(Set.init)
         let generic = genericSupported(status)
         let covered = Set(status.supported?.generic?.covered ?? [])
+        let recordings = Set(status.supported?.series?.types ?? [])
         let disabled = Set((status.types ?? []).filter { $0.enabled == false }.map(\.type))
         return catalog.filter { spec in
             if disabled.contains(spec.name) { return false }
             // An old server (no `supported.generic`) gets catalog types only,
             // and the generic ones are not even queried.
             if spec.isGeneric { return generic && !covered.contains(spec.name) }
+            // A server that predates recordings would keep their times and drop the points.
+            if spec.isRecording { return recordings.contains(spec.name) }
             switch spec.kind {
             case .raw: return raw?.contains(spec.name) ?? true
             case .buckets: return buckets?.contains(spec.name) ?? true
@@ -316,6 +331,8 @@ actor HealthSyncEngine {
     /// background delivery named. 2026-10-04: mid-backfill, the Mac had no step
     /// after midnight and not last night's sleep, both already on the phone.
     private func prime(_ spec: HealthTypeSpec, _ run: Run) async throws {
+        // A recording is read whole, object by object: there is no "last 7 days first".
+        if spec.isRecording { return }
         let snapshot = state.read()
         let first = snapshot.anchors[spec.name] == nil && !snapshot.primed.contains(spec.name)
         let catchUp = !first && snapshot.primed.contains(spec.name) && !snapshot.completed.contains(spec.name)
@@ -377,6 +394,33 @@ actor HealthSyncEngine {
                 snapshot.oldestDate = Self.earlier(snapshot.oldestDate, page.earliestStart)
             }
             if page.fetched + page.deleted.count < Self.anchoredLimit { return .finished }
+        }
+        return .more
+    }
+
+    // MARK: - Recordings
+
+    private func recordingRound(_ spec: HealthTypeSpec, _ run: Run) async throws -> Step {
+        for _ in 0..<Self.pagesPerRound {
+            try check(run)
+            let anchor = state.read().anchors[spec.name]
+            let page: HealthRecordingPage
+            do {
+                page = try await source.recordings(spec, anchor: anchor, limit: Self.recordingPageLimit(spec),
+                                                   batchTimeZone: run.zone)
+            } catch {
+                try stopIfFatal(error)
+                return .skipped
+            }
+            if !page.items.isEmpty || !page.deleted.isEmpty {
+                let stored = try await post(spec, items: HealthBatcher.encode(page.items), deleted: page.deleted, run)
+                guard stored else { return .skipped }
+            }
+            state.update(generation: run.generation) { snapshot in
+                if page.fetched + page.deleted.count > 0, let next = page.anchor { snapshot.anchors[spec.name] = next }
+                snapshot.oldestDate = Self.earlier(snapshot.oldestDate, page.earliestStart)
+            }
+            if page.fetched + page.deleted.count < Self.recordingPageLimit(spec) { return .finished }
         }
         return .more
     }

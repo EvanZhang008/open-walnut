@@ -17,7 +17,9 @@
  *   - a generic type pins the first unit (and, for buckets, agg) it stores; a call
  *     with another one stores nothing and answers `unitMismatch`;
  *   - a characteristic (`x.BloodType` …) re-sent under the same uuid replaces its
- *     row: it is a current value, not a sample.
+ *     row: it is a current value, not a sample;
+ *   - a recording (`s.` types, series-store.ts) is stored chunk by chunk in its own
+ *     tables; a deleted uuid removes it from there as well.
  *
  * Generic types never change a derived night or day, so they mark nothing dirty.
  *
@@ -41,6 +43,8 @@ import { markDirty, persistDirty } from './materialize.js'
 import { sanitizeHealthSync, type CleanBatch, type CleanResync, type SyncRefusal } from './sanitize.js'
 import { isAppleDeviceSource } from './source-order.js'
 import { armMissingCheck, checkSleepReady } from './sleep-ready.js'
+import { isSeriesType } from './series-catalog.js'
+import { applySeries, deleteSeries } from './series-store.js'
 
 /** What a generic call sent against what the store pinned for its type. */
 export interface UnitMismatch { type: string; field: 'unit' | 'agg'; stored: string; sent: string | null }
@@ -59,6 +63,8 @@ export interface HealthSyncBody {
   /** Nothing was stored: a generic call lacked a field it needs. A client bug; keep the anchor. */
   refused?: SyncRefusal
   resync?: { phase: 'begin' | 'end'; generation: number | null; marked?: number; swept?: number; stale?: true }
+  /** Recordings only: how many this call made complete (its last missing chunk arrived). */
+  completed?: number
 }
 
 /**
@@ -279,17 +285,22 @@ function recordUploadMeta(batch: CleanBatch, now: number): void {
 /**
  * `genericAllowed: false` answers every generic call `unsupported` (deletions still
  * apply): the call came through a relay that cannot carry generic types intact.
+ * `seriesAllowed: false` does the same for recordings (`s.` types).
  */
 export function ingestHealthSync(
-  rawBody: unknown, opts: { now?: number; extraRejected?: number; genericAllowed?: boolean } = {},
+  rawBody: unknown, opts: { now?: number; extraRejected?: number; genericAllowed?: boolean; seriesAllowed?: boolean } = {},
 ): HealthSyncOutcome {
   const now = opts.now ?? Date.now()
   const sanitized = sanitizeHealthSync(rawBody, now)
   if (!sanitized.ok) {
     return { status: 413, body: { error: { code: 'too_large', message: sanitized.message }, maxItems: sanitized.maxItems, maxBytes: sanitized.maxBytes } }
   }
-  const clean = opts.genericAllowed === false && isGenericName(sanitized.batch.type)
-    ? { ...sanitized, unsupported: true as const, refused: undefined }
+  const declined = (opts.genericAllowed === false && isGenericName(sanitized.batch.type))
+    || (opts.seriesAllowed === false && isSeriesType(sanitized.batch.type))
+  const clean = declined
+    // A declined recording keeps its deletions (they go to the recording tables) and stores no chunk.
+    ? { ...sanitized, unsupported: true as const, refused: undefined,
+        batch: sanitized.batch.series ? { ...sanitized.batch, series: [] } : sanitized.batch }
     : sanitized
   const { batch } = clean
   const rejected = clean.rejected + (opts.extraRejected ?? 0)
@@ -315,7 +326,13 @@ export function ingestHealthSync(
     const store = !paused && !categoryOff && !clean.unsupported && !clean.refused && !mismatch
     if (store && batch.resync?.phase === 'begin') body.resync = applyResyncBegin(batch, batch.resync, now)
     if (store) {
-      if (batch.kind === 'raw') {
+      if (batch.series) {
+        const applied = applySeries(batch.type, batch.series)
+        body.accepted = applied.accepted
+        body.inserted = applied.inserted
+        if (applied.completed > 0) body.completed = applied.completed
+        for (const d of applied.dates) touched.dates.add(d)
+      } else if (batch.kind === 'raw') {
         body.inserted = applySamples(batch, touched, now)
         body.accepted = batch.samples.length
       } else {
@@ -324,7 +341,7 @@ export function ingestHealthSync(
       }
     }
     // Deletions apply even while paused: removing data is always what the user wants.
-    body.deleted = applyDeletes(batch.deleted, touched)
+    body.deleted = batch.series ? deleteSeries(batch.deleted) : applyDeletes(batch.deleted, touched)
     if (store && batch.resync?.phase === 'end') body.resync = applyResyncEnd(batch, batch.resync, touched)
     if (store) recordUploadMeta(batch, now)
     if (store && generic && body.accepted > 0) pinUnits(batch)

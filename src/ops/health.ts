@@ -36,7 +36,8 @@ defineOp({
     + 'every other HealthKit type the phone syncs under a generic name (`q.<Suffix>` quantity, e.g. q.BodyMass, '
     + 'q.BloodPressureSystolic, q.DietaryProtein; `c.<Suffix>` category, e.g. c.MenstrualFlow, c.Headache; `x.<Name>` other '
     + 'kinds: x.Electrocardiogram, x.GAD7, x.PHQ9, x.BloodType, x.DateOfBirth …), each with lastSampleAt and, for generic '
-    + 'types, its unit. Call this to discover what exists, then read rows with health_samples or a quantity over time with '
+    + 'types, its unit, plus the recordings (s.Audiogram, s.HeartbeatSeries, s.WorkoutRoute: read them with '
+    + 'health_recordings). Call this to discover what exists, then read rows with health_samples or a quantity over time with '
     + 'health_series. A catalog type in state `unknown_or_denied` has had no sample for 14 days: iOS never tells an app '
     + 'about a denied read, so this may mean permission is off OR the user simply has no such data; say so, do not guess '
     + `which. A generic type is listed only when it has data. Call this first when a health read comes back empty. ${PRIVACY}`,
@@ -135,6 +136,32 @@ defineOp({
     limit: z.number().int().min(1).max(MAX_SAMPLE_ROWS).optional().describe(`Most rows to return, newest first (default 100, max ${MAX_SAMPLE_ROWS})`),
   },
   bind: { method: 'GET', path: '/api/health/samples' },
+  localOnlyMessage: HEALTH_LOCAL_ONLY_MESSAGE,
+  tags: HEALTH_TAGS,
+})
+
+defineOp({
+  name: 'health_recordings',
+  title: 'Apple Health recordings: audiograms, heartbeat series, workout routes',
+  description:
+    'Recordings are HealthKit objects made of many points, read by `type`: s.Audiogram (hearing test: per frequency, '
+    + 'left and right ear threshold in dB HL; summary has the pure-tone average over 500/1000/2000/4000 Hz), '
+    + 's.HeartbeatSeries (beat-to-beat timings behind an HRV reading: summary has beats, gaps, mean heart rate and '
+    + 'RMSSD from the intervals, never across a gap), s.WorkoutRoute (the GPS track of an outdoor workout: summary has '
+    + 'distance, climb, max speed and duration, and `workout` names the workout it belongs to). Without `id`: the '
+    + 'recordings newest first, each with its summary (`complete` false while chunks are still arriving). With `id`: '
+    + 'that one recording\'s points, columns named by `columns`, a long route thinned evenly to 2000 points. '
+    + 'A route is where the user was: answer with distances, times and place names they already used, never paste '
+    + 'coordinates into a reply, a letter or a note. An audiogram is a device test, not a clinical diagnosis. '
+    + `Listed in health_status with lastSampleAt once any arrived. ${PRIVACY}`,
+  input: {
+    type: z.enum(['s.Audiogram', 's.HeartbeatSeries', 's.WorkoutRoute']).describe('Which kind of recording'),
+    id: z.string().min(1).max(64).optional().describe('One recording\'s id from the list: returns its points'),
+    from: z.string().max(40).optional().describe('YYYY-MM-DD or ISO-8601 instant (default: all)'),
+    to: z.string().max(40).optional().describe('YYYY-MM-DD (inclusive) or ISO-8601 instant (default today)'),
+    limit: z.number().int().min(1).max(200).optional().describe('Most recordings to list, newest first (default 50, max 200)'),
+  },
+  bind: { method: 'GET', path: '/api/health/recordings' },
   localOnlyMessage: HEALTH_LOCAL_ONLY_MESSAGE,
   tags: HEALTH_TAGS,
 })

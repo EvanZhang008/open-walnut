@@ -17,6 +17,8 @@ import { enabledCategories, saveEnabledCategories } from './ingest.js'
 import { resetMaterializeQueue, savedSourceOrder } from './materialize.js'
 import { cleanPreferredUnits, type PreferredUnits } from './sanitize.js'
 import { disarmMissingCheck } from './sleep-ready.js'
+import { seriesInCategories } from './series-catalog.js'
+import { countSeries, deleteSeriesTypes } from './series-store.js'
 
 export class HealthSettingsError extends Error {
   constructor(message: string, public status = 400) {
@@ -123,6 +125,7 @@ export function deleteHealthData(body: unknown): HealthDeleteResult {
     const bucketWhere = [...(names.length ? [`metric IN (${marks})`] : []), ...(generic ? [genericTypeSql('metric')] : [])].join(' OR ')
     if (sampleWhere) removed += db.prepare(`DELETE FROM samples WHERE ${sampleWhere}`).run(...names).changes
     if (bucketWhere) removed += db.prepare(`DELETE FROM buckets WHERE ${bucketWhere}`).run(...names).changes
+    removed += deleteSeriesTypes(db, seriesInCategories(scoped))
     db.prepare('DELETE FROM nights').run()
     db.prepare('DELETE FROM days').run()
     const enabled = [...enabledCategories()].filter((c) => !scoped.includes(c))
@@ -151,5 +154,5 @@ function countRows(): number {
   const db = getHealthDb()
   const s = db.prepare('SELECT COUNT(*) AS n FROM samples').get() as { n: number }
   const b = db.prepare('SELECT COUNT(*) AS n FROM buckets').get() as { n: number }
-  return s.n + b.n
+  return s.n + b.n + countSeries(db)
 }

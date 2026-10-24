@@ -20,7 +20,10 @@ final class HealthTypeCatalogTests: XCTestCase {
         XCTAssertEqual(HealthTypeCatalog.extraSpecs.count, 3)
         XCTAssertEqual(HealthTypeCatalog.characteristicTypes.count, 6)
         // This OS knows every one of them.
-        XCTAssertEqual(HealthTypeCatalog.all.count, 21 + 47 + 55 + 66 + 3)
+        XCTAssertEqual(HealthTypeCatalog.recordingSpecs.map(\.name), ["s.Audiogram", "s.HeartbeatSeries", "s.WorkoutRoute"])
+        XCTAssertEqual(HealthTypeCatalog.all.count, 21 + 47 + 55 + 66 + 3 + 3)
+        XCTAssertEqual(HealthTypeCatalog.all.suffix(3).map(\.name), HealthTypeCatalog.recordingSpecs.map(\.name),
+                       "recordings go last")
     }
 
     func testNamesAreUniqueAndGenericNamesMatchTheServerRule() {
@@ -119,12 +122,14 @@ final class HealthTypeCatalogTests: XCTestCase {
         let read = HealthTypeCatalog.readTypes()
         XCTAssertEqual(read.count, HealthTypeCatalog.all.count + 6)
         for type in read {
+            let recording = type == HKObjectType.audiogramSampleType() || type == HKSeriesType.heartbeat()
+                || type == HKSeriesType.workoutRoute()
             let allowed = type is HKQuantityType || type is HKCategoryType || type is HKWorkoutType
                 || type is HKStateOfMindType || type is HKElectrocardiogramType || type is HKScoredAssessmentType
-                || type is HKCharacteristicType
+                || type is HKCharacteristicType || recording
             XCTAssertTrue(allowed, type.identifier)
-            let forbidden = type is HKCorrelationType || type is HKClinicalType || type is HKAudiogramSampleType
-                || type is HKSeriesType || type is HKPrescriptionType || type is HKDocumentType
+            let forbidden = type is HKCorrelationType || type is HKClinicalType || type is HKPrescriptionType
+                || type is HKDocumentType
             XCTAssertFalse(forbidden, type.identifier)
             if #available(iOS 26.0, *) {
                 XCTAssertFalse(type is HKUserAnnotatedMedicationType || type is HKMedicationDoseEventType,

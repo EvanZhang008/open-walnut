@@ -22,6 +22,8 @@ final class FakeHealthSource: HealthDataSource, @unchecked Sendable {
 
     private let lock = NSLock()
     private var samples: [String: [Sample]] = [:]
+    /// Recordings: one entry per object, its chunk items already encoded.
+    private var recordingObjects: [String: [(seq: Int, items: [HealthWireRecordingItem], start: Date)]] = [:]
     private var deletions: [String: [(seq: Int, uuid: String)]] = [:]
     private var nextSeq = 1
     private var _queried: [String] = []
@@ -55,6 +57,52 @@ final class FakeHealthSource: HealthDataSource, @unchecked Sendable {
             )
             samples[type, default: []].append(Sample(seq: nextSeq, wire: wire, start: start))
             nextSeq += 1
+        }
+    }
+
+    /// One recording object of `points` route-shaped points, cut into chunks the
+    /// way the real encoder does.
+    func addRecording(_ type: String, start: Date, points: Int, uuid: String? = nil) {
+        lock.withLock {
+            let id = uuid ?? "R\(nextSeq)"
+            let zone = TimeZone(identifier: "America/New_York")!
+            let rows: [[Double?]] = (0..<points).map { [Double($0 * 1000), 10, -30, nil, nil, nil] }
+            let size = HealthRecordingEncoder.maxPointsPerChunk
+            let chunks = max(1, (rows.count + size - 1) / size)
+            let items = (0..<chunks).map { c in
+                HealthWireRecordingItem(
+                    uuid: id, start: HealthWireTime.iso(start, in: zone),
+                    end: HealthWireTime.iso(start.addingTimeInterval(Double(points)), in: zone),
+                    source: HealthWireSource(bundleId: "com.apple.health.test", name: "Watch"),
+                    chunk: c, chunks: chunks, points: Array(rows[min(rows.count, c * size)..<min(rows.count, (c + 1) * size)])
+                )
+            }
+            recordingObjects[type, default: []].append((nextSeq, items, start))
+            nextSeq += 1
+        }
+    }
+
+    func recordings(_ spec: HealthTypeSpec, anchor: Data?, limit: Int,
+                    batchTimeZone: TimeZone) async throws -> HealthRecordingPage {
+        onAnchoredQuery()
+        return try lock.withLock {
+            try touch(spec.name)
+            let after = anchor.flatMap { Int(String(decoding: $0, as: UTF8.self)) } ?? 0
+            if deniedTypes.contains(spec.name) {
+                return HealthRecordingPage(items: [], deleted: [], anchor: Data(String(max(after, nextSeq - 1)).utf8),
+                                           fetched: 0, earliestStart: nil)
+            }
+            var events: [(seq: Int, object: [HealthWireRecordingItem]?, start: Date?, deleted: String?)] =
+                (recordingObjects[spec.name] ?? []).filter { $0.seq > after }.map { ($0.seq, $0.items, $0.start, nil) }
+            events += (deletions[spec.name] ?? []).filter { $0.seq > after }.map { ($0.seq, nil, nil, $0.uuid) }
+            events.sort { $0.seq < $1.seq }
+            let page = Array(events.prefix(limit))
+            let objects = page.compactMap(\.object)
+            return HealthRecordingPage(
+                items: objects.flatMap { $0 }, deleted: page.compactMap(\.deleted),
+                anchor: Data(String(page.last?.seq ?? after).utf8), fetched: objects.count,
+                earliestStart: page.compactMap(\.start).min()
+            )
         }
     }
 
@@ -159,8 +207,10 @@ final class FakeHealthTransport: HealthSyncTransport, @unchecked Sendable {
     /// `held` lists the types the Mac has samples of; nil leaves `types` out
     /// (an older server), so nothing is read again from the beginning.
     static func status(storeId: String = "hs-1", paused: Bool = false, generic: Bool = true,
-                       raw: [String]? = nil, buckets: [String]? = nil, held: [String: String?]? = nil) -> HealthStatusResponse {
+                       raw: [String]? = nil, buckets: [String]? = nil, held: [String: String?]? = nil,
+                       series: [String]? = nil) -> HealthStatusResponse {
         var supported: [String: Any] = [:]
+        if let series { supported["series"] = ["types": series] }
         if let raw { supported["raw"] = raw }
         if let buckets { supported["buckets"] = buckets }
         if generic { supported["generic"] = ["prefixes": ["q", "c", "x"], "covered": [String]()] }
@@ -233,6 +283,11 @@ extension HealthTypeSpec {
     static func testRaw(_ name: String, generic: Bool = false, unit: String? = nil) -> HealthTypeSpec {
         HealthTypeSpec(name: name, object: .category("HKCategoryTypeIdentifierSleepAnalysis"), kind: .raw,
                        unit: unit, scale: 1, isGeneric: generic, bucketStat: nil, immediateDelivery: false)
+    }
+
+    static func testRecording(_ name: String = "s.WorkoutRoute") -> HealthTypeSpec {
+        HealthTypeSpec(name: name, object: .workoutRoute, kind: .raw, unit: nil, scale: 1,
+                       isGeneric: false, bucketStat: nil, immediateDelivery: false)
     }
 
     static func testBuckets(_ name: String, generic: Bool = false, unit: String = "count") -> HealthTypeSpec {

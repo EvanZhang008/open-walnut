@@ -215,6 +215,54 @@ describe('Apple Health through a real server', () => {
     expect(bad.ok).toBe(false)
   })
 
+  it('a paired phone syncs a route in chunks across calls, and the agent reads it', async () => {
+    const { token } = await createDevice('e2e-phone-rec')
+    const phone = async (method: string, p: string, body?: unknown): Promise<{ status: number; body: any }> => {
+      const res = await fetch(url(p), {
+        method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      return { status: res.status, body: await res.json() }
+    }
+    const status = await phone('GET', '/api/v1/health/status')
+    expect(status.body.supported.series.types).toEqual(['s.Audiogram', 's.HeartbeatSeries', 's.WorkoutRoute'])
+    expect(status.body.types).toEqual(expect.arrayContaining([expect.objectContaining({ type: 's.WorkoutRoute', lastSampleAt: null })]))
+
+    // A one-hour run, one point a second: 3600 points in 4 chunks, sent as two calls.
+    const id = uuid('R')
+    const start = zonedTime(D1, 7, 0, TZ)
+    const points = Array.from({ length: 3600 }, (_, i) => [i * 1000, 10 + i * 0.00001, -30, 5, 4, 2.8])
+    const chunk = (c: number) => ({
+      uuid: id, start: new Date(start).toISOString(), end: new Date(start + 3_600_000).toISOString(), source: WATCH,
+      device: 'Watch', chunk: c, chunks: 4, points: points.slice(c * 1000, (c + 1) * 1000),
+    })
+    const call = (chunks: number[]) => ({ device, tz: TZ, kind: 'raw', type: 's.WorkoutRoute', samples: chunks.map(chunk), deleted: [] })
+    expect((await phone('POST', '/api/v1/health/sync', call([0, 1]))).body).toMatchObject({ accepted: 2, inserted: 2 })
+    const local = { apiBase: apiBase(), origin: LOCAL_ORIGIN }
+    const partial = await executeOp('health_recordings', { type: 's.WorkoutRoute' }, local)
+    expect((partial as any).result.recordings[0]).toMatchObject({ id, complete: false, chunksReceived: 2, chunks: 4 })
+    expect((await phone('POST', '/api/v1/health/sync', call([2, 3]))).body).toMatchObject({ accepted: 2, inserted: 2, completed: 1 })
+    // The phone resends after a lost answer: nothing is stored twice.
+    expect((await phone('POST', '/api/v1/health/sync', call([2, 3]))).body).toMatchObject({ accepted: 2, inserted: 0 })
+
+    const list = await executeOp('health_recordings', { type: 's.WorkoutRoute' }, local)
+    expect(list.ok, JSON.stringify(list)).toBe(true)
+    const row = (list as any).result.recordings[0]
+    expect(row).toMatchObject({ id, complete: true, source: WATCH.name })
+    expect(row.summary).toMatchObject({ points: 3600 })
+    expect(row.summary.distanceM).toBeGreaterThan(3900)
+    const detail = await executeOp('health_recordings', { type: 's.WorkoutRoute', id }, local)
+    expect((detail as any).result.points).toHaveLength(2000)
+    expect((detail as any).result.thinned).toEqual({ from: 3600, to: 2000 })
+    const st = await executeOp('health_status', {}, local)
+    expect((st as any).result.types).toEqual(expect.arrayContaining([expect.objectContaining({ type: 's.WorkoutRoute', state: 'ok' })]))
+
+    // HealthKit deleted it: the phone sends the uuid, the Mac drops it.
+    expect((await phone('POST', '/api/v1/health/sync', { ...call([]), deleted: [id] })).body).toMatchObject({ deleted: 1 })
+    const after = await executeOp('health_recordings', { type: 's.WorkoutRoute' }, local)
+    expect((after as any).result.recordings).toEqual([])
+  })
+
   it('day_review reads the live endpoints and lists what is missing', async () => {
     // Every section but calendar: its first read on a fresh home compiles and signs
     // the native EventKit helper, which a test must not do (the unit test covers it).
@@ -257,6 +305,7 @@ describe('Apple Health through a real server', () => {
       ['GET', '/api/health/status'],
       ['GET', `/api/health/sleep?from=${D1}&to=${D1}`],
       ['GET', '/api/health/samples?type=q.BodyMass'],
+      ['GET', '/api/health/recordings?type=s.WorkoutRoute'],
       ['GET', '/api/v1/health/status'],
       ['PUT', '/api/v1/health/settings', { paused: true }],
       ['DELETE', '/api/v1/health/data', {}],
@@ -271,7 +320,8 @@ describe('Apple Health through a real server', () => {
       expect(r.ok, `${method} ${path}: ${JSON.stringify(r)}`).toBe(false)
       expect(JSON.stringify(r), `${method} ${path}`).toMatch(/Health data is only available to sessions on this Mac|runs only for callers on this Mac|runs only from the console on this Mac/)
     }
-    for (const [name, args] of [['health_status', {}], ['health_sleep', {}], ['health_samples', { type: 'q.BodyMass' }], ['day_review', {}]] as const) {
+    for (const [name, args] of [['health_status', {}], ['health_sleep', {}], ['health_samples', { type: 'q.BodyMass' }],
+      ['health_recordings', { type: 's.WorkoutRoute' }], ['day_review', {}]] as const) {
       const r = await gateway('remote-dev', name, args)
       expect(r).toMatchObject({ ok: false, error: { message: `${name} refused: ${HEALTH_LOCAL_ONLY_MESSAGE}` } })
     }

@@ -27,10 +27,23 @@ struct HealthStatusResponse: Decodable, Sendable {
         }
     }
 
+    /// Present only on a server that stores recordings (`s.` types).
+    struct Series: Decodable, Sendable {
+        let types: [String]?
+
+        private enum CodingKeys: String, CodingKey { case types }
+
+        init(from decoder: Decoder) throws {
+            let container = try? decoder.container(keyedBy: CodingKeys.self)
+            types = try? container?.decodeIfPresent([String].self, forKey: .types)
+        }
+    }
+
     struct Supported: Decodable, Sendable {
         let raw: [String]?
         let buckets: [String]?
         let generic: Generic?
+        let series: Series?
     }
 
     struct TypeState: Decodable, Sendable {

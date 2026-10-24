@@ -63,8 +63,9 @@ async function handle(res: Response, action: HealthAction, body: unknown): Promi
 
 /** REPLICA: narrow, bound, forward, and pass the primary's answer through verbatim. */
 async function relay(res: Response, action: HealthAction, body: unknown): Promise<void> {
-  const { RELAY_GENERIC_FLAG } = await import('../../core/health/relay.js')
-  let params: Record<string, unknown> = { body, [RELAY_GENERIC_FLAG]: true }
+  const { RELAY_GENERIC_FLAG, RELAY_SERIES_FLAG } = await import('../../core/health/relay.js')
+  const stamps = { [RELAY_GENERIC_FLAG]: true, [RELAY_SERIES_FLAG]: true }
+  let params: Record<string, unknown> = { body, ...stamps }
   if (action === 'sync') {
     const { sanitizeHealthSync, relayPayload } = await import('../../core/health/sanitize.js')
     const clean = sanitizeHealthSync(body)
@@ -72,7 +73,7 @@ async function relay(res: Response, action: HealthAction, body: unknown): Promis
       res.status(413).json({ error: { code: clean.code, message: clean.message }, maxItems: clean.maxItems, maxBytes: clean.maxBytes })
       return
     }
-    params = { body: relayPayload(clean.batch), rejected: clean.rejected, [RELAY_GENERIC_FLAG]: true }
+    params = { body: relayPayload(clean.batch), rejected: clean.rejected, ...stamps }
   }
   const { serializedBytes } = await import('../../core/health/sanitize.js')
   if (serializedBytes(params) > RELAY_MAX_BYTES) {

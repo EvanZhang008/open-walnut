@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import HealthKit
 
@@ -24,6 +25,17 @@ struct HealthAnchoredPage: Sendable {
     /// with `deleted.count` it tells whether the page was full.
     var fetched: Int
     /// Earliest sample start in the page.
+    var earliestStart: Date?
+}
+
+/// One anchored page of a recording type, every object already read point by
+/// point and cut into chunk items.
+struct HealthRecordingPage: Sendable {
+    var items: [HealthWireRecordingItem]
+    var deleted: [String]
+    var anchor: Data?
+    /// Objects the query returned, including any whose points could not be read.
+    var fetched: Int
     var earliestStart: Date?
 }
 
@@ -56,6 +68,9 @@ protocol HealthDataSource: Sendable {
                     includeEmpty: Bool, batchTimeZone: TimeZone) async throws -> [HealthWireBucket]
     /// The characteristics that are set.
     func characteristics() async throws -> [HealthCharacteristicValue]
+    /// Recordings (`s.` types) and deletions after `anchor`, at most `limit` objects.
+    func recordings(_ spec: HealthTypeSpec, anchor: Data?, limit: Int,
+                    batchTimeZone: TimeZone) async throws -> HealthRecordingPage
 }
 
 /// HealthKit, read-only. Never asks to share (write) anything: only the DEBUG
@@ -240,6 +255,69 @@ final class HealthKitDataSource: HealthDataSource, @unchecked Sendable {
         return out
     }
 
+    // MARK: - Recordings
+
+    func recordings(_ spec: HealthTypeSpec, anchor: Data?, limit: Int,
+                    batchTimeZone: TimeZone) async throws -> HealthRecordingPage {
+        guard let type = spec.sampleType else { throw HealthSourceError.unavailable }
+        let start = anchor.flatMap(Self.unarchive)
+        let (samples, deleted, next): ([HKSample], [String], Data?) = try await withCheckedThrowingContinuation { continuation in
+            let query = HKAnchoredObjectQuery(type: type, predicate: nil, anchor: start, limit: limit) {
+                _, samples, deleted, newAnchor, error in
+                if let error {
+                    continuation.resume(throwing: Self.map(error))
+                    return
+                }
+                continuation.resume(returning: (samples ?? [], (deleted ?? []).map(\.uuid.uuidString),
+                                                newAnchor.flatMap(Self.archive)))
+            }
+            store.execute(query)
+        }
+        var items: [HealthWireRecordingItem] = []
+        for sample in samples {
+            let points: [[Double?]]
+            switch sample {
+            case let audiogram as HKAudiogramSample:
+                points = HealthRecordingEncoder.audiogramPoints(audiogram)
+            case let series as HKHeartbeatSeriesSample:
+                points = HealthRecordingEncoder.heartbeatPoints(try await beats(of: series))
+            case let route as HKWorkoutRoute:
+                points = HealthRecordingEncoder.routePoints(try await locations(of: route), start: route.startDate)
+            default:
+                continue
+            }
+            items += HealthRecordingEncoder.items(sample, points: HealthRecordingEncoder.capped(points, object: spec.object),
+                                                  batchTimeZone: batchTimeZone)
+        }
+        return HealthRecordingPage(items: items, deleted: deleted, anchor: next, fetched: samples.count,
+                                   earliestStart: samples.map(\.startDate).min())
+    }
+
+    /// Every beat of one series, in order.
+    private func beats(of series: HKHeartbeatSeriesSample) async throws -> [(sinceStart: TimeInterval, precededByGap: Bool)] {
+        // A query over an empty series might never call back with `done`.
+        guard series.count > 0 else { return [] }
+        return try await withCheckedThrowingContinuation { continuation in
+            let collected = QueryCollector<(sinceStart: TimeInterval, precededByGap: Bool)>(continuation)
+            let query = HKHeartbeatSeriesQuery(heartbeatSeries: series) { _, since, gap, done, error in
+                if let error { collected.fail(Self.map(error)) } else { collected.add([(since, gap)], done: done) }
+            }
+            store.execute(query)
+        }
+    }
+
+    /// Every location of one route, in order (iOS hands them out in batches).
+    private func locations(of route: HKWorkoutRoute) async throws -> [CLLocation] {
+        guard route.count > 0 else { return [] }
+        return try await withCheckedThrowingContinuation { continuation in
+            let collected = QueryCollector<CLLocation>(continuation)
+            let query = HKWorkoutRouteQuery(route: route) { _, batch, done, error in
+                if let error { collected.fail(Self.map(error)) } else { collected.add(batch ?? [], done: done) }
+            }
+            store.execute(query)
+        }
+    }
+
     // MARK: - Helpers
 
     static func map(_ error: Error) -> HealthSourceError {
@@ -259,5 +337,35 @@ final class HealthKitDataSource: HealthDataSource, @unchecked Sendable {
 
     static func unarchive(_ data: Data) -> HKQueryAnchor? {
         try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: data)
+    }
+}
+
+/// Gathers what a query hands out over many callbacks and resumes once: at
+/// `done`, or at the first error.
+private final class QueryCollector<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [T] = []
+    private var continuation: CheckedContinuation<[T], Error>?
+
+    init(_ continuation: CheckedContinuation<[T], Error>) {
+        self.continuation = continuation
+    }
+
+    func add(_ batch: [T], done: Bool) {
+        lock.lock()
+        items += batch
+        let finished = done ? continuation : nil
+        if done { continuation = nil }
+        let out = items
+        lock.unlock()
+        finished?.resume(returning: out)
+    }
+
+    func fail(_ error: Error) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(throwing: error)
     }
 }

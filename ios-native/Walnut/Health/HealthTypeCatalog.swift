@@ -27,6 +27,10 @@ enum HealthObjectKind: Sendable, Hashable {
     case stateOfMind
     case electrocardiogram
     case scoredAssessment(String)
+    /// Recordings: objects made of many points (HealthRecordingEncoder).
+    case audiogram
+    case heartbeatSeries
+    case workoutRoute
 }
 
 /// One readable Health type: the name the server knows it by, how it is sent,
@@ -70,6 +74,21 @@ struct HealthTypeSpec: Sendable, Hashable {
             return HKObjectType.electrocardiogramType()
         case .scoredAssessment(let raw):
             return HKScoredAssessmentType(HKScoredAssessmentTypeIdentifier(rawValue: raw))
+        case .audiogram:
+            return HKObjectType.audiogramSampleType()
+        case .heartbeatSeries:
+            return HKSeriesType.heartbeat()
+        case .workoutRoute:
+            return HKSeriesType.workoutRoute()
+        }
+    }
+
+    /// An `s.` recording: sent as chunks of points, only to a server whose
+    /// status lists it under `supported.series`.
+    var isRecording: Bool {
+        switch object {
+        case .audiogram, .heartbeatSeries, .workoutRoute: return true
+        default: return false
         }
     }
 
@@ -93,8 +112,10 @@ struct HealthTypeSpec: Sendable, Hashable {
 ///    Objective-C exception and crashes the app;
 ///  - clinical records (they need a separate entitlement and a review);
 ///  - vision prescriptions and medications (per-object authorization, which the
-///    plain read request cannot ask for);
-///  - audiograms, heartbeat series and workout routes (routes are location data).
+///    plain read request cannot ask for).
+///
+/// Audiograms, heartbeat series and workout routes are read as recordings
+/// (`recordingSpecs`), last in the order: each is a list of points.
 enum HealthTypeCatalog {
     /// Catalog types in sync order. heart_rate and respiratory_rate go raw only.
     static let catalogSpecs: [HealthTypeSpec] = [
@@ -227,9 +248,21 @@ enum HealthTypeCatalog {
         return raw + buckets + categories + extraSpecs
     }()
 
+    /// Recordings (series-catalog.ts on the Mac). Their points are read one
+    /// object at a time, so they go last: a long route history never holds up
+    /// the types an agent reads every day.
+    static let recordingSpecs: [HealthTypeSpec] = [
+        HealthTypeSpec(name: "s.Audiogram", object: .audiogram, kind: .raw, unit: nil, scale: 1,
+                       isGeneric: false, bucketStat: nil, immediateDelivery: false),
+        HealthTypeSpec(name: "s.HeartbeatSeries", object: .heartbeatSeries, kind: .raw, unit: nil, scale: 1,
+                       isGeneric: false, bucketStat: nil, immediateDelivery: false),
+        HealthTypeSpec(name: "s.WorkoutRoute", object: .workoutRoute, kind: .raw, unit: nil, scale: 1,
+                       isGeneric: false, bucketStat: nil, immediateDelivery: false),
+    ]
+
     /// Every entry this iOS can read, in sync order. Built once: an identifier
     /// a newer SDK names but this OS lacks returns nil and is dropped here.
-    static let all: [HealthTypeSpec] = (catalogSpecs + genericSpecs).filter { $0.sampleType != nil }
+    static let all: [HealthTypeSpec] = (catalogSpecs + genericSpecs + recordingSpecs).filter { $0.sampleType != nil }
 
     static func spec(named name: String) -> HealthTypeSpec? {
         all.first { $0.name == name }
@@ -243,9 +276,10 @@ enum HealthTypeCatalog {
     }
 
     /// Everything Walnut asks to READ. Only quantity, category, workout, state of
-    /// mind, ECG, scored assessment and characteristic types are ever in here: a
-    /// correlation, clinical or per-object type would raise an exception inside
-    /// `requestAuthorization` (pinned by HealthTypeCatalogTests).
+    /// mind, ECG, scored assessment, audiogram, series (heartbeat, route) and
+    /// characteristic types are ever in here: a correlation, clinical or
+    /// per-object type would raise an exception inside `requestAuthorization`
+    /// (pinned by HealthTypeCatalogTests).
     static func readTypes(for specs: [HealthTypeSpec] = all, characteristics: Bool = true) -> Set<HKObjectType> {
         var types = Set<HKObjectType>(specs.compactMap(\.sampleType))
         if characteristics { types.formUnion(characteristicTypes) }

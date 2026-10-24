@@ -14,7 +14,12 @@
  * (`q.<Suffix>`, `c.<Suffix>`, `x.<Name>`, see isGenericType). The server does not
  * interpret those: it stores what the phone sends, pins the first unit it stores
  * per type, and serves them to the agent as they are.
+ *
+ * Recordings (audiograms, heartbeat series, workout routes) arrive under `s.`
+ * names with lists of points, and live in their own tables (series-catalog.ts).
  */
+
+import { seriesSpec, supportedSeries } from './series-catalog.js'
 
 /** At most this many items (samples + deleted + buckets) per sync call. Pinned by the iOS client test. */
 export const HEALTH_MAX_ITEMS_PER_SYNC = 500
@@ -183,9 +188,9 @@ export function genericTypeSql(column: string): string {
   return GENERIC_PREFIXES.map((p) => `(${column} >= '${p}.' AND ${column} < '${p}/')`).join(' OR ')
 }
 
-/** The category a stored type belongs to (`other` for every generic type). */
+/** The category a stored type belongs to (`other` for every generic type, its own for a recording). */
 export function typeCategory(name: string): HealthCategory | undefined {
-  return metricSpec(name)?.category ?? (isGenericType(name) ? 'other' : undefined)
+  return metricSpec(name)?.category ?? (isGenericType(name) ? 'other' : seriesSpec(name)?.category)
 }
 
 /** Every type and metric, by sync kind, for GET /health/status (a phone gates on it before sending). */
@@ -200,6 +205,7 @@ export function supportedTypes() {
       bucketPrefixes: [...GENERIC_BUCKET_PREFIXES],
       covered: Object.keys(GENERIC_COVERED),
     },
+    series: supportedSeries(),
   }
 }
 

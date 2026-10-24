@@ -39,6 +39,22 @@ struct HealthWireSample: Codable, Equatable, Sendable {
     var meta: HealthWireMeta?
 }
 
+/// One chunk of a recording (`s.Audiogram`, `s.HeartbeatSeries`,
+/// `s.WorkoutRoute`): the header fields ride on every chunk, `points` are the
+/// type's columns (src/core/health/series-catalog.ts), `nil` for a value the
+/// object does not have.
+struct HealthWireRecordingItem: Codable, Equatable, Sendable {
+    var uuid: String
+    var start: String
+    var end: String
+    var source: HealthWireSource?
+    var device: String?
+    var tz: String?
+    var chunk: Int
+    var chunks: Int
+    var points: [[Double?]]
+}
+
 /// One statistics bucket (`intervalSec` 3600 or 86400).
 struct HealthWireBucket: Codable, Equatable, Sendable {
     var start: String

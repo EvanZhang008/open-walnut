@@ -12,6 +12,7 @@ import {
   GENERIC_COVERED, HEALTH_MAX_SAMPLE_ROWS as MAX_SAMPLE_ROWS, SLEEP_CODES, isCharacteristic, isGenericType, metricSpec, unitPinKey,
 } from './catalog.js'
 import { getHealthDb, getMeta } from './db.js'
+import { isSeriesType } from './series-catalog.js'
 import { addDays, localDate, localIso, zonedMidnight } from './day-key.js'
 import { HealthQueryError, MAX_RANGE_DAYS, healthTz, toInstant } from './query-common.js'
 
@@ -48,6 +49,7 @@ export async function samplesQuery(args: { type?: string; from?: string; to?: st
   const spec = metricSpec(type)
   const generic = isGenericType(type)
   if (spec && !spec.raw) throw new HealthQueryError(`${type} is stored as buckets only: read it with health_series or health_daily`)
+  if (isSeriesType(type)) throw new HealthQueryError(`${type} is a recording (a list of points): read it with health_recordings`)
   if (!spec && !generic) throw new HealthQueryError('type must be a catalog raw type (sleep, heart_rate, …) or a q. / c. / x. type from health_status')
   const limit = resolveLimit(args.limit)
   const tz = healthTz()

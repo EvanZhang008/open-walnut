@@ -6,6 +6,7 @@
  *   GET /api/health/daily?last_days=&from=&to=&metrics=
  *   GET /api/health/series?metric=&from=&to=&bucket=5m|1h|1d
  *   GET /api/health/samples?type=&from=&to=&limit=
+ *   GET /api/health/recordings?type=&id=&from=&to=&limit=
  *
  * Primary only (501 on a replica, like /api/time): the store lives on the Mac.
  * This machine only (middleware/health-access.ts): any other caller gets 403,
@@ -119,7 +120,7 @@ function route(name: string, empty: () => Record<string, unknown>, read: Reader)
 }
 
 function countItems(body: Record<string, unknown>): number {
-  for (const key of ['nights', 'days', 'points', 'rows', 'types']) {
+  for (const key of ['nights', 'days', 'points', 'rows', 'recordings', 'types']) {
     const v = body[key]
     if (Array.isArray(v)) return v.length
   }
@@ -156,5 +157,12 @@ healthRouter.get('/samples', route('samples', () => ({ rows: [] }), async (req) 
   const { healthSamples } = await import('../../core/health/index.js')
   return await healthSamples({
     type: q(req, 'type'), from: q(req, 'from'), to: q(req, 'to'), limit: q(req, 'limit'),
+  }) as unknown as Record<string, unknown>
+}))
+
+healthRouter.get('/recordings', route('recordings', () => ({ recordings: [] }), async (req) => {
+  const { healthRecordings } = await import('../../core/health/index.js')
+  return healthRecordings({
+    type: q(req, 'type'), id: q(req, 'id'), from: q(req, 'from'), to: q(req, 'to'), limit: q(req, 'limit'),
   }) as unknown as Record<string, unknown>
 }))

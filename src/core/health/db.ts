@@ -6,7 +6,8 @@
  * getHealthDb() enforces rather than trusting each caller to check.
  *
  * The directory is kept out of git-sync (CRITICAL_IGNORE_DIRS) and out of the S3
- * backup (EXCLUDED_DIRS): the raw samples and this store never leave this machine.
+ * backup (EXCLUDED_DIRS): the raw samples, the recordings (a workout route is
+ * where the user went) and this store never leave this machine.
  */
 
 import Database, { type Database as DatabaseType } from 'better-sqlite3'
@@ -81,6 +82,32 @@ CREATE TABLE IF NOT EXISTS days (date TEXT PRIMARY KEY, rev INTEGER NOT NULL, js
 -- cannot serve a stale night (materialize.ts).
 CREATE TABLE IF NOT EXISTS dirty (kind TEXT NOT NULL, date TEXT NOT NULL, PRIMARY KEY (kind, date)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS sleep_ready (date TEXT PRIMARY KEY, status TEXT NOT NULL, at_ms INTEGER NOT NULL);
+
+-- Recordings (series-catalog.ts: audiograms, heartbeat series, workout routes):
+-- one header row each, its points in chunks beside it. New tables only, so a
+-- store written here still opens unchanged in a build that predates them.
+CREATE TABLE IF NOT EXISTS series (
+  uuid TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  source_bundle TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  device TEXT,
+  tz TEXT NOT NULL,
+  local_date TEXT NOT NULL,
+  chunks INTEGER NOT NULL,
+  -- Set once every chunk is stored: the recording is complete.
+  summary TEXT
+);
+CREATE INDEX IF NOT EXISTS series_type_end ON series(type, end_ms);
+CREATE TABLE IF NOT EXISTS series_chunks (
+  uuid TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  points INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (uuid, idx)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 

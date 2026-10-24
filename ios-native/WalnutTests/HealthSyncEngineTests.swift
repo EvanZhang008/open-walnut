@@ -409,6 +409,98 @@ final class HealthSyncEngineTests: XCTestCase {
         XCTAssertFalse(source.queried.contains("vo2max"))
     }
 
+    // MARK: - Recordings
+
+    func testRecordingsGoOnlyToAServerThatListsThem() async {
+        source.addRecording("s.WorkoutRoute", start: now.addingTimeInterval(-86_400), points: 10)
+        // A server without supported.series would keep the times and drop the points.
+        transport.status = FakeHealthTransport.status()
+        await engine([.testRecording()]).run(reason: "old-server", budget: 60)
+        XCTAssertFalse(source.queried.contains("s.WorkoutRoute"))
+        XCTAssertTrue(transport.bodies(for: "s.WorkoutRoute").isEmpty)
+        XCTAssertNil(state.read().anchors["s.WorkoutRoute"])
+
+        transport.status = FakeHealthTransport.status(series: ["s.Audiogram"])
+        await engine([.testRecording()]).run(reason: "lists-another", budget: 60)
+        XCTAssertTrue(transport.bodies(for: "s.WorkoutRoute").isEmpty)
+
+        transport.status = FakeHealthTransport.status(series: ["s.WorkoutRoute"])
+        let outcome = await engine([.testRecording()]).run(reason: "new-server", budget: 60)
+        XCTAssertEqual(outcome, .synced)
+        let body = transport.bodies(for: "s.WorkoutRoute").first
+        XCTAssertEqual(body?["kind"] as? String, "raw")
+        XCTAssertNil(body?["unit"], "a recording names no unit")
+        let item = (body?["samples"] as? [[String: Any]])?.first
+        XCTAssertEqual(item?["chunk"] as? Int, 0)
+        XCTAssertEqual((item?["points"] as? [[Any]])?.count, 10)
+        XCTAssertNotNil(state.read().anchors["s.WorkoutRoute"])
+    }
+
+    func testALongRouteGoesOutInChunksAndManyRoutesPageWithoutPriming() async {
+        source.addRecording("s.WorkoutRoute", start: now.addingTimeInterval(-3 * 86_400), points: 3600, uuid: "LONG")
+        for i in 0..<60 {
+            source.addRecording("s.WorkoutRoute", start: now.addingTimeInterval(-Double(60 - i) * 3600), points: 5)
+        }
+        transport.status = FakeHealthTransport.status(series: ["s.WorkoutRoute"])
+        await engine([.testRecording()]).run(reason: "test", budget: 120)
+        let items = transport.bodies(for: "s.WorkoutRoute").flatMap { ($0["samples"] as? [[String: Any]]) ?? [] }
+        let long = items.filter { $0["uuid"] as? String == "LONG" }
+        XCTAssertEqual(long.map { $0["chunk"] as? Int }, [0, 1, 2, 3])
+        XCTAssertEqual(long.compactMap { $0["chunks"] as? Int }, [4, 4, 4, 4])
+        XCTAssertEqual(Set(items.compactMap { $0["uuid"] as? String }).count, 61, "every route is sent once")
+        for body in transport.bodies(for: "s.WorkoutRoute") {
+            let data = try! JSONSerialization.data(withJSONObject: body)
+            XCTAssertLessThanOrEqual(data.count, HealthBatcher.maxBytes + 1024)
+        }
+        // No 7-day priming query: the history is read from its beginning, five
+        // routes a page (61 routes: 12 full pages and a last one).
+        XCTAssertEqual(source.queried.filter { $0 == "s.WorkoutRoute" }.count, 13)
+    }
+
+    func testARouteCutOffBetweenTwoCallsIsSentWholeAgain() async {
+        // 10 000 points = 10 chunks, more than one call can carry.
+        source.addRecording("s.WorkoutRoute", start: now.addingTimeInterval(-86_400), points: 10_000, uuid: "BIG")
+        transport.status = FakeHealthTransport.status(series: ["s.WorkoutRoute"])
+        let down = APIError.network(underlying: URLError(.cannotConnectToHost))
+        transport.syncError = { index in index == 1 ? down : nil }
+        let first = await engine([.testRecording()]).run(reason: "cut", budget: 60)
+        XCTAssertEqual(first, .macUnreachable)
+        XCTAssertEqual(transport.bodies(for: "s.WorkoutRoute").count, 2)
+        XCTAssertNil(state.read().anchors["s.WorkoutRoute"], "half a route sent: the anchor stays")
+
+        transport.syncError = { _ in nil }
+        let second = await engine([.testRecording()]).run(reason: "again", budget: 60)
+        XCTAssertEqual(second, .synced)
+        let resent = transport.bodies(for: "s.WorkoutRoute").dropFirst(2)
+        let chunks = resent.flatMap { ($0["samples"] as? [[String: Any]]) ?? [] }.compactMap { $0["chunk"] as? Int }
+        XCTAssertEqual(chunks, Array(0..<10), "every chunk goes again; the Mac ignores the ones it has")
+        XCTAssertNotNil(state.read().anchors["s.WorkoutRoute"])
+    }
+
+    func testARecordingTheMacDeclinesKeepsItsAnchor() async {
+        source.addRecording("s.HeartbeatSeries", start: now.addingTimeInterval(-3600), points: 70)
+        transport.status = FakeHealthTransport.status(series: ["s.HeartbeatSeries"])
+        transport.reply = { _, _ in .ok(FakeHealthTransport.result(unsupported: true)) }
+        let outcome = await engine([.testRecording("s.HeartbeatSeries")]).run(reason: "test", budget: 60)
+        XCTAssertEqual(outcome, .synced)
+        XCTAssertNil(state.read().anchors["s.HeartbeatSeries"])
+
+        transport.reply = { _, _ in .ok(FakeHealthTransport.stored) }
+        await engine([.testRecording("s.HeartbeatSeries")]).run(reason: "again", budget: 60)
+        XCTAssertNotNil(state.read().anchors["s.HeartbeatSeries"])
+        XCTAssertEqual(transport.bodies(for: "s.HeartbeatSeries").count, 2, "the declined call went out again")
+    }
+
+    func testADeletedRecordingIsSentAsDeleted() async {
+        source.addRecording("s.Audiogram", start: now.addingTimeInterval(-86_400), points: 6, uuid: "EAR")
+        transport.status = FakeHealthTransport.status(series: ["s.Audiogram"])
+        await engine([.testRecording("s.Audiogram")]).run(reason: "first", budget: 60)
+        source.delete("s.Audiogram", uuid: "EAR")
+        await engine([.testRecording("s.Audiogram")]).run(reason: "second", budget: 60)
+        let last = transport.bodies(for: "s.Audiogram").last
+        XCTAssertEqual(last?["deleted"] as? [String], ["EAR"])
+    }
+
     func testALockedPhoneStopsQuietlyAndKeepsAnchors() async {
         source.add("sleep", start: now.addingTimeInterval(-60 * 86_400), uuid: "A")
         source.add("heart_rate", start: now.addingTimeInterval(-60 * 86_400), uuid: "H")

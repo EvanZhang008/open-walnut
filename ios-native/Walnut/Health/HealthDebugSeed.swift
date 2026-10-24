@@ -1,9 +1,12 @@
 #if DEBUG
+import CoreLocation
 import Foundation
 import HealthKit
 
 /// DEBUG builds only: write a small synthetic Health dataset so the sync can be
-/// checked end to end on a simulator, which has no Watch and no real data.
+/// checked end to end on a simulator, which has no Watch and no real data. It
+/// includes one of each recording: a run's route, a heartbeat series and an
+/// audiogram.
 ///
 ///     xcrun simctl launch <udid> dev.openwalnut.ios -walnut.healthDebugSeed 1
 ///
@@ -24,11 +27,21 @@ enum HealthDebugSeed {
     static func runIfRequested() {
         guard UserDefaults.standard.bool(forKey: launchArgument), HKHealthStore.isHealthDataAvailable() else { return }
         LaunchGate.shared.whenActive {
-            do {
-                let count = try await seed()
-                AppLog.info("health", "debug seed written", ["samples": String(count)])
-            } catch {
-                AppLog.error("health", "debug seed failed", ["error": String(describing: error)])
+            // On a busy simulator healthd can answer the request before the sheet
+            // has been answered, so the first save finds write access still
+            // undetermined. Try again until the sheet is answered (2 min): the
+            // sync identifiers make a repeat replace, never duplicate.
+            for attempt in 1...40 {
+                do {
+                    let count = try await seed()
+                    AppLog.info("health", "debug seed written", ["samples": String(count), "attempt": String(attempt)])
+                    return
+                } catch let error as HKError where error.code == .errorAuthorizationNotDetermined && attempt < 40 {
+                    try? await Task.sleep(for: .seconds(3))
+                } catch {
+                    AppLog.error("health", "debug seed failed", ["error": String(describing: error), "attempt": String(attempt)])
+                    return
+                }
             }
         }
     }
@@ -43,7 +56,11 @@ enum HealthDebugSeed {
         let mass = HKQuantityType(.bodyMass)
         let headache = HKCategoryType(.headache)
         let workout = HKObjectType.workoutType()
-        let share: Set<HKSampleType> = [sleep, heartRate, resting, hrv, steps, mass, headache, workout]
+        let audiogram = HKObjectType.audiogramSampleType()
+        let heartbeats = HKSeriesType.heartbeat()
+        let route = HKSeriesType.workoutRoute()
+        let share: Set<HKSampleType> = [sleep, heartRate, resting, hrv, steps, mass, headache, workout,
+                                        audiogram, heartbeats, route]
         try await store.requestAuthorization(toShare: share, read: share)
 
         let watch = HKDevice(name: "Apple Watch", manufacturer: "Apple Inc.", model: "Watch",
@@ -123,8 +140,50 @@ enum HealthDebugSeed {
         try await builder.beginCollection(at: start)
         try await builder.addMetadata(meta("workout"))
         try await builder.endCollection(at: end)
-        _ = try await builder.finishWorkout()
-        return samples.count + 1
+        let run = try await builder.finishWorkout()
+
+        // Its GPS track: a made-up loop in open water, one point every 2 s.
+        if let run {
+            let routeBuilder = HKWorkoutRouteBuilder(healthStore: store, device: watch)
+            let locations = (0..<900).map { i -> CLLocation in
+                let angle = Double(i) / 900 * 2 * .pi
+                return CLLocation(coordinate: CLLocationCoordinate2D(latitude: 10 + 0.01 * sin(angle),
+                                                                     longitude: -30 + 0.01 * cos(angle)),
+                                  altitude: 5 + Double(i % 20), horizontalAccuracy: 5, verticalAccuracy: 4,
+                                  course: -1, speed: 2.8, timestamp: start.addingTimeInterval(Double(i) * 2))
+            }
+            try await routeBuilder.insertRouteData(locations)
+            _ = try await routeBuilder.finishRoute(with: run, metadata: meta("route"))
+        }
+
+        // The beats behind last night's HRV reading: a minute, with one gap.
+        let series = HKHeartbeatSeriesBuilder(healthStore: store, device: watch, start: at(3, 0))
+        var offset = 0.0
+        for beat in 0..<70 {
+            offset += 0.85 + Double(beat % 5) * 0.02
+            try await series.addHeartbeat(at: offset, precededByGap: beat == 40)
+        }
+        try await series.addMetadata(meta("beats"))
+        _ = try await series.finishSeries()
+
+        // A hearing test from yesterday (the per-ear test API is iOS 18.1).
+        if #available(iOS 18.1, *) {
+            let hz = HKUnit.hertz()
+            let db = HKUnit.decibelHearingLevel()
+            let levels: [(Double, Double, Double)] = [(250, 10, 10), (500, 10, 15), (1000, 15, 15), (2000, 20, 25),
+                                                      (4000, 30, 35), (8000, 40, 45)]
+            let points = try levels.map { freq, left, right in
+                try HKAudiogramSensitivityPoint(frequency: HKQuantity(unit: hz, doubleValue: freq), tests: [
+                    try HKAudiogramSensitivityTest(sensitivity: HKQuantity(unit: db, doubleValue: left), type: .air,
+                                               masked: false, side: .left, clampingRange: nil),
+                    try HKAudiogramSensitivityTest(sensitivity: HKQuantity(unit: db, doubleValue: right), type: .air,
+                                               masked: false, side: .right, clampingRange: nil),
+                ])
+            }
+            try await store.save(HKAudiogramSample(sensitivityPoints: points, start: at(10, 0, dayOffset: -1),
+                                                   end: at(10, 10, dayOffset: -1), metadata: meta("audiogram")))
+        }
+        return samples.count + 4
     }
 }
 #endif

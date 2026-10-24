@@ -17,6 +17,7 @@ export { HEALTH_MAX_ITEMS_PER_SYNC, HEALTH_MAX_SYNC_BYTES, HEALTH_METRICS, SLEEP
 export { ingestHealthSync, type HealthSyncOutcome } from './ingest.js'
 export { healthDaily, healthSeries, healthSleep, healthStatus, HealthQueryError } from './queries.js'
 export { samplesQuery as healthSamples } from './samples.js'
+export { recordingsQuery as healthRecordings } from './series-store.js'
 export { runHealthAction, isHealthAction, type HealthAction, type HealthActionResult } from './relay.js'
 export { sanitizeHealthSync } from './sanitize.js'
 

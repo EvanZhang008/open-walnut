@@ -10,6 +10,7 @@
 
 import { log } from '../../logging/index.js'
 import { isGenericName } from './catalog.js'
+import { isSeriesType } from './series-catalog.js'
 import { ingestHealthSync } from './ingest.js'
 import { healthStatus } from './queries.js'
 import { HealthSettingsError, deleteHealthData, updateHealthSettings } from './settings.js'
@@ -32,6 +33,13 @@ export interface HealthActionResult {
  */
 export const RELAY_GENERIC_FLAG = 'genericTypes'
 
+/**
+ * The same guard for recordings (`s.` types): a replica that predates them keeps
+ * no point of a relayed chunk, so an unstamped relay gets a status without
+ * `supported.series` and a recording sync answered `unsupported`.
+ */
+export const RELAY_SERIES_FLAG = 'seriesTypes'
+
 const unreachable = (message: string): HealthActionResult => ({
   status: 503, body: { error: { code: 'primary_unreachable', message } },
 })
@@ -40,10 +48,12 @@ export function isHealthAction(value: string): value is HealthAction {
   return value === 'sync' || value === 'status' || value === 'settings' || value === 'delete'
 }
 
-function withoutGeneric(body: Record<string, unknown>): Record<string, unknown> {
+function withoutSupported(body: Record<string, unknown>, keys: { generic: boolean; series: boolean }): Record<string, unknown> {
   const supported = body.supported
-  if (!supported || typeof supported !== 'object') return body
-  const { generic: _generic, ...rest } = supported as Record<string, unknown>
+  if (!supported || typeof supported !== 'object' || (!keys.generic && !keys.series)) return body
+  const rest = { ...(supported as Record<string, unknown>) }
+  if (keys.generic) delete rest.generic
+  if (keys.series) delete rest.series
   return { ...body, supported: rest }
 }
 
@@ -52,18 +62,22 @@ export async function runHealthAction(
   action: HealthAction, params: Record<string, unknown>, opts: { direct?: boolean } = {},
 ): Promise<HealthActionResult> {
   const genericAllowed = opts.direct === true || params[RELAY_GENERIC_FLAG] === true
+  const seriesAllowed = opts.direct === true || params[RELAY_SERIES_FLAG] === true
   try {
     if (action === 'sync') {
       const extra = typeof params.rejected === 'number' && Number.isInteger(params.rejected) && params.rejected > 0 ? params.rejected : 0
       if (!genericAllowed && isGenericName(typeOf(params.body))) {
         log.web.info('health sync: a generic call through a relay that predates generic types, declined', {})
       }
-      const out = ingestHealthSync(params.body, { extraRejected: extra, genericAllowed })
+      if (!seriesAllowed && isSeriesType(typeOf(params.body))) {
+        log.web.info('health sync: a recording through a relay that predates recordings, declined', {})
+      }
+      const out = ingestHealthSync(params.body, { extraRejected: extra, genericAllowed, seriesAllowed })
       return { status: out.status, body: out.body as unknown as Record<string, unknown> }
     }
     if (action === 'status') {
       const body = healthStatus() as unknown as Record<string, unknown>
-      return { status: 200, body: genericAllowed ? body : withoutGeneric(body) }
+      return { status: 200, body: withoutSupported(body, { generic: !genericAllowed, series: !seriesAllowed }) }
     }
     if (action === 'settings') return { status: 200, body: updateHealthSettings(params.body) as unknown as Record<string, unknown> }
     return { status: 200, body: deleteHealthData(params.body) as unknown as Record<string, unknown> }

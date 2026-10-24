@@ -18,6 +18,8 @@ import type { PreferredUnits } from './sanitize.js'
 import { IN_BED_ONLY_CAVEAT, UNRECORDED_GAP_CAVEAT, type NightSummary } from './sleep-merge.js'
 import type { DaySummary } from './day-summary.js'
 import { displayDistance, displayEnergy, displayTemperature } from './units.js'
+import { SERIES_TYPES } from './series-catalog.js'
+import { seriesLastEnd } from './series-store.js'
 
 const DAY_MS = 86_400_000
 /** No sample for this long reads as `unknown_or_denied`: apps cannot see a read denial. */
@@ -54,6 +56,14 @@ export function healthStatus(now = Date.now()) {
     const state = age > UNKNOWN_AFTER_DAYS * DAY_MS ? 'unknown_or_denied' : age > spec.staleAfterDays * DAY_MS ? 'stale' : 'ok'
     return { type: name, category: spec.category, enabled: enabled.has(spec.category), lastSampleAt: iso(last), state }
   })
+  // Recordings are always listed (a phone forgets the anchor of a type the Mac
+  // holds nothing of), and stay out of `coverage`, which is about days of data.
+  const recordings = Object.entries(SERIES_TYPES).map(([name, spec]) => {
+    const last = seriesLastEnd(db, name)
+    const age = last === null ? Infinity : now - last
+    const state = age > spec.staleAfterDays * DAY_MS ? 'unknown_or_denied' : 'ok'
+    return { type: name, category: spec.category, enabled: enabled.has(spec.category), lastSampleAt: iso(last), state, kind: 'recording' as const }
+  })
   const generic = genericTypes(enabled.has('other'), now)
   if (generic.lo !== null) coverageLo = Math.min(coverageLo, generic.lo)
   if (generic.hi !== null) coverageHi = Math.max(coverageHi, generic.hi)
@@ -85,7 +95,7 @@ export function healthStatus(now = Date.now()) {
       from: Number.isFinite(coverageLo) ? localDate(coverageLo, tz) : null,
       to: Number.isFinite(coverageHi) ? localDate(coverageHi - 1, tz) : null,
     },
-    types: [...types, ...generic.types],
+    types: [...types, ...recordings, ...generic.types],
     sources,
     sleepSourceOrder: savedSourceOrder(),
     categories: [...enabled].sort(),

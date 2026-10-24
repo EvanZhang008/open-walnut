@@ -21,6 +21,7 @@ import {
   HEALTH_MAX_SYNC_BYTES, HEALTH_MAX_TYPE_LENGTH, SPAN_VALUE_TYPES, isCharacteristic, isGenericType, isQuantityType, metricSpec,
 } from './catalog.js'
 import { isValidTz } from './day-key.js'
+import { cleanPoint, isSeriesType, seriesSpec, type SeriesPoint } from './series-catalog.js'
 
 export interface HealthSource { bundleId: string; name: string }
 
@@ -44,6 +45,19 @@ export interface CleanSample {
   device?: string
   tz: string
   meta?: SampleMeta
+}
+
+/** One chunk of a recording (series-catalog.ts): the header fields ride on every chunk. */
+export interface CleanSeriesItem {
+  uuid: string
+  start: number
+  end: number
+  source: HealthSource
+  device?: string
+  tz: string
+  chunk: number
+  chunks: number
+  points: SeriesPoint[]
 }
 
 export interface CleanBucket {
@@ -74,6 +88,8 @@ export interface CleanBatch {
   samples: CleanSample[]
   deleted: string[]
   buckets: CleanBucket[]
+  /** Recording chunks (`s.` types only), sent under `samples` on the wire. */
+  series?: CleanSeriesItem[]
   resync?: CleanResync
   preferredUnits?: PreferredUnits
   /** Generic types only: the unit every value in this call is in. */
@@ -177,6 +193,41 @@ function cleanSample(raw: unknown, type: string, batchTz: string, now: number): 
   if (device) out.device = device
   const meta = cleanMeta(s.meta)
   if (meta) out.meta = meta
+  return out
+}
+
+/**
+ * One chunk of a recording. Every point must pass (a route with a hole cut out
+ * of it would misread), so one junk point drops the chunk; the recording then
+ * stays incomplete and says so.
+ */
+function cleanSeriesItem(raw: unknown, type: string, batchTz: string, now: number): CleanSeriesItem | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const s = raw as Record<string, unknown>
+  const spec = seriesSpec(type)
+  if (!spec) return null
+  const uuid = typeof s.uuid === 'string' && UUID_RE.test(s.uuid) ? s.uuid : undefined
+  const start = parseInstant(s.start, now)
+  const end = parseInstant(s.end, now)
+  if (!uuid || start === undefined || end === undefined || end < start || end - start > spec.maxSpanMs) return null
+  const tz = isValidTz(s.tz) ? s.tz : batchTz
+  if (!tz) return null
+  const chunks = s.chunks ?? 1
+  const chunk = s.chunk ?? 0
+  if (typeof chunks !== 'number' || !Number.isInteger(chunks) || chunks < 1 || chunks > spec.maxChunks) return null
+  if (typeof chunk !== 'number' || !Number.isInteger(chunk) || chunk < 0 || chunk >= chunks) return null
+  if (!Array.isArray(s.points) || s.points.length > spec.maxPointsPerChunk) return null
+  const points: SeriesPoint[] = []
+  for (const p of s.points) {
+    const clean = cleanPoint(type, p, end - start)
+    if (!clean) return null
+    points.push(clean)
+  }
+  const src = (s.source && typeof s.source === 'object' ? s.source : {}) as Record<string, unknown>
+  const source: HealthSource = { bundleId: str(src.bundleId, 200) ?? 'unknown', name: str(src.name, 100) ?? '' }
+  const out: CleanSeriesItem = { uuid, start, end, source, tz, chunk, chunks, points }
+  const device = str(s.device, 100)
+  if (device) out.device = device
   return out
 }
 
@@ -372,9 +423,10 @@ export function sanitizeHealthSync(body: unknown, now = Date.now()): SanitizeOut
   const units = cleanUnits(b.preferredUnits)
   if (units) base.preferredUnits = units
 
-  const supported = generic
-    ? kind === 'raw' || isQuantityType(type)
-    : kind === 'raw' ? spec?.raw === true : spec?.buckets === true
+  const series = isSeriesType(type)
+  const supported = series ? kind === 'raw'
+    : generic ? kind === 'raw' || isQuantityType(type)
+      : kind === 'raw' ? spec?.raw === true : spec?.buckets === true
   if (!supported) {
     // Nothing of an unknown type can be stored. The phone gates on status.supported,
     // and must not advance its anchor for a call answered `unsupported`.
@@ -389,7 +441,20 @@ export function sanitizeHealthSync(body: unknown, now = Date.now()): SanitizeOut
       return { ok: true, batch: base, rejected: rejected + samplesIn.length + bucketsIn.length, refused }
     }
   }
-  if (kind === 'raw') {
+  if (series) {
+    // A recording has no mark-and-sweep: each one is an immutable HealthKit object.
+    delete base.resync
+    base.series = []
+    const seen = new Set<string>()
+    for (const item of samplesIn) {
+      const clean = cleanSeriesItem(item, type, tz, now)
+      const key = clean ? `${clean.uuid}#${clean.chunk}` : ''
+      if (!clean || seen.has(key)) { rejected++; continue }
+      seen.add(key)
+      base.series.push(clean)
+    }
+    rejected += bucketsIn.length
+  } else if (kind === 'raw') {
     const seen = new Set<string>()
     for (const item of samplesIn) {
       const clean = generic ? cleanGenericSample(item, type, tz, now) : cleanSample(item, type, tz, now)
@@ -421,8 +486,10 @@ export function sanitizeHealthSync(body: unknown, now = Date.now()): SanitizeOut
  * shrink a batch, never grow it past the frame budget.
  */
 export function relayPayload(batch: CleanBatch): Record<string, unknown> {
+  const { series, ...rest } = batch
+  const items: Array<CleanSample | CleanSeriesItem> = series ?? batch.samples
   return {
-    ...batch,
-    samples: batch.samples.map(({ tz, ...rest }) => (tz === batch.tz ? rest : { ...rest, tz })),
+    ...rest,
+    samples: items.map(({ tz, ...item }) => (tz === batch.tz ? item : { ...item, tz })),
   }
 }
