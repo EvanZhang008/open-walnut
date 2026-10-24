@@ -282,7 +282,8 @@ Release get is what the matrix ran. Both channels also publish only a commit who
   from before it) still installs its Node archive, and an archive install moves to the file on
   its next install. A pinned archive (going back to a release from before the file) updates
   itself on its next start and knows nothing of held versions, so install.sh names
-  `updates.auto: false` as the way to stay on it. The musl build links the C++ runtime
+  `updates.auto: false` in that data home's `config.yaml` (`OPEN_WALNUT_HOME` when set) as the
+  way to stay on it, and says to remove it again for updates. The musl build links the C++ runtime
   (Alpine's `libstdc++` and `libgcc`): when the file cannot start on a musl system without
   it, install.sh names the `apk add` line (and so does the npm launcher, on its loader's exit
   127). A release on this disk (`OPEN_WALNUT_RELEASE_BASE_URL=file://...`, the Mac app's) may

@@ -407,7 +407,12 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
     expect(back.code, back.out).toBe(0)
     expect(await printed(home)).toBe('0.6.9 (archive)')
     expect(back.out).toContain('Open Walnut 0.6.9 updates itself to the newest release when it starts')
-    expect(back.out).toContain('updates.auto: false')
+    expect(back.out).toContain('set updates.auto: false in ~/.open-walnut/config.yaml')
+    expect(back.out).toContain('Remove that setting again when you want updates.')
+    // A data home of its own: the note names its config.yaml.
+    const elsewhere = await install(home, { OPEN_WALNUT_VERSION: '0.6.9', OPEN_WALNUT_HOME: '/srv/walnut-data' })
+    expect(elsewhere.code, elsewhere.out).toBe(0)
+    expect(elsewhere.out).toContain('set updates.auto: false in /srv/walnut-data/config.yaml')
     // A release with the file holds a move back by itself: no such note.
     const forward = await install(home, { OPEN_WALNUT_VERSION: '0.7.0' })
     expect(forward.code, forward.out).toBe(0)

@@ -166,7 +166,8 @@ the same way (`npm install -g open-walnut@<version>` goes back; turn updates on 
 stay there), Homebrew with `brew upgrade open-walnut`. Going back to a release from before the
 single file (`OPEN_WALNUT_VERSION=0.6.17` with the install command) installs its Node archive,
 which updates itself on its next start the way an npm install does: set `updates.auto: false`
-in `~/.open-walnut/config.yaml` to stay on it (install.sh says so).
+in `config.yaml` in your data folder (`~/.open-walnut`, or `OPEN_WALNUT_HOME`) to stay on it, and
+remove it again when you want updates (install.sh says so).
 
 ---
 

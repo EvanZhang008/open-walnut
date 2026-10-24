@@ -471,8 +471,13 @@ install_archive() {
   # A pinned release from before the file (going back to it): its updater installs the
   # newest release on its next start and knows nothing of the versions held back.
   if [ -n "${OPEN_WALNUT_VERSION:-}" ]; then
+    # Its data home: OPEN_WALNUT_HOME when this shell names one, as Walnut reads it.
+    config_dir="${OPEN_WALNUT_HOME:-}"
+    # shellcheck disable=SC2088 # printed for a person, not expanded
+    [ -n "$config_dir" ] || config_dir='~/.open-walnut'
     printf '  Open Walnut %s updates itself to the newest release when it starts. To stay on it,\n' "$version" >&2
-    printf '  set updates.auto: false in ~/.open-walnut/config.yaml, or start it with WALNUT_NO_AUTO_UPDATE=1.\n\n' >&2
+    printf '  set updates.auto: false in %s/config.yaml, or start it with WALNUT_NO_AUTO_UPDATE=1.\n' "$config_dir" >&2
+    printf '  Remove that setting again when you want updates.\n\n' >&2
   fi
 }
 
