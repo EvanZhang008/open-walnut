@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Unified postinstall: routes between two very different install shapes.
  *

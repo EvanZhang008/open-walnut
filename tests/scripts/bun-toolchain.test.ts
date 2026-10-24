@@ -162,6 +162,8 @@ describe('postinstall', () => {
     expect(scripts.postinstall).toBe('node scripts/postinstall.mjs')
     for (const file of ['scripts/postinstall.mjs', 'scripts/build-sqlite-dylib.mjs']) {
       const text = fs.readFileSync(path.join(REPO, file), 'utf8')
+      // Its shebang names the runtime package.json runs it with.
+      expect(text.split('\n')[0], file).toBe('#!/usr/bin/env node')
       const specs = [...text.matchAll(/^import\s[^'"]*['"]([^'"]+)['"]/gm), ...text.matchAll(/\bimport\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
       expect(specs.length, file).toBeGreaterThan(0)
       expect(specs.filter((s) => !s.startsWith('node:')), file).toEqual([])
