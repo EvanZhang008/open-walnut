@@ -19,7 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import yaml from 'js-yaml'
-import { ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTunnels, stripSnapshotPushTokens } from '../../src/commands/ephemeral-snapshot.js'
+import { dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTunnels, stripSnapshotPushTokens } from '../../src/commands/ephemeral-snapshot.js'
 
 let dir: string
 const cronFile = () => path.join(dir, 'cron-jobs.json')
@@ -65,6 +65,61 @@ describe('pauseSnapshotCronJobs', () => {
     expect(fs.readFileSync(cronFile(), 'utf-8')).toBe('{ not json')
     fs.writeFileSync(cronFile(), JSON.stringify({ jobs: 'nope' }))
     expect(pauseSnapshotCronJobs(dir)).toBe(0)
+  })
+})
+
+describe('dropSnapshotQueuedMessages', () => {
+  const queueFile = () => path.join(dir, 'session-message-queue.json')
+  const row = (id: string, sessionId: string, status: string) =>
+    ({ id, sessionId, message: 'hi', status, enqueuedAt: '2026-10-24T07:00:00.000Z' })
+
+  it('empties every queue (pending, processing and parked) and keeps the bookkeeping', () => {
+    fs.writeFileSync(queueFile(), JSON.stringify({
+      version: 1,
+      queues: {
+        'sid-a': [row('qm-1', 'sid-a', 'pending'), row('qm-2', 'sid-a', 'processing')],
+        'sid-b': [row('qm-3', 'sid-b', 'parked')],
+        'sid-c': [],
+      },
+      settled: { 'qm-0': 'uuid-0' },
+      relay: { 'qm-mobile-1': ['taken', 1] },
+    }))
+    expect(dropSnapshotQueuedMessages(dir)).toBe(3)
+    const store = JSON.parse(fs.readFileSync(queueFile(), 'utf-8'))
+    expect(store).toEqual({ version: 1, queues: {}, settled: { 'qm-0': 'uuid-0' }, relay: { 'qm-mobile-1': ['taken', 1] } })
+  })
+
+  it('a missing store, or one with nothing queued, is left alone and is no failure', () => {
+    expect(dropSnapshotQueuedMessages(dir)).toBe(0)
+    expect(fs.existsSync(queueFile())).toBe(false)
+    const raw = JSON.stringify({ version: 1, queues: { 'sid-a': [] } })
+    fs.writeFileSync(queueFile(), raw)
+    expect(dropSnapshotQueuedMessages(dir)).toBe(0)
+    expect(fs.readFileSync(queueFile(), 'utf-8')).toBe(raw)
+    fs.writeFileSync(queueFile(), JSON.stringify({ version: 1 }))
+    expect(dropSnapshotQueuedMessages(dir)).toBe(0)
+  })
+
+  it('removes a store it cannot parse or understand (fail closed), never leaving rows behind', () => {
+    for (const raw of ['{ not json', '[]', 'null', JSON.stringify({ version: 1, queues: [row('qm-1', 's', 'pending')] })]) {
+      fs.writeFileSync(queueFile(), raw)
+      expect(dropSnapshotQueuedMessages(dir)).toBe(0)
+      expect(fs.existsSync(queueFile())).toBe(false)
+    }
+  })
+
+  it('counts a malformed queue entry and still empties it', () => {
+    fs.writeFileSync(queueFile(), JSON.stringify({ version: 1, queues: { 'sid-a': { id: 'qm-1' } } }))
+    expect(dropSnapshotQueuedMessages(dir)).toBe(1)
+    expect(JSON.parse(fs.readFileSync(queueFile(), 'utf-8')).queues).toEqual({})
+  })
+
+  it('removes the store when it cannot be rewritten', () => {
+    fs.writeFileSync(queueFile(), JSON.stringify({ version: 1, queues: { 'sid-a': [row('qm-1', 'sid-a', 'pending')] } }))
+    // A directory where the temp file goes makes the write fail.
+    fs.mkdirSync(`${queueFile()}.${process.pid}.tmp`)
+    expect(dropSnapshotQueuedMessages(dir)).toBe(1)
+    expect(fs.existsSync(queueFile())).toBe(false)
   })
 })
 

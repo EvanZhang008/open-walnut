@@ -414,3 +414,27 @@ describe('ephemeral runtime dirs', () => {
     expect(fs.existsSync(fresh)).toBe(true)
   })
 })
+
+describe('ephemeralRuntimeRoot', () => {
+  it('is /tmp unless a harness names its own private short dir', async () => {
+    const { ephemeralRuntimeRoot } = await import('../../src/commands/ephemeral-registry.js')
+    expect(ephemeralRuntimeRoot({}, true)).toBe('/tmp')
+    const own = fs.mkdtempSync('/tmp/epr-')
+    fs.chmodSync(own, 0o700)
+    const set = (root: string) => ({ WALNUT_EPHEMERAL_RUNTIME_ROOT: root })
+    try {
+      expect(ephemeralRuntimeRoot(set(own), true)).toBe(own)
+      // Any other process ignores the variable, so a stray one never breaks or redirects production.
+      expect(ephemeralRuntimeRoot(set(own), false)).toBe('/tmp')
+      expect(ephemeralRuntimeRoot(set('relative/dir'), false)).toBe('/tmp')
+      fs.chmodSync(own, 0o755)
+      expect(() => ephemeralRuntimeRoot(set(own), true)).toThrow()
+      expect(() => ephemeralRuntimeRoot(set('relative/dir'), true)).toThrow()
+      expect(() => ephemeralRuntimeRoot(set(own + '/missing'), true)).toThrow()
+      // root + 86 bytes must fit the 104-byte socket path: 17 characters at most.
+      expect(() => ephemeralRuntimeRoot(set('/tmp/' + 'x'.repeat(13)), true)).toThrow()
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true })
+    }
+  })
+})

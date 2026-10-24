@@ -4410,6 +4410,11 @@ if (!mockDaemon) {
 }
 if (mockDaemon) {
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${mockDaemon.port}`)
+  // The session gate skips only this in-process MockDaemon, so the seeded fixture sessions resume.
+  {
+    const { trustFixtureDaemon } = await import('../../../src/providers/ephemeral-session-gate.js')
+    trustFixtureDaemon(`ws://127.0.0.1:${mockDaemon.port}`, mockDaemon.instanceId)
+  }
   // A stop the server decides on (a completed task, an idle reap) goes to the daemon
   // that spawned the session, this one, not to the isolated real local daemon that
   // the pool lookup finds first: that one refuses it ("not_journaled"), the CLI

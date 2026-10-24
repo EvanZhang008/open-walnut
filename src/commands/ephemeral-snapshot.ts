@@ -185,6 +185,56 @@ export function pauseSnapshotCronJobs(snapshotDir: string): number {
   return paused
 }
 
+/** Session message queue file inside a data dir (SESSION_QUEUE_FILE in constants.ts). */
+const SESSION_QUEUE_STORE_FILE = 'session-message-queue.json'
+
+/**
+ * Empty every session's queue in the snapshot. Returns how many rows were
+ * dropped. The copied queue holds messages for the user's REAL sessions, and a
+ * test server delivers pending rows at boot and on every daemon connect: on
+ * 2026-10-24 one did, resuming seven of the user's sessions under their own ids,
+ * so seven duplicate agents wrote into the real transcripts and ran real tool
+ * calls. Parked rows go too: Retry on one is a resume as well. The `settled`
+ * and `relay` records stay; they are bookkeeping and deliver nothing.
+ * A missing store drops nothing. A store that cannot be read, parsed or
+ * rewritten is removed (fail closed), and that is said on stderr.
+ */
+export function dropSnapshotQueuedMessages(snapshotDir: string): number {
+  const file = path.join(snapshotDir, SESSION_QUEUE_STORE_FILE)
+  if (!fs.existsSync(file)) return 0
+  const failClosed = (why: string): number => {
+    process.stderr.write(`ephemeral: removing the copied session queue (${why})\n`)
+    try { fs.rmSync(file, { force: true }) } catch { /* best-effort */ }
+    // A queue that is still there after this would be replayed: refuse to go on.
+    if (fs.existsSync(file)) throw new Error(`could not remove the copied session queue ${file}`)
+    return 0
+  }
+  let store: { queues?: unknown }
+  try {
+    store = JSON.parse(fs.readFileSync(file, 'utf-8'))
+  } catch (err) {
+    return failClosed(`unreadable: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!store || typeof store !== 'object' || Array.isArray(store)) return failClosed('not a queue store')
+  const queues = store.queues
+  if (queues === undefined) return 0
+  if (!queues || typeof queues !== 'object' || Array.isArray(queues)) return failClosed('queues is not a map')
+  let dropped = 0
+  for (const rows of Object.values(queues as Record<string, unknown>)) {
+    dropped += Array.isArray(rows) ? rows.length : 1
+  }
+  if (dropped === 0) return 0
+  store.queues = {}
+  try {
+    const tmp = `${file}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2))
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    failClosed(`could not rewrite: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  return dropped
+}
+
 /**
  * Config files the server reads: config.yaml, and config.yaml.bak, which
  * config-manager restores from when config.yaml is missing or unreadable.

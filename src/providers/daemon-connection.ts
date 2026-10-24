@@ -35,6 +35,7 @@ import { laneForwardForTesting, sshLaneForward, StreamLane } from './stream-lane
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
+import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
 import { buildRemotePreamble } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
@@ -1615,6 +1616,9 @@ export class DaemonConnection {
     if (!this._connected || !this.ws) {
       throw markLinkFailure(new Error(`DaemonConnection not connected to ${this.hostKey}`), 'no-link')
     }
+    // A test server never resumes or writes into a session it did not start.
+    const gateScope = { host: this.hostKey, url: this._lastWsUrl, instance: this._daemonInstanceId }
+    const gateAttempt = gateSessionCommand(gateScope, cmd, params)
 
     const id = ++this.cmdCounter
     const traceId = typeof params.traceId === 'string' && params.traceId
@@ -1664,7 +1668,11 @@ export class DaemonConnection {
     let reached: number | null = null
     creditCurrentRead(() => reached ?? reachedNow())
     return new Promise<DaemonCommandResult>((resolveCmd, rejectCmd) => {
-      const resolve = (result: DaemonCommandResult) => { reached ??= reachedNow(); resolveCmd(result) }
+      const resolve = (result: DaemonCommandResult) => {
+        reached ??= reachedNow()
+        try { settleSessionCommand(gateScope, cmd, params, result, gateAttempt) } catch { /* the reply still resolves */ }
+        resolveCmd(result)
+      }
       const reject = (error: Error) => { reached ??= reachedNow(); rejectCmd(error) }
       const onTimeout = () => {
         const pending = this.pendingCommands.get(id)

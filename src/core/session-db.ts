@@ -233,6 +233,16 @@ export function sessionIdsInStore(opts: { exceptHost?: string } = {}): string[] 
   return handle.prepare('SELECT claude_session_id FROM sessions').pluck().all() as string[];
 }
 
+/** Every session id and ACP runtime id in the store, without decoding records (the ephemeral session gate's copied set). */
+export function sessionIdentitiesInStore(): string[] {
+  const handle = getDb();
+  if (!handle) throw new Error('sessions store unavailable');
+  return handle.prepare(
+    `SELECT claude_session_id FROM sessions UNION
+     SELECT json_extract(payload, '$.acpRuntimeId') FROM sessions WHERE instr(payload, '"acpRuntimeId"') > 0 AND json_valid(payload)`,
+  ).pluck().all().filter((id): id is string => typeof id === 'string' && id !== '');
+}
+
 /**
  * The sessions copy's one write (replication/kinds/sessions.ts): rows in as
  * they came (INSERT OR REPLACE, every column), removed ids out, one

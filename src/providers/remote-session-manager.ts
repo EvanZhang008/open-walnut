@@ -26,6 +26,7 @@ import {
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { BudgetCheckingError, BudgetPausedError, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
+import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
 import { linkFailureKind } from './link-failure.js'
 import { CloudSessionLink } from './cloud-session-link.js'
 import { isSessionStopSuperseded, SessionStopSupersededError } from '../core/sessions/session-stop.js'
@@ -866,8 +867,9 @@ export class RemoteSessionManager implements SessionManager {
       }
       throw new SendHeldError(`Not sent yet: the session host refused delivery (${reason || 'unknown reason'})`)
     } catch (err) {
-      // A budget refusal is an answer: nothing was written, so later lines are not held behind it.
-      if (isSessionStopSuperseded(err) || err instanceof BudgetPausedError || err instanceof BudgetCheckingError) throw err
+      // A budget or test-server gate refusal is an answer: nothing was written, so later lines are not held behind it.
+      if (isSessionStopSuperseded(err) || err instanceof BudgetPausedError || err instanceof BudgetCheckingError
+        || err instanceof InheritedSessionRefusedError) throw err
       if (err instanceof SendOutcomeUnknownError || err instanceof SendHeldError) {
         this._heldThrough = this._writeSeq
         log.session.warn('RemoteSessionManager: send outcome unknown', { host: this.hostKey, sid, error: err.message })

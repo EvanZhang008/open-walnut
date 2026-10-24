@@ -77,8 +77,28 @@ export type ReapOptions = { tmpBase?: string, runtimeRoot?: string }
 // and the daemon puts `term/walnut-<uuid>.dsock` under it (90 bytes worst case
 // here, 136 under /var/folders/…/T/).
 
-/** Root for runtime dirs. /tmp exists on every supported OS. */
-export const EPHEMERAL_RUNTIME_ROOT = '/tmp'
+/** True in the `web --ephemeral` launcher and its test server, the only processes that honour the override. */
+const EPHEMERAL_PROCESS = process.argv.includes('--ephemeral') || process.argv.includes('--_ephemeral-child')
+
+/**
+ * Root for runtime dirs: /tmp (exists on every supported OS), or, in the
+ * ephemeral launcher and its test server, WALNUT_EPHEMERAL_RUNTIME_ROOT when a
+ * harness wants their runtime dirs, and the reaper's scan, kept to a private
+ * dir of its own. Every other process ignores the variable.
+ */
+export function ephemeralRuntimeRoot(env: NodeJS.ProcessEnv = process.env, scoped: boolean = EPHEMERAL_PROCESS): string {
+  const root = env.WALNUT_EPHEMERAL_RUNTIME_ROOT
+  if (!root || !scoped) return '/tmp'
+  let st: fs.Stats | null = null
+  try { st = fs.lstatSync(root) } catch { /* reported below */ }
+  // `<root>/open-walnut-eph-<ppid>-<six>/term/walnut-<uuid>.dsock` is root + 86 bytes, under the 104-byte socket cap.
+  const usable = path.isAbsolute(root) && root.length <= 17 && st?.isDirectory() && !st.isSymbolicLink()
+    && (st.mode & 0o077) === 0 && (typeof process.getuid !== 'function' || st.uid === process.getuid())
+  if (!usable) throw new Error(`WALNUT_EPHEMERAL_RUNTIME_ROOT must be your own 0700 directory, absolute, at most 17 characters: ${root}`)
+  return root
+}
+
+export const EPHEMERAL_RUNTIME_ROOT = ephemeralRuntimeRoot()
 
 /** The runtime dir shape, `open-walnut-eph-<ppid>-<six>` (the snapshot's own suffix). */
 export const EPHEMERAL_RUNTIME_DIR_RE = /^open-walnut-eph-\d+-[A-Za-z0-9]{6}$/

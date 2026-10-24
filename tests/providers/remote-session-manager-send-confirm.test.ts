@@ -11,7 +11,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
-import { BudgetCheckingError, BudgetPausedError, SendHeldError, SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, SendHeldError, SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js'
+import { InheritedSessionRefusedError } from '../../src/providers/ephemeral-session-gate.js'
 import { markLinkFailure } from '../../src/providers/link-failure.js'
 import fs from 'node:fs'
 import { sessionStops, SessionStopSupersededError } from '../../src/core/sessions/session-stop.js'
@@ -758,6 +759,19 @@ describe('RemoteSessionManager: a send whose answer never came', () => {
     await expect(mgr.writeMessage('hello', { uuid: 'u-1', markers })).rejects.toBeInstanceOf(BudgetPausedError);
     expect(sent.map(row => row.cmd)).toEqual(['send']);
     expect(onExit).not.toHaveBeenCalled();
+  });
+  it('a test server\'s gate refusal is an answer: it parks the line, never holds it as in doubt', async () => {
+    const { conn, sent } = fakeConn([new InheritedSessionRefusedError('sid-1', 'send'), { ok: true }])
+    const mgr = manager(conn)
+    const onExit = vi.fn(); Object.assign(mgr as unknown as Record<string, unknown>, { _onExit: onExit, _hasPipe: true })
+    const refused = mgr.writeMessage('hello', { uuid: 'u-1', markers })
+    await expect(refused).rejects.toBeInstanceOf(InheritedSessionRefusedError)
+    const err = await refused.catch((e: unknown) => e)
+    expect(err).not.toBeInstanceOf(SendHeldError)
+    expect(classifyDeliveryFailure(err)).toMatchObject({ kind: 'permanent', code: 'inherited_session' })
+    expect(onExit).not.toHaveBeenCalled()
+    expect(await mgr.writeMessage('again', { uuid: 'u-2', markers })).toBe(true)
+    expect(sent.map(row => row.cmd)).toEqual(['send', 'send'])
   });
   it('a send whose budget is still being checked is held (sent again), and holds no later line behind it', async () => {
     const { conn, sent } = fakeConn([{ ok: false, reason: 'budget_checking' }, { ok: true }]);

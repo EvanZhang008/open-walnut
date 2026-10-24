@@ -26,6 +26,7 @@ import { log } from '../../logging/index.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readTeamConfig, findTeammateJsonlPaths, writeToInbox, extractTeamsFromLeadJsonl, findSubagentJsonlByPrompt, getLeadSessionJsonlPath, findAllSubagentJsonlsForAgent, readTeamConfigRemote, extractTeamsFromLeadJsonlRemote, readRemoteSubagentJsonls } from '../../core/team-reader.js'
 import { ActiveTabPoller, readFullFile, parseJsonlLines } from '../../providers/subagent-poller.js'
+import { refuseRealHomeWrite } from '../../providers/ephemeral-session-gate.js'
 import { broadcastEvent } from '../ws/handler.js'
 
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
@@ -838,6 +839,7 @@ export function registerSessionChatRpc(): void {
     const agentName = data.agentName
     const message = data.message
 
+    refuseRealHomeWrite('team-send')
     await writeToInbox(teamName, agentName, message)
 
     log.web.info('team message sent to inbox', { teamName, agentName, messageLength: message.length })

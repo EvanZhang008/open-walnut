@@ -820,8 +820,9 @@ function installExitDiagnostics(): void {
   })
 }
 
-/** Where the exit trace goes: a host replica keeps it in its own run dir, never in a shared /tmp file. */
+/** Where the exit trace goes: a host replica or a test server keeps it in its own run dir, never in a shared /tmp file. */
 function exitTraceFile(): string {
+  if (IS_EPHEMERAL) return path.join(LOG_DIR, 'exit.log')
   try { if (isHostReplica()) return path.join(LOG_DIR, 'exit.log') } catch { /* undecidable role: the default */ }
   return '/tmp/open-walnut-exit.log'
 }
@@ -1226,6 +1227,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (scrub.scrubbed > 0) {
       log.session.warn('ephemeral server: cleared inherited session pids (they belong to another Walnut)', scrub)
     }
+    // Arm the session gate before anything can spawn; unarmed, it refuses every start.
+    const { sessionIdentitiesInStore } = await import('../core/session-db.js')
+    const { armEphemeralSessionGate } = await import('../providers/ephemeral-session-gate.js')
+    armEphemeralSessionGate(sessionIdentitiesInStore())
   }
 
   // Route every log.error()/log.fatal() into the notification center (deduped

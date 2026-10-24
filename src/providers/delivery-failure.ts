@@ -18,13 +18,14 @@
 
 import { CwdMissingError } from './cwd-check.js';
 import { isSessionStopSuperseded } from '../core/sessions/session-stop.js';
+import { InheritedSessionRefusedError } from './ephemeral-session-gate.js';
 
 export type DeliveryFailureKind = 'permanent' | 'transient';
 
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
 }
@@ -53,6 +54,8 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
     return { kind: 'permanent', code: 'budget_paused', reason: 'Not sent: the session budget is paused. Raise or remove the limit, then retry.' };
   }
   if (isSessionStopSuperseded(err)) return { kind: 'permanent', code: 'session_stopped', reason };
+  // A test server refusing a session it did not start: retrying changes nothing.
+  if (err instanceof InheritedSessionRefusedError || /^inherited_session:/.test(message)) return { kind: 'permanent', code: 'inherited_session', reason };
   if (err instanceof CwdMissingError) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (CWD_MISSING.test(message)) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (SESSION_MISSING.test(message)) return { kind: 'permanent', code: 'session_missing', reason };

@@ -24,7 +24,7 @@ import {
   ephemeralRuntimeDir,
   removeEphemeralRuntimeDirs,
 } from './ephemeral-registry.js'
-import { copyDataSnapshot, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
+import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
 /** Auto-shutdown after 10 minutes of no HTTP requests. */
 const EPHEMERAL_IDLE_TTL_MS = 10 * 60 * 1000
@@ -359,6 +359,18 @@ async function runEphemeralLauncher(): Promise<void> {
   const pausedCronJobs = pauseSnapshotCronJobs(tmpDir)
   const removedPushTokens = stripSnapshotPushTokens(tmpDir)
   const stoppedTunnels = stopSnapshotTunnels(tmpDir)
+  // The copied queue would be delivered to the user's real sessions at boot.
+  let droppedQueuedMessages: number
+  try {
+    droppedQueuedMessages = dropSnapshotQueuedMessages(tmpDir)
+  } catch (err) {
+    process.stderr.write(`ephemeral: ${err instanceof Error ? err.message : String(err)}\n`)
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    removeEphemeralRuntimeDirs(runtimeDir)
+    unregisterEphemeralDir(registryFile, tmpDir)
+    process.exit(1)
+    return
+  }
 
   // 5. Spawn detached child
   const binPath = process.argv[1]
@@ -410,7 +422,7 @@ async function runEphemeralLauncher(): Promise<void> {
     ])
     // 7. Print JSON to stdout (exec tool captures this). daemonDir holds this
     // server's own daemon and logs (open-walnut-<date>.log).
-    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, pausedCronJobs, removedPushTokens, stoppedTunnels }))
+    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, pausedCronJobs, removedPushTokens, stoppedTunnels, droppedQueuedMessages }))
     process.exit(0)
   } catch (err) {
     process.stderr.write(`ephemeral: ${err instanceof Error ? err.message : String(err)}\n`)
