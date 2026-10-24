@@ -25,7 +25,18 @@
  * least 5 separate bulk-insert bursts. Detection exists so the next occurrence
  * shows up in the logs within a day instead of after another six months.
  */
+import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
+
+/**
+ * The command that repairs orphaned links in the data home `home`. The script
+ * ships in the repository only (not in the npm package or the walnut file), so
+ * it runs from a checkout, with bun like the rest of Walnut.
+ */
+export function repairCommand(home: string): string {
+  const quoted = /^[\w@%+=:,./-]+$/.test(home) ? home : `'${home.replace(/'/g, `'\\''`)}'`;
+  return `from a Walnut checkout: OPEN_WALNUT_HOME=${quoted} bun scripts/repair-orphan-session-links.mjs (a dry run; add --apply to write, --verify to recount)`;
+}
 
 export interface SessionIntegrityReport {
   /** Sessions whose `task_id` names a task that no longer exists. */
@@ -145,7 +156,7 @@ export async function checkSessionTaskIntegrity(): Promise<SessionIntegrityRepor
       duplicateRemoteIdGroups: report.duplicateRemoteIdGroups,
       duplicateTaskRows: report.duplicateTaskRows,
       duplicateSample: report.duplicateSample,
-      remedy: 'node scripts/repair-orphan-session-links.mjs (dry-run first)',
+      remedy: repairCommand(WALNUT_HOME),
     });
   } else {
     log.session.debug('session↔task integrity clean', {

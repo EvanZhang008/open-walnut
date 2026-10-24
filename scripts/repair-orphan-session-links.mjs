@@ -46,7 +46,8 @@
  * `deriveGenericTitles`, `remoteIdOf`, `holdingTitleFor`). Per-install
  * overrides can live in an uncommitted JSON file — see OVERRIDES_FILE.
  *
- * Usage:
+ * Usage, from a Walnut checkout (OPEN_WALNUT_HOME or WALNUT_DATA_DIR names
+ * another data home than ~/.open-walnut):
  *   bun scripts/repair-orphan-session-links.mjs                          # dry-run
  *   bun scripts/repair-orphan-session-links.mjs --apply                  # buckets A, C, D
  *   bun scripts/repair-orphan-session-links.mjs --apply --create-holding # also bucket B
@@ -63,7 +64,8 @@ const APPLY = process.argv.includes('--apply');
 const CREATE_HOLDING = process.argv.includes('--create-holding');
 const VERIFY_ONLY = process.argv.includes('--verify');
 
-const DATA_DIR = process.env.WALNUT_DATA_DIR || path.join(os.homedir(), '.open-walnut');
+// The data home Walnut itself reads (OPEN_WALNUT_HOME, src/constants.ts); WALNUT_DATA_DIR still wins.
+const DATA_DIR = process.env.WALNUT_DATA_DIR || process.env.OPEN_WALNUT_HOME || path.join(os.homedir(), '.open-walnut');
 const SESSIONS_DB = path.join(DATA_DIR, 'sessions.sqlite');
 const TASKS_DB = path.join(DATA_DIR, 'tasks', 'tasks.sqlite');
 
