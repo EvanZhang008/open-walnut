@@ -12526,7 +12526,17 @@ function armsBridgeFastWindow(s) {
   return s.firstDrop || s.uptimeMs >= s.armUptimeMs;
 }
 
-function getWsClientCtor() {
+// Bun 1.4.4 rewrote its WebSocket client (oven-sh/bun#45223), and terminate()
+// now ends a ws:// socket with a FIN, after the kernel has sent what it
+// buffered: the drain abandonBridgeSocket is there to avoid. The same release
+// builds its ws on native transports and honours createConnection, so from
+// 1.4.4 a ws:// bridge rides a TCP socket this twin opens itself
+// (connectBridgeTcp) and is reset with resetAndDestroy(), as on Node and as
+// daemon-standalone.ts does (BRIDGE_OWN_TCP there; measured 2026-10-23: a RST
+// on 1.4.3 and 1.4.4, and Bun's ws ignores createConnection before 1.4.4).
+const BRIDGE_OWN_TCP = typeof Bun !== 'undefined' && !!Bun.semver && Bun.semver.satisfies(Bun.version, '>=1.4.4');
+
+function getWsClientCtor(url) {
   // Under Node: the ws package when it is installed (deploySource() installs
   // it on a remote host), else createBridgeWsClient. Never Node's global
   // WebSocket: it has no terminate(), so a link torn down as dead stayed
@@ -12535,24 +12545,33 @@ function getWsClientCtor() {
   // in 420 s). Both Node clients dial their TCP socket through
   // connectBridgeTcp, so a socket given up on can be reset
   // (abandonBridgeSocket), on ws:// and wss:// alike.
-  // Under Bun: its global WebSocket, the only client there is. Its terminate()
-  // resets a ws:// link, but on wss:// it leaves the link in that same state:
-  // CLOSING (readyState 2), no close event, the TCP flow still ESTABLISHED
-  // 180 s on behind a dead path, still draining behind a slow one (gate
-  // 2026-10-07; see abandonBridgeSocket in daemon-standalone.ts).
-  if (typeof Bun !== 'undefined' && typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
-  try {
-    const m = require('ws');
-    const WsPackage = m.WebSocket || m;
-    return function BridgeWsPackageClient(url) {
-      const tcp = {};
-      const secure = /^(wss|https):/i.test(url);
-      const client = new WsPackage(url, { createConnection: function(opts, done) { return connectBridgeTcp(opts, secure, tcp, done); } });
-      client.bridgeTcp = tcp;
-      return client;
-    };
-  } catch {}
+  // Under Bun from 1.4.4: a ws:// bridge goes through Bun's ws over
+  // connectBridgeTcp too (see BRIDGE_OWN_TCP). Older Bun, and wss:// on any
+  // Bun: its global WebSocket. Its terminate() resets a ws:// link before
+  // 1.4.4, but on wss:// it leaves the link CLOSING (readyState 2), no close
+  // event, the TCP flow still ESTABLISHED 180 s on behind a dead path, still
+  // draining behind a slow one (gate 2026-10-07; see abandonBridgeSocket in
+  // daemon-standalone.ts).
+  const secure = /^(wss|https):/i.test(String(url || ''));
+  if (typeof Bun !== 'undefined' && typeof globalThis.WebSocket === 'function') {
+    if (!BRIDGE_OWN_TCP || secure) return globalThis.WebSocket;
+    return bridgeWsPackageClient(require('ws'));
+  }
+  try { return bridgeWsPackageClient(require('ws')); } catch {}
   return function BridgeWsBuiltinClient(url) { return createBridgeWsClient(url); };
+}
+
+// The ws package's client (Bun's own ws under Bun), dialing its TCP socket
+// through connectBridgeTcp and keeping it, so abandonBridgeSocket can reset it.
+function bridgeWsPackageClient(m) {
+  const WsPackage = m.WebSocket || m;
+  return function BridgeWsPackageClient(url) {
+    const tcp = {};
+    const secure = /^(wss|https):/i.test(url);
+    const client = new WsPackage(url, { createConnection: function(opts, done) { return connectBridgeTcp(opts, secure, tcp, done); } });
+    client.bridgeTcp = tcp;
+    return client;
+  };
 }
 
 // A request's createConnection for the bridge (http(s).request, under the ws
@@ -12904,7 +12923,7 @@ function logBridgeConnClose(info) {
 function dialBridge(gen) {
   if (gen !== bridgeGeneration || !bridgeConfig || !bridgeConfig.enabled) return;
   const cfg = bridgeConfig;
-  const WsCtor = getWsClientCtor();
+  const WsCtor = getWsClientCtor(cfg.url);
   // Which client dials (the conn-open line names it): Bun's, the ws package's, or createBridgeWsClient.
   const wsClient = WsCtor === globalThis.WebSocket ? 'bun' : WsCtor.name === 'BridgeWsBuiltinClient' ? 'builtin' : 'ws';
   let dialUrl;

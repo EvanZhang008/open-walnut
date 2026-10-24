@@ -2341,9 +2341,18 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
     expect(connect).toMatch(/require\('tls'\)\.connect\(Object\.assign\(\{\}, opts, \{ socket: tcp,/)
     expect(connect).toMatch(/done\(null, tlsSocket\);/)
   })
+  // The JS twin runs on Bun now too (source deploys run daemon.cjs on bun), so it
+  // follows the bun twin: from Bun 1.4.4 a ws:// bridge dials through Bun's ws
+  // over connectBridgeTcp, whose socket abandonBridgeSocket resets.
+  it('the JS twin also dials a ws:// bridge over its own TCP socket on Bun 1.4.4 and later', () => {
+    expect(templateSrc).toContain("const BRIDGE_OWN_TCP = typeof Bun !== 'undefined' && !!Bun.semver && Bun.semver.satisfies(Bun.version, '>=1.4.4');")
+    expect(standaloneSrc).toContain("const BRIDGE_OWN_TCP = Bun.semver.satisfies(Bun.version, '>=1.4.4')")
+    expect(templateSrc).toContain('const secure = /^(wss|https):/i.test(String(url || \'\'));')
+    expect(templateSrc).toContain('const WsCtor = getWsClientCtor(cfg.url);')
+  })
   it('the JS twin dials with a client that can terminate, never Node\'s global WebSocket', () => {
-    const ctor = templateSrc.slice(templateSrc.indexOf('function getWsClientCtor()'), templateSrc.indexOf('function connectBridgeTcp('))
-    expect(ctor).toMatch(/if \(typeof Bun !== 'undefined' && typeof globalThis\.WebSocket === 'function'\) return globalThis\.WebSocket;/)
+    const ctor = templateSrc.slice(templateSrc.indexOf('function getWsClientCtor(url)'), templateSrc.indexOf('function connectBridgeTcp('))
+    expect(ctor).toMatch(/if \(typeof Bun !== 'undefined' && typeof globalThis\.WebSocket === 'function'\) \{\s*\n\s*if \(!BRIDGE_OWN_TCP \|\| secure\) return globalThis\.WebSocket;\s*\n\s*return bridgeWsPackageClient\(require\('ws'\)\);/)
     expect(ctor).toMatch(/require\('ws'\)/)
     // The ws package dials through connectBridgeTcp too, and keeps its TCP socket.
     expect(ctor).toMatch(/new WsPackage\(url, \{ createConnection: function\(opts, done\) \{ return connectBridgeTcp\(opts, secure, tcp, done\); \} \}\);\s*\n\s*client\.bridgeTcp = tcp;/)
