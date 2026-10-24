@@ -2,10 +2,13 @@
  * Safe sqlite snapshots for backup.
  *
  * Canonical DBs are live-written by the running server; a raw file copy can
- * photograph a torn page mid-transaction. `db.backup()` (src/lib/sqlite.ts) uses
- * SQLite's online backup API, which yields a consistent copy while writers
- * keep going. Snapshots land in a staging dir and ride the upload set under
- * SQLITE_SNAPSHOT_PREFIX; restore puts them back at their original paths.
+ * photograph a torn page mid-transaction. `db.backup()` (src/lib/sqlite.ts)
+ * copies with VACUUM INTO: one read transaction, so a consistent copy while
+ * writers keep going (WAL). That is one synchronous call over the whole
+ * database (seconds for a large one), which backup() runs on a worker thread so
+ * the server's event loop is not held. Snapshots land in a staging dir and ride
+ * the upload set under SQLITE_SNAPSHOT_PREFIX; restore puts them back at their
+ * original paths.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -44,7 +47,7 @@ export async function snapshotSqliteDbs(
     const dest = path.join(stagingDir, rel);
     try {
       await fs.mkdir(path.dirname(dest), { recursive: true });
-      // Open read-only; backup() is async and paced (non-blocking).
+      // Open read-only; backup() copies on a worker thread, so this await does not hold the loop.
       const db = new Database(src, { readonly: true, fileMustExist: true });
       try {
         await db.backup(dest);

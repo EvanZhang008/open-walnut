@@ -160,6 +160,50 @@ describe('sqlite on bun', () => {
     expect(fs.readdirSync(path.dirname(dest)).filter((f) => !/-(wal|shm)$/.test(f))).toEqual(['copy.db'])
   })
 
+  it('backup copies a database file off the event loop, as better-sqlite3 did in steps', async () => {
+    // VACUUM INTO is one call: on this thread a 750 MB database held every route
+    // for 4.8 s. Here a database big enough that the copy takes a while, timed
+    // on this thread first, then backed up while a timer measures the loop.
+    db.exec("CREATE TABLE big (b BLOB); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 12000) INSERT INTO big SELECT randomblob(4000) FROM n")
+    db.prepare('INSERT INTO t (name) VALUES (?)').run('kept')
+    let t0 = performance.now()
+    db.prepare('VACUUM INTO ?').run(path.join(dir, 'inline.db'))
+    const inlineMs = performance.now() - t0
+    let maxGap = 0
+    let last = performance.now()
+    const tick = setInterval(() => { const now = performance.now(); maxGap = Math.max(maxGap, now - last); last = now }, 5)
+    t0 = performance.now()
+    try {
+      await db.backup(path.join(dir, 'copy.db'))
+    } finally {
+      clearInterval(tick)
+    }
+    const backupMs = performance.now() - t0
+    expect(maxGap, `loop held ${Math.round(maxGap)} ms of a ${Math.round(backupMs)} ms backup (${Math.round(inlineMs)} ms on this thread)`).toBeLessThan(inlineMs / 2)
+    const copy = new Database(path.join(dir, 'copy.db'), { readonly: true })
+    expect(copy.prepare('SELECT count(*) FROM big').pluck().get()).toBe(12000)
+    expect(copy.prepare('SELECT name FROM t').pluck().all()).toEqual(['kept'])
+    copy.close()
+  })
+
+  it('backup of an in-memory database copies it on this thread, and a failed copy rejects and leaves nothing', async () => {
+    const mem = new Database(':memory:')
+    mem.exec("CREATE TABLE m (x); INSERT INTO m VALUES ('in memory')")
+    await mem.backup(path.join(dir, 'mem.db'))
+    mem.close()
+    const copy = new Database(path.join(dir, 'mem.db'), { readonly: true })
+    expect(copy.prepare('SELECT x FROM m').pluck().get()).toBe('in memory')
+    copy.close()
+    // A file that is not a database: the worker's VACUUM INTO fails, and says why.
+    const bad = path.join(dir, 'not-a-db.db')
+    fs.writeFileSync(bad, Buffer.alloc(8192, 7))
+    const opened = new Database(bad, { readonly: true, fileMustExist: true })
+    const out = path.join(dir, 'out', 'copy.db')
+    await expect(opened.backup(out)).rejects.toThrow(/not a database/)
+    opened.close()
+    expect(fs.readdirSync(path.dirname(out))).toEqual([])
+  })
+
   it('serialize gives the database bytes as a Buffer', () => {
     db.prepare('INSERT INTO t (name) VALUES (?)').run('a')
     const bytes = db.serialize()

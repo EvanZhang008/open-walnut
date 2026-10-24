@@ -39,9 +39,15 @@ export async function runSelftest(): Promise<number> {
         db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)')
         db.prepare('INSERT INTO t (v) VALUES (?)').run('caf\u00e9')
         const row = db.prepare('SELECT v FROM t').get() as { v: string } | undefined
+        // backup() copies on a worker thread (an eval worker requiring bun:sqlite).
+        await db.backup(path.join(tmp, 'check-copy.db'))
         db.close()
         if (row?.v !== 'caf\u00e9') throw new Error(`read back ${JSON.stringify(row)}`)
-        return `bun:sqlite, ${sqliteLibrary()}`
+        const copy = new Database(path.join(tmp, 'check-copy.db'), { readonly: true })
+        const copied = copy.prepare('SELECT v FROM t').get() as { v: string } | undefined
+        copy.close()
+        if (copied?.v !== 'caf\u00e9') throw new Error(`backup read back ${JSON.stringify(copied)}`)
+        return `bun:sqlite, ${sqliteLibrary()}, backup off-thread`
       },
     },
     {

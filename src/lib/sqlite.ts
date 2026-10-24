@@ -41,6 +41,7 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Worker } from 'node:worker_threads'
 
 const require = createRequire(import.meta.url)
 
@@ -393,6 +394,51 @@ class SqliteStatement implements Statement {
   }
 }
 
+/**
+ * VACUUM INTO `temp` from the database file `file`, on a worker thread. One
+ * call copies the whole database (4.8 s for a 750 MB one), and on the calling
+ * thread it would hold the event loop, and every route, that long. The worker
+ * opens its own read-only connection, so it copies the last commit while
+ * writers go on (WAL); bun has loaded SQLite for this process already
+ * (bunSqlite), so the worker's is the same library.
+ */
+const VACUUM_WORKER = String.raw`
+const { parentPort, workerData } = require('node:worker_threads')
+const { Database } = require('bun:sqlite')
+try {
+  const db = new Database(workerData.file, { readonly: true })
+  try {
+    db.exec('PRAGMA busy_timeout = ' + workerData.busyTimeout)
+    const stmt = db.prepare('VACUUM INTO ?')
+    try { stmt.run(workerData.temp) } finally { stmt.finalize() }
+  } finally {
+    db.close()
+  }
+  parentPort.postMessage({ ok: true })
+} catch (error) {
+  parentPort.postMessage({ ok: false, message: error && error.message ? error.message : String(error), code: error && error.code })
+}
+`
+
+function vacuumIntoOffThread(file: string, temp: string, busyTimeout: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(VACUUM_WORKER, { eval: true, workerData: { file, temp, busyTimeout } })
+    let settled = false
+    const settle = (err?: Error): void => {
+      if (settled) return
+      settled = true
+      void worker.terminate()
+      if (err) reject(err)
+      else resolve()
+    }
+    worker.once('message', (m: { ok: boolean; message?: string; code?: string }) => {
+      settle(m.ok ? undefined : Object.assign(new Error(m.message ?? 'VACUUM INTO failed'), m.code ? { code: m.code } : {}))
+    })
+    worker.once('error', (err) => settle(err instanceof Error ? err : new Error(String(err))))
+    worker.once('exit', (code) => settle(new Error(`the SQLite backup worker exited with code ${code}`)))
+  })
+}
+
 class SqliteDatabase {
   private readonly db: BunDatabase
   private isOpen = true
@@ -404,6 +450,7 @@ class SqliteDatabase {
   readonly name: string
   readonly readonly: boolean
   readonly memory: boolean
+  private readonly busyTimeout: number
 
   constructor(filename = ':memory:', options: Options = {}) {
     const bun = bunSqlite()
@@ -420,6 +467,7 @@ class SqliteDatabase {
     if (this.readonly && !this.memory) ensureWalFileForReadonly(filename)
     this.db = new bun.Database(filename, flags)
     const timeout = options.timeout ?? 5000
+    this.busyTimeout = Math.max(0, Math.floor(timeout))
     this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeout))}`)
     if (!hasCompiledDefaults(this.db)) this.db.exec('PRAGMA foreign_keys = ON; PRAGMA cache_size = -16000')
     // On macOS bun uses the system SQLite, which keeps a WAL database's -wal and
@@ -476,12 +524,19 @@ class SqliteDatabase {
   async backup(destination: string, _options: BackupOptions = {}): Promise<{ totalPages: number; remainingPages: number }> {
     // VACUUM INTO writes a consistent copy (a read-only connection may make one too); it refuses an existing
     // file, which better-sqlite3's backup() overwrites, so it writes beside the target and renames over it.
+    // better-sqlite3 copied in steps between event-loop turns; VACUUM INTO is one call, so a database file
+    // is copied on a worker thread (vacuumIntoOffThread). An in-memory one has no file to open there.
+    const handle = this.handle()
     const dir = path.dirname(destination)
     await fs.promises.mkdir(dir, { recursive: true })
     const temp = path.join(dir, `.${path.basename(destination)}.${process.pid}.${Date.now()}.backup`)
     try {
-      const vacuum = this.handle().prepare('VACUUM INTO ?')
-      try { vacuum.run(temp) } finally { vacuum.finalize() }
+      if (this.memory || handle.inTransaction) {
+        const vacuum = handle.prepare('VACUUM INTO ?')
+        try { vacuum.run(temp) } finally { vacuum.finalize() }
+      } else {
+        await vacuumIntoOffThread(this.name, temp, this.busyTimeout)
+      }
       await fs.promises.rename(temp, destination)
     } finally {
       await fs.promises.rm(temp, { force: true }).catch(() => {})
@@ -489,6 +544,7 @@ class SqliteDatabase {
     const pages = this.pragma('page_count', { simple: true })
     return { totalPages: typeof pages === 'number' ? pages : 0, remainingPages: 0 }
   }
+
 
   serialize(options: { attached?: string } = {}): Buffer {
     return asBuffer(this.handle().serialize(options.attached ?? 'main')) as Buffer
