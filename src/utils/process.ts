@@ -1,7 +1,23 @@
 import { execSync, execFile as execFileCb } from 'node:child_process'
+import fs from 'node:fs'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFileCb)
+
+/**
+ * A pid's command line from Linux /proc (arguments joined by spaces), '' for a
+ * pid that is gone, or null on a host without /proc (macOS asks ps). A slim
+ * container image has no ps at all: asking it there called every live process
+ * dead and printed "ps: not found" for each check.
+ */
+function procCommandLine(pid: number): string | null {
+  if (!fs.existsSync('/proc/self/stat')) return null
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf-8').split('\0').filter(Boolean).join(' ')
+  } catch {
+    return ''
+  }
+}
 
 /**
  * Check if a process with the given PID is alive (synchronous).
@@ -19,8 +35,10 @@ export function isProcessAlive(pid: number, expectedBinary?: string): boolean {
 
   if (!expectedBinary) return true
 
+  const proc = procCommandLine(pid)
+  if (proc !== null) return proc.includes(expectedBinary)
   try {
-    const cmd = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf-8', timeout: 3000 }).trim()
+    const cmd = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
     return cmd.includes(expectedBinary)
   } catch {
     // ps failed — process may have exited between kill(0) and ps
@@ -43,6 +61,8 @@ export async function isProcessAliveAsync(pid: number, expectedBinary?: string):
 
   if (!expectedBinary) return true
 
+  const proc = procCommandLine(pid)
+  if (proc !== null) return proc.includes(expectedBinary)
   try {
     const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'command='], {
       encoding: 'utf-8',

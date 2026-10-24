@@ -1060,18 +1060,42 @@ function sleepSync(ms: number) {
 function runningGroupsSync(pids: number[]): number[] {
   const alive = pids.filter(isProcessGroupAlive)
   if (alive.length === 0) return alive
+  const running = runningGroupIdsSync()
+  return running ? alive.filter((pid) => running.has(pid)) : alive
+}
+
+/**
+ * The process groups with a member that is not a zombie: from /proc on Linux
+ * (a slim image has no ps), from one ps elsewhere; null when neither answers.
+ * Keep in sync with daemon-source.ts.
+ */
+function runningGroupIdsSync(): Set<number> | null {
+  const running = new Set<number>()
+  if (fs.existsSync('/proc/self/stat')) {
+    let names: string[]
+    try { names = fs.readdirSync('/proc') } catch { return null }
+    for (const name of names) {
+      if (!/^\d+$/.test(name)) continue
+      try {
+        const raw = fs.readFileSync(`/proc/${name}/stat`, 'utf-8')
+        // After "<pid> (<comm>) ": state, ppid, pgrp, ...
+        const fields = raw.slice(raw.lastIndexOf(')') + 2).split(' ')
+        if (fields[0] && fields[0] !== 'Z' && fields[2]) running.add(Number(fields[2]))
+      } catch { /* gone meanwhile */ }
+    }
+    return running
+  }
   let out: string
   try {
-    out = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf-8', timeout: 2000 })
+    out = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] })
   } catch {
-    return alive
+    return null
   }
-  const running = new Set<number>()
   for (const line of out.split('\n')) {
     const [pgid, stat] = line.trim().split(/\s+/)
     if (pgid && stat && !stat.startsWith('Z')) running.add(Number(pgid))
   }
-  return alive.filter((pid) => running.has(pid))
+  return running
 }
 
 /**
@@ -11440,6 +11464,18 @@ if (action === '--status') {
   process.exit(0)
 }
 
+/** Whether something takes a TCP connection on 127.0.0.1:`port` within `timeoutMs` (a daemon listens there). */
+function loopbackPortAnswers(port: number, timeoutMs: number): Promise<boolean> {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    const done = (ok: boolean) => { clearTimeout(timer); socket.destroy(); resolve(ok) }
+    const timer = setTimeout(() => done(false), timeoutMs)
+    socket.once('connect', () => done(true))
+    socket.once('error', () => done(false))
+  })
+}
+
 if (action === '--start' || SERVICE_MODE) {
   if (SERVICE_MODE && (!DAEMON_STATE_DIR || !path.isAbsolute(DAEMON_STATE_DIR))) {
     throw new Error('--service requires an absolute WALNUT_DAEMON_STATE_DIR')
@@ -11469,12 +11505,23 @@ if (action === '--start' || SERVICE_MODE) {
   if (legacyPid && legacyPid > 1 && legacyPid !== process.pid) {
     let alive = true
     try { process.kill(legacyPid, 0) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false
+      // EPERM: another user's process, which a daemon of this user never is.
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ESRCH' || code === 'EPERM') alive = false
       else throw error
+    }
+    // A live pid is a legacy daemon only when its port takes a connection: after a
+    // restart (a container's above all) a dead daemon's pid file may name another
+    // process, and yielding to it left the dir with no daemon. Keep in sync with daemon-source.ts.
+    let legacyPort = ''
+    try { legacyPort = fs.readFileSync(PORT_FILE, 'utf8').trim() } catch { /* no port file: no daemon to yield to */ }
+    if (alive && !(await loopbackPortAnswers(Number(legacyPort), 1500))) {
+      logMsg('warn', 'daemon.pid names a live process that is no daemon here (nothing on its port): starting', { pid: legacyPid, port: legacyPort || null })
+      alive = false
     }
     if (alive) {
       if (SERVICE_MODE) throw new Error('A legacy daemon is running; service handover is required')
-      console.log(fs.readFileSync(PORT_FILE, 'utf8').trim())
+      console.log(legacyPort)
       process.exit(0)
     }
   }

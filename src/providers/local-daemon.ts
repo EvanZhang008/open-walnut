@@ -981,6 +981,8 @@ export class LocalDaemon {
     // entirely; this file is the last-resort black box. An inherited FILE fd
     // (not a pipe) keeps the detached daemon independent of our lifetime.
     const stderrFd = this.openStderrLog()
+    // Port and pid files older than this are a dead daemon's (waitForPortFile).
+    const spawnedAt = Date.now()
     const proc = spawn(spawnCmd, spawnArgs, {
       detached: true,
       cwd: this.daemonDir,
@@ -1009,7 +1011,7 @@ export class LocalDaemon {
     proc.on('error', (err) => { spawnError = err })
 
     // Wait for port file (daemon writes it on startup)
-    let port = await this.waitForPortFile(10000)
+    let port = await this.waitForPortFile(10000, spawnedAt)
     if (spawnError) {
       throw new Error(`Local daemon spawn failed: ${(spawnError as Error).message}`)
     }
@@ -1027,7 +1029,7 @@ export class LocalDaemon {
       log.session.warn('the daemon is slow to start under the Walnut Sessions host; waiting longer', {
         host: this._sessionHostApp, hostPid, waitMs: SESSION_HOST_LATE_START_MS,
       })
-      port = await this.waitForPortFile(SESSION_HOST_LATE_START_MS)
+      port = await this.waitForPortFile(SESSION_HOST_LATE_START_MS, spawnedAt)
       if (spawnError) {
         throw new Error(`Local daemon spawn failed: ${(spawnError as Error).message}`)
       }
@@ -1052,6 +1054,7 @@ export class LocalDaemon {
       this._sessionHostApp = null
       const retryFd = this.openStderrLog()
       const [retryCmd, retryArgs] = withUtilityQosClamp(cmd, args)
+      const retriedAt = Date.now()
       const retry = spawn(retryCmd, retryArgs, {
         detached: true,
         cwd: this.daemonDir,
@@ -1062,7 +1065,7 @@ export class LocalDaemon {
       this._spawnedPid = retry.pid ?? null
       retry.unref()
       retry.on('error', (err) => { spawnError = err })
-      port = await this.waitForPortFile(10000)
+      port = await this.waitForPortFile(10000, retriedAt)
       if (spawnError) {
         throw new Error(`Local daemon spawn failed: ${(spawnError as Error).message}`)
       }
@@ -1079,7 +1082,10 @@ export class LocalDaemon {
           + 'WALNUT_SESSION_HOST=0 to start the daemon without the identity host.',
         )
       }
-      throw new Error('Local daemon failed to start — port file not created within 10s')
+      const stale = this.readPortFile()
+      throw new Error(stale
+        ? `Local daemon failed to start: within 10s nothing answered on port ${stale}, the port its port file names (a dead daemon's files, or a new one that did not come up)`
+        : 'Local daemon failed to start — port file not created within 10s')
     }
 
     // Verify it responds
@@ -1185,20 +1191,42 @@ export class LocalDaemon {
 
   // 10s allows for: binary exec, Bun runtime init, directory creation,
   // socket bind, and port file write. Empirically sufficient for all tested hardware.
-  private async waitForPortFile(timeoutMs: number): Promise<number | null> {
+  /**
+   * The port of the daemon just spawned (at `spawnedAt`): its port file and a live
+   * pid in its pid file. A live pid is not proof on its own: after a restart (a
+   * container's above all) the pid a dead daemon left may name another process,
+   * and taking that daemon's stale port failed the start with "not responding to
+   * hello" until the next try. So files older than the spawn count only when a
+   * daemon answers hello on that port; the new daemon's own files (written after
+   * the spawn) are taken at once, and a slow first hello is the caller's ping to judge.
+   */
+  private async waitForPortFile(timeoutMs: number, spawnedAt: number): Promise<number | null> {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
       const port = this.readPortFile()
       if (port) {
-        // Verify it's a fresh port (not stale from old daemon)
         const pid = this.readPidFile()
         if (pid && this.isPidAlive(pid)) {
-          return port
+          if (this.writtenSince(spawnedAt)) return port
+          if ((await this.ping(port, 1000)).alive) return port
         }
       }
       await new Promise(r => setTimeout(r, 200))
     }
     return null
+  }
+
+  /**
+   * Both the port file and the pid file were written at or after `at` (ms epoch).
+   * A second of slack: some file systems keep whole seconds, and a dead daemon's
+   * files are older than that (it was found dead before the spawn).
+   */
+  private writtenSince(at: number): boolean {
+    try {
+      return fs.statSync(this.portFile).mtimeMs >= at - 1000 && fs.statSync(this.pidFile).mtimeMs >= at - 1000
+    } catch {
+      return false
+    }
   }
 }
 

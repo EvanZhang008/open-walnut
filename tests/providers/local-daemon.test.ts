@@ -17,6 +17,7 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest'
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
 import { execSync, spawn } from 'node:child_process'
@@ -45,6 +46,8 @@ interface MockOpts {
   helloDelay?: number
   /** Push events at every client, before and right before its hello answer, as a busy daemon does. */
   eventsFirst?: boolean
+  /** Wait this long before listening (and writing the port and pid files), as a daemon booting on a loaded host does. */
+  startDelayMs?: number
 }
 
 /**
@@ -73,6 +76,7 @@ const NO_PID = ${opts.noPidFile ? 'true' : 'false'}
 const EVENTS_FIRST = ${opts.eventsFirst ? 'true' : 'false'}
 const event = (ws) => ws.send(JSON.stringify({ ev: 'session_state', sid: 's-1', state: 'dead', exitCode: 0, reason: 'proc-exit' }))
 fs.mkdirSync(DAEMON_DIR, { recursive: true })
+setTimeout(() => {
 const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
 wss.on('listening', () => {
   const port = wss.address().port
@@ -93,6 +97,7 @@ wss.on('connection', (ws) => {
     }
   })
 })
+}, ${opts.startDelayMs ?? 0})
 process.stdin.resume()
 process.on('SIGTERM', () => { process.exit(0) })
 `
@@ -198,6 +203,35 @@ describe('LocalDaemon — mock daemon coverage', () => {
     expect(port).toBeGreaterThan(0)
     expect(port).not.toBe(99999)
   }, 10000)
+
+  // 2026-10-23: after a restart (a container's above all) a dead daemon's pid file
+  // may name another live process. The spawn's wait took that daemon's stale port
+  // at once and failed with "not responding to hello"; only the next try recovered.
+  it('a stale port file whose pid now names another live process: the spawn waits for the new daemon\'s own files', async () => {
+    const { daemon, daemonDir } = makeDaemon(tmpDir, 'v1', { startDelayMs: 1500 })
+    // Another process that took the dead daemon's pid (this run's own child, ended below).
+    const other = spawn('sleep', ['60'], { stdio: 'ignore' })
+    try {
+      const closed = await new Promise<number>((resolve) => {
+        const srv = net.createServer()
+        srv.listen(0, '127.0.0.1', () => { const p = (srv.address() as net.AddressInfo).port; srv.close(() => resolve(p)) })
+      })
+      fs.mkdirSync(daemonDir, { recursive: true })
+      fs.writeFileSync(path.join(daemonDir, 'daemon.port'), String(closed))
+      fs.writeFileSync(path.join(daemonDir, 'daemon.pid'), String(other.pid))
+      const old = new Date(Date.now() - 60_000)
+      for (const f of ['daemon.port', 'daemon.pid']) fs.utimesSync(path.join(daemonDir, f), old, old)
+
+      const port = await daemon.ensureRunning()
+      expect(port).not.toBe(closed)
+      expect(Number(fs.readFileSync(path.join(daemonDir, 'daemon.port'), 'utf-8'))).toBe(port)
+      // The process that holds the old pid is left alone.
+      expect(other.exitCode).toBeNull()
+      expect(() => process.kill(other.pid!, 0)).not.toThrow()
+    } finally {
+      other.kill('SIGTERM')
+    }
+  }, 20000)
 
   // 2026-10-23: the ping took the first message for its answer, so a daemon that
   // had just pushed a session's state was called dead and respawned, and every

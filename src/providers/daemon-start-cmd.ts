@@ -33,7 +33,15 @@ function shq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-export function buildDaemonStopCmd(dir = '/tmp/open-walnut'): string {
+/**
+ * Stops the unmanaged daemon in `dir` and confirms it is gone (prints
+ * `walnut-daemon-stop-confirmed`). The pid is checked to be that daemon (its
+ * command line) and followed by its start time, so a reused pid is never
+ * signalled. Linux reads both from /proc: a slim image has no ps, and asking it
+ * there failed every stop, so a host without procps could never take a new
+ * daemon. Elsewhere ps answers. `procRoot` is for tests only.
+ */
+export function buildDaemonStopCmd(dir = '/tmp/open-walnut', procRoot = '/proc'): string {
   const pidFile = shq(`${dir}/daemon.pid`)
   return [
     `if [ ! -e ${pidFile} ]; then printf '%s\\n' walnut-daemon-stop-confirmed; exit 0; fi`,
@@ -43,11 +51,19 @@ export function buildDaemonStopCmd(dir = '/tmp/open-walnut'): string {
     'export LC_ALL=C',
     'ERROR_FILE=$(mktemp) || exit 1',
     'trap \'rm -f "$ERROR_FILE"\' EXIT',
-    'read_identity() { value=$(ps -p "$PID" -o lstart= 2>"$ERROR_FILE"); code=$?; [ ! -s "$ERROR_FILE" ] || return 2; printf \'%s\\n\' "$value"; return "$code"; }',
+    `PROC=${shq(procRoot)}`,
+    'if [ -r "$PROC/self/stat" ]; then',
+    // Field 22 (the start time) is the 20th after "<pid> (<comm>) "; comm may hold ") ", so strip to the last one.
+    '  read_identity() { [ -r "$PROC/$PID/stat" ] || return 1; value=$(sed \'s/.*) //\' "$PROC/$PID/stat" 2>/dev/null | cut -d\' \' -f20); [ -n "$value" ] || return 1; printf \'%s\\n\' "$value"; }',
+    '  read_command() { [ -r "$PROC/$PID/cmdline" ] || return 1; tr \'\\000\' \' \' < "$PROC/$PID/cmdline" | sed \'s/ *$//\'; }',
+    'else',
+    '  read_identity() { value=$(ps -p "$PID" -o lstart= 2>"$ERROR_FILE"); code=$?; [ ! -s "$ERROR_FILE" ] || return 2; printf \'%s\\n\' "$value"; return "$code"; }',
+    '  read_command() { ps -p "$PID" -o command= 2>"$ERROR_FILE"; }',
+    'fi',
     'IDENTITY=$(read_identity); STATUS=$?',
     'if [ "$STATUS" -eq 1 ] && [ -z "$IDENTITY" ]; then printf \'%s\\n\' walnut-daemon-stop-confirmed; exit 0; fi',
     '[ "$STATUS" -eq 0 ] && [ -n "$IDENTITY" ] || exit 1',
-    'COMMAND=$(ps -p "$PID" -o command= 2>"$ERROR_FILE") || exit 1',
+    'COMMAND=$(read_command) || exit 1',
     '[ ! -s "$ERROR_FILE" ] || exit 1',
     `case "$COMMAND" in ${['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64'].map((name) => shq(`${dir}/${name} --start`)).join('|')}|*${shq(` ${dir}/daemon.cjs --start`)}) ;; *) exit 1;; esac`,
     'CURRENT=$(read_identity); STATUS=$?',

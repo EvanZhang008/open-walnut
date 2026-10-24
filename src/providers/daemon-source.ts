@@ -1784,9 +1784,12 @@ function readStartTime(pid) {
       if (fields[19]) return fields[19];
     }
   } catch {}
+  // Linux answers from /proc alone: no entry is a pid that is gone. Asking ps too
+  // printed "ps: not found" into stderr on every check where procps is missing.
+  if (hasProcFs()) return null;
   try {
     const env = Object.assign({}, process.env, { LANG: 'C' });
-    const out = execSync('ps -p ' + pid + ' -o lstart=', { encoding: 'utf-8', timeout: 2000, env: env }).trim();
+    const out = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf-8', timeout: 2000, env: env, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     return out || null;
   } catch {}
   return null;
@@ -2937,18 +2940,39 @@ function sleepSync(ms) {
 function runningGroupsSync(pids) {
   const alive = pids.filter(isProcessGroupAlive);
   if (alive.length === 0) return alive;
+  const running = runningGroupIdsSync();
+  return running ? alive.filter((pid) => running.has(pid)) : alive;
+}
+// The process groups with a member that is not a zombie: from /proc on Linux (a
+// slim image has no ps), from one ps elsewhere; null when neither answers. Keep
+// in sync with daemon-standalone.ts.
+function runningGroupIdsSync() {
+  const running = new Set();
+  if (hasProcFs()) {
+    let names;
+    try { names = fs.readdirSync('/proc'); } catch { return null; }
+    for (const name of names) {
+      if (!/^\\d+$/.test(name)) continue;
+      try {
+        const raw = fs.readFileSync('/proc/' + name + '/stat', 'utf-8');
+        // After "<pid> (<comm>) ": state, ppid, pgrp, ...
+        const fields = raw.slice(raw.lastIndexOf(')') + 2).split(' ');
+        if (fields[0] && fields[0] !== 'Z' && fields[2]) running.add(Number(fields[2]));
+      } catch { /* gone meanwhile */ }
+    }
+    return running;
+  }
   let out;
   try {
-    out = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf-8', timeout: 2000 });
+    out = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
   } catch {
-    return alive;
+    return null;
   }
-  const running = new Set();
   for (const line of out.split('\\n')) {
     const parts = line.trim().split(/\\s+/);
     if (parts[0] && parts[1] && !parts[1].startsWith('Z')) running.add(Number(parts[0]));
   }
-  return alive.filter((pid) => running.has(pid));
+  return running;
 }
 
 // Is this an isolated-dir daemon (sandbox / test / ephemeral demo) whose CLI
@@ -13502,6 +13526,20 @@ if (action === '--start' || SERVICE_MODE) {
   process.exit(1);
 }
 
+// Whether something takes a TCP connection on 127.0.0.1:port within timeoutMs (a
+// daemon listens there). Keep in sync with daemon-standalone.ts.
+function loopbackPortAnswers(port, timeoutMs) {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(false);
+  return new Promise(function (resolve) {
+    const socket = net.connect({ host: '127.0.0.1', port: port });
+    let timer = null;
+    const done = function (ok) { clearTimeout(timer); socket.destroy(); resolve(ok); };
+    timer = setTimeout(function () { done(false); }, timeoutMs);
+    socket.once('connect', function () { done(true); });
+    socket.once('error', function () { done(false); });
+  });
+}
+
 async function startDaemon() {
   if (SERVICE_MODE && (!DAEMON_STATE_DIR || !path.isAbsolute(DAEMON_STATE_DIR))) {
     throw new Error('--service requires an absolute WALNUT_DAEMON_STATE_DIR');
@@ -13544,12 +13582,22 @@ async function startDaemon() {
   if (legacyPid && legacyPid > 1 && legacyPid !== process.pid) {
     let legacyAlive = true;
     try { process.kill(legacyPid, 0); } catch (err) {
-      if (err && err.code === 'ESRCH') legacyAlive = false;
+      // EPERM: another user's process, which a daemon of this user never is.
+      if (err && (err.code === 'ESRCH' || err.code === 'EPERM')) legacyAlive = false;
       else throw err;
+    }
+    // A live pid is a legacy daemon only when its port takes a connection: after a
+    // restart a dead daemon's pid file may name another process. Keep in sync with
+    // daemon-standalone.ts.
+    let legacyPort = '';
+    try { legacyPort = fs.readFileSync(PORT_FILE, 'utf8').trim(); } catch (err) { /* no port file: no daemon to yield to */ }
+    if (legacyAlive && !(await loopbackPortAnswers(Number(legacyPort), 1500))) {
+      logMsg('warn', 'daemon.pid names a live process that is no daemon here (nothing on its port): starting', { pid: legacyPid, port: legacyPort || null });
+      legacyAlive = false;
     }
     if (legacyAlive) {
       if (SERVICE_MODE) throw new Error('A legacy daemon is running; service handover is required');
-      console.log(fs.readFileSync(PORT_FILE, 'utf8').trim());
+      console.log(legacyPort);
       process.exit(0);
     }
   }

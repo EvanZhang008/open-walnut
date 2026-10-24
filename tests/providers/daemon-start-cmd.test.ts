@@ -5,6 +5,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from '../../src/providers/daemon-start-cmd.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -234,6 +235,35 @@ describe('buildDaemonStartCmd', () => {
     const signals = await fsp.readFile(path.join(dir, 'signals'), 'utf8').catch(() => '')
     expect(signals).toBe(['unknown', 'warning', 'invalid', 'foreign'].includes(scenario) ? '' : '-TERM 4242\n')
     expect(await fsp.readFile(path.join(dir, 'daemon.pid'), 'utf8')).toBe(scenario === 'invalid' ? '-1' : '4242')
+  })
+
+  // 2026-10-23: a slim image has no ps, and asking it failed every stop there, so a
+  // host without procps could never take a new daemon. Linux reads /proc instead
+  // (a fake one here, so this runs on macOS too).
+  it.each(['drain', 'reused', 'foreign', 'gone', 'exited-before-signal'])('on a host with /proc and no ps, stop reads the identity from /proc: %s', async (scenario) => {
+    const proc = path.join(dir, 'proc')
+    await fsp.mkdir(path.join(proc, 'self'), { recursive: true })
+    await fsp.writeFile(path.join(proc, 'self', 'stat'), '1 (sh) S 0')
+    await fsp.writeFile(path.join(dir, 'daemon.pid'), '4242')
+    const stat = (start: string) => `4242 (daemon) linux) S 1 4242 4242 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 ${start} 1 1`
+    if (scenario !== 'gone') {
+      await fsp.mkdir(path.join(proc, '4242'), { recursive: true })
+      await fsp.writeFile(path.join(proc, '4242', 'stat'), stat('777001'))
+      await fsp.writeFile(path.join(proc, '4242', 'cmdline'), scenario === 'foreign' ? 'unrelated-process\0' : `${dir}/daemon-linux-arm64\0--start\0`)
+    }
+    const stub = [
+      'count=0',
+      'ps() { printf \'%s\\n\' "ps: not found" >&2; return 127; }',
+      'kill() { printf \'%s\\n\' "$*" >> "$LAB_DIR/signals"; if [ "$SCENARIO" = exited-before-signal ]; then rm -f "$LAB_DIR/proc/4242/stat"; return 1; fi; return 0; }',
+      'sleep() { count=$((count+1)); if [ "$count" -ge 3 ]; then case "$SCENARIO" in drain) rm -f "$LAB_DIR/proc/4242/stat";; reused) printf \'%s\' "$NEW_STAT" > "$LAB_DIR/proc/4242/stat";; esac; fi; }',
+    ].join('\n')
+    const output = await execFileAsync('/bin/sh', ['-c', `${stub}\n${buildDaemonStopCmd(dir, proc)}`], {
+      env: { PATH: guardedPath([], '/usr/bin:/bin'), LAB_DIR: dir, SCENARIO: scenario, NEW_STAT: stat('888002') }, timeout: 5000,
+    }).then((result) => ({ ok: true, stdout: result.stdout }), () => ({ ok: false, stdout: '' }))
+    expect(output.ok).toBe(scenario !== 'foreign')
+    if (output.ok) expect(output.stdout.trim()).toBe('walnut-daemon-stop-confirmed')
+    const signals = await fsp.readFile(path.join(dir, 'signals'), 'utf8').catch(() => '')
+    expect(signals).toBe(['foreign', 'gone'].includes(scenario) ? '' : '-TERM 4242\n')
   })
 
   it('never renders a bare VAR= directly after nohup (regression shape)', () => {

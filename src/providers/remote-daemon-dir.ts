@@ -63,6 +63,19 @@ export interface DaemonDirChoice {
   unusable?: boolean
 }
 
+/**
+ * Shell helpers for "is this pid our daemon": `w_args <pid>` prints its command
+ * line (Linux /proc; ps elsewhere, which a slim Linux image does not have), and
+ * `w_daemon <pid>` is true when that line is a session daemon's (`--start` or
+ * `--service`). A pid file whose pid now names another process (a restarted
+ * container reuses pids) is no live daemon: taking it for one pointed every
+ * connect at the dead daemon's port, again on every try, until that process ended.
+ */
+const DAEMON_PID_SH = [
+  `w_args() { if [ -r /proc/self/cmdline ]; then tr '\\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; else ps -o args= -p "$1" 2>/dev/null; fi; }`,
+  'w_daemon() { case " $(w_args "$1") " in *" --start "*|*" --service "*) return 0;; esac; return 1; }',
+]
+
 const PROBE_HEADER = 'walnut-dir-probe v1'
 const PROBE_DONE = 'walnut-dir-probe-done'
 
@@ -109,9 +122,11 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     '}',
     // Free space of the dir, or of its parent when it does not exist yet.
     'w_free() { t=$1; [ -d "$t" ] || t=$(dirname "$t"); df -Pk "$t" 2>/dev/null | awk \'NR==2 { print int($4 / 1024) }\'; }',
-    // Only a dir we own can hold OUR live daemon (a planted pid file must not steer the connect).
+    // Only a dir we own can hold OUR live daemon (a planted pid file must not steer the connect),
+    // and only a pid that is a daemon (a stale pid file's pid may name another process now).
+    ...DAEMON_PID_SH,
     'w_live() { if [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -O "$1/daemon.pid" ]; then p=$(cat "$1/daemon.pid" 2>/dev/null); '
-      + 'if [ -n "$p" ] && [ -s "$1/daemon.port" ] && kill -0 "$p" 2>/dev/null; then echo 1; return; fi; fi; echo 0; }',
+      + 'if [ -n "$p" ] && [ -s "$1/daemon.port" ] && kill -0 "$p" 2>/dev/null && w_daemon "$p"; then echo 1; return; fi; fi; echo 0; }',
     `w_status() { ${check}; }`,
     'tl=$(w_live "$T")',
     'cl=0; [ -n "$C" ] && cl=$(w_live "$C")',
@@ -254,17 +269,18 @@ export interface LiveDaemonScan {
 
 /**
  * One `sh -s` script: the first of `dirs` (in order) holding a live daemon we
- * own (pid alive, port file present), with the runtime read from the live
- * process's command line.
+ * own (pid alive and a daemon's, port file present), with the runtime read from
+ * the live process's command line.
  */
 export function buildLiveDaemonScanScript(dirs: string[]): string {
   return [
+    ...DAEMON_PID_SH,
     ...dirs.map((d, i) => [
       `d=${shq(d)}`,
       'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ]; then',
       '  P=$(cat "$d/daemon.pid" 2>/dev/null); Q=$(cat "$d/daemon.port" 2>/dev/null)',
-      '  if [ -n "$P" ] && [ -n "$Q" ] && kill -0 "$P" 2>/dev/null; then',
-      '    R=unknown; case "$(ps -o args= -p "$P" 2>/dev/null)" in *daemon-linux-*|*daemon-darwin-*) R=binary;; *bun*) R=bun;; *node*) R=node;; esac',
+      '  if [ -n "$P" ] && [ -n "$Q" ] && kill -0 "$P" 2>/dev/null && w_daemon "$P"; then',
+      '    R=unknown; case "$(w_args "$P")" in *daemon-linux-*|*daemon-darwin-*) R=binary;; *bun*) R=bun;; *node*) R=node;; esac',
       `    echo "walnut-live dir=${i} pid=$P port=$Q runtime=$R"; exit 0`,
       '  fi',
       'fi',

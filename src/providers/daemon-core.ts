@@ -2347,14 +2347,25 @@ export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number):
     const fields = raw.slice(rparen + 2).split(' ')
     return fields[19] ?? null
   } catch {}
+  // A Linux host answers from /proc alone: no entry there is a pid that is gone.
+  // Asking ps as well printed "ps: not found" into the daemon's stderr on every
+  // check where procps is not installed (slim container images).
+  if (hasProcFs(fs)) return null
   // macOS: ps -p <pid> -o lstart= (e.g. "Thu May  6 18:59:15 2026")
   // Force LANG=C so localized day/month names don't break startTime comparisons
   // when the daemon starts under one locale but reconciles under another.
   try {
-    const result = (execSync(`ps -p ${pid} -o lstart=`, { encoding: 'utf-8', timeout: 2000, env: { ...process.env, LANG: 'C' } }) as string).trim()
+    const result = (execSync(`ps -p ${pid} -o lstart=`, {
+      encoding: 'utf-8', timeout: 2000, env: { ...process.env, LANG: 'C' }, stdio: ['ignore', 'pipe', 'ignore'],
+    }) as string).trim()
     return result || null
   } catch {}
   return null
+}
+
+/** Whether this host has a Linux /proc (every pid answers there, ps is never needed). */
+export function hasProcFs(fs: typeof import('node:fs')): boolean {
+  try { return fs.existsSync('/proc/self/stat') } catch { return false }
 }
 
 /** Linux /proc start time; `undefined` when /proc is unavailable (macOS). */
@@ -2402,7 +2413,7 @@ export function defaultReadStartTimes(fs: typeof import('node:fs'), pids: number
   }
   try {
     return parsePsStartTimes(execFileSync('ps', PS_START_TIME_ARGS(wanted), {
-      encoding: 'utf-8', timeout: 5000, env: { ...process.env, LANG: 'C' },
+      encoding: 'utf-8', timeout: 5000, env: { ...process.env, LANG: 'C' }, stdio: ['ignore', 'pipe', 'ignore'],
     }))
   } catch (err) {
     // ps exits 1 when any pid is gone but still prints the live ones.

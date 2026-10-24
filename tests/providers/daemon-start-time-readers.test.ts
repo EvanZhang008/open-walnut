@@ -11,7 +11,13 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
-import { execFile } from 'node:child_process'
+import { execFile, execSync } from 'node:child_process'
+
+// execSync is watched (and still runs for real): the single-pid reader's ps path.
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:child_process')>()
+  return { ...real, execSync: vi.fn(real.execSync) }
+})
 import {
   parsePsStartTimes,
   createAsyncStartTimeReader,
@@ -96,5 +102,29 @@ describe('real readers agree with the single-pid reader (identity strings must m
       execFileFn: (file, args, options, cb) => execFile(file, args, options, (e, stdout) => cb(e, String(stdout ?? ''))),
     })
     expect(await read(process.pid)).toBe(single)
+  })
+})
+
+describe('a host without ps (a slim container image)', () => {
+  // 2026-10-23: on Linux, a pid with no /proc entry fell through to `ps -p`, which a
+  // slim image does not have: the daemon's stderr filled with "ps: not found".
+  const linuxFs = {
+    readFileSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+    existsSync: (p: string) => p === '/proc/self/stat',
+  } as unknown as typeof fs
+
+  it('a Linux host answers from /proc alone: a pid with no /proc entry is gone, and no ps is asked', () => {
+    vi.mocked(execSync).mockClear()
+    expect(defaultReadStartTime(linuxFs, 424242)).toBeNull()
+    expect(execSync).not.toHaveBeenCalled()
+    expect(defaultReadStartTimes(linuxFs, [424242, 424243]).size).toBe(0)
+  })
+
+  it('elsewhere ps answers, and its stderr never reaches the daemon\'s', () => {
+    vi.mocked(execSync).mockClear()
+    defaultReadStartTime(noProcFs, 424242)
+    expect(execSync).toHaveBeenCalledTimes(1)
+    const opts = vi.mocked(execSync).mock.calls[0]![1] as { stdio?: unknown[] }
+    expect(opts.stdio?.[2]).toBe('ignore')
   })
 })
