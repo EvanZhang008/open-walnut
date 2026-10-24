@@ -140,4 +140,11 @@ describe('Walnut runs only on bun', () => {
     expect(pkg.trustedDependencies?.filter((name) => /better-sqlite3|node-pty/.test(name))).toEqual([])
     expect(pkg.engines).toEqual({ bun: expect.any(String) })
   })
+
+  it('no package.json script runs through tsx: bun runs TypeScript itself', () => {
+    const { scripts = {} } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }
+    expect(Object.entries(scripts).filter(([, cmd]) => /(^|[\s;&|(])(npx\s+)?tsx\s/.test(cmd))).toEqual([])
+    expect(scripts['search:eval']).toBe('bun scripts/search-eval.mjs')
+    expect(scripts['search:robustness']).toBe('bun scripts/search-robustness-eval.mjs')
+  })
 })
