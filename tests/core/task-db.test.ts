@@ -34,6 +34,7 @@ import {
   updateTasksBulk,
   addTasksBulk,
   deleteTasksBulk,
+  deleteTask,
   listTasks,
   getTask,
   buildTaskQueryWhere,
@@ -857,6 +858,41 @@ describe('task-db: backup-on-empty guard', () => {
     } finally {
       backupDb.close();
     }
+  });
+});
+
+describe('task-db: backup-on-empty guard on the real write path', () => {
+  const backupPath = () => TASK_DB_PATH.replace(/\.sqlite$/, '.backup.sqlite');
+
+  it('deleting the last task saves the rows it held before the write clears them', async () => {
+    // The backup used to start un-awaited: its copy ran after the clear, so it
+    // saved the empty table it exists to prevent.
+    const { task } = await addTask({ title: 'The only task', project: 'Local', source: 'local' });
+    await deleteTask(task.id);
+    expect(await listTasks()).toEqual([]);
+    const saved = new Database(backupPath(), { readonly: true });
+    try {
+      expect(saved.prepare('SELECT id, title FROM tasks').all()).toEqual([{ id: task.id, title: 'The only task' }]);
+    } finally {
+      saved.close();
+    }
+  });
+
+  it('a backup that fails falls back to a file copy, and the delete still goes through', async () => {
+    const { task } = await addTask({ title: 'Doomed backup', project: 'Local', source: 'local' });
+    // A directory where the backup goes: the backup's rename and the copy both fail.
+    fs.mkdirSync(path.join(backupPath(), 'occupied'), { recursive: true });
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => { rejections.push(reason) };
+    process.on('unhandledRejection', onRejection);
+    try {
+      await deleteTask(task.id);
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
+    expect(rejections).toEqual([]);
+    expect(await listTasks()).toEqual([]);
   });
 });
 

@@ -834,7 +834,9 @@ async function writeStore(store: TaskStore): Promise<void> {
       if (existing.n > 0) {
         const backupPath = TASK_DB_PATH.replace(/\.sqlite$/, '.backup.sqlite');
         try {
-          (db as unknown as { backup: (p: string) => Promise<unknown> }).backup(backupPath);
+          // Awaited: the clear below must wait for the copy, or the copy saves
+          // the empty table this guard exists for (and its failure goes unhandled).
+          await db.backup(backupPath);
         } catch {
           try {
             fsSync.copyFileSync(TASK_DB_PATH, backupPath);
