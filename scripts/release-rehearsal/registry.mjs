@@ -104,6 +104,9 @@ export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM, p
   const hits = []
   // Packages answered 404 for now: a release still reaching the registry, package by package.
   let withheld = new Set()
+  // Packages whose index alone is answered 404 (a CDN still serving one from before the
+  // release): their version documents and tarballs are there.
+  let indexWithheld = new Set()
   let packuments = null
   const build = (url, tags) => {
     const out = {}
@@ -127,6 +130,7 @@ export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM, p
     if (!name) return void passThrough(req, res, upstream)
     if (withheld.has(name)) { hits.push(`withheld ${pathname}`); return json(res, { error: 'not found' }, 404) }
     const rest = pathname.slice(name.length + 1)
+    if (rest === '' && indexWithheld.has(name)) { hits.push(`withheld-index ${pathname}`); return json(res, { error: 'not found' }, 404) }
     if (rest === '') { hits.push(pathname); return json(res, packuments[name]) }
     const tgz = files.get(`${name}${rest}`)
     if (tgz) {
@@ -151,6 +155,8 @@ export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM, p
     setDistTags: (tags) => { packuments = build(url, tags) },
     /** Answer 404 for these packages until called again (a publish npm has not made visible yet). */
     setWithheld: (list) => { withheld = new Set(list) },
+    /** Answer 404 for these packages' index only, until called again; their versions stay. */
+    setIndexWithheld: (list) => { indexWithheld = new Set(list) },
     close: () => new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections() }),
   }
 }

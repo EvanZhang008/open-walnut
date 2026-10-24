@@ -172,6 +172,34 @@ describe('field-packs: the release as a release publishes it', () => {
     }
   }, 180_000)
 
+  it('an index that does not name the release yet: npm leaves the file out, and the launcher\'s postinstall fetches it by its version\'s document', async () => {
+    const out = path.join(tmp, 'packs-index')
+    const version = '9.9.9-rehearsal.3'
+    const tarballs = packVersion({ files: stub(version), version, out })
+    const registry = await startRegistry({ tarballs: tarballs.map((file: string) => ({ file })), distTags: { latest: version }, upstream: 'http://127.0.0.1:9' })
+    registry.setIndexWithheld([`@open-walnut/${HOST}`])
+    try {
+      const prefix = path.join(tmp, 'prefix-index')
+      const env = { ...process.env, npm_config_prefix: prefix, npm_config_registry: `${registry.url}/`, npm_config_cache: path.join(tmp, 'cache-index'), npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
+      delete env.npm_execpath
+      const r = await new Promise<{ code: number; out: string }>((resolve) => {
+        const child = spawn('npm', ['install', '-g', 'open-walnut@latest', '--allow-scripts=open-walnut'], { env })
+        let text = ''
+        child.stdout.on('data', (d) => { text += d })
+        child.stderr.on('data', (d) => { text += d })
+        child.on('close', (c) => resolve({ code: c ?? 1, out: text }))
+      })
+      expect(r.code, r.out).toBe(0)
+      expect(registry.hits).toContain(`withheld-index /@open-walnut/${HOST}`)
+      expect(registry.hits).toContain(`/@open-walnut/${HOST}/${version}`)
+      const printed = spawnSync(path.join(prefix, 'bin/walnut'), ['--version'], { env, encoding: 'utf8' })
+      expect(printed.stdout.trim(), printed.stderr).toBe(`${version} (stub)`)
+      expect(printed.stderr).toBe('')
+    } finally {
+      await registry.close()
+    }
+  }, 180_000)
+
   it('refuses a field.json whose next release is not newer, or whose tarballs are gone', () => {
     const dir = path.join(tmp, 'bad')
     fs.mkdirSync(dir, { recursive: true })

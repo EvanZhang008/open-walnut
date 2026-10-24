@@ -45,6 +45,12 @@
  *               (npm makes a release visible package by package) when the old
  *               release updates: it keeps serving its own version, and its next
  *               start, once the file is there, is the release.
+ *   field-index the registry serves an index of this machine's package that
+ *               does not name the release yet (a CDN's copy from before it,
+ *               here none at all), while its version's document and tarball
+ *               are there: npm leaves the package out, the launcher's
+ *               postinstall fetches it by that document, and the old release's
+ *               startup update succeeds and serves the release.
  *   field-unscripted  `npm install -g` typed by hand while the release's file
  *               is not on the registry yet, with install scripts off (npm 12
  *               without --allow-scripts runs none): npm installs the launcher
@@ -82,7 +88,7 @@ const reports = (printed, version) => printed.split(/\s/)[0] === version
 const PERSISTENT_DAEMON_HEARTBEAT_MS = String(30 * 60_000)
 
 /** Every field scenario, in the order they run (--field-only picks some). */
-export const FIELD_SCENARIOS = ['field', 'field-work', 'field-back', 'field-cli', 'field-hand', 'field-lag', 'field-unscripted', 'field-archive']
+export const FIELD_SCENARIOS = ['field', 'field-work', 'field-back', 'field-cli', 'field-hand', 'field-lag', 'field-index', 'field-unscripted', 'field-archive']
 
 /** Where a release's GitHub assets are (`<base>/v<version>/<file>`). */
 export const RELEASE_DOWNLOADS = 'https://github.com/EvanZhang008/open-walnut/releases/download'
@@ -533,6 +539,25 @@ async function lagging({ from, field, work, walnuts, opts }) {
   })
 }
 
+async function indexBehind({ from, field, work, walnuts, opts }) {
+  return withRegistry(field, from, opts, async (registry) => {
+    const w = walnutFor(work, `field-index-${from.version}`, registry, walnuts)
+    await installStart(w, from, opts.upstream)
+    registry.setDistTags(tags(field.release.version))
+    registry.setIndexWithheld([hostPackage()])
+    await w.start({ timeoutMs: 900_000 })
+    expectStartupUpdate(w, from.version, field.release.version)
+    await expectServing(w, field.release.version)
+    const file = path.join(launcherRoot(w), 'node_modules', hostPackage(), 'walnut')
+    if (!fs.existsSync(file)) throw new Error(`${file} is not there after the update`)
+    // npm found no index for it (so left it out), and the postinstall read its version's document.
+    if (!registry.hits.includes(`withheld-index /${hostPackage()}`)) throw new Error(`npm never asked for ${hostPackage()}'s index`)
+    if (!registry.hits.includes(`/${hostPackage()}/${field.release.version}`)) throw new Error(`nothing read ${hostPackage()}@${field.release.version}'s own document: npm installed it some other way`)
+    await w.shutdown()
+    return `${hostPackage()}'s index did not name ${field.release.version}: npm left it out, the postinstall fetched it by its version's document, and ${from.version}'s startup update served ${field.release.version}`
+  })
+}
+
 async function unscripted({ from, field, work, walnuts, opts }) {
   return withRegistry(field, from, opts, async (registry) => {
     const w = walnutFor(work, `field-unscripted-${from.version}`, registry, walnuts)
@@ -679,6 +704,7 @@ export async function rehearseField({ work, fieldJson, scenario, walnuts, opts =
     'field-cli': (a) => updatedWhileServing({ ...a, how: 'cli' }),
     'field-hand': (a) => updatedWhileServing({ ...a, how: 'hand' }),
     'field-lag': lagging,
+    'field-index': indexBehind,
     'field-unscripted': unscripted,
     'field-archive': archived,
   }

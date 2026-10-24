@@ -494,6 +494,44 @@ jobs:
             ${{ runner.temp }}/field-run/*/daemon/*.log
           if-no-files-found: ignore
 
+  # ── npm's launcher on the oldest Node it runs on ────────────────────────────
+  # The open-walnut package runs its compiled file through a launcher on the
+  # Node npm installs it with (scripts/npm-launcher/): Ubuntu 18.04's apt Node
+  # is 8 and 20.04's is 10. Its fetch and exit tests run that launcher on each
+  # (WALNUT_TEST_NODE): a working directory deleted under it, a platform
+  # package npm left out, a registry that sends nothing, a root install.
+  old-node:
+    name: npm launcher on Node ${{ matrix.node }}
+    runs-on: ubuntu-24.04
+    needs: build
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['8.17.0', '10.24.1']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - name: Fetch Node ${{ matrix.node }}, checked against its SHASUMS256.txt
+        run: |
+          dist="https://nodejs.org/dist/v${{ matrix.node }}"
+          file="node-v${{ matrix.node }}-linux-x64.tar.xz"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$dist/$file"
+          curl -fsSL "$dist/SHASUMS256.txt" | grep " $file\$" | sha256sum -c -
+          tar -xJf "$file"
+          "$RUNNER_TEMP/node-v${{ matrix.node }}-linux-x64/bin/node" --version
+      - name: The launcher's fetch and exit tests, the launcher on Node ${{ matrix.node }}
+        env:
+          WALNUT_TEST_NODE: ${{ runner.temp }}/node-v${{ matrix.node }}-linux-x64/bin/node
+        run: npx vitest run --config vitest.focus.config.ts tests/scripts/npm-launcher-fetch.test.ts tests/scripts/npm-launcher-exit.test.ts
+
   # ── The archives the rehearsal does not build ───────────────────────────────
   # A release ships four self-contained archives (release-archives.yml); the
   # rehearsal above builds the macos-26 and ubuntu-24.04 ones. These legs build
@@ -613,7 +651,7 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-24.04
-    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, archive-targets]
+    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, old-node, archive-targets]
     # Runs whatever the gates concluded, EXCEPT on a run a newer push cancelled:
     # there it judged cancelled legs and turned the superseded run red (6 of the
     # 9 red runs on main from 2026-10-02 to 10-04). A job that hits its timeout
@@ -629,6 +667,7 @@ jobs:
           echo "test-e2e:   ${{ needs.test-e2e.result }}"
           echo "rehearsal:  ${{ needs.rehearsal.result }}"
           echo "field:      ${{ needs.field.result }}"
+          echo "old-node:   ${{ needs.old-node.result }}"
           echo "archive-targets: ${{ needs.archive-targets.result }}"
           echo "onboarding: ${{ needs.onboarding.result }}"
           echo "remote-host: ${{ needs.remote-host.result }}"
@@ -642,6 +681,7 @@ jobs:
           [ "${{ needs.test-e2e.result }}" = "success" ] || { echo "::error::the e2e tier failed: a failure not in tests/setup/known-failures-e2e.json, or a run that crashed"; failed=1; }
           [ "${{ needs.rehearsal.result }}" = "success" ] || { echo "::error::the release rehearsal failed: this commit's package does not install, serve or update"; failed=1; }
           [ "${{ needs.field.result }}" = "success" ] || { echo "::error::the field rehearsal failed: an install of a release on npm today does not update to this commit and keep its work"; failed=1; }
+          [ "${{ needs.old-node.result }}" = "success" ] || { echo "::error::npm's launcher failed on Node 8 or 10, which old Ubuntu systems install it with"; failed=1; }
           [ "${{ needs.archive-targets.result }}" = "success" ] || { echo "::error::an archive a release ships (darwin-x64 or linux-arm64) did not build or run"; failed=1; }
           [ "${{ needs.onboarding.result }}" = "success" ] || { echo "::error::the documented install broke on a fresh machine"; failed=1; }
           [ "${{ needs.remote-host.result }}" = "success" ] || { echo "::error::Walnut could not onboard a fresh remote host"; failed=1; }

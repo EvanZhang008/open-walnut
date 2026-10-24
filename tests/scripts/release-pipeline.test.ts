@@ -845,7 +845,7 @@ describe('ci.yml', () => {
   const gate = doc.jobs['ci-ok']!
 
   it('CI OK, the check both channels publish by, waits on the rehearsal, the slow tier and e2e', () => {
-    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'node-side', 'test', 'test-heavy', 'test-e2e', 'onboarding', 'remote-host', 'rehearsal', 'field']))
+    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'node-side', 'test', 'test-heavy', 'test-e2e', 'onboarding', 'remote-host', 'rehearsal', 'field', 'old-node']))
     // The informational browser suite stays out of the gate.
     expect(gate.needs).not.toContain('browser')
     const check = gate.steps.map((s) => s.run ?? '').join('\n')
@@ -891,6 +891,22 @@ describe('ci.yml', () => {
     expect(steps[build]).not.toContain('--version')
     expect(job.steps.some((s) => s['continue-on-error'])).toBe(false)
     expect(job.needs).toBe('build')
+  })
+
+  it('npm\'s launcher runs its fetch and exit tests on Node 8 and 10, and CI OK waits on it', () => {
+    const job = doc.jobs['old-node']!
+    expect(job.strategy!.matrix.node).toEqual(['8.17.0', '10.24.1'])
+    const steps = job.steps as Array<{ run?: string; env?: Record<string, string> }>
+    const fetch = steps.findIndex((s) => (s.run ?? '').includes('SHASUMS256.txt'))
+    const tests = steps.findIndex((s) => s.env?.WALNUT_TEST_NODE !== undefined)
+    expect(fetch).toBeGreaterThan(-1)
+    expect(tests).toBeGreaterThan(fetch)
+    expect(steps[fetch]!.run).toContain('sha256sum -c -')
+    expect(steps[tests]!.env!.WALNUT_TEST_NODE).toBe('${{ runner.temp }}/node-v${{ matrix.node }}-linux-x64/bin/node')
+    expect(steps[tests]!.run).toContain('tests/scripts/npm-launcher-fetch.test.ts')
+    expect(steps[tests]!.run).toContain('tests/scripts/npm-launcher-exit.test.ts')
+    expect(gate.needs).toContain('old-node')
+    expect(job.steps.some((s) => s['continue-on-error'])).toBe(false)
   })
 
   it('the quick tier blocks in three serial legs that cover it once', () => {
