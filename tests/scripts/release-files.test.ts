@@ -120,7 +120,7 @@ describe('npm-packages.mjs', () => {
     for (const f of LAUNCHER_LIB) expect(fs.readFileSync(path.join(out, LAUNCHER, 'lib', f), 'utf8'), f).toBe(fs.readFileSync(path.join(ROOT, 'scripts/npm-launcher', f), 'utf8'))
   })
 
-  it('carry nothing npm runs at install but the launcher\'s own postinstall, which the updater relies on: it passes npm no --allow-scripts', () => {
+  it('carry nothing npm runs at install but the launcher\'s own postinstall, and the updater allows npm exactly that one', () => {
     // npm runs a package's install, preinstall, postinstall and prepare scripts,
     // and `node-gyp rebuild` for a binding.gyp at its root (or gypfile: true)
     // with no install script. The launcher has exactly one, the check that its
@@ -135,7 +135,9 @@ describe('npm-packages.mjs', () => {
       const deps = { ...m.dependencies, ...m.optionalDependencies }
       expect(Object.keys(deps).filter((name) => !name.startsWith('@open-walnut/')), dir).toEqual([])
     }
-    for (const manager of ['npm', 'pnpm', 'yarn', 'bun'] as const) {
+    // npm 12 runs no install script it was not allowed: the launcher's, and only it.
+    expect(managerArgv('npm', 'open-walnut@latest').args).toEqual(['install', '-g', 'open-walnut@latest', '--allow-scripts=open-walnut'])
+    for (const manager of ['pnpm', 'yarn', 'bun'] as const) {
       expect(managerArgv(manager, 'open-walnut@latest').args.join(' '), manager).not.toMatch(/allow-scripts|ignore-scripts=false|trust/)
     }
   })

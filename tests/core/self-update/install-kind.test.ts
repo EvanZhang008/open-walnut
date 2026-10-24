@@ -44,8 +44,8 @@ describe('managerCommand and managerArgv', () => {
   })
 
   it('argv is the same words without a shell', () => {
-    // The launcher and the platform packages run no install script: no manager is told to allow one.
-    expect(managerArgv('npm', 'open-walnut@0.6.0')).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0'] })
+    // npm is told to allow exactly the launcher's own postinstall; no other manager is told anything.
+    expect(managerArgv('npm', 'open-walnut@0.6.0')).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0', '--allow-scripts=open-walnut'] })
     expect(managerArgv('pnpm', 'open-walnut@0.6.0')).toEqual({ file: 'pnpm', args: ['add', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('bun', 'open-walnut@0.6.0')).toEqual({ file: 'bun', args: ['add', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('yarn', 'open-walnut@0.6.0')).toEqual({ file: 'yarn', args: ['global', 'add', 'open-walnut@0.6.0'] })
@@ -65,7 +65,7 @@ describe('the self-contained archive', () => {
     const prefix = '/home/alice/.local/share/open-walnut/app/runtime'
     expect(managerArgv('npm', 'open-walnut@0.6.3', prefix)).toEqual({
       file: `${prefix}/bin/node`,
-      args: [`${prefix}/lib/node_modules/npm/bin/npm-cli.js`, 'install', '-g', '--prefix', prefix, 'open-walnut@0.6.3'],
+      args: [`${prefix}/lib/node_modules/npm/bin/npm-cli.js`, 'install', '-g', '--prefix', prefix, 'open-walnut@0.6.3', '--allow-scripts=open-walnut'],
     })
   })
 })

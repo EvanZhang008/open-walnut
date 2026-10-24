@@ -65,14 +65,14 @@ describe('planUpdate', () => {
 
   it('a nightly build installs the exact newer nightly and says so', () => {
     const plan = planUpdate(NIGHTLY_NEWER, { check: false })
-    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.1-nightly.20261002.1'] })
+    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.1-nightly.20261002.1', '--allow-scripts=open-walnut'] })
     expect(plan.lines[0]).toBe('A newer Open Walnut is available on the nightly channel: 0.6.1-nightly.20261001.4 → 0.6.1-nightly.20261002.1.')
     expect(planUpdate(NIGHTLY_NEWER, { check: true }).lines[1]).toBe('Run: npm install -g open-walnut@nightly')
   })
 
   it('installs the exact newer version through the manager that installed Walnut', () => {
     const plan = planUpdate(NPM_NEWER, { check: false })
-    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0'] })
+    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0', '--allow-scripts=open-walnut'] })
     expect(plan.lines).toEqual([
       'A newer Open Walnut is available: 0.5.1 → 0.6.0.',
       `Running: npm install -g open-walnut@0.6.0`,
@@ -122,7 +122,7 @@ describe('runUpdateWith', () => {
     const { d, out, run } = deps(NPM_NEWER, { serverRunning: async () => true })
     const code = await runUpdateWith({}, { json: false }, d)
     expect(code).toBe(0)
-    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0'], undefined)
+    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', '--allow-scripts=open-walnut'], undefined)
     expect(out[2]).toBe('Installed Open Walnut 0.6.0.')
     expect(out[3]).toContain('still runs 0.5.1 until it is restarted')
   })
@@ -257,7 +257,7 @@ describe('what a launcher runs on its own (--auto), and an install that did not 
     const { d, err, run, out } = deps(NPM_NEWER, { versionOf })
     expect(await runUpdateWith({}, { json: false }, d)).toBe(1)
     expect(run.mock.calls.map((c) => (c as unknown[])[1])).toEqual([
-      ['install', '-g', 'open-walnut@0.6.0'], ['install', '-g', 'open-walnut@0.6.0'], ['install', '-g', 'open-walnut@0.5.1'],
+      ['install', '-g', 'open-walnut@0.6.0', '--allow-scripts=open-walnut'], ['install', '-g', 'open-walnut@0.6.0', '--allow-scripts=open-walnut'], ['install', '-g', 'open-walnut@0.5.1', '--allow-scripts=open-walnut'],
     ])
     expect(err.at(-1)).toBe('Open Walnut 0.6.0 did not install its file for this machine (it still starts 0.5.1 (old)); 0.5.1 is back.')
     expect(out).not.toContain('Installed Open Walnut 0.6.0.')

@@ -129,18 +129,23 @@ function installArgv(manager: PackageManager, spec: string): { file: string; arg
   }
 }
 
+// npm may skip the launcher's postinstall, and that script is what lets npm roll back when the platform file cannot be fetched.
+const NPM_ALLOW_SCRIPTS = `--allow-scripts=${PACKAGE_NAME}`
+
 /**
  * The manager's global install of one spec (`@latest`, `@nightly`, `@0.6.0`), as argv: no shell.
- * What it installs is the launcher and this machine's platform package, neither of
- * which has an install script, so no manager needs one allowed.
+ * What it installs is the launcher, whose one install script is its postinstall
+ * (scripts/npm-launcher/postinstall.js), and this machine's platform package, which
+ * has none. npm is told to allow that one script and nothing else.
  */
 export function managerArgv(manager: PackageManager, spec: string, runtimePrefix: string | null = null): { file: string; args: string[] } {
   if (runtimePrefix) {
     // The archive's own Node runs its own npm, into its own prefix.
     const npmCli = path.join(runtimePrefix, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
-    return { file: path.join(runtimePrefix, 'bin', 'node'), args: [npmCli, 'install', '-g', '--prefix', runtimePrefix, spec] }
+    return { file: path.join(runtimePrefix, 'bin', 'node'), args: [npmCli, 'install', '-g', '--prefix', runtimePrefix, spec, NPM_ALLOW_SCRIPTS] }
   }
-  return installArgv(manager, spec)
+  const argv = installArgv(manager, spec)
+  return manager === 'npm' ? { ...argv, args: [...argv.args, NPM_ALLOW_SCRIPTS] } : argv
 }
 
 /** The command a person types: the same install, through the manager that put Walnut there. */

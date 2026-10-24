@@ -481,8 +481,11 @@ on the first one:
 - **A dependency's install script runs only when allowed.** Walnut no longer needs one. The
   platform packages run no install script and build nothing, and a checkout installs with Bun.
   The launcher's own postinstall only checks for its file; without it, as in
-  `npm i -g open-walnut` typed with npm 12, the first start fetches the file instead. So the
-  update that `open-walnut web` and `open-walnut update` run passes no `--allow-scripts`.
+  `npm i -g open-walnut` typed with npm 12, the first start fetches the file instead. The
+  update that `open-walnut web` and `open-walnut update` run passes npm
+  `--allow-scripts=open-walnut`, that one script and nothing else, because the postinstall is
+  what lets npm roll back when the platform file cannot be fetched (0.6.x's own update passes
+  a list that names it too).
 
 The release jobs install `npm@12`, not `npm@latest`, so the next major is taken on purpose
 rather than discovered in a publish.
