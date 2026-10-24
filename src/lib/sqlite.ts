@@ -182,8 +182,10 @@ function bunSqlite(): BunSqlite {
   if (typeof bunVersion !== 'string') {
     throw new Error(`Walnut runs on bun, whose SQLite is built in; this process runs on Node ${process.version}, which has none Walnut uses. Run it with bun (https://bun.sh).`)
   }
-  bunModule = require('bun:sqlite') as BunSqlite
+  // Kept only once the library checks out, so a file that would not load fails every open.
+  const mod = require('bun:sqlite') as BunSqlite
   library = 'bun'
+  libraryProblem = null
   if (process.platform === 'darwin') {
     library = 'system'
     // WALNUT_SQLITE_LIBRARY names the library (the compiled file ships one);
@@ -192,13 +194,21 @@ function bunSqlite(): BunSqlite {
     if (wanted !== 'system') {
       const custom = wanted || builtSqliteLibrary()
       if (custom && fs.existsSync(custom)) {
+        let refused: unknown = null
         try {
-          bunModule.Database.setCustomSQLite(custom)
-        } catch {
-          // Loaded already in this process (a worker thread after its parent),
-          // and by this same code, so with this same library.
+          mod.Database.setCustomSQLite(custom)
+        } catch (err) {
+          // Loaded already in this process: by this code in a worker thread's
+          // parent (the same library), or by a bun:sqlite open that skipped this
+          // file (Apple's). Or the file would not load. The check below says which.
+          refused = err
         }
-        library = custom
+        const loaded = loadedSqlite(mod, custom, refused)
+        if (loaded.isCustom) {
+          library = custom
+        } else {
+          libraryProblem = `SQLite ${loaded.version} was loaded before src/lib/sqlite.ts could load ${custom} (a bun:sqlite open that skips it): this is the macOS system build, which behaves unlike Walnut's`
+        }
       } else {
         libraryProblem = wanted
           ? `WALNUT_SQLITE_LIBRARY names no file (${wanted}): SQLite is the macOS system build, which behaves unlike Walnut's`
@@ -206,7 +216,32 @@ function bunSqlite(): BunSqlite {
       }
     }
   }
-  return bunModule
+  bunModule = mod
+  return mod
+}
+
+/**
+ * Which SQLite bun has loaded, checked rather than assumed: a library file
+ * carries its own sqlite_source_id() string, and Apple's build (3.51.0 in
+ * macOS 26, its id ending in "aapl") is not that file. Opens one in-memory
+ * database; reads the file once per process (about 3 MB).
+ */
+function loadedSqlite(mod: BunSqlite, file: string, refused: unknown): { version: string; isCustom: boolean } {
+  let db: BunDatabase
+  try {
+    db = new mod.Database(':memory:')
+  } catch (err) {
+    // Nothing is loaded: the file itself would not load (refused says why).
+    throw new Error(`SQLite ${file} does not load: ${String(refused ?? err).split('\n')[0]}`)
+  }
+  try {
+    const stmt = db.prepare('SELECT sqlite_version(), sqlite_source_id()')
+    const [version, sourceId] = (stmt.values()[0] ?? []).map(String)
+    stmt.finalize()
+    return { version, isCustom: !!sourceId && fs.readFileSync(file).includes(Buffer.from(sourceId)) }
+  } finally {
+    db.close()
+  }
 }
 
 /**

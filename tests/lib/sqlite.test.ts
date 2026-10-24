@@ -2,6 +2,7 @@
  * The SQLite contract (src/lib/sqlite.ts): the better-sqlite3 API the code was
  * written against, over bun:sqlite, behaving as the code relies on.
  */
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -212,6 +213,46 @@ describe.runIf(process.platform === 'darwin')('the upstream SQLite macOS bun loa
     expect(db.prepare('SELECT sqlite_version()').pluck().get()).toBe(process.env.WALNUT_SQLITE_LIBRARY ? expect.any(String) : SQLITE_VERSION)
     const opts = db.prepare('SELECT compile_options FROM pragma_compile_options').pluck().all()
     expect(opts).toEqual(expect.arrayContaining(['DEFAULT_FOREIGN_KEYS', 'DEFAULT_CACHE_SIZE=-16000', 'DQS=0', 'ENABLE_FTS5']))
+  })
+
+  /** A fresh bun process that runs `body` (with SHIM, the absolute module path) and prints JSON. */
+  const SHIM = path.resolve(import.meta.dirname, '../../src/lib/sqlite.ts')
+  function inChild(body: string, env: Record<string, string> = {}): Record<string, unknown> {
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env }
+    if (!('WALNUT_SQLITE_LIBRARY' in env)) delete childEnv.WALNUT_SQLITE_LIBRARY
+    const r = spawnSync(process.execPath, ['-e', `const SHIM = ${JSON.stringify(SHIM)};\n${body}`], { encoding: 'utf8', env: childEnv })
+    expect(r.status, r.stderr).toBe(0)
+    return JSON.parse(r.stdout.trim().split('\n').at(-1)!)
+  }
+  const REPORT = "console.log(JSON.stringify({ library: m.sqliteLibrary(), problem: m.sqliteLibraryProblem(), version: new m.default(':memory:').prepare('SELECT sqlite_version()').pluck().get() }))"
+
+  it('is checked after loading: a bun:sqlite open that ran first is named, not reported as the built library', () => {
+    // A direct open loads Apple's build, so the shim's setCustomSQLite can only refuse.
+    const direct = inChild(`const { Database } = require('bun:sqlite'); new Database(':memory:').close(); const m = await import(SHIM); ${REPORT}`)
+    expect(direct.library).toBe('system')
+    expect(direct.version).not.toBe(SQLITE_VERSION)
+    expect(direct.problem).toMatch(new RegExp(`^SQLite ${direct.version} was loaded before src/lib/sqlite\\.ts could load .*libsqlite3\\.dylib \\(a bun:sqlite open that skips it\\)`))
+    // The shim alone loads and reports the built library.
+    expect(inChild(`const m = await import(SHIM); ${REPORT}`)).toEqual({ library: DYLIB, problem: null, version: SQLITE_VERSION })
+  })
+
+  it('a worker thread after its parent finds the library loaded already, and it is the same one', () => {
+    const worker = path.join(dir, 'worker.mjs')
+    fs.writeFileSync(worker, `import { parentPort } from 'node:worker_threads'; const m = await import(${JSON.stringify(SHIM)}); parentPort.postMessage({ library: m.sqliteLibrary(), problem: m.sqliteLibraryProblem() })`)
+    const body = `const m = await import(SHIM); new m.default(':memory:').close();
+      const { Worker } = await import('node:worker_threads');
+      const w = new Worker(${JSON.stringify(worker)});
+      const got = await new Promise((resolve, reject) => { w.on('message', resolve); w.on('error', reject) });
+      await w.terminate();
+      console.log(JSON.stringify(got))`
+    expect(inChild(body)).toEqual({ library: DYLIB, problem: null })
+  })
+
+  it('a library file that will not load fails the open in words, not later as a bare dlopen error', () => {
+    const bad = path.join(dir, 'not-a-library.dylib')
+    fs.writeFileSync(bad, 'not a mach-o file')
+    const got = inChild(`const m = await import(SHIM); let error = null; try { new m.default(':memory:') } catch (e) { error = String(e.message) } console.log(JSON.stringify({ error }))`, { WALNUT_SQLITE_LIBRARY: bad })
+    expect(got.error).toMatch(new RegExp(`^SQLite ${bad.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} does not load: Error: dlopen`))
   })
 
   it('is found from a bundle that inlined src/lib/sqlite.ts, and null when it is not built', () => {
