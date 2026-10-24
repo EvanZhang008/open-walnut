@@ -31,6 +31,14 @@ describe('updateCardView', () => {
     expect(v.command).toBe('npm install -g open-walnut@latest');
   });
 
+  it('a Homebrew keg that updates itself keeps its own state, and adds the brew upgrade line in every state', () => {
+    const brewHint = { note: 'Homebrew installed this copy, and it updates itself; brew upgrade open-walnut moves it to the compiled file (formula 0.6.0).', command: 'brew upgrade open-walnut' };
+    const newer = updateCardView(status({ latest: '0.6.0', available: true, autoUpdate: true, brewHint }));
+    expect(newer).toMatchObject({ tone: 'update', command: 'npm install -g open-walnut@latest', note: 'Installs itself the next time open-walnut web starts, or run the command now', brew: brewHint });
+    expect(updateCardView(status({ brewHint }))).toMatchObject({ tone: 'ok', status: 'Up to date', brew: brewHint });
+    expect(updateCardView(status({ latest: '0.6.0', available: true })).brew).toBeUndefined();
+  });
+
   it('a nightly build names its channel', () => {
     const nightly = status({ current: '0.6.1-nightly.20261001.4', channel: 'nightly', latest: '0.6.1-nightly.20261002.1', tags: { latest: '0.6.0', nightly: '0.6.1-nightly.20261002.1' }, available: true, install: { ...NPM, updateCommand: 'npm install -g open-walnut@nightly' } });
     expect(updateCardView(nightly)).toMatchObject({ status: '0.6.1-nightly.20261002.1 available (nightly)', command: 'npm install -g open-walnut@nightly' });

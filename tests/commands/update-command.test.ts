@@ -133,6 +133,19 @@ describe('runUpdateWith', () => {
     expect(out).toHaveLength(3)
   })
 
+  it('a 0.6.x Homebrew keg that updates itself installs with its npm, and names brew upgrade as the way to the file', async () => {
+    const brew = { note: 'Homebrew installed this copy, and it updates itself; brew upgrade open-walnut moves it to the compiled file (formula 0.6.0).' }
+    const { d, out, run } = deps(NPM_NEWER, { brewHint: async () => brew })
+    expect(await runUpdateWith({ check: true }, { json: false }, d)).toBe(0)
+    expect(run).not.toHaveBeenCalled()
+    expect(out).toEqual(['A newer Open Walnut is available: 0.5.1 → 0.6.0.', 'Run: npm install -g open-walnut@latest', brew.note])
+    // Still its own npm update, the line beside it.
+    const again = deps(NPM_NEWER, { brewHint: async () => brew })
+    expect(await runUpdateWith({}, { json: false }, again.d)).toBe(0)
+    expect(again.run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW], undefined)
+    expect(again.out).toContain(brew.note)
+  })
+
   it('--check never runs the installer', async () => {
     const { d, run, out } = deps(NPM_NEWER)
     expect(await runUpdateWith({ check: true }, { json: false }, d)).toBe(0)

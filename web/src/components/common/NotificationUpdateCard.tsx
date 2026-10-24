@@ -74,6 +74,16 @@ export function NotificationUpdateCard({ status, checking, onCheck }: {
             <span className="nfc-update-note" data-testid="nfc-update-note">{v.note}</span>
           </div>
         )}
+        {v.brew && (
+          <>
+            <div className="notification-detail-row muted">
+              <span className="nfc-update-note" data-testid="nfc-update-brew-note">{v.brew.note}</span>
+            </div>
+            <div className="notification-detail-row nfc-update-command-row">
+              <CopyCommand command={v.brew.command} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

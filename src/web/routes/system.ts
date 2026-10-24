@@ -124,7 +124,14 @@ async function updateStatusForClient() {
   try { configAuto = (await getConfig()).updates?.auto } catch { /* default */ }
   const status = getUpdateChecker().status()
   const selfUpdates = status.install.kind === 'npm' || status.install.kind === 'binary'
-  return { ...status, autoUpdate: selfUpdates && autoUpdateEnabled(configAuto, process.env) }
+  // A 0.6.x Homebrew keg that updates itself: the way to the compiled file, when brew takes nothing back.
+  let brewHint: { note: string; command: string } | null = null
+  if (status.install.homebrewKeg) {
+    const { brewUpgradeHint } = await import('../../core/self-update/homebrew-keg.js')
+    const hint = await brewUpgradeHint(status.install.homebrewKeg, status.current).catch(() => null)
+    if (hint) brewHint = { note: hint.note, command: hint.command }
+  }
+  return { ...status, autoUpdate: selfUpdates && autoUpdateEnabled(configAuto, process.env), ...(brewHint ? { brewHint } : {}) }
 }
 
 // GET /api/system/update: the cached answer, never a network call.

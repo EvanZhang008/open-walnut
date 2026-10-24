@@ -16,12 +16,19 @@ export interface UpdateCardView {
   /** A quiet line under the status (where a source checkout lives, when it was checked). */
   note?: string;
   command?: string;
+  /** A second way to update this copy (a Homebrew keg that updates itself: `brew upgrade` moves it to the file). */
+  brew?: { note: string; command: string };
   /** The button renders only when a check can run here. */
   canCheck: boolean;
 }
 
 /** Pure: the words and tones for one status, so a test can pin every state without a DOM. */
 export function updateCardView(s: UpdateStatus): UpdateCardView {
+  const view = baseView(s);
+  return s.brewHint ? { ...view, brew: s.brewHint } : view;
+}
+
+function baseView(s: UpdateStatus): UpdateCardView {
   if (!s.enabled) {
     switch (s.reason) {
       case 'source':

@@ -10,7 +10,9 @@
  *     A running server keeps the old code until it is restarted; say so.
  *   - the compiled file in install.sh's layout: download the newer file, check
  *     it, and swap the link (src/core/self-update/binary-install.ts).
- *   - a file Homebrew installed: name `brew upgrade open-walnut`.
+ *   - a file Homebrew installed: name `brew upgrade open-walnut`. A 0.6.x
+ *     keg's archive that updated itself onto the npm launcher updates as npm
+ *     does, and says that `brew upgrade` moves it to the file (homebrew-keg.ts).
  *   - source checkout: print the git steps and do nothing. The developer owns
  *     that tree (an unexpected pull over local work is worse than no update).
  *   - cloud replica / unpacked bundle: say where the update comes from.
@@ -124,6 +126,8 @@ export interface UpdateDeps {
   watch?: () => UpdateStop
   /** Is a Walnut server answering at the default address? (It keeps the old code until restarted.) */
   serverRunning: () => Promise<boolean>
+  /** A Homebrew keg that updates itself: the `brew upgrade` line, or null (homebrew-keg.ts). */
+  brewHint?: (status: UpdateStatus) => Promise<{ note: string } | null>
   out: (line: string) => void
   err: (line: string) => void
 }
@@ -143,6 +147,7 @@ export async function defaultDeps(): Promise<UpdateDeps> {
   const { autoUpdateEnabled, relaunchVersion, runInherited, watchStop } = await import('../core/self-update/startup-update.js')
   const { badDirFor, clearBad, heldBack } = await import('../core/self-update/held-versions.js')
   const { WALNUT_HOME } = await import('../constants.js')
+  const { brewUpgradeHint } = await import('../core/self-update/homebrew-keg.js')
   return {
     // A fresh checker, not the server's: this process is the install being updated.
     checkNow: (channel) => new UpdateChecker(channel ? { channel } : {}).checkNow(),
@@ -166,6 +171,7 @@ export async function defaultDeps(): Promise<UpdateDeps> {
     clearHeld: (status, version) => clearBad(badDirFor(status.install, WALNUT_HOME), version),
     watch: () => watchStop(null),
     serverRunning: probeServer,
+    brewHint: (status) => brewUpgradeHint(status.install.homebrewKeg, status.current).catch(() => null),
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
   }
@@ -191,10 +197,12 @@ export async function runUpdateWith(options: UpdateOptions, globals: GlobalOptio
     return 0
   }
   const plan = planUpdate(status, { check: options.check === true })
+  const brew = await deps.brewHint?.(status) ?? null
   if (globals.json) {
-    deps.out(JSON.stringify({ ...status, plan: { lines: plan.lines, install: plan.install ?? null, installFile: plan.installFile ?? null } }, null, 2))
+    deps.out(JSON.stringify({ ...status, plan: { lines: plan.lines, install: plan.install ?? null, installFile: plan.installFile ?? null }, brewHint: brew }, null, 2))
   } else {
     for (const line of plan.lines) (plan.exitCode === 0 ? deps.out : deps.err)(line)
+    if (brew) deps.out(brew.note)
   }
   if (plan.installFile) {
     const stop = deps.watch?.()

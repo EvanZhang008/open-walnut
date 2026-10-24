@@ -18,8 +18,9 @@
  *   - `other`: a package root without a checkout or a node_modules parent (an
  *     unpacked tarball, a cloud bundle), or a compiled file outside any layout
  *     Walnut knows. Checked, but there is no one command Walnut runs; a file in a
- *     Homebrew keg names `brew upgrade`, and so does a keg's Node archive that
- *     updated itself onto the npm launcher before the formula installed the file.
+ *     Homebrew keg names `brew upgrade`. A keg of the 0.6.x formula's Node
+ *     archive that updated itself onto the npm launcher stays `npm` (it keeps
+ *     updating itself, as that formula promised) and carries `homebrewKeg`.
  *   - `replica`: the cloud companion. It deploys through its own scripts, and
  *     the primary console is where the user acts.
  */
@@ -76,6 +77,13 @@ export interface InstallInfo {
   runtimePrefix?: string | null
   /** The versions layout of a `binary` install; null for every other install. */
   binary?: BinaryInstall | null
+  /**
+   * The Homebrew keg (`<cellar>/open-walnut/<version>`) an npm install sits in: a
+   * 0.6.x formula's Node archive that updated itself onto the npm launcher. It
+   * keeps updating itself; `brew upgrade` moves it to the compiled file
+   * (homebrew-keg.ts). Absent for every other install.
+   */
+  homebrewKeg?: string | null
   /**
    * The command that starts this install again as its newest version (a restart
    * after an update), when that is not this process's own executable: the
@@ -229,7 +237,13 @@ export const binaryLinkOf = (root: string): string => path.join(root, 'bin', 'wa
 
 /** A file Homebrew installed (`<cellar>/open-walnut/<version>/...`): brew owns its updates. */
 export function inHomebrewKeg(file: string): boolean {
-  return /\/Cellar\/open-walnut\/[^/]+\//.test(file.replace(/\\/g, '/'))
+  return kegOf(file) !== null
+}
+
+/** The keg directory (`<prefix>/Cellar/open-walnut/<version>`) a path sits in, or null. */
+export function kegOf(file: string): string | null {
+  const m = /^(.*\/Cellar\/open-walnut\/[^/]+)\//.exec(file.replace(/\\/g, '/'))
+  return m ? m[1]! : null
 }
 
 export function detectInstall(inputs: DetectInstallInputs = {
@@ -244,15 +258,15 @@ export function detectInstall(inputs: DetectInstallInputs = {
   let packageRoot = inputs.packageRoot
   let relaunch: string[] | null = null
   let viaLauncher = false
+  let homebrewKeg: string | null = null
   if (inputs.execPath) {
     // The compiled file: these say how it was installed, and a package root the
     // file reports (its unpacked runtime) never does.
     const launched = launcherPackageRoot(inputs.execPath, inputs.env ?? {}, realpath, readFile)
-    // A keg's Node archive that updated itself onto the launcher (0.6.17's updater
-    // knew no keg): brew owns the keg, and `brew upgrade` replaces it with the file.
-    if (launched && inHomebrewKeg(safeRealpath(realpath, launched.packageRoot) ?? launched.packageRoot)) {
-      return { ...base, kind: 'other', packageRoot: null, updateCommand: HOMEBREW_UPDATE_COMMAND, relaunch: launched.relaunch }
-    }
+    // A keg's Node archive that updated itself onto the launcher (0.6.x's formula
+    // promised it keeps itself up to date): it goes on doing so with its npm, and
+    // `brew upgrade` is named only as the way to the file (homebrew-keg.ts).
+    if (launched) homebrewKeg = kegOf(safeRealpath(realpath, launched.packageRoot) ?? launched.packageRoot)
     if (launched) {
       viaLauncher = true
       packageRoot = launched.packageRoot
@@ -271,7 +285,7 @@ export function detectInstall(inputs: DetectInstallInputs = {
   if (inputs.installDir && !viaLauncher) return { ...base, kind: 'source', sourceDir: inputs.installDir }
   const manager = packageRoot ? managerFromPath(packageRoot) : null
   const runtimePrefix = manager === 'npm' && packageRoot ? runtimePrefixOf(packageRoot, inputs.exists) : null
-  const npmBase = { ...base, packageRoot, relaunch }
+  const npmBase = { ...base, packageRoot, relaunch, ...(homebrewKeg ? { homebrewKeg } : {}) }
   // The archive updates itself with `walnut update`: its npm is not on PATH.
   if (runtimePrefix) return { ...npmBase, kind: 'npm', manager, runtimePrefix, updateCommand: 'walnut update' }
   if (manager) return { ...npmBase, kind: 'npm', manager, updateCommand: managerCommand(manager, channel === 'nightly' ? 'nightly' : 'latest') }
