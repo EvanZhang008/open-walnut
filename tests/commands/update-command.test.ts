@@ -286,3 +286,49 @@ describe('what a launcher runs on its own (--auto), and an install that did not 
     expect(stop.done).toHaveBeenCalled()
   })
 })
+
+// A root-owned npm prefix (a distro or NodeSource Node, installed with `sudo npm i -g`):
+// npm itself would end in a 30-line EACCES error (seen in a Debian container, 0.6.99 -> 0.6.100).
+describe('an install this user cannot write', () => {
+  it('names the sudo command the start names, runs nothing, and is exit 1', () => {
+    const plan = planUpdate(NPM_NEWER, { check: false, writable: false })
+    expect(plan.install).toBeUndefined()
+    expect(plan).toEqual({
+      exitCode: 1,
+      lines: [
+        'A newer Open Walnut is available: 0.5.1 → 0.6.0.',
+        'This install (/usr/local/lib/node_modules/open-walnut) is not writable by this user, so nothing was changed. Run: sudo npm install -g open-walnut@latest',
+      ],
+    })
+  })
+
+  it('--check names the same command and is exit 0: the question was answered', () => {
+    expect(planUpdate(NPM_NEWER, { check: true, writable: false })).toEqual({
+      exitCode: 0, lines: ['A newer Open Walnut is available: 0.5.1 → 0.6.0.', 'Run: sudo npm install -g open-walnut@latest'],
+    })
+    expect(planUpdate(NIGHTLY_NEWER, { check: true, writable: false }).lines[1]).toBe('Run: sudo npm install -g open-walnut@nightly')
+  })
+
+  it('says nothing about it when there is nothing newer', () => {
+    expect(planUpdate(NPM_UP_TO_DATE, { check: false, writable: false })).toEqual({ exitCode: 0, lines: ['Open Walnut 0.5.1 is the newest (0.5.1).'] })
+  })
+
+  it('a compiled file whose root belongs to someone else says how to fix it and installs nothing', () => {
+    const plan = planUpdate(FILE_NEWER, { check: false, writable: false })
+    expect(plan.installFile).toBeUndefined()
+    expect(plan).toMatchObject({ exitCode: 1, lines: [expect.any(String), `This install (${ROOT}) is not writable by this user, so nothing was changed. Fix it: make ${ROOT} writable by this user, or run install.sh again as its owner`] })
+  })
+
+  it('runUpdateWith asks deps.writable about this install and never starts npm', async () => {
+    const writable = vi.fn(() => false)
+    const { d, run, out, err } = deps(NPM_NEWER, { writable })
+    expect(await runUpdateWith({}, { json: false }, d)).toBe(1)
+    expect(writable).toHaveBeenCalledWith(NPM_NEWER.install)
+    expect(run).not.toHaveBeenCalled()
+    expect(out).toEqual([])
+    expect(err[1]).toContain('Run: sudo npm install -g open-walnut@latest')
+    const file = deps(FILE_NEWER, { writable: () => false, installFile: vi.fn(async () => {}) })
+    expect(await runUpdateWith({}, { json: false }, file.d)).toBe(1)
+    expect(file.d.installFile).not.toHaveBeenCalled()
+  })
+})

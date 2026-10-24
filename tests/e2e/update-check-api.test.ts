@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Server as HttpServer } from 'node:http';
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
@@ -25,8 +26,10 @@ let registryUrl: string;
 let answer: string | number | 'hang' = '0.9.0';
 let registryHits = 0;
 
+// A real npm prefix this user owns: whether the install is writable is part of the answer.
+const PREFIX_MODULES = path.join(WALNUT_HOME, 'npm-prefix', 'lib', 'node_modules');
 const NPM: InstallInfo = {
-  kind: 'npm', sourceDir: null, packageRoot: '/usr/local/lib/node_modules/open-walnut', manager: 'npm',
+  kind: 'npm', sourceDir: null, packageRoot: path.join(PREFIX_MODULES, 'open-walnut'), manager: 'npm',
   updateCommand: 'npm install -g open-walnut@latest',
 };
 
@@ -38,6 +41,7 @@ async function api(method: string, path: string): Promise<{ status: number; data
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
+  await fs.mkdir(NPM.packageRoot!, { recursive: true });
   registry = http.createServer((req, res) => {
     registryHits++;
     if (answer === 'hang') return; // never answers; the checker's own deadline ends it
@@ -55,6 +59,7 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
+  await fs.chmod(PREFIX_MODULES, 0o755).catch(() => {});
   await stopServer();
   registry.closeAllConnections();
   await new Promise<void>((resolve) => registry.close(() => resolve()));
@@ -135,6 +140,26 @@ describe('update check API', () => {
       if (saved === undefined) delete process.env.WALNUT_NO_AUTO_UPDATE;
       else process.env.WALNUT_NO_AUTO_UPDATE = saved;
     }
+  });
+
+  // `sudo npm i -g` into a root-owned prefix: the start cannot update it (it names the sudo
+  // command), so the card must not promise that, and its command is the sudo one.
+  it.skipIf(process.getuid?.() === 0)('an npm install this user cannot write: no update on start, the sudo command', async () => {
+    const saved = process.env.WALNUT_NO_AUTO_UPDATE;
+    delete process.env.WALNUT_NO_AUTO_UPDATE;
+    await fs.chmod(PREFIX_MODULES, 0o555);
+    try {
+      setUpdateCheckerForTest(new UpdateChecker({ registryUrl, current: '0.5.1', currentKnown: true, install: NPM, env: {} }));
+      const r = await api('GET', '/api/system/update');
+      expect(r.data).toMatchObject({ autoUpdate: false, install: { kind: 'npm', updateCommand: 'sudo npm install -g open-walnut@latest' } });
+    } finally {
+      await fs.chmod(PREFIX_MODULES, 0o755);
+      if (saved === undefined) delete process.env.WALNUT_NO_AUTO_UPDATE;
+      else process.env.WALNUT_NO_AUTO_UPDATE = saved;
+    }
+    // Writable again: the plain command.
+    const again = await api('GET', '/api/system/update');
+    expect(again.data.install.updateCommand).toBe('npm install -g open-walnut@latest');
   });
 
   it('a disabled checker (opted out) answers at once from both routes', async () => {

@@ -162,6 +162,17 @@ export function managerCommand(manager: PackageManager, tag: 'latest' | 'nightly
   return [file, ...args].join(' ')
 }
 
+/**
+ * What a person does to update an install this user cannot write: a root-owned
+ * npm prefix (a distro or NodeSource Node, installed with `sudo npm i -g`) takes
+ * the same command through sudo; a compiled file's root owned by someone else is
+ * theirs to fix. The start, `walnut update` and the console's card all say this.
+ */
+export function notWritableFix(install: Pick<InstallInfo, 'kind' | 'binary' | 'updateCommand'>): string {
+  if (install.kind === 'binary' && install.binary) return `make ${install.binary.root} writable by this user, or run install.sh again as its owner`
+  return `sudo ${install.updateCommand ?? managerCommand('npm')}`
+}
+
 /** The manager a global install path belongs to; null when the path has no node_modules parent. */
 export function managerFromPath(packageRoot: string): PackageManager | null {
   const p = packageRoot.replace(/\\/g, '/')

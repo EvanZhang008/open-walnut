@@ -25,15 +25,17 @@
  * (src/core/self-update/held-versions.ts); without it the published version
  * installs and its mark goes. After an npm install, the launcher must start the
  * new version (npm can skip its platform package), else the old one goes back.
- * Exit 0 when the question was answered (newer or not), 1 when the registry
- * could not be reached or the install did not take, the installer's code when
- * it failed.
+ * An install this user cannot write (a root-owned npm prefix) is not handed to
+ * npm, which would only fail with EACCES: the command names the sudo one, as
+ * the start does. Exit 0 when the question was answered (newer or not), 1 when
+ * the registry could not be reached, the install is not this user's to write or
+ * the install did not take, the installer's code when it failed.
  */
 
 import os from 'node:os'
 import type { GlobalOptions } from '../core/types.js'
 import type { UpdateChannel, UpdateStatus } from '../core/self-update/update-check.js'
-import { managerArgv, type BinaryInstall, type InstallInfo } from '../core/self-update/install-kind.js'
+import { managerArgv, notWritableFix, type BinaryInstall, type InstallInfo } from '../core/self-update/install-kind.js'
 import type { UpdateStop } from '../core/self-update/startup-update.js'
 import { apiBaseUrl } from '../utils/api-client.js'
 
@@ -61,7 +63,13 @@ export interface UpdatePlan {
   exitCode: number
 }
 
-export function planUpdate(status: UpdateStatus, opts: { check: boolean }): UpdatePlan {
+/**
+ * `writable: false` is an install this user cannot replace (a root-owned npm
+ * prefix, a binary root owned by someone else): the plan names the fix the start
+ * names (notWritableFix) and runs nothing, where the installer would only end
+ * in its own permission error. Without it the install counts as writable.
+ */
+export function planUpdate(status: UpdateStatus, opts: { check: boolean; writable?: boolean }): UpdatePlan {
   const { install } = status
   if (install.kind === 'source') {
     const dir = install.sourceDir ?? 'the checkout'
@@ -96,6 +104,14 @@ export function planUpdate(status: UpdateStatus, opts: { check: boolean }): Upda
     }
   }
   const head = `A newer Open Walnut is available${onChannel}: ${status.current} → ${status.latest}.`
+  const updatesItself = (install.kind === 'binary' && install.binary) || (install.kind === 'npm' && install.manager)
+  if (opts.writable === false && updatesItself) {
+    const fix = notWritableFix(install)
+    const what = install.kind === 'binary' ? 'Fix it' : 'Run'
+    if (opts.check) return { exitCode: 0, lines: [head, `${what}: ${fix}`] }
+    const where = install.binary?.root ?? install.packageRoot
+    return { exitCode: 1, lines: [head, `This install${where ? ` (${where})` : ''} is not writable by this user, so nothing was changed. ${what}: ${fix}`] }
+  }
   if (install.kind === 'binary' && install.binary) {
     if (opts.check) return { exitCode: 0, lines: [head, 'Run: walnut update'] }
     return { exitCode: 0, lines: [head, `Installing it into ${install.binary.root}...`], installFile: { install: install.binary, version: status.latest } }
@@ -111,6 +127,8 @@ export function planUpdate(status: UpdateStatus, opts: { check: boolean }): Upda
 
 export interface UpdateDeps {
   checkNow: (channel?: UpdateChannel) => Promise<UpdateStatus>
+  /** Can this user replace this install (startup-update.ts installWritable)? Absent: yes. */
+  writable?: (install: InstallInfo) => boolean
   run: (file: string, args: string[], stop?: UpdateStop) => Promise<number>
   /** The file's own update (binary-install.ts installFileVersion); throws with the reason. */
   installFile?: (install: BinaryInstall, version: string, signal?: AbortSignal) => Promise<void>
@@ -144,13 +162,14 @@ async function probeServer(): Promise<boolean> {
 export async function defaultDeps(): Promise<UpdateDeps> {
   const { UpdateChecker } = await import('../core/self-update/update-check.js')
   const { installFileVersion, registryBaseFor } = await import('../core/self-update/binary-install.js')
-  const { autoUpdateEnabled, relaunchVersion, runInherited, watchStop } = await import('../core/self-update/startup-update.js')
+  const { autoUpdateEnabled, installWritable, relaunchVersion, runInherited, watchStop } = await import('../core/self-update/startup-update.js')
   const { badDirFor, clearBad, heldBack } = await import('../core/self-update/held-versions.js')
   const { WALNUT_HOME } = await import('../constants.js')
   const { brewUpgradeHint } = await import('../core/self-update/homebrew-keg.js')
   return {
     // A fresh checker, not the server's: this process is the install being updated.
     checkNow: (channel) => new UpdateChecker(channel ? { channel } : {}).checkNow(),
+    writable: (install) => installWritable(install),
     run: runInherited,
     installFile: async (install, version, signal) => {
       await installFileVersion({
@@ -196,7 +215,7 @@ export async function runUpdateWith(options: UpdateOptions, globals: GlobalOptio
     deps.out(`Open Walnut ${status.latest} is published, but ${held}.`)
     return 0
   }
-  const plan = planUpdate(status, { check: options.check === true })
+  const plan = planUpdate(status, { check: options.check === true, writable: deps.writable?.(status.install) ?? true })
   const brew = await deps.brewHint?.(status) ?? null
   if (globals.json) {
     deps.out(JSON.stringify({ ...status, plan: { lines: plan.lines, install: plan.install ?? null, installFile: plan.installFile ?? null }, brewHint: brew }, null, 2))

@@ -41,7 +41,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import type { UpdateStatus } from './update-check.js'
-import { managerArgv, type BinaryInstall, type InstallInfo } from './install-kind.js'
+import { managerArgv, notWritableFix, type BinaryInstall, type InstallInfo } from './install-kind.js'
 import type { InstallJob } from './background-install.js'
 import { APPLIED_ENV, reexecSelf, relaunchVersion, type ReexecResult } from './startup-relaunch.js'
 
@@ -104,6 +104,18 @@ export function binaryRootWritable(root: string, access: (p: string, mode: numbe
   }
 }
 
+/**
+ * Can this user's process update this install in place: an npm install's package
+ * root (installDirWritable), a compiled file's root (binaryRootWritable)? An
+ * install Walnut never updates itself (source, Homebrew, a replica) is not this
+ * question's business: true.
+ */
+export function installWritable(install: InstallInfo, access: (p: string, mode: number) => void = fs.accessSync): boolean {
+  if (install.kind === 'binary') return install.binary ? binaryRootWritable(install.binary.root, access) : true
+  if (install.kind === 'npm') return installDirWritable(install.packageRoot, access)
+  return true
+}
+
 export function decideStartupUpdate(status: UpdateStatus, inputs: StartupUpdateInputs): StartupUpdateDecision {
   if (inputs.applied) return { action: 'skip', reason: 'applied' }
   if (!inputs.auto) return { action: 'skip', reason: 'off' }
@@ -114,13 +126,11 @@ export function decideStartupUpdate(status: UpdateStatus, inputs: StartupUpdateI
   if (!status.available) return { action: 'skip', reason: 'current' }
   if (inputs.held) return { action: 'skip', reason: 'held', note: inputs.held }
   if (binary) {
-    if (!inputs.writable) return { action: 'skip', reason: 'not-writable', note: `make ${binary.root} writable by this user, or run install.sh again as its owner` }
+    if (!inputs.writable) return { action: 'skip', reason: 'not-writable', note: notWritableFix(status.install) }
     return { action: 'install-file', version: status.latest, install: binary }
   }
   if (!status.install.manager) return { action: 'skip', reason: 'no-manager' }
-  if (!inputs.writable) {
-    return { action: 'skip', reason: 'not-writable', note: `sudo ${status.install.updateCommand ?? 'npm install -g open-walnut@latest'}` }
-  }
+  if (!inputs.writable) return { action: 'skip', reason: 'not-writable', note: notWritableFix(status.install) }
   return { action: 'install', version: status.latest, argv: managerArgv(status.install.manager, `open-walnut@${status.latest}`, status.install.runtimePrefix) }
 }
 

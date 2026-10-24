@@ -116,10 +116,13 @@ const UPDATE_CHECK_DEADLINE_MS = 8_000
 /**
  * The status plus whether `open-walnut web` installs updates on start (config `updates.auto`),
  * for the card's wording. Only an npm or binary install updates itself; Homebrew and source never do.
+ * An install this server's user cannot write (a root-owned npm prefix, installed with
+ * `sudo npm i -g`) does not either, and its command is the sudo one the start names.
  */
 async function updateStatusForClient() {
   const { getUpdateChecker } = await import('../../core/self-update/update-check.js')
-  const { autoUpdateEnabled } = await import('../../core/self-update/startup-update.js')
+  const { autoUpdateEnabled, installWritable } = await import('../../core/self-update/startup-update.js')
+  const { notWritableFix } = await import('../../core/self-update/install-kind.js')
   let configAuto: boolean | undefined
   try { configAuto = (await getConfig()).updates?.auto } catch { /* default */ }
   const status = getUpdateChecker().status()
@@ -134,8 +137,12 @@ async function updateStatusForClient() {
   // Installed after this server started (the startup update outlived its budget): a restart runs it.
   const { installedInBackground } = await import('../../core/self-update/background-install.js')
   const installed = installedInBackground()
+  const writable = !selfUpdates || installWritable(status.install)
+  const install = !writable && status.install.kind === 'npm' && status.install.updateCommand
+    ? { ...status.install, updateCommand: notWritableFix(status.install) }
+    : status.install
   return {
-    ...status, autoUpdate: selfUpdates && autoUpdateEnabled(configAuto, process.env),
+    ...status, install, autoUpdate: selfUpdates && writable && autoUpdateEnabled(configAuto, process.env),
     ...(brewHint ? { brewHint } : {}), ...(installed ? { installed } : {}),
   }
 }

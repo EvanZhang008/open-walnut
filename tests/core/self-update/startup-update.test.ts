@@ -11,7 +11,7 @@ import { guardedPath } from '../../setup/exec-guard.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-startup-update'))
 
 import {
-  APPLIED_ENV, LAUNCHER_UPDATES_ENV, READY_FILE_ENV, autoUpdateEnabled, binaryRootWritable, decideStartupUpdate, installDirWritable, reexecSelf, relaunchArgv, updateOnStart, watchStop,
+  APPLIED_ENV, LAUNCHER_UPDATES_ENV, READY_FILE_ENV, autoUpdateEnabled, binaryRootWritable, decideStartupUpdate, installDirWritable, installWritable, reexecSelf, relaunchArgv, updateOnStart, watchStop,
   type ReexecResult, type StartupUpdateDeps, type UpdateStop,
 } from '../../../src/core/self-update/startup-update.js'
 import type { UpdateStatus } from '../../../src/core/self-update/update-check.js'
@@ -44,6 +44,26 @@ describe('installDirWritable', () => {
     const parentReadOnly = (p: string) => { if (p === '/usr/local/lib/node_modules') throw new Error('EACCES') }
     expect(installDirWritable(NPM_ROOT, parentReadOnly)).toBe(false)
     expect(installDirWritable(null, ok)).toBe(false)
+  })
+})
+
+describe('installWritable', () => {
+  // The one question the start, `walnut update` and the console's card all ask.
+  const readOnly = (dirs: string[]) => (p: string) => { if (dirs.includes(p)) throw new Error('EACCES') }
+  const NPM = { kind: 'npm' as const, sourceDir: null, packageRoot: NPM_ROOT, manager: 'npm' as const, updateCommand: 'npm install -g open-walnut@latest' }
+  it('an npm install: its package root and the directory npm renames it in', () => {
+    expect(installWritable(NPM, vi.fn())).toBe(true)
+    expect(installWritable(NPM, readOnly(['/usr/local/lib/node_modules']))).toBe(false)
+  })
+  it('a compiled file: its versions/ and bin/', () => {
+    const FILE = { kind: 'binary' as const, sourceDir: null, packageRoot: null, manager: null, updateCommand: 'walnut update', binary: { root: '/opt/walnut', target: 'linux-x64', version: '0.6.99' } }
+    expect(installWritable(FILE, vi.fn())).toBe(true)
+    expect(installWritable(FILE, readOnly(['/opt/walnut/bin']))).toBe(false)
+  })
+  it('an install Walnut never updates itself is not asked about', () => {
+    const never = () => { throw new Error('EACCES') }
+    expect(installWritable({ kind: 'other', sourceDir: null, packageRoot: '/opt/x', manager: null, updateCommand: 'brew upgrade open-walnut' }, never)).toBe(true)
+    expect(installWritable({ kind: 'source', sourceDir: '/src', packageRoot: '/src', manager: null, updateCommand: null }, never)).toBe(true)
   })
 })
 
