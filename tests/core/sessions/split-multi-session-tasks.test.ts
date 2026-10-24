@@ -13,7 +13,8 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
 }));
 
 import { getSessionByClaudeId, getSessionsForTask, createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
-import { closeDb, getDb } from '../../../src/core/session-db.js';
+import { closeDb, getDb, SESSION_DB_PATH } from '../../../src/core/session-db.js';
+import Database from 'better-sqlite3';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { addTask, getTask, linkSession, mergeTaskInto, updateTaskRaw, SessionOwnedByOtherTaskError } from '../../../src/core/task-manager.js';
 import { splitMultiSessionTasks } from '../../../src/core/sessions/split-multi-session-tasks.js';
@@ -101,6 +102,31 @@ describe('splitting legacy tasks that hold several sessions', () => {
     // The other task's session stays the other task's.
     expect((await getSessionByClaudeId('elsewhere'))?.taskId).toBe(other.id);
     expect(await splitMultiSessionTasks()).toEqual({ tasks: 0, detached: 0, guardReady: true });
+  });
+
+  it('a rollback round trip: an older Walnut adds a second session, the next start splits it off again', async () => {
+    const { task } = await addTask({ title: 'Planned work', project: 'Demo' });
+    await createSessionRecord('plan', task.id, 'Demo');
+    expect(await splitMultiSessionTasks()).toEqual({ tasks: 0, detached: 0, guardReady: true });
+    closeDb();
+    _resetSessionTrackerForTesting();
+
+    // The Node release executes the plan: a new session on the same task, written
+    // through its own connection, which carries no guard.
+    const older = new Database(SESSION_DB_PATH);
+    try {
+      older.prepare(`INSERT INTO sessions (claude_session_id, task_id, project, process_status, mode, started_at, last_active_at, message_count, archived, status_revision)
+        VALUES ('exec', ?, '', 'idle', 'default', ?, ?, 4, 0, 1)`).run(task.id, '2026-10-24T00:00:00.000Z', '2026-10-24T00:00:00.000Z');
+    } finally {
+      older.close();
+    }
+    await updateTaskRaw(task.id, { session_id: 'exec', exec_session_id: 'exec', plan_session_id: 'plan', session_ids: ['plan', 'exec'] }, { source: 'test' });
+
+    // Back on this build: the task keeps the session it names, the plan becomes history.
+    expect(await splitMultiSessionTasks()).toEqual({ tasks: 1, detached: 1, guardReady: true });
+    expect((await getSessionsForTask(task.id)).map((s) => s.claudeSessionId)).toEqual(['exec']);
+    expect((await getSessionByClaudeId('plan'))?.legacyTaskId).toBe(task.id);
+    await expect(createSessionRecord('another', task.id, 'Demo')).rejects.toBeInstanceOf(TaskSessionTakenError);
   });
 
   it('keeps the newest live session when the task names none of its rows', async () => {

@@ -22,9 +22,11 @@ import {
   updateSessionRecord,
   _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js';
-import { closeDb, getDb } from '../../../src/core/session-db.js';
+import { closeDb, getDb, SESSION_DB_PATH } from '../../../src/core/session-db.js';
+import Database from 'better-sqlite3';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
+  dropFileGuardTriggers,
   ensureOneSessionPerTaskGuard,
   ONE_SESSION_PER_TASK_TRIGGERS,
   sessionHasNoConversation,
@@ -122,7 +124,7 @@ describe('the guard triggers', () => {
     expect(ensureOneSessionPerTaskGuard(db)).toBe(false);
     db.prepare('UPDATE sessions SET task_id = NULL WHERE claude_session_id = ?').run('l-1');
     expect(ensureOneSessionPerTaskGuard(db)).toBe(true);
-    const names = db.prepare(`SELECT name FROM sqlite_master WHERE type='trigger'`).pluck().all();
+    const names = db.prepare(`SELECT name FROM temp.sqlite_master WHERE type='trigger'`).pluck().all();
     expect(names).toEqual(expect.arrayContaining([...ONE_SESSION_PER_TASK_TRIGGERS]));
     // SQLite itself now refuses a second row, even one written around the guard.
     expect(() => insertLegacyRow('l-3', 'task-x', '2026-10-03T00:00:00.000Z')).toThrow(/one session per task/);
@@ -140,6 +142,43 @@ describe('the guard triggers', () => {
     // The same row written again (same id, same task) still goes through.
     expect(() => db.prepare(`INSERT OR REPLACE INTO sessions (claude_session_id, task_id, project, process_status, mode, started_at, last_active_at, message_count, archived, status_revision)
       VALUES ('keep-me', 'task-r', '', 'idle', 'default', 'x', 'x', 2, 0, 2)`).run()).not.toThrow();
+  });
+
+  it('live on this connection only: the file carries none, so a Walnut from before the rule still writes after a rollback', async () => {
+    await createSessionRecord('mine', 'task-rb', 'demo');
+    const db = getDb()!;
+    expect(ensureOneSessionPerTaskGuard(db)).toBe(true);
+    expect(db.prepare(`SELECT name FROM main.sqlite_master WHERE type='trigger'`).pluck().all()).toEqual([]);
+    // A second connection is what an older build opens: it gives the task a second
+    // session (executing a plan did) and the write lands instead of aborting
+    // after its CLI started.
+    const older = new Database(SESSION_DB_PATH);
+    try {
+      older.prepare(`INSERT INTO sessions (claude_session_id, task_id, project, process_status, mode, started_at, last_active_at, message_count, archived, status_revision)
+        VALUES ('exec', 'task-rb', '', 'idle', 'default', 'x', 'x', 1, 0, 1)`).run();
+    } finally {
+      older.close();
+    }
+    expect(db.prepare('SELECT claude_session_id FROM sessions WHERE task_id = ? ORDER BY claude_session_id').pluck().all('task-rb')).toEqual(['exec', 'mine']);
+    // This build's own connection still refuses one.
+    expect(() => insertLegacyRow('third', 'task-rb', '2026-10-03T00:00:00.000Z')).toThrow(/one session per task/);
+  });
+
+  it('removes the triggers an earlier build stored in the file and arms them on the connection', async () => {
+    await createSessionRecord('only', 'task-f', 'demo');
+    const db = getDb()!;
+    for (const name of ONE_SESSION_PER_TASK_TRIGGERS) {
+      db.exec(`CREATE TRIGGER ${name} BEFORE INSERT ON sessions WHEN NEW.task_id = 'never' BEGIN SELECT RAISE(ABORT, 'one session per task'); END`);
+    }
+    expect(dropFileGuardTriggers(db)).toBe(2);
+    expect(dropFileGuardTriggers(db)).toBe(0);
+    for (const name of ONE_SESSION_PER_TASK_TRIGGERS) {
+      db.exec(`CREATE TRIGGER ${name} BEFORE INSERT ON sessions WHEN NEW.task_id = 'never' BEGIN SELECT RAISE(ABORT, 'one session per task'); END`);
+    }
+    expect(ensureOneSessionPerTaskGuard(db)).toBe(true);
+    expect(db.prepare(`SELECT name FROM main.sqlite_master WHERE type='trigger'`).pluck().all()).toEqual([]);
+    expect(db.prepare(`SELECT name FROM temp.sqlite_master WHERE type='trigger' ORDER BY name`).pluck().all()).toEqual([...ONE_SESSION_PER_TASK_TRIGGERS].sort());
+    expect(() => insertLegacyRow('second', 'task-f', '2026-10-03T00:00:00.000Z')).toThrow(/one session per task/);
   });
 
   it('drops the unique index an earlier build created', async () => {

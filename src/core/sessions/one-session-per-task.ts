@@ -5,12 +5,21 @@
  *
  * The rule lives on the session store, the source of truth: every write that
  * would give a task a second row is refused in code, and SQLite triggers
- * (created once the legacy data is split) refuse it too. Triggers, not a unique
+ * (armed once the legacy data is split) refuse it too. Triggers, not a unique
  * index: the store writes with INSERT OR REPLACE, which settles a unique
  * conflict by DELETING the other row, so an index would turn any write that
- * slips past the guard (an older build after a rollback) into a silent loss of
- * the task's conversation. A trigger aborts the write instead. Task-side fields (`session_id`, the legacy
+ * slips past the guard into a silent loss of the task's conversation. A trigger
+ * aborts the write instead. Task-side fields (`session_id`, the legacy
  * plan/exec slots, `session_ids`) are a cache that names that one session.
+ *
+ * The triggers are TEMP: they belong to this build's connection, never to the
+ * file. A Walnut from before the rule (0.6.17, the Node release a user rolls
+ * back to) still gives a task a second session when it executes a plan or
+ * starts one for an existing task; with the triggers in the file that write
+ * aborted after the CLI had started, so the session ran unrecorded. Without
+ * them the old build works as it always did, and the next start of this build
+ * splits the task again (split-multi-session-tasks.ts). Files that carry the
+ * triggers from an earlier build lose them on the next open.
  */
 import type { Database as DatabaseType } from 'better-sqlite3';
 import type { SessionRecord } from '../types.js';
@@ -71,23 +80,40 @@ export function countTasksWithSeveralSessions(handle: DatabaseType): number {
   return row.n;
 }
 
+const TRIGGER_NAMES_SQL = ONE_SESSION_PER_TASK_TRIGGERS.map(() => '?').join(', ');
+
 /**
- * Create the guard triggers once no task holds two rows. Returns false (and
- * creates nothing) while legacy duplicates remain: the in-code guard still
- * refuses every new duplicate, and the split migration removes the old ones.
+ * Remove the guard triggers an earlier build stored in the file itself, where a
+ * Walnut from before the rule meets them after a rollback. Returns how many went.
+ */
+export function dropFileGuardTriggers(handle: DatabaseType): number {
+  const names = handle
+    .prepare(`SELECT name FROM main.sqlite_master WHERE type = 'trigger' AND name IN (${TRIGGER_NAMES_SQL})`)
+    .pluck()
+    .all(...ONE_SESSION_PER_TASK_TRIGGERS) as string[];
+  for (const name of names) handle.exec(`DROP TRIGGER IF EXISTS main."${name}"`);
+  return names.length;
+}
+
+/**
+ * Arm the guard triggers on this connection once no task holds two rows.
+ * Returns false (and arms nothing) while legacy duplicates remain: the in-code
+ * guard still refuses every new duplicate, and the split migration removes the
+ * old ones. TEMP triggers, so the file never carries them (see the header).
  */
 export function ensureOneSessionPerTaskGuard(handle: DatabaseType): boolean {
   handle.exec(`DROP INDEX IF EXISTS ${RETIRED_INDEX}`);
+  dropFileGuardTriggers(handle);
   const present = handle
-    .prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name IN (${ONE_SESSION_PER_TASK_TRIGGERS.map(() => '?').join(', ')})`)
+    .prepare(`SELECT COUNT(*) AS n FROM temp.sqlite_master WHERE type = 'trigger' AND name IN (${TRIGGER_NAMES_SQL})`)
     .get(...ONE_SESSION_PER_TASK_TRIGGERS) as { n: number };
   if (present.n === ONE_SESSION_PER_TASK_TRIGGERS.length) return true;
   if (countTasksWithSeveralSessions(handle) > 0) return false;
-  const clash = `${taskRowSql('NEW.')} AND EXISTS (SELECT 1 FROM sessions s WHERE s.task_id = NEW.task_id
+  const clash = `${taskRowSql('NEW.')} AND EXISTS (SELECT 1 FROM main.sessions s WHERE s.task_id = NEW.task_id
     AND s.claude_session_id <> NEW.claude_session_id AND ${taskRowSql('s.')})`;
   const abort = `BEGIN SELECT RAISE(ABORT, '${ONE_SESSION_PER_TASK_ABORT}'); END`;
-  handle.exec(`CREATE TRIGGER IF NOT EXISTS ${ONE_SESSION_PER_TASK_TRIGGERS[0]} BEFORE INSERT ON sessions WHEN ${clash} ${abort}`);
-  handle.exec(`CREATE TRIGGER IF NOT EXISTS ${ONE_SESSION_PER_TASK_TRIGGERS[1]} BEFORE UPDATE OF task_id, archive_reason ON sessions WHEN ${clash} ${abort}`);
+  handle.exec(`CREATE TEMP TRIGGER IF NOT EXISTS ${ONE_SESSION_PER_TASK_TRIGGERS[0]} BEFORE INSERT ON main.sessions WHEN ${clash} ${abort}`);
+  handle.exec(`CREATE TEMP TRIGGER IF NOT EXISTS ${ONE_SESSION_PER_TASK_TRIGGERS[1]} BEFORE UPDATE OF task_id, archive_reason ON main.sessions WHEN ${clash} ${abort}`);
   return true;
 }
 
