@@ -292,8 +292,9 @@ function clipLabel(text: string): string {
 
 /** URLs a task remembers having been tagged by Walnut (Task.auto_links), newest kept. */
 export const MAX_AUTO_LINKS = 200
-/** Link tags a task holds before Walnut stops adding more on its own. */
-export const MAX_LINK_TAGS = 12
+/** Link tags a task holds before Walnut stops adding more on its own: only the few that matter
+ *  (the user, 2026-10-23: "only most important, max 3"). */
+export const MAX_LINK_TAGS = 3
 
 /** The candidates worth adding to a task: a URL the task already holds under any key, or one
  *  Walnut tagged before (the user may have removed or relabelled it), is skipped. */

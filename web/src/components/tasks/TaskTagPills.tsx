@@ -18,6 +18,7 @@ import { useTagDisplay } from '@/stores/tag-display-store';
 import { shownTags, tagValue, type CompiledTagDisplay } from '../../../../src/core/tag-display-rules';
 import { isLinkTag, linkTagKey, linkTagLabel, linkTagShowsId } from '../../../../src/core/link-tags';
 import '@/styles/session-header-pills.css';
+import '@/styles/row-pills.css';
 import { effectiveTags } from '../../../../src/core/tag-model';
 
 type TaggedTask = { tags?: readonly string[]; created_at?: string; updated_at?: string };
@@ -106,7 +107,7 @@ function OverflowMenu({ rest, compiled, onOpenPath }: { rest: string[]; compiled
   );
 }
 
-export function TaskTagPills({ tags, task, max = 2, className, linksFirst, menu, onOpenPath }: {
+export function TaskTagPills({ tags, task, max = 1, className, linksFirst, menu, onOpenPath }: {
   tags?: readonly string[]; task?: TaggedTask; max?: number; className?: string;
   /** Shows the link tags, before the other tags: the session header, where a link is what one
    *  opens. Every other surface (a task row, a card) leaves link tags off (2026-10-23). */
@@ -122,13 +123,19 @@ export function TaskTagPills({ tags, task, max = 2, className, linksFirst, menu,
     ? [...ordered.filter((tag) => isLinkTag(tag)), ...ordered.filter((tag) => !isLinkTag(tag))]
     : ordered.filter((tag) => !isLinkTag(tag));
   if (shown.length === 0) return null;
+  const head = shown.slice(0, max);
   const rest = shown.slice(max);
+  const more = rest.length > 0 && (menu
+    ? <OverflowMenu rest={rest} compiled={compiled} onOpenPath={onOpenPath} />
+    : <span className="tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled)).join(', ')}>+{rest.length}</span>);
+  const last = head.at(-1)!;
   return (
     <span className={className ? `task-tag-pills ${className}` : 'task-tag-pills'} data-testid="task-tag-pills">
-      {shown.slice(0, max).map((tag) => <Pill key={tag} tag={tag} compiled={compiled} onOpenPath={onOpenPath} />)}
-      {rest.length > 0 && (menu
-        ? <OverflowMenu rest={rest} compiled={compiled} onOpenPath={onOpenPath} />
-        : <span className="tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled)).join(', ')}>+{rest.length}</span>)}
+      {head.slice(0, -1).map((tag) => <Pill key={tag} tag={tag} compiled={compiled} onOpenPath={onOpenPath} />)}
+      {/* "+N" rides inside the last pill ("thread +3"), never as a pill of its own (2026-10-23). */}
+      {more
+        ? <span className="tag-pill-group" key={last}><Pill tag={last} compiled={compiled} onOpenPath={onOpenPath} />{more}</span>
+        : <Pill key={last} tag={last} compiled={compiled} onOpenPath={onOpenPath} />}
     </span>
   );
 }

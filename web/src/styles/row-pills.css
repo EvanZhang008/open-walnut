@@ -1,0 +1,83 @@
+/* "+N" inside the tag pill (TaskTagPills): the last tag and its count read as ONE pill,
+   "thread +3", sharing the tag's tint; the count stays its own click (the header's menu). */
+.tag-pill-group {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 8px;
+  background: rgba(175, 82, 222, 0.1);
+  vertical-align: middle;
+}
+:root[data-theme="dark"] .tag-pill-group { background: rgba(175, 82, 222, 0.18); }
+.tag-pill-group > .tag-chip { background: transparent; min-width: 0; }
+.tag-pill-group > .tag-chip:first-child { padding-right: 3px; }
+.tag-pill-group > .tag-chip-overflow {
+  flex: none;
+  padding-left: 3px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  opacity: 0.75;
+}
+.tag-pill-group > .tag-chip-overflow-btn:hover,
+.tag-pill-group > .tag-chip-overflow-btn.open { background: rgba(175, 82, 222, 0.14); opacity: 1; }
+.session-panel-header .session-panel-header-top .tag-pill-group { border-radius: 10px; }
+.session-panel-header .session-panel-header-top .tag-pill-group > .tag-chip:first-child { padding-right: 3px; }
+.session-panel-header .session-panel-header-top .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
+
+/* Every pill in a task list is one size: tags, Trigger, Cron, Worker, Leader, the due date and
+   the search row's tier (2026-10-23: they were 16 to 17px with 10, 10.5 and 11px text).
+   `html` + two classes outranks each pill's own rule, whatever order the files load in. */
+html .todo-panel :is(.tag-chip, .task-row-pill, .todo-item-due-pill, .todo-search-tier-pill) {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding-block: 0;
+  padding-inline: 7px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 12px;
+}
+html .todo-panel .tag-pill-group > .tag-chip:first-child { padding-right: 3px; }
+html .todo-panel .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
+
+/* A search row keeps to two lines: the title owns the first, and the row's pills follow the
+   tier and project on the second, never on a third line of their own (2026-10-23). The title
+   row dissolves into the row's content box, which takes over its padding and its role as the
+   anchor of the circle, the dot and the kebab. Desktop list only, the same query that lays the
+   title row out this way (home-navigation.css). */
+@media (min-width: 769px) and (min-height: 501px), (min-width: 769px) and (pointer: fine) {
+  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 4px;
+    padding-left: 24px;
+    padding-right: 28px;
+  }
+  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) > .todo-item-title-row {
+    display: contents;
+  }
+  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) .todo-item-title {
+    flex: 1 0 100%;
+    width: auto;
+  }
+  /* The tier and project take what the pills leave (basis 0), the project name cut short
+     first, so a crowded row still fits its pills on the second line. */
+  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) > .todo-search-meta-row {
+    order: 1;
+    flex: 1 1 0;
+    min-width: 64px;
+    overflow: hidden;
+    padding-left: 0;
+  }
+  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) > .todo-item-title-row > :not(.todo-item-title, .task-phase-icon-btn, .task-kebab-wrapper, .task-unread-dot, .task-start-btn) {
+    order: 2;
+  }
+}
