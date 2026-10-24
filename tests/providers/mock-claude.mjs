@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { OPTIONAL_VALUE_FLAGS, VALUE_FLAGS } from './mock-claude-flags.mjs';
 
 const args = process.argv.slice(2);
 let transcriptParent = null;
@@ -129,40 +130,43 @@ let modelFlag = null;
 let effortFlag = null;
 let dangerouslySkipPermissions = false;
 
+// Every flag Walnut's spawns pass is known, with the value it takes
+// (mock-claude-flags.mjs). Only a bare argument is the message: an unknown flag
+// read as one made `--permission-prompt-tool stdio` a turn that answered "stdio".
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--resume') {
+  const arg = args[i];
+  // `--flag=value` carries its value in the same argument.
+  const eq = arg.startsWith('--') ? arg.indexOf('=') : -1;
+  const name = eq > 0 ? arg.slice(0, eq) : arg;
+  const inline = eq > 0 ? arg.slice(eq + 1) : undefined;
+  if (OPTIONAL_VALUE_FLAGS.has(name)) {
     resume = true;
     // --resume can take a session ID as its value (UUID format)
-    if (args[i + 1] && !args[i + 1].startsWith('-')) {
-      sessionId = args[++i];
-    }
-  } else if (args[i] === '--permission-mode' && args[i + 1]) {
-    permissionMode = args[++i];
-  } else if (args[i] === '--append-system-prompt' && args[i + 1]) {
-    appendSystemPrompt = args[++i];
-  } else if (args[i] === '--output-format' && args[i + 1]) {
-    outputFormat = args[++i];
-  } else if (args[i] === '--input-format' && args[i + 1]) {
-    inputFormat = args[++i];
-  } else if (args[i] === '--model' && args[i + 1]) {
-    modelFlag = args[++i];
-  } else if (args[i] === '--effort' && args[i + 1]) {
-    effortFlag = args[++i];
-  } else if (args[i] === '--dangerously-skip-permissions' || args[i] === '--allow-dangerously-skip-permissions') {
+    if (inline !== undefined) sessionId = inline;
+    else if (args[i + 1] && !args[i + 1].startsWith('-')) sessionId = args[++i];
+  } else if (VALUE_FLAGS.has(name)) {
+    const value = inline ?? args[++i];
+    if (value === undefined) continue;
+    if (name === '--permission-mode') permissionMode = value;
+    else if (name === '--append-system-prompt') appendSystemPrompt = value;
+    else if (name === '--output-format') outputFormat = value;
+    else if (name === '--input-format') inputFormat = value;
+    else if (name === '--model') modelFlag = value;
+    else if (name === '--effort') effortFlag = value;
+    // Pre-assigned session id (init-only spawn): adopted like --resume's.
+    else if (name === '--session-id') sessionId = value;
+  } else if (name === '--dangerously-skip-permissions' || name === '--allow-dangerously-skip-permissions') {
     // Both spellings grant the bypass CAPABILITY. Walnut spawns the `--allow-`
     // form because the bare flag also SELECTS bypassPermissions and outranks
     // `--permission-mode`. The bare form is still accepted here so a session
     // recorded before that fix (whose stored argv has the bare flag) keeps
     // replaying identically.
     dangerouslySkipPermissions = true;
-  } else if (args[i] === '--session-id' && args[i + 1]) {
-    // Pre-assigned session id (init-only spawn) — adopt it like --resume does.
-    sessionId = args[++i];
-  } else if (args[i] === '-p' || args[i] === '--verbose') {
-    // skip known flags
-  } else {
-    message = args[i];
+  } else if (!arg.startsWith('-')) {
+    message = arg;
   }
+  // Anything else is a flag with no value (BARE_FLAGS) or one this mock does not
+  // know: skipped, never the message.
 }
 
 // Resolver for an init-only spawn awaiting its first FIFO user message (see below).
