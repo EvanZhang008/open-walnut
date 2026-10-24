@@ -33,8 +33,9 @@
  * Left as is: a whole JS number binds as INTEGER on bun and as REAL in
  * better-sqlite3. Same value in INTEGER and REAL columns and in comparisons;
  * it differs only as TEXT ('3' vs '3.0'), in integer division and in json text.
- * bun also accepts what better-sqlite3 refuses (a boolean, get() on a write,
- * two statements in one prepare).
+ * bun also accepts what better-sqlite3 refuses (a boolean, get() on a write).
+ * Two statements in one prepare, and a transaction function that returns a
+ * promise, are refused here as better-sqlite3 refused them.
  */
 
 import fs from 'node:fs'
@@ -42,6 +43,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
+import { checkOneStatement, refusePromise } from './sqlite-guards.js'
 
 const require = createRequire(import.meta.url)
 
@@ -492,7 +494,9 @@ class SqliteDatabase {
   }
 
   prepare(source: string): SqliteStatement {
-    const stmt = this.handle().prepare(source)
+    const handle = this.handle()
+    checkOneStatement(source)
+    const stmt = handle.prepare(source)
     const ref = new WeakRef(stmt)
     this.statements.add(ref)
     this.collected.register(stmt, ref)
@@ -505,7 +509,9 @@ class SqliteDatabase {
   }
 
   pragma(source: string, options: PragmaOptions = {}): unknown {
-    const stmt = this.handle().prepare(`PRAGMA ${source}`)
+    const handle = this.handle()
+    checkOneStatement(`PRAGMA ${source}`)
+    const stmt = handle.prepare(`PRAGMA ${source}`)
     try {
       if (options.simple) {
         const first = stmt.values()[0]
@@ -518,7 +524,7 @@ class SqliteDatabase {
   }
 
   transaction<F extends (...args: never[]) => unknown>(fn: F): Transaction<F> {
-    return this.handle().transaction(fn)
+    return this.handle().transaction(refusePromise(fn))
   }
 
   async backup(destination: string, _options: BackupOptions = {}): Promise<{ totalPages: number; remainingPages: number }> {

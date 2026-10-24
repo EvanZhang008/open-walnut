@@ -94,6 +94,18 @@ describe('PluginStorage', () => {
     expect((await fs.stat(storage.dataDir)).mode & 0o777).toBe(0o700)
     expect((await fs.stat(path.join(storage.dataDir, 'plugin.sqlite'))).mode & 0o777).toBe(0o600)
   })
+
+  it('refuses two statements in run, get and all, and runs several in exec and a migration', async () => {
+    await storage.database.migrate([
+      { version: 1, sql: 'CREATE TABLE a (x INTEGER); CREATE TABLE b (y INTEGER);' },
+    ])
+    // bun would run the first and drop the second without a word.
+    await expect(storage.database.run('INSERT INTO a VALUES (1); INSERT INTO b VALUES (2)')).rejects.toThrow('more than one statement')
+    await expect(storage.database.all('SELECT * FROM a; SELECT * FROM b')).rejects.toThrow('more than one statement')
+    expect(await storage.database.get<{ n: number }>('SELECT count(*) AS n FROM a')).toEqual({ n: 0 })
+    await storage.database.exec('INSERT INTO a VALUES (1); INSERT INTO b VALUES (2);')
+    expect(await storage.database.all('SELECT (SELECT count(*) FROM a) AS a, (SELECT count(*) FROM b) AS b;')).toEqual([{ a: 1, b: 1 }])
+  })
 })
 
 describe('PluginDatabaseClient bad input', () => {
