@@ -49,6 +49,34 @@ export interface DetachedInstallOptions {
   pollMs?: number
 }
 
+/**
+ * npm moves the installed package aside before it downloads the new one, so for the whole
+ * download a start finds no Walnut there (measured: 100 s at 512 KB/s, and the start failed
+ * with ENOENT). The download goes first, with the install untouched (`npm cache add` of the
+ * launcher and this machine's platform package), then the install runs from the cache: what
+ * is left of that gap is the unpack. Null when there is nothing to fetch ahead (not npm, or
+ * the platform package is not known).
+ */
+export function prefetchArgv(argv: { file: string; args: string[] }, spec: string, platformSpec: string | null): { file: string; args: string[] } | null {
+  const i = argv.args.indexOf('install')
+  if (i < 0 || !platformSpec) return null
+  // What comes before `install` stays: the archive's npm-cli.js after its Node.
+  return { file: argv.file, args: [...argv.args.slice(0, i), 'cache', 'add', spec, platformSpec] }
+}
+
+/** `@open-walnut/<target>@<version>` for the platform package this process runs from, or null. */
+export function platformSpecFor(execPath: string, version: string): string | null {
+  const m = /\/node_modules\/@open-walnut\/((?:darwin|linux)-(?:arm64|x64)(?:-musl)?)\/[^/]+$/.exec(execPath.replace(/\\/g, '/'))
+  return m ? `@open-walnut/${m[1]}@${version}` : null
+}
+
+/** Commands run one after another (a failed fetch ahead does not stop the install); the last one's exit is the job's. */
+export function sequenceArgv(steps: Array<{ file: string; args: string[] }>): { file: string; args: string[] } {
+  if (steps.length === 1) return steps[0]!
+  const q = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`
+  return { file: '/bin/sh', args: ['-c', steps.map((st) => [st.file, ...st.args].map(q).join(' ')).join('; ')] }
+}
+
 export function startDetachedInstall(file: string, args: string[], o: DetachedInstallOptions): InstallJob {
   fs.mkdirSync(path.dirname(o.logFile), { recursive: true })
   const fd = fs.openSync(o.logFile, 'w')

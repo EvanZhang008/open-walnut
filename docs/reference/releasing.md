@@ -561,7 +561,9 @@ guess):
   `config.yaml`, or with `WALNUT_NO_AUTO_UPDATE=1`. An install gets one minute: whoever waits for
   the port (the Mac app, a service manager, a person) must not wait for npm, which took 6.5
   minutes under load. Past that the current version starts and the install goes on (the file's
-  download in the server; npm detached, its output in `~/.open-walnut/local/update-install.log`,
+  download in the server; npm detached, the release fetched into its cache before the installed
+  copy is touched (npm moves that copy aside for the whole download, so a start then found none),
+  its output in `~/.open-walnut/local/update-install.log`,
   so a stopped server or a closed pipe never ends it half way, and a record keeps the next start
   from running a second npm into the same prefix); once it is in, the update card says
   `<version> installed` and a restart runs it, watched as the restart after an install is (one

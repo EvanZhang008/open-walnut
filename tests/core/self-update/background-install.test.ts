@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { installRunning, startDetachedInstall } from '../../../src/core/self-update/background-install.js'
+import { installRunning, platformSpecFor, prefetchArgv, sequenceArgv, startDetachedInstall } from '../../../src/core/self-update/background-install.js'
 import { processStart } from '../../../src/core/self-update/install-lock.js'
 
 let dir: string
@@ -105,5 +105,36 @@ describe('the pending version', () => {
     expect(fs.existsSync(file)).toBe(false)
     fs.writeFileSync(file, '{"version":1}')
     expect(readUnverified(file)).toBeNull()
+  })
+})
+
+describe('the download goes first', () => {
+  const PKG = '/Users/a/.local/share/open-walnut/app/runtime/lib/node_modules/open-walnut'
+  it('names the platform package this process runs from', () => {
+    expect(platformSpecFor(`${PKG}/node_modules/@open-walnut/darwin-arm64/walnut`, '0.7.0')).toBe('@open-walnut/darwin-arm64@0.7.0')
+    expect(platformSpecFor('/usr/lib/node_modules/open-walnut/node_modules/@open-walnut/linux-x64-musl/walnut', '0.7.0')).toBe('@open-walnut/linux-x64-musl@0.7.0')
+    // Not from a platform package (the versions layout, a source checkout): nothing to fetch ahead.
+    expect(platformSpecFor('/Users/a/.local/share/open-walnut/versions/0.6.9/walnut', '0.7.0')).toBeNull()
+  })
+
+  it('turns npm\'s install into a cache add of the same packages, for npm only', () => {
+    const archive = { file: '/r/bin/node', args: ['/r/lib/node_modules/npm/bin/npm-cli.js', 'install', '-g', '--prefix', '/r', 'open-walnut@0.7.0', '--allow-scripts=x'] }
+    expect(prefetchArgv(archive, 'open-walnut@0.7.0', '@open-walnut/darwin-arm64@0.7.0')).toEqual({ file: '/r/bin/node', args: ['/r/lib/node_modules/npm/bin/npm-cli.js', 'cache', 'add', 'open-walnut@0.7.0', '@open-walnut/darwin-arm64@0.7.0'] })
+    expect(prefetchArgv({ file: 'npm', args: ['install', '-g', 'open-walnut@0.7.0', '--allow-scripts=x'] }, 'open-walnut@0.7.0', '@open-walnut/linux-x64@0.7.0')).toEqual({ file: 'npm', args: ['cache', 'add', 'open-walnut@0.7.0', '@open-walnut/linux-x64@0.7.0'] })
+    expect(prefetchArgv({ file: 'pnpm', args: ['add', '-g', 'open-walnut@0.7.0'] }, 'open-walnut@0.7.0', '@open-walnut/linux-x64@0.7.0')).toBeNull()
+    expect(prefetchArgv({ file: 'npm', args: ['install', '-g', 'open-walnut@0.7.0'] }, 'open-walnut@0.7.0', null)).toBeNull()
+  })
+
+  it('runs the steps in order; a failed fetch does not stop the install, whose exit is the job\'s', async () => {
+    const out = path.join(dir, 'out.txt')
+    const one = sequenceArgv([{ file: '/bin/sh', args: ['-c', 'exit 0'] }])
+    expect(one).toEqual({ file: '/bin/sh', args: ['-c', 'exit 0'] })
+    const job = sequenceArgv([
+      { file: '/bin/sh', args: ['-c', `echo "it's first" >> '${out}'; exit 4`] },
+      { file: '/bin/sh', args: ['-c', `echo second >> '${out}'; exit 3`] },
+    ])
+    const run = startDetachedInstall(job.file, job.args, { logFile, record, version: '0.7.0', tail: () => {} })
+    expect(await run.done).toBe(3)
+    expect(fs.readFileSync(out, 'utf8')).toBe("it's first\nsecond\n")
   })
 })

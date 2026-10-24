@@ -434,7 +434,7 @@ export async function runStartupUpdate(configAuto: () => Promise<boolean | undef
   const { UpdateChecker } = await import('./update-check.js')
   const { installFileVersion, registryBaseFor, rollBack, undoRollBack } = await import('./binary-install.js')
   const { badDirFor, clearBad, heldBack, markBad } = await import('./held-versions.js')
-  const { installRunning, noteInstalledInBackground, readUnverified, startDetachedInstall, writeUnverified } = await import('./background-install.js')
+  const { installRunning, noteInstalledInBackground, platformSpecFor, prefetchArgv, readUnverified, sequenceArgv, startDetachedInstall, writeUnverified } = await import('./background-install.js')
   const { WALNUT_HOME } = await import('../../constants.js')
   const err = (line: string) => { process.stderr.write(`${line}\n`) }
   const record = path.join(WALNUT_HOME, 'local', 'update-installing.json')
@@ -446,7 +446,12 @@ export async function runStartupUpdate(configAuto: () => Promise<boolean | undef
     writable: installDirWritable,
     held: (status) => heldBack(status.install, status.latest!, badDirFor(status.install, WALNUT_HOME)),
     run: runInherited,
-    startInstall: (file, args, version) => startDetachedInstall(file, args, { logFile: path.join(WALNUT_HOME, 'local', 'update-install.log'), record, version }),
+    startInstall: (file, args, version) => {
+      // The download first, the install untouched; then the install from the cache (background-install.ts).
+      const ahead = prefetchArgv({ file, args }, `open-walnut@${version}`, platformSpecFor(process.execPath, version))
+      const job = sequenceArgv(ahead ? [ahead, { file, args }] : [{ file, args }])
+      return startDetachedInstall(job.file, job.args, { logFile: path.join(WALNUT_HOME, 'local', 'update-install.log'), record, version })
+    },
     busy: async () => {
       const job = await installRunning(record)
       return job ? `the install of ${job.version} an earlier start began still runs (pid ${job.pid})` : null
