@@ -17,15 +17,17 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { shownTags, tagValue, type CompiledTagDisplay } from '../../../../src/core/tag-display-rules';
 import { isLinkTag, linkTagKey, linkTagLabel, linkTagShowsId } from '../../../../src/core/link-tags';
+import '@/styles/session-header-pills.css';
 import { effectiveTags } from '../../../../src/core/tag-model';
 
 type TaggedTask = { tags?: readonly string[]; created_at?: string; updated_at?: string };
 
-/** The tags a task shows, in order: every surface that draws tag pills filters through this.
- *  Given the task, its own dates (`created:` / `updated:`) count too, for a rule that shows them. */
+/** The tags a task list shows, in order (the /tasks cards and table filter through this).
+ *  Given the task, its own dates (`created:` / `updated:`) count too, for a rule that shows them.
+ *  Link tags stay off every list: they belong to the session header (2026-10-23). */
 export function useShownTags(tags: readonly string[] | undefined, task?: TaggedTask): string[] {
   const { compiled } = useTagDisplay();
-  return shownTags(task ? effectiveTags(task) : tags, compiled);
+  return shownTags(task ? effectiveTags(task) : tags, compiled).filter((tag) => !isLinkTag(tag));
 }
 
 /** Tags this short keep their whole text when the pills are squeezed; longer ones give way. */
@@ -106,7 +108,8 @@ function OverflowMenu({ rest, compiled, onOpenPath }: { rest: string[]; compiled
 
 export function TaskTagPills({ tags, task, max = 2, className, linksFirst, menu, onOpenPath }: {
   tags?: readonly string[]; task?: TaggedTask; max?: number; className?: string;
-  /** Links before the other tags (the session header, where a link is what one opens). */
+  /** Shows the link tags, before the other tags: the session header, where a link is what one
+   *  opens. Every other surface (a task row, a card) leaves link tags off (2026-10-23). */
   linksFirst?: boolean;
   /** "+N" opens the rest as a list instead of naming them in a tooltip. */
   menu?: boolean;
@@ -117,7 +120,7 @@ export function TaskTagPills({ tags, task, max = 2, className, linksFirst, menu,
   const ordered = shownTags(task ? effectiveTags(task) : tags, compiled);
   const shown = linksFirst
     ? [...ordered.filter((tag) => isLinkTag(tag)), ...ordered.filter((tag) => !isLinkTag(tag))]
-    : ordered;
+    : ordered.filter((tag) => !isLinkTag(tag));
   if (shown.length === 0) return null;
   const rest = shown.slice(max);
   return (

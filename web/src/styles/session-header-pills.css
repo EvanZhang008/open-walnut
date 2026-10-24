@@ -1,0 +1,27 @@
+/* Every pill in a session header is one size, the status badge's ("Idle", "Running"):
+   20px tall, 11px text, 10px corners. Tag, Trigger, Cron, Worker and Leader were 16px
+   beside a 20px badge (2026-10-23). Three classes, so this wins over globals.css and
+   subtask-pill.css whatever order they load in. The pills with a transparent 1px border
+   take a pixel less padding so they come out the same size. */
+.session-panel-header .session-panel-header-top :is(.tag-chip, .session-panel-badge) {
+  box-sizing: border-box;
+  height: 20px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 16px;
+  max-width: none;
+}
+.session-panel-header .session-panel-header-top :is(.task-trigger-pill, .task-team-pill, .session-cron-pill) {
+  box-sizing: border-box;
+  height: 20px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 16px;
+}
+/* The header shows one tag pill plus "+N": it is never clipped, the title gives way. */
+.session-panel-header .session-panel-title-area > .session-panel-tag-pills {
+  flex: 0 0 auto;
+  max-width: none;
+}
