@@ -33,6 +33,27 @@ function shq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+/** The daemon files the Mac starts in a daemon dir, as `<dir>/<name> --start` (the binary) or `<runtime> <dir>/daemon.cjs --start`. */
+const DAEMON_BINARY_NAMES = ['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64']
+
+/**
+ * Shell helpers for "is this pid the daemon of that dir": `w_args <pid>` prints
+ * its command line (Linux /proc; ps elsewhere, which a slim Linux image does not
+ * have), and `w_daemon <pid> <dir>` is true when that line runs a daemon file of
+ * `<dir>` the way the Mac starts one (the rule buildDaemonStopCmd applies), or
+ * is an OS service's daemon (`<install root>/versions/<sha>/daemon --service`).
+ * A pid file whose pid now names another process (a restarted container reuses
+ * pids) is no live daemon: taking it for one pointed every connect at the dead
+ * daemon's port, again on every try, until that process ended.
+ */
+export const DAEMON_PID_SH: readonly string[] = [
+  `w_args() { if [ -r /proc/self/cmdline ]; then tr '\\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; else ps -o args= -p "$1" 2>/dev/null; fi; }`,
+  // /proc ends the line with one NUL (now a space); the leading space makes `<dir>/<binary> --start` a suffix match too.
+  'w_daemon() { a=$(w_args "$1"); a=" ${a% }"; case "$a" in '
+    + [...DAEMON_BINARY_NAMES, 'daemon.cjs'].map((name) => `*" $2/${name} --start"`).join('|')
+    + '|*"/daemon --service") return 0;; esac; return 1; }',
+]
+
 /**
  * Stops the unmanaged daemon in `dir` and confirms it is gone (prints
  * `walnut-daemon-stop-confirmed`). The pid is checked to be that daemon (its
@@ -54,7 +75,8 @@ export function buildDaemonStopCmd(dir = '/tmp/open-walnut', procRoot = '/proc')
     `PROC=${shq(procRoot)}`,
     'if [ -r "$PROC/self/stat" ]; then',
     // Field 22 (the start time) is the 20th after "<pid> (<comm>) "; comm may hold ") ", so strip to the last one.
-    '  read_identity() { [ -r "$PROC/$PID/stat" ] || return 1; value=$(sed \'s/.*) //\' "$PROC/$PID/stat" 2>/dev/null | cut -d\' \' -f20); [ -n "$value" ] || return 1; printf \'%s\\n\' "$value"; }',
+    // A stat file that is there but parses empty is a failure (2), never "gone": only a pid with no stat is gone.
+    '  read_identity() { [ -r "$PROC/$PID/stat" ] || return 1; value=$(sed \'s/.*) //\' "$PROC/$PID/stat" 2>/dev/null | cut -d\' \' -f20); if [ -z "$value" ]; then [ -e "$PROC/$PID/stat" ] && return 2; return 1; fi; printf \'%s\\n\' "$value"; }',
     '  read_command() { [ -r "$PROC/$PID/cmdline" ] || return 1; tr \'\\000\' \' \' < "$PROC/$PID/cmdline" | sed \'s/ *$//\'; }',
     'else',
     '  read_identity() { value=$(ps -p "$PID" -o lstart= 2>"$ERROR_FILE"); code=$?; [ ! -s "$ERROR_FILE" ] || return 2; printf \'%s\\n\' "$value"; return "$code"; }',
@@ -65,7 +87,7 @@ export function buildDaemonStopCmd(dir = '/tmp/open-walnut', procRoot = '/proc')
     '[ "$STATUS" -eq 0 ] && [ -n "$IDENTITY" ] || exit 1',
     'COMMAND=$(read_command) || exit 1',
     '[ ! -s "$ERROR_FILE" ] || exit 1',
-    `case "$COMMAND" in ${['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64'].map((name) => shq(`${dir}/${name} --start`)).join('|')}|*${shq(` ${dir}/daemon.cjs --start`)}) ;; *) exit 1;; esac`,
+    `case "$COMMAND" in ${DAEMON_BINARY_NAMES.map((name) => shq(`${dir}/${name} --start`)).join('|')}|*${shq(` ${dir}/daemon.cjs --start`)}) ;; *) exit 1;; esac`,
     'CURRENT=$(read_identity); STATUS=$?',
     'if [ "$STATUS" -eq 1 ] && [ -z "$CURRENT" ]; then printf \'%s\\n\' walnut-daemon-stop-confirmed; exit 0; fi',
     '[ "$STATUS" -eq 0 ] && [ "$CURRENT" = "$IDENTITY" ] || exit 1',
@@ -112,6 +134,14 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
   // stop-for-upgrade'd each other's half-booted daemons in a loop (a
   // 43-minute host outage). The poll lets the FIRST attempt succeed.
   //
+  // Ready means a daemon wrote the files SINCE this start (they differ from
+  // what the dir held before nohup: a daemon writes its port, then its pid), or
+  // this start yielded to the daemon already running (it exits 0 after
+  // printing that daemon's port). A live pid alone proves nothing: a dead
+  // daemon's files stay, and after a restart (a container's above all) its pid
+  // may name another process, which `kill -0` takes for the daemon. The old
+  // port was then reported as the new daemon's, and every connect went to it.
+  //
   // Fail fast on a spawn that can never succeed: if the start log shows the
   // wrapper chain itself failed to exec (as opposed to daemon output), the
   // remaining ~40s of polling is pure spin — bail after one sleep. The error
@@ -138,23 +168,26 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
   const portFile = shq(`${dir}/daemon.port`)
   const script = shq(`${dir}/daemon.cjs`)
   const exec = opts.execPath ? shq(opts.execPath) : ''
+  const files = `$(cat ${portFile} ${pidFile} 2>/dev/null)`
+  const before = `WALNUT_BEFORE="${files}"; `
   const waitReady =
-    'WALNUT_BG=$!; WALNUT_BG_DONE=; for i in $(seq 1 22); do ' +
+    'WALNUT_BG=$!; WALNUT_BG_DONE=; WALNUT_BG_RC=; WALNUT_READY=; for i in $(seq 1 22); do ' +
     `DPID=$(cat ${pidFile} 2>/dev/null); ` +
-    `[ -s ${portFile} ] && [ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && break; ` +
+    `if [ -s ${portFile} ] && [ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null; then ` +
+    `if [ "${files}" != "$WALNUT_BEFORE" ] || [ "$WALNUT_BG_RC" = 0 ]; then WALNUT_READY=1; break; fi; fi; ` +
     `[ "$i" -ge 2 ] && grep -Eq "^(nohup|env): " ${log} 2>/dev/null && break; ` +
     'if [ -z "$WALNUT_BG_DONE" ]; then WALNUT_BG_GONE=; ' +
     'if ! kill -0 "$WALNUT_BG" 2>/dev/null; then WALNUT_BG_GONE=1; ' +
     'else case "$(ps -o stat= -p "$WALNUT_BG" 2>/dev/null)" in Z*) WALNUT_BG_GONE=1;; esac; fi; ' +
     'if [ -n "$WALNUT_BG_GONE" ]; then WALNUT_BG_DONE=1; wait "$WALNUT_BG"; WALNUT_BG_RC=$?; ' +
-    `if [ "$WALNUT_BG_RC" -ne 0 ]; then echo "walnut-daemon-exit=$WALNUT_BG_RC" >> ${log}; break; fi; fi; fi; ` +
+    `if [ "$WALNUT_BG_RC" -ne 0 ]; then echo "walnut-daemon-exit=$WALNUT_BG_RC" >> ${log}; break; fi; continue; fi; fi; ` +
     'sleep 2; done'
 
   // `[ -n "$DPID" ]` guards against an empty pid file (cat succeeds but
   // yields empty → `kill -0 ""` behavior is shell-dependent; some emit the
-  // current shell's pid).
+  // current shell's pid). Nothing is confirmed unless the poll saw the daemon ready.
   const confirmRunning =
-    `cat ${portFile} && echo && ` +
+    `[ -n "$WALNUT_READY" ] && cat ${portFile} && echo && ` +
     `DPID=$(cat ${pidFile} 2>/dev/null) && ` +
     `[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"`
 
@@ -164,17 +197,18 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
       // The daemon source itself sources ~/.zshrc / ~/.bashrc on startup to
       // populate process.env.PATH so cmdStart's spawn('claude', ...) finds
       // the CLI. See daemon-source.ts "PATH setup" block.
-      return `nohup ${envPrefix}${exec} ${script} --start > ${log} 2>&1 & ` +
+      return `${before}nohup ${envPrefix}${exec} ${script} --start > ${log} 2>&1 & ` +
         `${waitReady}; ${confirmRunning}`
     case 'binary':
       // Binary deploy — run directly, no PATH setup needed. Binary has a
-      // `--status` subcommand, so use it as the liveness confirmation.
-      return `nohup ${envPrefix}${exec} --start > ${log} 2>&1 & ` +
-        `${waitReady}; cat ${portFile} && echo && ${envPrefix}${exec} --status`
+      // `--status` subcommand (the pid alive AND the daemon answering on its
+      // port), so use it as the liveness confirmation.
+      return `${before}nohup ${envPrefix}${exec} --start > ${log} 2>&1 & ` +
+        `${waitReady}; [ -n "$WALNUT_READY" ] && cat ${portFile} && echo && ${envPrefix}${exec} --status`
     case 'node':
       // Source deploy under node — needs the shell preamble for node PATH
       // discovery (rc files, nvm init).
-      return `${opts.preamble ?? 'true'}; nohup ${envPrefix}node ${script} --start > ${log} 2>&1 & ` +
+      return `${opts.preamble ?? 'true'}; ${before}nohup ${envPrefix}node ${script} --start > ${log} 2>&1 & ` +
         `${waitReady}; ${confirmRunning}`
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { execFile } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -201,6 +201,53 @@ describe('buildDaemonStartCmd', () => {
     expect(Date.now() - started).toBeLessThan(15_000)
   })
 
+  // 2026-10-24: a dead daemon's files stay, and after a restart (a container's
+  // above all) its pid can name another live process. The poll took that `kill -0`
+  // for the daemon, so the start reported the dead daemon's port as the new one's.
+  describe("readiness never trusts a dead daemon's files", () => {
+    let other: ChildProcess | null = null
+    beforeEach(async () => {
+      other = spawn('sleep', ['60'], { stdio: 'ignore' })
+      await fsp.writeFile(path.join(dir, 'daemon.pid'), String(other.pid))
+      await fsp.writeFile(path.join(dir, 'daemon.port'), '41673')
+    })
+    afterEach(() => { other?.kill('SIGKILL'); other = null })
+
+    async function fake(name: string, body: string[]): Promise<string> {
+      const p = path.join(dir, name)
+      await fsp.writeFile(p, ['#!/bin/sh', 'if [ "$1" = "--status" ]; then echo "{\\"running\\":true}"; exit 0; fi', ...body].join('\n'), { mode: 0o755 })
+      return p
+    }
+    const startOf = (runtime: 'bun' | 'binary' | 'node', exec: string) => runtime === 'node'
+      ? buildDaemonStartCmd({ runtime, dir, preamble: `PATH=${"'"}${dir}${"'"}:"$PATH"` })
+      : buildDaemonStartCmd({ runtime, execPath: exec, dir })
+
+    it.each(['bun', 'binary', 'node'] as const)('%s: the old pid file names a live process: the start waits for the new daemon and reports its port', async (runtime) => {
+      // The new daemon takes a moment, so the first polls see only the old files.
+      const exec = await fake(runtime === 'node' ? 'node' : `fake-${runtime}`, ['sleep 3', `echo 41999 > "${dir}/daemon.port"`, `echo $$ > "${dir}/daemon.pid"`, 'sleep 5'])
+      const { stdout } = await run(startOf(runtime, exec))
+      expect(stdout.split('\n')[0]).toBe('41999')
+      expect(stdout).toContain('"running":true')
+      expect(stdout).not.toContain('41673')
+      expect(other!.exitCode).toBeNull()
+    }, 30_000)
+
+    it('the old pid file names a live process and the new daemon dies before it writes: no running line', async () => {
+      const exec = await fake('fake-bun', ['sleep 1', 'exit 1'])
+      const failed = await run(startOf('bun', exec)).then(() => null, (err: { stdout?: string }) => err)
+      expect(failed).not.toBeNull()
+      expect(failed!.stdout ?? '').not.toContain('"running":true')
+      expect(await fsp.readFile(path.join(dir, 'daemon-start.log'), 'utf8')).toContain('walnut-daemon-exit=1')
+    }, 30_000)
+
+    it.each(['bun', 'binary'] as const)('%s: a start that yields to the daemon already running (exit 0, its files untouched) reports that daemon', async (runtime) => {
+      const exec = await fake(`fake-${runtime}`, ['echo 41673', 'exit 0'])
+      const { stdout } = await run(startOf(runtime, exec))
+      expect(stdout.split('\n')[0]).toBe('41673')
+      expect(stdout).toContain('"running":true')
+    }, 30_000)
+  })
+
   it('rejects invalid env var names and multi-line values', () => {
     expect(() => buildDaemonStartCmd({ runtime: 'node', dir, env: { 'BAD NAME': '1' } })).toThrow()
     expect(() => buildDaemonStartCmd({ runtime: 'node', dir, env: { OK: 'a\nb' } })).toThrow()
@@ -227,7 +274,8 @@ describe('buildDaemonStartCmd', () => {
       '  printf \'%s\\n\' old-identity',
       '}',
     ].join('\n')
-    const output = await execFileAsync('/bin/sh', ['-c', `${stub}\n${buildDaemonStopCmd(dir)}`], {
+    // The ps branch, on Linux too: a proc root that is not there.
+    const output = await execFileAsync('/bin/sh', ['-c', `${stub}\n${buildDaemonStopCmd(dir, path.join(dir, 'no-proc'))}`], {
       env: { PATH: '/usr/bin:/bin', LAB_DIR: dir, SCENARIO: scenario }, timeout: 5000,
     }).then((result) => ({ ok: true, stdout: result.stdout }), () => ({ ok: false, stdout: '' }))
     expect(output.ok).toBe(['drain', 'reused', 'exited-before-signal'].includes(scenario))
@@ -240,7 +288,7 @@ describe('buildDaemonStartCmd', () => {
   // 2026-10-23: a slim image has no ps, and asking it failed every stop there, so a
   // host without procps could never take a new daemon. Linux reads /proc instead
   // (a fake one here, so this runs on macOS too).
-  it.each(['drain', 'reused', 'foreign', 'gone', 'exited-before-signal'])('on a host with /proc and no ps, stop reads the identity from /proc: %s', async (scenario) => {
+  it.each(['drain', 'reused', 'foreign', 'gone', 'exited-before-signal', 'empty-stat', 'empty-after-signal'])('on a host with /proc and no ps, stop reads the identity from /proc: %s', async (scenario) => {
     const proc = path.join(dir, 'proc')
     await fsp.mkdir(path.join(proc, 'self'), { recursive: true })
     await fsp.writeFile(path.join(proc, 'self', 'stat'), '1 (sh) S 0')
@@ -248,22 +296,23 @@ describe('buildDaemonStartCmd', () => {
     const stat = (start: string) => `4242 (daemon) linux) S 1 4242 4242 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 ${start} 1 1`
     if (scenario !== 'gone') {
       await fsp.mkdir(path.join(proc, '4242'), { recursive: true })
-      await fsp.writeFile(path.join(proc, '4242', 'stat'), stat('777001'))
+      // A stat file that is there but reads empty is no answer, never "gone".
+      await fsp.writeFile(path.join(proc, '4242', 'stat'), scenario === 'empty-stat' ? '' : stat('777001'))
       await fsp.writeFile(path.join(proc, '4242', 'cmdline'), scenario === 'foreign' ? 'unrelated-process\0' : `${dir}/daemon-linux-arm64\0--start\0`)
     }
     const stub = [
       'count=0',
       'ps() { printf \'%s\\n\' "ps: not found" >&2; return 127; }',
       'kill() { printf \'%s\\n\' "$*" >> "$LAB_DIR/signals"; if [ "$SCENARIO" = exited-before-signal ]; then rm -f "$LAB_DIR/proc/4242/stat"; return 1; fi; return 0; }',
-      'sleep() { count=$((count+1)); if [ "$count" -ge 3 ]; then case "$SCENARIO" in drain) rm -f "$LAB_DIR/proc/4242/stat";; reused) printf \'%s\' "$NEW_STAT" > "$LAB_DIR/proc/4242/stat";; esac; fi; }',
+      'sleep() { count=$((count+1)); if [ "$count" -ge 3 ]; then case "$SCENARIO" in drain) rm -f "$LAB_DIR/proc/4242/stat";; reused) printf \'%s\' "$NEW_STAT" > "$LAB_DIR/proc/4242/stat";; empty-after-signal) : > "$LAB_DIR/proc/4242/stat";; esac; fi; }',
     ].join('\n')
     const output = await execFileAsync('/bin/sh', ['-c', `${stub}\n${buildDaemonStopCmd(dir, proc)}`], {
       env: { PATH: guardedPath([], '/usr/bin:/bin'), LAB_DIR: dir, SCENARIO: scenario, NEW_STAT: stat('888002') }, timeout: 5000,
     }).then((result) => ({ ok: true, stdout: result.stdout }), () => ({ ok: false, stdout: '' }))
-    expect(output.ok).toBe(scenario !== 'foreign')
+    expect(output.ok).toBe(!['foreign', 'empty-stat', 'empty-after-signal'].includes(scenario))
     if (output.ok) expect(output.stdout.trim()).toBe('walnut-daemon-stop-confirmed')
     const signals = await fsp.readFile(path.join(dir, 'signals'), 'utf8').catch(() => '')
-    expect(signals).toBe(['foreign', 'gone'].includes(scenario) ? '' : '-TERM 4242\n')
+    expect(signals).toBe(['foreign', 'gone', 'empty-stat'].includes(scenario) ? '' : '-TERM 4242\n')
   })
 
   it('never renders a bare VAR= directly after nohup (regression shape)', () => {

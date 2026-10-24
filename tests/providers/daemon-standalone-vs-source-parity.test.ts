@@ -3589,4 +3589,15 @@ describe('session cost day split parity (session-cost-day-v1)', () => {
     expect(readFile(path.join(ROOT, 'src/providers/usage-host-core.ts'))).toMatch(/export \{ scanSessionCost, SESSION_COST_DAY_SPLIT \}/)
     expect(readFile(path.join(ROOT, 'src/providers/session-cost-core.ts'))).toMatch(/export const SESSION_COST_DAY_SPLIT = true/)
   })
+
+  // A host without procps answers `ps` with "ps: not found" on stderr, and a
+  // daemon that let it through wrote that line into its log on every check.
+  it('every ps the daemon runs keeps its stderr out of the daemon\'s own (both twins and the core)', () => {
+    for (const file of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts', 'src/providers/daemon-core.ts']) {
+      const src = readFile(path.join(ROOT, file))
+      const calls = [...src.matchAll(/execFileSync\('ps',[\s\S]*?\)\)?[;\n]/g)].map((m) => m[0])
+      expect(calls.length, file).toBeGreaterThan(0)
+      for (const call of calls) expect(call, `${file}: ${call.slice(0, 120)}`).toContain("stdio: ['ignore', 'pipe', 'ignore']")
+    }
+  })
 })

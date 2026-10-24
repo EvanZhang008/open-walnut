@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { parseSeedAnswer, parseSlotAnswer, seedFromSlotScript, slotCheckScript, slotInstallScript } from '../../src/providers/daemon-file-slot.js'
+import { parseSeedAnswer, parseSlotAnswer, parseSlotDetail, seedFromSlotScript, slotCheckScript, slotInstallScript, slotNeedKb } from '../../src/providers/daemon-file-slot.js'
 
 const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex')
 const run = (script: string) => execFileSync('/bin/sh', ['-c', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
@@ -139,5 +139,88 @@ describe('the daemon slot on a host', () => {
     expect(() => slotCheckScript(slot, 'abc')).toThrow(/64 hex/)
     expect(() => slotInstallScript(slot, `${slot}.gz`, "'; rm -rf / #")).toThrow(/64 hex/)
     expect(() => seedFromSlotScript(slot, 'Z'.repeat(64), '/tmp/x.gz')).toThrow(/64 hex/)
+  })
+})
+
+// Before the file goes in it runs once, as the daemon (`__daemon --version`): it
+// must print the version the Mac expects. That also proves it runs on this host
+// (a C library or CPU it does not support prints its loader's error).
+describe('the slot runs the file once before it goes in', () => {
+  const said = (text: string, code = 0) => Buffer.concat([
+    Buffer.from(`#!/bin/sh\nif [ "$1" = __daemon ] && [ "$2" = --version ]; then printf '%s\\n' '${text}'; exit ${code}; fi\nexit 0\n`),
+    crypto.randomBytes(100_000),
+  ])
+  const FIT = said('walnut-daemon-new')
+  const OLD_BUILD = said('walnut-daemon-old')
+  const BROKEN = Buffer.from('#!/bin/sh\necho "/lib/ld-linux-aarch64.so.1: version GLIBC_2.38 not found" >&2\nexit 127\n')
+  const fit = { version: 'walnut-daemon-new' }
+
+  function install(file: Buffer): string {
+    fs.mkdirSync(path.dirname(slot), { recursive: true })
+    fs.writeFileSync(slot, OTHER)
+    fs.writeFileSync(`${slot}.gz`, zlib.gzipSync(file))
+    return run(slotInstallScript(slot, `${slot}.gz`, sha(file), fit))
+  }
+
+  it('a file that prints the expected version goes in', () => {
+    expect(parseSlotAnswer(install(FIT))).toBe('installed')
+    expect(sha(fs.readFileSync(slot))).toBe(sha(FIT))
+  })
+
+  it.each([
+    ['another build', OLD_BUILD, 'walnut-daemon-old'],
+    ['a file that cannot run here', BROKEN, 'GLIBC_2.38 not found'],
+  ])('%s: unrunnable, with what it printed; the old daemon file stays, and nothing is left behind', (_label, file, printed) => {
+    const out = install(file as Buffer)
+    expect(parseSlotAnswer(out)).toBe('unrunnable')
+    expect(parseSlotDetail(out).said).toContain(printed)
+    expect(fs.readFileSync(slot)).toEqual(OTHER)
+    expect(fs.existsSync(`${slot}.part`)).toBe(false)
+    expect(fs.existsSync(`${slot}.gz`)).toBe(false)
+  })
+
+  it('a host server install of another build is not copied in either', () => {
+    fs.mkdirSync(path.dirname(app), { recursive: true })
+    fs.writeFileSync(app, OLD_BUILD)
+    fs.mkdirSync(path.dirname(slot), { recursive: true })
+    fs.writeFileSync(slot, OTHER)
+    const out = run(slotCheckScript(slot, sha(OLD_BUILD), [app], fit))
+    expect(parseSlotAnswer(out)).toBe('unrunnable')
+    expect(fs.readFileSync(slot)).toEqual(OTHER)
+    fs.writeFileSync(app, FIT)
+    expect(parseSlotAnswer(run(slotCheckScript(slot, sha(FIT), [app], fit)))).toBe('copied')
+  })
+
+  it('no expected version (a source-run Mac): nothing is run', () => {
+    fs.mkdirSync(path.dirname(slot), { recursive: true })
+    fs.writeFileSync(`${slot}.gz`, zlib.gzipSync(BROKEN))
+    expect(parseSlotAnswer(run(slotInstallScript(slot, `${slot}.gz`, sha(BROKEN), { version: null })))).toBe('installed')
+  })
+})
+
+// The walnut file peaks at about 2.5 times its size in the slot's dir (its gz,
+// a cut upload's chunks, the unpacked part, the old file a running daemon keeps),
+// where the floor of the dir probe is 200 MB. Below that the source goes instead.
+describe('the slot needs room for the walnut file', () => {
+  it('a dir with less room than the file needs answers low, before anything is copied or sent', () => {
+    fs.mkdirSync(path.dirname(app), { recursive: true })
+    fs.writeFileSync(app, FILE)
+    const out = run(slotCheckScript(slot, sha(FILE), [app], { needKb: 1e12 }))
+    expect(parseSlotAnswer(out)).toBe('low')
+    expect(parseSlotDetail(out)).toMatchObject({ needKb: 1e12 })
+    expect(parseSlotDetail(out).freeKb).toBeGreaterThan(0)
+    expect(fs.existsSync(slot)).toBe(false)
+    // With room it copies as before.
+    expect(parseSlotAnswer(run(slotCheckScript(slot, sha(FILE), [app], { needKb: 1 })))).toBe('copied')
+  })
+
+  it('a slot that already holds the file needs no room', () => {
+    fs.mkdirSync(path.dirname(slot), { recursive: true })
+    fs.writeFileSync(slot, FILE)
+    expect(parseSlotAnswer(run(slotCheckScript(slot, sha(FILE), [], { needKb: 1e12 })))).toBe('have')
+  })
+
+  it('needs 2.5 times the file, in KB', () => {
+    expect(slotNeedKb(100 * 1024 * 1024)).toBe(256_000)
   })
 })

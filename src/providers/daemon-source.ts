@@ -1823,7 +1823,7 @@ function readStartTimes(pids) {
   }
   try {
     const env = Object.assign({}, process.env, { LANG: 'C' });
-    return parsePsStartTimes(execFileSync('ps', psStartTimeArgs(wanted), { encoding: 'utf-8', timeout: 5000, env: env }));
+    return parsePsStartTimes(execFileSync('ps', psStartTimeArgs(wanted), { encoding: 'utf-8', timeout: 5000, env: env, stdio: ['ignore', 'pipe', 'ignore'] }));
   } catch (err) {
     // ps exits 1 when any pid is gone but still prints the live ones.
     return err && typeof err.stdout === 'string' ? parsePsStartTimes(err.stdout) : out;
@@ -13487,32 +13487,115 @@ if (action === '--prewarm-folds') {
   process.exit(0);
 }
 
-if (action === '--stop') {
-  try {
-    const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
-    process.kill(pid, 'SIGTERM');
-    console.log('daemon stopped (pid=' + pid + ')');
-  } catch {
-    console.log('daemon not running');
-  }
-  process.exit(0);
+// What a daemon answers a plain HTTP request on its port with, since the first
+// daemon. Keep in sync with daemon-standalone.ts.
+const DAEMON_HTTP_ANSWER = 'walnut-daemon ok';
+
+// Whether a daemon answers on 127.0.0.1:port within timeoutMs: a plain GET gets
+// "walnut-daemon ok" back. Any other listener (a reused port) is no daemon.
+// Keep in sync with daemon-standalone.ts.
+function loopbackDaemonAnswers(port, timeoutMs) {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(false);
+  return new Promise(function (resolve) {
+    const socket = net.connect({ host: '127.0.0.1', port: port });
+    let seen = '';
+    let settled = false;
+    let timer = null;
+    const done = function (ok) { if (settled) return; settled = true; clearTimeout(timer); socket.destroy(); resolve(ok); };
+    timer = setTimeout(function () { done(false); }, timeoutMs);
+    socket.once('connect', function () { socket.write('GET / HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n'); });
+    socket.on('data', function (chunk) {
+      seen = (seen + chunk.toString('latin1')).slice(-4096);
+      if (seen.indexOf(DAEMON_HTTP_ANSWER) >= 0) done(true);
+    });
+    socket.once('end', function () { done(seen.indexOf(DAEMON_HTTP_ANSWER) >= 0); });
+    socket.once('close', function () { done(seen.indexOf(DAEMON_HTTP_ANSWER) >= 0); });
+    socket.once('error', function () { done(false); });
+  });
 }
 
-if (action === '--status') {
+// The pid daemon.pid names, or null: no file, not a plain number, or 0, 1 or
+// below (kill(-1) signals every process of the user, kill(0) the caller's group).
+function readDaemonPidFile() {
+  let raw;
+  try { raw = fs.readFileSync(PID_FILE, 'utf-8').trim(); } catch { return null; }
+  if (!/^\\d+$/.test(raw)) return null;
+  const pid = Number(raw);
+  return Number.isSafeInteger(pid) && pid > 1 ? pid : null;
+}
+
+// Alive in the kill(0) sense; EPERM is another user's process, which a daemon of this user never is.
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// pid's command line (Linux /proc, ps elsewhere), '' when it is gone, null when nothing could tell.
+function commandLineOf(pid) {
+  if (hasProcFs()) {
+    try { return fs.readFileSync('/proc/' + pid + '/cmdline', 'utf-8').split(String.fromCharCode(0)).filter(Boolean).join(' '); } catch { return ''; }
+  }
   try {
-    const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
-    process.kill(pid, 0);
-    const port = fs.readFileSync(PORT_FILE, 'utf-8').trim();
+    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (err) {
+    return err && err.status === 1 ? '' : null;
+  }
+}
+
+// Whether pid is this dir's daemon: the instance lock names it (every daemon
+// since the lock), or, for an older one, its command line runs a daemon file of
+// this dir the way the Mac starts one (the rule buildDaemonStopCmd applies).
+// Keep in sync with daemon-standalone.ts.
+async function isThisDirsDaemon(pid) {
+  if (daemonLockCore && typeof daemonLockCore.readDaemonInstanceOwner === 'function') {
+    const owner = await daemonLockCore.readDaemonInstanceOwner({ runtimeDir: DAEMON_DIR, uid: os.userInfo().uid, deadlineMs: 2000 });
+    if (owner) return owner.pid === pid;
+  }
+  const line = commandLineOf(pid);
+  if (!line) return false;
+  const names = ['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64', 'daemon.cjs'];
+  return names.some(function (name) { return (' ' + line).endsWith(' ' + DAEMON_DIR + '/' + name + ' --start'); });
+}
+
+async function stopCommand() {
+  // Only a pid that is this dir's daemon is signalled: a pid file may name
+  // another process now (a reused pid), or hold -1, which kill() reads as every process.
+  const pid = readDaemonPidFile();
+  if (pid === null || pid === process.pid || !pidAlive(pid)) {
+    console.log('daemon not running');
+  } else if (!(await isThisDirsDaemon(pid))) {
+    console.log('daemon not running (daemon.pid names pid ' + pid + ', which is not this daemon)');
+  } else {
+    try {
+      process.kill(pid, 'SIGTERM');
+      console.log('daemon stopped (pid=' + pid + ')');
+    } catch {
+      console.log('daemon not running');
+    }
+  }
+}
+
+async function statusCommand() {
+  // Running means the pid is alive AND a daemon answers on the port file's port:
+  // a dead daemon's files stay, and its pid may name another process by now.
+  const pid = readDaemonPidFile();
+  let port = NaN;
+  try { port = parseInt(fs.readFileSync(PORT_FILE, 'utf-8').trim(), 10); } catch {}
+  if (pid !== null && pidAlive(pid) && await loopbackDaemonAnswers(port, 3000)) {
     let instanceId;
     try { instanceId = fs.readFileSync(INSTANCE_ID_FILE, 'utf-8').trim(); } catch {}
-    console.log(JSON.stringify({ running: true, pid, port: parseInt(port, 10), instanceId }));
-  } catch {
+    console.log(JSON.stringify({ running: true, pid, port, instanceId }));
+  } else {
     console.log(JSON.stringify({ running: false }));
   }
-  process.exit(0);
 }
 
-if (action === '--start' || SERVICE_MODE) {
+if (action === '--stop' || action === '--status') {
+  // CJS has no top-level await: the command runs async and exits itself.
+  (action === '--stop' ? stopCommand() : statusCommand()).then(
+    function () { process.exit(0); },
+    function () { console.log(action === '--stop' ? 'daemon not running' : JSON.stringify({ running: false })); process.exit(0); },
+  );
+} else if (action === '--start' || SERVICE_MODE) {
   // A CJS deploy cannot await at top level, so startup is one async function.
   // Any rejection exits non-zero instead of leaving a half-started daemon.
   startDaemon().catch(function (err) {
@@ -13524,20 +13607,6 @@ if (action === '--start' || SERVICE_MODE) {
   // usage error). 'wn' is the deprecated alias kept for shims in the field.
   console.error('Usage: node daemon.js --start | --service | --prewarm-folds | --stop | --status | walnut <args...>');
   process.exit(1);
-}
-
-// Whether something takes a TCP connection on 127.0.0.1:port within timeoutMs (a
-// daemon listens there). Keep in sync with daemon-standalone.ts.
-function loopbackPortAnswers(port, timeoutMs) {
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(false);
-  return new Promise(function (resolve) {
-    const socket = net.connect({ host: '127.0.0.1', port: port });
-    let timer = null;
-    const done = function (ok) { clearTimeout(timer); socket.destroy(); resolve(ok); };
-    timer = setTimeout(function () { done(false); }, timeoutMs);
-    socket.once('connect', function () { done(true); });
-    socket.once('error', function () { done(false); });
-  });
 }
 
 async function startDaemon() {
@@ -13586,13 +13655,13 @@ async function startDaemon() {
       if (err && (err.code === 'ESRCH' || err.code === 'EPERM')) legacyAlive = false;
       else throw err;
     }
-    // A live pid is a legacy daemon only when its port takes a connection: after a
-    // restart a dead daemon's pid file may name another process. Keep in sync with
-    // daemon-standalone.ts.
+    // A live pid is a legacy daemon only when a daemon answers on its port: after a
+    // restart a dead daemon's pid file may name another process, and any other
+    // listener on that port is no daemon either. Keep in sync with daemon-standalone.ts.
     let legacyPort = '';
     try { legacyPort = fs.readFileSync(PORT_FILE, 'utf8').trim(); } catch (err) { /* no port file: no daemon to yield to */ }
-    if (legacyAlive && !(await loopbackPortAnswers(Number(legacyPort), 1500))) {
-      logMsg('warn', 'daemon.pid names a live process that is no daemon here (nothing on its port): starting', { pid: legacyPid, port: legacyPort || null });
+    if (legacyAlive && !(await loopbackDaemonAnswers(Number(legacyPort), 1500))) {
+      logMsg('warn', 'daemon.pid names a live process that is no daemon here (no daemon answers on its port): starting', { pid: legacyPid, port: legacyPort || null });
       legacyAlive = false;
     }
     if (legacyAlive) {

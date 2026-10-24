@@ -21,6 +21,7 @@
 
 import path from 'node:path'
 import { shq } from './remote-sh.js'
+import { DAEMON_PID_SH } from './daemon-start-cmd.js'
 
 export const PROD_REMOTE_DAEMON_DIR = '/tmp/open-walnut'
 /** Relative to $HOME on the host. Both daemon twins recognise it as a production dir. */
@@ -62,19 +63,6 @@ export interface DaemonDirChoice {
   /** Neither dir passed the check: the start will most likely fail. */
   unusable?: boolean
 }
-
-/**
- * Shell helpers for "is this pid our daemon": `w_args <pid>` prints its command
- * line (Linux /proc; ps elsewhere, which a slim Linux image does not have), and
- * `w_daemon <pid>` is true when that line is a session daemon's (`--start` or
- * `--service`). A pid file whose pid now names another process (a restarted
- * container reuses pids) is no live daemon: taking it for one pointed every
- * connect at the dead daemon's port, again on every try, until that process ended.
- */
-const DAEMON_PID_SH = [
-  `w_args() { if [ -r /proc/self/cmdline ]; then tr '\\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; else ps -o args= -p "$1" 2>/dev/null; fi; }`,
-  'w_daemon() { case " $(w_args "$1") " in *" --start "*|*" --service "*) return 0;; esac; return 1; }',
-]
 
 const PROBE_HEADER = 'walnut-dir-probe v1'
 const PROBE_DONE = 'walnut-dir-probe-done'
@@ -126,7 +114,7 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     // and only a pid that is a daemon (a stale pid file's pid may name another process now).
     ...DAEMON_PID_SH,
     'w_live() { if [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -O "$1/daemon.pid" ]; then p=$(cat "$1/daemon.pid" 2>/dev/null); '
-      + 'if [ -n "$p" ] && [ -s "$1/daemon.port" ] && kill -0 "$p" 2>/dev/null && w_daemon "$p"; then echo 1; return; fi; fi; echo 0; }',
+      + 'if [ -n "$p" ] && [ -s "$1/daemon.port" ] && kill -0 "$p" 2>/dev/null && w_daemon "$p" "$1"; then echo 1; return; fi; fi; echo 0; }',
     `w_status() { ${check}; }`,
     'tl=$(w_live "$T")',
     'cl=0; [ -n "$C" ] && cl=$(w_live "$C")',
@@ -279,7 +267,7 @@ export function buildLiveDaemonScanScript(dirs: string[]): string {
       `d=${shq(d)}`,
       'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ]; then',
       '  P=$(cat "$d/daemon.pid" 2>/dev/null); Q=$(cat "$d/daemon.port" 2>/dev/null)',
-      '  if [ -n "$P" ] && [ -n "$Q" ] && kill -0 "$P" 2>/dev/null && w_daemon "$P"; then',
+      '  if [ -n "$P" ] && [ -n "$Q" ] && kill -0 "$P" 2>/dev/null && w_daemon "$P" "$d"; then',
       '    R=unknown; case "$(w_args "$P")" in *daemon-linux-*|*daemon-darwin-*) R=binary;; *bun*) R=bun;; *node*) R=node;; esac',
       `    echo "walnut-live dir=${i} pid=$P port=$Q runtime=$R"; exit 0`,
       '  fi',

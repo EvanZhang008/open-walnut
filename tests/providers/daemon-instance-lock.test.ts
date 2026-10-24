@@ -17,6 +17,7 @@ import {
   lockDirFor,
   normalizeWsPort,
   parseDaemonLockBanner,
+  readDaemonInstanceOwner,
   type LockNetLike,
   type LockServerLike,
   type LockSocketLike,
@@ -222,6 +223,30 @@ describe('acquireDaemonInstanceLock — existing owner', () => {
     if (result.kind !== 'existing') throw new Error('expected existing')
     expect(result.owner.dir).toBe(dir)
     expect(result.owner.dir).not.toContain('�')
+  })
+})
+
+// The twins' --stop asks who holds the lock before it signals daemon.pid's pid:
+// read only, so it can never make a daemon that is starting yield.
+describe('readDaemonInstanceOwner', () => {
+  const READ = { runtimeDir: '/tmp/open-walnut', uid: 501, fs: stubFs }
+  it('returns the holder of this uid and dir, and never binds the port', async () => {
+    const line = bannerLine({ uid: 501, dir: '/tmp/open-walnut', pid: 99, instanceId: 'd-99-zz', wsPort: 3456 })
+    const stub = makeStubNet({ probeChunks: [line] })
+    expect(await readDaemonInstanceOwner({ ...READ, net: stub.netApi })).toEqual({ uid: 501, dir: '/tmp/open-walnut', pid: 99, instanceId: 'd-99-zz', wsPort: 3456 })
+    expect(stub.calls.createServer).toBe(0)
+    expect(stub.calls.connections).toEqual([daemonLockPort(501, '/tmp/open-walnut')])
+  })
+
+  it('is null when nothing holds it, the holder is foreign or no walnut lock, or the dir is not there', async () => {
+    expect(await readDaemonInstanceOwner({ ...READ, net: makeStubNet({ probeError: new Error('ECONNREFUSED') }).netApi })).toBeNull()
+    expect(await readDaemonInstanceOwner({ ...READ, net: makeStubNet({ probeChunks: [bannerLine({ uid: 502, dir: '/tmp/open-walnut', pid: 8, instanceId: 'i', wsPort: null })] }).netApi })).toBeNull()
+    expect(await readDaemonInstanceOwner({ ...READ, net: makeStubNet({ probeChunks: ['{"magic":"ssh/1"}\n'] }).netApi })).toBeNull()
+    expect(await readDaemonInstanceOwner({ ...READ, deadlineMs: 20, net: makeStubNet().netApi })).toBeNull()
+    const gone = { realpathSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+    const stub = makeStubNet()
+    expect(await readDaemonInstanceOwner({ ...READ, fs: gone, net: stub.netApi })).toBeNull()
+    expect(stub.calls.connections).toEqual([])
   })
 })
 

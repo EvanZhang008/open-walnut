@@ -1085,7 +1085,7 @@ export class LocalDaemon {
       const stale = this.readPortFile()
       throw new Error(stale
         ? `Local daemon failed to start: within 10s nothing answered on port ${stale}, the port its port file names (a dead daemon's files, or a new one that did not come up)`
-        : 'Local daemon failed to start — port file not created within 10s')
+        : 'Local daemon failed to start: port file not created within 10s')
     }
 
     // Verify it responds

@@ -43,8 +43,16 @@ const LINUX_ARM = 'os=Linux\narch=aarch64\nlibc=glibc\ntranslated=0\nglibc=2.36\
 
 interface Routes {
   bun?: string[]
-  /** What the slot check finds on the host. */
-  slot?: 'have' | 'copied' | 'none'
+  /** What the slot check finds on the host (the whole answer for `low` and `unrunnable`). */
+  slot?: 'have' | 'copied' | 'none' | string
+  /** What the install answers (default `slot=installed`). */
+  install?: string
+  /** daemon.version on the host. */
+  remoteVersion?: string
+  /** The version this Mac expects (null: none, no update decided). */
+  expected?: string | null
+  /** The upload fails with this. */
+  uploadFails?: string
   system?: string
   start: Partial<Record<'bun' | 'binary' | 'node', string>>
   startLog?: Partial<Record<'bun' | 'binary' | 'node', string>>
@@ -68,6 +76,9 @@ function setup(routes: Routes) {
     const cmd = String(args[0])
     seen.push(cmd)
     if (cmd.includes('walnut-dir-probe v1')) return ''
+    if (cmd.includes('walnut-daemon-stop-confirmed')) return 'walnut-daemon-stop-confirmed'
+    if (cmd.includes('daemon.version')) return routes.remoteVersion ?? ''
+    if (cmd.includes('acp-busy.json')) return ''
     if (cmd.includes('walnut-live none')) return 'walnut-live none'
     if (cmd.includes('walnut-service-probe-done')) return NO_SERVICE
     if (cmd.includes('bun_path=')) return bunReplies.length > 1 ? bunReplies.shift()! : bunReplies[0]
@@ -75,8 +86,8 @@ function setup(routes: Routes) {
     if (cmd.includes('install_rc=')) return 'install_rc=127\ninstall_log=/tmp/open-walnut/bun-install.log\ninstall_tail_begin\nno curl or wget\ninstall_tail_end'
     if (cmd.includes('s=$(uname -s')) return routes.system ?? LINUX_ARM
     if (cmd === 'printf %s "$HOME"') return '/home/me'
-    if (cmd.includes('echo slot=none')) return `slot=${routes.slot ?? 'none'}`
-    if (cmd.includes('echo slot=installed')) return 'slot=installed'
+    if (cmd.includes('echo slot=none')) return (routes.slot ?? 'none').startsWith('slot=') ? routes.slot! : `slot=${routes.slot ?? 'none'}`
+    if (cmd.includes('echo slot=installed')) return routes.install ?? 'slot=installed'
     if (cmd.includes('nohup ')) {
       lastStarted = runtimeOf(cmd)
       starts.push(`${lastStarted}: ${cmd}`)
@@ -89,8 +100,13 @@ function setup(routes: Routes) {
   vi.spyOn(priv(conn), 'deploySource').mockImplementation(async () => { deploys.push(`source:${(conn as unknown as { _bunPath: string | null })._bunPath ? 'bun' : 'node'}`) })
   vi.spyOn(priv(conn), 'deployBinary').mockImplementation(async () => { deploys.push('prebuilt binary') })
   vi.spyOn(priv(conn), 'getLocalBinaryPath').mockImplementation(async () => null)
-  vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(null)
-  vi.spyOn(conn, 'uploadFile').mockImplementation(async (p: string, _d: Buffer, o?: { sha256?: string }) => { uploads.push({ path: p, sha256: o?.sha256 }); return { skipped: false } })
+  vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(routes.expected ?? null)
+  vi.spyOn(conn, 'uploadFile').mockImplementation(async (p: string, _d: Buffer, o?: { sha256?: string }) => {
+    seen.push(`UPLOAD ${p}`)
+    if (routes.uploadFails) throw new Error(routes.uploadFails)
+    uploads.push({ path: p, sha256: o?.sha256 })
+    return { skipped: false }
+  })
   return { conn, seen, starts, deploys, uploads }
 }
 
@@ -169,10 +185,87 @@ describe('a compiled Mac deploys the host\'s walnut file as its daemon', () => {
     expect(deploys).toEqual(['source:node'])
   })
 
+  it('a slot dir without room for the walnut file: nothing is sent, and the daemon source goes instead', async () => {
+    compiledMac()
+    const { conn, uploads, deploys, starts, seen } = setup({ slot: 'slot=low free_kb=51200 need_kb=256000', start: { node: STARTED } })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(uploads).toEqual([])
+    expect(deploys).toEqual(['source:node'])
+    expect(starts.map((s) => s.split(':')[0])).toEqual(['node'])
+    // The check asked for 2.5 times the file (here its 1 KB gz) in KB.
+    expect(seen.find((c) => c.includes('echo slot=none'))).toContain('-lt 3 ]; then echo "slot=low')
+  })
+
+  it('a walnut file that does not run here as this build\'s daemon: the source goes instead, and the file is not offered again on this connection', async () => {
+    compiledMac()
+    const { conn, uploads, deploys, seen } = setup({
+      expected: 'walnut-daemon-new', install: 'slot=unrunnable\ndetail=/lib/ld-linux-aarch64.so.1: version GLIBC_2.38 not found',
+      start: { node: STARTED },
+    })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(uploads.map((u) => u.path)).toEqual(['/tmp/open-walnut/daemon-linux-arm64.gz'])
+    // The run asks for the version this Mac expects.
+    expect(seen.find((c) => c.includes('echo slot=installed'))).toContain("__daemon --version")
+    expect(seen.find((c) => c.includes('echo slot=installed'))).toContain("'walnut-daemon-new'")
+    expect(deploys).toEqual(['source:node'])
+    expect((conn as unknown as { _failedRuntimes: Map<string, string> })._failedRuntimes.get('binary')).toContain('GLIBC_2.38')
+    expect(await priv(conn).hasDaemonBinary()).toBe(true)
+    uploads.length = 0
+    expect(await priv(conn).deployDaemon()).toBe('node')
+    expect(uploads).toEqual([])
+  })
+
   it('a Mac on Node (no compiled file) never asks for a walnut file', async () => {
     const { conn, deploys } = setup({ start: { node: STARTED } })
     expect(await priv(conn).deployAndStart()).toBe(32100)
     expect(files.asks).toEqual([])
     expect(deploys).toEqual(['source:node'])
+  })
+})
+
+// An update used to stop the old daemon first and only then fetch and upload
+// the file: the host had no daemon for the whole upload (minutes for the walnut
+// file on a slow link) and none at all when the upload failed.
+describe('an update puts the new daemon on the host before it stops the old one', () => {
+  const SLOT = '/tmp/open-walnut/daemon-linux-arm64'
+  const upgrade = { expected: 'walnut-daemon-new', remoteVersion: 'walnut-daemon-old' }
+
+  it('the file goes in while the old daemon runs, then the stop, then the start of what was staged', async () => {
+    compiledMac()
+    const { conn, seen, uploads, starts } = setup({ ...upgrade, start: { binary: STARTED } })
+    expect(await priv(conn).shouldUpgradeDaemon(SLOT, undefined, undefined, 'binary')).toBe(true)
+    const at = (pred: (c: string) => boolean) => seen.findIndex(pred)
+    const upload = at((c) => c.startsWith('UPLOAD '))
+    const install = at((c) => c.includes('echo slot=installed'))
+    const stop = at((c) => c.includes('walnut-daemon-stop-confirmed'))
+    expect(upload).toBeGreaterThan(-1)
+    expect(install).toBeGreaterThan(upload)
+    expect(stop).toBeGreaterThan(install)
+    // The start that follows the stop takes the staged runtime: nothing is checked or sent again.
+    const before = seen.length
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(seen.slice(before).some((c) => c.includes('echo slot=none') || c.startsWith('UPLOAD '))).toBe(false)
+    expect(uploads).toHaveLength(1)
+    expect(starts.map((s) => s.split(':')[0])).toEqual(['binary'])
+  })
+
+  it('the upload fails: no stop, the old daemon keeps serving, and the update is asked again', async () => {
+    compiledMac()
+    const { conn, seen, deploys } = setup({ ...upgrade, uploadFails: 'chunk 12 of 400 failed after 5 tries', start: { binary: STARTED } })
+    expect(await priv(conn).shouldUpgradeDaemon(SLOT, undefined, undefined, 'binary')).toBe(false)
+    expect(seen.some((c) => c.includes('walnut-daemon-stop-confirmed'))).toBe(false)
+    // A daemon running as the binary is never traded for the source because one transfer failed.
+    expect(deploys).toEqual([])
+    expect((conn as unknown as { upgradeRecheckTimer: unknown }).upgradeRecheckTimer).not.toBeNull()
+    expect((conn as unknown as { _staged: unknown })._staged).toBeNull()
+    priv(conn).clearUpgradeRecheck()
+  })
+
+  it('an old daemon on node: a failed walnut file upload falls to the source as before, still ahead of the stop', async () => {
+    compiledMac()
+    const { conn, seen, deploys } = setup({ ...upgrade, uploadFails: 'link dropped', start: { node: STARTED } })
+    expect(await priv(conn).shouldUpgradeDaemon(SLOT, undefined, undefined, 'node')).toBe(true)
+    expect(deploys).toEqual(['source:node'])
+    expect(seen.findIndex((c) => c.includes('walnut-daemon-stop-confirmed'))).toBeGreaterThan(seen.findIndex((c) => c.startsWith('UPLOAD ')))
   })
 })

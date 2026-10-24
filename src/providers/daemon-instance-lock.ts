@@ -227,6 +227,28 @@ async function probeExistingOwner(
   return { uid: banner.uid, dir: banner.dir, pid: banner.pid, instanceId: banner.instanceId, wsPort: banner.wsPort }
 }
 
+/**
+ * Read only: the daemon holding `runtimeDir`'s instance lock (its pid, ws port
+ * and instance id), or null when none holds it, or the holder is no daemon of
+ * this uid and dir. Never takes the lock, so it cannot make a starting daemon yield.
+ */
+export async function readDaemonInstanceOwner(options: {
+  runtimeDir: string
+  uid: number
+  deadlineMs?: number
+  net?: LockNetLike
+  fs?: LockFsLike
+}): Promise<DaemonLockOwnerInfo | null> {
+  let dir: string
+  try { dir = lockDirFor(options.runtimeDir, options.fs ?? nodeFs) } catch { return null }
+  const netApi = options.net ?? (nodeNet as unknown as LockNetLike)
+  try {
+    return await probeExistingOwner(netApi, daemonLockPort(options.uid, dir), options.uid, dir, options.deadlineMs ?? DAEMON_LOCK_DEADLINE_MS)
+  } catch {
+    return null
+  }
+}
+
 /** Probe only this one deterministic port: any fallback candidate would let a third party take the port a dead owner freed, causing two instances. */
 export async function acquireDaemonInstanceLock(
   options: AcquireDaemonInstanceLockOptions,

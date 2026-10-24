@@ -41,7 +41,7 @@ import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
-import { parseSlotAnswer, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotInstallScript } from './daemon-file-slot.js'
+import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotInstallScript, slotNeedKb } from './daemon-file-slot.js'
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import type { SshTarget } from './session-io.js'
@@ -325,6 +325,22 @@ export function parseRemoteServiceProbe(output: string, paths: string[]): Remote
 }
 
 class DaemonShutdownPendingError extends Error {}
+
+/** The walnut file cannot be had for this host (not Linux, no build for it): another runtime's turn, not a transfer that failed. */
+class WalnutFileUnavailableError extends Error {}
+
+/**
+ * The new daemon's file could not be put on the host before an update: the
+ * running daemon is left alone and keeps serving, and the update is asked again.
+ */
+class DaemonStageError extends Error {}
+
+interface DeployOpts {
+  /** False: leave the connect phase alone (an update staged on a live connection). */
+  phases?: boolean
+  /** A failed transfer of the binary (or the walnut file) throws instead of falling to the source. */
+  keepBinary?: boolean
+}
 
 /** ssh's answer when the LOGIN failed, as opposed to a connection a proxy cut. */
 const LOGIN_REFUSED_KINDS: ReadonlySet<string> = new Set(['auth', 'cert_expired', 'agent_missing', 'proxy_login', 'host_key'])
@@ -646,6 +662,11 @@ export class DaemonConnection {
    * the 37MB binary re-uploaded on every connect.
    */
   private _failedRuntimes = new Map<RemoteRuntime, string>()
+  /**
+   * The runtime an update deployed while the old daemon still ran (stageUpgrade):
+   * the start that follows the stop uses it instead of deploying again.
+   */
+  private _staged: { runtime: RemoteRuntime; dir: string; at: number } | null = null
 
   constructor(hostKey: string, sshTarget: SshTarget | null) {
     this.hostKey = hostKey
@@ -2815,7 +2836,7 @@ export class DaemonConnection {
         // daemon.version at startup). Without this, an old daemon would stay
         // alive forever.
         const remotePath = await this.getRemoteDaemonPath()
-        if (await this.shouldUpgradeDaemon(remotePath, service)) {
+        if (await this.shouldUpgradeDaemon(remotePath, service, undefined, status.runtime)) {
           return service.managed ? this.checkDaemonRunning(opts) : null
         }
         this._runtime = status.runtime
@@ -2925,6 +2946,7 @@ export class DaemonConnection {
    */
   private async shouldUpgradeDaemon(
     remotePath: string, service?: RemoteServiceTakeover, gate?: () => UpgradeHold,
+    liveRuntime?: RemoteRuntime | 'unknown' | null,
   ): Promise<boolean> {
     // Ephemeral attach-only: never upgrade (which would --stop the production
     // daemon). Version skew between the ephemeral's binary and production's is
@@ -2998,39 +3020,38 @@ export class DaemonConnection {
       // daemon advertises open ACP turns in acp-busy.json; killing it mid-turn
       // writes turn-interrupted:shutdown into live user work. Defer while busy
       // (stale >2min = not busy, so this can never wedge upgrades).
-      try {
-        const busyRaw = (await this.sshExec(
-          `cat ${shq(this._remoteDir + '/acp-busy.json')} 2>/dev/null || true`, 5_000,
-        )).trim()
-        if (busyRaw) {
-          const busy = JSON.parse(busyRaw) as { busySids?: string[]; updatedAt?: number }
-          if (
-            typeof busy.updatedAt === 'number'
-            && Date.now() - busy.updatedAt < 2 * 60_000
-            && Array.isArray(busy.busySids) && busy.busySids.length > 0
-          ) {
-            log.session.warn('DaemonConnection: daemon upgrade DEFERRED (ACP turns open)', {
-              host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
-              busySids: busy.busySids,
-            })
-            this.postponeUpgrade('ACP turns are open', expected, remoteVersion, { steady: true })
-            return false
-          }
-        }
-      } catch {}
-
+      if (await this.acpTurnsOpen(expected, remoteVersion)) return false
       if (this.holdUpgrade(gate, expected, remoteVersion)) return false
       // The new daemon's checkpoints first, while this one still serves; the
       // gate is asked again after it, right before the stop.
       if (await this.holdUpgradeForFoldPrewarm(expected, remoteVersion)) return false
       if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+      // The new daemon goes onto the host first, while the old one still serves:
+      // stopping first left the host with no daemon for the whole upload (minutes
+      // for the walnut file on a slow link), and with none at all when it failed.
+      // Only into a dir no OS service owns: the verdict the stop needs comes first.
+      const verdict = await this.unmanagedTakeover(takeover)
+      try {
+        await this.stageUpgrade(liveRuntime)
+      } catch (err) {
+        if (!(err instanceof DaemonStageError)) throw err
+        this.postponeUpgrade(`the new daemon could not be put on the host, so the running one keeps serving (${err.message.split('\n')[0].slice(0, 200)})`, expected, remoteVersion)
+        return false
+      }
+      // The upload may have taken minutes: work that started meanwhile still holds the stop.
+      if (await this.acpTurnsOpen(expected, remoteVersion) || this.holdUpgrade(gate, expected, remoteVersion)) {
+        this._staged = null
+        return false
+      }
       // Mismatch (or legacy daemon that predates daemon.version) → upgrade.
       log.session.info('DaemonConnection: daemon version mismatch — stopping for upgrade', {
         host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
       })
-      // The answer read above, not a second probe: it is seconds old, and a
-      // second ssh round trip is a second chance to get no answer.
-      await this.stopUnmanagedDaemon(takeover)
+      // The service answer read above, not a second probe: a second ssh round
+      // trip is a second chance to get no answer. It may be minutes old after a
+      // long upload, which is safe: the stop itself signals only this dir's
+      // `--start` daemon, never an OS service's.
+      await this.stopUnmanagedDaemon(verdict)
       this._lastUpgradeAttempt = { expected, at: Date.now() }
       return true
     } catch (error) {
@@ -3116,6 +3137,30 @@ export class DaemonConnection {
     } else if (result.outcome === 'waited') {
       log.session.info('DaemonConnection: waited for the fold prewarm an earlier server started', { host: this.hostKey, ms: result.ms })
     }
+  }
+
+  /** Open ACP turns on the host (acp-busy.json fresh and non-empty): the update is asked again in a minute. */
+  private async acpTurnsOpen(expected: string, remoteVersion: string): Promise<boolean> {
+    try {
+      const busyRaw = (await this.sshExec(
+        `cat ${shq(this._remoteDir + '/acp-busy.json')} 2>/dev/null || true`, 5_000,
+      )).trim()
+      if (!busyRaw) return false
+      const busy = JSON.parse(busyRaw) as { busySids?: string[]; updatedAt?: number }
+      if (
+        typeof busy.updatedAt === 'number'
+        && Date.now() - busy.updatedAt < 2 * 60_000
+        && Array.isArray(busy.busySids) && busy.busySids.length > 0
+      ) {
+        log.session.warn('DaemonConnection: daemon upgrade DEFERRED (ACP turns open)', {
+          host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
+          busySids: busy.busySids,
+        })
+        this.postponeUpgrade('ACP turns are open', expected, remoteVersion, { steady: true })
+        return true
+      }
+    } catch {}
+    return false
   }
 
   /** A re-check's gate said not now: drop the decision (stale) or ask again (busy). */
@@ -3206,7 +3251,7 @@ export class DaemonConnection {
     }
     let goAhead = false
     try {
-      goAhead = await this.shouldUpgradeDaemon(await this.getRemoteDaemonPath(), undefined, gate)
+      goAhead = await this.shouldUpgradeDaemon(await this.getRemoteDaemonPath(), undefined, gate, this._runtime)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       log.session.warn('DaemonConnection: postponed daemon update check failed', { host: this.hostKey, error: msg })
@@ -3255,14 +3300,23 @@ export class DaemonConnection {
     return !!stop && stop.dir === this._remoteDir && Date.now() - stop.at < 2 * 60_000
   }
 
-  private async stopUnmanagedDaemon(known?: RemoteServiceTakeover): Promise<void> {
-    // A verdict for another runtime dir (the live daemon was adopted from the
-    // other production dir after the probe) never saw this dir's marker file.
+  /**
+   * The service verdict for THIS runtime dir, or a throw when an OS service owns
+   * it or nobody could tell: what licenses an unmanaged stop, and the deploy
+   * ahead of one. A verdict for another runtime dir (the live daemon was adopted
+   * from the other production dir after the probe) never saw this dir's marker file.
+   */
+  private async unmanagedTakeover(known?: RemoteServiceTakeover): Promise<RemoteServiceTakeover> {
     const takeover = known && known.dir === this._remoteDir ? known : await this.detectServiceTakeover()
     if (takeover.undetermined) {
       throw new DaemonServiceProbeError(this.hostKey, 'Walnut will not stop a daemon it cannot classify', takeover.undetermined)
     }
     if (takeover.managed) throw new DaemonServiceNotReadyError(this.hostKey, 'refusing an unmanaged stop', takeover)
+    return takeover
+  }
+
+  private async stopUnmanagedDaemon(known?: RemoteServiceTakeover): Promise<void> {
+    await this.unmanagedTakeover(known)
     try {
       const output = await this.sshExec(buildDaemonStopCmd(this._remoteDir), 45_000)
       if (!output.split('\n').includes('walnut-daemon-stop-confirmed')) throw new Error('missing shutdown confirmation')
@@ -3452,6 +3506,8 @@ export class DaemonConnection {
     this.localPort = null
 
     try {
+      // The new daemon onto the host first, then the stop (see stageUpgrade).
+      await this.stageUpgrade(this._runtime)
       await this.stopUnmanagedDaemon(takeover)
 
       // Redeploy + start + tunnel + reconnect
@@ -3500,18 +3556,19 @@ export class DaemonConnection {
    * Prefers bun + source (tiny upload) when a bun on the host RUNS, then the
    * prebuilt binary, then node + source (see remote-runtime.ts).
    */
-  private async deployDaemon(): Promise<RemoteRuntime> {
+  private async deployDaemon(opts: DeployOpts = {}): Promise<RemoteRuntime> {
+    const setPhase = (phase: DaemonConnectPhase) => { if (opts.phases !== false) this.setPhase(phase) }
     // Preferred path: bun + ~63KB JS source. Bypasses corporate-proxy bulk-transfer kills
     // entirely (binary is 37MB compressed; source is gzipped to ~17KB on the
     // wire). Bun is a single static binary so probe-or-install completes in a
     // few seconds when missing. Falls through to binary on probe/install
     // failure (offline hosts, restrictive networks, glibc-too-old for bun).
-    this.setPhase('install-runtime')
+    setPhase('install-runtime')
     this._bunInstallNote = null
     const skipBun = this._failedRuntimes.has('bun')
     if (skipBun) log.session.info('DaemonConnection: bun already failed to run the daemon on this host, skipping it', { host: this.hostKey })
     const bunPath = skipBun ? null : await this.probeOrInstallBun()
-    this.setPhase('upload')
+    setPhase('upload')
     if (bunPath) {
       // Set BEFORE deploySource: it skips the npm `ws` install under bun.
       this._bunPath = bunPath
@@ -3557,6 +3614,7 @@ export class DaemonConnection {
         this._deployedViaSource = false
         return 'binary'
       } catch (err) {
+        if (opts.keepBinary) throw new DaemonStageError(`the daemon binary did not get onto the host: ${err instanceof Error ? err.message : String(err)}`)
         // Binary deploy failed (e.g. SSH proxy killed the transfer).
         // Fall back to lightweight source deploy (~44KB, always passes).
         log.session.warn('DaemonConnection: binary deploy failed, falling back to source deploy', {
@@ -3571,6 +3629,9 @@ export class DaemonConnection {
         this._deployedViaSource = false
         return 'binary'
       } catch (err) {
+        if (opts.keepBinary && !(err instanceof WalnutFileUnavailableError)) {
+          throw new DaemonStageError(`the walnut file did not get onto the host: ${err instanceof Error ? err.message : String(err)}`)
+        }
         log.session.warn('DaemonConnection: the walnut file could not be deployed as the daemon, falling back to source deploy', {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
         })
@@ -3588,13 +3649,46 @@ export class DaemonConnection {
   }
 
   /**
+   * Put the new daemon on the host while the old one still runs (an update):
+   * the source beside it, the binary or the walnut file unpacked next to its
+   * slot and renamed into place, which the running process never notices. The
+   * stop and the start come after (deployAndStart takes the staged runtime).
+   * Throws DaemonStageError when nothing could be put there, and when the
+   * running daemon is the binary and the new binary's transfer failed: falling
+   * to the source then would trade a daemon that runs here for a runtime this
+   * host may not have (no Node on a bare host), so it keeps the one it has.
+   */
+  private async stageUpgrade(liveRuntime?: RemoteRuntime | 'unknown' | null): Promise<RemoteRuntime> {
+    this._staged = null
+    let runtime: RemoteRuntime
+    try {
+      runtime = await this.deployDaemon({ phases: !this._connected, keepBinary: liveRuntime === 'binary' })
+    } catch (err) {
+      if (err instanceof DaemonStageError) throw err
+      throw new DaemonStageError(err instanceof Error ? err.message : String(err))
+    }
+    this._staged = { runtime, dir: this._remoteDir, at: Date.now() }
+    log.session.info('DaemonConnection: the new daemon is on the host; stopping the old one next', { host: this.hostKey, runtime, dir: this._remoteDir })
+    return runtime
+  }
+
+  /** The runtime an update staged for this dir in the last 10 minutes, once. */
+  private takeStaged(): RemoteRuntime | null {
+    const staged = this._staged
+    this._staged = null
+    if (!staged || staged.dir !== this._remoteDir || Date.now() - staged.at > 10 * 60_000) return null
+    if (staged.runtime !== 'node' && this._failedRuntimes.has(staged.runtime)) return null
+    return staged.runtime
+  }
+
+  /**
    * Deploy, then start; when the start fails in a runtime-shaped way (exec
    * format, illegal instruction, GLIBC, a runtime killed by a signal), move
    * along bun → binary → node inside THIS connect. Each runtime is tried at most
    * once, so there is exactly one fallback chain per connect and no loop.
    */
   private async deployAndStart(): Promise<number> {
-    let runtime = await this.deployDaemon()
+    let runtime = this.takeStaged() ?? await this.deployDaemon()
     // A runtime that already died at start here is never tried again (node,
     // the cheap last resort, always stays eligible).
     const tried = new Set<RemoteRuntime>([runtime, ...[...this._failedRuntimes.keys()].filter((r) => r !== 'node')])
@@ -3741,16 +3835,25 @@ export class DaemonConnection {
       import('../core/host-server/install.js'),
     ])
     const target = parseHostTarget(await this.sshExec(targetProbeScript(), 15_000))
-    if (!target.target.startsWith('linux-')) throw new Error(`the host runs ${target.describe}; its daemon slot takes a Linux walnut file only`)
+    if (!target.target.startsWith('linux-')) throw new WalnutFileUnavailableError(`the host runs ${target.describe}; its daemon slot takes a Linux walnut file only`)
     const file = await sharedHostFileSource().file(target.target, (message) => {
       log.session.info('DaemonConnection: getting the walnut file for the daemon', { host: this.hostKey, message })
-    })
+    }).catch((err: unknown) => { throw new WalnutFileUnavailableError(err instanceof Error ? err.message : String(err)) })
     const slot = await this.getRemoteDaemonPath()
     // A host server install of this very build holds the same file.
     const rootSpec = checkHostRoot(hostServerRootSpec() ?? HOST_ROOT)
     const home = rootSpec.startsWith('$HOME') ? (await this.sshExec('printf %s "$HOME"', 10_000)).trim() : ''
     const alsoAt = !rootSpec.startsWith('$HOME') ? [`${rootSpec}/app/${file.id}/walnut`] : home.startsWith('/') ? [`${rootSpec.replace('$HOME', home)}/app/${file.id}/walnut`] : []
-    const found = parseSlotAnswer(await this.sshExec(slotCheckScript(slot, file.sha256, alsoAt), 120_000))
+    // Run once before it goes in (its daemon version, which also proves it runs here), and only with room for it.
+    const fit = { version: this.getExpectedDaemonVersion() }
+    const rawBytes = file.gz.length >= 18 ? file.gz.readUInt32LE(file.gz.length - 4) : 0
+    const checked = await this.sshExec(slotCheckScript(slot, file.sha256, alsoAt, { ...fit, needKb: slotNeedKb(Math.max(rawBytes, file.gz.length)) }), 120_000)
+    const found = parseSlotAnswer(checked)
+    if (found === 'low') {
+      const room = parseSlotDetail(checked)
+      throw new WalnutFileUnavailableError(`the daemon dir has ${Math.round((room.freeKb ?? 0) / 1024)} MB free, and the walnut file needs about ${Math.round((room.needKb ?? 0) / 1024)} MB there`)
+    }
+    if (found === 'unrunnable') this.walnutFileUnfit(parseSlotDetail(checked).said)
     if (found === 'have' || found === 'copied') {
       log.session.info('DaemonConnection: walnut file deployed as the daemon', {
         host: this.hostKey, target: target.target, id: file.id, how: found === 'have' ? 'already in the slot' : 'copied from the host server install', deployMs: Date.now() - t0,
@@ -3759,13 +3862,25 @@ export class DaemonConnection {
     }
     const gz = `${slot}.gz`
     const sent = await this.uploadFile(gz, file.gz, { sha256: file.gzSha256 })
-    if (parseSlotAnswer(await this.sshExec(slotInstallScript(slot, gz, file.sha256), 120_000)) !== 'installed') {
-      throw new Error('the walnut file did not go into the daemon slot')
-    }
+    const installed = await this.sshExec(slotInstallScript(slot, gz, file.sha256, fit), 120_000)
+    const answer = parseSlotAnswer(installed)
+    if (answer === 'unrunnable') this.walnutFileUnfit(parseSlotDetail(installed).said)
+    if (answer !== 'installed') throw new Error('the walnut file did not go into the daemon slot')
     log.session.info('DaemonConnection: walnut file deployed as the daemon', {
       host: this.hostKey, target: target.target, id: file.id, how: sent.skipped ? 'its gz was already on the host' : 'uploaded',
       gzBytes: file.gz.length, deployMs: Date.now() - t0,
     })
+  }
+
+  /**
+   * The walnut file ran on the host and did not print the daemon version this
+   * Mac expects (or could not run there at all): this connection does not offer
+   * it again, and the deploy goes on to the source.
+   */
+  private walnutFileUnfit(said: string | undefined): never {
+    const reason = `the walnut file does not run here as this build's daemon (it printed: ${said || 'nothing'})`
+    this._failedRuntimes.set('binary', reason.slice(0, 300))
+    throw new WalnutFileUnavailableError(reason)
   }
 
   /**

@@ -79,9 +79,14 @@ interface SshRoutes {
 
 const answer = (route: string | (() => string) | undefined) => typeof route === 'function' ? route() : route ?? ''
 
-/** Stub every SSH round trip; returns the list of commands actually issued. */
+/**
+ * Stub every SSH round trip; returns the list of commands actually issued. The
+ * deploy an update makes before its stop (stageUpgrade) is stubbed too, seen as
+ * `DEPLOY`: its uploads are not SSH round trips (they have tests of their own).
+ */
 function stubSsh(conn: DaemonConnection, routes: SshRoutes): string[] {
   const seen: string[] = []
+  vi.spyOn(priv(conn), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); return 'node' })
   vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
     const cmd = String(args[0])
     seen.push(cmd)
@@ -217,7 +222,7 @@ describe('DaemonConnection — managed host, daemon not answering', () => {
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
     // The daemon dir probe has its own tests; the stub ssh does not answer it.
     vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
-    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
+    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue('node')
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
 
     await expect(conn.connect()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
@@ -232,7 +237,7 @@ describe('DaemonConnection — managed host, daemon not answering', () => {
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
     // The daemon dir probe has its own tests; the stub ssh does not answer it.
     vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
-    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
+    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue('node')
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
 
     await expect(priv(conn).reconnect()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
@@ -300,14 +305,15 @@ describe('DaemonConnection — managed host with a live daemon', () => {
     expect(errorLog).toHaveBeenCalledTimes(0)
   })
 
-  it.each(['checkDaemonRunning', 'forceRedeployAndReconnect'])('does not deploy when the old daemon has not finished draining: %s', async (method) => {
+  it.each(['checkDaemonRunning', 'forceRedeployAndReconnect'])('starts nothing when the old daemon has not finished draining: %s', async (method) => {
     const conn = new DaemonConnection('devbox', TARGET)
     vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
     const seen = stubSsh(conn, { probe: probeReply(), status: RUNNING_STATUS, version: 'walnut-daemon-old00000', stopPending: true })
-    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
+    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue('node')
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
     await expect(priv(conn)[method]()).rejects.toThrow('shutdown was not confirmed')
-    expect(deploy).not.toHaveBeenCalled()
+    // The new daemon went onto the host beside the old one (before the stop), and nothing more.
+    expect(deploy).toHaveBeenCalledTimes(1)
     expect(start).not.toHaveBeenCalled()
     expect(seen.some((cmd) => /rm -f \/tmp\/open-walnut\/daemon\./.test(cmd))).toBe(false)
   })
@@ -329,7 +335,7 @@ describe('DaemonConnection — capability drift on a managed host', () => {
     const conn = new DaemonConnection('devbox', TARGET)
     const seen = stubSsh(conn, { probe: probeReply({ present: ['/tmp/open-walnut/daemon.service'] }) })
     const teardown = vi.spyOn(priv(conn), 'closeBulkChannel')
-    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
+    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue('node')
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
 
     await expect(priv(conn).forceRedeployAndReconnect()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
@@ -350,7 +356,7 @@ describe('DaemonConnection — capability drift on a managed host', () => {
   it('an unmanaged host still redeploys on drift', async () => {
     const conn = new DaemonConnection('devbox', TARGET)
     stubSsh(conn, { probe: probeReply() })
-    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
+    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue('node')
     vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
     vi.spyOn(priv(conn), 'createTunnel').mockResolvedValue(5555)
     vi.spyOn(priv(conn), 'connectWebSocket').mockResolvedValue(undefined)
@@ -447,7 +453,7 @@ describe('DaemonConnection — a service probe with no answer is not a verdict',
     vi.spyOn(priv(conn), 'stopControlMaster').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
-    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
+    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue('node')
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
 
     const run = entry === 'connect' ? conn.connect() : priv(conn).reconnect() as Promise<void>
@@ -462,7 +468,7 @@ describe('DaemonConnection — a service probe with no answer is not a verdict',
     const seen = stubSsh(conn, { probe: noAnswer })
     vi.spyOn(log.session, 'warn').mockImplementation(() => {})
     const teardown = vi.spyOn(priv(conn), 'closeBulkChannel')
-    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
+    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue('node')
 
     await expect(priv(conn).forceRedeployAndReconnect()).rejects.toBeInstanceOf(DaemonServiceProbeError)
     expect(teardown).not.toHaveBeenCalled()

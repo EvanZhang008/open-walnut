@@ -144,6 +144,21 @@ ls ~/.local/share/open-walnut/versions
 ln -sfn ../versions/<version>/walnut ~/.local/share/open-walnut/bin/walnut
 ```
 
+Remote hosts keep the session daemon the newer version started there. Version 0.6.17 and
+older stop a host's daemon with `ps`, so on a host without `ps` (slim container images have
+no procps) the older version cannot replace it, and every connect to that host fails with
+"Daemon shutdown was not confirmed; no replacement was started". Stop the daemon on that
+host once and the older version starts its own on the next connect; running sessions keep
+running:
+
+```bash
+/tmp/open-walnut/daemon-linux-x64 --stop     # daemon-linux-arm64 on an ARM host
+node /tmp/open-walnut/daemon.cjs --stop      # one that runs under Node (bun: the same with bun)
+```
+
+A daemon that runs from `~/.cache/open-walnut` (used when `/tmp` cannot hold it) stops the
+same way from there. Installing procps on the host works too.
+
 While a newer version is still installed beside the one linked, starting Walnut does not
 install it again: it updates once a release newer than that one is published.
 `walnut update` installs the newest one whenever you ask. An npm install updates through npm

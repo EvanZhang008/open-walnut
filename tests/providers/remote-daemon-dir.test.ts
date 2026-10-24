@@ -7,7 +7,8 @@
  *
  * MACHINE SAFETY: every path is inside a mkdtemp dir; the real /tmp/open-walnut
  * and the real ~/.cache are never named. The "live daemon" is a child of this
- * test whose command line says `--start`, its pid written into a temp pid file.
+ * test whose command line runs `<dir>/daemon-linux-x64 --start`, its pid written
+ * into that dir's pid file.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -34,7 +35,6 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const c of children.splice(0)) c.kill('SIGKILL')
-  daemonPid = 0
   // Undo the permission tricks first, or rm cannot enter the dirs.
   for (const d of [path.join(root, 'tmp'), tmpDir, path.join(root, 'home')]) { try { fs.chmodSync(d, 0o700) } catch { /* absent */ } }
   fs.rmSync(root, { recursive: true, force: true })
@@ -51,7 +51,7 @@ function probe(opts: { writeTest?: boolean; minFreeMb?: number; tmpDir?: string 
   return { raw, parsed: parsed! }
 }
 
-/** This test's own children: the stand-in daemons (a command line with `--start`) and other processes. */
+/** This test's own children: the stand-in daemons (a daemon's command line) and other processes. */
 const children: ChildProcess[] = []
 function child(args: string[]): number {
   // `; true` keeps sh from exec'ing sleep, so the command line stays the one given.
@@ -59,13 +59,13 @@ function child(args: string[]): number {
   children.push(c)
   return c.pid!
 }
-let daemonPid = 0
-
-function fakeLiveDaemon(dir: string): void {
-  daemonPid ||= child(['daemon-linux-x64', '--start'])
+/** A daemon of `dir` the way the Mac starts one (`<dir>/daemon-linux-x64 --start`, or another command line), alive, in its files. */
+function fakeLiveDaemon(dir: string, args: string[] = [path.join(dir, 'daemon-linux-x64'), '--start']): number {
+  const pid = child(args)
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'daemon.pid'), String(daemonPid))
+  fs.writeFileSync(path.join(dir, 'daemon.pid'), String(pid))
   fs.writeFileSync(path.join(dir, 'daemon.port'), '41234')
+  return pid
 }
 
 const asRoot = typeof process.getuid === 'function' && process.getuid() === 0
@@ -164,6 +164,22 @@ describe('daemon dir probe, executed', () => {
     expect(probe().parsed.tmp.live).toBe(true)
   })
 
+  // A daemon is this dir's daemon file run as `--start` (or an OS service's
+  // `.../daemon --service`), not any command line that happens to say `--start`.
+  it.each([
+    ['another program started with --start', (): string[] => ['some-tool', '--start'], false],
+    ["another dir's daemon", (): string[] => [path.join(root, 'other', 'daemon-linux-x64'), '--start'], false],
+    ['this dir\'s daemon file with more after --start', (): string[] => [path.join(tmpDir, 'daemon-linux-x64'), '--start', '--extra'], false],
+    ['the source under bun', (): string[] => ['/home/me/.bun/bin/bun', path.join(tmpDir, 'daemon.cjs'), '--start'], true],
+    ['the source under node', (): string[] => ['node', path.join(tmpDir, 'daemon.cjs'), '--start'], true],
+    ["an OS service's daemon", (): string[] => [path.join(root, 'svc', 'versions', 'abc', 'daemon'), '--service'], true],
+  ] as const)('the identity check: %s → live %s', (_label, args, live) => {
+    fakeLiveDaemon(tmpDir, args())
+    expect(probe().parsed.tmp.live).toBe(live)
+    const out = execFileSync('/bin/sh', ['-s'], { input: buildLiveDaemonScanScript([tmpDir]), encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin') } })
+    expect(out.trim() === 'walnut-live none').toBe(!live)
+  })
+
   it('a stale pid file is not a live daemon', () => {
     fs.mkdirSync(cacheDir, { recursive: true })
     fs.writeFileSync(path.join(cacheDir, 'daemon.pid'), '999999')
@@ -208,8 +224,8 @@ describe('live daemon scan across both production dirs, executed', () => {
     fs.mkdirSync(tmpDir, { recursive: true })
     fs.writeFileSync(path.join(tmpDir, 'daemon.pid'), '999999')  // stale
     fs.writeFileSync(path.join(tmpDir, 'daemon.port'), '41000')
-    fakeLiveDaemon(cacheDir)
-    expect(scan([tmpDir, cacheDir])).toMatchObject({ dir: cacheDir, pid: daemonPid, port: 41234, runtime: 'binary' })
+    const cachePid = fakeLiveDaemon(cacheDir)
+    expect(scan([tmpDir, cacheDir])).toMatchObject({ dir: cacheDir, pid: cachePid, port: 41234, runtime: 'binary' })
     fakeLiveDaemon(tmpDir)
     expect(scan([tmpDir, cacheDir])?.dir).toBe(tmpDir)
     expect(scan([cacheDir, tmpDir])?.dir).toBe(cacheDir)
