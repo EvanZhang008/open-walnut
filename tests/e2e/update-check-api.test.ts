@@ -151,7 +151,7 @@ describe('update check API', () => {
     try {
       setUpdateCheckerForTest(new UpdateChecker({ registryUrl, current: '0.5.1', currentKnown: true, install: NPM, env: {} }));
       const r = await api('GET', '/api/system/update');
-      expect(r.data).toMatchObject({ autoUpdate: false, install: { kind: 'npm', updateCommand: 'sudo npm install -g open-walnut@latest' } });
+      expect(r.data).toMatchObject({ autoUpdate: false, install: { kind: 'npm', updateCommand: 'sudo npm install -g open-walnut@latest --allow-scripts=open-walnut' } });
     } finally {
       await fs.chmod(PREFIX_MODULES, 0o755);
       if (saved === undefined) delete process.env.WALNUT_NO_AUTO_UPDATE;
@@ -160,6 +160,27 @@ describe('update check API', () => {
     // Writable again: the plain command.
     const again = await api('GET', '/api/system/update');
     expect(again.data.install.updateCommand).toBe('npm install -g open-walnut@latest');
+  });
+
+  // A compiled file's root someone else owns: its plain `walnut update` would only exit 1.
+  it.skipIf(process.getuid?.() === 0)('a compiled file this user cannot write: no update on start, its own update by full path through sudo', async () => {
+    const root = path.join(WALNUT_HOME, 'binary-root');
+    await fs.mkdir(path.join(root, 'versions'), { recursive: true });
+    await fs.mkdir(path.join(root, 'bin'), { recursive: true });
+    const FILE: InstallInfo = {
+      kind: 'binary', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'walnut update',
+      binary: { root, target: 'linux-x64', version: '0.5.1' }, relaunch: [path.join(root, 'bin', 'walnut')],
+    };
+    await fs.chmod(path.join(root, 'versions'), 0o555);
+    try {
+      setUpdateCheckerForTest(new UpdateChecker({ registryUrl, current: '0.5.1', currentKnown: true, install: FILE, env: {} }));
+      const r = await api('GET', '/api/system/update');
+      expect(r.data).toMatchObject({ autoUpdate: false, install: { kind: 'binary', updateCommand: `sudo ${root}/bin/walnut update` } });
+    } finally {
+      await fs.chmod(path.join(root, 'versions'), 0o755);
+    }
+    const again = await api('GET', '/api/system/update');
+    expect(again.data.install.updateCommand).toBe('walnut update');
   });
 
   it('a disabled checker (opted out) answers at once from both routes', async () => {

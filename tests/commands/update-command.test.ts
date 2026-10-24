@@ -297,26 +297,33 @@ describe('an install this user cannot write', () => {
       exitCode: 1,
       lines: [
         'A newer Open Walnut is available: 0.5.1 → 0.6.0.',
-        'This install (/usr/local/lib/node_modules/open-walnut) is not writable by this user, so nothing was changed. Run: sudo npm install -g open-walnut@latest',
+        'This install (/usr/local/lib/node_modules/open-walnut) is not writable by this user, so nothing was changed. Run: sudo npm install -g open-walnut@latest --allow-scripts=open-walnut',
       ],
     })
   })
 
   it('--check names the same command and is exit 0: the question was answered', () => {
     expect(planUpdate(NPM_NEWER, { check: true, writable: false })).toEqual({
-      exitCode: 0, lines: ['A newer Open Walnut is available: 0.5.1 → 0.6.0.', 'Run: sudo npm install -g open-walnut@latest'],
+      exitCode: 0, lines: ['A newer Open Walnut is available: 0.5.1 → 0.6.0.', 'Run: sudo npm install -g open-walnut@latest --allow-scripts=open-walnut'],
     })
-    expect(planUpdate(NIGHTLY_NEWER, { check: true, writable: false }).lines[1]).toBe('Run: sudo npm install -g open-walnut@nightly')
+    expect(planUpdate(NIGHTLY_NEWER, { check: true, writable: false }).lines[1]).toBe('Run: sudo npm install -g open-walnut@nightly --allow-scripts=open-walnut')
   })
 
   it('says nothing about it when there is nothing newer', () => {
     expect(planUpdate(NPM_UP_TO_DATE, { check: false, writable: false })).toEqual({ exitCode: 0, lines: ['Open Walnut 0.5.1 is the newest (0.5.1).'] })
   })
 
-  it('a compiled file whose root belongs to someone else says how to fix it and installs nothing', () => {
+  it('a compiled file whose root belongs to someone else names its own update by full path (sudo has no ~/.local/bin) and installs nothing', () => {
     const plan = planUpdate(FILE_NEWER, { check: false, writable: false })
     expect(plan.installFile).toBeUndefined()
-    expect(plan).toMatchObject({ exitCode: 1, lines: [expect.any(String), `This install (${ROOT}) is not writable by this user, so nothing was changed. Fix it: make ${ROOT} writable by this user, or run install.sh again as its owner`] })
+    expect(plan).toMatchObject({ exitCode: 1, lines: [expect.any(String), `This install (${ROOT}) is not writable by this user, so nothing was changed. Run: sudo ${ROOT}/bin/walnut update`] })
+    expect(planUpdate(FILE_NEWER, { check: true, writable: false }).lines[1]).toBe(`Run: sudo ${ROOT}/bin/walnut update`)
+  })
+
+  it('the Node archive names its own walnut by full path: its npm is its own and not on sudo\'s PATH', () => {
+    const prefix = '/opt/walnut stuff/app'
+    const archive: UpdateStatus = { ...NPM_NEWER, install: { ...NPM_NEWER.install, packageRoot: `${prefix}/lib/node_modules/open-walnut`, runtimePrefix: prefix, updateCommand: 'walnut update' } }
+    expect(planUpdate(archive, { check: true, writable: false }).lines[1]).toBe("Run: sudo '/opt/walnut stuff/app/bin/walnut' update")
   })
 
   it('runUpdateWith asks deps.writable about this install and never starts npm', async () => {
@@ -326,7 +333,7 @@ describe('an install this user cannot write', () => {
     expect(writable).toHaveBeenCalledWith(NPM_NEWER.install)
     expect(run).not.toHaveBeenCalled()
     expect(out).toEqual([])
-    expect(err[1]).toContain('Run: sudo npm install -g open-walnut@latest')
+    expect(err[1]).toContain('Run: sudo npm install -g open-walnut@latest --allow-scripts=open-walnut')
     const file = deps(FILE_NEWER, { writable: () => false, installFile: vi.fn(async () => {}) })
     expect(await runUpdateWith({}, { json: false }, file.d)).toBe(1)
     expect(file.d.installFile).not.toHaveBeenCalled()

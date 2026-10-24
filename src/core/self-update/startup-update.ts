@@ -273,8 +273,7 @@ export async function updateOnStart(deps: StartupUpdateDeps): Promise<StartupUpd
   const decision = decideStartupUpdate(status, { auto, applied, writable, held })
   if (decision.action === 'skip') {
     if (decision.reason === 'not-writable') {
-      const what = binary ? 'Fix it: ' : 'Run: '
-      deps.err(`Open Walnut ${status.latest} is published, but this install is not writable by this user. ${what}${decision.note}`)
+      deps.err(`Open Walnut ${status.latest} is published, but this install is not writable by this user. Run: ${decision.note}`)
     }
     if (decision.reason === 'held') deps.err(`Open Walnut ${status.latest} is published, but ${decision.note}. Starting ${status.current}.`)
     return { kind: 'continue', decision }

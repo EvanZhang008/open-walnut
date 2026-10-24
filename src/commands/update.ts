@@ -107,10 +107,9 @@ export function planUpdate(status: UpdateStatus, opts: { check: boolean; writabl
   const updatesItself = (install.kind === 'binary' && install.binary) || (install.kind === 'npm' && install.manager)
   if (opts.writable === false && updatesItself) {
     const fix = notWritableFix(install)
-    const what = install.kind === 'binary' ? 'Fix it' : 'Run'
-    if (opts.check) return { exitCode: 0, lines: [head, `${what}: ${fix}`] }
+    if (opts.check) return { exitCode: 0, lines: [head, `Run: ${fix}`] }
     const where = install.binary?.root ?? install.packageRoot
-    return { exitCode: 1, lines: [head, `This install${where ? ` (${where})` : ''} is not writable by this user, so nothing was changed. ${what}: ${fix}`] }
+    return { exitCode: 1, lines: [head, `This install${where ? ` (${where})` : ''} is not writable by this user, so nothing was changed. Run: ${fix}`] }
   }
   if (install.kind === 'binary' && install.binary) {
     if (opts.check) return { exitCode: 0, lines: [head, 'Run: walnut update'] }

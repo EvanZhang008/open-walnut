@@ -162,15 +162,25 @@ export function managerCommand(manager: PackageManager, tag: 'latest' | 'nightly
   return [file, ...args].join(' ')
 }
 
+/** One shell word: as it is when it needs no quoting, else in single quotes. */
+const shellWord = (s: string): string => (/^[\w/.,:@%+=-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
+
 /**
- * What a person does to update an install this user cannot write: a root-owned
+ * What a person runs to update an install this user cannot write: a root-owned
  * npm prefix (a distro or NodeSource Node, installed with `sudo npm i -g`) takes
- * the same command through sudo; a compiled file's root owned by someone else is
- * theirs to fix. The start, `walnut update` and the console's card all say this.
+ * the same command through sudo, with the launcher's install script allowed
+ * (npm 12 runs none it was not allowed to, and as root it is what fetches a
+ * platform package npm left out). A compiled file, or the Node archive, takes
+ * its own `walnut update` by full path: sudo's PATH (secure_path) has no
+ * ~/.local/bin, and the archive's npm is its own. The start, `walnut update` and
+ * the console's card all say this.
  */
-export function notWritableFix(install: Pick<InstallInfo, 'kind' | 'binary' | 'updateCommand'>): string {
-  if (install.kind === 'binary' && install.binary) return `make ${install.binary.root} writable by this user, or run install.sh again as its owner`
-  return `sudo ${install.updateCommand ?? managerCommand('npm')}`
+export function notWritableFix(install: Pick<InstallInfo, 'kind' | 'binary' | 'updateCommand' | 'manager' | 'runtimePrefix'>): string {
+  if (install.kind === 'binary' && install.binary) return `sudo ${shellWord(binaryLinkOf(install.binary.root))} update`
+  if (install.kind === 'npm' && install.runtimePrefix) return `sudo ${shellWord(path.join(install.runtimePrefix, 'bin', 'walnut'))} update`
+  const command = install.updateCommand ?? managerCommand('npm')
+  if ((install.manager ?? 'npm') === 'npm' && command.startsWith('npm install -g ')) return `sudo ${command} --allow-scripts=${PACKAGE_NAME}`
+  return `sudo ${command}`
 }
 
 /** The manager a global install path belongs to; null when the path has no node_modules parent. */

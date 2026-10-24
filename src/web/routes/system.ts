@@ -117,7 +117,8 @@ const UPDATE_CHECK_DEADLINE_MS = 8_000
  * The status plus whether `open-walnut web` installs updates on start (config `updates.auto`),
  * for the card's wording. Only an npm or binary install updates itself; Homebrew and source never do.
  * An install this server's user cannot write (a root-owned npm prefix, installed with
- * `sudo npm i -g`) does not either, and its command is the sudo one the start names.
+ * `sudo npm i -g`, or a compiled file's root) does not either, and its command is the
+ * sudo one the start names.
  */
 async function updateStatusForClient() {
   const { getUpdateChecker } = await import('../../core/self-update/update-check.js')
@@ -138,9 +139,8 @@ async function updateStatusForClient() {
   const { installedInBackground } = await import('../../core/self-update/background-install.js')
   const installed = installedInBackground()
   const writable = !selfUpdates || installWritable(status.install)
-  const install = !writable && status.install.kind === 'npm' && status.install.updateCommand
-    ? { ...status.install, updateCommand: notWritableFix(status.install) }
-    : status.install
+  // Every kind that updates itself: an unwritable compiled file's `walnut update` only exits 1.
+  const install = !writable ? { ...status.install, updateCommand: notWritableFix(status.install) } : status.install
   return {
     ...status, install, autoUpdate: selfUpdates && writable && autoUpdateEnabled(configAuto, process.env),
     ...(brewHint ? { brewHint } : {}), ...(installed ? { installed } : {}),

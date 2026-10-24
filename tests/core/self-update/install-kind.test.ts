@@ -12,7 +12,7 @@ import { readBunLock, runtimeClosure, splitSpec } from '../../helpers/bun-lock.j
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-install-kind'))
 
 import {
-  BINARY_MARKER, detectInstall, globalPrefixOf, kegOf, LAUNCHER_ENV, managerArgv, managerCommand, managerFromPath, RUNTIME_MARKER, runsCompiled, runtimePrefixOf,
+  BINARY_MARKER, detectInstall, globalPrefixOf, kegOf, LAUNCHER_ENV, managerArgv, managerCommand, managerFromPath, notWritableFix, RUNTIME_MARKER, runsCompiled, runtimePrefixOf,
 } from '../../../src/core/self-update/install-kind.js'
 
 describe('managerFromPath', () => {
@@ -49,6 +49,24 @@ describe('managerCommand and managerArgv', () => {
     expect(managerArgv('pnpm', 'open-walnut@0.6.0')).toEqual({ file: 'pnpm', args: ['add', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('bun', 'open-walnut@0.6.0')).toEqual({ file: 'bun', args: ['add', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('yarn', 'open-walnut@0.6.0')).toEqual({ file: 'yarn', args: ['global', 'add', 'open-walnut@0.6.0'] })
+  })
+})
+
+// What a person runs for an install this user cannot write: a command that works under sudo.
+describe('notWritableFix', () => {
+  const npm = (manager: 'npm' | 'pnpm' | 'bun' | 'yarn', tag: 'latest' | 'nightly' = 'latest') => ({ kind: 'npm' as const, manager, runtimePrefix: null, binary: null, updateCommand: managerCommand(manager, tag) })
+  it('npm through sudo, with the launcher\'s install script allowed (npm 12 runs none it was not allowed to)', () => {
+    expect(notWritableFix(npm('npm'))).toBe('sudo npm install -g open-walnut@latest --allow-scripts=open-walnut')
+    expect(notWritableFix(npm('npm', 'nightly'))).toBe('sudo npm install -g open-walnut@nightly --allow-scripts=open-walnut')
+    expect(notWritableFix(npm('pnpm'))).toBe('sudo pnpm add -g open-walnut@latest')
+    expect(notWritableFix(npm('yarn'))).toBe('sudo yarn global add open-walnut@latest')
+  })
+
+  it('the compiled file and the Node archive take their own walnut update by full path, quoted when it must be', () => {
+    const binary = { root: '/opt/open-walnut', target: 'linux-x64', version: '0.6.18' }
+    expect(notWritableFix({ kind: 'binary', binary, manager: null, runtimePrefix: null, updateCommand: 'walnut update' })).toBe('sudo /opt/open-walnut/bin/walnut update')
+    expect(notWritableFix({ kind: 'binary', binary: { ...binary, root: "/srv/it's here" }, manager: null, runtimePrefix: null, updateCommand: 'walnut update' })).toBe("sudo '/srv/it'\\''s here/bin/walnut' update")
+    expect(notWritableFix({ kind: 'npm', manager: 'npm', runtimePrefix: '/home/a/.local/share/open-walnut/app', binary: null, updateCommand: 'walnut update' })).toBe('sudo /home/a/.local/share/open-walnut/app/bin/walnut update')
   })
 })
 

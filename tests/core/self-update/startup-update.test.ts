@@ -79,7 +79,7 @@ describe('decideStartupUpdate', () => {
     expect(decideStartupUpdate({ ...BASE, enabled: false, reason: 'opted-out' }, ALL)).toEqual({ action: 'skip', reason: 'disabled', note: 'opted-out' })
     expect(decideStartupUpdate({ ...BASE, latest: null, error: 'fetch failed' }, ALL)).toEqual({ action: 'skip', reason: 'unreachable', note: 'fetch failed' })
     expect(decideStartupUpdate({ ...BASE, latest: '0.5.1', available: false }, ALL)).toEqual({ action: 'skip', reason: 'current' })
-    expect(decideStartupUpdate(BASE, { ...ALL, writable: false })).toEqual({ action: 'skip', reason: 'not-writable', note: 'sudo npm install -g open-walnut@latest' })
+    expect(decideStartupUpdate(BASE, { ...ALL, writable: false })).toEqual({ action: 'skip', reason: 'not-writable', note: 'sudo npm install -g open-walnut@latest --allow-scripts=open-walnut' })
   })
 
   it('a nightly build installs the exact nightly', () => {
@@ -154,7 +154,7 @@ describe('updateOnStart', () => {
     const { d, err, run } = deps(BASE, { writable: () => false })
     expect((await updateOnStart(d)).decision).toMatchObject({ action: 'skip', reason: 'not-writable' })
     expect(run).not.toHaveBeenCalled()
-    expect(err[0]).toBe('Open Walnut 0.6.0 is published, but this install is not writable by this user. Run: sudo npm install -g open-walnut@latest')
+    expect(err[0]).toBe('Open Walnut 0.6.0 is published, but this install is not writable by this user. Run: sudo npm install -g open-walnut@latest --allow-scripts=open-walnut')
   })
 
   it('a failing installer, or one that cannot start, still starts the old version', async () => {
@@ -223,7 +223,7 @@ describe('the compiled file in install.sh\'s layout', () => {
     const { d, err } = deps(FILE, { installFile, binaryWritable: () => false })
     expect((await updateOnStart(d)).decision).toMatchObject({ reason: 'not-writable' })
     expect(installFile).not.toHaveBeenCalled()
-    expect(err[0]).toContain(`this install is not writable by this user. Fix it: make ${ROOT} writable`)
+    expect(err[0]).toContain(`this install is not writable by this user. Run: sudo ${ROOT}/bin/walnut update`)
   })
 })
 
