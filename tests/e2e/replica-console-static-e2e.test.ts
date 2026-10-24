@@ -8,7 +8,7 @@
  * and one hashed asset it names loads; both while the Mac answers too (then
  * forwarded to it), byte for byte the same build.
  *
- * Needs the build: `npm run build`, then `cd web && npx vite build`. Without it
+ * Needs the build: `bun run build`, then `cd web && bun x vite build`. Without it
  * the file fails at once and says so (never a skipped test).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -28,7 +28,7 @@ describe('the console page from the host replica (a real build)', () => {
 
   beforeAll(async () => {
     const missing = builtAppMissing()
-    if (missing) throw new Error(`this test runs a real build and ${missing} is missing: npm run build, then cd web && npx vite build`)
+    if (missing) throw new Error(`this test runs a real build and ${missing} is missing: bun run build, then cd web && bun x vite build`)
     c = await startReplicaCluster({ twin: 'source', app: 'built' })
     // Awake: the page is forwarded to the Mac, which serves the same build.
     const page = await c.replica('GET', '/', { headers: NAV })

@@ -14,7 +14,7 @@
  * so the override keeps this test runnable). Run locally with:
  *   env -u VITEST WALNUT_LIVE_BEDROCK=1 \
  *     WALNUT_LIVE_EXPORT_CMD='"/Users/…/.toolbox/bin/claude" default-credential-export' \
- *     npx vitest run --config <live-config> tests/core/credential-resolver.live.test.ts
+ *     bun --bun vitest run --config <live-config> tests/core/credential-resolver.live.test.ts
  */
 import { describe, it, expect } from 'vitest';
 import AnthropicBedrock from '@anthropic-ai/bedrock-sdk';

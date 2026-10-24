@@ -3,7 +3,7 @@
  * (`@open-walnut/plugin-api/testing`).
  *
  * Imported from SOURCE, not through the package name: the package's exports map
- * points at `dist/`, which is only rebuilt by `npm run build:plugins`, so a test
+ * points at `dist/`, which is only rebuilt by `bun run build:plugins`, so a test
  * going through the package name would grade a stale build.
  */
 import { describe, expect, it, vi } from 'vitest'

@@ -11,7 +11,7 @@ The recurring incident shape: the conversation is over, but something stale (a u
 | Oracles | `oracles.ts` | 1. **refresh equivalence** at quiescence (the user's own bug definition); 2. **never vanish** (every canonical assistant text visible). Designed residuals (redacted thinking) are allowlisted explicitly, never silently. |
 | Scenarios | `scenarios.test.ts` | Named incident replays + stress orderings + 25 seeded random interleavings. |
 
-Run: `WALNUT_VITEST_GATE=0 npx vitest run tests/web/chat-lab/ --config vitest.integration.config.ts` (~0.5 s).
+Run: `WALNUT_VITEST_GATE=0 bun --bun vitest run tests/web/chat-lab/ --config vitest.integration.config.ts` (~0.5 s).
 
 ## The loop (how every future incident goes through here)
 

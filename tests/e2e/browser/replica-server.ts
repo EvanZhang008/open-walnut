@@ -12,7 +12,7 @@
  *   REPLICA_APP=built    EVERY path goes to the replica, which runs a real build
  *                        of this tree dev:false (the Mac serves the same build):
  *                        the page and its assets are the replica's own while the
- *                        Mac is away. Build first: npm run build, then the web build.
+ *                        Mac is away. Build first: bun run build, then the web build.
  *
  * Control port PW_TEST_PORT + 1 (default 3473), loopback only:
  *   GET  /control/ready    the cluster is up, its ids and its seed (a note, a letter, a routine, the favorites, a theme)

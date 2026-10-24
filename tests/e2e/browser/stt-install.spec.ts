@@ -7,7 +7,7 @@
  *
  * Prerequisites (this really installs and downloads, 1.6 GB):
  *   whisper-cpp must NOT be installed (brew uninstall whisper-cpp)
- *   cd web && npx vite build
+ *   cd web && bun x vite build
  *   npx playwright test stt-install
  * The simplified flow without installs is covered by stt-setup-simplified.spec.ts.
  */

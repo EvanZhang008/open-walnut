@@ -4,7 +4,7 @@
  * keeps WALNUT_LIVE_CLAUDE_CLI); the fake-CLI coverage is
  * adapter-claude-cli.integration.test.ts.
  *
- *   WALNUT_LIVE_CLAUDE_CLI=1 npx vitest run --config vitest.live.config.ts tests/model/providers/adapter-claude-cli.live.test.ts
+ *   WALNUT_LIVE_CLAUDE_CLI=1 bun --bun vitest run --config vitest.live.config.ts tests/model/providers/adapter-claude-cli.live.test.ts
  */
 import { describe, it, expect } from 'vitest';
 import { ClaudeCliAdapter } from '../../../src/model/providers/adapter-claude-cli.js';

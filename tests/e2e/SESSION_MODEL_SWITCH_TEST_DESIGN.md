@@ -252,7 +252,7 @@ Reuse the exact helpers from `session-mode-change.test.ts`:
 
 Same as `session-mode-pill.spec.ts` and `app.spec.ts`:
 - Runs against the Playwright test server on port 3457 (`tests/e2e/browser/test-server.ts`)
-- Uses pre-built SPA (requires `cd web && npx vite build` beforehand)
+- Uses pre-built SPA (requires `cd web && bun x vite build` beforehand)
 - Injects WS events via captured WebSocket (same `addInitScript` pattern as `session-mode-pill.spec.ts`)
 
 ### Seed Data Required

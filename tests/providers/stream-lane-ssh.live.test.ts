@@ -8,7 +8,7 @@
  *      needs a login of its own and outlives the master.
  *   2. It ends with the server that holds it, also one killed with SIGKILL.
  *
- * Run: WALNUT_LIVE_TEST=1 npx vitest run --config vitest.live.config.ts tests/providers/stream-lane-ssh.live.test.ts
+ * Run: WALNUT_LIVE_TEST=1 bun --bun vitest run --config vitest.live.config.ts tests/providers/stream-lane-ssh.live.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'

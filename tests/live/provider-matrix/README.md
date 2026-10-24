@@ -6,20 +6,20 @@ One generic scenario set, every coding-agent provider. Real binaries, real turns
 
 ```bash
 # Codex (needs a logged-in system codex + built dist/daemon-binaries)
-WALNUT_LIVE_CODEX=1 npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_CODEX=1 bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
 
 # Claude Code (needs claude CLI on PATH)
-WALNUT_LIVE_CLAUDE=1 npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_CLAUDE=1 bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
 
 # The other ACP CLIs (each needs its own binary on PATH + built dist/daemon-binaries)
-WALNUT_LIVE_GEMINI=1   npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
-WALNUT_LIVE_OPENCODE=1 npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
-WALNUT_LIVE_GOOSE=1    npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
-WALNUT_LIVE_PI=1       npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
-WALNUT_LIVE_DSH=1      npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_GEMINI=1   bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_OPENCODE=1 bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_GOOSE=1    bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_PI=1       bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_DSH=1      bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
 
 # Any combination in one run
-WALNUT_LIVE_CODEX=1 WALNUT_LIVE_CLAUDE=1 npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+WALNUT_LIVE_CODEX=1 WALNUT_LIVE_CLAUDE=1 bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
 ```
 
 Ungated or unavailable providers skip loudly (reason printed), never silently.

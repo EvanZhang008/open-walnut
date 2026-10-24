@@ -4,7 +4,7 @@
  * API keys from env vars — never hardcoded.
  *
  * Run: ANTHROPIC_API_KEY=... OPENAI_API_KEY=... OPENROUTER_API_KEY=... GEMINI_API_KEY=... \
- *      npx vitest run tests/e2e/provider-all-models.test.ts --config vitest.e2e.config.ts
+ *      bun --bun vitest run tests/e2e/provider-all-models.test.ts --config vitest.e2e.config.ts
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startServer, stopServer } from '../../src/web/server.js';

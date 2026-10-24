@@ -226,7 +226,7 @@ describe('the Mac keeps its companion on its build (real launcher, real build)',
 
   beforeAll(async () => {
     for (const f of [path.join(DIST, 'cli.js'), path.join(DIST, 'build-info.json'), path.join(DIST, 'daemon-binaries', `daemon-${process.platform}-${process.arch}`)]) {
-      if (!fs.existsSync(f)) throw new Error(`this test runs a real build and ${f} is missing: npm run build, then cd web && npx vite build`)
+      if (!fs.existsSync(f)) throw new Error(`this test runs a real build and ${f} is missing: bun run build, then cd web && bun x vite build`)
     }
     // Short: socket paths under it must fit in 104 bytes on macOS. Never `open-walnut-*`.
     base = fs.mkdtempSync(path.join(os.tmpdir(), 'cbu-'))

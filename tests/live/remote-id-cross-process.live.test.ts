@@ -27,7 +27,7 @@
  *
  * Run:
  *   WALNUT_LIVE_TEST=1 WALNUT_LIVE_CROSS_PROCESS=1 \
- *     npx vitest run --config vitest.live.config.ts \
+ *     bun --bun vitest run --config vitest.live.config.ts \
  *     tests/live/remote-id-cross-process.live.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

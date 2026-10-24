@@ -5,7 +5,7 @@
  *   → real codex app-server (system `codex` binary, must be authenticated).
  *
  * Run manually:
- *   WALNUT_LIVE_CODEX=1 npx vitest run --config vitest.live.config.ts tests/e2e/acp-codex.live.test.ts
+ *   WALNUT_LIVE_CODEX=1 bun --bun vitest run --config vitest.live.config.ts tests/e2e/acp-codex.live.test.ts
  *
  * Covers: initialize/model discovery, one prompt turn (real tokens — kept
  * trivial), warm follow-up on the same worker, interrupt, daemon kill →

@@ -13,7 +13,7 @@
  *      (projects: webkit-phone, webkit-desktop, chromium-phone, chromium-desktop; WebKit
  *      first, the Mac app's engine). REPLICA_TWIN=standalone runs the host daemon's
  *      bun twin; REPLICA_APP=built serves the page and its assets from the replica
- *      itself (a real build of this tree: npm run build, then the web build).
+ *      itself (a real build of this tree: bun run build, then the web build).
  */
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'

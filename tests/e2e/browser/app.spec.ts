@@ -8,7 +8,7 @@
  * (using Date.now() suffixes) and asserts on that specific data.
  *
  * Prerequisites:
- *   cd web && npx vite build    (builds SPA to dist/web/static/)
+ *   cd web && bun x vite build    (builds SPA to dist/web/static/)
  *   npx playwright test          (runs these tests)
  */
 import { test, expect, type Page } from '@playwright/test'

@@ -14,7 +14,7 @@
  *   Layer C: Walnut session record (REST API) — mode field
  *
  * Gated by WALNUT_LIVE_MODE_TEST=1 — skipped in CI, run manually:
- *   WALNUT_LIVE_MODE_TEST=1 npx vitest run --config vitest.live.config.ts tests/e2e/session-mode.live.test.ts
+ *   WALNUT_LIVE_MODE_TEST=1 bun --bun vitest run --config vitest.live.config.ts tests/e2e/session-mode.live.test.ts
  *
  * Cost: ~$0.01 per full run (Haiku model, ~200 tokens per call).
  */

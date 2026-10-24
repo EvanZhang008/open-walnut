@@ -11,7 +11,7 @@
  * - Multiple session column display
  *
  * Prerequisites:
- *   cd web && npx vite build    (builds SPA to dist/web/static/)
+ *   cd web && bun x vite build    (builds SPA to dist/web/static/)
  *   npx playwright test          (runs these tests)
  *
  * Test server is started by playwright.config.ts webServer.

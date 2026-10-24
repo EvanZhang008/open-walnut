@@ -4,7 +4,7 @@
  * Tests real croner scheduling without mocks. These verify the actual
  * croner library integration with real timestamps and timezones.
  *
- * Run with: WALNUT_LIVE_TEST=1 npx vitest run tests/core/cron-schedule.live.test.ts --config vitest.live.config.ts
+ * Run with: WALNUT_LIVE_TEST=1 bun --bun vitest run tests/core/cron-schedule.live.test.ts --config vitest.live.config.ts
  */
 import { describe, it, expect } from 'vitest';
 import { isLiveTest } from '../helpers/live.js';

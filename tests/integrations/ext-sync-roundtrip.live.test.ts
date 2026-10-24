@@ -25,7 +25,7 @@
  *   - Valid ExtSync credentials (cookie-based auth)
  *
  * Run with:
- *   WALNUT_LIVE_TEST=1 npx vitest run tests/integrations/ext-sync-roundtrip.live.test.ts --config vitest.live.config.ts
+ *   WALNUT_LIVE_TEST=1 bun --bun vitest run tests/integrations/ext-sync-roundtrip.live.test.ts --config vitest.live.config.ts
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

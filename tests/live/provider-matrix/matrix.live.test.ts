@@ -22,8 +22,8 @@
  * status polling — status races turn startup and ACP session ids migrate.
  *
  * Run (per provider gate):
- *   WALNUT_LIVE_CODEX=1  npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
- *   WALNUT_LIVE_CLAUDE=1 npx vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+ *   WALNUT_LIVE_CODEX=1  bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
+ *   WALNUT_LIVE_CLAUDE=1 bun --bun vitest run --config vitest.live.config.ts tests/live/provider-matrix/matrix.live.test.ts
  * Both gates may be set together; ungated/unavailable providers are skipped
  * with a visible reason, never silently.
  */

@@ -11,7 +11,7 @@
  *   3. A `-L` forward asked for through the master is held by the master after
  *      its client is gone, and cancelRecordedForwards removes it.
  *
- * Run: WALNUT_LIVE_TEST=1 npx vitest run --config vitest.live.config.ts tests/providers/ssh-control-master.live.test.ts
+ * Run: WALNUT_LIVE_TEST=1 bun --bun vitest run --config vitest.live.config.ts tests/providers/ssh-control-master.live.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'

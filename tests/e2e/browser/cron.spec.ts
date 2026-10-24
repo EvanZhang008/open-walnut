@@ -8,7 +8,7 @@
  * (using Date.now() + random suffixes) and cleans up after itself.
  *
  * Prerequisites:
- *   cd web && npx vite build    (builds SPA to dist/web/static/)
+ *   cd web && bun x vite build    (builds SPA to dist/web/static/)
  *   npx playwright test          (runs these tests)
  */
 import { test, expect } from '@playwright/test'

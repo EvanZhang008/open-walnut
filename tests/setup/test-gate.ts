@@ -10,7 +10,7 @@
  * Design (deliberately approximate, always fails open):
  *   - A "run group" = one logical test invocation. scripts/test-parallel.mjs
  *     launches 6 tiers in parallel as ONE group (they share WALNUT_TEST_RUN_ID);
- *     a bare `npx vitest run` is its own group (keyed by runner pid).
+ *     a bare `bun --bun vitest run` is its own group (keyed by runner pid).
  *   - Each group registers a dir under $TMPDIR/walnut-vitest-gate/ with one
  *     pid file per runner process. A group is "live" if any of its pids is.
  *   - At most MAX_GROUPS live groups may run; later groups poll-wait, log a
