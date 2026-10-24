@@ -25,7 +25,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
-import { BUN, ROOT, startReplicaCluster, waitFor, type ReplicaCluster, type SeedMac, type Twin } from '../helpers/replica-cluster.js'
+import { BUN, HOST_KEY, ROOT, startReplicaCluster, waitFor, type ReplicaCluster, type SeedMac, type Twin } from '../helpers/replica-cluster.js'
 
 const TASKS = 6_500
 const SESSIONS = 5_000
@@ -130,7 +130,15 @@ describe(`R17: a host replica at real density (${TWIN} twin)`, () => {
   }, 400_000)
 
   it('the Mac asleep: the board loads from the copies in under 3 s, every row there', async () => {
-    // The notes copy (through the daemon) is whole before the lid closes.
+    // The notes copy (through the daemon) is whole before the lid closes. The Mac logs
+    // its notes round to the host only once every body the host lacked is stored there
+    // (syncKind in src/core/host-replica.ts); the phone cannot tell, because while the
+    // Mac is awake the replica forwards /api/notes-v2 to it.
+    const notesRound = await waitFor(() => macLines(c, 'host replica: round').find((l) => l.host === HOST_KEY && l.kind === 'notes' && l.action === 'synced' && l.entries >= NOTES) ?? null,
+      180_000, `the Mac's notes round to hold ${NOTES} notes on the host`, 2_000)
+    const { host, kind, action, entries, sent, ms } = notesRound
+    process.stdout.write(`replica-scale-e2e: notes round ${JSON.stringify({ host, kind, action, entries, sent, ms })}\n`)
+    // And the phone sees them all through the Mac.
     await waitFor(async () => {
       const r = await phone('/api/notes-v2')
       return r.status === 200 && uniq(r.text, /Note \d+\.md/g) >= NOTES ? true : null
