@@ -399,6 +399,8 @@ function buildTimeline(
 
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
+/** The note a held queued message shows when its hold named no reason. */
+const HELD_DEFAULT_REASON = 'Waiting to confirm the previous message';
 /** How long after real input inside the transcript its growth still counts as the
  *  reader's own doing (see the follower below). A click's layout lands within a
  *  frame or two, so this only has to cover a gesture, not a thought. */
@@ -470,11 +472,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Consumed queueIds already reported to the owner (useSessionSend GC).
   const notifiedConsumedIds = useRef<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
-  // Queued messages held behind an earlier one whose delivery is still being
-  // confirmed with the host ('session:delivery-held'). Order is kept, so they
-  // wait; the note says why. Cleared when they deliver or fail; a reloaded panel
-  // reads the hold back from the queue (OptimisticMessage.heldReason).
-  const [heldIds, setHeldIds] = useState<ReadonlySet<string>>(() => new Set());
+  // Queued messages held back ('session:delivery-held'): behind an earlier one
+  // whose delivery is still being confirmed with the host, or behind a permission
+  // prompt the user has not answered. Order is kept, so they wait; the note says
+  // why (id → reason). Cleared when they deliver or fail; a reloaded panel reads
+  // the hold back from the queue (OptimisticMessage.heldReason).
+  const [heldIds, setHeldIds] = useState<ReadonlyMap<string, string>>(() => new Map());
   // The pinned Initial Prompt renders through the same markdown path as every
   // other user bubble, so its task pills and file links need the same delegate.
   const handleInitialPromptClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
@@ -846,8 +849,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const releaseHeld = useCallback((ids?: readonly string[]) => {
     setHeldIds((prev) => {
       if (prev.size === 0) return prev;
-      if (!ids) return new Set();
-      const next = new Set(prev);
+      if (!ids) return new Map();
+      const next = new Map(prev);
       for (const id of ids) next.delete(id);
       return next.size === prev.size ? prev : next;
     });
@@ -855,10 +858,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   // A queued message waits for the host to confirm the one before it.
   useEvent('session:delivery-held', (data) => {
-    const d = data as { sessionId?: string; messageIds?: string[] };
+    const d = data as { sessionId?: string; messageIds?: string[]; reason?: string };
     if (d.sessionId !== sessionId || !Array.isArray(d.messageIds) || d.messageIds.length === 0) return;
-    log.info('stream', `delivery held ids=${d.messageIds.join(',')}`, { sessionId });
-    setHeldIds((prev) => new Set([...prev, ...d.messageIds!]));
+    log.info('stream', `delivery held ids=${d.messageIds.join(',')} reason=${d.reason ?? ''}`, { sessionId });
+    const reason = d.reason || HELD_DEFAULT_REASON;
+    setHeldIds((prev) => {
+      const next = new Map(prev);
+      for (const id of d.messageIds!) next.set(id, reason);
+      return next;
+    });
   });
 
   // Messages delivered to CLI: transition from grey (pending) to normal (delivered).
@@ -4217,7 +4225,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                     <div className="thread-queue-note" role="status">Waits for “{answeringTitle}” to finish.</div>
                   )}
                   {(heldIds.has(m.queueId) || !!m.heldReason) && (m.status === 'pending' || m.status === 'received') && (
-                    <div className="thread-queue-note session-msg-held-note" role="status">Waiting to confirm the previous message</div>
+                    <div className="thread-queue-note session-msg-held-note" role="status">{heldIds.get(m.queueId) ?? m.heldReason ?? HELD_DEFAULT_REASON}</div>
                   )}
                   <OptimisticImagePreviews images={m.images} />
                   <DeliveryMetaLine status={m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />

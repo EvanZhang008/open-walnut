@@ -252,8 +252,8 @@ export async function resolveCaller(callerSid: string | undefined): Promise<Call
 /**
  * Deliver `text` to a session with the letter-ops three-state handling:
  * normal → durable queue + dispatch; parked on a permission prompt → enqueue
- * WITHOUT dispatch (both delivery paths auto-deny pending prompts — the
- * message rides the next natural drain); missing session is the caller's error.
+ * WITHOUT dispatch (the row waits behind the prompt and goes out once it is
+ * answered, see QueuedMessage.closesPrompt); missing session is the caller's error.
  *
  * `fromLeader`: the sender leads the target (its parent task's session). A
  * worker's question is its leader's to answer, so a pending AskUserQuestion
@@ -284,6 +284,7 @@ export async function deliverToSession(
       enqueueMessage: opts.enqueueText === opts.busText ? undefined : opts.enqueueText,
       ...(opts.taskId ? { taskId: opts.taskId } : {}),
       ...(opts.messageId ? { messageId: opts.messageId } : {}),
+      ...(leaderAnswersQuestion ? { closesPrompt: true } : {}),
     }),
     DELIVERY_TIMEOUT_MS,
   );

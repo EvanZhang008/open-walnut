@@ -39,6 +39,27 @@ export async function removeTaken(sessionId: string, ids: string[], opts?: { ran
 }
 
 /**
+ * Undo a markProcessing whose line was never written (a delivery held back
+ * before the write): the rows are pending again exactly as before, so their
+ * next delivery is a first one, not a resend the daemon must be asked about.
+ */
+export async function unmarkUnwritten(messages: QueuedMessage[]): Promise<void> {
+  if (messages.length === 0) return;
+  await mutateStore((s) => {
+    for (const m of messages) {
+      const row = s.queues[m.sessionId]?.find((q) => q.id === m.id);
+      if (row?.status !== 'processing') continue;
+      row.status = 'pending';
+      const tries = (row.lineTries ?? 1) - 1;
+      if (tries > 0) { row.lineTries = tries; continue; }
+      delete row.lineTries;
+      delete row.lineUuid;
+      delete row.lineTracked;
+    }
+  });
+}
+
+/**
  * Put rows still in the queue back to pending, and nothing else: unlike
  * revertToPending it never re-inserts a missing row, because a row whose line
  * may be in a CLI is missing exactly when the CLI said it took it (removeTaken).

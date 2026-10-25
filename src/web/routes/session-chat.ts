@@ -452,11 +452,11 @@ export function registerSessionChatRpc(): void {
     // queued, can't be edited or deleted, and must not look like a row to any
     // other reader of the queue. See core/sessions/launch-prompts.ts.
     const launchPrompt = launchPromptFor(data.sessionId)
-    // A row held behind a line whose delivery is being confirmed says so, so a
-    // reloaded panel shows it waiting rather than delivered.
+    // A held row (behind a line whose delivery is being confirmed, or behind an
+    // unanswered permission prompt) says so, so a reloaded panel shows why it waits.
     const held = heldRows(data.sessionId)
     const messages = (await getQueue(data.sessionId)).map((m) =>
-      m.status === 'processing' && held?.has(m.id) ? { ...m, heldReason: held.get(m.id) } : m)
+      (m.status === 'processing' || m.status === 'pending') && held?.has(m.id) ? { ...m, heldReason: held.get(m.id) } : m)
     return { messages, ...(launchPrompt ? { launchPrompt } : {}) }
   })
 

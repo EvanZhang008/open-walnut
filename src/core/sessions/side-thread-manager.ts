@@ -445,8 +445,8 @@ class SideThreadManager {
         'This side thread\'s process has been reaped — inject the full aside instead', 409,
       );
     }
-    // An open permission prompt is auto-denied by any delivery, so a summary request
-    // would silently answer a question the user was still looking at.
+    // An open permission prompt holds every delivery but a person's: the summary
+    // request would wait behind a question the user was still looking at.
     if (record.pendingPermission) {
       throw new SessionControlError(
         'This side thread is waiting on a permission prompt — answer it first', 409,

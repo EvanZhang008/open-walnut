@@ -123,7 +123,7 @@ const INLINE_ENTRIES: InlineEntry[] = [
   {
     id: 'auto-deny-stale-permissions',
     name: 'Auto-deny pending permissions on new user message',
-    description: 'A new user message auto-denies permission prompts still pending from the previous turn, so the turn can pick up the new input instead of hanging.',
+    description: 'A new message from a person auto-denies permission prompts still pending, so the turn can pick up the new input instead of hanging. Messages nobody typed (peers, letters, notices, triggers) wait behind the prompt and go out once it is answered.',
     on: ['onMessageSend'],
     domains: ['session'],
     runtime: 'walnut',
@@ -131,7 +131,7 @@ const INLINE_ENTRIES: InlineEntry[] = [
     priority: 100,
     actionType: 'deny_permission',
     actionDetail: 'Deny stale pending permission requests',
-    conditions: ['Pending permission exists from a previous turn'],
+    conditions: ['Pending permission exists', 'The message was sent by a person'],
     mutable: 'readonly',
     note: 'Disabling this would make new user messages silently hang behind stale prompts.',
     isEnabled: () => true,

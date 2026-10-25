@@ -253,9 +253,10 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                 // 'failed' presentation so it keeps Retry + Discard instead of looking
                 // like an ordinary "Queued" message that is still on its way.
                 const parked = m.status === 'parked';
-                // A row held behind a line still being confirmed was never written:
-                // it shows as waiting, with the reason, not as delivered.
-                const held = m.status === 'processing' && !!m.heldReason;
+                // A row held back (behind a line still being confirmed, or behind an
+                // unanswered permission prompt) was never written: it shows as
+                // waiting, with the reason, not as delivered.
+                const held = (m.status === 'processing' || m.status === 'pending') && !!m.heldReason;
                 return {
                   role: 'user' as const,
                   text: display,

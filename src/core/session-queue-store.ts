@@ -68,6 +68,14 @@ export interface QueuedMessage {
    * copy it sent by the host's direct path would carry another uuid and run twice.
    */
   lineInDoubt?: true;
+  /**
+   * A person sent it (the composer, the phone, the `walnut` CLI, a plan button),
+   * or a leader answering its worker's question: delivering it answers a pending
+   * permission prompt with a deny, since the person moved on. A row without it (a
+   * peer, a letter, a notice, a trigger) waits behind the prompt and goes out
+   * once the prompt is answered.
+   */
+  closesPrompt?: true;
 }
 
 export interface QueueStore {

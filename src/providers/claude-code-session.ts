@@ -49,11 +49,12 @@ import {
   removeTaken,
   revertIfQueued,
   parkIfQueued,
+  unmarkUnwritten,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
-import { lineUuidFor, noteTurnUserUuid, pickBatchUuid } from './batch-uuid.js'
+import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, turnUserUuid } from './batch-uuid.js'
 import {
-  announceReclaimed, awaitLine, awaitedLines, dropLine, isLineAwaited, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld,
+  announceReclaimed, awaitLine, awaitedLines, dropLine, heldRows, isLineAwaited, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld,
   takeLine, takeUntold, untakenLines, type LineState, type ReclaimReason, type UntakenLine,
 } from './line-consumption.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
@@ -85,7 +86,7 @@ import {
 } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
-import type { WorkflowPhaseInfo, WorkflowAgentInfo, SessionBackgroundTasksPayload } from '../core/event-types.js'
+import type { WorkflowPhaseInfo, WorkflowAgentInfo, SessionBackgroundTasksPayload, SessionPermissionResolvedEvent } from '../core/event-types.js'
 import { recordTurn } from '../core/observability/recorder.js'
 import { TurnSpeedMeter, tokensPerSecond, type TurnSpeedFinal } from '../core/sessions/turn-speed.js'
 import type { SessionServerClient } from './session-server-client.js'
@@ -103,6 +104,9 @@ import {
   abortAllTurns,
   getOpenTurnPromise,
 } from './turn-ledger.js'
+
+/** Why a queued message waits while the session's permission prompt is unanswered (holdBehindPrompt). */
+const PROMPT_HOLD_REASON = 'Waiting for the permission prompt to be answered'
 
 /**
  * The walnut MCP mount for an ACP session, resolved to THIS install's CLI entry.
@@ -787,6 +791,14 @@ export class ClaudeCodeSession {
    *  Survives a server restart: the record keeps the pid that reported it
    *  (lineLifecyclePid), and attachToExisting reads it back for that process. */
   private _sawCommandLifecycle = false
+  /** This process's own system/init has been read, so it has said whether it reports its
+   *  queue (capabilities `msg_lifecycle_v1`). Cleared by every spawn; true for a process
+   *  this object attached to, whose init it may never see (the attach path keeps the
+   *  old rule there, read back from lineLifecyclePid). */
+  private _initSeenThisProcess = true
+  /** Lines written behind a running turn before this process's init said whether it reports
+   *  its queue: tracked until that init decides (provisional, see writeMessage). */
+  private _provisionalLines = new Set<string>()
   /** The pid last written to the record as reporting lifecycle (one write per process). */
   private _lifecyclePidSaved: number | null = null
   /** Monotonic counter of OBSERVED TURN-START EDGES. Stamped onto every SESSION_RESULT
@@ -2528,6 +2540,7 @@ export class ClaudeCodeSession {
     this._cwd = cwd ?? null
     // A new process holds no cut copy (its first line may say otherwise: settleSpawnLine).
     this._cutPid = null
+    this._initSeenThisProcess = false
 
     const isResume = !!resumeSessionId && !forkSession
     // Pre-assigned id (init-only spawn) names the stream/FIFO files directly —
@@ -3617,8 +3630,24 @@ export class ClaudeCodeSession {
     const rows = opts?.rows ?? []
     // A row whose line went to a CLI that reports its queue keeps waiting for its
     // word, also when this object has seen no frame yet (a restarted server).
-    const tracked = this._sawCommandLifecycle || rows.some((r) => r.lineTracked)
+    // A line written behind the turn before this process's init said whether it reports its
+    // queue is tracked provisionally: dropping it at the write lost it when the process died
+    // before running it (the first mid-turn line of a fresh session). The init decides it.
+    const provisional = !this._sawCommandLifecycle && !rows.some((r) => r.lineTracked)
+      && queuedBehindTurn && !this._initSeenThisProcess
+    const tracked = this._sawCommandLifecycle || rows.some((r) => r.lineTracked) || provisional
     const lineSid = uuid && rows.length && tracked ? this.claudeSessionId : null
+    if (lineSid && provisional) {
+      this._provisionalLines.add(uuid!)
+      // Bounded like the registry it mirrors (line-consumption MAX_LINES): the
+      // oldest provisional line settles by its write, the old rule.
+      if (this._provisionalLines.size > 64) {
+        const oldest = this._provisionalLines.values().next().value!
+        this._provisionalLines.delete(oldest)
+        const settled = takeLine(this.claudeSessionId, oldest)
+        if (settled.length) this.removeWrittenRows(settled)
+      }
+    }
     if (lineSid) {
       // The CLI may already have reported this line (it raced a restart's redelivery).
       const reported = awaitLine(lineSid, uuid!, rows, this.pid, (evicted) => {
@@ -3914,6 +3943,33 @@ export class ClaudeCodeSession {
   /** The CLI is inside a turn whose result has not landed (the same test `send` uses for a line queued behind it). */
   get inTurn(): boolean { return this._processStatus === 'running' && !this._turnResultEmitted }
 
+  /**
+   * A system/init: the CLI says whether it reports its command queue. With the capability, the
+   * session counts as reporting from now on and the provisional lines stay tracked. Without it
+   * (an older CLI), those lines follow the old rule now: the write was the last word. A replayed
+   * init may confirm but never settles a provisional line (it can belong to an earlier process).
+   */
+  private noteInitCapabilities(capabilities: unknown, replayed: boolean): void {
+    const reports = Array.isArray(capabilities) && capabilities.includes('msg_lifecycle_v1')
+    if (!replayed) this._initSeenThisProcess = true
+    if (reports) {
+      this._sawCommandLifecycle = true
+      this._provisionalLines.clear()
+      this.saveLifecyclePid()
+      return
+    }
+    if (replayed || this._sawCommandLifecycle || this._provisionalLines.size === 0) return
+    const sid = this.claudeSessionId
+    const uuids = [...this._provisionalLines]
+    this._provisionalLines.clear()
+    const rows = uuids.flatMap((uuid) => takeLine(sid, uuid))
+    if (rows.length === 0) return
+    log.session.info('the CLI does not report its queue: provisional lines settle by their write', {
+      sessionId: sid, messageIds: rows.map((r) => r.id),
+    })
+    this.removeWrittenRows(rows)
+  }
+
   /** Record which process reported lifecycle, so a restarted server knows it before that process prints another frame. */
   private saveLifecyclePid(): void {
     const sid = this.claudeSessionId
@@ -4135,6 +4191,7 @@ export class ClaudeCodeSession {
    */
   reclaimUntakenLines(why: 'exit' | 'death' | 'crash' | 'teardown', announce = false): void {
     this._processEnds++
+    this._provisionalLines.clear()
     const sid = this.claudeSessionId
     if (!sid) return
     this.handBackLines(sid, untakenLines(sid, this.pid), why, announce)
@@ -5292,6 +5349,13 @@ export class ClaudeCodeSession {
             }
           })()
         }
+
+        // ── Does this CLI report its command queue? (init only) ──
+        // Claude Code declares it in its capabilities (`msg_lifecycle_v1`, 2.1.28x). It names a
+        // line by command_lifecycle only when the line waits behind a turn, so before this the
+        // first mid-turn line of a session went out under the old rule (its rows left at the
+        // write) and was lost if the process died before running it.
+        if (sys.subtype === 'init') this.noteInitCapabilities(sys.capabilities, this._isReplayedByOffset() === true)
 
         // ── CLI-advertised slash commands (init only) ──
         // Every init (spawn, --resume, auto-continuation, reattach replay) carries
@@ -7241,6 +7305,7 @@ export class ClaudeCodeSession {
         const lc = event as unknown as StreamCommandLifecycleEvent
         // This CLI reports its queue: from now on its lines' rows wait for its word.
         this._sawCommandLifecycle = true
+        this._provisionalLines.clear()
         this.saveLifecyclePid()
         if (typeof lc.command_uuid !== 'string' || typeof lc.state !== 'string') break
         noteLineState(this.claudeSessionId, lc.command_uuid, lc.state as LineState)
@@ -8590,6 +8655,14 @@ export class ClaudeCodeSession {
   }
 
   /** True when Claude Code is blocked waiting for a permission decision. */
+  /** A pending request the user has in front of them (asked, with its re-ask timer
+   *  running), not a sentinel held across a bypass approval or a question routed
+   *  to the leader. */
+  get hasUserPrompt(): boolean {
+    for (const id of this._pendingPermissionRequests.keys()) if (this._permissionReEmitTimers.has(id)) return true
+    return false
+  }
+
   get hasPendingPermission(): boolean {
     return this._pendingPermissionRequests.size > 0
   }
@@ -9142,6 +9215,24 @@ export class SessionRunner {
           } else {
             await this.handleSend({ ...sendData, source: sendSource })
           }
+        }
+          break
+
+        case EventNames.SESSION_PERMISSION_RESOLVED: {
+          // An answered prompt releases what waited behind it (holdBehindPrompt).
+          // A withdrawn one (a Stop, the CLI's cancel) leaves the queue to the
+          // turn's end, as a bare Stop does.
+          const resolved = event.data as SessionPermissionResolvedEvent
+          if (!resolved?.sessionId) break
+          const owner = this.findSessionByClaudeId(resolved.sessionId)
+          if (owner?.active && owner.hasUserPrompt) break
+          const promptHeld = [...(heldRows(resolved.sessionId) ?? [])].filter(([, why]) => why === PROMPT_HOLD_REASON).map(([id]) => id)
+          releaseHeld(resolved.sessionId, promptHeld)
+          // Walnut's own deny for a person's message is inside a delivery that goes on
+          // by itself. An expired prompt (the process died, the session was retired)
+          // wakes nothing: the rows ride the next delivery, as any other row does.
+          if (resolved.cancelled || resolved.expired || this.autoDenying.has(resolved.sessionId)) break
+          this.deliverRest(resolved.sessionId)
         }
           break
 
@@ -11422,19 +11513,24 @@ export class SessionRunner {
     // spawn rather than writing into a missing pipe and taking the respawn path.
     await targetSession.awaitSpawn()
 
-    // If Claude is blocked on a permission prompt, auto-deny it so the user's
-    // message can be processed. Without this, messages are silently lost.
+    // A prompt the user has not answered holds every message but a person's, and
+    // a person's message auto-denies it so it can be processed (promptDecision).
     // Not for a line written again (recoveryDeliveries): the user sent nothing new.
-    const recovery = this.recoveryDeliveries.delete(sessionId)
-    if (targetSession.hasPendingPermission && !recovery) {
+    const prompt = this.recoveryDeliveries.has(sessionId) ? 'none' : await this.promptDecision(sessionId, targetSession, stopFence)
+    if (prompt === 'hold') return
+    this.recoveryDeliveries.delete(sessionId)
+    if (prompt === 'deny') {
       const pendingPerms = targetSession.getPendingPermissionRequests()
       log.session.info('injectMidTurn: auto-denying pending permissions to unblock for user message', {
         sessionId,
         permissions: pendingPerms.map(p => p.toolName),
       })
-      for (const p of pendingPerms) {
-        await targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied').catch(() => false)
-      }
+      this.autoDenying.add(sessionId)
+      try {
+        for (const p of pendingPerms) {
+          await targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied').catch(() => false)
+        }
+      } finally { this.autoDenying.delete(sessionId) }
       await new Promise(r => setTimeout(r, 200))
     }
 
@@ -12179,6 +12275,9 @@ export class SessionRunner {
    *  a NEW user message; such a delivery skips it once. */
   private recoveryDeliveries = new Set<string>()
 
+  /** Sessions whose pending prompts a delivery is denying right now (a person's message). */
+  private autoDenying = new Set<string>()
+
   /**
    * Lines handed back to the queue. `death`: the process died without a turn
    * event, so the next process gets them (a turn still counted here is the dead
@@ -12270,6 +12369,44 @@ export class SessionRunner {
     this.deliverRest(sessionId)
   }
 
+  /**
+   * What a delivery does about the session's pending permission prompt.
+   * 'deny': a person's message waits (QueuedMessage.closesPrompt): it answers the
+   * prompt with a deny, as before. 'hold': the user has a prompt in front of them
+   * and only messages nobody typed wait (a peer's message, a letter, a notice, a
+   * trigger): nothing is taken or written, the rows wait and the prompt's answer
+   * drives the queue (SESSION_PERMISSION_RESOLVED). 2026-10-24: notices denied
+   * ExitPlanMode and Write cards, and the user was told to stop messaging the task.
+   * 'none': no prompt, a dead process (its write fails over to a resume), or a
+   * request never shown to the user (a bypass approval or a routed worker question
+   * still in flight): the line is written and the CLI queues it behind the request,
+   * which it keeps open (verified on 2.1.284).
+   * The caller has ruled out a line written again (recoveryDeliveries).
+   */
+  private async promptDecision(sessionId: string, target: ClaudeCodeSession, stopFence: string | null, batch: QueuedMessage[] = []): Promise<'none' | 'hold' | 'deny'> {
+    if (!target.hasPendingPermission || !target.active || !target.hasPipe) return 'none'
+    const rows = await this.promptHeldRows(sessionId, stopFence)
+    if (batch.some((m) => m.closesPrompt) || rows.some((m) => m.closesPrompt)) return 'deny'
+    if (!target.hasUserPrompt) return 'none'
+    this.announcePromptHold(sessionId, target, rows)
+    return 'hold'
+  }
+
+  /** The rows a delivery now could take (pending, inside the current stop fence). */
+  private async promptHeldRows(sessionId: string, stopFence: string | null): Promise<QueuedMessage[]> {
+    return (await getQueue(sessionId)).filter((m) => m.status === 'pending' && (m.stopFence ?? null) === stopFence)
+  }
+
+  private announcePromptHold(sessionId: string, target: ClaudeCodeSession, rows: QueuedMessage[]): void {
+    if (rows.length === 0) return
+    const reason = PROMPT_HOLD_REASON
+    log.session.info('messages wait behind a pending permission prompt', {
+      sessionId, messageIds: rows.map((m) => m.id), permissions: target.getPendingPermissionRequests().map((p) => p.toolName),
+    })
+    noteHeld(sessionId, rows.map((m) => m.id), reason)
+    bus.emit(EventNames.SESSION_DELIVERY_HELD, { sessionId, messageIds: rows.map((m) => m.id), reason }, ['main-ai'], { source: 'session-runner' })
+  }
+
   /** Lines queued behind one whose answer is being asked for: the user sees why they wait. */
   private announceHeld(sessionId: string, msgs: QueuedMessage[]): void {
     log.session.info('line waits for the previous one to be confirmed', { sessionId, messageIds: msgs.map((m) => m.id) })
@@ -12345,7 +12482,10 @@ export class SessionRunner {
     // processNext); the line still goes now and the CLI queues it.
     let tracked = false
     let inTurn = false
-    for (const [, s] of this.sessions) if (s.sessionId === sessionId) { tracked = s.reportsLineLifecycle; inTurn = s.inTurn; break }
+    let live: ClaudeCodeSession | undefined
+    for (const [, s] of this.sessions) if (s.sessionId === sessionId) { tracked = s.reportsLineLifecycle; inTurn = s.inTurn; live = s; break }
+    // A prompt the user has not answered holds every message but a person's (promptDecision).
+    if (live && !this.recoveryDeliveries.has(sessionId) && await this.promptDecision(sessionId, live, stopFence) === 'hold') return
     // A mid-turn write still out holds an earlier line as 'processing': taking the
     // queue's head now would send a later line first (see midTurnWrites).
     await this.midTurnWrites.get(sessionId)
@@ -12354,6 +12494,12 @@ export class SessionRunner {
     releaseHeld(sessionId, msgs.map((m) => m.id))
     const dedupe = (msgs[0].lineTries ?? 1) > 1
 
+    // A batch held back after this point (promptDecision on a session attached
+    // below) undoes only what this delivery set up, not a turn already running.
+    const before = {
+      active: this.activeProcessing.has(sessionId), count: this.batchCounts.get(sessionId),
+      ids: this.batchMessageIds.get(sessionId), turnUuid: turnUserUuid(sessionId),
+    }
     this.setActiveProcessing(sessionId, msgs.length, msgs.map((m) => m.id))
 
     let combined = msgs.map((m) => m.message).join('\n\n')
@@ -12485,15 +12631,33 @@ export class SessionRunner {
         // permanently stuck with messages bouncing in the queue.
         // Not for a line written again (recoveryDeliveries): the user sent nothing new.
         const recovery = this.recoveryDeliveries.delete(sessionId)
-        if (targetSession.hasPendingPermission && !recovery) {
+        const prompt = recovery ? 'none' : await this.promptDecision(sessionId, targetSession, stopFence, msgs)
+        // A session attached just now may carry a prompt the check before the
+        // batch could not see: the unwritten batch goes back as it was, and waits.
+        if (prompt === 'hold') {
+          await unmarkUnwritten(msgs)
+          this.announcePromptHold(sessionId, targetSession, msgs)
+          noteTurnUserUuid(sessionId, before.turnUuid)
+          if (!before.active) this.clearActiveProcessing(sessionId)
+          else {
+            this.batchCounts.set(sessionId, before.count ?? 0)
+            if (before.ids) this.batchMessageIds.set(sessionId, before.ids)
+            else this.batchMessageIds.delete(sessionId)
+          }
+          return
+        }
+        if (prompt === 'deny') {
           const pendingPerms = targetSession.getPendingPermissionRequests()
           log.session.info('processNext: auto-denying pending permissions to unblock session for user message', {
             sessionId,
             permissions: pendingPerms.map(p => p.toolName),
           })
-          for (const p of pendingPerms) {
-            await targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied').catch(() => false)
-          }
+          this.autoDenying.add(sessionId)
+          try {
+            for (const p of pendingPerms) {
+              await targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied').catch(() => false)
+            }
+          } finally { this.autoDenying.delete(sessionId) }
           // Small delay for Claude Code to process the denial before we write the new message
           await new Promise(r => setTimeout(r, 200))
         }

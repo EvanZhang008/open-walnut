@@ -52,7 +52,7 @@ export {
   migrateSessionQueue, rollbackSessionQueueMigration, type SessionQueueMigration,
 } from './session-queue-park.js';
 // The lines that went out (session-queue-lines.ts): rows the CLI took, rows put back unconfirmed.
-export { removeTaken, revertIfQueued, settledLineUuid } from './session-queue-lines.js';
+export { removeTaken, revertIfQueued, settledLineUuid, unmarkUnwritten } from './session-queue-lines.js';
 
 // ── Public API ──
 
@@ -99,7 +99,7 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string },
+  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean },
 ): Promise<QueuedMessage> {
   if (opts?.id?.startsWith('qm-inbox-') && !opts.id.startsWith('qm-inbox-ai-')) {
     const { validateInboxMessageBoundary } = await import('./human-inbox/item-execution.js');
@@ -125,6 +125,7 @@ export async function enqueueMessage(
     // a new-shaped one are byte-identical on disk.
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
     ...(inherited ? { lineUuid: inherited, lineTries: 1 } : {}),
+    ...(opts?.closesPrompt ? { closesPrompt: true as const } : {}),
   };
   // A relayed row is written strictly: on a disk failure the companion is told
   // (QueueNotStoredError) instead of the row living in this process alone.
@@ -152,6 +153,13 @@ export async function enqueueMessage(
   log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth: outcome.queueDepth });
   return msg;
 }
+
+/**
+ * Send sources a person typed into the session (phase.ts REOPENING_SEND_SOURCES
+ * minus the peer and letter paths). Their rows answer a pending permission
+ * prompt (QueuedMessage.closesPrompt); every other row waits behind it.
+ */
+export const PERSON_SEND_SOURCES: ReadonlySet<string> = new Set(['ui', 'mobile', 'cli', 'web-api', 'api-v1', 'chat']);
 
 /**
  * Enqueue a message AND notify session-runner + UI in one call.
@@ -186,6 +194,8 @@ export async function sendMessageToSession(
     relayTaken?: boolean;
     /** A resend of a line that already went out keeps its uuid (see QueuedMessage.lineUuid). */
     lineUuid?: string;
+    /** Answers a pending permission prompt although no person typed it (a leader answering its worker's question). */
+    closesPrompt?: boolean;
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
@@ -216,6 +226,7 @@ export async function sendMessageToSession(
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.relayTaken ? { relayTaken: true } : {}),
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
+      ...(opts?.closesPrompt || PERSON_SEND_SOURCES.has(opts?.source ?? '') ? { closesPrompt: true } : {}),
     });
   } catch (err) {
     appState?.release();

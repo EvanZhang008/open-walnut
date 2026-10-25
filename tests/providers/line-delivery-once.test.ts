@@ -68,6 +68,9 @@ function harness(opts: { reportsLifecycle?: boolean } = {}) {
   Object.assign(session, {
     claudeSessionId: SID, _transport: transport, _processStatus: 'running', _active: true, pid: 12345,
     _sawCommandLifecycle: opts.reportsLifecycle !== false,
+    // A CLI without lifecycle has already printed its init, with no msg_lifecycle_v1 in it:
+    // that is what tells Walnut it does not report its queue (midturn-first-line-tracked.test.ts).
+    _initSeenThisProcess: opts.reportsLifecycle === false,
   })
   const runner = new SessionRunner('/bin/true')
   const internals = runner as unknown as {
@@ -195,8 +198,10 @@ describe('C1: a line queued behind a running turn', () => {
       h.lifecycle(h.writes[0].uuid!, state)
       await vi.waitFor(async () => expect((await rows()).find((r) => r.id === id)?.status).toBe('parked'))
       const row = (await getQueue(SID)).find((m) => m.id === id)!
-      // A Retry goes out as a new line: the CLI would skip the old uuid as already seen.
-      expect(row.lineUuid).toBeUndefined()
+      // A Retry goes out as a new line: the CLI would skip the old uuid as already seen
+      // (a dropped line keeps a fresh uuid of its own, session-queue-park.ts parkIfQueued).
+      expect(row.lineUuid).not.toBe(h.writes[0].uuid)
+      expect(row.lineTries ?? 0).toBe(0)
       await vi.waitFor(() => expect(h.events.some((e) => e.name === EventNames.SESSION_BATCH_FAILED
         && (e.data.messageIds as string[]).includes(id))).toBe(true))
       bus.unsubscribe('line-delivery-once-test')

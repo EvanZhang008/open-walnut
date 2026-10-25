@@ -588,6 +588,11 @@ if (outputFormat === 'stream-json') {
     // for the CLI's `__remote-workflow`-style internal names.
     slash_commands: ['compact', 'clear', 'mock-skill-alpha', 'mock-skill-beta', 'doctor', 'color', '__internal-thing'],
     terminal_slash_commands: ['doctor', 'color'],
+    // Mirrors CLI 2.1.284: msg_lifecycle_v1 says this process names a line that waits
+    // behind a turn (command_lifecycle). MOCK_CLAUDE_NO_LIFECYCLE_CAPS=1 plays an older CLI.
+    ...(process.env.MOCK_CLAUDE_NO_LIFECYCLE_CAPS === '1' ? {} : {
+      capabilities: ['interrupt_receipt_v1', 'interrupt_cancel_queued_v1', 'msg_lifecycle_v1', 'mcp_read_resource_v1', 'mcp_tool_ui_meta_v1'],
+    }),
   };
   process.stdout.write(JSON.stringify(initEvent) + '\n');
 

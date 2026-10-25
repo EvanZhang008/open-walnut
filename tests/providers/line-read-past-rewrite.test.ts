@@ -351,7 +351,7 @@ describe('a lost line across a server restart, an old window, and a pending perm
     h.lifecycle(h.writes[1].uuid!, 'started')
     await vi.waitFor(async () => expect(await rows()).toEqual([]))
     // A message the user types now is a new one: the prompt is denied for it, as before.
-    await enqueueMessage(SID, 'never mind, do this instead')
+    await enqueueMessage(SID, 'never mind, do this instead', { closesPrompt: true })
     await h.internals.processNext(SID)
     await vi.waitFor(() => expect(resolve).toHaveBeenCalledWith('perm-1', false, expect.stringMatching(/User sent a new message/)), { timeout: 3000 })
   })

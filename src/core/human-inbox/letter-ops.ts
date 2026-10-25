@@ -253,10 +253,10 @@ export function buildLetterDeliveryText(
  * so a delivery problem is a STATUS, not a failure of the whole request.
  *
  * One session state gets the queue but NOT the dispatch: a session parked on a
- * permission prompt. Both delivery paths (processNext / injectMidTurn) auto-DENY
- * every pending prompt to make room for a new message, so answering a letter
- * from the phone would silently deny a tool call the human never saw (session_send
- * defers to enqueue-only for exactly this reason). Dropping the answer isn't an
+ * permission prompt. A letter's answer is not a person typing into the session,
+ * so it must never answer that prompt (a tool call the human never saw); both
+ * delivery paths hold such rows behind the prompt (QueuedMessage.closesPrompt),
+ * and enqueue-only keeps it off the dispatch altogether (session_send does the same). Dropping the answer isn't an
  * option either — an action can only be answered once. So the wrapped text is
  * ENQUEUED without emitting SESSION_SEND and rides the session's next drain
  * (turn end after the human resolves the prompt, startup recovery, daemon
