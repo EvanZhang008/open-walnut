@@ -810,8 +810,9 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - `GET /api/v1/tasks?status=todo|in_progress|done` →
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
 - `ProjectedTask`: `{ id, title, status, phase, priority, project,
-  due_date?, start_date?, wait_until?, created_at, updated_at, completed_at?,
-  pinned?, unread?, tags?, summary? }` — `summary` is truncated to ~500 chars.
+  parent_task_id?, due_date?, start_date?, wait_until?, created_at, updated_at,
+  completed_at?, pinned?, unread?, tags?, summary? }` — `summary` is truncated to
+  ~500 chars.
   `phase` is one of `TODO`, `WAITING`, `IN_PROGRESS`, `NEED_ACTION`, `COMPLETE`.
   `WAITING` was added in 0.5.2 (a task parked until something happens; its
   `status` is `todo`); a client built before it should treat an unknown phase as
@@ -832,6 +833,11 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   when the agent produced output the human hasn't opened; omitted otherwise.
   Additive and optional. `PATCH /api/v1/tasks/:id` accepts `unread` to mark a
   task read from the phone.
+  `parent_task_id` (added 2026-10) is the parent task's id (older rows may hold
+  a short prefix of it), present only on a subtask. A subtask with no
+  `start_date` of its own takes its nearest ancestor's for the Now view, as the
+  web does; a client reading an older server sees no field and treats the task
+  as having no parent. Additive and optional, so older clients ignore it.
 - Scope: all open tasks + tasks completed in the last 14 days (older
   completions are excluded from the projection).
 - Provenance: `syncedAt` is when the primary box exported the snapshot. On the

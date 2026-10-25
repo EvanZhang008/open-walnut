@@ -44,6 +44,11 @@ struct BoardRow: Identifiable, Equatable {
     /// never had one.
     var knownSessionIds: [String]? = nil
 
+    /// The start date this row's task INHERITS for the "Now" filter: the nearest
+    /// ancestor's, set only when the task has none of its own and the board was built
+    /// under "Now" (`BoardModel.inheritedStartDates`). nil = nothing to inherit.
+    var inheritedStart: String? = nil
+
     /// True when this row is known to have a session — hydrated, or known by id.
     ///
     /// A BOOL over a three-valued field, so it answers only the first question ("is there a
@@ -814,15 +819,47 @@ enum BoardModel {
     /// for, and a date filter that quietly did it too would make that toggle
     /// look broken.
     ///
-    /// One thing the desktop does that this cannot: inherit a parent's
-    /// `start_date` when the task has none. The mobile projection carries no
-    /// `parent_task_id`, so there is no chain to walk — a subtask with no start
-    /// date of its own reads as actionable now. That is the honest answer from
-    /// the data this surface has, not an approximation of the other one.
+    /// A task with no start date of its own inherits its nearest ancestor's, as the
+    /// desktop does (`getEffectiveStartDate`): the row carries it in `inheritedStart`.
     static func isDeferred(_ row: BoardRow, filter: BoardDateFilter, now: Date) -> Bool {
         guard filter == .now, let task = row.task, !task.isDone else { return false }
-        guard let start = task.startDateValue else { return false }
+        let own = task.startDate.flatMap { $0.isEmpty ? nil : $0 }
+        guard let start = WalnutTask.parseISO(own ?? row.inheritedStart) else { return false }
         return start > now
+    }
+
+    /// The start date each task with none of its own inherits, keyed by task id: the
+    /// first ancestor that has one, walking `parent_task_id` at most 10 levels, the
+    /// desktop's `getEffectiveDateField`. A parent reference resolves to the task with
+    /// that exact id, else the first whose id starts with it (`resolveParentRef`, for
+    /// short refs). An ancestor the projection does not carry ends the walk, and a
+    /// server that predates `parent_task_id` gives every task nothing to inherit,
+    /// which is the board as it was before.
+    static func inheritedStartDates(_ tasks: [WalnutTask]) -> [String: String] {
+        func nonEmpty(_ s: String?) -> String? { s.flatMap { $0.isEmpty ? nil : $0 } }
+        let needy = tasks.filter { nonEmpty($0.startDate) == nil && nonEmpty($0.parentTaskId) != nil }
+        guard !needy.isEmpty else { return [:] }
+        var byId: [String: WalnutTask] = [:]
+        byId.reserveCapacity(tasks.count)
+        for task in tasks where byId[task.id] == nil { byId[task.id] = task }
+        var byPrefix: [String: WalnutTask?] = [:]
+        func resolve(_ ref: String) -> WalnutTask? {
+            if let hit = byId[ref] { return hit }
+            if let memo = byPrefix[ref] { return memo }
+            let hit = tasks.first { $0.id.hasPrefix(ref) }
+            byPrefix[ref] = .some(hit)
+            return hit
+        }
+        var out: [String: String] = [:]
+        for task in needy {
+            var current = task
+            for _ in 0..<10 {
+                guard let ref = nonEmpty(current.parentTaskId), let parent = resolve(ref) else { break }
+                if let start = nonEmpty(parent.startDate) { out[task.id] = start; break }
+                current = parent
+            }
+        }
+        return out
     }
 
     /// Everything a band checks before it keeps a row: the query, then the date
@@ -1005,6 +1042,8 @@ enum BoardModel {
         // deferral bought nothing and cost a branch nobody could reason about.
         var projectionIds = Set<String>()
         var heldWaiting: [(tier: String, row: BoardRow)] = []
+        // Only "Now" reads a start date, so only "Now" pays for the parent walk.
+        let inherited = dateFilter == .now ? inheritedStartDates(tasks) : [:]
         let capacity = splitTierOf.count + 8
         rowById.reserveCapacity(capacity)
         tierById.reserveCapacity(capacity)
@@ -1021,14 +1060,18 @@ enum BoardModel {
             // in no band, no chip and no fold. A session-only row below never stands in
             // for it, because the projection has the task.
             if !showWaiting, task.isWaiting {
-                heldWaiting.append((tier, BoardRow(task: task, session: nil, knownSessionIds: nil)))
+                heldWaiting.append((tier, BoardRow(
+                    task: task, session: nil, knownSessionIds: nil,
+                    inheritedStart: inherited[task.id]
+                )))
                 continue
             }
             // `knownSessionIds[task.id]` stays nil for a task nobody has asked about,
             // which is the row's "unknown" state and NOT "no sessions" (see BoardRow).
             rowById[task.id] = BoardRow(
                 task: task, session: sessionOf[task.id],
-                knownSessionIds: knownSessionIds[task.id]
+                knownSessionIds: knownSessionIds[task.id],
+                inheritedStart: inherited[task.id]
             )
             tierById[task.id] = tier
             order.append(task.id)
@@ -1110,7 +1153,10 @@ enum BoardModel {
         for id in order {
             guard let tier = tierById[id], let row = rowById[id] else { continue }
             guard admits(row, query: query, dateFilter: dateFilter, now: now) else {
-                if matches(row, query: query), isDeferred(row, filter: dateFilter, now: now) {
+                // A WAITING row is never "not available yet", even under `Show waiting`:
+                // the console's footer skips every waiting task there (`footerCounts`).
+                if row.task?.isWaiting != true, matches(row, query: query),
+                   isDeferred(row, filter: dateFilter, now: now) {
                     hiddenByTier[tier, default: .zero].notAvailable += 1
                 }
                 continue

@@ -18,7 +18,8 @@ final class TaskBoardModelTests: XCTestCase {
     private func task(
         _ id: String, title: String = "a task", project: String = "",
         status: String = "todo", phase: String = "TODO", pinned: Bool? = true,
-        start: String? = nil, due: String? = nil, unread: Bool? = nil
+        start: String? = nil, due: String? = nil, unread: Bool? = nil,
+        parent: String? = nil
     ) -> WalnutTask {
         WalnutTask(
             id: id, title: title, status: status, phase: phase,
@@ -26,7 +27,7 @@ final class TaskBoardModelTests: XCTestCase {
             createdAt: "2026-08-27T00:00:00Z", updatedAt: "2026-08-27T00:00:00Z",
             completedAt: status == "done" ? "2026-08-27T01:00:00Z" : nil,
             starred: nil, pinned: pinned, tags: nil, summary: nil,
-            startDate: start, unread: unread
+            startDate: start, unread: unread, parentTaskId: parent
         )
     }
 
@@ -1587,6 +1588,12 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(all.hidden, BoardHiddenCounts(waiting: 3, done: 1, notAvailable: 0))
         XCTAssertEqual(board(.now, query: "alpha").hidden,
             BoardHiddenCounts(waiting: 1, done: 1, notAvailable: 1), "`other` fails the query")
+        let shown = BoardModel.assemble(
+            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: ["focus": ids],
+            customTiers: [], dateFilter: .now, showWaiting: true, now: Self.now
+        )
+        XCTAssertEqual(shown.hidden.notAvailable, 1,
+            "with waiting rows shown, `waitLater` is still not counted as not available")
     }
 
     func testTheHiddenFooterNamesTheSwitchForEachPart() {
@@ -1598,22 +1605,86 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(BoardHiddenCounts(waiting: 2).footerText, "Hidden: 2 waiting (Show waiting)")
     }
 
-    /// CONTRACT BOUNDARY, not parity: the console's Now inherits a PARENT's start date
-    /// (`getEffectiveDateField`), and the phone cannot, because the slim task
-    /// projection it reads carries no `parent_task_id`. A pinned subtask with no start
-    /// of its own, under a parent that starts later, is therefore hidden on the Mac and
-    /// shown here. Pinned so the gap is visible: when the projection gains the field,
-    /// this test is where the phone should start inheriting.
-    func testNowCannotInheritAParentsStartDateFromTheSlimProjection() throws {
-        let json = #"{"id":"child","title":"t","status":"todo","phase":"TODO","priority":"none","project":"","pinned":true,"parent_task_id":"parent"}"#
-        let child = try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
+    /// A subtask with no start date of its own inherits its nearest ancestor's, as the
+    /// console's Now does (`getEffectiveDateField`), and the footer counts it the same way.
+    func testNowInheritsTheNearestAncestorsStartDate() {
+        let tasks = [
+            // parents are unpinned: off the board, still in the projection
+            task("future", pinned: false, start: "2026-09-30"),
+            task("past", pinned: false, start: "2026-08-01"),
+            task("bare", pinned: false, parent: "future"),
+            task("underFuture", parent: "future"),
+            task("underPast", parent: "past"),
+            task("grandchild", parent: "bare"),
+            task("ownPast", start: "2026-08-02", parent: "future"),
+            task("ownEmpty", start: "", parent: "future"),
+            task("orphan", parent: "notInProjection"),
+            task("doneChild", status: "done", phase: "COMPLETE", parent: "future"),
+            task("waitChild", phase: "WAITING", parent: "future"),
+        ]
+        let onBoard = tasks.filter { $0.pinned == true }.map(\.id)
+        let tierOf = Dictionary(uniqueKeysWithValues: onBoard.map { ($0, "focus") })
+        func board(_ date: BoardDateFilter, showDone: Bool = false, showWaiting: Bool = false) -> BoardAssembly {
+            BoardModel.assemble(
+                tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: ["focus": onBoard],
+                customTiers: [], dateFilter: date, showDone: showDone, showWaiting: showWaiting,
+                now: Self.now
+            )
+        }
+        func ids(_ b: BoardAssembly) -> Set<String> { Set(b.bands.flatMap { $0.rows.map(\.id) }) }
+        let now = board(.now, showDone: true, showWaiting: true)
+        XCTAssertEqual(ids(now), ["underPast", "ownPast", "orphan", "doneChild"],
+            "a future parent or grandparent hides the subtask; its own start, a past "
+            + "parent, a missing parent and a done row keep it")
+        XCTAssertEqual(now.hidden.notAvailable, 3,
+            "underFuture, grandchild, ownEmpty; a waiting row is never counted here, as on the console")
+        // Default switches: the waiting child is hidden by both filters and counted by neither.
+        let byDefault = board(.now)
+        XCTAssertEqual(byDefault.hidden, BoardHiddenCounts(waiting: 0, done: 1, notAvailable: 3))
+        XCTAssertEqual(ids(board(.all, showDone: true, showWaiting: true)), Set(onBoard),
+            "All shows every subtask again")
+        XCTAssertEqual(board(.all).hidden, BoardHiddenCounts(waiting: 1, done: 1, notAvailable: 0))
+    }
+
+    /// A short parent reference resolves to the first task whose id starts with it
+    /// (`resolveParentRef`), and a parent loop ends instead of spinning.
+    func testInheritedStartResolvesShortRefsAndSurvivesALoop() {
+        let inherited = BoardModel.inheritedStartDates([
+            task("parent-full-id", pinned: false, start: "2026-09-30"),
+            task("short", parent: "parent-f"),
+            task("loopA", parent: "loopB"),
+            task("loopB", parent: "loopA"),
+            task("own", start: "2026-08-02", parent: "parent-full-id"),
+        ])
+        XCTAssertEqual(inherited, ["short": "2026-09-30"])
+    }
+
+    /// The wire field decodes, a server that predates it leaves nothing to inherit,
+    /// and the store's row copies keep it, or one pin or edit would drop the link.
+    @MainActor
+    func testParentTaskIdDecodesAndSurvivesRowCopies() throws {
+        func decode(_ extra: String) throws -> WalnutTask {
+            let json = #"{"id":"child","title":"t","status":"todo","phase":"TODO","priority":"none","project":"","pinned":true"# + extra + "}"
+            return try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
+        }
+        let child = try decode(#","parent_task_id":"parent""#)
+        XCTAssertEqual(child.parentTaskId, "parent")
+        XCTAssertNil(try decode("").parentTaskId, "an older server sends no link")
+        XCTAssertEqual(TasksStore.withPinned(child, false).parentTaskId, "parent")
+        XCTAssertEqual(TasksStore.applyEdit(TasksStore.TaskEdit(title: "x"), to: child).parentTaskId, "parent")
         let parent = task("parent", pinned: false, start: "2026-09-30")
-        let board = BoardModel.assemble(
+        let old = BoardModel.assemble(
+            tasks: [parent, try decode("")], sessions: [], tierOf: ["child": "focus"],
+            tierOrder: ["focus": ["child"]], customTiers: [], dateFilter: .now, now: Self.now
+        )
+        XCTAssertEqual(old.bands.flatMap { $0.rows.map(\.id) }, ["child"],
+            "with no link the subtask reads as actionable, the board as it was")
+        let linked = BoardModel.assemble(
             tasks: [parent, child], sessions: [], tierOf: ["child": "focus"],
             tierOrder: ["focus": ["child"]], customTiers: [], dateFilter: .now, now: Self.now
         )
-        XCTAssertEqual(board.bands.flatMap { $0.rows.map(\.id) }, ["child"],
-            "the phone shows it: there is no parent link to inherit from")
+        XCTAssertTrue(linked.bands.flatMap(\.rows).isEmpty)
+        XCTAssertEqual(linked.hidden.notAvailable, 1)
     }
 
     /// An empty board must say WHY it is empty. "Nothing pinned yet" over a board

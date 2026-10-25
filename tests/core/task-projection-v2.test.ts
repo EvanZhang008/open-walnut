@@ -101,6 +101,17 @@ describe('projection envelope (write side)', () => {
     expect(projected.project).toBe('');
     expect(projected).not.toHaveProperty('category');
   });
+
+  it('projectTask carries parent_task_id for a subtask and omits it for a top-level task', () => {
+    const base = {
+      title: 'Row', status: 'todo', phase: 'TODO', priority: 'none', project: 'Marina',
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+    };
+    const child = projectTask({ ...base, id: 'c1', parent_task_id: 'p1' } as unknown as Task);
+    const top = projectTask({ ...base, id: 'p1' } as unknown as Task);
+    expect(child.parent_task_id).toBe('p1');
+    expect(top).not.toHaveProperty('parent_task_id');
+  });
 });
 
 describe('done-retention scope', () => {

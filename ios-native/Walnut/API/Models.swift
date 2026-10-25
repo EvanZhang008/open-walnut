@@ -321,6 +321,11 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// nil. Every copy of a row (`TasksStore.applyEdit`, `withPinned`) must carry it,
     /// or an unrelated edit would clear the board's unread dot until the next refresh.
     var unread: Bool? = nil
+    /// The parent task's id, subtasks only (additive). The board's "Now" filter
+    /// inherits the parent's start date through it, as the console does. A server
+    /// that predates the field sends nothing, and the subtask then reads as having
+    /// no inherited start. Every copy of a row (`applyEdit`, `withPinned`) carries it.
+    var parentTaskId: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
@@ -332,6 +337,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case startDate = "start_date"
         case endDate = "end_date"
         case unread
+        case parentTaskId = "parent_task_id"
     }
 }
 

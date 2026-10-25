@@ -69,6 +69,10 @@ export interface ProjectedTask {
   priority: string
   /** Single grouping layer. '' = Inbox. */
   project: string
+  /** The parent task's id, subtasks only (additive, omitted when unset): lets a
+   *  client inherit the parent's start_date for the "Now" filter, as the console
+   *  does. Older clients ignore it. */
+  parent_task_id?: string
   due_date?: string
   start_date?: string
   end_date?: string
@@ -156,6 +160,7 @@ export function projectTask(t: Task): ProjectedTask {
     phase: t.phase,
     priority: t.priority,
     project: t.project || '',
+    ...(t.parent_task_id ? { parent_task_id: t.parent_task_id } : {}),
     ...(t.due_date ? { due_date: t.due_date } : {}),
     ...(t.start_date ? { start_date: t.start_date } : {}),
     ...(t.end_date ? { end_date: t.end_date } : {}),
