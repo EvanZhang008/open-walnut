@@ -26,8 +26,12 @@ export interface DesktopUpdateDeps {
 export function createDesktopUpdate(deps: DesktopUpdateDeps) {
   var empty = { available: false, token: null, version: null } as DesktopUpdateStatus
   async function executable(): Promise<string | null> {
-    if (deps.platform !== 'darwin' || deps.isolated) return null
-    var candidates = ['/Applications/Walnut.app/Contents/MacOS/Walnut', deps.home + '/Applications/Walnut.app/Contents/MacOS/Walnut']
+    // WALNUT_DESKTOP_UPDATE_APP (a test knob, desktop/README.md): the app copy a test runs,
+    // the only one an isolated daemon may offer; otherwise an isolated daemon offers none.
+    var testApp = deps.env.WALNUT_DESKTOP_UPDATE_APP
+    if (deps.platform !== 'darwin' || (deps.isolated && !testApp)) return null
+    var candidates = testApp ? [testApp + '/Contents/MacOS/Walnut']
+      : ['/Applications/Walnut.app/Contents/MacOS/Walnut', deps.home + '/Applications/Walnut.app/Contents/MacOS/Walnut']
     for (var file of candidates) {
       try {
         if ((await deps.fs.promises.readFile(file)).includes(Buffer.from('--desktop-update-bridge'))) return file

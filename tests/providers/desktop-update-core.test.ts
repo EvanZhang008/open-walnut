@@ -51,6 +51,18 @@ describe('installed desktop update', () => {
     await s.core.restart('12:old:new', 'yes')
     expect(s.spawn.mock.calls[1][1]).toEqual(['--desktop-update-bridge', 'restart', '12:old:new'])
   })
+  it('an isolated daemon offers no app, except the copy a test names', async () => {
+    const s = setup()
+    s.deps.isolated = true
+    const isolated = createDesktopUpdate(s.deps)
+    expect((await isolated.status()).available).toBe(false)
+    expect(s.execFile).not.toHaveBeenCalled()
+    s.deps.env = { WALNUT_DESKTOP_UPDATE_APP: '/tmp/e2e/Apps/Walnut.app' }
+    const named = createDesktopUpdate(s.deps)
+    expect((await named.status()).available).toBe(true)
+    expect(s.execFile.mock.calls[0][0]).toBe('/tmp/e2e/Apps/Walnut.app/Contents/MacOS/Walnut')
+    expect(s.readFileSync).not.toHaveBeenCalledWith('/Applications/Walnut.app/Contents/MacOS/Walnut')
+  })
   it('never sends --force to an older helper that does not report windows', async () => {
     const s = setup()
     await s.core.restart('12:old:new', true)

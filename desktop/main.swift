@@ -155,8 +155,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "Walnut"
         applyWindowChrome()
         window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // WALNUT_DESKTOP_E2E_BACKGROUND=1 (a test knob, README.md): a test copy opens behind
+        // every window and never takes focus from the person using this Mac.
+        if ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_BACKGROUND"] == "1" {
+            window.orderBack(nil)
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         if let config = loadConfig(),
            FileManager.default.fileExists(atPath: config.walnutHome),
@@ -1453,6 +1459,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ])
 
         webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
+        // A test copy opened behind other windows (WALNUT_DESKTOP_E2E_BACKGROUND) is covered,
+        // and WebKit treats a covered page as hidden and all but stops it. Let it run.
+        if ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_BACKGROUND"] == "1",
+           webView.responds(to: NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")) {
+            webView.setValue(false, forKey: "windowOcclusionDetectionEnabled")
+        }
         consolePageLoaded = false
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self

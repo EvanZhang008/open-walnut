@@ -101,12 +101,19 @@ enum DesktopUpdateBridge {
         while !app.isTerminated && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
         guard app.isTerminated else { return 1 }
         let opener = Process()
-        opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        #if WALNUT_DESKTOP_TEST
-        opener.arguments = ["-g", "-j", "-a", target.path]
-        #else
-        opener.arguments = ["-a", target.path]
-        #endif
+        // WALNUT_APPLY_UPDATE_OPEN: a test's own opener (as in apply-update.sh), which starts
+        // the app with the test's environment instead of the person's.
+        if let custom = ProcessInfo.processInfo.environment["WALNUT_APPLY_UPDATE_OPEN"], !custom.isEmpty {
+            opener.executableURL = URL(fileURLWithPath: custom)
+            opener.arguments = [target.path]
+        } else {
+            opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            #if WALNUT_DESKTOP_TEST
+            opener.arguments = ["-g", "-j", "-a", target.path]
+            #else
+            opener.arguments = ["-a", target.path]
+            #endif
+        }
         do { try opener.run(); opener.waitUntilExit() }
         catch { return 1 }
         guard opener.terminationStatus == 0 else { return 1 }

@@ -199,6 +199,16 @@ and keeps one previous copy.
 
 Test knobs (environment): `WALNUT_DESKTOP_PORTS` (comma-separated, instead of
 3456 and 4567) and install.sh's own `OPEN_WALNUT_*` knobs, which pass through.
+For the restart of an installed update on a Mac where the real app keeps running:
+`WALNUT_DESKTOP_E2E_BACKGROUND=1` opens the window behind every other window without
+taking focus, and keeps its page running though covered; `WALNUT_DESKTOP_UPDATE_APP=<path to .app>` lets an isolated daemon
+(an ephemeral server's) offer that copy's update, which no isolated daemon does
+otherwise; `WALNUT_APPLY_UPDATE_OPEN` (also apply-update.sh's) is the program the
+restart helper runs with the app's path to open it again, so the new copy starts
+with the test's environment. The copy needs its own bundle identifier: the helper
+only restarts an app when exactly one with that identifier is running.
+`WALNUT_DESKTOP_E2E_SCRIPT=<file>` adds that script to the main window's console
+page, for a test's own steps (typing a draft, reading what the page shows).
 `scripts/desktop-smoke.mjs` uses them with a throwaway `HOME` and
 `CFFIXED_USER_HOME` (which `NSHomeDirectory()` follows) to launch a built app
 the way a new Mac would; CI's macOS release rehearsal runs it on every push.

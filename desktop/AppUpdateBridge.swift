@@ -92,6 +92,13 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
     static var e2eClicks: Bool { ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_UPDATE_CLICKS"] == "1" }
 
     func addAppUpdateTestScript(to controller: WKUserContentController) {
+        // WALNUT_DESKTOP_E2E_SCRIPT=<file> (a test knob, README.md): a test's own steps in the
+        // console page, such as typing a draft before a restart. No new power: the test that
+        // sets it could point WALNUT_DESKTOP_PORTS at a page of its own anyway.
+        if let path = ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_SCRIPT"], !path.isEmpty,
+           let source = try? String(contentsOfFile: path, encoding: .utf8) {
+            controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        }
         guard Self.e2eClicks else { return }
         let script = """
         (() => {
