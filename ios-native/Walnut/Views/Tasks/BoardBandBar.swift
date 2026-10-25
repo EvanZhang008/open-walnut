@@ -478,6 +478,9 @@ struct BoardBandBar: View {
     /// `Show done`: every band shows its completed rows. Lives here, one tap deep, and
     /// nowhere else, because it is rarely used (it used to be a capsule on every heading).
     @Binding var showDone: Bool
+    /// `Show waiting`, beside it: WAITING tasks join their tiers. A plain binding with a
+    /// default (not `@Binding`) so a host that never offers it needs no argument.
+    var showWaiting: Binding<Bool> = .constant(false)
     /// Band id to filter to, or nil for the whole board.
     let onSelect: (String?) -> Void
     /// Which copy this is. Read by `cardInset` and by `drawsChips`, and nothing else.
@@ -1121,6 +1124,7 @@ struct BoardBandBar: View {
                     }
                     Section {
                         showDoneToggle
+                        showWaitingToggle
                     }
                 } label: {
                     filtersLabel
@@ -1136,7 +1140,8 @@ struct BoardBandBar: View {
         // so a flow (or VoiceOver) matching the WORD "Filters" would otherwise find two.
         .accessibilityLabel(drawing ? "Filters" : "")
         .accessibilityValue(drawing
-            ? "\(grouping.label), \(dateFilter.label)\(showDone ? ", Show done" : "")" : "")
+            ? "\(grouping.label), \(dateFilter.label)\(showDone ? ", Show done" : "")"
+                + (showWaiting.wrappedValue ? ", Show waiting" : "") : "")
         .sheet(isPresented: $showFiltersSheet) { filtersSheet }
     }
 
@@ -1174,6 +1179,7 @@ struct BoardBandBar: View {
                 }
                 Section {
                     showDoneToggle
+                    showWaitingToggle
                 }
             }
             .navigationTitle("Filters")
@@ -1203,6 +1209,18 @@ struct BoardBandBar: View {
             }
         ))
         .accessibilityIdentifier("board.showDone")
+    }
+
+    /// The `Show waiting` switch, built like `showDoneToggle`.
+    private var showWaitingToggle: some View {
+        Toggle("Show waiting", isOn: Binding(
+            get: { showWaiting.wrappedValue },
+            set: { value in
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                withAnimation(.snappy(duration: 0.2)) { showWaiting.wrappedValue = value }
+            }
+        ))
+        .accessibilityIdentifier("board.showWaiting")
     }
 
     /// One filter's values, with the current one checked.

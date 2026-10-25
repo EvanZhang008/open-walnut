@@ -81,6 +81,9 @@ struct TasksView: View {
     /// on every heading: showing finished work is rare, and a `show done (N)` capsule on
     /// each band was noise on the screen whose job is the open rows.
     @AppStorage(BoardFilterPrefs.showDoneKey, store: AppPrefs.defaults) private var showDone = false
+    /// `Show waiting`, beside it: off by default, so a WAITING task leaves the board until
+    /// it wakes, as on the console.
+    @AppStorage(BoardFilterPrefs.showWaitingKey, store: AppPrefs.defaults) private var showWaiting = false
     // The board's three view decisions — WHICH TIER (the chip rail), how its rows are
     // headed (grouping), and which dates are admitted — all persisted through @AppStorage,
     // which is how this app already keeps a view preference (SettingsView's mic route,
@@ -467,7 +470,7 @@ struct TasksView: View {
                 }
                 .listSectionSpacing(2)
 
-                boardSections(entries, isEmpty: bands.isEmpty)
+                boardSections(entries, isEmpty: bands.isEmpty, hidden: assembly.hidden)
                 // Matching open tasks below the bands while a query is live (dogfood R17).
                 // Its HEADING is what marks it as a different list.
                 if !query.isEmpty {
@@ -494,6 +497,22 @@ struct TasksView: View {
                         taskRow: { task, snippet in AnyView(taskRowButton(task, matchSnippet: snippet)) }
                     ) { hit in
                         openSearchHit(hit)
+                    }
+                }
+
+                // What the filters took out, under the rows they took it from: the
+                // console's footer, so a count that differs from what the user expected
+                // (or a new task that starts later) always has a visible reason.
+                if query.isEmpty, let hiddenText = assembly.hidden.footerText {
+                    Section {
+                        Text(hiddenText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .accessibilityIdentifier("board.hiddenCounts")
                     }
                 }
 
@@ -846,6 +865,7 @@ struct TasksView: View {
             // previous tier on screen until some unrelated input moved the key.
             scope: scope,
             showDone: showDone,
+            showWaiting: showWaiting,
             // `.all` admits every row regardless of the clock, so its bands are
             // time-independent and the bucket is a constant. Under `.now` a start date
             // that passes has to show up, and a minute is the granularity that costs one
@@ -864,6 +884,7 @@ struct TasksView: View {
                 dateFilter: filter,
                 // The filters menu's one switch; off = every band folds its done rows.
                 showDone: showDone,
+                showWaiting: showWaiting,
                 // Used by project grouping only. Empty (a server without the endpoint,
                 // a failed fetch, an offline cold start) = the flat project bands.
                 folders: folders,
@@ -918,6 +939,7 @@ struct TasksView: View {
             grouping: grouping,
             dateFilter: dateFilter,
             showDone: $showDone,
+            showWaiting: $showWaiting,
             onSelect: { bandId in
                 tierScopeRaw = BoardFilterPrefs.rawScope(bandId)
                 // Land at the top of what you just asked for. Without this, narrowing from
@@ -949,11 +971,14 @@ struct TasksView: View {
     }
 
     @ViewBuilder
-    private func boardSections(_ entries: [BoardCollapse.Entry], isEmpty: Bool) -> some View {
+    private func boardSections(
+        _ entries: [BoardCollapse.Entry], isEmpty: Bool, hidden: BoardHiddenCounts
+    ) -> some View {
         if isEmpty {
             Section {
                 Text(Self.boardEmptyText(
-                    query: trimmedQuery, dateFilter: dateFilter.wrappedValue
+                    query: trimmedQuery, dateFilter: dateFilter.wrappedValue,
+                    hidden: hidden
                 ))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -1002,10 +1027,23 @@ struct TasksView: View {
     /// own: `Now` HIDES rows, so "Nothing pinned yet" over a board full of
     /// deferred work is a lie that sends the user looking for a bug. Name the
     /// filter that did it AND where the control lives.
-    static func boardEmptyText(query: String, dateFilter: BoardDateFilter) -> String {
+    ///
+    /// `hidden` says what the filters took out. When it is waiting or done work, "every
+    /// task starts later" would be the same kind of lie, so the sentence points at the
+    /// filters menu and the footer line under it lists what is there.
+    static func boardEmptyText(
+        query: String, dateFilter: BoardDateFilter, hidden: BoardHiddenCounts = .zero
+    ) -> String {
         if !query.isEmpty { return "No matches in Pins." }
-        if dateFilter == .now {
+        // Blame the dates only when they are what emptied it: rows are hidden as not
+        // available yet, and nothing else is. A fresh install opens on Now, so an empty
+        // board that hides nothing must say "Nothing pinned yet", not "pick All".
+        let onlyLater = hidden.notAvailable > 0 && hidden.waiting == 0 && hidden.done == 0
+        if dateFilter == .now, onlyLater {
             return "Nothing to do right now: every task starts later. Pick All in the filter menu to see them."
+        }
+        if !hidden.isEmpty {
+            return "Nothing open here. The filter menu can show what is hidden."
         }
         return "Nothing pinned yet. Pin a task to keep it here."
     }

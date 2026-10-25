@@ -446,6 +446,9 @@ extension WalnutTask {
     var statusKind: TaskStatus { TaskStatus(status) }
     var priorityKind: TaskPriority { TaskPriority(priority) }
     var isDone: Bool { statusKind == .done }
+    /// Parked until something happens (`WAITING`, the server's held phase). The board
+    /// hides these by default, as the console does.
+    var isWaiting: Bool { phase == "WAITING" }
     var isUnread: Bool { unread == true }
 
     var dueDateValue: Date? { Self.parseISO(dueDate) }

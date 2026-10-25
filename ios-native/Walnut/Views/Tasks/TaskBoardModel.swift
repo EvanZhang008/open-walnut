@@ -197,8 +197,43 @@ struct BoardAssembly: Equatable {
     /// "you are looking at more than you asked for", which the rail itself makes obvious,
     /// and never an empty board with no explanation.
     let scope: String?
+    /// What the default filters took out of `scope` (the whole board when nil): the
+    /// phone's copy of the console's footer (`TodoFilterFooter`), counted with the same
+    /// rules, so "this tier says 8 here and 15 there" always has a stated reason.
+    var hidden: BoardHiddenCounts = .zero
 
     static let empty = BoardAssembly(rail: [], bands: [], scope: nil)
+}
+
+/// Rows the board's default filters hide, per kind. Each count applies every OTHER
+/// filter (the query, the date filter for waiting rows) and lets go of only its own,
+/// like the console's footer, so turning that one filter off shows exactly that many.
+struct BoardHiddenCounts: Equatable {
+    /// WAITING rows, hidden while `Show waiting` is off.
+    var waiting = 0
+    /// Done rows folded away while `Show done` is off.
+    var done = 0
+    /// Open rows whose start date has not arrived, hidden under `Now`.
+    var notAvailable = 0
+
+    static let zero = BoardHiddenCounts()
+    var isEmpty: Bool { waiting == 0 && done == 0 && notAvailable == 0 }
+
+    /// The footer line, or nil when the filters hide nothing. Each part names the
+    /// switch that brings it back, in the order the filters menu lists them.
+    var footerText: String? {
+        var parts: [String] = []
+        if notAvailable > 0 { parts.append("\(notAvailable) not available yet (Dates: All)") }
+        if done > 0 { parts.append("\(done) done (Show done)") }
+        if waiting > 0 { parts.append("\(waiting) waiting (Show waiting)") }
+        guard !parts.isEmpty else { return nil }
+        return "Hidden: " + parts.joined(separator: ", ")
+    }
+
+    static func + (a: Self, b: Self) -> Self {
+        Self(waiting: a.waiting + b.waiting, done: a.done + b.done,
+             notAvailable: a.notAvailable + b.notAvailable)
+    }
 }
 
 /// The desktop's date filter, in the two values that earn their place on a phone
@@ -878,6 +913,7 @@ enum BoardModel {
         grouping: BoardGrouping = .tier,
         dateFilter: BoardDateFilter = .all,
         showDone: Bool = false,
+        showWaiting: Bool = false,
         shownDoneTiers: Set<String> = [],
         folders: BoardFolderIndex = .empty,
         knownSessionIds: [String: [String]] = [:],
@@ -888,8 +924,8 @@ enum BoardModel {
         assemble(
             tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
             customTiers: customTiers, query: query, grouping: grouping,
-            dateFilter: dateFilter, showDone: showDone, shownDoneTiers: shownDoneTiers,
-            folders: folders,
+            dateFilter: dateFilter, showDone: showDone, showWaiting: showWaiting,
+            shownDoneTiers: shownDoneTiers, folders: folders,
             knownSessionIds: knownSessionIds, scope: scope, projectOrder: projectOrder,
             now: now
         ).bands
@@ -919,6 +955,7 @@ enum BoardModel {
         grouping: BoardGrouping = .tier,
         dateFilter: BoardDateFilter = .all,
         showDone: Bool = false,
+        showWaiting: Bool = false,
         shownDoneTiers: Set<String> = [],
         folders: BoardFolderIndex = .empty,
         knownSessionIds: [String: [String]] = [:],
@@ -967,6 +1004,7 @@ enum BoardModel {
         // only, most sessions belong to a task that is present and unpinned, so the
         // deferral bought nothing and cost a branch nobody could reason about.
         var projectionIds = Set<String>()
+        var heldWaiting: [(tier: String, row: BoardRow)] = []
         let capacity = splitTierOf.count + 8
         rowById.reserveCapacity(capacity)
         tierById.reserveCapacity(capacity)
@@ -977,6 +1015,15 @@ enum BoardModel {
             guard let tier = boardTier(
                 pinned: task.pinned, splitTier: splitTierOf[task.id], knownTiers: knownTiers
             ) else { continue }
+            // A WAITING task leaves the board while `Show waiting` is off, in every tier
+            // the Parked shelf included, as on the console (its default Status is
+            // TODO / IN_PROGRESS / NEED_ACTION). Kept aside only to be COUNTED: it is
+            // in no band, no chip and no fold. A session-only row below never stands in
+            // for it, because the projection has the task.
+            if !showWaiting, task.isWaiting {
+                heldWaiting.append((tier, BoardRow(task: task, session: nil, knownSessionIds: nil)))
+                continue
+            }
             // `knownSessionIds[task.id]` stays nil for a task nobody has asked about,
             // which is the row's "unknown" state and NOT "no sessions" (see BoardRow).
             rowById[task.id] = BoardRow(
@@ -1028,10 +1075,18 @@ enum BoardModel {
         // rendered bands, which is what makes "the rail is the tier rail" true by
         // construction — feeding it the rendered bands is what turned it into a list of
         // projects and folders under `By project`.
+        // The WAITING rows set aside above that this query and date filter would show, per
+        // tier. A tier whose every row is waiting keeps its band and chip (the Parked shelf
+        // most of all), exactly like a tier of folded completions, so a reader scoped to it
+        // keeps the scope and its footer says how many are waiting.
+        var waitingByTier: [String: Int] = [:]
+        for held in heldWaiting where admits(held.row, query: query, dateFilter: dateFilter, now: now) {
+            waitingByTier[held.tier, default: 0] += 1
+        }
         let railBands = tierBands(
             rowById: rowById, pinOrder: pinOrder, tiers: tiers, folders: folders,
             query: query, dateFilter: dateFilter, showDone: showDone,
-            shownDoneTiers: shownDoneTiers, now: now
+            shownDoneTiers: shownDoneTiers, hiddenWaiting: waitingByTier, now: now
         )
 
         // …and each chip's COUNT is what the board SHOWS for that tier, which is why it is
@@ -1051,14 +1106,26 @@ enum BoardModel {
         // fold decisions do.
         var countByTier: [String: Int] = [:]
         countByTier.reserveCapacity(tiers.count)
+        var hiddenByTier: [String: BoardHiddenCounts] = [:]
         for id in order {
             guard let tier = tierById[id], let row = rowById[id] else { continue }
-            guard admits(row, query: query, dateFilter: dateFilter, now: now) else { continue }
+            guard admits(row, query: query, dateFilter: dateFilter, now: now) else {
+                if matches(row, query: query), isDeferred(row, filter: dateFilter, now: now) {
+                    hiddenByTier[tier, default: .zero].notAvailable += 1
+                }
+                continue
+            }
             if row.isDone, !showDone,
                !shownDoneTiers.contains(
                    foldKey(row, tier: tier, grouping: grouping, folders: folders)
-               ) { continue }
+               ) {
+                hiddenByTier[tier, default: .zero].done += 1
+                continue
+            }
             countByTier[tier, default: 0] += 1
+        }
+        for (tier, n) in waitingByTier {
+            hiddenByTier[tier, default: .zero].waiting += n
         }
         var rail = [BandChip(
             bandId: nil, label: allChipLabel,
@@ -1077,8 +1144,10 @@ enum BoardModel {
         }
 
         // Nothing to narrow and nothing to re-head: the rail bands ARE the board.
+        let hidden = honoured.map { hiddenByTier[$0] ?? .zero }
+            ?? hiddenByTier.values.reduce(.zero, +)
         if honoured == nil && grouping == .tier {
-            return BoardAssembly(rail: rail, bands: railBands, scope: nil)
+            return BoardAssembly(rail: rail, bands: railBands, scope: nil, hidden: hidden)
         }
 
         // The scope filter, at construction, over the ONE membership map.
@@ -1108,10 +1177,11 @@ enum BoardModel {
             bands = tierBands(
                 rowById: scopedRowById, pinOrder: pinOrder, tiers: tiers, folders: folders,
                 query: query, dateFilter: dateFilter, showDone: showDone,
-                shownDoneTiers: shownDoneTiers, now: now
+                shownDoneTiers: shownDoneTiers,
+                hiddenWaiting: waitingByTier.filter { $0.key == honoured }, now: now
             )
         }
-        return BoardAssembly(rail: rail, bands: bands, scope: honoured)
+        return BoardAssembly(rail: rail, bands: bands, scope: honoured, hidden: hidden)
     }
 
     /// Every tier's ids in PIN ORDER: the split's own array (the server sorts it by
@@ -1215,6 +1285,7 @@ enum BoardModel {
         dateFilter: BoardDateFilter,
         showDone: Bool = false,
         shownDoneTiers: Set<String>,
+        hiddenWaiting: [String: Int] = [:],
         now: Date
     ) -> [BoardBand] {
         var bands: [BoardBand] = []
@@ -1243,8 +1314,9 @@ enum BoardModel {
             // its create ring and its chip on the rail (`railBands` is this builder), so
             // finishing the last open task in the tier you are scoped to neither takes
             // away the place to add the next one nor drops the chip and the scope with it.
+            // The same holds for a tier whose rows are all hidden WAITING tasks.
             // A tier with no pinned rows at all has no band, as before.
-            guard !rows.isEmpty || doneCount > 0 else { continue }
+            guard !rows.isEmpty || doneCount > 0 || (hiddenWaiting[tier.id] ?? 0) > 0 else { continue }
             bands.append(BoardBand(
                 bandId: tier.id, label: tier.label,
                 rows: rows,
@@ -1866,6 +1938,8 @@ struct BoardBandsKey: Equatable {
     /// The filters menu's `Show done` (see `bands(showDone:)`). Part of the key because it
     /// changes which rows every band holds.
     let showDone: Bool
+    /// The filters menu's `Show waiting`: WAITING rows leave every band while it is off.
+    var showWaiting = false
     let nowBucket: Int
 }
 
