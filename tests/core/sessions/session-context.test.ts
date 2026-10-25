@@ -285,7 +285,21 @@ describe('buildSessionContext (identity note)', () => {
     // step had been going up for approval and messages had become code names
     // and progress notes. The same text for Main, a lead and a worker, so each
     // knows what the others do. 5,275 with it; a small margin, not more room.
-    expect(systemPrompt.length).toBeLessThan(5400)
+    // 5400 → 5800 (2026-10-24) for the no-action line: a turn that needs nothing
+    // from the user ends with one fixed line, and the panel folds that answer. 5,681.
+    expect(systemPrompt.length).toBeLessThan(5800)
+  })
+
+  it('asks for the exact no-action line, and only for turns that need nothing from the user', async () => {
+    const { NO_ACTION_TAG } = await import('../../../web/src/utils/turn-end-marker')
+    const { systemPrompt } = await buildSessionContext('')
+    expect(systemPrompt).toContain(`end your last message with this line on its own: ${NO_ACTION_TAG}.`)
+    expect(systemPrompt).toMatch(/Never on an answer to something they asked, when something failed, when you ask them anything, or when they must act/)
+    // A background turn may end quietly with the line alone, instead of filler.
+    expect(systemPrompt).toMatch(/A turn a notice, trigger or another task started that needs nothing at all may be that line alone/)
+    // An ask's answers are what the user came for: it never gets the line.
+    const { systemPrompt: askPrompt } = await buildSessionContext(await seedTask('Ask Walnut'))
+    expect(askPrompt).not.toContain(NO_ACTION_TAG)
   })
 
   it('makes waiting the session\'s job: arm a trigger itself, park only when only the wait is left', async () => {

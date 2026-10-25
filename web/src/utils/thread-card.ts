@@ -10,6 +10,7 @@ import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
 import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { stripQuestionTag } from '@/utils/question-tag';
+import { stripTurnMarker } from '@/utils/turn-end-marker';
 
 /** The rows the tree reads (`SessionHistoryMessage` fits). */
 export interface CardRowLike {
@@ -21,11 +22,12 @@ export interface CardRowLike {
   tools?: readonly unknown[];
 }
 
-/** An assistant row says something: text left once the `[Qn]` tag is gone. A
- *  reply that is the tag and tool calls has no answer in it. */
+/** An assistant row says something: text left once the `[Qn]` tag and the
+ *  no-action line are gone. A reply that is only those and tool calls has no
+ *  answer in it. */
 export function hasWords(text: string | undefined): boolean {
   // A test, not a trim: the timeline asks this of every live text block per render.
-  return !!text && /\S/.test(stripQuestionTag(text));
+  return !!text && /\S/.test(stripTurnMarker(stripQuestionTag(text)));
 }
 
 /** One turn of the question: its user row and the reply's final message. */

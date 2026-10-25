@@ -9,6 +9,7 @@ import type { SessionPinnedQuote } from '@/types/session';
 import { QUOTE_CONTEXT_CHARS } from '@/utils/text-quote-anchor';
 import { ROOT_THREAD_KEY, THREAD_HUES, normalizePassage, pathToRoot, type ThreadTree } from '@/utils/thread-tree';
 import { stripQuestionTag } from '@/utils/question-tag';
+import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { sessionDraftKey } from '@/utils/composer-insert';
 import {
   displayTitleOf, metaOf, openBelow, viewStatusOf,
@@ -466,7 +467,8 @@ export function deriveThreadStats(
     if (/\S/.test(stripQuestionTag(text))) {
       out.answered.add(turnHead);
       out.turnEnds.delete(turnHead);
-      out.lastAnswer.set(turnKey, text);
+      // The takeaway reads its last paragraph: never the no-action line.
+      out.lastAnswer.set(turnKey, stripTurnMarker(text));
       const at = r.timestamp ? Date.parse(r.timestamp) : NaN;
       if (Number.isFinite(at)) out.answeredAt.set(turnKey, at);
     } else if (!out.answered.has(turnHead) && !out.turnEnds.has(turnHead)) {

@@ -43,6 +43,7 @@ export default defineConfig({
       '@open-walnut/history-turn-window': path.resolve(__dirname, '../src/lib/history-turn-window.ts'),
       '@open-walnut/history-injected-banner': path.resolve(__dirname, '../src/lib/history-injected-banner.ts'),
       '@open-walnut/history-session-envelope': path.resolve(__dirname, '../src/lib/history-session-envelope.ts'),
+      '@open-walnut/history-walnut-riders': path.resolve(__dirname, '../src/lib/history-walnut-riders.ts'),
       '@open-walnut/three-way-merge': path.resolve(__dirname, '../src/lib/three-way-merge.ts'),
     },
   },

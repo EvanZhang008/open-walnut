@@ -11,11 +11,19 @@ export interface HistoryTurnRow {
   injected?: boolean;
 }
 
-export function isHistoryUserTurn(message: HistoryTurnRow): boolean {
+/**
+ * A row something SENT into the session: a person's message, or a delivery from
+ * another task or from Walnut. Not a line the CLI wrote itself (a skill dump,
+ * the interrupt marker, an injected context row).
+ */
+export function isHistorySentRow(message: HistoryTurnRow): boolean {
   if (message.role !== 'user' || message.injected || message.text.startsWith('Base directory for this skill:')) return false;
   const text = typedUserText(message.text).trim();
-  return !!text && !/^\[Request interrupted by user( for tool use)?\]$/.test(text)
-    && !isEnvelopeOnly(parseSessionEnvelopes(text));
+  return !!text && !/^\[Request interrupted by user( for tool use)?\]$/.test(text);
+}
+
+export function isHistoryUserTurn(message: HistoryTurnRow): boolean {
+  return isHistorySentRow(message) && !isEnvelopeOnly(parseSessionEnvelopes(typedUserText(message.text).trim()));
 }
 
 export function historyTurnWindowLimit(

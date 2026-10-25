@@ -50,6 +50,7 @@
  * later writes `[/note]` gets their text folded into a disclosure row — the same
  * ambiguity the server-side stripper has always had, and here nothing is deleted.
  */
+import { withoutLeadingRiders } from './history-walnut-riders.js';
 
 /** A bracket name longer than this is prose that happens to be bracketed. */
 const MAX_NAME_LEN = 80;
@@ -149,10 +150,14 @@ export function splitLeadingBanners(text: string): BannerSplit | null {
  * The human's own words in a stored turn: the typed text with any leading machine
  * block peeled off, `''` when the turn was nothing but blocks.
  *
+ * Walnut's notices riding in front of the message (history-walnut-riders.ts) come
+ * off first: they sit outside the bracket blocks, ahead of everything.
+ *
  * For the surfaces that have no room to fold anything (one-line previews, counts).
  * They share this so a preview list and its badge count can never disagree about
  * which turns the human actually sent.
  */
 export function typedUserText(text: string): string {
-  return splitLeadingBanners(text)?.body ?? text;
+  const own = withoutLeadingRiders(text);
+  return splitLeadingBanners(own)?.body ?? own;
 }

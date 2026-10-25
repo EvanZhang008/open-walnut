@@ -26,7 +26,10 @@ import { detectOutboundSend } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
+import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
+import '@/styles/session-riders.css';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
+import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { shortenFileAboutLine } from '@/utils/thread-tree';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
@@ -1082,11 +1085,21 @@ export const SessionMessage = memo(function SessionMessage(props: SessionMessage
 function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text: rawText, timestamp, tools: rawTools, thinking } = message;
   // A reply's `[Q<n>]` tag names its question (question-tag.ts); the label above
-  // the turn shows the number, so the line itself never renders.
-  const text = role === 'assistant' ? stripQuestionTag(rawText ?? '') : rawText;
+  // the turn shows the number, so the line itself never renders. Nor does the
+  // "no action needed" marker line (turn-end-marker.ts): it is for the timeline.
+  const text = role === 'assistant' ? stripTurnMarker(stripQuestionTag(rawText ?? '')) : rawText;
   const tools = suppressTools || answerOnly ? undefined : rawTools;
   const time = formatTime(timestamp);
   const isUser = role === 'user';
+
+  // Walnut puts its own notices IN FRONT of the person's words (place note, org
+  // digest, routing rules, app state: history-walnut-riders.ts), in the same
+  // stored line. The notices are Walnut's and the words are the person's: split
+  // the notices off first, so they render as their own card row above the bubble
+  // and everything below works on the row without them. A row holding an envelope
+  // used to lose its bubble entirely, which drew the person's words on the AI side.
+  const riderSplit = useMemo(() => (isUser && text ? splitLeadingRiders(text) : null), [isUser, text]);
+  const ownText = riderSplit ? riderSplit.body : text;
 
   // Walnut sometimes PREPENDS a machine block ("[Conversation context]…") to the
   // message it hands the CLI, so the transcript stores that block inside the
@@ -1101,8 +1114,8 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // cannot find it; recognizing it produces the same split, which leaves the
   // QUERY as the bubble and folds the prompt into one disclosure row.
   const bannerSplit = useMemo(() => {
-    if (!isUser || !text) return null;
-    const split = searchPromptBannerSplit(text) ?? splitLeadingBanners(text);
+    if (!isUser || !ownText) return null;
+    const split = searchPromptBannerSplit(ownText) ?? splitLeadingBanners(ownText);
     if (!split) return null;
     // The question-number banner (`[Question Q4]`) asks the model for its reply
     // tag; the turn label and the sidebar already show the number, so the
@@ -1110,13 +1123,13 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
     // the label replaced).
     const banners = split.banners.filter((b) => !QUESTION_BANNER_RE.test(b.name));
     return banners.length === split.banners.length ? split : { ...split, banners };
-  }, [isUser, text]);
+  }, [isUser, ownText]);
   // A question about a FILE passage opens with ``About `<absolute path>`:``; the
   // bubble shows that path relative to the session's cwd.
   const bodyText = useMemo(() => {
-    const body = bannerSplit ? bannerSplit.body : text;
+    const body = bannerSplit ? bannerSplit.body : ownText;
     return isUser && body ? shortenFileAboutLine(body, sessionCwd) : body;
-  }, [bannerSplit, text, isUser, sessionCwd]);
+  }, [bannerSplit, ownText, isUser, sessionCwd]);
 
   // …and its ANSWER is a JSON object, usually with the model's own reasoning
   // above it ("Looking at the seed results, I can see strong matches for …" plus
@@ -1206,7 +1219,12 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
     ];
   };
 
-  return (
+  const riderSegments = useMemo(
+    () => riderSplit?.riders.map((envelope) => ({ kind: 'envelope' as const, envelope })) ?? null,
+    [riderSplit],
+  );
+
+  const row = (
     <div
       className={`session-msg ${envelopeSegments || (bannerSplit && !bodyText) ? 'session-msg-envelope'
         : isUser ? 'session-msg-user' : 'session-msg-assistant'}`}
@@ -1332,5 +1350,18 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         />
       )}
     </div>
+  );
+  if (!riderSegments) return row;
+  return (
+    <>
+      <div className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
+        {/* Not `.session-msg-content`: that class marks THE message body, which
+            quote pins and passage selection find as the row's first match. */}
+        <div className="session-msg-rider-content" onClick={handleContentClick}>
+          <SessionEnvelopeSegments segments={riderSegments} sessionCwd={sessionCwd} />
+        </div>
+      </div>
+      {row}
+    </>
   );
 }

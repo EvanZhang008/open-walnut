@@ -116,7 +116,8 @@ function lastWordsOfTurn(
       return line.length > ACTION_LINE_MAX ? `${line.slice(0, cutEnd(line, ACTION_LINE_MAX - 1))}…` : line;
     });
   if (lastSaid >= 0) {
-    const words = clipNoticeMessage(turn[lastSaid].text)!;
+    // '' when its last message was only the no-action line.
+    const words = clipNoticeMessage(turn[lastSaid].text) ?? { text: '' };
     return actions.length ? { ...words, actions } : words;
   }
   if (actions.length) return { text: '', actions };

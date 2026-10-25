@@ -357,6 +357,24 @@ describe('sweepPlaceholderTitles', () => {
     expect((await getTask(task.id)).title).toBe('Docx preview support');
   });
 
+  it('titles from the words after Walnut\'s notices, never the notices', async () => {
+    // A place note or org digest rides IN FRONT of the person's words in the
+    // same user line (session-message-queue.ts); it carries no titling signal.
+    const { buildDigestText } = await import('../../src/core/org/org-store.js');
+    const digest = buildDigestText({ id: 'task-main', title: 'Main' }, ['Sample lead: DIGEST_MARKER moved'], 0,
+      new Date(Date.now() - 60_000).toISOString(), Date.now());
+    const sid = nextSid();
+    const task = await makeTaskAndSession(sid);
+    historyTailMock.mockResolvedValue(userHistory(`${digest}\n\nfix the docx preview renderer in the file viewer`));
+
+    const stats = await sweepPlaceholderTitles();
+
+    expect(stats.retitled).toBe(1);
+    expect(promptAt(0)).toContain('docx preview renderer');
+    expect(promptAt(0)).not.toContain('DIGEST_MARKER');
+    expect((await getTask(task.id)).title).toBe('Docx preview support');
+  });
+
   it('retries a transient model failure inside the same attempt', async () => {
     const sid = nextSid();
     const task = await makeTaskAndSession(sid);

@@ -1,0 +1,10 @@
+/* Walnut's notices that rode in front of a person's message: their own row
+   right above the bubble, so they read as Walnut's and the words as the
+   person's (SessionMessage.tsx, history-walnut-riders.ts). */
+.session-msg-riders {
+  margin-bottom: 4px;
+}
+
+.session-msg-rider-content {
+  word-break: break-word;
+}

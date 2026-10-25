@@ -31,6 +31,7 @@ import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { engineCaps } from './agents/engine-registry.js';
+import { withoutLeadingRiders } from '../lib/history-walnut-riders.js';
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 /** First sweep waits for boot to settle (session reconnects, daemon dials). */
@@ -227,7 +228,9 @@ export async function sweepPlaceholderTitles(now = Date.now()): Promise<{
  *  would only burn an attempt per backoff cycle for the whole 48h window. */
 function pickTitleSource(texts: string[]): string {
   const notSlash = (t: string) => {
-    const stripped = t.replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, '').trim();
+    // Walnut's notices in front of the words (place note, org digest…) carry no
+    // titling signal either.
+    const stripped = withoutLeadingRiders(t).replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, '').trim();
     return stripped && !/^\/[a-z][\w-]*(\s|$)/i.test(stripped) ? stripped : '';
   };
   const substantive = texts.find((t) => {

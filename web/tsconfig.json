@@ -29,6 +29,7 @@
       "@open-walnut/history-turn-window": ["../src/lib/history-turn-window"],
       "@open-walnut/history-injected-banner": ["../src/lib/history-injected-banner"],
       "@open-walnut/history-session-envelope": ["../src/lib/history-session-envelope"],
+      "@open-walnut/history-walnut-riders": ["../src/lib/history-walnut-riders"],
       "@open-walnut/three-way-merge": ["../src/lib/three-way-merge"]
     }
   },

@@ -25,6 +25,7 @@ import type {
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
+import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -1669,11 +1670,12 @@ export async function autoTitleFromObservedMessage(
   // paths), the output-mode instruction / standing reminder (machine text
   // that, while rich mode holds, rides EVERY send and would otherwise dominate
   // the titling prompt — see core/sessions/output-mode.ts), and the reference
-  // card block appended for entity pills (core/sessions/reference-cards.ts).
+  // card block appended for entity pills (core/sessions/reference-cards.ts), and
+  // the notices Walnut put in front of the words (lib/history-walnut-riders.ts).
   // This sees the RAW observed message, so it cannot rely on the history
   // projection's strip. An image-only message leaves nothing.
   const message = toDisplayedUserText(
-    rawMessage.replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, ''),
+    withoutLeadingRiders(rawMessage).replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, ''),
   ).trim();
   if (!message) return false;
   if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return false; // slash command

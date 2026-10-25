@@ -1,0 +1,35 @@
+/* Folds around finished work in the session timeline (TurnFolds.tsx). The
+   header is the quiet tool-run line; open, the rows inside render exactly as
+   they would unfolded, set in by the same left rule a tool run's body uses. */
+.no-action-fold-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+.no-action-mark {
+  padding: 2px 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+.no-action-fold .tool-run-toggle {
+  max-width: 100%;
+}
+
+.process-fold-body,
+.no-action-fold-body {
+  margin-top: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+/* A fold's own row already wears the question's gutter bar (threadWrapperProps
+   on the fold); the rows inside it must not draw a second one. */
+.process-fold-body .session-msg--threaded {
+  border-left: none;
+  margin-left: 0;
+  padding-left: 0;
+}

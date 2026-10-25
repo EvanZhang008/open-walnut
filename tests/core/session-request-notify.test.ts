@@ -367,6 +367,12 @@ describe('lastWordsOf — what a notice quotes from the target transcript', () =
       .toEqual({ text: '', actions: ['Write: /r/a.md', 'TodoWrite'] });
   });
 
+  it('never quotes the no-action line: a turn that said only that says nothing', () => {
+    const tag = '<walnut-turn status="no-action"/>'
+    expect(lastWordsOf([user('go'), say(`All set, nothing for you.\n\n${tag}`)])).toEqual({ text: 'All set, nothing for you.' });
+    expect(lastWordsOf([user('go'), tool('Bash', 'ls'), say(tag)])).toEqual({ text: '' });
+  });
+
   it('a turn with neither text nor tools falls back to an earlier turn\'s text; nothing at all is undefined', () => {
     expect(lastWordsOf([say('The answer is 42.'), user('thanks'), { role: 'assistant', text: 'hm', kind: 'thinking' }]))
       .toEqual({ text: 'The answer is 42.' });

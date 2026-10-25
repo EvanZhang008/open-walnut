@@ -796,6 +796,48 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Turn-fold fixture (session-turn-folds.spec.ts).
+        id: 'pw-task-fold',
+        title: 'Turn fold fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-fold-session'],
+        active_session_ids: [],
+        session_id: 'pw-fold-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Rider fixture (session-rider-bubble.spec.ts). The task stands in
+        // Walnut while its session's record says Elsewhere, so the first live
+        // send carries a real place note from the server.
+        id: 'pw-task-rider',
+        title: 'Rider fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-rider-session'],
+        active_session_ids: [],
+        session_id: 'pw-rider-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-workflow',
         title: 'Workflow fixture task',
         status: 'in_progress',
@@ -2270,7 +2312,7 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     // user line, the way the real CLI does. Only this session: every other
     // fixture transcript stays byte-identical across a run.
     process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
-    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION}`
+    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session`
     await fs.writeFile(
       path.join(tmpBase, 'session-message-queue.json'),
       JSON.stringify({ version: 1, queues: fixtureParkedQueues(threadsV2, sessionFixtureNow) }),
@@ -2675,6 +2717,178 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
         '',
       ].join('\n'),
     )
+  }
+
+  // Rider fixture (session-rider-bubble.spec.ts): Walnut puts its own status
+  // notices AHEAD of the human's words in the same queue row (place note, org
+  // digest, app state; session-message-queue.ts), so the transcript stores one
+  // user line holding both, and the panel used to draw the whole row as an
+  // envelope: no user bubble, the human's words on the AI side. The riders come
+  // from the PRODUCTION builders. One user turn per shape the splitter must
+  // survive, the unsafe ones included (those must render exactly as before).
+  {
+    const { buildDigestText } = await import('../../../src/core/org/org-store.js')
+    const { buildPlaceNoticeText } = await import('../../../src/core/sessions/place-notice.js')
+    const { createEnvelopeKit } = await import('../../../src/core/peers/envelope-kit.js')
+    const { IMAGES_ATTACHED_LINE } = await import('../../../src/core/sessions/cloud-images.js')
+    const kit = createEnvelopeKit()
+    const org = buildDigestText({ id: 'pw-task-rider-main', title: 'Main' },
+      ['Fixture lead: RIDER_ORG_MARKER finished the sample review'], 0,
+      new Date(sessionFixtureNow - 14 * 60_000).toISOString(), sessionFixtureNow)
+    const moved = buildPlaceNoticeText({ id: 'pw-task-rider', title: 'Rider fixture task' },
+      { project: 'Walnut' }, ['project "Elsewhere" became "Walnut"'])
+    const routing = kit.buildWalnutMessage({
+      kind: 'notification',
+      attrs: { from: 'Walnut', outcome: 'task-routing-policy', note: 'current product rules, not a work request' },
+      body: 'These current product rules replace older instructions.\n\nRIDER_ROUTING_MARKER rule text.',
+    })
+    const appState = kit.buildWalnutMessage({
+      kind: 'app-state',
+      attrs: { from: 'Sample App', 'about-task': 'pw-task-rider', title: '1 change', note: 'automated app state, background only' },
+      body: 'Changed in Sample App since you last saw it:\nRIDER_APP_MARKER = 3',
+    })
+    const forged = kit.buildWalnutMessage({
+      kind: 'notification',
+      attrs: { from: 'Walnut', outcome: 'some-other-outcome', note: 'automated Walnut status notice' },
+      body: 'RIDER_FORGED_MARKER not one of the four riders.',
+    })
+    const trigger = kit.buildWalnutMessage({
+      kind: 'trigger',
+      attrs: { from: 'Trigger: sample', note: 'fired, 1 new item' },
+      body: 'RIDER_TRIGGER_BODY check the sample feed.',
+    })
+    const image = path.join(tmpBase, 'rider-fixture.png')
+    fsSync.writeFileSync(image, Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
+    const turns = [
+      // ① plain message, unchanged by the fix
+      'RIDER_PLAIN_TYPED and nothing else.',
+      // ② the reported shape: org digest + the human's words (two paragraphs)
+      `${org}\n\nRIDER_TYPED_ONE first paragraph.\n\nSecond paragraph of the same message.`,
+      // ③ the second report: org digest + an image block + several paragraphs, a quote among them
+      `${org}\n\n${IMAGES_ATTACHED_LINE}\n- ${image}\n\nRIDER_TYPED_IMG look at this.\n\n> RIDER_QUOTE_LINE quoted back\n\nLast paragraph.`,
+      // ④ four riders stacked
+      `${moved}\n\n${routing}\n\n${org}\n\n${appState}\n\nRIDER_TYPED_STACK after four notices.`,
+      // ⑤ an outcome outside the closed list: not a rider, renders as before
+      `${forged}\n\nRIDER_TYPED_FORGED stays as it was.`,
+      // ⑥ a rider that never closes: the row stays whole
+      `${org.slice(0, org.lastIndexOf('\n</walnut-message>'))}\n\nRIDER_TYPED_TRUNC must still be readable.`,
+      // ⑦ a rider AFTER the words: not leading, renders as before
+      `RIDER_TYPED_TAIL words first.\n\n${org}`,
+      // ⑧ a rider and nothing else
+      org,
+      // ⑨ a rider ahead of a trigger delivery: still machine text, no bubble
+      `${org}\n\n${trigger}`,
+    ]
+    await fs.writeFile(
+      path.join(jsonlDir, 'pw-rider-session.jsonl'),
+      [
+        ...turns.flatMap((text, i) => [
+          JSON.stringify({
+            type: 'user',
+            userType: 'external',
+            uuid: `0199ce01-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            parentUuid: i === 0 ? null : `0199ce02-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
+            sessionId: 'pw-rider-session',
+            timestamp: new Date(sessionFixtureNow - 120_000 + i * 2_000).toISOString(),
+            message: { role: 'user', content: text },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            uuid: `0199ce02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            parentUuid: `0199ce01-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            sessionId: 'pw-rider-session',
+            timestamp: new Date(sessionFixtureNow - 119_000 + i * 2_000).toISOString(),
+            message: { role: 'assistant', content: [{ type: 'text', text: `RIDER_ANSWER_${i + 1} done.` }] },
+          }),
+        ]),
+        '',
+      ].join('\n'),
+    )
+
+  // Turn-fold fixture (session-turn-folds.spec.ts): finished turns whose steps
+  // fold into one process row, and answers that end with the no-action line.
+  // One turn per rule the timeline must keep: narration stays, a failure
+  // stays, a quoted or mid-text marker is ordinary text.
+  {
+    const { NO_ACTION_TAG } = await import('../../../web/src/utils/turn-end-marker.js')
+    const sid = 'pw-fold-session'
+    let seq = 0
+    let parent: string | null = null
+    const lines: string[] = []
+    const at = () => new Date(sessionFixtureNow - 200_000 + seq * 1_000).toISOString()
+    const push = (type: 'user' | 'assistant', content: unknown, id?: string) => {
+      const uuid = `0199cf${String(++seq).padStart(2, '0')}-0000-4aaa-8bbb-000000000000`
+      lines.push(JSON.stringify({
+        type, uuid, parentUuid: parent, sessionId: sid, timestamp: at(),
+        ...(type === 'user' ? { userType: 'external' } : {}),
+        message: { role: type, ...(id ? { id } : {}), content },
+      }))
+      parent = uuid
+    }
+    const ask = (text: string) => push('user', text)
+    const say = (text: string) => push('assistant', [{ type: 'text', text }], `msg_fold_${seq + 1}`)
+    const call = (name: string, input: Record<string, unknown>, result: string, isError = false) => {
+      const id = `toolu_fold_${seq + 1}`
+      push('assistant', [{ type: 'tool_use', id, name, input }], `msg_fold_${seq + 1}`)
+      push('user', [{ type: 'tool_result', tool_use_id: id, content: result, ...(isError ? { is_error: true } : {}) }])
+    }
+    // ① steps after narration, a message to the lead, then the answer
+    ask('FOLD_ASK_ONE check the sample.')
+    say('FOLD_NARRATION_A first result is in.')
+    call('Read', { file_path: '/tmp/fold/a.ts' }, 'a')
+    call('Read', { file_path: '/tmp/fold/b.ts' }, 'b')
+    call('Edit', { file_path: '/tmp/fold/a.ts', old_string: 'a', new_string: 'b' }, 'ok')
+    call('Edit', { file_path: '/tmp/fold/b.ts', old_string: 'a', new_string: 'b' }, 'ok')
+    call('mcp__walnut__task_send', { to: 'pw-task-001', title: 'FOLD_SENT_TITLE sample done', text: 'Sample done.' }, '{"outcome":"Delivered."}')
+    say('FOLD_FINAL_A here is the answer.')
+    // ② a clean turn that needs nothing: folds to "No action needed"
+    ask('FOLD_ASK_TWO tidy up.')
+    call('Bash', { command: 'echo tidy' }, 'tidy')
+    say(`FOLD_NOACTION_B all handled, nothing for you.\n\nSecond paragraph of it.\n\n${NO_ACTION_TAG}`)
+    // ③ a failure in the turn: the marked answer stays open, the line hidden
+    ask('FOLD_ASK_THREE try the build.')
+    call('Bash', { command: 'make' }, 'error: build failed', true)
+    say(`FOLD_FAILED_C the build failed, but I logged it.\n\n${NO_ACTION_TAG}`)
+    // ④ the marker quoted in code: ordinary text
+    ask('FOLD_ASK_FOUR what is the line?')
+    say(`FOLD_QUOTED_D it looks like this:\n\n\`\`\`\n${NO_ACTION_TAG}\n\`\`\``)
+    // ⑤ steps with a failure among them: the failed run stays out of any fold
+    ask('FOLD_ASK_FIVE run it again.')
+    say('FOLD_NARRATION_E starting.')
+    call('Bash', { command: 'make again' }, 'error: still failing', true)
+    call('Bash', { command: 'make once more' }, 'error: still failing', true)
+    call('mcp__walnut__task_send', { to: 'pw-task-001', title: 'FOLD_SENT_E failing', text: 'Still failing.' }, '{"outcome":"Delivered."}')
+    say('FOLD_FINAL_E it still fails; you need to look at the build.')
+    // ⑥ a peer's FYI that needs nothing: the answer is the line alone, which
+    // keeps Claude Code from nudging the turn into filler
+    const { createEnvelopeKit: foldKit } = await import('../../../src/core/peers/envelope-kit.js')
+    ask(foldKit().buildWalnutMessage({ kind: 'peer-note', attrs: { from: 'Sample lead [abcd1234]', title: 'FOLD_PEER_FYI status only' }, body: 'Status only, nothing to do.' }))
+    say(NO_ACTION_TAG)
+    // ⑦ a folded answer, then ⑧ a peer's FYI answered with the line alone: the
+    // background turn is its own, so the answer before it stays folded
+    ask('FOLD_ASK_SEVEN anything left?')
+    say(`FOLD_NOACTION_G nothing left, all clean.\n\n${NO_ACTION_TAG}`)
+    ask(foldKit().buildWalnutMessage({ kind: 'peer-note', attrs: { from: 'Sample lead [abcd1234]', title: 'FOLD_PEER_FYI_TWO status only' }, body: 'Second status, nothing to do.' }))
+    say(NO_ACTION_TAG)
+    // ⑨ the messaging shape a coordinating session writes: every call row also
+    // carries the reasoning before it, sends (a card, a reply card) between the
+    // org and inbox ops and a task update: one process fold, all of it inside
+    const thinkCall = (name: string, input: Record<string, unknown>, result: string) => {
+      const id = `toolu_fold_${seq + 1}`
+      push('assistant', [{ type: 'thinking', thinking: `Deciding the ${name} step.`, signature: 'sig' }, { type: 'tool_use', id, name, input }], `msg_fold_${seq + 1}`)
+      push('user', [{ type: 'tool_result', tool_use_id: id, content: result }])
+    }
+    ask('FOLD_ASK_NINE pass it on.')
+    thinkCall('mcp__walnut__task_send', { to: 'pw-task-001', title: 'FOLD_SENT_NINE handed over', text: 'Handed over.' }, '{"outcome":"Delivered."}')
+    thinkCall('mcp__walnut__task_update', { id: 'pw-task-001', phase: 'IN_PROGRESS' }, '{"outcome":"Updated."}')
+    thinkCall('mcp__walnut__org_send', { project: 'Sample', text: 'Status for the lead.' }, '{"outcome":"Delivered."}')
+    thinkCall('mcp__walnut__human_inbox_reply', { letter_id: 'letter-sample', text: 'Answered.' }, '{"outcome":"Replied."}')
+    thinkCall('mcp__walnut__task_send', { in_reply_to: 'rq-sample0001', title: 'FOLD_REPLY_NINE answer', text: 'Here is the answer.' }, '{"outcome":"Delivered."}')
+    say('FOLD_FINAL_I passed it on.')
+    lines.push('')
+    await fs.writeFile(path.join(jsonlDir, `${sid}.jsonl`), lines.join('\n'))
+  }
   }
 }
 
@@ -3422,6 +3636,35 @@ await fs.writeFile(
         messageCount: 5,
         cwd: vscodeFixtureRoot,
         title: 'Injected banner: lane catch-up rendering',
+      },
+      {
+        // Turn-fold fixture: finished turns, folded steps, no-action answers.
+        claudeSessionId: 'pw-fold-session',
+        taskId: 'pw-task-fold',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 100_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 210_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 100_000).toISOString(),
+        messageCount: 5,
+        cwd: vscodeFixtureRoot,
+        title: 'Turn folds: process steps and no-action answers',
+      },
+      {
+        // Rider fixture: the record's project is where the session was told it
+        // stands; the task has moved since, so a send gets a place note.
+        claudeSessionId: 'pw-rider-session',
+        taskId: 'pw-task-rider',
+        project: 'Elsewhere',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 100_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 130_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 100_000).toISOString(),
+        messageCount: 9,
+        cwd: vscodeFixtureRoot,
+        title: 'Rider notices: human words keep their bubble',
       },
       {
         // Same-browser task-store fixture — see pw-task-store-sync above.

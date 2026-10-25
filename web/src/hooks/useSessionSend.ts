@@ -7,6 +7,7 @@ import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory
 import type { ImageAttachment } from '@/api/chat';
 import { removeBatchMessages, markDeliveredMessages, statusOnAdopt, unmatchedDeliveredIds } from '@/components/sessions/optimistic-dedup';
 import { launchSeedFor } from '@/components/sessions/launch-prompt-seed';
+import { withoutLeadingRiders } from '@open-walnut/history-walnut-riders';
 
 /** Per-send extras that ride the `session:send` RPC. */
 export interface SessionSendOptions {
@@ -246,8 +247,11 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                 // projection and keeps the image preamble, so that (not the raw
                 // row) is the matching basis — see OptimisticMessage.dedupText
                 // and session-chat.ts's dedupText.
+                // A queued row also holds any notice Walnut put in front of the
+                // words (history-walnut-riders.ts): history shows those as their
+                // own card, so the bubble shows only what follows them.
                 const historyBasis = toDisplayedUserText(m.message);
-                const display = stripImageRefPrefix(historyBasis);
+                const display = stripImageRefPrefix(withoutLeadingRiders(historyBasis));
                 // 'parked' = the server stopped auto-retrying this row (permanent
                 // failure, e.g. the session's working folder was deleted). Reuse the
                 // 'failed' presentation so it keeps Retry + Discard instead of looking
