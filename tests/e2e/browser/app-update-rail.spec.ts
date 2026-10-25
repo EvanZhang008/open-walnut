@@ -31,6 +31,7 @@ async function installShell(page: Page, initial: State): Promise<void> {
     const w = window as unknown as Record<string, unknown>
     let state = first as Record<string, unknown>
     const calls: string[] = []
+    const bodies: Array<Record<string, unknown>> = []
     const waiting: Record<string, (v: unknown) => void> = {}
     const push = (s: Record<string, unknown>) => {
       state = s
@@ -39,12 +40,16 @@ async function installShell(page: Page, initial: State): Promise<void> {
     const handler = {
       postMessage(body: { op: string }) {
         calls.push(body.op)
+        bodies.push(body)
         if (body.op === 'getState') return Promise.resolve({ state })
         if (body.op === 'check') return Promise.resolve({ checked: true, state })
         if (body.op === 'download' || body.op === 'confirmInstall' || body.op === 'install') {
           return new Promise((resolve) => { waiting[body.op] = resolve })
         }
         if (body.op === 'openRelease') return Promise.resolve(true)
+        // A shell from before the window check answers "unknown op" until a test sets windows.
+        if (body.op === 'unsavedWindows' && w.__shellWindows) return Promise.resolve({ windows: w.__shellWindows })
+        if (body.op === 'revealUnsaved') return Promise.resolve(true)
         return Promise.reject(new Error(`unknown op ${body.op}`))
       },
     }
@@ -53,6 +58,7 @@ async function installShell(page: Page, initial: State): Promise<void> {
     else Object.defineProperty(window, 'webkit', { value: { messageHandlers: { walnutUpdate: handler } }, configurable: true })
     w.__shell = {
       calls,
+      bodies,
       push,
       state: () => state,
       answer(op: string, value: unknown) { const r = waiting[op]; delete waiting[op]; r?.(value) },
@@ -62,6 +68,8 @@ async function installShell(page: Page, initial: State): Promise<void> {
 }
 
 const shell = {
+  installBodies: (page: Page) => page.evaluate(() => (window as any).__shell.bodies.filter((b: { op: string }) => b.op === 'install')),
+  windows: (page: Page, windows: unknown) => page.evaluate((w) => { (window as any).__shellWindows = w }, windows),
   push: (page: Page, s: State) => page.evaluate((st) => (window as any).__shell.push(st), s),
   calls: (page: Page) => page.evaluate(() => [...(window as any).__shell.calls] as string[]),
   waiting: (page: Page, op: string) => page.evaluate((o) => (window as any).__shell.waitingFor(o), op),
@@ -171,7 +179,7 @@ test('UC-2: up to date: no update notice; Settings shows the version and checks 
   await row.screenshot({ path: `${SHOTS}/uc2-settings-row-${browserName}.png` })
 })
 
-test('UC-3: available, download progress, Read more, and Restart with native cancel and confirmation', async ({ page, browserName }) => {
+test('UC-3: available, download progress, Read more, and Restart that installs at once', async ({ page, browserName }) => {
   await installShell(page, IDLE)
   await loadApp(page)
   await expect.poll(() => shell.calls(page)).toContain('getState')
@@ -206,22 +214,15 @@ test('UC-3: available, download progress, Read more, and Restart with native can
   await toast(page, 'Update downloaded').getByRole('button', { name: 'Read more' }).click()
   await expect.poll(() => shell.calls(page)).toContain('openRelease')
 
+  // Nothing would be lost: Restart installs at once, without a second question.
   await action(page).click()
-  await expect.poll(() => shell.waiting(page, 'confirmInstall')).toBe(true)
-  await expect(action(page)).toHaveText('Restarting…')
-  await shell.answer(page, 'confirmInstall', false)
-  await expect(action(page)).not.toHaveAttribute('aria-disabled', 'true')
-  await expectNotice(page, 'downloaded', 'Restart')
-  expect(await shell.calls(page)).not.toContain('install')
-
-  await action(page).click()
-  await expect.poll(() => shell.waiting(page, 'confirmInstall')).toBe(true)
-  await shell.answer(page, 'confirmInstall', true)
   await expect.poll(() => shell.waiting(page, 'install')).toBe(true)
+  expect(await shell.calls(page)).not.toContain('confirmInstall')
   await expectNotice(page, 'downloaded', 'Restarting…')
   await expect(action(page)).toHaveAttribute('aria-disabled', 'true')
   await action(page).click({ force: true })
   expect((await shell.calls(page)).filter((c) => c === 'install')).toHaveLength(1)
+  expect(await shell.installBodies(page)).toEqual([{ op: 'install' }])
   await shell.answer(page, 'install', { accepted: true, completed: true, state: DOWNLOADED })
 })
 
@@ -264,7 +265,7 @@ test('UC-4: download errors show a home toast or a popout dialog, and both allow
     await expect(dialog).toContainText('The network connection was lost.')
     await expect(toast(child, 'Could not download update')).toHaveCount(0)
     await child.screenshot({ path: `${SHOTS}/uc4-popout-download-error-${browserName}.png` })
-    await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(dialog).toHaveCount(0)
     await expectNotice(child, 'available', 'Download')
     await expect(action(child)).not.toHaveAttribute('aria-disabled', 'true')
@@ -279,36 +280,69 @@ test('UC-4: download errors show a home toast or a popout dialog, and both allow
   }
 })
 
-test('unsent input arriving during native confirmation prevents installation', async ({ page }) => {
+test('unsent work in this window and another one is listed with Go there; Restart Anyway installs with force', async ({ page }) => {
   await installShell(page, DOWNLOADED)
   await loadApp(page)
-  await action(page).click()
-  await expect.poll(() => shell.waiting(page, 'confirmInstall')).toBe(true)
+  await shell.windows(page, [
+    { id: 'main', title: 'Walnut', isSource: true, items: [] },
+    { id: 'pop-1', title: 'Fix the login', isSource: false, items: [{ what: 'An attached image that is not sent', where: 'session “Fix the login”' }] },
+  ])
   await page.evaluate(() => {
     const draft = document.createElement('textarea')
     draft.id = 'late-update-draft'
-    draft.value = 'Keep input written while the confirmation is open'
+    draft.setAttribute('aria-label', 'Reply to the thread')
+    draft.value = 'Keep this text nobody saves'
     document.body.append(draft)
   })
-  await shell.answer(page, 'confirmInstall', true)
-  await expect(toast(page, 'Could not install update')).toContainText('Save your edits')
-  expect(await shell.calls(page)).not.toContain('install')
-  await expect(page.locator('#late-update-draft')).toHaveValue('Keep input written while the confirmation is open')
-  await page.evaluate(() => document.querySelector('#late-update-draft')!.remove())
   await action(page).click()
-  await expect.poll(() => shell.waiting(page, 'confirmInstall')).toBe(true)
-  await shell.answer(page, 'confirmInstall', true)
+  const dialog = page.getByRole('dialog', { name: 'Restart Walnut anyway?' })
+  await expect(dialog).toContainText('This window')
+  await expect(dialog).toContainText('Unsent text in the “Reply to the thread” box')
+  await expect(dialog).toContainText('Window “Fix the login”')
+  await expect(dialog).toContainText('An attached image that is not sent in session “Fix the login”')
+  expect(await shell.calls(page)).not.toContain('install')
+  await page.screenshot({ path: `${SHOTS}/release-unsaved-dialog.png` })
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('#late-update-draft')).toHaveValue('Keep this text nobody saves')
+
+  // Go there on another window asks the shell to bring that window and item forward.
+  await action(page).click()
+  await dialog.locator('.unsaved-work-item', { hasText: 'attached image' }).getByRole('button', { name: 'Go there' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(async () => (await page.evaluate(() => (window as any).__shell.bodies)).filter((b: { op: string }) => b.op === 'revealUnsaved')).toEqual([{ op: 'revealUnsaved', window: 'pop-1', index: 0 }])
+  // Go there in this window focuses the box.
+  await action(page).click()
+  await dialog.locator('.unsaved-work-item', { hasText: 'Unsent text' }).getByRole('button', { name: 'Go there' }).click()
+  await expect(page.locator('#late-update-draft')).toBeFocused()
+
+  await action(page).click()
+  await dialog.getByRole('button', { name: 'Restart Anyway' }).click()
   await expect.poll(() => shell.waiting(page, 'install')).toBe(true)
+  expect(await shell.installBodies(page)).toEqual([{ op: 'install', force: true }])
+  expect(await shell.calls(page)).not.toContain('confirmInstall')
   await shell.answer(page, 'install', { accepted: true, completed: true, state: DOWNLOADED })
 })
 
-test('UC-5: install errors keep Restart available and a second native confirmation retries', async ({ page }) => {
+test('a shell that checked every window and found nothing installs at once, telling the shell it checked', async ({ page }) => {
+  await installShell(page, DOWNLOADED)
+  await loadApp(page)
+  await shell.windows(page, [
+    { id: 'main', title: 'Walnut', isSource: true, items: [{ what: 'Unsent text', where: 'counted by the page itself' }] },
+    { id: 'pop-1', title: 'Fix the login', isSource: false, items: [] },
+  ])
+  await action(page).click()
+  await expect.poll(() => shell.waiting(page, 'install')).toBe(true)
+  await expect(page.getByRole('dialog', { name: 'Restart Walnut anyway?' })).toHaveCount(0)
+  expect(await shell.installBodies(page)).toEqual([{ op: 'install', force: true }])
+  await shell.answer(page, 'install', { accepted: true, completed: true, state: DOWNLOADED })
+})
+
+test('UC-5: install errors keep Restart available and a second click retries', async ({ page }) => {
   await installShell(page, DOWNLOADED)
   await loadApp(page)
   await expectNotice(page, 'downloaded', 'Restart')
   await action(page).click()
-  await expect.poll(() => shell.waiting(page, 'confirmInstall')).toBe(true)
-  await shell.answer(page, 'confirmInstall', true)
   await expect.poll(() => shell.waiting(page, 'install')).toBe(true)
   const failed: State = { ...DOWNLOADED, message: 'Walnut cannot replace itself in /Volumes/Walnut. Move Walnut to the Applications folder, or download it again from the release page.', errorContext: 'install' }
   await shell.push(page, failed)
@@ -318,8 +352,6 @@ test('UC-5: install errors keep Restart available and a second native confirmati
   await expectNotice(page, 'downloaded', 'Restart')
   await expect(action(page)).not.toHaveAttribute('aria-disabled', 'true')
   await action(page).click()
-  await expect.poll(() => shell.waiting(page, 'confirmInstall')).toBe(true)
-  await shell.answer(page, 'confirmInstall', true)
   await expect.poll(async () => (await shell.calls(page)).filter((c) => c === 'install').length).toBe(2)
   await expect.poll(() => shell.waiting(page, 'install')).toBe(true)
   await shell.answer(page, 'install', { accepted: true, completed: true, state: DOWNLOADED })

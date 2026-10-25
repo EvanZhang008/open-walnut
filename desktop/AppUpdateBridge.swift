@@ -55,13 +55,21 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
             confirmInstall(from: message.webView) { ok in replyHandler(ok, nil) }
         case "install":
             let source = message.webView
+            // force: the page listed every window's unsent work and the person chose to restart anyway.
+            let force = body["force"] as? Bool == true
             checkUpdateWindows { [weak self] clean in
-                guard let self, clean, let source, self.updateWindowViews().contains(where: { $0 === source }) else {
+                guard let self, clean || force, let source, self.updateWindowViews().contains(where: { $0 === source }) else {
                     replyHandler(nil, "Save edits and send or clear unsent messages in every Walnut window before restarting.")
                     return
                 }
                 updater.install { accepted, failed in reply(["accepted": accepted, "completed": false, "failed": failed]) }
             }
+        case "unsavedWindows":
+            listUnsavedWindows(source: message.webView) { windows in replyHandler(["windows": windows], nil) }
+        case "revealUnsaved":
+            let id = body["window"] as? String ?? ""
+            let index = (body["index"] as? NSNumber)?.intValue ?? -1
+            replyHandler(revealUnsaved(window: id, index: index), nil)
         case "openRelease":
             let version = body["version"] as? String ?? ""
             if let url = updater.releaseURL(version: version) { NSWorkspace.shared.open(url); replyHandler(true, nil) }
@@ -146,6 +154,57 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
             guard let self else { finish(false); return }
             finish(clean && identities == Set(self.updateWindowViews().map { ObjectIdentifier($0) }))
         }
+    }
+
+    /// Every window's answer to "what would a restart lose here?", for the page that asks before
+    /// it restarts. A window whose page cannot list its work (an older bundle) answers with the
+    /// shell's own yes/no check; one that cannot be checked at all answers `items: null`.
+    func listUnsavedWindows(source: WKWebView?, _ done: @escaping ([[String: Any]]) -> Void) {
+        let views = updateWindowViews()
+        guard !views.isEmpty else { done([]); return }
+        var answers = [Int: [String: Any]]()
+        let group = DispatchGroup()
+        for (i, view) in views.enumerated() {
+            let base: [String: Any] = ["id": String(UInt(bitPattern: ObjectIdentifier(view).hashValue)),
+                                       "title": view.window?.title ?? "", "isSource": view === source]
+            answers[i] = base.merging(["items": NSNull()]) { $1 }
+            group.enter()
+            let js = "(() => { try { const b = window.__walnutDesktop; return b && typeof b.listUnsavedWork === 'function' ? JSON.stringify(b.listUnsavedWork()) : null; } catch { return null; } })()"
+            view.evaluateJavaScript(js) { [weak self] result, _ in
+                if let text = result as? String, let items = Self.jsonObject(text) as? [[String: Any]] {
+                    answers[i] = base.merging(["items": items]) { $1 }
+                    group.leave()
+                    return
+                }
+                let watchdog = view === self?.webView ? self?.webContentWatchdog : self?.popoutWatchdogs[ObjectIdentifier(view)]
+                guard let watchdog else { group.leave(); return }
+                watchdog.checkUnsavedWork { unsaved in
+                    let items: [[String: Any]] = unsaved ? [["what": "Unsaved work", "where": ""]] : []
+                    answers[i] = base.merging(["items": items]) { $1 }
+                    group.leave()
+                }
+            }
+        }
+        var finished = false
+        let finish = {
+            guard !finished else { return }
+            finished = true
+            done(views.indices.compactMap { answers[$0] })
+        }
+        // A window that does not answer in time stays "could not be checked".
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: finish)
+        group.notify(queue: .main, execute: finish)
+    }
+
+    /// Bring a window forward and ask its page to show item `index` (-1: the window only).
+    func revealUnsaved(window id: String, index: Int) -> Bool {
+        guard let view = updateWindowViews().first(where: { String(UInt(bitPattern: ObjectIdentifier($0).hashValue)) == id }),
+              let window = view.window else { return false }
+        window.makeKeyAndOrderFront(nil)
+        if index >= 0 {
+            view.evaluateJavaScript("(() => { const b = window.__walnutDesktop; return !!(b && b.revealUnsavedWork && b.revealUnsavedWork(\(index))); })()", completionHandler: nil)
+        }
+        return true
     }
 
     func confirmInstall(from source: WKWebView? = nil, _ done: @escaping (Bool) -> Void) {

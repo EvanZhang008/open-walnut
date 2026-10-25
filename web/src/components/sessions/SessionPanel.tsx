@@ -2823,6 +2823,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             // Per page: the root keeps `draft:session:<id>` (old drafts survive),
             // a question page and a pending Ask each have their own.
             draftKey={threads.draftKey}
+            draftKeptOnReload={threads.draftKeptOnReload}
             prefillText={prefillText}
             prefillNonce={prefillNonce}
             prefillMode={prefillMode}

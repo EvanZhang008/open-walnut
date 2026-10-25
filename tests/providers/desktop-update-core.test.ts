@@ -40,6 +40,29 @@ describe('installed desktop update', () => {
     expect(await s.core.status()).toMatchObject({ restarting: false, error: expect.stringContaining('could not restart') })
     expect(await s.core.restart('12:old:new')).toEqual({ accepted: true })
   })
+  it('passes force to the helper only when asked, and names the other-windows refusal', async () => {
+    const s = setup()
+    // A helper that reports `windows` knows --force.
+    s.execFile.mockImplementation((_f, _a, _o, done) => done(null, JSON.stringify({ available: true, token: '12:old:new', version: '1.0', windows: 2 })))
+    await s.core.restart('12:old:new', true)
+    expect(s.spawn.mock.calls[0][1]).toEqual(['--desktop-update-bridge', 'restart', '12:old:new', '--force'])
+    s.child.emit('exit', 3)
+    expect((await s.core.status()).error).toContain('Another Walnut window is open')
+    await s.core.restart('12:old:new', 'yes')
+    expect(s.spawn.mock.calls[1][1]).toEqual(['--desktop-update-bridge', 'restart', '12:old:new'])
+  })
+  it('never sends --force to an older helper that does not report windows', async () => {
+    const s = setup()
+    await s.core.restart('12:old:new', true)
+    expect(s.spawn.mock.calls[0][1]).toEqual(['--desktop-update-bridge', 'restart', '12:old:new'])
+    s.child.emit('exit', 1)
+    expect((await s.core.status()).error).toContain('close any extra app windows')
+  })
+  it('relays the open window count the helper reports', async () => {
+    const s = setup()
+    s.execFile.mockImplementation((_f, _a, _o, done) => done(null, JSON.stringify({ available: true, token: '12:old:new', version: '1.0', windows: 2 })))
+    expect(await s.core.status()).toMatchObject({ windows: 2 })
+  })
   it('an isolated test daemon cannot detect or restart the real app', async () => {
     const s = setup()
     s.deps.isolated = true

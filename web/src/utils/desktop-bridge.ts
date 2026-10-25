@@ -14,10 +14,23 @@
  * `evaluateJavaScript`, which sees only globals.
  */
 import { hasUnsavedWork } from '@/utils/stale-assets';
+import { listUnsavedWork, revealUnsavedWork } from '@/utils/unsaved-work';
 import { openLink } from '@/utils/open-link';
 
+/** One thing a restart would lose in this window, for the restart notice in another one. */
+export interface DesktopUnsavedItem {
+  what: string;
+  where: string;
+}
+
 export interface DesktopBridge {
-  hasUnsavedWork(): boolean;
+  /** `reload`: the shell reloads this page in place; anything else (or nothing, an older
+   *  shell) means the page goes away, a restart or a closing window. */
+  hasUnsavedWork(scope?: string): boolean;
+  /** The same answer as hasUnsavedWork, item by item; null when the check failed. */
+  listUnsavedWork(): DesktopUnsavedItem[] | null;
+  /** Bring the item at `index` of a fresh listUnsavedWork() into view. */
+  revealUnsavedWork(index: number): boolean;
   /** An `open-walnut://` link the app was asked to open (desktop/AppLink.swift).
    *  Handled in place, never by a reload: the page may hold unsaved text. */
   openLink(link: string): boolean;
@@ -31,8 +44,19 @@ declare global {
 
 export function installDesktopBridge(target: Window = window): DesktopBridge {
   const bridge: DesktopBridge = {
-    hasUnsavedWork: () => {
-      try { return hasUnsavedWork(target.document); } catch { return true; }
+    hasUnsavedWork: (scope) => {
+      try { return hasUnsavedWork(target.document, scope === 'reload' ? 'reload' : 'leave'); } catch { return true; }
+    },
+    listUnsavedWork: () => {
+      try { return listUnsavedWork(target.document).map(({ what, where }) => ({ what, where })); } catch { return null; }
+    },
+    revealUnsavedWork: (index) => {
+      try {
+        const found = listUnsavedWork(target.document)[Number(index)];
+        if (!found) return false;
+        revealUnsavedWork(found);
+        return true;
+      } catch { return false; }
     },
     openLink: (link) => openLink(String(link)),
   };

@@ -5,7 +5,13 @@ export interface DesktopUpdateStatus {
   available: boolean
   token: string | null
   version: string | null
+  /** App windows open now (a helper from before this field omits it). */
+  windows?: number
 }
+
+/** The helper's exit code when other app windows are open and the restart was not forced
+ *  (written as a literal inside createDesktopUpdate: the JS daemon embeds its source text). */
+export const DESKTOP_RESTART_OTHER_WINDOWS = 3
 
 export interface DesktopUpdateDeps {
   fs: typeof fsType
@@ -44,7 +50,7 @@ export function createDesktopUpdate(deps: DesktopUpdateDeps) {
   }
   var restarting = false
   var restartError: string | null = null
-  async function restart(token: unknown): Promise<{ accepted: boolean }> {
+  async function restart(token: unknown, force?: unknown): Promise<{ accepted: boolean }> {
     if (typeof token !== 'string' || token.length > 200 || restarting) return { accepted: false }
     var current = await status()
     var file = await executable()
@@ -53,10 +59,20 @@ export function createDesktopUpdate(deps: DesktopUpdateDeps) {
     restartError = null
     try {
       await new Promise<void>(function (resolve, reject) {
-        var proc = deps.spawn(file!, ['--desktop-update-bridge', 'restart', token as string], { detached: true, stdio: 'ignore', env: deps.env })
+        var args = ['--desktop-update-bridge', 'restart', token as string]
+        // Only a helper that reports `windows` knows --force; an older one exits 2 on it.
+        var knowsForce = typeof current.windows === 'number'
+        if (force === true && knowsForce) args.push('--force')
+        var proc = deps.spawn(file!, args, { detached: true, stdio: 'ignore', env: deps.env })
         proc.once('error', reject)
         proc.once('spawn', function () { proc.unref(); resolve() })
-        proc.once('exit', function (code) { restarting = false; restartError = code === 0 ? null : 'Walnut could not restart. Save your work and close any extra app windows, then try again.' })
+        proc.once('exit', function (code) {
+          restarting = false
+          restartError = code === 0 ? null
+            : code === 3 ? 'Another Walnut window is open. Try again to choose whether to restart anyway.'
+              : knowsForce ? 'Walnut did not restart. Try again.'
+                : 'Walnut could not restart. Save your work and close any extra app windows, then try again.'
+        })
       })
       return { accepted: true }
     } catch (_e) { restarting = false; return { accepted: false } }

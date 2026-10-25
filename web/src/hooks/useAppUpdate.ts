@@ -45,6 +45,14 @@ export interface AppUpdateCheckResult {
   state: AppUpdateState;
 }
 
+/** One app window's answer to unsavedWindows; `items` is null when it could not be checked. */
+export interface UnsavedWindow {
+  id: string;
+  title: string;
+  isSource: boolean;
+  items: Array<{ what: string; where: string }> | null;
+}
+
 interface UpdateHandler { postMessage(body: Record<string, unknown>): Promise<unknown> }
 
 export const APP_UPDATE_EVENT = 'walnut:app-update';
@@ -72,7 +80,12 @@ export const appUpdateBridge = {
   download: () => ask<AppUpdateActionResult>('download'),
   /** The app's own confirmation sheet; resolves true to go ahead. */
   confirmInstall: () => ask<boolean>('confirmInstall'),
-  install: () => ask<AppUpdateActionResult>('install'),
+  /** `force`: the page checked every window and the user chose to restart anyway. */
+  install: (force = false) => ask<AppUpdateActionResult>('install', force ? { force: true } : {}),
+  /** Unsent work in every app window (desktop/AppUpdateBridge.swift); rejects on a shell without it. */
+  unsavedWindows: () => ask<{ windows: UnsavedWindow[] }>('unsavedWindows'),
+  /** Bring item `index` of window `window` into view (it becomes the key window). */
+  revealUnsaved: (window: string, index: number) => ask<boolean>('revealUnsaved', { window, index }),
   /** Opens the release page in the browser; resolves false when the app has no feed. */
   openRelease: (version: string) => ask<boolean>('openRelease', { version }),
 };

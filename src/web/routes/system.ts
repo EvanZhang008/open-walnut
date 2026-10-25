@@ -73,12 +73,18 @@ systemRouter.get('/health', async (req, res) => {
 
 systemRouter.get('/desktop-update', async (req, res) => {
   const empty = { available: false, token: null, version: null }
-  if (!isPersonAtThisMachine(req) || process.platform !== 'darwin') { res.json(empty); return }
+  // Only a page that shows the update in its bottom notice asks with `notice=1`.
+  // An older page would show it as a sidebar item; it hears nothing, and its own
+  // "Walnut updated · Reload" notice brings it to the page that asks.
+  if (req.query.notice !== '1' || !isPersonAtThisMachine(req) || process.platform !== 'darwin') { res.json(empty); return }
   const daemon = getConnectedDaemonConnection('__local__')
   if (!daemon?.hasCapability('desktop-update-v1')) { res.json(empty); return }
   try {
     const result = await daemon.send('desktop.updateStatus', {}, 7000)
-    res.json(result.ok ? { available: result.available, token: result.token, version: result.version, restarting: result.restarting, error: result.error } : empty)
+    res.json(result.ok ? {
+      available: result.available, token: result.token, version: result.version, restarting: result.restarting, error: result.error,
+      ...(typeof result.windows === 'number' ? { windows: result.windows } : {}),
+    } : empty)
   } catch { res.json(empty) }
 })
 
@@ -89,7 +95,8 @@ systemRouter.post('/desktop-update/restart', async (req, res) => {
   const token = req.body?.token
   if (typeof token !== 'string' || !token || token.length > 200) { res.status(400).json({ error: 'An update token is required.' }); return }
   try {
-    const result = await daemon.send('desktop.restart', { token }, 7000)
+    // force: the page checked every app window (or the user chose to restart anyway).
+    const result = await daemon.send('desktop.restart', { token, force: req.body?.force === true }, 7000)
     if (!result.ok || !result.accepted) { res.status(409).json({ error: 'The installed update changed. Check again before restarting.' }); return }
     res.status(202).json({ accepted: true })
   } catch { res.status(503).json({ error: 'Could not request the app restart. Try again.' }) }

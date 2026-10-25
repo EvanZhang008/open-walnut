@@ -154,14 +154,22 @@ the state and its rules in `AppUpdateMachine.swift`, a port of T3's
    releases page for the newest release (`releases/latest`, the redirect to its
    tag; no API call, so no rate limit) and whether that release has a DMG for
    this Mac yet. Nothing shows while there is nothing to do.
-2. **Download.** An update item appears in the sidebar above Voice ("Update
-   available"); **Check for Updates…** in the app menu and the row in Settings →
-   General do the same. A click downloads `Walnut-<arch>.dmg` (a ring fills as
+2. **Download.** A small notice at the bottom of the window says "Walnut update
+   available · Download"; **Check for Updates…** in the app menu and the row in
+   Settings → General do the same. A click downloads `Walnut-<arch>.dmg` (a ring fills as
    it comes in), copies the app out of it and checks that the new app is valid
    and satisfies the running app's designated requirement: only a build signed
    by the same developer, with the same bundle id and the expected version, can
    replace it. A failed download offers a retry.
-3. **Restart to update.** After the app's confirmation, the app stops its server
+3. **Restart to update.** The same notice then says "Walnut updated · Restart".
+   A click restarts at once unless something in an app window would be lost: a
+   message typed in a session box is saved and comes back, so it never holds the
+   restart; text in other boxes, an attached image, unsaved file edits or a note
+   still saving are listed with the window and session they are in, a **Go
+   there** button each, and **Restart Anyway** (`web/src/utils/unsaved-work.ts`,
+   the `unsavedWindows` request in `AppUpdateBridge.swift`). A build installed
+   over the running app (`--desktop-update-bridge`) gets the same notice and the
+   same rule. Then the app stops its server
    (5 seconds at most), hands the swap to `apply-update.sh` and quits. The
    script waits for the app to exit, swaps the new app into place with two
    renames (the old one comes back if anything fails) and opens it. Sessions

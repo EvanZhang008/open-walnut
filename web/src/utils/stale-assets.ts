@@ -51,6 +51,7 @@
  */
 import { log } from '@/utils/log';
 import { beaconFlush } from '@/utils/browser-logger';
+import { listUnsavedWork, type UnsavedScope } from '@/utils/unsaved-work';
 
 const RELOAD_LOG_KEY = 'open-walnut-stale-asset-reloads';
 /** Reloads allowed inside RELOAD_WINDOW_MS before we stop trying. */
@@ -89,74 +90,13 @@ const PERIODIC_CHECK_MS = 10 * 60_000;
 /** Never ask the server which bundle it serves more often than this. */
 const MIN_FETCH_INTERVAL_MS = 60_000;
 
-/** What the DOM told us about work a reload would destroy. */
-export interface UnsavedSnapshot {
-  /** The Files panel's dirty dot — an editor with explicit-save changes. */
-  dirtyEditor: boolean;
-  /**
-   * Composer drafts (`<textarea>`). Precious whether or not they have focus — a
-   * half-written message you left to go read code is exactly what a reload must
-   * not eat.
-   */
-  drafts: string[];
-  /**
-   * Text in the field that has focus RIGHT NOW: a single-line input, or an
-   * inline-editing contenteditable (a task title). Focus-gated on purpose —
-   * most single-line inputs here are search and filter boxes, and a stale
-   * filter must not block recovery forever.
-   */
-  focusedText: string;
-}
-
-/** Pure half of the safety check, so the rule is testable without a DOM. */
-export function isUnsaved(snapshot: UnsavedSnapshot): boolean {
-  return snapshot.dirtyEditor
-    || snapshot.drafts.some((t) => t.trim().length > 0)
-    || snapshot.focusedText.trim().length > 0;
-}
-
-/** Text-bearing input types only: a checked checkbox is not unsaved typing. */
-const TEXT_INPUT_TYPES = new Set(['text', 'search', 'url', 'email', 'tel', 'password', 'number', '']);
 /**
- * Editors whose contenteditable holds a DOCUMENT, not unsaved typing: the
- * CodeMirror source editor and the TipTap surfaces. Scanning them for text
- * (the first version of this file did) reports "unsaved" for as long as any
- * file is open, which defers the reload forever — caught in verification, with
- * a JSON grammar failing on a rebuilt server and the tab refusing to heal.
- * Their real dirty state is `.fv-dirty-dot`.
+ * Would reloading right now throw away something the user typed? The rule and
+ * the places it looks live in unsaved-work.ts (a persisted composer draft does
+ * not count; it comes back after the reload).
  */
-const DOCUMENT_EDITOR_SELECTOR = '.cm-editor, .ProseMirror, .tiptap';
-
-const EDITABLE_ATTR_VALUES = new Set(['', 'true', 'plaintext-only']);
-
-/**
- * DOM half of the safety check. Kept trivial — the rule lives in isUnsaved.
- * `active` is a parameter (not read straight off the document) so the rule can
- * be tested against a headless DOM that has no focus model.
- */
-export function readUnsavedSnapshot(doc: Document = document, active: Element | null = doc.activeElement): UnsavedSnapshot {
-  const drafts = Array.from(doc.querySelectorAll('textarea'), (el) => (el as HTMLTextAreaElement).value ?? '');
-  // An image pasted into a composer is unsent work with no text to find: it
-  // lives only in React state, so a reload drops it and the user has to go find
-  // the screenshot again. Counted as a draft so every caller (this file's
-  // recovery, the drift upgrade, the desktop shell's page-process recycle)
-  // treats it the same as half-typed text.
-  if (doc.querySelector('.chat-image-preview')) drafts.push('[pending attachment]');
-  let focusedText = '';
-  const tag = active?.tagName?.toUpperCase();
-  if (tag === 'INPUT') {
-    const type = (active!.getAttribute('type') ?? '').toLowerCase();
-    if (TEXT_INPUT_TYPES.has(type)) focusedText = (active as HTMLInputElement).value ?? '';
-  } else if (active && EDITABLE_ATTR_VALUES.has((active.getAttribute('contenteditable') ?? 'off').toLowerCase())) {
-    // An inline title being edited counts; a document editor's body does not.
-    if (!active.closest?.(DOCUMENT_EDITOR_SELECTOR)) focusedText = active.textContent ?? '';
-  }
-  return { dirtyEditor: doc.querySelector('.fv-dirty-dot, .notes-save-status.saving, .notes-save-status.error, .global-notes-saving, .global-notes-error') != null, drafts, focusedText };
-}
-
-/** Would reloading right now throw away something the user typed? */
-export function hasUnsavedWork(doc: Document = document): boolean {
-  return isUnsaved(readUnsavedSnapshot(doc));
+export function hasUnsavedWork(doc: Document = document, scope: UnsavedScope = 'reload'): boolean {
+  return listUnsavedWork(doc, doc.activeElement, scope).length > 0;
 }
 
 interface EventTargetLike {

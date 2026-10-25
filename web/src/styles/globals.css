@@ -33330,14 +33330,20 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   white-space: nowrap;
 }
 
-/* The unsaved-text question is the one thing here worth reading. */
-.stale-build-pill.is-confirming {
-  border-color: var(--warning);
+/* What a restart or reload would lose, each with a way to get to it. */
+.unsaved-work p { margin: 0 0 8px; }
+.unsaved-work-window { margin: 6px 0 2px; font-weight: 600; color: var(--fg); }
+.unsaved-work-list { margin: 0 0 8px; padding: 0; list-style: none; }
+.unsaved-work-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
 }
-
-.stale-build-pill.is-confirming .stale-build-pill-text {
-  color: var(--fg);
-}
+.unsaved-work-what { min-width: 0; overflow-wrap: anywhere; }
+.unsaved-work-go { flex-shrink: 0; padding: 3px 10px; font-size: 12px; }
+.unsaved-work-note { color: var(--fg-muted); font-size: 12px; }
 
 .stale-build-pill-sep {
   color: var(--fg-muted);

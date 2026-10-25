@@ -3374,7 +3374,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'transfer.realpath': return replyTransfer(ws, id, 'transfer.realpath', function () { return transferCore.realpath(cmd); }, false);
     case 'host.facts': return replyTransfer(ws, id, 'host.facts', function () { return hostFacts.facts(cmd); }, false);
     case 'desktop.updateStatus': return replyTransfer(ws, id, 'desktop.updateStatus', function () { return desktopUpdate.status(); }, false);
-    case 'desktop.restart': return replyTransfer(ws, id, 'desktop.restart', function () { return desktopUpdate.restart(cmd.token); }, true);
+    case 'desktop.restart': return replyTransfer(ws, id, 'desktop.restart', function () { return desktopUpdate.restart(cmd.token, cmd.force); }, true);
     case 'usage.scan': return cmdUsageScan(ws, id, cmd);
     case 'usage.costState': return cmdUsageCostState(ws, id, cmd);
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id, cmd);

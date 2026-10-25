@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { getStaleBuild, hasUnsavedWork, reloadForUpgrade, subscribeStaleBuild, type StaleBuildState } from '@/utils/stale-assets';
+import { useNavigate } from 'react-router-dom';
+import { getStaleBuild, reloadForUpgrade, subscribeStaleBuild, type StaleBuildState } from '@/utils/stale-assets';
+import { openSessionOnHome } from '@/utils/open-session';
+import { draftsSettled } from '@/utils/unsaved-work';
 import { useInstalledAppUpdate } from '@/components/layout/InstalledAppUpdate';
 import { useAppUpdateState } from '@/hooks/useAppUpdate';
 import { useAppUpdateActions } from '@/components/layout/useAppUpdateActions';
 import { getAppUpdateButtonTooltip, resolveAppUpdateButtonAction, shouldShowAppUpdateItem } from '@/components/layout/app-update-logic';
 import { ConfirmDialog } from './ConfirmDialog';
+import { gatherUnsavedWork, hasAny, UnsavedWorkDialog, type UnsavedWork } from './UnsavedWorkDialog';
 
 const DISMISS_KEY = 'open-walnut-stale-build-pill-dismissed';
-const CONFIRM_MS = 8_000;
 
 function readDismissed(): string | null {
   try { return window.sessionStorage.getItem(DISMISS_KEY); } catch { return null; }
@@ -17,10 +20,12 @@ function readDismissed(): string | null {
 export function StaleBuildPill() {
   const [state, setState] = useState<StaleBuildState | null>(getStaleBuild);
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);
-  const [confirming, setConfirming] = useState(false);
-  const [restartConfirming, setRestartConfirming] = useState(false);
-  const [guardError, setGuardError] = useState<string | null>(null);
-  const confirmTimer = useRef<number | null>(null);
+  // The work a restart or reload would lose, while the user decides about it.
+  const [held, setHeld] = useState<{ work: UnsavedWork; verb: 'restart' | 'reload'; go: () => Promise<void> } | null>(null);
+  // From the click until the restart request is out (the check, the draft settle).
+  const [starting, setStarting] = useState(false);
+  const checking = useRef(false);
+  const navigate = useNavigate();
   const installed = useInstalledAppUpdate();
   const shell = useAppUpdateState();
   const shellActions = useAppUpdateActions(shell);
@@ -28,12 +33,12 @@ export function StaleBuildPill() {
   const shellVisible = shouldShowAppUpdateItem(shell);
   const shellAction = shell ? resolveAppUpdateButtonAction(shell) : 'none';
   const native = installedReady || installed.pending;
-  const pending = native ? installed.pending : shellActions.pending || shell?.status === 'downloading';
+  const pending = starting || (native ? installed.pending : shellActions.pending || shell?.status === 'downloading');
   const label = native ? (pending ? 'Restarting…' : 'Restart')
     : shellVisible ? shellAction === 'install' ? (pending ? 'Restarting…' : 'Restart')
       : shell?.status === 'downloading' && shell.downloadPercent != null ? `Downloading ${Math.floor(shell.downloadPercent)}%`
         : pending ? 'Downloading…' : 'Download'
-    : confirming ? 'Reload anyway' : 'Reload';
+    : 'Reload';
   const identity = native ? `app:${installed.update?.token ?? 'restarting'}`
     : shellVisible ? `release:${shell?.downloadedVersion ?? shell?.availableVersion}` : state?.served;
 
@@ -42,68 +47,61 @@ export function StaleBuildPill() {
     return subscribeStaleBuild(() => setState(getStaleBuild()));
   }, []);
 
-  useEffect(() => {
-    setConfirming(false);
-    setRestartConfirming(false);
-    if (confirmTimer.current != null) window.clearTimeout(confirmTimer.current);
-    return () => { if (confirmTimer.current != null) window.clearTimeout(confirmTimer.current); };
-  }, [identity]);
+  // A newer update replaces the one being decided about.
+  useEffect(() => { setHeld(null); }, [identity]);
 
-  const onAction = useCallback(() => {
-    if (pending) return;
-    if (native) { setRestartConfirming(true); return; }
-    if (shellVisible) {
-      if (shellAction === 'install' && hasUnsavedWork()) {
-        setGuardError('Save your edits and send or clear unsent messages before restarting.');
-        return;
-      }
-      void shellActions.run();
-      return;
+  const onAction = useCallback(async () => {
+    if (pending || checking.current) return;
+    // Download and check need no guard: nothing closes.
+    if (!native && shellVisible && shellAction !== 'install') { void shellActions.run(); return; }
+    const verb = native || shellVisible ? 'restart' : 'reload';
+    // A restart ends the page process: a draft written by the check gets a moment to reach disk first.
+    const go = async (force: boolean, otherWindows: number) => {
+      if (verb === 'reload') { reloadForUpgrade(); return; }
+      setStarting(true);
+      try {
+        // Other windows saved their drafts during the check, on their own clocks.
+        await draftsSettled(1_500, otherWindows > 0);
+        if (native) await installed.restart(force);
+        else await shellActions.run({ checked: true, force });
+      } finally { setStarting(false); }
+    };
+    checking.current = true;
+    try {
+      // Restart and reload go at once, unless something would be lost: a draft
+      // already in storage is not (it comes back), so it never holds them.
+      const work = await gatherUnsavedWork(verb === 'restart' ? 'app' : 'window',
+        (sessionId) => openSessionOnHome(sessionId, navigate), installed.update?.windows);
+      if (!hasAny(work)) { await go(work.allChecked, work.otherWindows); return; }
+      setHeld({ work, verb, go: () => go(true, work.otherWindows) });
+    } finally {
+      checking.current = false;
     }
-    if (!confirming && hasUnsavedWork()) {
-      setConfirming(true);
-      confirmTimer.current = window.setTimeout(() => {
-        confirmTimer.current = null;
-        setConfirming(false);
-      }, CONFIRM_MS);
-      return;
-    }
-    reloadForUpgrade();
-  }, [pending, native, shellVisible, shellAction, shellActions.run, confirming]);
-
-  const restart = () => {
-    setRestartConfirming(false);
-    if (hasUnsavedWork()) {
-      setGuardError('Save your edits and send or clear unsent messages before restarting.');
-      return;
-    }
-    void installed.restart();
-  };
+  }, [pending, native, shellVisible, shellAction, shellActions.run, installed.restart, installed.update?.windows, navigate]);
   const onLater = () => {
     if (!identity || pending) return;
     try { window.sessionStorage.setItem(DISMISS_KEY, identity); } catch { /* quota */ }
     setDismissed(identity);
   };
   const visible = !!identity && (pending || dismissed !== identity);
-  const error = guardError ?? installed.error ?? shellActions.error;
-  const clearError = () => { setGuardError(null); installed.clearError(); shellActions.clearError(); };
+  const error = installed.error ?? shellActions.error;
+  const clearError = () => { installed.clearError(); shellActions.clearError(); };
 
   return <>
     {visible && createPortal(
-      <div className={`stale-build-pill${confirming ? ' is-confirming' : ''}`} role="status" aria-live="polite"
+      <div className="stale-build-pill" role="status" aria-live="polite"
         data-served={state?.served} data-running={state?.running} data-update-kind={native ? 'app' : shellVisible ? 'release' : 'web'}>
-        <span className="stale-build-pill-text">{confirming ? 'You have unsaved text: reload anyway?' : native || shellAction === 'install' ? 'Walnut updated' : shellVisible ? 'Walnut update available' : 'Walnut updated'}</span>
+        <span className="stale-build-pill-text">{native || shellAction === 'install' ? 'Walnut updated' : shellVisible ? 'Walnut update available' : 'Walnut updated'}</span>
         <span className="stale-build-pill-sep" aria-hidden="true">·</span>
-        <button type="button" className="stale-build-pill-action" data-testid="walnut-update-action" data-status={native ? pending ? 'restarting' : 'installed' : shellVisible ? shell?.status : 'stale'} onClick={onAction} aria-disabled={pending || undefined}
+        <button type="button" className="stale-build-pill-action" data-testid="walnut-update-action" data-status={native ? pending ? 'restarting' : 'installed' : shellVisible ? shell?.status : 'stale'} onClick={() => { void onAction(); }} aria-disabled={pending || undefined}
           title={native ? 'Restart to use the installed app update' : shellVisible && shell ? getAppUpdateButtonTooltip(shell) : undefined}>{label}</button>
         <button type="button" className="stale-build-pill-later" onClick={onLater} aria-disabled={pending || undefined}
           title="Later: hide this update notice" aria-label="Later: hide this update notice">×</button>
       </div>, document.body,
     )}
-    {restartConfirming && <ConfirmDialog title="Restart to use the installed update?"
-      message="Walnut will close and reopen with the new app. Running sessions keep going. Save edits and send or clear unsent messages first."
-      confirmLabel="Restart Now" cancelLabel="Not Now" onCancel={() => setRestartConfirming(false)} onConfirm={restart} />}
-    {error && <ConfirmDialog title={shellActions.error ? 'Could not update Walnut' : 'Could not restart Walnut'} message={error} confirmLabel="OK"
-      onCancel={clearError} onConfirm={clearError} />}
+    {held && <UnsavedWorkDialog work={held.work} verb={held.verb} onCancel={() => setHeld(null)}
+      onAnyway={() => { const { go } = held; setHeld(null); void go(); }} />}
+    {error && <ConfirmDialog title={shellActions.error ? 'Could not update Walnut' : 'Could not restart Walnut'} message={error}
+      confirmLabel="Try Again" cancelLabel="Close" onCancel={clearError} onConfirm={() => { clearError(); void onAction(); }} />}
   </>;
 }

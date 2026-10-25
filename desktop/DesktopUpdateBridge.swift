@@ -11,6 +11,8 @@ struct InstalledDesktopUpdate: Codable {
     var available: Bool
     var token: String?
     var version: String?
+    /// The running app's content windows; the page asks before a restart that would close them.
+    var windows: Int? = nil
 }
 
 enum DesktopUpdateBridge {
@@ -58,11 +60,13 @@ enum DesktopUpdateBridge {
               SecStaticCodeCheckValidity(installed, [], requirement) == errSecSuccess else { return (none, nil) }
         let token = "\(app.processIdentifier):\(runningHash):\(installedHash)"
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return (InstalledDesktopUpdate(available: true, token: token, version: version), app)
+        // -1: the window list could not be read; the page counts it as a window nobody checked.
+        return (InstalledDesktopUpdate(available: true, token: token, version: version, windows: contentWindowCount(app) ?? -1), app)
     }
 
-    static func otherWindowsAreClean(_ app: NSRunningApplication) -> Bool {
-        guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+    /// nil when the window list cannot be read.
+    static func contentWindowCount(_ app: NSRunningApplication) -> Int? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
         let contentWindows = windows.filter {
             guard ($0[kCGWindowOwnerPID as String] as? Int32) == app.processIdentifier,
                   ($0[kCGWindowLayer as String] as? Int) == 0,
@@ -70,18 +74,24 @@ enum DesktopUpdateBridge {
                   let width = bounds["Width"] as? Double, let height = bounds["Height"] as? Double else { return false }
             return width > 100 && height > 100
         }
-        return contentWindows.count <= 1
+        return contentWindows.count
     }
 
-    static func restart(expected: String) -> Bool {
+    /// Exit code 3: other windows are open and nobody checked them.
+    static let otherWindowsOpen: Int32 = 3
+
+    /// `force`: the page checked every window, or the user chose to restart anyway.
+    static func restart(expected: String, force: Bool = false) -> Int32 {
         let target = Bundle.main.bundleURL
         let (status, app) = probe(target: target)
-        guard status.available, status.token == expected, let app, app.processIdentifier > 1 else { return false }
-        // Old shells cannot check another window's draft; refuse rather than discard it.
-        guard otherWindowsAreClean(app), app.terminate() else { return false }
+        guard status.available, status.token == expected, let app, app.processIdentifier > 1 else { return 1 }
+        // An older shell cannot check another window's unsent work: refuse unless the page
+        // looked at every window or the person chose to restart anyway.
+        if !force && (contentWindowCount(app) ?? 2) > 1 { return otherWindowsOpen }
+        guard app.terminate() else { return 1 }
         let deadline = Date().addingTimeInterval(30)
         while !app.isTerminated && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
-        guard app.isTerminated else { return false }
+        guard app.isTerminated else { return 1 }
         let opener = Process()
         opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         #if WALNUT_DESKTOP_TEST
@@ -90,17 +100,17 @@ enum DesktopUpdateBridge {
         opener.arguments = ["-a", target.path]
         #endif
         do { try opener.run(); opener.waitUntilExit() }
-        catch { return false }
-        guard opener.terminationStatus == 0 else { return false }
+        catch { return 1 }
+        guard opener.terminationStatus == 0 else { return 1 }
         let launchDeadline = Date().addingTimeInterval(15)
         while Date() < launchDeadline {
             if NSWorkspace.shared.runningApplications.contains(where: {
                 $0.bundleIdentifier == app.bundleIdentifier && $0.activationPolicy == .regular && $0.processIdentifier != app.processIdentifier
                     && runningHash($0.processIdentifier) == expected.split(separator: ":").last.map(String.init)
-            }) { return true }
+            }) { return 0 }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
-        return false
+        return 1
     }
 }
 
@@ -110,8 +120,8 @@ func runDesktopUpdateBridgeIfRequested(_ args: [String] = CommandLine.arguments)
         let status = DesktopUpdateBridge.probe().0
         if let data = try? JSONEncoder().encode(status) { print(String(decoding: data, as: UTF8.self)); exit(0) }
     }
-    if args.count == 4 && args[2] == "restart" {
-        exit(DesktopUpdateBridge.restart(expected: args[3]) ? 0 : 1)
+    if args.count >= 4 && args.count <= 5 && args[2] == "restart" && (args.count == 4 || args[4] == "--force") {
+        exit(DesktopUpdateBridge.restart(expected: args[3], force: args.count == 5))
     }
     exit(2)
 }

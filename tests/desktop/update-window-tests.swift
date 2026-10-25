@@ -150,6 +150,39 @@ private final class UpdateTestDelegate: AppDelegate {
         try await wait("clean install boundary") { (try? await main.evaluateJavaScript("window.installResult")) as? String == "accepted" }
         precondition(owner.appUpdater!.testInstallCalls == 1)
         print("PASS: actual install bridge refuses late dirty and accepts clean through a stub")
+        // The page lists every window's unsent work before a restart: a page with the bridge
+        // answers item by item, an older page answers through the shell's own check.
+        let listed = WKWebView(frame: main.frame)
+        let listedWindow = NSWindow(contentRect: listed.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        listedWindow.isReleasedWhenClosed = false
+        listedWindow.title = "Fix the login"
+        listedWindow.contentView = listed
+        listed.loadHTMLString("<textarea>Old page text</textarea>", baseURL: nil)
+        let listedKey = ObjectIdentifier(listed)
+        owner.popoutWindows[listedKey] = listedWindow
+        owner.popoutWatchdogs[listedKey] = watchdog(listed, listedWindow)
+        try await wait("listed window loaded") { (try? await listed.evaluateJavaScript("document.querySelector('textarea')?.value")) as? String == "Old page text" }
+        try await js(main, "window.__walnutDesktop={listUnsavedWork:()=>[{what:'Unsent text',where:'session “Board”'}],hasUnsavedWork:()=>true}; true")
+        var windows: [[String: Any]]?
+        owner.listUnsavedWindows(source: main) { windows = $0 }
+        try await wait("window list") { windows != nil }
+        precondition(windows!.count == 2)
+        let mine = windows!.first { $0["isSource"] as? Bool == true }!
+        precondition(((mine["items"] as? [[String: Any]])?.first?["where"] as? String) == "session “Board”")
+        let other = windows!.first { $0["isSource"] as? Bool == false }!
+        precondition(other["title"] as? String == "Fix the login")
+        precondition(((other["items"] as? [[String: Any]])?.first?["what"] as? String) == "Unsaved work")
+        precondition(owner.revealUnsaved(window: "no-such-window", index: 0) == false)
+        print("PASS: every window's unsent work is listed, an older page through the shell's check")
+        try await js(main, "window.installResult=null;window.webkit.messageHandlers.walnutUpdate.postMessage({op:'install',force:true}).then(()=>window.installResult='accepted',()=>window.installResult='refused'); true")
+        try await wait("forced install") { (try? await main.evaluateJavaScript("window.installResult")) as? String == "accepted" }
+        precondition(owner.appUpdater!.testInstallCalls == 2)
+        let kept = try await listed.evaluateJavaScript("document.querySelector('textarea').value") as? String
+        precondition(kept == "Old page text")
+        owner.popoutWindows.removeValue(forKey: listedKey)
+        owner.popoutWatchdogs.removeValue(forKey: listedKey)
+        listedWindow.close()
+        print("PASS: Restart Anyway installs past unsent work without touching it")
         precondition(!NSRunningApplication.current.isActive)
         owner.window.close()
         print("PASS: all windows stayed hidden and production was untouched")

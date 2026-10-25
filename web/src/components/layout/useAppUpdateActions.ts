@@ -33,7 +33,9 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
     else notify({ kind: 'operation-error', severity: 'error', persistent: false, title, body, dedupKey: `app-update:${title}` });
   }, []);
 
-  const run = useCallback(async () => {
+  /** `checked`: the update notice already looked at every window and asked (StaleBuildPill), so the
+   *  install goes ahead without the app's own sheet; `force` when the user chose to restart anyway. */
+  const run = useCallback(async (opts?: { checked?: boolean; force?: boolean }) => {
     if (!state || inFlight.current || isAppUpdateButtonDisabled(state)) return;
     const action = resolveAppUpdateButtonAction(state);
     inFlight.current = true;
@@ -56,6 +58,11 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
           });
         } else if (shouldToastAppUpdateActionResult(result)) {
           toastError('Could not download update', getAppUpdateActionError(result) ?? '');
+        }
+      } else if (action === 'install' && opts?.checked) {
+        const result = await appUpdateBridge.install(opts.force === true);
+        if (shouldToastAppUpdateActionResult(result)) {
+          toastError('Could not install update', getAppUpdateActionError(result) ?? '');
         }
       } else if (action === 'install') {
         if (hasUnsavedWork()) {

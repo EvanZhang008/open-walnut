@@ -138,6 +138,7 @@ export function AgentSearchFollowUp({
           placeholder={opening ? 'Opening this search’s conversation…' : 'Ask a follow-up…'}
           showCommands={false}
           draftKey={`draft:agent-search:${query}`}
+          draftKeptOnReload={false}
           {...(prefill ? { prefillText: prefill.text, prefillNonce: prefill.nonce } : {})}
         />
       </div>

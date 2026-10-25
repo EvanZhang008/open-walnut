@@ -876,6 +876,7 @@ export function DraftSessionPanel({
             onMenuOpen: ensureQuickParseLoaded,
           }] : undefined}
           draftKey={draftComposerKey(draft.id)}
+          draftKeptOnReload={false}
           placeholder={isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER
               : askAgent ? `${askLabel} anything…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)

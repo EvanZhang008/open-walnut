@@ -156,7 +156,7 @@ final class WebContentWatchdog {
         }
         guard case let .recycle(reason) = verdict else { return }
         recycleInFlight = true
-        checkUnsavedWork { [weak self, weak webView] unsaved in
+        checkUnsavedWork(reload: true) { [weak self, weak webView] unsaved in
             guard let self, let webView, self.webView === webView else { return }
             if unsaved {
                 self.recycleInFlight = false
@@ -180,13 +180,15 @@ final class WebContentWatchdog {
     /// same rule its stale-asset reload uses); falls back to a DOM scan for an
     /// older bundle. Any error answers "unsaved": the cost of a wrong yes is one
     /// minute, the cost of a wrong no is lost text.
-    func checkUnsavedWork(_ completion: @escaping (Bool) -> Void) {
+    /// `reload`: the page loads again in place (a recycle), so a draft it keeps in storage comes
+    /// back; otherwise the page goes away (a restart, a closing window).
+    func checkUnsavedWork(reload: Bool = false, _ completion: @escaping (Bool) -> Void) {
         guard let webView else { completion(true); return }
         let js = """
         (() => {
           try {
             const b = window.__walnutDesktop;
-            if (b && typeof b.hasUnsavedWork === 'function') return !!b.hasUnsavedWork();
+            if (b && typeof b.hasUnsavedWork === 'function') return !!b.hasUnsavedWork('\(reload ? "reload" : "leave")');
             if (document.querySelector('.fv-dirty-dot')) return true;
             for (const t of document.querySelectorAll('textarea')) if (t.value && t.value.trim()) return true;
             const a = document.activeElement;

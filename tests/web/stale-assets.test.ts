@@ -8,9 +8,8 @@
  * rendering with no syntax colors) with nothing in any log.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { parseHTML } from 'linkedom';
 import {
-  isUnsaved, readUnsavedSnapshot, recordStaleReload, initStaleAssetRecovery, type StaleAssetDeps,
+  recordStaleReload, initStaleAssetRecovery, type StaleAssetDeps,
 } from '../../web/src/utils/stale-assets';
 
 class FakeStorage {
@@ -40,112 +39,6 @@ class FakeTarget {
   }
   count(type: string) { return this.listeners.get(type)?.size ?? 0; }
 }
-
-describe('stale-assets: is a reload safe?', () => {
-  const clean = { dirtyEditor: false, drafts: ['', '   '], focusedText: '' };
-
-  it('a clean page is safe', () => {
-    expect(isUnsaved(clean)).toBe(false);
-  });
-
-  it('a half-typed message defers the reload', () => {
-    expect(isUnsaved({ ...clean, drafts: ['', 'half a thought'] })).toBe(true);
-  });
-
-  it('a dirty file editor defers the reload even with no text anywhere', () => {
-    expect(isUnsaved({ ...clean, dirtyEditor: true, drafts: [] })).toBe(true);
-  });
-
-  it('the field being typed in right now defers the reload', () => {
-    expect(isUnsaved({ ...clean, focusedText: 'infor' })).toBe(true);
-  });
-
-  it('an unfocused search box does NOT block forever', () => {
-    // readUnsavedSnapshot reports only the FOCUSED single-line field, so a
-    // filter left with text in it cannot wedge recovery.
-    expect(isUnsaved({ dirtyEditor: false, drafts: [], focusedText: '' })).toBe(false);
-  });
-
-  it('an OPEN file is not unsaved work', () => {
-    // Regression: the CodeMirror content div is contenteditable and holds the
-    // whole file, so scanning contenteditables for text deferred the reload for
-    // as long as any file was open. Dirtiness comes from the dirty dot instead.
-    expect(isUnsaved({ dirtyEditor: false, drafts: [''], focusedText: '' })).toBe(false);
-  });
-});
-
-describe('stale-assets: readUnsavedSnapshot (real DOM shapes)', () => {
-  /** The Files panel as it actually renders: a CodeMirror editor holding a file. */
-  const FILE_OPEN = `
-    <div class="file-content-view">
-      <div class="cm-editor"><div class="cm-content" contenteditable="true">package informers\nfunc F() {}</div></div>
-    </div>
-    <textarea class="composer"></textarea>`;
-
-  function snap(html: string, activeSelector?: string) {
-    const { document } = parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`);
-    const active = activeSelector ? document.querySelector(activeSelector) : null;
-    return readUnsavedSnapshot(document as unknown as Document, active as unknown as Element | null);
-  }
-
-  it('an open file with an empty composer is safe to reload', () => {
-    // THE regression: .cm-content is contenteditable and holds the whole file,
-    // so a naive contenteditable scan called this "unsaved" and the tab never
-    // healed (observed live: a JSON grammar 404ing with deferred:true forever).
-    expect(isUnsaved(snap(FILE_OPEN))).toBe(false);
-  });
-
-  it('a focused code editor is still not unsaved work', () => {
-    expect(isUnsaved(snap(FILE_OPEN, '.cm-content'))).toBe(false);
-  });
-
-  it('the dirty dot next to Save does count', () => {
-    expect(isUnsaved(snap(`${FILE_OPEN}<span class="fv-dirty-dot">●</span>`))).toBe(true);
-  });
-
-  it.each(['saving', 'error'])('a note with %s status blocks restart or reload', (status) => {
-    expect(isUnsaved(snap(`<span class="notes-save-status ${status}">Save status</span>`))).toBe(true);
-  });
-
-  it.each(['global-notes-saving', 'global-notes-error'])('global notes %s blocks restart or reload', (status) => {
-    expect(isUnsaved(snap(`<span class="${status}">Save status</span>`))).toBe(true);
-  });
-
-  it('a saved note does not block restart or reload', () => {
-    expect(isUnsaved(snap('<span class="notes-save-status saved">Saved</span>'))).toBe(false);
-  });
-
-  it('a composer draft counts even without focus', () => {
-    const { document } = parseHTML('<!DOCTYPE html><html><body><textarea>half a thought</textarea></body></html>');
-    expect(isUnsaved(readUnsavedSnapshot(document as unknown as Document, null))).toBe(true);
-  });
-
-  it('an image pasted into the composer counts, though it has no text', () => {
-    // Attachments live only in React state, so a reload silently drops them and
-    // the user has to go find the screenshot again — with nothing in any
-    // textarea to have warned us.
-    expect(isUnsaved(snap('<textarea class="composer"></textarea><div class="chat-image-previews"><div class="chat-image-preview"><img src="x.png"></div></div>'))).toBe(true);
-  });
-
-  it('a task title being edited inline counts', () => {
-    expect(isUnsaved(snap('<div class="todo-title" contenteditable="true">renaming this</div>', '.todo-title'))).toBe(true);
-  });
-
-  it('a search box with text but no focus does not', () => {
-    expect(isUnsaved(snap('<input type="search" value="SetTransform">'))).toBe(false);
-  });
-
-  it('the search box being typed in right now does', () => {
-    const { document } = parseHTML('<!DOCTYPE html><html><body><input id="q" type="search"></body></html>');
-    const input = document.querySelector('#q')!;
-    (input as unknown as HTMLInputElement).value = 'SetTrans';
-    expect(isUnsaved(readUnsavedSnapshot(document as unknown as Document, input as unknown as Element))).toBe(true);
-  });
-
-  it('a checkbox is never unsaved typing', () => {
-    expect(isUnsaved(snap('<input id="c" type="checkbox" value="on">', '#c'))).toBe(false);
-  });
-});
 
 describe('stale-assets: reload rate limit', () => {
   let session: FakeStorage;

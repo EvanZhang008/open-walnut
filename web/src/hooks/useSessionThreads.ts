@@ -15,7 +15,7 @@ import {
 } from '@/utils/thread-tree';
 import { displayTitleOf, hiddenKeysOf, statusOf } from '@/utils/thread-meta';
 import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-counts';
-import { composerDraftKey, unreadKeysOf } from '@/utils/thread-stack-state';
+import { composerDraftKey, isPendingKey, unreadKeysOf } from '@/utils/thread-stack-state';
 import { nextQuestionSeq, questionNumbers, withQuestionBanner } from '@/utils/question-tag';
 import { log } from '@/utils/log';
 
@@ -254,6 +254,8 @@ export interface PanelThreads {
   sendAnchored: (message: string, images: ImageAttachment[] | undefined, interrupt: boolean) => Promise<boolean>;
   composerPlaceholder?: string;
   draftKey: string;
+  /** false on a pending Ask: after a reload the stack opens on the root and nothing reads its key. */
+  draftKeptOnReload: boolean;
   /** Conversation Mode, the composer replying in a question (or asking a new
    *  one): what its chip names. Absent when it posts to the main conversation. */
   composerTarget?: ComposerTarget;
@@ -539,6 +541,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     api, stack, meta, counts: threadCount, hasQuestions, hiddenCount, toast, toastRef, sendAnchored,
     ...(composerPlaceholder ? { composerPlaceholder } : {}),
     draftKey: composerDraftKey(sessionId, pageKey, tree),
+    draftKeptOnReload: !isPendingKey(pageKey),
     ...(composerTarget ? { composerTarget } : {}),
   };
 }

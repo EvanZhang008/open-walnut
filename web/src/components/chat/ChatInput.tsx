@@ -19,6 +19,7 @@ import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
+import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 import { keepCommandFirst } from './leading-command';
@@ -122,6 +123,9 @@ interface ChatInputProps {
   onDictationInsert?: () => void;
   /** localStorage key for persisting draft text. When set, input value is saved on change (debounced) and restored on mount. */
   draftKey?: string;
+  /** false: nothing reads this draft key after a reload (a new-session draft's key is
+   *  swept on load), so a reload or restart would lose the text and it still counts as unsaved. */
+  draftKeptOnReload?: boolean;
   /** Shift+Tab handler — sessions use it to cycle the permission mode. */
   onToggleMode?: () => void;
   /** Root dir for "@" file mentions. When set, typing "@" opens a file picker. */
@@ -222,7 +226,7 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -303,8 +307,34 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     try {
       if (pending.text) localStorage.setItem(pending.key, pending.text);
       else localStorage.removeItem(pending.key);
+      noteDraftWrite();
     } catch { /* quota exceeded or unavailable */ }
   }, []);
+
+  const keptOnReloadRef = useRef(draftKeptOnReload);
+  keptOnReloadRef.current = draftKeptOnReload;
+  // A reload or an app restart first asks every composer to save its text now
+  // (utils/unsaved-work.ts). One whose text is in storage afterwards comes back
+  // on the next mount, so it does not hold the restart back.
+  useEffect(() => {
+    const onFlush = (e: Event) => {
+      const el = textareaRef.current;
+      const key = draftKeyRef.current;
+      const detail = (e as CustomEvent<DraftFlushDetail>).detail;
+      if (!el || !key || !detail?.claims || !keptOnReloadRef.current) return;
+      flushDraft();
+      // A popout window is not reopened after it goes away, so its own key is not read again.
+      if (detail.scope === 'leave' && window.location.pathname === '/popout') return;
+      try {
+        const text = composeRefs(el.value, tableRef.current);
+        if (!text.trim()) return;
+        if (localStorage.getItem(key) !== text) { localStorage.setItem(key, text); noteDraftWrite(); }
+        detail.claims.push({ element: el, key, text });
+      } catch { /* not saved: the text still counts as unsaved */ }
+    };
+    window.addEventListener(DRAFT_FLUSH_EVENT, onFlush);
+    return () => window.removeEventListener(DRAFT_FLUSH_EVENT, onFlush);
+  }, [flushDraft]);
 
   // Track whether the component has mounted so the effect below can skip the
   // initial run (the useState initializer above already handles first render).
